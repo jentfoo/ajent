@@ -155,8 +155,8 @@ func TestDuplicateKeys(t *testing.T) {
 		})
 	}
 
-	t.Run("the_pi_compat_case", func(t *testing.T) {
-		// a real pi models.json declares thinkingFormat twice in one compat block
+	t.Run("duplicate_key_in_compat_warns", func(t *testing.T) {
+		// a hand-written models.json declares thinkingFormat twice in one compat block
 		in := `{"providers":{"lmstudio":{"models":[{"compat":{` +
 			`"thinkingFormat":"reasoning_effort","maxTokensField":"max_tokens",` +
 			`"thinkingFormat":"deepseek"}}]}}}`

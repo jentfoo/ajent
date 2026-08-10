@@ -98,7 +98,7 @@ func TestResolveCaps(t *testing.T) {
 		assert.Equal(t, TokenizerRemoteTokenize, got.Tokenizer)
 	})
 	t.Run("long_cache_retention_flag", func(t *testing.T) {
-		// a pi models.json carries this, so it must be recognized not warned about
+		// an existing models.json carries this, so it must be recognized not warned about
 		got := resolveCaps(base, nil, &Compat{SupportsLongCache: ptr(true)})
 		assert.True(t, got.LongCache)
 	})
@@ -162,6 +162,20 @@ func TestResolveModel(t *testing.T) {
 		got := resolveModel("lmstudio", Capabilities{Images: true}, nil,
 			ModelConfig{ID: "m1", Input: []Modality{ModalityText}})
 		assert.Equal(t, []Modality{ModalityText}, got.Input)
+	})
+	t.Run("per_model_headers_carried_onto_the_model", func(t *testing.T) {
+		got := resolveModel("lmstudio", base, nil, ModelConfig{
+			ID: "m1", Headers: map[string]string{"X-Org": "acme"},
+		})
+		assert.Equal(t, map[string]string{"X-Org": "acme"}, got.Headers)
+	})
+	t.Run("sampling_params_fold_into_the_body_escape_hatch", func(t *testing.T) {
+		got := resolveModel("lmstudio", base, nil, ModelConfig{
+			ID: "m1", SamplingParams: map[string]any{"temperature": 0.2, "seed": 7},
+		})
+		require.NotNil(t, got.Caps.ExtraBody)
+		assert.JSONEq(t, `0.2`, string(got.Caps.ExtraBody["temperature"]))
+		assert.JSONEq(t, `7`, string(got.Caps.ExtraBody["seed"]))
 	})
 }
 

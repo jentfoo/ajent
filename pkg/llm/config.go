@@ -85,19 +85,22 @@ type File struct {
 
 // ProviderConfig is one endpoint. Unset fields fall back to the flavor default.
 type ProviderConfig struct {
-	API       Dialect           `json:"api,omitempty"`
-	Flavor    Flavor            `json:"flavor,omitempty"`
-	BaseURL   string            `json:"baseUrl,omitempty"`
-	APIKey    string            `json:"apiKey,omitempty"`
-	APIKeyEnv string            `json:"apiKeyEnv,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"`
-	Timeouts  Timeouts          `json:"timeouts,omitzero"`
-	Retry     RetryPolicy       `json:"retry,omitzero"`
-	Discover  *bool             `json:"discover,omitempty"`
-	Routing   *Routing          `json:"routing,omitempty"` // openrouter only
-	Compat    *Compat           `json:"compat,omitempty"`  // defaults for every model here
-	Models    []ModelConfig     `json:"models,omitempty"`
-	Disabled  bool              `json:"disabled,omitempty"`
+	API        Dialect           `json:"api,omitempty"`
+	Flavor     Flavor            `json:"flavor,omitempty"`
+	Name       string            `json:"name,omitempty"` // accepted for compatibility; not used
+	BaseURL    string            `json:"baseUrl,omitempty"`
+	APIKey     string            `json:"apiKey,omitempty"`
+	APIKeyEnv  string            `json:"apiKeyEnv,omitempty"`
+	OAuth      string            `json:"oauth,omitempty"`      // accepted for compatibility; not used
+	AuthHeader *bool             `json:"authHeader,omitempty"` // accepted for compatibility; not used
+	Headers    map[string]string `json:"headers,omitempty"`
+	Timeouts   Timeouts          `json:"timeouts,omitzero"`
+	Retry      RetryPolicy       `json:"retry,omitzero"`
+	Discover   *bool             `json:"discover,omitempty"`
+	Routing    *Routing          `json:"routing,omitempty"` // openrouter only
+	Compat     *Compat           `json:"compat,omitempty"`  // defaults for every model here
+	Models     []ModelConfig     `json:"models,omitempty"`
+	Disabled   bool              `json:"disabled,omitempty"`
 }
 
 // Routing is openrouter's upstream provider preference.
@@ -121,6 +124,10 @@ type ModelConfig struct {
 	MaxTokens     *int              `json:"maxTokens,omitempty"`
 	Compat        *Compat           `json:"compat,omitempty"`
 	LevelMap      map[Level]*string `json:"thinkingLevelMap,omitempty"`
+
+	Headers        map[string]string `json:"headers,omitempty"`        // merged over the provider's per request
+	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // opaque additions to the request body
+	Cost           json.RawMessage   `json:"cost,omitempty"`           // accepted for compatibility; pricing is out of scope
 }
 
 // Compat is the per model quirk set. Every field is a pointer so an override
@@ -151,7 +158,7 @@ type Compat struct {
 	ExtraBody map[string]json.RawMessage `json:"extraBody,omitempty"`
 }
 
-// thinkingFormats maps pi's thinkingFormat names onto a reasoning style.
+// thinkingFormats maps the standard thinkingFormat names onto a reasoning style.
 var thinkingFormats = map[string]ReasoningStyle{
 	"none":               ReasoningNone,
 	"anthropic":          ReasoningAnthropicBudget,
@@ -168,7 +175,7 @@ var thinkingFormats = map[string]ReasoningStyle{
 // LoadFile reads a models.json, returning the decoded file and warnings for
 // anything questionable in it. A missing file is not an error.
 //
-// Line comments and trailing commas are accepted, so a file written for pi
+// Line comments and trailing commas are accepted, so an existing configuration
 // loads unchanged. A syntax error names the line and column it is on.
 func LoadFile(path string) (File, []string, error) {
 	raw, err := os.ReadFile(path)

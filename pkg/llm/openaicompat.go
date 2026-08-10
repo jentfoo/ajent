@@ -41,7 +41,8 @@ func (p *compatProvider) Stream(ctx context.Context, req Request) (Stream, error
 		path = "/chat/completions"
 	}
 	resp, err := p.client.do(ctx, httpReq{
-		method: http.MethodPost, path: path, body: body, classify: p.profile.classify,
+		method: http.MethodPost, path: path, body: body,
+		headers: req.Model.Headers, classify: p.profile.classify,
 	})
 	if err != nil {
 		return nil, err

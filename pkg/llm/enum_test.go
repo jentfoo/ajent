@@ -45,8 +45,8 @@ func TestLevelUnmarshalJSON(t *testing.T) {
 		require.ErrorContains(t, err, "unknown reasoning level")
 		assert.Contains(t, err.Error(), "off, minimal, low, medium, high, xhigh, max")
 	})
-	t.Run("pi_level_set_is_covered", func(t *testing.T) {
-		// a thinkingLevelMap copied from pi must map every key
+	t.Run("level_set_is_covered", func(t *testing.T) {
+		// any thinkingLevelMap written against the standard levels maps every key
 		var m map[Level]*string
 		require.NoError(t, json.Unmarshal([]byte(
 			`{"off":null,"minimal":"minimal","low":"low","medium":"medium","high":"high","xhigh":"high","max":"high"}`), &m))
@@ -100,8 +100,8 @@ func TestReasoningStyleUnmarshalJSON(t *testing.T) {
 	}{
 		{"named_style", `"anthropic_budget"`, ReasoningAnthropicBudget},
 		{"inline_tags", `"inline_tags"`, ReasoningInlineTags},
-		{"pi_bool_true", `true`, ReasoningUnset},
-		{"pi_bool_false", `false`, ReasoningNone},
+		{"bool_true", `true`, ReasoningUnset},
+		{"bool_false", `false`, ReasoningNone},
 		{"explicit_none", `"none"`, ReasoningNone},
 	}
 	for _, tc := range tests {

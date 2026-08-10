@@ -20,19 +20,22 @@ const testPoll = time.Millisecond
 func newTestUI(t *testing.T, v *vt, in io.Reader) *UI {
 	t.Helper()
 	u := &UI{
-		theme:  NewTheme(ColorNone),
-		render: newTestInline(v),
-		mode:   ModeInline,
-		status: Status{Model: "test", MaxTokens: 1000},
-		in:     in,
-		inFd:   -1,
-		msgs:   make(chan string),
-		done:   make(chan struct{}),
+		theme:    NewTheme(ColorNone),
+		render:   newTestInline(v),
+		mode:     ModeInline,
+		status:   Status{Model: "test", MaxTokens: 1000},
+		in:       in,
+		inFd:     -1,
+		msgs:     make(chan string),
+		controls: make(chan Control, 4),
+		done:     make(chan struct{}),
 	}
 	u.reader = newInputReader(in)
 	go u.reader.run()
 	go u.readKeys()
+	u.mu.Lock() // a key may already be decoding; serialize with readKeys
 	u.repaint()
+	u.mu.Unlock()
 	t.Cleanup(u.Close)
 	return u
 }
@@ -66,7 +69,7 @@ func TestUIInput(t *testing.T) {
 
 	t.Run("block_starts_at_the_top", func(t *testing.T) {
 		assert.Equal(t, promptFirst+inputHint, v.Line(0))
-		assert.Equal(t, "ctx 0% ░░░░░░░░░░ 0/1k · test", v.Line(1))
+		assert.Equal(t, "░░░░░░░░░░ 0/1k · test", v.Line(1))
 	})
 	t.Run("typed_text_replaces_hint", func(t *testing.T) {
 		_, err := io.WriteString(pw, "hi")
@@ -80,8 +83,8 @@ func TestUIInput(t *testing.T) {
 		waitLine(0, promptFirst+inputHint)
 	})
 	t.Run("status_follows_the_input", func(t *testing.T) {
-		u.SetStatus(Status{Model: "opus-5", Tokens: 500, MaxTokens: 1000})
-		assert.Equal(t, "ctx 50% ▓▓▓▓▓░░░░░ 500/1k · opus-5", v.Line(1))
+		u.SetStatus(Status{Model: "opus-5"})
+		assert.Equal(t, "opus-5", v.Line(1))
 	})
 	require.NoError(t, pw.Close())
 }
@@ -112,7 +115,7 @@ func TestUIInputEditing(t *testing.T) {
 		_, err := io.WriteString(pw, "\x1b\rsecond")
 		require.NoError(t, err)
 		waitLine(1, promptCont+"second")
-		waitLine(2, "ctx 0% ░░░░░░░░░░ 0/1k · test")
+		waitLine(2, "░░░░░░░░░░ 0/1k · test")
 	})
 	t.Run("ctrl_c_clears_buffer", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
@@ -120,11 +123,15 @@ func TestUIInputEditing(t *testing.T) {
 		waitLine(0, promptFirst+inputHint)
 		assert.Empty(t, u.line(v, 2), "the extra input row is gone")
 	})
-	t.Run("ctrl_d_on_empty_quits", func(t *testing.T) {
+	t.Run("ctrl_c_on_empty_emits_interrupt", func(t *testing.T) {
+		_, err := io.WriteString(pw, "\x03")
+		require.NoError(t, err)
+		assert.Equal(t, ControlInterrupt, <-u.Controls())
+	})
+	t.Run("ctrl_d_on_empty_emits_eof", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x04")
 		require.NoError(t, err)
-		_, open := <-u.Messages()
-		assert.False(t, open, "messages channel closes on quit")
+		assert.Equal(t, ControlEOF, <-u.Controls())
 	})
 	require.NoError(t, pw.Close())
 }
@@ -161,7 +168,7 @@ func TestUIHistory(t *testing.T) {
 	})
 	t.Run("block_follows_the_last_line", func(t *testing.T) {
 		assert.Contains(t, v.Line(12), promptFirst)
-		assert.Contains(t, v.Line(13), "ctx")
+		assert.Contains(t, v.Line(13), "0/1k · test")
 	})
 }
 
@@ -333,7 +340,7 @@ func TestUIResume(t *testing.T) {
 
 	u.resume()
 	assert.Equal(t, "❯ kept", u.line(v, 0), "history is untouched")
-	assert.Contains(t, u.snapshot(v), "ctx", "the live block is repainted")
+	assert.Contains(t, u.snapshot(v), "/1k · test", "the live status bar is repainted")
 }
 
 // TestUISafeGo checks the recover path in a subprocess, since it re-panics by

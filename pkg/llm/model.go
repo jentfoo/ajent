@@ -19,7 +19,8 @@ type Model struct {
 	ContextWindow int
 	MaxOutput     int
 	Input         []Modality
-	Caps          Capabilities // resolved from dialect, provider then model compat
+	Caps          Capabilities      // resolved from dialect, provider then model compat
+	Headers       map[string]string // per request additions over the provider's
 }
 
 // Key returns the canonical provider/id identifier.

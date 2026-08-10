@@ -19,17 +19,18 @@ type Segment struct {
 	Text string
 }
 
-// Status is the state rendered on the line below the input field.
+// Status is the state rendered on the line below the input field. Context usage
+// is tracked here but no longer shown as a permanent "ctx %" bar; it is reported
+// elsewhere, so the status line stays model plus any transient segments.
 type Status struct {
 	Model     string
-	Tokens    int
-	MaxTokens int
+	Tokens    int // context usage count, kept for reporting outside the bar
+	MaxTokens int // the active model's window, same purpose
 	Segments  []Segment
 }
 
 // render returns the single status line, truncated to width. Segments are
-// dropped one at a time until it fits, so the context bar and model survive
-// longest.
+// dropped one at a time until it fits, so the model survives longest.
 func (s Status) render(t Theme, width int) string {
 	parts := s.parts(t)
 	for len(parts) > 0 {
@@ -42,21 +43,21 @@ func (s Status) render(t Theme, width int) string {
 	return ""
 }
 
-// parts returns the status pieces in priority order, most important first.
+// parts returns the status pieces in priority order, most important first. The
+// context bar and token totals survive longest; the percentage is omitted as it
+// duplicates what the bar already conveys.
 func (s Status) parts(t Theme) []string {
 	var parts []string
 	if s.MaxTokens > 0 {
-		var b strings.Builder
 		pct := s.Tokens * 100 / s.MaxTokens
-		if pct > 100 {
+		if pct < 0 {
+			pct = 0
+		} else if pct > 100 {
 			pct = 100
 		}
-		b.WriteString(t.Dim.Wrap("ctx "))
-		b.WriteString(usageStyle(t, pct).Wrap(strconv.Itoa(pct) + "%"))
-		b.WriteString(" ")
-		b.WriteString(usageStyle(t, pct).Wrap(usageBar(pct)))
-		b.WriteString(t.Dim.Wrap(" " + formatTokens(s.Tokens) + "/" + formatTokens(s.MaxTokens)))
-		parts = append(parts, b.String())
+		bar := usageStyle(t, pct).Wrap(usageBar(pct))
+		toks := t.Dim.Wrap(formatTokens(s.Tokens) + "/" + formatTokens(s.MaxTokens))
+		parts = append(parts, bar+" "+toks)
 	}
 	if s.Model != "" {
 		parts = append(parts, t.Dim.Wrap(s.Model))
@@ -106,7 +107,8 @@ func (u *UI) SetModel(name string, maxTokens int) {
 	u.repaint()
 }
 
-// usageStyle escalates the color as the context fills.
+// usageStyle escalates the color as the context fills. It is used when a caller
+// renders context usage outside the status bar.
 func usageStyle(t Theme, pct int) Style {
 	switch {
 	case pct >= 90:

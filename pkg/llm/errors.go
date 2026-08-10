@@ -81,7 +81,7 @@ func (e *APIError) Error() string {
 	return b.String()
 }
 
-// Unwrap reports context overflow so phase 08 can use errors.Is.
+// Unwrap reports context overflow so callers can match it with errors.Is.
 func (e *APIError) Unwrap() error {
 	if e.overflow {
 		return ErrContextOverflow

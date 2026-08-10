@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +90,116 @@ func TestDecodeKeyIncomplete(t *testing.T) {
 			assert.Zero(t, n)
 		})
 	}
+}
+
+// manualEsc is an escTimer a test drives directly, so the timeout paths need no
+// wall clock. It may be called from the inputReader run goroutine while the
+// test polls its state, so it guards those fields with a mutex.
+type manualEsc struct {
+	ch    chan time.Time
+	mu    sync.Mutex
+	delay time.Duration // last Reset duration, for assertion
+	resets int
+}
+
+func newManualEsc() *manualEsc { return &manualEsc{ch: make(chan time.Time)} }
+
+func (m *manualEsc) Reset(d time.Duration) bool {
+	m.mu.Lock()
+	m.delay = d
+	m.resets++
+	m.mu.Unlock()
+	return true
+}
+
+// resetCount returns how many times the timer has been armed.
+func (m *manualEsc) resetCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resets
+}
+
+func (m *manualEsc) Stop() bool {
+	select {
+	case <-m.ch:
+	default:
+	}
+	return true
+}
+
+func (m *manualEsc) C() <-chan time.Time { return m.ch }
+
+// fire simulates the escape timeout elapsing.
+func (m *manualEsc) fire(tb testing.TB) {
+	tb.Helper()
+	select {
+	case m.ch <- time.Now():
+	default:
+		tb.Fatal("escape timer not armed")
+	}
+}
+
+// newManualReader returns an inputReader whose escape timer is a manualEsc.
+func newManualReader(src io.Reader) (*inputReader, *manualEsc) {
+	r := newInputReader(src)
+	e := newManualEsc()
+	r.newTimer = func() escTimer { return e }
+	return r, e
+}
+
+func TestEscapeTimeout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("lone_escape_fires", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r, esc := newManualReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll,
+			"the escape byte must arm the timer")
+
+		esc.fire(t)
+		assert.Equal(t, key{typ: keyEscape}, <-r.keys)
+	})
+	t.Run("sequence_within_window_decodes", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r, esc := newManualReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll,
+			"the escape byte must arm the timer before [A arrives")
+
+		_, err = io.WriteString(pw, "[A")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyUp}, <-r.keys)
+	})
+	t.Run("paste_containing_escape", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r, _ := newManualReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b[200~a\x1bb\x1b[201~")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyPaste, text: "a\x1bb"}, <-r.keys)
+	})
+	t.Run("timer_never_fires_without_data", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r, esc := newManualReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "z")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+		assert.Zero(t, esc.resetCount(), "no escape byte means no timer arming")
+
+		_, err = io.WriteString(pw, "\x1b[A")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyUp}, <-r.keys)
+	})
 }
 
 func TestInputReaderRun(t *testing.T) {

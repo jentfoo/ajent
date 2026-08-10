@@ -102,8 +102,8 @@ func (s StopReason) String() string {
 	}
 }
 
-// Usage is the provider reported token accounting for one response. Phase 07
-// owns aggregation; this is the per response report.
+// Usage is the provider reported token accounting for one response, to be
+// aggregated by callers.
 type Usage struct {
 	Input      int
 	Output     int

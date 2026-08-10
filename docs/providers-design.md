@@ -1,8 +1,8 @@
 # Provider Design
 
 How `pkg/llm` works, why it is shaped this way, and the rules you must not break
-when changing it. `pkg/config` is covered here too, since it exists to serve this
-layer until phase 09 grows it.
+when changing it. `pkg/config` is covered here too, since it currently serves
+the path and byte handling this layer needs.
 
 ## What it is
 
@@ -43,7 +43,7 @@ pkg/llm/
   enum.go           text encoding shared by every enum
   duration.go       Duration, the config duration form
 
-  sse.go            dialect free frame parser, reused by phase 11
+  sse.go            dialect free frame parser, shared with any SSE consumer
   httpclient.go     timeouts, retry loop, idle reader, redaction, key resolution
   retry.go          backoff, Retry-After, retryable classification
 
@@ -73,7 +73,8 @@ sixth of that shape is roughly a hundred lines.
 
 **`pkg/config` must never import `pkg/llm`.** `pkg/llm` imports it for paths, so
 the reverse edge would cycle. That is why `models.json` is decoded in
-`pkg/llm/config.go` rather than in `pkg/config`, and it constrains phase 09.
+`pkg/llm/config.go` rather than in `pkg/config`, and any growth of `pkg/config`
+must keep that dependency one-directional.
 
 ## The content model
 
@@ -94,8 +95,8 @@ appended. That is what makes `applyRetention` safe to write as a filter.
 `BlockList` carries the JSON round trip. A bare `[]Block` cannot be decoded — the
 concrete type is lost — so `BlockList.MarshalJSON` writes a `{type, data}`
 envelope per block and `UnmarshalJSON` reads it back. `Message.Content` and
-`ToolResultBlock.Content` are both `BlockList`, so phase 06 gets transcript
-serialisation for free.
+`ToolResultBlock.Content` are both `BlockList`, so the session log can round-trip
+a transcript directly.
 
 `ThinkingBlock` deliberately carries every provider's replay token at once:
 
@@ -152,9 +153,9 @@ done                                 StopReason, or Err when the turn failed
 to concatenating deltas for a block whose end never arrived, so an aborted stream
 still yields what was received.
 
-`ScriptedProvider` and `SliceStream` are exported for exactly this reason:
-phases 02 and 08 both need a fake provider, and three packages inventing their
-own would drift.
+`ScriptedProvider` and `SliceStream` are exported for exactly this reason: the
+agent loop's tests and compaction all need a fake provider, and several packages
+each inventing their own would drift.
 
 ## Capabilities
 
@@ -183,8 +184,8 @@ default, an explicit `"0s"` disables the bound. A plain zero cannot say
 The feature with the least agreement between vendors, so it gets the most
 machinery.
 
-**Levels** are pi's seven — `off, minimal, low, medium, high, xhigh, max` — so a
-`thinkingLevelMap` copied from a pi configuration maps every key. A model may
+**Levels** are the standard seven — `off, minimal, low, medium, high, xhigh,
+max` — so a `thinkingLevelMap` written against them maps every key. A model may
 translate them with `Capabilities.LevelMap`; a `null` entry omits the parameter
 entirely for that level.
 
@@ -229,8 +230,8 @@ unless it still holds tool calls.
 
 ## Configuration
 
-`~/.ajent/models.json`, deliberately close to pi's so a file ports over with only
-the `cost` blocks removed:
+`~/.ajent/models.json`, kept in the familiar shape so an existing configuration
+ports over with only the `cost` blocks removed:
 
 ```json
 {
@@ -262,7 +263,7 @@ the `cost` blocks removed:
 }
 ```
 
-Deliberate differences from pi:
+Deliberate choices in this loader:
 
 - **`api` and `flavor` are separate.** `api` is the wire dialect
   (`anthropic` | `openai-responses` | `openai-completions`); `flavor` selects
@@ -270,19 +271,18 @@ Deliberate differences from pi:
   names a known one, so `"lmstudio"` needs no `flavor` field, but an
   OpenAI-compatible proxy in front of a known server can say
   `{"flavor": "lmstudio"}` and still get the right defaults.
-- **Nothing.** `//` line comments and trailing commas are accepted, matching what
-  pi's own loader strips, because a config you cannot paste in is not a config
-  you match. Comments and commas are blanked rather than deleted, so byte offsets
+- **Nothing.** `//` line comments and trailing commas are accepted because a
+  config you cannot paste in is not a config you can use. Comments and commas are blanked rather than deleted, so byte offsets
   still refer to the original file and a genuine syntax error reports the line,
   column and the text it is on.
 - **Duplicate keys warn.** `encoding/json` keeps the last silently, so a repeated
-  key is a setting that looks applied and is not. A real pi file declares
-  `thinkingFormat` twice in one `compat` block.
-- **`reasoning` accepts pi's bool or a style name.** `true` means the dialect
-  default style.
+  key is a setting that looks applied and is not. Hand-written configs do this:
+  `thinkingFormat` appears twice in one `compat` block.
+- **`reasoning` accepts either the boolean form or a style name.** `true`
+  selects the dialect default style.
 - **Unrecognised keys warn rather than fail.** A typo silently ignored is worse
   than a warning, and a hard failure locks the user out of their agent. The same
-  reasoning is why the loader tolerates the syntax pi tolerates: refusing to
+  reasoning is why the loader tolerates lenient syntax: refusing to
   start over a trailing comma helps nobody.
 - **No `cost` block.** See "Deliberately not done".
 
@@ -344,7 +344,7 @@ for an hour is indistinguishable from a hang.
 
 Every provider signals "too many input tokens" differently, so each flavor has a
 phrase table in `classify.go` and maps its form to `ErrContextOverflow`, which
-phase 08 catches with `errors.Is`. Note llama.cpp reports it as a **500**, not a
+callers catch with `errors.Is`. Note llama.cpp reports it as a **500**, not a
 client error. Matching vendor prose is fragile by nature; treat the table as
 something that will need additions.
 
@@ -394,7 +394,7 @@ produce, a real bug.
 every attempt and returns only once the status is 2xx and headers are read. The
 stream then reads with no retry underneath it. There is no code path that *can*
 re-emit deltas, which is what would duplicate them in the transcript. A
-mid-stream failure surfaces the partial plus an error and lets phase 02 decide.
+mid-stream failure surfaces the partial plus an error for the caller to handle.
 
 **2. A stream is a synchronous pull, not a goroutine and a channel.** Each
 adapter's stream holds the response, the SSE reader and a pending queue. Nothing
@@ -404,7 +404,7 @@ what people reach for first and it leaks on every early `Close`.
 
 **3. `Close` abandons whatever is still buffered, and is not an error.** `Next`
 checks the closed flag before draining pending events, and `Err` returns nil
-after a deliberate close. Phase 02's interrupt depends on both halves.
+after a deliberate close. The agent loop's interrupt depends on both halves.
 
 **4. Thinking blocks keep every provider's replay token, and unreplayable ones
 are dropped.** See "The content model" and "Reasoning".
@@ -437,8 +437,8 @@ providers echo the key into.
 
 **11. `sse.go` knows no dialect.** No JSON, no vendor names, one const for the
 `[DONE]` sentinel and a method to report it, with the policy left to the caller.
-Phase 11's MCP transport reuses it, and `openaicompat` breaks on `[DONE]` while
-MCP ignores it.
+An MCP transport can reuse it; `openaicompat` breaks on `[DONE]` while MCP
+ignores it.
 
 ## Testing
 
@@ -510,11 +510,11 @@ implementing `Provider`, and a case in `factory.go`.
 
 - **Pricing.** `Model` has no pricing field, `models.json` has no `cost` block,
   and openrouter's pricing fields are dropped rather than cached. Nothing can go
-  quietly stale and be wrong about money. Phase 07 has to decide whether to
-  restore it before building `/cost`.
+  quietly stale and be wrong about money. Restoring it would need an explicit
+decision before any cost reporting is built.
 - **A built-in model catalogue.** Endpoints and quirks only. See traps.
 - **Token estimation.** `Capabilities.Tokenizer` declares what each provider can
-  do; phase 07 owns using it.
+  do; a future token or cost feature would use it.
 - **Azure, Bedrock and Vertex.** They are OpenAI- and Anthropic-shaped with
   different auth. `baseUrl`, `headers`, `flavor` and `compat.extraBody` should
   cover most of it without code.

@@ -76,8 +76,8 @@ type ReasoningConfig struct {
 	Show   bool // stream thinking to the UI
 }
 
-// Level is the requested reasoning depth. The set matches pi's, so a
-// thinkingLevelMap copied from a pi configuration maps every level.
+// Level is the requested reasoning depth. The standard seven levels let any
+// thinkingLevelMap written against them map every entry.
 type Level uint8
 
 const (

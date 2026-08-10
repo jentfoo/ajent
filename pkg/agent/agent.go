@@ -1,0 +1,97 @@
+package agent
+
+import (
+	"context"
+	"sync"
+
+	"github.com/jentfoo/ajent/pkg/llm"
+)
+
+// defaultMaxSteps caps a single turn's tool-calling iterations so a runaway
+// loop cannot spin forever.
+const defaultMaxSteps = 100
+
+// Options configures an Agent.
+type Options struct {
+	Provider  func(llm.Model) (llm.Provider, error) // resolved per request so /model switching works
+	Sink      Sink
+	Tools     ToolSet
+	Env       Environment
+	Transform Transform // nil is identity
+	MaxSteps  int       // defaults to defaultMaxSteps
+}
+
+// Agent runs turns against a model provider, streaming deltas to the sink and
+// dispatching tool calls until the model stops. Turn state lives here so
+// callers can observe turns and inject steering.
+type Agent struct {
+	opts  Options
+	state *State
+
+	mu      sync.Mutex
+	running bool
+	steer   []Input
+	follow  []Input
+	cancel  context.CancelFunc
+}
+
+// New returns an agent bound to state, using opts.Sink for events. The sink is
+// required; a nil one means no UI wants the output.
+func New(state *State, opts Options) *Agent {
+	if opts.MaxSteps == 0 {
+		opts.MaxSteps = defaultMaxSteps
+	}
+	return &Agent{state: state, opts: opts}
+}
+
+// Running reports whether a turn is in flight. It is advisory for steering, not
+// a lock; callers that need ordering use Prompt's completion.
+func (a *Agent) Running() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.running
+}
+
+// Steer queues input to be injected into the running turn at its next step
+// boundary, or reports false when idle. It does not cancel the in-flight model
+// call; FollowUp is for the impatient case.
+func (a *Agent) Steer(in Input) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.running {
+		return false
+	}
+	a.steer = append(a.steer, in)
+	return true
+}
+
+// FollowUp queues input as the next turn once the running one settles, or
+// reports false when idle (call Prompt instead).
+func (a *Agent) FollowUp(in Input) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.running {
+		return false
+	}
+	a.follow = append(a.follow, in)
+	return true
+}
+
+// Interrupt cancels the running turn and drops anything queued. It is safe to
+// call at any time; an idle agent ignores it.
+func (a *Agent) Interrupt() {
+	a.mu.Lock()
+	cancel := a.cancel
+	a.steer = nil
+	a.follow = nil
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// Prompt runs input to completion, including any follow-up queued while it ran.
+// It returns when both queues are empty or the context ends.
+func (a *Agent) Prompt(ctx context.Context, in Input) error {
+	return a.runTurns(ctx, []Input{in})
+}

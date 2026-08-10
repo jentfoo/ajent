@@ -28,6 +28,16 @@ const (
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+// Control is an out-of-band key the caller decides the meaning of. The editor
+// does not consume these; the TUI front end maps them onto agent control calls.
+type Control uint8
+
+const (
+	ControlEscape Control = iota
+	ControlInterrupt
+	ControlEOF
+)
+
 // Options configures a UI.
 type Options struct {
 	In        *os.File // defaults to os.Stdin
@@ -47,12 +57,13 @@ type UI struct {
 	editor editor
 	status Status
 
-	in     io.Reader
-	inFd   int
-	reader *inputReader
-	msgs   chan string
-	done   chan struct{}
-	closed bool
+	in       io.Reader
+	inFd     int
+	reader   *inputReader
+	msgs     chan string
+	controls chan Control
+	done     chan struct{}
+	closed   bool
 
 	thinkBuf  lineBuffer
 	thinking  bool
@@ -89,14 +100,15 @@ func New(opts Options) (*UI, error) {
 	theme := NewTheme(DetectColorProfile(osEnv, mode != ModePlain))
 
 	u := &UI{
-		theme:  theme,
-		render: newRenderer(mode, theme, out, int(out.Fd())),
-		mode:   mode,
-		status: Status{Model: opts.Model, MaxTokens: opts.MaxTokens},
-		in:     in,
-		inFd:   int(in.Fd()),
-		msgs:   make(chan string),
-		done:   make(chan struct{}),
+		theme:    theme,
+		render:   newRenderer(mode, theme, out, int(out.Fd())),
+		mode:     mode,
+		status:   Status{Model: opts.Model, MaxTokens: opts.MaxTokens},
+		in:       in,
+		inFd:     int(in.Fd()),
+		msgs:     make(chan string),
+		controls: make(chan Control, 4),
+		done:     make(chan struct{}),
 	}
 	if err := u.render.start(u.inFd); err != nil {
 		return nil, err
@@ -130,8 +142,13 @@ func (u *UI) safeGo(fn func()) {
 // Mode reports the paint mode in use.
 func (u *UI) Mode() Mode { return u.mode }
 
-// Messages returns submitted user input, closed when the user quits.
+// Messages returns submitted user input, closed when the UI goes away.
 func (u *UI) Messages() <-chan string { return u.msgs }
+
+// Controls returns keys the editor did not consume: Esc and Ctrl+C or Ctrl+D on
+// an empty buffer. The send is non-blocking with a drop, so key handling never
+// blocks on the consumer.
+func (u *UI) Controls() <-chan Control { return u.controls }
 
 // Width returns the current terminal width in columns.
 func (u *UI) Width() int {
@@ -417,22 +434,25 @@ func (u *UI) readKeys() {
 	}
 }
 
-// handleKey applies one key and redraws, returning any submitted message.
+// handleKey applies one key and redraws when it changed the view. A control
+// emission or a no-op skips repaint: nothing on screen moved.
 func (u *UI) handleKey(k key) (submit *string, quit bool) {
+	var dirty bool
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	submit, quit = u.applyKey(k)
-	if !quit {
+	submit, dirty, quit = u.applyKey(k)
+	if dirty && !quit {
 		u.repaint()
 	}
 	return submit, quit
 }
 
-// applyKey mutates the editor for one key. Caller holds the lock.
-func (u *UI) applyKey(k key) (submit *string, quit bool) {
+// applyKey mutates the editor for one key and reports whether it changed any
+// rendered state. Caller holds the lock.
+func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	if u.act != nil {
 		u.routeKey(k) // an active interaction sees every key before the editor
-		return nil, false
+		return nil, false, false
 	}
 	switch k.typ {
 	case keyRune:
@@ -443,7 +463,7 @@ func (u *UI) applyKey(k key) (submit *string, quit bool) {
 		u.editor.Insert("\n")
 	case keyEnter:
 		if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
-			return &v, false
+			return &v, true, false // editor cleared by submit, redraw the prompt
 		}
 	case keyBackspace:
 		u.editor.Backspace()
@@ -482,19 +502,36 @@ func (u *UI) applyKey(k key) (submit *string, quit bool) {
 	case keyPageDown:
 		u.render.scroll(-u.page())
 	case keyEscape:
-		u.editor.Clear()
+		if u.editor.Value() != "" {
+			u.editor.Clear()
+		} else {
+			u.emitControl(ControlEscape) // no visual change
+			return nil, false, false
+		}
 	case keyInterrupt:
 		if u.editor.Value() == "" {
-			return nil, true
+			u.emitControl(ControlInterrupt)
+			return nil, false, false // no visual change
+		} else {
+			u.editor.Clear()
 		}
-		u.editor.Clear()
 	case keyEOF:
 		if u.editor.Value() == "" {
-			return nil, true
+			u.emitControl(ControlEOF)
+			return nil, false, false // no visual change
+		} else {
+			u.editor.DeleteForward()
 		}
-		u.editor.DeleteForward()
 	}
-	return nil, false
+	return nil, true, false
+}
+
+// emitControl reports an unconsumed key without blocking. Caller holds the lock.
+func (u *UI) emitControl(c Control) {
+	select {
+	case u.controls <- c:
+	default: // nobody is listening, drop rather than stall input
+	}
 }
 
 // readLines feeds plain mode, where the terminal handles line editing. Reads are

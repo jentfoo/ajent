@@ -52,9 +52,39 @@ const (
 )
 
 // escTimeout is how long a lone escape byte is held before it is reported as
-// keyEscape rather than the start of a longer sequence. It is a variable so
-// tests can drive the boundary deterministically.
-var escTimeout = 30 * time.Millisecond
+// keyEscape rather than the start of a longer sequence.
+const escTimeout = 50 * time.Millisecond
+
+// escTimer holds a lone escape byte until it is certain no sequence follows. The
+// interface lets tests drive the timeout paths deterministically instead of by
+// wall clock.
+type escTimer interface {
+	Reset(d time.Duration) bool
+	Stop() bool
+	C() <-chan time.Time
+}
+
+// realEsc wraps *time.Timer as an escTimer, arming lazily so a never-fired
+// timer needs no initial drain.
+type realEsc struct{ t *time.Timer }
+
+func newRealEsc() escTimer {
+	return &realEsc{t: time.NewTimer(time.Hour)}
+}
+
+func (e *realEsc) Reset(d time.Duration) bool {
+	if !e.t.Stop() {
+		select {
+		case <-e.t.C:
+		default:
+		}
+	}
+	return e.t.Reset(d)
+}
+
+func (e *realEsc) Stop() bool { return e.t.Stop() }
+
+func (e *realEsc) C() <-chan time.Time { return e.t.C }
 
 // controlKeys maps single control bytes to their editing action.
 var controlKeys = map[byte]keyType{
@@ -206,13 +236,18 @@ type inputReader struct {
 	src     io.Reader
 	keys    chan key
 	reports chan int
+
+	newTimer func() escTimer // defaults to newRealEsc, tests inject a manual one
+	escDelay time.Duration   // how long a lone escape byte is held, seeded from escTimeout
 }
 
 func newInputReader(src io.Reader) *inputReader {
 	return &inputReader{
-		src:     src,
-		keys:    make(chan key, 64),
-		reports: make(chan int, 4),
+		src:      src,
+		keys:     make(chan key, 64),
+		reports:  make(chan int, 4),
+		newTimer: newRealEsc,
+		escDelay: escTimeout,
 	}
 }
 
@@ -243,11 +278,7 @@ func (r *inputReader) run() {
 	}()
 
 	var buf []byte
-	timer := time.NewTimer(escTimeout)
-	defer timer.Stop()
-	if !timer.Stop() {
-		<-timer.C
-	}
+	timer := r.newTimer()
 
 	for {
 		for {
@@ -264,14 +295,14 @@ func (r *inputReader) run() {
 
 		var pendingEsc <-chan time.Time
 		if len(buf) > 0 && buf[0] == escByte {
-			timer.Reset(escTimeout)
-			pendingEsc = timer.C
+			timer.Reset(r.escDelay)
+			pendingEsc = timer.C()
 		}
 
 		select {
 		case res := <-reads:
 			if pendingEsc != nil && !timer.Stop() {
-				<-timer.C
+				<-timer.C()
 			}
 			buf = append(buf, res.data...)
 			if res.err != nil {

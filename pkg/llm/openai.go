@@ -46,7 +46,7 @@ func (p *responsesProvider) Stream(ctx context.Context, req Request) (Stream, er
 	}
 	resp, err := p.client.do(ctx, httpReq{
 		method: http.MethodPost, path: "/responses", body: body,
-		classify: compatClassifier(p.name, FlavorOpenAI),
+		headers: req.Model.Headers, classify: compatClassifier(p.name, FlavorOpenAI),
 	})
 	if err != nil {
 		return nil, err

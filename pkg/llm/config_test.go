@@ -27,8 +27,8 @@ func loadFixture(t *testing.T, name string) (File, []string, error) {
 func TestLoadFile(t *testing.T) {
 	t.Parallel()
 
-	t.Run("pi_style_file_loads_unchanged", func(t *testing.T) {
-		f, warnings, err := loadFixture(t, "models_pi_style.json")
+	t.Run("compat_style_file_loads_unchanged", func(t *testing.T) {
+		f, warnings, err := loadFixture(t, "models_compat_style.json")
 		require.NoError(t, err)
 		assert.Empty(t, warnings)
 
@@ -49,8 +49,8 @@ func TestLoadFile(t *testing.T) {
 		assert.Equal(t, "qwen-chat-template", *qwen.Compat.ThinkingFormat)
 		assert.Equal(t, []Modality{ModalityText, ModalityImage}, qwen.Input)
 	})
-	t.Run("pi_thinking_level_map_maps_every_level", func(t *testing.T) {
-		f, _, err := loadFixture(t, "models_pi_style.json")
+	t.Run("thinking_level_map_maps_every_level", func(t *testing.T) {
+		f, _, err := loadFixture(t, "models_compat_style.json")
 		require.NoError(t, err)
 
 		deepseek := f.Providers["lmstudio"].Models[1]
@@ -69,7 +69,9 @@ func TestLoadFile(t *testing.T) {
 
 		joined := strings.Join(warnings, "\n")
 		assert.Contains(t, joined, "bogusProviderKey")
-		assert.Contains(t, joined, "cost") // pricing is deliberately not supported
+		// cost is accepted for compatibility but pricing itself stays out of scope,
+		// so it must not warn on a real config that carries it
+		assert.NotContains(t, joined, "cost")
 	})
 	t.Run("minimal_file", func(t *testing.T) {
 		f, warnings, err := loadFixture(t, "models_minimal.json")
@@ -91,10 +93,10 @@ func TestLoadFile(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), path)
 	})
-	t.Run("pi_quirks_load_unchanged", func(t *testing.T) {
-		// line comments, a trailing comma and a duplicated key, exactly as a
-		// real pi models.json carries them
-		f, warnings, err := loadFixture(t, "models_pi_quirks.json")
+	t.Run("compat_quirks_load_unchanged", func(t *testing.T) {
+		// line comments, a trailing comma and a duplicated key, exactly as
+		// a real-world models.json carries them
+		f, warnings, err := loadFixture(t, "models_compat_quirks.json")
 		require.NoError(t, err)
 
 		models := f.Providers["lmstudio"].Models
@@ -133,6 +135,46 @@ func TestLoadFile(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, warnings)
 	})
+}
+
+// TestModelConfigCompatParity loads a compatibility-style model entry carrying the fields ajent
+// accepts for parity: per-model headers, opaque sampling params and a cost block
+// that is out of scope but must not warn.
+func TestModelConfigCompatParity(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), ModelsFileName)
+	require.NoError(t, os.WriteFile(path, []byte(`{
+  "providers": {
+    "llamacpp": {
+      "baseUrl": "http://localhost:8080",
+      "name": "Local llama.cpp",
+      "oauth": "radius",
+      "authHeader": true,
+      "models": [{
+        "id": "qwen3.6-27b-mtp",
+        "headers": { "X-Org": "acme" },
+        "samplingParams": { "temperature": 0.2, "seed": 7 },
+        "cost": { "input": 1.00, "output": 3.40 }
+      }]
+    }
+  }
+}`), config.SecretPerm))
+
+	f, warnings, err := LoadFile(path)
+	require.NoError(t, err)
+	assert.Empty(t, warnings) // cost and the accepted provider keys must not warn
+
+	p := f.Providers["llamacpp"]
+	assert.Equal(t, "Local llama.cpp", p.Name)
+	assert.Equal(t, "radius", p.OAuth)
+	require.NotNil(t, p.AuthHeader)
+	assert.True(t, *p.AuthHeader)
+
+	m := p.Models[0]
+	assert.Equal(t, map[string]string{"X-Org": "acme"}, m.Headers)
+	assert.InDelta(t, 0.2, m.SamplingParams["temperature"], 1e-9)
+	require.NotNil(t, m.Cost)
 }
 
 func TestDialectUnmarshalText(t *testing.T) {

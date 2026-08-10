@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"maps"
 	"slices"
 	"time"
@@ -192,7 +193,7 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.ReasoningReplay = orBool(c.ReasoningReplay, o.RequiresReasoningReplay)
 	c.ReplayReasoning = orBool(c.ReplayReasoning, o.RequiresReasoningContent)
 
-	// supportsReasoningEffort is pi's way of saying the model takes an effort
+	// supportsReasoningEffort signals the model takes an effort
 	// parameter rather than a token budget
 	if o.SupportsReasoningEffort != nil && *o.SupportsReasoningEffort {
 		c.Reasoning = ReasoningOpenAIEffort
@@ -208,6 +209,34 @@ func orBool(dst bool, p *bool) bool {
 		return *p
 	}
 	return dst
+}
+
+// mergeExtra overlays src keys onto base verbatim body additions.
+func mergeExtra(base, src map[string]json.RawMessage) map[string]json.RawMessage {
+	out := maps.Clone(base)
+	if out == nil {
+		out = make(map[string]json.RawMessage, len(src))
+	}
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+// rawSamplingParams re-encodes opaque sampling params as verbatim body keys.
+func rawSamplingParams(params map[string]any) map[string]json.RawMessage {
+	if len(params) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(params))
+	for k, v := range params {
+		b, err := json.Marshal(v)
+		if err != nil {
+			continue // a value that cannot marshal is dropped rather than failing the model
+		}
+		out[k] = b
+	}
+	return out
 }
 
 func orStr(dst string, p *string) string {
@@ -226,6 +255,11 @@ func resolveModel(provider string, base Capabilities, providerCompat *Compat, mc
 	if len(mc.LevelMap) > 0 {
 		caps.LevelMap = maps.Clone(mc.LevelMap)
 	}
+	// sampling params ride the same verbatim body escape hatch as extraBody, so
+	// every adapter that folds one in picks up both without a new code path.
+	if len(mc.SamplingParams) > 0 {
+		caps.ExtraBody = mergeExtra(caps.ExtraBody, rawSamplingParams(mc.SamplingParams))
+	}
 	if caps.Reasoning == ReasoningNone {
 		caps.ReasoningReplay = false
 	}
@@ -237,6 +271,7 @@ func resolveModel(provider string, base Capabilities, providerCompat *Compat, mc
 		Aliases:  slices.Clone(mc.Aliases),
 		Input:    slices.Clone(mc.Input),
 		Caps:     caps,
+		Headers:  maps.Clone(mc.Headers),
 	}
 	if mc.ContextWindow != nil {
 		m.ContextWindow = *mc.ContextWindow

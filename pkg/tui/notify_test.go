@@ -180,17 +180,17 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.Contains(t, got, "opus-5")
 		assert.NotContains(t, got, "subagents: 2")
 	})
-	t.Run("context_and_model_survive_longest", func(t *testing.T) {
-		got := s.render(plain, 40)
-		assert.Contains(t, got, "ctx 34%")
+	t.Run("context_bar_survives_longest", func(t *testing.T) {
+		got := s.render(plain, 22)
+		assert.Contains(t, got, "68.2k/200k") // the token totals outlive segments and model
 	})
 	t.Run("empty_segment_text_skipped", func(t *testing.T) {
 		got := Status{Model: "m", Segments: []Segment{{Key: "a", Text: ""}}}.render(plain, 80)
 		assert.Equal(t, "m", got)
 	})
-	t.Run("no_segments_matches_the_old_shape", func(t *testing.T) {
+	t.Run("no_segments_matches_the_bar_shape", func(t *testing.T) {
 		got := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}.render(plain, 80)
-		assert.Equal(t, "ctx 34% ▓▓▓▓░░░░░░ 68.2k/200k · opus-5", got)
+		assert.Equal(t, "▓▓▓▓░░░░░░ 68.2k/200k · opus-5", got)
 	})
 }
 

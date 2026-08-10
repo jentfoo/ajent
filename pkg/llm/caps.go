@@ -69,7 +69,7 @@ func (s *ReasoningStyle) UnmarshalText(data []byte) error {
 	return reasoningNames.unmarshalText(data, s, "reasoning style")
 }
 
-// UnmarshalJSON also accepts a bool, so a pi model entry declaring
+// UnmarshalJSON also accepts a bool, so a model entry declaring
 // "reasoning": true carries over unchanged.
 func (s *ReasoningStyle) UnmarshalJSON(data []byte) error {
 	var b bool

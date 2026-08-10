@@ -13,7 +13,7 @@ func TestStatusRender(t *testing.T) {
 
 	t.Run("full_line", func(t *testing.T) {
 		s := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}
-		assert.Equal(t, "ctx 34% ▓▓▓▓░░░░░░ 68.2k/200k · opus-5", s.render(plain, 80))
+		assert.Equal(t, "▓▓▓▓░░░░░░ 68.2k/200k · opus-5", s.render(plain, 80))
 	})
 	t.Run("model_only", func(t *testing.T) {
 		assert.Equal(t, "opus-5", Status{Model: "opus-5"}.render(plain, 80))
@@ -21,13 +21,15 @@ func TestStatusRender(t *testing.T) {
 	t.Run("empty_status", func(t *testing.T) {
 		assert.Empty(t, Status{}.render(plain, 80))
 	})
-	t.Run("truncated_to_width", func(t *testing.T) {
+	t.Run("context_survives_narrow_width", func(t *testing.T) {
 		s := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}
-		assert.Equal(t, "ctx 34%", s.render(plain, 7))
+		got := s.render(plain, 21)
+		assert.Equal(t, "▓▓▓▓░░░░░░ 68.2k/200k", got) // the bar survives; the model drops
 	})
 	t.Run("over_capacity_clamped", func(t *testing.T) {
-		s := Status{Tokens: 300000, MaxTokens: 200000}
-		assert.Equal(t, "ctx 100% ▓▓▓▓▓▓▓▓▓▓ 300k/200k", s.render(plain, 80))
+		s := Status{Tokens: 300000, MaxTokens: 100}
+		// tokens past the window clamp to a full bar rather than overflowing
+		assert.Equal(t, "▓▓▓▓▓▓▓▓▓▓ 300k/100", s.render(plain, 80))
 	})
 	t.Run("styled_when_color_enabled", func(t *testing.T) {
 		s := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}

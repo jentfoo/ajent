@@ -42,7 +42,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request) (Stream, er
 	}
 	resp, err := p.client.do(ctx, httpReq{
 		method: http.MethodPost, path: "/v1/messages", body: body,
-		classify: anthropicClassifier(p.name),
+		headers: req.Model.Headers, classify: anthropicClassifier(p.name),
 	})
 	if err != nil {
 		return nil, err
@@ -72,7 +72,7 @@ func (p *anthropicProvider) CountTokens(ctx context.Context, req Request) (int, 
 
 	resp, err := p.client.do(ctx, httpReq{
 		method: http.MethodPost, path: "/v1/messages/count_tokens", body: body,
-		classify: anthropicClassifier(p.name),
+		headers: req.Model.Headers, classify: anthropicClassifier(p.name),
 	})
 	if err != nil {
 		return 0, err
