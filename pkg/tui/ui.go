@@ -26,7 +26,11 @@ const (
 	maxInputRatio   = 3 // input may take at most this fraction of the screen
 )
 
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// The frames rotate clockwise around the perimeter; ⠦ (bottom-left) leads, so when idle
+// it rests at the bottom-left of the cell rather than starting from the top. Idle reuses
+// frame[0], and since every frame shares a column width, turning busy never shifts the
+// status line.
+var spinnerFrames = []string{"⠦", "⠧", "⠇", "⠏", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴"}
 
 // Control is an out-of-band key the caller decides the meaning of. The editor
 // does not consume these; the TUI front end maps them onto agent control calls.
@@ -45,6 +49,12 @@ type Options struct {
 	Mode      Mode     // paint mode, ModeAuto detects multiplexers
 	Model     string
 	MaxTokens int
+	// Rewind enables the double-Esc rewind gesture. While idle (SetIdle(true)) and
+	// no interaction is active, two Esc presses within DoubleEscWindow call
+	// OnRewind instead of emitting a lone Escape control; a single Esc still emits
+	// ControlEscape after one window. Leave OnRewind nil to keep plain single-Esc.
+	DoubleEscWindow time.Duration // how close two idle Esc presses must be; 0 uses the default
+	OnRewind        func()
 }
 
 // UI is the terminal front end: committed history above a live block holding the
@@ -69,11 +79,21 @@ type UI struct {
 	thinking  bool
 	outBuf    lineBuffer
 	textBuf   string
+	streaming bool // a text block is partially buffered; show it live above input
 	textStart bool
 
-	tool      string
-	spinner   int
+	tool    string
+	busy    bool // a turn is in flight; the status-bar glyph animates while set
+	spinner int
 	spinnerCh chan struct{}
+
+	// rewind gesture configuration and state (see rewind.go)
+	doubleEscWindow time.Duration
+	onRewind        func()
+	idle            bool // host marks true while awaiting prompt, false during a turn
+	escPending      bool // first idle Esc seen; waiting for a second within the window
+	rewTimer        escToken
+	afterDelay      func(time.Duration, func()) *time.Timer // time.AfterFunc unless overridden in tests
 
 	act        *pending // interaction owning the live block
 	queue      []*pending
@@ -110,6 +130,14 @@ func New(opts Options) (*UI, error) {
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
 	}
+	doubleEsc := opts.DoubleEscWindow
+	if doubleEsc <= 0 {
+		doubleEsc = defaultDoubleEscWindow
+	}
+	u.doubleEscWindow = doubleEsc
+	u.onRewind = opts.OnRewind
+	u.afterDelay = time.AfterFunc
+
 	if err := u.render.start(u.inFd); err != nil {
 		return nil, err
 	}
@@ -167,9 +195,36 @@ func (u *UI) Close() {
 	}
 	u.closed = true
 	u.stopSpinner()
+	u.cancelRewindLocked()
 	u.cancelInteractions()
 	close(u.done)
 	u.render.close(u.inFd)
+}
+
+// Reset drops rendered state so a rewind can redraw just the current session.
+// Where the renderer owns scrollback (alt mode) committed lines go too; inline
+// keeps the terminal's own scrollback but our buffers and live block reset. The
+// next Replay paints the restored branch fresh.
+func (u *UI) Reset() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed {
+		return
+	}
+	u.stopSpinner()
+	u.cancelRewindLocked()
+	u.thinkBuf.Flush()
+	u.outBuf.Flush()
+	u.textBuf = ""
+	u.streaming = false
+	u.textStart = false
+	u.started = false // the next gap no longer needs a leading blank line
+	u.lastBlank = false
+	u.thinking = false
+	u.tool = ""
+	u.busy = false
+	u.noticeText = ""
+	u.render.clearHistory()
 }
 
 // SetStatus replaces the whole status line, including the model and every
@@ -188,6 +243,18 @@ func (u *UI) SetTokens(tokens int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.status.Tokens = tokens
+	u.repaint()
+}
+
+// SetInput replaces the editor buffer, e.g. pre-filling a prompt after a rewind
+// so it can be edited or re-sent as the start of a new branch.
+func (u *UI) SetInput(text string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed || u.act != nil { // never clobber an active interaction's input
+		return
+	}
+	u.editor.SetValue(text)
 	u.repaint()
 }
 
@@ -219,24 +286,46 @@ func (u *UI) EndThinking() {
 	u.thinking = false
 }
 
-// Text streams assistant output, rendering markdown once each block is complete.
+// Text streams assistant output. Complete markdown blocks commit to history;
+// the partial remainder renders live above the input so a reply appears word by
+// word instead of only at block boundaries.
 func (u *UI) Text(delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.textBuf += delta
+	u.streaming = true
 	done, rest := splitCompleteBlocks(u.textBuf)
 	u.textBuf = rest
 	u.writeMarkdown(done)
+	if len(rest) > 0 {
+		u.repaint() // refresh the live preview as the partial block grows
+	}
 }
 
-// EndText renders whatever remains of the current message.
+// EndText renders whatever remains of the current message and drops the preview.
 func (u *UI) EndText() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	rest := u.textBuf
 	u.textBuf = ""
+	u.streaming = false
 	u.writeMarkdown(rest)
 	u.textStart = false
+	u.repaint() // drop the live preview now that the message is committed
+}
+
+// streamingRows lays the in-progress markdown out into display rows for the live
+// block, re-wrapping prose at width so it reads like the finished message.
+func (u *UI) streamingRows(w int) []string {
+	if !u.streaming || strings.TrimSpace(u.textBuf) == "" {
+		return nil
+	}
+	lines := renderMarkdown(u.theme, w, u.textBuf)
+	var out []string
+	for _, l := range lines {
+		out = append(out, wrapLine(l.text, w)...)
+	}
+	return out
 }
 
 // Output streams raw tool output, committed a line at a time with no markdown
@@ -266,16 +355,17 @@ func (u *UI) Diff(path, before, after string) {
 	u.commit(out, flowWrap)
 }
 
-// ToolStart commits the tool header and spins a transient line above the input.
-// The returned function clears the spinner and commits result, which may be empty
-// when the output was already streamed through Output.
+// ToolStart commits the tool header to history. While active, the running tool's
+// label rides in the status bar next to the working glyph (bottom-left corner);
+// no separate spinner row is drawn above the input. The returned function clears
+// it and commits result, which may be empty when output was already streamed.
 func (u *UI) ToolStart(label string) func(result string) {
 	u.mu.Lock()
 	u.gap()
 	u.commit(u.theme.Accent.Wrap(toolMarker)+" "+u.theme.Dim.Wrap(label), flowReflow)
 	u.tool = label
 	u.spinner = 0
-	u.startSpinner()
+	u.syncSpinnerLocked()
 	u.repaint()
 	u.mu.Unlock()
 
@@ -283,10 +373,34 @@ func (u *UI) ToolStart(label string) func(result string) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		u.tool = ""
-		u.stopSpinner()
 		if result != "" {
 			u.commit(styleLines(u.theme.Dim, indentLines(result, userContinue, userContinue)), flowWrap)
 		}
+		// the tool label leaves the status bar; a busy turn keeps its glyph animated
+		u.syncSpinnerLocked()
+		u.repaint()
+	}
+}
+
+// Busy makes the status-bar glyph animate for as long as a turn is in flight, so
+// there is always an indicator while the model thinks or works. The returned
+// function returns it to its static resting frame.
+func (u *UI) Busy() func() {
+	u.mu.Lock()
+	u.busy = true
+	u.spinner = 0
+	u.syncSpinnerLocked()
+	u.repaint()
+	u.mu.Unlock()
+
+	return func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		if !u.busy {
+			return
+		}
+		u.busy = false
+		u.syncSpinnerLocked()
 		u.repaint()
 	}
 }
@@ -351,13 +465,11 @@ func (u *UI) repaint() {
 	w, h := u.render.size()
 
 	var rows []string
-	if u.tool != "" {
-		frame := spinnerFrames[u.spinner%len(spinnerFrames)]
-		rows = append(rows, u.theme.Spinner.Wrap(frame)+" "+u.theme.Dim.Wrap(u.tool))
-	}
 	if u.noticeText != "" {
 		rows = append(rows, u.noticeText)
 	}
+	// in-progress markdown streams above the input so a reply appears live
+	rows = append(rows, u.streamingRows(w)...)
 	offset := len(rows)
 
 	// an interaction takes the input's place while it is active, so the editor
@@ -373,7 +485,17 @@ func (u *UI) repaint() {
 		inputRows, curRow, curCol = u.editor.inputView(u.theme, w, maxRows)
 		rows = append(rows, inputRows...)
 	}
-	rows = append(rows, u.status.render(u.theme, w))
+	// the working glyph and any running tool sit at the start of the status bar (bottom
+	// left corner) so streamed output above can never displace or corrupt them. It only
+	// animates while something is in flight; it rests as a static frame otherwise.
+	st := u.status
+	frame := spinnerFrames[u.spinner%len(spinnerFrames)]
+	if !u.busy && u.tool == "" {
+		frame = spinnerFrames[0] // static resting frame when idle; bottom-left of the cell
+	}
+	st.Spinner = u.theme.Spinner.Wrap(frame)
+	st.Tool = u.tool
+	rows = append(rows, st.render(u.theme, w))
 
 	u.render.setLive(rows, offset+curRow, curCol)
 }
@@ -396,6 +518,16 @@ func (u *UI) startSpinner() {
 			}
 		}
 	})
+}
+
+// syncSpinnerLocked keeps the frame ticker running exactly while some indicator
+// needs it. Caller holds the lock.
+func (u *UI) syncSpinnerLocked() {
+	if u.busy || u.tool != "" {
+		u.startSpinner()
+	} else {
+		u.stopSpinner()
+	}
 }
 
 // tickSpinner advances the spinner one frame.
@@ -456,10 +588,13 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	}
 	switch k.typ {
 	case keyRune:
+		u.cancelRewindLocked() // typing ends the idle double-Esc window
 		u.editor.Insert(k.text)
 	case keyPaste:
+		u.cancelRewindLocked()
 		u.editor.Insert(strings.ReplaceAll(k.text, "\r", "\n"))
 	case keyNewline:
+		u.cancelRewindLocked()
 		u.editor.Insert("\n")
 	case keyEnter:
 		if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
@@ -503,7 +638,20 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.render.scroll(-u.page())
 	case keyEscape:
 		if u.editor.Value() != "" {
+			// Esc clears the buffer rather than rewinding; drop any half-armed
+			// gesture so its deferred lone-Esc cannot fire after this press.
+			u.cancelRewindLocked()
 			u.editor.Clear()
+		} else if u.idle && u.onRewind != nil && u.act == nil {
+			// idle prompt: defer the lone-Esc emission one window so a second Esc
+			// can rewind instead of interrupting (which mid-turn still does)
+			if u.escPending { // second Esc inside the window -> rewind gesture
+				u.cancelRewindLocked()
+				u.triggerRewind()
+				return nil, false, false
+			}
+			u.armRewindLocked()
+			return nil, false, false // nothing changed on screen yet
 		} else {
 			u.emitControl(ControlEscape) // no visual change
 			return nil, false, false

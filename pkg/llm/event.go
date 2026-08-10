@@ -84,32 +84,36 @@ const (
 	StopError
 )
 
-// String returns the stop reason name used in logs and golden fixtures.
-func (s StopReason) String() string {
-	switch s {
-	case StopEndTurn:
-		return "end_turn"
-	case StopToolUse:
-		return "tool_use"
-	case StopMaxTokens:
-		return "max_tokens"
-	case StopAborted:
-		return "aborted"
-	case StopError:
-		return "error"
-	default:
-		return "unknown"
-	}
+var stopReasonNames = enumNames[StopReason]{
+	StopEndTurn:   "end_turn",
+	StopToolUse:   "tool_use",
+	StopMaxTokens: "max_tokens",
+	StopAborted:   "aborted",
+	StopError:     "error",
 }
+
+// String returns the stop reason name used in logs and golden fixtures.
+func (s StopReason) String() string { return stopReasonNames.name(s) }
+
+// MarshalText encodes the stop reason as its canonical name.
+func (s StopReason) MarshalText() ([]byte, error) { return stopReasonNames.marshalText(s) }
+
+// UnmarshalText decodes a canonical stop-reason name.
+func (s *StopReason) UnmarshalText(data []byte) error {
+	return stopReasonNames.unmarshalText(data, s, "stop reason")
+}
+
+// ParseStop returns the stop reason named by s.
+func ParseStop(s string) (StopReason, bool) { return stopReasonNames.lookup(s) }
 
 // Usage is the provider reported token accounting for one response, to be
 // aggregated by callers.
 type Usage struct {
-	Input      int
-	Output     int
-	CacheRead  int
-	CacheWrite int
-	Reasoning  int // when reported separately
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	CacheRead  int `json:"cacheRead"`
+	CacheWrite int `json:"cacheWrite"`
+	Reasoning  int `json:"reasoning"` // when reported separately
 }
 
 // Add folds o into u, for providers that report usage incrementally.

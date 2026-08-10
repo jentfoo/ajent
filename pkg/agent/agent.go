@@ -17,8 +17,9 @@ type Options struct {
 	Sink      Sink
 	Tools     ToolSet
 	Env       Environment
-	Transform Transform // nil is identity
-	MaxSteps  int       // defaults to defaultMaxSteps
+	Transform Transform         // nil is identity
+	OnMessage func(MessageInfo) // nil is a no-op; called once per appended message in loop order
+	MaxSteps  int               // defaults to defaultMaxSteps
 }
 
 // Agent runs turns against a model provider, streaming deltas to the sink and
@@ -94,4 +95,17 @@ func (a *Agent) Interrupt() {
 // It returns when both queues are empty or the context ends.
 func (a *Agent) Prompt(ctx context.Context, in Input) error {
 	return a.runTurns(ctx, []Input{in})
+}
+
+// ResetState replaces the in-memory context after a rewind onto an earlier
+// branch point. It is refused while a turn is running: rewinding must happen at
+// rest, so swapping *State cannot race the loop reading it.
+func (a *Agent) ResetState(st *State) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running {
+		return false
+	}
+	a.state = st
+	return true
 }

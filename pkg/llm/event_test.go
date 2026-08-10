@@ -1,9 +1,11 @@
 package llm
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUsageAdd(t *testing.T) {
@@ -68,4 +70,41 @@ func TestStopReasonString(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.reason.String())
 		})
 	}
+}
+
+func TestStopReasonMarshalRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	for _, reason := range []StopReason{StopEndTurn, StopToolUse, StopMaxTokens, StopAborted, StopError} {
+		b, err := json.Marshal(reason)
+		require.NoError(t, err)
+		assert.Equal(t, `"`+reason.String()+`"`, string(b))
+
+		var back StopReason
+		require.NoError(t, json.Unmarshal(b, &back))
+		assert.Equal(t, reason, back)
+	}
+}
+
+func TestParseStop(t *testing.T) {
+	t.Parallel()
+
+	got, ok := ParseStop("tool_use")
+	require.True(t, ok)
+	assert.Equal(t, StopToolUse, got)
+
+	_, ok = ParseStop("TOOL_USE") // case insensitive
+	require.True(t, ok)
+
+	_, ok = ParseStop("bogus")
+	assert.False(t, ok)
+}
+
+func TestUsageJSONTags(t *testing.T) {
+	t.Parallel()
+
+	u := Usage{Input: 1, Output: 2, CacheRead: 3, CacheWrite: 4, Reasoning: 5}
+	b, err := json.Marshal(u)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"input":1,"output":2,"cacheRead":3,"cacheWrite":4,"reasoning":5}`, string(b))
 }

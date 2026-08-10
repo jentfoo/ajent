@@ -86,6 +86,14 @@ func (r *inlineRenderer) commit(lines []histLine) {
 	r.t.write(b.String())
 }
 
+// clearHistory clears the live block; committed scrollback belongs to the
+// terminal in this mode and cannot be erased. The UI resets its own buffers.
+func (r *inlineRenderer) clearHistory() {
+	r.t.write(r.eraseLive())
+	r.live = nil
+	r.drawn = false
+}
+
 func (r *inlineRenderer) setLive(rows []string, caretRow, caretCol int) {
 	var b strings.Builder
 	b.WriteString(beginSync)

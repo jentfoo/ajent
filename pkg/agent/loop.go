@@ -110,7 +110,9 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 			result.Err = err
 			break
 		}
-		a.state.Messages = append(a.state.Messages, msg)
+		// usage rides with the assistant message it came from so a session records
+		// per-message token accounting (user echoes and tool results carry none).
+		a.append(MessageInfo{Message: msg, Stop: stop, Usage: usage})
 		result.Steps = step
 
 		if turnCtx.Err() != nil {
@@ -175,7 +177,7 @@ func (a *Agent) appendSteer(inputs []Input) {
 		if len(blocks) == 0 {
 			continue // an empty steer would inject a blank user turn
 		}
-		a.state.Messages = append(a.state.Messages, llm.Message{Role: llm.RoleUser, Content: blocks})
+		a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}})
 	}
 }
 
@@ -230,7 +232,12 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	}
 
 	msg := acc.Message()
-	return msg, acc.Usage(), acc.StopReason(), streamErr(st, &acc)
+	stop := acc.StopReason()
+	if ctx.Err() != nil {
+		// interrupted mid-stream: the partial message records its real reason
+		stop = llm.StopAborted
+	}
+	return msg, acc.Usage(), stop, streamErr(st, &acc)
 }
 
 // forward maps one event onto sink calls. Block boundaries come from the end
@@ -337,7 +344,17 @@ func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock
 	for i, r := range results {
 		content[i] = r
 	}
-	a.state.Messages = append(a.state.Messages, llm.Message{Role: llm.RoleUser, Content: content})
+	a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: content}})
+}
+
+// append records one message in state and notifies the OnMessage hook so a
+// session can persist it as the loop appends it. Called on the loop goroutine,
+// so ordering matches the transcript exactly.
+func (a *Agent) append(info MessageInfo) {
+	a.state.Messages = append(a.state.Messages, info.Message)
+	if h := a.opts.OnMessage; h != nil {
+		h(info)
+	}
 }
 
 // callFrom adapts a model tool-call block into the agent's ToolCall.

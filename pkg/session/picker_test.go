@@ -1,0 +1,231 @@
+package session
+
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// TestPickerRowsInterleaved builds a branch with user, assistant-text and
+// tool-only entries interleaved and asserts exactly which rows appear, newest
+// first, with correct kinds and ordinals.
+func TestPickerRowsInterleaved(t *testing.T) {
+	t.Parallel()
+
+	entries := []Entry{
+		sessionOnly("root"),
+		pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
+		pickAssistText("a1", "u1", "an answer"),
+		pickToolCall("t1", "a1"), // assistant turn ending in a tool call
+		pickToolResultMsg("r1", "t1"),
+	}
+
+	rows := PickerRows(entries)
+	assert.Len(t, rows, 4) // session entry is skipped
+
+	assert.Equal(t, RowTool, rows[0].Kind)
+	assert.Equal(t, "r1", rows[0].ID)
+
+	assert.Equal(t, RowTool, rows[1].Kind)
+	assert.Equal(t, "t1", rows[1].ID)
+
+	// newest-first means the assistant answer precedes its user prompt
+	assert.Equal(t, RowAssistant, rows[2].Kind)
+	assert.Equal(t, "a1", rows[2].ID)
+	assert.Equal(t, RowUser, rows[3].Kind)
+	assert.Equal(t, "u1", rows[3].ID)
+	assert.Equal(t, 4, rows[0].Ordinal, "ordinals count pickable rows from the root")
+	assert.Equal(t, 2, rows[2].Ordinal)
+
+	// the collapsed tool call shows [name] args
+	assert.Contains(t, rows[1].Label, "[bash]")
+}
+
+func TestPickerRowLabelsAndKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   Entry
+		want RowKind
+		sub  string // substring expected in Label; empty means row skipped
+	}{
+		{"user_text", pickMsg("a", "", llm.Text(llm.RoleUser, "hello world")), RowUser, "user: hello"},
+		{"assistant_text", pickAssistText("b", "", "the fix is here"), RowAssistant, "assistant: the fix"},
+		{"tool_call_only", pickToolCall("c", ""), RowTool, "[bash] read main.go"},
+		{"session_skipped", sessionOnly("s"), 0, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := PickerRows([]Entry{tc.in})
+			if tc.sub == "" {
+				assert.Empty(t, rows)
+				return
+			}
+			require.Len(t, rows, 1)
+			assert.Equal(t, tc.want, rows[0].Kind)
+			assert.Contains(t, rows[0].Label, tc.sub)
+		})
+	}
+}
+
+func TestPickerRowsToolResultCollapsesToOneLine(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+		llm.ToolResultBlock{CallID: "c1", IsError: false,
+			Content: llm.BlockList{llm.TextBlock{Text: "ok  0.4s"}}},
+	}}
+	e := pickMsg("r1", "", m)
+	rows := PickerRows([]Entry{e})
+	require.Len(t, rows, 1)
+	assert.Equal(t, RowTool, rows[0].Kind)
+	assert.Contains(t, rows[0].Label, "ok  0.4s")
+}
+
+// TestTreeRowsFlatLinear verifies an un-forked chat stays one flat column: every
+// message at depth 0 with no branch connectors.
+func TestTreeRowsFlatLinear(t *testing.T) {
+	t.Parallel()
+
+	entries := []Entry{
+		sessionOnly("root"),
+		pickMsg("u1", "root", llm.Text(llm.RoleUser, "hihi hi again")),
+		pickAssistText("a2", "u1", "Hi!"),
+		pickMsg("u3", "a2", llm.Text(llm.RoleUser, "idk how do you feel?")),
+		pickAssistText("a4", "u3", "I don't have feelings per se"),
+	}
+
+	tree := TreeRows(entries, "a4")
+	require.Len(t, tree, 4) // session entry skipped
+
+	// pre-order from the root: oldest first along a single chain.
+	assert.Equal(t, []string{"u1", "a2", "u3", "a4"}, idsOf(tree))
+	for _, r := range tree {
+		assert.Equalf(t, 0, r.Depth, "linear chain must stay flat (id=%s)", r.ID)
+		assert.Emptyf(t, r.Guide, "no fork means no branch connector (id=%s)", r.ID)
+	}
+	// the whole active path is live.
+	for _, r := range tree {
+		assert.Truef(t, r.Active, "every node of a linear chat is on the head's path (id=%s)", r.ID)
+	}
+}
+
+// TestTreeRowsShowsFork verifies that rewinding + resubmitting produces two
+// branches at the SAME level: both children of the fork point move down one
+// together, drawn with connectors. The most recent branch lists first.
+func TestTreeRowsShowsFork(t *testing.T) {
+	t.Parallel()
+
+	entries := []Entry{
+		sessionOnly("root"),
+		pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
+	}
+	// u1 forks into a1 (old) and u2->a2 (newer).
+	forked := append([]Entry(nil), entries...)
+	forked = append(forked,
+		pickAssistText("a1", "u1", "an answer"), // old, abandoned
+		pickMsg("u2", "u1", llm.Text(llm.RoleUser, "unrelated fork")),
+		pickAssistText("a2", "u2", "the other reply"))
+
+	// head is a2; u1 and u2 are active, a1 is an abandoned fork.
+	tree := TreeRows(forked, "a2")
+	require.Len(t, tree, 4) // u1 + (a1 | u2,a2)
+
+	// pre-order in insertion order: older sibling first, newer branch last (bottom).
+	assert.Equal(t, []string{"u1", "a1", "u2", "a2"}, idsOf(tree))
+
+	depth := map[string]int{}
+	guide := map[string]string{}
+	active := map[string]bool{}
+	for _, r := range tree {
+		depth[r.ID], guide[r.ID], active[r.ID] = r.Depth, r.Guide, r.Active
+	}
+	// both siblings of the fork sit at depth 1 together; the shared root stays flat.
+	assert.Equal(t, 0, depth["u1"])
+	assert.Equal(t, 1, depth["a1"], "older branch indented one level")
+	assert.Equal(t, 1, depth["u2"], "newer branch at the SAME level as its sibling")
+	assert.Equal(t, 1, depth["a2"])
+
+	// drawn with connectors: older child listed first (├──), newer closes the fork (└──).
+	assert.Empty(t, guide["u1"])
+	assert.Equal(t, "├── ", guide["a1"], "older sibling is the first listed branch")
+	assert.Equal(t, "└── ", guide["u2"], "newer sibling closes the fork at the bottom")
+	assert.Equal(t, "   ", guide["a2"], "continuation blank because its parent u2 is last (newest at bottom)")
+
+	// u2 is the last/newest sibling -> └──; a1 is not live.
+	assert.True(t, active["u1"] && active["u2"] && active["a2"])
+	assert.False(t, active["a1"])
+}
+
+func idsOf(rows []TreeRow) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = r.ID
+	}
+	return out
+}
+
+func depths(rows []TreeRow) []int {
+	out := make([]int, len(rows))
+	for i, r := range rows {
+		out[i] = r.Depth
+	}
+	return out
+}
+
+// helpers ---------------------------------------------------------
+
+func sessionOnly(id string) Entry {
+	return Entry{ID: id, Type: TypeSession}
+}
+
+func pickMsg(id, parent string, m llm.Message) Entry {
+	return Entry{ID: id, ParentID: parent, Type: TypeMessage,
+		Data: mustJSON(MessageData{Message: m})}
+}
+
+func pickAssistText(id, parent, text string) Entry {
+	return pickMsg(id, parent, llm.Text(llm.RoleAssistant, text))
+}
+
+// pickToolCall is an assistant message that only carries a bash tool call.
+func pickToolCall(id, parent string) Entry {
+	m := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+		llm.ToolCallBlock{ID: "c1", Name: "bash",
+			Input: json.RawMessage(`{"command":"read main.go"}`)},
+	}}
+	return pickMsg(id, parent, m)
+}
+
+// pickToolResultMsg is a user message holding only tool results.
+func pickToolResultMsg(id, parent string) Entry {
+	m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+		llm.ToolResultBlock{CallID: "c1",
+			Content: llm.BlockList{llm.TextBlock{Text: "line one\nline two"}}},
+	}}
+	return pickMsg(id, parent, m)
+}
+
+// TestEntryMessageText verifies the untruncated, newline-preserving prompt text
+// returned for pre-filling the editor on rewind.
+func TestEntryMessageText(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+		llm.TextBlock{Text: "line one"},
+		llm.TextBlock{Text: "line two\nwith more"},
+	}}
+	e := pickMsg("u1", "", m)
+	assert.Equal(t, "line one\nline two\nwith more", EntryMessageText(e))
+
+	// tool-only and non-message entries carry no prompt text.
+	toolOnly := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+		llm.ToolResultBlock{CallID: "c1"},
+	}}
+	assert.Equal(t, "", EntryMessageText(pickMsg("r", "", toolOnly)))
+	assert.Equal(t, "", EntryMessageText(sessionOnly("s")))
+}

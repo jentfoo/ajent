@@ -96,9 +96,9 @@ func TestDecodeKeyIncomplete(t *testing.T) {
 // wall clock. It may be called from the inputReader run goroutine while the
 // test polls its state, so it guards those fields with a mutex.
 type manualEsc struct {
-	ch    chan time.Time
-	mu    sync.Mutex
-	delay time.Duration // last Reset duration, for assertion
+	ch     chan time.Time
+	mu     sync.Mutex
+	delay  time.Duration // last Reset duration, for assertion
 	resets int
 }
 

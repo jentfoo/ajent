@@ -45,6 +45,13 @@ type TurnResult struct {
 	Err   error // transport or context failure; tool errors are results not this
 }
 
+// MessageInfo is one appended message and what the stream reported with it.
+type MessageInfo struct {
+	Message llm.Message
+	Stop    llm.StopReason // assistant messages only
+	Usage   llm.Usage
+}
+
 // ToolCall is one model-requested invocation handed to a Tool.
 type ToolCall struct {
 	ID    string

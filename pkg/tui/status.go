@@ -23,6 +23,8 @@ type Segment struct {
 // is tracked here but no longer shown as a permanent "ctx %" bar; it is reported
 // elsewhere, so the status line stays model plus any transient segments.
 type Status struct {
+	Spinner   string // the working glyph, first element (bottom-left corner); static at rest
+	Tool      string // a running tool's label, shown right after the spinner while active
 	Model     string
 	Tokens    int // context usage count, kept for reporting outside the bar
 	MaxTokens int // the active model's window, same purpose
@@ -48,6 +50,12 @@ func (s Status) render(t Theme, width int) string {
 // duplicates what the bar already conveys.
 func (s Status) parts(t Theme) []string {
 	var parts []string
+	if s.Spinner != "" {
+		parts = append(parts, s.Spinner)
+	}
+	if s.Tool != "" {
+		parts = append(parts, t.Dim.Wrap(s.Tool))
+	}
 	if s.MaxTokens > 0 {
 		pct := s.Tokens * 100 / s.MaxTokens
 		if pct < 0 {

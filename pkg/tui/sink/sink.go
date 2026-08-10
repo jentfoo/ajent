@@ -18,16 +18,22 @@ type Sink struct {
 	ui   *tui.UI
 	toks int // last reported context size, so repeated Usage calls never shrink it
 
-	mu sync.Mutex
+	busy func() // clears the working spinner; nil while idle
+	mu   sync.Mutex
 }
 
 // New returns a sink that drives ui.
 func New(ui *tui.UI) *Sink { return &Sink{ui: ui} }
 
-// TurnStart is required by the interface; nothing needs rendering here now that
-// the interrupt hint lives outside the status bar.
+// TurnStart echoes the prompt so a replay or resume shows each user message,
+// and live turns render it too — startTurn no longer pre-echoes. It also lights
+// the working spinner: from here until TurnEnd the model owns control, so there
+// is always an indicator that something is in flight even before the first token.
 func (s *Sink) TurnStart(info agent.TurnInfo) {
-	_ = info
+	if strings.TrimSpace(info.Input.Text) != "" {
+		s.ui.UserEcho(info.Input.Text)
+	}
+	s.busy = s.ui.Busy()
 }
 
 // Thinking streams reasoning output.
@@ -80,10 +86,15 @@ func (s *Sink) Notice(msg string, level agent.Level) {
 	s.ui.Notify(msg, tui.Level(level))
 }
 
-// TurnEnd updates the context bar from the turn's totals and flushes any open
-// tool output line. Failures and aborts already landed as notices from the loop.
+// TurnEnd updates the context bar from the turn's totals, flushes any open
+// tool output line and clears the working spinner. Failures and aborts already
+// landed as notices from the loop.
 func (s *Sink) TurnEnd(res agent.TurnResult) {
 	s.ui.EndOutput()
+	if s.busy != nil {
+		s.busy()
+		s.busy = nil
+	}
 	if n := res.Usage.Input + res.Usage.CacheRead; n > 0 {
 		s.mu.Lock()
 		if n > s.toks {

@@ -69,7 +69,8 @@ func TestUIInput(t *testing.T) {
 
 	t.Run("block_starts_at_the_top", func(t *testing.T) {
 		assert.Equal(t, promptFirst+inputHint, v.Line(0))
-		assert.Equal(t, "░░░░░░░░░░ 0/1k · test", v.Line(1))
+		// the leftmost working glyph always leads the status line
+		assert.Equal(t, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test", v.Line(1))
 	})
 	t.Run("typed_text_replaces_hint", func(t *testing.T) {
 		_, err := io.WriteString(pw, "hi")
@@ -84,7 +85,8 @@ func TestUIInput(t *testing.T) {
 	})
 	t.Run("status_follows_the_input", func(t *testing.T) {
 		u.SetStatus(Status{Model: "opus-5"})
-		assert.Equal(t, "opus-5", v.Line(1))
+		// the working glyph always leads, then the model
+		assert.Equal(t, spinnerFrames[0]+" · opus-5", v.Line(1))
 	})
 	require.NoError(t, pw.Close())
 }
@@ -115,7 +117,7 @@ func TestUIInputEditing(t *testing.T) {
 		_, err := io.WriteString(pw, "\x1b\rsecond")
 		require.NoError(t, err)
 		waitLine(1, promptCont+"second")
-		waitLine(2, "░░░░░░░░░░ 0/1k · test")
+		waitLine(2, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test")
 	})
 	t.Run("ctrl_c_clears_buffer", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
@@ -166,6 +168,19 @@ func TestUIHistory(t *testing.T) {
 		assert.Equal(t, "• one", v.Line(10))
 		assert.Equal(t, "• two", v.Line(11))
 	})
+	t.Run("partial_text_streams_live_then_commits", func(t *testing.T) {
+		v2 := newVT(60, 20)
+		u2 := newTestUI(t, v2, strings.NewReader(""))
+
+		// a single paragraph not yet closed stays as a live preview above input,
+		// so the reply reads word by word instead of only at block boundaries.
+		u2.Text("first para ")
+		assert.Equal(t, "first para", v2.Line(0))
+
+		u2.EndText()
+		assert.Equal(t, "first para", v2.Line(0), "the preview commits to history")
+		assert.Contains(t, v2.Line(1), promptFirst, "preview row is released after commit")
+	})
 	t.Run("block_follows_the_last_line", func(t *testing.T) {
 		assert.Contains(t, v.Line(12), promptFirst)
 		assert.Contains(t, v.Line(13), "0/1k · test")
@@ -201,12 +216,57 @@ func TestUIToolStart(t *testing.T) {
 
 	done := u.ToolStart("bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0), "the header commits up front")
-	assert.Contains(t, v.Line(1), "bash: go test ./...", "transient spinner row above the input")
+	// no separate spinner row above the input; the tool rides in the status bar.
+	statusRow := u.line(v, 2) // committed header on row 0, live block starts at row 1: input then status
+	assert.True(t, strings.HasPrefix(stripANSI(statusRow), spinnerFrames[0]),
+		"spinner still leads the bottom-left status line while a tool runs")
+	assert.Contains(t, stripANSI(statusRow), "bash: go test ./...",
+		"running tool label sits next to the working glyph in the status bar")
 
 	done("ok  0.4s")
 
 	assert.Equal(t, "  ok  0.4s", v.Line(1))
-	assert.Contains(t, v.Line(2), promptFirst, "the spinner row is released")
+	assert.Contains(t, v.Line(2), promptFirst, "no spinner row is left behind")
+}
+
+func TestUIBusy(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	// a bare glyph sits at the left of the status line even when idle; no label.
+	assert.NotContains(t, u.snapshot(v), "working", "no working label is ever shown")
+	assert.Contains(t, u.snapshot(v), spinnerFrames[0], "a resting frame is always visible")
+
+	stop := u.Busy()
+	// advancing the frame while busy repaints a different glyph: it animates.
+	u.mu.Lock()
+	u.spinner++
+	u.repaint()
+	u.mu.Unlock()
+	assert.Contains(t, u.snapshot(v), spinnerFrames[1%len(spinnerFrames)], "busy advances the frame")
+
+	// a running tool shares the bottom-left status line with the busy glyph.
+	doneTool := u.ToolStart("bash: go test ./...")
+	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
+	statusRow := u.line(v, 2) // committed header on row 0; live block starts at row 1 (input), status on row 2
+	assert.Contains(t, stripANSI(statusRow), "bash: go test ./...")
+	doneTool("ok  0.4s")
+
+	stop()
+}
+
+func TestUIStatusSpinnerLeftmost(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 10)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	// the spinner is the first element of the status line, before model and tokens.
+	statusRow := u.line(v, 1) // live block: input on row 0, status on row 1
+	assert.True(t, strings.HasPrefix(stripANSI(statusRow), spinnerFrames[0]),
+		"spinner occupies the leftmost column of the status bar")
 }
 
 func TestUIOutput(t *testing.T) {

@@ -59,6 +59,7 @@ type renderer interface {
 	start(inFd int) error
 	commit(lines []histLine)
 	setLive(rows []string, caretRow, caretCol int)
+	clearHistory() // drop retained lines where the mode owns scrollback (alt); no-op elsewhere
 	resize()
 	scroll(lines int) bool // false when the mode has no viewport of its own
 	suspend(inFd int)      // hand the terminal back to another program
@@ -182,6 +183,7 @@ type plainRenderer struct {
 	out io.Writer
 }
 
+func (p *plainRenderer) clearHistory()   {} // plain prints lines; nothing retained
 func (p *plainRenderer) start(int) error { return nil }
 
 func (p *plainRenderer) commit(lines []histLine) {

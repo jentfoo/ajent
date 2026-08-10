@@ -68,12 +68,13 @@ type Discoverer interface {
 	DiscoverModels(ctx context.Context) ([]Model, error)
 }
 
-// ReasoningConfig is what the user chose, before provider translation.
+// ReasoningConfig is what the user chose, before provider translation. It also
+// round-trips through JSON as a session setting_change value.
 type ReasoningConfig struct {
-	Level  Level
-	Budget int // explicit token budget, overrides Level when positive
-	Retain RetainPolicy
-	Show   bool // stream thinking to the UI
+	Level  Level        `json:"level"`
+	Budget int          `json:"budget,omitempty"` // explicit token budget, overrides Level when positive
+	Retain RetainPolicy `json:"retain,omitempty"`
+	Show   bool         `json:"show,omitempty"` // stream thinking to the UI
 }
 
 // Level is the requested reasoning depth. The standard seven levels let any

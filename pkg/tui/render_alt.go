@@ -73,6 +73,15 @@ func (r *altRenderer) commit(lines []histLine) {
 	r.render()
 }
 
+// clearHistory drops every retained line so a rewind can redraw just the
+// current session state; alt owns its scrollback and repaints from scratch.
+func (r *altRenderer) clearHistory() {
+	r.lines = nil
+	r.wrapped = nil
+	r.wrapAt = 0
+	r.offset = 0
+}
+
 func (r *altRenderer) setLive(rows []string, caretRow, caretCol int) {
 	r.live, r.caretRow, r.caretCol = rows, caretRow, caretCol
 	r.render()
