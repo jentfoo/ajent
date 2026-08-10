@@ -64,6 +64,11 @@ type UI struct {
 	spinner   int
 	spinnerCh chan struct{}
 
+	act        *pending // interaction owning the live block
+	queue      []*pending
+	noticeKey  string // keyed notice still collapsible in the live block
+	noticeText string
+
 	started   bool
 	lastBlank bool
 }
@@ -145,15 +150,27 @@ func (u *UI) Close() {
 	}
 	u.closed = true
 	u.stopSpinner()
+	u.cancelInteractions()
 	close(u.done)
 	u.render.close(u.inFd)
 }
 
-// SetStatus replaces the status line contents.
+// SetStatus replaces the whole status line, including the model and every
+// segment. To update one part use SetModel, SetTokens or SetStatusSegment,
+// which is almost always what a caller means.
 func (u *UI) SetStatus(s Status) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.status = s
+	u.repaint()
+}
+
+// SetTokens updates the context usage count, leaving the model and its window
+// alone. The window belongs to the model, the count belongs to the turn.
+func (u *UI) SetTokens(tokens int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.status.Tokens = tokens
 	u.repaint()
 }
 
@@ -293,6 +310,7 @@ func (u *UI) commitHist(lines []histLine) {
 	if len(lines) == 0 {
 		return
 	}
+	u.flushNotice() // a keyed notice stops being collapsible once anything follows
 	for i, l := range lines {
 		lines[i].text = strings.ReplaceAll(l.text, "\t", tabSpaces)
 	}
@@ -314,16 +332,30 @@ func (u *UI) repaint() {
 		return
 	}
 	w, h := u.render.size()
-	maxRows := max(1, (h-1)/maxInputRatio)
-	inputRows, curRow, curCol := u.editor.inputView(u.theme, w, maxRows)
 
 	var rows []string
 	if u.tool != "" {
 		frame := spinnerFrames[u.spinner%len(spinnerFrames)]
 		rows = append(rows, u.theme.Spinner.Wrap(frame)+" "+u.theme.Dim.Wrap(u.tool))
 	}
+	if u.noticeText != "" {
+		rows = append(rows, u.noticeText)
+	}
 	offset := len(rows)
-	rows = append(rows, inputRows...)
+
+	// an interaction takes the input's place while it is active, so the editor
+	// keeps whatever was typed and shows it again once the prompt resolves
+	var curRow, curCol int
+	if u.act != nil {
+		var iRows []string
+		iRows, curRow, curCol = u.interactionRows(w, h-offset)
+		rows = append(rows, iRows...)
+	} else {
+		maxRows := max(1, (h-1)/maxInputRatio)
+		var inputRows []string
+		inputRows, curRow, curCol = u.editor.inputView(u.theme, w, maxRows)
+		rows = append(rows, inputRows...)
+	}
 	rows = append(rows, u.status.render(u.theme, w))
 
 	u.render.setLive(rows, offset+curRow, curCol)
@@ -398,6 +430,10 @@ func (u *UI) handleKey(k key) (submit *string, quit bool) {
 
 // applyKey mutates the editor for one key. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, quit bool) {
+	if u.act != nil {
+		u.routeKey(k) // an active interaction sees every key before the editor
+		return nil, false
+	}
 	switch k.typ {
 	case keyRune:
 		u.editor.Insert(k.text)
@@ -445,6 +481,8 @@ func (u *UI) applyKey(k key) (submit *string, quit bool) {
 		u.render.scroll(u.page())
 	case keyPageDown:
 		u.render.scroll(-u.page())
+	case keyEscape:
+		u.editor.Clear()
 	case keyInterrupt:
 		if u.editor.Value() == "" {
 			return nil, true

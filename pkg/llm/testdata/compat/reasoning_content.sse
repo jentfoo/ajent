@@ -1,0 +1,10 @@
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"reasoning_content":"let me think"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"answer"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

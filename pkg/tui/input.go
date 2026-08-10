@@ -4,6 +4,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -35,6 +36,7 @@ const (
 	keyPageUp
 	keyPageDown
 	keyCursorReport
+	keyEscape
 )
 
 // key is one decoded input event.
@@ -44,7 +46,15 @@ type key struct {
 	row  int    // reported cursor row for keyCursorReport
 }
 
-const readChunk = 1024
+const (
+	readChunk = 1024
+	escByte   = 0x1b
+)
+
+// escTimeout is how long a lone escape byte is held before it is reported as
+// keyEscape rather than the start of a longer sequence. It is a variable so
+// tests can drive the boundary deterministically.
+var escTimeout = 30 * time.Millisecond
 
 // controlKeys maps single control bytes to their editing action.
 var controlKeys = map[byte]keyType{
@@ -72,7 +82,7 @@ var controlKeys = map[byte]keyType{
 func decodeKey(b []byte) (k key, n int, ok bool) {
 	if len(b) == 0 {
 		return key{}, 0, false
-	} else if b[0] == 0x1b {
+	} else if b[0] == escByte {
 		return decodeEscape(b)
 	} else if t, found := controlKeys[b[0]]; found {
 		return key{typ: t}, 1, true
@@ -206,12 +216,39 @@ func newInputReader(src io.Reader) *inputReader {
 	}
 }
 
+// readResult is one chunk from the source, or the failure that ended it.
+type readResult struct {
+	data []byte
+	err  error
+}
+
 // run decodes until the source ends, then emits keyEOF and closes keys.
+//
+// A lone escape byte is indistinguishable from the start of a longer sequence
+// until either more bytes arrive or enough time passes, so it is held for
+// escTimeout before being reported as keyEscape.
 func (r *inputReader) run() {
 	defer close(r.keys)
 
+	reads := make(chan readResult, 1)
+	go func() {
+		for {
+			chunk := make([]byte, readChunk)
+			n, err := r.src.Read(chunk)
+			reads <- readResult{data: chunk[:n], err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	var buf []byte
-	chunk := make([]byte, readChunk)
+	timer := time.NewTimer(escTimeout)
+	defer timer.Stop()
+	if !timer.Stop() {
+		<-timer.C
+	}
+
 	for {
 		for {
 			k, n, ok := decodeKey(buf)
@@ -219,26 +256,51 @@ func (r *inputReader) run() {
 				break
 			}
 			buf = buf[n:]
-			if k.typ == keyCursorReport {
-				select {
-				case r.reports <- k.row:
-				default:
-				}
-			} else if k.typ != keyIgnore {
-				r.keys <- k
-			}
+			r.emit(k)
 		}
 		if len(buf) == 0 {
 			buf = nil // drop the consumed backing array
 		}
 
-		n, err := r.src.Read(chunk)
-		if n > 0 {
-			buf = append(buf, chunk[:n]...)
+		var pendingEsc <-chan time.Time
+		if len(buf) > 0 && buf[0] == escByte {
+			timer.Reset(escTimeout)
+			pendingEsc = timer.C
 		}
-		if err != nil {
-			r.keys <- key{typ: keyEOF}
-			return
+
+		select {
+		case res := <-reads:
+			if pendingEsc != nil && !timer.Stop() {
+				<-timer.C
+			}
+			buf = append(buf, res.data...)
+			if res.err != nil {
+				r.flush(buf)
+				r.keys <- key{typ: keyEOF}
+				return
+			}
+		case <-pendingEsc:
+			r.keys <- key{typ: keyEscape}
+			buf = buf[1:]
 		}
+	}
+}
+
+// emit routes a decoded key to the right consumer.
+func (r *inputReader) emit(k key) {
+	if k.typ == keyCursorReport {
+		select {
+		case r.reports <- k.row:
+		default:
+		}
+	} else if k.typ != keyIgnore {
+		r.keys <- k
+	}
+}
+
+// flush reports a trailing lone escape that the source ended on.
+func (r *inputReader) flush(buf []byte) {
+	if len(buf) == 1 && buf[0] == escByte {
+		r.keys <- key{typ: keyEscape}
 	}
 }

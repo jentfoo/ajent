@@ -1,0 +1,27 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_02","model":"gpt-5","status":"in_progress"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_abc"}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"weighing "}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"delta":"options"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_abc","encrypted_content":"ENCRYPTED-PAYLOAD","summary":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_02","role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":1,"delta":"the answer"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_02","role":"assistant"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_02","model":"gpt-5","status":"completed","usage":{"input_tokens":20,"output_tokens":30,"output_tokens_details":{"reasoning_tokens":25}}}}
+

@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "id": "anthropic/claude-opus-4-5",
+      "name": "Anthropic: Claude Opus 4.5",
+      "context_length": 200000,
+      "architecture": { "input_modalities": ["text", "image"] },
+      "top_provider": { "max_completion_tokens": 64000 },
+      "supported_parameters": ["reasoning", "tools", "temperature"]
+    },
+    {
+      "id": "z-ai/glm-5.2",
+      "name": "Z.AI: GLM 5.2",
+      "context_length": 800000,
+      "architecture": { "input_modalities": ["text"] },
+      "top_provider": { "max_completion_tokens": 200000 },
+      "supported_parameters": ["temperature"]
+    }
+  ]
+}

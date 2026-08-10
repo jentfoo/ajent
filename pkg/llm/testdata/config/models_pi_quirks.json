@@ -1,0 +1,25 @@
+{
+  "providers": {
+    "lmstudio": {
+      "baseUrl": "http://192.168.1.100:1111/v1",
+      "api": "openai-completions",
+      "apiKey": "lmstudio",
+      // the model I use day to day
+      "models": [
+        {
+          "id": "deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash 0731",
+          "reasoning": true,
+          "contextWindow": 400000,
+          "maxTokens": 40000,
+          "compat": {
+            "supportsReasoningEffort": true,
+            "thinkingFormat": "reasoning_effort",
+            "maxTokensField": "max_tokens",
+            "thinkingFormat": "deepseek"
+          }
+        },
+      ]
+    },
+  }
+}

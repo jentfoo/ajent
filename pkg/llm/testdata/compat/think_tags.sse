@@ -1,0 +1,12 @@
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"<thi"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"nk>pondering</think>"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"the answer"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

@@ -12,17 +12,41 @@ const (
 	barEmpty       = "░"
 )
 
+// Segment is a keyed status line item, rendered after the model in insertion
+// order and dropped first when the line does not fit.
+type Segment struct {
+	Key  string
+	Text string
+}
+
 // Status is the state rendered on the line below the input field.
 type Status struct {
 	Model     string
 	Tokens    int
 	MaxTokens int
+	Segments  []Segment
 }
 
-// render returns the single status line, truncated to width.
+// render returns the single status line, truncated to width. Segments are
+// dropped one at a time until it fits, so the context bar and model survive
+// longest.
 func (s Status) render(t Theme, width int) string {
-	var b strings.Builder
+	parts := s.parts(t)
+	for len(parts) > 0 {
+		line := strings.Join(parts, t.Dim.Wrap(statusSep))
+		if displayWidth(line) <= width || len(parts) == 1 {
+			return truncateDisplay(line, width)
+		}
+		parts = parts[:len(parts)-1] // the last segment is the least important
+	}
+	return ""
+}
+
+// parts returns the status pieces in priority order, most important first.
+func (s Status) parts(t Theme) []string {
+	var parts []string
 	if s.MaxTokens > 0 {
+		var b strings.Builder
 		pct := s.Tokens * 100 / s.MaxTokens
 		if pct > 100 {
 			pct = 100
@@ -32,14 +56,54 @@ func (s Status) render(t Theme, width int) string {
 		b.WriteString(" ")
 		b.WriteString(usageStyle(t, pct).Wrap(usageBar(pct)))
 		b.WriteString(t.Dim.Wrap(" " + formatTokens(s.Tokens) + "/" + formatTokens(s.MaxTokens)))
+		parts = append(parts, b.String())
 	}
 	if s.Model != "" {
-		if b.Len() > 0 {
-			b.WriteString(t.Dim.Wrap(statusSep))
-		}
-		b.WriteString(t.Dim.Wrap(s.Model))
+		parts = append(parts, t.Dim.Wrap(s.Model))
 	}
-	return truncateDisplay(b.String(), width)
+	for _, seg := range s.Segments {
+		if seg.Text != "" {
+			parts = append(parts, t.Dim.Wrap(seg.Text))
+		}
+	}
+	return parts
+}
+
+// SetStatusSegment adds, replaces or (with an empty text) removes a keyed
+// status segment.
+func (u *UI) SetStatusSegment(key, text string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	for i, seg := range u.status.Segments {
+		if seg.Key != key {
+			continue
+		}
+		if text == "" {
+			u.status.Segments = append(u.status.Segments[:i], u.status.Segments[i+1:]...)
+		} else {
+			u.status.Segments[i].Text = text
+		}
+		u.repaint()
+		return
+	}
+	if text != "" {
+		u.status.Segments = append(u.status.Segments, Segment{Key: key, Text: text})
+	}
+	u.repaint()
+}
+
+// SetModel updates the model name and context window shown in the status line,
+// leaving any segments alone.
+func (u *UI) SetModel(name string, maxTokens int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	u.status.Model = name
+	if maxTokens > 0 {
+		u.status.MaxTokens = maxTokens
+	}
+	u.repaint()
 }
 
 // usageStyle escalates the color as the context fills.

@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "id": "qwen3.6-27b-mtp",
+      "type": "llm",
+      "state": "loaded",
+      "max_context_length": 200000,
+      "loaded_context_length": 65536,
+      "capabilities": ["tool_use", "vision"]
+    },
+    {
+      "id": "deepseek-v4-flash-0731",
+      "type": "llm",
+      "state": "not-loaded",
+      "max_context_length": 400000,
+      "capabilities": ["tool_use"]
+    },
+    {
+      "id": "nomic-embed-text",
+      "type": "embeddings",
+      "state": "not-loaded",
+      "max_context_length": 2048
+    }
+  ]
+}

@@ -37,6 +37,11 @@ linters:
     goconst:
       min-len: 4
       min-occurrences: 4
+    recvcheck:
+      # value String/MarshalJSON alongside pointer UnmarshalJSON is the standard
+      # enum shape, not a mistake
+      exclusions:
+        - "*.String"
 
 formatters:
   enable:

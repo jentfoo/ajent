@@ -87,6 +87,8 @@ type Theme struct {
 	Link     Style
 	Quote    Style
 	Spinner  Style
+	Warn     Style // notice levels, kept separate from the diff palette
+	Error    Style
 
 	DiffAdd     Style
 	DiffDel     Style
@@ -126,6 +128,8 @@ func NewTheme(p ColorProfile) Theme {
 	t.Link = styleFg(110, attrFgBlue)
 	t.Quote = style(attrDim, attrItalic)
 	t.Spinner = styleFg(213, attrFgMagenta)
+	t.Warn = styleFg(179, attrFgYellow)
+	t.Error = styleFg(167, attrFgRed)
 
 	t.DiffAdd = styleFg(78, attrFgGreen)
 	t.DiffDel = styleFg(167, attrFgRed)

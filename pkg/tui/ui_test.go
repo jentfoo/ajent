@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testPoll = 10 * time.Millisecond
+const testPoll = time.Millisecond
 
 // newTestUI drives a UI in inline mode against the emulator, with no real
 // terminal behind it.

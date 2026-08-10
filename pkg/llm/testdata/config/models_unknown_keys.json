@@ -1,0 +1,15 @@
+{
+  "providers": {
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "bogusProviderKey": 1,
+      "models": [
+        {
+          "id": "z-ai/glm-5.2",
+          "contextWindow": 800000,
+          "cost": { "input": 1.0, "output": 3.4 }
+        }
+      ]
+    }
+  }
+}

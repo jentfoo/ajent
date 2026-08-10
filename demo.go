@@ -11,8 +11,7 @@ import (
 // Scripted stand in for a real agent, the TUI is driven exactly as the agent
 // loop will drive it once there is a model behind it.
 const (
-	demoModel     = "opus-5"
-	demoMaxTokens = 200_000
+	demoMaxTokens = 200_000 // placeholder window when no model is configured
 	startTokens   = 12_400
 
 	chunkDelay = 22 * time.Millisecond
@@ -159,7 +158,7 @@ func (d *demo) addTokens(n int) { d.setTokens(d.tokens + n) }
 
 func (d *demo) setTokens(n int) {
 	d.tokens = n
-	d.ui.SetStatus(tui.Status{Model: demoModel, Tokens: n, MaxTokens: demoMaxTokens})
+	d.ui.SetTokens(n) // the model and its window belong to the registry, not the demo
 }
 
 // unwrap joins the source wrapped lines of each paragraph into a single long

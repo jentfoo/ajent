@@ -1,0 +1,12 @@
+data: {"id":"gen-1","model":"anthropic/claude-opus-4-5","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"gen-1","model":"anthropic/claude-opus-4-5","choices":[{"index":0,"delta":{"reasoning":"weighing options","reasoning_details":[{"type":"reasoning.text","text":"weighing options","signature":"sig-abc"}]}}]}
+
+data: {"id":"gen-1","model":"anthropic/claude-opus-4-5","choices":[{"index":0,"delta":{"content":"the answer"}}]}
+
+data: {"id":"gen-1","model":"anthropic/claude-opus-4-5","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"gen-1","model":"anthropic/claude-opus-4-5","choices":[],"usage":{"prompt_tokens":30,"completion_tokens":9}}
+
+data: [DONE]
+

@@ -72,11 +72,17 @@ ui.go            public API, state machine, key handling, locking
   wrap.go          width aware wrapping, hanging indents
   editor.go        multi line input buffer, grapheme aware, plus its layout
   input.go         byte stream -> key events (escape sequences, paste)
-  status.go        status line model and formatting
+  status.go        status line model and formatting, keyed segments
   style.go         color profile detection and the palette
   text.go          ANSI aware width, truncation, escape splitting
   ansi.go          escape sequence constants and builders
   history.go       line buffering for streaming input
+  interaction.go   interaction queue, key routing, result channels
+  prompt.go        Select, Confirm, Input, Pick and their live block rendering
+  filter.go        subsequence matching and scoring for Pick
+  notify.go        notices, level styles, safe collapse
+  plain.go         interaction fallback for the mode with no live block
+  errors.go        ErrCancelled, ErrBusy, ErrNoUI
 ```
 
 Everything above the renderer layer is shared by all modes. If you are adding a
@@ -172,6 +178,56 @@ not suspend us on its own. `keySuspend` calls `renderer.suspend` to hand the
 terminal back, then re-raises `SIGTSTP`; the `SIGCONT` handler in `watchSignals`
 calls `renderer.resume` and repaints. Anything new that takes the terminal needs
 both halves.
+
+**8. A notice collapses only while it is still live.** Invariant 3 forbids
+rewriting a committed line, so `NotifyKeyed` keeps its notice in the *live
+block*, not in history. Repeating the same key rewrites that row, which is free
+because the live block is redrawn every repaint anyway. The moment anything else
+commits, `commitHist` flushes the notice into history first and it stops being
+collapsible. This is the only form of collapse that is safe here, and it is
+enough for a progress notice that updates in place.
+
+## Interactions
+
+Anything above the TUI can ask the user a question: `Select`, `Confirm`, `Input`
+and `Pick`, each with a `Context` variant, all blocking and all callable from a
+goroutine that is not the input goroutine.
+
+An interaction **grows the live block** rather than overlaying history, because
+invariant 1 forbids inline mode from addressing committed lines. It takes the
+input field's place while active, so the editor keeps whatever was typed and
+shows it again once the prompt resolves. That works identically under every
+renderer, which is the whole reason for the constraint — the interaction layer
+only composes rows for `setLive` and touches no renderer at all.
+
+The height cap is `maxInteractionRatio` (half the screen) rather than the input's
+`maxInputRatio` (a third): an interaction is transient and modal, and a third of
+a short terminal is not a usable picker. Lists scroll internally with a
+`... N more` footer, which counts against the budget so row accounting stays
+exact per invariant 2.
+
+Concurrency follows invariant 4. A blocking `Select` cannot hold `u.mu`, so the
+caller registers a `pending` under the lock, requests a repaint, releases, then
+waits on a result channel. The input goroutine checks for an active interaction
+before the editor sees a key. Resolution commits a one line summary to history,
+promotes the queue head and repaints. Interactions **queue in arrival order**
+rather than being refused, because parallel tool calls will each want to ask
+something and denying them for being simultaneous is the wrong default.
+`pending.resolve` is a `sync.Once`, so a cancellation racing a keystroke settles
+on whichever arrived first, and `Close` resolves everything outstanding with
+`ErrCancelled` so no caller is left blocked (invariant 5).
+
+Plain mode has no live block and `readLines` already owns stdin, so a prompt is
+written to history and the answer is taken from the message queue. Reading the
+same queue the caller reads is what makes it race free: a plain mode prompt is
+only ever opened from the message loop, so nothing else is reading while it
+waits. Registering a side channel instead loses the race whenever input is piped
+rather than typed.
+
+A lone `Esc` is indistinguishable from the start of a longer escape sequence
+until more bytes arrive or enough time passes, so `inputReader.run` holds it for
+`escTimeout` before reporting `keyEscape`. Without that there is no cancel key
+at all.
 
 ## Wrapping policy
 

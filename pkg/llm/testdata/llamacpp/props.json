@@ -1,0 +1,6 @@
+{
+  "default_generation_settings": { "n_ctx": 32768 },
+  "model_path": "/models/qwen3.6-27b-Q4_K_M.gguf",
+  "total_slots": 1,
+  "chat_format": "chatml"
+}

@@ -1,0 +1,4 @@
+data: {"id":"c1","model":"m1","choices":[],"usage":{"prompt_tokens":50,"completion_tokens":0,"prompt_tokens_details":{"cached_tokens":40}}}
+
+data: [DONE]
+

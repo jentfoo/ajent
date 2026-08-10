@@ -1,0 +1,79 @@
+{
+  "providers": {
+    "lmstudio": {
+      "baseUrl": "http://192.168.1.100:1111/v1",
+      "api": "openai-completions",
+      "apiKey": "lmstudio",
+      "models": [
+        {
+          "id": "qwen3.6-27b-mtp",
+          "name": "Qwen 3.6 27B (Balanced)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 200000,
+          "maxTokens": 20000,
+          "compat": {
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false,
+            "thinkingFormat": "qwen-chat-template",
+            "maxTokensField": "max_tokens"
+          }
+        },
+        {
+          "id": "deepseek-v4-flash-0731",
+          "name": "DeepSeek V4 Flash 0731",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 400000,
+          "maxTokens": 40000,
+          "compat": {
+            "supportsDeveloperRole": false,
+            "maxTokensField": "max_tokens",
+            "requiresReasoningContentOnAssistantMessages": true,
+            "thinkingFormat": "deepseek"
+          },
+          "thinkingLevelMap": {
+            "off": "none",
+            "minimal": "minimal",
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "high",
+            "max": "high"
+          }
+        },
+        {
+          "id": "minimax-m2.7",
+          "name": "MiniMax M2.7",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 180000,
+          "maxTokens": 20000,
+          "compat": {
+            "supportsDeveloperRole": false,
+            "supportsReasoningEffort": false,
+            "maxTokensField": "max_tokens"
+          },
+          "thinkingLevelMap": { "off": null }
+        }
+      ]
+    },
+    "openrouter": {
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "api": "openai-completions",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "models": [
+        {
+          "id": "z-ai/glm-5.2",
+          "name": "GLM-5.2 (OpenRouter)",
+          "aliases": ["glm"],
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 800000,
+          "maxTokens": 200000,
+          "compat": { "thinkingFormat": "openrouter" }
+        }
+      ]
+    }
+  }
+}
