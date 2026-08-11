@@ -48,7 +48,7 @@ func TestRewindStateRebuild(t *testing.T) {
 
 	entries := readEntriesRewind(t, p)
 	branch := session.Branch(entries, w.Head())
-	assert.Equal(t, 3, len(branch)) // session + user "one" + assistant reply
+	assert.Len(t, branch, 3) // session + user "one" + assistant reply
 
 	// rewind onto the *first user message* (index 1): context is just that prompt,
 	// before its assistant reply — rewinding drops everything after the pick.

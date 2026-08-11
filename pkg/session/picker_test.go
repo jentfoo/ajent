@@ -169,14 +169,6 @@ func idsOf(rows []TreeRow) []string {
 	return out
 }
 
-func depths(rows []TreeRow) []int {
-	out := make([]int, len(rows))
-	for i, r := range rows {
-		out[i] = r.Depth
-	}
-	return out
-}
-
 // helpers ---------------------------------------------------------
 
 func sessionOnly(id string) Entry {
@@ -226,6 +218,6 @@ func TestEntryMessageText(t *testing.T) {
 	toolOnly := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
 		llm.ToolResultBlock{CallID: "c1"},
 	}}
-	assert.Equal(t, "", EntryMessageText(pickMsg("r", "", toolOnly)))
-	assert.Equal(t, "", EntryMessageText(sessionOnly("s")))
+	assert.Empty(t, EntryMessageText(pickMsg("r", "", toolOnly)))
+	assert.Empty(t, EntryMessageText(sessionOnly("s")))
 }

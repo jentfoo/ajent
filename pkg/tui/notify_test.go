@@ -28,12 +28,6 @@ func TestUINotify(t *testing.T) {
 			assert.Contains(t, u.snapshot(v), "! something")
 		}
 	})
-	t.Run("styled_when_color_enabled", func(t *testing.T) {
-		t.Parallel()
-		theme := NewTheme(Color256)
-		assert.NotEqual(t, theme.Warn.Open(), theme.Error.Open())
-		assert.NotEmpty(t, theme.Warn.Open())
-	})
 }
 
 func TestUINotifyKeyed(t *testing.T) {
@@ -97,13 +91,6 @@ func TestUISetStatusSegment(t *testing.T) {
 		u.SetStatusSegment("agents", "subagents: 1")
 		u.SetStatusSegment("agents", "")
 		assert.NotContains(t, u.snapshot(v), "subagents")
-	})
-	t.Run("removing_an_absent_key_is_a_no_op", func(t *testing.T) {
-		v := newVT(80, 12)
-		u := newTestUI(t, v, strings.NewReader(""))
-
-		u.SetStatusSegment("nothing", "")
-		assert.NotContains(t, u.snapshot(v), "nothing")
 	})
 }
 

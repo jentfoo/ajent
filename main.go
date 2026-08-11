@@ -376,7 +376,7 @@ func openSession(store *session.Store, mode resumeMode, cwd string, id string, p
 		if pick != nil { // no UI means we cannot choose; fall back to fresh
 			picked, perr = pick(list)
 		}
-		if perr == tui.ErrCancelled || picked < 0 {
+		if errors.Is(perr, tui.ErrCancelled) || picked < 0 {
 			return fresh() // cancelled the resume; start new rather than stall
 		} else if perr != nil {
 			return nil, perr
@@ -395,7 +395,7 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		if label == "" {
 			label = "(empty session)"
 		}
-		detail := in.Started.Local().Format("2006-01-02 15:04")
+		detail := in.Started.UTC().Format("2006-01-02 15:04 UTC") // sessions are stored as UTC
 		if in.Model != "" {
 			detail += " · " + in.Model
 		}

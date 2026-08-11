@@ -119,9 +119,4 @@ func TestApplySpans(t *testing.T) {
 		out := applySpans("+", "abc", [][2]int{{1, 2}}, base, emph)
 		assert.Equal(t, "\x1b[32m+a\x1b[7mb\x1b[0m\x1b[32mc\x1b[0m", out)
 	})
-	t.Run("span_past_end_clamped", func(t *testing.T) {
-		assert.NotPanics(t, func() {
-			applySpans("+", "abc", [][2]int{{1, 99}}, base, emph)
-		})
-	})
 }

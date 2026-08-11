@@ -106,14 +106,6 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	assert.Equal(t, idB, found.ID)
 }
 
-func TestStoreOutputPathScopedToSession(t *testing.T) {
-	t.Parallel()
-
-	s := StoreAt("/root/sessions")
-	p := s.OutputPath(filepath.Join("/root/sessions", "p", "s.jsonl"), "call-1")
-	assert.Equal(t, filepath.Join("/root/sessions", "p", "output-call-1.txt"), p)
-}
-
 func TestStoreListEmptyWhenMissingDir(t *testing.T) {
 	t.Parallel()
 

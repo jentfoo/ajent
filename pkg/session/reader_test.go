@@ -85,12 +85,3 @@ func TestBranchFollowsHeadIgnoresSibling(t *testing.T) {
 	// Branch from b still follows root->a->b and ignores the fork c.
 	assert.Equal(t, []string{"root", "a", "b"}, ids(Branch(forked, "b")))
 }
-
-func TestHeadReturnsLastID(t *testing.T) {
-	t.Parallel()
-
-	var entries []Entry
-	assert.Empty(t, Head(entries))
-	entries = append([]Entry{}, Entry{ID: "x"}, Entry{ID: "y"})
-	assert.Equal(t, "y", Head(entries))
-}

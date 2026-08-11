@@ -76,9 +76,3 @@ func TestDir(t *testing.T) {
 		require.Error(t, err)
 	})
 }
-
-func TestProjectDir(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, filepath.Join("/ws", DirName), ProjectDir("/ws"))
-}

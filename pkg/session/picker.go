@@ -99,8 +99,8 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 	}
 	// every root (usually just the session line) starts a tree; orphans too
 	for _, e := range entries {
-		switch {
-		case e.ParentID == "":
+		switch e.ParentID {
+		case "":
 			depth[e.ID] = 0
 			visit(e.ID)
 		default:

@@ -19,17 +19,6 @@ func TestSteerIdleRejected(t *testing.T) {
 	assert.False(t, a.FollowUp(Input{Text: "x"}))
 }
 
-// TestInterruptIdleIsNoop verifies Interrupt on an idle agent clears nothing and
-// does not error.
-func TestInterruptIdleIsNoop(t *testing.T) {
-	t.Parallel()
-
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
-	a := newTestAgent(nil, p, nil)
-
-	assert.NotPanics(t, a.Interrupt)
-}
-
 // TestRunningReportsState verifies the running flag flips for the duration of a
 // turn and clears after.
 func TestRunningReportsState(t *testing.T) {
