@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 // responsesProvider serves the OpenAI Responses API, falling back to the shared
@@ -195,17 +194,12 @@ type responsesStream struct {
 	resp     *http.Response
 	sse      *SSEReader
 	provider string
+	*streamPump
 
 	items   map[int]*respOpenItem
-	pending []Event
 	usage   Usage
 	status  string
 	sawTool bool
-	done    bool
-	err     error
-
-	mu     sync.Mutex
-	closed bool
 }
 
 // respOpenItem is an output item being streamed.
@@ -218,27 +212,13 @@ type respOpenItem struct {
 }
 
 func newResponsesStream(ctx context.Context, resp *http.Response, provider string) *responsesStream {
-	return &responsesStream{
+	s := &responsesStream{
 		ctx: ctx, resp: resp, provider: provider,
 		sse:   NewSSEReader(resp.Body, 0),
 		items: make(map[int]*respOpenItem),
 	}
-}
-
-// Next returns the next event, or false at end of stream.
-func (s *responsesStream) Next() (Event, bool) {
-	for {
-		if s.isClosed() {
-			return Event{}, false // a close abandons anything still buffered
-		} else if len(s.pending) > 0 {
-			ev := s.pending[0]
-			s.pending = s.pending[1:]
-			return ev, true
-		} else if s.done {
-			return Event{}, false
-		}
-		s.pending = append(s.pending, s.readFrame()...)
-	}
+	s.streamPump = newStreamPump(resp.Body, s.readFrame)
+	return s
 }
 
 // readFrame decodes one SSE frame into zero or more events.
@@ -396,30 +376,4 @@ func (s *responsesStream) finish(cause error) []Event {
 		s.err = cause
 	}
 	return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr}}
-}
-
-// Err returns the failure that ended the stream, if any.
-func (s *responsesStream) Err() error {
-	if s.isClosed() {
-		return nil
-	}
-	return s.err
-}
-
-// Close stops the stream and unblocks a pending Next.
-func (s *responsesStream) Close() error {
-	s.mu.Lock()
-	already := s.closed
-	s.closed = true
-	s.mu.Unlock()
-	if already {
-		return nil
-	}
-	return s.resp.Body.Close()
-}
-
-func (s *responsesStream) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
 }

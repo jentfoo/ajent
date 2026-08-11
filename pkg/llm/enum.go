@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -49,11 +50,14 @@ func (n enumNames[T]) lookup(s string) (T, bool) {
 
 // sorted returns the configuration names in enum order.
 func (n enumNames[T]) sorted() []string {
-	out := make([]string, 0, len(n))
-	for v := range len(n) {
-		if s, ok := n[T(v)]; ok {
-			out = append(out, s)
-		}
+	keys := make([]int, 0, len(n))
+	for v := range n {
+		keys = append(keys, int(v))
+	}
+	slices.Sort(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, n[T(k)])
 	}
 	return out
 }

@@ -7,8 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// wantReserve mirrors the Reserve policy for a given window and configured value,
-// so tests assert branch selection (absolute vs fraction vs clamp) against a
+// wantReserve mirrors the Reserve policy so tests assert branch selection against a
 // clear reference rather than magic numbers.
 func wantReserve(window int, cfg float64) int {
 	if window <= 0 {
@@ -16,20 +15,15 @@ func wantReserve(window int, cfg float64) int {
 	}
 	maxR := max(1, window*9/10)
 	switch {
-	case cfg >= 1: // absolute token count, clamped to 90%
+	case cfg >= 1: // absolute token count, clamped to the cap
 		return min(int(cfg), maxR)
-	case cfg > 0 && cfg < 1: // fraction of the window, clamped to 15%
-		r := int(float64(window) * cfg)
-		if r <= 0 {
-			return 500
-		}
-		return min(r, maxR)
 	default:
-		r := int(float64(window) * defaultReserveFraction)
-		if r <= 1 {
-			return 900
+		fraction := defaultReserveFraction
+		if cfg > 0 && cfg < 1 { // fraction of the window
+			fraction = cfg
 		}
-		return min(r, maxR)
+		r := int(float64(window) * fraction)
+		return min(max(r, 1), maxR)
 	}
 }
 
@@ -46,6 +40,8 @@ func TestReserve(t *testing.T) {
 		{"absolute_count_unclamped", llm.Model{ContextWindow: win, ContextReserve: 32000}},
 		{"fraction_override", llm.Model{ContextWindow: win, ContextReserve: 0.4}},
 		{"out_of_range_clamps_to_ninety", llm.Model{ContextWindow: win, ContextReserve: 1e6}},
+		{"tiny_window_default_min_one", llm.Model{ContextWindow: 3}}, // fraction rounds to zero -> floor of one
+		{"tiny_window_fraction_min_one", llm.Model{ContextWindow: 5, ContextReserve: 0.2}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

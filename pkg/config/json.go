@@ -66,7 +66,7 @@ func blankTrailingCommas(b []byte) {
 			inString = true
 		case c == ',':
 			j := i + 1
-			for j < len(b) && isJSONSpace(b[j]) {
+			for j < len(b) && (b[j] == ' ' || b[j] == '\t' || b[j] == '\r' || b[j] == '\n') {
 				j++
 			}
 			if j < len(b) && (b[j] == '}' || b[j] == ']') {
@@ -74,10 +74,6 @@ func blankTrailingCommas(b []byte) {
 			}
 		}
 	}
-}
-
-func isJSONSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\r' || c == '\n'
 }
 
 // JSONError returns err with the file, line and column it happened at, plus the

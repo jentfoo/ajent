@@ -5,6 +5,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // ReplayOptions controls how a resume is condensed onto the sink.
@@ -79,7 +80,7 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 						}
 					case llm.ToolCallBlock:
 						// labels on resume are a follow-up; replay falls back to the bare name
-						pending[blk.ID] = sink.ToolStart(callFromReplay(cur, blk), blk.Name)
+						pending[blk.ID] = sink.ToolStart(agent.ToolCall{ID: blk.ID, Name: blk.Name, Input: blk.Input}, blk.Name)
 					}
 				}
 			default:
@@ -95,10 +96,6 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 		}
 	}
 	endTurn()
-}
-
-func callFromReplay(_ llm.Model, b llm.ToolCallBlock) agent.ToolCall {
-	return agent.ToolCall{ID: b.ID, Name: b.Name, Input: b.Input}
 }
 
 // foldResults resolves every tool result in content against pending calls,
@@ -121,18 +118,11 @@ func summarize(tr llm.ToolResultBlock) string {
 	var parts []string
 	for _, b := range tr.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, firstLine(strings.TrimSpace(tb.Text)))
+			parts = append(parts, strutil.FirstLine(strings.TrimSpace(tb.Text)))
 		}
 	}
 	s := strings.Join(parts, " ")
 	return truncate(s)
-}
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
 }
 
 // userText extracts the plain text of a prompt message.

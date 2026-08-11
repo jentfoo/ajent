@@ -302,8 +302,7 @@ func (u *UI) SetTokens(tokens int) {
 	u.repaint()
 }
 
-// SetInput replaces the editor buffer, e.g. pre-filling a prompt after a rewind
-// so it can be edited or re-sent as the start of a new branch.
+// SetInput replaces the editor buffer, e.g. to pre-fill a prompt after a rewind.
 func (u *UI) SetInput(text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()

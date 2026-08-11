@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/config"
-	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 const (
@@ -158,23 +157,9 @@ func readInfo(path string) (Info, bool) {
 			info.Model = sd.Model
 		case TypeMessage:
 			info.Messages++
-			if info.First != "" {
-				continue
-			}
-			var md MessageData
-			if err := e.Decode(&md); err != nil || md.Message.Role != llm.RoleUser {
-				continue
-			}
-			for _, b := range md.Message.Content {
-				if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-					info.First = truncate(strings.TrimSpace(tb.Text))
-					break
-				}
-			}
-		default:
-			continue
 		}
 	}
+	info.First = firstUserOn(Branch(entries, headFor(path, entries)))
 	return info, true
 }
 

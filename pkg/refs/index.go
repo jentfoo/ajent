@@ -153,7 +153,8 @@ func enumerate(root string) ([]entry, map[string]time.Time) {
 func enumerateRepo(root string, entries *[]entry, mtimes map[string]time.Time) []entry {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-co", "--exclude-standard")
+	// -z: NUL-delimited and never quotes paths (spaces/unicode stay literal)
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "ls-files", "-coz", "--exclude-standard")
 	out, _ := cmd.Output()
 
 	rootClean := filepath.Clean(root)
@@ -166,9 +167,8 @@ func enumerateRepo(root string, entries *[]entry, mtimes map[string]time.Time) [
 		}
 	}
 
-	repoFiles := strings.Split(strings.TrimSpace(string(out)), "\n")
+	repoFiles := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
 	for _, relline := range repoFiles {
-		relline = strings.TrimSpace(relline)
 		if relline == "" {
 			continue
 		}

@@ -60,7 +60,7 @@ type compatMessage struct {
 	Content          any              `json:"content,omitempty"` // string, or a part list
 	ToolCalls        []compatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
-	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ReasoningContent *string          `json:"reasoning_content,omitempty"`
 	ReasoningDetails json.RawMessage  `json:"reasoning_details,omitempty"`
 	Name             string           `json:"name,omitempty"`
 }

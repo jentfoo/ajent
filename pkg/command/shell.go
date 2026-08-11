@@ -10,6 +10,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
@@ -71,7 +72,7 @@ func (s *Stager) Run(cmd string) {
 	run := &stageRun{
 		id:     id,
 		cmd:    cmd,
-		label:  "! " + firstLine(cmd),
+		label:  "! " + strutil.FirstLine(cmd),
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
@@ -151,8 +152,7 @@ func (s *Stager) Flush(ctx context.Context) []llm.Message {
 		select {
 		case <-r.done:
 		case <-ctx.Done():
-			// context ended before the run finished: leave it unflushed by
-			// re-queuing it and stopping, so a later flush picks it up.
+			// requeue the unfinished run so a later flush picks it up
 			s.mu.Lock()
 			s.runs = append(s.runs, r)
 			s.mu.Unlock()
@@ -167,14 +167,6 @@ func (s *Stager) Flush(ctx context.Context) []llm.Message {
 		)
 	}
 	return out
-}
-
-// firstLine returns the first line of s, for the tool header.
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
 }
 
 const toolBash = "bash"

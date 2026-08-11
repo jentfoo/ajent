@@ -52,7 +52,7 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	if strings.TrimSpace(p.Pattern) == "" {
 		return resultErr("find needs a non-empty pattern"), nil
 	}
-	root, err := t.policy.Resolve(p.PathOrDot())
+	root, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
 		return resultErr(err.Error()), nil
 	}
@@ -72,14 +72,6 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 
 	return agent.ToolResult{Content: llmBlock(strings.TrimRight(b.String(), "\n"))}, nil
-}
-
-// PathOrDot returns the requested path or the policy cwd's dot.
-func (p findParams) PathOrDot() string {
-	if p.Path != "" {
-		return p.Path
-	}
-	return "."
 }
 
 // listFiles returns files under root matching pattern, bounded by max. It uses

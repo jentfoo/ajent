@@ -99,13 +99,11 @@ func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
 	if t == nil {
 		return
 	}
-	reported := tokens.Zero(md.Usage)
-	predicted := 0 // rebuilt ledgers cannot know the original prediction; leave calibration unseeded
-	if reported {
+	if tokens.Zero(md.Usage) { // unreported provider → estimate the message instead of exact terms
 		t.Add(tokens.EstimateMessages([]llm.Message{md.Message}))
-	} else {
-		t.Response(key, md.Usage, predicted)
+		return
 	}
+	t.Response(key, md.Usage, 0) // prediction unknown on rebuild; leave calibration unseeded
 }
 
 // newestCompaction returns the index of the last compaction entry, or -1.

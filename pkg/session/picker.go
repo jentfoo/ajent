@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // RowKind tells how a branch entry reads in the rewind picker.
@@ -233,12 +234,12 @@ func rowFor(e Entry) *PickerRow {
 			return nil
 		}
 		return &PickerRow{ID: e.ID, Kind: RowUser,
-			Label: "user: " + truncate(firstLine(txt))}
+			Label: "user: " + truncate(strutil.FirstLine(txt))}
 	case llm.RoleAssistant:
 		txt := strings.TrimSpace(userText(m))
 		if txt != "" {
 			return &PickerRow{ID: e.ID, Kind: RowAssistant,
-				Label: "assistant: " + truncate(firstLine(txt))}
+				Label: "assistant: " + truncate(strutil.FirstLine(txt))}
 		}
 		lbl := toolCallLabel(m)
 		if lbl == "" {
@@ -270,7 +271,7 @@ func toolCallLabel(m llm.Message) string {
 		if tc, ok := b.(llm.ToolCallBlock); ok {
 			lbl := "[" + tc.Name + "]"
 			if s := strings.TrimSpace(firstArgText(tc.Input)); s != "" {
-				lbl += " " + truncate(firstLine(s))
+				lbl += " " + truncate(strutil.FirstLine(s))
 			}
 			parts = append(parts, lbl)
 		}

@@ -6,7 +6,6 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestAccountingPendingLiveLifecycle(t *testing.T) {
@@ -54,10 +53,8 @@ func TestAccountingUnreportedTurnIsEstimated(t *testing.T) {
 
 	// a provider that reported nothing (llama.cpp) marks the turn estimated.
 	a.Response(key, llm.Usage{}, 0)
-	require.Len(t, a.Turns(), 1)
-
-	turn := a.Turns()[0]
-	assert.True(t, turn.Estimated)
+	assert.Equal(t, 1, a.TurnsCount())
+	assert.Equal(t, 1, a.EstimatedTurns())
 
 	// spend totals stay zero for an unreported response; context stays at zero too
 	assert.Zero(t, a.Context().Used)
@@ -69,7 +66,7 @@ func TestAccountingChildRollsUpSpendNotContext(t *testing.T) {
 	parent := New(llm.Model{ID: "m1", Provider: "p"})
 	const key = "p/m1"
 
-	child := parent.Child("research")
+	child := parent.Child()
 	in, out := 2000, 300
 	// child spends on its own context; the parent must not see that used.
 	child.Response(key, llm.Usage{Input: in, Output: out}, 1500)

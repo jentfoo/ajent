@@ -223,23 +223,30 @@ type pickState struct {
 
 // refilter recomputes the match set, keeping the order stable for equal scores.
 func (s *pickState) refilter() {
+	s.matches = refilterMatches(s.items, s.filter)
+	s.cursor = 0
+}
+
+// refilterMatches returns item indexes matching filter, best first. The order is
+// kept stable for equal scores so a list does not jump around.
+func refilterMatches(items []PickItem, filter string) (matches []int) {
 	type scored struct {
 		index int
 		score int
 	}
 	var hits []scored
-	for i, it := range s.items {
-		if score, ok := bestScore(it, s.filter); ok {
+	for i, it := range items {
+		if score, ok := bestScore(it, filter); ok {
 			hits = append(hits, scored{index: i, score: score})
 		}
 	}
 	slices.SortStableFunc(hits, func(a, b scored) int { return b.score - a.score })
 
-	s.matches = make([]int, len(hits))
+	matches = make([]int, len(hits))
 	for i, h := range hits {
-		s.matches[i] = h.index
+		matches[i] = h.index
 	}
-	s.cursor = 0
+	return matches
 }
 
 // bestScore returns the best score across an item's matchable strings.
@@ -384,21 +391,7 @@ type multiPickState struct {
 
 // refilter recomputes the match set, keeping the order stable for equal scores.
 func (s *multiPickState) refilter() {
-	type scored struct {
-		index int
-		score int
-	}
-	var hits []scored
-	for i, it := range s.items {
-		if score, ok := bestScore(it, s.filter); ok {
-			hits = append(hits, scored{index: i, score: score})
-		}
-	}
-	slices.SortStableFunc(hits, func(a, b scored) int { return b.score - a.score })
-	s.matches = make([]int, len(hits))
-	for i, h := range hits {
-		s.matches[i] = h.index
-	}
+	s.matches = refilterMatches(s.items, s.filter)
 	s.cursor = 0
 }
 

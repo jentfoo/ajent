@@ -93,7 +93,8 @@ func (r mdRenderer) block(n ast.Node, src []byte) (string, lineFlow) {
 		return r.codeBlock(n, src), flowWrap
 	case ast.KindBlockquote:
 		body := strings.Join(r.blockTexts(n, src), blockSeparator)
-		return prefixLines(r.theme.Quote.Wrap(body), r.theme.Dim.Wrap(quotePrefix)), flowWrap
+		prefix := r.theme.Dim.Wrap(quotePrefix)
+		return indentLines(r.theme.Quote.Wrap(body), prefix, prefix), flowWrap
 	case ast.KindList:
 		return r.list(n.(*ast.List), src), flowWrap
 	case ast.KindThematicBreak:
@@ -209,8 +210,7 @@ func (r mdRenderer) buildTable(n ast.Node, src []byte) *mdTable {
 }
 
 // layoutTable renders the table at width: column widths come from content and are
-// shrunk (with long cells wrapped) when they would exceed it, so a resize re-lays
-// every row rather than clipping. A separator line runs between all rows.
+// shrunk (long cells wrapped) when they exceed it; a separator runs between rows.
 func layoutTable(t *mdTable, width int) []string {
 	cols := len(t.header)
 	if cols == 0 || t.align == nil {
@@ -505,10 +505,6 @@ func indentLines(s, first, rest string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func prefixLines(s, prefix string) string {
-	return indentLines(s, prefix, prefix)
 }
 
 // splitCompleteBlocks divides buffered markdown at the last safe block boundary.

@@ -80,13 +80,10 @@ func numberLines(data []byte, start, limit int) (string, int) {
 		return "", 0
 	}
 	for i := start - 1; i < end; i++ {
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, clampLine(string(lines[i])))
+		fmt.Fprintf(&b, "%6d\t%s\n", i+1, capLine(string(lines[i])))
 	}
 	if end < len(lines) { // more lines remain past what was emitted
 		return b.String(), end
 	}
 	return b.String(), 0
 }
-
-// clampLine truncates s at MaxLineChars on a rune boundary.
-func clampLine(s string) string { return capLine(s) }

@@ -21,11 +21,9 @@ type Line struct {
 	Rest string // the line after any escape handling and prefix; for commands, the name+args
 }
 
-// ParseLine classifies a submitted line, covering every escape hatch in the
-// spec: a leading space or `//` or `!!` is a literal prompt; `/name args` is a
-// command; `!cmd` is a shell command; anything else is a prompt. Unknown `/foo`
-// still parses as a command so dispatch can notice it rather than prompting the
-// model — a typo should not cost tokens.
+// ParseLine classifies a submitted line: `//`, `!!` and leading space escape to
+// a literal prompt, `/name args` is a command, `!cmd` a shell command, else a
+// prompt. Unknown `/foo` still parses as a command so dispatch can notice typos.
 func ParseLine(s string) Line {
 	// a leading space escapes anything: the line is a literal prompt
 	if strings.HasPrefix(s, " ") {

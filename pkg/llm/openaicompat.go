@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 // compatProfile is what one provider changes about the shared chat-completions
@@ -197,15 +196,23 @@ func compatMessageFor(m Message, caps Capabilities) ([]compatMessage, error) {
 				Function: compatToolFunction{Name: v.Name, Arguments: string(v.Input)},
 			})
 		case ThinkingBlock:
-			if caps.ReplayReasoning {
-				msg.ReasoningContent = v.Text
+			if caps.ReplayReasoning && v.Text != "" {
+				t := v.Text
+				msg.ReasoningContent = &t
 			}
 			if len(v.Details) > 0 {
 				msg.ReasoningDetails = v.Details
 			}
 		}
 	}
-	if msg.Content == nil && len(msg.ToolCalls) == 0 && msg.ReasoningContent == "" {
+	// deepseek requires every replayed assistant message to carry reasoning_content,
+	// even when empty, so it stays in thinking mode across turns.
+	if caps.ReplayReasoning && m.Role == RoleAssistant && msg.ReasoningContent == nil {
+		e := ""
+		msg.ReasoningContent = &e
+	}
+	// skip messages with neither content nor tool calls, which providers reject
+	if msg.Content == nil && len(msg.ToolCalls) == 0 {
 		return results, nil
 	}
 	return append(results, msg), nil
@@ -301,17 +308,11 @@ type compatStream struct {
 	sse     *SSEReader
 	profile compatProfile
 	st      *compatState
-
-	pending []Event
-	done    bool
-	err     error
-
-	mu     sync.Mutex
-	closed bool
+	*streamPump
 }
 
 func newCompatStream(ctx context.Context, resp *http.Response, caps Capabilities, profile compatProfile) *compatStream {
-	return &compatStream{
+	s := &compatStream{
 		ctx:     ctx,
 		resp:    resp,
 		sse:     NewSSEReader(resp.Body, 0),
@@ -323,22 +324,8 @@ func newCompatStream(ctx context.Context, resp *http.Response, caps Capabilities
 			textIdx:  -1,
 		},
 	}
-}
-
-// Next returns the next event, or false at end of stream.
-func (s *compatStream) Next() (Event, bool) {
-	for {
-		if s.isClosed() {
-			return Event{}, false // a close abandons anything still buffered
-		} else if len(s.pending) > 0 {
-			ev := s.pending[0]
-			s.pending = s.pending[1:]
-			return ev, true
-		} else if s.done {
-			return Event{}, false
-		}
-		s.pending = append(s.pending, s.readFrame()...)
-	}
+	s.streamPump = newStreamPump(resp.Body, s.readFrame)
+	return s
 }
 
 // readFrame decodes one SSE frame into zero or more events.
@@ -488,30 +475,4 @@ func (s *compatStream) finish(cause error) []Event {
 		stop = StopEndTurn
 	}
 	return append(events, Event{Type: EventDone, StopReason: stop, Usage: st.usage, Err: streamErr})
-}
-
-// Err returns the failure that ended the stream, if any.
-func (s *compatStream) Err() error {
-	if s.isClosed() {
-		return nil // a deliberate close is not an error
-	}
-	return s.err
-}
-
-// Close stops the stream and unblocks a pending Next.
-func (s *compatStream) Close() error {
-	s.mu.Lock()
-	already := s.closed
-	s.closed = true
-	s.mu.Unlock()
-	if already {
-		return nil
-	}
-	return s.resp.Body.Close()
-}
-
-func (s *compatStream) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
 }

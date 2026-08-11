@@ -40,10 +40,9 @@ func NewExpander(reg *tools.Registry, sink agent.Sink, policy tools.PathPolicy) 
 }
 
 // Expand resolves every @ reference in text. Small text files inject a read pair
-// (deduped against the tracker), directories inject an ls pair regardless of the
-// tool's enabled state, and large/non-text files annotate in place. The byte
-// cap pushes overflow to annotation. Re-expanding already-annotated text
-// replaces the measurement rather than appending a second.
+// (deduped against the tracker), directories an ls pair regardless of enabled
+// state, and large/non-text files annotate in place. Re-expanding an annotated
+// ref replaces its measurement rather than appending a second.
 func (x *Expander) Expand(ctx context.Context, text string) Result {
 	refs := Parse(text)
 	if len(refs) == 0 || x.reg == nil {
@@ -54,7 +53,8 @@ func (x *Expander) Expand(ctx context.Context, text string) Result {
 		notices []string
 		spent   int
 	)
-	// rebuild the text by splicing spans back to front so earlier offsets stay valid
+	// splice back to front so earlier offsets stay valid; prepend each pair so
+	// references land in forward transcript order.
 	out := text
 	for i := len(refs) - 1; i >= 0; i-- {
 		ref := refs[i]
@@ -69,26 +69,23 @@ func (x *Expander) Expand(ctx context.Context, text string) Result {
 			continue
 		}
 		if m.Dir {
-			before = prependDir(ctx, x, full, ref.Path, before)
+			before = append(injectPair(ctx, x, "ls", "ref-ls-", ref.Path), before...)
 			continue
 		}
 		if m.Kind != tools.KindText {
 			out = splice(out, ref, annotate(ref, m))
 			continue
 		}
-		// dedupe against an unchanged read this session
+		// dedupe against an unchanged read this session; the literal stays
 		if x.tracker != nil && x.tracker.Check(full) == nil {
-			continue // already read and unchanged; literal stays
+			continue
 		}
 		if overInjectLimit(m) || spent+int(m.Bytes) > tools.RefTotal.Bytes {
 			out = splice(out, ref, annotate(ref, m))
 			notices = append(notices, "@"+ref.Path+" too large; annotated")
 			continue
 		}
-		// iterate back to front so earlier offsets stay valid; prepend each read
-		// pair (as with dirs) so references land in forward transcript order.
-		pair := injectRead(ctx, x, full, ref.Path)
-		before = append(pair, before...)
+		before = append(injectPair(ctx, x, "read", "ref-", ref.Path), before...)
 		spent += int(m.Bytes)
 	}
 	return Result{Text: out, Before: before, Notices: notices}
@@ -105,17 +102,17 @@ func overInjectLimit(m tools.Measurement) bool {
 	return false
 }
 
-// injectRead runs a synthetic read call and returns its call + result pair.
-func injectRead(ctx context.Context, x *Expander, full, display string) []llm.Message {
-	tool, ok := x.reg.Lookup("read")
+// injectPair runs a synthetic tool call and returns its call + result pair.
+func injectPair(ctx context.Context, x *Expander, name, idPrefix, display string) []llm.Message {
+	tool, ok := x.reg.Lookup(name)
 	if !ok {
 		return nil
 	}
-	id := "ref-" + display
+	id := idPrefix + display
 	input, _ := json.Marshal(map[string]any{"path": display})
-	call := agent.ToolCall{ID: id, Name: "read", Input: input}
+	call := agent.ToolCall{ID: id, Name: name, Input: input}
 	out := agent.NewOutput(x.sink, id)
-	done := x.sink.ToolStart(call, "read "+display)
+	done := x.sink.ToolStart(call, name+" "+display)
 	res, err := tool.Execute(ctx, call, out)
 	if res.Content == nil {
 		res.Content = llm.BlockList{}
@@ -129,42 +126,10 @@ func injectRead(ctx context.Context, x *Expander, full, display string) []llm.Me
 	done(res)
 	return []llm.Message{
 		{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
-			ID: id, Name: "read", Input: input}}},
+			ID: id, Name: name, Input: input}}},
 		{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
 			CallID: id, Content: res.Content, Display: res.Display, IsError: res.IsError}}},
 	}
-}
-
-// prependDir injects an ls pair ahead of the current before slice, so multiple
-// references land in transcript order.
-func prependDir(ctx context.Context, x *Expander, full, display string, before []llm.Message) []llm.Message {
-	tool, ok := x.reg.Lookup("ls")
-	if !ok {
-		return before
-	}
-	id := "ref-ls-" + display
-	input, _ := json.Marshal(map[string]any{"path": display})
-	call := agent.ToolCall{ID: id, Name: "ls", Input: input}
-	out := agent.NewOutput(x.sink, id)
-	done := x.sink.ToolStart(call, "ls "+display)
-	res, err := tool.Execute(ctx, call, out)
-	if res.Content == nil {
-		res.Content = llm.BlockList{}
-	}
-	if err != nil && !res.IsError {
-		res.IsError = true
-		if len(res.Content) == 0 {
-			res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
-		}
-	}
-	done(res)
-	pair := []llm.Message{
-		{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
-			ID: id, Name: "ls", Input: input}}},
-		{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
-			CallID: id, Content: res.Content, Display: res.Display, IsError: res.IsError}}},
-	}
-	return append(pair, before...)
 }
 
 // annotate returns the replacement text for a large/non-text reference: the

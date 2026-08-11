@@ -23,8 +23,12 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	b.WriteString("# Usage\n")
 
 	cs := t.Context()
-	window := windowOr(st.Model.ContextWindow, cs.Window)
-	budget := cs.Budget() // the bar fills against this same budget
+	// prefer the state's declared window; fall back to what accounting reports
+	window := st.Model.ContextWindow
+	if window <= 0 {
+		window = cs.Window
+	}
+	budget := cs.Budget()
 
 	fmt.Fprintf(&b, "\ncontext: %s / %s  (%d%% of %s budget before compaction)\n",
 		tui.FormatTokens(cs.Used), tui.FormatTokens(window),
@@ -38,7 +42,7 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	b.WriteString("|------:|------:|-------:|")
 
 	total := t.Total()
-	n := t.TurnsCount() // exact even though the retained per-turn slice is bounded
+	n := t.TurnsCount()
 	est := t.EstimatedTurns()
 
 	fmt.Fprintf(&b, "| %d | %s | %s |\n", n,
@@ -62,14 +66,6 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 
 	c.Print(b.String())
 	return nil
-}
-
-// windowOr returns w when positive, else fallback (a model may report none).
-func windowOr(w, fallback int) int {
-	if w > 0 {
-		return w
-	}
-	return fallback
 }
 
 // pctOf clamps the percentage of used against a budget (window minus reserve, or a

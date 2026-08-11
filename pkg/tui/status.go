@@ -57,8 +57,7 @@ func (s Status) parts(t Theme) []string {
 		parts = append(parts, t.Dim.Wrap(s.Tool))
 	}
 	if s.MaxTokens > 0 {
-		// the bar fills to the compaction point (window minus reserve); the count
-		// shows used against the real window. A full bar means compaction fires now.
+		// bar fills to budget (window−reserve); count shows used vs the real window
 		budget := s.MaxTokens - s.Reserve
 		if budget <= 0 {
 			budget = s.MaxTokens

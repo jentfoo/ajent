@@ -45,7 +45,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 	if err := decode(call.Input, &p); err != nil {
 		return resultErr("bad args: " + err.Error()), nil
 	}
-	full, err := t.policy.Resolve(p.PathOrDot())
+	full, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
 		return resultErr(err.Error()), nil
 	}
@@ -74,12 +74,4 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 	}
 
 	return agent.ToolResult{Content: llmBlock(strings.TrimRight(b.String(), "\n"))}, nil
-}
-
-// PathOrDot returns the requested path or the policy cwd's dot.
-func (p lsParams) PathOrDot() string {
-	if p.Path != "" {
-		return p.Path
-	}
-	return "."
 }

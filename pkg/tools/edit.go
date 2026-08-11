@@ -111,7 +111,7 @@ func nearMatch(old, buf string) string {
 		score := overlap(line, tokens)
 		if score > bestScore {
 			bestScore = score
-			bestLine = fmt.Sprintf("line %d: %s", i+1, trimToMax(strings.TrimSpace(line)))
+			bestLine = fmt.Sprintf("line %d: %s", i+1, capLine(strings.TrimSpace(line)))
 		}
 	}
 	return bestLine + "\n(try matching the line above exactly)"
@@ -138,7 +138,7 @@ func ambiguousError(idx int, old, buf string) string {
 		if !strings.Contains(line, old) {
 			continue
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, trimToMax(strings.TrimSpace(line)))
+		fmt.Fprintf(&b, "%6d\t%s\n", i+1, capLine(strings.TrimSpace(line)))
 		if b.Len() > 800 {
 			b.WriteString("... more occurrences omitted; use replace_all to apply everywhere\n")
 			break
@@ -146,6 +146,3 @@ func ambiguousError(idx int, old, buf string) string {
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
-
-// trimToMax shortens s at MaxLineChars.
-func trimToMax(s string) string { return capLine(s) }

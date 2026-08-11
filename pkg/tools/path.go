@@ -13,6 +13,14 @@ type PathPolicy struct {
 	Cwd string // base for relative paths
 }
 
+// argPath returns p, or "." when empty so a tool defaults to the session cwd.
+func argPath(p string) string {
+	if p == "" {
+		return "."
+	}
+	return p
+}
+
 // Resolve returns the canonical absolute form of path, folding symlinks in its
 // longest existing prefix so read/write/edit agree on one tracker key. Relative
 // paths are taken from Cwd; nothing is refused.

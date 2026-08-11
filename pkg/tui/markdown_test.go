@@ -266,7 +266,7 @@ func TestIndentLines(t *testing.T) {
 
 	assert.Equal(t, "> a\n  b", indentLines("a\nb", "> ", "  "))
 	assert.Equal(t, "> a", indentLines("a", "> ", "  "))
-	assert.Equal(t, "| a\n| b", prefixLines("a\nb", "| "))
+	assert.Equal(t, "| a\n| b", indentLines("a\nb", "| ", "| "))
 }
 
 func TestFenceMarker(t *testing.T) {

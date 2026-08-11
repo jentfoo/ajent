@@ -148,7 +148,7 @@ func Discover(ctx context.Context, f File, cache map[string]CacheEntry, opts Dis
 			continue
 		}
 		def := flavorDefaults[flavor]
-		if !boolOr(cfg.Discover, def.discover) {
+		if !orBool(def.discover, cfg.Discover) {
 			continue // explicitly opted out
 		}
 		prev := out[name]
@@ -201,14 +201,6 @@ func discoverOne(ctx context.Context, name string, cfg ProviderConfig, flavor Fl
 		return prev, err
 	}
 	return discoverProvider(ctx, client, spec.path, spec.parse, prev, now)
-}
-
-// boolOr returns the pointer's value, or alt when it is unset.
-func boolOr(p *bool, alt bool) bool {
-	if p != nil {
-		return *p
-	}
-	return alt
 }
 
 // discoverProvider performs a conditional GET and returns the refreshed entry.

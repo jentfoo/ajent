@@ -15,10 +15,10 @@ import (
 func TestLoadSaveRoundTrip(t *testing.T) {
 	t.Setenv("AJENT_HOME", t.TempDir())
 
-	lines := []string{"hello", "/model", "@main.go", "hello"} // dedup keeps first
+	lines := []string{"hello", "/model", "@main.go", "hello"} // dedup keeps most recent copy
 	Save(lines, "")
 	got := Load("")
-	assert.Equal(t, []string{"hello", "/model", "@main.go"}, got)
+	assert.Equal(t, []string{"/model", "@main.go", "hello"}, got)
 }
 
 // TestLoadExcludesSecretPrefix verifies a secret-prefixed line is dropped on load.
@@ -60,6 +60,24 @@ func TestSaveCapsToMax(t *testing.T) {
 	got := Load("")
 	assert.Len(t, got, MaxLines)
 	assert.Equal(t, "line-"+strconv.Itoa(MaxLines+49), got[len(got)-1])
+}
+
+// TestLoadKeepsRecentDuplicateAcrossCap is a regression test: dedup keeps the
+// most recent copy of each line so capping never evicts a re-used command that
+// only survives in its oldest position.
+func TestLoadKeepsRecentDuplicateAcrossCap(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("AJENT_HOME", home)
+	var b []byte
+	for i := 0; i < MaxLines+1; i++ { // fill past the cap with unique lines
+		b = append(b, []byte("line-"+strconv.Itoa(i)+"\n")...)
+	}
+	b = append(b, "line-0\n"...) // re-type the oldest line most recently
+	require.NoError(t, os.WriteFile(filepath.Join(home, "history"), b, 0o600))
+
+	got := Load("")
+	assert.Len(t, got, MaxLines)
+	assert.Equal(t, "line-0", got[len(got)-1]) // the recent copy survives
 }
 
 // TestLoadCapsHandEditedFile verifies load caps an over-long file at MaxLines,

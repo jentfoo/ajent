@@ -181,22 +181,22 @@ func elidedText(s string, l Limit) string {
 	var hb int
 	for i := 0; i < len(lines) && len(head) < halfLines(maxKeep); i++ {
 		capped := capLine(lines[i])
-		if l.Bytes > 0 && hb+byteLen(capped)+1 > headAllow {
+		if l.Bytes > 0 && hb+len(capped)+1 > headAllow {
 			break
 		}
 		head = append(head, capped)
-		hb += byteLen(capped) + 1
+		hb += len(capped) + 1
 	}
 
 	var tail []string
 	var tb int
 	for i := len(lines) - 1; i >= 0 && len(tail) < maxKeep-halfLines(maxKeep); i-- {
 		capped := capLine(lines[i])
-		if l.Bytes > 0 && tb+byteLen(capped)+1 > tailAllow {
+		if l.Bytes > 0 && tb+len(capped)+1 > tailAllow {
 			break
 		}
 		tail = append([]string{capped}, tail...)
-		tb += byteLen(capped) + 1
+		tb += len(capped) + 1
 	}
 
 	return strings.Join(head, "\n") + elideMarker + strings.Join(tail, "\n")
@@ -240,8 +240,6 @@ func capLine(s string) string {
 	}
 	return out.String()
 }
-
-func byteLen(s string) int { return len(s) }
 
 // countLines returns the number of lines in s, counting a trailing partial line.
 func countLines(s string) int {

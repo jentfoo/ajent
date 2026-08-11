@@ -47,6 +47,9 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	} else if err = f.Chmod(perm); err != nil {
 		_ = f.Close()
 		return err
+	} else if err = f.Sync(); err != nil { // durability across an OS crash, not just a process one
+		_ = f.Close()
+		return err
 	} else if err = f.Close(); err != nil {
 		return err
 	}

@@ -52,16 +52,14 @@ func (o *completionOverlay) key(k key, u *UI) (consume, submit bool) {
 		}
 		return true, false
 	case keyTab:
-		// Tab accepts immediately; a following Enter just submits the result.
+		// accept now; a following Enter just submits
 		if len(o.items) > 0 {
 			o.applyCurrent(u)
 			o.moved = false
 		}
 		return true, false
 	case keyEnter:
-		// Enter accepts the highlighted candidate and submits when the selection
-		// was moved explicitly (↑/↓); with the list merely offered it submits the
-		// line as typed so an open list never swallows a send the user meant.
+		// accept and submit when ↑/↓ moved the selection; otherwise submit as typed
 		if o.moved && len(o.items) > 0 {
 			o.applyCurrent(u)
 			return true, true

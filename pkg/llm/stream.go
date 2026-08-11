@@ -2,7 +2,9 @@ package llm
 
 import (
 	"encoding/json"
+	"io"
 	"slices"
+	"sync"
 )
 
 // Stream is a single model response, pulled one event at a time.
@@ -155,6 +157,70 @@ func Accumulate(s Stream) (Message, Usage, error) {
 		err = a.Err()
 	}
 	return a.Message(), a.Usage(), err
+}
+
+// streamPump holds the shared event-pumping state every provider stream uses:
+// the Next loop, buffered events, terminal done/error flags and close semantics.
+// read decodes one frame into zero or more events; it is set by the embedding
+// stream, which keeps all decode-specific state on itself.
+type streamPump struct {
+	pending []Event
+	done    bool
+	err     error
+
+	mu     sync.Mutex
+	closed bool
+
+	body io.ReadCloser // closed by Close
+	read func() []Event
+}
+
+// newStreamPump returns a pump that reads frames through read and closes body.
+func newStreamPump(body io.ReadCloser, read func() []Event) *streamPump {
+	return &streamPump{body: body, read: read}
+}
+
+// Next returns the next event, or false at end of stream. A close abandons
+// anything still buffered.
+func (p *streamPump) Next() (Event, bool) {
+	for {
+		if p.isClosed() {
+			return Event{}, false
+		} else if len(p.pending) > 0 {
+			ev := p.pending[0]
+			p.pending = p.pending[1:]
+			return ev, true
+		} else if p.done {
+			return Event{}, false
+		}
+		p.pending = append(p.pending, p.read()...)
+	}
+}
+
+// Err returns the failure that ended the stream, or nil after a deliberate close.
+func (p *streamPump) Err() error {
+	if p.isClosed() {
+		return nil
+	}
+	return p.err
+}
+
+// Close stops the stream and unblocks a pending Next.
+func (p *streamPump) Close() error {
+	p.mu.Lock()
+	already := p.closed
+	p.closed = true
+	p.mu.Unlock()
+	if already {
+		return nil
+	}
+	return p.body.Close()
+}
+
+func (p *streamPump) isClosed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.closed
 }
 
 // SliceStream is a Stream over a fixed event slice, for tests and fakes.

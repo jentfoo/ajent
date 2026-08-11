@@ -113,10 +113,9 @@ func absorbNote(text string, pos int) (end int, ok bool) {
 	return pos, false
 }
 
-// looksLikeNote reports whether inner matches the measurement shape
-// `(N lines, SIZE)` / `(binary, SIZE)` / `(image, SIZE)` / `(dir)` / `(SIZE)`
-// closely enough to be treated as an existing annotation. It is strict about
-// the allowed words so ordinary parenthetical prose after a path is never eaten.
+// looksLikeNote reports whether inner matches a measurement shape like
+// (N lines, SIZE), (binary, SIZE) or (dir). Strict enough that ordinary
+// parenthetical prose after a path is never treated as an annotation.
 func looksLikeNote(inner string) bool {
 	inner = strings.TrimSpace(inner)
 	if inner == "" {

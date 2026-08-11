@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,21 +77,11 @@ func buildGuidelines(names []string) string {
 	b.WriteString("- Answer in the same language as the user's message\n")
 
 	// search hint only when bash is present and no dedicated find/grep tool is
-	if hasName(names, "bash") && !hasName(names, "find") && !hasName(names, "grep") {
+	if slices.Contains(names, "bash") && !slices.Contains(names, "find") && !slices.Contains(names, "grep") {
 		b.WriteString("- Search code with `rg` or `find` via the bash tool rather than reading whole files\n")
 	}
 
 	return b.String() + "\n"
-}
-
-// hasName reports whether names contains name.
-func hasName(names []string, name string) bool {
-	for _, n := range names {
-		if n == name {
-			return true
-		}
-	}
-	return false
 }
 
 // buildEnvironmentFacts appends clean structured machine-fact lines. Empty values

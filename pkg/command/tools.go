@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -34,7 +35,11 @@ func toolsFreeSelect(c Console, reg *tools.Registry) error {
 	if err != nil {
 		return nil // cancelled
 	}
-	reg.SetEnabled(pickedNames(all, picked))
+	names := make([]string, len(picked))
+	for i, p := range picked {
+		names[i] = all[p].Name()
+	}
+	reg.SetEnabled(names)
 	c.ToolsChanged()
 	c.Notify("tool block changed; prompt cache will miss", levelInfo)
 	return nil
@@ -67,11 +72,10 @@ func toolsWidenOnly(c Console, reg *tools.Registry) error {
 	return nil
 }
 
-// toolItems builds PickItems grouped by source, returning the items and the set
-// of indexes that should start selected (the currently enabled tools present in
-// the offered slice).
+// toolItems groups offered tools by source for MultiPick headers, returning the
+// items plus which indexes are already enabled.
 func toolItems(reg *tools.Registry, offered []agent.Tool) ([]tui.PickItem, []int) {
-	enabled := sliceToSet(reg.Names())
+	enabled := bulk.SliceToSet(reg.Names())
 	// group by source so MultiPick emits a header when the group changes
 	slices.SortStableFunc(offered, func(a, b agent.Tool) int {
 		sa, sb := reg.Source(a.Name()), reg.Source(b.Name())
@@ -95,22 +99,4 @@ func toolItems(reg *tools.Registry, offered []agent.Tool) ([]tui.PickItem, []int
 		}
 	}
 	return items, initial
-}
-
-// pickedNames maps the chosen indexes back to tool names, preserving order.
-func pickedNames(offered []agent.Tool, picked []int) []string {
-	out := make([]string, 0, len(picked))
-	for _, i := range picked {
-		out = append(out, offered[i].Name())
-	}
-	return out
-}
-
-// sliceToSet builds a set for membership checks.
-func sliceToSet(s []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(s))
-	for _, v := range s {
-		out[v] = struct{}{}
-	}
-	return out
 }

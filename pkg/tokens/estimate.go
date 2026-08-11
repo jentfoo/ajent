@@ -42,6 +42,9 @@ const (
 // (emoji) pairs above U+FFFF.
 func EstimateText(text string, kind Kind) int {
 	ratio := bytesPerToken[kind]
+	if ratio <= 0 { // unknown kind: fall back to prose rather than divide by zero
+		ratio = bytesPerToken[KindProse]
+	}
 	var ascii int
 	tokens := 0
 	for _, r := range text {
@@ -99,9 +102,6 @@ func imageTokens(n int) int {
 	}
 	return t
 }
-
-// EstimateBlocks estimates the tokens of a content block list as prose.
-func EstimateBlocks(blocks llm.BlockList) int { return estimateBlocks(blocks) }
 
 // EstimateMessages estimates one or more messages including per-message framing.
 func EstimateMessages(msgs []llm.Message) int {

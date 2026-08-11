@@ -65,7 +65,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	if p.Pattern == "" {
 		return resultErr("grep needs a non-empty pattern"), nil
 	}
-	cwd, err := t.policy.Resolve(p.PathOrDot())
+	cwd, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
 		return resultErr(err.Error()), nil
 	}
@@ -77,8 +77,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		return resultErr("grep mode must be files, content or count"), nil
 	}
 
-	// compile once up front so a bad regex is an actionable error, not an
-	// empty result that looks like "no matches".
+	// compile first: a bad regex must surface as an error, not empty results
 	re, err := p.compile()
 	if err != nil {
 		return resultErr("grep: " + err.Error()), nil
@@ -99,14 +98,6 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 
 	return t.goSearch(cwd, p, mode, re, max), nil
-}
-
-// PathOrDot returns the requested path or the policy cwd's dot.
-func (p grepParams) PathOrDot() string {
-	if p.Path != "" {
-		return p.Path
-	}
-	return "."
 }
 
 // compile builds the matcher, honouring literal and ignoreCase.

@@ -26,8 +26,8 @@ func (c ContextState) Budget() int {
 
 // Reserve returns the tokens held back from m's window for its response. A value
 // >= 1 is an absolute token count; a value in (0,1) is a fraction of the window;
-// anything else uses the default fraction. It clamps to at most 90% of the window
-// so a bad config cannot produce a zero budget.
+// anything else uses the default fraction. It clamps to at most 90% of the window,
+// and to at least one token.
 func Reserve(m llm.Model) int {
 	window := m.ContextWindow
 	if window <= 0 {
@@ -35,29 +35,18 @@ func Reserve(m llm.Model) int {
 	}
 	maxReserve := max(1, window*9/10)
 	switch {
-	case m.ContextReserve >= 1: // absolute token count
+	case m.ContextReserve >= 1: // absolute token count, clamped to the cap
 		r := int(m.ContextReserve)
 		if r > maxReserve {
 			r = maxReserve
 		}
 		return r
-	case m.ContextReserve > 0 && m.ContextReserve < 1:
-		fraction := m.ContextReserve
-		r := int(float64(window) * fraction)
-		if r <= 0 {
-			return 1
-		} else if r > maxReserve {
-			return maxReserve
-		}
-		return r
-	default: // unset or invalid: default fraction
+	default:
 		fraction := defaultReserveFraction
-		r := int(float64(window) * fraction)
-		if r <= 0 {
-			return 1
-		} else if r > maxReserve {
-			return maxReserve
+		if m.ContextReserve > 0 && m.ContextReserve < 1 { // fraction of the window
+			fraction = m.ContextReserve
 		}
-		return r
+		r := int(float64(window) * fraction)
+		return min(max(r, 1), maxReserve)
 	}
 }

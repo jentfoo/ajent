@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 )
 
 const (
@@ -335,16 +334,11 @@ type anthropicStream struct {
 	resp     *http.Response
 	sse      *SSEReader
 	provider string
+	*streamPump
 
-	blocks  map[int]*antOpenBlock
-	pending []Event
-	usage   Usage
-	stop    StopReason
-	done    bool
-	err     error
-
-	mu     sync.Mutex
-	closed bool
+	blocks map[int]*antOpenBlock
+	usage  Usage
+	stop   StopReason
 }
 
 // antOpenBlock is a content block being streamed.
@@ -358,27 +352,13 @@ type antOpenBlock struct {
 }
 
 func newAnthropicStream(ctx context.Context, resp *http.Response, provider string) *anthropicStream {
-	return &anthropicStream{
+	s := &anthropicStream{
 		ctx: ctx, resp: resp, provider: provider,
 		sse:    NewSSEReader(resp.Body, 0),
 		blocks: make(map[int]*antOpenBlock),
 	}
-}
-
-// Next returns the next event, or false at end of stream.
-func (s *anthropicStream) Next() (Event, bool) {
-	for {
-		if s.isClosed() {
-			return Event{}, false // a close abandons anything still buffered
-		} else if len(s.pending) > 0 {
-			ev := s.pending[0]
-			s.pending = s.pending[1:]
-			return ev, true
-		} else if s.done {
-			return Event{}, false
-		}
-		s.pending = append(s.pending, s.readFrame()...)
-	}
+	s.streamPump = newStreamPump(resp.Body, s.readFrame)
+	return s
 }
 
 // readFrame decodes one SSE frame into zero or more events.
@@ -535,30 +515,4 @@ func (s *anthropicStream) finish(cause error) []Event {
 		stop = StopEndTurn
 	}
 	return append(events, Event{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr})
-}
-
-// Err returns the failure that ended the stream, if any.
-func (s *anthropicStream) Err() error {
-	if s.isClosed() {
-		return nil
-	}
-	return s.err
-}
-
-// Close stops the stream and unblocks a pending Next.
-func (s *anthropicStream) Close() error {
-	s.mu.Lock()
-	already := s.closed
-	s.closed = true
-	s.mu.Unlock()
-	if already {
-		return nil
-	}
-	return s.resp.Body.Close()
-}
-
-func (s *anthropicStream) isClosed() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closed
 }

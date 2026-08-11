@@ -377,6 +377,33 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":"because"`)
 	})
+	t.Run("empty_reasoning_content_forced_on_assistant", func(t *testing.T) {
+		// deepseek requires every replayed assistant message to carry the field,
+		// even a plain reply with no thinking block.
+		req := baseReq()
+		req.Model.Caps.ReplayReasoning = true
+		req.Reasoning.Retain = RetainAll
+		req.Messages = []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "plain reply"}}},
+		}
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"reasoning_content":""`)
+	})
+	t.Run("empty_assistant_message_skipped", func(t *testing.T) {
+		// neither content nor tool calls: dropped regardless of reasoning fields
+		req := baseReq()
+		req.Model.Caps.ReplayReasoning = true
+		req.Reasoning.Retain = RetainAll
+		req.Messages = []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{ThinkingBlock{Text: "because"}}},
+		}
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), `reasoning_content`)
+	})
 	t.Run("profile_decorator_runs", func(t *testing.T) {
 		body, err := buildCompatBody(baseReq(), compatProfile{
 			decorate: func(b *compatRequest, _ Request) { b.CachePrompt = ptr(true) },

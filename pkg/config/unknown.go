@@ -26,8 +26,10 @@ func walkUnknown(node any, t reflect.Type, path string, out *[]string) {
 	for t != nil && t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	if t == nil || t.Kind() == reflect.Interface || implementsUnmarshaler(t) {
-		return // consumes arbitrary JSON
+	// an Unmarshaler or interface/pointer-to-interface consumes arbitrary JSON
+	if t == nil || t.Kind() == reflect.Interface ||
+		t.Implements(unmarshalerType) || reflect.PointerTo(t).Implements(unmarshalerType) {
+		return
 	}
 
 	switch n := node.(type) {
@@ -78,10 +80,6 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 		out[strings.ToLower(name)] = f.Type
 	}
 	return out
-}
-
-func implementsUnmarshaler(t reflect.Type) bool {
-	return t.Implements(unmarshalerType) || reflect.PointerTo(t).Implements(unmarshalerType)
 }
 
 func deref(t reflect.Type) reflect.Type {

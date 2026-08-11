@@ -117,7 +117,7 @@ func (c *Completer) pathComplete(cells []string, pos, start int) (int, []tui.Com
 	if len(items) == 0 {
 		return pos, nil
 	}
-	// replace from just past the @ so accepting a candidate never drops it.
+	// start after @ so accepting keeps the leading @
 	return start + 1, items
 }
 

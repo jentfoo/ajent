@@ -165,7 +165,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		}
 
 		if step >= maxSteps {
-			sink.Notice("turn hit the "+itoa(maxSteps)+" step limit", LevelWarn)
+			sink.Notice("turn hit the "+strconv.Itoa(maxSteps)+" step limit", LevelWarn)
 			result.Stop = llm.StopMaxTokens // loop ran out, treat as a hard stop
 			// answer this message's tool_use so the next request stays well formed
 			a.appendToolResults(msg, nil)
@@ -464,9 +464,6 @@ func (a *Agent) syncContext(force bool) {
 // needsRecount reports whether a provider reported no usage and has an exact
 // local tokenizer, which is when the loop recounts after appending instead of
 // trusting an estimate.
-// needsRecount reports whether a provider reported no usage and has an exact
-// local tokenizer, which is when the loop recounts after appending instead of
-// trusting an estimate.
 func needsRecount(caps llm.Capabilities, u llm.Usage) bool {
 	return tokens.Zero(u) && caps.Tokenizer == llm.TokenizerRemoteTokenize
 }
@@ -497,9 +494,6 @@ func toolCalls(msg llm.Message) []llm.ToolCallBlock {
 	}
 	return out
 }
-
-// itoa formats an int for notices.
-func itoa(n int) string { return strconv.Itoa(n) }
 
 // NewOutput returns an Output that forwards tool output to sink under callID,
 // so a host-run tool (a staged ! command or an injected @ read) streams through

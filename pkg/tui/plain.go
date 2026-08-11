@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -58,6 +59,17 @@ func applyPlainAnswer(it interactor, line string) error {
 			return ErrCancelled
 		}
 		s.chosen = s.matches[0]
+		return nil
+	case *multiPickState:
+		s.filter = line
+		s.refilter()
+		if len(s.matches) == 0 {
+			return ErrCancelled
+		}
+		for idx := range s.selected {
+			s.chosen = append(s.chosen, idx)
+		}
+		slices.Sort(s.chosen)
 		return nil
 	default:
 		return ErrNoUI
