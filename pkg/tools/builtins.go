@@ -28,6 +28,7 @@ func Builtins(opts Options) (*Registry, error) {
 	policy := PathPolicy{Cwd: cwd}
 
 	reg := New()
+	reg.tracker = tracker
 	reg.Register(&readTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&writeTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&editTool{policy: policy, tracker: tracker}, true)

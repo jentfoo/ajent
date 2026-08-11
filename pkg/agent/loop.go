@@ -172,8 +172,13 @@ func (a *Agent) drainSteer() {
 }
 
 // appendSteer adds queued steering inputs as user messages at a step boundary.
+// Input.Before is appended first, ahead of the user's text, so synthetic
+// tool-call + result pairs land in transcript order before what the user said.
 func (a *Agent) appendSteer(inputs []Input) {
 	for _, in := range inputs {
+		for _, m := range in.Before {
+			a.append(MessageInfo{Message: m})
+		}
 		var blocks llm.BlockList
 		if in.Text != "" {
 			blocks = append(blocks, llm.TextBlock{Text: in.Text})
@@ -316,7 +321,7 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) llm.ToolR
 			Content: llm.BlockList{llm.TextBlock{Text: "unknown tool"}}}
 	}
 
-	out := &sinkWriter{sink: sink, id: call.ID}
+	out := NewOutput(sink, call.ID)
 	done := sink.ToolStart(call, tool.Label(call))
 	res, err := tool.Execute(ctx, call, out)
 	if res.Content == nil {
@@ -397,6 +402,13 @@ func toolCalls(msg llm.Message) []llm.ToolCallBlock {
 
 // itoa formats an int for notices.
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// NewOutput returns an Output that forwards tool output to sink under callID,
+// so a host-run tool (a staged ! command or an injected @ read) streams through
+// the same path an agent-run tool uses.
+func NewOutput(sink Sink, callID string) Output {
+	return &sinkWriter{sink: sink, id: callID}
+}
 
 // sinkWriter forwards tool output deltas to the sink as they are written. It is
 // safe for concurrent use so a tool can stream stdout and stderr from two goroutines.

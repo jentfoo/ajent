@@ -22,7 +22,20 @@ var (
 	FindResult = Limit{Lines: 500}
 	GrepResult = Limit{Lines: 1000, Bytes: 128 << 10}
 	LsResult   = Limit{Lines: 500}
+
+	// RefInject bounds a single @file injected in full. Above either axis the
+	// reference is annotated with its shape instead, so the model can choose to
+	// read it with offset/limit rather than paying for the whole file.
+	RefInject = Limit{Lines: 500, Bytes: 32 << 10}
+	// RefTotal caps the total bytes injected for one message; once reached the
+	// remaining references annotate instead, so a message never silently loses one.
+	RefTotal = Limit{Bytes: 128 << 10}
 )
+
+// MeasureCeiling is the byte size above which Measure reports only the byte
+// count and never reads the file to count lines, so annotating a giant file is
+// itself bounded.
+const MeasureCeiling int64 = 512 << 10
 
 // MaxLineChars caps a single line before it is emitted.
 const MaxLineChars = 2000

@@ -37,6 +37,8 @@ const (
 	keyPageDown
 	keyCursorReport
 	keyEscape
+	keyTab
+	keyBackTab
 )
 
 // key is one decoded input event.
@@ -105,6 +107,7 @@ var controlKeys = map[byte]keyType{
 	0x17: keyKillWord,
 	0x1a: keySuspend,
 	0x7f: keyBackspace,
+	0x09: keyTab,
 }
 
 // decodeKey decodes the first key in b. ok is false when b holds only part of a
@@ -177,6 +180,11 @@ func decodeCSI(b []byte) (key, int, bool) {
 		return key{typ: keyCursorReport, row: v}, n, true
 	case '~':
 		return decodeTilde(b, params, n)
+	case 'Z':
+		if params == "" {
+			return key{typ: keyBackTab}, n, true
+		}
+		return key{typ: keyIgnore}, n, true
 	default:
 		return key{typ: keyIgnore}, n, true
 	}

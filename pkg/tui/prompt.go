@@ -24,12 +24,20 @@ type PickItem struct {
 	Label  string   // primary text
 	Detail string   // dim trailing text
 	Terms  []string // extra strings the filter matches, not displayed
+	Group  string   // source label; a dim header is emitted when it changes
 }
 
 // PickOptions tunes a Pick.
 type PickOptions struct {
 	Placeholder string
 	Initial     int    // index selected when the list opens
+	Filter      string // initial filter text
+}
+
+// MultiPickOptions tunes a MultiPick.
+type MultiPickOptions struct {
+	Placeholder string
+	Initial     []int  // indexes selected when the list opens
 	Filter      string // initial filter text
 }
 
@@ -93,6 +101,30 @@ func (u *UI) PickContext(ctx context.Context, prompt string, items []PickItem, o
 	}
 	if err := u.run(ctx, s); err != nil {
 		return 0, err
+	}
+	return s.chosen, nil
+}
+
+// MultiPick presents a filterable multi-select list and returns the chosen
+// indexes, or ErrCancelled on Esc. Space/Tab toggle the highlighted row, ↑/↓
+// move, Enter confirms and Esc cancels; typed text narrows the filter.
+// Rows group under a dim header when PickItem.Group changes.
+func (u *UI) MultiPick(prompt string, items []PickItem, opts MultiPickOptions) ([]int, error) {
+	return u.MultiPickContext(context.Background(), prompt, items, opts)
+}
+
+// MultiPickContext is MultiPick, abandoned when ctx ends.
+func (u *UI) MultiPickContext(ctx context.Context, prompt string, items []PickItem, opts MultiPickOptions) ([]int, error) {
+	if len(items) == 0 {
+		return nil, ErrCancelled
+	}
+	s := &multiPickState{prompt: prompt, items: items, filter: opts.Filter, placeholder: opts.Placeholder, selected: make(map[int]struct{})}
+	for _, i := range opts.Initial {
+		s.selected[i] = struct{}{}
+	}
+	s.refilter()
+	if err := u.run(ctx, s); err != nil {
+		return nil, err
 	}
 	return s.chosen, nil
 }
@@ -333,4 +365,158 @@ func lastRune(s string) (rune, int) {
 	}
 	last := runes[len(runes)-1]
 	return last, len(string(last))
+}
+
+// multiPickState is a multi-select list narrowed by a live filter. Space/Tab
+// toggle the highlighted row, Enter confirms, Esc cancels; typed text (other
+// than space) narrows the filter. Rows group under a dim header when
+// PickItem.Group changes between matches.
+type multiPickState struct {
+	prompt      string
+	placeholder string
+	items       []PickItem
+	filter      string
+	matches     []int // indexes into items, best first
+	cursor      int   // index into matches
+	selected    map[int]struct{}
+	chosen      []int // indexes into items, in item order
+}
+
+// refilter recomputes the match set, keeping the order stable for equal scores.
+func (s *multiPickState) refilter() {
+	type scored struct {
+		index int
+		score int
+	}
+	var hits []scored
+	for i, it := range s.items {
+		if score, ok := bestScore(it, s.filter); ok {
+			hits = append(hits, scored{index: i, score: score})
+		}
+	}
+	slices.SortStableFunc(hits, func(a, b scored) int { return b.score - a.score })
+	s.matches = make([]int, len(hits))
+	for i, h := range hits {
+		s.matches[i] = h.index
+	}
+	s.cursor = 0
+}
+
+func (s *multiPickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
+	header := t.Accent.Wrap(s.prompt) + t.Dim.Wrap("  "+strconv.Itoa(len(s.selected))+
+		" selected · "+strconv.Itoa(len(s.matches))+" of "+strconv.Itoa(len(s.items)))
+	shown := s.filter
+	if shown == "" && s.placeholder != "" {
+		shown = t.Dim.Wrap(s.placeholder)
+	}
+	filterRow := t.User.Wrap(userMarker) + shown
+	rows := []string{header, filterRow}
+
+	listRows := maxRows - len(rows)
+	start, end := windowFor(s.cursor, len(s.matches), listRows)
+	var prevGroup string
+	for i := start; i < end; i++ {
+		idx := s.matches[i]
+		it := s.items[idx]
+		if it.Group != "" && it.Group != prevGroup {
+			rows = append(rows, t.Dim.Wrap(selectIndent+it.Group))
+			prevGroup = it.Group
+		}
+		rows = append(rows, multiPickRow(t, it, i == s.cursor, s.isSelected(idx), width))
+	}
+	if len(s.matches) == 0 {
+		rows = append(rows, t.Dim.Wrap(selectIndent+"no matches"))
+	} else if end-start < len(s.matches) {
+		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(len(s.matches)-(end-start))))
+	}
+	return rows, 1, displayWidth(t.User.Wrap(userMarker)) + displayWidth(s.filter)
+}
+
+func (s *multiPickState) key(k key) (bool, error) {
+	switch k.typ {
+	case keyUp:
+		s.cursor = wrapIndex(s.cursor-1, len(s.matches))
+	case keyDown:
+		s.cursor = wrapIndex(s.cursor+1, len(s.matches))
+	case keyPageUp:
+		s.cursor = max(0, s.cursor-pickPage)
+	case keyPageDown:
+		s.cursor = min(max(len(s.matches)-1, 0), s.cursor+pickPage)
+	case keyRune:
+		if k.text == " " {
+			s.toggleCurrent() // space selects/deselects; it never narrows the filter
+			return false, nil
+		}
+		s.filter += k.text
+		s.refilter()
+	case keyPaste:
+		s.filter += strings.ReplaceAll(k.text, "\n", "")
+		s.refilter()
+	case keyBackspace:
+		if s.filter != "" {
+			_, size := lastRune(s.filter)
+			s.filter = s.filter[:len(s.filter)-size]
+			s.refilter()
+		}
+	case keyKillLine:
+		s.filter = ""
+		s.refilter()
+	case keyTab:
+		s.toggleCurrent()
+	case keyEnter:
+		if len(s.matches) == 0 {
+			return false, nil
+		}
+		s.chosen = make([]int, 0, len(s.selected))
+		for idx := range s.selected {
+			s.chosen = append(s.chosen, idx)
+		}
+		slices.Sort(s.chosen)
+		return true, nil
+	case keyEscape, keyInterrupt:
+		return true, ErrCancelled
+	}
+	return false, nil
+}
+
+// toggleCurrent flips the highlighted row between selected and unselected.
+func (s *multiPickState) toggleCurrent() {
+	if len(s.matches) == 0 {
+		return
+	}
+	idx := s.matches[s.cursor]
+	if s.isSelected(idx) {
+		delete(s.selected, idx)
+	} else {
+		s.selected[idx] = struct{}{}
+	}
+}
+
+func (s *multiPickState) summary(t Theme) string {
+	if len(s.selected) == 0 {
+		return t.Dim.Wrap(noticeMarker + " " + s.prompt + " (none)")
+	}
+	return t.Dim.Wrap(noticeMarker + " " + s.prompt + " " + strconv.Itoa(len(s.selected)) + " selected")
+}
+
+func (s *multiPickState) isSelected(idx int) bool {
+	_, ok := s.selected[idx]
+	return ok
+}
+
+// multiPickRow renders one multi-select row with a checkbox and cursor marker.
+func multiPickRow(t Theme, it PickItem, selected, checked bool, width int) string {
+	box := "[ ] "
+	if checked {
+		box = "[x] "
+	}
+	marker, style := selectIndent, t.Dim
+	if selected {
+		marker, style = selectMarker, t.Accent
+	}
+	line := style.Wrap(marker + box + it.Label)
+	if it.Detail != "" {
+		line += t.Dim.Wrap("  " + it.Detail)
+	}
+	return truncateDisplay(line, width)
 }

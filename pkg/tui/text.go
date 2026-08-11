@@ -67,6 +67,11 @@ func stripANSI(s string) string {
 	return b.String()
 }
 
+// GraphemeCells splits s into grapheme clusters, one cell per element.
+func GraphemeCells(s string) []string {
+	return graphemesOf(s)
+}
+
 // graphemesOf splits s into grapheme clusters for cursor movement.
 func graphemesOf(s string) []string {
 	if s == "" {

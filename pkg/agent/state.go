@@ -10,11 +10,12 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// Input is one user turn: free text plus any extra content blocks, such as an
-// expanded @file reference.
+// Input is one user turn: free text, extra content blocks, and any synthetic
+// messages to append ahead of the user's own (staged shell results, @ reads).
 type Input struct {
 	Text   string
 	Blocks llm.BlockList // extra content, appended after Text when non-empty
+	Before []llm.Message // appended ahead of this input, in transcript order
 }
 
 // State is the in-memory projection of a session. It is owned by the loop

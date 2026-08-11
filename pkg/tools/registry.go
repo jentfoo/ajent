@@ -12,14 +12,20 @@ import (
 // Registry holds the tool set and its enabled state. It satisfies agent.ToolSet
 // so the loop reads tools straight off it.
 type Registry struct {
-	tools  []registeredTool // declaration order drives Names/Schemas
-	schema []llm.ToolSchema // cached, invalidated by SetEnabled
-	guards []Guard          // ordered; first non-allow wins inside Execute
+	tools   []registeredTool // declaration order drives Names/Schemas
+	schema  []llm.ToolSchema // cached, invalidated by SetEnabled
+	guards  []Guard          // ordered; first non-allow wins inside Execute
+	tracker *Tracker         // the read tracker shared by read/write/edit, nil when none
 }
 
-// registeredTool pairs a tool with its default-enabled flag.
+// SourceBuiltin is the source label for tools registered by the core. MCP
+// servers (phase 11) and extensions (phase 10) register under their own names.
+const SourceBuiltin = "builtin"
+
+// registeredTool pairs a tool with its default-enabled flag and source label.
 type registeredTool struct {
 	tool           agent.Tool
+	source         string // who registered it, for /tools grouping
 	defaultEnabled bool
 	enabled        bool
 }
@@ -27,10 +33,22 @@ type registeredTool struct {
 // New returns an empty registry with no guards.
 func New() *Registry { return &Registry{} }
 
-// Register adds t to the registry, enabled when defaultEnabled is true. Order of
-// registration drives Names and Schemas.
+// Register adds t to the registry under the builtin source, enabled when
+// defaultEnabled is true. Order of registration drives Names and Schemas.
 func (r *Registry) Register(t agent.Tool, defaultEnabled bool) {
-	r.tools = append(r.tools, registeredTool{tool: t, defaultEnabled: defaultEnabled, enabled: defaultEnabled})
+	r.RegisterFrom(SourceBuiltin, t, defaultEnabled)
+}
+
+// RegisterFrom adds t to the registry under source, enabled when defaultEnabled
+// is true. Source groups the tool in /tools (builtin, an MCP server name, an
+// extension name); order of registration drives Names and Schemas.
+func (r *Registry) RegisterFrom(source string, t agent.Tool, defaultEnabled bool) {
+	r.tools = append(r.tools, registeredTool{
+		tool:           t,
+		source:         source,
+		defaultEnabled: defaultEnabled,
+		enabled:        defaultEnabled,
+	})
 	r.schema = nil // schema cache is stale until rebuilt
 }
 
@@ -49,8 +67,9 @@ func (r *Registry) Enabled() []agent.Tool {
 	return out
 }
 
-// SetEnabled flips the enabled set to names. Unknown names are ignored; known
-// ones not listed become disabled.
+// SetEnabled replaces the enabled set with names. Unknown names are ignored;
+// known ones not listed become disabled. Use Enable to widen the set within a
+// session instead.
 func (r *Registry) SetEnabled(names []string) {
 	want := bulk.SliceToSet(names)
 	for i := range r.tools {
@@ -64,7 +83,23 @@ func (r *Registry) SetEnabled(names []string) {
 	r.schema = nil // the tool block in the prompt changed, so bust the cache
 }
 
-// Get returns an enabled, guard-wrapped tool by name.
+// Enable additively enables the named tools, leaving others untouched. Unknown
+// names are ignored. The enabled set only widens within a session, so this is
+// the /tools path after the first prompt; SetEnabled is the free-selection path
+// before it.
+func (r *Registry) Enable(names []string) {
+	want := bulk.SliceToSet(names)
+	for i := range r.tools {
+		if _, ok := want[r.tools[i].tool.Name()]; ok {
+			r.tools[i].enabled = true
+		}
+	}
+	r.schema = nil
+}
+
+// Get returns an enabled, guard-wrapped tool by name. Use Lookup when a caller
+// needs the tool regardless of enabled state (e.g. @ running ls, ! checking
+// bash): Get would silently refuse a disabled tool.
 func (r *Registry) Get(name string) (agent.Tool, bool) {
 	for _, rt := range r.tools {
 		if !rt.enabled || rt.tool.Name() != name {
@@ -74,6 +109,55 @@ func (r *Registry) Get(name string) (agent.Tool, bool) {
 	}
 	return nil, false
 }
+
+// Lookup returns a guard-wrapped tool by name regardless of enabled state. Use
+// Get when the call should respect the enabled set (agent-initiated calls); a
+// user-explicit @dir listing or ! shell command runs through Lookup so a
+// disabled tool still serves the direct request.
+func (r *Registry) Lookup(name string) (agent.Tool, bool) {
+	for _, rt := range r.tools {
+		if rt.tool.Name() != name {
+			continue
+		}
+		return &guardedTool{t: rt.tool, reg: r}, true
+	}
+	return nil, false
+}
+
+// Disabled returns currently disabled tools in declaration order, for the
+// post-first-prompt /tools mode that can only widen the set.
+func (r *Registry) Disabled() []agent.Tool {
+	var out []agent.Tool
+	for _, rt := range r.tools {
+		if !rt.enabled {
+			out = append(out, rt.tool)
+		}
+	}
+	return out
+}
+
+// All returns every registered tool in declaration order regardless of enabled
+// state, for the pre-first-prompt /tools picker that selects freely.
+func (r *Registry) All() []agent.Tool {
+	out := make([]agent.Tool, 0, len(r.tools))
+	for _, rt := range r.tools {
+		out = append(out, rt.tool)
+	}
+	return out
+}
+
+// Source returns the registration source label for name, or empty when unknown.
+func (r *Registry) Source(name string) string {
+	for _, rt := range r.tools {
+		if rt.tool.Name() == name {
+			return rt.source
+		}
+	}
+	return ""
+}
+
+// Tracker returns the read tracker shared by read/write/edit, or nil when none.
+func (r *Registry) Tracker() *Tracker { return r.tracker }
 
 // Schemas returns the enabled tool schemas in declaration order, cached.
 func (r *Registry) Schemas() []llm.ToolSchema {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -46,6 +47,8 @@ type Options struct {
 	Mode      Mode     // paint mode, ModeAuto detects multiplexers
 	Model     string
 	MaxTokens int
+	// History seeds the editor's line history (e.g. loaded from ~/.ajent/history).
+	History []string
 	// double-Esc rewind: two idle presses within DoubleEscWindow call OnRewind instead of ControlEscape
 	DoubleEscWindow time.Duration // window between two idle Esc presses; 0 = default
 	OnRewind        func()
@@ -94,6 +97,11 @@ type UI struct {
 	noticeKey  string // keyed notice still collapsible in the live block
 	noticeText string
 
+	completer  Completer          // nil disables the overlay
+	completion *completionOverlay // active overlay state, nil when closed
+
+	pastes map[string]string // placeholder → pasted content, expanded at submit
+
 	started   bool
 	lastBlank bool
 }
@@ -131,6 +139,8 @@ func New(opts Options) (*UI, error) {
 	u.doubleEscWindow = doubleEsc
 	u.onRewind = opts.OnRewind
 	u.afterDelay = time.AfterFunc
+	u.editor.history = slices.Clone(opts.History)
+	u.editor.histIdx = len(u.editor.history)
 
 	if err := u.render.start(u.inFd); err != nil {
 		return nil, err
@@ -166,6 +176,13 @@ func (u *UI) Mode() Mode { return u.mode }
 
 // Messages returns submitted user input, closed when the UI goes away.
 func (u *UI) Messages() <-chan string { return u.msgs }
+
+// History returns the editor's line history for persistence across sessions.
+func (u *UI) History() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return slices.Clone(u.editor.history)
+}
 
 // Controls returns keys the editor did not consume: Esc and Ctrl+C or Ctrl+D on
 // an empty buffer. The send is non-blocking with a drop, so key handling never
@@ -306,6 +323,13 @@ func (u *UI) EndText() {
 	u.writeMarkdown(rest)
 	u.textStart = false
 	u.repaint() // drop the live preview now that the message is committed
+}
+
+// Print renders a complete markdown document into history at once, the form
+// /help uses. It is the synchronous equivalent of Text followed by EndText.
+func (u *UI) Print(markdown string) {
+	u.Text(markdown)
+	u.EndText()
 }
 
 // streamingRows lays the in-progress markdown out into display rows for the live
@@ -466,6 +490,13 @@ func (u *UI) repaint() {
 	rows = append(rows, u.streamingRows(w)...)
 	offset := len(rows)
 
+	// the completion overlay rides above the editor, shifting the caret offset
+	if u.completion != nil && u.act == nil {
+		compRows := u.completion.rows(u.theme, w, max(3, (h-2)/4))
+		rows = append(rows, compRows...)
+		offset += len(compRows)
+	}
+
 	// an interaction takes the input's place while it is active, so the editor
 	// keeps whatever was typed and shows it again once the prompt resolves
 	var curRow, curCol int
@@ -578,19 +609,60 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.routeKey(k) // an active interaction sees every key before the editor
 		return nil, false, false
 	}
+	// the completion overlay consumes only Tab/↑/↓/Enter/Esc before the editor,
+	// and only per the accept rules; everything else falls through so typing
+	// still narrows the list.
+	if u.completion != nil && u.completion.accept(k) {
+		consume, doSubmit := u.completion.key(k, u)
+		if consume && k.typ == keyEscape {
+			u.completion = nil
+			u.cancelRewindLocked()
+			return nil, true, false
+		}
+		if consume && doSubmit {
+			// Enter on an unmoved list submits the line as typed
+			u.completion = nil
+			if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
+				e := u.expandPastes(v)
+				return &e, true, false
+			}
+			return nil, true, false
+		}
+		if consume {
+			u.queryCompleter() // re-query after the accept changed the text
+			return nil, true, false
+		}
+	}
 	switch k.typ {
 	case keyRune:
 		u.cancelRewindLocked() // typing ends the idle double-Esc window
 		u.editor.Insert(k.text)
 	case keyPaste:
 		u.cancelRewindLocked()
-		u.editor.Insert(strings.ReplaceAll(k.text, "\r", "\n"))
+		text := strings.ReplaceAll(k.text, "\r", "\n")
+		if len(text) > pasteThreshold {
+			// large paste: store the content and insert a placeholder so the input
+			// block stays small; the placeholder is expanded before sending.
+			placeholder := pastePlaceholder(text)
+			if u.pastes == nil {
+				u.pastes = make(map[string]string)
+			}
+			u.pastes[placeholder] = text
+			u.editor.Insert(placeholder)
+		} else {
+			u.editor.Insert(text)
+		}
 	case keyNewline:
 		u.cancelRewindLocked()
 		u.editor.Insert("\n")
 	case keyEnter:
+		// an unmoved list merely offered: submit the line as typed and close it
+		if u.completion != nil {
+			u.completion = nil
+		}
 		if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
-			return &v, true, false // editor cleared by submit, redraw the prompt
+			e := u.expandPastes(v)
+			return &e, true, false
 		}
 	case keyBackspace:
 		u.editor.Backspace()
@@ -663,6 +735,14 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			u.editor.DeleteForward()
 		}
 	}
+	// A key that reached the editor (rather than being consumed by ↑/↓) means the
+	// user is composing again: drop any prior selection so Enter submits as typed.
+	if u.completion != nil {
+		u.completion.moved = false
+	}
+	// re-query the completer after any editor mutation so the overlay narrows or
+	// closes as the text changes; a nil completer is a no-op.
+	u.queryCompleter()
 	return nil, true, false
 }
 

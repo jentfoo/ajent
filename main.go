@@ -13,7 +13,10 @@ import (
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/history"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -22,6 +25,10 @@ import (
 
 // defaultMaxTokens is the context window shown when no model reports one.
 const defaultMaxTokens = 200_000
+
+// secretPrefix marks editor lines excluded from persistent history, so a pasted
+// secret never round-trips through ~/.ajent/history.
+const secretPrefix = "secret:"
 
 func main() {
 	var modelFlag string
@@ -111,12 +118,14 @@ func main() {
 		Mode:      mode,
 		Model:     label,
 		MaxTokens: maxTokens,
+		History:   history.Load(secretPrefix),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ajent:", err)
 		os.Exit(1)
 	}
 	defer ui.Close()
+	defer history.Save(ui.History(), secretPrefix)
 
 	for _, w := range warnings {
 		ui.Notify(w, tui.LevelWarn)
@@ -141,10 +150,6 @@ func main() {
 	}
 }
 
-// driver runs the real agent loop: it builds an Agent over the registry and
-// drives turns from submitted messages, steering mid-turn input into the running
-// turn rather than starting a second one. sessMode decides whether this run starts
-// fresh or resumes a saved transcript.
 // driver runs the real agent loop: it builds an Agent over the registry and
 // drives turns from submitted messages, steering mid-turn input into the running
 // turn rather than starting a second one. sessMode decides whether this run starts
@@ -203,47 +208,109 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 		ui.Notify("no model configured; use /model to pick one", tui.LevelWarn)
 	}
 
-	quit := watchControls(ui, ag)
+	quit := make(chan struct{})
+	started := false
 
-	var seed agent.Input
+	// phase 05: the command registry, shell stager and @ expander own the single
+	// dispatch path for submitted lines. Commands run inline; shell lines stage and
+	// flush ahead of the next prompt; prompts expand @ refs and steer the agent.
+	cmds := command.NewRegistry()
+	stager := command.NewStager(toolsReg, sink)
+	console := &uiConsole{
+		ui: ui, reg: reg, st: st, tools: toolsReg, commands: cmds,
+		started: &started, quit: quit,
+	}
+	if rec != nil {
+		console.rec = rec.rec
+	}
+	command.RegisterBuiltins(cmds, console)
+	watchControls(ui, ag, stager, quit)
+	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
+	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
+	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
+
+	pump := make(chan pumpLine, 16)
+	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started)
+
 	if len(args) > 0 {
-		seed = agent.Input{Text: strings.Join(args, " ")}
-		startTurn(ui, rec != nil, ag, seed.Text)
+		pump <- pumpLine{kind: command.KindPrompt, rest: strings.Join(args, " ")}
 	}
 
 	for {
 		select {
 		case msg, ok := <-ui.Messages():
 			if !ok {
+				close(pump)
 				return rec // UI closed
 			}
-			if cmd, arg, ok := slashCommand(msg); ok {
-				handleCommand(ui, reg, st, cmd, arg)
-				continue
+			line := command.ParseLine(msg)
+			switch line.Kind {
+			case command.KindShell:
+				stager.Run(line.Rest)
+			case command.KindCommand:
+				pump <- pumpLine{kind: command.KindCommand, rest: line.Rest}
+			default:
+				pump <- pumpLine{kind: command.KindPrompt, rest: line.Rest}
 			}
-			if ag.Steer(agent.Input{Text: msg}) {
-				continue // queued into the running turn at its next boundary
-			}
-			startTurn(ui, rec != nil, ag, msg)
 		case <-quit:
+			close(pump)
 			return rec
 		}
 	}
 }
 
-// startTurn echoes a submitted message and runs it to completion in the
-// background so the main loop keeps receiving input while the model streams.
+// pumpLine is one classified submitted line handed to the prompt pump.
+type pumpLine struct {
+	kind command.Kind
+	rest string
+}
+
+// runPump owns ordering for commands and prompts. Commands run inline (pickers
+// block only the pump); prompts flush staged shell results, expand @ refs and
+// steer or start a turn. Submissions stay in order and the UI never stalls.
+func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool) {
+	for line := range pump {
+		switch line.kind {
+		case command.KindCommand:
+			name, arg, ok := command.SplitCommand(line.rest)
+			if !ok {
+				console.Notify("unknown command /"+line.rest, tui.LevelWarn)
+				continue
+			}
+			cmd, ok := console.commands.Get(name)
+			if !ok {
+				console.Notify("unknown command /"+name, tui.LevelWarn)
+				continue
+			}
+			_ = cmd.Handler(context.Background(), arg, console)
+		case command.KindPrompt:
+			if strings.TrimSpace(line.rest) == "" {
+				continue
+			}
+			// flush staged shell results ahead of the message, waiting for any
+			// in-flight command to finish first
+			before := stager.Flush(context.Background())
+			res := expander.Expand(context.Background(), line.rest)
+			for _, n := range res.Notices {
+				console.Notify(n, tui.LevelWarn)
+			}
+			input := agent.Input{Text: res.Text, Before: append(before, res.Before...)}
+			startPrompt(ui, recording, ag, input, started)
+		}
+	}
+}
+
+// startPrompt echoes a submitted message and runs it to completion in the
+// background so the pump keeps receiving input while the model streams.
 // recording reports whether sessions are on, which is what lets double-Esc rewind;
 // idle flips false for the turn's duration so Esc interrupts instead of rewinding.
-func startTurn(ui *tui.UI, recording bool, ag *agent.Agent, text string) {
-	if strings.TrimSpace(text) == "" {
-		return
-	}
+func startPrompt(ui *tui.UI, recording bool, ag *agent.Agent, input agent.Input, started *bool) {
 	ui.SetIdle(false)
-	go func() { // the sink echoes the prompt on TurnStart and streams the reply
-		_ = ag.Prompt(context.Background(), agent.Input{Text: text})
+	*started = true
+	go func() {
+		_ = ag.Prompt(context.Background(), input)
 		if recording {
-			ui.SetIdle(true) // back at rest; double-Esc can rewind again
+			ui.SetIdle(true)
 		}
 	}()
 }
@@ -556,8 +623,7 @@ const doublePressWindow = 2 * time.Second
 // turn, while Ctrl+D or a double Ctrl+C on an idle empty editor quits. Closing
 // quit signals driver to return, which lets main's deferred ui.Close restore the
 // terminal.
-func watchControls(ui *tui.UI, ag *agent.Agent) <-chan struct{} {
-	quit := make(chan struct{})
+func watchControls(ui *tui.UI, ag *agent.Agent, stager *command.Stager, quit chan struct{}) {
 	go func() {
 		var lastInt time.Time
 		for c := range ui.Controls() {
@@ -565,10 +631,18 @@ func watchControls(ui *tui.UI, ag *agent.Agent) <-chan struct{} {
 			case tui.ControlEscape:
 				if ag.Running() {
 					ag.Interrupt()
+				} else if stager.Pending() {
+					stager.Cancel() // Esc cancels an in-flight staged shell command
 				}
 			case tui.ControlInterrupt:
 				if ag.Running() {
 					ag.Interrupt()
+					continue
+				}
+				// a running `!` cancels on the first Ctrl+C instead of quitting
+				if stager.Pending() {
+					stager.Cancel()
+					ui.SetStatusSegment("hint", "cancelled shell command")
 					continue
 				}
 				now := time.Now()
@@ -582,12 +656,11 @@ func watchControls(ui *tui.UI, ag *agent.Agent) <-chan struct{} {
 				if ag.Running() {
 					continue // ignored while a turn streams, per the key table
 				}
-				close(quit) // emitted only on an empty editor: deliberate exit
+				close(quit)
 				return
 			}
 		}
 	}()
-	return quit
 }
 
 // discoverTimeout bounds a background model discovery pass, so an unreachable
@@ -611,145 +684,5 @@ func refreshModels(ui *tui.UI, reg *llm.Registry) {
 	}
 	if added := len(reg.Models()) - before; added > 0 {
 		ui.NotifyKeyed("models", "discovered "+strconv.Itoa(added)+" more models", tui.LevelInfo)
-	}
-}
-
-// slashCommand splits a submitted line into a command and its argument,
-// reporting whether it was one at all.
-func slashCommand(msg string) (cmd, arg string, ok bool) {
-	trimmed := strings.TrimSpace(msg)
-	if !strings.HasPrefix(trimmed, "/") {
-		return "", "", false
-	}
-	cmd, arg, _ = strings.Cut(trimmed[1:], " ")
-	return strings.ToLower(cmd), strings.TrimSpace(arg), cmd != ""
-}
-
-// handleCommand runs a slash command. The registry stays the single source of
-// truth for the active model; st.Model follows it so later turns use the new one.
-func handleCommand(ui *tui.UI, reg *llm.Registry, st *agent.State, cmd, arg string) {
-	switch cmd {
-	case "model":
-		selectModel(ui, reg, st, arg)
-	case "reasoning":
-		reasoningCommand(ui, st, arg)
-	default:
-		ui.Notify("unknown command /"+cmd, tui.LevelWarn)
-	}
-}
-
-// reasoningCommand sets the session's reasoning level (and whether thinking is
-// streamed). With no argument it reports the current choice; with an empty target
-// after a picker it leaves things unchanged.
-func reasoningCommand(ui *tui.UI, st *agent.State, arg string) {
-	if strings.TrimSpace(arg) == "" {
-		items := make([]tui.PickItem, len(llm.Levels()))
-		for i, lvl := range llm.Levels() {
-			name := lvl.String()
-			marker := "  "
-			if st.Reasoning.Level == lvl {
-				marker = "* "
-			}
-			items[i] = tui.PickItem{Label: marker + name, Terms: []string{name}}
-		}
-		picked, err := ui.PickContext(context.Background(), "Reasoning", items,
-			tui.PickOptions{Placeholder: "filter"})
-		if err != nil {
-			return // cancelled
-		}
-		arg = llm.Levels()[picked].String()
-	}
-	lvl, ok := llm.ParseLevel(arg)
-	if !ok {
-		ui.Notify("unknown reasoning level "+arg+"; use off|minimal|low|medium|high|xhigh|max", tui.LevelWarn)
-		return
-	}
-	st.Reasoning = llm.ReasoningConfig{
-		Level:  lvl,
-		Retain: st.Reasoning.Retain, // keep the current retention policy
-		Show:   true,
-	}
-	ui.Notify("reasoning: "+lvl.String(), tui.LevelInfo)
-}
-
-// selectModel resolves arg, or opens the picker when it is empty.
-func selectModel(ui *tui.UI, reg *llm.Registry, st *agent.State, arg string) {
-	models := reg.Models()
-	if len(models) == 0 {
-		ui.Notify("no models configured; add some to ~/.ajent/"+llm.ModelsFileName, tui.LevelWarn)
-		return
-	}
-	var m llm.Model
-	if arg != "" {
-		target, err := reg.Resolve(arg)
-		if err != nil {
-			reportResolveError(ui, arg, err)
-			return
-		}
-		m = target
-	} else {
-		items := make([]tui.PickItem, len(models))
-		activeKey := reg.Active().Key()
-		var initial int
-		for i, mod := range models {
-			if mod.Key() == activeKey {
-				initial = i
-			}
-			items[i] = tui.PickItem{
-				Label:  mod.Key(),
-				Detail: modelDetail(mod),
-				Terms:  append([]string{mod.Name}, mod.Aliases...),
-			}
-		}
-		picked, err := ui.PickContext(context.Background(), "Model", items,
-			tui.PickOptions{Placeholder: "filter", Initial: initial})
-		if err != nil {
-			return // cancelled, nothing to report
-		}
-		m = models[picked]
-	}
-	applyModel(ui, reg, st, m)
-}
-
-// modelDetail is the dim trailing text on a picker row.
-func modelDetail(m llm.Model) string {
-	parts := []string{m.Display()}
-	if m.ContextWindow > 0 {
-		parts = append(parts, formatTokens(m.ContextWindow))
-	}
-	if m.Caps.Reasoning != llm.ReasoningNone {
-		parts = append(parts, "reasoning")
-	}
-	return strings.Join(parts, " · ")
-}
-
-// applyModel makes m active and reflects it in the status line and the agent's
-// state so subsequent turns use it.
-func applyModel(ui *tui.UI, reg *llm.Registry, st *agent.State, m llm.Model) {
-	reg.SetActive(m)
-	st.Model = m
-	ui.SetModel(m.Key(), m.ContextWindow)
-	ui.Notify("model: "+m.Key(), tui.LevelInfo)
-}
-
-// reportResolveError explains why a name did not select a model.
-func reportResolveError(ui *tui.UI, arg string, err error) {
-	var ambiguous *llm.ErrAmbiguousModel
-	if errors.As(err, &ambiguous) {
-		ui.Notify(arg+" matches "+strings.Join(ambiguous.Candidates, ", "), tui.LevelWarn)
-		return
-	}
-	ui.Notify("no model matches "+arg, tui.LevelWarn)
-}
-
-// formatTokens abbreviates a context window, such as 200k or 1.2M.
-func formatTokens(n int) string {
-	switch {
-	case n >= 1_000_000:
-		return strings.TrimSuffix(strconv.FormatFloat(float64(n)/1_000_000, 'f', 1, 64), ".0") + "M"
-	case n >= 1_000:
-		return strings.TrimSuffix(strconv.FormatFloat(float64(n)/1_000, 'f', 1, 64), ".0") + "k"
-	default:
-		return strconv.Itoa(n)
 	}
 }

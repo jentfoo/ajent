@@ -137,6 +137,11 @@ func usageBar(pct int) string {
 	return strings.Repeat(barFull, filled) + strings.Repeat(barEmpty, statusBarCells-filled)
 }
 
+// FormatTokens abbreviates a token count, such as 68.2k or 1.2M.
+func FormatTokens(n int) string {
+	return formatTokens(n)
+}
+
 // formatTokens abbreviates a token count, such as 68.2k or 1.2M.
 func formatTokens(n int) string {
 	switch {
