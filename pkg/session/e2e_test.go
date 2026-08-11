@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,11 +20,16 @@ type blockingTool struct {
 	entered chan struct{}
 }
 
-func (t *blockingTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: t.name} }
-func (t *blockingTool) Parallel() bool         { return false }
+func (t *blockingTool) Name() string                { return t.name }
+func (t *blockingTool) Label(agent.ToolCall) string { return t.name + ": ..." }
+func (t *blockingTool) Description() string         { return "test tool" }
+func (t *blockingTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: t.name} }
+func (t *blockingTool) Mode() agent.ExecutionMode {
+	return agent.ModeSerial
+}
 
 // Execute blocks until ctx is done, then returns an empty result.
-func (t *blockingTool) Execute(ctx context.Context, _ agent.ToolCall, _ io.Writer) (agent.ToolResult, error) {
+func (t *blockingTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	if t.entered != nil {
 		close(t.entered)
 		t.entered = nil
@@ -38,6 +42,7 @@ type singleSet struct{ tool agent.Tool }
 
 func (s *singleSet) Get(name string) (agent.Tool, bool) { return s.tool, name == s.tool.Schema().Name }
 func (s *singleSet) Schemas() []llm.ToolSchema          { return []llm.ToolSchema{s.tool.Schema()} }
+func (s *singleSet) Names() []string                    { return []string{s.tool.Name()} }
 
 // toolTurn frames one assistant turn ending in a single tool call.
 func toolTurn(id, name string) []llm.Event {

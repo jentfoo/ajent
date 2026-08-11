@@ -66,8 +66,8 @@ func (s *recordingSink) Text(d string)              { s.next.Text(d) }
 func (s *recordingSink) EndText()                   { s.next.EndText() }
 
 // ToolStart forwards the call and wraps its completion hook so nothing is lost.
-func (s *recordingSink) ToolStart(call agent.ToolCall) func(agent.ToolResult) {
-	done := s.next.ToolStart(call)
+func (s *recordingSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
+	done := s.next.ToolStart(call, label)
 	return func(res agent.ToolResult) { done(res) }
 }
 

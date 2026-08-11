@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"runtime"
 	"strconv"
@@ -77,6 +76,13 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	sink := a.opts.Sink
 	if sink == nil {
 		sink = NopSink{}
+	}
+	// mirror the enabled set into state so the transcript records what this turn
+	// could call; buildSystem derives its search hint from it.
+	if ts := a.opts.Tools; ts != nil {
+		a.state.Tools = ts.Names()
+	} else {
+		a.state.Tools = nil
 	}
 	maxSteps := a.opts.MaxSteps
 
@@ -191,8 +197,8 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	messages := assemble(a.state, a.opts.Transform)
 
 	var tools []llm.ToolSchema
-	if ts := a.opts.Tools; ts != nil && len(ts.Schemas()) > 0 {
-		tools = ts.Schemas()
+	if ts := a.opts.Tools; ts != nil {
+		tools = ts.Schemas() // cached by the registry, so cheap per step
 	}
 
 	req := llm.Request{
@@ -300,14 +306,18 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 // runTool executes one tool and streams its output to the sink. A malformed or
 // erroring tool is still a result, not a turn failure.
 func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) llm.ToolResultBlock {
+	if a.opts.Tools == nil {
+		return llm.ToolResultBlock{CallID: call.ID, IsError: true,
+			Content: llm.BlockList{llm.TextBlock{Text: "no tools configured"}}}
+	}
 	tool, ok := a.opts.Tools.Get(call.Name)
 	if !ok {
 		return llm.ToolResultBlock{CallID: call.ID, IsError: true,
 			Content: llm.BlockList{llm.TextBlock{Text: "unknown tool"}}}
 	}
 
-	var buf bytes.Buffer
 	out := &sinkWriter{sink: sink, id: call.ID}
+	done := sink.ToolStart(call, tool.Label(call))
 	res, err := tool.Execute(ctx, call, out)
 	if res.Content == nil {
 		res.Content = llm.BlockList{}
@@ -315,22 +325,23 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) llm.ToolR
 	if err != nil && !res.IsError {
 		res.IsError = true
 	}
-	buf.WriteString(out.String())
-	if buf.Len() > 0 && len(res.Content) == 1 {
-		if tb, ok := res.Content[0].(llm.TextBlock); ok {
-			tb.Text += "\n" + buf.String()
-			res.Content[0] = tb
-		}
-	} else if buf.Len() > 0 {
-		res.Content = append(res.Content, llm.TextBlock{Text: buf.String()})
-	}
-	if res.IsError && len(res.Content) == 1 {
-		if tb, ok := res.Content[0].(llm.TextBlock); ok && tb.Text == "" {
-			tb.Text = err.Error()
-			res.Content[0] = tb
+	// an erroring tool with empty content still hands the model something to see
+	if res.IsError && err != nil {
+		switch {
+		case len(res.Content) == 0:
+			res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
+		case len(res.Content) == 1:
+			if tb, ok := res.Content[0].(llm.TextBlock); ok && tb.Text == "" {
+				tb.Text = err.Error()
+				res.Content[0] = tb
+			}
 		}
 	}
-	return llm.ToolResultBlock{CallID: call.ID, Content: res.Content, IsError: res.IsError}
+	done(res)
+	return llm.ToolResultBlock{
+		CallID: call.ID, Content: res.Content, IsError: res.IsError,
+		Display: res.Display, Details: res.Details,
+	}
 }
 
 // appendToolResults appends one user message holding every tool result in the
@@ -366,7 +377,7 @@ func callFrom(c llm.ToolCallBlock) ToolCall {
 func allParallel(ts ToolSet, calls []llm.ToolCallBlock) bool {
 	for _, c := range calls {
 		t, ok := ts.Get(c.Name)
-		if !ok || !t.Parallel() {
+		if !ok || t.Mode() != ModeParallel {
 			return false
 		}
 	}
@@ -387,17 +398,24 @@ func toolCalls(msg llm.Message) []llm.ToolCallBlock {
 // itoa formats an int for notices.
 func itoa(n int) string { return strconv.Itoa(n) }
 
-// sinkWriter forwards tool output deltas to the sink as they are written.
+// sinkWriter forwards tool output deltas to the sink as they are written. It is
+// safe for concurrent use so a tool can stream stdout and stderr from two goroutines.
 type sinkWriter struct {
 	sink Sink
 	id   string
-	buf  bytes.Buffer
+	mu   sync.Mutex
 }
 
 func (w *sinkWriter) Write(p []byte) (int, error) {
-	w.buf.Write(p)
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.sink.ToolOutput(w.id, string(p))
 	return len(p), nil
 }
 
-func (w *sinkWriter) String() string { return w.buf.String() }
+// Diff forwards a rendered file change to the sink.
+func (w *sinkWriter) Diff(path, before, after string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.sink.Diff(path, before, after)
+}

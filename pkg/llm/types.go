@@ -70,6 +70,8 @@ type ToolCallBlock struct {
 type ToolResultBlock struct {
 	CallID  string    `json:"callId"`
 	Content BlockList `json:"content"`
+	Display string    `json:"display,omitempty"` // what history shows when it differs from Content
+	Details any       `json:"details,omitempty"` // structured detail for extensions and the transcript
 	IsError bool      `json:"isError,omitempty"`
 }
 

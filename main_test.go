@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,13 +125,19 @@ type singleToolSet struct{ tool agent.Tool }
 
 func (s singleToolSet) Get(name string) (agent.Tool, bool) { return s.tool, name == "bash" }
 func (s singleToolSet) Schemas() []llm.ToolSchema          { return []llm.ToolSchema{s.tool.Schema()} }
+func (s singleToolSet) Names() []string                    { return []string{"bash"} }
 
 // noopRewindTool executes instantly so the loop never blocks.
 type noopRewindTool struct{}
 
-func (noopRewindTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: "bash"} }
-func (noopRewindTool) Parallel() bool         { return false }
-func (noopRewindTool) Execute(_ context.Context, _ agent.ToolCall, _ io.Writer) (agent.ToolResult, error) {
+func (noopRewindTool) Name() string                { return "bash" }
+func (noopRewindTool) Label(agent.ToolCall) string { return "bash: ..." }
+func (noopRewindTool) Description() string         { return "test tool" }
+func (noopRewindTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: "bash"} }
+func (noopRewindTool) Mode() agent.ExecutionMode {
+	return agent.ModeSerial
+}
+func (noopRewindTool) Execute(_ context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
 }
 

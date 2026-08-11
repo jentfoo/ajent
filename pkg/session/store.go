@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
@@ -109,12 +110,9 @@ func (s *Store) Find(workspace, id string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	var matches []Info
-	for _, in := range list {
-		if in.ID == id || strings.HasPrefix(in.ID, id) {
-			matches = append(matches, in)
-		}
-	}
+	matches := bulk.SliceFilter(func(in Info) bool {
+		return in.ID == id || strings.HasPrefix(in.ID, id)
+	}, list)
 	switch len(matches) {
 	case 0:
 		return Info{}, ErrNotFound

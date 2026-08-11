@@ -21,7 +21,7 @@ func (c *captureSink) Thinking(string)          {}
 func (c *captureSink) EndThinking()             {}
 func (c *captureSink) Text(string)              {}
 func (c *captureSink) EndText()                 {}
-func (c *captureSink) ToolStart(agent.ToolCall) func(agent.ToolResult) {
+func (c *captureSink) ToolStart(agent.ToolCall, string) func(agent.ToolResult) {
 	return func(agent.ToolResult) {}
 }
 func (c *captureSink) ToolOutput(string, string)        {}

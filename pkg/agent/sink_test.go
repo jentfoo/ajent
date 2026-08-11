@@ -15,7 +15,7 @@ func (r *recordingSink) Thinking(string)    { r.calls = append(r.calls, "thinkin
 func (r *recordingSink) EndThinking()       { r.calls = append(r.calls, "end_thinking") }
 func (r *recordingSink) Text(string)        { r.calls = append(r.calls, "text") }
 func (r *recordingSink) EndText()           { r.calls = append(r.calls, "end_text") }
-func (r *recordingSink) ToolStart(call ToolCall) func(ToolResult) {
+func (r *recordingSink) ToolStart(call ToolCall, _ string) func(ToolResult) {
 	r.calls = append(r.calls, "tool_start:"+call.Name)
 	return func(ToolResult) {}
 }
@@ -35,14 +35,16 @@ type resultCatcher struct {
 	result TurnResult
 }
 
-func (c *resultCatcher) TurnStart(TurnInfo)                  {}
-func (c *resultCatcher) Thinking(string)                     {}
-func (c *resultCatcher) EndThinking()                        {}
-func (c *resultCatcher) Text(string)                         {}
-func (c *resultCatcher) EndText()                            {}
-func (c *resultCatcher) ToolStart(ToolCall) func(ToolResult) { return func(ToolResult) {} }
-func (c *resultCatcher) ToolOutput(string, string)           {}
-func (c *resultCatcher) Diff(string, string, string)         {}
-func (c *resultCatcher) Usage(llm.Usage)                     {}
-func (c *resultCatcher) Notice(string, Level)                {}
-func (c *resultCatcher) TurnEnd(r TurnResult)                { c.result = r }
+func (c *resultCatcher) TurnStart(TurnInfo) {}
+func (c *resultCatcher) Thinking(string)    {}
+func (c *resultCatcher) EndThinking()       {}
+func (c *resultCatcher) Text(string)        {}
+func (c *resultCatcher) EndText()           {}
+func (c *resultCatcher) ToolStart(ToolCall, string) func(ToolResult) {
+	return func(ToolResult) {}
+}
+func (c *resultCatcher) ToolOutput(string, string)   {}
+func (c *resultCatcher) Diff(string, string, string) {}
+func (c *resultCatcher) Usage(llm.Usage)             {}
+func (c *resultCatcher) Notice(string, Level)        {}
+func (c *resultCatcher) TurnEnd(r TurnResult)        { c.result = r }

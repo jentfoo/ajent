@@ -52,7 +52,7 @@ func buildSystem(s *State, env Environment) llm.BlockList {
 	b.WriteString("You help by reading files, running commands, editing code and writing new files.\n\n")
 
 	// guidelines first, then environment facts per the design doc
-	b.WriteString(buildGuidelines())
+	b.WriteString(buildGuidelines(s.Tools))
 
 	buildEnvironmentFacts(&b, env)
 
@@ -66,16 +66,31 @@ func identityLine(cwd string) string {
 }
 
 // buildGuidelines returns the guideline block: the always-included bullets first,
-// then any derived from the enabled toolset (empty for now; phase 04 supplies a
-// bash-without-grep/find/ls hint). The derivation rule is that guidelines never
-// name a tool that is not present.
-func buildGuidelines() string {
+// then any derived from the enabled toolset. The derivation rule is that
+// guidelines never name a tool that is not present.
+func buildGuidelines(names []string) string {
 	var b strings.Builder
 	b.WriteString("Guidelines:\n")
 	b.WriteString("- Be concise in your responses\n")
 	b.WriteString("- Show file paths clearly when working with files\n")
-	b.WriteString("- Answer in the same language as the user's message\n\n")
-	return b.String()
+	b.WriteString("- Answer in the same language as the user's message\n")
+
+	// search hint only when bash is present and no dedicated find/grep tool is
+	if hasName(names, "bash") && !hasName(names, "find") && !hasName(names, "grep") {
+		b.WriteString("- Search code with `rg` or `find` via the bash tool rather than reading whole files\n")
+	}
+
+	return b.String() + "\n"
+}
+
+// hasName reports whether names contains name.
+func hasName(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // buildEnvironmentFacts appends clean structured machine-fact lines. Empty values

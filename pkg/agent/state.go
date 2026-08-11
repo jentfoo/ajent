@@ -63,6 +63,8 @@ type ToolCall struct {
 // tool still returns here with IsError set, so the turn continues rather than
 // aborting.
 type ToolResult struct {
-	Content llm.BlockList
+	Content llm.BlockList // what the model sees
+	Display string        // what history shows, when it differs from streamed output
+	Details any           // structured detail for extensions and the transcript
 	IsError bool
 }

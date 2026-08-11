@@ -21,7 +21,7 @@ func (s *replaySink) Text(d string)              { s.calls = append(s.calls, "te
 func (s *replaySink) EndText()                   { s.calls = append(s.calls, "end_text") }
 
 // ToolStart records the call and captures its completion hook.
-func (s *replaySink) ToolStart(call agent.ToolCall) func(agent.ToolResult) {
+func (s *replaySink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResult) {
 	s.calls = append(s.calls, "tool:"+call.Name)
 	return func(res agent.ToolResult) { s.calls = append(s.calls, fmt.Sprintf("result:%v", res.IsError)) }
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -99,9 +99,22 @@ func (t *stubTool) callCount() int {
 	return len(t.calls)
 }
 
+func (t *stubTool) Name() string { return t.name }
+func (t *stubTool) Label(ToolCall) string {
+	if t.name != "" {
+		return t.name + ": ..."
+	}
+	return t.name
+}
+func (t *stubTool) Description() string    { return "test tool" }
 func (t *stubTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: t.name} }
-func (t *stubTool) Parallel() bool         { return t.parallel }
-func (t *stubTool) Execute(ctx context.Context, call ToolCall, _ io.Writer) (ToolResult, error) {
+func (t *stubTool) Mode() ExecutionMode {
+	if t.parallel {
+		return ModeParallel
+	}
+	return ModeSerial
+}
+func (t *stubTool) Execute(ctx context.Context, call ToolCall, _ Output) (ToolResult, error) {
 	t.mu.Lock()
 	t.calls = append(t.calls, call)
 	block := t.block
@@ -133,6 +146,14 @@ func (s *mapSet) Schemas() []llm.ToolSchema {
 		out = append(out, t.Schema())
 	}
 	return out
+}
+func (s *mapSet) Names() []string {
+	names := make([]string, 0, len(s.tools))
+	for name := range s.tools {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
 
 func TestLoopTextOnly(t *testing.T) {

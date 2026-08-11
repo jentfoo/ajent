@@ -14,6 +14,11 @@ import (
 
 // Sink renders one agent turn onto the TUI. Rendering state lives on the UI
 // itself.
+//
+// Concurrency: ToolStart, ToolOutput, Diff and the done hook may be called from
+// parallel tool goroutines; *tui.UI serializes them. busy and toks are only
+// touched from the loop goroutine (TurnStart/Usage/TurnEnd) and must stay that
+// way.
 type Sink struct {
 	ui   *tui.UI
 	toks int // last reported context size, so repeated Usage calls never shrink it
@@ -47,17 +52,22 @@ func (s *Sink) EndText() { s.ui.EndText() }
 
 // ToolStart maps a tool call onto the TUI spinner and returns the completion
 // hook that reports how it ended. Incremental output is streamed separately via
-// ToolOutput, so only an error needs extra rendering here.
-func (s *Sink) ToolStart(call agent.ToolCall) func(agent.ToolResult) {
-	done := s.ui.ToolStart(call.Name)
+// ToolOutput, so only an error or a Display string needs extra rendering here.
+func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
+	if strings.TrimSpace(label) == "" {
+		label = call.Name
+	}
+	done := s.ui.ToolStart(label)
 	return func(res agent.ToolResult) {
-		if !res.IsError {
-			// output already streamed through ToolOutput; nothing extra to commit
-			done("")
-			return
+		var result string
+		if res.IsError {
+			s.ui.Notify("tool "+call.Name+" failed", tui.LevelWarn)
+			result = firstText(res.Content)
+		} else if strings.TrimSpace(res.Display) != "" {
+			// commit what history shows when it differs from the streamed output
+			result = res.Display
 		}
-		s.ui.Notify("tool "+call.Name+" failed", tui.LevelWarn)
-		done(firstText(res.Content))
+		done(result)
 	}
 }
 

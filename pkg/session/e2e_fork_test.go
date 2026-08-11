@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"io"
 	"path/filepath"
 	"testing"
 
@@ -88,11 +87,16 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 // noopTool executes instantly so the loop never blocks on a real tool.
 type noopTool struct{}
 
-func (t *noopTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: "bash"} }
-func (t *noopTool) Parallel() bool         { return false }
+func (t *noopTool) Name() string                { return "bash" }
+func (t *noopTool) Label(agent.ToolCall) string { return "bash: ..." }
+func (t *noopTool) Description() string         { return "test tool" }
+func (t *noopTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: "bash"} }
+func (t *noopTool) Mode() agent.ExecutionMode {
+	return agent.ModeSerial
+}
 
 // Execute returns an empty result immediately.
-func (t *noopTool) Execute(_ context.Context, _ agent.ToolCall, _ io.Writer) (agent.ToolResult, error) {
+func (t *noopTool) Execute(_ context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "ok"}}}, nil
 }
 

@@ -78,7 +78,8 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 							sink.EndThinking()
 						}
 					case llm.ToolCallBlock:
-						pending[blk.ID] = sink.ToolStart(callFromReplay(cur, blk))
+						// labels on resume are a follow-up; replay falls back to the bare name
+						pending[blk.ID] = sink.ToolStart(callFromReplay(cur, blk), blk.Name)
 					}
 				}
 			default:

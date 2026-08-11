@@ -15,6 +15,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
@@ -165,9 +166,18 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	}
 
 	sink := tuisink.New(ui)
+
+	// phase 04: build the built-in tool registry and hand it to the loop so the
+	// model can read, write, edit and run commands.
+	toolsReg, terr := tools.Builtins(tools.Options{SessionID: cwdOrDot()})
+	if terr != nil {
+		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
+	}
+
 	opts := agent.Options{
-		Sink: sink,
-		Env:  agent.DetectEnvironment(),
+		Sink:  sink,
+		Env:   agent.DetectEnvironment(),
+		Tools: toolsReg,
 		Provider: func(m llm.Model) (llm.Provider, error) {
 			return providers.ProviderFor(m)
 		},
@@ -176,6 +186,10 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 		opts.Sink = rec.rec.Sink(sink) // persist notices and fsync at turn end
 		opts.OnMessage = rec.rec.Message
 		rec.rebuild(ui, reg, st)
+	}
+	// a resumed session restores its enabled tool set; unknown names are ignored.
+	if toolsReg != nil && len(st.Tools) > 0 {
+		toolsReg.SetEnabled(st.Tools)
 	}
 	ag := agent.New(st, opts)
 	if rec != nil {

@@ -21,7 +21,7 @@ type Sink interface {
 	EndThinking()
 	Text(delta string)
 	EndText()
-	ToolStart(call ToolCall) func(ToolResult)
+	ToolStart(call ToolCall, label string) func(ToolResult)
 	ToolOutput(callID, delta string)
 	Diff(path, before, after string)
 	Usage(llm.Usage)
@@ -32,14 +32,16 @@ type Sink interface {
 // NopSink discards every event, for a sub-agent with no UI.
 type NopSink struct{}
 
-func (NopSink) TurnStart(TurnInfo)                       {}
-func (NopSink) Thinking(string)                          {}
-func (NopSink) EndThinking()                             {}
-func (NopSink) Text(string)                              {}
-func (NopSink) EndText()                                 {}
-func (NopSink) ToolStart(call ToolCall) func(ToolResult) { return func(ToolResult) {} }
-func (NopSink) ToolOutput(string, string)                {}
-func (NopSink) Diff(string, string, string)              {}
-func (NopSink) Usage(llm.Usage)                          {}
-func (NopSink) Notice(string, Level)                     {}
-func (NopSink) TurnEnd(TurnResult)                       {}
+func (NopSink) TurnStart(TurnInfo) {}
+func (NopSink) Thinking(string)    {}
+func (NopSink) EndThinking()       {}
+func (NopSink) Text(string)        {}
+func (NopSink) EndText()           {}
+func (NopSink) ToolStart(call ToolCall, label string) func(ToolResult) {
+	return func(ToolResult) {}
+}
+func (NopSink) ToolOutput(string, string)   {}
+func (NopSink) Diff(string, string, string) {}
+func (NopSink) Usage(llm.Usage)             {}
+func (NopSink) Notice(string, Level)        {}
+func (NopSink) TurnEnd(TurnResult)          {}
