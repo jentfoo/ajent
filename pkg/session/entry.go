@@ -30,14 +30,13 @@ const sessionVersion = 1
 // Version returns the current transcript format, for stamping a fresh SessionData.
 func Version() int { return sessionVersion }
 
-// Entry is one line of the transcript: an id, its parent for branching, and an
-// opaque payload whose shape follows from Type.
+// Entry is one line of the transcript, linked to its parent for branching.
 type Entry struct {
 	ID       string          `json:"id"`
-	ParentID string          `json:"parentId,omitempty"`
+	ParentID string          `json:"parentId,omitempty"` // previous head this entry branches from; empty = root
 	Type     Type            `json:"type"`
-	TS       int64           `json:"ts"` // unix milliseconds
-	Data     json.RawMessage `json:"data,omitempty"`
+	TS       int64           `json:"ts"`             // unix milliseconds
+	Data     json.RawMessage `json:"data,omitempty"` // opaque payload whose shape follows Type
 }
 
 // Decode unmarshals the entry payload into v.

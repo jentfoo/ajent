@@ -428,9 +428,8 @@ Patterns:
 - Renderer tests construct a `termState` directly with `fd: -1` and a fixed size.
   Set `sizeFn` to simulate a resize; leaving it nil pins the size.
 - `newTestUI` in `ui_test.go` drives a full `UI` in inline mode against the
-  emulator, with an `io.Pipe` for keystrokes.
-- No `time.Sleep` in tests. Use `require.Eventually` against a locked read of the
-  emulator.
+  emulator, with an `io.Pipe` for keystrokes. Assertions use
+  `require.Eventually` against a locked read of the emulator.
 - For end to end checks against a real pty, run the binary under
   `script -qec '...' /dev/null`, then resize it from outside with
   `stty -F /dev/pts/N cols 120 rows 30`. Useful for asserting what we emit;

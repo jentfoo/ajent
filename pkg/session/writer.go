@@ -9,9 +9,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 )
 
-// Writer appends entries to one JSONL file. A single Write per line under a
-// mutex keeps the transcript line-atomic for its writer; Sync is the turn-
-// boundary fsync, never called by Append.
+// Writer appends entries to one JSONL file with line-atomic writes; Sync fsyncs at turn boundaries.
 type Writer struct {
 	f      *os.File // nil for Discard
 	path   string   // transcript file; empty for Discard, drives HEAD persistence

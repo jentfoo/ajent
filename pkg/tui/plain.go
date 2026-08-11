@@ -6,13 +6,8 @@ import (
 	"strings"
 )
 
-// runPlain asks an interaction without a live block. Plain mode has no raw keys
-// and readLines already owns stdin, so the prompt is written to history and the
-// answer is taken from the message queue.
-//
-// Reading the same queue the caller does is what makes this race free: a plain
-// mode prompt is only ever opened from the message loop, so nothing else is
-// reading while it waits.
+// runPlain asks an interaction without a live block, answering through the same
+// message queue the caller reads.
 func (u *UI) runPlain(ctx context.Context, it interactor) error {
 	u.mu.Lock()
 	if u.closed {

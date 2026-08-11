@@ -26,10 +26,7 @@ const (
 	maxInputRatio   = 3 // input may take at most this fraction of the screen
 )
 
-// The frames rotate clockwise around the perimeter; ⠦ (bottom-left) leads, so when idle
-// it rests at the bottom-left of the cell rather than starting from the top. Idle reuses
-// frame[0], and since every frame shares a column width, turning busy never shifts the
-// status line.
+// clockwise frames; ⠦ (bottom-left) leads so idle rests at bottom-left
 var spinnerFrames = []string{"⠦", "⠧", "⠇", "⠏", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴"}
 
 // Control is an out-of-band key the caller decides the meaning of. The editor
@@ -49,11 +46,8 @@ type Options struct {
 	Mode      Mode     // paint mode, ModeAuto detects multiplexers
 	Model     string
 	MaxTokens int
-	// Rewind enables the double-Esc rewind gesture. While idle (SetIdle(true)) and
-	// no interaction is active, two Esc presses within DoubleEscWindow call
-	// OnRewind instead of emitting a lone Escape control; a single Esc still emits
-	// ControlEscape after one window. Leave OnRewind nil to keep plain single-Esc.
-	DoubleEscWindow time.Duration // how close two idle Esc presses must be; 0 uses the default
+	// double-Esc rewind: two idle presses within DoubleEscWindow call OnRewind instead of ControlEscape
+	DoubleEscWindow time.Duration // window between two idle Esc presses; 0 = default
 	OnRewind        func()
 }
 
@@ -82,9 +76,9 @@ type UI struct {
 	streaming bool // a text block is partially buffered; show it live above input
 	textStart bool
 
-	tool    string
-	busy    bool // a turn is in flight; the status-bar glyph animates while set
-	spinner int
+	tool      string
+	busy      bool // a turn is in flight; the status-bar glyph animates while set
+	spinner   int
 	spinnerCh chan struct{}
 
 	// rewind gesture configuration and state (see rewind.go)
@@ -485,9 +479,7 @@ func (u *UI) repaint() {
 		inputRows, curRow, curCol = u.editor.inputView(u.theme, w, maxRows)
 		rows = append(rows, inputRows...)
 	}
-	// the working glyph and any running tool sit at the start of the status bar (bottom
-	// left corner) so streamed output above can never displace or corrupt them. It only
-	// animates while something is in flight; it rests as a static frame otherwise.
+	// working glyph and running tool live at the status bar's bottom-left
 	st := u.status
 	frame := spinnerFrames[u.spinner%len(spinnerFrames)]
 	if !u.busy && u.tool == "" {

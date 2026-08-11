@@ -44,19 +44,14 @@ func DetectEnvironment() Environment {
 }
 
 // buildSystem returns the system blocks for state, stable across a session so
-// the prompt cache survives. It is assembled in the order documented in
-// docs/prompt-design.md (identity -> how-you-help -> available tools ->
-// guidelines -> environment facts -> project instructions -> skills); today only
-// the phase-02 parts exist and are emitted here.
+// the prompt cache survives.
 func buildSystem(s *State, env Environment) llm.BlockList {
 	var b strings.Builder
 
 	b.WriteString(identityLine(cwdOrDot(env.Cwd)))
 	b.WriteString("You help by reading files, running commands, editing code and writing new files.\n\n")
 
-	// Guidelines precede environment facts per the design doc. The two bullets
-	// below are always included; tool-derived guidelines (phase 04) join through
-	// buildGuidelines so a hint never names a tool that is not present.
+	// guidelines first, then environment facts per the design doc
 	b.WriteString(buildGuidelines())
 
 	buildEnvironmentFacts(&b, env)

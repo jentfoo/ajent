@@ -106,9 +106,7 @@ func (r *inlineRenderer) setLive(rows []string, caretRow, caretCol int) {
 	r.t.write(b.String())
 }
 
-// resize recomputes where the caret sits inside the block, since the terminal has
-// just re-wrapped the rows above it. History needs nothing: the terminal reflows
-// it exactly as it does for any other command's output.
+// resize recomputes the caret position after a terminal width change.
 func (r *inlineRenderer) resize() {
 	old := r.t.width
 	r.t.refreshSize()

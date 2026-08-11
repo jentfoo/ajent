@@ -13,9 +13,7 @@ const (
 	defaultBase     = 500 * time.Millisecond
 	defaultMax      = 30 * time.Second
 	defaultJitter   = 0.3
-	// maxRetryAfter bounds an honoured Retry-After. Beyond it the request fails
-	// immediately, since an agent that silently sleeps for an hour is
-	// indistinguishable from a hang.
+	// cap on an honoured Retry-After; beyond it the request fails
 	maxRetryAfter = time.Minute
 )
 

@@ -15,9 +15,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	var st agent.State
 	var warns []string
 
-	// The newest compaction collapses everything before firstKeptEntryID into one
-	// summary message; messages from that entry onward stay verbatim. Model and
-	// setting changes still apply regardless, since they shape the active config.
+	// the newest compaction collapses earlier messages into one summary
 	var keepIdx int
 	if pos := newestCompaction(branch); pos >= 0 {
 		var cd CompactionData

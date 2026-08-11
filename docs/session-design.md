@@ -235,8 +235,8 @@ flag parser so its optional trailing id is not greedily consumed as a positional
 argument. A requested id resolves *before* the TUI opens, so a bad id fails with a
 clear message instead of silently starting a fresh transcript.
 
-Every resume path reopens the file (`session.Open`) — which recovers the head from
-`HEAD`, falling back to tail recovery — then rebuilds state and replays history.
+Every resume path reopens the file with `session.Open` (head recovery as
+above), rebuilds state and replays history.
 On exit, `cmd/ajent` prints:
 
 ```

@@ -93,15 +93,10 @@ work by transforming this assembled list rather than rewriting `State`.
 
 ### System prompt stays cache-stable
 
-`buildSystem(state, env)` builds one neutral, focused system block: an
-identity sentence naming the working directory, a short "how you help" line,
-concise guideline bullets, then environment facts as clean structured lines
-(working directory, platform, shell, date, git branch). It is cache-stable: only
-a day-granular date changes between requests, so the provider's prompt cache
-survives. The `Platform` and `Shell` lines are omitted when empty; the whole git
-line drops when there is no branch (a dirty tree appends "(dirty)"). Git probes
-fail silently to empty so an unreachable repo cannot stall or
-break the turn.
+`buildSystem(state, env)` builds one cache-stable system block — identity,
+guidelines, environment facts — where only a day-granular date changes between
+requests, so the provider's prompt cache survives. Composition and wording are
+specified in `prompt-design.md`.
 
 ### Step limit
 
@@ -143,6 +138,10 @@ Interruption is cancellation, not draining:
   agent ends up permanently broken.
 - The interrupted turn reports `TurnResult{Stop: StopAborted}` plus a visible
   notice. No adapter ever emits `StopAborted`; only the agent sets it.
+
+The invariant behind the synthetic results: every cancelled or completed turn
+leaves `State.Messages` with each `ToolCallBlock` matched by a
+`ToolResultBlock`, which is what keeps the next request valid.
 
 ## Tool dispatch
 
@@ -190,17 +189,10 @@ Two kinds of mid-turn input:
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
 drops everything queued and cancels the running turn.
 
-## The transcript stays well formed
-
-Every cancelled or completed turn leaves `State.Messages` with each
-`ToolCallBlock` matched by a `ToolResultBlock`. This invariant is what keeps the
-next request valid, and it is asserted directly in the abort tests (`wellFormed`
-checks that tool calls balance tool results).
-
 ## Concurrency rules
 
-- `State.Messages`, `Reasoning`, `Model`, `Tools` are owned by the loop goroutine.
-- The queue and `running` flag live under `a.mu`.
+- `State` is owned by the loop goroutine; the queue and `running` flag live
+  under `a.mu`.
 - All control methods (`Steer`, `FollowUp`, `Interrupt`, `Running`) take
   `a.mu`. They never block on a stream; they only mutate the queue or cancel.
 

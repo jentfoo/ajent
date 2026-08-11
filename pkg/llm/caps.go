@@ -12,9 +12,7 @@ type Capabilities struct {
 	ReplayReasoning bool   // echo reasoning_content on assistant messages
 	ThinkOpen       string // inline reasoning tags, empty when unused
 	ThinkClose      string
-	// LevelMap translates a requested level to the provider's own value. A nil
-	// entry omits the reasoning parameter for that level; a missing entry falls
-	// back to the dialect default.
+	// per-level override of the provider's reasoning value; nil omits it, absent uses the default
 	LevelMap map[Level]*string
 
 	PromptCache bool

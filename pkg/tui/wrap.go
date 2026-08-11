@@ -110,9 +110,7 @@ func wrapLine(line string, width int) []string {
 	return rows
 }
 
-// breakPoint returns the last word boundary at or before end, or end when the run
-// holds no space to break on. A space sitting exactly at the row edge counts, so a
-// run that fills the row precisely is not broken early.
+// breakPoint returns the last word boundary at or before end, or end when none exists.
 func breakPoint(cs []cell, start, end int) int {
 	if end < len(cs) && cs[end].text == " " {
 		return end

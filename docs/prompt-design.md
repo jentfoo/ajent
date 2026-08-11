@@ -5,8 +5,8 @@ cheap, stable and honest. This document is the index for prompting: each surface
 is described once here and referenced by its phase documents rather than
 re-specified there.
 
-The core idea, stated plainly up front: **a good prompt makes the model cheap,
-predictable and self-aware of what it does not know.** Cheap means cache-stable
+The core idea: **a good prompt makes the model cheap, predictable and
+self-aware of what it does not know.** Cheap means cache-stable
 and no wasted tokens. Predictable means structured output where a machine will
 consume it. Self-aware means provenance markers everywhere injected content came
 from — so the model can tell real instructions from compacted history, user
@@ -154,8 +154,8 @@ cache-stability contract.
 - `buildSystem(s *State, env Environment)` stays deterministic given state+env;
   extension snippets and project instructions join through explicit inputs so
   tests can assert byte equality across calls with equal inputs.
-- Changing the tool set or reloading project instructions changes this block —
-  announce it (a one-line notice) because it busts the cache.
+- Changing the tool set or reloading project instructions changes this block;
+  per principle 1, the change is announced with a one-line notice.
 
 ---
 

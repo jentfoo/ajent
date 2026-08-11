@@ -57,12 +57,6 @@ type TreeRow struct {
 // message, oldest (root) first so branches read top-down. Newer continuations of
 // a fork are appended after older ones, so the most recent work sits at the bottom
 // — near where the rewind picker opens.
-//
-// A node's Depth counts how many forks sit above it: every child of an un-forked
-// parent inherits its indent and a linear chat stays flat at 0; when a message has
-// several continuations they all move down one level together, so sibling branches
-// always align. Guide carries the box-drawing connectors ("├──"/"└──" with "│"
-// continuation bars) that draw the actual branch structure.
 func TreeRows(entries []Entry, head string) []TreeRow {
 	if len(entries) == 0 {
 		return nil

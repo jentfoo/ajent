@@ -50,9 +50,7 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 				continue
 			}
 			turnUsage.Add(md.Usage)
-			// the most recent non-unknown stop closes this turn: a tool-calling
-			// assistant message stops with StopToolUse, and whichever step ends the
-			// user's turn (end_turn / max_tokens / aborted) supersedes it.
+			// the most recent non-unknown stop closes this turn
 			if md.Stop != llm.StopUnknown {
 				lastStop = md.Stop
 			}

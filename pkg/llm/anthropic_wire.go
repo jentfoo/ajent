@@ -49,11 +49,10 @@ type antTool struct {
 	CacheControl *antCache       `json:"cache_control,omitempty"`
 }
 
-// antCache marks a prompt cache breakpoint. An empty TTL takes the default
-// five minute tier.
+// antCache marks a prompt cache breakpoint.
 type antCache struct {
 	Type string `json:"type"`
-	TTL  string `json:"ttl,omitempty"`
+	TTL  string `json:"ttl,omitempty"` // empty means the default five minute tier
 }
 
 type antMessage struct {

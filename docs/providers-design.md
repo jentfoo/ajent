@@ -271,8 +271,9 @@ Deliberate choices in this loader:
   names a known one, so `"lmstudio"` needs no `flavor` field, but an
   OpenAI-compatible proxy in front of a known server can say
   `{"flavor": "lmstudio"}` and still get the right defaults.
-- **Nothing.** `//` line comments and trailing commas are accepted because a
-  config you cannot paste in is not a config you can use. Comments and commas are blanked rather than deleted, so byte offsets
+- **Lenient syntax.** `//` line comments and trailing commas are accepted
+  because a config you cannot paste in is not a config you can use. Comments
+  and commas are blanked rather than deleted, so byte offsets
   still refer to the original file and a genuine syntax error reports the line,
   column and the text it is on.
 - **Duplicate keys warn.** `encoding/json` keeps the last silently, so a repeated
@@ -281,9 +282,7 @@ Deliberate choices in this loader:
 - **`reasoning` accepts either the boolean form or a style name.** `true`
   selects the dialect default style.
 - **Unrecognised keys warn rather than fail.** A typo silently ignored is worse
-  than a warning, and a hard failure locks the user out of their agent. The same
-  reasoning is why the loader tolerates lenient syntax: refusing to
-  start over a trailing comma helps nobody.
+  than a warning, and a hard failure locks the user out of their agent.
 - **No `cost` block.** See "Deliberately not done".
 
 `models.json` is user scope only, because it may hold a literal `apiKey`. The

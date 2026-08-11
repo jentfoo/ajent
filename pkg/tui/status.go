@@ -19,9 +19,7 @@ type Segment struct {
 	Text string
 }
 
-// Status is the state rendered on the line below the input field. Context usage
-// is tracked here but no longer shown as a permanent "ctx %" bar; it is reported
-// elsewhere, so the status line stays model plus any transient segments.
+// Status is the state rendered on the line below the input field.
 type Status struct {
 	Spinner   string // the working glyph, first element (bottom-left corner); static at rest
 	Tool      string // a running tool's label, shown right after the spinner while active

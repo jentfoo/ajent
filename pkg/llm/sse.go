@@ -13,9 +13,7 @@ import (
 const (
 	// DefaultMaxFrame bounds the data one frame may accumulate.
 	DefaultMaxFrame = 1 << 20
-	// DoneSentinel is the data payload OpenAI dialects end a stream with. The
-	// reader reports it; acting on it is the caller's choice, since MCP does not
-	// use it.
+	// DoneSentinel is the [DONE] payload that ends an OpenAI-dialect stream
 	DoneSentinel = "[DONE]"
 )
 

@@ -25,10 +25,7 @@ type Sink struct {
 // New returns a sink that drives ui.
 func New(ui *tui.UI) *Sink { return &Sink{ui: ui} }
 
-// TurnStart echoes the prompt so a replay or resume shows each user message,
-// and live turns render it too — startTurn no longer pre-echoes. It also lights
-// the working spinner: from here until TurnEnd the model owns control, so there
-// is always an indicator that something is in flight even before the first token.
+// TurnStart echoes the user prompt and lights the working spinner until TurnEnd.
 func (s *Sink) TurnStart(info agent.TurnInfo) {
 	if strings.TrimSpace(info.Input.Text) != "" {
 		s.ui.UserEcho(info.Input.Text)

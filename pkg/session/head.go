@@ -8,9 +8,8 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 )
 
-// HeadCursor is the mutable pointer to where work continues after a fork: which
-// transcript file in a directory and which entry id inside it. It is persisted as
-// <session dir>/HEAD, the one mutable piece of an otherwise append-only design.
+// HeadCursor is the mutable pointer to where work continues after a fork. It is
+// persisted as <session dir>/HEAD, the one mutable piece of an otherwise append-only design.
 type HeadCursor struct {
 	File string `json:"file"` // base name of one .jsonl session in the directory
 	ID   string `json:"id"`   // active branch head inside that file
