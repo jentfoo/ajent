@@ -47,14 +47,18 @@ tables.
 
 ❯ user input, continuation rows indent by two
   second line of a multi line message
-ctx 34% ▓▓▓░░░░░░░ 68.2k/200k · opus-5
+▓▓▓░░░░░░░ ~68.2k/200k · opus-5
 ```
 
 - Prompt is `❯ ` on the first row, two spaces on continuations.
 - An empty buffer shows a dim `type a message` hint.
-- The status line is one dim row: context percentage, a ten cell bar, used/total
-  tokens, then the model. It escalates colour at 70% and again at 90%, and is
-  truncated to the terminal width.
+- The status line is one dim row: a ten cell bar, used/total tokens, then the
+  model. The bar fills against the compaction budget (`window - reserve`, phase
+  07) so a full bar means "compaction fires now" rather than at raw capacity;
+  the count shows used against the real window. A `~` prefixes the count while it
+  is an estimate (mid-stream or between provider reports). The colour escalates
+  at 70% and again at 90%, both relative to the budget, and the line truncates to
+  the terminal width.
 - A running tool adds one transient spinner row directly above the input. It is
   never committed to history; only its header and result are.
 - The input block grows with the buffer, capped at a third of the screen
@@ -117,7 +121,7 @@ ModeInline                          ModeAlt
 | more output              |        | (bottom aligned)         |
 |                          |        |                          |
 | > input          <- block|        | > input                  |
-| ctx 34% ...      follows |        | ctx 34% ...       pinned |
+| bar/used tokens   follows|        | bar/used tokens    pinned|
 |                          |        +--------------------------+
 | (blank until output      |
 |  fills the screen)       |

@@ -6,6 +6,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // State rebuilds agent state from a branch, resolving model switches through
@@ -14,6 +15,7 @@ import (
 func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.State, []string) {
 	var st agent.State
 	var warns []string
+	st.Tokens = tokens.New(llm.Model{})
 
 	// the newest compaction collapses earlier messages into one summary
 	var keepIdx int
@@ -44,6 +46,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 				warns = append(warns, "invalid message entry: "+err.Error())
 				continue
 			}
+			rebuildUsage(st.Tokens, st.Model.Key(), md)
 			st.Messages = append(st.Messages, md.Message)
 		case TypeModelChange:
 			var m ModelData
@@ -56,6 +59,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 				warns = append(warns, fmt.Sprintf("unresolved model key %q", m.Model))
 				continue // keep the previous model on failure
 			}
+			st.Tokens.SetModel(resolved)
 			st.Model = resolved
 		case TypeSession:
 			// seed the active model from session start; a later model_change overrides it.
@@ -68,6 +72,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 				warns = append(warns, fmt.Sprintf("unresolved session model key %q", sd.Model))
 				continue
 			}
+			st.Tokens.SetModel(resolved)
 			st.Model = resolved
 		case TypeSettingChange:
 			var sd SettingData
@@ -85,6 +90,22 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 		warns = append(warns, "rebuilt context leaves a tool call unanswered")
 	}
 	return st, warns
+}
+
+// rebuildUsage folds one message's recorded usage into the ledger under key. A
+// provider report snaps the exact terms; later messages without one stay as an
+// estimate so /usage reconciles with what was actually sent.
+func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
+	if t == nil {
+		return
+	}
+	reported := tokens.Zero(md.Usage)
+	predicted := 0 // rebuilt ledgers cannot know the original prediction; leave calibration unseeded
+	if reported {
+		t.Add(tokens.EstimateMessages([]llm.Message{md.Message}))
+	} else {
+		t.Response(key, md.Usage, predicted)
+	}
 }
 
 // newestCompaction returns the index of the last compaction entry, or -1.

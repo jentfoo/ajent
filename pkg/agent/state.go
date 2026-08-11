@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // Input is one user turn: free text, extra content blocks, and any synthetic
@@ -25,6 +26,7 @@ type State struct {
 	Model     llm.Model
 	Reasoning llm.ReasoningConfig
 	Tools     []string // active tool names, in declaration order
+	Tokens    *tokens.Accounting
 }
 
 // Transform rewrites an assembled message list before it is sent. Compaction

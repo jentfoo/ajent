@@ -5,7 +5,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -471,4 +473,39 @@ func TestStyleLines(t *testing.T) {
 	t.Run("empty_input", func(t *testing.T) {
 		assert.Empty(t, styleLines(s, ""))
 	})
+}
+
+func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	pr, pw := io.Pipe()
+	u := newTestUI(t, v, pr)
+
+	var mu sync.Mutex
+	var got []string
+	u.SetOnEdit(func(text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = append(got, text)
+	})
+
+	// a large paste is stored under a placeholder; the editor holds the tiny marker.
+	big := strings.Repeat("a", 3000)
+	u.mu.Lock()
+	ph := pastePlaceholder(big)
+	u.pastes = map[string]string{ph: big}
+	u.editor.Insert(ph) // what the buffer actually contains
+	u.notifyEditLocked(u.expandPastes(u.editor.Value()))
+	u.repaint()
+	u.mu.Unlock()
+
+	// OnEdit receives the expanded paste, not the placeholder.
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Contains(got, big)
+	}, time.Second, testPoll)
+
+	_ = pw.Close()
 }

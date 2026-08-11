@@ -6,6 +6,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,7 @@ func TestRegisterBuiltinsInstallsAll(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	want := []string{"help", "model", "reasoning", "tools", "exit"}
+	want := []string{"help", "model", "reasoning", "usage", "tools", "exit"}
 	assert.Equal(t, want, r.Names())
 }
 
@@ -199,4 +200,48 @@ func enabledHas(reg *tools.Registry, name string) bool {
 		}
 	}
 	return false
+}
+
+func TestUsagePrintsSessionLedger(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := NewRegistry()
+	c.commands = r
+	RegisterBuiltins(r, c)
+
+	// give the fake state a ledger with one reported turn so /usage has data.
+	st := &agent.State{Model: llm.Model{ID: "alpha", Provider: "test"},
+		Reasoning: llm.ReasoningConfig{}}
+	tok := tokens.New(st.Model)
+	const key = "test/alpha"
+	tok.Response(key, llm.Usage{Input: 1000, Output: 200}, 900)
+	st.Tokens = tok
+	c.state = st
+
+	cmd, ok := r.Get("usage")
+	require.True(t, ok)
+	require.NoError(t, cmd.Handler(context.Background(), "", c))
+
+	require.Len(t, c.prints, 1)
+	assert.Contains(t, c.prints[0], "# Usage")
+	assert.Contains(t, c.prints[0], "input")
+	assert.Contains(t, c.prints[0], "output")
+}
+
+func TestUsageWithNoLedgerNotifies(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := NewRegistry()
+	c.commands = r
+	RegisterBuiltins(r, c)
+
+	c.state.Tokens = nil // no accounting configured
+
+	cmd, ok := r.Get("usage")
+	require.True(t, ok)
+	require.NoError(t, cmd.Handler(context.Background(), "", c))
+
+	assert.NotEmpty(t, c.notices) // warns rather than panics
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,7 @@ func (r *recordingSinkForShell) ToolOutput(_, d string) {
 }
 func (r *recordingSinkForShell) Diff(string, string, string) {}
 func (r *recordingSinkForShell) Usage(llm.Usage)             {}
+func (r *recordingSinkForShell) Context(tokens.ContextState) {}
 func (r *recordingSinkForShell) Notice(msg string, _ agent.Level) {
 	r.mu.Lock()
 	r.notices = append(r.notices, msg)

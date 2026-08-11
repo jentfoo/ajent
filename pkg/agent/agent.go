@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // defaultMaxSteps caps a single turn's tool-calling iterations so a runaway
@@ -28,6 +30,9 @@ type Options struct {
 type Agent struct {
 	opts  Options
 	state *State
+
+	ctxLast   int       // last emitted Used, for throttling Context emits
+	ctxLastAt time.Time // when that emit happened; drives the interval throttle
 
 	mu      sync.Mutex
 	running bool
@@ -108,4 +113,35 @@ func (a *Agent) ResetState(st *State) bool {
 	}
 	a.state = st
 	return true
+}
+
+// Recount replaces the context estimate with an exact count from the provider's
+// tokenizer, or returns llm.ErrNoTokenizer when it has none. It refuses while a
+// turn is running, like ResetState.
+func (a *Agent) Recount(ctx context.Context) (int, error) {
+	a.mu.Lock()
+	if a.running {
+		a.mu.Unlock()
+		return 0, errTurnRunning
+	}
+	a.mu.Unlock()
+	return a.recount(ctx)
+}
+
+// recount replaces the ledger's estimate with the provider tokenizer's exact count
+// of what buildRequest would send. It is shared by the external Recount and the
+// turn loop (which calls it while running, so it must not take the agent lock).
+func (a *Agent) recount(ctx context.Context) (int, error) {
+	p, err := a.opts.Provider(a.state.Model)
+	if err != nil {
+		return 0, err
+	}
+	n, err := tokens.Recount(ctx, p, a.buildRequest())
+	if err != nil {
+		return 0, err
+	}
+	if t := a.state.Tokens; t != nil {
+		t.Rebase(n)
+	}
+	return n, nil
 }

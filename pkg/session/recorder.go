@@ -5,6 +5,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // Recorder bridges an agent turn stream onto a Writer. The Message hook is the
@@ -74,6 +75,9 @@ func (s *recordingSink) ToolStart(call agent.ToolCall, label string) func(agent.
 func (s *recordingSink) ToolOutput(id, d string) { s.next.ToolOutput(id, d) }
 func (s *recordingSink) Diff(p, b, a string)     { s.next.Diff(p, b, a) }
 func (s *recordingSink) Usage(u llm.Usage)       { s.next.Usage(u) }
+func (s *recordingSink) Context(c tokens.ContextState) {
+	s.next.Context(c)
+}
 
 // Notice persists the notice, then forwards it; persistence failures surface as
 // an error-level notice through the wrapped sink.

@@ -35,6 +35,20 @@ func TestStatusRender(t *testing.T) {
 		s := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}
 		assert.Contains(t, s.render(NewTheme(Color256), 80), "\x1b[2m")
 	})
+	t.Run("fills_to_budget_not_window", func(t *testing.T) {
+		// a full budget (window minus reserve) fills the bar even though raw
+		// usage is well under the window.
+		s := Status{Tokens: 160000, MaxTokens: 200000, Reserve: 40000}
+		assert.Equal(t, "▓▓▓▓▓▓▓▓▓▓ 160k/200k", s.render(plain, 80))
+	})
+	t.Run("estimated_prefixes_tilde", func(t *testing.T) {
+		s := Status{Tokens: 4000, MaxTokens: 10000, Estimated: true}
+		assert.Equal(t, "▓▓▓▓░░░░░░ ~4k/10k", s.render(plain, 120))
+	})
+	t.Run("zero_window_renders_no_bar", func(t *testing.T) {
+		s := Status{Model: "opus-5"}
+		assert.Equal(t, "opus-5", s.render(plain, 40)) // no MaxTokens -> no bar
+	})
 }
 
 func TestUsageBar(t *testing.T) {

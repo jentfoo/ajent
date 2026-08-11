@@ -12,15 +12,19 @@ const (
 
 // Model is one addressable model on one provider.
 type Model struct {
-	Provider      string
-	ID            string
-	Name          string
-	Aliases       []string
+	Provider string
+	ID       string
+	Name     string
+	Aliases  []string
+	// ContextWindow is the full input window in tokens; 0 when unknown.
 	ContextWindow int
 	MaxOutput     int
-	Input         []Modality
-	Caps          Capabilities      // resolved from dialect, provider then model compat
-	Headers       map[string]string // per request additions over the provider's
+	// ContextReserve is the fraction (or absolute count, >= 1) of the window held
+	// back for a response. Values < 1 are fractions of ContextWindow.
+	ContextReserve float64
+	Input          []Modality
+	Caps           Capabilities      // resolved from dialect, provider then model compat
+	Headers        map[string]string // per request additions over the provider's
 }
 
 // Key returns the canonical provider/id identifier.

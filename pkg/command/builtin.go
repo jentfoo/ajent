@@ -8,9 +8,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// RegisterBuiltins installs /help, /model, /reasoning, /tools and /exit into r
-// against c. Later phases register /settings, /compact, /resume, /cost and /init
-// into the same registry.
+// RegisterBuiltins installs /help, /usage, /model, /reasoning, /tools and /exit
+// into r against c. Later phases register /settings, /compact, /resume, /cost
+// and /init into the same registry.
 func RegisterBuiltins(r *Registry, c Console) {
 	r.Register(Command{
 		Name:        "help",
@@ -37,6 +37,11 @@ func RegisterBuiltins(r *Registry, c Console) {
 			return filterPrefix(out, prefix)
 		},
 		Handler: reasoningCommand,
+	})
+	r.Register(Command{
+		Name:        "usage",
+		Description: "show session token usage and context status",
+		Handler:     usageCommand,
 	})
 	r.Register(Command{
 		Name:        "tools",

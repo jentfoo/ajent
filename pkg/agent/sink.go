@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // Level is the severity of a notice.
@@ -25,6 +26,9 @@ type Sink interface {
 	ToolOutput(callID, delta string)
 	Diff(path, before, after string)
 	Usage(llm.Usage)
+	// Context reports how full the next request will be, exact after a response
+	// and estimated while one streams.
+	Context(tokens.ContextState)
 	Notice(msg string, level Level)
 	TurnEnd(TurnResult)
 }
@@ -43,5 +47,6 @@ func (NopSink) ToolStart(call ToolCall, label string) func(ToolResult) {
 func (NopSink) ToolOutput(string, string)   {}
 func (NopSink) Diff(string, string, string) {}
 func (NopSink) Usage(llm.Usage)             {}
+func (NopSink) Context(tokens.ContextState) {}
 func (NopSink) Notice(string, Level)        {}
 func (NopSink) TurnEnd(TurnResult)          {}

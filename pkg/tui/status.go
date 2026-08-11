@@ -24,8 +24,10 @@ type Status struct {
 	Spinner   string // the working glyph, first element (bottom-left corner); static at rest
 	Tool      string // a running tool's label, shown right after the spinner while active
 	Model     string
-	Tokens    int // context usage count, kept for reporting outside the bar
-	MaxTokens int // the active model's window, same purpose
+	Tokens    int  // context usage count; drives the bar against Budget()
+	MaxTokens int  // the model's window; 0 renders no bar
+	Reserve   int  // tokens held back from MaxTokens for a response
+	Estimated bool // Used includes an estimate; prefixes the count with ~
 	Segments  []Segment
 }
 
@@ -55,14 +57,24 @@ func (s Status) parts(t Theme) []string {
 		parts = append(parts, t.Dim.Wrap(s.Tool))
 	}
 	if s.MaxTokens > 0 {
-		pct := s.Tokens * 100 / s.MaxTokens
+		// the bar fills to the compaction point (window minus reserve); the count
+		// shows used against the real window. A full bar means compaction fires now.
+		budget := s.MaxTokens - s.Reserve
+		if budget <= 0 {
+			budget = s.MaxTokens
+		}
+		pct := s.Tokens * 100 / budget
 		if pct < 0 {
 			pct = 0
 		} else if pct > 100 {
 			pct = 100
 		}
 		bar := usageStyle(t, pct).Wrap(usageBar(pct))
-		toks := t.Dim.Wrap(formatTokens(s.Tokens) + "/" + formatTokens(s.MaxTokens))
+		tilde := ""
+		if s.Estimated {
+			tilde = "~" // the count is approximate until the next provider report
+		}
+		toks := t.Dim.Wrap(tilde + formatTokens(s.Tokens) + "/" + formatTokens(s.MaxTokens))
 		parts = append(parts, bar+" "+toks)
 	}
 	if s.Model != "" {
@@ -113,8 +125,7 @@ func (u *UI) SetModel(name string, maxTokens int) {
 	u.repaint()
 }
 
-// usageStyle escalates the color as the context fills. It is used when a caller
-// renders context usage outside the status bar.
+// usageStyle escalates the color as the context fills against its budget.
 func usageStyle(t Theme, pct int) Style {
 	switch {
 	case pct >= 90:

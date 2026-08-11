@@ -2,12 +2,27 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
+
+// contextThrottle is the minimum Used movement that triggers a Context emit, and
+// contextInterval the longest we go without one while a stream moves at all. The
+// pair keeps a streaming response from repainting on every tiny delta while still
+// advancing visibly as tokens land.
+const (
+	contextThrottle = 32
+	contextInterval = 80 * time.Millisecond
+)
+
+// errTurnRunning is returned by Recount while a turn owns the agent.
+var errTurnRunning = errors.New("agent: turn running; recount refused")
 
 // runTurns drains the follow-up queue, running one turn per queued input until
 // nothing is left. Prompt hands in a single initial input; steering and
@@ -118,7 +133,20 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		}
 		// usage rides with the assistant message it came from so a session records
 		// per-message token accounting (user echoes and tool results carry none).
+		recount := needsRecount(a.state.Model.Caps, usage)
 		a.append(MessageInfo{Message: msg, Stop: stop, Usage: usage})
+		if recount {
+			// a provider that reported no usage snaps to the local tokenizer's exact
+			// count of what the next request (including this message) will send. A
+			// failure falls back to the estimate append already recorded.
+			_, _ = a.recount(turnCtx)
+			// record the turn even though there is no provider report, so /usage's
+			// count and estimated-footnote reflect what actually ran.
+			if t := a.state.Tokens; t != nil {
+				t.EstimatedTurn(a.state.Model.Key())
+			}
+		}
+		a.syncContext(true)
 		result.Steps = step
 
 		if turnCtx.Err() != nil {
@@ -199,20 +227,11 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	if err != nil {
 		return llm.Message{}, llm.Usage{}, 0, err
 	}
-	messages := assemble(a.state, a.opts.Transform)
+	req := a.buildRequest()
+	predicted := tokens.EstimateRequest(req)
 
-	var tools []llm.ToolSchema
-	if ts := a.opts.Tools; ts != nil {
-		tools = ts.Schemas() // cached by the registry, so cheap per step
-	}
-
-	req := llm.Request{
-		Model:     a.state.Model,
-		System:    buildSystem(a.state, a.opts.Env),
-		Messages:  messages,
-		Tools:     tools,
-		Reasoning: a.state.Reasoning,
-	}
+	// thinking deltas move the bar only when retention keeps them in the next request
+	keepThink := llm.ResolveRetain(a.state.Reasoning.Retain, a.state.Model.Caps) != llm.RetainNone
 
 	st, err := provider.Stream(ctx, req)
 	if err != nil {
@@ -235,7 +254,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 
 	var acc llm.Accumulator
 	for ev, ok := st.Next(); ok; ev, ok = st.Next() {
-		a.forward(sink, ev)
+		a.forward(sink, keepThink, ev)
 		acc.Add(ev)
 		if ctx.Err() != nil {
 			break // nothing renders after an interrupt
@@ -244,27 +263,65 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 
 	msg := acc.Message()
 	stop := acc.StopReason()
+	usage := acc.Usage()
 	if ctx.Err() != nil {
 		// interrupted mid-stream: the partial message records its real reason
 		stop = llm.StopAborted
 	}
-	return msg, acc.Usage(), stop, streamErr(st, &acc)
+	// snap the exact terms to this response's report, unless a provider that
+	// reported nothing needs the local tokenizer recount instead (done after append).
+	if t := a.state.Tokens; t != nil && !needsRecount(a.state.Model.Caps, usage) {
+		t.Response(a.state.Model.Key(), usage, predicted)
+	}
+	return msg, usage, stop, streamErr(st, &acc)
 }
 
-// forward maps one event onto sink calls. Block boundaries come from the end
-// events; deltas stream through so rendering and assembly share a loop.
-func (a *Agent) forward(sink Sink, ev llm.Event) {
+// buildRequest assembles the llm.Request the next provider call will receive,
+// shared by the estimator, the recount hook and streaming.
+func (a *Agent) buildRequest() llm.Request {
+	messages := assemble(a.state, a.opts.Transform)
+	var tools []llm.ToolSchema
+	if ts := a.opts.Tools; ts != nil {
+		tools = ts.Schemas() // cached by the registry, so cheap per step
+	}
+	return llm.Request{
+		Model:     a.state.Model,
+		System:    buildSystem(a.state, a.opts.Env),
+		Messages:  messages,
+		Tools:     tools,
+		Reasoning: a.state.Reasoning,
+	}
+}
+
+// forward maps one event onto sink calls and ledger updates. Block boundaries
+// come from the end events; deltas stream through so rendering and assembly share
+// a loop.
+func (a *Agent) forward(sink Sink, keepThink bool, ev llm.Event) {
+	t := a.state.Tokens
 	switch ev.Type {
 	case llm.EventThinkingDelta:
 		sink.Thinking(ev.Text)
+		if t != nil && keepThink {
+			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
+		}
+		a.syncContext(false) // the live bucket grew; repaint when it moves enough
 	case llm.EventTextDelta:
 		sink.Text(ev.Text)
+		if t != nil {
+			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
+		}
+		a.syncContext(false)
 	case llm.EventThinkingEnd:
 		sink.EndThinking()
+		a.syncContext(true) // block end repaints unconditionally
 	case llm.EventTextEnd:
 		sink.EndText()
+		a.syncContext(true)
 	case llm.EventUsage:
 		sink.Usage(ev.Usage)
+		if t != nil {
+			t.Partial(ev.Usage)
+		}
 	}
 }
 
@@ -371,6 +428,47 @@ func (a *Agent) append(info MessageInfo) {
 	if h := a.opts.OnMessage; h != nil {
 		h(info)
 	}
+	// messages without a provider report occupy context only as an estimate. An
+	// assistant response that reported usage is already counted in outputExact.
+	if t := a.state.Tokens; t != nil && info.Usage == (llm.Usage{}) {
+		t.Add(tokens.EstimateMessages([]llm.Message{info.Message}))
+	}
+}
+
+// syncContext emits the ledger's context to the sink, throttled so a streaming
+// response does not repaint on every delta. force bypasses the throttle for block
+// ends and turn boundaries.
+func (a *Agent) syncContext(force bool) {
+	t := a.state.Tokens
+	if t == nil {
+		return
+	}
+	cs := t.Context()
+	moved := cs.Used - a.ctxLast
+	if moved < 0 {
+		moved = -moved
+	}
+	now := time.Now()
+	// emit when forced, when Used moved past the threshold, or when enough wall
+	// clock elapsed since the last emit so even slow streams advance regularly.
+	if !force && moved < contextThrottle && now.Sub(a.ctxLastAt) < contextInterval {
+		return
+	}
+	a.ctxLast = cs.Used
+	a.ctxLastAt = now
+	if s := a.opts.Sink; s != nil {
+		s.Context(cs)
+	}
+}
+
+// needsRecount reports whether a provider reported no usage and has an exact
+// local tokenizer, which is when the loop recounts after appending instead of
+// trusting an estimate.
+// needsRecount reports whether a provider reported no usage and has an exact
+// local tokenizer, which is when the loop recounts after appending instead of
+// trusting an estimate.
+func needsRecount(caps llm.Capabilities, u llm.Usage) bool {
+	return tokens.Zero(u) && caps.Tokenizer == llm.TokenizerRemoteTokenize
 }
 
 // callFrom adapts a model tool-call block into the agent's ToolCall.

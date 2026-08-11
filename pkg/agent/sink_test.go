@@ -2,6 +2,7 @@ package agent
 
 import (
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // recordingSink captures every sink call in order, for asserting exact
@@ -23,7 +24,8 @@ func (r *recordingSink) ToolOutput(string, string) { r.calls = append(r.calls, "
 func (r *recordingSink) Diff(string, string, string) {
 	r.calls = append(r.calls, "diff")
 }
-func (r *recordingSink) Usage(llm.Usage) { r.calls = append(r.calls, "usage") }
+func (r *recordingSink) Usage(llm.Usage)             { r.calls = append(r.calls, "usage") }
+func (r *recordingSink) Context(tokens.ContextState) {}
 func (r *recordingSink) Notice(msg string, level Level) {
 	r.calls = append(r.calls, "notice:"+msg)
 	_ = level
@@ -46,5 +48,6 @@ func (c *resultCatcher) ToolStart(ToolCall, string) func(ToolResult) {
 func (c *resultCatcher) ToolOutput(string, string)   {}
 func (c *resultCatcher) Diff(string, string, string) {}
 func (c *resultCatcher) Usage(llm.Usage)             {}
+func (c *resultCatcher) Context(tokens.ContextState) {}
 func (c *resultCatcher) Notice(string, Level)        {}
 func (c *resultCatcher) TurnEnd(r TurnResult)        { c.result = r }

@@ -5,10 +5,10 @@ package sink
 
 import (
 	"strings"
-	"sync"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
@@ -16,15 +16,11 @@ import (
 // itself.
 //
 // Concurrency: ToolStart, ToolOutput, Diff and the done hook may be called from
-// parallel tool goroutines; *tui.UI serializes them. busy and toks are only
-// touched from the loop goroutine (TurnStart/Usage/TurnEnd) and must stay that
-// way.
+// parallel tool goroutines; *tui.UI serializes them. busy is only touched from
+// the loop goroutine (TurnStart/TurnEnd) and must stay that way.
 type Sink struct {
 	ui   *tui.UI
-	toks int // last reported context size, so repeated Usage calls never shrink it
-
 	busy func() // clears the working spinner; nil while idle
-	mu   sync.Mutex
 }
 
 // New returns a sink that drives ui.
@@ -77,15 +73,18 @@ func (s *Sink) ToolOutput(callID, delta string) { s.ui.Output(delta) }
 // Diff commits a colorized file edit.
 func (s *Sink) Diff(path, before, after string) { s.ui.Diff(path, before, after) }
 
-// Usage folds the latest provider accounting into the context bar.
-func (s *Sink) Usage(u llm.Usage) {
-	s.mu.Lock()
-	// input grows with history; cacheRead counts reused prefix tokens
-	if total := u.Input + u.CacheRead; total > s.toks {
-		s.toks = total
-	}
-	s.ui.SetTokens(s.toks)
-	s.mu.Unlock()
+// Usage is kept on the interface for pass-through sinks but no longer drives the
+// bar; Context does. It renders nothing here.
+func (s *Sink) Usage(llm.Usage) {}
+
+// Context updates the context bar from the ledger's snapshot.
+func (s *Sink) Context(c tokens.ContextState) {
+	s.ui.SetContext(tui.ContextInfo{
+		Used:      c.Used,
+		Window:    c.Window,
+		Reserve:   c.Reserve,
+		Estimated: c.Estimated,
+	})
 }
 
 // Notice surfaces a message at the matching severity.
@@ -93,22 +92,14 @@ func (s *Sink) Notice(msg string, level agent.Level) {
 	s.ui.Notify(msg, tui.Level(level))
 }
 
-// TurnEnd updates the context bar from the turn's totals, flushes any open
-// tool output line and clears the working spinner. Failures and aborts already
-// landed as notices from the loop.
+// TurnEnd flushes any open tool output line and clears the working spinner.
+// Failures and aborts already landed as notices from the loop; the context bar
+// was updated by Context events during the turn.
 func (s *Sink) TurnEnd(res agent.TurnResult) {
 	s.ui.EndOutput()
 	if s.busy != nil {
 		s.busy()
 		s.busy = nil
-	}
-	if n := res.Usage.Input + res.Usage.CacheRead; n > 0 {
-		s.mu.Lock()
-		if n > s.toks {
-			s.toks = n
-		}
-		s.ui.SetTokens(s.toks)
-		s.mu.Unlock()
 	}
 }
 

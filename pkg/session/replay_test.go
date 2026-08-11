@@ -6,6 +6,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -29,6 +30,7 @@ func (s *replaySink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolRes
 func (s *replaySink) ToolOutput(string, string)      {}
 func (s *replaySink) Diff(string, string, string)    {}
 func (s *replaySink) Usage(llm.Usage)                {}
+func (s *replaySink) Context(tokens.ContextState)    {}
 func (s *replaySink) Notice(m string, _ agent.Level) { s.calls = append(s.calls, "notice:"+m) }
 func (s *replaySink) TurnEnd(agent.TurnResult)       { s.calls = append(s.calls, "turn_end") }
 

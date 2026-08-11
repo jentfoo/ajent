@@ -18,13 +18,11 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
-
-// defaultMaxTokens is the context window shown when no model reports one.
-const defaultMaxTokens = 200_000
 
 // secretPrefix marks editor lines excluded from persistent history, so a pasted
 // secret never round-trips through ~/.ajent/history.
@@ -105,19 +103,17 @@ func main() {
 		}
 	}
 
-	maxTokens := defaultMaxTokens
+	// a model with no reported window renders no context bar rather than one drawn
+	// against a fabricated number; parts() already skips the bar when MaxTokens is 0.
 	var label string
 	if active.ID != "" {
 		label = active.Key()
-		if active.ContextWindow > 0 {
-			maxTokens = active.ContextWindow
-		}
 	}
 
 	ui, err := tui.New(tui.Options{
 		Mode:      mode,
 		Model:     label,
-		MaxTokens: maxTokens,
+		MaxTokens: active.ContextWindow,
 		History:   history.Load(secretPrefix),
 	})
 	if err != nil {
@@ -161,6 +157,7 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	st := &agent.State{
 		Model:     active,
 		Reasoning: defaultReasoning(),
+		Tokens:    tokens.New(active),
 	}
 
 	// phase 06: every turn is recorded into the workspace transcript so double-Esc
@@ -196,6 +193,18 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	if toolsReg != nil && len(st.Tools) > 0 {
 		toolsReg.SetEnabled(st.Tools)
 	}
+
+	// feed the editor's in-progress text into accounting so the context bar grows
+	// as you type or paste, then clears it once submitted (the buffer empties).
+	editSink := opts.Sink // may be nil before a session is set up
+	ui.SetOnEdit(func(text string) {
+		t := st.Tokens
+		if t == nil || editSink == nil {
+			return
+		}
+		t.SetCompose(tokens.EstimateText(text, tokens.KindProse))
+		editSink.Context(t.Context())
+	})
 	ag := agent.New(st, opts)
 	if rec != nil {
 		rec.bindRewind(ui, ag, reg, &st)
@@ -508,6 +517,9 @@ func (r *sessRec) rebuild(ui *tui.UI, reg *llm.Registry, st *agent.State) {
 	if rebuilt.Model.ID != "" {
 		st.Model = rebuilt.Model
 	}
+	if rebuilt.Tokens != nil {
+		st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
+	}
 	session.Replay(session.Branch(entries, session.Head(entries)), tuisink.New(ui), session.ReplayOptions{})
 }
 
@@ -580,6 +592,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, st **ag
 		Model:     (**st).Model, // keep the live model; a fork may not carry one
 		Reasoning: (**st).Reasoning,
 		Tools:     (**st).Tools,
+		Tokens:    rebuilt.Tokens, // ledger rebuilt for exactly this branch point
 	}
 	if rebuilt.Model.ID != "" {
 		nst.Model = rebuilt.Model

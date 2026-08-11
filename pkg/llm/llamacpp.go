@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -55,21 +56,63 @@ func parseLlamaProps(body []byte) ([]ModelConfig, error) {
 	return []ModelConfig{m}, nil
 }
 
+// countBlocks renders a message's content into token-countable text, including
+// tool calls and results that blocksText skips. Images contribute a size marker.
+func countBlocks(blocks BlockList) string {
+	var b strings.Builder
+	for _, blk := range blocks {
+		switch t := blk.(type) {
+		case TextBlock:
+			b.WriteString(t.Text)
+		case ThinkingBlock:
+			b.WriteString(t.Text)
+		case ToolCallBlock:
+			if j, err := json.Marshal(map[string]any{"name": t.Name, "arguments": rawJSON(t.Input)}); err == nil {
+				b.Write(j)
+			}
+		case ToolResultBlock:
+			b.WriteString(countBlocks(t.Content))
+		case ImageBlock:
+			b.WriteString("[[image " + strconv.Itoa(len(t.Data)) + " bytes]]")
+		}
+	}
+	return b.String()
+}
+
+// rawJSON returns the raw arguments as-is, or an empty object when malformed.
+func rawJSON(raw json.RawMessage) any {
+	if len(raw) == 0 || !json.Valid(raw) {
+		return map[string]any{}
+	}
+	var v any
+	_ = json.Unmarshal(raw, &v)
+	return v
+}
+
 // llamaTokenize is the /tokenize response.
 type llamaTokenize struct {
 	Tokens []int `json:"tokens"`
 }
 
 // CountTokens returns the exact input token count from the server's own
-// tokenizer, which is local and cheap enough to call freely.
+// tokenizer, which is local and cheap enough to call freely. It renders every
+// block a request would send so tool schemas, calls, results and images are not
+// silently counted as zero.
 func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, error) {
 	if req.Model.Caps.Tokenizer != TokenizerRemoteTokenize {
 		return 0, ErrNoTokenizer
 	}
 	var text strings.Builder
 	text.WriteString(blocksText(req.System))
-	for _, m := range req.Messages {
-		text.WriteString(blocksText(m.Content))
+	for _, m := range RetainedMessages(req) {
+		text.WriteString(countBlocks(m.Content))
+	}
+	// tool schemas ride in the request and occupy real tokens; count them once
+	// when present (an empty list adds nothing to what a no-tool prompt sends).
+	if len(req.Tools) > 0 {
+		if schemas, err := json.Marshal(compatTools(req.Tools)); err == nil {
+			text.Write(schemas)
+		}
 	}
 
 	body, err := json.Marshal(map[string]string{"content": text.String()})

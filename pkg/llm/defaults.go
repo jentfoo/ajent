@@ -279,6 +279,9 @@ func resolveModel(provider string, base Capabilities, providerCompat *Compat, mc
 	if mc.MaxTokens != nil {
 		m.MaxOutput = *mc.MaxTokens
 	}
+	if mc.ContextReserve != nil {
+		m.ContextReserve = *mc.ContextReserve
+	}
 	if len(m.Input) == 0 {
 		m.Input = []Modality{ModalityText}
 		if caps.Images {

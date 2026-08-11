@@ -6,6 +6,12 @@ import (
 	"github.com/go-analyze/bulk"
 )
 
+// RetainedMessages returns msgs with thinking stripped per the resolved
+// retention policy and capability set. It is what a provider would send.
+func RetainedMessages(req Request) []Message {
+	return applyRetention(req.Messages, req.Reasoning.Retain, req.Model.Caps)
+}
+
 // applyRetention returns messages with thinking blocks stripped per policy, at
 // request build time only. It never mutates msgs, and returns it unchanged when
 // nothing is stripped.
@@ -44,6 +50,13 @@ func applyRetention(msgs []Message, policy RetainPolicy, caps Capabilities) []Me
 		return msgs
 	}
 	return out
+}
+
+// ResolveRetain adjusts the requested retention policy to what caps accept. It
+// returns RetainNone when reasoning is unsupported and upgrades a weaker policy
+// to whole-turn when replay requires it.
+func ResolveRetain(policy RetainPolicy, caps Capabilities) RetainPolicy {
+	return resolveRetention(policy, caps)
 }
 
 // resolveRetention adjusts the policy to what caps can actually accept.

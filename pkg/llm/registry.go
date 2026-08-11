@@ -141,6 +141,9 @@ func enrichModel(declared, discovered ModelConfig) ModelConfig {
 	if declared.MaxTokens == nil {
 		declared.MaxTokens = discovered.MaxTokens
 	}
+	if declared.ContextReserve == nil && discovered.ContextReserve != nil {
+		declared.ContextReserve = discovered.ContextReserve
+	}
 	if declared.Reasoning == nil {
 		declared.Reasoning = discovered.Reasoning
 	}

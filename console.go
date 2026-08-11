@@ -46,7 +46,22 @@ func (c *uiConsole) Commands() *command.Registry { return c.commands }
 func (c *uiConsole) SetModel(m llm.Model) {
 	c.reg.SetActive(m)
 	c.st.Model = m
+	// rebase the ledger's window and reserve onto the new model so a mid-session
+	// /model rescales the bar immediately rather than on the next turn.
+	t := c.st.Tokens
+	if t != nil {
+		t.SetModel(m)
+	}
 	c.ui.SetModel(m.Key(), m.ContextWindow)
+	if t != nil {
+		cs := t.Context()
+		c.ui.SetContext(tui.ContextInfo{
+			Used:      cs.Used,
+			Window:    cs.Window,
+			Reserve:   cs.Reserve,
+			Estimated: cs.Estimated,
+		})
+	}
 	c.ui.Notify("model: "+m.Key(), tui.LevelInfo)
 	if c.rec != nil {
 		c.rec.ModelChange(m, "command")

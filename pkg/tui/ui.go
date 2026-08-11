@@ -52,6 +52,10 @@ type Options struct {
 	// double-Esc rewind: two idle presses within DoubleEscWindow call OnRewind instead of ControlEscape
 	DoubleEscWindow time.Duration // window between two idle Esc presses; 0 = default
 	OnRewind        func()
+	// OnEdit is called with the current editor text (pastes expanded) whenever it
+	// changes, so a host can feed token accounting while the user composes. It runs
+	// on an internal goroutine, never under the UI lock.
+	OnEdit func(text string)
 }
 
 // UI is the terminal front end: committed history above a live block holding the
@@ -83,6 +87,11 @@ type UI struct {
 	busy      bool // a turn is in flight; the status-bar glyph animates while set
 	spinner   int
 	spinnerCh chan struct{}
+
+	// input-change notification for token accounting while composing
+	onEdit       func(string) // never invoked under u.mu; see editNotify
+	editCh       chan string  // coalescing buffer (size 1, latest wins)
+	lastNotified string       // last text handed to onEdit, so cursor moves do not refire
 
 	// rewind gesture configuration and state (see rewind.go)
 	doubleEscWindow time.Duration
@@ -132,6 +141,9 @@ func New(opts Options) (*UI, error) {
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
 	}
+	if opts.OnEdit != nil {
+		u.onEdit = opts.OnEdit
+	}
 	doubleEsc := opts.DoubleEscWindow
 	if doubleEsc <= 0 {
 		doubleEsc = defaultDoubleEscWindow
@@ -154,6 +166,10 @@ func New(opts Options) (*UI, error) {
 	u.safeGo(u.reader.run)
 	u.safeGo(u.readKeys)
 	u.safeGo(u.watchSignals)
+	if opts.OnEdit != nil {
+		u.editCh = make(chan string, 1)
+		u.safeGo(u.drainEdits) // runs OnEdit outside the UI lock
+	}
 	u.repaint()
 	return u, nil
 }
@@ -208,6 +224,11 @@ func (u *UI) Close() {
 	u.stopSpinner()
 	u.cancelRewindLocked()
 	u.cancelInteractions()
+	if u.editCh != nil {
+		ch := u.editCh
+		u.editCh = nil // handleKey's nil guard drops further edits instead of sending on a closed channel
+		close(ch)      // ends drainEdits; its range loop exits cleanly
+	}
 	close(u.done)
 	u.render.close(u.inFd)
 }
@@ -248,8 +269,32 @@ func (u *UI) SetStatus(s Status) {
 	u.repaint()
 }
 
+// ContextInfo is how full the next request will be, exact after a response and
+// estimated while one streams. It keeps pkg/tui free of any agent import.
+type ContextInfo struct {
+	Used      int
+	Window    int
+	Reserve   int
+	Estimated bool
+}
+
+// SetContext updates the context bar from an accounting snapshot, replacing the
+// usage count and reserve while keeping the model's window authoritative. A zero
+// Window leaves it untouched so a mid-session /model keeps its own number.
+func (u *UI) SetContext(ci ContextInfo) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if ci.Window > 0 {
+		u.status.MaxTokens = ci.Window
+	}
+	u.status.Tokens = ci.Used
+	u.status.Reserve = ci.Reserve
+	u.status.Estimated = ci.Estimated
+	u.repaint()
+}
+
 // SetTokens updates the context usage count, leaving the model and its window
-// alone. The window belongs to the model, the count belongs to the turn.
+// alone. The demo uses it; live sessions drive the bar through SetContext.
 func (u *UI) SetTokens(tokens int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -596,10 +641,60 @@ func (u *UI) handleKey(k key) (submit *string, quit bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	submit, dirty, quit = u.applyKey(k)
+	if u.editCh != nil && !quit {
+		u.notifyEditLocked(u.expandPastes(u.editor.Value()))
+	}
 	if dirty && !quit {
 		u.repaint()
 	}
 	return submit, quit
+}
+
+// SetOnEdit installs an input-change callback after construction, for hosts that
+// build their accounting state later than Options (e.g. main's driver). It may be
+// called again to swap the callback; drainEdits reads it per iteration so the new
+// one takes effect immediately.
+func (u *UI) SetOnEdit(fn func(string)) {
+	if fn == nil || u.closed {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.editCh != nil && u.onEdit != nil {
+		u.onEdit = fn // swap: keep the existing drain goroutine
+		return
+	}
+	u.editCh = make(chan string, 1)
+	u.onEdit = fn
+	go u.drainEdits()
+}
+
+// notifyEditLocked hands the current editor text to OnEdit when it changed since
+// the last notification. Caller holds the lock and must have confirmed editCh is
+// non-nil; Close clears it before closing so a send here never hits a closed channel.
+func (u *UI) notifyEditLocked(text string) {
+	if u.onEdit == nil || text == u.lastNotified {
+		return
+	}
+	u.lastNotified = text
+	select {
+	case u.editCh <- text:
+	default: // a newer edit is already queued; drop this one (latest wins)
+	}
+}
+
+// drainEdits delivers pending editor changes to OnEdit off the UI lock, so the
+// callback may safely call back into SetContext or other locked methods. It reads
+// onEdit under the lock each iteration so a later SetOnEdit swap takes effect.
+func (u *UI) drainEdits() {
+	for text := range u.editCh {
+		u.mu.Lock()
+		fn := u.onEdit
+		u.mu.Unlock()
+		if fn != nil {
+			fn(text)
+		}
+	}
 }
 
 // applyKey mutates the editor for one key and reports whether it changed any
