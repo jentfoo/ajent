@@ -240,8 +240,11 @@ inferred from its text:
 - **`flowWrap`**: carries alignment. Wrapped by us via `wrapLine`, which breaks on
   word boundaries and indents continuations to align under the text. Code blocks,
   diffs, list items, blockquotes, user echo and raw tool output.
+- **`flowReflow`** lines carrying a structured table payload (see `histLine.table`)
+  are laid out fresh by `rows(width)` on every resize rather than clipped.
 - **`flowClip`**: structural, cannot survive being broken at all. Never wrapped,
-  clipped to the width instead. Tables and thematic rules.
+  clipped to the width instead. Thematic rules and tables nested inside a list or
+  quote.
 
 The trade: wrapped and clipped lines keep their alignment but do not reflow when
 the terminal widens. Prose reflows but its continuations cannot be indented,
@@ -255,6 +258,10 @@ misclassified and silently stopped reflowing.
 never splits a cluster, never miscounts an escape sequence as width, and reopens
 the active style on each continuation row. This is why emoji with modifiers and
 ZWJ sequences survive wrapping intact.
+Table cells reuse the same `cell` machinery (`wrapCellLine`) so wrapped cell text
+keeps its styling; column widths come from content and are shrunk (widest first)
+when they would overflow, never dropping data. Rows get a separator line between
+them.
 
 ## Content rendering
 
@@ -279,7 +286,7 @@ Supported elements:
 | List | `• ` bullets or `N. ` ordered, nested by indent, tight and loose |
 | Task list | `[x]` / `[ ]` checkboxes |
 | Thematic break | full width rule at the committed width, clipped on resize |
-| GFM table | `go-pretty`, hard sized to the terminal, clipped on resize |
+| GFM table | our own layout: cells wrapped to their column, rows separated, re-laid out at each width (alt mode) and terminal-reflowed (inline) |
 | HTML block | passed through dim |
 
 | Inline | Rendering |
@@ -471,9 +478,10 @@ Things that look fine and are not:
 
 - Inline mode inherits the emulator's reflow behaviour. Where that is poor, alt
   mode is the answer, and auto-detection already routes multiplexers there.
-- `flowWrap` and `flowClip` lines (tables, code, diffs) do not reflow on resize in
-  either mode. They keep the width they were committed at; alt mode clips the
-  structural ones rather than breaking their borders.
+- `flowWrap` and `flowClip` lines (code, diffs, thematic rules) do not reflow on
+  resize in either mode; they keep the width they were committed at. Tables are the
+exception: their structure is retained so alt mode re-lays them out at each new
+width instead of clipping.
 - Alt mode's scrollback is ours, so the terminal scrollbar does not cover the
   session while it runs. The transcript is replayed on exit to compensate.
 - Alt mode retains the whole session uncapped, and re-lays every line on a width

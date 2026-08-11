@@ -9,11 +9,20 @@ import (
 )
 
 // mdText joins rendered lines back into flat text, the shape the assertions compare.
+// A table histLine is expanded through layoutTable since its cells live in structure,
+// not in l.text.
 func mdText(lines []histLine) string {
 	var b strings.Builder
 	for _, l := range lines {
-		b.WriteString(l.text)
-		b.WriteString("\n")
+		if l.table != nil {
+			for _, row := range layoutTable(l.table, defaultWidth) {
+				b.WriteString(row)
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString(l.text)
+			b.WriteString("\n")
+		}
 	}
 	return b.String()
 }
@@ -87,7 +96,6 @@ func TestRenderMarkdownFlow(t *testing.T) {
 		{"list_wraps", "- a\n- b", flowWrap},
 		{"code_wraps", "```go\nx := 1\n```", flowWrap},
 		{"blockquote_wraps", "> quoted", flowWrap},
-		{"table_clips", "| A | B |\n|---|---|\n| 1 | 2 |", flowClip},
 		{"rule_clips", "---", flowClip},
 	}
 	for _, tc := range tests {
@@ -95,6 +103,9 @@ func TestRenderMarkdownFlow(t *testing.T) {
 			lines := renderMarkdown(plain, 40, tc.input)
 			require.NotEmpty(t, lines)
 			for _, l := range lines {
+				if l.table != nil { // tables are structured and re-laid out per width
+					continue
+				}
 				assert.Equal(t, tc.expected, l.flow)
 			}
 		})
@@ -106,6 +117,43 @@ func TestRenderMarkdownFlow(t *testing.T) {
 		assert.Equal(t, flowReflow, lines[0].flow)
 		assert.Empty(t, lines[1].text) // separator
 		assert.Equal(t, flowClip, lines[2].flow)
+	})
+}
+
+// TestRenderMarkdownTable guards the structured table path: separators between rows,
+// long cells wrapped within their column, and re-layout at a narrower width.
+func TestRenderMarkdownTable(t *testing.T) {
+	t.Parallel()
+
+	plain := NewTheme(ColorNone)
+	const src = "| ID | Name |\n|---|---|\n| 1 | alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega |"
+
+	t.Run("one_structured_line_with_separators", func(t *testing.T) {
+		lines := renderMarkdown(plain, 60, src)
+		require.Len(t, lines, 1)
+		require.NotNil(t, lines[0].table)
+
+		shape := layoutTable(lines[0].table, 80)
+		assert.True(t, strings.HasPrefix(shape[0], "┌────┬"), "top border: %q", shape[0])
+		assert.Contains(t, shape[1], "│ ID │ Name")
+		// the header and data rows are separated by a mid line
+		assert.True(t, strings.HasPrefix(shape[2], "├────┼"), "mid border: %q", shape[2])
+	})
+	t.Run("long_cell_wraps_within_the_column", func(t *testing.T) {
+		lines := renderMarkdown(plain, 60, src)
+		rows := layoutTable(lines[0].table, 40)
+		// every physical line keeps its left border and nothing is lost
+		for _, row := range rows {
+			assert.True(t, strings.HasPrefix(row, "┌") || strings.HasPrefix(row, "├") ||
+				strings.HasPrefix(row, "└") || strings.HasPrefix(row, "│"), "row: %q", row)
+		}
+	})
+	t.Run("reflows_to_a_narrower_width", func(t *testing.T) {
+		lines := renderMarkdown(plain, 60, src)
+		wide := layoutTable(lines[0].table, 80)
+		narrow := layoutTable(lines[0].table, 30)
+
+		require.Greater(t, len(narrow), len(wide), "a narrower terminal should wrap more")
 	})
 }
 

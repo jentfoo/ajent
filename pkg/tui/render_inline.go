@@ -66,13 +66,18 @@ func (r *inlineRenderer) commit(lines []histLine) {
 	b.WriteString(hideCursor)
 	b.WriteString(r.eraseLive())
 	for _, l := range lines {
-		switch l.flow {
-		case flowWrap:
+		switch {
+		case l.table != nil:
+			for _, row := range layoutTable(l.table, r.t.width) {
+				b.WriteString(row)
+				b.WriteString("\r\n")
+			}
+		case l.flow == flowWrap:
 			for _, row := range wrapLine(l.text, r.t.width) {
 				b.WriteString(row)
 				b.WriteString("\r\n")
 			}
-		case flowClip:
+		case l.flow == flowClip:
 			b.WriteString(truncateDisplay(l.text, r.t.width))
 			b.WriteString("\r\n")
 		default:

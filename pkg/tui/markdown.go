@@ -4,8 +4,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jedib0t/go-pretty/v6/table"
-	prettytext "github.com/jedib0t/go-pretty/v6/text"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -49,6 +47,14 @@ type mdRenderer struct {
 func (r mdRenderer) blocks(n ast.Node, src []byte) []histLine {
 	var out []histLine
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if c.Kind() == east.KindTable {
+			// a table is one structured line that re-lays itself on resize.
+			if len(out) > 0 {
+				out = append(out, histLine{})
+			}
+			out = append(out, histLine{table: r.buildTable(c, src)})
+			continue
+		}
 		b, flow := r.block(c, src)
 		if b == "" {
 			continue
@@ -93,8 +99,9 @@ func (r mdRenderer) block(n ast.Node, src []byte) (string, lineFlow) {
 	case ast.KindThematicBreak:
 		w := max(r.width, minRuleWidth)
 		return r.theme.Dim.Wrap(strings.Repeat(ruleChar, w)), flowClip
-	case east.KindTable:
-		return r.table(n, src), flowClip
+	case east.KindTable: // nested table (inside a list or quote): laid out once
+		t := r.buildTable(n, src)
+		return strings.Join(layoutTable(t, r.width), "\n"), flowClip
 	case ast.KindHTMLBlock:
 		return r.theme.Dim.Wrap(strings.TrimRight(rawLines(n, src), "\n")), flowWrap
 	default:
@@ -146,56 +153,260 @@ func (r mdRenderer) list(l *ast.List, src []byte) string {
 	return strings.Join(items, sep)
 }
 
-// table renders a GFM table through go-pretty, hard sized since it cannot reflow.
-func (r mdRenderer) table(n ast.Node, src []byte) string {
-	tw := table.NewWriter()
-	tw.SetStyle(table.StyleLight)
-	tw.Style().Options.SeparateRows = false
-	tw.Style().Format.Header = prettytext.FormatDefault // keep the author's casing
-	if w := min(r.width, maxTableWidth); w > 0 {
-		tw.SetAllowedRowLength(w)
-	}
+// mdAlign is a column's horizontal alignment from the GFM delimiter row.
+type mdAlign uint8
+
+const (
+	alignLeft mdAlign = iota
+	alignCenter
+	alignRight
+)
+
+// mdTable holds one markdown table as styled cells plus per-column alignment, so
+// it can be re-laid out at any width instead of being frozen when committed.
+type mdTable struct {
+	header []string   // header cells (first row), same length as every data row
+	rows   [][]string // data cells, one slice per source row
+	align  []mdAlign  // per-column alignment from the delimiter colons
+}
+
+// buildTable walks a GFM table node into its structured form. Cells are fully
+// styled here; layout only measures and pads them.
+func (r mdRenderer) buildTable(n ast.Node, src []byte) *mdTable {
+	t := &mdTable{}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
 		switch c.Kind() {
 		case east.KindTableHeader:
-			tw.AppendHeader(r.tableRow(c, src))
-			tw.SetColumnConfigs(r.columnConfigs(c))
+			var hdr []string
+			for cc := c.FirstChild(); cc != nil; cc = cc.NextSibling() {
+				cell, ok := cc.(*east.TableCell)
+				if !ok {
+					continue
+				}
+				hdr = append(hdr, r.inline(cc, src, ""))
+				switch cell.Alignment {
+				case east.AlignCenter:
+					t.align = append(t.align, alignCenter)
+				case east.AlignRight:
+					t.align = append(t.align, alignRight)
+				default:
+					t.align = append(t.align, alignLeft)
+				}
+			}
+			t.header = hdr
 		case east.KindTableRow:
-			tw.AppendRow(r.tableRow(c, src))
+			var row []string
+			for cc := c.FirstChild(); cc != nil; cc = cc.NextSibling() {
+				if _, ok := cc.(*east.TableCell); !ok {
+					continue
+				}
+				row = append(row, r.inline(cc, src, ""))
+			}
+			t.rows = append(t.rows, row)
 		}
 	}
-	return strings.TrimRight(tw.Render(), "\n")
+	return t
 }
 
-func (r mdRenderer) tableRow(n ast.Node, src []byte) table.Row {
-	var row table.Row
-	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		row = append(row, r.inline(c, src, ""))
+// layoutTable renders the table at width: column widths come from content and are
+// shrunk (with long cells wrapped) when they would exceed it, so a resize re-lays
+// every row rather than clipping. A separator line runs between all rows.
+func layoutTable(t *mdTable, width int) []string {
+	cols := len(t.header)
+	if cols == 0 || t.align == nil {
+		return nil
 	}
-	return row
+	target := min(max(width, 1), maxTableWidth)
+	avail := max(target-(3*cols+1), cols) // content room after borders and padding
+
+	nat := make([]int, cols)
+	for i, h := range t.header {
+		nat[i] = cellMaxWidth(h)
+	}
+	for _, row := range t.rows {
+		for i, c := range row {
+			if i < cols {
+				nat[i] = max(nat[i], cellMaxWidth(c))
+			}
+		}
+	}
+	w := shrinkColumns(nat, avail)
+
+	// wrap every header and data cell to its column width before assembling rows.
+	hdrLines := make([][]string, cols)
+	for i, h := range t.header {
+		hdrLines[i] = wrapCell(h, w[i])
+	}
+	datLines := make([][][]string, len(t.rows))
+	for ri, row := range t.rows {
+		datLines[ri] = make([][]string, cols)
+		for ci, c := range row {
+			if ci < cols {
+				datLines[ri][ci] = wrapCell(c, w[ci])
+			}
+		}
+	}
+
+	var out []string
+	out = append(out, hBorder("┌", "┬", "┐", w))
+	nGroups := len(datLines) + 1 // header group first, then each data row as its own group
+	for i := 0; i < nGroups; i++ {
+		var cells [][]string
+		if i == 0 {
+			cells = hdrLines
+		} else if i-1 < len(datLines) {
+			cells = datLines[i-1]
+		}
+		out = append(out, tableRowGroup(cells, w, t.align)...)
+		if i == nGroups-1 {
+			out = append(out, hBorder("└", "┴", "┘", w))
+		} else {
+			out = append(out, hBorder("├", "┼", "┤", w))
+		}
+	}
+	return out
 }
 
-func (r mdRenderer) columnConfigs(header ast.Node) []table.ColumnConfig {
-	var cfgs []table.ColumnConfig
-	var i int
-	for c := header.FirstChild(); c != nil; c = c.NextSibling() {
-		i++
-		cell, ok := c.(*east.TableCell)
-		if !ok {
-			continue
-		}
-		var align prettytext.Align
-		switch cell.Alignment {
-		case east.AlignCenter:
-			align = prettytext.AlignCenter
-		case east.AlignRight:
-			align = prettytext.AlignRight
-		default:
-			continue
-		}
-		cfgs = append(cfgs, table.ColumnConfig{Number: i, Align: align, AlignHeader: align})
+// shrinkColumns reduces natural column widths so their sum fits avail, trimming the
+// currently widest column first and never below a per-column floor.
+func shrinkColumns(nat []int, avail int) []int {
+	sum := 0
+	for _, n := range nat {
+		sum += n
 	}
-	return cfgs
+	if sum <= avail || len(nat) == 0 {
+		return append([]int(nil), nat...)
+	}
+	minCol := min(3, max(avail/len(nat), 1))
+	w := append([]int(nil), nat...)
+	overflow := sum - avail
+	for overflow > 0 {
+		bi := -1
+		for i := range w {
+			if w[i] > minCol && (bi < 0 || w[i] > w[bi]) {
+				bi = i
+			}
+		}
+		if bi < 0 { // every column is at its floor; accept the overflow and clip later
+			break
+		}
+		w[bi]--
+		overflow--
+	}
+	return w
+}
+
+// hBorder builds a horizontal box line across columns, e.g. ┌──┬──┐.
+func hBorder(left, mid, right string, w []int) string {
+	var b strings.Builder
+	b.WriteString(left)
+	for i, cw := range w {
+		if i > 0 {
+			b.WriteString(mid)
+		}
+		b.WriteString(strings.Repeat("─", cw+2))
+	}
+	return b.String() + right
+}
+
+// tableRowGroup renders one logical row (header or data) into physical lines,
+// wrapping when a cell spans more than one column line.
+func tableRowGroup(cells [][]string, w []int, al []mdAlign) []string {
+	n := 0
+	for _, c := range cells {
+		if len(c) > n {
+			n = len(c)
+		}
+	}
+	out := make([]string, 0, n)
+	var b strings.Builder
+	for li := 0; li < n; li++ {
+		b.Reset()
+		b.WriteString("│")
+		for i, c := range cells {
+			b.WriteString(" ")
+			if li < len(c) {
+				b.WriteString(padLine(c[li], w[i], al[i]))
+			} else {
+				b.WriteString(strings.Repeat(" ", w[i]))
+			}
+			b.WriteString(" │")
+		}
+		out = append(out, b.String())
+	}
+	return out
+}
+
+// padLine pads s to width columns honoring a column alignment. Styling is already
+// baked into s; the appended spaces are plain.
+func padLine(s string, w int, a mdAlign) string {
+	sw := displayWidth(s)
+	if sw >= w {
+		return s
+	}
+	switch a {
+	case alignCenter:
+		l := (w - sw) / 2
+		return strings.Repeat(" ", l) + s + strings.Repeat(" ", w-sw-l)
+	case alignRight:
+		return strings.Repeat(" ", w-sw) + s
+	default:
+		return s + strings.Repeat(" ", w-sw)
+	}
+}
+
+// wrapCell breaks a cell into lines at most width columns, splitting on hard line
+// breaks first and then wrapping long content without any hanging indent.
+func wrapCell(s string, w int) []string {
+	if w <= 0 {
+		return nil
+	}
+	var out []string
+	for _, ln := range strings.Split(s, "\n") {
+		out = append(out, wrapCellLine(ln, w)...)
+	}
+	return out
+}
+
+// wrapCellLine word-wraps one cell line to width using the same grapheme cells as
+// wrapLine but with no indent or hanging marker.
+func wrapCellLine(line string, w int) []string {
+	if displayWidth(line) <= w {
+		return []string{line}
+	}
+	cs := cells(line)
+	var out []string
+	for start := 0; start < len(cs); {
+		end, cw := start, 0
+		for end < len(cs) && cw+cs[end].width <= w {
+			cw += cs[end].width
+			end++
+		}
+		if end == start {
+			end = start + 1 // a single cell wider than the column, never stall
+		}
+		stop := breakPoint(cs, start, end)
+		for stop > start && cs[stop-1].text == " " {
+			stop--
+		}
+		out = append(out, renderCells(cs[start:stop], ""))
+		start = stop
+		for start < len(cs) && cs[start].text == " " {
+			start++
+		}
+	}
+	return out
+}
+
+// cellMaxWidth returns the widest logical line in a possibly multi-line cell.
+func cellMaxWidth(s string) int {
+	m := 0
+	for _, ln := range strings.Split(s, "\n") {
+		if d := displayWidth(ln); d > m {
+			m = d
+		}
+	}
+	return m
 }
 
 // inline renders the inline children of n. active carries the ancestor styles so a

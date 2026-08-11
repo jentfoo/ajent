@@ -147,6 +147,38 @@ func TestAltRendererLineFlow(t *testing.T) {
 	})
 }
 
+// TestAltRendererTableReflows guards resize behaviour for a committed table: it must
+// re-lay out at the new width instead of staying truncated at its old one.
+func TestAltRendererTableReflows(t *testing.T) {
+	t.Parallel()
+
+	plain := NewTheme(ColorNone)
+	src := "| A | B |\n|---|---|\n| 1 | a long description that should wrap when the terminal narrows |"
+	hl := renderMarkdown(plain, 60, src)[0]
+	require.NotNil(t, hl.table)
+
+	v := newVT(40, 10)
+	r := newTestAlt(v)
+	r.setLive([]string{"❯", "ctx"}, 1, 2)
+	r.commit([]histLine{hl})
+	wideRows := layoutTable(hl.table, r.t.width)
+
+	narrow := newVT(20, 10)
+	r.t.out, r.t.width, r.t.height = narrow, narrow.w, narrow.h
+	r.resize()
+
+	narrowRows := layoutTable(hl.table, r.t.width)
+	require.Greater(t, len(narrowRows), len(wideRows), "narrowing should wrap the long cell")
+	// content is not truncated: the table bottom border and the last wrapped cell
+	// line are both on screen with their left borders intact.
+	assert.Equal(t, narrowRows[len(narrowRows)-1], narrow.Line(v.h-3), "bottom border re-laid")
+	var visible strings.Builder
+	for i := 0; i < v.h; i++ {
+		visible.WriteString(narrow.Line(i))
+	}
+	assert.Contains(t, visible.String(), "narrows", "long cell text survives the narrower width")
+}
+
 func TestAltRendererClose(t *testing.T) {
 	t.Parallel()
 

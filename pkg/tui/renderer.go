@@ -42,13 +42,16 @@ const (
 
 // histLine is one committed logical line.
 type histLine struct {
-	text string
-	flow lineFlow
+	text  string
+	flow  lineFlow
+	table *mdTable // non-nil for a markdown table; laid out fresh at each width
 }
 
 // rows lays the line out at width, for renderers that own their viewport.
 func (l histLine) rows(width int) []string {
-	if l.flow == flowClip {
+	if l.table != nil {
+		return layoutTable(l.table, width)
+	} else if l.flow == flowClip {
 		return []string{l.text} // the caller truncates it to the viewport
 	}
 	return wrapLine(l.text, width)
@@ -189,8 +192,15 @@ func (p *plainRenderer) start(int) error { return nil }
 func (p *plainRenderer) commit(lines []histLine) {
 	var b strings.Builder
 	for _, l := range lines {
-		b.WriteString(l.text)
-		b.WriteString("\n")
+		if l.table != nil {
+			for _, row := range layoutTable(l.table, defaultWidth) {
+				b.WriteString(row)
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString(l.text)
+			b.WriteString("\n")
+		}
 	}
 	_, _ = io.WriteString(p.out, b.String())
 }
