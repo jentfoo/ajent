@@ -55,9 +55,9 @@ func TestStateCompactionEmitsSummaryAndKeptTail(t *testing.T) {
 	st, warns := State(branch, resolveModel)
 	assert.Empty(t, warns)
 	require.Len(t, st.Messages, 3) // summary + m3 + m4
-	sys := st.Messages[0]
-	assert.Equal(t, llm.RoleSystem, sys.Role)
-	assert.Contains(t, textOf(sys), "summed")
+	summary := st.Messages[0]
+	assert.Equal(t, llm.RoleUser, summary.Role) // a user message reaches every provider
+	assert.Contains(t, textOf(summary), "summed")
 	assert.Equal(t, "kept start", textOf(st.Messages[1]))
 }
 

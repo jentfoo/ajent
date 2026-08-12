@@ -54,8 +54,8 @@ type Guard func(ctx context.Context, call agent.ToolCall) Decision // Allow | De
 ```
 
 Guards run in registration order before a tool executes; first non-allow wins.
-Core registers none by default — the agent runs unguarded unless configured
-(phase 14 plugs the barrier in here). A denial becomes an error result carrying
+Core registers none by default — the agent runs unguarded unless configured with
+a guard. A denial becomes an error result carrying
 the reason, and nothing touches disk. `Ask` without a registered asker is
 treated as a denial.
 
@@ -154,7 +154,7 @@ containment check by default — extensions layer their own limits via guards.
 The tracker records `path → (mtime, size, sha256)` on every read. `write` and
 `edit` consult it before touching an existing file: never-read → "read it
 first"; changed since read → "re-read it". Shared by `read`/`write`/`edit` and
-exported for compaction (phase 08 drops superseded reads using it). Safe for
+exported so compaction can drop superseded reads using it. Safe for
 concurrent use.
 
 ### Output limits (`limits.go`, `spill.go`)

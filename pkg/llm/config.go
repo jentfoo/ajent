@@ -115,16 +115,17 @@ type Routing struct {
 // Pointer fields distinguish absent from explicitly zero, which is what makes
 // field by field layering work.
 type ModelConfig struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name,omitempty"`
-	Aliases        []string          `json:"aliases,omitempty"`
-	Reasoning      *ReasoningStyle   `json:"reasoning,omitempty"`
-	Input          []Modality        `json:"input,omitempty"`
-	ContextWindow  *int              `json:"contextWindow,omitempty"`
-	MaxTokens      *int              `json:"maxTokens,omitempty"`
-	ContextReserve *float64          `json:"contextReserve,omitempty"` // fraction (<1) or absolute token count (>=1)
-	Compat         *Compat           `json:"compat,omitempty"`
-	LevelMap       map[Level]*string `json:"thinkingLevelMap,omitempty"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name,omitempty"`
+	Aliases          []string          `json:"aliases,omitempty"`
+	Reasoning        *ReasoningStyle   `json:"reasoning,omitempty"`
+	Input            []Modality        `json:"input,omitempty"`
+	ContextWindow    *int              `json:"contextWindow,omitempty"`
+	MaxTokens        *int              `json:"maxTokens,omitempty"`
+	ContextReserve   *float64          `json:"contextReserve,omitempty"`   // fraction (<1) or absolute token count (>=1)
+	CompactThreshold *float64          `json:"compactThreshold,omitempty"` // where auto-compaction fires; fraction (<1) of window or absolute count (>=1)
+	Compat           *Compat           `json:"compat,omitempty"`
+	LevelMap         map[Level]*string `json:"thinkingLevelMap,omitempty"`
 
 	Headers        map[string]string `json:"headers,omitempty"`        // merged over the provider's per request
 	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // opaque additions to the request body

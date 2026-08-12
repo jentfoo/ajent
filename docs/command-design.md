@@ -4,7 +4,7 @@ How `pkg/command` and `pkg/refs` own everything the user does that is not "send
 a message to the model": slash commands through a registry, direct `!` shell
 execution with staged results, `@`-path expansion with auto-read, and the
 non-blocking completion overlay driving both. It is the single dispatch path for
-submitted lines; extensions (phase 10) and MCP (phase 11) register into the
+submitted lines; extensions and MCP register into the
 same registry, so a built-in `/tools` and a third-party `/plan` are the same
 mechanism.
 
@@ -22,8 +22,8 @@ Three packages sit above the agent, tools and TUI:
 `pkg/command` imports `pkg/tui`, `pkg/agent`, `pkg/llm`, `pkg/tools` and
 `pkg/session`; it never imports `pkg/refs` (the host wires the two together
 through the `Completer`). The UI does not import the command package — the host
-adapts `Console` onto `*tui.UI`, so headless mode (phase 16) and the sub-agent
-(phase 13) can drive the same commands with a different front end.
+adapts `Console` onto `*tui.UI`, so headless mode and the sub-agent
+can drive the same commands with a different front end.
 
 ## Dispatch
 
@@ -95,13 +95,13 @@ func (r *Registry) List() []Command             // registration order, for /help
 func (r *Registry) Names() []string
 ```
 
-`Register` is add-or-replace so a later phase can widen a built-in; the
+`Register` is add-or-replace so it can be widened to cover more behaviour; the
 registration order is preserved for `/help` and command completion.
 
 ### Console
 
 `Console` is a command's view of the world — an interface, not a struct, so
-phase 10 can back it with the extension host protocol:
+the extension host can back it with its own protocol:
 
 ```go
 type Console interface {
@@ -141,8 +141,8 @@ dispatched, never on a command or a `!`.
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/exit` | quit |
 
-`/settings`, `/compact`, `/resume`, `/cost` and `/init` land with their phases
-and register into the same registry.
+`/settings`, `/compact`, `/resume`, `/cost` and `/init` also register into
+the same registry.
 
 ### `/tools` and the enabled set
 
@@ -194,8 +194,8 @@ each as its own call + result pair.
 
 **Representation.** Reuse the real `bash` tool end to end. The staged pair is a
 synthetic shell-call + result block carrying provenance (`shellProvenance{Source:
-"shell", TS}` in `ToolResultBlock.Details`) so phase 07 can count it and phase
-08's superseded-pass can treat it as injected content.
+"shell", TS}` in `ToolResultBlock.Details`) so token accounting can count it
+and compaction's superseded-pass can treat it as injected content.
 
 **Error behaviour.** A non-zero exit code is an ordinary staged result, not a
 turn failure — the model sees the failure (with the exit code) at the next
@@ -335,7 +335,7 @@ read it back. `pkg/history` persists that history to `~/.ajent/history` through
 `config.UserPath`, deduplicated, capped at `MaxLines` (1000), and with the
 secret prefix excluded on *both* load and save so a pasted secret never reaches
 disk. The host owns the secret prefix; `history.Load`/`history.Save` take it as a
-parameter. `Ctrl+R` reverse search is deferred to phase 16.
+parameter.
 
 ## File map
 

@@ -92,8 +92,9 @@ func TestRewindStateRebuild(t *testing.T) {
 
 // TestRewindToPrior verifies picking a message maps to rewinding *before* it:
 // the head becomes that message's parent and its full text is returned for the
-// editor, so re-sending starts the new branch.
-func TestRewindToPrior(t *testing.T) {
+// editor, so re-sending starts the new branch. A user prompt rewinds to its
+// parent and pre-fills; an assistant reply stays as its own head with no text.
+func TestRewindTarget(t *testing.T) {
 	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
@@ -106,16 +107,15 @@ func TestRewindToPrior(t *testing.T) {
 
 	entries := readEntriesRewind(t, p)
 
-	// picking the assistant reply rewinds to its parent (the user prompt) and
-	// returns that assistant text for editing.
-	head, fill, ok := rewindToPrior(entries, a2.ID)
+	// picking the assistant reply keeps that message as its own head with no pre-fill.
+	head, fill, ok := session.RewindTarget(entries, a2.ID)
 	assert.True(t, ok)
-	assert.Equal(t, u1.ID, head)
-	assert.Equal(t, "hi there", fill)
+	assert.Equal(t, a2.ID, head)
+	assert.Empty(t, fill)
 
 	// picking the first user message rewinds to its parent (the session entry),
-	// so the prompt is cleared and only that text sits in the editor.
-	head2, fill2, ok := rewindToPrior(entries, u1.ID)
+	// so only that text sits in the editor.
+	head2, fill2, ok := session.RewindTarget(entries, u1.ID)
 	assert.True(t, ok, "even the root-most message has the session line before it")
 	assert.Equal(t, entries[0].ID, head2) // the session entry
 	assert.Equal(t, "hello world", fill2)
@@ -173,17 +173,24 @@ func TestOpenSessionModes(t *testing.T) {
 	require.NoError(t, err)
 	firstPath := seed.Path()
 
+	// capture the seed's id while it is still the only session; a later
+	// newest-first listing cannot be trusted once other sessions share its
+	// second-granularity timestamp.
+	seedList, err := store.List(ws)
+	require.NoError(t, err)
+	require.Len(t, seedList, 1)
+	seedID := seedList[0].ID
+
 	pickFirst := func(list []session.Info) (int, error) {
 		require.NotEmpty(t, list)
 		return 0, nil // select the newest root
 	}
 
-	// no flag: always a fresh file, never reuses.
-	wNew, err := openSession(store, modeNewSession, ws, "", pickFirst)
-	require.NoError(t, err)
-	assert.NotEqual(t, firstPath, wNew.Path(), "no flag must start a new session")
+	// The seed-relative assertions below run while the seed is still the only
+	// session; modeNewSession and the cancelled resume each create a newer file,
+	// so they come last to keep "latest" pointing at the seed above.
 
-	// --continue: reuse the most recent transcript.
+	// --continue: reuse the most recent transcript (the seed, still alone).
 	wCont, err := openSession(store, modeContinue, ws, "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wCont.Path(), "--continue must resume the latest session")
@@ -194,10 +201,14 @@ func TestOpenSessionModes(t *testing.T) {
 	assert.Equal(t, firstPath, wPick.Path(), "--resume must reopen the selected session")
 
 	// --resume <id>: reuse that exact saved transcript directly.
-	have, _ := store.List(ws)
-	wID, err := openSession(store, modeResumeID, ws, have[0].ID, pickFirst)
+	wID, err := openSession(store, modeResumeID, ws, seedID, pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wID.Path(), "--resume <id> must reopen that exact session")
+
+	// no flag: always a fresh file, never reuses.
+	wNew, err := openSession(store, modeNewSession, ws, "", pickFirst)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstPath, wNew.Path(), "no flag must start a new session")
 
 	// --resume cancelled (ErrCancelled): start fresh rather than stall.
 	wCancel, err := openSession(store, modeResumePick, ws, "",

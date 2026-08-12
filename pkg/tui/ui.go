@@ -275,6 +275,7 @@ type ContextInfo struct {
 	Used      int
 	Window    int
 	Reserve   int
+	Compact   int // where an auto-compaction would fire; 0 when unset
 	Estimated bool
 }
 
@@ -289,6 +290,7 @@ func (u *UI) SetContext(ci ContextInfo) {
 	}
 	u.status.Tokens = ci.Used
 	u.status.Reserve = ci.Reserve
+	u.status.Compact = ci.Compact
 	u.status.Estimated = ci.Estimated
 	u.repaint()
 }

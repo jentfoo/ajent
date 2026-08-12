@@ -83,6 +83,7 @@ func (s *Sink) Context(c tokens.ContextState) {
 		Used:      c.Used,
 		Window:    c.Window,
 		Reserve:   c.Reserve,
+		Compact:   c.Compact,
 		Estimated: c.Estimated,
 	})
 }

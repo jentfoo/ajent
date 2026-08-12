@@ -221,3 +221,59 @@ func TestEntryMessageText(t *testing.T) {
 	assert.Empty(t, EntryMessageText(pickMsg("r", "", toolOnly)))
 	assert.Empty(t, EntryMessageText(sessionOnly("s")))
 }
+
+// pickCompaction is a compaction entry with measured before/after tokens.
+func pickCompaction(id, parent string) Entry {
+	return Entry{ID: id, ParentID: parent, Type: TypeCompaction,
+		Data: mustJSON(CompactionData{Before: 142000, After: 61000, Summary: "s"})}
+}
+
+func TestRewindTarget(t *testing.T) {
+	t.Parallel()
+
+	entries := []Entry{
+		sessionOnly("root"),
+		pickMsg("u1", "root", llm.Text(llm.RoleUser, "hello world")),
+		pickAssistText("a1", "u1", "hi there"),
+		pickToolCall("t1", "a1"),
+		pickToolResultMsg("r1", "t1"),
+		pickCompaction("c1", "r1"),
+	}
+
+	cases := []struct {
+		name     string
+		row      string
+		wantHead string
+		wantFill string
+		wantOK   bool
+	}{
+		{"user_prompt_rewinds_before", "u1", "root", "hello world", true},
+		{"assistant_keeps_own_message", "a1", "a1", "", true},
+		{"tool_call_keeps_own_message", "t1", "t1", "", true},
+		{"tool_result_keeps_own_message", "r1", "r1", "", true},
+		{"compaction_rewinds_before", "c1", "r1", "", true},
+		{"unknown_row_not_ok", "nope", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			head, fill, ok := RewindTarget(entries, tc.row)
+			assert.Equal(t, tc.wantOK, ok)
+			assert.Equal(t, tc.wantHead, head)
+			assert.Equal(t, tc.wantFill, fill)
+		})
+	}
+}
+
+func TestPickerRowsIncludeCompaction(t *testing.T) {
+	t.Parallel()
+
+	entries := []Entry{
+		sessionOnly("root"),
+		pickMsg("u1", "root", llm.Text(llm.RoleUser, "q")),
+		pickCompaction("c1", "u1"),
+	}
+	rows := PickerRows(entries)
+	require.Len(t, rows, 2) // session skipped; user + compaction
+	assert.Equal(t, RowCompaction, rows[0].Kind)
+	assert.Contains(t, rows[0].Label, "compaction")
+}

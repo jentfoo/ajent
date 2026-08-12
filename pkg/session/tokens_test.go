@@ -42,6 +42,38 @@ func TestStateRebuildsLedgerFromRecordedUsage(t *testing.T) {
 	assert.False(t, cs.Estimated)
 }
 
+// TestStateLedgerIgnoresSummarizedAwayMessages asserts that after a compaction,
+// the rebuilt ledger's context terms reflect only surviving messages — never the
+// entries dropped by a cut. A reported turn before the cut must not inflate Used on
+// resume/rewind, or threshold auto-compaction would fire immediately even though
+// context was just reduced.
+func TestStateLedgerIgnoresSummarizedAwayMessages(t *testing.T) {
+	t.Parallel()
+
+	branch := make([]Entry, 0, 4)
+	branch = append(branch,
+		entry(TypeSession, SessionData{Model: "p/m1"}),
+		usageMessage("a0", "summarized away reply", llm.Usage{Input: 4000, Output: 1000}), // before the cut
+		msgWithID("u1", llm.Text(llm.RoleUser, "kept ask")),                               // no usage -> estimated
+	)
+	// a compaction whose firstKept is u1 folds everything before it into the summary.
+	branch = append(branch,
+		Entry{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"s","firstKeptEntryId":"u1"}`)})
+
+	stCompact, warns := State(branch, resolveModel)
+	assert.Empty(t, warns)
+	require.Len(t, stCompact.Messages, 2) // summary + kept ask
+
+	// the same history without a cut: a0's exact terms stay in context.
+	fullBranch := branch[:len(branch)-1]
+	stFull, _ := State(fullBranch, resolveModel)
+
+	// skipping summarized-away entries must lower Used below what the full (uncut)
+	// ledger reports; without the fix both would carry a0's 4000+1000 exact terms.
+	assert.Less(t, stCompact.Tokens.Context().Used, stFull.Tokens.Context().Used,
+		"a cut that summarizes away a reported turn must shrink Used")
+}
+
 // TestStateRewindRebuildsLedgerForPointOnly asserts rewinding onto a mid-branch
 // point yields a ledger covering only the messages before it.
 func TestStateRewindRebuildsLedgerForPointOnly(t *testing.T) {

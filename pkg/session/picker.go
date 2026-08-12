@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -13,9 +14,10 @@ import (
 type RowKind int
 
 const (
-	RowUser      RowKind = iota // user prompt: first line, truncated
-	RowAssistant                // assistant text reply
-	RowTool                     // tool header or result, collapsed to one label
+	RowUser       RowKind = iota // user prompt: first line, truncated
+	RowAssistant                 // assistant text reply
+	RowTool                      // tool header or result, collapsed to one label
+	RowCompaction                // a context reduction, labelled by before/after tokens
 )
 
 // PickerRow is one selectable prior message for rewinding onto.
@@ -186,6 +188,56 @@ func dispLast(kids []string, id string) bool {
 	return true
 }
 
+// RewindTarget maps selecting one row onto the new branch head and editor
+// pre-fill. A user message rewinds to its parent (so its text can be edited or
+// re-sent); an assistant, tool-result or compaction entry stays as its own head;
+// a compaction rewinds past it so context returns to just before the reduction.
+func RewindTarget(entries []Entry, rowID string) (head, fill string, ok bool) {
+	for i := range entries {
+		e := entries[i]
+		if e.ID != rowID {
+			continue
+		}
+		switch e.Type {
+		case TypeCompaction:
+			return e.ParentID, "", true // parent is a valid head when it exists; caller checks ok via empty check? keep simple: return parent even if root
+		case TypeMessage:
+			var md MessageData
+			if err := e.Decode(&md); err != nil {
+				return "", "", false
+			}
+			switch md.Message.Role {
+			case llm.RoleUser:
+				if onlyToolResults(md.Message.Content) {
+					return e.ID, "", true // a tool result stays as its own head
+				}
+				return e.ParentID, EntryMessageText(e), true // user prompt: rewind before it and pre-fill
+			case llm.RoleAssistant:
+				return e.ID, "", true // assistant reply keeps its own message
+			default:
+				return "", "", false
+			}
+		default:
+			return "", "", false
+		}
+	}
+	return "", "", false
+}
+
+// formatTokens abbreviates a token count for picker labels, mirroring the TUI's.
+func formatTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return trimZero(strconv.FormatFloat(float64(n)/1_000_000, 'f', 1, 64)) + "M"
+	case n >= 1000:
+		return trimZero(strconv.FormatFloat(float64(n)/1000, 'f', 1, 64)) + "k"
+	default:
+		return strconv.Itoa(n)
+	}
+}
+
+func trimZero(s string) string { return strings.TrimSuffix(s, ".0") }
+
 // EntryMessageText returns the full plain-text of a user or assistant message
 // entry, untruncated and newline-preserving. It is what rewinding onto that
 // message pre-fills into the editor so it can be edited or re-sent.
@@ -212,8 +264,20 @@ func EntryMessageText(e Entry) string {
 }
 
 func rowFor(e Entry) *PickerRow {
-	if e.Type != TypeMessage {
-		return nil // session / compaction / notice / custom are not rewound onto
+	switch e.Type {
+	case TypeCompaction:
+		var cd CompactionData
+		if err := e.Decode(&cd); err != nil || (cd.Before == 0 && cd.After == 0) {
+			return nil // unreadable or not yet measured; nothing to label
+		}
+		lbl := "compaction: " + formatTokens(cd.Before) + " → " + formatTokens(cd.After)
+		if cd.Summary != "" {
+			lbl += " · summarized"
+		}
+		return &PickerRow{ID: e.ID, Kind: RowCompaction, Label: lbl}
+	case TypeMessage:
+	default:
+		return nil // session / notice / custom are not rewound onto
 	}
 	var md MessageData
 	if err := e.Decode(&md); err != nil {

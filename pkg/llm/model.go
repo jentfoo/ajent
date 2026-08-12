@@ -22,9 +22,12 @@ type Model struct {
 	// ContextReserve is the fraction (or absolute count, >= 1) of the window held
 	// back for a response. Values < 1 are fractions of ContextWindow.
 	ContextReserve float64
-	Input          []Modality
-	Caps           Capabilities      // resolved from dialect, provider then model compat
-	Headers        map[string]string // per request additions over the provider's
+	// CompactThreshold is where an automatic compaction fires: a fraction (<1)
+	// or absolute token count (>=1) of ContextWindow; 0 uses the default 0.8.
+	CompactThreshold float64
+	Input            []Modality
+	Caps             Capabilities      // resolved from dialect, provider then model compat
+	Headers          map[string]string // per request additions over the provider's
 }
 
 // Key returns the canonical provider/id identifier.

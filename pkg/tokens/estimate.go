@@ -103,11 +103,16 @@ func imageTokens(n int) int {
 	return t
 }
 
+// EstimateMessage estimates a single message including its per-message framing.
+func EstimateMessage(m llm.Message) int {
+	return messageOverhead + estimateBlocks(m.Content)
+}
+
 // EstimateMessages estimates one or more messages including per-message framing.
 func EstimateMessages(msgs []llm.Message) int {
 	n := 0
 	for _, m := range msgs {
-		n += messageOverhead + estimateBlocks(m.Content)
+		n += EstimateMessage(m)
 	}
 	return n
 }

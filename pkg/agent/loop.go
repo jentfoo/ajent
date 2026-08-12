@@ -57,6 +57,16 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 			continue
 		}
 		err := a.runTurn(ctx, input)
+		// a real turn boundary: the hook decides whether an automatic compact fires.
+		// It must not run mid-stream or between a tool call and its result.
+		if err == nil && a.opts.Compact != nil {
+			a.mu.Lock()
+			idle := !a.running
+			a.mu.Unlock()
+			if idle {
+				_, _ = a.opts.Compact(ctx, CompactThreshold)
+			}
+		}
 		failed := err != nil
 		a.mu.Lock()
 		drained := len(a.steer) == 0 && len(a.follow) == 0
@@ -101,6 +111,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	}
 	maxSteps := a.opts.MaxSteps
 
+	var overflowRetried bool // at most one compaction retry per turn
 	result := TurnResult{Stop: llm.StopUnknown, Usage: llm.Usage{}}
 
 	a.mu.Lock()
@@ -127,6 +138,15 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		result.Usage.Add(usage)
 
 		if err != nil {
+			// an oversized request: compact aggressively and retry the same step once.
+			// Nothing was appended for the failed call, so state stays in agreement.
+			if llm.IsOverflow(err) && !overflowRetried && a.opts.Compact != nil {
+				did, cerr := a.opts.Compact(ctx, CompactOverflow)
+				if did && cerr == nil {
+					overflowRetried = true
+					continue // retry with the reduced context
+				}
+			}
 			sink.Notice("turn failed: "+err.Error(), LevelError)
 			result.Err = err
 			break

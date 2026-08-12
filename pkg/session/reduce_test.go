@@ -1,0 +1,187 @@
+package session
+
+import (
+	"testing"
+
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// toolResultEntry builds a user message entry holding one tool result for callID.
+func toolResultEntry(id, parent, callID, text string, isError bool) Entry {
+	m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+		llm.ToolResultBlock{CallID: callID, IsError: isError,
+			Content: llm.BlockList{llm.TextBlock{Text: text}}},
+	}}
+	return pickMsg(id, parent, m)
+}
+
+func TestContextMessagesSummaryIsUserMessage(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{
+		pickMsg("m1", "", llm.Text(llm.RoleUser, "dropped")),
+		{ID: "comp", Type: TypeCompaction,
+			Data: mustJSON(CompactionData{Summary: "the goal", FirstKeptEntryID: "m2"})},
+		pickMsg("m2", "comp", llm.Text(llm.RoleUser, "kept")),
+	}
+	msgs, warns := ContextMessages(branch, CompactionData{
+		Summary: "the goal", FirstKeptEntryID: "m2",
+	})
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 2)                     // summary + kept tail
+	assert.Equal(t, llm.RoleUser, msgs[0].Role) // reaches providers that skip system role
+	assert.Contains(t, textOf(msgs[0]), "<summary>")
+	assert.Contains(t, textOf(msgs[0]), "the goal")
+	assert.Equal(t, "kept", textOf(msgs[1]))
+}
+
+func TestContextMessagesReductionsOnlyNoCut(t *testing.T) {
+	t.Parallel()
+
+	// an empty FirstKeptEntryID applies reductions without truncating and warns
+	// about nothing.
+	branch := []Entry{
+		pickMsg("m1", "", llm.Text(llm.RoleUser, "one")),
+		toolResultEntry("m2", "m1", "c1", "old failed output", true),
+		pickMsg("m3", "m2", llm.Text(llm.RoleUser, "two")),
+	}
+	cd := CompactionData{Reduce: &Reduce{
+		Stubs: []Stub{{CallID: "c1", Text: "[bash failed: output dropped]"}},
+	}}
+	msgs, warns := ContextMessages(branch, cd)
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 3) // nothing truncated
+	assert.Equal(t, "[bash failed: output dropped]", toolResultText(msgs[1]))
+}
+
+func TestContextMessagesDropsListedEntries(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{
+		pickMsg("m1", "", llm.Text(llm.RoleUser, "keep")),
+		pickAssistText("m2", "m1", ""), // aborted: dropped by id
+		pickMsg("m3", "m2", llm.Text(llm.RoleUser, "also keep")),
+	}
+	cd := CompactionData{Reduce: &Reduce{Drop: []string{"m2"}}}
+	msgs, warns := ContextMessages(branch, cd)
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "keep", textOf(msgs[0]))
+	assert.Equal(t, "also keep", textOf(msgs[1]))
+}
+
+func TestContextMessagesStripsThinking(t *testing.T) {
+	t.Parallel()
+
+	assist := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+		llm.ThinkingBlock{Text: "hidden reasoning"},
+		llm.TextBlock{Text: "visible"},
+	}}
+	branch := []Entry{pickMsg("m1", "", assist)}
+	cd := CompactionData{Reduce: &Reduce{StripThinking: true}}
+
+	msgs, warns := ContextMessages(branch, cd)
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].Content, 1) // thinking stripped, text kept
+	assert.Equal(t, "visible", textOf(msgs[0]))
+}
+
+func TestContextMessagesDropsAssistantEmptiedByStripThinking(t *testing.T) {
+	t.Parallel()
+
+	// an assistant message holding only thinking becomes empty when stage 3 strips it;
+	// providers reject zero-content assistant messages, so the entry is dropped.
+	assist := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+		llm.ThinkingBlock{Text: "only hidden reasoning"},
+	}}
+	branch := []Entry{pickMsg("m1", "", assist)}
+	cd := CompactionData{Reduce: &Reduce{StripThinking: true}}
+
+	msgs, warns := ContextMessages(branch, cd)
+	assert.Empty(t, warns)
+	require.Empty(t, msgs) // nothing left worth emitting
+}
+
+func TestContextMessagesKeepsPreExistingEmptyAssistantWithoutStripping(t *testing.T) {
+	t.Parallel()
+
+	// a genuinely empty assistant (e.g. from an under-specified test provider) is not
+	// dropped when we never stripped thinking, so resume keeps the recorded context.
+	assist := llm.Message{Role: llm.RoleAssistant, Content: nil}
+	branch := []Entry{pickMsg("m1", "", assist)}
+
+	msgs, warns := ContextMessages(branch, CompactionData{})
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 1) // left as recorded when no stage-3 strip ran
+}
+
+func TestContextMessagesSummaryOnlyCompaction(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{
+		pickMsg("m1", "", llm.Text(llm.RoleUser, "old ask")),
+		pickMsg("m2", "m1", llm.Text(llm.RoleAssistant, "old answer")),
+		{ID: "comp", Type: TypeCompaction,
+			Data: mustJSON(CompactionData{Summary: "everything folded"})},
+		pickMsg("m3", "comp", llm.Text(llm.RoleUser, "new ask")),
+	}
+	msgs, warns := ContextMessages(branch, CompactionData{Summary: "everything folded"})
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 2) // summary + post-compaction messages only
+	assert.Contains(t, textOf(msgs[0]), "everything folded")
+	assert.Equal(t, "new ask", textOf(msgs[1]))
+}
+
+func TestContextMessagesSummaryWithoutEntryKeepsEverything(t *testing.T) {
+	t.Parallel()
+
+	// a summary-only plan measured before its entry exists is no cut at all
+	branch := []Entry{pickMsg("m1", "", llm.Text(llm.RoleUser, "only"))}
+	msgs, warns := ContextMessages(branch, CompactionData{Summary: "s"})
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 1)
+}
+
+func TestContextMessagesMissingFirstKeptWarns(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{pickMsg("m1", "", llm.Text(llm.RoleUser, "only"))}
+	msgs, warns := ContextMessages(branch, CompactionData{FirstKeptEntryID: "ghost"})
+	assert.NotEmpty(t, warns)
+	assert.Empty(t, msgs)
+}
+
+func TestContextMessagesElidesByLimit(t *testing.T) {
+	t.Parallel()
+
+	long := make([]byte, 4096)
+	for i := range long {
+		long[i] = 'a'
+	}
+	branch := []Entry{toolResultEntry("m1", "", "c1", string(long), false)}
+	cd := CompactionData{Reduce: &Reduce{Stubs: []Stub{{CallID: "c1", Limit: 512}}}}
+
+	msgs, warns := ContextMessages(branch, cd)
+	assert.Empty(t, warns)
+	require.Len(t, msgs, 1)
+	out := toolResultText(msgs[0])
+	assert.Less(t, len(out), len(long)) // elided below the original size
+	assert.Contains(t, out, "[truncated]")
+}
+
+// toolResultText extracts the first text block of a message's tool result.
+func toolResultText(m llm.Message) string {
+	for _, b := range m.Content {
+		if tr, ok := b.(llm.ToolResultBlock); ok {
+			for _, cb := range tr.Content {
+				if tb, ok := cb.(llm.TextBlock); ok {
+					return tb.Text
+				}
+			}
+		}
+	}
+	return ""
+}

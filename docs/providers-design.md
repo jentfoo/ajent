@@ -513,7 +513,7 @@ implementing `Provider`, and a case in `factory.go`.
 decision before any cost reporting is built.
 - **A built-in model catalogue.** Endpoints and quirks only. See traps.
 - **Token estimation.** `Capabilities.Tokenizer` declares what each provider can
-  do; a future token or cost feature would use it.
+  do, but no consumer uses it yet.
 - **Azure, Bedrock and Vertex.** They are OpenAI- and Anthropic-shaped with
   different auth. `baseUrl`, `headers`, `flavor` and `compat.extraBody` should
   cover most of it without code.

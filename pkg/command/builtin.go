@@ -44,6 +44,12 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Handler:     usageCommand,
 	})
 	r.Register(Command{
+		Name:        "compact",
+		Description: "reduce context toward the compaction threshold",
+		Args:        "[instructions]",
+		Handler:     compactCommand,
+	})
+	r.Register(Command{
 		Name:        "tools",
 		Description: "enable tools for this session",
 		Handler:     toolsCommand,

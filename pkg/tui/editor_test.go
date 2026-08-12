@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -255,5 +256,31 @@ func TestEditorInputView(t *testing.T) {
 		rows, _, curCol := e.inputView(th, 60, 5)
 		assert.Equal(t, []string{promptFirst + "ＡＢ"}, rows)
 		assert.Equal(t, 6, curCol)
+	})
+	t.Run("leading_bang_swaps_marker_no_duplicate", func(t *testing.T) {
+		e := newEditorAt("!ls -la", 2)
+		rows, _, curCol := e.inputView(th, 60, 5)
+		// the literal `!` replaces ❯ as the marker: exactly one bang on screen
+		assert.Equal(t, []string{"!ls -la"}, rows)
+		assert.NotContains(t, rows[0], promptFirst)
+		assert.Equal(t, 1, strings.Count(rows[0], "!"), "no duplicate ! marker")
+		// cursor is after the `l`, so col = width of `!` + one cell
+		assert.Equal(t, 2, curCol)
+	})
+	t.Run("bare_bang_is_the_marker", func(t *testing.T) {
+		e := newEditorAt("!", 1)
+		rows, _, curCol := e.inputView(th, 60, 5)
+		assert.Equal(t, []string{"!"}, rows)
+		assert.Equal(t, 1, curCol)
+	})
+	t.Run("bang_mid_buffer_keeps_prompt", func(t *testing.T) {
+		e := newEditorAt("a!b", 2)
+		rows, _, _ := e.inputView(th, 60, 5)
+		assert.Equal(t, []string{promptFirst + "a!b"}, rows)
+	})
+	t.Run("continuation_lines_keep_indent", func(t *testing.T) {
+		e := newEditorAt("!echo a\necho b", 10)
+		rows, _, _ := e.inputView(th, 60, 5)
+		assert.Equal(t, []string{"!echo a", promptCont + "echo b"}, rows)
 	})
 }

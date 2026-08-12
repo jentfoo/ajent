@@ -54,7 +54,7 @@ than this build understands; older or equal files are fine.
 |---|---|---|
 | `session` | `SessionData` | first line of the file: version, workspace, starting model, git state |
 | `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only) |
-| `compaction` | `CompactionData` | a context reduction recorded without deleting anything |
+| `compaction` | `CompactionData` | a context reduction recorded without deleting anything (see `compaction-design.md`) |
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
 | `setting_change` | `SettingData` | one setting change (`reasoning`, `tools`) as key + raw value |
 | `notice` | `NoticeData` | a user-visible notice worth replaying on resume |
@@ -162,8 +162,13 @@ Two consumers read the transcript back:
 - **State** (`session.State`) rebuilds `agent.State` from a branch: messages in
   order, model switches resolved through a resolver (a failure to resolve is a
   warning, never an error — the caller falls back to its active model), and
-  setting changes applied. A compaction collapses everything before its first
-  kept entry into one summary system message while later entries stay verbatim.
+  setting changes applied. Message assembly goes through one function,
+  `session.ContextMessages`, which applies the newest compaction's cut and its
+  structural reduction plan (the schema and replay live here; `pkg/compact`
+  computes the plan — see `compaction-design.md`). A compaction collapses
+  everything before its first kept entry into one summary **user** message (wrapped in `<summary>` provenance
+  framing — a user role reaches every provider, unlike a system message), while
+  later entries stay verbatim except where the plan stubs or drops them.
 - **Replay** (`session.Replay`) condenses the same branch onto a sink so a
   reopened session shows its history: user prompts open turns, assistant content
   and tool calls stream through, notices replay, and each turn closes with its
@@ -298,7 +303,8 @@ Repository style this package follows (shared with `pkg/tui` and `pkg/agent`):
 - Sessions are scoped to the workspace directory they started in; resuming from
   a different path sees nothing. There is no cross-workspace search yet.
 - The transcript keeps every branch uncapped, so heavy forking grows the file.
-  Compaction reduces what is rebuilt into context but never shrinks the file.
+  Compaction reduces what is rebuilt into context but never shrinks the file
+  (see `compaction-design.md` "Known limits").
 - Replay intentionally drops thinking (off by default) and collapses tool
   results to one-line summaries, so a resumed session is condensed history, not
   a pixel-perfect restore of scrollback.

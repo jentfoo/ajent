@@ -122,6 +122,17 @@ func (a *Accounting) Rebase(used int) {
 	a.outputExact, a.pending, a.live, a.composing = 0, 0, 0, 0
 }
 
+// Reseed replaces the ledger's context terms with an estimate of the next
+// request after compaction rewrites history, leaving session spend intact. The
+// estimate sits in pending so Used reports factor*est and stays marked estimated.
+func (a *Accounting) Reseed(est int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.promptExact, a.outputExact = 0, 0
+	a.live, a.composing = 0, 0
+	a.pending = float64(est)
+}
+
 // Context returns how full the next request will be.
 func (a *Accounting) Context() ContextState {
 	a.mu.Lock()
@@ -135,6 +146,7 @@ func (a *Accounting) Context() ContextState {
 		Used:      a.promptExact + a.outputExact + usedEst,
 		Window:    a.model.ContextWindow,
 		Reserve:   Reserve(a.model),
+		Compact:   CompactAt(a.model),
 		Estimated: estimated > 0,
 	}
 }

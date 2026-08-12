@@ -210,8 +210,16 @@ func isSpaceCell(c string) bool {
 // inputView lays the editor out into display rows of at most width columns and
 // returns the zero based cursor offset within those rows.
 func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, curCol int) {
-	first, cont := t.Prompt.Wrap(promptFirst), promptCont
-	firstW, contW := displayWidth(promptFirst), displayWidth(promptCont)
+	// A leading `!` marks a shell command: let it serve as the prompt glyph itself
+	// rather than duplicating it beside ❯. Backspacing that first character returns
+	// the marker to the ordinary prompt.
+	shell := len(e.cells) > 0 && e.cells[0] == "!"
+	marker, cont := promptFirst, promptCont
+	if shell {
+		marker = "" // the literal `!` in cells[0] is now the marker
+	}
+	first := t.Prompt.Wrap(marker)
+	firstW, contW := displayWidth(marker), displayWidth(cont)
 
 	var line strings.Builder
 	line.WriteString(first)

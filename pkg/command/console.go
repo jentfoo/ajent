@@ -46,6 +46,9 @@ type Console interface {
 	// Started reports whether a user prompt has been sent this session. The
 	// /tools picker is unrestricted before it and widen-only after.
 	Started() bool
+	// Compact reduces the session context toward the compaction threshold.
+	// instructions is an optional /compact <instructions> focus for the summariser.
+	Compact(ctx context.Context, instructions string) error
 	// Exit signals the driver to quit.
 	Exit()
 }

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -532,4 +533,33 @@ func TestAnthropicProviderCountTokens(t *testing.T) {
 	require.NoError(t, json.Unmarshal(req.Body, &sent))
 	assert.NotContains(t, sent, "stream")
 	assert.NotContains(t, sent, "max_tokens")
+}
+
+// TestCompactionSummaryReachesTheModel is the regression for phase 08 defect 1:
+// a compaction summary injected as a user message must survive the adapter,
+// whereas a system-role message is dropped (system is a top-level field).
+func TestCompactionSummaryReachesTheModel(t *testing.T) {
+	t.Parallel()
+
+	summary := Text(RoleUser, "The conversation history before this point was compacted:\n<summary>\nthe goal\n</summary>")
+	req := Request{Model: anthropicModel(nil), Messages: []Message{summary, Text(RoleUser, "next")}}
+
+	msgs, err := anthropicMessages(req, req.Model.Caps)
+	require.NoError(t, err)
+
+	var sb strings.Builder
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			if b.Type == "text" {
+				sb.WriteString(b.Text)
+			}
+		}
+	}
+	assert.Contains(t, sb.String(), "<summary>") // the summary survives as a user message
+
+	// the same text as a system message would be dropped entirely.
+	sysReq := Request{Model: anthropicModel(nil), Messages: []Message{Text(RoleSystem, "<summary>lost</summary>")}}
+	sysMsgs, err := anthropicMessages(sysReq, sysReq.Model.Caps)
+	require.NoError(t, err)
+	assert.Empty(t, sysMsgs)
 }

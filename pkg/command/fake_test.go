@@ -33,6 +33,8 @@ type fakeConsole struct {
 	reasoning    llm.ReasoningConfig
 	toolsChanged int
 	exited       bool
+	compactCalls int
+	compactInstr string
 }
 
 type fakePick struct {
@@ -117,6 +119,14 @@ func (f *fakeConsole) SetReasoning(c llm.ReasoningConfig) {
 func (f *fakeConsole) ToolsChanged() { f.mu.Lock(); f.toolsChanged++; f.mu.Unlock() }
 func (f *fakeConsole) Started() bool { return f.started }
 func (f *fakeConsole) Exit()         { f.exited = true }
+
+func (f *fakeConsole) Compact(_ context.Context, instructions string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.compactCalls++
+	f.compactInstr = instructions
+	return nil
+}
 
 // noticesSeen returns a snapshot of recorded notices.
 func (f *fakeConsole) noticesSeen() []string {

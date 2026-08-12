@@ -30,9 +30,15 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	}
 	budget := cs.Budget()
 
-	fmt.Fprintf(&b, "\ncontext: %s / %s  (%d%% of %s budget before compaction)\n",
+	// fill against the compaction threshold when one is configured, so the number
+	// matches the status bar; fall back to the response-safe budget otherwise.
+	denom := cs.Compact
+	if denom <= 0 {
+		denom = budget
+	}
+	fmt.Fprintf(&b, "\ncontext: %s / %s  (%d%% of %s before compaction)\n",
 		tui.FormatTokens(cs.Used), tui.FormatTokens(window),
-		pctOf(cs.Used, budget), tui.FormatTokens(budget))
+		pctOf(cs.Used, denom), tui.FormatTokens(denom))
 	if cs.Reserve > 0 {
 		fmt.Fprintf(&b, "\nreserve: %s held back for the response\n",
 			tui.FormatTokens(cs.Reserve))
@@ -68,15 +74,15 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	return nil
 }
 
-// pctOf clamps the percentage of used against a budget (window minus reserve, or a
-// raw window when no reserve is set) to [0,100], matching how the status bar fills.
+// pctOf clamps the percentage of used against a denominator to [0,100], matching
+// how the status bar fills.
 func pctOf(used, total int) int {
 	if total <= 0 || used < 1 {
 		return 0
 	}
 	p := used * 100 / total
-	if p > 94 {
-		return 92 // at/over budget: keep a full-but-not-yet-compacted context below a hard readout
+	if p > 100 {
+		p = 100
 	}
 	return p
 }

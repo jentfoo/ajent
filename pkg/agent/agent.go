@@ -13,6 +13,15 @@ import (
 // loop cannot spin forever.
 const defaultMaxSteps = 100
 
+// CompactReason tells the compact hook why it was asked to reduce context.
+type CompactReason uint8
+
+const (
+	CompactManual    CompactReason = iota // /compact; the caller asks directly, not via the hook
+	CompactThreshold                      // a turn boundary; the hook decides whether to act
+	CompactOverflow                       // a request exceeded the window and must shrink before retry
+)
+
 // Options configures an Agent.
 type Options struct {
 	Provider  func(llm.Model) (llm.Provider, error) // resolved per request so /model switching works
@@ -21,7 +30,10 @@ type Options struct {
 	Env       Environment
 	Transform Transform         // nil is identity
 	OnMessage func(MessageInfo) // nil is a no-op; called once per appended message in loop order
-	MaxSteps  int               // defaults to defaultMaxSteps
+	// Compact reduces the live context at a turn boundary or after an overflow,
+	// reporting whether anything changed. It never runs mid-stream.
+	Compact  func(ctx context.Context, r CompactReason) (bool, error)
+	MaxSteps int // defaults to defaultMaxSteps
 }
 
 // Agent runs turns against a model provider, streaming deltas to the sink and
@@ -102,16 +114,16 @@ func (a *Agent) Prompt(ctx context.Context, in Input) error {
 	return a.runTurns(ctx, []Input{in})
 }
 
-// ResetState replaces the in-memory context after a rewind onto an earlier
-// branch point. It is refused while a turn is running: rewinding must happen at
-// rest, so swapping *State cannot race the loop reading it.
-func (a *Agent) ResetState(st *State) bool {
+// WithState runs fn against the live state, reporting false when a turn is
+// running. Rewind and compaction both rewrite context this way, so every holder
+// of *State observes the change.
+func (a *Agent) WithState(fn func(*State)) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.running {
 		return false
 	}
-	a.state = st
+	fn(a.state)
 	return true
 }
 

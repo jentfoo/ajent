@@ -53,9 +53,9 @@ tables.
 - Prompt is `❯ ` on the first row, two spaces on continuations.
 - An empty buffer shows a dim `type a message` hint.
 - The status line is one dim row: a ten cell bar, used/total tokens, then the
-  model. The bar fills against the compaction budget (`window - reserve`, phase
-  07) so a full bar means "compaction fires now" rather than at raw capacity;
-  the count shows used against the real window. A `~` prefixes the count while it
+  model. The bar fills against the compaction budget (`window - reserve`) so a
+  full bar means "compaction fires now" rather than at raw capacity; the count
+  shows used against the real window. A `~` prefixes the count while it
   is an estimate (mid-stream or between provider reports). The colour escalates
   at 70% and again at 90%, both relative to the budget, and the line truncates to
   the terminal width.

@@ -7,6 +7,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -22,6 +23,7 @@ type uiConsole struct {
 	tools    *tools.Registry
 	commands *command.Registry
 	rec      *session.Recorder
+	comp     *compactor // nil when session recording is off
 
 	started *bool // shared with the driver pump
 	quit    chan struct{}
@@ -50,15 +52,21 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	// /model rescales the bar immediately rather than on the next turn.
 	t := c.st.Tokens
 	if t != nil {
-		t.SetModel(m)
+		t.SetModel(m) // drops every context term for the new window/reserve
 	}
 	c.ui.SetModel(m.Key(), m.ContextWindow)
 	if t != nil {
+		// SetModel zeroed the ledger, so Used would read empty regardless of real
+		// occupancy. Remeasure against the actual in-memory messages: a switch to a
+		// smaller window must reflect that it now overflows, or threshold auto-compaction
+		// could never fire on this model.
+		t.Reseed(tokens.EstimateMessages(c.st.Messages))
 		cs := t.Context()
 		c.ui.SetContext(tui.ContextInfo{
 			Used:      cs.Used,
 			Window:    cs.Window,
 			Reserve:   cs.Reserve,
+			Compact:   cs.Compact,
 			Estimated: cs.Estimated,
 		})
 	}
@@ -84,6 +92,17 @@ func (c *uiConsole) ToolsChanged() {
 }
 
 func (c *uiConsole) Started() bool { return *c.started }
+
+// Compact reduces the session context toward the compaction threshold. An empty
+// instructions string runs an unguided pass; refused while a turn streams.
+func (c *uiConsole) Compact(ctx context.Context, instructions string) error {
+	if c.comp == nil {
+		c.ui.Notify("compaction needs an open session", tui.LevelWarn)
+		return nil
+	}
+	_, err := c.comp.run(ctx, agent.CompactManual, instructions)
+	return err
+}
 
 func (c *uiConsole) Exit() {
 	select {

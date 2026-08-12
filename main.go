@@ -176,12 +176,21 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
 	}
 
+	// the compactor is wired lazily so the agent options can close over it before
+	// the *Agent it needs exists; it is assigned once, right after agent.New.
+	var comp *compactor
 	opts := agent.Options{
 		Sink:  sink,
 		Env:   agent.DetectEnvironment(),
 		Tools: toolsReg,
 		Provider: func(m llm.Model) (llm.Provider, error) {
 			return providers.ProviderFor(m)
+		},
+		Compact: func(ctx context.Context, reason agent.CompactReason) (bool, error) {
+			if comp == nil {
+				return false, nil // recording is off; nothing to compact
+			}
+			return comp.run(ctx, reason, "")
 		},
 	}
 	if rec != nil {
@@ -207,7 +216,12 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	})
 	ag := agent.New(st, opts)
 	if rec != nil {
-		rec.bindRewind(ui, ag, reg, &st)
+		rec.bindRewind(ui, ag, reg)
+		comp = &compactor{
+			rec: rec, st: st, ag: ag, reg: reg, ui: ui,
+			sink:        opts.Sink,
+			providerFor: providers.ProviderFor,
+		}
 	}
 
 	// the prompt is at rest until a turn starts; double-Esc rewinds from here.
@@ -231,6 +245,7 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	}
 	if rec != nil {
 		console.rec = rec.rec
+		console.comp = comp
 	}
 	command.RegisterBuiltins(cmds, console)
 	watchControls(ui, ag, stager, quit)
@@ -525,11 +540,11 @@ func (r *sessRec) rebuild(ui *tui.UI, reg *llm.Registry, st *agent.State) {
 
 // bindRewind wires the double-Esc gesture to a picker over this transcript's
 // branch. Picking an entry rewinds the writer and agent onto that point.
-func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, st **agent.State) {
+func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	if ui == nil || ag == nil {
 		return
 	}
-	ui.SetOnRewind(func() { r.rewind(ui, ag, reg, st) })
+	ui.SetOnRewind(func() { r.rewind(ui, ag, reg) })
 }
 
 // stateFor rebuilds agent state from a transcript's branch rooted at head.
@@ -547,7 +562,7 @@ func modelResolver(reg *llm.Registry) func(string) (llm.Model, error) {
 // messages rewinds *before* it — head moves to that message's parent — and pre-
 // fills the editor with the picked text, ready to edit or re-send as the start of
 // a new branch.
-func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, st **agent.State) {
+func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil || len(entries) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
@@ -575,8 +590,8 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, st **ag
 		return // cancelled
 	}
 
-	newHead, fillText, ok := rewindToPrior(entries, tree[picked].ID)
-	if !ok {
+	newHead, fillText, ok := session.RewindTarget(entries, tree[picked].ID)
+	if !ok || newHead == "" {
 		ui.Notify("cannot rewind onto that entry", tui.LevelWarn)
 		return
 	}
@@ -587,45 +602,23 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, st **ag
 		ui.Notify("rewind: "+wmsg, tui.LevelWarn)
 	}
 
-	nst := &agent.State{
-		Messages:  rebuilt.Messages,
-		Model:     (**st).Model, // keep the live model; a fork may not carry one
-		Reasoning: (**st).Reasoning,
-		Tools:     (**st).Tools,
-		Tokens:    rebuilt.Tokens, // ledger rebuilt for exactly this branch point
-	}
-	if rebuilt.Model.ID != "" {
-		nst.Model = rebuilt.Model
-	}
+	// mutate the live state in place so every holder (the console, this rewind
+	// handler) sees the restored context; keep the current model and reasoning.
+	ag.WithState(func(st *agent.State) {
+		st.Messages = rebuilt.Messages
+		if rebuilt.Model.ID != "" {
+			st.Model = rebuilt.Model
+		}
+		st.Tokens = rebuilt.Tokens // ledger rebuilt for exactly this branch point
+	})
 
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.
 	ui.Reset()
-	if ag.ResetState(nst) {
-		*st = nst // driver's handle now points at the same rebuilt state
-	}
 	session.Replay(session.Branch(entries, newHead), tuisink.New(ui), session.ReplayOptions{})
 	if fillText != "" {
 		ui.SetInput(fillText)
 	}
-}
-
-// rewindToPrior maps selecting a message onto rewinding *before* it: the head is
-// set to its parent so the picked text becomes the start of the new branch, and
-// fillText carries the full original prompt for the editor. ok is false when the
-// entry has no prior point to rewind onto.
-func rewindToPrior(entries []session.Entry, rowID string) (newHead, fillText string, ok bool) {
-	for i := range entries {
-		e := entries[i]
-		if e.ID != rowID || e.Type != session.TypeMessage {
-			continue
-		}
-		if e.ParentID == "" {
-			return "", "", false // nothing before this message to rewind onto
-		}
-		return e.ParentID, session.EntryMessageText(e), true
-	}
-	return "", "", false
 }
 
 // doublePressWindow is how long a second Ctrl+C on an idle editor must arrive

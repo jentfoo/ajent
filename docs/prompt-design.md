@@ -1,9 +1,8 @@
 # Prompt design
 
 Every string ajent sends to a model, and the rules that keep those strings
-cheap, stable and honest. This document is the index for prompting: each surface
-is described once here and referenced by its phase documents rather than
-re-specified there.
+cheap, stable and honest. Each prompt surface is described in this document; it
+is the single reference for prompting.
 
 The core idea: **a good prompt makes the model cheap, predictable and
 self-aware of what it does not know.** Cheap means cache-stable
@@ -60,40 +59,40 @@ is a tax paid forever.
 
 ## Prompt surfaces
 
-Each surface maps to one or more roadmap phases. The owning phase builds it; the
-surfaces here are the contract they build against.
+The prompt surfaces are covered in detail below, each with the contract that
+governs its assembly and use.
 
-| Surface | Phase(s) | What it is |
-|---|---|---|
-| System prompt composition | 02, 16 | identity + guidelines + environment facts + project instructions + tool snippets + skills |
-| Tool descriptions & schemas | 04, 11, 12 | one-line snippet per enabled tool; JSON Schema params |
-| `@`-file reference injection | 05 | synthetic read call+result ahead of the user message |
-| Project instruction layering | 16 | AGENTS.md/CLAUDE.md discovery and provenance-marked assembly |
-| Skills registry & injection | 10, 13 (optional) | `<available_skills>` blocks with name/description/location |
-| Prompt templates / slash commands | 05, 09, 12, 15 | markdown templates expanded into prompts; `/init` survey |
-| Compaction summarisation | 06, 07, 08 | staged free reductions + exact-format LLM summary |
-| Sub-agent system prompt & contract | 13 | isolated read-only agents with an output contract and empty-summary nudge |
-| Tool-barrier deny reasons & classifier | 14 | denial reason becomes the error text; one-word verdict classifier |
-| Plan workflow kickoff/review prompts | 15 | role-specific kickoffs that assume zero prior context |
+| Surface | What it is |
+|---|---|
+| System prompt composition | identity + guidelines + environment facts + project instructions + tool snippets + skills |
+| Tool descriptions & schemas | one-line snippet per enabled tool; JSON Schema params |
+| `@`-file reference injection | synthetic read call+result ahead of the user message |
+| Project instruction layering | AGENTS.md/CLAUDE.md discovery and provenance-marked assembly |
+| Skills registry & injection | `<available_skills>` blocks with name/description/location |
+| Prompt templates / slash commands | markdown templates expanded into prompts; `/init` survey |
+| Compaction summarisation | staged free reductions + exact-format LLM summary |
+| Sub-agent system prompt & contract | isolated read-only agents with an output contract and empty-summary nudge |
+| Tool-barrier deny reasons & classifier | denial reason becomes the error text; one-word verdict classifier |
+| Plan workflow kickoff/review prompts | role-specific kickoffs that assume zero prior context |
 
 ---
 
-## System prompt composition (02 → extended in 16)
+## System prompt composition
 
-Assembled by `buildSystem` into a single cache-stable text block. It is built
-from ordered parts; phase 16 layers project instructions and extension snippets
-on top without touching the loop.
+Assembled by `buildSystem` into a single cache-stable text block. Project
+instructions, tool snippets and skills are layered on top of the ordered base
+parts without touching the loop.
 
 ### Parts, in order
 
 ```
 1. Identity sentence        — one neutral line naming the harness + repo cwd.
 2. "How you help" line      — read files, run commands, edit code, write new files.
-3. Available tools          — only enabled tools with their snippets (phase 04).
+3. Available tools          — only enabled tools with their snippets.
 4. Guidelines               — concise bullets; some derived from which tools exist.
 5. Environment facts        — clean structured lines: cwd, platform, shell, date,
                               git branch + dirty state.
-6. Project instructions     — provenance-marked AGENTS.md/CLAUDE.md blocks (16).
+6. Project instructions     — provenance-marked AGENTS.md/CLAUDE.md blocks.
 7. Skills                   — <available_skills> when read is available (optional).
 ```
 
@@ -159,7 +158,7 @@ cache-stability contract.
 
 ---
 
-## Tool descriptions & schemas (04, 11, 12)
+## Tool descriptions & schemas
 
 A tool is described to the model by a **one-line snippet** plus its JSON Schema.
 The snippet appears in `Available tools` only when the tool is enabled and has a
@@ -175,7 +174,7 @@ snippet — this is how "only advertise what is real" is enforced.
 Each snippet is a verb phrase plus the minimum context to invoke it. Descriptions
 must state plainly anything that changes how the model should use the tool:
 
-- The sub-agent tools (phase 13) carry an explicit "no session context — pass
+- The sub-agent tools carry an explicit "no session context — pass
   file paths and key facts, not content" contract.
 - `bash` notes one shell process per call so the model does not assume persistent
   `cd`.
@@ -198,7 +197,7 @@ not just a stop sign.
 
 ---
 
-## `@`-file reference injection (05)
+## `@`-file reference injection
 
 When a user message contains `@path`, ajent injects a synthetic `read` call +
 result pair ahead of that message, using the real tool. The literal `@path`
@@ -209,13 +208,13 @@ Prompt implications:
 - Using the real tool means one code path for truncation markers, binary
   refusal, line numbering and stale-read tracking — so the model sees exactly
   what it would see if it had called `read` itself.
-- Injected reads are visible to compaction's superseded-pass (phase 08) and
-  countable by token accounting (07). No special "reference" block type is ever
+- Injected reads are visible to compaction's superseded-pass and countable by
+  token accounting. No special "reference" block type is ever
   shown to the model; a reference is just an ordinary read.
 
 ---
 
-## Project instruction layering (16, promotable into 02)
+## Project instruction layering
 
 Discover `AGENTS.md`/`CLAUDE.md` from the user-global dir down through cwd and up
 to the workspace root, deduplicate by canonical path (a worktree's copy shadows
@@ -251,7 +250,7 @@ Rules:
 
 ---
 
-## Skills registry & injection (10, optional)
+## Skills registry & injection
 
 If ajent ships skills (specialised instruction files), they are injected as an
 `<available_skills>` block, listed only when the `read` tool exists:
@@ -276,7 +275,7 @@ are omitted entirely.
 
 ---
 
-## Prompt templates & slash commands (05, 09, 12, 15)
+## Prompt templates & slash commands
 
 Reusable prompts live as **markdown files** discovered from config dirs; the
 filename becomes the command name (`review.md` → `/review`). Frontmatter carries a
@@ -303,14 +302,13 @@ Design rules:
   context; it states the process, the output format (often with headings to fill
   in), and what not to do. The `/wr`-style finish prompt is a good model: numbered
   steps, explicit constraints ("never `git add .`"), and an exact closing line.
-- **Templates can invoke workflows**, chaining sub-agents or plan phases by name,
-  with `{previous}` placeholders threading output between stages (15).
+
 - The command registry (`/help`, `/model`, `/tools`, ...) is where templates are
   surfaced; unknown commands error rather than costing tokens.
 
 ---
 
-## Compaction summarisation (06, 07, 08)
+## Compaction summarisation
 
 Compaction runs free structural reductions first (stages 1–3: drop failed/superseded/
 aborted tool calls, elide old output to shape summaries, strip retained thinking),
@@ -368,6 +366,8 @@ Use this EXACT format:
 - [(none) if not applicable]
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.
+For content the assistant produced (code, prose, plans, answers), include a 2-3
+sentence synopsis of its substance — never just a title or name.
 ```
 
 This is the heart of resumption: **Goal / Constraints / Progress / Decisions /
@@ -430,7 +430,7 @@ leaves users convinced the agent "forgot" for no reason.
 
 ---
 
-## Sub-agent system prompt & contract (13)
+## Sub-agent system prompt & contract
 
 A sub-agent is a fresh `agent.Agent` with an in-memory session, read-only tools,
 and its own system prompt: the parent's neutral identity/guidelines minus most
@@ -485,7 +485,7 @@ findings enter the main context as three paragraphs, not fifty tool results.
 
 ---
 
-## Tool-barrier deny reasons & classifier (14)
+## Tool-barrier deny reasons & classifier
 
 The barrier gates tools between "read-only work runs unprompted" and
 "destructive calls ask first". Its prompts are part of that contract.
@@ -534,7 +534,7 @@ Rules that keep it cheap and correct:
 
 ---
 
-## Plan workflow kickoff/review prompts (15)
+## Plan workflow kickoff/review prompts
 
 The plan → implement → review loop runs two models against projected contexts, so
 every stage's prompt must be **self-contained**: each receiving model has *no*
@@ -545,8 +545,8 @@ whole workflow is that every kickoff says the plan/revision must carry every fil
 path and fact because nothing else does:
 
 ```
-You are entering phase <phase> of a planned task. You have NO prior context from
-earlier phases.
+You are working on one stage of the plan below. You have NO prior context from
+the stages before it.
 
 The plan below carries every fact you need — read it fully before acting.
 Preserve all file paths exactly; do not invent or assume paths the plan does not
@@ -594,9 +594,8 @@ Prompts are code. The bar is golden/verbatim tests over exact strings:
   in the system prompt verbatim.
 - **Barrier classifier**: assert one-word verdicts, cache hit/miss behaviour, and
   that `unsure` is never cached.
-- **Plan kickoff**: assert each phase's projected context contains only its allowed
-  segments (including after compaction inside a phase), and that revision prompts
-  are self-contained.
+- **Plan kickoff**: assert the projected context for each stage contains only its
+  allowed segments, and that revision prompts are self-contained.
 
 Where a prompt is user-configurable (project instructions, templates) the tests
 cover discovery order, dedupe by canonical path, provenance markers, and reload at

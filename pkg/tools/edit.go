@@ -69,15 +69,14 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	for i := range p.Edits {
 		op := &p.Edits[i]
 		if op.OldText == "" {
-			return resultErr(fmt.Sprintf("edit %d has an empty oldText; exact text is required", i+1)), nil
+			return resultErr(fmt.Sprintf("edit %d: empty oldText; provide the exact text you want replaced", i+1)), nil
 		}
 		count := strings.Count(buf, op.OldText)
 		switch {
 		case count == 0:
-			return resultErr(fmt.Sprintf("no match for edit %d in %s\n%s", i+1, p.Path,
-				nearMatch(p.Edits[i].OldText, buf))), nil
+			return resultErr(notFoundError(i+1, p.Path, p.Edits[i].OldText, buf)), nil
 		case count > 1 && !op.ReplaceAll:
-			return resultErr(ambiguousError(i+1, op.OldText, buf)), nil
+			return resultErr(ambiguousError(i+1, p.Path, op.OldText, buf)), nil
 		default: // exactly one match, or replace_all with any positive count
 			if op.ReplaceAll {
 				buf = strings.ReplaceAll(buf, op.OldText, op.NewText)
@@ -99,12 +98,18 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}, nil
 }
 
-// nearMatch finds the line of buf with the most token overlap with old, for an
-// actionable zero-match error.
+// notFoundError guides a retry after zero matches: name the failure, say why
+// exact copy matters, and offer one closest line for context.
+func notFoundError(idx int, path, old, buf string) string {
+	return fmt.Sprintf("no match for edit %d in %s; whitespace/newlines must match exactly. Include a unique surrounding line if the text is ambiguous.\nclosest context:\n%s",
+		idx, path, nearMatch(old, buf))
+}
+
+// nearMatch finds the closest matching line of buf to old, as read-only context.
 func nearMatch(old, buf string) string {
 	tokens := strings.Fields(old)
 	if len(tokens) == 0 {
-		return "no tokens to match against"
+		return "(none)"
 	}
 	bestLine, bestScore := "", -1
 	for i, line := range strings.Split(buf, "\n") {
@@ -114,7 +119,7 @@ func nearMatch(old, buf string) string {
 			bestLine = fmt.Sprintf("line %d: %s", i+1, capLine(strings.TrimSpace(line)))
 		}
 	}
-	return bestLine + "\n(try matching the line above exactly)"
+	return bestLine
 }
 
 // overlap counts how many of tokens appear in line.
@@ -128,11 +133,11 @@ func overlap(line string, tokens []string) int {
 	return n
 }
 
-// ambiguousError describes a multi-match so the model can pick replace_all or
-// tighten old.
-func ambiguousError(idx int, old, buf string) string {
+// ambiguousError names the count and gives two concrete retry options, then lists
+// matching lines (capped) so the model can pick unique context.
+func ambiguousError(idx int, path string, old, buf string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d occurrences of edit %d's old text in the file:\n", strings.Count(buf, old), idx)
+	fmt.Fprintf(&b, "edit %d matches %d occurrences in %s; widen its oldText with surrounding context or set replace_all:true.\n", idx, strings.Count(buf, old), path)
 	lines := strings.Split(buf, "\n")
 	for i, line := range lines {
 		if !strings.Contains(line, old) {
@@ -140,7 +145,7 @@ func ambiguousError(idx int, old, buf string) string {
 		}
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, capLine(strings.TrimSpace(line)))
 		if b.Len() > 800 {
-			b.WriteString("... more occurrences omitted; use replace_all to apply everywhere\n")
+			b.WriteString("... more matches omitted; add unique context or set replace_all:true\n")
 			break
 		}
 	}

@@ -282,6 +282,9 @@ func resolveModel(provider string, base Capabilities, providerCompat *Compat, mc
 	if mc.ContextReserve != nil {
 		m.ContextReserve = *mc.ContextReserve
 	}
+	if mc.CompactThreshold != nil {
+		m.CompactThreshold = *mc.CompactThreshold
+	}
 	if len(m.Input) == 0 {
 		m.Input = []Modality{ModalityText}
 		if caps.Images {

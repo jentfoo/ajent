@@ -155,6 +155,34 @@ func TestExpandDedupesUnchangedFile(t *testing.T) {
 	assert.Empty(t, res2.Before, "an unchanged, already-read file is not re-injected")
 }
 
+// TestExpandReinjectsWhenFileChanges locks in the dedup contract: an @ is only
+// injected on its first inclusion, and re-injected once the file's hash changes.
+func TestExpandReinjectsWhenFileChanges(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "a.go")
+	require.NoError(t, os.WriteFile(p, []byte("package a\n"), 0o600))
+	x, _ := newExpander(t, dir)
+
+	// first inclusion reads the file and injects it
+	res1 := x.Expand(context.Background(), "@a.go")
+	require.Len(t, res1.Before, 2, "first @ include must inject the read pair")
+
+	// unchanged → not injected again
+	res2 := x.Expand(context.Background(), "@a.go")
+	assert.Empty(t, res2.Before, "unchanged, already-read file is not re-injected")
+
+	// hash changed → must be read and injected again
+	require.NoError(t, os.WriteFile(p, []byte("package a\nvar X = 1\n"), 0o600))
+	res3 := x.Expand(context.Background(), "@a.go")
+	require.Len(t, res3.Before, 2, "an @ is re-injected after its hash changes")
+
+	// unchanged again → deduped once more
+	res4 := x.Expand(context.Background(), "@a.go")
+	assert.Empty(t, res4.Before, "dedups again once the changed content has been read")
+}
+
 func TestExpandReplacesExistingAnnotation(t *testing.T) {
 	t.Parallel()
 

@@ -70,6 +70,7 @@ type CompactionData struct {
 	FirstKeptEntryID string          `json:"firstKeptEntryId,omitempty"`
 	Before           int             `json:"before,omitzero"`
 	After            int             `json:"after,omitzero"`
+	Reduce           *Reduce         `json:"reduce,omitempty"` // structural plan replayed on every rebuild
 	Details          json.RawMessage `json:"details,omitempty"`
 }
 

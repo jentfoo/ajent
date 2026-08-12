@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -17,37 +18,36 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	var warns []string
 	st.Tokens = tokens.New(llm.Model{})
 
-	// the newest compaction collapses earlier messages into one summary
-	var keepIdx int
-	if pos := newestCompaction(branch); pos >= 0 {
-		var cd CompactionData
-		if err := branch[pos].Decode(&cd); err != nil {
-			warns = append(warns, "invalid compaction entry: "+err.Error())
-		} else if p, ok := indexOf(branch, cd.FirstKeptEntryID); ok {
-			keepIdx = p
-			st.Messages = append(st.Messages, llm.Message{
-				Role:    llm.RoleSystem,
-				Content: llm.BlockList{llm.TextBlock{Text: summaryNote(cd.Summary)}},
-			})
-		} else {
-			warns = append(warns, "compaction first-kept entry not found")
-		}
+	cd := newestCompactionData(branch)
+	msgs, mwarns := ContextMessages(branch, cd)
+	warns = append(warns, mwarns...)
+	st.Messages = msgs
+
+	// the ledger's context terms must reflect only messages that survive compaction:
+	// entries summarized away by a cut or dropped outright are gone from what the next
+	// request sends. Cumulative spend (Accounting.Total) is unaffected — it comes from
+	// recorded usage, not this rebuild.
+	keepIdx := cutIndex(branch, cd)
+	var dropped map[string]struct{}
+	if r := cd.Reduce; r != nil {
+		dropped = bulk.SliceToSet(r.Drop)
 	}
 
 	for i := range branch {
 		e := branch[i]
 		switch e.Type {
 		case TypeMessage:
-			if i < keepIdx {
-				continue // summarized away by the newest compaction
+			if keepIdx != 0 && (keepIdx < 0 || i < keepIdx) { // cut away or cut missing
+				continue
+			}
+			if _, ok := dropped[e.ID]; ok {
+				continue
 			}
 			var md MessageData
 			if err := e.Decode(&md); err != nil {
-				warns = append(warns, "invalid message entry: "+err.Error())
-				continue
+				continue // already warned by ContextMessages; ledger just skips it
 			}
 			rebuildUsage(st.Tokens, st.Model.Key(), md)
-			st.Messages = append(st.Messages, md.Message)
 		case TypeModelChange:
 			var m ModelData
 			if err := e.Decode(&m); err != nil {
@@ -92,6 +92,19 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	return st, warns
 }
 
+// newestCompactionData decodes the last compaction entry on the branch. When none
+// exists it returns an empty value so assembly applies no cut and no reductions.
+func newestCompactionData(branch []Entry) CompactionData {
+	for i := len(branch) - 1; i >= 0; i-- {
+		if branch[i].Type == TypeCompaction {
+			var cd CompactionData
+			_ = branch[i].Decode(&cd)
+			return cd
+		}
+	}
+	return CompactionData{}
+}
+
 // rebuildUsage folds one message's recorded usage into the ledger under key. A
 // provider report snaps the exact terms; later messages without one stay as an
 // estimate so /usage reconciles with what was actually sent.
@@ -105,29 +118,6 @@ func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
 	}
 	t.Response(key, md.Usage, 0) // prediction unknown on rebuild; leave calibration unseeded
 }
-
-// newestCompaction returns the index of the last compaction entry, or -1.
-func newestCompaction(branch []Entry) int {
-	idx := -1
-	for i := range branch {
-		if branch[i].Type == TypeCompaction {
-			idx = i
-		}
-	}
-	return idx
-}
-
-// indexOf returns the file-order position of id.
-func indexOf(branch []Entry, id string) (int, bool) {
-	for i := range branch {
-		if branch[i].ID == id {
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-func summaryNote(s string) string { return "Summary of earlier conversation:\n\n" + s }
 
 // applySetting folds one setting_change into state. Unknown keys are ignored.
 func applySetting(st *agent.State, key string, value json.RawMessage) {

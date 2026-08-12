@@ -27,6 +27,7 @@ type Status struct {
 	Tokens    int  // context usage count; drives the bar against Budget()
 	MaxTokens int  // the model's window; 0 renders no bar
 	Reserve   int  // tokens held back from MaxTokens for a response
+	Compact   int  // where an auto-compaction fires; when set, the bar fills against it
 	Estimated bool // Used includes an estimate; prefixes the count with ~
 	Segments  []Segment
 }
@@ -57,8 +58,12 @@ func (s Status) parts(t Theme) []string {
 		parts = append(parts, t.Dim.Wrap(s.Tool))
 	}
 	if s.MaxTokens > 0 {
-		// bar fills to budget (window−reserve); count shows used vs the real window
-		budget := s.MaxTokens - s.Reserve
+		// bar fills to where an auto-compact would fire when that is known, else to
+		// the response-safe budget (window−reserve); count shows used vs the real window.
+		budget := s.Compact
+		if budget <= 0 {
+			budget = s.MaxTokens - s.Reserve
+		}
 		if budget <= 0 {
 			budget = s.MaxTokens
 		}

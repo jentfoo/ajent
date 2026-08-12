@@ -117,3 +117,24 @@ func TestAccountingComposeGrowsAndClears(t *testing.T) {
 	assert.Zero(t, cs.Used)
 	assert.False(t, cs.Estimated)
 }
+
+func TestAccountingReseedKeepsSpendResetsContext(t *testing.T) {
+	t.Parallel()
+
+	a := New(llm.Model{ID: "m1", Provider: "p", ContextWindow: 100000})
+	const key = "p/m1"
+
+	// a reported turn establishes exact context terms and session spend. The
+	// prediction matches the report so the calibration factor stays 1 and the
+	// reseeded estimate below is unscaled.
+	a.Response(key, llm.Usage{Input: 5000, Output: 300}, 5000)
+	total := a.Total()
+	assert.Equal(t, 5300, total.Input+total.Output)
+
+	// compaction reseeds the context to a fresh estimate without touching spend.
+	a.Reseed(1200)
+	cs := a.Context()
+	assert.True(t, cs.Estimated) // the reseeded figure is an estimate
+	assert.Equal(t, 1200, cs.Used)
+	assert.Equal(t, 5300, a.Total().Input+a.Total().Output)
+}
