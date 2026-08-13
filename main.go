@@ -289,6 +289,12 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
 
+	// Ctrl+R reverse history search over this workspace's recorded prompts.
+	if store := promptStore(rec); store != nil {
+		pIdx := session.NewPromptIndex(store, cwdOrDot())
+		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(pIdx.Prompts()) })
+	}
+
 	pump := make(chan pumpLine, 16)
 	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started)
 
@@ -564,6 +570,32 @@ func openSession(store *session.Store, mode resumeMode, cwd string, id, modelKey
 	default: // modeNewSession and anything unexpected: always fresh
 		return fresh()
 	}
+}
+
+// promptStore returns the store backing Ctrl+R history search: the active
+// recorder's store, or a fresh one when recording was disabled so prior
+// transcripts stay searchable.
+func promptStore(rec *sessRec) *session.Store {
+	if rec != nil && rec.store != nil {
+		return rec.store
+	}
+	st, err := session.NewStore()
+	if err != nil {
+		return nil
+	}
+	return st
+}
+
+// searchItems maps recorded prompts onto Ctrl+R candidate rows.
+func searchItems(prompts []session.Prompt) []tui.SearchItem {
+	out := make([]tui.SearchItem, 0, len(prompts))
+	for _, p := range prompts {
+		out = append(out, tui.SearchItem{
+			Text:   p.Text,
+			Detail: p.At.UTC().Format("2006-01-02 15:04 UTC"), // sessions are stored as UTC
+		})
+	}
+	return out
 }
 
 // pickSessionRoot lists saved sessions (newest first) for the user to resume from.

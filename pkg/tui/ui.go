@@ -106,8 +106,16 @@ type UI struct {
 	noticeKey  string // keyed notice still collapsible in the live block
 	noticeText string
 
-	completer  Completer          // nil disables the overlay
-	completion *completionOverlay // active overlay state, nil when closed
+	completer     Completer           // nil disables the completion overlay
+	completion    *completionOverlay  // active completion state, nil when closed
+	historySearch func() []SearchItem // nil disables Ctrl+R history search
+	search        *searchOverlay      // active search state, nil when closed
+
+	// plain ↑/↓ browse the same recorded-prompt list that Ctrl+R searches (see
+	// SetHistorySearch), so arrows recall prompts without opening the overlay.
+	prompts   []string // newest-first prompt texts; nil falls back to editor history
+	promptIdx int      // -1 at the live buffer, else index of the recalled prompt
+	stashP    string   // live draft held aside while browsing recorded prompts
 
 	pastes map[string]string // placeholder → pasted content, expanded at submit
 
@@ -536,6 +544,16 @@ func (u *UI) repaint() {
 	rows = append(rows, u.streamingRows(w)...)
 	offset := len(rows)
 
+	// an active history search rides above the editor like completion; the two are
+	// mutually exclusive by construction (opening one clears the other).
+	if u.search != nil {
+		// a history search needs more room than completion so the full prompt reads;
+		// the input keeps its own share below.
+		searchRows := u.search.rows(u.theme, w, max(4, (h-1)*2/3))
+		rows = append(rows, searchRows...)
+		offset += len(searchRows)
+	}
+
 	// the completion overlay rides above the editor, shifting the caret offset
 	if u.completion != nil && u.act == nil {
 		compRows := u.completion.rows(u.theme, w, max(3, (h-2)/4))
@@ -698,12 +716,154 @@ func (u *UI) drainEdits() {
 	}
 }
 
+// SetHistorySearch installs the Ctrl+R reverse history search source. fn runs off
+// the key loop; nil disables the gesture.
+func (u *UI) SetHistorySearch(fn func() []SearchItem) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.historySearch = fn
+	if fn == nil {
+		u.search = nil // clear any open overlay when the source is removed
+	}
+	u.repaint()
+}
+
+// openSearchLocked opens the Ctrl+R overlay and starts its provider off the key
+// loop, so a slow scan never blocks further input. Caller holds the lock.
+func (u *UI) openSearchLocked() {
+	if u.historySearch == nil {
+		return
+	}
+	fn := u.historySearch
+	u.completion = nil
+	u.cancelRewindLocked()
+	u.search = &searchOverlay{pending: true}
+	go func() { u.deliverSearch(fn()) }()
+}
+
+// acceptSearchLocked fills the editor with the highlighted match (when there is
+// one) and closes the overlay. It does not submit; the caller decides whether to
+// fall through so a key like ↑/↓ can then browse history from that point.
+// Caller holds the lock.
+func (u *UI) acceptSearchLocked() {
+	if it, ok := u.search.current(); ok {
+		u.editor.SetValue(it.Text)
+	}
+	u.search = nil
+}
+
+// ensurePromptNavLocked lazily loads the recorded-prompt list for plain ↑/↓ once,
+// so arrows scroll the same set Ctrl+R searches. A nil or empty source leaves
+// prompts nil, in which case arrows fall back to editor history navigation.
+// Caller holds the lock; the provider is TTL-cached upstream so this is cheap after
+// a first load and never scans per keystroke.
+func (u *UI) ensurePromptNavLocked() {
+	if u.historySearch == nil || u.prompts != nil {
+		return
+	}
+	items := u.historySearch()
+	ps := make([]string, 0, len(items))
+	for _, it := range items {
+		ps = append(ps, it.Text)
+	}
+	if len(ps) > 0 {
+		u.prompts = ps
+		u.promptIdx = -1 // at the live buffer; first ↑ recalls the newest prompt
+	} else {
+		u.prompts = nil // no recorded prompts: keep editor-history fallback active
+	}
+}
+
+// promptPrev recalls the next older recorded prompt into the field, holding any live
+// draft aside so a later Down restores it. It reports false when there is no list or
+// already at the oldest entry, letting callers fall back to editor history.
+func (u *UI) promptPrev() bool {
+	u.ensurePromptNavLocked()
+	if u.prompts == nil || u.promptIdx >= len(u.prompts)-1 {
+		return false // no list, or already at the oldest recorded prompt
+	}
+	if !u.browsingPrompts() { // first step away from the live buffer: hold the draft
+		u.stashP = u.editor.Value()
+	}
+	u.promptIdx++
+	u.editor.SetValue(u.prompts[u.promptIdx]) // newest-first, so ↑ walks older
+	return true
+}
+
+// promptNext moves toward the live buffer, restoring the held draft at the end.
+func (u *UI) promptNext() bool {
+	if u.prompts == nil || !u.browsingPrompts() {
+		return false // no list or already back at the live buffer
+	}
+	u.promptIdx--
+	if u.promptIdx < 0 { // reached the live buffer: bring the draft back
+		u.editor.SetValue(u.stashP)
+		u.stashP = ""
+	} else {
+		u.editor.SetValue(u.prompts[u.promptIdx])
+	}
+	return true
+}
+
+// browsingPrompts reports whether ↑/↓ are mid-way through the recorded list rather
+// than at the live buffer.
+func (u *UI) browsingPrompts() bool {
+	return u.prompts != nil && u.promptIdx >= 0
+}
+
+// resetPromptNavLocked drops the cached prompt list so a later ↑ reloads it, letting
+// freshly recorded prompts appear. Caller holds the lock.
+func (u *UI) resetPromptNavLocked() {
+	if u.prompts == nil && u.stashP == "" {
+		return
+	}
+	u.prompts = nil
+	u.promptIdx = -1
+	u.stashP = ""
+}
+
+// deliverSearch stores the provider's results if the overlay is still open.
+func (u *UI) deliverSearch(items []SearchItem) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed || u.search == nil || !u.search.pending {
+		return
+	}
+	u.search.items = items
+	u.search.pending = false
+	u.search.refilter()
+	u.repaint()
+}
+
 // applyKey mutates the editor for one key and reports whether it changed any
 // rendered state. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	if u.act != nil {
 		u.routeKey(k) // an active interaction sees every key before the editor
 		return nil, false, false
+	}
+	// an open history search consumes keys ahead of completion and the editor. Up
+	// and Down select: they commit the highlighted prompt into the field, close the
+	// overlay, but do not scroll on this same press — subsequent arrows browse.
+	if u.search != nil {
+		switch k.typ {
+		case keyUp, keyDown:
+			u.acceptSearchLocked() // select + close only; no navigation here
+			return nil, true, false
+		default:
+			switch act := u.search.key(k); act {
+			case searchStay:
+				return nil, true, false
+			case searchAccept:
+				u.acceptSearchLocked() // Enter commits the highlighted prompt
+				return nil, true, false
+			case searchClose:
+				u.search = nil
+				return nil, true, false
+			case searchPass:
+				u.search = nil // close and let the editor handle this key below
+			}
+		}
 	}
 	// the completion overlay consumes only Tab/↑/↓/Enter/Esc before the editor,
 	// and only per the accept rules; everything else falls through so typing
@@ -720,6 +880,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			u.completion = nil
 			if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
 				e := u.expandPastes(v)
+				u.resetPromptNavLocked() // let a later ↑ pick up the freshly sent prompt
 				return &e, true, false
 			}
 			return nil, true, false
@@ -730,6 +891,8 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		}
 	}
 	switch k.typ {
+	case keyReverseSearch:
+		u.openSearchLocked()
 	case keyRune:
 		u.cancelRewindLocked() // typing ends the idle double-Esc window
 		u.editor.Insert(k.text)
@@ -758,6 +921,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		}
 		if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
 			e := u.expandPastes(v)
+			u.resetPromptNavLocked() // let a later ↑ pick up the freshly sent prompt
 			return &e, true, false
 		}
 	case keyBackspace:
@@ -773,11 +937,17 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	case keyWordRight:
 		u.editor.WordRight()
 	case keyUp:
-		if !u.editor.Up() {
+		// cursor first, then browse recorded prompts; fall back to editor history
+		// when no prompt list is configured (or it ran out).
+		if !u.editor.Up() && !u.promptPrev() {
 			u.editor.HistoryPrev()
 		}
 	case keyDown:
-		if !u.editor.Down() {
+		// while mid-way through the recorded prompts, Down walks back toward the
+		// live buffer; otherwise normal cursor/history behaviour.
+		if u.browsingPrompts() {
+			u.promptNext()
+		} else if !u.editor.Down() {
 			u.editor.HistoryNext()
 		}
 	case keyHome:

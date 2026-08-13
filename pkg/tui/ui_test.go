@@ -455,6 +455,251 @@ func TestUIReadLines(t *testing.T) {
 	}
 }
 
+func TestUISearchOverlay(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 10)
+	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem {
+		return []SearchItem{
+			{Text: "fix the retry loop", Detail: "2026-01-02 03:04 UTC"},
+			{Text: "add a test\nfor retries"},
+		}
+	})
+
+	deliver := func() {
+		// openSearchLocked runs the provider off the key loop; wait for it here.
+		require.Eventually(t, func() bool {
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			return u.search != nil && !u.search.pending
+		}, time.Second, testPoll)
+	}
+	press := func(k key) *string { // applyKey then repaint, mirroring handleKey
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		submit, dirty, _ := u.applyKey(k)
+		if dirty {
+			u.repaint()
+		}
+		return submit
+	}
+
+	t.Run("ctrl_r_opens_overlay", func(t *testing.T) {
+		press(key{typ: keyReverseSearch})
+		deliver()
+		assert.Contains(t, stripANSI(v.Line(0)), "(reverse-i-search)`':")
+	})
+	t.Run("typing_narrows", func(t *testing.T) {
+		press(key{typ: keyRune, text: "retry"})
+		// the header shows the query and detail; the full match renders below it
+		assert.Contains(t, stripANSI(v.Line(0)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
+		assert.Contains(t, v.Line(1), "fix the retry loop")
+	})
+	t.Run("enter_fills_editor_without_submitting", func(t *testing.T) {
+		submit := press(key{typ: keyEnter})
+		assert.Nil(t, submit)
+		require.Nil(t, u.search)
+		assert.Equal(t, "fix the retry loop", u.editor.Value(), "full prompt fills the editor")
+	})
+}
+
+func TestUISearchOverlayEscapeLeavesBuffer(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 10)
+	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem { return []SearchItem{{Text: "typed already"}} })
+
+	press := func(k key) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		_, dirty, _ := u.applyKey(k)
+		if dirty {
+			u.repaint()
+		}
+	}
+	// a pre-existing buffer must survive Esc from the search overlay
+	press(key{typ: keyRune, text: "keep me"}) // seed the buffer through the editor
+	press(key{typ: keyReverseSearch})
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.search != nil && !u.search.pending
+	}, time.Second, testPoll)
+
+	press(key{typ: keyEscape})
+
+	assert.Nil(t, u.search)
+	assert.Equal(t, "keep me", u.editor.Value(), "Esc leaves whatever was typed untouched")
+}
+
+// openSearch waits until the Ctrl+R overlay is up and its provider delivered.
+func (u *UI) waitOpenSearch(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.search != nil && !u.search.pending
+	}, time.Second, testPoll)
+}
+
+func TestUISearchArrowCommitsAndScrolls(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 10)
+	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem {
+		return []SearchItem{
+			{Text: "newest prompt"},
+			{Text: "older prompt"},
+		}
+	})
+
+	press := func(k key) *string { // applyKey then repaint, mirroring handleKey
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		submit, dirty, _ := u.applyKey(k)
+		if dirty {
+			u.repaint()
+		}
+		return submit
+	}
+
+	// type a filter so there is something to select; with an empty query nothing shows.
+	press(key{typ: keyReverseSearch})
+	u.waitOpenSearch(t)
+	press(key{typ: keyRune, text: "ne"}) // narrows to the newest prompt
+	// Down in reverse search selects the highlighted (newest) prompt into the field
+	// and closes the overlay — it does not scroll on this same press.
+	submit := press(key{typ: keyDown})
+	assert.Nil(t, submit, "an arrow in search must not send the message")
+	require.Nil(t, u.search, "down closes the overlay after selecting")
+	assert.Equal(t, "newest prompt", u.editor.Value())
+}
+
+func TestUISearchArrowCommitsThenBrowsesOlder(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 10)
+	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem {
+		return []SearchItem{
+			{Text: "newest recorded"},
+			{Text: "older recorded"},
+		}
+	})
+
+	press := func(k key) *string {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		submit, dirty, _ := u.applyKey(k)
+		if dirty {
+			u.repaint()
+		}
+		return submit
+	}
+
+	press(key{typ: keyReverseSearch})
+	u.waitOpenSearch(t)
+	press(key{typ: keyRune, text: "ne"}) // narrow to the newest recorded prompt
+	// Up selects the highlighted (newest) prompt and closes search — it must not
+	// scroll on this first press.
+	submit := press(key{typ: keyUp})
+	assert.Nil(t, submit)
+	require.Nil(t, u.search, "up closes the overlay after selecting")
+	assert.Equal(t, "newest recorded", u.editor.Value(), "the selected prompt fills the field without scrolling")
+
+	// subsequent presses walk older through the same recorded-prompt list.
+	submit = press(key{typ: keyUp})
+	assert.Nil(t, submit)
+	assert.Equal(t, "newest recorded", u.editor.Value(), "second up re-shows the newest before stepping further")
+	submit = press(key{typ: keyUp})
+	assert.Nil(t, submit)
+	assert.Equal(t, "older recorded", u.editor.Value(), "up scrolls older on later presses")
+}
+
+func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem {
+		return []SearchItem{
+			{Text: "third"}, // newest first, as the provider returns them
+			{Text: "second"},
+			{Text: "first"}, // oldest
+		}
+	})
+
+	press := func(k key) *string {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		submit, dirty, _ := u.applyKey(k)
+		if dirty {
+			u.repaint()
+		}
+		return submit
+	}
+
+	// plain ↑ walks the recorded prompts newest → oldest without ever opening Ctrl+R.
+	submit := press(key{typ: keyUp})
+	assert.Nil(t, submit)
+	assert.Equal(t, "third", u.editor.Value(), "first up recalls the newest prompt")
+
+	press(key{typ: keyUp})
+	assert.Equal(t, "second", u.editor.Value())
+
+	press(key{typ: keyUp})
+	assert.Equal(t, "first", u.editor.Value(), "third up reaches the oldest prompt")
+
+	// at the oldest there is nothing more to recall; it stays put.
+	press(key{typ: keyUp})
+	assert.Equal(t, "first", u.editor.Value())
+
+	// ↓ walks back toward the live buffer and finally restores the empty draft.
+	press(key{typ: keyDown})
+	assert.Equal(t, "second", u.editor.Value())
+	press(key{typ: keyDown})
+	assert.Equal(t, "third", u.editor.Value())
+	press(key{typ: keyDown})
+	assert.Empty(t, u.editor.Value(), "down returns to the live buffer")
+}
+
+func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	pr, pw := io.Pipe()
+	u := newTestUI(t, v, pr)
+	go func() {
+		for range u.Messages() {
+		}
+	}() // drain submissions so the loop keeps running
+
+	// type and submit a message; it is recorded into editor history live.
+	_, err := io.WriteString(pw, "last sent")
+	require.NoError(t, err)
+	_, err = io.WriteString(pw, "\r") // enter submits
+	require.NoError(t, err)
+	for i := 0; i < 10000 && len(u.editor.history) == 1; i++ {
+	}
+
+	_, err = io.WriteString(pw, "\x1b[A") // up arrow: recall the last sent message
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.editor.Value() == "last sent"
+	}, time.Second, testPoll, "up arrow fills the last sent message into the field")
+}
+
 func TestStyleLines(t *testing.T) {
 	t.Parallel()
 

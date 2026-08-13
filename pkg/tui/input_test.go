@@ -29,6 +29,7 @@ func TestDecodeKey(t *testing.T) {
 		{"ctrl_a_home", "\x01", key{typ: keyHome}, 1},
 		{"ctrl_e_end", "\x05", key{typ: keyEnd}, 1},
 		{"ctrl_k", "\x0b", key{typ: keyKillToEnd}, 1},
+		{"ctrl_r_reverse_search", "\x12", key{typ: keyReverseSearch}, 1},
 		{"ctrl_u", "\x15", key{typ: keyKillLine}, 1},
 		{"ctrl_w", "\x17", key{typ: keyKillWord}, 1},
 		{"ctrl_l_redraw", "\x0c", key{typ: keyRedraw}, 1},

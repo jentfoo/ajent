@@ -378,6 +378,24 @@ reporting the caret's row and column within them.
 Enter submits, Alt+Enter and Ctrl+J insert a newline. Ctrl+C clears a non-empty
 buffer and quits an empty one; Ctrl+D quits an empty one.
 
+**Ctrl+R opens a reverse history search** over the workspace's recorded prompts,
+drawn as an inline `(reverse-i-search)` overlay above the editor (not a modal
+picker). It opens blank — nothing is shown until you type content to match against,
+then typing narrows on a case-insensitive substring. Repeated Ctrl+R steps to the
+next older match, Enter fills the editor with the full prompt and does not send it,
+Esc closes leaving whatever was typed untouched. In the overlay ↑/↓ select: one
+press fills the editor with the highlighted prompt and closes the overlay without
+sending; subsequent plain arrows keep scrolling that same recorded list.
+
+The recorded-prompt list is shared: plain ↑/↓ (no Ctrl+R) walk the same newest-first
+set as the search overlay — first ↑ recalls your most recent sent message, further
+↑ steps older and ↓ returns to the live draft — with a fallback to the editor's
+file-history navigation when no prompt source is configured. Like completion it is
+an in-place live-block overlay rather than an interaction:
+the provider (`SetHistorySearch`) runs off the key loop so a slow scan never
+blocks input. The overlay's pure logic lives in `search.go` with no dependency on
+the UI, and the two overlays are mutually exclusive by construction.
+
 ## The demo
 
 `main.go` plus `demo.go` are a scripted stand-in for the agent loop. There is no
@@ -471,7 +489,9 @@ Things that look fine and are not:
 - **New markdown element**: add a case in `mdRenderer.block` or `inline`
   (`markdown.go`), then extend `TestRenderMarkdownDocument`.
 - **New key binding**: add a `keyType` and a decode case in `input.go`, then a
-  case in `UI.applyKey`.
+  case in `UI.applyKey`. Ctrl+R (`0x12`) is the reverse search example: it maps
+  to `keyReverseSearch`, which calls `openSearchLocked`; while the overlay is
+  open its own `search.key` consumes keys first.
 - **Syntax highlighting**: fenced code blocks are styled but not highlighted.
   `chroma` would slot into `mdRenderer.codeBlock`, at roughly 5 MB of binary.
 - **Third render mode**: implement `renderer` and add it to `newRenderer` and

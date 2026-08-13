@@ -147,6 +147,14 @@ does not orphan its sessions (the slug is cosmetic; the hash pins it). The store
 - **Find** matches an exact id or a unique prefix — what makes `--resume <id>`
   accept a few characters instead of the full ULID. An ambiguous prefix errors
   rather than guessing.
+- **Prompts** returns the workspace's recorded user prompts, newest first and
+  deduplicated to each distinct text's most recent occurrence. It scans up to
+  100 transcript files (500 prompts), walking each append-only file in reverse
+  so the newest prompt is read first.
+
+`PromptIndex` caches that list on a short TTL (`promptTTL`) behind a mutex, so
+Ctrl+R history search never rescans every transcript per keystroke. It is best
+effort: a scan failure yields an empty slice rather than an error.
 
 Sessions are scoped to the workspace they started in, so resuming from elsewhere
 sees nothing and starts fresh (see "Resume modes").
@@ -265,6 +273,10 @@ that other tips still point at.
 **2. Reads go through the branch, never raw file order.** Every consumer —
 state rebuild, replay, info counts — walks from a head id along `ParentID`.
 Raw-file-order reads break the moment two forks coexist in one file.
+
+History search is the deliberate exception: it scans every entry of each file in
+raw append order (newest first) rather than only the persisted head branch, so
+a prompt on an abandoned rewind fork stays findable.
 
 **3. The head advances only on success.** An append updates the cursor after a
 successful write; an fsync records it at turn boundaries. A lost or corrupt

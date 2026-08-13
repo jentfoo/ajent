@@ -98,10 +98,10 @@ func editRow(ctx context.Context, c Console, r *settingsRow) error {
 func savePrompt(c Console, changes ...settingChange) {
 	idx, err := c.Select(context.Background(), "Save change",
 		[]tui.Option{
-		{Label: "this session only"},
-		{Label: "save to user config"},
-		{Label: "save to project config"},
-	})
+			{Label: "this session only"},
+			{Label: "save to user config"},
+			{Label: "save to project config"},
+		})
 	if err != nil || idx == 0 {
 		return // Esc or Enter on the default keeps it for this session
 	}
@@ -353,6 +353,7 @@ func editLimits(c Console) ([]settingChange, error) {
 	_ = c.Settings().SetSession(key, n)
 	return []settingChange{{key: key, value: n}}, nil
 }
+
 // helpers ----------------------------------------------------------------
 
 // toolNames returns the currently enabled tool names in order.

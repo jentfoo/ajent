@@ -39,6 +39,7 @@ const (
 	keyEscape
 	keyTab
 	keyBackTab
+	keyReverseSearch
 )
 
 // key is one decoded input event.
@@ -103,6 +104,7 @@ var controlKeys = map[byte]keyType{
 	0x0d: keyEnter,
 	0x0e: keyDown,
 	0x10: keyUp,
+	0x12: keyReverseSearch, // Ctrl+R
 	0x15: keyKillLine,
 	0x17: keyKillWord,
 	0x1a: keySuspend,

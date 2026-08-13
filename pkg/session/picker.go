@@ -254,6 +254,11 @@ func EntryMessageText(e Entry) string {
 	default:
 		return "" // tool results and other roles are not prompt text
 	}
+	return messageText(md)
+}
+
+// messageText joins an entry's non-empty text blocks into one newline-delimited string.
+func messageText(md MessageData) string {
 	var parts []string
 	for _, b := range md.Message.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
