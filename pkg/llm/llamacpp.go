@@ -14,7 +14,7 @@ import (
 func decorateLlamaCpp(body *compatRequest, req Request) {
 	cache := true
 	body.CachePrompt = &cache
-	if req.Model.Caps.Reasoning == ReasoningInlineTags {
+	if req.Model.Caps.ThinkOpen != "" {
 		body.ChatTemplateKwarg = map[string]any{
 			"enable_thinking": req.Reasoning.Level != LevelOff,
 		}
@@ -102,15 +102,16 @@ func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, err
 	if req.Model.Caps.Tokenizer != TokenizerRemoteTokenize {
 		return 0, ErrNoTokenizer
 	}
+	req = Prepare(req)
 	var text strings.Builder
 	text.WriteString(blocksText(req.System))
-	for _, m := range RetainedMessages(req) {
+	for _, m := range req.Messages {
 		text.WriteString(countBlocks(m.Content))
 	}
 	// tool schemas ride in the request and occupy real tokens; count them once
 	// when present (an empty list adds nothing to what a no-tool prompt sends).
 	if len(req.Tools) > 0 {
-		if schemas, err := json.Marshal(compatTools(req.Tools)); err == nil {
+		if schemas, err := json.Marshal(compatTools(req.Tools, req.Model.Caps.SupportsStrict)); err == nil {
 			text.Write(schemas)
 		}
 	}

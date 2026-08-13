@@ -55,11 +55,7 @@ func NewProvider(name string, cfg ProviderConfig, flavor Flavor, opts ProviderOp
 		return nil, err
 	}
 
-	dialect := cfg.API
-	if dialect == DialectUnset {
-		dialect = def.dialect
-	}
-	switch dialect {
+	switch dialectFor(cfg, def.dialect) {
 	case DialectAnthropic:
 		return newAnthropicProvider(name, client), nil
 	case DialectOpenAIResponses:

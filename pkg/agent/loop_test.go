@@ -203,11 +203,21 @@ func TestLoopOneToolCall(t *testing.T) {
 
 	// user echo, assistant tool call, user result, assistant reply
 	require.Len(t, a.state.Messages, 4)
+
+	// the streamed assistant turn is stamped with its producing model and stop reason
+	turn := a.state.Messages[1]
+	assert.Equal(t, llm.RoleAssistant, turn.Role)
+	if assert.NotNil(t, turn.Origin) {
+		assert.Equal(t, "test", turn.Origin.Model)
+	}
+	assert.Equal(t, llm.StopEndTurn, turn.Stop) // the fixture's done event carries no tool stop
+
 	resultMsg := a.state.Messages[2]
 	assert.Equal(t, llm.RoleUser, resultMsg.Role)
 	tb, ok := resultMsg.Content[0].(llm.ToolResultBlock)
 	require.True(t, ok)
 	assert.Equal(t, "c1", tb.CallID)
+	assert.Equal(t, "bash", tb.ToolName) // set at the source for result-name providers
 	assert.False(t, tb.IsError)
 }
 
@@ -452,3 +462,41 @@ const (
 	defaultTimeout = 2 * time.Second
 	pollInterval   = time.Millisecond
 )
+
+func TestBuildRequest(t *testing.T) {
+	t.Parallel()
+
+	// a reasoning model with a full context window and an unsupported level
+	m := llm.Model{ID: "test", Provider: "p",
+		ContextWindow: 200000, MaxOutput: 8000,
+		Caps: llm.Capabilities{Dialect: llm.DialectOpenAICompletions, Reasoning: true}}
+	st := &State{
+		Model:     m,
+		Reasoning: llm.ReasoningConfig{Level: llm.LevelMax}, // xhigh/max opt-in -> clamps
+	}
+	a := newTestAgent(st, nil, NopSink{})
+
+	t.Run("clamps_level_and_sets_output_cap", func(t *testing.T) {
+		req := a.buildRequest()
+		assert.Equal(t, llm.LevelHigh, req.Reasoning.Level) // max clamps down to high
+		assert.Positive(t, req.MaxTokens)
+	})
+	t.Run("max_tokens_respects_the_window", func(t *testing.T) {
+		st2 := &State{
+			Model:     m,
+			Reasoning: llm.ReasoningConfig{Level: llm.LevelHigh},
+		}
+		a2 := newTestAgent(st2, nil, NopSink{})
+		req := a2.buildRequest()
+		assert.LessOrEqual(t, req.MaxTokens, 200000) // never exceeds the window
+	})
+	t.Run("nil_ledger_yields_zero_input", func(t *testing.T) {
+		st3 := &State{
+			Model:     m,
+			Reasoning: llm.ReasoningConfig{Level: llm.LevelHigh},
+			Tokens:    nil, // no accounting configured
+		}
+		a3 := newTestAgent(st3, nil, NopSink{})
+		assert.NotPanics(t, func() { _ = a3.buildRequest() })
+	})
+}

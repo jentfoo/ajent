@@ -304,12 +304,20 @@ func (a *Agent) buildRequest() llm.Request {
 	if ts := a.opts.Tools; ts != nil {
 		tools = ts.Schemas() // cached by the registry, so cheap per step
 	}
+	reasoning := a.state.Reasoning
+	reasoning.Level = llm.ClampLevel(a.state.Model, reasoning.Level)
+	var used int
+	if t := a.state.Tokens; t != nil {
+		used = t.Context().Used // 0 when the ledger is nil or empty
+	}
 	return llm.Request{
 		Model:     a.state.Model,
 		System:    buildSystem(a.state, a.opts.Env),
 		Messages:  messages,
 		Tools:     tools,
-		Reasoning: a.state.Reasoning,
+		Reasoning: reasoning,
+		MaxTokens: llm.MaxOutputFor(a.state.Model, used),
+		SessionID: a.opts.SessionID,
 	}
 }
 
@@ -421,7 +429,7 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) llm.ToolR
 	}
 	done(res)
 	return llm.ToolResultBlock{
-		CallID: call.ID, Content: res.Content, IsError: res.IsError,
+		CallID: call.ID, ToolName: call.Name, Content: res.Content, IsError: res.IsError,
 		Display: res.Display, Details: res.Details,
 	}
 }
@@ -443,7 +451,21 @@ func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock
 // append records one message in state and notifies the OnMessage hook so a
 // session can persist it as the loop appends it. Called on the loop goroutine,
 // so ordering matches the transcript exactly.
+// modelOrigin returns the Origin stamp for an assistant message produced by the
+// current model.
+func (a *Agent) modelOrigin() *llm.Origin {
+	return &llm.Origin{Provider: a.state.Model.Provider, Dialect: a.state.Model.Caps.Dialect, Model: a.state.Model.ID}
+}
+
 func (a *Agent) append(info MessageInfo) {
+	// an assistant response is stamped with its producing model so cross-model history
+	// can be degraded correctly on the next request; user and tool messages stay bare.
+	if info.Message.Role == llm.RoleAssistant && info.Stop != llm.StopUnknown {
+		n := info.Message
+		n.Origin = a.modelOrigin()
+		n.Stop = info.Stop
+		info.Message = n
+	}
 	a.state.Messages = append(a.state.Messages, info.Message)
 	if h := a.opts.OnMessage; h != nil {
 		h(info)

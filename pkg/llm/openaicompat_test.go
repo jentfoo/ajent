@@ -11,7 +11,10 @@ import (
 // compatModel is a chat-completions model with the given capability overrides.
 func compatModel(fn func(*Capabilities)) Model {
 	caps := flavorDefaults[FlavorLMStudio].caps
-	caps.Reasoning = ReasoningContentField // the common case, not inline tags
+	// deepseek is the common case: detection would set both of these together,
+	// and ReplayReasoning drives the empty reasoning_content echo on replies
+	caps.Thinking = ThinkingDeepSeek // the common case, not inline tags
+	caps.ReplayReasoning = true
 	if fn != nil {
 		fn(&caps)
 	}
@@ -58,7 +61,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, BlockList{TextBlock{Text: "Hello world"}}, msg.Content)
 		assert.Equal(t, Usage{Input: 12, Output: 3}, usage)
 	})
-	t.Run("reasoning_content_field", func(t *testing.T) {
+	t.Run("reasoning_content_field_records_source", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/reasoning_content.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
@@ -68,14 +71,51 @@ func TestCompatProviderStream(t *testing.T) {
 
 		assert.Equal(t, "let me think", thinkingOf(events))
 		assert.Equal(t, "answer", textOf(events))
-		assert.Contains(t, eventKinds(events), "thinking_end")
+		// the originating delta field rides onto the block for replay (B1/B2)
+		var tb ThinkingBlock
+		for _, ev := range events {
+			if b, ok := ev.Block.(ThinkingBlock); ok {
+				tb = b
+			}
+		}
+		assert.Equal(t, "reasoning_content", tb.Field)
+	})
+	t.Run("reasoning_text_field_read_last", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/reasoning_text.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		events := collect(t, s)
+
+		assert.Equal(t, "chutes thinks", thinkingOf(events))
+		var tb ThinkingBlock
+		for _, ev := range events {
+			if b, ok := ev.Block.(ThinkingBlock); ok {
+				tb = b
+			}
+		}
+		assert.Equal(t, "reasoning_text", tb.Field)
+	})
+	t.Run("reasoning_content_precedes_reasoning", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/reasoning_precedence.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		events := collect(t, s)
+
+		// pi reads reasoning_content before reasoning; chutes sends both fields
+		assert.Equal(t, "preferred", thinkingOf(events))
 	})
 	t.Run("think_tags_split_across_deltas", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/think_tags.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
 		s, err := p.Stream(t.Context(), Request{
-			Model: compatModel(func(c *Capabilities) { c.Reasoning = ReasoningInlineTags }),
+			Model: compatModel(func(c *Capabilities) {
+				c.ThinkOpen, c.ThinkClose = thinkOpenTag, thinkCloseTag
+			}),
 		})
 		require.NoError(t, err)
 		events := collect(t, s)
@@ -134,7 +174,11 @@ func TestCompatProviderStream(t *testing.T) {
 		srv, _ := sseServer(t, "compat/usage_only.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
-		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		// the fixture never sends a finish_reason; that is fine for providers which
+		// declare they do not support one (the cache fields are what this tests)
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(func(c *Capabilities) {
+			c.SupportsFinishReason = false
+		})})
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = s.Close() })
 
@@ -179,6 +223,46 @@ func TestCompatProviderStream(t *testing.T) {
 	})
 }
 
+func TestCompatStreamFinishReason(t *testing.T) {
+	t.Parallel()
+
+	collectStop := func(t *testing.T, fixture string, caps Capabilities) (StopReason, error) {
+		t.Helper()
+		srv, _ := sseServer(t, fixture)
+		p := newCompatTestProvider(t, srv.URL)
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(func(c *Capabilities) { *c = caps })})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+		var events []Event
+		for ev, ok := s.Next(); ok; ev, ok = s.Next() {
+			events = append(events, ev)
+		}
+		last := events[len(events)-1]
+		return last.StopReason, last.Err
+	}
+
+	t.Run("no_finish_tools_infer_stop_tool_use", func(t *testing.T) {
+		caps := flavorDefaults[FlavorLMStudio].caps
+		caps.SupportsFinishReason = false
+		stop, err := collectStop(t, "compat/no_finish_tool.sse", caps)
+		require.NoError(t, err)
+		assert.Equal(t, StopToolUse, stop)
+	})
+	t.Run("no_finish_text_infer_end_turn", func(t *testing.T) {
+		caps := flavorDefaults[FlavorLMStudio].caps
+		caps.SupportsFinishReason = false
+		stop, err := collectStop(t, "compat/no_finish_text.sse", caps)
+		require.NoError(t, err)
+		assert.Equal(t, StopEndTurn, stop)
+	})
+	t.Run("no_finish_with_support_is_truncation", func(t *testing.T) {
+		caps := flavorDefaults[FlavorLMStudio].caps
+		caps.SupportsFinishReason = true
+		_, err := collectStop(t, "compat/no_finish_text.sse", caps)
+		assert.ErrorContains(t, err, "stream ended without finish_reason")
+	})
+}
+
 func TestBuildCompatBody(t *testing.T) {
 	t.Parallel()
 
@@ -200,11 +284,13 @@ func TestBuildCompatBody(t *testing.T) {
 	t.Run("basic_shape", func(t *testing.T) {
 		body, err := buildCompatBody(baseReq(), compatProfile{})
 		require.NoError(t, err)
+		// the default level is off, and a deepseek model toggles it explicitly
 		assert.JSONEq(t, `{
 			"model": "m1",
 			"stream": true,
 			"stream_options": {"include_usage": true},
 			"max_tokens": 100,
+			"thinking": {"type": "disabled"},
 			"messages": [
 				{"role": "system", "content": "be terse"},
 				{"role": "user", "content": "hi"}
@@ -303,7 +389,7 @@ func TestBuildCompatBody(t *testing.T) {
 	})
 	t.Run("reasoning_effort_for_effort_models", func(t *testing.T) {
 		req := baseReq()
-		req.Model.Caps.Reasoning = ReasoningOpenAIEffort
+		req.Model.Caps.Reasoning, req.Model.Caps.Thinking = true, ThinkingOpenAI
 		req.Reasoning = ReasoningConfig{Level: LevelHigh}
 
 		body, err := buildCompatBody(req, compatProfile{})
@@ -312,7 +398,7 @@ func TestBuildCompatBody(t *testing.T) {
 	})
 	t.Run("level_map_translates_the_effort", func(t *testing.T) {
 		req := baseReq()
-		req.Model.Caps.Reasoning = ReasoningOpenAIEffort
+		req.Model.Caps.Reasoning, req.Model.Caps.Thinking = true, ThinkingOpenAI
 		req.Model.Caps.LevelMap = map[Level]*string{LevelXHigh: ptr("high")}
 		req.Reasoning = ReasoningConfig{Level: LevelXHigh}
 
@@ -322,7 +408,7 @@ func TestBuildCompatBody(t *testing.T) {
 	})
 	t.Run("null_level_map_entry_omits_the_parameter", func(t *testing.T) {
 		req := baseReq()
-		req.Model.Caps.Reasoning = ReasoningOpenAIEffort
+		req.Model.Caps.Reasoning, req.Model.Caps.Thinking = true, ThinkingOpenAI
 		req.Model.Caps.LevelMap = map[Level]*string{LevelOff: nil}
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
 
@@ -352,37 +438,80 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"type":"image_url"`)
 		assert.Contains(t, string(body), "data:image/png;base64,AQID")
 	})
-	t.Run("image_rejected_when_unsupported", func(t *testing.T) {
+	t.Run("image_downgraded_when_unsupported", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Images = false
 		req.Messages = []Message{{Role: RoleUser, Content: BlockList{
 			ImageBlock{MediaType: "image/png", Data: []byte{1}},
 		}}}
 
-		_, err := buildCompatBody(req, compatProfile{})
-		assert.ErrorContains(t, err, "image")
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), imageOmitted)
 	})
-	t.Run("reasoning_content_replayed_when_required", func(t *testing.T) {
+	t.Run("reasoning_replays_to_its_source_field", func(t *testing.T) {
 		req := baseReq()
-		req.Model.Caps.ReplayReasoning = true
 		req.Reasoning.Retain = RetainAll
-		req.Messages = []Message{
+		req.Messages = sameOrigin(req.Model, []Message{
 			Text(RoleUser, "q"),
 			{Role: RoleAssistant, Content: BlockList{
-				ThinkingBlock{Text: "because"},
+				ThinkingBlock{Field: "reasoning_content", Text: "because"},
 				TextBlock{Text: "answer"},
 			}},
-		}
+		})
 		body, err := buildCompatBody(req, compatProfile{})
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":"because"`)
 	})
-	t.Run("empty_reasoning_content_forced_on_assistant", func(t *testing.T) {
-		// deepseek requires every replayed assistant message to carry the field,
-		// even a plain reply with no thinking block.
+	t.Run("replays_to_block_field_without_config", func(t *testing.T) {
+		// no configured ReasoningField: the block's own source field wins
 		req := baseReq()
-		req.Model.Caps.ReplayReasoning = true
+		req.Model.Caps.ReasoningField = ""
 		req.Reasoning.Retain = RetainAll
+		req.Messages = sameOrigin(req.Model, []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{
+				ThinkingBlock{Field: "reasoning", Text: "pondered"},
+				TextBlock{Text: "answer"},
+			}},
+		})
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"reasoning":"pondered"`)
+	})
+	t.Run("configured_field_overrides_block_source", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.ReasoningField = "custom_reason"
+		req.Reasoning.Retain = RetainAll
+		req.Messages = sameOrigin(req.Model, []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{
+				ThinkingBlock{Field: "reasoning", Text: "pondered"},
+				TextBlock{Text: "answer"},
+			}},
+		})
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"custom_reason":"pondered"`)
+	})
+	t.Run("multi_block_thinking_joined_with_newline", func(t *testing.T) {
+		req := baseReq()
+		req.Reasoning.Retain = RetainAll
+		req.Messages = sameOrigin(req.Model, []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{
+				ThinkingBlock{Field: "reasoning_content", Text: "first"},
+				ThinkingBlock{Field: "reasoning_content", Text: "second"},
+				TextBlock{Text: "answer"},
+			}},
+		})
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"reasoning_content":"first\nsecond"`)
+	})
+	t.Run("empty_reasoning_forced_when_level_on", func(t *testing.T) {
+		req := baseReq()
+		req.Reasoning = ReasoningConfig{Level: LevelHigh, Retain: RetainAll}
 		req.Messages = []Message{
 			Text(RoleUser, "q"),
 			{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "plain reply"}}},
@@ -391,15 +520,54 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":""`)
 	})
+	t.Run("no_empty_reasoning_when_level_off", func(t *testing.T) {
+		req := baseReq()
+		req.Reasoning = ReasoningConfig{Retain: RetainAll}
+		req.Messages = []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "plain reply"}}},
+		}
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), `reasoning_content`)
+	})
+	t.Run("non_deepseek_replay_override_forces_empty", func(t *testing.T) {
+		// requiresReplayReasoningOnAssistantMessages drives the empty echo for any
+		// model, not just deepseek; detection supplies it for deepseek by default
+		req := baseReq()
+		req.Model.Caps.Thinking = ThinkingOpenAI // a non-deepseek format
+		req.Reasoning = ReasoningConfig{Level: LevelHigh, Retain: RetainAll}
+		req.Messages = []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "plain reply"}}},
+		}
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"reasoning_content":""`)
+	})
+	t.Run("non_deepseek_without_replay_sends_nothing", func(t *testing.T) {
+		// the field stays silent when not requested: ReplayReasoning is now a real gate
+		req := baseReq()
+		req.Model.Caps.Thinking = ThinkingOpenAI // a non-deepseek format
+		req.Model.Caps.ReplayReasoning = false
+		req.Reasoning = ReasoningConfig{Level: LevelHigh, Retain: RetainAll}
+		req.Messages = []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "plain reply"}}},
+		}
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), `reasoning_content`)
+	})
 	t.Run("empty_assistant_message_skipped", func(t *testing.T) {
 		// neither content nor tool calls: dropped regardless of reasoning fields
 		req := baseReq()
 		req.Model.Caps.ReplayReasoning = true
 		req.Reasoning.Retain = RetainAll
-		req.Messages = []Message{
+		req.Messages = sameOrigin(req.Model, []Message{
 			Text(RoleUser, "q"),
 			{Role: RoleAssistant, Content: BlockList{ThinkingBlock{Text: "because"}}},
-		}
+		})
 		body, err := buildCompatBody(req, compatProfile{})
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), `reasoning_content`)
@@ -410,6 +578,41 @@ func TestBuildCompatBody(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, true, decode(t, body)["cache_prompt"])
+	})
+}
+
+func TestCompatUsageToUsage(t *testing.T) {
+	t.Parallel()
+
+	decode := func(raw string) Usage {
+		var u compatUsage
+		require.NoError(t, json.Unmarshal([]byte(raw), &u))
+		return u.toUsage()
+	}
+
+	t.Run("openai_cached_tokens", func(t *testing.T) {
+		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
+			"prompt_tokens_details":{"cached_tokens":30}}`)
+		assert.Equal(t, Usage{Input: 70, Output: 20, CacheRead: 30}, got)
+	})
+	t.Run("deepseek_prompt_cache_hit", func(t *testing.T) {
+		got := decode(`{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":30}`)
+		assert.Equal(t, Usage{Input: 70, Output: 20, CacheRead: 30}, got)
+	})
+	t.Run("present_zero_wins_over_fallback", func(t *testing.T) {
+		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
+			"prompt_cache_hit_tokens":30,"prompt_tokens_details":{"cached_tokens":0}}`)
+		assert.Equal(t, Usage{Input: 100, Output: 20}, got)
+	})
+	t.Run("cache_write_subtracted", func(t *testing.T) {
+		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
+			"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":10}}`)
+		assert.Equal(t, Usage{Input: 60, Output: 20, CacheRead: 30, CacheWrite: 10}, got)
+	})
+	t.Run("reasoning_tokens", func(t *testing.T) {
+		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
+			"completion_tokens_details":{"reasoning_tokens":12}}`)
+		assert.Equal(t, Usage{Input: 100, Output: 20, Reasoning: 12}, got)
 	})
 }
 
@@ -455,5 +658,70 @@ func TestCompatClassifier(t *testing.T) {
 	t.Run("plain_body_is_kept", func(t *testing.T) {
 		err := compatClassifier("p", FlavorOpenAI)(500, []byte(`internal failure`))
 		assert.Contains(t, err.Error(), "internal failure")
+	})
+}
+
+func TestThinkingTokenBudget(t *testing.T) {
+	t.Parallel()
+
+	base := func() Request {
+		m := compatModel(func(c *Capabilities) {
+			c.Reasoning = true
+			c.Thinking = ThinkingOpenAI
+			c.SupportsReasoningEffort = true
+			c.SupportsThinkingTokenBudget = true
+			c.Budgets = map[Level]int{LevelHigh: 30000, LevelMedium: 8000}
+		})
+		return Request{
+			Model:     m,
+			System:    BlockList{TextBlock{Text: "sys"}},
+			Messages:  []Message{Text(RoleUser, "hi")},
+			MaxTokens: 20000,
+			Reasoning: ReasoningConfig{Level: LevelHigh},
+		}
+	}
+
+	t.Run("emitted_when_capable_and_on", func(t *testing.T) {
+		body, err := buildCompatBody(base(), compatProfile{})
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(body, &m))
+		assert.InDelta(t, 18976, m["thinking_token_budget"], 0.001) // min(30000, 20000-1024)
+	})
+	t.Run("clamped_to_the_answer_floor", func(t *testing.T) {
+		req := base()
+		// level budget below the ceiling is kept as-is
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(body, &m))
+		assert.InDelta(t, 18976, m["thinking_token_budget"], 0.001)
+	})
+	t.Run("omitted_when_ceiling_too_small", func(t *testing.T) {
+		req := base()
+		req.MaxTokens = 500 // ceiling - floor <= 0
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(body, &m))
+		assert.NotContains(t, m, "thinking_token_budget")
+	})
+	t.Run("absent_without_the_capability", func(t *testing.T) {
+		req := base()
+		req.Model.Caps.SupportsThinkingTokenBudget = false
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(body, &m))
+		assert.NotContains(t, m, "thinking_token_budget")
+	})
+	t.Run("absent_at_level_off", func(t *testing.T) {
+		req := base()
+		req.Reasoning.Level = LevelOff
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(body, &m))
+		assert.NotContains(t, m, "thinking_token_budget")
 	})
 }

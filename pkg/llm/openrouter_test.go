@@ -16,6 +16,9 @@ func openRouterModel(fn func(*Capabilities)) Model {
 	if fn != nil {
 		fn(&caps)
 	}
+	if caps.Reasoning && len(caps.Budgets) == 0 {
+		caps.Budgets = defaultBudgets(64000)
+	}
 	return Model{Provider: "openrouter", ID: "anthropic/claude-opus-4-5",
 		ContextWindow: 200000, MaxOutput: 64000, Caps: caps}
 }
@@ -65,9 +68,10 @@ func TestOpenRouterStream(t *testing.T) {
 		msg, _, err := Accumulate(s)
 		require.NoError(t, err)
 
+		m := openRouterModel(nil)
 		body, err := buildCompatBody(Request{
-			Model:     openRouterModel(nil),
-			Messages:  []Message{Text(RoleUser, "q"), msg},
+			Model:     m,
+			Messages:  sameOrigin(m, []Message{Text(RoleUser, "q"), msg}),
 			Reasoning: ReasoningConfig{Retain: RetainAll},
 		}, profileFor("openrouter", FlavorOpenRouter, ProviderConfig{}))
 		require.NoError(t, err)
@@ -112,12 +116,20 @@ func TestDecorateOpenRouter(t *testing.T) {
 		m := build(t, req, nil)
 		assert.InDelta(t, 4096, m["reasoning"].(map[string]any)["max_tokens"], 0.001)
 	})
-	t.Run("level_off_excludes_reasoning", func(t *testing.T) {
+	t.Run("level_off_sends_none", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
 
 		m := build(t, req, nil)
-		assert.Equal(t, true, m["reasoning"].(map[string]any)["exclude"])
+		assert.Equal(t, "none", m["reasoning"].(map[string]any)["effort"])
+	})
+	t.Run("off_suppressed_omits_reasoning", func(t *testing.T) {
+		req := baseReq()
+		req.Reasoning = ReasoningConfig{Level: LevelOff}
+		req.Model.Caps.LevelMap = map[Level]*string{LevelOff: nil} // cannot stop thinking
+
+		m := build(t, req, nil)
+		assert.NotContains(t, m, "reasoning")
 	})
 	t.Run("routing_preference_passed_through", func(t *testing.T) {
 		m := build(t, baseReq(), &Routing{
@@ -155,7 +167,7 @@ func TestParseOpenRouterModels(t *testing.T) {
 	})
 	t.Run("reasoning_support_detected", func(t *testing.T) {
 		require.NotNil(t, got[0].Reasoning)
-		assert.Equal(t, ReasoningOpenRouter, *got[0].Reasoning)
+		assert.True(t, *got[0].Reasoning)
 		assert.Nil(t, got[1].Reasoning)
 	})
 	t.Run("tool_support_detected", func(t *testing.T) {

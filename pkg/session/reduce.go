@@ -36,8 +36,10 @@ type Stats struct {
 
 // ContextMessages returns the messages branch contributes to the next request,
 // applying cd's cut point and structural reductions. Warnings name entries it
-// could not use.
-func ContextMessages(branch []Entry, cd CompactionData) ([]llm.Message, []string) {
+// could not use. When resolve is non-nil each assistant message is stamped with
+// the model that produced it (walking session and model_change entries) so cross-
+// model degradation can act on resume; a nil resolve leaves messages unstamped.
+func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (llm.Model, error)) ([]llm.Message, []string) {
 	var msgs []llm.Message
 	var warns []string
 
@@ -46,6 +48,8 @@ func ContextMessages(branch []Entry, cd CompactionData) ([]llm.Message, []string
 		warns = append(warns, "compaction first-kept entry not found")
 		return nil, warns // a cut that cannot be located keeps nothing safe
 	}
+
+	var current llm.Model // resolved from session/model_change entries as we walk
 
 	var dropped map[string]struct{}
 	var stubs map[string]Stub
@@ -66,10 +70,35 @@ func ContextMessages(branch []Entry, cd CompactionData) ([]llm.Message, []string
 	}
 
 	for i := range branch {
+		e := branch[i]
+		// walk model changes so each message is stamped with its producing model. This
+		// must run even for entries the cut discards: a compacted history's session and
+		// early model_change entries live before FirstKeptEntryID, yet still seed which
+		// model produced the kept tail.
+		if resolve != nil {
+			switch e.Type {
+			case TypeSession, TypeModelChange:
+				var key string
+				if e.Type == TypeSession {
+					var sd SessionData
+					_ = e.Decode(&sd)
+					key = sd.Model
+				} else {
+					var m ModelData
+					if err := e.Decode(&m); err == nil {
+						key = m.Model
+					}
+				}
+				if key != "" {
+					if resolved, rerr := resolve(key); rerr == nil && resolved.ID != "" {
+						current = resolved
+					}
+				}
+			}
+		}
 		if keep > 0 && i < keep {
 			continue // summarized away by the cut
 		}
-		e := branch[i]
 		if e.Type != TypeMessage {
 			continue
 		}
@@ -88,6 +117,12 @@ func ContextMessages(branch []Entry, cd CompactionData) ([]llm.Message, []string
 		// as recorded so resume keeps exactly the context it had.
 		if stripThinking && md.Message.Role == llm.RoleAssistant && len(reduced.Content) == 0 {
 			continue
+		}
+		if resolve != nil && reduced.Role == llm.RoleAssistant && current.ID != "" {
+			reduced.Origin = &llm.Origin{
+				Provider: current.Provider, Dialect: current.Caps.Dialect, Model: current.ID,
+			}
+			reduced.Stop = md.Stop
 		}
 		msgs = append(msgs, reduced)
 	}

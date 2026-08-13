@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"slices"
+)
 
 const (
 	respTypeMessage    = "message"
@@ -14,6 +17,10 @@ const (
 	// turn without the server storing it.
 	respEncryptedInclude = "reasoning.encrypted_content"
 )
+
+// respMinOutputTokens is openai's floor on max_output_tokens, below which a
+// request is rejected.
+const respMinOutputTokens = 16
 
 // respRequest is a Responses API request body.
 type respRequest struct {
@@ -48,10 +55,38 @@ type respItem struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	Output    string `json:"output,omitempty"`
+	// Output is a plain text string or an array of input_text/input_image parts
+	// when a tool result carries images the model accepts.
+	Output any `json:"output,omitempty"`
 
-	EncryptedContent string `json:"encrypted_content,omitempty"`
-	Summary          []any  `json:"summary,omitempty"`
+	EncryptedContent string          `json:"encrypted_content,omitempty"`
+	Summary          []any           `json:"summary,omitempty"`
+	Phase            string          `json:"phase,omitempty"` // responses message phase
+	Status           string          `json:"status,omitempty"`
+	Raw              json.RawMessage `json:"-"` // verbatim item, for replay
+}
+
+// MarshalJSON returns the captured raw item verbatim when present so a reasoning
+// block replays byte-identical; otherwise it encodes the fields.
+func (i respItem) MarshalJSON() ([]byte, error) {
+	if len(i.Raw) > 0 {
+		return i.Raw, nil
+	}
+	type alias respItem
+	return json.Marshal(alias(i))
+}
+
+// UnmarshalJSON decodes the fields and keeps a clone of the input for verbatim
+// replay. The type alias drops these methods so no recursion happens.
+func (i *respItem) UnmarshalJSON(data []byte) error {
+	type alias respItem
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	a.Raw = slices.Clone(data)
+	*i = respItem(a)
+	return nil
 }
 
 // respContent is one piece of message content.
@@ -70,7 +105,6 @@ type respTool struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 }
 
-// respEvent is one decoded Responses API stream frame.
 type respEvent struct {
 	Type           string       `json:"type"`
 	OutputIndex    int          `json:"output_index"`
@@ -88,9 +122,9 @@ type respPayload struct {
 	ID     string     `json:"id"`
 	Model  string     `json:"model"`
 	Status string     `json:"status"`
+	Output []respItem `json:"output"`
 	Usage  *respUsage `json:"usage"`
 	Error  *respError `json:"error"`
-	Output []respItem `json:"output"`
 }
 
 type respError struct {
@@ -102,11 +136,12 @@ type respUsage struct {
 	InputTokens        int `json:"input_tokens"`
 	OutputTokens       int `json:"output_tokens"`
 	InputTokensDetails struct {
-		CachedTokens int `json:"cached_tokens"`
-	} `json:"input_tokens_details"`
+		CachedTokens     *int `json:"cached_tokens,omitempty"`
+		CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
+	} `json:"input_tokens_details,omitempty"`
 	OutputTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
-	} `json:"output_tokens_details"`
+	} `json:"output_tokens_details,omitempty"`
 }
 
 // toUsage converts a wire usage report.
@@ -114,11 +149,20 @@ func (u *respUsage) toUsage() Usage {
 	if u == nil {
 		return Usage{}
 	}
+	cacheRead := 0
+	if u.InputTokensDetails.CachedTokens != nil {
+		cacheRead = *u.InputTokensDetails.CachedTokens
+	}
+	cacheWrite := 0
+	if u.InputTokensDetails.CacheWriteTokens != nil {
+		cacheWrite = *u.InputTokensDetails.CacheWriteTokens
+	}
 	return Usage{
-		Input:     u.InputTokens - u.InputTokensDetails.CachedTokens,
-		Output:    u.OutputTokens,
-		CacheRead: u.InputTokensDetails.CachedTokens,
-		Reasoning: u.OutputTokensDetails.ReasoningTokens,
+		Input:      max(0, u.InputTokens-cacheRead-cacheWrite),
+		Output:     u.OutputTokens,
+		CacheRead:  cacheRead,
+		CacheWrite: cacheWrite,
+		Reasoning:  u.OutputTokensDetails.ReasoningTokens,
 	}
 }
 
@@ -136,3 +180,5 @@ func respStopReason(status string, sawToolCall bool) StopReason {
 		return StopEndTurn
 	}
 }
+
+const maxReplayTextID = 64

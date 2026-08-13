@@ -44,7 +44,7 @@ func TestLoadFile(t *testing.T) {
 		require.NotNil(t, qwen.ContextWindow)
 		assert.Equal(t, 200000, *qwen.ContextWindow)
 		require.NotNil(t, qwen.Reasoning)
-		assert.Equal(t, ReasoningUnset, *qwen.Reasoning) // "reasoning": true
+		assert.True(t, *qwen.Reasoning) // "reasoning": true
 		require.NotNil(t, qwen.Compat.ThinkingFormat)
 		assert.Equal(t, "qwen-chat-template", *qwen.Compat.ThinkingFormat)
 		assert.Equal(t, []Modality{ModalityText, ModalityImage}, qwen.Input)
@@ -185,7 +185,7 @@ func TestDialectUnmarshalText(t *testing.T) {
 		input    string
 		expected Dialect
 	}{
-		{"anthropic", "anthropic", DialectAnthropic},
+		{"anthropic_messages", "anthropic-messages", DialectAnthropic},
 		{"openai_responses", "openai-responses", DialectOpenAIResponses},
 		{"openai_completions", "openai-completions", DialectOpenAICompletions},
 	}
@@ -198,6 +198,11 @@ func TestDialectUnmarshalText(t *testing.T) {
 		})
 	}
 
+	t.Run("anthropic_alias_resolves", func(t *testing.T) {
+		var got Dialect
+		require.NoError(t, got.UnmarshalText([]byte("anthropic")))
+		assert.Equal(t, DialectAnthropic, got)
+	})
 	t.Run("unknown_errors", func(t *testing.T) {
 		var got Dialect
 		assert.Error(t, got.UnmarshalText([]byte("grpc")))
@@ -211,4 +216,30 @@ func TestFlavorUnmarshalText(t *testing.T) {
 	require.NoError(t, got.UnmarshalText([]byte("lmstudio")))
 	assert.Equal(t, FlavorLMStudio, got)
 	assert.Equal(t, "lmstudio", got.String())
+}
+
+func TestCompatWarnings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_compat_warns_nothing", func(t *testing.T) {
+		assert.Empty(t, compatWarnings(nil, DialectOpenAICompletions))
+	})
+	t.Run("unknown_thinking_format_names_the_value", func(t *testing.T) {
+		w := compatWarnings(&Compat{ThinkingFormat: ptr("bogus")}, DialectOpenAICompletions)
+		require.Len(t, w, 1)
+		assert.Contains(t, w[0], "thinkingFormat \"bogus\" is not supported")
+	})
+	t.Run("known_thinking_format_does_not_warn", func(t *testing.T) {
+		w := compatWarnings(&Compat{ThinkingFormat: ptr("deepseek")}, DialectOpenAICompletions)
+		assert.Empty(t, w)
+	})
+	t.Run("anthropic_tagged_field_ignored_by_compat_dialect", func(t *testing.T) {
+		w := compatWarnings(&Compat{ForceAdaptiveThinking: ptr(true)}, DialectOpenAICompletions)
+		require.Len(t, w, 1)
+		assert.Contains(t, w[0], "forceAdaptiveThinking")
+	})
+	t.Run("anthropic_tagged_field_accepted_by_anthropic_messages", func(t *testing.T) {
+		w := compatWarnings(&Compat{ForceAdaptiveThinking: ptr(true)}, DialectAnthropic)
+		assert.Empty(t, w)
+	})
 }

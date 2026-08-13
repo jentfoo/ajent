@@ -13,37 +13,57 @@ const (
 
 // compatRequest is a chat-completions request body.
 type compatRequest struct {
-	Model             string             `json:"model"`
-	Messages          []compatMessage    `json:"messages"`
-	Stream            bool               `json:"stream"`
-	StreamOptions     *compatStreamOpts  `json:"stream_options,omitempty"`
-	MaxTokens         *int               `json:"max_tokens,omitempty"`
-	MaxCompletion     *int               `json:"max_completion_tokens,omitempty"`
-	Temperature       *float64           `json:"temperature,omitempty"`
-	Tools             []compatTool       `json:"tools,omitempty"`
-	ToolChoice        any                `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
-	ReasoningEffort   string             `json:"reasoning_effort,omitempty"`
-	Reasoning         *compatReasoning   `json:"reasoning,omitempty"`
-	ChatTemplateKwarg map[string]any     `json:"chat_template_kwargs,omitempty"`
-	Provider          *compatRouting     `json:"provider,omitempty"`
-	Usage             *compatUsageOption `json:"usage,omitempty"`
-	CachePrompt       *bool              `json:"cache_prompt,omitempty"`
+	Model               string             `json:"model"`
+	Messages            []compatMessage    `json:"messages"`
+	Stream              bool               `json:"stream"`
+	StreamOptions       *compatStreamOpts  `json:"stream_options,omitempty"`
+	MaxTokens           *int               `json:"max_tokens,omitempty"`
+	MaxCompletion       *int               `json:"max_completion_tokens,omitempty"`
+	Temperature         *float64           `json:"temperature,omitempty"`
+	Tools               []compatTool       `json:"tools,omitempty"`
+	ToolChoice          any                `json:"tool_choice,omitempty"`
+	ParallelToolCalls   *bool              `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort     *string            `json:"reasoning_effort,omitempty"`
+	Reasoning           *compatReasoning   `json:"reasoning,omitempty"`
+	Thinking            any                `json:"thinking,omitempty"` // object or bare string
+	EnableThinking      *bool              `json:"enable_thinking,omitempty"`
+	ChatTemplateKwarg   map[string]any     `json:"chat_template_kwargs,omitempty"`
+	ChatTemplateArgs    map[string]any     `json:"chat_template_args,omitempty"`
+	ThinkingTokenBudget *int               `json:"thinking_token_budget,omitempty"`
+	ToolStream          *bool              `json:"tool_stream,omitempty"`
+	Provider            any                `json:"provider,omitempty"` // typed routing or verbatim compat JSON
+	Usage               *compatUsageOption `json:"usage,omitempty"`
+	CachePrompt         *bool              `json:"cache_prompt,omitempty"`
 }
 
 // compatReasoning is the openrouter reasoning parameter.
 type compatReasoning struct {
-	Effort    string `json:"effort,omitempty"`
-	MaxTokens int    `json:"max_tokens,omitempty"`
-	Exclude   bool   `json:"exclude,omitempty"`
+	Effort    *string `json:"effort,omitempty"`
+	MaxTokens int     `json:"max_tokens,omitempty"`
+	Enabled   *bool   `json:"enabled,omitempty"` // together
+}
+
+// compatThinking is the object form of thinking for zai and deepseek.
+type compatThinking struct {
+	Type          string `json:"type"`
+	ClearThinking *bool  `json:"clear_thinking,omitempty"`
 }
 
 // compatRouting is openrouter's upstream routing preference.
 type compatRouting struct {
-	Order             []string `json:"order,omitempty"`
-	AllowFallbacks    *bool    `json:"allow_fallbacks,omitempty"`
-	DataCollection    string   `json:"data_collection,omitempty"`
-	RequireParameters *bool    `json:"require_parameters,omitempty"`
+	Order               []string        `json:"order,omitempty"`
+	AllowFallbacks      *bool           `json:"allow_fallbacks,omitempty"`
+	DataCollection      string          `json:"data_collection,omitempty"`
+	RequireParameters   *bool           `json:"require_parameters,omitempty"`
+	Only                []string        `json:"only,omitempty"`
+	Ignore              []string        `json:"ignore,omitempty"`
+	Zdr                 *bool           `json:"zdr,omitempty"`
+	EnforceDistillable  *bool           `json:"enforce_distillable_text,omitempty"`
+	Quantizations       []string        `json:"quantizations,omitempty"`
+	Sort                json.RawMessage `json:"sort,omitempty"`
+	MaxPrice            json.RawMessage `json:"max_price,omitempty"`
+	PreferredThroughput json.RawMessage `json:"preferred_min_throughput,omitempty"`
+	PreferredLatency    json.RawMessage `json:"preferred_max_latency,omitempty"`
 }
 
 type compatUsageOption struct {
@@ -60,9 +80,32 @@ type compatMessage struct {
 	Content          any              `json:"content,omitempty"` // string, or a part list
 	ToolCalls        []compatToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
-	ReasoningContent *string          `json:"reasoning_content,omitempty"`
-	ReasoningDetails json.RawMessage  `json:"reasoning_details,omitempty"`
 	Name             string           `json:"name,omitempty"`
+	ReasoningDetails json.RawMessage  `json:"reasoning_details,omitempty"`
+
+	// reasoning replay rides a provider-specific key (reasoning_content etc.),
+	// so it is injected in MarshalJSON rather than carried by a fixed tag.
+	reasoningField string
+	reasoningText  string
+}
+
+// MarshalJSON injects the dynamic reasoning-replay key, whose name differs per
+// provider and is resolved at build time onto reasoningField.
+func (m compatMessage) MarshalJSON() ([]byte, error) {
+	type wire compatMessage // alias so this method does not recurse
+	data, err := json.Marshal((*wire)(&m))
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]json.RawMessage
+	if err = json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	if m.reasoningField != "" {
+		v, _ := json.Marshal(m.reasoningText)
+		out[m.reasoningField] = v
+	}
+	return json.Marshal(out)
 }
 
 // compatPart is one piece of multimodal content.
@@ -99,6 +142,7 @@ type compatToolSchema struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 // compatChunk is one streamed chat-completions chunk.
@@ -121,20 +165,23 @@ type compatDelta struct {
 	Content          string           `json:"content"`
 	Reasoning        string           `json:"reasoning"`
 	ReasoningContent string           `json:"reasoning_content"`
+	ReasoningText    string           `json:"reasoning_text"` // chutes.ai spelling
 	ReasoningDetails json.RawMessage  `json:"reasoning_details"`
 	ToolCalls        []compatToolCall `json:"tool_calls"`
 }
 
 // compatUsage is the token report on the final chunk.
 type compatUsage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
-	PromptTokensDetails struct {
-		CachedTokens int `json:"cached_tokens"`
-	} `json:"prompt_tokens_details"`
+	PromptTokens         int  `json:"prompt_tokens"`
+	CompletionTokens     int  `json:"completion_tokens"`
+	PromptCacheHitTokens *int `json:"prompt_cache_hit_tokens,omitempty"` // deepseek spelling
+	PromptTokensDetails  struct {
+		CachedTokens     *int `json:"cached_tokens"` // pointer so a present zero wins over the fallback
+		CacheWriteTokens *int `json:"cache_write_tokens,omitempty"`
+	} `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
-	} `json:"completion_tokens_details"`
+	} `json:"completion_tokens_details,omitempty"`
 }
 
 // toUsage converts a wire usage report.
@@ -142,12 +189,22 @@ func (u *compatUsage) toUsage() Usage {
 	if u == nil {
 		return Usage{}
 	}
+	cacheRead := 0
+	if u.PromptTokensDetails.CachedTokens != nil {
+		cacheRead = *u.PromptTokensDetails.CachedTokens
+	} else if u.PromptCacheHitTokens != nil {
+		cacheRead = *u.PromptCacheHitTokens
+	}
+	cacheWrite := 0
+	if u.PromptTokensDetails.CacheWriteTokens != nil {
+		cacheWrite = *u.PromptTokensDetails.CacheWriteTokens
+	}
 	return Usage{
-		Input:      u.PromptTokens - u.PromptTokensDetails.CachedTokens,
+		Input:      max(0, u.PromptTokens-cacheRead-cacheWrite),
 		Output:     u.CompletionTokens,
-		CacheRead:  u.PromptTokensDetails.CachedTokens,
+		CacheRead:  cacheRead,
+		CacheWrite: cacheWrite,
 		Reasoning:  u.CompletionTokensDetails.ReasoningTokens,
-		CacheWrite: 0,
 	}
 }
 

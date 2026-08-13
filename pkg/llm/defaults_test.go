@@ -56,33 +56,39 @@ func TestResolveCaps(t *testing.T) {
 		explicit := resolveCaps(base, &Compat{SupportsTemperature: ptr(false)}, nil)
 		assert.False(t, explicit.Temperature)
 	})
-	t.Run("thinking_format_selects_the_style", func(t *testing.T) {
+	t.Run("thinking_format_selects_the_encoding", func(t *testing.T) {
 		tests := []struct {
 			format   string
-			expected ReasoningStyle
+			expected ThinkingFormat
 		}{
-			{"anthropic", ReasoningAnthropicBudget},
-			{"reasoning_effort", ReasoningOpenAIEffort},
-			{"openrouter", ReasoningOpenRouter},
-			{"qwen-chat-template", ReasoningInlineTags},
-			{"together", ReasoningInlineTags},
-			{"deepseek", ReasoningContentField},
-			{"none", ReasoningNone},
+			{"anthropic", ThinkingAnthropic},
+			{"openai", ThinkingOpenAI},
+			{"reasoning_effort", ThinkingOpenAI},
+			{"openrouter", ThinkingOpenRouter},
+			{"qwen-chat-template", ThinkingQwenChatTemplate},
+			{"together", ThinkingTogether},
+			{"deepseek", ThinkingDeepSeek},
+			{"none", ThinkingNone},
 		}
 		for _, tc := range tests {
 			t.Run(tc.format, func(t *testing.T) {
 				got := resolveCaps(base, nil, &Compat{ThinkingFormat: ptr(tc.format)})
-				assert.Equal(t, tc.expected, got.Reasoning)
+				assert.Equal(t, tc.expected, got.Thinking)
 			})
 		}
 	})
-	t.Run("unknown_thinking_format_leaves_the_style", func(t *testing.T) {
+	t.Run("unknown_thinking_format_leaves_the_encoding", func(t *testing.T) {
 		got := resolveCaps(base, nil, &Compat{ThinkingFormat: ptr("invented")})
-		assert.Equal(t, base.Reasoning, got.Reasoning)
+		assert.Equal(t, base.Thinking, got.Thinking)
 	})
-	t.Run("supports_reasoning_effort_forces_effort_style", func(t *testing.T) {
-		got := resolveCaps(base, nil, &Compat{SupportsReasoningEffort: ptr(true)})
-		assert.Equal(t, ReasoningOpenAIEffort, got.Reasoning)
+	t.Run("supports_reasoning_effort_is_a_gate_not_a_clobber", func(t *testing.T) {
+		// the clobber bug: supportsReasoningEffort must not overwrite thinkingFormat
+		got := resolveCaps(base, nil, &Compat{
+			ThinkingFormat:          ptr("deepseek"),
+			SupportsReasoningEffort: ptr(true),
+		})
+		assert.Equal(t, ThinkingDeepSeek, got.Thinking)
+		assert.True(t, got.SupportsReasoningEffort)
 	})
 	t.Run("custom_think_tags", func(t *testing.T) {
 		got := resolveCaps(base, nil, &Compat{ThinkTags: []string{"<reasoning>", "</reasoning>"}})
@@ -112,9 +118,13 @@ func TestResolveModel(t *testing.T) {
 	t.Parallel()
 
 	base := flavorDefaults[FlavorLMStudio].caps
+	tagCtx := modelContext{
+		provider: "lmstudio", dialect: DialectOpenAICompletions,
+		baseURL: resolveBaseURL("http://192.168.1.100:1111/v1", flavorDefaults[FlavorLMStudio].baseURL),
+	}
 
 	t.Run("copies_declared_fields", func(t *testing.T) {
-		got := resolveModel("lmstudio", base, nil, ModelConfig{
+		got := resolveModel(tagCtx, base, nil, ModelConfig{
 			ID: "m1", Name: "Model One", Aliases: []string{"m"},
 			ContextWindow: ptr(1000), MaxTokens: ptr(200),
 		})
@@ -125,24 +135,20 @@ func TestResolveModel(t *testing.T) {
 		assert.Equal(t, 1000, got.ContextWindow)
 		assert.Equal(t, 200, got.MaxOutput)
 	})
-	t.Run("reasoning_true_keeps_the_dialect_style", func(t *testing.T) {
-		got := resolveModel("lmstudio", base, nil,
-			ModelConfig{ID: "m1", Reasoning: ptr(ReasoningUnset)})
-		assert.Equal(t, ReasoningInlineTags, got.Caps.Reasoning)
+	t.Run("reasoning_true_keeps_the_dialect_default", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, nil,
+			ModelConfig{ID: "m1", Reasoning: ptr(true)})
+		assert.True(t, got.Caps.Reasoning)
 	})
 	t.Run("reasoning_false_disables_replay", func(t *testing.T) {
-		got := resolveModel("anthropic", flavorDefaults[FlavorAnthropic].caps, nil,
-			ModelConfig{ID: "m1", Reasoning: ptr(ReasoningNone)})
-		assert.Equal(t, ReasoningNone, got.Caps.Reasoning)
+		got := resolveModel(modelContext{provider: "anthropic", dialect: DialectAnthropic},
+			flavorDefaults[FlavorAnthropic].caps, nil,
+			ModelConfig{ID: "m1", Reasoning: ptr(false)})
+		assert.False(t, got.Caps.Reasoning)
 		assert.False(t, got.Caps.ReasoningReplay)
 	})
-	t.Run("explicit_style_wins", func(t *testing.T) {
-		got := resolveModel("lmstudio", base, nil,
-			ModelConfig{ID: "m1", Reasoning: ptr(ReasoningContentField)})
-		assert.Equal(t, ReasoningContentField, got.Caps.Reasoning)
-	})
 	t.Run("level_map_carried_onto_caps", func(t *testing.T) {
-		got := resolveModel("lmstudio", base, nil, ModelConfig{
+		got := resolveModel(tagCtx, base, nil, ModelConfig{
 			ID: "m1", LevelMap: map[Level]*string{LevelMax: ptr("high"), LevelOff: nil},
 		})
 		require.NotNil(t, got.Caps.LevelMap[LevelMax])
@@ -150,27 +156,37 @@ func TestResolveModel(t *testing.T) {
 		assert.Contains(t, got.Caps.LevelMap, LevelOff)
 		assert.Nil(t, got.Caps.LevelMap[LevelOff])
 	})
+	t.Run("thinking_budgets_overlay_the_ladder", func(t *testing.T) {
+		reasoning := true
+		got := resolveModel(tagCtx, base, nil, ModelConfig{
+			ID: "m1", Reasoning: &reasoning,
+			ThinkingBudgets: map[Level]int{LevelHigh: 5000},
+		})
+		// the configured rung wins and the rest of the ladder survives
+		assert.Equal(t, 5000, got.Caps.Budgets[LevelHigh])
+		assert.Contains(t, got.Caps.Budgets, LevelLow) // untouched rungs remain
+	})
 	t.Run("input_defaults_to_text", func(t *testing.T) {
-		got := resolveModel("lmstudio", Capabilities{}, nil, ModelConfig{ID: "m1"})
+		got := resolveModel(tagCtx, Capabilities{}, nil, ModelConfig{ID: "m1"})
 		assert.Equal(t, []Modality{ModalityText}, got.Input)
 	})
 	t.Run("input_includes_image_when_supported", func(t *testing.T) {
-		got := resolveModel("lmstudio", Capabilities{Images: true}, nil, ModelConfig{ID: "m1"})
+		got := resolveModel(tagCtx, Capabilities{Images: true}, nil, ModelConfig{ID: "m1"})
 		assert.Equal(t, []Modality{ModalityText, ModalityImage}, got.Input)
 	})
 	t.Run("declared_input_wins", func(t *testing.T) {
-		got := resolveModel("lmstudio", Capabilities{Images: true}, nil,
+		got := resolveModel(tagCtx, Capabilities{Images: true}, nil,
 			ModelConfig{ID: "m1", Input: []Modality{ModalityText}})
 		assert.Equal(t, []Modality{ModalityText}, got.Input)
 	})
 	t.Run("per_model_headers_carried_onto_the_model", func(t *testing.T) {
-		got := resolveModel("lmstudio", base, nil, ModelConfig{
+		got := resolveModel(tagCtx, base, nil, ModelConfig{
 			ID: "m1", Headers: map[string]string{"X-Org": "acme"},
 		})
 		assert.Equal(t, map[string]string{"X-Org": "acme"}, got.Headers)
 	})
 	t.Run("sampling_params_fold_into_the_body_escape_hatch", func(t *testing.T) {
-		got := resolveModel("lmstudio", base, nil, ModelConfig{
+		got := resolveModel(tagCtx, base, nil, ModelConfig{
 			ID: "m1", SamplingParams: map[string]any{"temperature": 0.2, "seed": 7},
 		})
 		require.NotNil(t, got.Caps.ExtraBody)
@@ -206,6 +222,20 @@ func TestFlavorDefaults(t *testing.T) {
 		assert.True(t, flavorDefaults[FlavorAnthropic].caps.ReasoningReplay)
 		assert.True(t, flavorDefaults[FlavorOpenAI].caps.ReasoningReplay)
 	})
+	t.Run("anthropic_defaults_eager_streaming_and_tool_cache", func(t *testing.T) {
+		// pi defaults both on; an unset entry must behave the same
+		caps := flavorDefaults[FlavorAnthropic].caps
+		assert.True(t, caps.EagerToolInputStreaming)
+		assert.True(t, caps.CacheControlOnTools)
+	})
+	t.Run("explicit_false_overrides_the_anthropic_defaults", func(t *testing.T) {
+		caps := resolveCaps(flavorDefaults[FlavorAnthropic].caps, &Compat{
+			EagerToolInputStreaming:     ptr(false),
+			SupportsCacheControlOnTools: ptr(false),
+		})
+		assert.False(t, caps.EagerToolInputStreaming)
+		assert.False(t, caps.CacheControlOnTools)
+	})
 	t.Run("llamacpp_starts_without_stream_usage", func(t *testing.T) {
 		assert.False(t, flavorDefaults[FlavorLlamaCpp].caps.StreamUsage)
 	})
@@ -217,6 +247,15 @@ func TestFlavorDefaults(t *testing.T) {
 	t.Run("local_flavors_need_no_key", func(t *testing.T) {
 		for _, f := range []Flavor{FlavorLMStudio, FlavorLlamaCpp} {
 			assert.Empty(t, flavorDefaults[f].apiKeyEnv, f.String())
+		}
+	})
+	t.Run("chat_completions_flavors_default_finish_reason_and_strict", func(t *testing.T) {
+		// pi's chat-completions default emits strict:false on tools and treats a
+		// stream that ends without finish_reason as truncated, so every flavor that
+		// can reach the compat builder carries both gates.
+		for _, f := range []Flavor{FlavorGeneric, FlavorOpenRouter, FlavorLMStudio, FlavorLlamaCpp} {
+			assert.True(t, flavorDefaults[f].caps.SupportsFinishReason, f.String())
+			assert.True(t, flavorDefaults[f].caps.SupportsStrict, f.String())
 		}
 	})
 }

@@ -50,11 +50,13 @@ type fakeMultiPick struct {
 func newFakeConsole(tb testing.TB) *fakeConsole {
 	tb.Helper()
 	// a small registry with two models so /model can resolve and list
+	reasoning := true
 	file := llm.File{Providers: map[string]llm.ProviderConfig{
 		"test": {
 			APIKeyEnv: "TEST_API_KEY",
 			Models: []llm.ModelConfig{
-				{ID: "alpha", Name: "Alpha", Aliases: []string{"a"}, ContextWindow: ptrInt(200000)},
+				{ID: "alpha", Name: "Alpha", Aliases: []string{"a"},
+					ContextWindow: ptrInt(200000), Reasoning: &reasoning},
 				{ID: "beta", Name: "Beta", ContextWindow: ptrInt(128000)},
 			},
 		},

@@ -90,23 +90,22 @@ func TestRetainPolicyUnmarshalJSON(t *testing.T) {
 	}
 }
 
-func TestReasoningStyleUnmarshalJSON(t *testing.T) {
+func TestThinkingFormatUnmarshalJSON(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
 		input    string
-		expected ReasoningStyle
+		expected ThinkingFormat
 	}{
-		{"named_style", `"anthropic_budget"`, ReasoningAnthropicBudget},
-		{"inline_tags", `"inline_tags"`, ReasoningInlineTags},
-		{"bool_true", `true`, ReasoningUnset},
-		{"bool_false", `false`, ReasoningNone},
-		{"explicit_none", `"none"`, ReasoningNone},
+		{"openai", `"openai"`, ThinkingOpenAI},
+		{"deepseek", `"deepseek"`, ThinkingDeepSeek},
+		{"anthropic", `"anthropic"`, ThinkingAnthropic},
+		{"think_tags", `"think-tags"`, ThinkingThinkTags},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			var got ReasoningStyle
+			var got ThinkingFormat
 			require.NoError(t, json.Unmarshal([]byte(tc.input), &got))
 			assert.Equal(t, tc.expected, got)
 		})
@@ -148,16 +147,18 @@ func TestEnumTextRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	t.Run("level", func(t *testing.T) {
-		enumRoundTrip[Level, *Level](t, Levels())
+		enumRoundTrip[Level, *Level](t, allLevels())
 	})
 	t.Run("retain_policy", func(t *testing.T) {
 		enumRoundTrip[RetainPolicy, *RetainPolicy](t,
 			[]RetainPolicy{RetainNone, RetainLastTurn, RetainWholeTurn, RetainAll})
 	})
-	t.Run("reasoning_style", func(t *testing.T) {
-		enumRoundTrip[ReasoningStyle, *ReasoningStyle](t, []ReasoningStyle{
-			ReasoningNone, ReasoningAnthropicBudget, ReasoningOpenAIEffort,
-			ReasoningOpenRouter, ReasoningInlineTags, ReasoningContentField, ReasoningUnset,
+	t.Run("thinking_format", func(t *testing.T) {
+		enumRoundTrip[ThinkingFormat, *ThinkingFormat](t, []ThinkingFormat{
+			ThinkingNone, ThinkingOpenAI, ThinkingOpenRouter, ThinkingDeepSeek,
+			ThinkingTogether, ThinkingBaseten, ThinkingZAI, ThinkingQwen,
+			ThinkingChatTemplate, ThinkingQwenChatTemplate, ThinkingStringThinking,
+			ThinkingAntLing, ThinkingAnthropic, ThinkingThinkTags,
 		})
 	})
 	t.Run("tokenizer_kind", func(t *testing.T) {
@@ -185,10 +186,10 @@ func TestParseRetain(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func TestLevels(t *testing.T) {
+func TestAllLevels(t *testing.T) {
 	t.Parallel()
 
-	got := Levels()
+	got := allLevels()
 	assert.Len(t, got, 7)
 	assert.Equal(t, LevelOff, got[0])
 	assert.Equal(t, LevelMax, got[len(got)-1])

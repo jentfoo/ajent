@@ -52,16 +52,20 @@ func TestParseLlamaProps(t *testing.T) {
 func TestDecorateLlamaCpp(t *testing.T) {
 	t.Parallel()
 
-	model := func(style ReasoningStyle) Model {
+	model := func(tags bool) Model {
 		caps := flavorDefaults[FlavorLlamaCpp].caps
-		caps.Reasoning = style
+		if tags {
+			caps.ThinkOpen, caps.ThinkClose = thinkOpenTag, thinkCloseTag
+		} else {
+			caps.ThinkOpen, caps.ThinkClose = "", ""
+		}
 		return Model{ID: "m1", Caps: caps}
 	}
 
 	t.Run("enables_thinking_above_off", func(t *testing.T) {
 		var body compatRequest
 		decorateLlamaCpp(&body, Request{
-			Model: model(ReasoningInlineTags), Reasoning: ReasoningConfig{Level: LevelMedium},
+			Model: model(true), Reasoning: ReasoningConfig{Level: LevelMedium},
 		})
 		assert.Equal(t, true, body.ChatTemplateKwarg["enable_thinking"])
 		require.NotNil(t, body.CachePrompt)
@@ -70,13 +74,13 @@ func TestDecorateLlamaCpp(t *testing.T) {
 	t.Run("disables_thinking_at_off", func(t *testing.T) {
 		var body compatRequest
 		decorateLlamaCpp(&body, Request{
-			Model: model(ReasoningInlineTags), Reasoning: ReasoningConfig{Level: LevelOff},
+			Model: model(true), Reasoning: ReasoningConfig{Level: LevelOff},
 		})
 		assert.Equal(t, false, body.ChatTemplateKwarg["enable_thinking"])
 	})
 	t.Run("no_template_kwarg_for_non_tag_models", func(t *testing.T) {
 		var body compatRequest
-		decorateLlamaCpp(&body, Request{Model: model(ReasoningNone)})
+		decorateLlamaCpp(&body, Request{Model: model(false)})
 		assert.Empty(t, body.ChatTemplateKwarg)
 	})
 	t.Run("older_builds_get_no_stream_options", func(t *testing.T) {

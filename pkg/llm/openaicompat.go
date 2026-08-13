@@ -41,7 +41,7 @@ func (p *compatProvider) Stream(ctx context.Context, req Request) (Stream, error
 	}
 	resp, err := p.client.do(ctx, httpReq{
 		method: http.MethodPost, path: path, body: body,
-		headers: req.Model.Headers, classify: p.profile.classify,
+		headers: withSessionHeaders(req.Model.Headers, req), classify: p.profile.classify,
 	})
 	if err != nil {
 		return nil, err
@@ -52,6 +52,7 @@ func (p *compatProvider) Stream(ctx context.Context, req Request) (Stream, error
 // buildCompatBody marshals a request into a chat-completions body. It is pure,
 // so request shape can be asserted without a server.
 func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
+	req = Prepare(req)
 	caps := req.Model.Caps
 	msgs, err := compatMessages(req, caps)
 	if err != nil {
@@ -77,7 +78,7 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 		body.Temperature = req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		body.Tools = compatTools(req.Tools)
+		body.Tools = compatTools(req.Tools, caps.SupportsStrict)
 		if caps.ToolChoice {
 			body.ToolChoice = compatToolChoice(req.ToolChoice)
 		}
@@ -85,10 +86,11 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 			t := true
 			body.ParallelToolCalls = &t
 		}
+		if caps.ZaiToolStream {
+			body.ToolStream = ptrOf(true)
+		}
 	}
-	if caps.Reasoning == ReasoningOpenAIEffort {
-		body.ReasoningEffort = effortFor(req.Reasoning.Level, caps)
-	}
+	applyThinking(&body, req) // runs after the max-tokens fields for its budget read
 	if profile.decorate != nil {
 		profile.decorate(&body, req)
 	}
@@ -112,35 +114,12 @@ func marshalWithExtra(body compatRequest, extra map[string]json.RawMessage) ([]b
 	return json.Marshal(merged)
 }
 
-// effortFor maps a level onto the provider's own effort value.
-func effortFor(l Level, caps Capabilities) string {
-	if caps.LevelMap != nil {
-		v, ok := caps.LevelMap[l]
-		if ok {
-			if v == nil {
-				return "" // an explicit null omits the parameter
-			}
-			return *v
-		}
-	}
-	switch l {
-	case LevelOff:
-		return ""
-	case LevelMinimal:
-		return "minimal"
-	case LevelLow:
-		return "low"
-	case LevelMedium:
-		return "medium"
-	default:
-		return "high"
-	}
-}
-
 // compatMessages flattens the content model onto chat-completions messages.
 func compatMessages(req Request, caps Capabilities) ([]compatMessage, error) {
-	msgs := applyRetention(req.Messages, req.Reasoning.Retain, caps)
+	msgs := req.Messages // already normalized by Prepare
 	out := make([]compatMessage, 0, len(msgs)+1)
+	// whether reasoning is on for this turn, which gates the empty replay field
+	on := caps.Reasoning && clampLevel(caps, req.Reasoning.Level) != LevelOff
 
 	if len(req.System) > 0 {
 		role := roleSystem
@@ -150,7 +129,7 @@ func compatMessages(req Request, caps Capabilities) ([]compatMessage, error) {
 		out = append(out, compatMessage{Role: role, Content: blocksText(req.System)})
 	}
 	for _, m := range msgs {
-		converted, err := compatMessageFor(m, caps)
+		converted, err := compatMessageFor(m, caps, on)
 		if err != nil {
 			return nil, err
 		}
@@ -160,15 +139,19 @@ func compatMessages(req Request, caps Capabilities) ([]compatMessage, error) {
 }
 
 // compatMessageFor converts one message, which may expand into several when it
-// carries tool results.
-func compatMessageFor(m Message, caps Capabilities) ([]compatMessage, error) {
+// carries tool results. on reports whether this turn reasons at all.
+func compatMessageFor(m Message, caps Capabilities, on bool) ([]compatMessage, error) {
 	// tool results become their own tool role messages
 	var results []compatMessage
 	for _, b := range m.Content {
 		if tr, ok := b.(ToolResultBlock); ok {
-			results = append(results, compatMessage{
+			rm := compatMessage{
 				Role: roleTool, ToolCallID: tr.CallID, Content: blocksText(tr.Content),
-			})
+			}
+			if caps.RequiresToolResultName && tr.ToolName != "" {
+				rm.Name = tr.ToolName
+			}
+			results = append(results, rm)
 		}
 	}
 	if len(results) > 0 && len(results) == len(m.Content) {
@@ -188,6 +171,7 @@ func compatMessageFor(m Message, caps Capabilities) ([]compatMessage, error) {
 	} else if text != "" {
 		msg.Content = text
 	}
+	var thinkingTexts []string
 	for _, b := range m.Content {
 		switch v := b.(type) {
 		case ToolCallBlock:
@@ -196,24 +180,41 @@ func compatMessageFor(m Message, caps Capabilities) ([]compatMessage, error) {
 				Function: compatToolFunction{Name: v.Name, Arguments: string(v.Input)},
 			})
 		case ThinkingBlock:
-			if caps.ReplayReasoning && v.Text != "" {
-				t := v.Text
-				msg.ReasoningContent = &t
+			if strings.TrimSpace(v.Text) != "" {
+				thinkingTexts = append(thinkingTexts, v.Text)
 			}
 			if len(v.Details) > 0 {
 				msg.ReasoningDetails = v.Details
 			}
 		}
 	}
-	// deepseek requires every replayed assistant message to carry reasoning_content,
-	// even when empty, so it stays in thinking mode across turns.
-	if caps.ReplayReasoning && m.Role == RoleAssistant && msg.ReasoningContent == nil {
-		e := ""
-		msg.ReasoningContent = &e
+
+	// reasoning replay rides the configured field or a surviving block's own source;
+	// an empty field is forced only when this turn reasons, which keeps deepseek-style
+	// models in thinking mode across turns.
+	if len(thinkingTexts) > 0 {
+		if msg.reasoningField = resolveReasonField(m, caps); msg.reasoningField != "" {
+			msg.reasoningText = strings.Join(thinkingTexts, "\n")
+		}
+	} else if on && m.Role == RoleAssistant {
+		// force an empty reasoning field so a model stays in thinking mode across
+		// turns; this defaults on for deepseek via detection and is user-overridable.
+		// think-tags models never get it: they parse tags from content, not fields.
+		if caps.ReplayReasoning {
+			msg.reasoningField = resolveReasonField(m, caps)
+			if msg.reasoningField == "" {
+				msg.reasoningField = "reasoning_content"
+			}
+		}
 	}
-	// skip messages with neither content nor tool calls, which providers reject
+	// skip messages with neither content nor tool calls, which providers reject,
+	// unless a bridging assistant placeholder must be emitted as explicit empty text.
 	if msg.Content == nil && len(msg.ToolCalls) == 0 {
-		return results, nil
+		if caps.RequiresAssistantAfterToolResult && m.Role == RoleAssistant {
+			msg.Content = ""
+		} else {
+			return results, nil
+		}
 	}
 	return append(results, msg), nil
 }
@@ -249,22 +250,43 @@ func compatContent(blocks BlockList, caps Capabilities) ([]compatPart, string, e
 	return parts, "", nil
 }
 
-// blocksText joins the text of every text block.
-func blocksText(blocks BlockList) string {
-	var b strings.Builder
-	for _, blk := range blocks {
-		if t, ok := blk.(TextBlock); ok {
-			b.WriteString(t.Text)
+// resolveReasonField returns which key reasoning replays under: the configured
+// field, else a surviving thinking block's own originating source.
+func resolveReasonField(m Message, caps Capabilities) string {
+	if caps.ReasoningField != "" {
+		return caps.ReasoningField
+	}
+	for _, b := range m.Content {
+		if tb, ok := b.(ThinkingBlock); ok && tb.Field != "" {
+			return tb.Field
 		}
 	}
-	return b.String()
+	return ""
 }
 
-// compatTools converts tool schemas.
-func compatTools(tools []ToolSchema) []compatTool {
+// blocksText joins the text of every non-empty text block with a newline. This
+// differs from pi's separator-less join for assistant parts, which is only hit by
+// responses phase blocks replayed onto compat.
+func blocksText(blocks BlockList) string {
+	var texts []string
+	for _, blk := range blocks {
+		if t, ok := blk.(TextBlock); ok && t.Text != "" {
+			texts = append(texts, t.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
+// compatTools converts tool schemas. strict applies the provider's default wire
+// shape (strict: false) when the capability gate is set.
+func compatTools(tools []ToolSchema, strict bool) []compatTool {
 	out := make([]compatTool, len(tools))
 	for i, t := range tools {
-		out[i] = compatTool{Type: typeFunction, Function: compatToolSchema(t)}
+		schema := compatToolSchema{Name: t.Name, Description: t.Description, Parameters: t.Parameters}
+		if strict {
+			schema.Strict = ptrOf(false)
+		}
+		out[i] = compatTool{Type: typeFunction, Function: schema}
 	}
 	return out
 }
@@ -287,18 +309,19 @@ func compatToolChoice(tc ToolChoice) any {
 
 // compatState is the mutable decode state one stream carries.
 type compatState struct {
-	caps      Capabilities
-	split     *thinkSplitter
-	tools     *toolAccumulator
-	nextBlock int
-	thinkIdx  int
-	textIdx   int
-	thinkBuf  strings.Builder // accumulated for the end block
-	textBuf   strings.Builder
-	details   json.RawMessage
-	usage     Usage
-	stop      StopReason
-	sawMeta   bool
+	caps        Capabilities
+	split       *thinkSplitter
+	tools       *toolAccumulator
+	nextBlock   int
+	thinkIdx    int
+	textIdx     int
+	thinkBuf    strings.Builder // accumulated for the end block
+	textBuf     strings.Builder
+	reasonField string // delta field that supplied the thinking text
+	details     json.RawMessage
+	usage       Usage
+	stop        StopReason
+	sawMeta     bool
 }
 
 // compatStream decodes a chat-completions event stream.
@@ -372,12 +395,14 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	st := s.st
 	var events []Event
 
-	reasoning := c.Delta.Reasoning
-	if reasoning == "" {
-		reasoning = c.Delta.ReasoningContent
+	// pi reads the first non-empty of reasoning_content, reasoning, reasoning_text;
+	// chutes.ai sends the same text in two fields and this order picks the right one.
+	reasoning, field := deltaReasonText(c.Delta)
+	if field != "" {
+		st.reasonField = field
 	}
 	content := c.Delta.Content
-	if st.caps.Reasoning == ReasoningInlineTags && content != "" {
+	if st.caps.ThinkOpen != "" && content != "" {
 		var thinking string
 		content, thinking = st.split.Write(content)
 		reasoning += thinking
@@ -420,14 +445,29 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	return events
 }
 
-// endThinking closes the thinking block, carrying the replay tokens. It is
-// idempotent so both the text transition and the terminal drain may call it.
+// endThinking closes the thinking block, carrying the replay tokens and its
+// originating delta field. It is idempotent so both the text transition and the
+// terminal drain may call it.
 func (s *compatStream) endThinking() Event {
 	st := s.st
 	idx := st.thinkIdx
 	st.thinkIdx = -2 // closed, so a later drain does not repeat it
 	return Event{Type: EventThinkingEnd, Index: idx,
-		Block: ThinkingBlock{Text: st.thinkBuf.String(), Details: st.details}}
+		Block: ThinkingBlock{Text: st.thinkBuf.String(), Details: st.details, Field: st.reasonField}}
+}
+
+// deltaReasonText returns the first non-empty reasoning field and its name.
+func deltaReasonText(d compatDelta) (text, field string) {
+	switch {
+	case d.ReasoningContent != "":
+		return d.ReasoningContent, "reasoning_content"
+	case d.Reasoning != "":
+		return d.Reasoning, "reasoning"
+	case d.ReasoningText != "":
+		return d.ReasoningText, "reasoning_text"
+	default:
+		return "", ""
+	}
 }
 
 // finish drains the accumulators and emits the terminal events.
@@ -439,7 +479,7 @@ func (s *compatStream) finish(cause error) []Event {
 
 	var events []Event
 	st := s.st
-	if st.caps.Reasoning == ReasoningInlineTags {
+	if st.caps.ThinkOpen != "" {
 		text, thinking := st.split.Flush()
 		if thinking != "" && st.thinkIdx >= 0 {
 			events = append(events, Event{Type: EventThinkingDelta, Index: st.thinkIdx, Text: thinking})
@@ -472,7 +512,19 @@ func (s *compatStream) finish(cause error) []Event {
 		stop = StopError
 		s.err = cause
 	} else if stop == StopUnknown {
-		stop = StopEndTurn
+		// no finish reason arrived: infer for providers that never send one, or an
+		// interrupted stream; otherwise a truncated stream is surfaced as an error.
+		if !st.caps.SupportsFinishReason || s.ctx.Err() != nil {
+			if st.tools != nil {
+				stop = StopToolUse
+			} else {
+				stop = StopEndTurn
+			}
+		} else {
+			streamErr = errors.New("llm: stream ended without finish_reason")
+			stop = StopError
+			s.err = streamErr
+		}
 	}
 	return append(events, Event{Type: EventDone, StopReason: stop, Usage: st.usage, Err: streamErr})
 }

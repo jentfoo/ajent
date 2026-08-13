@@ -162,7 +162,7 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 
 	// phase 06: every turn is recorded into the workspace transcript so double-Esc
 	// while idle can open the context-tree picker and rewind onto an earlier point.
-	rec := newSession(ui, sessMode, resumeID)
+	rec := newSession(ui, sessMode, resumeID, active.Key())
 	if rec == nil {
 		ui.Notify("session recording disabled; Esc will not rewind", tui.LevelWarn)
 	}
@@ -192,6 +192,7 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 			}
 			return comp.run(ctx, reason, "")
 		},
+		SessionID: sessionHint(rec),
 	}
 	if rec != nil {
 		opts.Sink = rec.rec.Sink(sink) // persist notices and fsync at turn end
@@ -425,7 +426,7 @@ const (
 // nil when recording cannot be set up so the app keeps running without a rewind tree.
 // newSession opens (or resumes) the workspace's current transcript per mode, or
 // nil when recording cannot be set up so the app keeps running without a rewind tree.
-func newSession(ui *tui.UI, mode resumeMode, resumeID string) *sessRec {
+func newSession(ui *tui.UI, mode resumeMode, resumeID, modelKey string) *sessRec {
 	store, err := session.NewStore()
 	if err != nil {
 		return nil
@@ -435,7 +436,7 @@ func newSession(ui *tui.UI, mode resumeMode, resumeID string) *sessRec {
 	if ui != nil && mode == modeResumePick {
 		pick = func(list []session.Info) (int, error) { return pickSessionRoot(ui, list) }
 	}
-	w, err := openSession(store, mode, cwd, resumeID, pick)
+	w, err := openSession(store, mode, cwd, resumeID, modelKey, pick)
 	if err != nil {
 		return nil
 	}
@@ -447,11 +448,12 @@ func newSession(ui *tui.UI, mode resumeMode, resumeID string) *sessRec {
 // openSession picks the transcript to write per resumeMode. id is used by
 // modeResumeID to reopen one saved session directly. pick is called for
 // modeResumePick to choose among saved roots; pass nil when no UI is available.
-func openSession(store *session.Store, mode resumeMode, cwd string, id string, pick func([]session.Info) (int, error)) (*session.Writer, error) {
+func openSession(store *session.Store, mode resumeMode, cwd string, id, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, error) {
 	fresh := func() (*session.Writer, error) {
 		return store.Create(cwd, session.SessionData{
 			Version:   session.Version(),
 			Workspace: cwd,
+			Model:     modelKey, // provenance so a resume can stamp assistant origins
 		})
 	}
 

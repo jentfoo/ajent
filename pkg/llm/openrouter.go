@@ -5,40 +5,37 @@ import (
 	"slices"
 )
 
-// decorateOpenRouter adds the reasoning parameter, upstream routing preference
-// and usage reporting that openrouter accepts beyond the shared dialect.
+// decorateOpenRouter adds the upstream routing preference and usage reporting
+// that openrouter accepts beyond the shared dialect. The reasoning parameter is
+// owned by applyThinking.
 func decorateOpenRouter(routing *Routing) func(*compatRequest, Request) {
 	return func(body *compatRequest, req Request) {
 		body.Usage = &compatUsageOption{Include: true}
-		body.ReasoningEffort = "" // openrouter carries it in the reasoning object
-
-		if req.Model.Caps.Reasoning == ReasoningOpenRouter {
-			body.Reasoning = openRouterReasoning(req)
-		}
-		if routing != nil {
-			body.Provider = &compatRouting{
-				Order:             slices.Clone(routing.Order),
-				AllowFallbacks:    routing.AllowFallbacks,
-				DataCollection:    routing.DataCollection,
-				RequireParameters: routing.RequireParams,
-			}
+		if r := req.Model.Caps.OpenRouterRouting; len(r) > 0 {
+			body.Provider = r // verbatim when configuration set it
+		} else if routing != nil {
+			body.Provider = compatRoutingFrom(routing)
 		}
 	}
 }
 
-// openRouterReasoning renders the reasoning parameter, which takes either an
-// effort or an explicit budget, and can ask the model not to reason at all.
-func openRouterReasoning(req Request) *compatReasoning {
-	if req.Reasoning.Level == LevelOff {
-		return &compatReasoning{Exclude: true}
-	} else if req.Reasoning.Budget > 0 {
-		return &compatReasoning{MaxTokens: req.Reasoning.Budget}
+// compatRoutingFrom maps the configured routing onto its wire form.
+func compatRoutingFrom(r *Routing) *compatRouting {
+	return &compatRouting{
+		Order:               slices.Clone(r.Order),
+		AllowFallbacks:      r.AllowFallbacks,
+		DataCollection:      r.DataCollection,
+		RequireParameters:   r.RequireParams,
+		Only:                slices.Clone(r.Only),
+		Ignore:              slices.Clone(r.Ignore),
+		Zdr:                 r.Zdr,
+		EnforceDistillable:  r.EnforceDistillable,
+		Quantizations:       slices.Clone(r.Quantizations),
+		Sort:                r.Sort,
+		MaxPrice:            r.MaxPrice,
+		PreferredThroughput: r.PreferredThroughput,
+		PreferredLatency:    r.PreferredLatency,
 	}
-	effort := effortFor(req.Reasoning.Level, req.Model.Caps)
-	if effort == "" {
-		return nil
-	}
-	return &compatReasoning{Effort: effort}
 }
 
 // openRouterExtra captures reasoning_details verbatim. Replaying it unchanged is
@@ -104,7 +101,7 @@ func parseOpenRouterModels(body []byte) ([]ModelConfig, error) {
 		}
 		if slices.Contains(d.SupportedParameters, "reasoning") ||
 			slices.Contains(d.SupportedParameters, "include_reasoning") {
-			m.Reasoning = ptrOf(ReasoningOpenRouter)
+			m.Reasoning = ptrOf(true)
 		}
 		if slices.Contains(d.SupportedParameters, "tools") {
 			m.Compat = &Compat{SupportsToolChoice: ptrOf(true)}

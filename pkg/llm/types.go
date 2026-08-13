@@ -28,10 +28,21 @@ const (
 	BlockImage      BlockType = "image"
 )
 
+// Origin records which provider, dialect and model produced a message. It is
+// populated on rebuild for identity comparisons; it never reaches the transcript.
+type Origin struct {
+	Provider string
+	Dialect  Dialect
+	Model    string
+}
+
 // Message is one turn of the conversation.
 type Message struct {
 	Role    Role      `json:"role"`
 	Content BlockList `json:"content"`
+
+	Origin *Origin    `json:"-"` // producing endpoint identity, rebuild only
+	Stop   StopReason `json:"-"` // terminating stop reason, rebuild only
 }
 
 // Block is one piece of message content. The unexported method seals the set.
@@ -45,18 +56,21 @@ type BlockList []Block
 
 // TextBlock is plain text content.
 type TextBlock struct {
-	Text string `json:"text"`
+	Text      string `json:"text"`
+	Signature string `json:"signature,omitempty"` // responses item id + phase
 }
 
 // ThinkingBlock is model reasoning. It carries every provider's replay token,
 // since dropping one is what breaks multi turn reasoning.
 type ThinkingBlock struct {
-	Text      string `json:"text,omitempty"`
-	Signature string `json:"signature,omitempty"` // anthropic
-	Redacted  string `json:"redacted,omitempty"`  // anthropic redacted_thinking, base64 verbatim
-	ItemID    string `json:"itemId,omitempty"`    // openai responses item id
-	Encrypted string `json:"encrypted,omitempty"` // openai encrypted_content
-	Details   []byte `json:"details,omitempty"`   // openrouter reasoning_details, verbatim
+	Text      string          `json:"text,omitempty"`
+	Signature string          `json:"signature,omitempty"` // anthropic
+	Redacted  string          `json:"redacted,omitempty"`  // anthropic redacted_thinking, base64 verbatim
+	ItemID    string          `json:"itemId,omitempty"`    // openai responses item id
+	Encrypted string          `json:"encrypted,omitempty"` // openai encrypted_content
+	Details   []byte          `json:"details,omitempty"`   // openrouter reasoning_details, verbatim
+	Field     string          `json:"field,omitempty"`     // originating reasoning delta name
+	Item      json.RawMessage `json:"item,omitempty"`      // full serialized responses item
 }
 
 // ToolCallBlock is a tool invocation requested by the model.
@@ -68,11 +82,14 @@ type ToolCallBlock struct {
 
 // ToolResultBlock is the outcome of a tool call, sent back to the model.
 type ToolResultBlock struct {
-	CallID  string    `json:"callId"`
-	Content BlockList `json:"content"`
-	Display string    `json:"display,omitempty"` // what history shows when it differs from Content
-	Details any       `json:"details,omitempty"` // structured detail for extensions and the transcript
-	IsError bool      `json:"isError,omitempty"`
+	CallID   string    `json:"callId"`
+	ToolName string    `json:"toolName,omitempty"` // matching call name, for result-name providers
+	Content  BlockList `json:"content"`
+	Display  string    `json:"display,omitempty"` // what history shows when it differs from Content
+	Details  any       `json:"details,omitempty"` // structured detail for extensions and the transcript
+	IsError  bool      `json:"isError,omitempty"`
+
+	AddedToolNames []string `json:"addedToolNames,omitempty"` // tool references materialized into tools
 }
 
 // ImageBlock is image content.

@@ -427,7 +427,7 @@ func TestCompactForceSummarisesSmallSession(t *testing.T) {
 // mustMsgs returns the messages ContextMessages would send for branch under cd.
 func mustMsgs(t *testing.T, branch []session.Entry, cd session.CompactionData) []llm.Message {
 	t.Helper()
-	msgs, warns := session.ContextMessages(branch, cd)
+	msgs, warns := session.ContextMessages(branch, cd, nil)
 	require.Empty(t, warns)
 	return msgs
 }
@@ -455,7 +455,7 @@ func TestCompactForceSingleTurnSummaryOnly(t *testing.T) {
 
 	// once recorded, the rebuilt context is the summary plus anything newer
 	recorded := append(slices.Clone(branch), compactEntry("c1", res.Summary, ""), userText("u2", "another?"))
-	msgs, warns := session.ContextMessages(recorded, session.CompactionData{Summary: res.Summary})
+	msgs, warns := session.ContextMessages(recorded, session.CompactionData{Summary: res.Summary}, nil)
 	require.Empty(t, warns)
 	require.Len(t, msgs, 2)
 	assert.Contains(t, textOf(msgs[0]), "The Last Librarian")

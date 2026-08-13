@@ -34,7 +34,7 @@ pkg/config/       paths and bytes only, no domain types
 pkg/llm/
   types.go          content model, BlockList and its type tagged JSON
   request.go        Request, Provider, Counter, Discoverer, Level, RetainPolicy
-  caps.go           Capabilities, ReasoningStyle, TokenizerKind
+  caps.go           Capabilities, TokenizerKind
   event.go          Event, EventType, StopReason, Usage
   stream.go         Stream, Accumulator, Accumulate, SliceStream
   fake.go           ScriptedProvider, for callers that need a provider in tests
@@ -53,7 +53,8 @@ pkg/llm/
   discover.go       discovery cache, conditional refetch, orchestration
   factory.go        ProviderConfig -> Provider
 
-  retention.go      applyRetention
+  prepare.go        Prepare (message normalization)
+  retention.go      retention policy helpers
   think.go          inline <think> splitting
   toolacc.go        tool argument accumulation
   classify.go       per flavor error and overflow classification
@@ -90,7 +91,7 @@ type Block interface{ blockType() BlockType }   // sealed
 `TextBlock`, `ThinkingBlock`, `ToolCallBlock`, `ToolResultBlock`, `ImageBlock`.
 
 Blocks are stored as **values, not pointers**, so a block is immutable once
-appended. That is what makes `applyRetention` safe to write as a filter.
+appended. That is what makes `Prepare` safe to write as a filter.
 
 `BlockList` carries the JSON round trip. A bare `[]Block` cannot be decoded — the
 concrete type is lost — so `BlockList.MarshalJSON` writes a `{type, data}`
@@ -116,8 +117,8 @@ tolerates a redacted block's absence but not its corruption.
 
 ```
 Request
-  -> applyRetention(messages, policy, caps)      strip unreplayable thinking
-  -> build<Dialect>Body(req)                     pure, no network
+  -> Prepare(req)                                one normalization pass (see below)
+  -> build<Dialect>Body(req)                     pure, no network; calls Prepare itself
   -> httpClient.do(ctx, httpReq{...})            all retries happen here
   -> <dialect>Stream over SSEReader              synchronous pull
   -> Event...                                    normalised, same for every vendor
@@ -126,6 +127,38 @@ Request
 
 Body construction is a pure function of the request, which is why request shape
 can be asserted in tests without a server.
+
+### Normalization (`Prepare`)
+
+Every request path — each `build*Body`, the token estimator, and llamacpp's exact
+counter — passes through one entry point so what is counted is exactly what is sent:
+
+- **Image downgrade** when the model cannot read images: an image becomes a text
+  placeholder (`(image omitted: ...)`) instead of failing the request. Consecutive
+  placeholders collapse to one; assistant content is untouched.
+- **Cross-model degradation** keyed on each message's `Origin` (provider + dialect +
+  model, stamped at append and rebuild, never written to the transcript). A message whose
+  origin differs from the target is untrusted: redacted thinking is dropped, other foreign
+  thinking flattens to plain text, responses signatures are stripped, and tool-call ids are
+  normalized with their matching results rewritten in step. Unknown provenance counts as
+  foreign.
+- **Retention** (below) merged into the same pass so a `none` policy can still strip a
+  block that degradation did not already turn to text.
+- **Orphan repair**: an unanswered tool call gets a synthetic error result before any later
+  turn or at the end of the list; assistant turns whose stop reason is `error` are skipped,
+  and their tool results dropped with them. This makes well-formedness a request-build
+  invariant rather than just an abort-time repair.
+
+A placeholder ladder gives empty or image-only tool results something to say: `(no tool
+output)`, or `(see attached image)` when an image survives. Some chat-completions providers
+require the reasoning-as-text shape, a tool-result name, an assistant reply between result
+turns and the next user message, or explicit `strict: false` on tools — all driven by their
+capability gates.
+
+**Traps**: adapters never call the retention helpers directly; they go through `Prepare`,
+which must stay idempotent (the Responses fallback builds the same body twice in a session).
+A provider that genuinely never sends a chat-completions finish reason must declare
+`supportsFinishReason: false`, or an otherwise clean stream is reported as truncated.
 
 ## The event stream
 
@@ -165,11 +198,19 @@ that takes a reasoning effort and another that does not, and a provider-level
 answer cannot express it. So capabilities live on `Model.Caps`, and the adapter
 reads `req.Model.Caps`.
 
-Resolution is three layers, field by field, later winning:
+Resolution is four layers, field by field, later winning. The detection layer
+sits between the flavor defaults and configured compat: it derives the quirks pi
+auto-detects from a chat-completions provider's name and base URL (never a model
+id except openrouter's `anthropic/` / `openai/` prefixes), so an entry carrying
+only a name and endpoint resolves like pi without any explicit config.
 
 ```
-flavorDefaults[flavor].caps  ->  ProviderConfig.Compat  ->  ModelConfig.Compat
+flavorDefaults[flavor].caps  ->  detected(name, baseURL)  ->  ProviderConfig.Compat  ->  ModelConfig.Compat
 ```
+
+Detection returns a sparse `Compat` (a zero one when no vendor family matches)
+and never sets `Reasoning`, which comes from the model entry. It runs only for
+chat-completions; anthropic and responses providers are not detected.
 
 Every `Compat` field is a pointer so "unset" is distinguishable from "explicitly
 false". Without that tri-state, `"supportsTemperature": false` is
@@ -189,15 +230,33 @@ max` — so a `thinkingLevelMap` written against them maps every key. A model ma
 translate them with `Capabilities.LevelMap`; a `null` entry omits the parameter
 entirely for that level.
 
-**Styles** decide the request and response encoding:
+**Thinking formats** decide how reasoning is encoded and parsed, carried as
+`Capabilities.Thinking`. The canonical values are pi's eleven (`openai`,
+`openrouter`, `deepseek`, `together`, `baseten`, `zai`, `qwen`, `chat-template`,
+`qwen-chat-template`, `string-thinking`, `ant-ling`) plus `none`, and two ajent
+extensions: `anthropic` (the Messages budget shape) and `think-tags` (no request
+parameter; reasoning is parsed back out of content with inline tags). Response
+parsing for the tag formats uses `ThinkOpen` / `ThinkClose`. An unknown value in
+configuration warns rather than defaulting silently.
 
-| Style | Request | Response |
-|---|---|---|
-| `anthropic_budget` | `thinking: {type, budget_tokens}` | `thinking` / `redacted_thinking` blocks with a signature |
-| `openai_effort` | `reasoning: {effort, summary}` | reasoning items, optionally `encrypted_content` |
-| `openrouter` | `reasoning: {effort}` \| `{max_tokens}` \| `{exclude}` | `reasoning` plus `reasoning_details` |
-| `inline_tags` | `chat_template_kwargs`, or nothing | `<think>...</think>` inside the content |
-| `reasoning_content` | none | `reasoning_content` on the delta |
+**Reasoning replay round-trips to its source field.** On chat-completions ingest,
+the first non-empty of `reasoning_content` → `reasoning` → `reasoning_text` wins
+(pi's order, since some providers echo the same text into two fields), and that
+delta name is recorded on the thinking block (`ThinkingBlock.Field`, inline-tag
+blocks leave it empty). On replay every surviving non-blank thinking block joins
+with `"\n"` (pi) and is written back under `Capabilities.ReasoningField` when
+set, else the first block's own `Field`. That resolves `ReasoningContentField` —
+which detection sets to `reasoning_content` for opencode-go, reproducing pi's
+hardcoded remap through configuration. A compat-dialect block with a non-empty
+`Field` is replayable regardless of policy.
+
+**Tool-result images split out on chat-completions.** When the model accepts
+images (`DialectOpenAICompletions && caps.Images`), `Prepare` moves image blocks
+after the placeholder ladder runs — so the result keeps a `(see attached image)`
+text part and the following user message carries them as text + `image_url` parts,
+optionally preceded by an assistant bridge when
+`requiresAssistantAfterToolResult`. Anthropic and Responses keep images inside the
+tool result, which is what pi does there.
 
 **Retention** is what the user configures, applied at request build time only.
 The transcript always holds everything.
@@ -265,8 +324,9 @@ ports over with only the `cost` blocks removed:
 
 Deliberate choices in this loader:
 
-- **`api` and `flavor` are separate.** `api` is the wire dialect
-  (`anthropic` | `openai-responses` | `openai-completions`); `flavor` selects
+- **`api` and `flavor` are separate.** `api` is the wire dialect —
+  `anthropic-messages` (canonical; legacy `anthropic` still loads through an alias) |
+  `openai-responses` | `openai-completions`; `flavor` selects
   discovery and quirk defaults. `flavor` defaults to the provider key when that
   names a known one, so `"lmstudio"` needs no `flavor` field, but an
   OpenAI-compatible proxy in front of a known server can say
@@ -279,8 +339,8 @@ Deliberate choices in this loader:
 - **Duplicate keys warn.** `encoding/json` keeps the last silently, so a repeated
   key is a setting that looks applied and is not. Hand-written configs do this:
   `thinkingFormat` appears twice in one `compat` block.
-- **`reasoning` accepts either the boolean form or a style name.** `true`
-  selects the dialect default style.
+- **`reasoning` is boolean-only** and matches pi: `true` enables reasoning with
+  the model's resolved thinking format; there is no style-name form.
 - **Unrecognised keys warn rather than fail.** A typo silently ignored is worse
   than a warning, and a hard failure locks the user out of their agent.
 - **No `cost` block.** See "Deliberately not done".
@@ -474,6 +534,16 @@ accumulator including arguments that parse early.
   the table ships no models.
 - **Do not mutate `httpClient.headers` for a per-call header.** Discovery runs in
   the background; use `httpReq.headers`, which merges over the client's.
+  `anthropicHeaders` is the real caller: it merges the `anthropic-beta` value
+  (interleaved thinking, fine-grained tool streaming) over `req.Model.Headers`
+  per request without touching either shared map.
+- **Anthropic always sends a thinking shape.** Reasoning models emit
+  `thinking:{"type":"disabled"}` when the level resolves to off (suppressed only
+  by an explicit `off:null` in the level map), the budget shape when on, and the
+  adaptive shape (`thinking:{"type":"adaptive"}` plus `output_config.effort`) on
+  models that require it. `max_tokens` is inflated by the thinking budget first,
+  capped at the model cap, so the reply keeps its full window. `display` is
+  deliberately never sent.
 - **A `Compat` bool must stay a pointer** and a `Timeouts` duration must stay a
   pointer. Both need the unset/explicit distinction.
 - **Enums encode as text, not JSON.** `encoding/json` uses `TextUnmarshaler` for
@@ -490,15 +560,18 @@ accumulator including arguments that parse early.
 
 Adding a provider that speaks chat-completions:
 
-1. Add a `Flavor` and an entry in `flavorDefaults` — base URL, dialect, key
-   variable, capabilities. No models.
-2. If it needs request fields nobody else sends, write a `decorate` hook. If it
+1. Check whether detection (`pkg/llm/detect.go`) already covers the vendor by
+   name or base URL — most chat-completions families pi detects are handled
+   there and need no flavor at all.
+2. If it still needs its own defaults, add a `Flavor` and an entry in
+   `flavorDefaults` — base URL, dialect, key variable, capabilities. No models.
+4. If it needs request fields nobody else sends, write a `decorate` hook. If it
    needs response fields nobody else reads, write an `extra` hook. Needing a
    third hook is the signal that the thing belongs in the shared layer.
-3. If it can list its own models, write a parser and add it to
+5. If it can list its own models, write a parser and add it to
    `discoverySpecs`.
-4. Add its overflow phrases to `overflowPhrases`.
-5. Record fixtures and run them through the same `collect` helper every other
+6. Add its overflow phrases to `overflowPhrases`.
+7. Record fixtures and run them through the same `collect` helper every other
    provider uses. That the assertions differ only in content, never in shape, is
    the real proof that normalisation worked.
 

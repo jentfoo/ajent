@@ -29,7 +29,7 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Description: "show or set the reasoning level",
 		Args:        "[level]",
 		Complete: func(prefix string) []string {
-			levels := llm.Levels()
+			levels := llm.LevelsFor(c.Models().Active())
 			out := make([]string, 0, len(levels))
 			for _, lvl := range levels {
 				out = append(out, lvl.String())

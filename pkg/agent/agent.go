@@ -32,8 +32,9 @@ type Options struct {
 	OnMessage func(MessageInfo) // nil is a no-op; called once per appended message in loop order
 	// Compact reduces the live context at a turn boundary or after an overflow,
 	// reporting whether anything changed. It never runs mid-stream.
-	Compact  func(ctx context.Context, r CompactReason) (bool, error)
-	MaxSteps int // defaults to defaultMaxSteps
+	Compact   func(ctx context.Context, r CompactReason) (bool, error)
+	MaxSteps  int    // defaults to defaultMaxSteps
+	SessionID string // session-affinity headers on requests that support them
 }
 
 // Agent runs turns against a model provider, streaming deltas to the sink and

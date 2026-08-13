@@ -1,0 +1,21 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_rt","model":"gpt-5","status":"in_progress"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_inline"}}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","output_index":0,"delta":"step one "}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","output_index":0}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","output_index":0,"delta":"step two"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_inline","encrypted_content":"ENC-INLINE","summary":[{"type":"summary_text","text":"summ"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_rt","model":"gpt-5","status":"completed","usage":{"input_tokens":10,"output_tokens":4}}}
+

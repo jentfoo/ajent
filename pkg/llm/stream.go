@@ -23,6 +23,7 @@ type Stream interface {
 type Accumulator struct {
 	blocks  BlockList
 	partial map[int]*partialBlock
+	pos     map[int]int // output index -> position in blocks, for re-emitted end events
 	usage   Usage
 	stop    StopReason
 	meta    StreamMeta
@@ -76,17 +77,31 @@ func (a *Accumulator) open(index int, typ BlockType, id, name string) {
 	a.partial[index] = &partialBlock{typ: typ, id: id, name: name, index: index}
 }
 
-// close appends the completed block, preferring the one the event carries.
+// close appends the completed block, preferring the one the event carries. A
+// re-emitted end for an index that already closed replaces its prior position.
 func (a *Accumulator) close(ev Event) {
 	p := a.partial[ev.Index]
 	if p != nil {
 		p.done = true
 	}
-	if ev.Block != nil {
-		a.blocks = append(a.blocks, ev.Block)
-	} else if p != nil {
-		a.blocks = append(a.blocks, p.build())
+	var block Block
+	switch {
+	case ev.Block != nil:
+		block = ev.Block
+	case p != nil:
+		block = p.build()
+	default:
+		return // no content to close
 	}
+	if pos, ok := a.pos[ev.Index]; ok && pos < len(a.blocks) {
+		a.blocks[pos] = block // re-emitted end replaces the prior block for this index
+		return
+	}
+	a.blocks = append(a.blocks, block)
+	if a.pos == nil {
+		a.pos = make(map[int]int)
+	}
+	a.pos[ev.Index] = len(a.blocks) - 1 // record so a later end replaces it
 }
 
 // build reconstructs a block from buffered deltas, for a stream that ended

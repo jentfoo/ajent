@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/jentfoo/ajent/pkg/config"
 )
@@ -24,9 +27,15 @@ const (
 
 var dialectNames = enumNames[Dialect]{
 	DialectUnset:             "",
-	DialectAnthropic:         "anthropic",
+	DialectAnthropic:         "anthropic-messages",
 	DialectOpenAIResponses:   "openai-responses",
 	DialectOpenAICompletions: "openai-completions",
+}
+
+// dialectAliases maps legacy spellings pi's catalogue once used onto their
+// canonical name, consulted after the enum lookup fails.
+var dialectAliases = map[string]Dialect{
+	"anthropic": DialectAnthropic,
 }
 
 // String returns the configuration name of the dialect.
@@ -37,7 +46,15 @@ func (d Dialect) MarshalText() ([]byte, error) { return dialectNames.marshalText
 
 // UnmarshalText decodes the configuration name.
 func (d *Dialect) UnmarshalText(data []byte) error {
-	return dialectNames.unmarshalText(data, d, "api dialect")
+	if v, ok := dialectNames.lookup(string(data)); ok {
+		*d = v
+		return nil
+	}
+	if v, ok := dialectAliases[string(data)]; ok {
+		*d = v
+		return nil
+	}
+	return fmt.Errorf("llm: unknown api dialect %q, want one of %s", data, strings.Join(dialectNames.sorted(), ", "))
 }
 
 // Flavor selects discovery and quirk defaults. It is separate from Dialect so
@@ -103,12 +120,24 @@ type ProviderConfig struct {
 	Disabled   bool              `json:"disabled,omitempty"`
 }
 
-// Routing is openrouter's upstream provider preference.
+// Routing is openrouter's upstream provider preference. The four camelCase
+// fields are ajent's historical spellings; the snake_case ones mirror pi's
+// OpenRouterRouting so a drop-in file loads unchanged.
 type Routing struct {
 	Order          []string `json:"order,omitempty"`
 	AllowFallbacks *bool    `json:"allowFallbacks,omitempty"`
 	DataCollection string   `json:"dataCollection,omitempty"`
 	RequireParams  *bool    `json:"requireParameters,omitempty"`
+
+	Only                []string        `json:"only,omitempty"`
+	Ignore              []string        `json:"ignore,omitempty"`
+	Zdr                 *bool           `json:"zdr,omitempty"`
+	EnforceDistillable  *bool           `json:"enforce_distillable_text,omitempty"`
+	Quantizations       []string        `json:"quantizations,omitempty"`
+	Sort                json.RawMessage `json:"sort,omitempty"`      // string or {by,partition}
+	MaxPrice            json.RawMessage `json:"max_price,omitempty"` // per million token caps
+	PreferredThroughput json.RawMessage `json:"preferred_min_throughput,omitempty"`
+	PreferredLatency    json.RawMessage `json:"preferred_max_latency,omitempty"`
 }
 
 // ModelConfig is a model entry, or a partial override of a discovered one.
@@ -118,7 +147,7 @@ type ModelConfig struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name,omitempty"`
 	Aliases          []string          `json:"aliases,omitempty"`
-	Reasoning        *ReasoningStyle   `json:"reasoning,omitempty"`
+	Reasoning        *bool             `json:"reasoning,omitempty"`
 	Input            []Modality        `json:"input,omitempty"`
 	ContextWindow    *int              `json:"contextWindow,omitempty"`
 	MaxTokens        *int              `json:"maxTokens,omitempty"`
@@ -127,51 +156,73 @@ type ModelConfig struct {
 	Compat           *Compat           `json:"compat,omitempty"`
 	LevelMap         map[Level]*string `json:"thinkingLevelMap,omitempty"`
 
+	ThinkingBudgets map[Level]int `json:"thinkingBudgets,omitempty"` // per-level token budgets, override the ladder
+
 	Headers        map[string]string `json:"headers,omitempty"`        // merged over the provider's per request
 	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // opaque additions to the request body
 	Cost           json.RawMessage   `json:"cost,omitempty"`           // accepted for compatibility; pricing is out of scope
 }
 
-// Compat is the per model quirk set. Every field is a pointer so an override
-// turns one quirk on without restating the rest.
+// Compat is the per model quirk set: a flat union of pi's four dialect schemas,
+// plus ajent extensions. Every scalar field is a pointer so an override turns
+// one quirk on without restating the rest.
+//
+// The dialect tag lists which dialects read a field; absent means every dialect
+// honours it, which is where ajent's own extensions sit. compatWarnings reports
+// any set field whose dialect does not include the model's resolved dialect.
 type Compat struct {
 	ThinkingFormat        *string  `json:"thinkingFormat,omitempty"`
-	MaxTokensField        *string  `json:"maxTokensField,omitempty"`
+	MaxTokensField        *string  `json:"maxTokensField,omitempty" dialect:"openai-completions"`
 	ReasoningContentField *string  `json:"reasoningContentField,omitempty"`
 	CacheControlFormat    *string  `json:"cacheControlFormat,omitempty"`
 	Tokenizer             *string  `json:"tokenizer,omitempty"`
 	ThinkTags             []string `json:"thinkTags,omitempty"` // open then close
+	SessionAffinityFormat *string  `json:"sessionAffinityFormat,omitempty" dialect:"openai-completions,openai-responses"`
+	DeferredTools         *string  `json:"deferredToolsMode,omitempty" dialect:"openai-completions"`
 
-	SupportsDeveloperRole   *bool `json:"supportsDeveloperRole,omitempty"`
-	SupportsSystemRole      *bool `json:"supportsSystemRole,omitempty"`
-	SupportsReasoningEffort *bool `json:"supportsReasoningEffort,omitempty"`
-	SupportsTemperature     *bool `json:"supportsTemperature,omitempty"`
-	SupportsParallelTools   *bool `json:"supportsParallelToolCalls,omitempty"`
-	SupportsStreamUsage     *bool `json:"supportsStreamUsage,omitempty"`
-	SupportsToolChoice      *bool `json:"supportsToolChoice,omitempty"`
-	SupportsStore           *bool `json:"supportsStore,omitempty"`
-	SupportsPromptCache     *bool `json:"supportsPromptCache,omitempty"`
-	SupportsImages          *bool `json:"supportsImages,omitempty"`
-	SupportsLongCache       *bool `json:"supportsLongCacheRetention,omitempty"`
+	SupportsDeveloperRole    *bool `json:"supportsDeveloperRole,omitempty"`
+	SupportsSystemRole       *bool `json:"supportsSystemRole,omitempty"`
+	SupportsReasoningEffort  *bool `json:"supportsReasoningEffort,omitempty" dialect:"openai-completions"`
+	SupportsTemperature      *bool `json:"supportsTemperature,omitempty"`
+	SupportsParallelTools    *bool `json:"supportsParallelToolCalls,omitempty"`
+	SupportsStreamUsage      *bool `json:"supportsStreamUsage,omitempty" dialect:"openai-completions"`
+	SupportsUsageInStreaming *bool `json:"supportsUsageInStreaming,omitempty" dialect:"openai-completions"` // pi name
+	SupportsToolChoice       *bool `json:"supportsToolChoice,omitempty"`
+	SupportsStore            *bool `json:"supportsStore,omitempty" dialect:"openai-completions"`
+	SupportsPromptCache      *bool `json:"supportsPromptCache,omitempty"`
+	SupportsImages           *bool `json:"supportsImages,omitempty"`
+	SupportsLongCache        *bool `json:"supportsLongCacheRetention,omitempty"`
 
 	RequiresReasoningReplay  *bool `json:"requiresReasoningReplay,omitempty"`
-	RequiresReasoningContent *bool `json:"requiresReasoningContentOnAssistantMessages,omitempty"`
+	RequiresReasoningContent *bool `json:"requiresReasoningContentOnAssistantMessages,omitempty" dialect:"openai-completions"`
+
+	SupportsFinishReason             *bool `json:"supportsFinishReason,omitempty" dialect:"openai-completions"`
+	RequiresToolResultName           *bool `json:"requiresToolResultName,omitempty" dialect:"openai-completions"`
+	RequiresAssistantAfterToolResult *bool `json:"requiresAssistantAfterToolResult,omitempty" dialect:"openai-completions"`
+	SupportsStrictMode               *bool `json:"supportsStrictMode,omitempty" dialect:"openai-completions,openai-responses"`
+	RequiresThinkingAsText           *bool `json:"requiresThinkingAsText,omitempty" dialect:"openai-completions"`
+	SupportsOpenAIGrammarTools       *bool `json:"supportsOpenAIGrammarTools,omitempty" dialect:"openai-completions,openai-responses"`
+	SupportsThinkingTokenBudget      *bool `json:"supportsThinkingTokenBudget,omitempty" dialect:"openai-completions"`
+	ZaiToolStream                    *bool `json:"zaiToolStream,omitempty" dialect:"openai-completions"`
+
+	ForceAdaptiveThinking       *bool `json:"forceAdaptiveThinking,omitempty" dialect:"anthropic-messages"`
+	AllowEmptySignature         *bool `json:"allowEmptySignature,omitempty" dialect:"anthropic-messages"`
+	SupportsStrictTools         *bool `json:"supportsStrictTools,omitempty" dialect:"anthropic-messages"`
+	SupportsToolReferences      *bool `json:"supportsToolReferences,omitempty" dialect:"anthropic-messages"`
+	SupportsCacheControlOnTools *bool `json:"supportsCacheControlOnTools,omitempty" dialect:"anthropic-messages"`
+	EagerToolInputStreaming     *bool `json:"supportsEagerToolInputStreaming,omitempty" dialect:"anthropic-messages"`
+
+	SupportsAdditionalTools     *bool `json:"supportsAdditionalTools,omitempty" dialect:"openai-responses"`
+	SupportsToolSearch          *bool `json:"supportsToolSearch,omitempty" dialect:"openai-responses"`
+	SupportsExplicitPromptCache *bool `json:"supportsExplicitPromptCacheMode,omitempty" dialect:"openai-responses"`
+
+	SendSessionAffinityHeaders *bool                      `json:"sendSessionAffinityHeaders,omitempty"`
+	ChatTemplateKwargs         map[string]json.RawMessage `json:"chatTemplateKwargs,omitempty" dialect:"openai-completions"`
+	ChatTemplateArgs           map[string]json.RawMessage `json:"chatTemplateArgs,omitempty" dialect:"openai-completions"`
+	OpenRouterRouting          json.RawMessage            `json:"openRouterRouting,omitempty"` // pass through
+	VercelGatewayRouting       json.RawMessage            `json:"vercelGatewayRouting,omitempty"`
 
 	ExtraBody map[string]json.RawMessage `json:"extraBody,omitempty"`
-}
-
-// thinkingFormats maps the standard thinkingFormat names onto a reasoning style.
-var thinkingFormats = map[string]ReasoningStyle{
-	"none":               ReasoningNone,
-	"anthropic":          ReasoningAnthropicBudget,
-	"reasoning_effort":   ReasoningOpenAIEffort,
-	"openai-responses":   ReasoningOpenAIEffort,
-	"openrouter":         ReasoningOpenRouter,
-	"qwen-chat-template": ReasoningInlineTags,
-	"together":           ReasoningInlineTags,
-	"think-tags":         ReasoningInlineTags,
-	"deepseek":           ReasoningContentField,
-	"reasoning_content":  ReasoningContentField,
 }
 
 // LoadFile reads a models.json, returning the decoded file and warnings for
@@ -219,6 +270,55 @@ func LoadUserFile() (File, []string, error) {
 		return File{}, nil, err
 	}
 	return LoadFile(path)
+}
+
+// compatWarnings reports configuration that will not behave as authored for the
+// dialect d: an unknown thinkingFormat value and any set field whose dialect tag
+// excludes d. It returns nil when nothing is wrong with o.
+func compatWarnings(o *Compat, d Dialect) []string {
+	if o == nil {
+		return nil
+	}
+	t := reflect.TypeOf(*o)
+	v := reflect.ValueOf(*o)
+	var out []string
+	if o.ThinkingFormat != nil {
+		if _, ok := parseThinkingFormat(*o.ThinkingFormat); !ok {
+			out = append(out, fmt.Sprintf("compat thinkingFormat %q is not supported, the provider default is used", *o.ThinkingFormat))
+		}
+	}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		dialects, hasTag := f.Tag.Lookup("dialect")
+		if !hasTag || !compatFieldSet(v, i) {
+			continue
+		}
+		allowed := strings.Split(dialects, ",")
+		name := compatJSONName(f)
+		if d == DialectUnset || !slices.Contains(allowed, d.String()) {
+			out = append(out, fmt.Sprintf("compat field %q is ignored by dialect %s", name, d))
+		}
+	}
+	return out
+}
+
+// compatFieldSet reports whether the struct field at i was set in configuration.
+func compatFieldSet(v reflect.Value, i int) bool {
+	switch fv := v.Field(i); fv.Kind() {
+	case reflect.Ptr:
+		return !fv.IsNil()
+	default:
+		return !fv.IsZero()
+	}
+}
+
+// compatJSONName returns a field's json name for warning messages.
+func compatJSONName(f reflect.StructField) string {
+	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+	if name == "" || name == "-" {
+		return f.Name
+	}
+	return name
 }
 
 // secretWarning reports a permissive mode on a file holding a literal key.

@@ -65,6 +65,41 @@ func TestBlockListMarshalJSON(t *testing.T) {
 	})
 }
 
+// TestMessageRebuildFieldsAreNotSerialized pins that the rebuild-only fields
+// (Origin, Stop) never reach the transcript while additive block fields survive it.
+func TestMessageRebuildFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	m := Message{
+		Role: RoleAssistant,
+		Content: BlockList{
+			ThinkingBlock{Text: "hmm", Field: "reasoning_content"},
+			TextBlock{Text: "hello", Signature: "msg_1.phase"},
+			ToolResultBlock{CallID: "t1", Content: BlockList{TextBlock{Text: "out"}},
+				AddedToolNames: []string{"read"}},
+		},
+		Origin: &Origin{Provider: "anthropic", Dialect: DialectAnthropic, Model: "claude"},
+		Stop:   StopEndTurn,
+	}
+
+	data, err := json.Marshal(m)
+	require.NoError(t, err)
+	// rebuild identity must stay out of the transcript format
+	assert.NotContains(t, string(data), `"origin"`)
+	assert.NotContains(t, string(data), `"stop"`)
+	assert.NotContains(t, string(data), "anthropic")
+
+	var got Message
+	require.NoError(t, json.Unmarshal(data, &got))
+	// additive block fields survive the round trip
+	think := got.Content[0].(ThinkingBlock)
+	assert.Equal(t, "reasoning_content", think.Field)
+	text := got.Content[1].(TextBlock)
+	assert.Equal(t, "msg_1.phase", text.Signature)
+	tr := got.Content[2].(ToolResultBlock)
+	assert.Equal(t, []string{"read"}, tr.AddedToolNames)
+}
+
 func TestMessageMarshalJSON(t *testing.T) {
 	t.Parallel()
 

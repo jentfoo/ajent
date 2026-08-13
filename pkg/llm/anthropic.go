@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 )
@@ -13,6 +14,12 @@ import (
 const (
 	// minThinkingBudget is the smallest budget the Messages API accepts.
 	minThinkingBudget = 1024
+	// betaInterleavedThinking enables interleaved thinking, which streams each
+	// thought as it happens; without it thoughts arrive only at message_stop.
+	betaInterleavedThinking = "interleaved-thinking-2025-05-14"
+	// betaFineGrainedTools streams tool input arguments in smaller deltas when
+	// eager streaming is off.
+	betaFineGrainedTools = "fine-grained-tool-streaming-2025-05-14"
 	// maxCacheBreakpoints is the API limit on cache_control markers.
 	maxCacheBreakpoints = 4
 	// longCacheTTL is the extended retention tier, for models that offer it.
@@ -41,7 +48,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request) (Stream, er
 	}
 	resp, err := p.client.do(ctx, httpReq{
 		method: http.MethodPost, path: "/v1/messages", body: body,
-		headers: req.Model.Headers, classify: anthropicClassifier(p.name),
+		headers: anthropicHeaders(req), classify: anthropicClassifier(p.name),
 	})
 	if err != nil {
 		return nil, err
@@ -61,7 +68,7 @@ func (p *anthropicProvider) CountTokens(ctx context.Context, req Request) (int, 
 	if err = json.Unmarshal(body, &trimmed); err != nil {
 		return 0, err
 	}
-	for _, k := range []string{"stream", "max_tokens", "temperature"} {
+	for _, k := range []string{"stream", "max_tokens", "temperature", "output_config"} {
 		delete(trimmed, k)
 	}
 	body, err = json.Marshal(trimmed)
@@ -71,7 +78,7 @@ func (p *anthropicProvider) CountTokens(ctx context.Context, req Request) (int, 
 
 	resp, err := p.client.do(ctx, httpReq{
 		method: http.MethodPost, path: "/v1/messages/count_tokens", body: body,
-		headers: req.Model.Headers, classify: anthropicClassifier(p.name),
+		headers: anthropicHeaders(req), classify: anthropicClassifier(p.name),
 	})
 	if err != nil {
 		return 0, err
@@ -88,16 +95,31 @@ func (p *anthropicProvider) CountTokens(ctx context.Context, req Request) (int, 
 // buildAnthropicBody marshals a request into a Messages API body. It is pure,
 // so request shape can be asserted without a server.
 func buildAnthropicBody(req Request) ([]byte, error) {
+	req = Prepare(req)
 	caps := req.Model.Caps
 	msgs, err := anthropicMessages(req, caps)
 	if err != nil {
 		return nil, err
 	}
 
+	level := clampLevel(caps, req.Reasoning.Level)
+	on := caps.Dialect == DialectAnthropic && caps.Reasoning && level != LevelOff
+
 	maxTokens := req.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = req.Model.MaxOutput
 	}
+	// the thinking budget eats into max_tokens, so it is inflated to keep a full
+	// answer window; adaptive models replace the budget with an effort instead
+	var budget int
+	if on && !caps.ForceAdaptiveThinking {
+		maxTokens += levelBudgetFor(req, level)
+		if req.Model.MaxOutput > 0 {
+			maxTokens = min(maxTokens, req.Model.MaxOutput)
+		}
+		budget = thinkingBudget(caps, level, req.Reasoning.Budget, maxTokens)
+	}
+
 	body := antRequest{
 		Model:     req.Model.ID,
 		MaxTokens: maxTokens,
@@ -108,45 +130,90 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 		body.System = []antBlock{{Type: antTypeText, Text: blocksText(req.System)}}
 	}
 	if len(req.Tools) > 0 {
-		body.Tools = anthropicTools(req.Tools)
+		body.Tools = anthropicTools(req.Tools, caps.EagerToolInputStreaming)
 		body.ToolChoice = anthropicToolChoice(req.ToolChoice)
 	}
 
-	if budget := thinkingBudget(req, maxTokens); budget > 0 {
-		body.Thinking = &antThinking{Type: "enabled", BudgetTokens: budget}
-		// the API rejects any temperature but the default while thinking is on,
-		// so it is dropped rather than surfaced as an error the user cannot act on
-	} else if req.Temperature != nil && caps.Temperature {
-		body.Temperature = req.Temperature
+	switch {
+	case on && caps.ForceAdaptiveThinking:
+		// display summarized keeps thinking text streaming on adaptive models
+		body.Thinking = &antThinking{Type: antThinkAdaptive, Display: "summarized"}
+		if effort := anthropicEffort(caps, level); effort != "" {
+			body.OutputConfig = &antOutputConfig{Effort: effort}
+		}
+	case on && budget > 0:
+		body.Thinking = &antThinking{Type: antThinkEnabled, BudgetTokens: budget,
+			Display: "summarized"}
+	case !on && caps.Dialect == DialectAnthropic && caps.Reasoning && !offSuppressed(caps):
+		// an explicit off shape matches pi and keeps the deepseek parity locked in B
+		body.Thinking = &antThinking{Type: antThinkDisabled}
+	default:
+	}
+
+	if body.Thinking == nil || body.Thinking.Type == antThinkDisabled {
+		if req.Temperature != nil && caps.Temperature {
+			// the API rejects any temperature but the default while thinking is on,
+			// so it is dropped rather than surfaced as an error the user cannot act on
+			body.Temperature = req.Temperature
+		}
 	}
 
 	if req.Cache.Enabled && caps.PromptCache {
-		applyCacheBreakpoints(&body, req.Cache.KeepLast, caps.LongCache)
+		applyCacheBreakpoints(&body, req.Cache.KeepLast, caps.LongCache, caps.CacheControlOnTools)
 	}
 	return json.Marshal(body)
 }
 
-// thinkingBudget returns the reasoning token budget, or zero when reasoning is
-// off or unsupported.
-func thinkingBudget(req Request, maxTokens int) int {
-	caps := req.Model.Caps
-	if caps.Reasoning != ReasoningAnthropicBudget || req.Reasoning.Level == LevelOff {
+// levelBudgetFor returns the request's explicit reasoning budget, or the model's
+// configured budget for the level.
+func levelBudgetFor(req Request, l Level) int {
+	if req.Reasoning.Budget > 0 {
+		return req.Reasoning.Budget
+	}
+	return req.Model.Caps.Budgets[l]
+}
+
+// thinkingBudget returns the reasoning token budget for a resolved level, or zero
+// when it cannot fit under maxTokens with the answer floor kept.
+func thinkingBudget(caps Capabilities, level Level, explicitBudget int, maxTokens int) int {
+	if caps.Dialect != DialectAnthropic || !caps.Reasoning || level == LevelOff {
 		return 0
 	}
-	budget := req.Reasoning.Budget
+	budget := explicitBudget
 	if budget <= 0 {
-		budget = levelBudget(req.Reasoning.Level, req.Model.MaxOutput)
+		budget = caps.Budgets[level]
 	}
+	// the API rejects budgets below its minimum, so small explicit ones are raised
 	if budget < minThinkingBudget {
 		budget = minThinkingBudget
 	}
-	if maxTokens > 0 && budget >= maxTokens {
-		budget = maxTokens - 1 // the budget must leave room for the reply
+	// the shared answer floor keeps reasoning from eating the whole output, and a
+	// max_tokens too small to leave any room drops thinking entirely
+	headroom := max(0, maxTokens-minAnswerTokens)
+	if budget > headroom {
+		budget = headroom
 	}
 	if budget < minThinkingBudget {
 		return 0
 	}
 	return budget
+}
+
+// anthropicEffort returns the adaptive-thinking effort for a level: the model's
+// configured value when it has one, else low for minimal and low, medium for
+// medium, and high for everything above.
+func anthropicEffort(caps Capabilities, l Level) string {
+	if v, ok := caps.LevelMap[l]; ok && v != nil {
+		return *v
+	}
+	switch l {
+	case LevelMinimal, LevelLow:
+		return "low"
+	case LevelMedium:
+		return "medium"
+	default:
+		return "high"
+	}
 }
 
 // levelBudget maps a reasoning level onto a token budget.
@@ -177,7 +244,7 @@ func levelBudget(l Level, maxOutput int) int {
 // anthropicMessages converts the content model, collapsing to the user and
 // assistant roles the API accepts.
 func anthropicMessages(req Request, caps Capabilities) ([]antMessage, error) {
-	msgs := applyRetention(req.Messages, req.Reasoning.Retain, caps)
+	msgs := req.Messages // already normalized by Prepare
 	out := make([]antMessage, 0, len(msgs))
 
 	for _, m := range msgs {
@@ -215,10 +282,19 @@ func anthropicBlocks(blocks BlockList, caps Capabilities) ([]antBlock, error) {
 				out = append(out, antBlock{Type: antTypeText, Text: v.Text})
 			}
 		case ThinkingBlock:
-			if v.Redacted != "" {
+			sig := strings.TrimSpace(v.Signature)
+			switch {
+			case v.Redacted != "":
 				out = append(out, antBlock{Type: antTypeRedacted, Data: v.Redacted})
-			} else if v.Signature != "" {
-				out = append(out, antBlock{Type: antTypeThinking, Thinking: v.Text, Signature: v.Signature})
+			case sig != "": // a signature replays even when the text is empty
+				out = append(out, antBlock{Type: antTypeThinking, Thinking: v.Text, Signature: &sig})
+			case strings.TrimSpace(v.Text) == "":
+				continue // nothing to send
+			case caps.AllowEmptySignature:
+				out = append(out, antBlock{Type: antTypeThinking, Thinking: v.Text, Signature: ptrOf("")})
+			default:
+				// an aborted stream's reasoning survives as visible text
+				out = append(out, antBlock{Type: antTypeText, Text: v.Text})
 			}
 		case ToolCallBlock:
 			input := v.Input
@@ -247,11 +323,86 @@ func anthropicBlocks(blocks BlockList, caps Capabilities) ([]antBlock, error) {
 	return out, nil
 }
 
+// anthropicHeaders returns the request headers: model headers with an
+// anthropic-beta value merged over them. It never mutates req.Model.Headers.
+func anthropicHeaders(req Request) map[string]string {
+	caps := req.Model.Caps
+	var values []string
+	if len(req.Tools) > 0 && !caps.EagerToolInputStreaming {
+		values = append(values, betaFineGrainedTools)
+	}
+	// interleaving is built into the adaptive shape, so it is only requested for
+	// budget models that actually reason
+	if caps.Reasoning && !caps.ForceAdaptiveThinking {
+		values = append(values, betaInterleavedThinking)
+	}
+	base := req.Model.Headers
+	if len(values) > 0 {
+		base = maps.Clone(base)
+		if base == nil {
+			base = make(map[string]string, 1)
+		}
+		// pi joins in order and last-wins over a model-declared beta value
+		base["anthropic-beta"] = strings.Join(values, ",")
+	}
+	return withSessionHeaders(base, req)
+}
+
+// sessionAffinityKeys returns the header names to carry SessionID for caps,
+// empty when no affinity applies.
+func sessionAffinityKeys(caps Capabilities) []string {
+	if !caps.SessionAffinity {
+		return nil
+	}
+	switch caps.Dialect {
+	case DialectOpenAIResponses:
+		switch caps.SessionAffinityFormat {
+		case openRouterAffinityFormat:
+			return []string{"x-session-id"}
+		case "openai-nosession":
+			return []string{"x-client-request-id"}
+		default: // openai
+			return []string{"session_id", "x-client-request-id"}
+		}
+	case DialectAnthropic:
+		return []string{"x-session-affinity"}
+	default: // chat-completions
+		switch caps.SessionAffinityFormat {
+		case openRouterAffinityFormat:
+			return []string{"x-session-id"}
+		case "openai-nosession":
+			return []string{"x-client-request-id", "x-session-affinity"}
+		default: // openai
+			return []string{"session_id", "x-client-request-id", "x-session-affinity"}
+		}
+	}
+}
+
+// withSessionHeaders overlays the session-affinity keys onto base, cloning only
+// when something is added so the common path allocates nothing.
+func withSessionHeaders(base map[string]string, req Request) map[string]string {
+	keys := sessionAffinityKeys(req.Model.Caps)
+	if len(keys) == 0 || req.SessionID == "" {
+		return base
+	}
+	out := maps.Clone(base)
+	if out == nil {
+		out = make(map[string]string, len(keys))
+	}
+	for _, k := range keys {
+		out[k] = req.SessionID
+	}
+	return out
+}
+
 // anthropicTools converts tool schemas.
-func anthropicTools(tools []ToolSchema) []antTool {
+func anthropicTools(tools []ToolSchema, eagerStreaming bool) []antTool {
 	out := make([]antTool, len(tools))
 	for i, t := range tools {
 		out[i] = antTool{Name: t.Name, Description: t.Description, InputSchema: t.Parameters}
+		if eagerStreaming {
+			out[i].EagerInputStreaming = ptrOf(true)
+		}
 	}
 	return out
 }
@@ -273,7 +424,7 @@ func anthropicToolChoice(tc ToolChoice) *antToolChoi {
 // applyCacheBreakpoints marks the stable prefix so the cache grows with the
 // conversation. Breakpoints are recomputed every request, and the same history
 // always produces the same ones.
-func applyCacheBreakpoints(body *antRequest, keepLast int, longTTL bool) {
+func applyCacheBreakpoints(body *antRequest, keepLast int, longTTL bool, cacheOnTools bool) {
 	remaining := maxCacheBreakpoints
 	mark := func() *antCache {
 		c := &antCache{Type: antCacheEphemeral}
@@ -287,9 +438,12 @@ func applyCacheBreakpoints(body *antRequest, keepLast int, longTTL bool) {
 		body.System[n-1].CacheControl = mark()
 		remaining--
 	}
-	if n := len(body.Tools); n > 0 && remaining > 0 {
-		body.Tools[n-1].CacheControl = mark()
-		remaining--
+	// a model that cannot cache tool definitions leaves the budget for prompts
+	if cacheOnTools {
+		if n := len(body.Tools); n > 0 && remaining > 0 {
+			body.Tools[n-1].CacheControl = mark()
+			remaining--
+		}
 	}
 	// the newest message is still changing, so breakpoints start one back
 	for i := len(body.Messages) - 2; i >= 0 && keepLast > 0 && remaining > 0; i-- {

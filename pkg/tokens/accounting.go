@@ -145,7 +145,7 @@ func (a *Accounting) Context() ContextState {
 	return ContextState{
 		Used:      a.promptExact + a.outputExact + usedEst,
 		Window:    a.model.ContextWindow,
-		Reserve:   Reserve(a.model),
+		Reserve:   a.model.Reserve(),
 		Compact:   CompactAt(a.model),
 		Estimated: estimated > 0,
 	}

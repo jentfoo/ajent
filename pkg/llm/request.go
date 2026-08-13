@@ -3,6 +3,9 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"slices"
+
+	"github.com/go-analyze/bulk"
 )
 
 // Request is one model call.
@@ -16,6 +19,7 @@ type Request struct {
 	Temperature *float64 // nil uses the provider default
 	Reasoning   ReasoningConfig
 	Cache       CachePolicy
+	SessionID   string // session-affinity headers, when a provider supports them
 }
 
 // ToolSchema is a tool as the model sees it.
@@ -115,9 +119,105 @@ func (l *Level) UnmarshalText(data []byte) error {
 // ParseLevel returns the level named by s.
 func ParseLevel(s string) (Level, bool) { return levelNames.lookup(s) }
 
-// Levels returns every level in order, for menus and completion.
-func Levels() []Level {
+// allLevels is every reasoning depth in ascending order, the base for filtering.
+func allLevels() []Level {
 	return []Level{LevelOff, LevelMinimal, LevelLow, LevelMedium, LevelHigh, LevelXHigh, LevelMax}
+}
+
+// levelValue maps a non-off level onto the provider's effort value. An absent map
+// key sends the level name itself; an explicit null reports unsupported.
+func levelValue(caps Capabilities, l Level) (string, bool) {
+	if v, ok := caps.LevelMap[l]; ok {
+		if v == nil {
+			return "", false
+		}
+		return *v, true
+	}
+	return l.String(), true
+}
+
+// offValue maps the off level onto a provider value. An absent key uses def;
+// an explicit null reports that thinking cannot be turned off.
+func offValue(caps Capabilities, def string) (string, bool) {
+	if v, ok := caps.LevelMap[LevelOff]; ok {
+		if v == nil {
+			return "", false
+		}
+		return *v, true
+	}
+	return def, def != ""
+}
+
+// offSuppressed reports a model that cannot stop thinking (off maps to null).
+func offSuppressed(caps Capabilities) bool {
+	v, ok := caps.LevelMap[LevelOff]
+	return ok && v == nil
+}
+
+// levelsFor returns the reasoning depths a model offers: only LevelOff when it
+// cannot reason; otherwise every level without a null entry, where xhigh and max
+// are opt-in via an explicit non-null map entry.
+func levelsFor(caps Capabilities) []Level {
+	if !caps.Reasoning {
+		return []Level{LevelOff}
+	}
+	return bulk.SliceFilter(func(l Level) bool {
+		v, ok := caps.LevelMap[l]
+		switch {
+		case ok && v == nil:
+			return false // an explicit null removes the level
+		case (l == LevelXHigh || l == LevelMax) && !ok:
+			return false // xhigh and max are opt-in
+		default:
+			return true
+		}
+	}, allLevels())
+}
+
+// clampLevel snaps a requested reasoning depth to the nearest supported one,
+// searching up then down and falling back to the first available. Off is never
+// escalated: it always means no reasoning, even on a model that cannot stop.
+func clampLevel(caps Capabilities, l Level) Level {
+	if l == LevelOff {
+		return LevelOff // requesting off stays off; {off:null} emits nothing
+	}
+	supported := levelsFor(caps)
+	idx, found := slices.BinarySearch(supported, l)
+	if found {
+		return supported[idx]
+	}
+	if idx < len(supported) { // next higher level
+		return supported[idx]
+	}
+	// highest below the request; off is always in levelsFor when reasoning,
+	// so this only fires for a non-reasoning model clamped by mistake
+	for i := len(supported) - 1; i >= 0; i-- {
+		if supported[i] != LevelOff {
+			return supported[i]
+		}
+	}
+	return LevelOff
+}
+
+// LevelsFor returns the reasoning depths m offers, for menus and completion.
+func LevelsFor(m Model) []Level { return levelsFor(m.Caps) }
+
+// ClampLevel snaps a requested level onto one m actually supports.
+func ClampLevel(m Model, l Level) Level { return clampLevel(m.Caps, l) }
+
+// MaxOutputFor clamps an output cap to the tokens left in the window after input
+// and reserve. It returns the model's own cap when the window is unknown, and the
+// available window when no cap is set; never below one token.
+func MaxOutputFor(m Model, inputTokens int) int {
+	if m.ContextWindow <= 0 {
+		return m.MaxOutput // window unknown: the model cap stands
+	}
+	out := m.MaxOutput
+	if out <= 0 {
+		out = max(1, m.ContextWindow-inputTokens)
+	}
+	available := m.ContextWindow - inputTokens - m.Reserve()
+	return max(1, min(out, available))
 }
 
 // RetainPolicy is how much thinking survives into later requests. It applies at

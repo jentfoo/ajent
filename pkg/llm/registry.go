@@ -3,6 +3,7 @@ package llm
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
@@ -67,8 +68,14 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 		}
 		flavor := flavorFor(name, cfg)
 		def := flavorDefaults[flavor]
+		dialect := dialectFor(cfg, def.dialect)
+		ctx := modelContext{provider: name, dialect: dialect, baseURL: resolveBaseURL(cfg.BaseURL, def.baseURL)}
 		entries[name] = cfg
 		flavors[name] = flavor
+
+		for _, w := range compatWarnings(cfg.Compat, dialect) {
+			warnings = append(warnings, "provider "+name+": "+w)
+		}
 
 		declared := cfg.Models
 		var discovered []ModelConfig
@@ -80,7 +87,10 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 			warnings = append(warnings, "provider "+name+" has no models declared or discovered")
 		}
 		for _, mc := range merged {
-			models = append(models, resolveModel(name, def.caps, cfg.Compat, mc))
+			for _, w := range compatWarnings(mc.Compat, dialect) {
+				warnings = append(warnings, fmt.Sprintf("provider %s model %s: %s", name, mc.ID, w))
+			}
+			models = append(models, resolveModel(ctx, def.caps, cfg.Compat, mc))
 		}
 	}
 
@@ -158,6 +168,9 @@ func enrichModel(declared, discovered ModelConfig) ModelConfig {
 	}
 	if len(declared.LevelMap) == 0 {
 		declared.LevelMap = discovered.LevelMap
+	}
+	if len(declared.ThinkingBudgets) == 0 {
+		declared.ThinkingBudgets = discovered.ThinkingBudgets
 	}
 	return declared
 }

@@ -31,7 +31,7 @@ func abortResults(msg llm.Message, results []llm.ToolResultBlock) []llm.ToolResu
 			continue
 		}
 		out = append(out, llm.ToolResultBlock{
-			CallID:  tc.ID,
+			CallID: tc.ID, ToolName: tc.Name,
 			IsError: true,
 			Content: llm.BlockList{llm.TextBlock{Text: interruptedText}},
 		})

@@ -61,7 +61,8 @@ func TestCrashResumeRebuildsState(t *testing.T) {
 	t.Parallel()
 
 	p := filepath.Join(t.TempDir(), "session.jsonl")
-	w, err := Create(p, SessionData{Version: sessionVersion})
+	// the starting model is recorded so a resume can stamp assistant provenance
+	w, err := Create(p, SessionData{Version: sessionVersion, Model: "test"})
 	require.NoError(t, err)
 	r := NewRecorder(w)
 

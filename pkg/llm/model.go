@@ -2,6 +2,10 @@ package llm
 
 import "slices"
 
+// defaultReserveFraction is the fraction of a model's window held back for a
+// response when no contextReserve configures it.
+const defaultReserveFraction = 0.2
+
 // Modality is an input kind a model accepts.
 type Modality string
 
@@ -42,4 +46,31 @@ func (m Model) Display() string {
 		return m.Name
 	}
 	return m.ID
+}
+
+// Reserve returns the tokens held back from m's window for its response. A value
+// >= 1 is an absolute token count; a value in (0,1) is a fraction of the window;
+// anything else uses the default fraction. It clamps to at most 90% of the window,
+// and to at least one token.
+func (m Model) Reserve() int {
+	window := m.ContextWindow
+	if window <= 0 {
+		return 0
+	}
+	maxReserve := max(1, window*9/10)
+	switch {
+	case m.ContextReserve >= 1: // absolute token count, clamped to the cap
+		r := int(m.ContextReserve)
+		if r > maxReserve {
+			r = maxReserve
+		}
+		return r
+	default:
+		fraction := defaultReserveFraction
+		if m.ContextReserve > 0 && m.ContextReserve < 1 { // fraction of the window
+			fraction = m.ContextReserve
+		}
+		r := int(float64(window) * fraction)
+		return min(max(r, 1), maxReserve)
+	}
 }

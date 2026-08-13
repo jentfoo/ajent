@@ -126,7 +126,8 @@ func EstimateRequest(req llm.Request) int {
 			n += EstimateText(tb.Text, KindProse)
 		}
 	}
-	for _, m := range llm.RetainedMessages(req) {
+	req = llm.Prepare(req)
+	for _, m := range req.Messages {
 		n += messageOverhead + estimateBlocks(m.Content)
 	}
 	if len(req.Tools) > 0 {

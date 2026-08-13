@@ -51,7 +51,8 @@ func TestEstimateRequestExcludesUnretainedThinking(t *testing.T) {
 	t.Parallel()
 
 	// a content-field provider replays inline thinking only when retention keeps it.
-	caps := llm.Capabilities{Reasoning: llm.ReasoningContentField, ReplayReasoning: true}
+	caps := llm.Capabilities{Dialect: llm.DialectOpenAICompletions, Reasoning: true,
+		Thinking: llm.ThinkingDeepSeek, ReplayReasoning: true}
 	req := llm.Request{
 		Model:  llm.Model{Caps: caps},
 		System: llm.BlockList{llm.TextBlock{Text: "you are a helper"}},
@@ -93,4 +94,33 @@ func TestEstimateTextAstralPairsCostTwo(t *testing.T) {
 		}
 	}
 	assert.Equal(t, want, EstimateText(astral, KindProse))
+}
+
+func TestEstimateRequestMatchesPreparedMessages(t *testing.T) {
+	t.Parallel()
+
+	// a text-only model with an orphaned tool call: Prepare downgrades the image
+	// and synthesizes a result, so the estimate must reflect what is really sent.
+	m := llm.Model{Provider: "p", ID: "m", Caps: llm.Capabilities{Dialect: llm.DialectOpenAICompletions}}
+	req := llm.Request{
+		Model: m,
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: llm.BlockList{
+				llm.TextBlock{Text: "look at this"},
+				llm.ImageBlock{MediaType: "image/png", Data: make([]byte, 1024)},
+			}},
+			{Role: llm.RoleAssistant, Content: llm.BlockList{
+				llm.ToolCallBlock{ID: "c1", Name: "read", Input: []byte(`{}`)},
+			}},
+		},
+	}
+
+	estimated := EstimateRequest(req) // normalizes through Prepare internally
+	prepared := llm.Prepare(req).Messages
+	manual := 0
+	for _, msg := range prepared {
+		manual += messageOverhead + estimateBlocks(msg.Content)
+	}
+	assert.Equal(t, manual, estimated,
+		"the estimator must count exactly the messages Prepare will send")
 }

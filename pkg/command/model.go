@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -70,7 +71,7 @@ func modelDetail(m llm.Model) string {
 	if m.ContextWindow > 0 {
 		parts = append(parts, tui.FormatTokens(m.ContextWindow))
 	}
-	if m.Caps.Reasoning != llm.ReasoningNone {
+	if m.Caps.Reasoning {
 		parts = append(parts, "reasoning")
 	}
 	return strings.Join(parts, " · ")
@@ -89,12 +90,16 @@ func reportResolveError(c Console, arg string, err error) {
 // reasoningCommand sets the session reasoning level. With no argument it reports
 // the current choice; with a level it sets it and persists through the console.
 func reasoningCommand(_ context.Context, arg string, c Console) error {
+	active := c.Models().Active()
+	supported := llm.LevelsFor(active)
+	var lvl llm.Level
+
 	if strings.TrimSpace(arg) == "" {
-		items := make([]tui.PickItem, len(llm.Levels()))
-		for i, lvl := range llm.Levels() {
-			name := lvl.String()
+		items := make([]tui.PickItem, len(supported))
+		for i, l := range supported {
+			name := l.String()
 			marker := "  "
-			if c.State().Reasoning.Level == lvl {
+			if c.State().Reasoning.Level == l {
 				marker = "* "
 			}
 			items[i] = tui.PickItem{Label: marker + name, Terms: []string{name}}
@@ -104,17 +109,35 @@ func reasoningCommand(_ context.Context, arg string, c Console) error {
 		if err != nil {
 			return nil // cancelled
 		}
-		arg = llm.Levels()[picked].String()
+		lvl = supported[picked]
+	} else {
+		var ok bool
+		lvl, ok = llm.ParseLevel(arg)
+		if !ok {
+			c.Notify("unknown reasoning level "+arg+"; use "+levelsList(supported), levelWarn)
+			return nil
+		}
+		// never store a level the encoder will silently drop: snap to what is sent
+		if !slices.Contains(supported, lvl) {
+			c.Notify(lvl.String()+" unsupported for this model; using "+llm.ClampLevel(active, lvl).String(),
+				levelWarn)
+			lvl = llm.ClampLevel(active, lvl)
+		}
 	}
-	lvl, ok := llm.ParseLevel(arg)
-	if !ok {
-		c.Notify("unknown reasoning level "+arg+"; use off|minimal|low|medium|high|xhigh|max", levelWarn)
-		return nil
-	}
+
 	c.SetReasoning(llm.ReasoningConfig{
 		Level:  lvl,
 		Retain: c.State().Reasoning.Retain, // keep the current retention policy
 		Show:   true,
 	})
 	return nil
+}
+
+// levelsList joins level names for a supported-level notice.
+func levelsList(levels []llm.Level) string {
+	names := make([]string, len(levels))
+	for i, l := range levels {
+		names[i] = l.String()
+	}
+	return strings.Join(names, "|")
 }

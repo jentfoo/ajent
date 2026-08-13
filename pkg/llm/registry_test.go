@@ -91,7 +91,8 @@ func TestNewRegistry(t *testing.T) {
 		_, flavor, ok := r.ProviderConfigFor(m)
 		require.True(t, ok)
 		assert.Equal(t, FlavorAnthropic, flavor)
-		assert.Equal(t, ReasoningAnthropicBudget, m.Caps.Reasoning)
+		assert.True(t, m.Caps.Reasoning)
+		assert.Equal(t, ThinkingAnthropic, m.Caps.Thinking)
 		assert.True(t, m.Caps.ReasoningReplay)
 	})
 	t.Run("unknown_provider_key_is_generic", func(t *testing.T) {
@@ -114,7 +115,7 @@ func TestNewRegistry(t *testing.T) {
 
 		_, flavor, _ := r.ProviderConfigFor(m)
 		assert.Equal(t, FlavorLMStudio, flavor)
-		assert.Equal(t, ReasoningInlineTags, m.Caps.Reasoning)
+		assert.Equal(t, ThinkingThinkTags, m.Caps.Thinking)
 	})
 }
 
@@ -194,6 +195,12 @@ func TestMergeModels(t *testing.T) {
 		assert.Equal(t, "Discovered A", got[0].Name)
 		require.NotNil(t, got[1].ContextWindow)
 		assert.Equal(t, 2000, *got[1].ContextWindow) // the real loaded window
+	})
+	t.Run("thinking_budgets_fill_from_discovery", func(t *testing.T) {
+		d := []ModelConfig{{ID: "b"}}
+		disc := []ModelConfig{{ID: "b", ThinkingBudgets: map[Level]int{LevelHigh: 7777}}}
+		got := mergeModels(d, disc)
+		assert.Equal(t, 7777, got[0].ThinkingBudgets[LevelHigh])
 	})
 	t.Run("discovery_supplies_everything_when_nothing_declared", func(t *testing.T) {
 		got := mergeModels(nil, discovered)

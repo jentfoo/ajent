@@ -36,7 +36,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 		baseURL:   "https://api.anthropic.com",
 		apiKeyEnv: "ANTHROPIC_API_KEY",
 		caps: Capabilities{
-			Reasoning:       ReasoningAnthropicBudget,
+			Dialect:         DialectAnthropic,
+			Reasoning:       true,
+			Thinking:        ThinkingAnthropic,
 			ReasoningReplay: true,
 			PromptCache:     true,
 			CacheFormat:     "anthropic",
@@ -46,6 +48,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Images:          true,
 			Temperature:     true,
 			ToolChoice:      true,
+			// pi defaults both on; an entry that says nothing behaves like pi
+			EagerToolInputStreaming: true,
+			CacheControlOnTools:     true,
 		},
 	},
 	FlavorOpenAI: {
@@ -53,7 +58,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 		baseURL:   "https://api.openai.com/v1",
 		apiKeyEnv: "OPENAI_API_KEY",
 		caps: Capabilities{
-			Reasoning:       ReasoningOpenAIEffort,
+			Dialect:         DialectOpenAIResponses,
+			Reasoning:       true,
+			Thinking:        ThinkingOpenAI,
 			ReasoningReplay: true,
 			PromptCache:     true,
 			Tokenizer:       TokenizerLocalEstimate,
@@ -73,17 +80,23 @@ var flavorDefaults = map[Flavor]flavorDefault{
 		apiKeyEnv: "OPENROUTER_API_KEY",
 		discover:  true,
 		caps: Capabilities{
-			Reasoning:      ReasoningOpenRouter,
+			Dialect:        DialectOpenAICompletions,
+			Reasoning:      true,
+			Thinking:       ThinkingOpenRouter,
 			ReasoningField: fieldReasoning,
-			PromptCache:    true,
-			Tokenizer:      TokenizerLocalEstimate,
-			MaxTokensField: fieldMaxTokens,
-			SystemAsRole:   true,
-			ParallelTools:  true,
-			StreamUsage:    true,
-			Images:         true,
-			Temperature:    true,
-			ToolChoice:     true,
+			// pi's openrouter default emits reasoning_effort for generic levels
+			SupportsReasoningEffort: true,
+			SupportsFinishReason:    true,
+			SupportsStrict:          true,
+			PromptCache:             true,
+			Tokenizer:               TokenizerLocalEstimate,
+			MaxTokensField:          fieldMaxTokens,
+			SystemAsRole:            true,
+			ParallelTools:           true,
+			StreamUsage:             true,
+			Images:                  true,
+			Temperature:             true,
+			ToolChoice:              true,
 		},
 	},
 	FlavorLMStudio: {
@@ -94,7 +107,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 		// minutes, so neither bound applies
 		timeouts: Timeouts{Header: dur(0), Idle: dur(0), Connect: dur(5 * time.Second)},
 		caps: Capabilities{
-			Reasoning:      ReasoningInlineTags,
+			Dialect:        DialectOpenAICompletions,
+			Reasoning:      true,
+			Thinking:       ThinkingThinkTags,
 			ReasoningField: fieldReasoningConten,
 			ThinkOpen:      thinkOpenTag,
 			ThinkClose:     thinkCloseTag,
@@ -104,6 +119,10 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			StreamUsage:    true,
 			Temperature:    true,
 			ToolChoice:     true,
+			// pi's chat-completions default emits reasoning_effort
+			SupportsReasoningEffort: true,
+			SupportsFinishReason:    true,
+			SupportsStrict:          true,
 		},
 	},
 	FlavorLlamaCpp: {
@@ -112,18 +131,24 @@ var flavorDefaults = map[Flavor]flavorDefault{
 		discover: true,
 		timeouts: Timeouts{Idle: dur(0), Connect: dur(5 * time.Second)},
 		caps: Capabilities{
-			Reasoning:      ReasoningInlineTags,
+			Dialect:        DialectOpenAICompletions,
+			Reasoning:      true,
+			Thinking:       ThinkingThinkTags,
 			ReasoningField: fieldReasoningConten,
 			ThinkOpen:      thinkOpenTag,
 			ThinkClose:     thinkCloseTag,
 			Tokenizer:      TokenizerRemoteTokenize,
 			MaxTokensField: fieldMaxTokens,
 			SystemAsRole:   true,
+			// pi's chat-completions default emits reasoning_effort
+			SupportsReasoningEffort: true,
 			// older builds reject the unknown stream_options key, discovery
 			// turns it back on when the build reports support
-			StreamUsage: false,
-			Temperature: true,
-			ToolChoice:  true,
+			StreamUsage:          false,
+			Temperature:          true,
+			ToolChoice:           true,
+			SupportsFinishReason: true,
+			SupportsStrict:       true,
 		},
 	},
 	FlavorGeneric: {
@@ -134,6 +159,10 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			SystemAsRole:   true,
 			Temperature:    true,
 			ToolChoice:     true,
+			// pi's chat-completions default emits reasoning_effort
+			SupportsReasoningEffort: true,
+			SupportsFinishReason:    true,
+			SupportsStrict:          true,
 		},
 	},
 }
@@ -149,8 +178,26 @@ func flavorFor(name string, cfg ProviderConfig) Flavor {
 	return FlavorGeneric
 }
 
-// resolveCaps layers the provider then model compat blocks over the flavor
-// defaults, field by field.
+// dialectFor returns the wire dialect a provider speaks: its configured api,
+// or the flavor default when unset.
+func dialectFor(cfg ProviderConfig, defDialect Dialect) Dialect {
+	if cfg.API != DialectUnset {
+		return cfg.API
+	}
+	return defDialect
+}
+
+// resolveBaseURL returns the endpoint a provider talks to: its configured base,
+// or the flavor default when unset.
+func resolveBaseURL(cfg, def string) string {
+	if cfg != "" {
+		return cfg
+	}
+	return def
+}
+
+// resolveCaps layers detection and compat blocks over the flavor defaults in
+// order, later winning field by field.
 func resolveCaps(base Capabilities, layers ...*Compat) Capabilities {
 	for _, l := range layers {
 		base = applyCompat(base, l)
@@ -158,14 +205,16 @@ func resolveCaps(base Capabilities, layers ...*Compat) Capabilities {
 	return base
 }
 
-// applyCompat overlays one compat block, leaving unset fields alone.
+// applyCompat overlays one compat block, leaving unset fields alone. ThinkingFormat
+// resolves through the enum lookup and is left unchanged on an unknown value,
+// which compatWarnings reports separately.
 func applyCompat(c Capabilities, o *Compat) Capabilities {
 	if o == nil {
 		return c
 	}
 	if o.ThinkingFormat != nil {
-		if style, ok := thinkingFormats[*o.ThinkingFormat]; ok {
-			c.Reasoning = style
+		if f, ok := parseThinkingFormat(*o.ThinkingFormat); ok {
+			c.Thinking = f
 		}
 	}
 	if o.Tokenizer != nil {
@@ -179,12 +228,15 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.MaxTokensField = orStr(c.MaxTokensField, o.MaxTokensField)
 	c.ReasoningField = orStr(c.ReasoningField, o.ReasoningContentField)
 	c.CacheFormat = orStr(c.CacheFormat, o.CacheControlFormat)
+	c.SessionAffinityFormat = orStr(c.SessionAffinityFormat, o.SessionAffinityFormat)
+	c.DeferredTools = orStr(c.DeferredTools, o.DeferredTools)
 
 	c.DeveloperRole = orBool(c.DeveloperRole, o.SupportsDeveloperRole)
 	c.SystemAsRole = orBool(c.SystemAsRole, o.SupportsSystemRole)
 	c.Temperature = orBool(c.Temperature, o.SupportsTemperature)
 	c.ParallelTools = orBool(c.ParallelTools, o.SupportsParallelTools)
-	c.StreamUsage = orBool(c.StreamUsage, o.SupportsStreamUsage)
+	// supportsStreamUsage is ajent's historical name for pi's supportsUsageInStreaming
+	c.StreamUsage = orBool(orBool(c.StreamUsage, o.SupportsUsageInStreaming), o.SupportsStreamUsage)
 	c.ToolChoice = orBool(c.ToolChoice, o.SupportsToolChoice)
 	c.Store = orBool(c.Store, o.SupportsStore)
 	c.PromptCache = orBool(c.PromptCache, o.SupportsPromptCache)
@@ -193,13 +245,38 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.ReasoningReplay = orBool(c.ReasoningReplay, o.RequiresReasoningReplay)
 	c.ReplayReasoning = orBool(c.ReplayReasoning, o.RequiresReasoningContent)
 
-	// supportsReasoningEffort signals the model takes an effort
-	// parameter rather than a token budget
-	if o.SupportsReasoningEffort != nil && *o.SupportsReasoningEffort {
-		c.Reasoning = ReasoningOpenAIEffort
+	// supportsReasoningEffort is a pure gate now; it never picks the encoding.
+	c.SupportsReasoningEffort = orBool(c.SupportsReasoningEffort, o.SupportsReasoningEffort)
+	c.SupportsFinishReason = orBool(c.SupportsFinishReason, o.SupportsFinishReason)
+	c.SupportsStrict = orBool(c.SupportsStrict, o.SupportsStrictMode)
+	c.SupportsStrictTools = orBool(c.SupportsStrictTools, o.SupportsStrictTools)
+	c.SupportsGrammarTools = orBool(c.SupportsGrammarTools, o.SupportsOpenAIGrammarTools)
+	c.SupportsThinkingTokenBudget = orBool(c.SupportsThinkingTokenBudget, o.SupportsThinkingTokenBudget)
+	c.ForceAdaptiveThinking = orBool(c.ForceAdaptiveThinking, o.ForceAdaptiveThinking)
+	c.AllowEmptySignature = orBool(c.AllowEmptySignature, o.AllowEmptySignature)
+	c.RequiresThinkingAsText = orBool(c.RequiresThinkingAsText, o.RequiresThinkingAsText)
+	c.RequiresToolResultName = orBool(c.RequiresToolResultName, o.RequiresToolResultName)
+	c.RequiresAssistantAfterToolResult = orBool(c.RequiresAssistantAfterToolResult, o.RequiresAssistantAfterToolResult)
+	c.EagerToolInputStreaming = orBool(c.EagerToolInputStreaming, o.EagerToolInputStreaming)
+	c.CacheControlOnTools = orBool(c.CacheControlOnTools, o.SupportsCacheControlOnTools)
+	c.ToolReferences = orBool(c.ToolReferences, o.SupportsToolReferences)
+	c.SupportsAdditionalTools = orBool(c.SupportsAdditionalTools, o.SupportsAdditionalTools)
+	c.SupportsToolSearch = orBool(c.SupportsToolSearch, o.SupportsToolSearch)
+	c.SupportsExplicitPromptCache = orBool(c.SupportsExplicitPromptCache, o.SupportsExplicitPromptCache)
+	c.ZaiToolStream = orBool(c.ZaiToolStream, o.ZaiToolStream)
+	c.SessionAffinity = orBool(c.SessionAffinity, o.SendSessionAffinityHeaders)
+
+	if len(o.ChatTemplateKwargs) > 0 {
+		c.ChatTemplateKwargs = maps.Clone(o.ChatTemplateKwargs)
+	}
+	if len(o.ChatTemplateArgs) > 0 {
+		c.ChatTemplateArgs = maps.Clone(o.ChatTemplateArgs)
 	}
 	if len(o.ExtraBody) > 0 {
 		c.ExtraBody = maps.Clone(o.ExtraBody)
+	}
+	if len(o.OpenRouterRouting) > 0 {
+		c.OpenRouterRouting = o.OpenRouterRouting
 	}
 	return c
 }
@@ -246,11 +323,32 @@ func orStr(dst string, p *string) string {
 	return dst
 }
 
-// resolveModel builds a Model from a config entry against a provider's defaults.
-func resolveModel(provider string, base Capabilities, providerCompat *Compat, mc ModelConfig) Model {
-	caps := resolveCaps(base, providerCompat, mc.Compat)
-	if mc.Reasoning != nil && *mc.Reasoning != ReasoningUnset {
+// modelContext carries what resolveModel needs beyond the config entry: the
+// resolved endpoint and dialect that drive detection.
+type modelContext struct {
+	provider string
+	dialect  Dialect
+	baseURL  string // resolved endpoint, for detection
+}
+
+// resolveModel builds a Model from a config entry against a provider's defaults,
+// layering flavor caps then detection then the compat blocks. Detection runs only
+// for chat-completions and never overrides configured compat.
+func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, mc ModelConfig) Model {
+	layers := []*Compat{providerCompat, mc.Compat}
+	if ctx.dialect == DialectOpenAICompletions {
+		d := detectCompat(ctx.provider, ctx.baseURL, mc.ID)
+		layers = append([]*Compat{&d}, layers...)
+	}
+	caps := resolveCaps(base, layers...)
+	caps.Dialect = ctx.dialect
+
+	if mc.Reasoning != nil {
 		caps.Reasoning = *mc.Reasoning
+	}
+	maxOut := 0
+	if mc.MaxTokens != nil {
+		maxOut = *mc.MaxTokens
 	}
 	if len(mc.LevelMap) > 0 {
 		caps.LevelMap = maps.Clone(mc.LevelMap)
@@ -260,12 +358,19 @@ func resolveModel(provider string, base Capabilities, providerCompat *Compat, mc
 	if len(mc.SamplingParams) > 0 {
 		caps.ExtraBody = mergeExtra(caps.ExtraBody, rawSamplingParams(mc.SamplingParams))
 	}
-	if caps.Reasoning == ReasoningNone {
+	if !caps.Reasoning {
 		caps.ReasoningReplay = false
+	} else {
+		// start from the ladder, then overlay configured rungs so a partial map
+		// keeps the rest of it
+		caps.Budgets = defaultBudgets(maxOut)
+		for l, b := range mc.ThinkingBudgets {
+			caps.Budgets[l] = b
+		}
 	}
 
 	m := Model{
-		Provider: provider,
+		Provider: ctx.provider,
 		ID:       mc.ID,
 		Name:     mc.Name,
 		Aliases:  slices.Clone(mc.Aliases),
@@ -273,11 +378,11 @@ func resolveModel(provider string, base Capabilities, providerCompat *Compat, mc
 		Caps:     caps,
 		Headers:  maps.Clone(mc.Headers),
 	}
+	if maxOut > 0 {
+		m.MaxOutput = maxOut
+	}
 	if mc.ContextWindow != nil {
 		m.ContextWindow = *mc.ContextWindow
-	}
-	if mc.MaxTokens != nil {
-		m.MaxOutput = *mc.MaxTokens
 	}
 	if mc.ContextReserve != nil {
 		m.ContextReserve = *mc.ContextReserve

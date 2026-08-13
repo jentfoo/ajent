@@ -19,7 +19,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	st.Tokens = tokens.New(llm.Model{})
 
 	cd := newestCompactionData(branch)
-	msgs, mwarns := ContextMessages(branch, cd)
+	msgs, mwarns := ContextMessages(branch, cd, resolve)
 	warns = append(warns, mwarns...)
 	st.Messages = msgs
 

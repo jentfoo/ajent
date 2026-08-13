@@ -12,7 +12,7 @@ import (
 // applying its cut and reductions exactly as assembly would. It is the single
 // measure both per-stage early exit and the final report use.
 func tokensFor(branch []session.Entry, cd session.CompactionData) int {
-	msgs, warns := session.ContextMessages(branch, cd)
+	msgs, warns := session.ContextMessages(branch, cd, nil)
 	if msgs == nil && len(warns) > 0 {
 		return math.MaxInt // an unlocatable cut saves nothing
 	}
@@ -20,4 +20,4 @@ func tokensFor(branch []session.Entry, cd session.CompactionData) int {
 }
 
 // tokensReserve reports how many tokens a model holds back for its response.
-func tokensReserve(m llm.Model) int { return tokens.Reserve(m) }
+func tokensReserve(m llm.Model) int { return m.Reserve() }

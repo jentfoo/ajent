@@ -191,27 +191,27 @@ func TestOpenSessionModes(t *testing.T) {
 	// so they come last to keep "latest" pointing at the seed above.
 
 	// --continue: reuse the most recent transcript (the seed, still alone).
-	wCont, err := openSession(store, modeContinue, ws, "", pickFirst)
+	wCont, err := openSession(store, modeContinue, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wCont.Path(), "--continue must resume the latest session")
 
 	// --resume with a selection: reuse that root's transcript.
-	wPick, err := openSession(store, modeResumePick, ws, "", pickFirst)
+	wPick, err := openSession(store, modeResumePick, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wPick.Path(), "--resume must reopen the selected session")
 
 	// --resume <id>: reuse that exact saved transcript directly.
-	wID, err := openSession(store, modeResumeID, ws, seedID, pickFirst)
+	wID, err := openSession(store, modeResumeID, ws, seedID, "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wID.Path(), "--resume <id> must reopen that exact session")
 
 	// no flag: always a fresh file, never reuses.
-	wNew, err := openSession(store, modeNewSession, ws, "", pickFirst)
+	wNew, err := openSession(store, modeNewSession, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.NotEqual(t, firstPath, wNew.Path(), "no flag must start a new session")
 
 	// --resume cancelled (ErrCancelled): start fresh rather than stall.
-	wCancel, err := openSession(store, modeResumePick, ws, "",
+	wCancel, err := openSession(store, modeResumePick, ws, "", "",
 		func([]session.Info) (int, error) { return 0, tui.ErrCancelled })
 	require.NoError(t, err)
 	assert.NotEqual(t, firstPath, wCancel.Path(), "cancelling --resume should start a new session")
@@ -232,7 +232,7 @@ func TestOpenSessionResumePick(t *testing.T) {
 	target := have[0]
 
 	// picker returns the only root's index -> open that exact file.
-	w, err := openSession(store, modeResumePick, ws, "",
+	w, err := openSession(store, modeResumePick, ws, "", "",
 		func(list []session.Info) (int, error) {
 			assert.Len(t, list, 1)
 			return 0, nil
@@ -265,12 +265,12 @@ func TestResumeByID(t *testing.T) {
 	}
 	require.NotEmpty(t, want.ID)
 
-	w, err := openSession(store, modeResumeID, ws, want.ID, nil)
+	w, err := openSession(store, modeResumeID, ws, want.ID, "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, older.Path(), w.Path())
 
 	// a bogus id resolves to ErrNotFound.
-	_, err = openSession(store, modeResumeID, ws, "NO-SUCH-ID", nil)
+	_, err = openSession(store, modeResumeID, ws, "NO-SUCH-ID", "", nil)
 	assert.ErrorIs(t, err, session.ErrNotFound)
 }
 

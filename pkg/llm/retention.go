@@ -1,56 +1,6 @@
 package llm
 
-import (
-	"slices"
-
-	"github.com/go-analyze/bulk"
-)
-
-// RetainedMessages returns msgs with thinking stripped per the resolved
-// retention policy and capability set. It is what a provider would send.
-func RetainedMessages(req Request) []Message {
-	return applyRetention(req.Messages, req.Reasoning.Retain, req.Model.Caps)
-}
-
-// applyRetention returns messages with thinking blocks stripped per policy, at
-// request build time only. It never mutates msgs, and returns it unchanged when
-// nothing is stripped.
-//
-// A provider that cannot read thinking blocks downgrades to RetainNone, and one
-// that must replay them upgrades to RetainWholeTurn, since either alternative
-// makes the request invalid. A block carrying no replay token this provider
-// accepts is dropped whatever the policy, since it cannot be sent at all.
-func applyRetention(msgs []Message, policy RetainPolicy, caps Capabilities) []Message {
-	policy = resolveRetention(policy, caps)
-	keepFrom, lastAssistant := retentionBounds(msgs)
-
-	var changed bool
-	out := make([]Message, 0, len(msgs))
-	for i, m := range msgs {
-		if m.Role != RoleAssistant || !hasThinking(m.Content) {
-			out = append(out, m)
-			continue
-		}
-		keep := keepThinking(policy, i, keepFrom, lastAssistant)
-		content := bulk.SliceFilter(func(b Block) bool {
-			t, ok := b.(ThinkingBlock)
-			return !ok || (keep && replayable(t, caps))
-		}, m.Content)
-		if len(content) == len(m.Content) {
-			out = append(out, m)
-			continue
-		}
-		changed = true
-		if len(content) == 0 {
-			continue // an empty assistant message is rejected by some providers
-		}
-		out = append(out, Message{Role: m.Role, Content: content})
-	}
-	if !changed {
-		return msgs
-	}
-	return out
-}
+import "slices"
 
 // ResolveRetain adjusts the requested retention policy to what caps accept. It
 // returns RetainNone when reasoning is unsupported and upgrades a weaker policy
@@ -61,7 +11,7 @@ func ResolveRetain(policy RetainPolicy, caps Capabilities) RetainPolicy {
 
 // resolveRetention adjusts the policy to what caps can actually accept.
 func resolveRetention(policy RetainPolicy, caps Capabilities) RetainPolicy {
-	if caps.Reasoning == ReasoningNone {
+	if !caps.Reasoning {
 		return RetainNone
 	} else if caps.ReasoningReplay && policy < RetainWholeTurn {
 		return RetainWholeTurn
@@ -104,15 +54,20 @@ func keepThinking(policy RetainPolicy, i, keepFrom, lastAssistant int) bool {
 // replayable reports whether the block carries the token this provider needs to
 // accept it back. A provider rejects a thinking block it cannot verify.
 func replayable(t ThinkingBlock, caps Capabilities) bool {
-	switch caps.Reasoning {
-	case ReasoningAnthropicBudget:
-		return t.Signature != "" || t.Redacted != ""
-	case ReasoningOpenAIEffort:
-		return t.ItemID != ""
-	case ReasoningOpenRouter:
+	switch caps.Dialect {
+	case DialectAnthropic:
+		return t.Signature != "" || t.Redacted != "" || caps.AllowEmptySignature
+	case DialectOpenAIResponses:
+		return t.ItemID != "" || len(t.Item) > 0
+	}
+	// a compat block with an originating field replays back to that field; this
+	// replaces the deepseek-only replay gate once the source-field round trip lands.
+	if t.Field != "" {
+		return true
+	}
+	switch caps.Thinking {
+	case ThinkingOpenRouter:
 		return len(t.Details) > 0
-	case ReasoningContentField:
-		return caps.ReplayReasoning && t.Text != ""
 	default:
 		return false // inline tags are re-parsed from content, never replayed
 	}
