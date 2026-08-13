@@ -4,11 +4,40 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
+
+// drive runs the scripted demo instead of a real agent. The TUI is driven through
+// exactly the API the live loop uses: on each submitted message it plays a canned
+// turn, so this doubles as the reference for how to call into the package.
+func drive(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode resumeMode, resumeID string, args []string) *sessRec {
+	// The demo has no agent or staged command to interrupt/cancel, so a quit
+	// gesture (Ctrl+C or Ctrl+D on an idle empty editor) ends the show right away.
+	go func() {
+		for c := range ui.Controls() {
+			switch c {
+			case tui.ControlInterrupt, tui.ControlEOF:
+				ui.Close()
+				os.Exit(0)
+			}
+		}
+	}()
+
+	d := newDemo(ui)
+	if len(args) > 0 {
+		d.play(strings.Join(args, " "))
+	}
+	for msg := range ui.Messages() {
+		d.play(msg)
+	}
+	return nil // the demo never records a session; nothing to resume
+}
 
 // Scripted stand in for a real agent, the TUI is driven exactly as the agent
 // loop will drive it once there is a model behind it.

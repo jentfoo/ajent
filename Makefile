@@ -6,11 +6,17 @@ test test-all: .SHELLFLAGS := -o pipefail -c
 _FILTER := | grep -v "no test files"
 endif
 
-.PHONY: build clean test test-all test-cover bench fmt-changed lint
+.PHONY: build build-demo clean test test-all test-cover bench fmt-changed lint
 
 build:
 	@mkdir -p bin
 	go build -o ./bin/ajent ./
+
+# Build in demo mode: the scripted stand-in (demo.go) is gated behind the `demo`
+# build tag, so it only compiles into this binary.
+build-demo:
+	@mkdir -p bin
+	go build -tags demo -o ./bin/ajent-demo ./
 
 PLATFORMS := linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 windows-arm64
 

@@ -25,6 +25,9 @@ import (
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
+// drive runs the session loop: it delegates to driver (the real agent) unless the
+// `demo` build tag swaps in demo.go's scripted stand-in instead.
+
 // secretPrefix marks editor lines excluded from persistent history, so a pasted
 // secret never round-trips through ~/.ajent/history.
 const secretPrefix = "secret:"
@@ -168,7 +171,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	sess := driver(ui, set, reg, active, sessMode, resumeID, flag.Args())
+	sess := drive(ui, set, reg, active, sessMode, resumeID, flag.Args())
 
 	// Restore the terminal before printing so the hint is visible after a Ctrl+C /
 	// Ctrl+D quit, then tell the user how to get back to this conversation.
