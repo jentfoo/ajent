@@ -14,6 +14,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/history"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
@@ -78,28 +79,59 @@ func main() {
 		}
 	}
 
-	mode, ok := tui.ParseMode(*render)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "ajent: unknown render mode %q\n", *render)
-		os.Exit(2)
+	// the flag layer outranks every file layer; -m/-render stop being ad hoc.
+	flagLayer := config.Layer{Name: "flag"}
+	var ferr error
+	if modelFlag != "" {
+		flagLayer.Data, ferr = config.SetKey(flagLayer.Data, "model", modelFlag)
+	}
+	if *render != "auto" && ferr == nil {
+		flagLayer.Data, _ = config.SetKey(flagLayer.Data, "ui.render", *render)
 	}
 
-	file, warnings, err := llm.LoadUserFile()
+	set, warnings, err := config.Load(config.Options{
+		Workspace: cwdOrDot(),
+		Flags:     flagLayer,
+	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ajent:", err)
 		os.Exit(1)
+	}
+
+	modeName := set.Settings().UI.Render
+	mode, ok := tui.ParseMode(modeName)
+	if !ok || modeName == "" {
+		fmt.Fprintf(os.Stderr, "ajent: unknown render mode %q\n", modeName)
+		os.Exit(2)
+	}
+	tools.ApplyLimits(toolLimitsFrom(set.Settings().Tools.Limits))
+
+	file, w, err := llm.LoadUserFile()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ajent:", err)
+		os.Exit(1)
+	}
+	warnings = append(warnings, w...)
+	overridden, owarns, oerr := llm.ApplyOverrides(file, set.Settings().Providers, set.Settings().Models)
+	if oerr != nil {
+		fmt.Fprintln(os.Stderr, "ajent:", err)
+		os.Exit(1)
+	}
+	warnings = append(warnings, owarns...)
+	file = overridden
+	// a config.json model choice becomes the default before discovery runs.
+	if m := set.Settings().Model; m != "" {
+		file.DefaultModel = m
 	}
 	reg, regWarnings := llm.NewRegistry(file, llm.LoadUserCache(), llm.RegistryOptions{})
 	warnings = append(warnings, regWarnings...)
 
 	active := reg.Active()
 	if modelFlag != "" {
-		m, err := reg.Resolve(modelFlag)
-		if err == nil {
+		// the flag already set config's model; resolve it through the registry.
+		if m, rerr := reg.Resolve(modelFlag); rerr == nil {
 			reg.SetActive(m)
 			active = m
-		} else {
-			warnings = append(warnings, "no model matches "+modelFlag)
 		}
 	}
 
@@ -136,7 +168,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	sess := driver(ui, reg, active, sessMode, resumeID, flag.Args())
+	sess := driver(ui, set, reg, active, sessMode, resumeID, flag.Args())
 
 	// Restore the terminal before printing so the hint is visible after a Ctrl+C /
 	// Ctrl+D quit, then tell the user how to get back to this conversation.
@@ -152,11 +184,12 @@ func main() {
 // fresh or resumes a saved transcript; resumeID is the id for modeResumeID. It
 // returns the open session record (nil when recording could not be set up) so main
 // can print its resume hint on exit.
-func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode, resumeID string, args []string) *sessRec {
+func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode resumeMode, resumeID string, args []string) *sessRec {
 	providers := llm.NewProviders(reg)
+	rc := reasoningFrom(set.Settings().Reasoning, active)
 	st := &agent.State{
 		Model:     active,
-		Reasoning: defaultReasoning(),
+		Reasoning: rc,
 		Tokens:    tokens.New(active),
 	}
 
@@ -197,7 +230,7 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	if rec != nil {
 		opts.Sink = rec.rec.Sink(sink) // persist notices and fsync at turn end
 		opts.OnMessage = rec.rec.Message
-		rec.rebuild(ui, reg, st)
+		rec.rebuild(set, ui, reg, st, toolsReg)
 	}
 	// a resumed session restores its enabled tool set; unknown names are ignored.
 	if toolsReg != nil && len(st.Tools) > 0 {
@@ -228,6 +261,8 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	// the prompt is at rest until a turn starts; double-Esc rewinds from here.
 	ui.SetIdle(true)
 
+	showReasoningIndicator(ui, set, st)
+
 	if active.ID == "" {
 		ui.Notify("no model configured; use /model to pick one", tui.LevelWarn)
 	}
@@ -241,7 +276,7 @@ func driver(ui *tui.UI, reg *llm.Registry, active llm.Model, sessMode resumeMode
 	cmds := command.NewRegistry()
 	stager := command.NewStager(toolsReg, sink)
 	console := &uiConsole{
-		ui: ui, reg: reg, st: st, tools: toolsReg, commands: cmds,
+		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		started: &started, quit: quit,
 	}
 	if rec != nil {
@@ -340,15 +375,52 @@ func startPrompt(ui *tui.UI, recording bool, ag *agent.Agent, input agent.Input,
 	}()
 }
 
-// defaultReasoning enables thinking for capable models: a moderate level that
-// streams to the UI, with whole-turn retention so multi-step turns stay valid.
-// Providers without reasoning support ignore it entirely. /reasoning overrides it.
-func defaultReasoning() llm.ReasoningConfig {
-	return llm.ReasoningConfig{
-		Level:  llm.LevelMedium,
-		Retain: llm.RetainWholeTurn,
-		Show:   true,
+// showReasoningIndicator shows the reasoning level in the status bar when it
+// differs from the resolved default, clearing it otherwise.
+func showReasoningIndicator(ui *tui.UI, set *config.Set, st *agent.State) {
+	if ui == nil || st == nil {
+		return
 	}
+	dflt := llm.LevelMedium // the compiled-in default level
+	if d, _, ok := set.Explain("reasoning.level"); ok && string(d) != `"medium"` {
+		ui.SetStatusSegment("reasoning", st.Reasoning.Level.String())
+	} else if st.Reasoning.Level != dflt {
+		ui.SetStatusSegment("reasoning", st.Reasoning.Level.String())
+	} else {
+		ui.SetStatusSegment("reasoning", "")
+	}
+}
+
+// toolLimitsFrom maps a typed limits block onto tools.Limits for ApplyLimits.
+func toolLimitsFrom(l config.ToolLimits) tools.Limits {
+	return tools.Limits{
+		Bash:      toolsLimit(l.Bash),
+		Read:      toolsLimit(l.Read),
+		Find:      toolsLimit(l.Find),
+		Grep:      toolsLimit(l.Grep),
+		Ls:        toolsLimit(l.Ls),
+		RefInject: toolsLimit(l.RefInject),
+		RefTotal:  toolsLimit(l.RefTotal),
+	}
+}
+
+func toolsLimit(l config.Limit) tools.Limit {
+	return tools.Limit{Lines: l.Lines, Bytes: l.Bytes}
+}
+
+// reasoningFrom translates a config reasoning block into the active model's
+// configured level and retention, falling back to defaults when unparsable.
+func reasoningFrom(r config.Reasoning, m llm.Model) llm.ReasoningConfig {
+	lvl := llm.LevelMedium
+	if l, ok := llm.ParseLevel(r.Level); ok && r.Level != "" {
+		lvl = llm.ClampLevel(m, l)
+	}
+	retain := llm.RetainWholeTurn
+	if p, ok := llm.ParseRetain(r.Retain); ok && r.Retain != "" {
+		retain = p
+	}
+	show := r.Show
+	return llm.ReasoningConfig{Level: lvl, Retain: retain, Show: show}
 }
 
 // sessRec owns the open transcript: the store it lives in, the writer appending
@@ -518,7 +590,7 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 // rebuild reconstructs the agent state from the resumed branch and replays it
 // onto the UI so a reopened session shows its history. It is best-effort: any
 // problem falls back to a fresh empty context.
-func (r *sessRec) rebuild(ui *tui.UI, reg *llm.Registry, st *agent.State) {
+func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil || len(entries) == 0 {
 		return
@@ -534,9 +606,21 @@ func (r *sessRec) rebuild(ui *tui.UI, reg *llm.Registry, st *agent.State) {
 	if rebuilt.Model.ID != "" {
 		st.Model = rebuilt.Model
 	}
-	if rebuilt.Tokens != nil {
-		st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
+	// fold resumed setting overrides into the session config layer so Explain and
+	// Settings report (session) instead of reverting to defaults.
+	set.SeedSession(session.SettingOverrides(entries))
+	resumed := set.Settings()
+	if _, ok := llm.ParseLevel(resumed.Reasoning.Level); ok || resumed.Reasoning.Retain != "" {
+		st.Reasoning = reasoningFrom(config.Reasoning{
+			Level:  resumed.Reasoning.Level,
+			Retain: resumed.Reasoning.Retain,
+			Show:   resumed.Reasoning.Show,
+		}, st.Model)
 	}
+	if toolsReg != nil && len(resumed.Tools.Enabled) > 0 {
+		toolsReg.SetEnabled(resumed.Tools.Enabled)
+	}
+	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
 	session.Replay(session.Branch(entries, session.Head(entries)), tuisink.New(ui), session.ReplayOptions{})
 }
 

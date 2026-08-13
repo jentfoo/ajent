@@ -56,7 +56,7 @@ than this build understands; older or equal files are fine.
 | `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only) |
 | `compaction` | `CompactionData` | a context reduction recorded without deleting anything (see `compaction-design.md`) |
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
-| `setting_change` | `SettingData` | one setting change (`reasoning`, `tools`) as key + raw value |
+| `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON |
 | `notice` | `NoticeData` | a user-visible notice worth replaying on resume |
 | `custom` | `CustomData` | opaque extension state that must survive a resume |
 
@@ -162,7 +162,11 @@ Two consumers read the transcript back:
 - **State** (`session.State`) rebuilds `agent.State` from a branch: messages in
   order, model switches resolved through a resolver (a failure to resolve is a
   warning, never an error — the caller falls back to its active model), and
-  setting changes applied. Message assembly goes through one function,
+  setting changes applied (`applySetting` accepts both `tools.enabled`, the dotted
+  config key, and the legacy `tools` alias so old transcripts still replay).
+  `session.SettingOverrides(branch)` returns the last value per setting_change
+  key for seeding a resumed session's config layer. Message assembly goes through
+  one function,
   `session.ContextMessages`, which applies the newest compaction's cut and its
   structural reduction plan (the schema and replay live here; `pkg/compact`
   computes the plan — see `compaction-design.md`). A compaction collapses
@@ -187,7 +191,7 @@ agent to sessions:
 rec.Message(info)          // append one message entry (durability path)
 rec.Sink(next)             // wrap: persist notices, fsync at TurnEnd
 rec.ModelChange(m, reason) // append model_change by canonical key
-rec.SettingChange(k, v)    // append setting_change as raw value
+rec.SettingChange(k, v)    // append setting_change; k is a config dotted key
 rec.Custom(type, v)        // append opaque extension state
 ```
 

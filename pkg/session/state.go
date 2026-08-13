@@ -127,12 +127,29 @@ func applySetting(st *agent.State, key string, value json.RawMessage) {
 		if err := json.Unmarshal(value, &rc); err == nil {
 			st.Reasoning = rc
 		}
-	case "tools":
+	case "tools", "tools.enabled": // dotted config key plus the legacy alias
 		var tools []string
 		if err := json.Unmarshal(value, &tools); err == nil {
 			st.Tools = tools
 		}
 	}
+}
+
+// SettingOverrides returns the last written value per setting_change key on a
+// branch, for seeding the session config layer when resuming.
+func SettingOverrides(branch []Entry) map[string]json.RawMessage {
+	out := make(map[string]json.RawMessage)
+	for _, e := range branch {
+		if e.Type != TypeSettingChange {
+			continue
+		}
+		var sd SettingData
+		if err := e.Decode(&sd); err != nil || len(sd.Value) == 0 {
+			continue
+		}
+		out[sd.Key] = sd.Value
+	}
+	return out
 }
 
 // wellFormed reports whether every ToolCallBlock has a matching ToolResultBlock,

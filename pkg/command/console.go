@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -23,6 +24,12 @@ type Console interface {
 	// MultiPick presents a filterable multi-select list and returns the chosen
 	// indexes, or ErrCancelled on Esc.
 	MultiPick(ctx context.Context, prompt string, items []tui.PickItem, opts tui.MultiPickOptions) ([]int, error)
+	// Select presents options and returns the chosen index.
+	Select(ctx context.Context, prompt string, options []tui.Option) (int, error)
+	// Confirm asks a yes or no question.
+	Confirm(ctx context.Context, prompt string) (bool, error)
+	// Input prompts for one line of text.
+	Input(ctx context.Context, label, placeholder string) (string, error)
 
 	// Models returns the live model registry, the single source of truth for the
 	// active model.
@@ -34,6 +41,10 @@ type Console interface {
 	Tools() *tools.Registry
 	// Commands returns the command registry, so /help can enumerate itself.
 	Commands() *Registry
+	// Settings returns the resolved configuration handle for this workspace.
+	Settings() *config.Set
+	// SaveSetting writes key into a config layer file ("user" or "project").
+	SaveSetting(layer, key string, value any) error
 
 	// SetModel makes m active, reflects it in the status line and agent state,
 	// and records a model-change entry in the session.

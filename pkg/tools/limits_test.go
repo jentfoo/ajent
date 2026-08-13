@@ -116,3 +116,20 @@ func TestWriterBuffersPartialLineAcrossWrites(t *testing.T) {
 	_, _ = w.Write([]byte("ef"))
 	assert.Contains(t, over.String(), "ef")
 }
+
+func TestApplyLimitsNonZeroFields(t *testing.T) {
+	t.Parallel()
+
+	orig := Limits{
+		Bash: BashOutput, Read: ReadFile, Find: FindResult,
+		Grep: GrepResult, Ls: LsResult, RefInject: RefInject, RefTotal: RefTotal,
+	}
+	t.Cleanup(func() { ApplyLimits(orig) })
+
+	// only the set dimension changes; a zero field keeps its default
+	ApplyLimits(Limits{Bash: Limit{Lines: 10}, Read: Limit{Bytes: 4096}})
+	assert.Equal(t, 10, BashOutput.Lines)
+	assert.Equal(t, 32768, BashOutput.Bytes) // bash byte bound untouched (32<<10 default)
+	assert.Equal(t, 4096, ReadFile.Bytes)    // read bytes overridden
+	assert.Equal(t, 2000, ReadFile.Lines)    // read line bound untouched
+}

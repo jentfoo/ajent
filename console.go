@@ -5,6 +5,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -18,6 +19,7 @@ import (
 // switch move into pkg/command without a cycle.
 type uiConsole struct {
 	ui       *tui.UI
+	set      *config.Set
 	reg      *llm.Registry
 	st       *agent.State
 	tools    *tools.Registry
@@ -40,10 +42,36 @@ func (c *uiConsole) MultiPick(ctx context.Context, prompt string, items []tui.Pi
 	return c.ui.MultiPickContext(ctx, prompt, items, opts)
 }
 
+func (c *uiConsole) Select(ctx context.Context, prompt string, options []tui.Option) (int, error) {
+	return c.ui.SelectContext(ctx, prompt, options)
+}
+
+func (c *uiConsole) Confirm(ctx context.Context, prompt string) (bool, error) {
+	return c.ui.ConfirmContext(ctx, prompt)
+}
+
+func (c *uiConsole) Input(ctx context.Context, label, placeholder string) (string, error) {
+	return c.ui.InputContext(ctx, label, placeholder)
+}
+
 func (c *uiConsole) Models() *llm.Registry       { return c.reg }
 func (c *uiConsole) State() *agent.State         { return c.st }
 func (c *uiConsole) Tools() *tools.Registry      { return c.tools }
 func (c *uiConsole) Commands() *command.Registry { return c.commands }
+func (c *uiConsole) Settings() *config.Set       { return c.set }
+
+// SaveSetting delegates to the config Set, surfacing warnings and failures.
+func (c *uiConsole) SaveSetting(layer, key string, value any) error {
+	warns, err := c.set.Save(layer, key, value)
+	for _, w := range warns {
+		c.ui.Notify(w, tui.LevelWarn)
+	}
+	if err != nil {
+		return err
+	}
+	_ = layer // Save already updated the in-memory Set for future resolution
+	return nil
+}
 
 func (c *uiConsole) SetModel(m llm.Model) {
 	c.reg.SetActive(m)
@@ -70,6 +98,10 @@ func (c *uiConsole) SetModel(m llm.Model) {
 			Estimated: cs.Estimated,
 		})
 	}
+	// record a session override so Explain and Settings report (session).
+	if c.set != nil {
+		_ = c.set.SetSession("model", m.Key())
+	}
 	c.ui.Notify("model: "+m.Key(), tui.LevelInfo)
 	if c.rec != nil {
 		c.rec.ModelChange(m, "command")
@@ -78,6 +110,15 @@ func (c *uiConsole) SetModel(m llm.Model) {
 
 func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
 	c.st.Reasoning = rc
+	// persist granular dotted leaves so every choice survives: marshalling the
+	// whole config would drop retain "none" and show false under omitempty.
+	if c.set != nil {
+		_ = c.set.SetSession("reasoning.level", rc.Level.String())
+		_ = c.set.SetSession("reasoning.show", rc.Show)
+		_ = c.set.SetSession("reasoning.retain", rc.Retain.String())
+	}
+	// keep the status indicator in step with a non-default level.
+	c.ui.SetStatusSegment("reasoning", levelOrEmpty(rc))
 	c.ui.Notify("reasoning: "+rc.Level.String(), tui.LevelInfo)
 	if c.rec != nil {
 		_ = c.rec.SettingChange("reasoning", rc)
@@ -85,10 +126,17 @@ func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
 }
 
 func (c *uiConsole) ToolsChanged() {
-	if c.rec == nil || c.tools == nil {
+	if c.tools == nil {
 		return
 	}
-	_ = c.rec.SettingChange("tools", c.tools.Names())
+	// the dotted config key; applySetting still accepts the legacy "tools" alias
+	names := c.tools.Names()
+	if c.set != nil {
+		_ = c.set.SetSession("tools.enabled", names)
+	}
+	if c.rec != nil {
+		_ = c.rec.SettingChange("tools.enabled", names)
+	}
 }
 
 func (c *uiConsole) Started() bool { return *c.started }
@@ -109,4 +157,12 @@ func (c *uiConsole) Exit() {
 	case c.quit <- struct{}{}:
 	default:
 	}
+}
+
+// levelOrEmpty returns the reasoning segment text, or "" at the default level.
+func levelOrEmpty(rc llm.ReasoningConfig) string {
+	if rc.Level == llm.LevelMedium {
+		return ""
+	}
+	return rc.Level.String()
 }

@@ -55,6 +55,13 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Handler:     toolsCommand,
 	})
 	r.Register(Command{
+		Name:        "settings",
+		Description: "view and edit configuration",
+		Args:        "[section]",
+		Complete:    settingsCompletion(c),
+		Handler:     settingsCommand,
+	})
+	r.Register(Command{
 		Name:        "exit",
 		Description: "quit",
 		Handler: func(_ context.Context, _ string, c Console) error {

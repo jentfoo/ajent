@@ -109,11 +109,16 @@ type Console interface {
     Print(markdown string)                       // /help renders a markdown list
     Pick(ctx, prompt, items, opts) (int, error)
     MultiPick(ctx, prompt, items, opts) ([]int, error)
+    Select(ctx, prompt, options) (int, error)    // enum picker for /settings rows
+    Confirm(ctx, prompt) (bool, error)           // yes/no for toggles
+    Input(ctx, label, placeholder) (string, error) // free text for numbers/limits
 
     Models() *llm.Registry
     State() *agent.State
     Tools() *tools.Registry
     Commands() *Registry
+    Settings() *config.Set                       // resolved configuration handle
+    SaveSetting(layer, key string, value any) error // write to user/project layer
 
     SetModel(m llm.Model)                        // registry + state + status + session entry
     SetReasoning(c llm.ReasoningConfig)
@@ -125,8 +130,11 @@ type Console interface {
 
 `main.go` implements it once (`uiConsole`) over the objects the driver already
 holds. `SetModel` records a `model_change` entry the old bespoke switch never
-did; `ToolsChanged` records a `setting_change("tools", names)` so resume keeps
-the set.
+did; `ToolsChanged` records a `setting_change("tools.enabled", names)` (dotted
+config key) so resume keeps the set. The three interaction methods are one-line
+forwarders to `tui.SelectContext`/`ConfirmContext`/`InputContext`, and the two
+settings methods delegate to the resolved `*config.Set`. Each mutator also calls
+`SetSession` with its config key so `/settings` reports the change as `(session)`.
 
 `Started()` is owned by the pump: it flips true when the first prompt is
 dispatched, never on a command or a `!`.
@@ -139,6 +147,7 @@ dispatched, never on a command or a `!`.
 | `/model [name]` | resolve by name, or open the picker; records a model-change entry |
 | `/reasoning [level]` | report, or set/clear the level for capable models |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
+| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`) |
 | `/exit` | quit |
 
 `/settings`, `/compact`, `/resume`, `/cost` and `/init` also register into
@@ -344,10 +353,11 @@ parameter.
 ```
 parse.go        ParseLine, SplitCommand — line classification
 command.go      Command, Registry, Register/Get/List/Names
-console.go      Console interface
-builtin.go      /help, /model, /reasoning, /tools, /exit + RegisterBuiltins
+console.go      Console interface (+ Select/Confirm/Input/Settings/SaveSetting)
+builtin.go      /help, /model, /reasoning, /tools, /settings, /exit + RegisterBuiltins
 model.go        /model, /reasoning (moved from main.go)
 tools.go        /tools — free-select before, widen-only after first prompt
+settings.go     /settings menu and per-row editors
 shell.go        Stager — staged ! execution and flush
 complete.go     Completer — command + path completion source
 ```

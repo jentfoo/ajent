@@ -147,3 +147,26 @@ func textOf(m llm.Message) string {
 	}
 	return ""
 }
+
+func TestStateAppliesDottedToolsKey(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{settingChange("tools.enabled", `["read","bash"]`)}
+	st, warns := State(branch, resolveModel)
+	assert.Empty(t, warns)
+	assert.Equal(t, []string{"read", "bash"}, st.Tools)
+}
+
+func TestSettingOverridesLastWriteWins(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{
+		settingChange("reasoning", `{"level":"low"}`),
+		msgWithID("m1", llm.Text(llm.RoleUser, "hi")),
+		settingChange("reasoning", `{"level":"high"}`),
+		settingChange("tools.enabled", `["bash"]`),
+	}
+	ov := SettingOverrides(branch)
+	assert.JSONEq(t, `{"level":"high"}`, string(ov["reasoning"]))
+	assert.JSONEq(t, `["bash"]`, string(ov["tools.enabled"]))
+}

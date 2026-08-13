@@ -32,6 +32,40 @@ var (
 	RefTotal = Limit{Bytes: 128 << 10}
 )
 
+// Limits is the configurable subset of the built-in tool output bounds. A zero
+// field leaves that dimension at its compiled-in default.
+type Limits struct {
+	Bash      Limit `json:"bash,omitzero"`
+	Read      Limit `json:"read,omitzero"`
+	Find      Limit `json:"find,omitzero"`
+	Grep      Limit `json:"grep,omitzero"`
+	Ls        Limit `json:"ls,omitzero"`
+	RefInject Limit `json:"refInject,omitzero"`
+	RefTotal  Limit `json:"refTotal,omitzero"`
+}
+
+// ApplyLimits overwrites the package limits with l's non-zero fields. MeasureCeiling
+// and MaxLineChars stay compiled-in.
+func ApplyLimits(l Limits) {
+	applyLimit(&BashOutput, l.Bash)
+	applyLimit(&ReadFile, l.Read)
+	applyLimit(&FindResult, l.Find)
+	applyLimit(&GrepResult, l.Grep)
+	applyLimit(&LsResult, l.Ls)
+	applyLimit(&RefInject, l.RefInject)
+	applyLimit(&RefTotal, l.RefTotal)
+}
+
+// applyLimit folds a configured bound over its package default dimension by dimension.
+func applyLimit(dst *Limit, src Limit) {
+	if src.Lines > 0 {
+		dst.Lines = src.Lines
+	}
+	if src.Bytes > 0 {
+		dst.Bytes = src.Bytes
+	}
+}
+
 // MeasureCeiling is the byte size above which Measure reports only the byte
 // count and never reads the file to count lines, so annotating a giant file is
 // itself bounded.

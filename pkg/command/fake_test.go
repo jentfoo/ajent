@@ -7,9 +7,12 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
+
+	"github.com/stretchr/testify/require"
 )
 
 // fakeConsole is a recording Console for built-in command tests. It captures
@@ -23,6 +26,12 @@ type fakeConsole struct {
 
 	picks      []fakePick      // queued results, consumed in order
 	multiPicks []fakeMultiPick // queued results, consumed in order
+	selects    []int           // queued Select indexes
+	confirms   []bool          // queued Confirm answers
+	inputs     []string        // queued Input replies
+	saveCalls  []saveCall      // recorded SaveSetting calls
+
+	settings *config.Set
 
 	models       *llm.Registry
 	state        *agent.State
@@ -47,6 +56,12 @@ type fakeMultiPick struct {
 	err    error
 }
 
+// saveCall records one SaveSetting request.
+type saveCall struct {
+	layer string
+	key   string
+}
+
 func newFakeConsole(tb testing.TB) *fakeConsole {
 	tb.Helper()
 	// a small registry with two models so /model can resolve and list
@@ -64,11 +79,17 @@ func newFakeConsole(tb testing.TB) *fakeConsole {
 	reg, _ := llm.NewRegistry(file, nil, llm.RegistryOptions{Env: func(string) string { return "" }})
 
 	tr := tools.New()
+	cfg, _, err := config.Load(config.Options{
+		Workspace: tb.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(tb, err)
 	return &fakeConsole{
 		models:   reg,
 		state:    &agent.State{Model: reg.Active(), Reasoning: llm.ReasoningConfig{Level: llm.LevelMedium, Show: true}},
 		tools:    tr,
 		commands: NewRegistry(),
+		settings: cfg,
 	}
 }
 
@@ -109,11 +130,52 @@ func (f *fakeConsole) MultiPick(_ context.Context, prompt string, _ []tui.PickIt
 	return next.result, next.err
 }
 
+func (f *fakeConsole) Select(_ context.Context, prompt string, _ []tui.Option) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.selects) == 0 {
+		return 0, tui.ErrCancelled
+	}
+	next := f.selects[0]
+	f.selects = f.selects[1:]
+	return next, nil
+}
+
+func (f *fakeConsole) Confirm(_ context.Context, prompt string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.confirms) == 0 {
+		return false, tui.ErrCancelled
+	}
+	next := f.confirms[0]
+	f.confirms = f.confirms[1:]
+	return next, nil
+}
+
+func (f *fakeConsole) Input(_ context.Context, label, placeholder string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.inputs) == 0 {
+		return "", tui.ErrCancelled
+	}
+	next := f.inputs[0]
+	f.inputs = f.inputs[1:]
+	return next, nil
+}
+
 func (f *fakeConsole) Models() *llm.Registry  { return f.models }
 func (f *fakeConsole) State() *agent.State    { return f.state }
 func (f *fakeConsole) Tools() *tools.Registry { return f.tools }
 func (f *fakeConsole) Commands() *Registry    { return f.commands }
-func (f *fakeConsole) SetModel(m llm.Model)   { f.models.SetActive(m); f.state.Model = m; f.setModel = m }
+func (f *fakeConsole) Settings() *config.Set  { return f.settings }
+
+func (f *fakeConsole) SaveSetting(layer, key string, value any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saveCalls = append(f.saveCalls, saveCall{layer: layer, key: key})
+	return nil
+}
+func (f *fakeConsole) SetModel(m llm.Model) { f.models.SetActive(m); f.state.Model = m; f.setModel = m }
 func (f *fakeConsole) SetReasoning(c llm.ReasoningConfig) {
 	f.reasoning = c
 	f.state.Reasoning = c
