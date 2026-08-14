@@ -1,7 +1,7 @@
 // Package command owns the single dispatch path for submitted lines: slash
 // commands through a registry, `!` shell commands executed directly with their
 // results staged onto context, and the `Console` view of the world commands
-// share. Extensions (phase 10) register into the same registry.
+// share. Extensions and MCP servers register into the same registry.
 package command
 
 import "strings"

@@ -9,7 +9,7 @@ import (
 )
 
 // RegisterBuiltins installs /help, /usage, /model, /reasoning, /tools and /exit
-// into r against c. Later phases register /settings, /compact, /resume, /cost
+// into r against c. The driver registers /settings, /compact, /resume, /cost
 // and /init into the same registry.
 func RegisterBuiltins(r *Registry, c Console) {
 	r.Register(Command{

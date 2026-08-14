@@ -910,8 +910,8 @@ func TestAnthropicProviderCountTokens(t *testing.T) {
 	assert.NotContains(t, sent, "max_tokens")
 }
 
-// TestCompactionSummaryReachesTheModel is the regression for phase 08 defect 1:
-// a compaction summary injected as a user message must survive the adapter,
+// TestCompactionSummaryReachesTheModel guards that a compaction summary
+// injected as a user message must survive the adapter,
 // whereas a system-role message is dropped (system is a top-level field).
 func TestCompactionSummaryReachesTheModel(t *testing.T) {
 	t.Parallel()

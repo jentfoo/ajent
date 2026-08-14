@@ -12,7 +12,7 @@ import (
 
 // Console is a command's view of the world: UI interactions, session, agent
 // state, registries and config. It is an interface rather than a grab-bag struct
-// so phase 10 can back it with the extension host protocol.
+// so an extension host can back it over a wire protocol.
 type Console interface {
 	// Notify commits a marked line to history at the given level.
 	Notify(msg string, level tui.Level)

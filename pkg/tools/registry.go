@@ -19,7 +19,7 @@ type Registry struct {
 }
 
 // SourceBuiltin is the source label for tools registered by the core. MCP
-// servers (phase 11) and extensions (phase 10) register under their own names.
+// servers and extensions register under their own names.
 const SourceBuiltin = "builtin"
 
 // registeredTool pairs a tool with its default-enabled flag and source label.

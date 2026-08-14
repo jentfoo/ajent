@@ -17,7 +17,8 @@ type readParams struct {
 }
 
 // readTool reads a file with line numbers so edit and the model agree on
-// positions. Images are unsupported in this phase and refused rather than dumped.
+// positions. Image files are not yet supported and are refused rather than
+// dumped as text.
 type readTool struct {
 	policy  PathPolicy
 	tracker *Tracker

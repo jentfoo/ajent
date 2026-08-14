@@ -12,10 +12,10 @@ type Settings struct {
 	Providers   json.RawMessage `json:"providers,omitempty"` // llm.ProviderConfig map
 	Models      json.RawMessage `json:"models,omitempty"`    // llm.ModelConfig by "provider/id"
 	Tools       Tools           `json:"tools,omitzero"`
-	Permissions Permissions     `json:"permissions,omitzero"` // phase 14 owns enforcement
+	Permissions Permissions     `json:"permissions,omitzero"` // enforced by the tool guard chain
 	Compaction  Compaction      `json:"compaction,omitzero"`
 	UI          UI              `json:"ui,omitzero"`
-	Extensions  Extensions      `json:"extensions,omitzero"` // phase 10 owns loading
+	Extensions  Extensions      `json:"extensions,omitzero"` // loaded by the extension host
 }
 
 // Reasoning is the session reasoning choice. Level and Retain are text names.
@@ -64,12 +64,12 @@ type UI struct {
 	ShowThinking bool   `json:"showThinking,omitzero"`
 }
 
-// Permissions configures the tool guard chain. Mode is parsed by phase 14.
+// Permissions configures the tool guard chain.
 type Permissions struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-// Extensions configures extension loading (phase 10).
+// Extensions configures extension loading.
 type Extensions struct {
 	Dir      string   `json:"dir,omitempty"`
 	Disabled []string `json:"disabled,omitzero"`

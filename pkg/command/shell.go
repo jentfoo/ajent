@@ -14,8 +14,8 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// shellProvenance rides in a ToolResultBlock.Details so phase 07 can count
-// staged results and phase 08 can treat them as injected content.
+// shellProvenance rides in a ToolResultBlock.Details so the token counter can
+// attribute staged results and prompt assembly can mark them injected.
 type shellProvenance struct {
 	Source string    `json:"source"` // "shell"
 	TS     time.Time `json:"ts"`

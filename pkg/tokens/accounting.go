@@ -30,7 +30,7 @@ type Accounting struct {
 	turnCount    int // total responses recorded this session
 	estTurnCount int // how many of those reported no usage
 
-	parent *Accounting // nil except on a child ledger (phase 13 sub-agents)
+	parent *Accounting // nil except on a child ledger for a sub-agent
 }
 
 // New returns an empty ledger bound to m's window and reserve.

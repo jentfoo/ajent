@@ -38,10 +38,10 @@ type Settings struct {
     Providers   json.RawMessage // folded over models.json providers (pkg/llm)
     Models      json.RawMessage // "provider/id" overrides (pkg/llm)
     Tools       Tools           // enabled set + per-tool output limits
-    Permissions Permissions     // parsed by phase 14, accepted now to avoid warnings
+    Permissions Permissions     // parsed by the guard chain, accepted now to avoid warnings
     Compaction  Compaction      // auto toggle + threshold fraction
     UI          UI              // render mode; showCost/showThinking
-    Extensions  Extensions      // loaded by phase 10, accepted now
+    Extensions  Extensions      // loaded by the extension host, accepted now
 }
 ```
 
@@ -71,5 +71,3 @@ lost. Writes go through `WriteFileAtomic` with secret permissions.
 `pkg/config ↛ pkg/llm`, always. Cross-schema folding happens in `pkg/llm`
 (`overrides.go`) and the typed surface stays stdlib-only here.
 
-This document constrains phases 10 (extensions), 12 (MCP config), 14
-(permission mode) and 17 (model catalogue).

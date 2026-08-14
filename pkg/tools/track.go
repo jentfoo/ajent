@@ -74,7 +74,7 @@ func (t *Tracker) Check(path string) error {
 	return nil
 }
 
-// Records returns a snapshot of the observed paths and their records, for phase 08.
+// Records returns a snapshot of the observed paths and their records.
 func (t *Tracker) Records() map[string]Record {
 	t.mu.Lock()
 	defer t.mu.Unlock()

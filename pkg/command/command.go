@@ -22,8 +22,8 @@ type Registry struct {
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry { return &Registry{byName: make(map[string]Command)} }
 
-// Register adds or replaces a command by name. Last write wins so a later phase
-// can widen a built-in; registration order is preserved for /help and completion.
+// Register adds or replaces a command by name. Last write wins, letting callers
+// widen a built-in; registration order is preserved for /help and completion.
 func (r *Registry) Register(cmd Command) {
 	if _, exists := r.byName[cmd.Name]; !exists {
 		r.order = append(r.order, cmd.Name)
