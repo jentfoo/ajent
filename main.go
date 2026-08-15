@@ -216,10 +216,16 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// the compactor is wired lazily so the agent options can close over it before
 	// the *Agent it needs exists; it is assigned once, right after agent.New.
 	var comp *compactor
+	env := agent.DetectEnvironment()
+	proj, perr := agent.LoadProjectInstructions(env.Cwd)
+	if perr != nil {
+		ui.Notify("could not read AGENTS.md: "+perr.Error(), tui.LevelWarn)
+	}
 	opts := agent.Options{
-		Sink:  sink,
-		Env:   agent.DetectEnvironment(),
-		Tools: toolsReg,
+		Sink:                sink,
+		Env:                 env,
+		ProjectInstructions: proj,
+		Tools:               toolsReg,
 		Provider: func(m llm.Model) (llm.Provider, error) {
 			return providers.ProviderFor(m)
 		},

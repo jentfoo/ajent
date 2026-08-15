@@ -24,12 +24,13 @@ const (
 
 // Options configures an Agent.
 type Options struct {
-	Provider  func(llm.Model) (llm.Provider, error) // resolved per request so /model switching works
-	Sink      Sink
-	Tools     ToolSet
-	Env       Environment
-	Transform Transform         // nil is identity
-	OnMessage func(MessageInfo) // nil is a no-op; called once per appended message in loop order
+	Provider            func(llm.Model) (llm.Provider, error) // resolved per request so /model switching works
+	Sink                Sink
+	Tools               ToolSet
+	Env                 Environment
+	ProjectInstructions []ProjectInstruction // AGENTS.md content layered into the system prompt; loaded once at startup
+	Transform           Transform            // nil is identity
+	OnMessage           func(MessageInfo)    // nil is a no-op; called once per appended message in loop order
 	// Compact reduces the live context at a turn boundary or after an overflow,
 	// reporting whether anything changed. It never runs mid-stream.
 	Compact   func(ctx context.Context, r CompactReason) (bool, error)

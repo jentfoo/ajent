@@ -312,7 +312,7 @@ func (a *Agent) buildRequest() llm.Request {
 	}
 	return llm.Request{
 		Model:     a.state.Model,
-		System:    buildSystem(a.state, a.opts.Env),
+		System:    buildSystem(a.state, a.opts.Env, a.opts.ProjectInstructions),
 		Messages:  messages,
 		Tools:     tools,
 		Reasoning: reasoning,

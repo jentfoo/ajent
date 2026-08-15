@@ -1,10 +1,14 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildSystem(t *testing.T) {
@@ -13,7 +17,7 @@ func TestBuildSystem(t *testing.T) {
 	s := &State{Model: llm.Model{ID: "test"}}
 	env := Environment{Cwd: "/repo", OS: "linux/amd64", Shell: "bash", Date: "2024-01-02", Branch: "main", Dirty: true}
 
-	blocks := buildSystem(s, env)
+	blocks := buildSystem(s, env, nil)
 	assert.Len(t, blocks, 1)
 
 	tb, ok := blocks[0].(llm.TextBlock)
@@ -34,8 +38,8 @@ func TestBuildSystemCacheStable(t *testing.T) {
 	env1 := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}
 	env2 := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-03 08:59"}
 
-	b1, _ := buildSystem(s, env1)[0].(llm.TextBlock)
-	b2, _ := buildSystem(s, env2)[0].(llm.TextBlock)
+	b1, _ := buildSystem(s, env1, nil)[0].(llm.TextBlock)
+	b2, _ := buildSystem(s, env2, nil)[0].(llm.TextBlock)
 	assert.NotEqual(t, b1.Text, b2.Text, "the date differs across days")
 }
 
@@ -56,4 +60,59 @@ func TestDetectEnvironment(t *testing.T) {
 	env := DetectEnvironment()
 	assert.NotEmpty(t, env.OS)
 	assert.NotEmpty(t, env.Date)
+}
+
+// TestBuildSystemProjectInstructions asserts the provenance-marked <project_context>
+// block is appended after environment facts when instructions are present.
+func TestBuildSystemProjectInstructions(t *testing.T) {
+	t.Parallel()
+
+	s := &State{Model: llm.Model{ID: "test"}}
+	env := Environment{Cwd: "/repo", Date: "2024-01-02"}
+	proj := []ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\nbuild with make test\n"}}
+
+	blocks := buildSystem(s, env, proj)
+	tb, ok := blocks[0].(llm.TextBlock)
+	require.True(t, ok)
+
+	for _, want := range []string{
+		"<project_context>",
+		"Project-specific instructions and guidelines:",
+		`<project_instructions path="/repo/AGENTS.md">`,
+		"# Rules",
+		"build with make test",
+		"</project_instructions>",
+		"</project_context>",
+	} {
+		assert.Contains(t, tb.Text, want)
+	}
+
+	// provenance block comes after the environment facts, not before them
+	assert.Less(t,
+		strings.Index(tb.Text, "Working directory: /repo\n"),
+		strings.Index(tb.Text, "<project_context>"),
+		"project instructions must follow environment facts")
+}
+
+// TestLoadProjectInstructions reads AGENTS.md from a dir when present.
+func TestLoadProjectInstructions(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Rules\n"), 0o644))
+
+	proj, err := LoadProjectInstructions(dir)
+	require.NoError(t, err)
+	assert.Len(t, proj, 1)
+	assert.Equal(t, filepath.Join(dir, "AGENTS.md"), proj[0].Path)
+	assert.Equal(t, "# Rules\n", proj[0].Body)
+}
+
+// TestLoadProjectInstructionsMissing returns nil when no AGENTS.md exists.
+func TestLoadProjectInstructionsMissing(t *testing.T) {
+	t.Parallel()
+
+	proj, err := LoadProjectInstructions(t.TempDir())
+	require.NoError(t, err)
+	assert.Nil(t, proj)
 }

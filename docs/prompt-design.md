@@ -18,7 +18,8 @@ not taste.
 
 **1. The system prompt is cache-stable.** Within a session, the assembled system
 block must be byte-identical between requests except for explicit, deliberate
-changes: the day-granular date, project-instruction reloads, tool-set changes.
+changes: the day-granular date, tool-set changes (project instructions are fixed
+for the session).
 Anything sub-day (timestamps, token counts) busts the provider's whole prompt
 cache and costs real money on every subsequent turn. When a change does land —
 say `/tools` toggles a tool — it is announced with a one-line notice so users
@@ -32,9 +33,8 @@ what makes compaction and plan projection work as pure transforms of an
 assembled message list, never as mutations of state.
 
 **3. Structured output beats prose wherever a machine or another model consumes
-the result.** Summaries, sub-agent returns, classifier verdicts and review
-output all use fixed headings/one-word answers with exact formats spelled out in
-the prompt. The format is part of the contract; tests assert it verbatim.
+the result.** Summaries use fixed headings with exact formats spelled out in the
+prompt. The format is part of the contract; tests assert it verbatim.
 
 **4. Preserve what resumption needs: file paths, line numbers, function names,
 error messages — verbatim.** Generic "summarise the conversation" prompts lose
@@ -42,20 +42,19 @@ exactly the details that let a later model pick up where one stopped. Every
 lossy prompt in this document carries an explicit instruction to keep those
 artefacts exact.
 
-**5. Only advertise what is real.** A tool appears in the prompt only when it is
-enabled and has a snippet; skills are listed only when the `read` tool exists;
-guidelines adapt to which tools are available. Advertising something that is not
-there makes the model burn a round-trip discovering it, or worse, try and fail.
+**5. Only advertise what is real.** A tool appears in the request only when it
+is enabled; guidelines adapt to which tools are available. Advertising something
+that is not there makes the model burn a round-trip discovering it, or worse,
+try and fail.
 
 **6. Provenance everywhere.** Every block of injected content carries where it
 came from: `<project_instructions path="/abs/AGENTS.md">`, a compaction summary
-that says "history before this point", a sub-agent result that is the whole
-return value. The model must never mistake one kind of text for another.
+that says "history before this point". The model must never mistake one kind of
+text for another.
 
-**7. Background prompts are short.** Compaction, classifier and plan kickoff
-calls reuse the provider client, use minimal reasoning, ask for exactly what is
-needed and no more. A long prompt on a call that runs every turn or per tool call
-is a tax paid forever.
+**7. Background prompts are short.** Compaction calls reuse the provider client,
+use minimal reasoning, ask for exactly what is needed and no more. A long prompt
+on a call that runs every turn or per tool call is a tax paid forever.
 
 ## Prompt surfaces
 
@@ -64,36 +63,31 @@ governs its assembly and use.
 
 | Surface | What it is |
 |---|---|
-| System prompt composition | identity + guidelines + environment facts + project instructions + tool snippets + skills |
-| Tool descriptions & schemas | one-line snippet per enabled tool; JSON Schema params |
+| System prompt composition | identity + guidelines + environment facts + project instructions |
+| Tool descriptions & schemas | per-tool `Description` prose plus JSON Schema params, sent via the provider tool channel |
 | `@`-file reference injection | synthetic read call+result ahead of the user message |
-| Project instruction layering | AGENTS.md/CLAUDE.md discovery and provenance-marked assembly |
-| Skills registry & injection | `<available_skills>` blocks with name/description/location |
+| Project instruction layering | `<cwd>/AGENTS.md` injection with provenance marker |
 | Prompt templates / slash commands | markdown templates expanded into prompts; `/init` survey |
 | Compaction summarisation | staged free reductions + exact-format LLM summary |
-| Sub-agent system prompt & contract | isolated read-only agents with an output contract and empty-summary nudge |
-| Tool-barrier deny reasons & classifier | denial reason becomes the error text; one-word verdict classifier |
-| Plan workflow kickoff/review prompts | role-specific kickoffs that assume zero prior context |
 
 ---
 
 ## System prompt composition
 
 Assembled by `buildSystem` into a single cache-stable text block. Project
-instructions, tool snippets and skills are layered on top of the ordered base
-parts without touching the loop.
+instructions are layered on top of the ordered base parts without touching the
+loop; the enabled tool schemas ride in the request's separate `Tools` channel,
+not this block.
 
 ### Parts, in order
 
 ```
 1. Identity sentence        — one neutral line naming the harness + repo cwd.
 2. "How you help" line      — read files, run commands, edit code, write new files.
-3. Available tools          — only enabled tools with their snippets.
-4. Guidelines               — concise bullets; some derived from which tools exist.
-5. Environment facts        — clean structured lines: cwd, platform, shell, date,
+3. Guidelines               — concise bullets; some derived from which tools exist.
+4. Environment facts        — clean structured lines: cwd, platform, shell, date,
                               git branch + dirty state.
-6. Project instructions     — provenance-marked AGENTS.md/CLAUDE.md blocks.
-7. Skills                   — <available_skills> when read is available (optional).
+5. Project instructions     — the `<cwd>/AGENTS.md` file, when present.
 ```
 
 ### Identity
@@ -150,35 +144,37 @@ cache-stability contract.
 ### Composition invariants
 
 - One text block (`llm.TextBlock`), not many; providers cache per-block.
-- `buildSystem(s *State, env Environment)` stays deterministic given state+env;
-  extension snippets and project instructions join through explicit inputs so
-  tests can assert byte equality across calls with equal inputs.
-- Changing the tool set or reloading project instructions changes this block;
-  per principle 1, the change is announced with a one-line notice.
+- `buildSystem(s *State, env Environment, proj []ProjectInstruction)` stays
+  deterministic given state+env; extension snippets and project instructions join
+  through explicit inputs so tests can assert byte equality across calls with
+  equal inputs.
+- Changing the tool set or adding/removing project instructions changes this block;
+  per principle 1, a change is announced with a one-line notice.
 
 ---
 
 ## Tool descriptions & schemas
 
-A tool is described to the model by a **one-line snippet** plus its JSON Schema.
-The snippet appears in `Available tools` only when the tool is enabled and has a
-snippet — this is how "only advertise what is real" is enforced.
+Tools reach the model through the provider's tool-schema channel, **not as text
+in the system block**. Each enabled tool contributes its name, a prose
+`Description()` and JSON Schema parameters (derived from struct tags) to the
+request's `Tools` list; only tools whose state is Enabled are sent — this is how
+"only advertise what is real" is enforced.
 
-```
-- read: Read file contents
-- bash: Execute bash commands (ls, grep, find, etc.)
-- edit: Make precise file edits with exact text replacement
-- write: Create or overwrite files
-```
+The description is full sentences, not a one-line snippet. It states plainly
+anything that changes how the model should use the tool:
 
-Each snippet is a verb phrase plus the minimum context to invoke it. Descriptions
-must state plainly anything that changes how the model should use the tool:
+- `read`: returns line-numbered text and refuses binary files; supports
+  offset/limit paging.
+- `bash`: runs in the session working directory; output is truncated with the
+  full log spilled to a file, and timeout overrides the default. One shell process
+  per call — there is no persistent `cd`.
+- `write`: creates or overwrites files, making parent directories.
+- `edit`: exact text replacement that applies atomically or not at all.
 
-- The sub-agent tools carry an explicit "no session context — pass
-  file paths and key facts, not content" contract.
-- `bash` notes one shell process per call so the model does not assume persistent
-  `cd`.
-- A read-only bar on some tools is stated in their snippet.
+There is deliberately **no "Available tools" list inside the system prompt**:
+the schema channel already tells the model exactly what it may call, and a second
+text copy would only cost tokens.
 
 ### Split what the model sees from what the user sees
 
@@ -216,9 +212,10 @@ Prompt implications:
 
 ## Project instruction layering
 
-Discover `AGENTS.md`/`CLAUDE.md` from the user-global dir down through cwd and up
-to the workspace root, deduplicate by canonical path (a worktree's copy shadows
-the repo's), then assemble with provenance markers:
+If `<cwd>/AGENTS.md` exists it is read once at startup and injected into the
+system block ahead of the first turn. The format mirrors how other agents present
+project instructions early in context — a provenance-marked wrapper so the model
+can tell project rules from conversation:
 
 ```
 <project_context>
@@ -229,49 +226,19 @@ Project-specific instructions and guidelines:
 ...file body...
 </project_instructions>
 
-<project_instructions path="/repo/docs/CLAUDE.md">
-...file body...
-</project_instructions>
-
 </project_context>
 ```
 
 Rules:
 
-- **Order** is significant: user-global first, then ancestor→descendant so more
-  specific instructions come later and can override.
-- **Provenance markers carry the absolute path.** The model must be able to point
-  at which instruction file told it something.
-- Watch files for changes mid-session; reload at turn boundaries (never mid-turn,
-  never between a tool call and its result).
-- `/init` generates one by having the agent survey the repository with a prompt
-  that asks for exactly what belongs in an instruction file: project layout,
-  build/test commands, conventions — not prose about itself.
-
----
-
-## Skills registry & injection
-
-If ajent ships skills (specialised instruction files), they are injected as an
-`<available_skills>` block, listed only when the `read` tool exists:
-
-```
-The following skills provide specialized instructions for specific tasks.
-Read the full skill file when the task matches its description.
-When a skill references a relative path, resolve it against the skill directory and use that absolute path in tool commands.
-
-<available_skills>
-  <skill>
-    <name>...</name>
-    <description>...</description>
-    <location>/abs/path/to/SKILL.md</location>
-  </skill>
-</available_skills>
-```
-
-The block is an index, not the content: descriptions are short so the model can
-match a task to a skill and then load the file. Skills with `disableModelInvocation`
-are omitted entirely.
+- **Only `<cwd>/AGENTS.md`.** Nested discovery is not supported — no ancestor
+  walk, no user-global file. A project that wants layered instructions puts them
+  in one file at the launch directory.
+- **Provenance marker carries the absolute path**, so the model can point at which
+  instruction file told it something.
+- Loaded once at startup and kept for the session; a changed `AGENTS.md` applies on
+  next launch. There is no mid-session reload or file watching, keeping the system
+  block cache-stable per principle 1.
 
 ---
 
@@ -430,153 +397,6 @@ leaves users convinced the agent "forgot" for no reason.
 
 ---
 
-## Sub-agent system prompt & contract
-
-A sub-agent is a fresh `agent.Agent` with an in-memory session, read-only tools,
-and its own system prompt: the parent's neutral identity/guidelines minus most
-tools, plus explicit constraints and an output contract. The two non-negotiables:
-
-**No-session-context warning.** The sub-agent has none of the main conversation.
-Its tool descriptions must say this plainly so models do not delegate work that
-needs context the child cannot see — pass file paths and key facts, not content.
-
-```
-You are a research agent working in an isolated context. You have no access to
-the caller's session or its history.
-
-- The task text below is everything you know; if it lacks a path or fact,
-  investigate for it rather than assuming.
-- You are READ-ONLY: read, find and grep only. You cannot edit files, run the
-  main agent's tools, or spawn further sub-agents. Tasks requiring edits must be
-  done directly by the caller — do not attempt them here.
-
-Task: <task>
-
-Your final assistant message is your entire return value. Make it self-contained:
-conclusions first, then file paths with line numbers and any caveats.
-```
-
-**The output contract.** The last assistant message *is* the deliverable —
-self-contained, conclusions-first, with exact paths/line numbers and caveats.
-
-**Empty-summary retry.** A reasoning model whose final message is thinking-only
-returns nothing. Nudge once or twice — "output the summary now, no tool calls" —
-then return a placeholder `(sub-agent produced no output)` rather than looping.
-
-### Role prompts for delegated work
-
-Specialised sub-agents each carry their own system prompt and structured output
-format so results are usable by whatever consumes them:
-
-- **Scout** — find relevant code fast; return Files Retrieved (with line ranges),
-  Key Code, Architecture, Start Here. Its findings go to an agent that has *not*
-  seen the files.
-- **Planner** — read-only analysis producing Goal / Plan / Files to Modify /
-  New Files / Risks, concrete enough for a worker to execute verbatim.
-- **Worker** — full capabilities in isolation; returns Completed / Files Changed /
-  Notes (plus handoff fields when passing to a reviewer).
-- **Reviewer** — reads diffs and code read-only; returns Critical / Warnings /
-  Suggestions / Summary with specific paths and line numbers.
-
-The pattern across all four: a role identity, an explicit capability boundary,
-and a fixed output format that another model can consume without re-reading the
-source files. This is the single biggest context-efficiency lever in the project —
-findings enter the main context as three paragraphs, not fifty tool results.
-
----
-
-## Tool-barrier deny reasons & classifier
-
-The barrier gates tools between "read-only work runs unprompted" and
-"destructive calls ask first". Its prompts are part of that contract.
-
-### Denial reason = error text
-
-A denied call becomes an `IsError` result whose text is the model's feedback.
-Denials without a reason waste the turn; with one, the model usually adapts. The
-reason should say what to do instead:
-
-- `sed -i` → "use the edit tool" (a hard reject).
-- A write outside allowed scope → state the path rule.
-
-### Allow-with-note
-
-When the user allows a call and adds a note, that note is injected into context so
-the model adapts for the rest of the session:
-
-```
-User allowed `rm` with note: only inside build/
-```
-
-This turns one approval into durable behaviour rather than a single permit.
-
-### Model classifier (auto mode)
-
-For commands the static analyser cannot verify, and only in auto/permission modes,
-one short call asks for exactly **one word** against a fresh, minimal context
-(never the session's):
-
-```
-Classify this shell command as exactly one of: readonly, write, unsure.
-Only output the single word.
-
-Command:
-<command>
-```
-
-Rules that keep it cheap and correct:
-
-- Skip entirely when static analysis already found a confident write (it would
-  prompt anyway).
-- Cache verdicts per exact command string in a session LRU (~500); never cache
-  `unsure` — it is usually transient.
-- Reuse the provider client; minimal reasoning.
-
----
-
-## Plan workflow kickoff/review prompts
-
-The plan → implement → review loop runs two models against projected contexts, so
-every stage's prompt must be **self-contained**: each receiving model has *no*
-prior context beyond what the projection gives it.
-
-**Kickoff prompts state this explicitly.** The single biggest quality lever in the
-whole workflow is that every kickoff says the plan/revision must carry every file
-path and fact because nothing else does:
-
-```
-You are working on one stage of the plan below. You have NO prior context from
-the stages before it.
-
-The plan below carries every fact you need — read it fully before acting.
-Preserve all file paths exactly; do not invent or assume paths the plan does not
-give you, and investigate rather than guess when one is missing.
-
-<plan / revision instructions>
-```
-
-- **Planning** kickoff: explore read-only (read/find/grep/bash gated by barrier,
-  plus sub-agents), ask clarifying questions, stay in planning until it calls the
-  implement transition.
-- **Implementing**: runs against a projected context of only its own plan kickoff
-  (+ reviewer instructions on later rounds) and its work. Tools include edit/write.
-- **Reviewing**: sees `[planning through dev_implement] + [all prior review rounds]
-  + [git status --porcelain]` — never the implementation chatter in between, so it
-  reviews the plan's intent against actual state.
-
-**Revision instructions must be self-contained.** A `dev_revise(instructions)`
-payload is fed to a fresh implementing segment that has no memory of the previous
-round; therefore the revision text names files and exact changes. The reviewer
-stalls without calling a control tool → ask the user rather than guessing.
-
-Robustness wording worth keeping: review starts whether or not `dev_review` was
-called (a stopped implementor is finished); an implementor turn ending in provider
-error retries up to 3 times so review never runs against untouched work; every
-kickoff that could be interrupted (`Esc`, `/plan-stop`) restores model, tools and
-reasoning level on the way out.
-
----
-
 ## Testing prompting
 
 Prompts are code. The bar is golden/verbatim tests over exact strings:
@@ -584,19 +404,13 @@ Prompts are code. The bar is golden/verbatim tests over exact strings:
 - **System prompt**: assert byte-equality across calls with equal inputs; assert
   cache stability across days (only the date differs); assert empty facts drop
   their lines and git failures fall silent.
-- **Tool snippets & schemas**: assert a tool appears only when enabled-with-snippet;
-  guidelines derive correctly from the enabled set.
+- **Tool schemas & descriptions**: assert a tool appears in the request's `Tools`
+  list only when enabled; guidelines derive correctly from the enabled set.
 - **Compaction**: assert the exact six-section format is present, that user focus
   instructions and the previous summary are included, and (with a scripted fake
   provider) that the model received history in `<conversation>` tags treated as data.
-- **Sub-agent**: assert tool-set enforcement (`agent_*` absent; no write reachable),
-  the empty-summary nudge sequence bounded to two, and that the output contract is
-  in the system prompt verbatim.
-- **Barrier classifier**: assert one-word verdicts, cache hit/miss behaviour, and
-  that `unsure` is never cached.
-- **Plan kickoff**: assert the projected context for each stage contains only its
-  allowed segments, and that revision prompts are self-contained.
 
 Where a prompt is user-configurable (project instructions, templates) the tests
-cover discovery order, dedupe by canonical path, provenance markers, and reload at
-turn boundaries — never mid-turn.
+cover presence/absence of `<cwd>/AGENTS.md`, the provenance marker carrying its
+absolute path, byte-stability across calls with equal inputs, and that project
+instructions are appended after environment facts.

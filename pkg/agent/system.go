@@ -3,9 +3,12 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
@@ -44,9 +47,37 @@ func DetectEnvironment() Environment {
 	}
 }
 
+// ProjectInstruction is one AGENTS.md file injected into the system block,
+// provenance-marked with its absolute source path.
+type ProjectInstruction struct {
+	Path string // absolute source path, used for <project_instructions path=...>
+	Body string // verbatim file contents
+}
+
+// agentsFileName is the single instruction file ajent recognises in cwd. Nested
+// discovery (ancestor or user-global files) is not supported.
+const agentsFileName = "AGENTS.md"
+
+// LoadProjectInstructions reads <dir>/AGENTS.md when it exists, returning a
+// single provenance-marked instruction; nil means none was found. A read error
+// other than the file being absent is returned for callers to surface.
+func LoadProjectInstructions(dir string) ([]ProjectInstruction, error) {
+	path := filepath.Join(dir, agentsFileName)
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	return []ProjectInstruction{{Path: path, Body: string(data)}}, nil
+}
+
 // buildSystem returns the system blocks for state, stable across a session so
-// the prompt cache survives.
-func buildSystem(s *State, env Environment) llm.BlockList {
+// the prompt cache survives. Project instructions are an explicit input (not
+// read here) so callers control when they reload and tests can assert byte
+// equality across calls with equal inputs.
+func buildSystem(s *State, env Environment, proj []ProjectInstruction) llm.BlockList {
 	var b strings.Builder
 
 	b.WriteString(identityLine(cwdOrDot(env.Cwd)))
@@ -57,7 +88,24 @@ func buildSystem(s *State, env Environment) llm.BlockList {
 
 	buildEnvironmentFacts(&b, env)
 
+	if len(proj) > 0 {
+		writeProjectInstructions(&b, proj)
+	}
+
 	return llm.BlockList{llm.TextBlock{Text: b.String()}}
+}
+
+// writeProjectInstructions appends provenance-marked AGENTS.md blocks inside a
+// <project_context> wrapper. The format mirrors what other agents send so the
+// model can tell project instructions from conversation.
+func writeProjectInstructions(b *strings.Builder, proj []ProjectInstruction) {
+	b.WriteString("\n<project_context>\n\n")
+	b.WriteString("Project-specific instructions and guidelines:\n\n")
+	for _, p := range proj {
+		fmt.Fprintf(b, "<project_instructions path=%q>\n%s\n</project_instructions>\n",
+			p.Path, strings.TrimSuffix(p.Body, "\n"))
+	}
+	b.WriteString("</project_context>")
 }
 
 // identityLine is the neutral first sentence naming the working directory. It is
