@@ -88,7 +88,7 @@ const defaultsJSON = `{
       "find":     { "lines": 500 },
       "grep":     { "lines": 1000, "bytes": 131072 },
       "ls":       { "lines": 500 },
-      "refInject":{ "lines": 500, "bytes": 32768 },
+      "refInject":{ "lines": 500, "bytes": 131072 },
       "refTotal": { "bytes": 131072 }
     }
   },

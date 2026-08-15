@@ -80,7 +80,8 @@ func (x *Expander) Expand(ctx context.Context, text string) Result {
 		if x.tracker != nil && x.tracker.Check(full) == nil {
 			continue
 		}
-		if overInjectLimit(m) || spent+int(m.Bytes) > tools.RefTotal.Bytes {
+		rl := tools.RefInjectLimit()
+		if overInjectLimit(m, rl) || spent+int(m.Bytes) > tools.RefTotalLimit().Bytes {
 			out = splice(out, ref, annotate(ref, m))
 			notices = append(notices, "@"+ref.Path+" too large; annotated")
 			continue
@@ -92,11 +93,11 @@ func (x *Expander) Expand(ctx context.Context, text string) Result {
 }
 
 // overInjectLimit reports whether m exceeds the per-file inject threshold.
-func overInjectLimit(m tools.Measurement) bool {
-	if tools.RefInject.Lines > 0 && m.Lines > tools.RefInject.Lines {
+func overInjectLimit(m tools.Measurement, ref tools.Limit) bool {
+	if ref.Lines > 0 && m.Lines > ref.Lines {
 		return true
 	}
-	if tools.RefInject.Bytes > 0 && m.Bytes > int64(tools.RefInject.Bytes) {
+	if ref.Bytes > 0 && m.Bytes > int64(ref.Bytes) {
 		return true
 	}
 	return false

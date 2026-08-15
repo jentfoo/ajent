@@ -20,7 +20,7 @@ func TestRegisterBuiltinsInstallsAll(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	want := []string{"help", "model", "reasoning", "usage", "compact", "tools", "settings", "exit"}
+	want := []string{"help", "model", "reasoning", "usage", "compact", "tools", "mcp", "settings", "exit"}
 	assert.Equal(t, want, r.Names())
 }
 

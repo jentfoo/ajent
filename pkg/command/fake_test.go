@@ -166,8 +166,11 @@ func (f *fakeConsole) Input(_ context.Context, label, placeholder string) (strin
 func (f *fakeConsole) Models() *llm.Registry  { return f.models }
 func (f *fakeConsole) State() *agent.State    { return f.state }
 func (f *fakeConsole) Tools() *tools.Registry { return f.tools }
-func (f *fakeConsole) Commands() *Registry    { return f.commands }
-func (f *fakeConsole) Settings() *config.Set  { return f.settings }
+
+// MCP returns a nil manager; the /mcp command reports it unavailable.
+func (f *fakeConsole) MCP() MCPServers       { return nil }
+func (f *fakeConsole) Commands() *Registry   { return f.commands }
+func (f *fakeConsole) Settings() *config.Set { return f.settings }
 
 func (f *fakeConsole) SaveSetting(layer, key string, value any) error {
 	f.mu.Lock()

@@ -55,6 +55,13 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Handler:     toolsCommand,
 	})
 	r.Register(Command{
+		Name:        "mcp",
+		Description: "manage MCP servers",
+		Args:        "[connect|disconnect|logs|reload] [name]",
+		Complete:    mcpCompletion(c),
+		Handler:     mcpCommand,
+	})
+	r.Register(Command{
 		Name:        "settings",
 		Description: "view and edit configuration",
 		Args:        "[section]",

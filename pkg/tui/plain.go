@@ -63,7 +63,7 @@ func applyPlainAnswer(it interactor, line string) error {
 	case *multiPickState:
 		s.filter = line
 		s.refilter()
-		if len(s.matches) == 0 {
+		if len(s.picks) == 0 {
 			return ErrCancelled
 		}
 		for idx := range s.selected {

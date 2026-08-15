@@ -121,15 +121,17 @@ func TestApplyLimitsNonZeroFields(t *testing.T) {
 	t.Parallel()
 
 	orig := Limits{
-		Bash: BashOutput, Read: ReadFile, Find: FindResult,
-		Grep: GrepResult, Ls: LsResult, RefInject: RefInject, RefTotal: RefTotal,
+		Bash: BashLimit(), Read: ReadFileLimit(), Find: FindResultLimit(),
+		Grep: GrepResultLimit(), Ls: LsResultLimit(), RefInject: RefInjectLimit(), RefTotal: RefTotalLimit(),
 	}
 	t.Cleanup(func() { ApplyLimits(orig) })
 
 	// only the set dimension changes; a zero field keeps its default
-	ApplyLimits(Limits{Bash: Limit{Lines: 10}, Read: Limit{Bytes: 4096}})
-	assert.Equal(t, 10, BashOutput.Lines)
-	assert.Equal(t, 32768, BashOutput.Bytes) // bash byte bound untouched (32<<10 default)
-	assert.Equal(t, 4096, ReadFile.Bytes)    // read bytes overridden
-	assert.Equal(t, 2000, ReadFile.Lines)    // read line bound untouched
+	ApplyLimits(Limits{Bash: Limit{Lines: 12}, Read: Limit{Bytes: 8192}})
+	b := BashLimit()
+	assert.Equal(t, 12, b.Lines)
+	assert.Equal(t, 32768, b.Bytes) // bash byte bound untouched (32<<10 default)
+	r := ReadFileLimit()
+	assert.Equal(t, 8192, r.Bytes) // read bytes overridden
+	assert.Equal(t, 2000, r.Lines) // read line bound untouched
 }

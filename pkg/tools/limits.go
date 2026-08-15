@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -14,23 +15,52 @@ type Limit struct {
 	Bytes int
 }
 
-// Defaults for the built-in tools, expressed as a line count and/or a byte
-// count so a single minified file cannot consume a whole budget on either axis.
+// Package-level output limits are set once by ApplyLimits at startup, but tests
+// run tools concurrently with a reconfiguration, so reads and writes share a lock.
 var (
-	BashOutput = Limit{Lines: 4000, Bytes: 32 << 10}  // ~30 kB for the model; the rest spills to disk
-	ReadFile   = Limit{Lines: 2000, Bytes: 512 << 20} // bytes effectively unbounded
-	FindResult = Limit{Lines: 500}
-	GrepResult = Limit{Lines: 1000, Bytes: 128 << 10}
-	LsResult   = Limit{Lines: 500}
-
-	// RefInject bounds a single @file injected in full. Above either axis the
-	// reference is annotated with its shape instead, so the model can choose to
-	// read it with offset/limit rather than paying for the whole file.
-	RefInject = Limit{Lines: 500, Bytes: 32 << 10}
-	// RefTotal caps the total bytes injected for one message; once reached the
-	// remaining references annotate instead, so a message never silently loses one.
-	RefTotal = Limit{Bytes: 128 << 10}
+	limitsMu   sync.RWMutex                           // guards every bound below together
+	bashOutput = Limit{Lines: 4000, Bytes: 32 << 10}  // ~30 kB for the model; the rest spills to disk
+	readFile   = Limit{Lines: 2000, Bytes: 512 << 20} // bytes effectively unbounded
+	findResult = Limit{Lines: 500}
+	grepResult = Limit{Lines: 1000, Bytes: 128 << 10}
+	lsResult   = Limit{Lines: 500}
+	// refInject bounds a single @file injected in full; above either axis the
+	// reference is annotated with its shape instead so the model reads it explicitly.
+	refInject = Limit{Lines: 500, Bytes: 128 << 10}
+	// refTotal caps total bytes for one message's references; once reached the rest
+	// annotate rather than silently dropping a file.
+	refTotal = Limit{Bytes: 128 << 10}
 )
+
+// BashLimit returns the bash output bound.
+func BashLimit() Limit { return limitRead(&bashOutput) }
+
+// ReadFileLimit returns the read tool's per-file bound.
+func ReadFileLimit() Limit { return limitRead(&readFile) }
+
+// FindResultLimit returns the find result bound.
+func FindResultLimit() Limit { return limitRead(&findResult) }
+
+// GrepResultLimit returns the grep output bound.
+func GrepResultLimit() Limit { return limitRead(&grepResult) }
+
+// LsResultLimit returns the ls result bound.
+func LsResultLimit() Limit { return limitRead(&lsResult) }
+
+// RefInjectLimit bounds a single @file injected in full; above either axis the
+// reference is annotated with its shape instead.
+func RefInjectLimit() Limit { return limitRead(&refInject) }
+
+// RefTotalLimit caps total bytes injected for one message; once reached the rest
+// annotate so no reference is silently lost.
+func RefTotalLimit() Limit { return limitRead(&refTotal) }
+
+// limitRead copies a bound under the read lock, returning an immutable snapshot.
+func limitRead(dst *Limit) Limit {
+	limitsMu.RLock()
+	defer limitsMu.RUnlock()
+	return *dst
+}
 
 // Limits is the configurable subset of the built-in tool output bounds. A zero
 // field leaves that dimension at its compiled-in default.
@@ -47,13 +77,15 @@ type Limits struct {
 // ApplyLimits overwrites the package limits with l's non-zero fields. MeasureCeiling
 // and MaxLineChars stay compiled-in.
 func ApplyLimits(l Limits) {
-	applyLimit(&BashOutput, l.Bash)
-	applyLimit(&ReadFile, l.Read)
-	applyLimit(&FindResult, l.Find)
-	applyLimit(&GrepResult, l.Grep)
-	applyLimit(&LsResult, l.Ls)
-	applyLimit(&RefInject, l.RefInject)
-	applyLimit(&RefTotal, l.RefTotal)
+	limitsMu.Lock()
+	defer limitsMu.Unlock()
+	applyLimit(&bashOutput, l.Bash)
+	applyLimit(&readFile, l.Read)
+	applyLimit(&findResult, l.Find)
+	applyLimit(&grepResult, l.Grep)
+	applyLimit(&lsResult, l.Ls)
+	applyLimit(&refInject, l.RefInject)
+	applyLimit(&refTotal, l.RefTotal)
 }
 
 // applyLimit folds a configured bound over its package default dimension by dimension.

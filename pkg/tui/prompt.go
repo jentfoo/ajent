@@ -374,30 +374,54 @@ func lastRune(s string) (rune, int) {
 	return last, len(string(last))
 }
 
+// pickRow is one navigable MultiPick row: a real item (item >= 0) or a synthetic
+// group header (Group set, item < 0). Headers are first-class so a whole group can
+// be toggled in one keypress.
+type pickRow struct {
+	group string // non-empty only for a header row
+	item  int    // index into items; negative marks a header
+}
+
 // multiPickState is a multi-select list narrowed by a live filter. Space/Tab
 // toggle the highlighted row, Enter confirms, Esc cancels; typed text (other
-// than space) narrows the filter. Rows group under a dim header when
-// PickItem.Group changes between matches.
+// than space) narrows the filter. Rows group under a navigable checkbox header
+// when PickItem.Group changes between matches.
 type multiPickState struct {
 	prompt      string
 	placeholder string
 	items       []PickItem
 	filter      string
-	matches     []int // indexes into items, best first
-	cursor      int   // index into matches
+	picks       []pickRow // visible rows, headers included, best first
+	cursor      int       // index into picks
 	selected    map[int]struct{}
 	chosen      []int // indexes into items, in item order
 }
 
-// refilter recomputes the match set, keeping the order stable for equal scores.
+// refilter recomputes the row set, keeping the order stable for equal scores.
 func (s *multiPickState) refilter() {
-	s.matches = refilterMatches(s.items, s.filter)
+	s.picks = buildRows(s.items, s.filter)
 	s.cursor = 0
+}
+
+// buildRows orders matching items best-first with a synthetic header before each
+// group change so the list reads as grouped sections.
+func buildRows(items []PickItem, filter string) []pickRow {
+	var out []pickRow
+	prev := ""
+	for _, idx := range refilterMatches(items, filter) {
+		g := items[idx].Group
+		if g != "" && g != prev {
+			out = append(out, pickRow{group: g, item: -1})
+			prev = g
+		}
+		out = append(out, pickRow{item: idx})
+	}
+	return out
 }
 
 func (s *multiPickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	header := t.Accent.Wrap(s.prompt) + t.Dim.Wrap("  "+strconv.Itoa(len(s.selected))+
-		" selected · "+strconv.Itoa(len(s.matches))+" of "+strconv.Itoa(len(s.items)))
+		" selected · "+strconv.Itoa(len(s.picks))+" of "+strconv.Itoa(len(s.items)))
 	shown := s.filter
 	if shown == "" && s.placeholder != "" {
 		shown = t.Dim.Wrap(s.placeholder)
@@ -406,35 +430,75 @@ func (s *multiPickState) rows(t Theme, width, maxRows int) ([]string, int, int) 
 	rows := []string{header, filterRow}
 
 	listRows := maxRows - len(rows)
-	start, end := windowFor(s.cursor, len(s.matches), listRows)
-	var prevGroup string
+	start, end := windowFor(s.cursor, len(s.picks), listRows)
 	for i := start; i < end; i++ {
-		idx := s.matches[i]
-		it := s.items[idx]
-		if it.Group != "" && it.Group != prevGroup {
-			rows = append(rows, t.Dim.Wrap(selectIndent+it.Group))
-			prevGroup = it.Group
+		r := s.picks[i]
+		if r.item < 0 { // group header row
+			members := s.groupMembers(r.group)
+			rows = append(rows, multiPickHeaderRow(t, r.group,
+				groupTri(members, s.selected), i == s.cursor, width))
+		} else {
+			it := s.items[r.item]
+			rows = append(rows, multiPickRow(t, it, i == s.cursor, s.isSelected(r.item), width))
 		}
-		rows = append(rows, multiPickRow(t, it, i == s.cursor, s.isSelected(idx), width))
 	}
-	if len(s.matches) == 0 {
+	if len(s.picks) == 0 {
 		rows = append(rows, t.Dim.Wrap(selectIndent+"no matches"))
-	} else if end-start < len(s.matches) {
-		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(len(s.matches)-(end-start))))
+	} else if end-start < len(s.picks) {
+		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(len(s.picks)-(end-start))))
 	}
 	return rows, 1, displayWidth(t.User.Wrap(userMarker)) + displayWidth(s.filter)
+}
+
+// groupMembers returns the visible item indexes belonging to a header's group.
+func (s *multiPickState) groupMembers(group string) []int {
+	var out []int
+	for _, r := range s.picks {
+		if r.item >= 0 && s.items[r.item].Group == group {
+			out = append(out, r.item)
+		}
+	}
+	return out
+}
+
+// allSelected reports whether every member of a set is selected.
+func (s *multiPickState) allSelected(members []int) bool {
+	for _, m := range members {
+		if !s.isSelected(m) {
+			return false
+		}
+	}
+	return len(members) > 0
+}
+
+// groupTri reports a header's checkbox state: -1 none, 0 partial, 1 all.
+func groupTri(members []int, selected map[int]struct{}) int {
+	sel := 0
+	for _, m := range members {
+		if _, ok := selected[m]; ok {
+			sel++
+		}
+	}
+	switch {
+	case sel == 0:
+		return -1
+	case sel == len(members):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func (s *multiPickState) key(k key) (bool, error) {
 	switch k.typ {
 	case keyUp:
-		s.cursor = wrapIndex(s.cursor-1, len(s.matches))
+		s.cursor = wrapIndex(s.cursor-1, len(s.picks))
 	case keyDown:
-		s.cursor = wrapIndex(s.cursor+1, len(s.matches))
+		s.cursor = wrapIndex(s.cursor+1, len(s.picks))
 	case keyPageUp:
 		s.cursor = max(0, s.cursor-pickPage)
 	case keyPageDown:
-		s.cursor = min(max(len(s.matches)-1, 0), s.cursor+pickPage)
+		s.cursor = min(max(len(s.picks)-1, 0), s.cursor+pickPage)
 	case keyRune:
 		if k.text == " " {
 			s.toggleCurrent() // space selects/deselects; it never narrows the filter
@@ -457,7 +521,7 @@ func (s *multiPickState) key(k key) (bool, error) {
 	case keyTab:
 		s.toggleCurrent()
 	case keyEnter:
-		if len(s.matches) == 0 {
+		if len(s.picks) == 0 {
 			return false, nil
 		}
 		s.chosen = make([]int, 0, len(s.selected))
@@ -472,16 +536,30 @@ func (s *multiPickState) key(k key) (bool, error) {
 	return false, nil
 }
 
-// toggleCurrent flips the highlighted row between selected and unselected.
+// toggleCurrent flips the highlighted row. A header toggles its whole group: it
+// deselects every member when all are already selected, otherwise selects them.
 func (s *multiPickState) toggleCurrent() {
-	if len(s.matches) == 0 {
+	if len(s.picks) == 0 {
 		return
 	}
-	idx := s.matches[s.cursor]
-	if s.isSelected(idx) {
-		delete(s.selected, idx)
+	r := s.picks[s.cursor]
+	if r.item < 0 { // header row toggles the entire group at once
+		members := s.groupMembers(r.group)
+		if s.allSelected(members) {
+			for _, m := range members {
+				delete(s.selected, m)
+			}
+		} else {
+			for _, m := range members {
+				s.selected[m] = struct{}{}
+			}
+		}
+		return
+	}
+	if s.isSelected(r.item) {
+		delete(s.selected, r.item)
 	} else {
-		s.selected[idx] = struct{}{}
+		s.selected[r.item] = struct{}{}
 	}
 }
 
@@ -511,5 +589,23 @@ func multiPickRow(t Theme, it PickItem, selected, checked bool, width int) strin
 	if it.Detail != "" {
 		line += t.Dim.Wrap("  " + it.Detail)
 	}
+	return truncateDisplay(line, width)
+}
+
+// multiPickHeaderRow renders a group header as a navigable tri-state checkbox:
+// [x] all selected, [ ] none, [~] partial.
+func multiPickHeaderRow(t Theme, group string, tri int, cursor bool, width int) string {
+	box := "[ ] "
+	switch tri {
+	case 1:
+		box = "[x] "
+	case 0:
+		box = "[~] " // partial selection within the group
+	}
+	marker, style := selectIndent, t.Dim
+	if cursor {
+		marker, style = selectMarker, t.Accent
+	}
+	line := style.Wrap(marker+box) + t.Dim.Wrap(group)
 	return truncateDisplay(line, width)
 }

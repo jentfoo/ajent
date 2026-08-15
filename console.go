@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 
+	"github.com/jentfoo/ajent/pkg/mcp"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/config"
@@ -26,6 +28,7 @@ type uiConsole struct {
 	commands *command.Registry
 	rec      *session.Recorder
 	comp     *compactor // nil when session recording is off
+	mcp      mcpAdapter // the MCP server manager adapter, or nil
 
 	started *bool // shared with the driver pump
 	quit    chan struct{}
@@ -57,6 +60,7 @@ func (c *uiConsole) Input(ctx context.Context, label, placeholder string) (strin
 func (c *uiConsole) Models() *llm.Registry       { return c.reg }
 func (c *uiConsole) State() *agent.State         { return c.st }
 func (c *uiConsole) Tools() *tools.Registry      { return c.tools }
+func (c *uiConsole) MCP() command.MCPServers     { return c.mcp }
 func (c *uiConsole) Commands() *command.Registry { return c.commands }
 func (c *uiConsole) Settings() *config.Set       { return c.set }
 
@@ -137,6 +141,10 @@ func (c *uiConsole) ToolsChanged() {
 	if c.rec != nil {
 		_ = c.rec.SettingChange("tools.enabled", names)
 	}
+	// /tools changed which MCP tools are enabled; republish the status ratio
+	if c.mcp.m != nil {
+		c.mcp.RefreshStatus()
+	}
 }
 
 func (c *uiConsole) Started() bool { return *c.started }
@@ -157,6 +165,68 @@ func (c *uiConsole) Exit() {
 	case c.quit <- struct{}{}:
 	default:
 	}
+}
+
+// mcpAdapter adapts *mcp.Manager to command.MCPServers so /mcp works without
+// pkg/command importing pkg/mcp.
+type mcpAdapter struct{ m *mcp.Manager }
+
+func (a mcpAdapter) ServerNames() []string { return a.m.ServerNames() }
+func (a mcpAdapter) LoadOnFirstMessage(ctx context.Context) {
+	a.m.LoadOnFirstMessage(ctx)
+}
+func (a mcpAdapter) Status(ctx context.Context) []command.MCPServerStatus {
+	src := a.m.Status(ctx)
+	out := make([]command.MCPServerStatus, len(src))
+	for i, s := range src {
+		out[i] = command.MCPServerStatus{
+			Name:      s.Name,
+			Transport: s.Transport,
+			Connected: s.Connected,
+			State:     s.State,
+			ToolCount: s.ToolCount,
+			Latency:   s.Latency,
+		}
+	}
+	return out
+}
+func (a mcpAdapter) Connect(ctx context.Context, name string) error { return a.m.Connect(ctx, name) }
+func (a mcpAdapter) Disconnect(name string)                         { a.m.Disconnect(name) }
+func (a mcpAdapter) Reload(ctx context.Context) error               { return a.m.Reload(ctx) }
+func (a mcpAdapter) Logs(name string) []string                      { return a.m.Logs(name) }
+func (a mcpAdapter) RefreshStatus()                                 { a.m.RefreshStatus() }
+
+// Groups maps the manager's tool groups onto /tools headers.
+func (a mcpAdapter) Groups() []command.MCPGroup {
+	src := a.m.ToolGroups()
+	out := make([]command.MCPGroup, len(src))
+	for i, g := range src {
+		out[i] = command.MCPGroup{Source: g.Source, Label: g.Label}
+	}
+	return out
+}
+
+// registryAdapter adapts *tools.Registry to mcp.Registrar so pkg/mcp never imports
+// pkg/tools. The State enums are numerically identical, so a direct cast bridges them.
+type registryAdapter struct{ reg *tools.Registry }
+
+func (a registryAdapter) RegisterState(source string, t agent.Tool, s mcp.State) {
+	a.reg.RegisterState(source, t, tools.State(s))
+}
+func (a registryAdapter) Unregister(source string)            { a.reg.Unregister(source) }
+func (a registryAdapter) EnabledNames(source string) []string { return a.reg.EnabledNames(source) }
+func (a registryAdapter) DisabledNames(source string) []string {
+	return a.reg.DisabledNames(source)
+}
+func (a registryAdapter) AllNames(source string) []string { return a.reg.AllNames(source) }
+func (a registryAdapter) MarkReadOnly(names []string)     { a.reg.MarkReadOnly(names) }
+
+// levelOf maps a warn flag onto the matching notice level.
+func levelOf(warn bool) tui.Level {
+	if warn {
+		return tui.LevelWarn
+	}
+	return tui.LevelInfo
 }
 
 // levelOrEmpty returns the reasoning segment text, or "" at the default level.

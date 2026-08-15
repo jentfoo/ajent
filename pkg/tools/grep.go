@@ -83,9 +83,10 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		return resultErr("grep: " + err.Error()), nil
 	}
 
+	grepLimit := GrepResultLimit()
 	max := p.Limit
 	if max <= 0 {
-		max = GrepResult.Lines
+		max = grepLimit.Lines
 	}
 
 	if !t.forceGo && rgOnPath() {
@@ -93,7 +94,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		if rgErr != nil {
 			return resultErr("grep: " + rgErr.Error()), nil
 		}
-		elided, _ := Elide(out, GrepResult)
+		elided, _ := Elide(out, grepLimit)
 		return agent.ToolResult{Content: llmBlock(elided)}, nil
 	}
 
@@ -164,7 +165,7 @@ func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Re
 			b.WriteString(m + "\n")
 		}
 	}
-	outStr, _ := Elide(b.String(), GrepResult)
+	outStr, _ := Elide(b.String(), GrepResultLimit())
 	return agent.ToolResult{Content: llmBlock(strings.TrimRight(outStr, "\n"))}
 }
 

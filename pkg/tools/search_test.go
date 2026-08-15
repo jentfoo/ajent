@@ -116,7 +116,7 @@ func TestFindBoundedResults(t *testing.T) {
 		callWith([]byte(`{"pattern":"*.txt"}`)), nil)
 	assert.False(t, res.IsError)
 	out := textOf(res)
-	assert.LessOrEqual(t, strings.Count(out, ".txt"), FindResult.Lines)
+	assert.LessOrEqual(t, strings.Count(out, ".txt"), FindResultLimit().Lines)
 }
 
 func TestFindMalformedArgsIsError(t *testing.T) {

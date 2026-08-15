@@ -34,12 +34,11 @@ func TestMultiPickSelects(t *testing.T) {
 
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Tools") }, time.Second, testPoll)
 
-	// toggle the first row (read) and the third (stat, in the mcp group)
-	press(t, pw, "\t") // read
+	// the cursor opens on the builtin header; down moves to read (row 1)
+	press(t, pw, "\x1b[B\t") // read
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll)
-	press(t, pw, "\x1b[B\x1b[B") // down, down to stat
-	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> [ ] stat") }, time.Second, testPoll)
-	press(t, pw, "\t") // toggle stat
+	// navigate past ls and the mcp header to stat (row 4) and toggle it
+	press(t, pw, "\x1b[B\x1b[B\x1b[B\t") // down to stat, toggle
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] stat") }, time.Second, testPoll)
 
 	press(t, pw, "\r") // enter confirms
@@ -72,7 +71,7 @@ func TestMultiPickSpaceTogglesSelection(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Tools") }, time.Second, testPoll)
 
-	press(t, pw, " ") // space toggles the highlighted row (read) on
+	press(t, pw, " ") // no groups here: the cursor is already on read; space selects it
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll,
 		"space selects the highlighted tool without entering the filter")
 	// a typed letter still narrows the filter (space does not become part of it)
@@ -107,6 +106,87 @@ func TestMultiPickGroupHeaderShown(t *testing.T) {
 
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "builtin") }, time.Second, testPoll)
 	assert.Contains(t, u.snapshot(v), "mcp")
+}
+
+func TestMultiPickHeaderTogglesGroup(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+
+	items := []PickItem{
+		{Label: "read", Group: "builtin"},
+		{Label: "ls", Group: "builtin"},
+	}
+	result := make(chan []int, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		picked, err := u.MultiPick("Tools", items, MultiPickOptions{})
+		errCh <- err
+		result <- picked
+	}()
+
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "builtin") }, time.Second, testPoll)
+	// the cursor starts on the builtin header; space selects the whole group
+	press(t, pw, "\t")
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll,
+		"toggling a header selects every member of its group")
+
+	// toggle again on the header deselects all
+	press(t, pw, "\t")
+	require.Eventually(t, func() bool { return !strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll,
+		"a fully selected group toggles back off as a whole")
+
+	// select one member leaves the header partial ([~])
+	press(t, pw, "\x1b[B\t")
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[~] builtin") }, time.Second, testPoll,
+		"a partially selected group renders a tri-state checkbox")
+
+	press(t, pw, "\r")
+	select {
+	case picked := <-result:
+		require.NoError(t, <-errCh)
+		assert.Len(t, picked, 1) // only read
+	case <-time.After(time.Second):
+		t.Fatal("MultiPick did not return")
+	}
+}
+
+func TestMultiPickHeaderNeverInChosen(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+
+	items := []PickItem{
+		{Label: "a", Group: "g1"},
+		{Label: "b", Group: "g2"},
+	}
+	result := make(chan []int, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		picked, err := u.MultiPick("Tools", items, MultiPickOptions{})
+		errCh <- err
+		result <- picked
+	}()
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "g1") }, time.Second, testPoll)
+
+	// select both groups via their headers (rows 0 and 2)
+	press(t, pw, "\t\x1b[B\x1b[B\t")
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] b") }, time.Second, testPoll)
+
+	press(t, pw, "\r")
+	select {
+	case picked := <-result:
+		require.NoError(t, <-errCh)
+		assert.ElementsMatch(t, []int{0, 1}, picked) // items only, never headers
+	case <-time.After(time.Second):
+		t.Fatal("MultiPick did not return")
+	}
 }
 
 func TestMultiPickEscCancels(t *testing.T) {

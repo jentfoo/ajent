@@ -29,7 +29,7 @@ func toolsCommand(_ context.Context, _ string, c Console) error {
 // selection is free to enable or disable anything ahead of the first prompt.
 func toolsFreeSelect(c Console, reg *tools.Registry) error {
 	all := reg.All()
-	items, initial := toolItems(reg, all)
+	items, initial := toolItems(reg, all, c)
 	picked, err := c.MultiPick(context.Background(), "Tools", items,
 		tui.MultiPickOptions{Placeholder: "filter", Initial: initial})
 	if err != nil {
@@ -53,7 +53,7 @@ func toolsWidenOnly(c Console, reg *tools.Registry) error {
 		c.Notify("all tools already enabled", levelInfo)
 		return nil
 	}
-	items, _ := toolItems(reg, disabled)
+	items, _ := toolItems(reg, disabled, c)
 	picked, err := c.MultiPick(context.Background(), "Enable tools", items,
 		tui.MultiPickOptions{Placeholder: "filter"})
 	if err != nil {
@@ -73,9 +73,12 @@ func toolsWidenOnly(c Console, reg *tools.Registry) error {
 }
 
 // toolItems groups offered tools by source for MultiPick headers, returning the
-// items plus which indexes are already enabled.
-func toolItems(reg *tools.Registry, offered []agent.Tool) ([]tui.PickItem, []int) {
+// items plus which indexes are already enabled. MCP sources render an enhanced
+// header (tool count, startup mode, connection state) from the manager.
+func toolItems(reg *tools.Registry, offered []agent.Tool, c Console) ([]tui.PickItem, []int) {
 	enabled := bulk.SliceToSet(reg.Names())
+	labels := mcpGroupLabels(c)
+
 	// group by source so MultiPick emits a header when the group changes
 	slices.SortStableFunc(offered, func(a, b agent.Tool) int {
 		sa, sb := reg.Source(a.Name()), reg.Source(b.Name())
@@ -90,13 +93,26 @@ func toolItems(reg *tools.Registry, offered []agent.Tool) ([]tui.PickItem, []int
 	items := make([]tui.PickItem, len(offered))
 	var initial []int
 	for i, t := range offered {
-		items[i] = tui.PickItem{
-			Label: t.Name(),
-			Group: reg.Source(t.Name()),
+		src := reg.Source(t.Name())
+		label := src
+		if l, ok := labels[src]; ok { // MCP servers carry an enhanced header
+			label = l
 		}
+		items[i] = tui.PickItem{Label: t.Name(), Group: label}
 		if _, ok := enabled[t.Name()]; ok {
 			initial = append(initial, i)
 		}
 	}
 	return items, initial
+}
+
+// mcpGroupLabels builds source→header-label for MCP servers from the manager.
+func mcpGroupLabels(c Console) map[string]string {
+	labels := make(map[string]string)
+	if mgr := c.MCP(); mgr != nil {
+		for _, g := range mgr.Groups() {
+			labels[g.Source] = g.Label
+		}
+	}
+	return labels
 }

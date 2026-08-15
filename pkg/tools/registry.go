@@ -3,17 +3,20 @@ package tools
 import (
 	"context"
 	"slices"
+	"sync"
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// Registry holds the tool set and its enabled state. It satisfies agent.ToolSet
-// so the loop reads tools straight off it.
+// Registry holds the tool set and its enable state. It satisfies agent.ToolSet
+// so the loop reads tools straight off it. MCP notification goroutines mutate it
+// while the loop reads, so every method takes the mutex.
 type Registry struct {
+	mu      sync.RWMutex
 	tools   []registeredTool // declaration order drives Names/Schemas
-	schema  []llm.ToolSchema // cached, invalidated by SetEnabled
+	schema  []llm.ToolSchema // cached, invalidated by any state change
 	guards  []Guard          // ordered; first non-allow wins inside Execute
 	tracker *Tracker         // the read tracker shared by read/write/edit, nil when none
 }
@@ -22,12 +25,28 @@ type Registry struct {
 // servers and extensions register under their own names.
 const SourceBuiltin = "builtin"
 
-// registeredTool pairs a tool with its default-enabled flag and source label.
+// State is a tool's visibility to the model.
+type State uint8
+
+const (
+	StateDisabled State = iota // known, not in the prompt, not callable
+	StateEnabled               // in the prompt and callable
+)
+
+// registeredTool pairs a tool with its source label, enable state and whether
+// it is safe to publish read-only (MCP annotations or config globs).
 type registeredTool struct {
-	tool           agent.Tool
-	source         string // who registered it, for /tools grouping
-	defaultEnabled bool
-	enabled        bool
+	tool     agent.Tool
+	source   string // who registered it, for /tools grouping
+	state    State
+	readOnly bool // safe to expose to a sub-agent; default is not
+}
+
+func boolState(b bool) State {
+	if b {
+		return StateEnabled
+	}
+	return StateDisabled
 }
 
 // New returns an empty registry with no guards.
@@ -36,20 +55,32 @@ func New() *Registry { return &Registry{} }
 // Register adds t to the registry under the builtin source, enabled when
 // defaultEnabled is true. Order of registration drives Names and Schemas.
 func (r *Registry) Register(t agent.Tool, defaultEnabled bool) {
-	r.RegisterFrom(SourceBuiltin, t, defaultEnabled)
+	r.RegisterState(SourceBuiltin, t, boolState(defaultEnabled))
 }
 
 // RegisterFrom adds t to the registry under source, enabled when defaultEnabled
 // is true. Source groups the tool in /tools (builtin, an MCP server name, an
 // extension name); order of registration drives Names and Schemas.
 func (r *Registry) RegisterFrom(source string, t agent.Tool, defaultEnabled bool) {
-	r.tools = append(r.tools, registeredTool{
-		tool:           t,
-		source:         source,
-		defaultEnabled: defaultEnabled,
-		enabled:        defaultEnabled,
-	})
+	r.RegisterState(source, t, boolState(defaultEnabled))
+}
+
+// RegisterState adds t under source with the given state. MCP servers register
+// their bridged tools through this.
+func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools = append(r.tools, registeredTool{tool: t, source: source, state: s})
 	r.schema = nil // schema cache is stale until rebuilt
+}
+
+// Unregister drops every tool registered under source. Used on disconnect and
+// re-discovery so a dead server's tools stop being offered.
+func (r *Registry) Unregister(source string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.tools = bulk.SliceFilter(func(rt registeredTool) bool { return rt.source != source }, r.tools)
+	r.schema = nil
 }
 
 // AddGuard appends g to the guard chain. Guards run in registration order and
@@ -58,9 +89,11 @@ func (r *Registry) AddGuard(g Guard) { r.guards = append(r.guards, g) }
 
 // Enabled returns every currently enabled tool in declaration order.
 func (r *Registry) Enabled() []agent.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []agent.Tool
 	for _, rt := range r.tools {
-		if rt.enabled {
+		if rt.state == StateEnabled {
 			out = append(out, rt.tool)
 		}
 	}
@@ -68,41 +101,45 @@ func (r *Registry) Enabled() []agent.Tool {
 }
 
 // SetEnabled replaces the enabled set with names. Unknown names are ignored;
-// known ones not listed become disabled. Use Enable to widen the set within a
-// session instead.
+// currently enabled tools not listed become disabled. Use Enable to widen the
+// set within a session instead.
 func (r *Registry) SetEnabled(names []string) {
 	want := bulk.SliceToSet(names)
-	for i := range r.tools {
-		r.tools[i].enabled = false
-	}
+	r.mu.Lock()
 	for i := range r.tools {
 		if _, ok := want[r.tools[i].tool.Name()]; ok {
-			r.tools[i].enabled = true
+			r.tools[i].state = StateEnabled
+		} else if r.tools[i].state == StateEnabled {
+			r.tools[i].state = StateDisabled
 		}
 	}
 	r.schema = nil // the tool block in the prompt changed, so bust the cache
+	r.mu.Unlock()
 }
 
-// Enable additively enables the named tools, leaving others untouched. Unknown
-// names are ignored. The enabled set only widens within a session, so this is
-// the /tools path after the first prompt; SetEnabled is the free-selection path
-// before it.
+// Enable additively enables the named tools from either state, leaving others
+// untouched. Unknown names are ignored. The enabled set only widens within a
+// session, so this is the /tools path after the first prompt; SetEnabled is the
+// free-selection path before it.
 func (r *Registry) Enable(names []string) {
 	want := bulk.SliceToSet(names)
+	r.mu.Lock()
 	for i := range r.tools {
 		if _, ok := want[r.tools[i].tool.Name()]; ok {
-			r.tools[i].enabled = true
+			r.tools[i].state = StateEnabled
 		}
 	}
 	r.schema = nil
+	r.mu.Unlock()
 }
 
-// Get returns an enabled, guard-wrapped tool by name. Use Lookup when a caller
-// needs the tool regardless of enabled state (e.g. @ running ls, ! checking
-// bash): Get would silently refuse a disabled tool.
+// Get returns a guard-wrapped callable tool by name. Only enabled tools answer;
+// disabled ones do not. Use Lookup when a caller needs the tool regardless of state.
 func (r *Registry) Get(name string) (agent.Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, rt := range r.tools {
-		if !rt.enabled || rt.tool.Name() != name {
+		if rt.state != StateEnabled || rt.tool.Name() != name {
 			continue
 		}
 		return &guardedTool{t: rt.tool, reg: r}, true
@@ -110,11 +147,13 @@ func (r *Registry) Get(name string) (agent.Tool, bool) {
 	return nil, false
 }
 
-// Lookup returns a guard-wrapped tool by name regardless of enabled state. Use
+// Lookup returns a guard-wrapped tool by name regardless of enable state. Use
 // Get when the call should respect the enabled set (agent-initiated calls); a
 // user-explicit @dir listing or ! shell command runs through Lookup so a
 // disabled tool still serves the direct request.
 func (r *Registry) Lookup(name string) (agent.Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, rt := range r.tools {
 		if rt.tool.Name() != name {
 			continue
@@ -127,18 +166,22 @@ func (r *Registry) Lookup(name string) (agent.Tool, bool) {
 // Disabled returns currently disabled tools in declaration order, for the
 // post-first-prompt /tools mode that can only widen the set.
 func (r *Registry) Disabled() []agent.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []agent.Tool
 	for _, rt := range r.tools {
-		if !rt.enabled {
+		if rt.state == StateDisabled {
 			out = append(out, rt.tool)
 		}
 	}
 	return out
 }
 
-// All returns every registered tool in declaration order regardless of enabled
+// All returns every registered tool in declaration order regardless of enable
 // state, for the pre-first-prompt /tools picker that selects freely.
 func (r *Registry) All() []agent.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]agent.Tool, 0, len(r.tools))
 	for _, rt := range r.tools {
 		out = append(out, rt.tool)
@@ -146,8 +189,95 @@ func (r *Registry) All() []agent.Tool {
 	return out
 }
 
+// BySource returns every tool registered under source in declaration order,
+// regardless of state. The /tools grouping and the MCP manager use it to see a
+// server's full offering.
+func (r *Registry) BySource(source string) []agent.Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []agent.Tool
+	for _, rt := range r.tools {
+		if rt.source == source {
+			out = append(out, rt.tool)
+		}
+	}
+	return out
+}
+
+// EnabledNames returns the currently enabled names registered under source. The
+// MCP manager captures this before re-registering a server so a live tool-list
+// refresh does not reset which tools are exposed.
+func (r *Registry) EnabledNames(source string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for _, rt := range r.tools {
+		if rt.source == source && rt.state == StateEnabled {
+			out = append(out, rt.tool.Name())
+		}
+	}
+	return out
+}
+
+// DisabledNames returns the currently disabled (inactive) names registered under
+// source. The MCP status ratio treats a config-disabled or /tools-deselected tool
+// as inactive but still discovered.
+func (r *Registry) DisabledNames(source string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for _, rt := range r.tools {
+		if rt.source == source && rt.state == StateDisabled {
+			out = append(out, rt.tool.Name())
+		}
+	}
+	return out
+}
+
+// AllNames returns every registered name under source, regardless of state. The
+// MCP status ratio counts a server's live offering from it.
+func (r *Registry) AllNames(source string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for _, rt := range r.tools {
+		if rt.source == source {
+			out = append(out, rt.tool.Name())
+		}
+	}
+	return out
+}
+
+// MarkReadOnly records that the named tools are safe to publish read-only. Unknown
+// names are ignored; the mark lives on the (source, tool) pair and is dropped with
+// an Unregister. The sub-agent bridge filters its published set on this metadata.
+func (r *Registry) MarkReadOnly(names []string) {
+	want := bulk.SliceToSet(names)
+	r.mu.Lock()
+	for i := range r.tools {
+		if _, ok := want[r.tools[i].tool.Name()]; ok {
+			r.tools[i].readOnly = true
+		}
+	}
+	r.mu.Unlock()
+}
+
+// ReadOnly reports whether name is marked safe to publish read-only.
+func (r *Registry) ReadOnly(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, rt := range r.tools {
+		if rt.tool.Name() == name {
+			return rt.readOnly
+		}
+	}
+	return false
+}
+
 // Source returns the registration source label for name, or empty when unknown.
 func (r *Registry) Source(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	for _, rt := range r.tools {
 		if rt.tool.Name() == name {
 			return rt.source
@@ -161,12 +291,14 @@ func (r *Registry) Tracker() *Tracker { return r.tracker }
 
 // Schemas returns the enabled tool schemas in declaration order, cached.
 func (r *Registry) Schemas() []llm.ToolSchema {
+	r.mu.Lock() // caches into r.schema, so it needs the write lock
+	defer r.mu.Unlock()
 	if r.schema != nil {
 		return slices.Clone(r.schema)
 	}
 	var out []llm.ToolSchema
 	for _, rt := range r.tools {
-		if !rt.enabled {
+		if rt.state != StateEnabled {
 			continue
 		}
 		out = append(out, llm.ToolSchema{
@@ -181,9 +313,11 @@ func (r *Registry) Schemas() []llm.ToolSchema {
 
 // Names returns the enabled tool names in declaration order.
 func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	var out []string
 	for _, rt := range r.tools {
-		if rt.enabled {
+		if rt.state == StateEnabled {
 			out = append(out, rt.tool.Name())
 		}
 	}

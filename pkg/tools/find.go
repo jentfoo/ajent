@@ -59,7 +59,7 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 
 	max := p.Limit
 	if max <= 0 {
-		max = FindResult.Lines
+		max = FindResultLimit().Lines
 	}
 	matches, truncated := listFiles(root, p.Pattern, max)
 

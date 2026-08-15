@@ -65,7 +65,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	t.tracker.Observe(full, data, info)
 	n := p.Limit
 	if n <= 0 {
-		n = ReadFile.Lines
+		n = ReadFileLimit().Lines
 	}
 	start := p.Offset
 	if start < 1 {

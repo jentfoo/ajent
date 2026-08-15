@@ -57,7 +57,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 
 	max := p.Limit
 	if max <= 0 {
-		max = LsResult.Lines
+		max = LsResultLimit().Lines
 	}
 
 	var b strings.Builder

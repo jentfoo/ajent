@@ -10,6 +10,22 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
+// MCPServers is the MCP manager's view /mcp needs, declared here so pkg/command
+// does not import pkg/mcp. main.go's uiConsole returns the real manager.
+type MCPServers interface {
+	ServerNames() []string
+	// LoadOnFirstMessage connects and registers every server in full, exactly once;
+	// the driver calls it just before assembling the user's first message.
+	LoadOnFirstMessage(ctx context.Context)
+	Status(ctx context.Context) []MCPServerStatus
+	Connect(ctx context.Context, name string) error
+	Disconnect(name string)
+	Reload(ctx context.Context) error // re-reads mcp.json and reconciles
+	Logs(name string) []string
+	Groups() []MCPGroup // per-server /tools group metadata
+	RefreshStatus()     // republish the status ratio after tool-set changes
+}
+
 // Console is a command's view of the world: UI interactions, session, agent
 // state, registries and config. It is an interface rather than a grab-bag struct
 // so an extension host can back it over a wire protocol.
@@ -39,6 +55,9 @@ type Console interface {
 	// Tools returns the live tool registry, the single source of truth for the
 	// enabled set.
 	Tools() *tools.Registry
+	// MCP returns the MCP server manager, nil when no servers are configured or
+	// wiring is unavailable. /mcp uses it to list and control servers.
+	MCP() MCPServers
 	// Commands returns the command registry, so /help can enumerate itself.
 	Commands() *Registry
 	// Settings returns the resolved configuration handle for this workspace.

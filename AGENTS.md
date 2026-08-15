@@ -38,6 +38,7 @@ needed update — every document that names the affected package.
 | `compaction-design.md` | `pkg/compact` (+ session) | Staged context reduction: cheap structural cuts first (failed/superseded calls, elision), an LLM summary only when those are insufficient; the measured `Reduce` plan recorded on a compaction entry and replayed. Uses `prompt-design.md` summaries. |
 | `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to extensions/MCP), direct `!` shell execution via the stager, `@`-path expansion with auto-read and gitignore-aware completion. |
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
+| `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. Reference phase 11's extension protocol builds on this client. |
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
 | `prompt-design.md` | every string sent to a model | Each prompt surface ajent sends; the principles enforced by tests: cache-stability of the system block, cheap/stable/honest prompts, provenance markers on all injected content. The single reference for prompting. |
 
@@ -54,6 +55,7 @@ tools    -> agent, config, llm
 session  -> agent, config, llm, tokens, tools
 compact  -> llm, session, tokens, tools
 tui      (no internal deps)
+mcp      -> agent, config, llm (+ mcp-go; never tools/tui/command — adapters live in main.go)
 refs     -> agent, llm, tokens, tools, tui
 command  -> agent, config, llm, refs, tokens, tools, tui
 main.go  -> everything (the only wiring layer)

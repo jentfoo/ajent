@@ -113,7 +113,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 
 	lim := t.limit
 	if lim == (Limit{}) {
-		lim = BashOutput
+		lim = BashLimit()
 	}
 	var head bytes.Buffer // bounded kept prefix, spilled beyond the output limit
 	spill := newSpiller(t.sessionID)

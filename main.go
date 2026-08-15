@@ -17,6 +17,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/history"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/mcp"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -196,8 +197,8 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		Tokens:    tokens.New(active),
 	}
 
-	// phase 06: every turn is recorded into the workspace transcript so double-Esc
-	// while idle can open the context-tree picker and rewind onto an earlier point.
+	// every turn is recorded into the workspace transcript so double-Esc while idle
+	// can open the context-tree picker and rewind onto an earlier point.
 	rec := newSession(ui, sessMode, resumeID, active.Key())
 	if rec == nil {
 		ui.Notify("session recording disabled; Esc will not rewind", tui.LevelWarn)
@@ -205,8 +206,8 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	sink := tuisink.New(ui)
 
-	// phase 04: build the built-in tool registry and hand it to the loop so the
-	// model can read, write, edit and run commands.
+	// build the built-in tool registry and hand it to the loop so the model can
+	// read, write, edit and run commands.
 	toolsReg, terr := tools.Builtins(tools.Options{SessionID: cwdOrDot()})
 	if terr != nil {
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
@@ -273,14 +274,38 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	quit := make(chan struct{})
 	started := false
 
-	// phase 05: the command registry, shell stager and @ expander own the single
-	// dispatch path for submitted lines. Commands run inline; shell lines stage and
-	// flush ahead of the next prompt; prompts expand @ refs and steer the agent.
+	// MCP servers bridge their remote tools into the registry and are supervised by
+	// a manager. Every server connects in full, eagerly, just before the user's
+	// first message.
+	servers, mwarns, merr := mcp.LoadConfig(cwdOrDot())
+	if merr != nil {
+		ui.Notify("mcp: "+merr.Error(), tui.LevelWarn)
+	}
+	for _, w := range mwarns {
+		ui.Notify("mcp: "+w, tui.LevelWarn)
+	}
+	var mgr *mcp.Manager
+	if toolsReg != nil && merr == nil {
+		mgr = mcp.New(servers, mcp.Options{
+			Registrar: registryAdapter{toolsReg},
+			Workspace: cwdOrDot(),
+			Restore:   st.Tools,
+			Notice:    func(msg string, warn bool) { ui.Notify(msg, levelOf(warn)) },
+			Status:    func(text string) { ui.SetStatusSegment("mcp", text) },
+		})
+	}
+
+	// the command registry, shell stager and @ expander own the single dispatch path
+	// for submitted lines. Commands run inline; shell lines stage and flush ahead of
+	// the next prompt; prompts expand @ refs and steer the agent.
 	cmds := command.NewRegistry()
 	stager := command.NewStager(toolsReg, sink)
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		started: &started, quit: quit,
+	}
+	if mgr != nil {
+		console.mcp = mcpAdapter{mgr}
 	}
 	if rec != nil {
 		console.rec = rec.rec
@@ -304,6 +329,12 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	if len(args) > 0 {
 		pump <- pumpLine{kind: command.KindPrompt, rest: strings.Join(args, " ")}
 	}
+
+	defer func() {
+		if mgr != nil {
+			mgr.Close()
+		}
+	}()
 
 	for {
 		select {
@@ -346,6 +377,11 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 				console.Notify("unknown command /"+line.rest, tui.LevelWarn)
 				continue
 			}
+			// MCP servers load eagerly so the pre-first-prompt /tools picker and /mcp
+			// list already show them; LoadOnFirstMessage is idempotent (runs once).
+			if console.mcp.m != nil && (name == "tools" || name == "mcp") {
+				console.mcp.LoadOnFirstMessage(context.Background())
+			}
 			cmd, ok := console.commands.Get(name)
 			if !ok {
 				console.Notify("unknown command /"+name, tui.LevelWarn)
@@ -355,6 +391,11 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 		case command.KindPrompt:
 			if strings.TrimSpace(line.rest) == "" {
 				continue
+			}
+			// connect every MCP server in full, once, so its tools exist before this
+			// (the first) turn is assembled; /tools or /mcp changes made up to now hold
+			if console.mcp.m != nil {
+				console.mcp.LoadOnFirstMessage(context.Background())
 			}
 			// flush staged shell results ahead of the message, waiting for any
 			// in-flight command to finish first
