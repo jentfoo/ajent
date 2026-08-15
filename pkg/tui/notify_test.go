@@ -72,14 +72,16 @@ func TestUINotifyKeyed(t *testing.T) {
 func TestUISetStatusSegment(t *testing.T) {
 	t.Parallel()
 
+	seg := func(key, text string) Segment { return Segment{Key: key, Text: text} }
+
 	t.Run("adds_and_replaces", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
 
-		u.SetStatusSegment("agents", "subagents: 1")
+		u.SetStatusSegment(seg("agents", "subagents: 1"))
 		assert.Contains(t, u.snapshot(v), "subagents: 1")
 
-		u.SetStatusSegment("agents", "subagents: 2")
+		u.SetStatusSegment(Segment{Key: "agents", Text: "subagents: 2", Short: "ag:2", Priority: 5})
 		screen := u.snapshot(v)
 		assert.Contains(t, screen, "subagents: 2")
 		assert.NotContains(t, screen, "subagents: 1")
@@ -88,8 +90,8 @@ func TestUISetStatusSegment(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
 
-		u.SetStatusSegment("agents", "subagents: 1")
-		u.SetStatusSegment("agents", "")
+		u.SetStatusSegment(seg("agents", "subagents: 1"))
+		u.SetStatusSegment(Segment{Key: "agents"})
 		assert.NotContains(t, u.snapshot(v), "subagents")
 	})
 }
@@ -100,7 +102,7 @@ func TestUISetModel(t *testing.T) {
 	v := newVT(80, 12)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	u.SetStatusSegment("agents", "subagents: 1")
+	u.SetStatusSegment(Segment{Key: "agents", Text: "subagents: 1"})
 	u.SetModel("lmstudio/qwen", 65536)
 
 	screen := u.snapshot(v)
@@ -118,7 +120,7 @@ func TestUISetTokens(t *testing.T) {
 		u := newTestUI(t, v, strings.NewReader(""))
 
 		u.SetModel("openrouter/z-ai/glm-5.2", 800000)
-		u.SetStatusSegment("agents", "subagents: 1")
+		u.SetStatusSegment(Segment{Key: "agents", Text: "subagents: 1"})
 		u.SetTokens(4200)
 
 		screen := u.snapshot(v)
@@ -151,33 +153,92 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 	t.Parallel()
 
 	plain := NewTheme(ColorNone)
-	s := Status{
-		Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
-		Segments: []Segment{{Key: "a", Text: "plan: reviewing"}, {Key: "b", Text: "subagents: 2"}},
-	}
 
-	t.Run("everything_fits", func(t *testing.T) {
-		got := s.render(plain, 120)
-		assert.Contains(t, got, "opus-5")
-		assert.Contains(t, got, "plan: reviewing")
-		assert.Contains(t, got, "subagents: 2")
+	t.Run("everything_fits_one_row", func(t *testing.T) {
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}, {Key: "b", Text: "subagents: 2"}},
+		}
+		got := s.rows(plain, 120)
+		assert.Len(t, got, 1)
+		row := strings.Join(got, " ")
+		assert.Contains(t, row, "opus-5")
+		assert.Contains(t, row, "plan: reviewing")
+		assert.Contains(t, row, "subagents: 2")
 	})
-	t.Run("last_segment_drops_first", func(t *testing.T) {
-		got := s.render(plain, 55)
-		assert.Contains(t, got, "opus-5")
-		assert.NotContains(t, got, "subagents: 2")
+	t.Run("segments_move_to_a_second_row", func(t *testing.T) {
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}, {Key: "b", Text: "subagents: 2"}},
+		}
+		got := s.rows(plain, 55)
+		assert.Len(t, got, 2) // fixed row one survives; segments wrap to short-form row two
+		assert.Contains(t, strings.Join(got, " "), "opus-5")
 	})
-	t.Run("context_bar_survives_longest", func(t *testing.T) {
-		got := s.render(plain, 22)
-		assert.Contains(t, got, "68.2k/200k") // the token totals outlive segments and model
+	t.Run("fixed_part_never_drops_for_segments", func(t *testing.T) {
+		// even at a width that clips the fixed part hard, segments do not evict it
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}},
+		}
+		got := s.rows(plain, 22)
+		assert.Len(t, got, 2)
+		assert.Contains(t, strings.Join(got, " "), "68.2k/200k") // token totals outlive segments
+	})
+	t.Run("priority_drops_lowest_first", func(t *testing.T) {
+		// both short forms together overflow row two; the lower-priority one drops
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{
+				{Key: "a", Text: "plan-reviewing", Short: "plan-reviewing-now", Priority: 10},
+				{Key: "b", Text: "subagents-running", Short: "subagents-running", Priority: 1},
+			},
+		}
+		both := displayWidth("plan-reviewing-now · subagents-running")
+		singleShort := displayWidth("plan-reviewing-now")
+		width := (both + singleShort) / 2 // fits one short form but not both
+		got := s.rows(plain, width)
+		assert.Len(t, got, 2)
+		row2 := got[1]
+		assert.NotContains(t, row2, "subagents") // priority 1 drops before priority 10
+		assert.Contains(t, row2, "plan-reviewing-now")
+	})
+	t.Run("tie_drops_later_insertion_first", func(t *testing.T) {
+		// equal priorities; the later insertion is dropped first (drop-last rule)
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{
+				{Key: "a", Text: "plan-reviewing", Short: "plan-reviewing-now"},
+				{Key: "b", Text: "subagents-running", Short: "subagents-running"},
+			},
+		}
+		both := displayWidth("plan-reviewing-now · subagents-running")
+		singleShort := displayWidth("subagents-running")
+		width := (both + singleShort) / 2
+		got := s.rows(plain, width)
+		assert.Len(t, got, 2)
+		row2 := got[1]
+		assert.NotContains(t, row2, "subagents") // later insertion drops first
+		assert.Contains(t, row2, "plan-reviewing-now")
+	})
+	t.Run("short_form_used_on_row_two", func(t *testing.T) {
+		// full text overflows one row; the short form appears on row two
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan-reviewing-in-progress-long", Short: "pr"}},
+		}
+		got := s.rows(plain, 30)
+		assert.Len(t, got, 2) // one row overflows, so segments take a second row
+		row2 := got[1]
+		assert.Equal(t, "pr", stripANSI(row2)) // short form, never the full text
 	})
 	t.Run("empty_segment_text_skipped", func(t *testing.T) {
-		got := Status{Model: "m", Segments: []Segment{{Key: "a", Text: ""}}}.render(plain, 80)
-		assert.Equal(t, "m", got)
+		got := Status{Model: "m", Segments: []Segment{{Key: "a", Text: ""}}}.rows(plain, 80)
+		assert.Equal(t, []string{"m"}, got)
 	})
 	t.Run("no_segments_matches_the_bar_shape", func(t *testing.T) {
-		got := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}.render(plain, 80)
-		assert.Equal(t, "▓▓▓▓░░░░░░ 68.2k/200k · opus-5", got)
+		got := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}.rows(plain, 80)
+		assert.Equal(t, []string{"▓▓▓▓░░░░░░ 68.2k/200k · opus-5"}, got)
 	})
 }
 

@@ -77,6 +77,20 @@ func (c *uiConsole) SaveSetting(layer, key string, value any) error {
 	return nil
 }
 
+// SetSessionSetting applies a dotted key as a session override and records it so
+// a resume restores it, mirroring ToolsChanged.
+func (c *uiConsole) SetSessionSetting(key string, value any) error {
+	if c.set != nil {
+		if err := c.set.SetSession(key, value); err != nil {
+			return err
+		}
+	}
+	if c.rec != nil {
+		return c.rec.SettingChange(key, value)
+	}
+	return nil
+}
+
 func (c *uiConsole) SetModel(m llm.Model) {
 	c.reg.SetActive(m)
 	c.st.Model = m
@@ -122,7 +136,7 @@ func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
 		_ = c.set.SetSession("reasoning.retain", rc.Retain.String())
 	}
 	// keep the status indicator in step with a non-default level.
-	c.ui.SetStatusSegment("reasoning", levelOrEmpty(rc))
+	c.ui.SetStatusSegment(tui.Segment{Key: "reasoning", Text: levelOrEmpty(rc)})
 	c.ui.Notify("reasoning: "+rc.Level.String(), tui.LevelInfo)
 	if c.rec != nil {
 		_ = c.rec.SettingChange("reasoning", rc)

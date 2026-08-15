@@ -18,7 +18,7 @@ func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	var seen []llm.Message
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
 	a := newTestAgent(nil, p, nil)
-	a.opts.OnMessage = func(info MessageInfo) { seen = append(seen, info.Message) }
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info.Message) }}
 
 	before := []llm.Message{
 		{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{

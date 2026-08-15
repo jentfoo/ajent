@@ -118,8 +118,7 @@ func TestPing(t *testing.T) {
 	assert.NoError(t, c.Ping(t.Context()))
 }
 
-// TestRequestRawSeam sends a custom method through the raw-request seam phase 11
-// relies on.
+// TestRequestRawSeam sends a custom method through the MCP raw-request seam.
 func TestRequestRawSeam(t *testing.T) {
 	t.Parallel()
 

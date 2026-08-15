@@ -33,12 +33,12 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("first reply")}}}, nil
 		},
-		Sink:  r.Sink(agent.NopSink{}),
+		Sinks: []agent.Sink{r.Sink(agent.NopSink{})},
 		Tools: set,
 		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64", Shell: "bash", Date: "2024-01-02"},
-		OnMessage: func(info agent.MessageInfo) {
-			r.Message(info)
-			mainLive = append(mainLive, info.Message)
+		OnMessage: []func(agent.MessageInfo){
+			r.Message,
+			func(info agent.MessageInfo) { mainLive = append(mainLive, info.Message) },
 		},
 	})
 	require.NoError(t, a.Prompt(t.Context(), agent.Input{Text: "first"}))

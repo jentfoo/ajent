@@ -77,12 +77,12 @@ func TestCrashResumeRebuildsState(t *testing.T) {
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: toolTurn("c1", "bash")}}}, nil
 		},
-		Sink:  r.Sink(agent.NopSink{}),
+		Sinks: []agent.Sink{r.Sink(agent.NopSink{})},
 		Tools: set,
 		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64", Shell: "bash", Date: "2024-01-02"},
-		OnMessage: func(info agent.MessageInfo) {
-			r.Message(info)
-			live = append(live, info.Message)
+		OnMessage: []func(agent.MessageInfo){
+			r.Message,
+			func(info agent.MessageInfo) { live = append(live, info.Message) },
 		},
 	})
 

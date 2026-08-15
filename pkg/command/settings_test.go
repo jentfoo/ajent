@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -111,4 +112,93 @@ func TestSettingsMenuSavesToProjectLayer(t *testing.T) {
 	require.NotEmpty(t, c.saveCalls)
 	assert.Equal(t, "project", c.saveCalls[0].layer)
 	assert.Equal(t, "model", c.saveCalls[0].key)
+}
+
+func TestEnumRowEditsAndRecordsSessionSetting(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "auto"})
+
+	// render shows the default until a value is set.
+	label, detail := r.render(c)
+	assert.Equal(t, "Permissions mode", label)
+	assert.Contains(t, detail, "default")
+
+	// Select picks index 1 (auto); the row records it as a session override.
+	c.selects = []int{1}
+	changes, err := r.edit(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, "permissions.mode", changes[0].key)
+	assert.Equal(t, "auto", changes[0].value)
+
+	src, srcName, ok := c.settings.Explain("permissions.mode")
+	require.True(t, ok)
+	assert.Equal(t, `"auto"`, string(src))
+	assert.Equal(t, "session", srcName)
+}
+
+func TestEnumRowCancelledLeavesSessionUntouched(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all"})
+
+	// no queued Select → ErrCancelled; nothing is recorded.
+	changes, err := r.edit(context.Background(), c)
+	require.ErrorIs(t, err, tui.ErrCancelled)
+	assert.Empty(t, changes)
+	_, _, ok := c.settings.Explain("permissions.mode")
+	assert.False(t, ok)
+}
+
+func TestModelRowPicksAndRecordsSubagentKey(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := modelRow("Sub-agent model", "subagent.model")
+
+	// picker returns beta (index 1); the row records it under its own key.
+	c.picks = []fakePick{{result: 1}}
+	changes, err := r.edit(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, "subagent.model", changes[0].key)
+	assert.Equal(t, "test/beta", changes[0].value)
+
+	raw, srcName, ok := c.settings.Explain("subagent.model")
+	require.True(t, ok)
+	assert.Equal(t, `"test/beta"`, string(raw))
+	assert.Equal(t, "session", srcName)
+}
+
+func TestModelRowCancelledReturnsErr(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := modelRow("Sub-agent model", "subagent.model")
+
+	// no queued pick → ErrCancelled, nothing recorded.
+	changes, err := r.edit(context.Background(), c)
+	require.ErrorIs(t, err, tui.ErrCancelled)
+	assert.Empty(t, changes)
+}
+
+func TestSettingsPermissionRowInMenu(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := NewRegistry()
+	c.commands = r
+	RegisterBuiltins(r, c)
+
+	// open the Permissions mode row (6); Select picks allow-read (index 1).
+	c.picks = []fakePick{{result: 0}}
+	c.selects = []int{1}
+
+	cmd, _ := r.Get("settings")
+	require.NoError(t, cmd.Handler(context.Background(), "permissions mode", c))
+	raw, srcName, ok := c.settings.Explain("permissions.mode")
+	require.True(t, ok)
+	assert.Equal(t, `"allow-read"`, string(raw))
+	assert.Equal(t, "session", srcName)
 }

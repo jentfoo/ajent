@@ -19,9 +19,13 @@ import (
 var testEnv = Environment{Cwd: "/repo", OS: "linux/amd64", Shell: "bash", Date: "2024-01-02"}
 
 func newTestAgent(state *State, p llm.Provider, sink Sink) *Agent {
+	var sinks []Sink
+	if sink != nil {
+		sinks = []Sink{sink}
+	}
 	opts := Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sink:     sink,
+		Sinks:    sinks,
 		Env:      testEnv,
 	}
 	if state == nil {

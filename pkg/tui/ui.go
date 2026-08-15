@@ -38,6 +38,7 @@ const (
 	ControlEscape Control = iota
 	ControlInterrupt
 	ControlEOF
+	ControlModeCycle // Shift+Tab; meaning belongs to the front end
 )
 
 // Options configures a UI.
@@ -103,7 +104,8 @@ type UI struct {
 
 	act        *pending // interaction owning the live block
 	queue      []*pending
-	noticeKey  string // keyed notice still collapsible in the live block
+	activity   []activityRow // transient keyed rows above the input, insertion order
+	noticeKey  string        // keyed notice still collapsible in the live block
 	noticeText string
 
 	completer     Completer           // nil disables the completion overlay
@@ -263,6 +265,7 @@ func (u *UI) Reset() {
 	u.thinking = false
 	u.tool = ""
 	u.busy = false
+	u.activity = nil // transient rows are live-block only; a reset drops them
 	u.noticeText = ""
 	u.render.clearHistory()
 }
@@ -529,7 +532,8 @@ func (u *UI) gap() {
 	}
 }
 
-// repaint redraws the live block: optional tool line, input, status.
+// repaint redraws the live block: notice/streaming/search/completion, activity,
+// input or interaction, then the status rows.
 func (u *UI) repaint() {
 	if u.closed || u.mode == ModePlain {
 		return
@@ -561,20 +565,8 @@ func (u *UI) repaint() {
 		offset += len(compRows)
 	}
 
-	// an interaction takes the input's place while it is active, so the editor
-	// keeps whatever was typed and shows it again once the prompt resolves
-	var curRow, curCol int
-	if u.act != nil {
-		var iRows []string
-		iRows, curRow, curCol = u.interactionRows(w, h-offset)
-		rows = append(rows, iRows...)
-	} else {
-		maxRows := max(1, (h-1)/maxInputRatio)
-		var inputRows []string
-		inputRows, curRow, curCol = u.editor.inputView(u.theme, w, maxRows)
-		rows = append(rows, inputRows...)
-	}
-	// working glyph and running tool live at the status bar's bottom-left
+	// working glyph and running tool live at the status bar's bottom-left; compute
+	// the block first so the activity budget below is exact.
 	st := u.status
 	frame := spinnerFrames[u.spinner%len(spinnerFrames)]
 	if !u.busy && u.tool == "" {
@@ -582,7 +574,32 @@ func (u *UI) repaint() {
 	}
 	st.Spinner = u.theme.Spinner.Wrap(frame)
 	st.Tool = u.tool
-	rows = append(rows, st.render(u.theme, w))
+	statusRows := st.rows(u.theme, w)
+
+	// activity yields first on a short terminal: it renders into whatever remains
+	// after the status rows and one line for the input/interaction minimum.
+	budget := maxActivityBudget // text cap plus the "+N more" row when overflowed
+	if room := h - len(rows) - 1 - len(statusRows); room < budget {
+		budget = max(room, 0)
+	}
+	actRows := u.activityRows(w, budget)
+	rows = append(rows, actRows...)
+	offset += len(actRows)
+
+	// an interaction takes the input's place while it is active, so the editor
+	// keeps whatever was typed and shows it again once the prompt resolves
+	var curRow, curCol int
+	if u.act != nil {
+		var iRows []string
+		iRows, curRow, curCol = u.interactionRows(w, h-len(rows))
+		rows = append(rows, iRows...)
+	} else {
+		maxRows := max(1, (h-1)/maxInputRatio)
+		var inputRows []string
+		inputRows, curRow, curCol = u.editor.inputView(u.theme, w, maxRows)
+		rows = append(rows, inputRows...)
+	}
+	rows = append(rows, statusRows...)
 
 	u.render.setLive(rows, offset+curRow, curCol)
 }
@@ -838,6 +855,12 @@ func (u *UI) deliverSearch(items []SearchItem) {
 // applyKey mutates the editor for one key and reports whether it changed any
 // rendered state. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
+	// Shift+Tab is out-of-band: it reaches the control channel even while a
+	// dialog or overlay owns the keyboard.
+	if k.typ == keyBackTab {
+		u.emitControl(ControlModeCycle)
+		return nil, false, false
+	}
 	if u.act != nil {
 		u.routeKey(k) // an active interaction sees every key before the editor
 		return nil, false, false

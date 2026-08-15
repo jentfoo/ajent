@@ -119,6 +119,7 @@ type Console interface {
     Commands() *Registry
     Settings() *config.Set                       // resolved configuration handle
     SaveSetting(layer, key string, value any) error // write to user/project layer
+    SetSessionSetting(key string, value any) error  // session override + recording
 
     SetModel(m llm.Model)                        // registry + state + status + session entry
     SetReasoning(c llm.ReasoningConfig)
@@ -135,6 +136,10 @@ config key) so resume keeps the set. The three interaction methods are one-line
 forwarders to `tui.SelectContext`/`ConfirmContext`/`InputContext`, and the two
 settings methods delegate to the resolved `*config.Set`. Each mutator also calls
 `SetSession` with its config key so `/settings` reports the change as `(session)`.
+`SetSessionSetting` applies a dotted session override *and* records it via
+`recorder.SettingChange`, closing the old gap where a row called `SetSession`
+directly and the override silently vanished on resume (auto-compaction, tool
+limits). The bespoke `SetModel`/`SetReasoning` mutators keep their own paths.
 
 `Started()` is owned by the pump: it flips true when the first prompt is
 dispatched, never on a command or a `!`.
@@ -147,7 +152,7 @@ dispatched, never on a command or a `!`.
 | `/model [name]` | resolve by name, or open the picker; records a model-change entry |
 | `/reasoning [level]` | report, or set/clear the level for capable models |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
-| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`) |
+| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set) and `modelRow` (key through the model picker) builders cover phase 12's mode and phase 13's sub-agent model |
 | `/exit` | quit |
 
 `/settings`, `/compact`, `/resume`, `/cost` and `/init` also register into

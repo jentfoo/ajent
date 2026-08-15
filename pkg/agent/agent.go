@@ -25,12 +25,13 @@ const (
 // Options configures an Agent.
 type Options struct {
 	Provider            func(llm.Model) (llm.Provider, error) // resolved per request so /model switching works
-	Sink                Sink
-	Tools               ToolSet
-	Env                 Environment
-	ProjectInstructions []ProjectInstruction // AGENTS.md content layered into the system prompt; loaded once at startup
-	Transform           Transform            // nil is identity
-	OnMessage           func(MessageInfo)    // nil is a no-op; called once per appended message in loop order
+	Sinks               []Sink                                // fanned out in registration order
+	Tools               ToolSet                               // nil disables tool calling entirely
+	Env                 Environment                           // OS facts layered into the system prompt
+	ProjectInstructions []ProjectInstruction                  // AGENTS.md content; loaded once at startup
+	Transforms          []Transform                           // applied in assembly order, nil entries skipped
+	OnMessage           []func(MessageInfo)                   // called per appended message, in registration order
+	OnSettled           []func(context.Context)               // agent drained and idle; observers may queue work
 	// Compact reduces the live context at a turn boundary or after an overflow,
 	// reporting whether anything changed. It never runs mid-stream.
 	Compact   func(ctx context.Context, r CompactReason) (bool, error)
@@ -44,24 +45,36 @@ type Options struct {
 type Agent struct {
 	opts  Options
 	state *State
+	sink  Sink // resolved once from opts.Sinks so runTurn reads one field
 
 	ctxLast   int       // last emitted Used, for throttling Context emits
 	ctxLastAt time.Time // when that emit happened; drives the interval throttle
 
-	mu      sync.Mutex
-	running bool
-	steer   []Input
-	follow  []Input
-	cancel  context.CancelFunc
+	mu       sync.Mutex
+	running  bool
+	settling int // depth of OnSettled notification; observers may queue work while >0
+	steer    []Input
+	follow   []Input
+	cancel   context.CancelFunc
 }
 
-// New returns an agent bound to state, using opts.Sink for events. The sink is
-// required; a nil one means no UI wants the output.
+// New returns an agent bound to state. Sinks are resolved once into a single
+// fan-out so the loop always emits on one field; with none supplied events go
+// nowhere.
 func New(state *State, opts Options) *Agent {
 	if opts.MaxSteps == 0 {
 		opts.MaxSteps = defaultMaxSteps
 	}
-	return &Agent{state: state, opts: opts}
+	a := &Agent{state: state, opts: opts}
+	switch len(opts.Sinks) {
+	case 0:
+		a.sink = NopSink{}
+	case 1:
+		a.sink = opts.Sinks[0]
+	default:
+		a.sink = &fanoutSink{sinks: opts.Sinks}
+	}
+	return a
 }
 
 // Running reports whether a turn is in flight. It is advisory for steering, not
@@ -78,7 +91,7 @@ func (a *Agent) Running() bool {
 func (a *Agent) Steer(in Input) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.running {
+	if !a.running && a.settling == 0 { // an OnSettled observer may queue work
 		return false
 	}
 	a.steer = append(a.steer, in)
@@ -90,7 +103,7 @@ func (a *Agent) Steer(in Input) bool {
 func (a *Agent) FollowUp(in Input) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.running {
+	if !a.running && a.settling == 0 { // an OnSettled observer may queue work
 		return false
 	}
 	a.follow = append(a.follow, in)

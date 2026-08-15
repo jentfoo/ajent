@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"strconv"
 	"sync"
 )
 
@@ -35,12 +36,11 @@ func newPending(it interactor) *pending {
 }
 
 // resolve completes the interaction exactly once, so a cancellation racing a
-// keystroke settles on whichever arrived first.
-func (p *pending) resolve(err error) {
-	p.once.Do(func() {
-		p.err = err
-		close(p.done)
-	})
+// keystroke settles on whichever arrived first. It reports whether this call won.
+func (p *pending) resolve(err error) bool {
+	var won bool
+	p.once.Do(func() { p.err = err; won = true; close(p.done) })
+	return won
 }
 
 // run registers an interaction and blocks until it resolves, ctx ends or the UI
@@ -51,10 +51,17 @@ func (u *UI) run(ctx context.Context, it interactor) error {
 		return u.runPlain(ctx, it)
 	}
 	p := newPending(it)
+	if err := u.enqueue(p); err != nil {
+		return err
+	}
+	return u.wait(ctx, p)
+}
 
+// enqueue registers a pending interaction and promotes it if nothing is active.
+func (u *UI) enqueue(p *pending) error {
 	u.mu.Lock()
+	defer u.mu.Unlock()
 	if u.closed {
-		u.mu.Unlock()
 		return ErrCancelled
 	}
 	u.queue = append(u.queue, p)
@@ -62,8 +69,11 @@ func (u *UI) run(ctx context.Context, it interactor) error {
 		u.promote()
 	}
 	u.repaint()
-	u.mu.Unlock()
+	return nil
+}
 
+// wait blocks until p resolves, ctx ends or the UI closes.
+func (u *UI) wait(ctx context.Context, p *pending) error {
 	select {
 	case <-p.done:
 		return p.err
@@ -116,19 +126,32 @@ func (u *UI) routeKey(k key) {
 		u.repaint()
 		return
 	}
-	if s := p.it.summary(u.theme); s != "" {
-		u.gap()
-		u.commit(s, flowWrap)
+	// resolve before committing so an external resolver that won the race is not
+	// double-committed or dequeued; only the winner writes history.
+	won := p.resolve(err)
+	if won {
+		if s := p.it.summary(u.theme); s != "" {
+			u.gap()
+			u.commit(s, flowWrap)
+		}
+		u.dequeue(p)
+		u.repaint()
 	}
-	p.resolve(err)
-	u.dequeue(p)
-	u.repaint()
 }
 
 // interactionRows renders the active interaction. Caller holds the lock.
 func (u *UI) interactionRows(width, height int) (rows []string, caretRow, caretCol int) {
 	maxRows := max(3, (height-2)/maxInteractionRatio)
-	return u.act.it.rows(u.theme, width, maxRows)
+	waiting := len(u.queue) - 1 // prompts queued behind the active one
+	if waiting > 0 {
+		maxRows-- // reserve a row for the queue indicator below
+	}
+	rows, caretRow, caretCol = u.act.it.rows(u.theme, width, maxRows)
+	if waiting > 0 {
+		// sits below the interaction so the caret position is unchanged
+		rows = append(rows, u.theme.Dim.Wrap("+"+strconv.Itoa(waiting)+" waiting"))
+	}
+	return rows, caretRow, caretCol
 }
 
 // cancelInteractions resolves everything pending, so no caller is left blocked

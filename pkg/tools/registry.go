@@ -18,6 +18,7 @@ type Registry struct {
 	tools   []registeredTool // declaration order drives Names/Schemas
 	schema  []llm.ToolSchema // cached, invalidated by any state change
 	guards  []Guard          // ordered; first non-allow wins inside Execute
+	asker   Asker            // consulted on ActionAsk, nil denies
 	tracker *Tracker         // the read tracker shared by read/write/edit, nil when none
 }
 
@@ -85,7 +86,19 @@ func (r *Registry) Unregister(source string) {
 
 // AddGuard appends g to the guard chain. Guards run in registration order and
 // first non-allow wins.
-func (r *Registry) AddGuard(g Guard) { r.guards = append(r.guards, g) }
+func (r *Registry) AddGuard(g Guard) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.guards = append(r.guards, g)
+}
+
+// guardSnapshot returns an immutable copy of the guards and asker under read
+// lock, so Execute runs a stable chain against concurrent registration.
+func (r *Registry) guardSnapshot() ([]Guard, Asker) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return slices.Clone(r.guards), r.asker
+}
 
 // Enabled returns every currently enabled tool in declaration order.
 func (r *Registry) Enabled() []agent.Tool {
@@ -326,8 +339,7 @@ func (r *Registry) Names() []string {
 
 var _ agent.ToolSet = (*Registry)(nil)
 
-// guardedTool runs the guard chain inside Execute. With no asker registered an
-// ActionAsk is treated as a denial naming its reason.
+// guardedTool runs the guard chain and any asker inside Execute.
 type guardedTool struct {
 	t   agent.Tool
 	reg *Registry
@@ -344,17 +356,33 @@ func (g *guardedTool) Mode() agent.ExecutionMode { return g.t.Mode() }
 // Execute vets the call through every guard, then delegates to the wrapped tool.
 // A denial becomes an error result carrying its reason and nothing touches disk.
 func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
-	for _, guard := range g.reg.guards {
+	guards, asker := g.reg.guardSnapshot()
+	for _, guard := range guards {
 		d := guard(ctx, c)
-		switch d.Action {
-		case ActionAllow:
+		if d.Action == ActionAllow {
 			continue
-		default: // Deny or Ask without an asker both refuse the call
-			return agent.ToolResult{
-				Content: llm.BlockList{llm.TextBlock{Text: "denied: " + d.Reason}},
-				IsError: true,
-			}, nil
+		}
+		// Ask consults the asker when registered; an unresolved or re-ask result
+		// refuses like a plain denial.
+		if d.Action != ActionAsk || asker == nil {
+			return denied(d.Reason)
+		}
+		resolved := asker(ctx, c, d)
+		if resolved.Action != ActionAllow {
+			reason := resolved.Reason
+			if reason == "" { // ask treated as a denial carries the original reason
+				reason = d.Reason
+			}
+			return denied(reason)
 		}
 	}
 	return g.t.Execute(ctx, c, out)
+}
+
+// denied builds an error result carrying the denial's reason.
+func denied(reason string) (agent.ToolResult, error) {
+	return agent.ToolResult{
+		Content: llm.BlockList{llm.TextBlock{Text: "denied: " + reason}},
+		IsError: true,
+	}, nil
 }

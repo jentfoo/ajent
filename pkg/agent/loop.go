@@ -72,8 +72,30 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 		drained := len(a.steer) == 0 && len(a.follow) == 0
 		running := a.running
 		a.mu.Unlock()
-		if failed || (drained && !running) {
-			return err
+		if failed {
+			return err // observers are not told about errored turns
+		}
+		if drained && !running {
+			// fully settled: notify observers, then re-read in case one queued work.
+			// An observer that always queues loops forever, like a self-queueing follow-up.
+			a.mu.Lock()
+			a.settling++ // Steer/FollowUp accept here though no turn is running
+			a.mu.Unlock()
+
+			for _, obs := range a.opts.OnSettled {
+				if obs != nil {
+					obs(ctx)
+				}
+			}
+
+			a.mu.Lock()
+			a.settling--
+			drained = len(a.steer) == 0 && len(a.follow) == 0
+			running = a.running
+			a.mu.Unlock()
+			if drained && !running {
+				return nil
+			}
 		}
 	}
 }
@@ -98,10 +120,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		cancel()
 	}()
 
-	sink := a.opts.Sink
-	if sink == nil {
-		sink = NopSink{}
-	}
+	sink := a.sink
 	// mirror the enabled set into state so the transcript records what this turn
 	// could call; buildSystem derives its search hint from it.
 	if ts := a.opts.Tools; ts != nil {
@@ -299,7 +318,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 // buildRequest assembles the llm.Request the next provider call will receive,
 // shared by the estimator, the recount hook and streaming.
 func (a *Agent) buildRequest() llm.Request {
-	messages := assemble(a.state, a.opts.Transform)
+	messages := assemble(a.state, a.opts.Transforms)
 	var tools []llm.ToolSchema
 	if ts := a.opts.Tools; ts != nil {
 		tools = ts.Schemas() // cached by the registry, so cheap per step
@@ -467,7 +486,7 @@ func (a *Agent) append(info MessageInfo) {
 		info.Message = n
 	}
 	a.state.Messages = append(a.state.Messages, info.Message)
-	if h := a.opts.OnMessage; h != nil {
+	for _, h := range a.opts.OnMessage {
 		h(info)
 	}
 	// messages without a provider report occupy context only as an estimate. An
@@ -498,9 +517,7 @@ func (a *Agent) syncContext(force bool) {
 	}
 	a.ctxLast = cs.Used
 	a.ctxLastAt = now
-	if s := a.opts.Sink; s != nil {
-		s.Context(cs)
-	}
+	a.sink.Context(cs)
 }
 
 // needsRecount reports whether a provider reported no usage and has an exact

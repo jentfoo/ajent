@@ -37,12 +37,10 @@ func TestRewindStateRebuild(t *testing.T) {
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("reply one")}}}, nil
 		},
-		Sink:  r.rec.Sink(agent.NopSink{}),
-		Tools: set,
-		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
-		OnMessage: func(info agent.MessageInfo) {
-			r.rec.Message(info)
-		},
+		Sinks:     []agent.Sink{r.rec.Sink(agent.NopSink{})},
+		Tools:     set,
+		Env:       agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+		OnMessage: []func(agent.MessageInfo){r.rec.Message},
 	})
 	require.NoError(t, a.Prompt(context.Background(), agent.Input{Text: "one"}))
 

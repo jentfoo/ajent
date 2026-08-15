@@ -66,6 +66,16 @@ type Sink interface {
 `cmd/ajent` provides a `tuisink` that maps these almost 1:1 onto `tui.UI`.
 `NopSink` discards everything for sub-agents with no UI.
 
+### Sink fan-out
+
+`Options.Sinks` is a slice; more than one consumer can watch turns without
+displacing the recorder. `New` resolves it once into a single field (`a.sink`):
+no sinks become `NopSink`, one sink is used as-is, and two or more are wrapped
+in a `fanoutSink` that forwards every method to each member in registration
+order. `ToolStart` returns a closure that calls each member's done in order.
+The loop therefore always emits on one field; fan-out costs nothing at the hot
+path.
+
 ## The loop
 
 ```
@@ -87,9 +97,11 @@ drain follow-up queue -> for each turn:
 
 ### Assembly is pure
 
-`assemble(state, transform)` returns the message list for one request as a pure
-function of `State`. It never mutates it. Compaction and plan projection both
-work by transforming this assembled list rather than rewriting `State`.
+`assemble(state, transforms)` returns the message list for one request as a pure
+function of `State`: each transform in the ordered chain (nil entries skipped)
+rewrites the list and hands it to the next. It never mutates `State`. Compaction
+and plan projection both work by transforming this assembled list rather than
+rewriting `State`, so they coexist by registering two transforms.
 
 ### System prompt stays cache-stable
 
@@ -188,6 +200,21 @@ Two kinds of mid-turn input:
 
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
 drops everything queued and cancels the running turn.
+
+### Message observers and settled notifications
+
+`Options.OnMessage` is a slice of callbacks, each invoked on the loop goroutine
+per appended message in registration order — so more than one feature can watch
+the transcript without displacing the session recorder (which keeps its own slot).
+The turn boundary needs no new hook: `Sink.TurnEnd` already marks it, and sink
+fan-out makes that event available to a second consumer.
+
+`Options.OnSettled` is a slice of callbacks invoked on the loop goroutine once
+the queues are drained, nothing is running, and the last turn did not error. They
+run after the compaction hook at each real boundary; an observer that queues work
+(such as another `Prompt`) keeps the same outer `Prompt` alive because `runTurns`
+re-reads the queues before returning. An observer that always queues loops
+forever, exactly like a self-queueing follow-up does today.
 
 ## Concurrency rules
 

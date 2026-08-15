@@ -14,42 +14,57 @@ import (
 // registry stays the single source of truth; Console.SetModel reflects the
 // choice in the status line, agent state and session entry.
 func modelCommand(_ context.Context, arg string, c Console) error {
-	models := c.Models().Models()
-	if len(models) == 0 {
+	if len(c.Models().Models()) == 0 {
 		c.Notify("no models configured; add some to ~/.ajent/"+llm.ModelsFileName, levelWarn)
 		return nil
 	}
 	var m llm.Model
+	var err error
 	if arg != "" {
-		target, err := c.Models().Resolve(arg)
-		if err != nil {
-			reportResolveError(c, arg, err)
+		target, rerr := c.Models().Resolve(arg)
+		if rerr != nil {
+			reportResolveError(c, arg, rerr)
 			return nil
 		}
 		m = target
 	} else {
-		items := make([]tui.PickItem, len(models))
-		activeKey := c.Models().Active().Key()
-		var initial int
-		for i, mod := range models {
-			if mod.Key() == activeKey {
-				initial = i
-			}
-			items[i] = tui.PickItem{
-				Label:  mod.Key(),
-				Detail: modelDetail(mod),
-				Terms:  append([]string{mod.Name}, mod.Aliases...),
-			}
-		}
-		picked, err := c.Pick(context.Background(), "Model", items,
-			tui.PickOptions{Placeholder: "filter", Initial: initial})
+		// pre-select the active model so an empty /model shows where it sits
+		m, err = pickModel(context.Background(), c, c.Models().Active().Key())
 		if err != nil {
-			return nil // cancelled, nothing to report
+			return err // cancelled or failed
 		}
-		m = models[picked]
 	}
 	c.SetModel(m)
 	return nil
+}
+
+// pickModel opens the model picker and returns the chosen model without touching
+// the session; callers apply it. current pre-selects a row by key (empty for none).
+func pickModel(ctx context.Context, c Console, current string) (llm.Model, error) {
+	models := c.Models().Models()
+	var m llm.Model
+	if len(models) == 0 {
+		return m, errors.New("no models configured; add some to ~/.ajent/" + llm.ModelsFileName)
+	}
+	items := make([]tui.PickItem, len(models))
+	activeKey := current
+	var initial int
+	for i, mod := range models {
+		if activeKey != "" && mod.Key() == activeKey {
+			initial = i
+		}
+		items[i] = tui.PickItem{
+			Label:  mod.Key(),
+			Detail: modelDetail(mod),
+			Terms:  append([]string{mod.Name}, mod.Aliases...),
+		}
+	}
+	picked, err := c.Pick(ctx, "Model", items,
+		tui.PickOptions{Placeholder: "filter", Initial: initial})
+	if err != nil {
+		return m, err
+	}
+	return models[picked], nil
 }
 
 // modelCompletion returns model keys and aliases for /model argument completion.

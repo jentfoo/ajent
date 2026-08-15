@@ -52,17 +52,44 @@ tables.
 
 - Prompt is `❯ ` on the first row, two spaces on continuations.
 - An empty buffer shows a dim `type a message` hint.
-- The status line is one dim row: a ten cell bar, used/total tokens, then the
-  model. The bar fills against the compaction budget (`window - reserve`) so a
-  full bar means "compaction fires now" rather than at raw capacity; the count
-  shows used against the real window. A `~` prefixes the count while it
-  is an estimate (mid-stream or between provider reports). The colour escalates
-  at 70% and again at 90%, both relative to the budget, and the line truncates to
-  the terminal width.
+- The status block sits on one dim row by default (see Status line).
 - A running tool adds one transient spinner row directly above the input. It is
   never committed to history; only its header and result are.
+- Activity rows (`SetActivity`) put keyed, single-line status for work that is
+  not the current tool call (e.g. live sub-agents) between any overlays and the
+  input. Rendered in insertion order, each elided to width — never wrapped, so a
+  row always occupies exactly one terminal line. Capped at `maxActivityRows`
+  text rows plus a dim `+N more` indicator (see `activity.go`). Activity is
+  live-block only: it yields first on a short terminal and never reaches
+  committed history.
 - The input block grows with the buffer, capped at a third of the screen
   (`maxInputRatio`), after which it scrolls internally around the caret.
+
+## Status line
+
+The status block (`status.go`) is the fixed chrome beneath the input: a ten cell
+context bar, used/total tokens, the model, then keyed `Segment`s in insertion
+order. The bar fills against the compaction budget (`window - reserve`) so a full
+bar means "compaction fires now" rather than at raw capacity; the count shows
+used against the real window. A `~` prefixes the count while it is an estimate
+(mid-stream or between provider reports). The colour escalates at 70% and again
+at 90%, both relative to the budget.
+
+A segment carries a `Short` form (fallback: its full text) and a `Priority`, so
+a narrow terminal shortens rather than vanishes. Packing (`Status.rows`) is:
+
+1. Everything on one row at full text, as long as it fits.
+2. Otherwise the fixed part (spinner, tool, bar/tokens, model) stays on row one
+   and segments move to a second row in their `Short` form.
+3. Only if even two rows overflow do segments drop — lowest `Priority` first,
+   ties dropping the later insertion (matching the old drop-last behaviour).
+
+The block is capped at two rows; an overflowing segment line is clipped to width
+rather than wrapped, so row accounting stays exact.
+
+`SetStatusSegment(seg Segment)` is the single setter: add by a new key, replace
+by key, remove with an empty `Text`. Because the live block is recomposed on
+every repaint, a second row appearing and disappearing costs nothing structurally.
 
 ## Layers
 
@@ -76,7 +103,10 @@ ui.go            public API, state machine, key handling, locking
   wrap.go          width aware wrapping, hanging indents
   editor.go        multi line input buffer, grapheme aware, plus its layout
   input.go         byte stream -> key events (escape sequences, paste)
-  status.go        status line model and formatting, keyed segments
+  decision.go      approval dialog: context elision, numbered options, handle
+  question.go      agent-initiated Ask: free-text or offered-option answer row
+  activity.go      transient keyed rows above the input, capped with +N more
+  status.go        status block model, two-row packing, keyed segments
   style.go         color profile detection and the palette
   text.go          ANSI aware width, truncation, escape splitting
   ansi.go          escape sequence constants and builders
@@ -193,9 +223,10 @@ enough for a progress notice that updates in place.
 
 ## Interactions
 
-Anything above the TUI can ask the user a question: `Select`, `Confirm`, `Input`
-and `Pick`, each with a `Context` variant, all blocking and all callable from a
-goroutine that is not the input goroutine.
+Anything above the TUI can ask the user a question: `Select`, `Confirm`, `Input`,
+`Pick` and grouped `MultiPick`, each with a `Context` variant, plus an approval
+`OpenDecision` dialog — all blocking and all callable from a goroutine that is
+not the input goroutine.
 
 An interaction **grows the live block** rather than overlaying history, because
 invariant 1 forbids inline mode from addressing committed lines. It takes the
@@ -218,8 +249,27 @@ promotes the queue head and repaints. Interactions **queue in arrival order**
 rather than being refused, because parallel tool calls will each want to ask
 something and denying them for being simultaneous is the wrong default.
 `pending.resolve` is a `sync.Once`, so a cancellation racing a keystroke settles
-on whichever arrived first, and `Close` resolves everything outstanding with
-`ErrCancelled` so no caller is left blocked (invariant 5).
+on whichever arrived first — it reports whether this call won, and only the
+winner commits its summary or dequeues (see `routeKey`) — and `Close` resolves
+everything outstanding with `ErrCancelled` so no caller is left blocked
+(invariant 5). When more than one prompt waits, a dim `+N waiting` line sits
+below the active interaction, reserving its row from that interaction's height
+budget (caret position unchanged because it rides below).
+
+An **approval dialog** (`OpenDecision`) is an interaction with a caller-held
+handle: `Wait` blocks for the answer, `Resolve(index)` settles it from the
+caller, and `Close` abandons it so `defer d.Close()` is always safe. The first
+to resolve wins — whether that is a keystroke or an external resolver (phase 12's
+classifier or a mode cycle) — by writing the result into `decisionState` under
+`u.mu` before calling `resolve`, then committing only if it won; the loser reads
+nothing. The subject is shown above numbered options, elided to at most
+eight lines and 240 characters with a dim `… +N lines` marker when cut, and is
+**never** passed through `renderMarkdown`: tool output belongs in the trap-free
+`Output` path (see Traps). Number keys select directly up to `interactionCap`,
+arrows/Enter take the highlight, Esc cancels — returned as `ErrCancelled` so the
+caller decides what it means (for approval, deny). Where no live block exists
+(plain mode) the handle's `Wait` reports `ErrNoUI`, and a caller can still
+resolve or close it harmlessly.
 
 Plain mode has no live block and `readLines` already owns stdin, so a prompt is
 written to history and the answer is taken from the message queue. Reading the
@@ -227,6 +277,21 @@ same queue the caller reads is what makes it race free: a plain mode prompt is
 only ever opened from the message loop, so nothing else is reading while it
 waits. Registering a side channel instead loses the race whenever input is piped
 rather than typed.
+
+An **agent-initiated question** (`Ask`) reuses the same interaction layer with a
+different payload: multi-line prompt text and either free-text entry (reusing
+`inputState`'s editing keys) or a small set of offered options (mirroring
+`selectState`). It queues behind other interactions in arrival order rather than
+pre-empting them. `Esc` is *declined to answer* — reported as an ordinary result
+(`Answer{Declined: true}`), never an error that would abort a turn. In plain mode
+the existing prompt-and-read-from-the-message-queue path carries it, and against
+a closed UI (no one can be asked) `Ask` returns `ErrNoUI` immediately so a
+non-interactive run is never blocked.
+
+The question's prompt rides above the answer row in the live block and elides to
+the interaction height budget with an ellipsis marker when it would overflow, so
+a long multi-line question cannot blow past the bounded live block. The free-text
+placeholder (`answer…`) marks where the reply is typed.
 
 A lone `Esc` is indistinguishable from the start of a longer escape sequence
 until more bytes arrive or enough time passes, so `inputReader.run` holds it for
@@ -355,9 +420,12 @@ agent (or demo) -> UI.Text("...delta")
 ```
 
 The live block is rebuilt separately by `UI.repaint`, which composes
-`[spinner row?] + input rows + status row` and hands it to `renderer.setLive`
-with the caret position. Anything that changes the input, status or tool state
-calls `repaint`.
+`notice? + streaming* + search? + completion? + activity* + (input | interaction)
++ status rows` and hands it to `renderer.setLive` with the caret position.
+Anything that changes the input, status, tool or activity state calls `repaint`.
+Activity renders into whatever height remains after the status block and one
+line of editor, so on a short terminal it yields first. Status is computed before
+the activity budget so row accounting stays exact.
 
 ## Input
 
@@ -375,8 +443,23 @@ runes, so the cursor moves over emoji and combining marks as a unit. It also own
 its own layout (`inputView`), hard wrapping the buffer into display rows and
 reporting the caret's row and column within them.
 
-Enter submits, Alt+Enter and Ctrl+J insert a newline. Ctrl+C clears a non-empty
-buffer and quits an empty one; Ctrl+D quits an empty one.
+The key table:
+
+| Key | Effect |
+|---|---|
+| Enter | submit (accepts an open completion or search selection) |
+| Alt+Enter, Ctrl+J | insert a newline |
+| `↑`/`↓` | history recall / move line; in overlays select |
+| Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
+| Ctrl+D | EOF on an empty editor (quits) |
+| Esc, twice | rewind onto an earlier message while idle |
+| Ctrl+R | reverse history search overlay (`search.go`) |
+| Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; meaning belongs to the front end |
+
+Keys that resolve to nothing are emitted on `Controls()` as `Control` events so
+the host decides their meaning. Shift+Tab is special: it reaches the control
+channel even while an interaction or overlay owns the keyboard, because changing
+a permission mode with a prompt already on screen must work.
 
 **Ctrl+R opens a reverse history search** over the workspace's recorded prompts,
 drawn as an inline `(reverse-i-search)` overlay above the editor (not a modal

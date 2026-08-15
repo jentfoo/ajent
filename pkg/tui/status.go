@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -13,10 +14,12 @@ const (
 )
 
 // Segment is a keyed status line item, rendered after the model in insertion
-// order and dropped first when the line does not fit.
+// order and dropped lowest priority first when even two rows overflow.
 type Segment struct {
-	Key  string
-	Text string
+	Key      string
+	Text     string
+	Short    string // used when the full text does not fit; falls back to Text
+	Priority int
 }
 
 // Status is the state rendered on the line below the input field.
@@ -32,24 +35,42 @@ type Status struct {
 	Segments  []Segment
 }
 
-// render returns the single status line, truncated to width. Segments are
-// dropped one at a time until it fits, so the model survives longest.
-func (s Status) render(t Theme, width int) string {
-	parts := s.parts(t)
-	for len(parts) > 0 {
-		line := strings.Join(parts, t.Dim.Wrap(statusSep))
-		if displayWidth(line) <= width || len(parts) == 1 {
-			return truncateDisplay(line, width)
-		}
-		parts = parts[:len(parts)-1] // the last segment is the least important
+// rows renders the status block: one row when everything fits at full text,
+// else a second short-form segment row. Never more than two; segments drop in
+// priority order (lowest first) only when even two rows overflow.
+func (s Status) rows(t Theme, width int) []string {
+	fixed := s.fixedParts(t)
+	order := activeSegments(s.Segments)
+
+	if line := joinStatus(append(fixed, segTexts(t, s.Segments, order)...), t); displayWidth(line) <= width {
+		return []string{truncateDisplay(line, width)}
 	}
-	return ""
+	// the fixed part stays on row one; segments move to a second short-form row
+	row1 := truncateDisplay(joinStatus(fixed, t), width)
+	if len(order) == 0 {
+		return []string{row1} // nothing left for a second row
+	}
+	dropSeq := s.dropOrder()
+	for {
+		line := joinStatus(segTextsShort(t, s.Segments, order), t)
+		if displayWidth(line) <= width || len(order) == 1 {
+			return []string{row1, truncateDisplay(line, width)}
+		}
+		dropped := dropSeq[0]
+		dropSeq = dropSeq[1:]
+		for i, idx := range order {
+			if idx == dropped {
+				order = slices.Delete(order, i, i+1)
+				break
+			}
+		}
+	}
 }
 
-// parts returns the status pieces in priority order, most important first. The
-// context bar and token totals survive longest; the percentage is omitted as it
-// duplicates what the bar already conveys.
-func (s Status) parts(t Theme) []string {
+// fixedParts returns the always-present pieces: spinner, tool, context bar and
+// token totals, then model. The percentage is omitted as it duplicates what the
+// bar already conveys.
+func (s Status) fixedParts(t Theme) []string {
 	var parts []string
 	if s.Spinner != "" {
 		parts = append(parts, s.Spinner)
@@ -84,34 +105,80 @@ func (s Status) parts(t Theme) []string {
 	if s.Model != "" {
 		parts = append(parts, t.Dim.Wrap(s.Model))
 	}
-	for _, seg := range s.Segments {
-		if seg.Text != "" {
-			parts = append(parts, t.Dim.Wrap(seg.Text))
-		}
-	}
 	return parts
 }
 
-// SetStatusSegment adds, replaces or (with an empty text) removes a keyed
-// status segment.
-func (u *UI) SetStatusSegment(key, text string) {
+// activeSegments lists segment indices whose text is non-empty, in insertion order.
+func activeSegments(segs []Segment) []int {
+	var idxs []int
+	for i := range segs {
+		if segs[i].Text != "" {
+			idxs = append(idxs, i)
+		}
+	}
+	return idxs
+}
+
+// segTexts renders the given segments' full text.
+func segTexts(t Theme, segs []Segment, idxs []int) []string {
+	texts := make([]string, 0, len(idxs))
+	for _, i := range idxs {
+		texts = append(texts, t.Dim.Wrap(segs[i].Text))
+	}
+	return texts
+}
+
+// segTextsShort renders segment short forms (falling back to Text).
+func segTextsShort(t Theme, segs []Segment, idxs []int) []string {
+	texts := make([]string, 0, len(idxs))
+	for _, i := range idxs {
+		short := segs[i].Short
+		if short == "" {
+			short = segs[i].Text
+		}
+		texts = append(texts, t.Dim.Wrap(short))
+	}
+	return texts
+}
+
+// dropOrder returns segment indices ordered by when to drop them: lowest priority
+// first, ties dropping the later insertion earlier (matching drop-last behaviour).
+func (s Status) dropOrder() []int {
+	idxs := activeSegments(s.Segments)
+	slices.SortStableFunc(idxs, func(a, b int) int {
+		if s.Segments[a].Priority != s.Segments[b].Priority {
+			return s.Segments[a].Priority - s.Segments[b].Priority
+		}
+		return b - a // later insertion drops first
+	})
+	return idxs
+}
+
+// joinStatus joins status pieces with the dim separator.
+func joinStatus(parts []string, t Theme) string {
+	return strings.Join(parts, t.Dim.Wrap(statusSep))
+}
+
+// SetStatusSegment adds, replaces or (with an empty Text) removes a keyed status
+// segment.
+func (u *UI) SetStatusSegment(seg Segment) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	for i, seg := range u.status.Segments {
-		if seg.Key != key {
+	for i := range u.status.Segments {
+		if u.status.Segments[i].Key != seg.Key {
 			continue
 		}
-		if text == "" {
-			u.status.Segments = append(u.status.Segments[:i], u.status.Segments[i+1:]...)
+		if seg.Text == "" {
+			u.status.Segments = slices.Delete(u.status.Segments, i, i+1)
 		} else {
-			u.status.Segments[i].Text = text
+			u.status.Segments[i] = seg
 		}
 		u.repaint()
 		return
 	}
-	if text != "" {
-		u.status.Segments = append(u.status.Segments, Segment{Key: key, Text: text})
+	if seg.Text != "" {
+		u.status.Segments = append(u.status.Segments, seg)
 	}
 	u.repaint()
 }

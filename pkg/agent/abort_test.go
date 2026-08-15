@@ -34,9 +34,8 @@ func TestInterruptMidStream(t *testing.T) {
 	t.Parallel()
 
 	gp := &hangProvider{turn: textOnly("hello ")}
-	a := newTestAgent(nil, gp, nil)
 	catch := &resultCatcher{}
-	a.opts.Sink = catch
+	a := newTestAgent(nil, gp, catch)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
@@ -59,10 +58,9 @@ func TestInterruptDuringToolExecution(t *testing.T) {
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 		{Events: toolCallEvents("c1", "bash")},
 	}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.Tools = set
 	catch := &resultCatcher{}
-	a.opts.Sink = catch
+	a := newTestAgent(nil, p, catch)
+	a.opts.Tools = set
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()

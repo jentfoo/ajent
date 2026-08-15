@@ -33,6 +33,84 @@ type Sink interface {
 	TurnEnd(TurnResult)
 }
 
+// fanoutSink forwards every event to each member in registration order, so more
+// than one consumer can watch turns without displacing the recorder.
+type fanoutSink struct {
+	sinks []Sink
+}
+
+func (f *fanoutSink) TurnStart(i TurnInfo) {
+	for _, s := range f.sinks {
+		s.TurnStart(i)
+	}
+}
+func (f *fanoutSink) Thinking(d string) {
+	for _, s := range f.sinks {
+		s.Thinking(d)
+	}
+}
+func (f *fanoutSink) EndThinking() {
+	for _, s := range f.sinks {
+		s.EndThinking()
+	}
+}
+func (f *fanoutSink) Text(d string) {
+	for _, s := range f.sinks {
+		s.Text(d)
+	}
+}
+func (f *fanoutSink) EndText() {
+	for _, s := range f.sinks {
+		s.EndText()
+	}
+}
+
+// ToolStart returns a closure that calls every member's done in order.
+func (f *fanoutSink) ToolStart(call ToolCall, label string) func(ToolResult) {
+	done := make([]func(ToolResult), 0, len(f.sinks))
+	for _, s := range f.sinks {
+		if d := s.ToolStart(call, label); d != nil {
+			done = append(done, d)
+		}
+	}
+	return func(r ToolResult) {
+		for _, d := range done {
+			d(r)
+		}
+	}
+}
+
+func (f *fanoutSink) ToolOutput(id, d string) {
+	for _, s := range f.sinks {
+		s.ToolOutput(id, d)
+	}
+}
+func (f *fanoutSink) Diff(p, b, a string) {
+	for _, s := range f.sinks {
+		s.Diff(p, b, a)
+	}
+}
+func (f *fanoutSink) Usage(u llm.Usage) {
+	for _, s := range f.sinks {
+		s.Usage(u)
+	}
+}
+func (f *fanoutSink) Context(c tokens.ContextState) {
+	for _, s := range f.sinks {
+		s.Context(c)
+	}
+}
+func (f *fanoutSink) Notice(msg string, level Level) {
+	for _, s := range f.sinks {
+		s.Notice(msg, level)
+	}
+}
+func (f *fanoutSink) TurnEnd(r TurnResult) {
+	for _, s := range f.sinks {
+		s.TurnEnd(r)
+	}
+}
+
 // NopSink discards every event, for a sub-agent with no UI.
 type NopSink struct{}
 

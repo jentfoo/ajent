@@ -30,6 +30,7 @@ type fakeConsole struct {
 	confirms   []bool          // queued Confirm answers
 	inputs     []string        // queued Input replies
 	saveCalls  []saveCall      // recorded SaveSetting calls
+	ssChanges  map[string]any  // recorded SetSessionSetting key/value pairs
 
 	settings *config.Set
 
@@ -176,6 +177,18 @@ func (f *fakeConsole) SaveSetting(layer, key string, value any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.saveCalls = append(f.saveCalls, saveCall{layer: layer, key: key})
+	return nil
+}
+func (f *fakeConsole) SetSessionSetting(key string, value any) error {
+	if err := f.settings.SetSession(key, value); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ssChanges == nil {
+		f.ssChanges = map[string]any{}
+	}
+	f.ssChanges[key] = value
 	return nil
 }
 func (f *fakeConsole) SetModel(m llm.Model) { f.models.SetActive(m); f.state.Model = m; f.setModel = m }

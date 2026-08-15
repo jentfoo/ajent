@@ -222,7 +222,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		ui.Notify("could not read AGENTS.md: "+perr.Error(), tui.LevelWarn)
 	}
 	opts := agent.Options{
-		Sink:                sink,
+		Sinks:               []agent.Sink{sink},
 		Env:                 env,
 		ProjectInstructions: proj,
 		Tools:               toolsReg,
@@ -238,8 +238,8 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		SessionID: sessionHint(rec),
 	}
 	if rec != nil {
-		opts.Sink = rec.rec.Sink(sink) // persist notices and fsync at turn end
-		opts.OnMessage = rec.rec.Message
+		opts.Sinks = []agent.Sink{rec.rec.Sink(sink)} // persist notices and fsync at turn end
+		opts.OnMessage = []func(agent.MessageInfo){rec.rec.Message}
 		rec.rebuild(set, ui, reg, st, toolsReg)
 	}
 	// a resumed session restores its enabled tool set; unknown names are ignored.
@@ -249,21 +249,23 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// feed the editor's in-progress text into accounting so the context bar grows
 	// as you type or paste, then clears it once submitted (the buffer empties).
-	editSink := opts.Sink // may be nil before a session is set up
+	editSinks := opts.Sinks // may be empty before a session is set up
 	ui.SetOnEdit(func(text string) {
 		t := st.Tokens
-		if t == nil || editSink == nil {
+		if t == nil || len(editSinks) == 0 {
 			return
 		}
 		t.SetCompose(tokens.EstimateText(text, tokens.KindProse))
-		editSink.Context(t.Context())
+		for _, s := range editSinks {
+			s.Context(t.Context())
+		}
 	})
 	ag := agent.New(st, opts)
 	if rec != nil {
 		rec.bindRewind(ui, ag, reg)
 		comp = &compactor{
 			rec: rec, st: st, ag: ag, reg: reg, ui: ui,
-			sink:        opts.Sink,
+			sink:        opts.Sinks[0], // set above when rec != nil
 			providerFor: providers.ProviderFor,
 		}
 	}
@@ -297,7 +299,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			Workspace: cwdOrDot(),
 			Restore:   st.Tools,
 			Notice:    func(msg string, warn bool) { ui.Notify(msg, levelOf(warn)) },
-			Status:    func(text string) { ui.SetStatusSegment("mcp", text) },
+			Status:    func(text string) { ui.SetStatusSegment(tui.Segment{Key: "mcp", Text: text}) },
 		})
 	}
 
@@ -318,7 +320,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		console.comp = comp
 	}
 	command.RegisterBuiltins(cmds, console)
-	watchControls(ui, ag, stager, quit)
+	watchControls(ui, ag, stager, quit, nil)
 	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
 	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
@@ -439,11 +441,11 @@ func showReasoningIndicator(ui *tui.UI, set *config.Set, st *agent.State) {
 	}
 	dflt := llm.LevelMedium // the compiled-in default level
 	if d, _, ok := set.Explain("reasoning.level"); ok && string(d) != `"medium"` {
-		ui.SetStatusSegment("reasoning", st.Reasoning.Level.String())
+		ui.SetStatusSegment(tui.Segment{Key: "reasoning", Text: st.Reasoning.Level.String()})
 	} else if st.Reasoning.Level != dflt {
-		ui.SetStatusSegment("reasoning", st.Reasoning.Level.String())
+		ui.SetStatusSegment(tui.Segment{Key: "reasoning", Text: st.Reasoning.Level.String()})
 	} else {
-		ui.SetStatusSegment("reasoning", "")
+		ui.SetStatusSegment(tui.Segment{Key: "reasoning"})
 	}
 }
 
@@ -796,8 +798,8 @@ const doublePressWindow = 2 * time.Second
 // watchControls interprets out-of-band keys: Esc and Ctrl+C interrupt a running
 // turn, while Ctrl+D or a double Ctrl+C on an idle empty editor quits. Closing
 // quit signals driver to return, which lets main's deferred ui.Close restore the
-// terminal.
-func watchControls(ui *tui.UI, ag *agent.Agent, stager *command.Stager, quit chan struct{}) {
+// terminal. onModeCycle runs when Shift+Tab is pressed; the front end wires it.
+func watchControls(ui *tui.UI, ag *agent.Agent, stager *command.Stager, quit chan struct{}, onModeCycle func()) {
 	go func() {
 		var lastInt time.Time
 		for c := range ui.Controls() {
@@ -816,7 +818,7 @@ func watchControls(ui *tui.UI, ag *agent.Agent, stager *command.Stager, quit cha
 				// a running `!` cancels on the first Ctrl+C instead of quitting
 				if stager.Pending() {
 					stager.Cancel()
-					ui.SetStatusSegment("hint", "cancelled shell command")
+					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled shell command"})
 					continue
 				}
 				now := time.Now()
@@ -825,13 +827,17 @@ func watchControls(ui *tui.UI, ag *agent.Agent, stager *command.Stager, quit cha
 					return
 				}
 				lastInt = now
-				ui.SetStatusSegment("hint", "ctrl+c again to quit")
+				ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "ctrl+c again to quit"})
 			case tui.ControlEOF:
 				if ag.Running() {
 					continue // ignored while a turn streams, per the key table
 				}
 				close(quit)
 				return
+			case tui.ControlModeCycle:
+				if onModeCycle != nil {
+					onModeCycle()
+				}
 			}
 		}
 	}()

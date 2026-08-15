@@ -125,19 +125,65 @@ func savePrompt(c Console, changes ...settingChange) {
 	c.Notify(fmt.Sprintf("%s saved to %s config", strings.Join(keys, ", "), layer), levelInfo)
 }
 
+// enumRow builds a row editing a string key from a fixed set of values.
+func enumRow(name, key string, values []string) settingsRow {
+	edit := func(_ context.Context, c Console) ([]settingChange, error) {
+		opts := make([]tui.Option, len(values))
+		current, _, _ := c.Settings().Explain(key)
+		var cur string
+		_ = json.Unmarshal(current, &cur)
+		for i, v := range values {
+			marker := "  "
+			if v == cur {
+				marker = "* "
+			}
+			opts[i] = tui.Option{Label: marker + v}
+		}
+		idx, err := c.Select(context.Background(), name, opts)
+		if err != nil {
+			return nil, err
+		}
+		sel := values[idx]
+		_ = c.SetSessionSetting(key, sel)
+		return []settingChange{{key: key, value: sel}}, nil
+	}
+	return settingsRow{name: name,
+		render: func(c Console) (string, string) { return name, detailOrDefault(c, key) },
+		edit:   edit}
+}
+
+// modelRow builds a row editing a model reference key through the model picker.
+func modelRow(name, key string) settingsRow {
+	render := func(c Console) (string, string) { return name, detailOrDefault(c, key) }
+	edit := func(ctx context.Context, c Console) ([]settingChange, error) {
+		raw, _, _ := c.Settings().Explain(key)
+		var cur string
+		_ = json.Unmarshal(raw, &cur)
+		m, err := pickModel(ctx, c, cur)
+		if err != nil {
+			return nil, err
+		}
+		_ = c.SetSessionSetting(key, m.Key())
+		return []settingChange{{key: key, value: m.Key()}}, nil
+	}
+	return settingsRow{name: name, render: render, edit: edit}
+}
+
 // allRows returns the settings menu in display order.
 func allRows() []settingsRow {
-	return []settingsRow{
+	rows := []settingsRow{
 		{name: "Model", render: rowModel, edit: editModel},
 		{name: "Reasoning", render: rowReasoning, edit: editReasoning},
 		{name: "Reasoning retention", render: rowRetention, edit: editRetention},
 		{name: "Show thinking", render: rowThinking, edit: editThinking},
 		{name: "Tools", render: rowTools, edit: editTools},
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
+		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "block-all"}),
 		{name: "Tool limits",
 			render: func(_ Console) (string, string) { return "Tool limits", "edit per-tool output bounds" },
 			edit:   func(_ context.Context, c Console) ([]settingChange, error) { return editLimits(c) }},
 	}
+	return rows
 }
 
 // detail renders a key's raw value with its source layer.
@@ -201,7 +247,7 @@ func editModel(ctx context.Context, c Console) ([]settingChange, error) {
 		return nil, err
 	}
 	key := c.Models().Active().Key()
-	_ = c.Settings().SetSession("model", key)
+	_ = c.SetSessionSetting("model", key)
 	return []settingChange{{key: "model", value: key}}, nil
 }
 
@@ -213,7 +259,7 @@ func editReasoning(_ context.Context, c Console) ([]settingChange, error) {
 	}
 	// persist the level as a dotted leaf; SetReasoning already updated state.
 	level := c.State().Reasoning.Level.String()
-	_ = c.Settings().SetSession("reasoning.level", level)
+	_ = c.SetSessionSetting("reasoning.level", level)
 	return []settingChange{{key: "reasoning.level", value: level}}, nil
 }
 
@@ -247,7 +293,7 @@ func editRetention(_ context.Context, c Console) ([]settingChange, error) {
 		Show:   c.State().Reasoning.Show,
 	})
 	// a text leaf survives even when the policy is "none" (zero value).
-	_ = c.Settings().SetSession("reasoning.retain", retain.String())
+	_ = c.SetSessionSetting("reasoning.retain", retain.String())
 	return []settingChange{{key: "reasoning.retain", value: retain.String()}}, nil
 }
 
@@ -263,7 +309,7 @@ func editThinking(_ context.Context, c Console) ([]settingChange, error) {
 		Retain: c.State().Reasoning.Retain,
 		Show:   on,
 	})
-	_ = c.Settings().SetSession("reasoning.show", on)
+	_ = c.SetSessionSetting("reasoning.show", on)
 	return []settingChange{{key: "reasoning.show", value: on}}, nil
 }
 
@@ -274,13 +320,12 @@ func editTools(ctx context.Context, c Console) ([]settingChange, error) {
 		return nil, err
 	}
 	names := toolNames(c)
-	_ = c.Settings().SetSession("tools.enabled", names)
+	_ = c.SetSessionSetting("tools.enabled", names)
 	return []settingChange{{key: "tools.enabled", value: names}}, nil
 }
 
 // editCompaction toggles auto-compaction and sets its threshold.
 func editCompaction(_ context.Context, c Console) ([]settingChange, error) {
-	cfg := c.Settings()
 	on, err := c.Confirm(context.Background(), "Enable automatic compaction?")
 	if err != nil {
 		return nil, err
@@ -288,7 +333,7 @@ func editCompaction(_ context.Context, c Console) ([]settingChange, error) {
 	newOn := on
 
 	threshold := 0.8
-	pct, _, _ := cfg.Explain("compaction.threshold")
+	pct, _, _ := c.Settings().Explain("compaction.threshold")
 	_ = json.Unmarshal(pct, &threshold)
 
 	if newOn {
@@ -311,11 +356,11 @@ func editCompaction(_ context.Context, c Console) ([]settingChange, error) {
 		}
 	}
 
-	_ = cfg.SetSession("compaction.auto", newOn)
+	_ = c.SetSessionSetting("compaction.auto", newOn)
 	changes := []settingChange{{key: "compaction.auto", value: newOn}}
 	if newOn {
 		// persist the threshold alongside the toggle so a save keeps both.
-		_ = cfg.SetSession("compaction.threshold", threshold)
+		_ = c.SetSessionSetting("compaction.threshold", threshold)
 		changes = append(changes, settingChange{key: "compaction.threshold", value: threshold})
 	}
 	return changes, nil
@@ -350,7 +395,7 @@ func editLimits(c Console) ([]settingChange, error) {
 		return nil, nil
 	}
 	key := dims[picked].key
-	_ = c.Settings().SetSession(key, n)
+	_ = c.SetSessionSetting(key, n)
 	return []settingChange{{key: key, value: n}}, nil
 }
 

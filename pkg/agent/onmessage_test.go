@@ -20,7 +20,7 @@ func TestOnMessageFiresOncePerMessageInOrder(t *testing.T) {
 	}}
 	a := newTestAgent(nil, p, nil)
 	a.opts.Tools = &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok"}}}
-	a.opts.OnMessage = func(info MessageInfo) { seen = append(seen, info.Message.Role) }
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info.Message.Role) }}
 
 	err := a.Prompt(t.Context(), Input{Text: "run it"})
 	require.NoError(t, err)
@@ -40,7 +40,7 @@ func TestOnMessageRecordsEndTurn(t *testing.T) {
 
 	var got llm.StopReason
 	a := newTestAgent(nil, &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}, nil)
-	a.opts.OnMessage = func(info MessageInfo) { got = info.Stop }
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { got = info.Stop }}
 
 	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
 	assert.Equal(t, llm.StopEndTurn, got)
@@ -52,12 +52,11 @@ func TestOnMessageRecordsAbortedStop(t *testing.T) {
 	t.Parallel()
 
 	gp := &hangProvider{turn: textOnly("hello ")}
-	a := newTestAgent(nil, gp, nil)
 	catch := &resultCatcher{}
-	a.opts.Sink = catch
+	a := newTestAgent(nil, gp, catch)
 
 	var got llm.StopReason
-	a.opts.OnMessage = func(info MessageInfo) { got = info.Stop }
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { got = info.Stop }}
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
@@ -83,7 +82,7 @@ func TestOnMessageRecordsToolUseStop(t *testing.T) {
 	a.opts.Tools = &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok"}}}
 
 	var got []MessageInfo
-	a.opts.OnMessage = func(info MessageInfo) { got = append(got, info) }
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { got = append(got, info) }}
 
 	require.NoError(t, a.Prompt(t.Context(), Input{Text: "run"}))
 	// the assistant tool-call message carries StopToolUse; user messages carry none

@@ -20,7 +20,6 @@ func TestOverflowRetriesAfterCompact(t *testing.T) {
 	}}
 	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sink:     NopSink{},
 		Env:      testEnv,
 		Compact: func(_ context.Context, r CompactReason) (bool, error) {
 			reasons = append(reasons, r)
@@ -59,7 +58,6 @@ func TestOverflowRetriesAtMostOnce(t *testing.T) {
 	var calls int
 	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sink:     NopSink{},
 		Env:      testEnv,
 		Compact: func(_ context.Context, _ CompactReason) (bool, error) {
 			calls++
@@ -78,7 +76,6 @@ func TestOverflowNoHookFailsTurn(t *testing.T) {
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}
 	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sink:     NopSink{},
 		Env:      testEnv,
 	})
 	err := a.Prompt(t.Context(), Input{Text: "big"})
@@ -92,7 +89,6 @@ func TestThresholdHookAtTurnBoundary(t *testing.T) {
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
 	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sink:     NopSink{},
 		Env:      testEnv,
 		Compact: func(_ context.Context, r CompactReason) (bool, error) {
 			reasons = append(reasons, r)
@@ -109,7 +105,6 @@ func TestWithStateMutatesLiveState(t *testing.T) {
 
 	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return nil, nil },
-		Sink:     NopSink{},
 	})
 	ok := a.WithState(func(s *State) { s.Messages = []llm.Message{llm.Text(llm.RoleUser, "x")} })
 	assert.True(t, ok)
@@ -127,7 +122,6 @@ func TestWithStateRefusedWhileRunning(t *testing.T) {
 	}}
 	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sink:     NopSink{},
 		Env:      testEnv,
 		Tools:    set,
 	})

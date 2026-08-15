@@ -140,6 +140,32 @@ func TestUIInputEditing(t *testing.T) {
 	require.NoError(t, pw.Close())
 }
 
+// TestUIModeCycle checks Shift+Tab reaches the control channel both idle and
+// while a dialog owns the keyboard.
+func TestUIModeCycle(t *testing.T) {
+	t.Parallel()
+
+	u, v, pw := interactionUI(t)
+
+	t.Run("idle_emits_mode_cycle", func(t *testing.T) {
+		press(t, pw, "\x1b[Z")
+		assert.Equal(t, ControlModeCycle, <-u.Controls())
+	})
+
+	t.Run("while_dialog_open_reaches_controls", func(t *testing.T) {
+		d := u.OpenDecision(DecisionRequest{
+			Prompt:  "Approve:",
+			Context: "run rm -rf /tmp/x",
+			Options: []Option{{Label: "Allow"}, {Label: "Deny"}},
+		})
+		t.Cleanup(d.Close)
+
+		waitFor(t, u, v, "Approve:")
+		press(t, pw, "\x1b[Z")
+		assert.Equal(t, ControlModeCycle, <-u.Controls())
+	})
+}
+
 func TestUIHistory(t *testing.T) {
 	t.Parallel()
 

@@ -64,6 +64,9 @@ type Console interface {
 	Settings() *config.Set
 	// SaveSetting writes key into a config layer file ("user" or "project").
 	SaveSetting(layer, key string, value any) error
+	// SetSessionSetting applies key as a session override and records it so a
+	// resume restores it. The caller owns the in-memory update.
+	SetSessionSetting(key string, value any) error
 
 	// SetModel makes m active, reflects it in the status line and agent state,
 	// and records a model-change entry in the session.

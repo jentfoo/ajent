@@ -59,7 +59,7 @@ func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*co
 
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 	st := &agent.State{Model: model, Tokens: tokens.New(model)}
-	ag := agent.New(st, agent.Options{Sink: agent.NopSink{}})
+	ag := agent.New(st, agent.Options{Sinks: []agent.Sink{agent.NopSink{}}})
 	c := &compactor{
 		rec: &sessRec{w: w}, st: st, ag: ag, reg: reg, ui: testUI(t),
 		sink:        agent.NopSink{},
@@ -163,7 +163,7 @@ func TestCompactorOverflowRunsMidTurn(t *testing.T) {
 	}
 
 	ag := agent.New(st, agent.Options{
-		Sink:     agent.NopSink{},
+		Sinks:    []agent.Sink{agent.NopSink{}},
 		Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
 		Env:      agent.DetectEnvironment(),
 		Compact:  func(ctx context.Context, r agent.CompactReason) (bool, error) { return c.run(ctx, r, "") },

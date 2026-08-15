@@ -47,17 +47,24 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
 - `Get(name)` — returns the tool wrapped in the guard chain; unknown or
   disabled tools are invisible to the model.
 
-### Guards (`guard.go`)
+### Guards (`guard.go`, `asker.go`)
 
 ```go
 type Guard func(ctx context.Context, call agent.ToolCall) Decision // Allow | Deny | Ask
+type Asker func(ctx context.Context, call agent.ToolCall, d Decision) Decision
+func (r *Registry) SetAsker(a Asker)
 ```
 
 Guards run in registration order before a tool executes; first non-allow wins.
 Core registers none by default — the agent runs unguarded unless configured with
 a guard. A denial becomes an error result carrying
-the reason, and nothing touches disk. `Ask` without a registered asker is
-treated as a denial.
+the reason, and nothing touches disk.
+
+`Ask` consults the registered asker (set via `SetAsker`) when one exists; the
+asker turns it into a final allow or deny, and returning `Ask` again is treated
+as a denial. With no asker registered an `Ask` still refuses — nothing changes
+for callers that do not opt in. The permission layer registers the asker (phase
+12); core never does.
 
 ## Built-in tools
 
@@ -130,7 +137,8 @@ Off-by-default extras for no-shell agents.
 
 ```
 builtins.go     Builtins(Options) — wires the shared tracker/policy into all tools
-registry.go     Registry, guardedTool wrapper
+registry.go     Registry, guardedTool wrapper, denied result helper
+asker.go        Asker type and SetAsker registration
 guard.go        Guard, Decision, Allow/Deny helpers
 schema.go       SchemaOf[T] reflection helper
 path.go         PathPolicy — resolves relative paths against Cwd, folds symlinks
