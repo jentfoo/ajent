@@ -54,23 +54,33 @@ type ProjectInstruction struct {
 	Body string // verbatim file contents
 }
 
-// agentsFileName is the single instruction file ajent recognises in cwd. Nested
-// discovery (ancestor or user-global files) is not supported.
+// agentsFileName is the single instruction file ajent recognises in each source
+// directory. Discovery covers only the launch cwd and the user-global config
+// dir; ancestor walking is not supported.
 const agentsFileName = "AGENTS.md"
 
-// LoadProjectInstructions reads <dir>/AGENTS.md when it exists, returning a
-// single provenance-marked instruction; nil means none was found. A read error
-// other than the file being absent is returned for callers to surface.
-func LoadProjectInstructions(dir string) ([]ProjectInstruction, error) {
-	path := filepath.Join(dir, agentsFileName)
-	data, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return nil, nil
-	case err != nil:
-		return nil, err
+// LoadProjectInstructions reads <dir>/AGENTS.md from each of dirs, in order,
+// returning a provenance-marked instruction per existing file (global first,
+// then project). Empty dirs and absent files are skipped; nil means none were
+// found. A read error other than a file being absent is returned for callers to
+// surface.
+func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
+	var proj []ProjectInstruction
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		path := filepath.Join(dir, agentsFileName)
+		data, err := os.ReadFile(path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			continue
+		case err != nil:
+			return nil, err
+		}
+		proj = append(proj, ProjectInstruction{Path: path, Body: string(data)})
 	}
-	return []ProjectInstruction{{Path: path, Body: string(data)}}, nil
+	return proj, nil
 }
 
 // buildSystem returns the system blocks for state, stable across a session so
@@ -126,7 +136,7 @@ func buildGuidelines(names []string) string {
 
 	// search hint only when bash is present and no dedicated find/grep tool is
 	if slices.Contains(names, "bash") && !slices.Contains(names, "find") && !slices.Contains(names, "grep") {
-		b.WriteString("- Search code with `rg` or `find` via the bash tool rather than reading whole files\n")
+		b.WriteString("- Use bash for file operations like ls, grep, find\n")
 	}
 
 	return b.String() + "\n"

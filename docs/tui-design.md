@@ -90,6 +90,10 @@ rather than wrapped, so row accounting stays exact.
 `SetStatusSegment(seg Segment)` is the single setter: add by a new key, replace
 by key, remove with an empty `Text`. Because the live block is recomposed on
 every repaint, a second row appearing and disappearing costs nothing structurally.
+The front end publishes a `permissions` segment (`Key: "permissions"`) whenever
+the live mode differs from the `allow-read` default — mirroring the reasoning
+indicator. The non-default modes must always be visible so nobody forgets the gate
+is open; it carries a short form (e.g. `all`, `block`, `auto`) for narrow rows.
 
 ## Layers
 
@@ -454,12 +458,14 @@ The key table:
 | Ctrl+D | EOF on an empty editor (quits) |
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`) |
-| Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; meaning belongs to the front end |
+| Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |
 
 Keys that resolve to nothing are emitted on `Controls()` as `Control` events so
 the host decides their meaning. Shift+Tab is special: it reaches the control
 channel even while an interaction or overlay owns the keyboard, because changing
-a permission mode with a prompt already on screen must work.
+a permission mode with a prompt already on screen must work. The front end maps
+it to `Barrier.Cycle()`, which re-evaluates any open approval dialog under the new
+mode — moving to `allow-all` resolves one as allow without a keystroke.
 
 **Ctrl+R opens a reverse history search** over the workspace's recorded prompts,
 drawn as an inline `(reverse-i-search)` overlay above the editor (not a modal

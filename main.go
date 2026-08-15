@@ -18,6 +18,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/history"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/mcp"
+	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -217,7 +218,10 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// the *Agent it needs exists; it is assigned once, right after agent.New.
 	var comp *compactor
 	env := agent.DetectEnvironment()
-	proj, perr := agent.LoadProjectInstructions(env.Cwd)
+	// user-global instructions layer before the project's, so the more specific
+	// cwd file comes later in context; an unresolvable home is skipped silently.
+	globalDir, _ := config.Home()
+	proj, perr := agent.LoadProjectInstructions(globalDir, env.Cwd)
 	if perr != nil {
 		ui.Notify("could not read AGENTS.md: "+perr.Error(), tui.LevelWarn)
 	}
@@ -303,6 +307,49 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		})
 	}
 
+	// the permission barrier gates every tool call through static classification and
+	// an approval dialog. Read-only work runs free; writes prompt unless allowed or
+	// blocked by mode. It starts from the resolved config default (a resume's session
+	// override included, since rebuild seeded it) so a restart restores the mode.
+	var barrier *permit.Barrier
+	if toolsReg != nil {
+		barrier = permit.NewBarrier(toolsReg.ReadOnly)
+		if mstr := set.Settings().Permissions.Mode; mstr != "" {
+			if m, ok := permit.ParseMode(mstr); ok {
+				barrier.SetMode(m)
+			}
+		}
+		showPermissionIndicator(ui, barrier)
+		// the prompter and noter adapt tui and agent onto permit's narrow interfaces;
+		// note injection steers the running turn without stopping it.
+		barrier.SetPrompter(promptAdapter{ui})
+		barrier.SetNoter(func(note string) { ag.Steer(agent.Input{Text: note}) })
+		// auto mode classifies unverifiable shell commands with a fresh-context model
+		// call, cached per exact command; the verdict never enters the session.
+		barrier.SetClassifier(permit.NewCachedClassifier(classifierAdapter{
+			providerFor: providers.ProviderFor,
+			model:       func() llm.Model { return st.Model }, // current model so /model applies
+		}.Classify))
+		barrier.SetNotice(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
+		// config-declared safe commands (exact MCP tool names or verbatim bash lines)
+		// auto-allow as read-only in allow-read/auto; write/edit can never be listed.
+		barrier.SetSafeCommands(set.Settings().Permissions.SafeCommands)
+		// config-declared denied commands refuse outright without prompting, every mode.
+		barrier.SetDeniedCommands(set.Settings().Permissions.DeniedCommands)
+		barrier.SetDryRun(toolsReg.DryRun)
+		// an approval dialog shows what a write/edit call would change (content or a
+		// plain diff) rather than its raw JSON arguments.
+		barrier.SetPreview(func(call agent.ToolCall) string {
+			path, before, after, ok := toolsReg.Preview(call)
+			if !ok {
+				return ""
+			}
+			return tui.UnifiedPreview(path, before, after)
+		})
+		toolsReg.AddGuard(barrier.Guard())
+		toolsReg.SetAsker(barrier.Asker())
+	}
+
 	// the command registry, shell stager and @ expander own the single dispatch path
 	// for submitted lines. Commands run inline; shell lines stage and flush ahead of
 	// the next prompt; prompts expand @ refs and steer the agent.
@@ -310,7 +357,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	stager := command.NewStager(toolsReg, sink)
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
-		started: &started, quit: quit,
+		started: &started, quit: quit, permit: barrier,
 	}
 	if mgr != nil {
 		console.mcp = mcpAdapter{mgr}
@@ -320,7 +367,18 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		console.comp = comp
 	}
 	command.RegisterBuiltins(cmds, console)
-	watchControls(ui, ag, stager, quit, nil)
+	onModeCycle := func() {
+		if barrier == nil {
+			return
+		}
+		m := barrier.Cycle() // re-evaluates any open dialog under the new mode
+		showPermissionIndicator(ui, barrier)
+		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
+		// record a session override so Explain and Settings report (session) and a
+		// resume restores it; the config file is never rewritten.
+		_ = console.SetSessionSetting("permissions.mode", m.String())
+	}
+	watchControls(ui, ag, stager, quit, onModeCycle)
 	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
 	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
@@ -431,6 +489,122 @@ func startPrompt(ui *tui.UI, recording bool, ag *agent.Agent, input agent.Input,
 			ui.SetIdle(true)
 		}
 	}()
+}
+
+// promptAdapter adapts tui's decision dialogs and free-text questions onto
+// permit.Prompter. In plain mode no dialog can be shown, so Open reports ErrNoUI.
+type promptAdapter struct{ ui *tui.UI }
+
+func (a promptAdapter) Open(prompt, subject string, options []string) (permit.Dialog, error) {
+	if a.ui.Mode() == tui.ModePlain { // nobody to ask in headless/piped mode
+		return nil, tui.ErrNoUI
+	}
+	opts := make([]tui.Option, len(options))
+	for i, o := range options {
+		opts[i] = tui.Option{Label: o}
+	}
+	d := a.ui.OpenDecision(tui.DecisionRequest{Prompt: prompt, Context: subject, Options: opts})
+	return decisionAdapter{d}, nil
+}
+
+func (a promptAdapter) Reason(ctx context.Context, label string) (string, bool) {
+	ans, err := a.ui.Ask(ctx, tui.Question{Text: label})
+	if err != nil || ans.Declined {
+		return "", false
+	}
+	return ans.Text, true
+}
+
+// classifierSystem is auto-mode's prompt: classify one shell command as exactly
+// one word. Reading from the network is deliberately NOT read-only — it is the
+// exfiltration channel, so "does not write locally" never means safe.
+const classifierSystem = `You classify a single shell command by its effect on the system. Reply with exactly one word and nothing else.
+
+Categories:
+- "readonly" — only reads or inspects data with no side effects: nothing is created, modified, or deleted, and no file, repo, process, network, or system state changes. Writing to stdout/stderr is fine.
+- "write" — has any side effect: creates/modifies/deletes files, changes permissions or ownership, alters repo/process/system state, downloads, installs or runs software, redirects output to a file (>, >>), or reads from the network.
+- "unsure" — only when you do not recognize the command name or genuinely cannot determine its effect.
+
+Compound constructs — pipelines, command substitution $(...) or backticks, loops (for/while/until), and conditionals (if/case) — have no side effect of their own. Classify them by the commands they actually run: if every command inside only reads or inspects, the whole thing is "readonly"; if any one of them writes, it is "write". Examples: 'for f in *.md; do head -20 "$f"; done' and 'echo "=== $(basename "$f") ==="' are readonly; 'for f in *.tmp; do rm "$f"; done' and 'x=$(mktemp)' are write.
+
+Use your general knowledge of Unix tools. The examples below are illustrative, NOT exhaustive — classify any unlisted command by what it actually does, not by whether it appears here.
+- readonly examples: ls, cat, head, tail, grep, rg, find (no -exec/-delete), stat, file, df, du, wc, echo, printf, ps, env, uname, hostname, which, date, awk, jq, sed (without -i/--in-place and with no s///w or s///e flags in the script), tree, git status/log/diff/show.
+- write examples: rm, mv, cp, touch, mkdir, rmdir, chmod, chown, ln, dd, truncate, tee, sed -i or sed --in-place; find -exec/-delete; git add/commit/checkout/reset/restore/push/pull/rebase/merge/stash; package installs (npm/pnpm/yarn/pip/apt/brew/cargo/go install); docker run/rm/kill, systemctl, mount, kill; curl/wget reading from or saving to the network.
+
+Reserve "unsure" for unrecognized commands. Respond with ONLY the classification word.`
+
+// classifierAdapter classifies an unverifiable shell command with a one-shot call
+// to the session's current model in a fresh context; the verdict never enters the
+// session. providerFor resolves the active vendor, model yields the live state so
+// /model switches apply.
+type classifierAdapter struct {
+	providerFor func(llm.Model) (llm.Provider, error)
+	model       func() llm.Model
+}
+
+func (a classifierAdapter) Classify(ctx context.Context, command string) permit.Class {
+	m := a.model()
+	if m.ID == "" { // no model configured; nothing to classify with
+		return permit.ClassUnsure
+	}
+	p, err := a.providerFor(m)
+	if err != nil {
+		return permit.ClassUnsure
+	}
+	req := llm.Request{
+		Model:     m,
+		System:    llm.BlockList{llm.TextBlock{Text: classifierSystem}},
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: command}}}},
+		MaxTokens: classifyBudget(m),
+	}
+	req.Reasoning = llm.ReasoningConfig{Level: llm.ClampLevel(m, llm.LevelMinimal)}
+	out, _, serr := runSummary(ctx, p, req)
+	if serr != nil {
+		return permit.ClassUnsure
+	}
+	return permit.NormalizeClass(out)
+}
+
+// classifyBudget sizes the classifier's output cap generously so a reasoning model
+// still has room for its thinking block when minimal is clamped away.
+func classifyBudget(m llm.Model) int {
+	budget := m.MaxOutput
+	if budget <= 0 {
+		return 4096 // unknown window: modest fallback, enough for one word plus thought
+	}
+	return min(budget, 20480)
+}
+
+// decisionAdapter wraps *tui.Decision onto permit.Dialog.
+type decisionAdapter struct{ d *tui.Decision }
+
+func (a decisionAdapter) Wait(ctx context.Context) (int, error) {
+	r, err := a.d.Wait(ctx)
+	if err != nil {
+		// an explicit Esc is a real denial, not the headless no-UI path.
+		if errors.Is(err, tui.ErrCancelled) {
+			return 0, permit.ErrDenied
+		}
+		return 0, err
+	}
+	return r.Index, nil
+}
+func (a decisionAdapter) Resolve(index int) { a.d.Resolve(index) }
+func (a decisionAdapter) Close()            { a.d.Close() }
+
+// showPermissionIndicator shows the live mode in the status bar when it differs
+// from the allow-read default, clearing it otherwise. The non-default modes must
+// always be visible so nobody forgets the gate is open.
+func showPermissionIndicator(ui *tui.UI, b *permit.Barrier) {
+	if ui == nil || b == nil {
+		return
+	}
+	m := b.Mode()
+	if m != permit.ModeAllowRead { // default: hidden until the user changes it
+		ui.SetStatusSegment(tui.Segment{Key: "permissions", Text: m.String(), Short: m.Short()})
+		return
+	}
+	ui.SetStatusSegment(tui.Segment{Key: "permissions"})
 }
 
 // showReasoningIndicator shows the reasoning level in the status bar when it

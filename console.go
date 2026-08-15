@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jentfoo/ajent/pkg/mcp"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -27,8 +29,9 @@ type uiConsole struct {
 	tools    *tools.Registry
 	commands *command.Registry
 	rec      *session.Recorder
-	comp     *compactor // nil when session recording is off
-	mcp      mcpAdapter // the MCP server manager adapter, or nil
+	comp     *compactor      // nil when session recording is off
+	mcp      mcpAdapter      // the MCP server manager adapter, or nil
+	permit   *permit.Barrier // live permission gate, nil when tools are disabled
 
 	started *bool // shared with the driver pump
 	quit    chan struct{}
@@ -78,8 +81,16 @@ func (c *uiConsole) SaveSetting(layer, key string, value any) error {
 }
 
 // SetSessionSetting applies a dotted key as a session override and records it so
-// a resume restores it, mirroring ToolsChanged.
+// a resume restores it, mirroring ToolsChanged. permissions.mode also drives the
+// live barrier and its status segment.
 func (c *uiConsole) SetSessionSetting(key string, value any) error {
+	if key == "permissions.mode" && c.permit != nil {
+		s := fmt.Sprint(value)
+		if m, ok := permit.ParseMode(s); ok {
+			c.permit.SetMode(m)
+			showPermissionIndicator(c.ui, c.permit)
+		}
+	}
 	if c.set != nil {
 		if err := c.set.SetSession(key, value); err != nil {
 			return err

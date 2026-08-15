@@ -46,6 +46,15 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   so the cached schema list is invalidated.
 - `Get(name)` — returns the tool wrapped in the guard chain; unknown or
   disabled tools are invisible to the model.
+- `ReadOnly(name)` — whether a tool may auto-run as read-only, derived from MCP
+  `annotations.readOnlyHint` or config globs. The permission barrier uses this
+  for non-built-in (MCP/extension) tools; core writers never consult it.
+- `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
+  `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be detected
+  before prompting; returns nil for tools that cannot predict.
+- `Preview(call)` → `(path, before, after, ok)` — dispatches to a tool's optional
+  `Previewer` (`editTool`, `writeTool`), returning what a call would change so an
+  approval dialog shows content or a diff instead of raw JSON arguments.
 
 ### Guards (`guard.go`, `asker.go`)
 
@@ -53,6 +62,8 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
 type Guard func(ctx context.Context, call agent.ToolCall) Decision // Allow | Deny | Ask
 type Asker func(ctx context.Context, call agent.ToolCall, d Decision) Decision
 func (r *Registry) SetAsker(a Asker)
+func WithUserInitiated(ctx context.Context) context.Context  // mark a user's own shell line
+func IsUserInitiated(ctx context.Context) bool
 ```
 
 Guards run in registration order before a tool executes; first non-allow wins.
@@ -63,8 +74,15 @@ the reason, and nothing touches disk.
 `Ask` consults the registered asker (set via `SetAsker`) when one exists; the
 asker turns it into a final allow or deny, and returning `Ask` again is treated
 as a denial. With no asker registered an `Ask` still refuses — nothing changes
-for callers that do not opt in. The permission layer registers the asker (phase
-12); core never does.
+for callers that do not opt in.
+
+The permission layer (phase 12) registers both: one guard from `permit.Barrier`
+runs static classification, and its asker resolves prompts into allow/deny with
+session memory. Config's `permissions.safeCommands` lets a user declare extra
+tools or exact bash lines to auto-allow as read-only (see phase 12); it can never
+name `write`/`edit`. Core never does. The `WithUserInitiated` marker rides the context
+so a user's own staged `!` shell line is exempt in every permission mode — it is
+the human's shell, not the model's.
 
 ## Built-in tools
 
@@ -100,11 +118,18 @@ diff (empty → content for new files) through `Output.Diff`.
 ### edit (`edit.go`)
 
 Exact-string replacement against an in-memory buffer, written once at the end:
-a multi-edit batch is all-or-nothing. An empty `oldText` is rejected. Zero
-matches returns a near-match suggestion (most token-overlapping line); multiple
-matches without `replace_all` returns the occurrence count and locations. Both
-errors are designed to be actionable, since they are the model's main feedback
-loop. Stale files are refused via the tracker. Renders through `Output.Diff`.
+a multi-edit batch is all-or-nothing. The validation loop lives in a shared
+`applyEdits(buf string, ops []editOp) (string, error)` used by both `Execute`
+and `DryRun`, preceded by an order-independent `validateEdits` pass: an empty
+or duplicated `oldText`, two edits overlapping the same region and a no-op
+(`oldText == newText`) all fail before any write. Zero matches returns a
+near-match suggestion (most token-overlapping line); multiple matches without
+`replace_all` returns the occurrence count and locations — both still reported
+through the per-op loop. Both errors are designed to be actionable, since they
+are the model's main feedback loop. Stale files are refused via the tracker.
+Renders through `Output.Diff`. The edit tool implements `DryRunner`, so the
+permission barrier can skip prompting for a call that cannot succeed and let
+the real apply path surface its natural error.
 
 ### bash (`bash.go`)
 
@@ -179,8 +204,8 @@ created lazily on first overflow — a normal command leaves nothing behind.
 hands the registry to the agent loop as its `ToolSet`. Per turn the loop:
 
 1. Mirrors the enabled names into state (the system prompt derives its search
-   hint from them — `rg` via `bash` is suggested only when no `find`/`grep`
-   tool is enabled).
+   hint from them — `ls`/`grep`/`find` via `bash` is suggested only when no
+   dedicated exploration tool is enabled).
 2. Sends the registry's cached schemas with each request.
 3. Dispatches tool calls: parallel when the model supports it and every call is
    `ModeParallel`, serial otherwise; results are appended in call order.

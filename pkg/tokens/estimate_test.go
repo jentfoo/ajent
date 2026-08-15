@@ -1,6 +1,7 @@
 package tokens
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -94,6 +95,27 @@ func TestEstimateTextAstralPairsCostTwo(t *testing.T) {
 		}
 	}
 	assert.Equal(t, want, EstimateText(astral, KindProse))
+}
+
+func TestEstimateFixedCountsSystemAndToolsOnly(t *testing.T) {
+	t.Parallel()
+
+	req := llm.Request{
+		Model:  llm.Model{ID: "m", Caps: llm.Capabilities{Dialect: llm.DialectOpenAICompletions}},
+		System: llm.BlockList{llm.TextBlock{Text: "you are a helper"}},
+		Tools: []llm.ToolSchema{
+			{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)},
+		},
+		Messages: []llm.Message{
+			{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: "hello there friend"}}},
+		},
+	}
+
+	sysTools := EstimateFixed(req)    // system + tool schemas only
+	full := EstimateRequest(req)      // includes the message on top
+	assert.Greater(t, full, sysTools) // messages add tokens beyond the fixed part
+	// a bare request with no tools or system contributes nothing fixed
+	assert.Zero(t, EstimateFixed(llm.Request{}))
 }
 
 func TestEstimateRequestMatchesPreparedMessages(t *testing.T) {

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -31,6 +32,42 @@ type editTool struct {
 }
 
 var _ agent.Tool = (*editTool)(nil)
+var _ DryRunner = (*editTool)(nil)
+var _ Previewer = (*editTool)(nil)
+
+// resolveApply resolves the path and returns the current file text with the edits
+// applied, so DryRun and Preview share one code path.
+func (t *editTool) resolveApply(call agent.ToolCall) (path string, before, after string, err error) {
+	var p editParams
+	err = decode(call.Input, &p)
+	if err != nil {
+		return "", "", "", errors.New("bad args: " + err.Error())
+	}
+	full, err := t.policy.Resolve(p.Path)
+	if err != nil {
+		return "", "", "", err
+	}
+	data, err := readAllFile(full) // missing or unreadable counts as will-fail
+	if err != nil {
+		return "", "", "", err
+	}
+	after, err = applyEdits(p.Path, string(data), p.Edits)
+	return p.Path, string(data), after, err
+}
+
+// DryRun reports whether an edit call would fail before it runs: the file is
+// missing or unreadable, or applyEdits rejects any op. The barrier uses it to skip
+// a prompt for a doomed call and let Execute return its natural error.
+func (t *editTool) DryRun(call agent.ToolCall) error {
+	_, _, _, err := t.resolveApply(call)
+	return err
+}
+
+// Preview returns the path with the file's current text and what it would become,
+// so an approval dialog can show a diff of the change before allowing it.
+func (t *editTool) Preview(call agent.ToolCall) (path, before, after string, err error) {
+	return t.resolveApply(call)
+}
 
 func (t *editTool) Name() string { return "edit" }
 func (t *editTool) Label(agent.ToolCall) string {
@@ -66,27 +103,12 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	data, _ := readAllFile(full)
 	buf := string(data)
 
-	for i := range p.Edits {
-		op := &p.Edits[i]
-		if op.OldText == "" {
-			return resultErr(fmt.Sprintf("edit %d: empty oldText; provide the exact text you want replaced", i+1)), nil
-		}
-		count := strings.Count(buf, op.OldText)
-		switch {
-		case count == 0:
-			return resultErr(notFoundError(i+1, p.Path, p.Edits[i].OldText, buf)), nil
-		case count > 1 && !op.ReplaceAll:
-			return resultErr(ambiguousError(i+1, p.Path, op.OldText, buf)), nil
-		default: // exactly one match, or replace_all with any positive count
-			if op.ReplaceAll {
-				buf = strings.ReplaceAll(buf, op.OldText, op.NewText)
-			} else {
-				buf = strings.Replace(buf, op.OldText, op.NewText, 1)
-			}
-		}
+	applied, err := applyEdits(p.Path, buf, p.Edits)
+	if err != nil {
+		return resultErr(err.Error()), nil
 	}
 
-	final := []byte(buf)
+	final := []byte(applied)
 	if err := config.WriteFileAtomic(full, final, 0o644); err != nil {
 		return resultErr("edit: " + err.Error()), nil
 	}
@@ -96,6 +118,75 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	return agent.ToolResult{
 		Content: llmBlock(fmt.Sprintf("applied %d edits to %s", len(p.Edits), p.Path)),
 	}, nil
+}
+
+// applyEdits validates ops against buf then applies them in order. It fails before
+// any change when an op's old text is empty, missing, ambiguous (more than one match
+// without replace_all), duplicated across edits, overlapping another edit, or a no-op.
+func applyEdits(path string, buf string, ops []editOp) (string, error) {
+	if err := validateEdits(buf, ops); err != nil {
+		return "", err
+	}
+	for i := range ops {
+		op := &ops[i]
+		count := strings.Count(buf, op.OldText)
+		switch {
+		case count == 0:
+			return "", errors.New(notFoundError(i+1, path, ops[i].OldText, buf))
+		case count > 1 && !op.ReplaceAll:
+			return "", errors.New(ambiguousError(i+1, path, op.OldText, buf))
+		default: // exactly one match, or replace_all with any positive count
+			if op.ReplaceAll {
+				buf = strings.ReplaceAll(buf, op.OldText, op.NewText)
+			} else {
+				buf = strings.Replace(buf, op.OldText, op.NewText, 1)
+			}
+		}
+	}
+	return buf, nil
+}
+
+// matchSpan is one non-replace edit's byte range in the original buffer.
+type matchSpan struct {
+	idx int // index of the owning op
+	s   int
+	e   int
+}
+
+// validateEdits runs the order-independent intent checks: empty or no-op edits,
+// duplicate old texts and overlapping non-replace regions. Missing/ambiguous text
+// is left to applyEdits' per-op loop, which sees the evolving buffer.
+func validateEdits(buf string, ops []editOp) error {
+	seen := make(map[string]int)
+	var spans []matchSpan
+	for i := range ops {
+		op := &ops[i]
+		if op.OldText == "" {
+			return fmt.Errorf("edit %d: empty oldText; provide the exact text you want replaced", i+1)
+		}
+		if op.OldText == op.NewText {
+			return fmt.Errorf("edit %d: no-op edit, newText equals oldText", i+1)
+		}
+		if j, dup := seen[op.OldText]; dup {
+			return fmt.Errorf("edits %d and %d repeat the same oldText; use replace_all or add context", j+1, i+1)
+		}
+		seen[op.OldText] = i
+		if op.ReplaceAll {
+			continue // many spans; overlap is only checked for single replacements
+		}
+		s := strings.Index(buf, op.OldText)
+		if s < 0 {
+			continue // missing is reported by the apply loop with full guidance
+		}
+		e := s + len(op.OldText)
+		for _, p := range spans {
+			if s < p.e && p.s < e { // regions share at least one byte in the original text
+				return fmt.Errorf("edits %d and %d target overlapping regions", p.idx+1, i+1)
+			}
+		}
+		spans = append(spans, matchSpan{i, s, e})
+	}
+	return nil
 }
 
 // notFoundError guides a retry after zero matches: name the failure, say why

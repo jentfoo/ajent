@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
@@ -114,8 +115,10 @@ func TestSettingsMenuSavesToProjectLayer(t *testing.T) {
 	assert.Equal(t, "model", c.saveCalls[0].key)
 }
 
+// non-parallel: Setenv cannot run alongside parallel siblings, and the home dir
+// is isolated so a real user config never shifts the rendered source away from default.
 func TestEnumRowEditsAndRecordsSessionSetting(t *testing.T) {
-	t.Parallel()
+	t.Setenv(config.EnvHome, t.TempDir())
 
 	c := newFakeConsole(t)
 	r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "auto"})
@@ -148,8 +151,9 @@ func TestEnumRowCancelledLeavesSessionUntouched(t *testing.T) {
 	changes, err := r.edit(context.Background(), c)
 	require.ErrorIs(t, err, tui.ErrCancelled)
 	assert.Empty(t, changes)
-	_, _, ok := c.settings.Explain("permissions.mode")
-	assert.False(t, ok)
+	_, srcName, ok := c.settings.Explain("permissions.mode")
+	assert.True(t, ok) // resolvable at the default layer now
+	assert.NotEqual(t, "session", srcName)
 }
 
 func TestModelRowPicksAndRecordsSubagentKey(t *testing.T) {

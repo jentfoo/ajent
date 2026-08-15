@@ -46,6 +46,13 @@ func UserPath(name string) (string, error) {
 	return filepath.Join(dir, name), nil
 }
 
+// Home returns the resolved ajent configuration directory path without creating
+// it. It honours AJENT_HOME and otherwise resolves <home>/.ajent; callers that
+// only probe for a file's existence use this to avoid an empty-dir side effect.
+func Home() (string, error) {
+	return resolveDir(osEnv, osHome)
+}
+
 // ProjectDir returns the configuration directory for a workspace.
 func ProjectDir(workspace string) string {
 	return filepath.Join(workspace, DirName)

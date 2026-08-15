@@ -66,7 +66,9 @@ type UI struct {
 
 // Permissions configures the tool guard chain.
 type Permissions struct {
-	Mode string `json:"mode,omitempty"`
+	Mode           string   `json:"mode,omitempty"`          // permission mode name
+	SafeCommands   []string `json:"safeCommands,omitzero"`   // exact tool names / bash lines auto-allowed as read-only
+	DeniedCommands []string `json:"deniedCommands,omitzero"` // exact tool names / bash lines always denied, never prompted
 }
 
 // Extensions configures extension loading.
@@ -92,6 +94,7 @@ const defaultsJSON = `{
       "refTotal": { "bytes": 131072 }
     }
   },
+  "permissions": { "mode": "allow-read" },
   "compaction": { "auto": true, "threshold": 0.8 },
   "ui": { "render": "auto" }
 }`

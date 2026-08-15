@@ -16,6 +16,13 @@ const (
 	minSpanGap = 4
 )
 
+// UnifiedPreview returns a plain (uncolored) unified diff of before and after,
+// empty when they match. Used for approval-dialog subjects whose dim-styled
+// context cannot carry ANSI codes.
+func UnifiedPreview(path, before, after string) string {
+	return udiff.Unified(path, path, before, after)
+}
+
 // RenderDiff returns a colorized unified diff of before and after, empty when they match.
 func RenderDiff(t Theme, path, before, after string) string {
 	unified := udiff.Unified(path, path, before, after)

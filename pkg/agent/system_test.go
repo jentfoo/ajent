@@ -116,3 +116,28 @@ func TestLoadProjectInstructionsMissing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, proj)
 }
+
+// TestLoadProjectInstructionsLayers orders global before project and skips empty dirs.
+func TestLoadProjectInstructionsLayers(t *testing.T) {
+	t.Parallel()
+
+	global := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(global, "AGENTS.md"), []byte("# Global\n"), 0o644))
+	project := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(project, "AGENTS.md"), []byte("# Project\n"), 0o644))
+
+	proj, err := LoadProjectInstructions(global, project)
+	require.NoError(t, err)
+	require.Len(t, proj, 2)
+	assert.Equal(t, filepath.Join(global, "AGENTS.md"), proj[0].Path)
+	assert.Equal(t, filepath.Join(project, "AGENTS.md"), proj[1].Path)
+}
+
+// TestLoadProjectInstructionsSkipsEmptyAndAbsent tolerates a missing home and an absent cwd.
+func TestLoadProjectInstructionsSkipsEmptyAndAbsent(t *testing.T) {
+	t.Parallel()
+
+	proj, err := LoadProjectInstructions("", t.TempDir(), "")
+	require.NoError(t, err)
+	assert.Nil(t, proj)
+}

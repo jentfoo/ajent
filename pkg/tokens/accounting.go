@@ -104,6 +104,19 @@ func (a *Accounting) Add(est int) {
 	a.pending += float64(est)
 }
 
+// SeedBase estimates the constant context overhead — the system prompt and tool
+// schemas that ride with every request but carry no provider report of their own.
+// It adds est to pending only while no exact terms cover it yet, so a fresh epoch
+// is seeded once and the next Response snapshot supersedes it. Messages are not
+// included; callers account them individually as they append.
+func (a *Accounting) SeedBase(est int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if est > 0 && a.promptExact == 0 && a.outputExact == 0 {
+		a.pending += float64(est)
+	}
+}
+
 // Stream adds to the live estimate of the response currently streaming.
 func (a *Accounting) Stream(est int) {
 	a.mu.Lock()

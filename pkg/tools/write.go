@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -24,6 +25,27 @@ type writeTool struct {
 }
 
 var _ agent.Tool = (*writeTool)(nil)
+var _ Previewer = (*writeTool)(nil)
+
+// Preview returns the path with the file's current and new content for a write
+// call, so an approval dialog can show what would be written (a brand-new file
+// previews as all additions).
+func (t *writeTool) Preview(call agent.ToolCall) (path, before, after string, err error) {
+	var p writeParams
+	if err := decode(call.Input, &p); err != nil {
+		return "", "", "", errors.New("bad args: " + err.Error())
+	}
+	full, err := t.policy.Resolve(p.Path)
+	if err != nil {
+		return "", "", "", err
+	}
+	var existing string
+	if _, statErr := os.Stat(full); statErr == nil { // show the delta when overwriting too
+		b, _ := readAllFile(full)
+		existing = string(b)
+	}
+	return p.Path, existing, p.Content, nil
+}
 
 func (t *writeTool) Name() string { return "write" }
 func (t *writeTool) Label(agent.ToolCall) string {

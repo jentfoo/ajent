@@ -66,9 +66,10 @@ governs its assembly and use.
 | System prompt composition | identity + guidelines + environment facts + project instructions |
 | Tool descriptions & schemas | per-tool `Description` prose plus JSON Schema params, sent via the provider tool channel |
 | `@`-file reference injection | synthetic read call+result ahead of the user message |
-| Project instruction layering | `<cwd>/AGENTS.md` injection with provenance marker |
+| Project instruction layering | `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, layered with provenance markers |
 | Prompt templates / slash commands | markdown templates expanded into prompts; `/init` survey |
 | Compaction summarisation | staged free reductions + exact-format LLM summary |
+| Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
 
 ---
 
@@ -87,7 +88,7 @@ not this block.
 3. Guidelines               — concise bullets; some derived from which tools exist.
 4. Environment facts        — clean structured lines: cwd, platform, shell, date,
                               git branch + dirty state.
-5. Project instructions     — the `<cwd>/AGENTS.md` file, when present.
+5. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
 ```
 
 ### Identity
@@ -118,7 +119,7 @@ dedicated exploration tools do (`grep`, `find`, `ls`), add a hint so the model
 uses bash for it:
 
 ```
-- Use bash for file operations like ls, rg, find
+- Use bash for file operations like ls, grep, find
 ```
 
 The derivation rule matters: guidelines should never tell the model to use a tool
@@ -212,7 +213,8 @@ Prompt implications:
 
 ## Project instruction layering
 
-If `<cwd>/AGENTS.md` exists it is read once at startup and injected into the
+The user-global `~/.ajent/AGENTS.md` (honouring `AJENT_HOME`) and `<cwd>/AGENTS.md`,
+when they exist, are read once at startup in that order and injected into the
 system block ahead of the first turn. The format mirrors how other agents present
 project instructions early in context — a provenance-marked wrapper so the model
 can tell project rules from conversation:
@@ -231,9 +233,10 @@ Project-specific instructions and guidelines:
 
 Rules:
 
-- **Only `<cwd>/AGENTS.md`.** Nested discovery is not supported — no ancestor
-  walk, no user-global file. A project that wants layered instructions puts them
-  in one file at the launch directory.
+- **Two sources, global then project.** The user-global `~/.ajent/AGENTS.md`
+  (honouring `AJENT_HOME`) is read first and `<cwd>/AGENTS.md` second, so the
+  more specific project file appears later in context. Absent or unresolvable
+  sources are skipped. Nested discovery beyond these two — no ancestor walk.
 - **Provenance marker carries the absolute path**, so the model can point at which
   instruction file told it something.
 - Loaded once at startup and kept for the session; a changed `AGENTS.md` applies on
@@ -394,6 +397,28 @@ came back from"). Nothing is ever deleted; `/compact undo` drops the newest entr
 Every compaction reports real numbers: `compacted 142k → 61k (dropped 18 failed
 tool results, truncated 6 outputs, summarised 47 messages)`. Silent compaction
 leaves users convinced the agent "forgot" for no reason.
+
+---
+
+## Tool-call classifier (`auto` mode)
+
+The permission barrier classifies an unverifiable shell command in `auto` with a
+one-shot call to the session's current model — **fresh context**, never the
+session history, and its verdict never enters the session. It asks for exactly one
+word: `readonly`, `write` or `unsure`. Reasoning is clamped minimal; the output
+token budget leaves room for a thinking block. Verdicts normalise by lowercasing,
+dropping non-letters and prefix-matching, so `` `readonly` ``, `read-only` and
+`readonly.` all collapse to one word; anything else is `unsure`. The response is
+never cached when unsure (usually transient: an abort, missing auth, an API
+error); confident verdicts are LRU-cached per exact command string.
+
+The prompt keeps the reference's framing — compound constructs classify by the
+commands they actually run, examples are illustrative not exhaustive — with one
+deliberate change: **reading from the network is *not* read-only**. The exfiltration
+channel means "does not write locally" never equals safe; the classifier must say
+so explicitly rather than inheriting the reference's opposite claim. Network tools
+(`curl`, `wget`, `nc`) are absent from both the static allowlist and any notion of
+classifier read-only.
 
 ---
 

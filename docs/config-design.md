@@ -38,7 +38,7 @@ type Settings struct {
     Providers   json.RawMessage // folded over models.json providers (pkg/llm)
     Models      json.RawMessage // "provider/id" overrides (pkg/llm)
     Tools       Tools           // enabled set + per-tool output limits
-    Permissions Permissions     // parsed by the guard chain, accepted now to avoid warnings
+    Permissions Permissions     // mode + safeCommands; enforced by the tool barrier (permit)
     Compaction  Compaction      // auto toggle + threshold fraction
     UI          UI              // render mode; showCost/showThinking
     Extensions  Extensions      // loaded by the extension host, accepted now
@@ -46,8 +46,35 @@ type Settings struct {
 ```
 
 Enum-valued keys are stored as their text names and parsed by the caller
-(`llm.ParseLevel`, `llm.ParseRetain`, `tui.ParseMode`). `providers`/`models`
-stay raw because **`pkg/config` must never import `pkg/llm`** — `pkg/llm`
+(`llm.ParseLevel`, `llm.ParseRetain`, `tui.ParseMode`, `permit.ParseMode`).
+
+### Permissions
+
+The permission block defaults to `{"mode": "allow-read"}`, so
+`Explain("permissions.mode")` resolves and reports `(default)`. The mode name is
+one of the four in `tools-design.md`; `AJENT_PERMISSIONS_MODE` binds for free
+through EnvLayer. It seeds a session's live barrier at startup, so a resumed
+session restores its cycled mode (rebuild replays session overrides before this).
+A `Shift+Tab` cycle or `/settings` records the change as a **session** override
+via `SetSessionSetting("permissions.mode", …)` — never rewriting the config file.
+`/settings`'s Permissions row edits the persistent default instead, offering save
+to user/project layer like any other enum row.
+
+`safeCommands` lists exact MCP/extension tool names or bash command prefixes that
+auto-allow as read-only in allow-read/auto; a shell entry matches at a token
+boundary, so `git` covers every git invocation and `git status` its subcommands.
+It can never name a core writer (`write`, `edit`) or un-reject an in-place sed,
+so no config entry overrides a known mutation. It gates on the live call's tool
+name (exact) or bash line prefix (see permit), independent of registry metadata.
+
+`deniedCommands` is its hard inverse: exact tool names or bash command prefixes that
+are always refused **without prompting**, in every mode — including allow-all and
+user-initiated `!` lines. Matching follows the same token-boundary rule as
+`safeCommands`, but may also name core writers, since denying one is a legitimate
+safety gate. A denied check runs first in the barrier verdict, so it wins over any
+safe-command or session allow.
+
+`providers`/`models` stay raw because **`pkg/config` must never import `pkg/llm`** — `pkg/llm`
 imports it for paths, and a typed reference would cycle. `models.json` is decoded
 in `pkg/llm`, and config's provider/model blocks fold over it via
 `llm.ApplyOverrides`.

@@ -56,6 +56,7 @@ session  -> agent, config, llm, tokens, tools
 compact  -> llm, session, tokens, tools
 tui      (no internal deps)
 mcp      -> agent, config, llm (+ mcp-go; never tools/tui/command — adapters live in main.go)
+permit   -> agent, tools (never tui; prompter/classifier interfaces are supplied by main.go)
 refs     -> agent, llm, tokens, tools, tui
 command  -> agent, config, llm, refs, tokens, tools, tui
 main.go  -> everything (the only wiring layer)
@@ -121,6 +122,20 @@ stage, expand `@` refs, then steer or start a turn.
 `demo.go` (behind the `demo` build tag) is a scripted stand-in for the real driver,
 used to exercise every rendering path without a provider; `run_agent.go` carries the
 `!demo` counterpart. Both define `drive(...)` with the same signature.
+
+### Permission barrier (`pkg/permit`)
+
+The tool gate: static classification of every call plus approval dialogs. It imports
+only `pkg/agent` and `pkg/tools`, never `pkg/tui` — main.go supplies its narrow
+`Prompter`/`Classifier`/`Noter` interfaces, so headless mode stays free. The rule is
+to allow only what is **verifiably** read-only: built-ins (`read`/`grep`/`find`/`ls`) by
+name, non-built-in tools on declared `Registry.ReadOnly` metadata (MCP hint / config
+globs), bash through a quote-aware analyser. Network commands are never read-only.
+Four modes (`allow-all`, the default `allow-read`, `auto`, `block-all`) cycle with
+Shift+Tab; `!` shell lines are exempt in every mode via `tools.WithUserInitiated`. A
+doomed edit is detected by a dry run of the real apply path so it never prompts. The
+model classifier (`auto`) runs concurrently with an already-open dialog and its verdict
+never enters the session.
 
 ## Code Style
 

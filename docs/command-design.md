@@ -139,7 +139,11 @@ settings methods delegate to the resolved `*config.Set`. Each mutator also calls
 `SetSessionSetting` applies a dotted session override *and* records it via
 `recorder.SettingChange`, closing the old gap where a row called `SetSession`
 directly and the override silently vanished on resume (auto-compaction, tool
-limits). The bespoke `SetModel`/`SetReasoning` mutators keep their own paths.
+limits). The bespoke `SetModel`/`SetReasoning` mutators keep their own paths. A
+`permissions.mode` key additionally applies its parsed mode to the live permission
+barrier and republishes the status segment — this is what makes `/settings`'s
+Permissions enum row take effect rather than sitting inert, and it is also how a
+Shift+Tab cycle records itself for resume.
 
 `Started()` is owned by the pump: it flips true when the first prompt is
 dispatched, never on a command or a `!`.
@@ -192,7 +196,9 @@ func (s *Stager) Flush(ctx) []llm.Message // waits, returns call+result pairs
 is a refusal notice), mints a call id, opens the display with
 `sink.ToolStart` and executes on a goroutine through `agent.NewOutput`. That
 reuses the whole `bash` path — streaming, ANSI stripping, output cap, spill
-file, process-group kill — with no second implementation.
+file, process-group kill — with no second implementation. It wraps its context in
+`tools.WithUserInitiated`, so a staged `!` line is exempt from every permission
+mode: this is the human's own shell, not the model's.
 
 **Staging onto context.** The command text and its result are *not* sent to the
 model immediately. They sit in the pending slot ahead of the next user message.

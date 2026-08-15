@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/go-analyze/bulk"
@@ -90,6 +91,60 @@ func (r *Registry) AddGuard(g Guard) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.guards = append(r.guards, g)
+}
+
+// DryRunner is implemented by tools that can predict whether a call would fail,
+// so the permission layer skips prompts for doomed calls and lets Execute return
+// its natural error.
+type DryRunner interface {
+	DryRun(call agent.ToolCall) error
+}
+
+// Previewer is implemented by tools that can render what a call would change, so
+// the approval dialog shows content or a diff instead of raw arguments.
+type Previewer interface {
+	Preview(call agent.ToolCall) (path, before, after string, err error)
+}
+
+// Preview reports whether call's effect is previewable and returns its path with
+// the current and resulting text. Tools without one report ok=false.
+func (r *Registry) Preview(call agent.ToolCall) (string, string, string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, rt := range r.tools {
+		if rt.tool.Name() != call.Name {
+			continue
+		}
+		pv, ok := rt.tool.(Previewer)
+		if !ok {
+			return "", "", "", false
+		}
+		path, before, after, err := pv.Preview(call)
+		if err != nil {
+			return "", "", "", false
+		}
+		return path, before, after, true
+	}
+	return "", "", "", false
+}
+
+// DryRun reports whether call would fail before running. Tools without a dry run
+// (or an unknown name) report nil, so a caller only skips a prompt on a definite
+// failure rather than guessing.
+func (r *Registry) DryRun(call agent.ToolCall) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, rt := range r.tools {
+		if rt.tool.Name() != call.Name {
+			continue
+		}
+		d, ok := rt.tool.(DryRunner)
+		if !ok {
+			return nil // cannot predict; do not skip the prompt on uncertainty
+		}
+		return d.DryRun(call)
+	}
+	return nil // unknown tool: leave it to Execute's natural error path
 }
 
 // guardSnapshot returns an immutable copy of the guards and asker under read
@@ -379,10 +434,14 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 	return g.t.Execute(ctx, c, out)
 }
 
-// denied builds an error result carrying the denial's reason.
+// denied builds an error result carrying the denial's reason. Reasons are already
+// self-framing ("refused …", "permission required …"), so no prefix is added.
 func denied(reason string) (agent.ToolResult, error) {
+	if strings.TrimSpace(reason) == "" { // guards always carry a reason; stay safe anyway
+		reason = "permission required"
+	}
 	return agent.ToolResult{
-		Content: llm.BlockList{llm.TextBlock{Text: "denied: " + reason}},
+		Content: llm.BlockList{llm.TextBlock{Text: reason}},
 		IsError: true,
 	}, nil
 }

@@ -118,6 +118,51 @@ func TestAccountingComposeGrowsAndClears(t *testing.T) {
 	assert.False(t, cs.Estimated)
 }
 
+func TestAccountingSeedBaseSeedsUntilExactSnapshot(t *testing.T) {
+	t.Parallel()
+
+	a := New(llm.Model{ID: "m1", Provider: "p"})
+
+	// a fresh ledger owes the constant overhead (system prompt + tool schemas)
+	base := 1500
+	a.SeedBase(base)
+	cs := a.Context()
+	assert.True(t, cs.Estimated)
+	assert.Equal(t, base, cs.Used)
+
+	// an appended message estimate rides on top of the seeded base.
+	msg := 300
+	a.Add(msg)
+	assert.Equal(t, base+msg, a.Context().Used)
+
+	// once an exact snapshot lands (mid-stream), it supersedes every estimate:
+	// further seeds are ignored because promptExact already covers system + tools.
+	exact := 4000
+	a.Partial(llm.Usage{Input: exact}) // snaps promptExact, clears pending; no calibration feed
+	a.SeedBase(100)
+	assert.Equal(t, exact, a.Context().Used) // exact only; no re-seed on top
+}
+
+func TestAccountingSeedBaseReSeedsAfterReseedReset(t *testing.T) {
+	t.Parallel()
+
+	a := New(llm.Model{ID: "m1", Provider: "p"})
+
+	// an exact snapshot covers the base, so a later seed is ignored.
+	exact := 3000
+	a.Partial(llm.Usage{Input: exact}) // promptExact=exact; pending cleared
+	a.SeedBase(100)
+	assert.Equal(t, exact, a.Context().Used)
+
+	// compaction reseeds the ledger to a message-only estimate (promptExact back
+	// to zero); re-seeding must put the fixed overhead on top of it.
+	resAfter := 2000
+	a.Reseed(resAfter)
+	assert.Equal(t, resAfter, a.Context().Used) // Estimated true; factor stays 1 here
+	a.SeedBase(700)
+	assert.Equal(t, resAfter+700, a.Context().Used)
+}
+
 func TestAccountingReseedKeepsSpendResetsContext(t *testing.T) {
 	t.Parallel()
 

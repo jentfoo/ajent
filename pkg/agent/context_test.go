@@ -86,6 +86,45 @@ func TestMultiStepTurnDoesNotMultiplyContext(t *testing.T) {
 	assert.Less(t, finalState.Used, 3*per)
 }
 
+// TestFirstTurnContextIncludesSystemAndTools locks in the fix for the start-of-
+// session undercount: before any exact provider report, the context bar must
+// already carry the fixed system-prompt + tool-schema overhead that rides with
+// every request — not just the appended message estimate.
+func TestFirstTurnContextIncludesSystemAndTools(t *testing.T) {
+	t.Parallel()
+
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
+	catch := &ctxCatcher{}
+	st := &State{
+		Model:     llm.Model{ID: "test", ContextWindow: 100000},
+		Reasoning: llm.ReasoningConfig{},
+		Tokens:    tokens.New(llm.Model{ID: "test", ContextWindow: 20000}),
+	}
+	a := newTestAgent(st, p, catch)
+	set := &mapSet{tools: map[string]Tool{"read": &stubTool{name: "read"}}}
+	a.opts.Tools = set
+	a.opts.ProjectInstructions = []ProjectInstruction{{
+		Path: "/repo/AGENTS.md", Body: "follow the repo rules carefully",
+	}}
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+
+	// what the request owes beyond its messages: system prompt + tool schemas.
+	fixed := tokens.EstimateFixed(llm.Request{
+		System: buildSystem(st, testEnv, a.opts.ProjectInstructions),
+		Tools:  set.Schemas(),
+	})
+	require.Positive(t, fixed) // the fixtures must actually contribute overhead
+
+	var sawBase bool
+	for _, cs := range catch.states {
+		if cs.Estimated && cs.Used >= fixed {
+			sawBase = true
+		}
+	}
+	assert.True(t, sawBase, "no emitted context bar carried the system+tools overhead")
+}
+
 // bigDelta is prose long enough that a single delta moves Used past the emit
 // throttle, so each lands as its own progressive Context update.
 func TestStreamingEmitsProgressiveContext(t *testing.T) {

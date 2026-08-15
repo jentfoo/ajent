@@ -68,7 +68,8 @@ func (s *Stager) Run(cmd string) {
 	s.mu.Lock()
 	s.nextID++
 	id := fmt.Sprintf("shell-%d", s.nextID)
-	runCtx, cancel := context.WithCancel(context.Background())
+	// a `!` line is the human's own shell; mark it so the permission gate exempts it.
+	runCtx, cancel := context.WithCancel(tools.WithUserInitiated(context.Background()))
 	run := &stageRun{
 		id:     id,
 		cmd:    cmd,

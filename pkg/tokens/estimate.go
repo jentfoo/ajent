@@ -117,18 +117,15 @@ func EstimateMessages(msgs []llm.Message) int {
 	return n
 }
 
-// EstimateRequest estimates the whole prompt a provider will receive: system,
-// retained messages (thinking already resolved by retention) and tool schemas.
-func EstimateRequest(req llm.Request) int {
+// EstimateFixed estimates the message-independent part of a request: system
+// blocks and tool schemas. Messages are excluded because callers account them as
+// they append, so this is what a fresh ledger still owes once its messages land.
+func EstimateFixed(req llm.Request) int {
 	n := 0
 	for _, blk := range req.System {
 		if tb, ok := blk.(llm.TextBlock); ok {
 			n += EstimateText(tb.Text, KindProse)
 		}
-	}
-	req = llm.Prepare(req)
-	for _, m := range req.Messages {
-		n += messageOverhead + estimateBlocks(m.Content)
 	}
 	if len(req.Tools) > 0 {
 		var t strings.Builder
@@ -137,6 +134,17 @@ func EstimateRequest(req llm.Request) int {
 			t.Write(s.Parameters)
 		}
 		n += EstimateText(t.String(), KindJSON) + schemaOverhead*len(req.Tools)
+	}
+	return n
+}
+
+// EstimateRequest estimates the whole prompt a provider will receive: system,
+// retained messages (thinking already resolved by retention) and tool schemas.
+func EstimateRequest(req llm.Request) int {
+	n := EstimateFixed(req)
+	req = llm.Prepare(req)
+	for _, m := range req.Messages {
+		n += messageOverhead + estimateBlocks(m.Content)
 	}
 	return n
 }

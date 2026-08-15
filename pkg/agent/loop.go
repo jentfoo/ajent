@@ -268,6 +268,11 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	}
 	req := a.buildRequest()
 	predicted := tokens.EstimateRequest(req)
+	// the system prompt and tool schemas are built into every request, so they
+	// must occupy context from the very first turn — not just after an exact report.
+	if t := a.state.Tokens; t != nil {
+		t.SeedBase(tokens.EstimateFixed(req))
+	}
 
 	// thinking deltas move the bar only when retention keeps them in the next request
 	keepThink := llm.ResolveRetain(a.state.Reasoning.Retain, a.state.Model.Caps) != llm.RetainNone
