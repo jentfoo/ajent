@@ -88,6 +88,11 @@ func (m *Manager) Start(task, instructions string) string {
 	m.mu.Unlock()
 
 	j.setQueued(time.Now())
+	// show the job immediately: rows render above the prompt even while queued,
+	// before the child's turn emits anything (childSink publishes only on output).
+	if fn := m.opts.Activity; fn != nil {
+		fn(j.id, rowLine(id, j.label))
+	}
 	m.wg.Add(1) // before the goroutine so Close's Wait never races a pending Add
 	go m.spawn(j)
 	m.publishStatus()
@@ -121,6 +126,11 @@ func (m *Manager) spawn(j *job) {
 		default:
 			j.finish(StatusDone, sum, nil)
 		}
+	}
+	// every terminal path clears the row Start published. Running jobs already did
+	// via childSink.TurnEnd; this also covers a job that never acquired its slot.
+	if fn := m.opts.Activity; fn != nil {
+		fn(j.id, "")
 	}
 	m.publishStatus()
 	close(j.done) // release waiting pollers before onComplete so their claim is visible

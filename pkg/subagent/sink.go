@@ -85,8 +85,9 @@ func (s *childSink) ToolStart(call agent.ToolCall, label string) func(agent.Tool
 // Thinking coalesces reasoning deltas onto a single "thinking…" line.
 func (s *childSink) Thinking(string) { s.set(thinkingRow(s.id), false) }
 
-// Text coalesces output deltas while the child works before its final summary.
-func (s *childSink) Text(string) { s.set(thinkingRow(s.id), false) }
+// Text shows the child's most recent output line, so the row reads as live work
+// rather than a static placeholder. Reasoning stays on thinkingRow via Thinking.
+func (s *childSink) Text(text string) { s.set(rowLine(s.id, text), false) }
 
 // TurnEnd clears the job's row; the activity cap and elision happen in tui.SetActivity.
 func (s *childSink) TurnEnd(result agent.TurnResult) {

@@ -181,18 +181,29 @@ child read-only: there is no user at its end to approve anything else.
 publishing through `Options.Activity(key, text)`. Nothing it emits reaches
 committed history:
 
-- `ToolStart(call, label)` publishes `<id>  <label>` immediately; its done hook
-  restores the prior line (thinking/idle fallback).
-- `Thinking`/`Text` coalesce onto a single `<id>  thinking…` line, throttled to one
+- `Start` publishes `<id>  <label>` immediately (see below), so a job is visible
+  above the prompt while it is still queued on the semaphore, before its turn emits.
+- `ToolStart(call, label)` publishes `<id>  <label>`; its done hook restores the
+  prior line (thinking/idle fallback).
+- `Thinking` coalesces onto a single `<id>  thinking…` line — reasoning stays on
+  the placeholder because it is not useful output.
+- `Text(text)` publishes `<id>  <one-lined text>`, so the row shows the child's
+  most recent actual output rather than a static label; both coalesce to one
   republish per `deltaFlush = 150ms` so streaming does not repaint per token.
-- `TurnEnd` clears the row.
+- `TurnEnd` clears the row, and every terminal path in `Manager.spawn` also clears
+  it — covering a job cancelled before it ever acquired its slot (no sink ran).
 
 Rows are single lines with no width maths — `tui.SetActivity` elides to width and
 never wraps, capped at `maxActivityRows = 3` plus a `+N more` indicator (phase 11).
 
 ### `tools.go` — the three tools
 
-All three are `agent.ModeParallel`. Their descriptions state the contract up front,
+All three are `agent.ModeParallel`. Their `Label(call)` methods read the call's
+arguments so the committed tool header names the target — `agent_start` shows its
+task (first line, elided to `maxLabelLen`) and `agent_poll` shows the normalized id
+— falling back to a bare verb when args do not parse. This distinguishes parallel
+starts/polls in the transcript instead of repeating `sub-agent: start` N times.
+Their descriptions state the contract up front,
 because a model that learns it by trial burns a round trip each: no session context
 (pass file paths and key facts, not content), read-only (`read`, `grep`, `find`,
 `ls` plus read-only MCP tools; anything needing write/edit/shell must be done

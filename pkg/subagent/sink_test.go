@@ -52,6 +52,28 @@ func TestSinkThinkingCoalesces(t *testing.T) {
 	assert.Equal(t, "sub-4  thinking…", c.rowText("sub-4"))
 }
 
+// TestSinkTextShowsLatestOutput verifies Text passes the child's output through
+// rather than collapsing to the static thinking placeholder.
+func TestSinkTextShowsLatestOutput(t *testing.T) {
+	t.Parallel()
+	c := newCapture()
+	s := newChildSink("sub-5", c.recordRow)
+
+	s.Text("inspecting\n  pkg/tui/ui.go")
+	assert.Equal(t, "sub-5  inspecting pkg/tui/ui.go", c.rowText("sub-5"))
+}
+
+// TestSinkThinkingStaysPlaceholder verifies reasoning deltas still settle on the
+// thinking line even though Text now shows real output.
+func TestSinkThinkingStaysPlaceholder(t *testing.T) {
+	t.Parallel()
+	c := newCapture()
+	s := newChildSink("sub-6", c.recordRow)
+
+	s.Thinking("some reasoning")
+	assert.Equal(t, "sub-6  thinking…", c.rowText("sub-6"))
+}
+
 // TestSinkNilPubIsSafe verifies a nil publisher never dereferences.
 func TestSinkNilPubIsSafe(t *testing.T) {
 	t.Parallel()

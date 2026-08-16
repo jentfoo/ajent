@@ -19,7 +19,18 @@ const sharedToolHint = "A sub-agent has no session context: pass file paths and 
 type startTool struct{ m *Manager }
 
 func (t *startTool) Name() string { return "agent_start" }
-func (t *startTool) Label(agent.ToolCall) string {
+
+// label shows which agent was spawned so the header identifies it, not just that
+// one was started. Falls back to the generic form when args do not parse.
+func (t *startTool) Label(call agent.ToolCall) string {
+	var p startParams
+	switch {
+	case json.Unmarshal(call.Input, &p) != nil:
+	default:
+		if task := strings.TrimSpace(p.Task); task != "" {
+			return "sub-agent: start " + shortLabel(task)
+		}
+	}
 	return "sub-agent: start"
 }
 func (t *startTool) Description() string {
@@ -59,7 +70,15 @@ func (t *startTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Ou
 type pollTool struct{ m *Manager }
 
 func (t *pollTool) Name() string { return "agent_poll" }
-func (t *pollTool) Label(agent.ToolCall) string {
+
+// label names the agent being waited on so parallel polls are distinguishable.
+func (t *pollTool) Label(call agent.ToolCall) string {
+	var p pollParams
+	if json.Unmarshal(call.Input, &p) == nil {
+		if id := trimSpace(p.ID); id != "" {
+			return "sub-agent: poll " + normalizeID(id)
+		}
+	}
 	return "sub-agent: poll"
 }
 func (t *pollTool) Description() string {

@@ -260,6 +260,49 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 	require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
 }
 
+// TestStartPublishesActivityRow verifies a job is visible above the prompt as
+// soon as it starts (even before its turn emits), and that every terminal path
+// clears the row.
+func TestStartPublishesActivityRow(t *testing.T) {
+	t.Parallel()
+	g := &gatedProvider{}
+	c := newCapture()
+	m := New(Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
+		Activity: c.recordRow,
+	})
+
+	id := m.Start("one", "")
+	// the row appears immediately while the job is queued/running and pinned open.
+	assert.Equal(t, "sub-1  one", c.rowText(id))
+
+	g.releaseAll()
+	m.Poll(t.Context(), id)
+	require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
+}
+
+// TestQueuedCancelledClearsActivityRow verifies a job cancelled before acquiring
+// its slot still clears the row Start published (no childSink ever ran).
+func TestQueuedCancelledClearsActivityRow(t *testing.T) {
+	t.Parallel()
+	g := &blockingProvider{}
+	c := newCapture()
+	m := New(Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
+		Activity: c.recordRow,
+	})
+
+	m.Start("one", "")
+	m.Start("two", "") // queued behind the blocking first job
+	// both jobs show a row: sub-1 is running/pinned open, sub-2 waits on the slot.
+	assert.Equal(t, "sub-1  one", c.rowText("sub-1"))
+	assert.Equal(t, "sub-2  two", c.rowText("sub-2"))
+
+	// cancel the queued second job; its row must still be cleared even though it never ran.
+	require.NoError(t, m.Stop("sub-2"))
+	require.Eventually(t, func() bool { return c.rowText("sub-2") == "" }, time.Second, 5*time.Millisecond)
+}
+
 func TestStatusSegmentAndList(t *testing.T) {
 	t.Parallel()
 	g := &gatedProvider{}

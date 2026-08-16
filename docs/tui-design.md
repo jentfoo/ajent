@@ -56,8 +56,9 @@ tables.
 - A running tool adds one transient spinner row directly above the input. It is
   never committed to history; only its header and result are.
 - Activity rows (`SetActivity`) put keyed, single-line status for work that is
-  not the current tool call — their real consumer is phase 13's live sub-agent
-  jobs (one row per running investigation, elided to a label) — between any
+  not the current tool call — their real consumer is phase 11's live sub-agent
+  jobs (one row per running investigation showing its task or most recent output)
+  — between any
   overlays and the input. Rendered in insertion order, each elided to width —
   never wrapped, so a row always occupies exactly one terminal line. The true cap
   is `maxActivityRows = 3` text rows **plus** a dim `+N more` indicator (see

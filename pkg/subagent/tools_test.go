@@ -143,6 +143,32 @@ func TestAgentToolsAreParallelAndLabeled(t *testing.T) {
 	assert.Contains(t, tools[0].Label(agent.ToolCall{}), "start")
 }
 
+// TestSubagentLabelsNameTheirTarget verifies the tool headers identify which agent
+// was started or polled, not just the verb.
+func TestSubagentLabelsNameTheirTarget(t *testing.T) {
+	t.Parallel()
+	_, tools := toolsManager(t, nil, time.Second)
+
+	startLabel := func(task string) string {
+		in, _ := json.Marshal(map[string]string{"task": task})
+		return tools[0].Label(agent.ToolCall{Input: in})
+	}
+	assert.Equal(t, "sub-agent: start inspect", startLabel("inspect\npkg"), "label uses the task's first line")
+	long := strings.Repeat("x", 100)
+	assert.Len(t, []rune(startLabel(long)), len([]rune("sub-agent: start "))+maxLabelLen, "task elides to maxLabelLen")
+
+	poll := func(id string) string {
+		in, _ := json.Marshal(map[string]string{"id": id})
+		return tools[1].Label(agent.ToolCall{Input: in})
+	}
+	assert.Equal(t, "sub-agent: poll sub-2", poll("sub-2"))
+	assert.Equal(t, "sub-agent: poll sub-3", poll("3"), "bare id normalizes to the canonical form")
+
+	// unparseable or empty args fall back to the generic label.
+	assert.Contains(t, tools[0].Label(agent.ToolCall{}), "start")
+	assert.Equal(t, "sub-agent: poll", tools[1].Label(agent.ToolCall{Input: json.RawMessage(`{"id":""}`)}))
+}
+
 func TestAgentStartDescriptionStatesContract(t *testing.T) {
 	t.Parallel()
 	_, tools := toolsManager(t, nil, time.Second)
