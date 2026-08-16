@@ -29,6 +29,7 @@ type Options struct {
 	Tools               ToolSet                               // nil disables tool calling entirely
 	Env                 Environment                           // OS facts layered into the system prompt
 	ProjectInstructions []ProjectInstruction                  // AGENTS.md content; loaded once at startup
+	SystemSnippets      []string                              // extra system blocks, appended after project instructions
 	Transforms          []Transform                           // applied in assembly order, nil entries skipped
 	OnMessage           []func(MessageInfo)                   // called per appended message, in registration order
 	OnSettled           []func(context.Context)               // agent drained and idle; observers may queue work

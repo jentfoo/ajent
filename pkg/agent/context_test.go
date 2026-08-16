@@ -111,7 +111,7 @@ func TestFirstTurnContextIncludesSystemAndTools(t *testing.T) {
 
 	// what the request owes beyond its messages: system prompt + tool schemas.
 	fixed := tokens.EstimateFixed(llm.Request{
-		System: buildSystem(st, testEnv, a.opts.ProjectInstructions),
+		System: buildSystem(st, testEnv, a.opts.ProjectInstructions, nil),
 		Tools:  set.Schemas(),
 	})
 	require.Positive(t, fixed) // the fixtures must actually contribute overhead

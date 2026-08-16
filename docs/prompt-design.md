@@ -63,12 +63,13 @@ governs its assembly and use.
 
 | Surface | What it is |
 |---|---|
-| System prompt composition | identity + guidelines + environment facts + project instructions |
+| System prompt composition | identity + guidelines + environment facts + project instructions (+ extension/sub-agent snippets) |
 | Tool descriptions & schemas | per-tool `Description` prose plus JSON Schema params, sent via the provider tool channel |
 | `@`-file reference injection | synthetic read call+result ahead of the user message |
 | Project instruction layering | `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, layered with provenance markers |
 | Prompt templates / slash commands | markdown templates expanded into prompts; `/init` survey |
 | Compaction summarisation | staged free reductions + exact-format LLM summary |
+| Sub-agent prompt | the child contract appended as a system snippet to every investigation, plus the empty-summary nudge |
 | Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
 
 ---
@@ -89,6 +90,7 @@ not this block.
 4. Environment facts        — working directory, an ls-style listing of it, plus
                               platform and day-granular date.
 5. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
+6. Extension snippets       — caller-supplied, blank-line separated; sub-agents inject their contract here.
 ```
 
 ### Identity
@@ -147,10 +149,11 @@ varies within a session — that is the cache-stability contract.
 ### Composition invariants
 
 - One text block (`llm.TextBlock`), not many; providers cache per-block.
-- `buildSystem(s *State, env Environment, proj []ProjectInstruction)` stays
-  deterministic given state+env; extension snippets and project instructions join
-  through explicit inputs so tests can assert byte equality across calls with
-  equal inputs.
+- `buildSystem(s *State, env Environment, proj []ProjectInstruction, snippets []string)`
+  stays deterministic given its inputs; extension snippets and project
+  instructions join through explicit inputs so tests can assert byte equality
+  across calls with equal inputs. An empty snippet slice produces a block
+  byte-identical to one built without the parameter.
 - Changing the tool set or adding/removing project instructions changes this block;
   per principle 1, a change is announced with a one-line notice.
 
@@ -175,9 +178,18 @@ anything that changes how the model should use the tool:
 - `write`: creates or overwrites files, making parent directories.
 - `edit`: exact text replacement that applies atomically or not at all.
 
+The `agent_*` sub-agent tools (phase 13) carry their whole contract in the
+description because a model that learns them by trial burns a round trip each:
+no session context — pass file paths and key facts, not content; read-only
+(`read`, `grep`, `find`, `ls` plus read-only MCP tools); and the final message is
+the entire return value.
+
 There is deliberately **no "Available tools" list inside the system prompt**:
 the schema channel already tells the model exactly what it may call, and a second
-text copy would only cost tokens.
+text copy would only cost tokens. For the same reason there is no `promptSnippet`-style
+one-line tool hint injected into a child's system block (the reference does this);
+`childContract` carries only constraints and the output contract, never an enum of
+tools — those ride the schema channel like any other request.
 
 ### Split what the model sees from what the user sees
 
@@ -421,6 +433,40 @@ channel means "does not write locally" never equals safe; the classifier must sa
 so explicitly rather than inheriting the reference's opposite claim. Network tools
 (`curl`, `wget`, `nc`) are absent from both the static allowlist and any notion of
 classifier read-only.
+
+---
+
+## Sub-agent prompt (phase 13)
+
+Every investigation child gets a fresh system block built by the same
+`buildSystem` with one extra snippet appended after project instructions:
+`childContract`. It states the read-only constraints (structural, not advisory —
+the tool set is filtered before the model ever sees it) and the output contract: the
+final assistant message **is** the entire return value. Quoted verbatim from
+`pkg/subagent/prompt.go`, asserted by golden tests:
+
+```text
+You are an isolated research sub-agent running as a background task of a coding agent.
+
+Constraints:
+- You have ONLY read-only tools: read, grep, find, ls and any MCP tool marked read-only. They are typed tool calls; do not try to invoke them via shell.
+- You CANNOT edit files or run shell commands. Do not attempt destructive operations.
+- Investigate thoroughly, then STOP.
+
+Output:
+Your FINAL assistant message must be a single, self-contained summary of everything you discovered. It will be the ONLY thing returned to the calling agent. Include conclusions, key file paths with line numbers, and any caveats or uncertainties. Do not emit tool calls in that final message. Be clear and concise.
+```
+
+A reasoning model whose final assistant message is thinking-only returns no text,
+so an empty summary triggers a bounded nudge (`maxContinueAttempts = 2`), then a
+placeholder rather than looping:
+
+```text
+Continue. Your previous message had no summary text (only internal reasoning). Now output the final, self-contained summary as plain text with no tool calls.
+```
+
+The task prompt is `Task:\n<task>` with an optional `Extra instructions:` block
+prepended when the caller supplied them.
 
 ---
 

@@ -17,7 +17,7 @@ func TestBuildSystem(t *testing.T) {
 	s := &State{Model: llm.Model{ID: "test"}}
 	env := Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}
 
-	blocks := buildSystem(s, env, nil)
+	blocks := buildSystem(s, env, nil, nil)
 	assert.Len(t, blocks, 1)
 
 	tb, ok := blocks[0].(llm.TextBlock)
@@ -38,8 +38,8 @@ func TestBuildSystemCacheStable(t *testing.T) {
 	env1 := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}
 	env2 := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-03 08:59"}
 
-	b1, _ := buildSystem(s, env1, nil)[0].(llm.TextBlock)
-	b2, _ := buildSystem(s, env2, nil)[0].(llm.TextBlock)
+	b1, _ := buildSystem(s, env1, nil, nil)[0].(llm.TextBlock)
+	b2, _ := buildSystem(s, env2, nil, nil)[0].(llm.TextBlock)
 	assert.NotEqual(t, b1.Text, b2.Text, "the date differs across days")
 }
 
@@ -52,7 +52,7 @@ func TestBuildSystemListsCwd(t *testing.T) {
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
 
 	s := &State{Model: llm.Model{ID: "test"}}
-	blocks := buildSystem(s, Environment{Cwd: dir}, nil)
+	blocks := buildSystem(s, Environment{Cwd: dir}, nil, nil)
 	tb, ok := blocks[0].(llm.TextBlock)
 	require.True(t, ok)
 
@@ -66,12 +66,44 @@ func TestBuildSystemOmitsMissingCwdListing(t *testing.T) {
 	t.Parallel()
 
 	s := &State{Model: llm.Model{ID: "test"}}
-	blocks := buildSystem(s, Environment{Cwd: "/does/not/exist"}, nil)
+	blocks := buildSystem(s, Environment{Cwd: "/does/not/exist"}, nil, nil)
 	tb, ok := blocks[0].(llm.TextBlock)
 	require.True(t, ok)
 
 	assert.Contains(t, tb.Text, "Working directory: /does/not/exist\n")
 	assert.NotContains(t, tb.Text, "Directory contents:")
+}
+
+// TestBuildSystemSnippetsAppendAfterProject asserts snippets land after project
+// instructions, each separated by a blank line.
+func TestBuildSystemSnippetsAppendAfterProject(t *testing.T) {
+	t.Parallel()
+
+	base := &State{Model: llm.Model{ID: "test"}}
+	env := Environment{Cwd: "/repo", Date: "2024-01-02"}
+
+	empty, _ := buildSystem(base, env, nil, nil)[0].(llm.TextBlock)
+	withProj, _ := buildSystem(base, env,
+		[]ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\n"}}, nil)[0].(llm.TextBlock)
+
+	snippets, _ := buildSystem(base, env,
+		[]ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\n"}},
+		[]string{"first snippet", "second snippet"})[0].(llm.TextBlock)
+
+	// empty snippets must not change the block at all, with or without project text.
+	assert.Equal(t, empty.Text, buildSystem(base, env, nil, []string{})[0].(llm.TextBlock).Text)
+	assert.NotEqual(t, empty.Text, withProj.Text) // proj alone still differs
+
+	snippetsOnly, _ := buildSystem(base, env, nil, []string{"first snippet"})[0].(llm.TextBlock)
+	// a snippet appended without project instructions is separated by a blank line.
+	assert.Contains(t, snippetsOnly.Text, "\n\nfirst snippet\n")
+
+	// each snippet appears after the project context and is newline-separated.
+	i1 := strings.Index(snippets.Text, "</project_context>")
+	i2 := strings.Index(snippets.Text, "first snippet")
+	i3 := strings.Index(snippets.Text, "second snippet")
+	assert.Greater(t, i2, i1)
+	assert.Greater(t, i3, i2)
 }
 
 // TestDetectEnvironment exercises the real machine-fact probes.
@@ -111,7 +143,7 @@ func TestBuildSystemProjectInstructions(t *testing.T) {
 	env := Environment{Cwd: "/repo", Date: "2024-01-02"}
 	proj := []ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\nbuild with make test\n"}}
 
-	blocks := buildSystem(s, env, proj)
+	blocks := buildSystem(s, env, proj, nil)
 	tb, ok := blocks[0].(llm.TextBlock)
 	require.True(t, ok)
 

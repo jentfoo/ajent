@@ -24,8 +24,9 @@ type Accounting struct {
 	live        float64 // raw estimate of the response currently streaming
 	composing   float64 // raw estimate of text being typed but not yet sent
 
-	total   llm.Usage            // cumulative billed input/output across the session
-	byModel map[string]llm.Usage // spend split by model key, for mid-session switches
+	total      llm.Usage            // cumulative billed input/output across the session
+	totalChild llm.Usage            // delegated subset of total: what sub-agents spent
+	byModel    map[string]llm.Usage // spend split by model key, for mid-session switches
 
 	turnCount    int // total responses recorded this session
 	estTurnCount int // how many of those reported no usage
@@ -195,6 +196,14 @@ func (a *Accounting) EstimatedTurns() int {
 	return a.estTurnCount
 }
 
+// ChildTotal returns the cumulative usage rolled up from sub-agent ledgers,
+// a subset of Total(). Zero until a child reports.
+func (a *Accounting) ChildTotal() llm.Usage {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.totalChild
+}
+
 // ByModel returns spend split by model key. It is empty when the model never
 // changed mid-session.
 func (a *Accounting) ByModel() map[string]llm.Usage {
@@ -224,6 +233,7 @@ func (a *Accounting) rollUp(key string, u llm.Usage) {
 		return
 	}
 	a.total.Add(u)
+	a.totalChild.Add(u)
 	addByModel(a, key, u)
 	if p := a.parent; p != nil {
 		p.rollUp(key, u) // nested sub-agent spend reaches the session root too

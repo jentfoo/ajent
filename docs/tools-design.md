@@ -46,9 +46,27 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   so the cached schema list is invalidated.
 - `Get(name)` — returns the tool wrapped in the guard chain; unknown or
   disabled tools are invisible to the model.
+- `All() []agent.Tool` — every declared tool **unwrapped** (no guard chain). A
+  sub-agent's tool set is built from this via a narrow `ToolSource`, so a child
+  runs no parent guards or approval dialogs.
 - `ReadOnly(name)` — whether a tool may auto-run as read-only, derived from MCP
   `annotations.readOnlyHint` or config globs. The permission barrier uses this
   for non-built-in (MCP/extension) tools; core writers never consult it.
+
+### Sub-agent tool set (`toolset.go`, phase 13)
+
+A child agent's tools are a fixed, structural subset of `Registry.All()`,
+independent of the parent's enabled set — so `find`/`grep`/`ls`, registered
+*disabled* by default in the parent, still reach a child. The filter includes
+the read-only built-ins (`read`, `grep`, `find`, `ls`) plus any tool for which
+`ReadOnly(name)` is true (MCP hints / config globs). Two exclusions are
+structural, not advisory:
+
+- **`agent_*` is barred unconditionally**, applied last so nothing can configure
+a child into spawning grandchildren.
+- **`bash` is never included** even when enabled in the parent — by policy, not
+by classification. A child with a small, obviously read-only set knows exactly
+what it has; there is no user at its permission prompt to approve anything else.
 - `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
   `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be detected
   before prompting; returns nil for tools that cannot predict.
@@ -157,6 +175,10 @@ Off-by-default extras for no-shell agents.
   Invalid patterns are actionable errors on both paths.
 - `ls`: one directory's entries, sorted alphabetically, `/` suffix on
   directories, named truncation marker at the limit.
+
+These off-by-default extras are exactly what a read-only sub-agent needs (phase
+13): they are always available to a child regardless of parent enable state, so
+a delegated investigation can `find`/`grep`/`ls` without ever reaching for shell.
 
 ## Shared infrastructure
 

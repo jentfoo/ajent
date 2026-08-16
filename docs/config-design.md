@@ -40,6 +40,7 @@ type Settings struct {
     Tools       Tools           // enabled set + per-tool output limits
     Permissions Permissions     // mode + safeCommands; enforced by the tool barrier (permit)
     Compaction  Compaction      // auto toggle + threshold fraction
+    Subagent    Subagent        // research sub-agent model + concurrency cap
     UI          UI              // render mode; showCost/showThinking
     Extensions  Extensions      // loaded by the extension host, accepted now
 }
@@ -73,6 +74,15 @@ user-initiated `!` lines. Matching follows the same token-boundary rule as
 `safeCommands`, but may also name core writers, since denying one is a legitimate
 safety gate. A denied check runs first in the barrier verdict, so it wins over any
 safe-command or session allow.
+
+### Subagent
+
+The sub-agent block defaults to `{"maxConcurrent": 4}`; `model` is deliberately
+left out so `Explain("subagent.model")` reports `(default)` and an empty value
+means inherit the session model. Both keys bind for free through EnvLayer's
+reflection (`AJENT_SUBAGENT_MODEL`, `AJENT_SUBAGENT_MAXCONCURRENT`) and are edited
+from `/settings`. Per `## The rule` below, `subagent.model` is a plain string key,
+resolved against the model registry by the caller — never an llm import here.
 
 `providers`/`models` stay raw because **`pkg/config` must never import `pkg/llm`** — `pkg/llm`
 imports it for paths, and a typed reference would cycle. `models.json` is decoded

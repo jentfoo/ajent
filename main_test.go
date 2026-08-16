@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -331,6 +332,28 @@ func TestSearchItems(t *testing.T) {
 	// sessions are stored as UTC and rendered with the same format as the resume picker
 	assert.Equal(t, "2026-01-02 03:04 UTC", got[0].Detail)
 	assert.Equal(t, "line one\nline two", got[1].Text) // multi-line prompts arrive intact
+}
+
+func TestResolveSubAgentModel(t *testing.T) {
+	t.Parallel()
+
+	win := 100000
+	reg, _ := llm.NewRegistry(llm.File{Providers: map[string]llm.ProviderConfig{
+		"p": {Models: []llm.ModelConfig{{ID: "child", ContextWindow: &win}}},
+	}}, nil, llm.RegistryOptions{})
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+
+	// configured child model resolves through the registry.
+	require.NoError(t, set.SetSession("subagent.model", "p/child"))
+	st := &agent.State{Model: llm.Model{Provider: "p", ID: "session"}}
+	got := resolveSubAgentModel(set, reg, st)
+	assert.Equal(t, "child", got.ID) // the configured child model wins
+
+	// unset falls back to the session's current model.
+	set2, _, _ := config.Load(config.Options{Workspace: t.TempDir()})
+	got = resolveSubAgentModel(set2, reg, st)
+	assert.Equal(t, "session", got.ID) // inherited when subagent.model is empty
 }
 
 // rewindResolve resolves the test model key.

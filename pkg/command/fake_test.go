@@ -33,6 +33,7 @@ type fakeConsole struct {
 	ssChanges  map[string]any  // recorded SetSessionSetting key/value pairs
 
 	settings *config.Set
+	agents   Agents // set by tests exercising /agents; nil when unavailable
 
 	models       *llm.Registry
 	state        *agent.State
@@ -169,7 +170,10 @@ func (f *fakeConsole) State() *agent.State    { return f.state }
 func (f *fakeConsole) Tools() *tools.Registry { return f.tools }
 
 // MCP returns a nil manager; the /mcp command reports it unavailable.
-func (f *fakeConsole) MCP() MCPServers       { return nil }
+func (f *fakeConsole) MCP() MCPServers { return nil }
+
+// Agents returns nil by default; tests that exercise /agents set f.agents first.
+func (f *fakeConsole) Agents() Agents        { return f.agents }
 func (f *fakeConsole) Commands() *Registry   { return f.commands }
 func (f *fakeConsole) Settings() *config.Set { return f.settings }
 

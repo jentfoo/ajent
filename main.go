@@ -21,6 +21,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -270,7 +271,50 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			s.Context(t.Context())
 		}
 	})
-	ag := agent.New(st, opts)
+	var ag *agent.Agent
+
+	// sub-agent investigations fan read-only work into throwaway child agents,
+	// each a fresh headless loop whose only return value is a final summary.
+	var sag *subagent.Manager
+	if toolsReg != nil {
+		sag = subagent.New(subagent.Options{
+			Provider: func(m llm.Model) (llm.Provider, error) { return providers.ProviderFor(m) },
+			Model:    func() llm.Model { return resolveSubAgentModel(set, reg, st) },
+			Reasoning: func() llm.ReasoningConfig {
+				return st.Reasoning
+			},
+			Parent:              func() *tokens.Accounting { return st.Tokens },
+			Tools:               toolsReg,
+			Env:                 env,
+			ProjectInstructions: proj,
+
+			Activity: func(key, text string) {
+				if ui != nil {
+					ui.SetActivity(key, text)
+				}
+			},
+			Notice: func(msg string) { ui.NotifyKeyed("subagent", msg, tui.LevelInfo) },
+			Status: func(text, short string) {
+				ui.SetStatusSegment(tui.Segment{Key: "subagents", Text: text, Short: short})
+			},
+			Deliver: func(in agent.Input) bool {
+				if ag == nil || !ag.Running() { // never start a turn on an idle parent
+					return false
+				}
+				return ag.Steer(in)
+			},
+			MaxConcurrent: set.Settings().Subagent.MaxConcurrent,
+		})
+		for _, t := range sag.Tools() {
+			toolsReg.RegisterFrom("subagent", t, true) // enabled by default; /tools toggles
+		}
+		// agent_* delegate read-only work, so allow-read runs them free.
+		toolsReg.MarkReadOnly([]string{"agent_start", "agent_poll", "agent_list"})
+		// flush pending completion steers into the running parent turn at start.
+		opts.Sinks = append(opts.Sinks, subagentSink{mgr: sag})
+	}
+
+	ag = agent.New(st, opts)
 	if rec != nil {
 		rec.bindRewind(ui, ag, reg)
 		comp = &compactor{
@@ -368,6 +412,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	if mgr != nil {
 		console.mcp = mcpAdapter{mgr}
 	}
+	if sag != nil {
+		console.agents = agentsAdapter{sag}
+	}
 	if rec != nil {
 		console.rec = rec.rec
 		console.comp = comp
@@ -403,6 +450,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	defer func() {
+		if sag != nil {
+			sag.Close() // cancel every running investigation and wait briefly
+		}
 		if mgr != nil {
 			mgr.Close()
 		}
@@ -519,6 +569,28 @@ func (a promptAdapter) Reason(ctx context.Context, label string) (string, bool) 
 		return "", false
 	}
 	return ans.Text, true
+}
+
+// subagentSink flushes pending completion steers into the running parent turn.
+// TurnStart runs once `running` is true, so a steer queues and lands at step 1
+// without ever starting an idle agent; NopSink carries every other event.
+type subagentSink struct {
+	agent.NopSink
+	mgr *subagent.Manager
+}
+
+func (s subagentSink) TurnStart(agent.TurnInfo) { s.mgr.Flush() }
+
+// resolveSubAgentModel returns the configured child model resolved through the
+// registry, or the session's current model when unset or unresolvable. Resolved
+// at spawn so a /settings change applies to the next job.
+func resolveSubAgentModel(set *config.Set, reg *llm.Registry, st *agent.State) llm.Model {
+	if m := set.Settings().Subagent.Model; m != "" {
+		if r, err := reg.Resolve(m); err == nil {
+			return r
+		}
+	}
+	return st.Model
 }
 
 // classifierSystem is auto-mode's prompt: classify one shell command as exactly

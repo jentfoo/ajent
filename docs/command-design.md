@@ -156,7 +156,8 @@ dispatched, never on a command or a `!`.
 | `/model [name]` | resolve by name, or open the picker; records a model-change entry |
 | `/reasoning [level]` | report, or set/clear the level for capable models |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
-| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set) and `modelRow` (key through the model picker) builders cover phase 12's mode and phase 13's sub-agent model |
+| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set), `modelRow` (key through the model picker) and `intRow` (numeric key with min/max validation — phase 13's concurrency, since an enum stores a string that won't unmarshal into an int field) builders cover phase 12's mode and phase 13's sub-agent settings |
+| `/agents [list\|stop <id>\|all]` | list every running/finished investigation as a markdown table (id, status, elapsed, task), or cancel one (`sub-2`, bare `2`) / all; unknown verbs warn. Esc never cancels jobs — this is the only stop path (see phase 13) |
 | `/exit` | quit |
 
 `/settings`, `/compact`, `/resume`, `/cost` and `/init` also register into
@@ -365,10 +366,11 @@ parameter.
 parse.go        ParseLine, SplitCommand — line classification
 command.go      Command, Registry, Register/Get/List/Names
 console.go      Console interface (+ Select/Confirm/Input/Settings/SaveSetting)
-builtin.go      /help, /model, /reasoning, /tools, /settings, /exit + RegisterBuiltins
+builtin.go      /help, /model, /reasoning, /tools, /agents, /settings, /exit + RegisterBuiltins
 model.go        /model, /reasoning (moved from main.go)
 tools.go        /tools — free-select before, widen-only after first prompt
-settings.go     /settings menu and per-row editors
+agents.go       /agents — list and stop sub-agents via the narrow Agents interface
+settings.go     /settings menu and per-row editors (enumRow/modelRow/intRow)
 shell.go        Stager — staged ! execution and flush
 complete.go     Completer — command + path completion source
 ```

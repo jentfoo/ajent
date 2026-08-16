@@ -14,9 +14,10 @@ import (
 // Input is one user turn: free text, extra content blocks, and any synthetic
 // messages to append ahead of the user's own (staged shell results, @ reads).
 type Input struct {
-	Text   string
-	Blocks llm.BlockList // extra content, appended after Text when non-empty
-	Before []llm.Message // appended ahead of this input, in transcript order
+	Text      string
+	Blocks    llm.BlockList // extra content, appended after Text when non-empty
+	Before    []llm.Message // appended ahead of this input, in transcript order
+	Delivered func()        // called once the steer lands in state; nil is the normal case
 }
 
 // State is the in-memory projection of a session. It is owned by the loop

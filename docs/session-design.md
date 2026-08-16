@@ -13,6 +13,11 @@ A session is one conversation, persisted as an append-only JSONL file — one
 directory so sessions survive renames deterministically without an index, keyed
 by `<slug>-<hash>` of the absolute workspace path.
 
+A session belongs to one agent; nothing requires every agent to have one. A
+phase-13 sub-agent runs on an **in-memory session** — no transcript file, recorder,
+or resume/rewind — so its only lasting trace is child spend rolled into the parent
+ledger.
+
 Goals, in priority order:
 
 1. The transcript is the source of truth and survives any crash.

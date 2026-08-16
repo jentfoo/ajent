@@ -238,17 +238,22 @@ func (p *streamPump) isClosed() bool {
 	return p.closed
 }
 
-// SliceStream is a Stream over a fixed event slice, for tests and fakes.
+// SliceStream is a Stream over a fixed event slice, for tests and fakes. The loop
+// drains it on one goroutine while an interrupt watcher may close it on another,
+// so Next and Close share a lock.
 type SliceStream struct {
 	Events []Event
 	Error  error
 
+	mu     sync.Mutex
 	pos    int
 	closed bool
 }
 
 // Next returns the next event, or false once the slice is drained or closed.
 func (s *SliceStream) Next() (Event, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed || s.pos >= len(s.Events) {
 		return Event{}, false
 	}
@@ -260,8 +265,10 @@ func (s *SliceStream) Next() (Event, bool) {
 // Err returns the configured error.
 func (s *SliceStream) Err() error { return s.Error }
 
-// Close stops the stream.
+// Close stops the stream. Safe to call more than once or while Next runs.
 func (s *SliceStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.closed = true
 	return nil
 }

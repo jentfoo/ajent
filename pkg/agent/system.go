@@ -72,10 +72,10 @@ func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 }
 
 // buildSystem returns the system blocks for state, stable across a session so
-// the prompt cache survives. Project instructions are an explicit input (not
-// read here) so callers control when they reload and tests can assert byte
-// equality across calls with equal inputs.
-func buildSystem(s *State, env Environment, proj []ProjectInstruction) llm.BlockList {
+// the prompt cache survives. Project instructions and snippets are explicit
+// inputs (not read here) so callers control when they reload and tests can assert
+// byte equality across calls with equal inputs.
+func buildSystem(s *State, env Environment, proj []ProjectInstruction, snippets []string) llm.BlockList {
 	var b strings.Builder
 
 	b.WriteString(identityLine(cwdOrDot(env.Cwd)))
@@ -88,6 +88,10 @@ func buildSystem(s *State, env Environment, proj []ProjectInstruction) llm.Block
 
 	if len(proj) > 0 {
 		writeProjectInstructions(&b, proj)
+	}
+
+	for _, snip := range snippets {
+		b.WriteString("\n" + strings.TrimSuffix(snip, "\n") + "\n")
 	}
 
 	return llm.BlockList{llm.TextBlock{Text: b.String()}}

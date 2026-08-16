@@ -64,7 +64,8 @@ type Sink interface {
 ```
 
 `cmd/ajent` provides a `tuisink` that maps these almost 1:1 onto `tui.UI`.
-`NopSink` discards everything for sub-agents with no UI.
+`NopSink` discards everything; a headless child agent uses it as an embedded
+base and overrides only the events that feed its activity row (phase 13).
 
 ### Sink fan-out
 
@@ -196,6 +197,10 @@ Two kinds of mid-turn input:
 - **`Steer`** is injected into the running turn's context at the next step
   boundary (a message submitted mid-turn does not cancel the in-flight model
   call). It returns false when idle, so the caller knows to start a new turn.
+- An `Input.Delivered` hook fires once its steer actually lands in `State`, so a
+  sender that must confirm delivery (the sub-agent notifier) can clear pending
+  ids only on real arrival; one dropped by an interrupt is re-offered. Nil is the
+  normal case.
 - **`FollowUp`** queues input as a separate turn once the current one settles.
 
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
@@ -222,6 +227,39 @@ forever, exactly like a self-queueing follow-up does today.
   under `a.mu`.
 - All control methods (`Steer`, `FollowUp`, `Interrupt`, `Running`) take
   `a.mu`. They never block on a stream; they only mutate the queue or cancel.
+- `Options.SystemSnippets` are extra system blocks appended after project
+  instructions, an explicit input to `buildSystem` so sub-agents can inject their
+  contract without touching cache-stable composition. Empty keeps the block
+  byte-identical.
+- A child agent (phase 13) is a separate `Agent` with its own single-owner loop:
+  one goroutine per job, each owning its fresh `State`. The parent and its
+  children never share an `Agent`, so there is no cross-loop ownership to reason
+  about — the only shared surface is the child's ledger rolling into the parent's
+  via `Accounting.Child()`.
+
+## Child agents (phase 13)
+
+The main agent can fan read-only investigation out to throwaway children whose
+only return value is a final summary paragraph, so findings enter context as one
+message instead of fifty tool results. Each job builds a fresh agent:
+
+- A fresh `State{Model, Reasoning}` — model resolved from `subagent.model`
+  through the registry (else inherited), reasoning inherited verbatim.
+- An **in-memory session**: no transcript file, recorder, resume or rewind. Its
+  usage rolls into the parent ledger as child spend (`ChildTotal()`), tracked
+  separately so `/usage` can show what delegation cost; `rollUp` never touches
+  context terms, so a child does not move the parent's context bar.
+- A **filtered tool set** built from the registry by name (read-only built-ins
+  plus registry-marked read-only tools), with a structural bar on `agent_*` — a
+  child must never spawn children. Parent enable state is ignored; `bash`, write
+  and edit are unreachable by construction, not by asking nicely.
+- A **sink that feeds an activity row** (`childSink` overrides `NopSink`) rather
+  than the transcript: tool label or a coalesced thinking line under the job's
+  key, cleared on completion. Nothing from a child reaches committed history.
+
+The manager wires these through narrow func-typed options supplied by main.go —
+the same decoupling that makes headless mode possible, applied to a second agent
+instance.
 
 ## Testing
 

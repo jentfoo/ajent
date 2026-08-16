@@ -56,12 +56,14 @@ tables.
 - A running tool adds one transient spinner row directly above the input. It is
   never committed to history; only its header and result are.
 - Activity rows (`SetActivity`) put keyed, single-line status for work that is
-  not the current tool call (e.g. live sub-agents) between any overlays and the
-  input. Rendered in insertion order, each elided to width — never wrapped, so a
-  row always occupies exactly one terminal line. Capped at `maxActivityRows`
-  text rows plus a dim `+N more` indicator (see `activity.go`). Activity is
-  live-block only: it yields first on a short terminal and never reaches
-  committed history.
+  not the current tool call — their real consumer is phase 13's live sub-agent
+  jobs (one row per running investigation, elided to a label) — between any
+  overlays and the input. Rendered in insertion order, each elided to width —
+  never wrapped, so a row always occupies exactly one terminal line. The true cap
+  is `maxActivityRows = 3` text rows **plus** a dim `+N more` indicator (see
+  `activity.go`); the phase-13 doc's "four rows" was wrong and this is the
+  correction. Activity is live-block only: it yields first on a short terminal
+  and never reaches committed history.
 - The input block grows with the buffer, capped at a third of the screen
   (`maxInputRatio`), after which it scrolls internally around the caret.
 
@@ -94,6 +96,12 @@ The front end publishes a `permissions` segment (`Key: "permissions"`) whenever
 the live mode differs from the `allow-read` default — mirroring the reasoning
 indicator. The non-default modes must always be visible so nobody forgets the gate
 is open; it carries a short form (e.g. `all`, `block`, `auto`) for narrow rows.
+
+The sub-agent manager publishes a `subagents` segment (`Key: "subagents"`) on
+every transition — full form `subagents: 2 running (oldest 41s), 1 done`, short
+form `sub 2` when only the count matters, cleared with an empty text when no jobs
+exist. It carries a default priority and drops before `permissions` under narrow
+widths, since permissions is a safety indicator that must stay visible.
 
 ## Layers
 

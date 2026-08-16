@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/config"
@@ -185,6 +186,44 @@ func TestModelRowCancelledReturnsErr(t *testing.T) {
 	changes, err := r.edit(context.Background(), c)
 	require.ErrorIs(t, err, tui.ErrCancelled)
 	assert.Empty(t, changes)
+}
+
+func TestIntRowRecordsAndValidatesSubagentConcurrency(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
+
+	// a valid value persists under its own key.
+	c.inputs = []string{"6"}
+	changes, err := r.edit(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, "subagent.maxConcurrent", changes[0].key)
+	assert.Equal(t, 6, changes[0].value)
+
+	n, srcName, ok := c.settings.Explain("subagent.maxConcurrent")
+	require.True(t, ok)
+	var got int
+	_ = json.Unmarshal(n, &got)
+	assert.Equal(t, 6, got) // a number, not a string; enumRow cannot store this
+	assert.Equal(t, "session", srcName)
+}
+
+func TestIntRowRejectsOutOfRangeWithoutPersisting(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
+
+	for _, bad := range []string{"0", "65", "abc"} {
+		c.inputs = []string{bad}
+		changes, err := r.edit(context.Background(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes) // invalid input aborts the edit
+		_, srcName, _ := c.settings.Explain("subagent.maxConcurrent")
+		assert.NotEqual(t, "session", srcName) // nothing recorded
+	}
+	assert.Len(t, c.noticesSeen(), 3)
 }
 
 func TestSettingsPermissionRowInMenu(t *testing.T) {

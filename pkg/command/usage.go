@@ -54,6 +54,12 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	fmt.Fprintf(&b, "| %d | %s | %s |\n", n,
 		tui.FormatTokens(total.Input), tui.FormatTokens(total.Output))
 
+	// delegation cost is tracked separately so /usage shows what sub-agents spent.
+	if child := t.ChildTotal(); child.Input > 0 || child.Output > 0 {
+		fmt.Fprintf(&b, "\nof which sub-agents: %s in / %s out\n",
+			tui.FormatTokens(child.Input), tui.FormatTokens(child.Output))
+	}
+
 	if byModel := t.ByModel(); len(byModel) > 1 {
 		b.WriteString("\n| model | input | output |\n")
 		b.WriteString("|-------|------:|-------:|\n")

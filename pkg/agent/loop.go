@@ -256,6 +256,9 @@ func (a *Agent) appendSteer(inputs []Input) {
 			continue // an empty steer would inject a blank user turn
 		}
 		a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}})
+		if in.Delivered != nil {
+			in.Delivered() // delivery is confirmed only when the message actually lands
+		}
 	}
 }
 
@@ -336,7 +339,7 @@ func (a *Agent) buildRequest() llm.Request {
 	}
 	return llm.Request{
 		Model:     a.state.Model,
-		System:    buildSystem(a.state, a.opts.Env, a.opts.ProjectInstructions),
+		System:    buildSystem(a.state, a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets),
 		Messages:  messages,
 		Tools:     tools,
 		Reasoning: reasoning,

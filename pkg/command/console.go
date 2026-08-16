@@ -58,6 +58,9 @@ type Console interface {
 	// MCP returns the MCP server manager, nil when no servers are configured or
 	// wiring is unavailable. /mcp uses it to list and control servers.
 	MCP() MCPServers
+	// Agents returns the sub-agent manager, nil when wiring is unavailable.
+	// /agents uses it to list jobs and cancel them.
+	Agents() Agents
 	// Commands returns the command registry, so /help can enumerate itself.
 	Commands() *Registry
 	// Settings returns the resolved configuration handle for this workspace.

@@ -62,6 +62,13 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Handler:     mcpCommand,
 	})
 	r.Register(Command{
+		Name:        "agents",
+		Description: "list and stop sub-agents",
+		Args:        "[list|stop <id>|all]",
+		Complete:    agentsCompletion(c),
+		Handler:     agentsCommand,
+	})
+	r.Register(Command{
 		Name:        "settings",
 		Description: "view and edit configuration",
 		Args:        "[section]",

@@ -14,6 +14,7 @@ type Settings struct {
 	Tools       Tools           `json:"tools,omitzero"`
 	Permissions Permissions     `json:"permissions,omitzero"` // enforced by the tool guard chain
 	Compaction  Compaction      `json:"compaction,omitzero"`
+	Subagent    Subagent        `json:"subagent,omitzero"` // research sub-agents
 	UI          UI              `json:"ui,omitzero"`
 	Extensions  Extensions      `json:"extensions,omitzero"` // loaded by the extension host
 }
@@ -57,6 +58,12 @@ type Compaction struct {
 	Threshold float64 `json:"threshold,omitzero"`
 }
 
+// Subagent configures research sub-agents.
+type Subagent struct {
+	Model         string `json:"model,omitempty"` // llm model key; empty inherits the session model
+	MaxConcurrent int    `json:"maxConcurrent,omitempty"`
+}
+
 // UI configures the terminal surface.
 type UI struct {
 	Render       string `json:"render,omitempty"` // tui.Mode name
@@ -96,6 +103,7 @@ const defaultsJSON = `{
   },
   "permissions": { "mode": "allow-read" },
   "compaction": { "auto": true, "threshold": 0.8 },
+  "subagent": { "maxConcurrent": 4 },
   "ui": { "render": "auto" }
 }`
 

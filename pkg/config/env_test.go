@@ -13,10 +13,12 @@ func TestEnvLayerBindsScalarKinds(t *testing.T) {
 	t.Parallel()
 
 	vars := map[string]string{
-		"AJENT_MODEL":                "anthropic/claude",
-		"AJENT_REASONING_LEVEL":      "low",
-		"AJENT_COMPACTION_AUTO":      "true",
-		"AJENT_COMPACTION_THRESHOLD": "0.5",
+		"AJENT_MODEL":                  "anthropic/claude",
+		"AJENT_REASONING_LEVEL":        "low",
+		"AJENT_COMPACTION_AUTO":        "true",
+		"AJENT_COMPACTION_THRESHOLD":   "0.5",
+		"AJENT_SUBAGENT_MODEL":         "openai/gpt-mini",
+		"AJENT_SUBAGENT_MAXCONCURRENT": "2",
 	}
 	l, warns := EnvLayer(func(k string) string { return vars[k] })
 	assert.Empty(t, warns)
@@ -27,6 +29,8 @@ func TestEnvLayerBindsScalarKinds(t *testing.T) {
 	assert.Equal(t, "low", st.Reasoning.Level)
 	assert.True(t, st.Compaction.Auto)
 	assert.InDelta(t, 0.5, st.Compaction.Threshold, 1e-9)
+	assert.Equal(t, "openai/gpt-mini", st.Subagent.Model)
+	assert.Equal(t, 2, st.Subagent.MaxConcurrent)
 }
 
 func TestEnvLayerUnparseableWarns(t *testing.T) {

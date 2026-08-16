@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/mcp"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -31,6 +33,7 @@ type uiConsole struct {
 	rec      *session.Recorder
 	comp     *compactor      // nil when session recording is off
 	mcp      mcpAdapter      // the MCP server manager adapter, or nil
+	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
 
 	started *bool // shared with the driver pump
@@ -64,6 +67,7 @@ func (c *uiConsole) Models() *llm.Registry       { return c.reg }
 func (c *uiConsole) State() *agent.State         { return c.st }
 func (c *uiConsole) Tools() *tools.Registry      { return c.tools }
 func (c *uiConsole) MCP() command.MCPServers     { return c.mcp }
+func (c *uiConsole) Agents() command.Agents      { return c.agents }
 func (c *uiConsole) Commands() *command.Registry { return c.commands }
 func (c *uiConsole) Settings() *config.Set       { return c.set }
 
@@ -230,6 +234,34 @@ func (a mcpAdapter) Groups() []command.MCPGroup {
 	}
 	return out
 }
+
+// agentsAdapter adapts *subagent.Manager to command.Agents so /agents works
+// without pkg/command importing pkg/subagent.
+type agentsAdapter struct{ m *subagent.Manager }
+
+func (a agentsAdapter) List() []command.AgentJob {
+	src := a.m.List()
+	out := make([]command.AgentJob, len(src))
+	for i, j := range src {
+		elapsed := time.Duration(0)
+		if !j.Started.IsZero() {
+			end := j.Ended
+			if end.IsZero() {
+				end = time.Now()
+			}
+			elapsed = end.Sub(j.Started)
+		}
+		out[i] = command.AgentJob{
+			ID:      j.ID,
+			Status:  j.Status.String(),
+			Task:    j.Task,
+			Elapsed: elapsed,
+		}
+	}
+	return out
+}
+func (a agentsAdapter) Stop(id string) error { return a.m.Stop(id) }
+func (a agentsAdapter) StopAll() int         { return a.m.StopAll() }
 
 // registryAdapter adapts *tools.Registry to mcp.Registrar so pkg/mcp never imports
 // pkg/tools. The State enums are numerically identical, so a direct cast bridges them.

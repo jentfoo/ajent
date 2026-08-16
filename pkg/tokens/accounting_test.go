@@ -75,6 +75,9 @@ func TestAccountingChildRollsUpSpendNotContext(t *testing.T) {
 
 	total := parent.Total()
 	assert.Equal(t, in+out, total.Input+total.Output) // but spend rolls up
+
+	childTotal := parent.ChildTotal()
+	assert.Equal(t, in+out, childTotal.Input+childTotal.Output) // delegated subset is tracked separately
 }
 
 func TestAccountingSetModelRebasesContext(t *testing.T) {

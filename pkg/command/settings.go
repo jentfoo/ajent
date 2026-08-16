@@ -152,6 +152,31 @@ func enumRow(name, key string, values []string) settingsRow {
 		edit:   edit}
 }
 
+// intRow builds a row editing an integer key within [min,max]. The edit reads
+// the current value, prompts for a replacement and validates before persisting,
+// so it fits numeric fields that enumRow's string storage cannot unmarshal into.
+func intRow(name, key string, min, max int) settingsRow {
+	edit := func(_ context.Context, c Console) ([]settingChange, error) {
+		current, _, _ := c.Settings().Explain(key)
+		var cur int
+		_ = json.Unmarshal(current, &cur)
+		in, err := c.Input(context.Background(), name, strconv.Itoa(cur))
+		if err != nil {
+			return nil, err
+		}
+		n, perr := strconv.Atoi(strings.TrimSpace(in))
+		if perr != nil || n < min || n > max {
+			c.Notify(fmt.Sprintf("%s must be between %d and %d", name, min, max), levelWarn)
+			return nil, nil
+		}
+		_ = c.SetSessionSetting(key, n)
+		return []settingChange{{key: key, value: n}}, nil
+	}
+	return settingsRow{name: name,
+		render: func(c Console) (string, string) { return name, detailOrDefault(c, key) },
+		edit:   edit}
+}
+
 // modelRow builds a row editing a model reference key through the model picker.
 func modelRow(name, key string) settingsRow {
 	render := func(c Console) (string, string) { return name, detailOrDefault(c, key) }
@@ -179,6 +204,8 @@ func allRows() []settingsRow {
 		{name: "Tools", render: rowTools, edit: editTools},
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
 		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "block-all"}),
+		modelRow("Sub-agent model", "subagent.model"),
+		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
 		{name: "Tool limits",
 			render: func(_ Console) (string, string) { return "Tool limits", "edit per-tool output bounds" },
 			edit:   func(_ context.Context, c Console) ([]settingChange, error) { return editLimits(c) }},
