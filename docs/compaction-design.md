@@ -255,8 +255,9 @@ through the same `ContextMessages` the rebuild uses, never a separate estimate.
 assistant message; a tool call and its result always travel together. Fuzz-tested
 over random tool interleavings.
 
-**4. The summary reaches the model.** It is a `RoleUser` message, because the
-adapters drop `RoleSystem` messages. This also makes a mid-turn cut legal.
+**4. The summary reaches the model.** Emitted as `RoleUser`, because adapters
+drop `RoleSystem` messages; this also makes a mid-turn cut legal (see "The one
+assembly function").
 
 **5. Only the newest compaction applies, and it is cumulative.** Each run
 recomputes every stage over the whole branch.

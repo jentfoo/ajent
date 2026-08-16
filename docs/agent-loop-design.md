@@ -241,25 +241,11 @@ forever, exactly like a self-queueing follow-up does today.
 
 The main agent can fan read-only investigation out to throwaway children whose
 only return value is a final summary paragraph, so findings enter context as one
-message instead of fifty tool results. Each job builds a fresh agent:
-
-- A fresh `State{Model, Reasoning}` — model resolved from `subagent.model`
-  through the registry (else inherited), reasoning inherited verbatim.
-- An **in-memory session**: no transcript file, recorder, resume or rewind. Its
-  usage rolls into the parent ledger as child spend (`ChildTotal()`), tracked
-  separately so `/usage` can show what delegation cost; `rollUp` never touches
-  context terms, so a child does not move the parent's context bar.
-- A **filtered tool set** built from the registry by name (read-only built-ins
-  plus registry-marked read-only tools), with a structural bar on `agent_*` — a
-  child must never spawn children. Parent enable state is ignored; `bash`, write
-  and edit are unreachable by construction, not by asking nicely.
-- A **sink that feeds an activity row** (`childSink` overrides `NopSink`) rather
-  than the transcript: tool label or a coalesced thinking line under the job's
-  key, cleared on completion. Nothing from a child reaches committed history.
-
-The manager wires these through narrow func-typed options supplied by main.go —
-the same decoupling that makes headless mode possible, applied to a second agent
-instance.
+message instead of fifty tool results. A child is just another `Agent` with its
+own single-owner loop; the full contract — fresh `State`, in-memory session,
+structurally filtered read-only tools and an activity-row sink — lives in
+`subagents-design.md`. The ownership rule that matters here is stated above: a
+child never shares this agent, so there is no cross-loop state to reason about.
 
 ## Testing
 

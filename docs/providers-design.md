@@ -72,10 +72,8 @@ Everything above the adapter files is vendor agnostic. Three of the five
 providers are a profile over `openaicompat.go` plus a discovery parser; adding a
 sixth of that shape is roughly a hundred lines.
 
-**`pkg/config` must never import `pkg/llm`.** `pkg/llm` imports it for paths, so
-the reverse edge would cycle. That is why `models.json` is decoded in
-`pkg/llm/config.go` rather than in `pkg/config`, and any growth of `pkg/config`
-must keep that dependency one-directional.
+The rule `pkg/config ↛ pkg/llm` (see `config-design.md`) is why `models.json`
+decodes in `pkg/llm/config.go` rather than in `pkg/config`.
 
 ## The content model
 

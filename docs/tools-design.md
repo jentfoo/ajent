@@ -55,18 +55,13 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
 
 ### Sub-agent tool set (`toolset.go`, phase 13)
 
-A child agent's tools are a fixed, structural subset of `Registry.All()`,
-independent of the parent's enabled set — so `find`/`grep`/`ls`, registered
-*disabled* by default in the parent, still reach a child. The filter includes
-the read-only built-ins (`read`, `grep`, `find`, `ls`) plus any tool for which
-`ReadOnly(name)` is true (MCP hints / config globs). Two exclusions are
-structural, not advisory:
-
-- **`agent_*` is barred unconditionally**, applied last so nothing can configure
-a child into spawning grandchildren.
-- **`bash` is never included** even when enabled in the parent — by policy, not
-by classification. A child with a small, obviously read-only set knows exactly
-what it has; there is no user at its permission prompt to approve anything else.
+A child agent's tools are a fixed structural subset of `Registry.All()` —
+unwrapped (no guards or dialogs), independent of the parent's enabled set — so
+`find`/`grep`/`ls`, registered *disabled* by default in the parent, still reach a
+child. The filter is owned and specified in `subagents-design.md`: read-only
+built-ins plus any tool for which `ReadOnly(name)` is true (MCP hints / config
+globs), with two structural exclusions (`agent_*` barred unconditionally; `bash`
+never included).
 - `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
   `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be detected
   before prompting; returns nil for tools that cannot predict.

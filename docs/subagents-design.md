@@ -265,17 +265,9 @@ model differs.
 
 ### Configuration (`pkg/config`)
 
-```go
-type Subagent struct {
-    Model         string `json:"model,omitempty"` // llm model key; empty inherits the session model
-    MaxConcurrent int    `json:"maxConcurrent,omitempty"`
-}
-```
-
-Defaults to `{"maxConcurrent": 4}` with `model` deliberately absent so an empty value
-means inherit. Both keys bind for free through env reflection and are edited from
-`/settings`. Per config-design's rule, `subagent.model` is a plain string key — the
-caller resolves it against the registry; `pkg/config` never imports `pkg/llm`.
+The `subagent` block lives in `config-design.md`: `model` (empty inherits the
+session model) and `maxConcurrent` (default 4), both bound for free through env
+reflection. Here it sizes the manager's semaphore; `/settings` edits it.
 
 ## Front-end wiring (`main.go` / `console.go`)
 
@@ -306,9 +298,9 @@ Every child gets a fresh system block built by the same cache-stable `buildSyste
 with one extra snippet appended after project instructions via
 `agent.Options.SystemSnippets`: `childContract`. It states the read-only constraints
 (structural — the tool set is filtered before the model ever sees it) and that the
-final assistant message **is** the entire return value. Quoted verbatim, asserted by
-golden tests; there is deliberately no "Available tools" list in a child's system
-block (the schema channel carries it), matching prompt-design.
+final assistant message **is** the entire return value. The text is quoted verbatim,
+and owned, by `prompt-design.md`; there is deliberately no "Available tools" list in a
+child's system block (the schema channel carries it).
 
 ## Testing
 

@@ -408,9 +408,8 @@ came back from"). Nothing is ever deleted; `/compact undo` drops the newest entr
 
 ### Honesty
 
-Every compaction reports real numbers: `compacted 142k → 61k (dropped 18 failed
-tool results, truncated 6 outputs, summarised 47 messages)`. Silent compaction
-leaves users convinced the agent "forgot" for no reason.
+Compaction reports real numbers as a replayable notice so users never think the
+agent "forgot" for no reason. The exact shape is specified in `compaction-design.md`.
 
 ---
 
