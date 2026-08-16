@@ -15,7 +15,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/config"
-	"github.com/jentfoo/ajent/pkg/history"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/mcp"
 	"github.com/jentfoo/ajent/pkg/permit"
@@ -28,8 +27,8 @@ import (
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
-// secretPrefix marks editor lines excluded from persistent history, so a pasted
-// secret never round-trips through ~/.ajent/history.
+// secretPrefix marks editor lines excluded from the workspace's persisted line
+// history, so a pasted secret never reaches disk.
 const secretPrefix = "secret:"
 
 func main() {
@@ -153,14 +152,12 @@ func main() {
 		Mode:      mode,
 		Model:     label,
 		MaxTokens: active.ContextWindow,
-		History:   history.Load(secretPrefix),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ajent:", err)
 		os.Exit(1)
 	}
 	defer ui.Close()
-	defer history.Save(ui.History(), secretPrefix)
 
 	for _, w := range warnings {
 		ui.Notify(w, tui.LevelWarn)
@@ -445,17 +442,23 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
 
-	// Ctrl+R reverse history search over this workspace's recorded prompts.
+	// Ctrl+R and ↑/↓ recall this workspace's typed lines merged with recorded
+	// prompts; every submitted line also lands in the editor-history file now.
+	var hist *session.EditorHistory
 	if store := promptStore(rec); store != nil {
-		pIdx := session.NewPromptIndex(store, cwdOrDot())
-		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(pIdx.Prompts()) })
+		hist, _ = session.NewEditorHistory(store, cwdOrDot(), secretPrefix)
+		defer hist.Compact() // bounded rewrite at exit; last writer wins under concurrency
+		idx := session.NewRecallIndex(store, cwdOrDot(), hist)
+		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
 	}
 
 	pump := make(chan pumpLine, 16)
 	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started)
 
-	if len(args) > 0 {
-		pump <- pumpLine{kind: command.KindPrompt, rest: strings.Join(args, " ")}
+	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
+		initial := strings.Join(args, " ")
+		hist.AppendHidden(initial) // durable in the workspace store yet excluded from ↑/↓ and Ctrl+R
+		pump <- pumpLine{kind: command.KindPrompt, rest: initial, injected: true}
 	}
 
 	defer func() {
@@ -474,6 +477,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				close(pump)
 				return rec // UI closed
 			}
+			hist.Append(msg) // every line (prompt /cmd !shell), recorded or not; nil-safe
 			line := command.ParseLine(msg)
 			switch line.Kind {
 			case command.KindShell:
@@ -490,10 +494,12 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 }
 
-// pumpLine is one classified submitted line handed to the prompt pump.
+// pumpLine is one classified submitted line handed to the prompt pump. injected marks
+// programmatic input (e.g. an argv bootstrap prompt) so it never enters recall/search.
 type pumpLine struct {
-	kind command.Kind
-	rest string
+	kind     command.Kind
+	rest     string
+	injected bool // non-typed input, excluded from transcript-derived prompt recall
 }
 
 // runPump owns ordering for commands and prompts. Commands run inline (pickers
@@ -535,7 +541,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			for _, n := range res.Notices {
 				console.Notify(n, tui.LevelWarn)
 			}
-			input := agent.Input{Text: res.Text, Before: append(before, res.Before...)}
+			input := agent.Input{Text: res.Text, Before: append(before, res.Before...), Injected: line.injected}
 			startPrompt(ui, recording, ag, input, started)
 		}
 	}
@@ -903,10 +909,11 @@ func promptStore(rec *sessRec) *session.Store {
 func searchItems(prompts []session.Prompt) []tui.SearchItem {
 	out := make([]tui.SearchItem, 0, len(prompts))
 	for _, p := range prompts {
-		out = append(out, tui.SearchItem{
-			Text:   p.Text,
-			Detail: p.At.UTC().Format("2006-01-02 15:04 UTC"), // sessions are stored as UTC
-		})
+		var detail string
+		if !p.At.IsZero() { // typed-only lines have no transcript timestamp
+			detail = p.At.UTC().Format("2006-01-02 15:04 UTC") // sessions are stored as UTC
+		}
+		out = append(out, tui.SearchItem{Text: p.Text, Detail: detail})
 	}
 	return out
 }

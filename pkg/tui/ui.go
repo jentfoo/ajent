@@ -5,7 +5,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -48,8 +47,6 @@ type Options struct {
 	Mode      Mode     // paint mode, ModeAuto detects multiplexers
 	Model     string
 	MaxTokens int
-	// History seeds the editor's line history (e.g. loaded from ~/.ajent/history).
-	History []string
 	// double-Esc rewind: two idle presses within DoubleEscWindow call OnRewind instead of ControlEscape
 	DoubleEscWindow time.Duration // window between two idle Esc presses; 0 = default
 	OnRewind        func()
@@ -161,8 +158,6 @@ func New(opts Options) (*UI, error) {
 	u.doubleEscWindow = doubleEsc
 	u.onRewind = opts.OnRewind
 	u.afterDelay = time.AfterFunc
-	u.editor.history = slices.Clone(opts.History)
-	u.editor.histIdx = len(u.editor.history)
 
 	if err := u.render.start(u.inFd); err != nil {
 		return nil, err
@@ -202,13 +197,6 @@ func (u *UI) Mode() Mode { return u.mode }
 
 // Messages returns submitted user input, closed when the UI goes away.
 func (u *UI) Messages() <-chan string { return u.msgs }
-
-// History returns the editor's line history for persistence across sessions.
-func (u *UI) History() []string {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	return slices.Clone(u.editor.history)
-}
 
 // Controls returns keys the editor did not consume: Esc and Ctrl+C or Ctrl+D on
 // an empty buffer. The send is non-blocking with a drop, so key handling never

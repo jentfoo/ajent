@@ -82,6 +82,11 @@ func (s *Store) List(workspace string) ([]Info, error) {
 	}
 	var out []Info
 	for _, f := range files {
+		// side files (output-*.txt, editor-history.lines) are not transcripts; only
+		// non-dir *.jsonl entries surface in the resume picker.
+		if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
+			continue
+		}
 		p := filepath.Join(dir, f.Name())
 		if info, ok := readInfo(p); ok {
 			out = append(out, info)

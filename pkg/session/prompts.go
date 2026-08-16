@@ -21,7 +21,8 @@ const (
 // promptNow supplies timestamps so the PromptIndex TTL is testable without sleeping.
 var promptNow = func() time.Time { return time.Now().UTC() }
 
-// Prompt is one recorded user prompt offered to history search.
+// Prompt is one recallable line offered to history search. At may be zero when
+// the line came from editor-history rather than a recorded transcript.
 type Prompt struct {
 	Text string
 	At   time.Time

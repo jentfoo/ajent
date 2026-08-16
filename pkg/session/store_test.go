@@ -106,6 +106,34 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	assert.Equal(t, idB, found.ID)
 }
 
+// TestStoreListSkipsNonJsonlFiles verifies side files (output-*.txt, the
+// editor-history line file) never surface as phantom sessions in the picker.
+func TestStoreListSkipsNonJsonlFiles(t *testing.T) {
+	t.Parallel()
+
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	w, err := s.Create(ws, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	txID := w.Head()
+	_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+	require.NoError(t, aerr)
+	require.NoError(t, w.Close())
+
+	dir, derr := s.Dir(ws)
+	require.NoError(t, derr)
+	// side files beside the transcript must be ignored by List.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "output-abc.txt"), []byte("tool out"), 0o600))
+	hh, hherr := NewEditorHistory(s, ws, "")
+	require.NoError(t, hherr)
+	hh.Append("/model")
+
+	list, lerr := s.List(ws)
+	require.NoError(t, lerr)
+	assert.Len(t, list, 1)
+	assert.Equal(t, txID, list[0].ID)
+}
+
 func TestStoreListEmptyWhenMissingDir(t *testing.T) {
 	t.Parallel()
 

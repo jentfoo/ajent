@@ -353,12 +353,16 @@ recalling a pasted line from history still expands.
 
 ## Editor history
 
-`pkg/tui` gained `Options.History` to seed the editor and `UI.History()` to
-read it back. `pkg/history` persists that history to `~/.ajent/history` through
-`config.UserPath`, deduplicated, capped at `MaxLines` (1000), and with the
-secret prefix excluded on *both* load and save so a pasted secret never reaches
-disk. The host owns the secret prefix; `history.Load`/`history.Save` take it as a
-parameter.
+The editor's line history is no longer seeded or read back through `pkg/tui`.
+Every submitted message — prompt, `/cmd` and `!shell`, multi-line pastes included as
+one unit — is appended to the workspace's `editor-history.lines` store at submit time
+by main (before `ParseLine` dispatch), so it persists regardless of whether a
+transcript/recorder is active. The store lives in the sessions tree
+(`pkg/session.EditorHistory`, JSONL: one message per row) and excludes messages
+prefixed by the host-owned secret marker on every path, so a pasted secret never
+reaches disk. Recall (↑/↓ and Ctrl+R) walks `session.RecallIndex` — typed messages
+merged with recorded prompts. The legacy global `~/.ajent/history` is abandoned in
+place: never read, migrated or deleted.
 
 ## File map
 
@@ -392,11 +396,7 @@ complete.go        Completion, Completer, MatchScore, SetCompleter
 complete_impl.go   completionOverlay — the live block state and accept rules
 prompt.go          MultiPick, multiPickState (grouped, Tab-toggle multi-select)
 input.go           keyTab / keyBackTab decoding
-ui.go              paste placeholders, Options.History, UI.History
+ui.go              paste placeholders
 ```
 
-`pkg/history`:
 
-```
-history.go        Load, Save — editor line history persistence
-```

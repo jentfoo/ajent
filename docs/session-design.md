@@ -147,7 +147,8 @@ does not orphan its sessions (the slug is cosmetic; the hash pins it). The store
 
 - **Create** starts a new session file named by UTC timestamp + id.
 - **List** returns every session for a workspace, newest first (`Info`: path,
-  id, started time, model, message count, first user prompt).
+  id, started time, model, message count, first user prompt). It scans only
+  non-directory `*.jsonl` entries so side files never surface as phantom rows.
 - **Latest** is `--continue`'s target: the most recent session.
 - **Find** matches an exact id or a unique prefix — what makes `--resume <id>`
   accept a few characters instead of the full ULID. An ambiguous prefix errors
@@ -163,6 +164,47 @@ effort: a scan failure yields an empty slice rather than an error.
 
 Sessions are scoped to the workspace they started in, so resuming from elsewhere
 sees nothing and starts fresh (see "Resume modes").
+
+## Editor history
+
+The sessions directory also holds each workspace's message record:
+`<slug>-<hash>/editor-history.lines`. It is JSONL — one submitted editor *message*
+per row, oldest first — the durable record of *messages typed*, distinct from the
+transcripts that record *turns*. Each message is `json.Marshal`ed onto a single
+physical line, so a multi-line turn (a paste or wrapped prompt) round-trips whole:
+embedded newlines are escaped and never fragment one submission into several recall
+entries. Non-prompt lines (`/cmd`, `!shell`) never touch a transcript and live only
+here; prompts appear in both.
+
+The store is append-only at submit time: `EditorHistory.Append` trims trailing CRs,
+drops blank and secret-prefixed messages (the pasted-secret invariant), then one
+atomic `O_APPEND` write of the JSON row. A single short write never interleaves
+bytes, so concurrent agents on one workspace cannot corrupt it; different workspaces
+are different files.
+
+Most rows are bare JSON strings (visible). Non-editor input that must still be
+durable — an `ajent "prompt"` argv bootstrap line — is written via `AppendHidden` as a
+JSON object (`{"msg":…,"hidden":true}`) so it survives restart and compaction yet
+never surfaces in ↑/↓ or Ctrl+R; the corresponding turn also carries `Input.Injected`
+so transcripts exclude it from prompt recall. Hidden rows are otherwise treated like
+any other line for dedup, cap and secret filtering.
+
+Recall (`EditorHistory.Recent`) reads the file plus this process's unflushed
+appends, dedups to each text's most recent occurrence, and caps at `maxHistoryLines`
+(1000), newest kept. When the raw file exceeds twice that it kicks a background
+compaction — self-healing after a crash off the recall path. Compaction
+(`EditorHistory.Compact`) rewrites via `config.WriteFileAtomic`: read-current,
+merge local appends, dedup + cap, replace. It takes **no lock**; last writer wins.
+Losing at most a few messages in the read→rename window is accepted over flocking the
+every-message append path. Rows that are not valid JSON (hand-edited or plain-text
+leftovers) decode literally, so the file stays human-edit friendly. Compaction also
+runs once on exit via `defer hist.Compact()`; it writes nothing when there is no
+message to persist, so an idle workspace never gains a phantom empty file.
+
+`RecallIndex` unifies recall onto one source: every typed message first, then any
+recorded prompt not already present (backfilling transcripts written before this
+phase). It reuses the `Prompt` type; a typed-only line carries a zero `At`. The old
+global `~/.ajent/history` is abandoned in place — never read, migrated or deleted.
 
 ## Reading and rebuilding
 
@@ -321,6 +363,10 @@ Repository style this package follows (shared with `pkg/tui` and `pkg/agent`):
 
 ## Known limits
 
+- Recall (↑/↓ and Ctrl+R) is per-workspace: each session dir holds only its own
+  typed lines, so history does not follow you across projects.
+- The legacy global `~/.ajent/history` file is abandoned in place — never read,
+  migrated or deleted. Only newly typed lines reach the sessions tree.
 - Sessions are scoped to the workspace directory they started in; resuming from
   a different path sees nothing. There is no cross-workspace search yet.
 - The transcript keeps every branch uncapped, so heavy forking grows the file.

@@ -515,23 +515,25 @@ a permission mode with a prompt already on screen must work. The front end maps
 it to `Barrier.Cycle()`, which re-evaluates any open approval dialog under the new
 mode — moving to `allow-all` resolves one as allow without a keystroke.
 
-**Ctrl+R opens a reverse history search** over the workspace's recorded prompts,
-drawn as an inline `(reverse-i-search)` overlay above the editor (not a modal
-picker). It opens blank — nothing is shown until you type content to match against,
-then typing narrows on a case-insensitive substring. Repeated Ctrl+R steps to the
-next older match, Enter fills the editor with the full prompt and does not send it,
-Esc closes leaving whatever was typed untouched. In the overlay ↑/↓ select: one
-press fills the editor with the highlighted prompt and closes the overlay without
-sending; subsequent plain arrows keep scrolling that same recorded list.
+**Ctrl+R opens a reverse history search** over one merged recall source — every
+line typed this workspace (`/cmd`, `!shell`) plus recorded prompts, newest first,
+deduplicated — drawn as an inline `(reverse-i-search)` overlay above the editor (not
+a modal picker). It opens blank — nothing is shown until you type content to match
+against, then typing narrows on a case-insensitive substring. Repeated Ctrl+R steps
+to the next older match, Enter fills the editor with the full line and does not send
+it, Esc closes leaving whatever was typed untouched. In the overlay ↑/↓ select: one
+press fills the editor with the highlighted line and closes the overlay without
+sending; subsequent plain arrows keep scrolling that same recalled list.
 
-The recorded-prompt list is shared: plain ↑/↓ (no Ctrl+R) walk the same newest-first
-set as the search overlay — first ↑ recalls your most recent sent message, further
-↑ steps older and ↓ returns to the live draft — with a fallback to the editor's
-file-history navigation when no prompt source is configured. Like completion it is
-an in-place live-block overlay rather than an interaction:
-the provider (`SetHistorySearch`) runs off the key loop so a slow scan never
-blocks input. The overlay's pure logic lives in `search.go` with no dependency on
-the UI, and the two overlays are mutually exclusive by construction.
+The recall source is shared: plain ↑/↓ (no Ctrl+R) walk the same newest-first set as
+the search overlay — first ↑ recalls your most recent sent line, further ↑ steps
+older and ↓ returns to the live draft. The editor's in-memory `e.history` fallback
+(`HistoryPrev`/`HistoryNext`) applies only when no recall source is installed (no
+session store). Like completion it is an in-place live-block overlay rather than an
+interaction: the provider (`SetHistorySearch`, backed by `RecallIndex`) runs off the
+key loop so a slow scan never blocks input. The overlay's pure logic lives in
+`search.go` with no dependency on the UI, and the two overlays are mutually
+exclusive by construction.
 
 ## The demo
 
