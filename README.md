@@ -1,10 +1,14 @@
 # ajent
 
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/go-appsec/toolbox-sidenuclei/blob/main/LICENSE)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/jentfoo/ajent/blob/main/LICENSE)
 [![Tests - Main Push](https://github.com/jentfoo/ajent/actions/workflows/tests-main.yml/badge.svg)](https://github.com/jentfoo/ajent/actions/workflows/tests-main.yml)
 [![Vibe-Scale 4.0(V2|U1|T2): Significant AI, test gaps](https://img.shields.io/badge/Vibe--Scale%204.0(V2%7CU1%7CT2)-Significant%20AI%2C%20test%20gaps-ff7f0e)](https://github.com/vibesdk/vibe-scale/blob/main/scale/vibe-4.md#v2-u1-t2-score-40--significant-ai-test-gaps)
 
-A very lightweight and minimized CLI Coding Agent interface, written in Go.
+A very lightweight, minimal CLI coding agent interface written in Go.
+
+The project is deliberately opinionated. It trims the UI to maximize working space and makes firm choices about things like subagents and tool barriers. Those opinions are an ongoing exploration of CLI agent ergonomics, so expect them to shift as the project evolves.
+
+Feedback is welcome. Please open issues if you have any suggestions or comments.
 
 ## Install
 
