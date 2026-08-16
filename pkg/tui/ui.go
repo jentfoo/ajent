@@ -364,8 +364,14 @@ func (u *UI) Text(delta string) {
 	u.streaming = true
 	done, rest := splitCompleteBlocks(u.textBuf)
 	u.textBuf = rest
+	if len(done) > 0 {
+		// A block completed: refresh the live preview to only what remains uncommitted
+		// before committing. Otherwise commit() redraws those just-committed rows as a
+		// stale ghost below history and prematurely scrolls fresh output out of view.
+		u.repaint()
+	}
 	u.writeMarkdown(done)
-	if len(rest) > 0 {
+	if len(rest) > 0 && len(done) == 0 {
 		u.repaint() // refresh the live preview as the partial block grows
 	}
 }
@@ -377,6 +383,11 @@ func (u *UI) EndText() {
 	rest := u.textBuf
 	u.textBuf = ""
 	u.streaming = false
+	if rest != "" {
+		// Drop the streaming preview before committing it, so commit() does not redraw
+		// the same rows as a stale ghost below the new history (see Text).
+		u.repaint()
+	}
 	u.writeMarkdown(rest)
 	u.textStart = false
 	u.repaint() // drop the live preview now that the message is committed

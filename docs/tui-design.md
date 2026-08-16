@@ -206,6 +206,14 @@ block boundaries only (`splitCompleteBlocks`); an open block stays buffered
 until it closes. Re-rendering committed scrollback is the Ink/Claude-Code bug
 that destroys history in tmux and VS Code.
 
+The live preview must be refreshed **before** those blocks are committed: a
+completed block still sitting in `r.live` would otherwise be redrawn by
+`renderer.commit`'s stale-block pass as a ghost *below* the new history. When
+the screen is full that oversized ghost overflows and prematurely scrolls the
+just-committed lines into terminal scrollback before they are read — output
+visibly jumps during streaming. So `Text`/`EndText` call `repaint()` (dropping
+the completed content from the preview) ahead of `writeMarkdown`, never after.
+
 **4. All public `UI` methods take `u.mu`.** Renderers are not independently
 thread safe. Input runs on its own goroutine, as does the spinner ticker, and
 both mutate through the same lock.
@@ -438,6 +446,10 @@ The live block is rebuilt separately by `UI.repaint`, which composes
 `notice? + streaming* + search? + completion? + activity* + (input | interaction)
 + status rows` and hands it to `renderer.setLive` with the caret position.
 Anything that changes the input, status, tool or activity state calls `repaint`.
+When a markdown block completes mid-stream, `Text`/`EndText` repaint **first** so
+the just-committed rows leave the preview before `writeMarkdown` runs (invariant
+3) — otherwise the inline renderer's commit pass would redraw them as a stale
+ghost and push fresh output off screen.
 Activity renders into whatever height remains after the status block and one
 line of editor, so on a short terminal it yields first. Status is computed before
 the activity budget so row accounting stays exact.
