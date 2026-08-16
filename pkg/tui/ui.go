@@ -557,6 +557,11 @@ func (u *UI) repaint() {
 	}
 	// in-progress markdown streams above the input so a reply appears live
 	rows = append(rows, u.streamingRows(w)...)
+	// a narrow rule atop the prompt area sets it apart from committed and streamed
+	// output; row accounting stays exact because this is one more real row here.
+	if w > 0 {
+		rows = append(rows, u.theme.Dim.Wrap(strings.Repeat("─", w)))
+	}
 	offset := len(rows)
 
 	// an active history search rides above the editor like completion; the two are

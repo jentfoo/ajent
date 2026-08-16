@@ -31,7 +31,9 @@ func TestUIDecisionRenders(t *testing.T) {
 	}
 
 	t.Run("shows_subject_and_numbered_options", func(t *testing.T) {
-		u, v, _ := interactionUI(t)
+		// the divider row costs one live-block line; a taller screen keeps both
+		// numbered options on it.
+		u, v, _ := tallUI(t)
 		d := u.OpenDecision(req)
 		defer d.Close()
 

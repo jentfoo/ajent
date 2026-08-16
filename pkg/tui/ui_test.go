@@ -70,25 +70,27 @@ func TestUIInput(t *testing.T) {
 	}
 
 	t.Run("block_starts_at_the_top", func(t *testing.T) {
-		assert.Equal(t, promptFirst+inputHint, v.Line(0))
+		// the divider rule leads, then input and status beneath it
+		assert.Equal(t, strings.Repeat(ruleChar, 40), v.Line(0))
+		assert.Equal(t, promptFirst+inputHint, v.Line(1))
 		// the leftmost working glyph always leads the status line
-		assert.Equal(t, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test", v.Line(1))
+		assert.Equal(t, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test", v.Line(2))
 	})
 	t.Run("typed_text_replaces_hint", func(t *testing.T) {
 		_, err := io.WriteString(pw, "hi")
 		require.NoError(t, err)
-		waitLine(0, promptFirst+"hi")
+		waitLine(1, promptFirst+"hi")
 	})
 	t.Run("enter_submits", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\r")
 		require.NoError(t, err)
 		assert.Equal(t, "hi", <-u.Messages())
-		waitLine(0, promptFirst+inputHint)
+		waitLine(1, promptFirst+inputHint)
 	})
 	t.Run("status_follows_the_input", func(t *testing.T) {
 		u.SetStatus(Status{Model: "opus-5"})
 		// the working glyph always leads, then the model
-		assert.Equal(t, spinnerFrames[0]+" · opus-5", v.Line(1))
+		assert.Equal(t, spinnerFrames[0]+" · opus-5", v.Line(2))
 	})
 	require.NoError(t, pw.Close())
 }
@@ -109,23 +111,23 @@ func TestUIInputEditing(t *testing.T) {
 	t.Run("backspace_and_word_kill", func(t *testing.T) {
 		_, err := io.WriteString(pw, "one two\x7f")
 		require.NoError(t, err)
-		waitLine(0, promptFirst+"one tw")
+		waitLine(1, promptFirst+"one tw")
 
 		_, err = io.WriteString(pw, "\x17")
 		require.NoError(t, err)
-		waitLine(0, promptFirst+"one")
+		waitLine(1, promptFirst+"one")
 	})
 	t.Run("alt_enter_grows_the_block", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x1b\rsecond")
 		require.NoError(t, err)
-		waitLine(1, promptCont+"second")
-		waitLine(2, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test")
+		waitLine(2, promptCont+"second")
+		waitLine(3, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test")
 	})
 	t.Run("ctrl_c_clears_buffer", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
 		require.NoError(t, err)
-		waitLine(0, promptFirst+inputHint)
-		assert.Empty(t, u.line(v, 2), "the extra input row is gone")
+		waitLine(1, promptFirst+inputHint)
+		assert.Empty(t, u.line(v, 3), "the extra input row is gone")
 	})
 	t.Run("ctrl_c_on_empty_emits_interrupt", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
@@ -207,11 +209,12 @@ func TestUIHistory(t *testing.T) {
 
 		u2.EndText()
 		assert.Equal(t, "first para", v2.Line(0), "the preview commits to history")
-		assert.Contains(t, v2.Line(1), promptFirst, "preview row is released after commit")
+		assert.Contains(t, v2.Line(2), promptFirst, "preview row is released after commit")
 	})
 	t.Run("block_follows_the_last_line", func(t *testing.T) {
-		assert.Contains(t, v.Line(12), promptFirst)
-		assert.Contains(t, v.Line(13), "0/1k · test")
+		// the committed transcript ends at row 11; divider on 12, input then status
+		assert.Contains(t, v.Line(13), promptFirst)
+		assert.Contains(t, v.Line(14), "0/1k · test")
 	})
 }
 
@@ -245,7 +248,7 @@ func TestUIToolStart(t *testing.T) {
 	done := u.ToolStart("bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0), "the header commits up front")
 	// no separate spinner row above the input; the tool rides in the status bar.
-	statusRow := u.line(v, 2) // committed header on row 0, live block starts at row 1: input then status
+	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
 	assert.True(t, strings.HasPrefix(stripANSI(statusRow), spinnerFrames[0]),
 		"spinner still leads the bottom-left status line while a tool runs")
 	assert.Contains(t, stripANSI(statusRow), "bash: go test ./...",
@@ -254,7 +257,7 @@ func TestUIToolStart(t *testing.T) {
 	done("ok  0.4s")
 
 	assert.Equal(t, "  ok  0.4s", v.Line(1))
-	assert.Contains(t, v.Line(2), promptFirst, "no spinner row is left behind")
+	assert.Contains(t, v.Line(3), promptFirst, "no spinner row is left behind")
 }
 
 func TestUIBusy(t *testing.T) {
@@ -278,7 +281,7 @@ func TestUIBusy(t *testing.T) {
 	// a running tool shares the bottom-left status line with the busy glyph.
 	doneTool := u.ToolStart("bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
-	statusRow := u.line(v, 2) // committed header on row 0; live block starts at row 1 (input), status on row 2
+	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1 (divider), input then status
 	assert.Contains(t, stripANSI(statusRow), "bash: go test ./...")
 	doneTool("ok  0.4s")
 
@@ -292,7 +295,7 @@ func TestUIStatusSpinnerLeftmost(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	// the spinner is the first element of the status line, before model and tokens.
-	statusRow := u.line(v, 1) // live block: input on row 0, status on row 1
+	statusRow := u.line(v, 2) // live block: divider on row 0, input on row 1, status on row 2
 	assert.True(t, strings.HasPrefix(stripANSI(statusRow), spinnerFrames[0]),
 		"spinner occupies the leftmost column of the status bar")
 }
@@ -515,13 +518,13 @@ func TestUISearchOverlay(t *testing.T) {
 	t.Run("ctrl_r_opens_overlay", func(t *testing.T) {
 		press(key{typ: keyReverseSearch})
 		deliver()
-		assert.Contains(t, stripANSI(v.Line(0)), "(reverse-i-search)`':")
+		assert.Contains(t, stripANSI(v.Line(1)), "(reverse-i-search)`':")
 	})
 	t.Run("typing_narrows", func(t *testing.T) {
 		press(key{typ: keyRune, text: "retry"})
 		// the header shows the query and detail; the full match renders below it
-		assert.Contains(t, stripANSI(v.Line(0)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
-		assert.Contains(t, v.Line(1), "fix the retry loop")
+		assert.Contains(t, stripANSI(v.Line(1)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
+		assert.Contains(t, v.Line(2), "fix the retry loop")
 	})
 	t.Run("enter_fills_editor_without_submitting", func(t *testing.T) {
 		submit := press(key{typ: keyEnter})

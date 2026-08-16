@@ -185,6 +185,26 @@ func TestUIInputPrompt(t *testing.T) {
 	})
 }
 
+// TestPickItemRowRoleTags verifies the rewind tree colors its role word
+// independently of selection so user/assistant reads at a glance.
+func TestPickItemRowRoleTags(t *testing.T) {
+	t.Parallel()
+	th := NewTheme(Color256)
+
+	t.Run("user_tag_blue", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "/ the question"}, false, 80)
+		assert.Equal(t, selectIndent+th.UserTag.Wrap("user")+th.Dim.Wrap("/ the question"), row)
+	})
+	t.Run("assistant_tag_yellow", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Tag: "assistant", Mark: MarkAssistant, Label: "/ a reply"}, false, 80)
+		assert.Equal(t, selectIndent+th.Assist.Wrap("assistant")+th.Dim.Wrap("/ a reply"), row)
+	})
+	t.Run("no_tag_plain_label", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Label: "a tool row"}, false, 80)
+		assert.Equal(t, selectIndent+th.Dim.Wrap("a tool row"), row)
+	})
+}
+
 func TestUIPick(t *testing.T) {
 	t.Parallel()
 

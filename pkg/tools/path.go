@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+var userHome = os.UserHomeDir // injectable for tests
 
 // PathPolicy decides how a tool argument becomes an absolute path. There is no
 // containment: relative paths are taken from Cwd and anything else the model
@@ -22,23 +25,46 @@ func argPath(p string) string {
 }
 
 // Resolve returns the canonical absolute form of path, folding symlinks in its
-// longest existing prefix so read/write/edit agree on one tracker key. Relative
-// paths are taken from Cwd; nothing is refused.
+// longest existing prefix so read/write/edit agree on one tracker key. A leading
+// ~ or ~/ expands to the user's home directory; other relative paths are taken
+// from Cwd. Nothing is refused.
 func (p PathPolicy) Resolve(path string) (string, error) {
-	base := p.Cwd
-	if base == "" {
-		var err error
-		if base, err = os.Getwd(); err != nil {
-			return "", fmt.Errorf("tools: cannot resolve cwd: %w", err)
+	var candidate string
+	if expanded, ok := expandTilde(path); ok {
+		candidate = expanded // absolute home path, no base needed
+	} else {
+		base := p.Cwd
+		if base == "" {
+			var err error
+			if base, err = os.Getwd(); err != nil {
+				return "", fmt.Errorf("tools: cannot resolve cwd: %w", err)
+			}
 		}
+		candidate = cleanAbs(base, path)
 	}
-	candidate := cleanAbs(base, path)
 	resolved, ok := evalPrefix(candidate)
 	if !ok { // nothing exists yet; the cleaned absolute is still a fine key
 		return candidate, nil
 	}
 	return resolved, nil
 }
+
+// expandTilde replaces a leading ~ or ~/ with the user's home directory. ok is
+// false when the path does not start with ~ or no home can be found.
+func expandTilde(path string) (string, bool) {
+	if path != "~" && (len(path) < 2 || !isSlash(path[1])) {
+		return "", false
+	}
+	home, err := userHome()
+	if err != nil || home == "" {
+		return "", false
+	}
+	rest := strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/")
+	return filepath.Join(home, rest), true
+}
+
+// isSlash reports whether c separates path components.
+func isSlash(c byte) bool { return c == '/' || c == '\\' }
 
 // cleanAbs returns the absolute cleaned form of path joined to base.
 func cleanAbs(base, path string) string {

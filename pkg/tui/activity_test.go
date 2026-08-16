@@ -8,6 +8,30 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// TestShadeRowPadsToFullWidth verifies an activity line is elided and padded to
+// the terminal width inside its background shade, so a full-width bar results.
+func TestShadeRowPadsToFullWidth(t *testing.T) {
+	t.Parallel()
+	th := NewTheme(Color256)
+
+	const w = 41
+	text := "sub-2  grep pattern" // 21 columns; the rest is trailing shade blanks
+	short := shadeRow(th.Activity, text, w)
+	assert.Equal(t, th.Activity.Open()+text+strings.Repeat(" ", w-displayWidth(text))+sgrReset,
+		short, "shade spans edge to edge")
+	assert.Zero(t, displayWidth(short)-w, "exactly one row wide")
+
+	// over-long text elides yet still fills the width exactly
+	trunc := shadeRow(th.Activity, strings.Repeat("x", 100), 20)
+	assert.Zero(t, displayWidth(trunc)-20, "elided row is still full width")
+}
+
+// TestShadeRowNoColorIsPlain verifies a no-op theme falls back to an elided row.
+func TestShadeRowNoColorIsPlain(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "sub-2  work", shadeRow(NewTheme(ColorNone).Activity, "sub-2  work", 40))
+}
+
 func TestUIActivity(t *testing.T) {
 	t.Parallel()
 

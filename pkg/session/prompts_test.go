@@ -96,6 +96,31 @@ func TestStorePromptsMultiLineJoinsBlocks(t *testing.T) {
 	assert.Equal(t, []string{"a\nb", "line one\nline two"}, promptTexts(prompts))
 }
 
+// TestStorePromptsSkipsInjected verifies system-injected context (sub-agent
+// completion steers, permission notes) never surfaces as a recallable prompt.
+func TestStorePromptsSkipsInjected(t *testing.T) {
+	t.Parallel()
+
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	w, err := s.Create(ws, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "a real prompt")})
+	require.NoError(t, aerr)
+	// an injected steer carries user text but must stay out of recall
+	_, ierr := w.Append(TypeMessage, MessageData{
+		Message:  llm.Text(llm.RoleUser, "Sub-agent sub-2 completed. Call agent_poll with id sub-2."),
+		Injected: true,
+	})
+	require.NoError(t, ierr)
+	require.NoError(t, w.Close())
+
+	prompts, perr := s.Prompts(ws)
+	require.NoError(t, perr)
+	assert.Equal(t, []string{"a real prompt"}, promptTexts(prompts),
+		"injected context is not a recallable prompt")
+}
+
 func TestStorePromptsLimit(t *testing.T) {
 	t.Parallel()
 

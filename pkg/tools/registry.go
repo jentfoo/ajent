@@ -17,6 +17,7 @@ import (
 type Registry struct {
 	mu      sync.RWMutex
 	tools   []registeredTool // declaration order drives Names/Schemas
+	groups  []ToolGroup      // ordered; /tools collapses each onto one row
 	schema  []llm.ToolSchema // cached, invalidated by any state change
 	guards  []Guard          // ordered; first non-allow wins inside Execute
 	asker   Asker            // consulted on ActionAsk, nil denies
@@ -42,6 +43,23 @@ type registeredTool struct {
 	source   string // who registered it, for /tools grouping
 	state    State
 	readOnly bool // safe to expose to a sub-agent; default is not
+}
+
+// ToolGroup presents several physical tools as one toggleable row in /tools that
+// always shares enable state, e.g. the sub-agent trio (agent_start/agent_poll/
+// agent_list) shown once under the "subagents" label instead of three rows.
+type ToolGroup struct {
+	Name   string   // picker label, e.g. "subagents"
+	Source string   // grouping header; SourceBuiltin sorts it with the core tools
+	Tools  []string // member tool names, all enabled or disabled together
+}
+
+// Row is one toggleable /tools entry: a single tool name or an entire ToolGroup
+// collapsed into one row that carries every physical member.
+type Row struct {
+	Name   string   // picker label; a tool name, or the group's display name
+	Source string   // grouping header (SourceBuiltin or an MCP server source)
+	Names  []string // physical tool names this row toggles
 }
 
 func boolState(b bool) State {
@@ -74,6 +92,21 @@ func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 	defer r.mu.Unlock()
 	r.tools = append(r.tools, registeredTool{tool: t, source: source, state: s})
 	r.schema = nil // schema cache is stale until rebuilt
+}
+
+// RegisterGroup records g as one toggleable /tools row over its member tools.
+// Members must already be registered; the group is presentation plus shared state,
+// never a registration of new tools. Duplicate names replace the earlier entry.
+func (r *Registry) RegisterGroup(g ToolGroup) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.groups {
+		if r.groups[i].Name == g.Name {
+			r.groups[i] = g
+			return
+		}
+	}
+	r.groups = append(r.groups, g)
 }
 
 // Unregister drops every tool registered under source. Used on disconnect and
@@ -168,11 +201,28 @@ func (r *Registry) Enabled() []agent.Tool {
 	return out
 }
 
+// expandGroupNames replaces any registered group name in want with its member tool
+// names, so /tools can toggle an entire group through one label. Callers that pass
+// physical names are unaffected.
+func (r *Registry) expandGroupNames(want map[string]struct{}) {
+	for i := range r.groups {
+		g := &r.groups[i]
+		if _, ok := want[g.Name]; !ok {
+			continue
+		}
+		delete(want, g.Name)
+		for _, m := range g.Tools {
+			want[m] = struct{}{}
+		}
+	}
+}
+
 // SetEnabled replaces the enabled set with names. Unknown names are ignored;
 // currently enabled tools not listed become disabled. Use Enable to widen the
 // set within a session instead.
 func (r *Registry) SetEnabled(names []string) {
 	want := bulk.SliceToSet(names)
+	r.expandGroupNames(want)
 	r.mu.Lock()
 	for i := range r.tools {
 		if _, ok := want[r.tools[i].tool.Name()]; ok {
@@ -191,6 +241,7 @@ func (r *Registry) SetEnabled(names []string) {
 // free-selection path before it.
 func (r *Registry) Enable(names []string) {
 	want := bulk.SliceToSet(names)
+	r.expandGroupNames(want)
 	r.mu.Lock()
 	for i := range r.tools {
 		if _, ok := want[r.tools[i].tool.Name()]; ok {
@@ -255,6 +306,70 @@ func (r *Registry) All() []agent.Tool {
 		out = append(out, rt.tool)
 	}
 	return out
+}
+
+// Units collapses offered tools into toggleable /tools rows: a registered group
+// whose every member is present in offered becomes one row carrying all members,
+// so the sub-agent trio toggles together; otherwise each tool stays its own row.
+// A partially-offered group (e.g. widen mode after a non-atomic change) falls back
+// to per-member rows rather than silently enabling missing tools.
+func (r *Registry) Units(offered []agent.Tool) []Row {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	present := make(map[string]bool, len(offered))
+	for _, t := range offered {
+		present[t.Name()] = true
+	}
+	sourceOf := make(map[string]string, len(r.tools))
+	for i := range r.tools {
+		sourceOf[r.tools[i].tool.Name()] = r.tools[i].source
+	}
+	var rows []Row
+	covered := make(map[*ToolGroup]bool) // group already emitted as a row
+	seen := make(map[string]bool)        // tool names consumed by a group row
+	for _, t := range offered {
+		name := t.Name()
+		if seen[name] {
+			continue
+		}
+		var g *ToolGroup
+		for i := range r.groups { // find the owning group, if any
+			if slices.Contains(r.groups[i].Tools, name) {
+				g = &r.groups[i]
+				break
+			}
+		}
+		switch {
+		case g == nil: // a plain tool stands alone
+			rows = append(rows, Row{Name: name, Source: sourceOf[name], Names: []string{name}})
+			seen[name] = true
+		case covered[g]: // already emitted as one row; skip its remaining members
+		default:
+			members := g.Tools
+			if allPresent(members, present) {
+				rows = append(rows, Row{Name: g.Name, Source: g.Source, Names: slices.Clone(members)})
+				covered[g] = true
+				for _, m := range members {
+					seen[m] = true
+				}
+			} else { // partial group: offer this member individually
+				rows = append(rows, Row{Name: name, Source: sourceOf[name], Names: []string{name}})
+				seen[name] = true
+			}
+		}
+	}
+	return rows
+}
+
+// allPresent reports whether every member appears in present.
+func allPresent(members []string, present map[string]bool) bool {
+	for _, m := range members {
+		if !present[m] {
+			return false
+		}
+	}
+	return true
 }
 
 // BySource returns every tool registered under source in declaration order,

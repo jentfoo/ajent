@@ -18,6 +18,7 @@ type Input struct {
 	Blocks    llm.BlockList // extra content, appended after Text when non-empty
 	Before    []llm.Message // appended ahead of this input, in transcript order
 	Delivered func()        // called once the steer lands in state; nil is the normal case
+	Injected  bool          // system-injected context (not a typed prompt); excluded from recall
 }
 
 // State is the in-memory projection of a session. It is owned by the loop
@@ -51,9 +52,10 @@ type TurnResult struct {
 
 // MessageInfo is one appended message and what the stream reported with it.
 type MessageInfo struct {
-	Message llm.Message
-	Stop    llm.StopReason // assistant messages only
-	Usage   llm.Usage
+	Message  llm.Message
+	Stop     llm.StopReason // assistant messages only
+	Usage    llm.Usage
+	Injected bool // system-injected context, excluded from prompt recall
 }
 
 // ToolCall is one model-requested invocation handed to a Tool.

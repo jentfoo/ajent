@@ -87,8 +87,8 @@ func filePrompts(path string) []Prompt {
 		if err := e.Decode(&md); err != nil {
 			continue
 		}
-		if md.Message.Role != llm.RoleUser {
-			continue // assistant replies and tool results are not prompts
+		if md.Message.Role != llm.RoleUser || md.Injected {
+			continue // assistant/tool messages and system-injected context are not prompts
 		}
 		txt := messageText(md)
 		if txt == "" {

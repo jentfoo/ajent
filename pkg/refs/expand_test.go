@@ -45,6 +45,37 @@ func newExpander(t *testing.T, dir string) (*Expander, *sinkCapturer) {
 	return NewExpander(reg, sink, tools.PathPolicy{Cwd: dir}), sink
 }
 
+func TestExpandTildePathInjectsReadFromHome(t *testing.T) {
+	root := t.TempDir() // workspace cwd
+	home := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(home, "notes.md"), []byte("hi\n"), 0o600))
+	// Setenv so the shared tools.PathPolicy (bound to os.UserHomeDir) sees home.
+	t.Setenv("HOME", home)
+
+	x, sink := newExpander(t, root)
+	res := x.Expand(t.Context(), "see @~/notes.md")
+	assert.Equal(t, "see @~/notes.md", res.Text, "small file keeps the literal ~ path")
+	require.Len(t, res.Before, 2, "a home-dir ref injects a read pair")
+	assert.Contains(t, sink.starts, "read ~/notes.md")
+}
+
+func TestExpandTildeAnnotatesLargeHomeFile(t *testing.T) {
+	// not parallel: Setenv mutates the process environment for HOME.
+	root := t.TempDir()
+	home := t.TempDir()
+	var b strings.Builder
+	for i := 0; i < 600; i++ {
+		b.WriteString("line\n")
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(home, "big.md"), []byte(b.String()), 0o600))
+	t.Setenv("HOME", home)
+
+	x, _ := newExpander(t, root)
+	res := x.Expand(context.Background(), "see @~/big.md")
+	assert.Contains(t, res.Text, "@~/big.md (", "large home-dir file annotated in place")
+	assert.Empty(t, res.Before)
+}
+
 func TestExpandNoRefs(t *testing.T) {
 	t.Parallel()
 

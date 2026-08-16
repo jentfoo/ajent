@@ -92,8 +92,8 @@ func TestUIAsk(t *testing.T) {
 		}
 		go func() { _, _ = u.Ask(context.Background(), Question{Text: many.String()}) }()
 
-		waitFor(t, u, v, "+8 lines")
-		// the live block stays inside its share of a 12 row screen
+		waitFor(t, u, v, "… +9 lines")
+		// the live block stays inside its share of a 12 row screen, divider included
 		require.Eventually(t, func() bool {
 			return liveRowCount(u.snapshot(v)) <= 8
 		}, time.Second, testPoll)

@@ -335,7 +335,8 @@ func (m *Manager) offer(ids []string) {
 	m.mu.Unlock()
 
 	in := agent.Input{
-		Text: completionNotice(deliverable),
+		Text:     completionNotice(deliverable),
+		Injected: true, // a system notice, not a typed prompt; excluded from recall
 		Delivered: func() { // clear exactly the names this message carried
 			m.mu.Lock()
 			out := m.pending[:0]

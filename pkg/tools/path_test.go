@@ -64,6 +64,58 @@ func TestResolveNewFileInMissingDirStillWorks(t *testing.T) {
 	assert.Equal(t, filepath.Join(cwd, "new", "dir", "file.txt"), abs) // cleaned absolute
 }
 
+func TestResolveTildeExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	restore := setTestUserHome(home)
+	t.Cleanup(restore)
+
+	p := PathPolicy{Cwd: ""}
+	abs, err := p.Resolve("~/f.txt")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "f.txt"), abs)
+}
+
+func TestResolveBareTildeExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	restore := setTestUserHome(home)
+	t.Cleanup(restore)
+
+	p := PathPolicy{Cwd: ""}
+	abs, err := p.Resolve("~")
+	require.NoError(t, err)
+	assert.Equal(t, home, abs)
+}
+
+func TestResolveTildeIgnoresCwd(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	restore := setTestUserHome(home)
+	t.Cleanup(restore)
+
+	p := PathPolicy{Cwd: cwd}
+	abs, err := p.Resolve("~/f.txt")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "f.txt"), abs) // home wins over Cwd
+}
+
+func TestResolveTildeMidPathNotExpanded(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	p := PathPolicy{Cwd: cwd}
+	abs, err := p.Resolve("a~b.txt")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "a~b.txt"), abs) // ~ only special at the start
+}
+
+// setTestUserHome swaps userHome for the duration of a test and returns a
+// restore func.
+func setTestUserHome(home string) func() {
+	orig := userHome
+	userHome = func() (string, error) { return home, nil }
+	return func() { userHome = orig }
+}
+
 func TestResolveEmptyCwdFallsBackToGetwd(t *testing.T) {
 	t.Parallel()
 

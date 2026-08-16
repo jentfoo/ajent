@@ -15,8 +15,9 @@ import (
 func TestStreamingCommitKeepsOutput(t *testing.T) {
 	t.Parallel()
 
-	// narrow enough that a stale tall-preview redraw overflows when it commits
-	v := newVT(20, 6)
+	// the divider row costs one live-block line; height 7 keeps this on the same
+	// overflow boundary that 6 held before chrome was added.
+	v := newVT(20, 7)
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	for _, c := range []string{

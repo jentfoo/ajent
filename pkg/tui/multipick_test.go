@@ -92,7 +92,8 @@ func TestMultiPickSpaceTogglesSelection(t *testing.T) {
 func TestMultiPickGroupHeaderShown(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(80, 12)
+	// the divider row costs one live-block line; a taller screen shows both groups.
+	v := newVT(80, 14)
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
 	u := newTestUI(t, v, pr)
@@ -157,7 +158,8 @@ func TestMultiPickHeaderTogglesGroup(t *testing.T) {
 func TestMultiPickHeaderNeverInChosen(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(80, 12)
+	// the divider row costs one live-block line; a taller screen keeps both groups.
+	v := newVT(80, 14)
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
 	u := newTestUI(t, v, pr)

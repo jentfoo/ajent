@@ -41,9 +41,18 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
 
 - `Register(t, defaultEnabled)` — built-ins, extensions and MCP servers all
   register the same way.
-- `SetEnabled(names)` — session-scoped; `/tools` edits it and the session file
-  persists it across resume. Changing the set changes the prompt's tool block,
-  so the cached schema list is invalidated.
+- `RegisterGroup(ToolGroup)` — presents several already-registered tools as one
+  toggleable `/tools` row (label + source) that always shares enable state. The
+  sub-agent trio (`agent_start`/`agent_poll`/`agent_list`) is registered under
+  this, so it shows once as `subagents`, grouped with the builtins.
+- `Units(offered []Tool)` — collapses offered tools into toggleable `/tools`
+  rows: a group whose every member is present becomes one row carrying all of
+  them; otherwise each tool stands alone. A partially-offered group (e.g. widen
+  mode after a non-atomic change) falls back to per-member rows.
+- `SetEnabled(names)` / `Enable(names)` — session-scoped; `/tools` edits it and
+  the session file persists it across resume. Both expand any named tool group
+  into its members, so one label flips every member at once. Changing the set
+  changes the prompt's tool block, so the cached schema list is invalidated.
 - `Get(name)` — returns the tool wrapped in the guard chain; unknown or
   disabled tools are invisible to the model.
 - `All() []agent.Tool` — every declared tool **unwrapped** (no guard chain). A
@@ -98,6 +107,12 @@ so a user's own staged `!` shell line is exempt in every permission mode — it 
 the human's shell, not the model's.
 
 ## Built-in tools
+
+The sub-agent trio (`agent_start`, `agent_poll`, `agent_list`) is also registered
+under the builtin source (see phase 13), so `/tools` sorts it up front with the
+core tools, ahead of any MCP group. The three are presented and toggled as one
+row — a single `subagents` entry (`RegisterGroup`) rather than three individual
+tools.
 
 | Tool   | Default  | Mode     | Parameters |
 |--------|----------|----------|------------|
@@ -194,8 +209,9 @@ internal.go     decode, result helpers, discard Output
 
 ### Path policy (`path.go`)
 
-All file tools resolve arguments through one `PathPolicy`: relative paths join
-the session cwd, symlinks in the longest existing prefix are folded so every
+All file tools resolve arguments through one `PathPolicy`: a leading `~` or
+`~/…` expands to the user's home directory, other relative paths join the
+session cwd, and symlinks in the longest existing prefix are folded so every
 tool agrees on one canonical path (which is also the tracker key). There is no
 containment check by default — extensions layer their own limits via guards.
 

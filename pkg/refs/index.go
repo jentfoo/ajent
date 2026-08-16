@@ -32,10 +32,13 @@ type Index struct {
 	root   string
 	policy tools.PathPolicy
 
-	mu      sync.Mutex
-	entries []entry // files and directories under root
-	mtime   map[string]time.Time
-	expires time.Time
+	mu          sync.Mutex
+	entries     []entry // files and directories under root
+	mtime       map[string]time.Time
+	expires     time.Time
+	homeEntries []entry // lazily enumerated home dir for ~ completion
+	homeMtime   map[string]time.Time
+	homeExpires time.Time
 }
 
 // NewIndex returns an index rooted at root. The root is resolved through policy
@@ -47,18 +50,44 @@ func NewIndex(root string, policy tools.PathPolicy) *Index {
 // Candidates returns paths matching query, ranked by (a) already in the
 // conversation, (b) recent mtime, (c) fuzzy score. Directories complete with a
 // trailing `/` so accepting one re-opens it deeper. The result is relative to
-// the root for display.
+// the root for display; a `~` or `~/…` query completes within the user's home
+// directory instead, keeping the leading ~ in each candidate.
 func (idx *Index) Candidates(query string, inConversation func(path string) bool) []tui.Completion {
-	entries := idx.ensureFresh()
 	if inConversation == nil {
 		inConversation = func(string) bool { return false }
 	}
-	rel := relativeTo(idx.root, query)
-	dir, prefix := filepath.Split(rel)
+
+	// a ~ or ~/… query completes within the user's home directory.
+	home := strings.HasPrefix(query, "~/") || query == "~"
+	base := idx.root // base directory candidates are displayed relative to
+	var entries []entry
+	var mtime map[string]time.Time
+	if home {
+		hdir := homeDir()
+		if hdir == "" {
+			return nil // no ~ completion without a resolvable home
+		}
+		entries, mtime = idx.ensureHomeFresh(hdir)
+		base = hdir
+	} else {
+		entries = idx.ensureFresh()
+		mtime = idx.mtime
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// the query relative to base: strip a leading ~ (and slash) for home queries,
+	// keep as-is for workspace ones.
+	qrel := query
+	if home {
+		qrel = strings.TrimPrefix(strings.TrimPrefix(query, "~"), "/")
+	}
+	dir, prefix := filepath.Split(qrel)
 
 	var out []tui.Completion
 	for _, e := range entries {
-		fr, err := filepath.Rel(idx.root, e.path)
+		fr, err := filepath.Rel(base, e.path)
 		if err != nil || !strings.HasPrefix(fr, dir) {
 			continue
 		}
@@ -71,10 +100,13 @@ func (idx *Index) Candidates(query string, inConversation func(path string) bool
 			continue
 		}
 		text := fr
+		if home {
+			text = "~/" + text // keep the ~ so accepting inserts a usable path
+		}
 		if e.isDir {
 			text += "/"
 		}
-		out = append(out, rankCandidate(text, inConversation(e.path), idx.mtime[e.path], query))
+		out = append(out, rankCandidate(text, inConversation(e.path), mtime[e.path], query))
 	}
 	slices.SortStableFunc(out, func(a, b tui.Completion) int { return b.Score - a.Score })
 	if len(out) > 64 {
@@ -110,6 +142,32 @@ func recentScore(mt time.Time) int {
 		return 0
 	}
 	return int(300 * (1 - days/30))
+}
+
+var userHome = os.UserHomeDir // injectable for tests
+
+// homeDir returns the user's home directory, or "" when it cannot be resolved.
+func homeDir() string {
+	home, err := userHome()
+	if err != nil || home == "" {
+		return ""
+	}
+	return home
+}
+
+// ensureHomeFresh refreshes the cached enumeration of root (the user's home)
+// when its TTL has elapsed.
+func (idx *Index) ensureHomeFresh(root string) ([]entry, map[string]time.Time) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	if time.Now().Before(idx.homeExpires) && idx.homeEntries != nil {
+		return idx.homeEntries, idx.homeMtime
+	}
+	entries, mtimes := enumerate(root)
+	idx.homeEntries = entries
+	idx.homeMtime = mtimes
+	idx.homeExpires = time.Now().Add(indexTTL)
+	return entries, mtimes
 }
 
 // ensureFresh refreshes the cached entry list when the TTL has elapsed.
@@ -214,13 +272,4 @@ func isSkippedDir(path string) bool {
 		}
 	}
 	return false
-}
-
-// relativeTo returns path relative to root when inside it, joined for display.
-func relativeTo(root, path string) string {
-	rel, err := filepath.Rel(root, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
-		return path
-	}
-	return rel
 }

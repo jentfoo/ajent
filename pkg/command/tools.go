@@ -5,7 +5,6 @@ import (
 	"slices"
 
 	"github.com/go-analyze/bulk"
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -29,15 +28,16 @@ func toolsCommand(_ context.Context, _ string, c Console) error {
 // selection is free to enable or disable anything ahead of the first prompt.
 func toolsFreeSelect(c Console, reg *tools.Registry) error {
 	all := reg.All()
-	items, initial := toolItems(reg, all, c)
+	rows := reg.Units(all)
+	items, initial := toolRows(reg, rows, c)
 	picked, err := c.MultiPick(context.Background(), "Tools", items,
 		tui.MultiPickOptions{Placeholder: "filter", Initial: initial})
 	if err != nil {
 		return nil // cancelled
 	}
-	names := make([]string, len(picked))
-	for i, p := range picked {
-		names[i] = all[p].Name()
+	var names []string
+	for _, p := range picked {
+		names = append(names, rows[p].Names...) // a group row expands to every member
 	}
 	reg.SetEnabled(names)
 	c.ToolsChanged()
@@ -53,7 +53,8 @@ func toolsWidenOnly(c Console, reg *tools.Registry) error {
 		c.Notify("all tools already enabled", levelInfo)
 		return nil
 	}
-	items, _ := toolItems(reg, disabled, c)
+	rows := reg.Units(disabled)
+	items, _ := toolRows(reg, rows, c)
 	picked, err := c.MultiPick(context.Background(), "Enable tools", items,
 		tui.MultiPickOptions{Placeholder: "filter"})
 	if err != nil {
@@ -62,9 +63,9 @@ func toolsWidenOnly(c Console, reg *tools.Registry) error {
 	if len(picked) == 0 {
 		return nil
 	}
-	toEnable := make([]string, 0, len(picked))
-	for _, i := range picked {
-		toEnable = append(toEnable, disabled[i].Name())
+	var toEnable []string
+	for _, p := range picked {
+		toEnable = append(toEnable, rows[p].Names...) // a group row expands to every member
 	}
 	reg.Enable(toEnable)
 	c.ToolsChanged()
@@ -72,16 +73,17 @@ func toolsWidenOnly(c Console, reg *tools.Registry) error {
 	return nil
 }
 
-// toolItems groups offered tools by source for MultiPick headers, returning the
-// items plus which indexes are already enabled. MCP sources render an enhanced
-// header (tool count, startup mode, connection state) from the manager.
-func toolItems(reg *tools.Registry, offered []agent.Tool, c Console) ([]tui.PickItem, []int) {
+// toolRows groups offered rows by source for MultiPick headers, returning the
+// items plus which indexes are already fully enabled. MCP sources render an
+// enhanced header (tool count, startup mode, connection state) from the manager.
+func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem, []int) {
 	enabled := bulk.SliceToSet(reg.Names())
 	labels := mcpGroupLabels(c)
 
-	// group by source so MultiPick emits a header when the group changes
-	slices.SortStableFunc(offered, func(a, b agent.Tool) int {
-		sa, sb := reg.Source(a.Name()), reg.Source(b.Name())
+	// group by source so MultiPick emits a header when the group changes; stable
+	// sort keeps declaration order within a source (builtins up front, ahead of MCP)
+	slices.SortStableFunc(rows, func(a, b tools.Row) int {
+		sa, sb := a.Source, b.Source
 		if sa == sb {
 			return 0
 		}
@@ -90,16 +92,23 @@ func toolItems(reg *tools.Registry, offered []agent.Tool, c Console) ([]tui.Pick
 		}
 		return 1
 	})
-	items := make([]tui.PickItem, len(offered))
+	items := make([]tui.PickItem, len(rows))
 	var initial []int
-	for i, t := range offered {
-		src := reg.Source(t.Name())
+	for i, rw := range rows {
+		src := rw.Source
 		label := src
 		if l, ok := labels[src]; ok { // MCP servers carry an enhanced header
 			label = l
 		}
-		items[i] = tui.PickItem{Label: t.Name(), Group: label}
-		if _, ok := enabled[t.Name()]; ok {
+		items[i] = tui.PickItem{Label: rw.Name, Group: label}
+		allOn := true
+		for _, n := range rw.Names {
+			if _, ok := enabled[n]; !ok {
+				allOn = false
+				break
+			}
+		}
+		if allOn {
 			initial = append(initial, i)
 		}
 	}

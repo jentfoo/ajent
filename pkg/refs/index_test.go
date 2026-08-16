@@ -3,6 +3,7 @@ package refs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -63,6 +64,60 @@ func TestCandidatesExcludesSkippedDirs(t *testing.T) {
 	for _, q := range []string{"", "no"} {
 		assert.NotContains(t, labelsOf(idx.Candidates(q, nil)), "node_modules/")
 	}
+}
+
+func TestCandidatesTildeCompletesHomeTopLevel(t *testing.T) {
+	root := t.TempDir() // workspace, must not leak into home completion
+	home := t.TempDir()
+	writeTree(t, root, "main.go")
+	writeTree(t, home, ".bashrc", "docs/notes.md")
+	restoreHome(t, home)
+
+	idx := NewIndex(root, tools.PathPolicy{})
+	cands := idx.Candidates("~", nil)
+	haveTildePrefix := true
+	for _, c := range cands {
+		haveTildePrefix = haveTildePrefix && strings.HasPrefix(c.Label, "~/")
+	}
+	assert.True(t, haveTildePrefix, "bare ~ offers home entries prefixed with ~/")
+	assert.NotContains(t, labelsOf(cands), "main.go",
+		"workspace files must not appear for a ~ query")
+
+	docs := idx.Candidates("~/d", nil)
+	require.Equal(t, []string{"~/docs/"}, labelsOf(docs))
+}
+
+func TestCandidatesTildeDrillsDeeper(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	writeTree(t, home, "pkg/main.go", "docs/a.txt")
+	restoreHome(t, home)
+
+	idx := NewIndex(root, tools.PathPolicy{})
+	cands := idx.Candidates("~/pk", nil)
+	assert.Equal(t, []string{"~/pkg/"}, labelsOf(cands))
+
+	sub := idx.Candidates("~/pkg/m", nil)
+	require.Equal(t, []string{"~/pkg/main.go"}, labelsOf(sub))
+}
+
+func TestCandidatesTildeTrailingSlashListsChildren(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	writeTree(t, home, "bin/run.sh", "docs/a.txt")
+	restoreHome(t, home)
+
+	idx := NewIndex(root, tools.PathPolicy{})
+	cands := idx.Candidates("~/bin/", nil)
+	assert.Equal(t, []string{"~/bin/run.sh"}, labelsOf(cands))
+}
+
+// restoreHome points the injected userHome at home for the duration of a test.
+func restoreHome(t *testing.T, home string) {
+	t.Helper()
+	orig := userHome
+	userHome = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHome = orig })
 }
 
 func TestCandidatesConversationRankedFirst(t *testing.T) {

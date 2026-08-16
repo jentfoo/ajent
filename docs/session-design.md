@@ -58,7 +58,7 @@ than this build understands; older or equal files are fine.
 | Type | Payload | Meaning |
 |---|---|---|
 | `session` | `SessionData` | first line of the file: version, workspace, starting model, git state |
-| `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only) |
+| `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only); an `injected` flag marks system-provided user text that must not surface as a recallable prompt |
 | `compaction` | `CompactionData` | a context reduction recorded without deleting anything (see `compaction-design.md`) |
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
 | `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON |

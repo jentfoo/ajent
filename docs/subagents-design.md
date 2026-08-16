@@ -183,18 +183,35 @@ committed history:
 
 - `Start` publishes `<id>  <label>` immediately (see below), so a job is visible
   above the prompt while it is still queued on the semaphore, before its turn emits.
-- `ToolStart(call, label)` publishes `<id>  <label>`; its done hook restores the
-  prior line (thinking/idle fallback).
-- `Thinking` coalesces onto a single `<id>  thinking…` line — reasoning stays on
-  the placeholder because it is not useful output.
-- `Text(text)` publishes `<id>  <one-lined text>`, so the row shows the child's
-  most recent actual output rather than a static label; both coalesce to one
-  republish per `deltaFlush = 150ms` so streaming does not repaint per token.
+- `ToolStart(call, label)` publishes `<id>  <call name + first arg>`; a rich,
+  multi-word provided label is kept whole, but built-in tools whose labels are bare
+  words (`read`, `grep`) have their first argument appended so the row reads as real
+  work rather than one token. Its done hook restores the prior line (thinking/idle
+  fallback).
+- `Thinking(delta)` and `Text(delta)` both accumulate streaming per-token deltas
+  into the current in-progress line and publish `<id>  <one-lined text>` (capped
+  at `maxBuf = 2048`, keeping only the head so a long stream never jumps its
+  display to the tail) — most sub-agent activity is reasoning, so chain-of-thought
+  is surfaced rather than collapsed. A single delta is only one word or character,
+  so replacing rather than appending would show no real progress. Each scrolls per
+  line: content after the last newline is kept and completed lines fall off the
+  row. Switching streams (thinking → text) starts fresh instead of appending prose
+  onto leftover reasoning. The row shows the child's most recent
+  actual output rather than a static label; deltas coalesce to one republish per
+  A current line that is blank or whitespace-only after trim publishes nothing,
+  so empty streaming lines never flash. Deltas coalesce to one republish per
+  `deltaFlush = 150ms` so streaming does not repaint per token.
 - `TurnEnd` clears the row, and every terminal path in `Manager.spawn` also clears
   it — covering a job cancelled before it ever acquired its slot (no sink ran).
 
 Rows are single lines with no width maths — `tui.SetActivity` elides to width and
-never wraps, capped at `maxActivityRows = 3` plus a `+N more` indicator (phase 11).
+never wraps, capped at `maxActivityRows = 3` plus a `+N more` indicator. They render
+dim on a subtle background (`Theme.Activity`) so live work stands apart from the
+prompt area above which they sit.
+
+The completion steer is marked `Input.Injected`, and the permission-barrier note
+steer in main.go is too, so neither surfaces as a recallable prompt via Ctrl+R or
+the up-arrow history — only messages the user actually typed do.
 
 ### `tools.go` — the three tools
 
@@ -292,11 +309,13 @@ barrier exist, with adapters:
 - A tiny sink (`NopSink`, overriding only `TurnStart`) appended to `opts.Sinks`
   calls `mgr.Flush()`
 
-The three tools are registered under source `subagent`, enabled by default, before
+The three tools are registered under source `builtin`, enabled by default, before
 the permission barrier's guard attaches (so `/tools` ordering matches other sources),
 and marked read-only so allow-read mode runs them free — the parent *calling*
-`agent_start` is itself a non-mutating act. A `defer sag.Close()` sits beside the MCP
-close.
+`agent_start` is itself a non-mutating act. They are collapsed into one toggleable
+`/tools` row via `Registry.RegisterGroup`: a single `subagents` label (grouped with
+the builtins, ahead of MCP) enables or disables all three at once — see the registry
+grouping in `tools-design.md`. A `defer sag.Close()` sits beside the MCP close.
 
 **Esc semantics.** Esc interrupts the *turn*, releasing any in-flight poll; jobs keep
 running because they are independent investigations and re-running them is expensive.

@@ -72,4 +72,12 @@ func TestNewTheme(t *testing.T) {
 		assert.Equal(t, "\x1b[38;5;78m+ok\x1b[0m", th.DiffAdd.Wrap("+ok"))
 		assert.Equal(t, "\x1b[2;3;38;5;245mhmm\x1b[0m", th.Thinking.Wrap("hmm"))
 	})
+	t.Run("activity_shades_background_at_256", func(t *testing.T) {
+		th := NewTheme(Color256)
+		assert.Equal(t, "\x1b[2;48;5;236mrow\x1b[0m", th.Activity.Wrap("row"),
+			"dim fg on a dark grey background sets sub-agent rows apart")
+	})
+	t.Run("activity_falls_back_to_dim_at_basic", func(t *testing.T) {
+		assert.Equal(t, "\x1b[2mrow\x1b[0m", NewTheme(ColorBasic).Activity.Wrap("row"))
+	})
 }

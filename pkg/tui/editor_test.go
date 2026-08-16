@@ -245,6 +245,21 @@ func TestEditorInputView(t *testing.T) {
 		assert.Equal(t, 1, curRow)
 		assert.Equal(t, 5, curCol)
 	})
+	t.Run("wraps_words_whole", func(t *testing.T) {
+		// an unbroken token still splits, but a word that overflows moves to the
+		// next line intact rather than being cut across lines
+		e := newEditorAt("one two three", 13)
+		rows, curRow, curCol := e.inputView(th, 7, 5)
+		assert.Equal(t, []string{promptFirst + "one", promptCont + "two", promptCont + "three"}, rows)
+		assert.Equal(t, 2, curRow)
+		assert.Equal(t, 7, curCol)
+	})
+	t.Run("wraps_word_when_partial_room", func(t *testing.T) {
+		// a row with room for only part of the next word still moves it whole
+		e := newEditorAt("hello world", 5)
+		rows, _, _ := e.inputView(th, 9, 5)
+		assert.Equal(t, []string{promptFirst + "hello", promptCont + "world"}, rows)
+	})
 	t.Run("windows_to_max_rows", func(t *testing.T) {
 		e := newEditorAt("a\nb\nc\nd", 7)
 		rows, curRow, _ := e.inputView(th, 60, 2)

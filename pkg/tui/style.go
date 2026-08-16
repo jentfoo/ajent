@@ -87,6 +87,9 @@ type Theme struct {
 	Link     Style
 	Quote    Style
 	Spinner  Style
+	Activity Style // live sub-agent status rows: dim on a subtle background
+	UserTag  Style // "user:" role tag in the rewind tree picker (blue)
+	Assist   Style // "assistant:" role tag in the rewind tree picker (yellow)
 	Warn     Style // notice levels, kept separate from the diff palette
 	Error    Style
 
@@ -128,6 +131,13 @@ func NewTheme(p ColorProfile) Theme {
 	t.Link = styleFg(110, attrFgBlue)
 	t.Quote = style(attrDim, attrItalic)
 	t.Spinner = styleFg(213, attrFgMagenta)
+	// activity rows sit in the live block above the prompt; a soft background sets
+	// them apart from committed output. Basic terminals lack a usable dark shade.
+	if p >= Color256 {
+		t.Activity = style(attrDim, 48, 5, 236) // dim fg on a dark grey bg
+	} else {
+		t.Activity = style(attrDim)
+	}
 	t.Warn = styleFg(179, attrFgYellow)
 	t.Error = styleFg(167, attrFgRed)
 
@@ -135,6 +145,8 @@ func NewTheme(p ColorProfile) Theme {
 	t.DiffDel = styleFg(167, attrFgRed)
 	t.DiffHunk = styleFg(245, attrFgCyan, attrDim)
 	t.DiffFile = styleFg(111, attrFgBlue, attrBold)
+	t.UserTag = styleFg(69, attrFgBlue)   // blue: user prompts
+	t.Assist = styleFg(221, attrFgYellow) // yellow: assistant replies
 	t.DiffAddWord = style(append([]int{attrReverse}, fg(78, attrFgGreen)...)...)
 	t.DiffDelWord = style(append([]int{attrReverse}, fg(167, attrFgRed)...)...)
 	return t

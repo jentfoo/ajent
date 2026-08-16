@@ -201,6 +201,10 @@ Two kinds of mid-turn input:
   sender that must confirm delivery (the sub-agent notifier) can clear pending
   ids only on real arrival; one dropped by an interrupt is re-offered. Nil is the
   normal case.
+- An `Input.Injected` flag marks system-provided context (sub-agent completion
+  steers, permission-barrier notes) rather than a typed prompt. It rides onto the
+  appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R / up
+  arrow) can exclude it; injected messages still appear in assembled context.
 - **`FollowUp`** queues input as a separate turn once the current one settles.
 
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`

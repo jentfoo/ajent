@@ -19,12 +19,24 @@ type Option struct {
 	Detail string
 }
 
+// ItemMark colors an optional leading Tag on a picker row so roles read at a
+// glance. Zero means no colored tag.
+type ItemMark int
+
+const (
+	MarkNone      ItemMark = iota
+	MarkUser               // blue "user" tag (rewind tree)
+	MarkAssistant          // yellow "assistant" tag (rewind tree)
+)
+
 // PickItem is one row of a filterable list.
 type PickItem struct {
 	Label  string   // primary text
 	Detail string   // dim trailing text
 	Terms  []string // extra strings the filter matches, not displayed
 	Group  string   // source label; a dim header is emitted when it changes
+	Tag    string   // optional short role word rendered colored before Label
+	Mark   ItemMark // colors Tag; MarkNone leaves Tag uncolored and hidden
 }
 
 // PickOptions tunes a Pick.
@@ -274,7 +286,7 @@ func (s *pickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	start, end := windowFor(s.cursor, len(s.matches), listRows)
 	for i := start; i < end; i++ {
 		it := s.items[s.matches[i]]
-		rows = append(rows, optionRow(t, Option{Label: it.Label, Detail: it.Detail}, i == s.cursor, width))
+		rows = append(rows, pickItemRow(t, it, i == s.cursor, width))
 	}
 	if len(s.matches) == 0 {
 		rows = append(rows, t.Dim.Wrap(selectIndent+"no matches"))
@@ -338,6 +350,34 @@ func optionRow(t Theme, o Option, selected bool, width int) string {
 		line += t.Dim.Wrap("  " + o.Detail)
 	}
 	return truncateDisplay(line, width)
+}
+
+// pickItemRow renders one Pick row: a cursor marker, an optional role tag colored
+// independently of selection so user/assistant reads at a glance, then the label
+// and detail under the base (dim/accent) style.
+func pickItemRow(t Theme, it PickItem, selected bool, width int) string {
+	marker, base := selectIndent, t.Dim
+	if selected {
+		marker, base = selectMarker, t.Accent
+	}
+	tagStyle := markStyle(t, it.Mark)
+	line := marker + tagStyle.Wrap(it.Tag) + base.Wrap(it.Label)
+	if it.Detail != "" {
+		line += t.Dim.Wrap("  " + it.Detail)
+	}
+	return truncateDisplay(line, width)
+}
+
+// markStyle returns the palette style for a role tag; MarkNone is a no-op.
+func markStyle(t Theme, m ItemMark) Style {
+	switch m {
+	case MarkUser:
+		return t.UserTag
+	case MarkAssistant:
+		return t.Assist
+	default:
+		return Style{}
+	}
 }
 
 // windowFor returns the visible slice bounds keeping cursor in view.

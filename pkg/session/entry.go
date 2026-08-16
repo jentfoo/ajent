@@ -59,9 +59,10 @@ type SessionData struct {
 
 // MessageData is one appended message and what the stream reported with it.
 type MessageData struct {
-	Message llm.Message    `json:"message"`
-	Stop    llm.StopReason `json:"stop,omitempty"` // assistant messages only
-	Usage   llm.Usage      `json:"usage,omitzero"`
+	Message  llm.Message    `json:"message"`
+	Stop     llm.StopReason `json:"stop,omitempty"` // assistant messages only
+	Usage    llm.Usage      `json:"usage,omitzero"`
+	Injected bool           `json:"injected,omitempty"` // system context excluded from prompt recall
 }
 
 // CompactionData records a context reduction without deleting anything.

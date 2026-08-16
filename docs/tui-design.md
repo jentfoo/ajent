@@ -14,7 +14,8 @@ widths), `goldmark` (markdown parsing), `go-pretty` (tables) and `go-udiff`
 Goals, in priority order:
 
 1. The whole session stays in scrollback and survives a terminal resize.
-2. Minimal chrome. Output gets the screen, the input block costs 2 rows.
+2. Minimal chrome. Output gets the screen; the prompt area (divider + input +
+   status) costs 3 rows.
 3. Correct formatting: markdown, diffs, thinking vs reply, wide characters.
 
 Goal 1 is the one that drove every hard decision below.
@@ -39,8 +40,9 @@ prose. See "Wrapping policy" for what is wrapped by us and why.
 
 ## Layout and chrome
 
-Deliberately bare. No box, no separator rule, no borders anywhere except inside
-tables.
+Deliberately bare. No box, no borders anywhere except inside tables, with one
+deliberate exception: a single narrow `─` divider rule sits atop the prompt area,
+separating it from committed output above (see "Prompt divider" below).
 
 ```
 <committed transcript>
@@ -60,13 +62,31 @@ tables.
   jobs (one row per running investigation showing its task or most recent output)
   — between any
   overlays and the input. Rendered in insertion order, each elided to width —
-  never wrapped, so a row always occupies exactly one terminal line. The true cap
-  is `maxActivityRows = 3` text rows **plus** a dim `+N more` indicator (see
+  never wrapped, so a row always occupies exactly one terminal line. Each status
+  row is padded inside its background shade to fill the full terminal width
+  (`shadeRow`), so live work reads as an edge-to-edge band rather than text with a
+  colour patch underneath; the dim `+N more` overflow indicator stays unshaded.
+  The true cap is `maxActivityRows = 3` text rows **plus** a dim `+N more`
+  indicator (see
   `activity.go`); the phase-13 doc's "four rows" was wrong and this is the
   correction. Activity is live-block only: it yields first on a short terminal
   and never reaches committed history.
 - The input block grows with the buffer, capped at a third of the screen
   (`maxInputRatio`), after which it scrolls internally around the caret.
+
+### Prompt divider
+
+The prompt area is set apart from output by one dim full-width `─` rule rendered
+directly above the interactive zone. It lives in the live block (`UI.repaint`)
+rather than history, so row accounting stays exact (invariant 2) and it rides with
+the input under every renderer — alt keeps a persistent frame, inline redraws it
+as part of the moving block.
+
+The rule is composed after streamed output but before overlays/activity/interaction,
+so in-progress replies read as output above the bar while search/completion/
+activity and the editor sit below. It costs one real row per repaint, which on a
+short terminal shrinks interaction/dialog height by one line; tests that pin
+dialogs to small screens are sized accordingly.
 
 ## Status line
 
@@ -416,6 +436,8 @@ profile (truecolor / 256 / 16 / none, honouring `NO_COLOR` and `TERM=dumb`).
 | Role | Look | Used for |
 |---|---|---|
 | `Thinking` | dim + italic | reasoning, so it never reads as reply text |
+| `Activity` | dim on a dark background (256/truecolor) | live sub-agent rows above the prompt, set apart from committed output; falls back to plain dim below 256 colors |
+| `UserTag` / `Assist` | blue / yellow | the leading role word in the rewind tree picker |
 | `User` | bold accent | echoed user messages |
 | `Dim` | dim | tool output, status, context lines |
 | `Accent` | magenta | markers: `✻` thinking, `⏺` tool, list bullets |
@@ -467,8 +489,11 @@ are the way to scroll in alt mode.
 
 `editor.go` is the buffer. Positions are grapheme cluster indexes, not bytes or
 runes, so the cursor moves over emoji and combining marks as a unit. It also owns
-its own layout (`inputView`), hard wrapping the buffer into display rows and
-reporting the caret's row and column within them.
+its own layout (`inputView`), wrapping the buffer into display rows on word
+boundaries (a word moves whole to the next line rather than being split across
+lines; only an unbroken token wider than a full row hard-splits) and reporting
+the caret's row and column within them. Wrapping is purely visual: `Value()` is
+untouched, so submitted input never gains newlines.
 
 The key table:
 

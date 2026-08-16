@@ -3,7 +3,31 @@ package tui
 import (
 	"slices"
 	"strconv"
+	"strings"
 )
+
+// shadeRow renders one activity line padded to exactly w columns inside its
+// style's background, so the shade spans edge to edge rather than sitting under
+// the status text alone. The row is elided first (never wrapped) and keeps exact
+// width maths: a full-width line occupies precisely one terminal row.
+func shadeRow(st Style, text string, w int) string {
+	open := st.Open()
+	if open == "" || w <= 0 { // no color or unknown width: plain elided row
+		return truncateDisplay(text, max(w, 1))
+	}
+	body := truncateDisplay(text, w)
+	fill := w - displayWidth(body)
+	var b strings.Builder
+	b.WriteString(open)
+	b.WriteString(body)
+	if fill > 0 {
+		for i := 0; i < fill; i++ { // trailing blanks carry the background shade
+			b.WriteByte(' ')
+		}
+	}
+	b.WriteString(sgrReset)
+	return b.String()
+}
 
 // maxActivityRows caps how many activity text rows are shown; overflow becomes
 // a single dim "+N more" line, so the block never grows past maxActivityBudget.
@@ -43,7 +67,7 @@ func (u *UI) SetActivity(key, text string) {
 }
 
 // activityRows renders the ordered activity rows into at most budget rows, each
-// elided to width (never wrapped) and followed by a dim "+N more" line when the
+// full-width shaded (never wrapped) and followed by a dim "+N more" line when the
 // cap is exceeded. Caller holds the lock.
 func (u *UI) activityRows(w, budget int) []string {
 	if len(u.activity) == 0 || budget <= 0 {
@@ -56,7 +80,7 @@ func (u *UI) activityRows(w, budget int) []string {
 			break
 		}
 		// never wrap: a wrapped row breaks exact row accounting
-		rows = append(rows, truncateDisplay(u.theme.Dim.Wrap(u.activity[i].text), w))
+		rows = append(rows, shadeRow(u.theme.Activity, u.activity[i].text, w))
 	}
 	extra := len(u.activity) - len(rows)
 	if extra > 0 && len(rows) < budget {

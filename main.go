@@ -306,8 +306,15 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			MaxConcurrent: set.Settings().Subagent.MaxConcurrent,
 		})
 		for _, t := range sag.Tools() {
-			toolsReg.RegisterFrom("subagent", t, true) // enabled by default; /tools toggles
+			// builtin source so /tools sorts the trio up front with core tools
+			toolsReg.RegisterFrom(tools.SourceBuiltin, t, true) // enabled by default; /tools toggles
 		}
+		// the trio toggles together in /tools under one "subagents" row.
+		toolsReg.RegisterGroup(tools.ToolGroup{
+			Name:   "subagents",
+			Source: tools.SourceBuiltin,
+			Tools:  []string{"agent_start", "agent_poll", "agent_list"},
+		})
 		// agent_* delegate read-only work, so allow-read runs them free.
 		toolsReg.MarkReadOnly([]string{"agent_start", "agent_poll", "agent_list"})
 		// flush pending completion steers into the running parent turn at start.
@@ -373,7 +380,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// the prompter and noter adapt tui and agent onto permit's narrow interfaces;
 		// note injection steers the running turn without stopping it.
 		barrier.SetPrompter(promptAdapter{ui})
-		barrier.SetNoter(func(note string) { ag.Steer(agent.Input{Text: note}) })
+		barrier.SetNoter(func(note string) {
+			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
+		})
 		// auto mode classifies unverifiable shell commands with a fresh-context model
 		// call, cached per exact command; the verdict never enters the session.
 		barrier.SetClassifier(permit.NewCachedClassifier(classifierAdapter{
@@ -902,6 +911,32 @@ func searchItems(prompts []session.Prompt) []tui.SearchItem {
 	return out
 }
 
+// rewindBody returns a tree row's label without its leading role word, which is
+// rendered separately as a colored tag so user/assistant reads at a glance.
+func rewindBody(row session.TreeRow) string {
+	prefix := ""
+	switch row.Kind {
+	case session.RowUser:
+		prefix = "user: "
+	case session.RowAssistant:
+		prefix = "assistant: "
+	}
+	return strings.TrimPrefix(row.Label, prefix)
+}
+
+// roleTag maps a tree row kind to its colored tag and mark; tool/compaction rows
+// carry none.
+func roleTag(kind session.RowKind) (string, tui.ItemMark) {
+	switch kind {
+	case session.RowUser:
+		return "user", tui.MarkUser
+	case session.RowAssistant:
+		return "assistant", tui.MarkAssistant
+	default:
+		return "", tui.MarkNone
+	}
+}
+
 // pickSessionRoot lists saved sessions (newest first) for the user to resume from.
 func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 	items := make([]tui.PickItem, len(list))
@@ -1004,7 +1039,11 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 			lead = "* " // the chain currently in context
 		}
 		// Guide draws the branch ("├──", "└──", continuation bars); a flat trunk has none.
-		items[i] = tui.PickItem{Label: lead + row.Guide + row.Label}
+		items[i] = tui.PickItem{Label: lead + row.Guide + rewindBody(row)}
+		if tag, mark := roleTag(row.Kind); tag != "" {
+			items[i].Tag = tag
+			items[i].Mark = mark
+		}
 	}
 	picked, err := ui.PickContext(context.Background(), "Rewind to", items,
 		tui.PickOptions{Placeholder: "filter", Initial: len(tree) - 1})

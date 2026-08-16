@@ -20,7 +20,12 @@ func NewRecorder(w *Writer) *Recorder { return &Recorder{w: w} }
 
 // Message records one appended message. Wire as agent.Options.OnMessage.
 func (r *Recorder) Message(info agent.MessageInfo) {
-	_, _ = r.w.Append(TypeMessage, MessageData{Message: info.Message, Stop: info.Stop, Usage: info.Usage})
+	_, _ = r.w.Append(TypeMessage, MessageData{
+		Message:  info.Message,
+		Stop:     info.Stop,
+		Usage:    info.Usage,
+		Injected: info.Injected,
+	})
 }
 
 // Sink wraps next so notices persist and the file is fsynced at each turn end.

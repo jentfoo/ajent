@@ -207,8 +207,11 @@ func isSpaceCell(c string) bool {
 	return c == " " || c == "\t" || c == "\n"
 }
 
-// inputView lays the editor out into display rows of at most width columns and
-// returns the zero based cursor offset within those rows.
+// inputView lays the editor out into display rows of at most width columns,
+// wrapping on word boundaries so a word is never split across lines (only an
+// unbroken token wider than a full row hard-splits), and returns the zero based
+// cursor offset within those rows. Wrapping is purely visual: Value() is
+// untouched, so submitted input gains no newlines.
 func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, curCol int) {
 	// A leading `!` marks a shell command: let it serve as the prompt glyph itself
 	// rather than duplicating it beside ❯. Backspacing that first character returns
@@ -218,40 +221,103 @@ func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, 
 	if shell {
 		marker = "" // the literal `!` in cells[0] is now the marker
 	}
-	first := t.Prompt.Wrap(marker)
 	firstW, contW := displayWidth(marker), displayWidth(cont)
+	cells := e.cells
 
-	var line strings.Builder
-	line.WriteString(first)
-	lineW := firstW
-	newRow := func() {
-		rows = append(rows, line.String())
-		line.Reset()
-		line.WriteString(cont)
-		lineW = contW
-	}
-	for i := 0; i <= len(e.cells); i++ {
-		if i < len(e.cells) && e.cells[i] != "\n" {
-			if w := displayWidth(e.cells[i]); lineW+w > width {
-				newRow()
+	// Rows as cell ranges: row k renders cells[starts[k]:ends[k]]. Breaks fall on
+	// word boundaries (trailing spaces dropped) so a word wraps whole to the next
+	// line; explicit newlines and too-wide tokens still split.
+	var starts, ends []int
+	starts = append(starts, 0)
+	i := 0
+	for i < len(cells) {
+		prefixW := firstW
+		if len(starts) > 1 { // continuation rows indent by two
+			prefixW = contW
+		}
+		rowStart := i
+		end, lineW := rowStart, prefixW
+		lastSpace := -1 // last wrap-able space cell index in this row
+		overflow := false
+		for end < len(cells) && cells[end] != "\n" {
+			w := displayWidth(cells[end])
+			if lineW+w > width {
+				overflow = true
+				break
 			}
+			if cells[end] == " " {
+				lastSpace = end
+			}
+			lineW += w
+			end++
 		}
-		if i == e.pos {
-			curRow, curCol = len(rows), lineW
+
+		var next int
+		switch {
+		case end < len(cells) && cells[end] == "\n":
+			ends = append(ends, end)
+			next = end + 1 // explicit newline ends the row; the \n is not rendered
+		case overflow && lastSpace >= 0:
+			// wrap at the trailing space: drop it and start the next word fresh
+			ends = append(ends, lastSpace)
+			next = lastSpace + 1
+		default:
+			if overflow { // unbreakable token wider than a row: hard-split, always advancing
+				end = max(end, rowStart+1)
+			}
+			ends = append(ends, end)
+			next = end
 		}
-		if i == len(e.cells) {
+		starts = append(starts, next)
+		i = next
+	}
+	// An empty buffer or a trailing newline still needs one row for the caret:
+	// the initial starts[0] already anchors it, only an end is missing.
+	if len(cells) == 0 && len(ends) == 0 {
+		ends = append(ends, 0)
+	} else if cells[len(cells)-1] == "\n" {
+		starts = append(starts, len(cells))
+		ends = append(ends, len(cells))
+	}
+
+	// Render each range: the first row carries the prompt glyph (or nothing for a
+	// leading `!`), continuations are indented by two raw spaces.
+	for k := 0; k < len(ends); k++ {
+		s, en := starts[k], ends[k]
+		var line strings.Builder
+		switch {
+		case k == 0 && shell:
+			// the literal `!` in cells[0] is already content; no glyph needed
+		case k == 0:
+			line.WriteString(t.Prompt.Wrap(marker))
+		default:
+			line.WriteString(cont)
+		}
+		for j := s; j < en; j++ {
+			line.WriteString(cells[j])
+		}
+		if len(cells) == 0 && k == 0 { // empty buffer: dim hint on the first row
+			line.WriteString(t.Dim.Wrap(truncateDisplay(inputHint, width-firstW)))
+		}
+		rows = append(rows, line.String())
+	}
+
+	// Map the caret to a display row and column.
+	for k := 0; k < len(ends); k++ {
+		s, en := starts[k], ends[k]
+		if e.pos >= s && e.pos <= en {
+			pw := firstW
+			if k > 0 {
+				pw = contW
+			}
+			col := pw
+			for j := s; j < e.pos; j++ {
+				col += displayWidth(cells[j])
+			}
+			curRow, curCol = k, col
 			break
-		} else if e.cells[i] == "\n" {
-			newRow()
-		} else {
-			line.WriteString(e.cells[i])
-			lineW += displayWidth(e.cells[i])
 		}
 	}
-	if len(e.cells) == 0 {
-		line.WriteString(t.Dim.Wrap(truncateDisplay(inputHint, width-firstW)))
-	}
-	rows = append(rows, line.String())
 
 	if maxRows > 0 && len(rows) > maxRows {
 		start := min(max(curRow-maxRows+1, 0), len(rows)-maxRows)
