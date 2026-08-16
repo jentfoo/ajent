@@ -119,9 +119,11 @@ applies, so each run recomputes cumulatively over the whole branch.
 owns ordering; shell lines go straight to the non-blocking `Stager`. Prompts flush the
 stage, expand `@` refs, then steer or start a turn.
 
-`demo.go` (behind the `demo` build tag) is a scripted stand-in for the real driver,
-used to exercise every rendering path without a provider; `run_agent.go` carries the
-`!demo` counterpart. Both define `drive(...)` with the same signature.
+The demo lives in `demo/`, its own stdlib-only module: `ajent-demosrv` is a
+standalone OpenAI-compatible chat server that plays a fixed script of real tool
+calls over SSE. Building with the `demo` tag (`make build-demo`) produces
+`bin/ajent-demo`, which spawns the sibling server and points its own `AJENT_HOME`
+at a temp dir, so config, models and transcripts stay hermetic.
 
 ### Permission barrier (`pkg/permit`)
 

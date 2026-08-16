@@ -15,7 +15,7 @@ func TestBuildSystem(t *testing.T) {
 	t.Parallel()
 
 	s := &State{Model: llm.Model{ID: "test"}}
-	env := Environment{Cwd: "/repo", OS: "linux/amd64", Shell: "bash", Date: "2024-01-02", Branch: "main", Dirty: true}
+	env := Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}
 
 	blocks := buildSystem(s, env, nil)
 	assert.Len(t, blocks, 1)
@@ -24,7 +24,7 @@ func TestBuildSystem(t *testing.T) {
 	if !ok {
 		t.Fatal("system prompt must be a single text block")
 	}
-	for _, want := range []string{"/repo", "linux/amd64", "bash", "2024-01-02", "main"} {
+	for _, want := range []string{"/repo", "linux/amd64", "2024-01-02"} {
 		assert.Contains(t, tb.Text, want)
 	}
 }
@@ -43,23 +43,63 @@ func TestBuildSystemCacheStable(t *testing.T) {
 	assert.NotEqual(t, b1.Text, b2.Text, "the date differs across days")
 }
 
-func TestGitFactsFailSilently(t *testing.T) {
+// TestBuildSystemListsCwd asserts the ls-style directory listing is emitted.
+func TestBuildSystemListsCwd(t *testing.T) {
 	t.Parallel()
 
-	// git runs in a non-repo temp dir must return empty rather than error,
-	// which is what the system prompt expects.
 	dir := t.TempDir()
-	assert.Empty(t, runGitIn(dir, "rev-parse", "--abbrev-ref", "HEAD"))
-	assert.Empty(t, gitDirtyIn(dir))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("// x\n"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
+
+	s := &State{Model: llm.Model{ID: "test"}}
+	blocks := buildSystem(s, Environment{Cwd: dir}, nil)
+	tb, ok := blocks[0].(llm.TextBlock)
+	require.True(t, ok)
+
+	assert.Contains(t, tb.Text, "Directory contents:")
+	assert.Contains(t, tb.Text, "  a.go\n")
+	assert.Contains(t, tb.Text, "  sub/\n")
 }
 
-// TestDetectEnvironment exercises the real machine-fact probes against a temp dir.
+// TestBuildSystemOmitsMissingCwdListing tolerates an absent cwd.
+func TestBuildSystemOmitsMissingCwdListing(t *testing.T) {
+	t.Parallel()
+
+	s := &State{Model: llm.Model{ID: "test"}}
+	blocks := buildSystem(s, Environment{Cwd: "/does/not/exist"}, nil)
+	tb, ok := blocks[0].(llm.TextBlock)
+	require.True(t, ok)
+
+	assert.Contains(t, tb.Text, "Working directory: /does/not/exist\n")
+	assert.NotContains(t, tb.Text, "Directory contents:")
+}
+
+// TestDetectEnvironment exercises the real machine-fact probes.
 func TestDetectEnvironment(t *testing.T) {
 	t.Parallel()
 
 	env := DetectEnvironment()
+	assert.NotEmpty(t, env.Cwd)
 	assert.NotEmpty(t, env.OS)
 	assert.NotEmpty(t, env.Date)
+}
+
+// TestListCwd sorts names and marks directories.
+func TestListCwd(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.go"), []byte("// x\n"), 0o644))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "a"), 0o755))
+
+	assert.Equal(t, []string{"a/", "b.go"}, listCwd(dir))
+}
+
+// TestListCwdMissing returns nil for an absent dir.
+func TestListCwdMissing(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, listCwd("/does/not/exist"))
 }
 
 // TestBuildSystemProjectInstructions asserts the provenance-marked <project_context>

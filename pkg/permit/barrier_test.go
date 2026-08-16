@@ -113,6 +113,7 @@ func runAndAnswer(t *testing.T, p *fakePrompter, b *Barrier, name string, input 
 type fakeClassifier struct {
 	verdict Class
 	block   bool // when true, waits for ctx cancellation and reports unsure
+	calls   int  // invocation count (guarded by the single asker goroutine)
 }
 
 func (c *fakeClassifier) Classify(ctx context.Context, command string) Class {
@@ -120,6 +121,7 @@ func (c *fakeClassifier) Classify(ctx context.Context, command string) Class {
 		<-ctx.Done()
 		return ClassUnsure
 	}
+	c.calls++
 	return c.verdict
 }
 
@@ -484,29 +486,44 @@ func TestAskerAutoWriteVerdictKeepsDialogWaiting(t *testing.T) {
 	assert.Equal(t, tools.ActionDeny, got.Action)
 }
 
-func TestAskerAutoSkippedForConfidentWrite(t *testing.T) {
+func TestAskerAutoClassifiesClearWriteAndApprovesOnReadOnly(t *testing.T) {
 	t.Parallel()
 
-	called := make(chan struct{})
 	b := NewBarrier(noRO)
 	b.SetMode(ModeAuto)
 	p := newFakePrompter()
 	b.SetPrompter(p)
-	b.SetClassifier(&countingClassifier{c: called, verdict: ClassReadOnly})
+	cl := &fakeClassifier{verdict: ClassReadOnly}
+	b.SetClassifier(cl)
 
-	// rm is a confident write; the classifier must not run and the dialog stands.
-	var got tools.Decision
+	// a confident write (rm) is still classified in auto mode; a readonly verdict
+	// resolves the dialog open without a keystroke.
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "bash", []byte(`{"command":"rm build"}`)); close(done) }()
-	waitDialog(t, p).answer(int(optAllow))
+	go func() { _ = runAsk(b, context.Background(), "bash", []byte(`{"command":"rm build"}`)); close(done) }()
 	<-done
 
-	assert.Equal(t, tools.ActionAllow, got.Action)
-	select {
-	case <-called:
-		t.Fatal("classifier ran for a confident write")
-	default:
-	}
+	assert.Equal(t, 1, cl.calls)
+}
+
+func TestAskerAutoClassifiesNativeWriteTool(t *testing.T) {
+	t.Parallel()
+
+	b := NewBarrier(noRO)
+	b.SetMode(ModeAuto)
+	p := newFakePrompter()
+	b.SetPrompter(p)
+	cl := &fakeClassifier{verdict: ClassReadOnly}
+	b.SetClassifier(cl)
+
+	// native write/edit tools are classified too, so the demo server can approve them.
+	done := make(chan struct{})
+	go func() {
+		_ = runAsk(b, context.Background(), "write", []byte(`{"path":"a.txt","content":"x"}`))
+		close(done)
+	}()
+	<-done
+
+	assert.Equal(t, 1, cl.calls)
 }
 
 func TestAskerAutoReadOnlyEmitsNotice(t *testing.T) {
@@ -561,20 +578,6 @@ func (r *noticeRecorder) all() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.notices...)
-}
-
-// countingClassifier reports its invocation count.
-type countingClassifier struct {
-	c       chan struct{}
-	verdict Class
-}
-
-func (c *countingClassifier) Classify(ctx context.Context, command string) Class {
-	select {
-	case c.c <- struct{}{}:
-	default:
-	}
-	return c.verdict
 }
 
 func TestAskerAutoUserAnswerCancelsInFlightClassification(t *testing.T) {

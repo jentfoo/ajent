@@ -79,7 +79,7 @@ func TestCrashResumeRebuildsState(t *testing.T) {
 		},
 		Sinks: []agent.Sink{r.Sink(agent.NopSink{})},
 		Tools: set,
-		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64", Shell: "bash", Date: "2024-01-02"},
+		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"},
 		OnMessage: []func(agent.MessageInfo){
 			r.Message,
 			func(info agent.MessageInfo) { live = append(live, info.Message) },

@@ -27,9 +27,6 @@ import (
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
-// drive runs the session loop: it delegates to driver (the real agent) unless the
-// `demo` build tag swaps in demo.go's scripted stand-in instead.
-
 // secretPrefix marks editor lines excluded from persistent history, so a pasted
 // secret never round-trips through ~/.ajent/history.
 const secretPrefix = "secret:"
@@ -83,6 +80,10 @@ func main() {
 			os.Exit(2)
 		}
 	}
+
+	// the demo build reconfigures itself before config.Load reads AJENT_HOME.
+	stop := startDemo()
+	defer stop()
 
 	// the flag layer outranks every file layer; -m/-render stop being ad hoc.
 	flagLayer := config.Layer{Name: "flag"}
@@ -173,7 +174,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	sess := drive(ui, set, reg, active, sessMode, resumeID, flag.Args())
+	sess := driver(ui, set, reg, active, sessMode, resumeID, flag.Args())
 
 	// Restore the terminal before printing so the hint is visible after a Ctrl+C /
 	// Ctrl+D quit, then tell the user how to get back to this conversation.
@@ -212,6 +213,11 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	toolsReg, terr := tools.Builtins(tools.Options{SessionID: cwdOrDot()})
 	if terr != nil {
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
+	}
+	// a configured enabled set replaces the built-in default (read/write/edit/bash),
+	// so find/grep/ls come on when config.json lists them.
+	if toolsReg != nil && len(set.Settings().Tools.Enabled) > 0 {
+		toolsReg.SetEnabled(set.Settings().Tools.Enabled)
 	}
 
 	// the compactor is wired lazily so the agent options can close over it before

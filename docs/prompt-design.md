@@ -86,8 +86,8 @@ not this block.
 1. Identity sentence        — one neutral line naming the harness + repo cwd.
 2. "How you help" line      — read files, run commands, edit code, write new files.
 3. Guidelines               — concise bullets; some derived from which tools exist.
-4. Environment facts        — clean structured lines: cwd, platform, shell, date,
-                              git branch + dirty state.
+4. Environment facts        — working directory, an ls-style listing of it, plus
+                              platform and day-granular date.
 5. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
 ```
 
@@ -113,7 +113,6 @@ Short bullets, always including:
 - Be concise in your responses
 - Show file paths clearly when working with files
 ```
-
 Plus guidelines derived from the enabled toolset. When `bash` exists but no
 dedicated exploration tools do (`grep`, `find`, `ls`), add a hint so the model
 uses bash for it:
@@ -127,20 +126,23 @@ that is not present.
 
 ### Environment facts
 
-Structured lines with empty values omitted entirely (a missing platform or shell,
-or a non-git directory, drops that line rather than emitting `unknown`):
+The header describes where the agent is and what it can see, not machine trivia.
+Shell and git status are deliberately omitted; instead the cwd is listed like
+`ls`, so the model knows which files exist. Empty values drop their line rather
+than emitting `unknown`:
 
 ```
 Working directory: /path
 Platform: linux/amd64       # only when known
-Shell: bash                 # only when known
 Date: 2026-08-10            # day granularity — the one thing that changes per day
-Git branch: main (dirty)    # whole line drops outside a repo; "(dirty)" appended on uncommitted changes
+Directory contents:
+  AGENTS.md
+  bin/
+  pkg/
 ```
 
-Facts are probed with bounded, silent-failure git calls so an unreachable repo
-cannot stall prompt assembly. Only the date varies within a session — that is the
-cache-stability contract.
+The listing is captured at startup and fixed for the session. Only the date
+varies within a session — that is the cache-stability contract.
 
 ### Composition invariants
 

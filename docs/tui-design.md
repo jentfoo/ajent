@@ -127,8 +127,10 @@ Everything above the renderer layer is shared by all modes. If you are adding a
 new kind of output, you almost certainly work in `ui.go` plus one renderer-
 agnostic file, and touch no renderer at all.
 
-The demo driving this lives outside the package, in `main.go` and `demo.go`. It
-is a scripted stand-in for the agent loop and exercises every rendering path.
+The demo driving this is not part of this package: `ajent-demo` (the root module
+built with the `demo` tag) spawns a standalone OpenAI-compatible model server in
+`demo/`, so it renders real turns, tool calls and diffs flowing through the whole
+agent loop rather than canned text.
 
 ## Render modes
 
@@ -487,33 +489,32 @@ the UI, and the two overlays are mutually exclusive by construction.
 
 ## The demo
 
-`main.go` plus `demo.go` are a scripted stand-in for the agent loop. There is no
-model behind it: `main.go` starts the UI and, on any message, plays a canned
-turn. It exists to exercise every rendering path, and it drives the UI through
-exactly the API the real agent loop will use, so it doubles as the reference for
-how to call this package.
+The TUI is exercised by a real agent loop against a scripted model server.
+`ajent-demo` (root module, `demo` build tag) points its own `AJENT_HOME` at a
+temp dir and spawns the sibling `bin/ajent-demosrv`, which speaks
+chat-completions SSE and plays an eleven-step script of real tool calls. Nothing is
+simulated below the wire, so every renderer path runs on genuine turns.
 
-The first turn plays, in order:
+The script is a long chain of deliberately small turns (mostly one thought or
+none plus one or two tool calls) across three scratch files (`notes.go`,
+`retry_test.go`, `README.md`) so reads and greps stream real contents many
+times. In order it exercises: an approval dialog (`mkdir`), a `write` with a
+Preview diff subject, a failing `edit` that skips its prompt via DryRun and
+renders an error result, read-only auto-allow reads, a successful `edit` showing
+a unified intraline diff, long thinking + `find`, more writes (`retry_test.go`,
+`README.md`) each followed by grep/read of the new file, parallel dispatch
+(`grep` + `read` in one message), compound read-only shell lines (`wc && head`,
+`ls -la`), two streamed cats (the smaller test file, then ~180 raw lines of
+`notes.go`) into scrollback, and a final dialog (`rm -rf`) before the closing
+turn. The full markdown showcase (headings, bold/italic/strike, inline + fenced
+code, GFM table with CJK/emoji, blockquote, rule, lists, links) runs in that last
+turn, after every tool result so the text wall cannot bury it; the final line
+reports the measured run time.
 
-1. **Thinking**, streamed in word chunks, dim and italic.
-2. **Tool call** with a spinner, resolving to a committed result line.
-3. **Markdown reply** covering headings, bold, italic, inline code, a fenced code
-   block, a GFM table, a blockquote, a `----` rule, bulleted and ordered lists, a
-   link and strikethrough, plus emoji and wide script samples.
-4. **File edit diff** with per line and intraline highlighting.
-5. **Bulk tool output**: ~170 short `go test -v` lines, deliberately narrow so
-   nothing wraps, which pushes the session into scrollback and exercises
-   scrolling under sustained output.
-6. **Wrap up** paragraph.
-
-Context usage in the status line ticks up across the whole turn. Later messages
-play a shorter reply so the input stays live.
-
-Two helpers in `demo.go` are worth knowing. `unwrap` joins source wrapped lines
-within a paragraph into one long line, so demo prose reflows instead of being
-frozen at whatever width the Go source happened to use. `expandTicks` turns `@@@`
-and `@@` into fences and code spans, since Go raw strings cannot contain
-backticks.
+The demo prose lives in `demo/srv/content.go`. Two helpers matter: `unwrap` joins
+source wrapped lines within a paragraph so it reflows instead of being frozen at
+the Go source's width, and `expandTicks` turns `@@@` and `@@` into fences and code
+spans since raw strings cannot contain backticks.
 
 ## Conventions
 

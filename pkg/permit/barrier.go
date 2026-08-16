@@ -15,7 +15,11 @@ import (
 // noUIReason is the denial for a call that would prompt with nobody to ask.
 const noUIReason = "permission required (no UI available)"
 
-// bashTool is the built-in shell tool's name, the only one the classifier runs on.
+// maxClassifierArgs bounds a non-bash call's payload sent to auto classification,
+// so a large write body never inflates the model request.
+const maxClassifierArgs = 500
+
+// bashTool is the built-in shell tool's name; its command feeds the classifier.
 const bashTool = "bash"
 
 // Barrier gates every tool call through static classification plus an optional
@@ -209,12 +213,11 @@ func (b *Barrier) Asker() tools.Asker {
 			return tools.Deny(noUIReason)
 		}
 
-		// auto mode starts classification concurrently with the already-open dialog;
-		// a user answer cancels it. Confident writes skip the model call entirely.
+		// auto mode classifies every prompted call concurrently with the dialog; a
+		// readonly verdict resolves it open. A user answer cancels classification.
 		var classifierCtx context.Context
 		cancel := func() {}
-		if m == ModeAuto && call.Name == bashTool &&
-			b.classifier != nil && !clearWrite(scanCommand(bashCommand(call.Input))) {
+		if m == ModeAuto && b.classifier != nil {
 			classifierCtx, cancel = context.WithCancel(ctx)
 		}
 
@@ -234,16 +237,16 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 
 		if classifierCtx != nil && classifierCtx.Err() == nil {
-			command := bashCommand(call.Input)
+			subject := classifierSubject(call)
 			go func() {
 				// a user answer cancels the context; skip both the resolve and its
 				// auto-allowed notice so a denial is never reported as auto-allowed.
-				if b.classifier.Classify(classifierCtx, command) != ClassReadOnly ||
+				if b.classifier.Classify(classifierCtx, subject) != ClassReadOnly ||
 					classifierCtx.Err() != nil { // user answered while classifying
 					return
 				}
 				dlg.Resolve(int(optAllow)) // first resolver wins; a keystroke beats this
-				b.noticeAutoAllowed(command)
+				b.noticeAutoAllowed(subject)
 			}()
 		}
 
@@ -350,6 +353,19 @@ func (b *Barrier) note(call agent.ToolCall, note string) {
 		}
 	}
 	b.noter("User allowed `" + name + "` with note: " + strings.TrimSpace(note))
+}
+
+// classifierSubject is what auto mode sends to classify call: the bash command,
+// or the tool name plus its elided arguments for any other tool.
+func classifierSubject(call agent.ToolCall) string {
+	if call.Name == bashTool {
+		return bashCommand(call.Input)
+	}
+	s := strings.TrimSpace(string(call.Input))
+	if len(s) > maxClassifierArgs {
+		s = s[:maxClassifierArgs] + "…"
+	}
+	return call.Name + " " + s
 }
 
 // noticeAutoAllowed tells the user a readonly verdict resolved an open dialog.

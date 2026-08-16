@@ -113,7 +113,7 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		return resultErr("edit: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, final, fileInfo(full))
-	out.Diff(p.Path, string(data), buf)
+	out.Diff(p.Path, buf, applied)
 
 	return agent.ToolResult{
 		Content: llmBlock(fmt.Sprintf("applied %d edits to %s", len(p.Edits), p.Path)),

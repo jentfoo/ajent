@@ -16,7 +16,7 @@ import (
 )
 
 // testEnv is a fixed environment so system prompt tests are deterministic.
-var testEnv = Environment{Cwd: "/repo", OS: "linux/amd64", Shell: "bash", Date: "2024-01-02"}
+var testEnv = Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}
 
 func newTestAgent(state *State, p llm.Provider, sink Sink) *Agent {
 	var sinks []Sink

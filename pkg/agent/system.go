@@ -1,13 +1,10 @@
 package agent
 
 import (
-	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -17,33 +14,24 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// gitTimeout bounds a single git probe so an unreachable repo cannot stall the
-// system prompt.
-const gitTimeout = 2 * time.Second
-
 // Environment is the machine facts the system prompt states. It is a plain
 // struct so tests can inject it and callers can layer project instructions
 // (AGENTS.md) on top.
 type Environment struct {
-	Cwd    string
-	OS     string
-	Shell  string
-	Date   string // day granularity, so the prompt cache survives
-	Branch string
-	Dirty  bool
+	Cwd  string
+	OS   string
+	Date string // day granularity, so the prompt cache survives
 }
 
 // DetectEnvironment reads the facts about this machine that a coding agent is
-// expected to know. Git failures fall back silently to empty.
+// expected to know. The cwd listing is captured at startup and stays fixed for
+// the session so the system block remains cache-stable.
 func DetectEnvironment() Environment {
 	cwd, _ := os.Getwd()
 	return Environment{
-		Cwd:    cwd,
-		OS:     runtime.GOOS + "/" + runtime.GOARCH,
-		Shell:  shellName(),
-		Date:   time.Now().Format("2006-01-02"),
-		Branch: gitBranch(),
-		Dirty:  gitDirty(),
+		Cwd:  cwd,
+		OS:   runtime.GOOS + "/" + runtime.GOARCH,
+		Date: time.Now().Format("2006-01-02"),
 	}
 }
 
@@ -132,7 +120,6 @@ func buildGuidelines(names []string) string {
 	b.WriteString("Guidelines:\n")
 	b.WriteString("- Be concise in your responses\n")
 	b.WriteString("- Show file paths clearly when working with files\n")
-	b.WriteString("- Answer in the same language as the user's message\n")
 
 	// search hint only when bash is present and no dedicated find/grep tool is
 	if slices.Contains(names, "bash") && !slices.Contains(names, "find") && !slices.Contains(names, "grep") {
@@ -142,24 +129,21 @@ func buildGuidelines(names []string) string {
 	return b.String() + "\n"
 }
 
-// buildEnvironmentFacts appends clean structured machine-fact lines. Empty values
-// are omitted entirely rather than emitted as "unknown", and only Date varies
-// within a session so the provider prompt cache survives.
+// buildEnvironmentFacts appends the working directory and an ls-style listing of
+// it. Empty values are omitted rather than emitted as "unknown"; shell and git
+// status are deliberately absent, and only Date varies within a session so the
+// provider prompt cache survives.
 func buildEnvironmentFacts(b *strings.Builder, env Environment) {
 	fmt.Fprintf(b, "Working directory: %s\n", cwdOrDot(env.Cwd))
 	if env.OS != "" {
 		fmt.Fprintf(b, "Platform: %s\n", env.OS)
 	}
-	if env.Shell != "" {
-		fmt.Fprintf(b, "Shell: %s\n", env.Shell)
-	}
 	fmt.Fprintf(b, "Date: %s\n", env.Date)
-	if env.Branch != "" {
-		fmt.Fprintf(b, "Git branch: %s", env.Branch)
-		if env.Dirty {
-			b.WriteString(" (dirty)")
+	if entries := listCwd(cwdOrDot(env.Cwd)); len(entries) > 0 {
+		b.WriteString("Directory contents:\n")
+		for _, e := range entries {
+			fmt.Fprintf(b, "  %s\n", e)
 		}
-		b.WriteByte('\n')
 	}
 }
 
@@ -170,61 +154,21 @@ func cwdOrDot(cwd string) string {
 	return cwd
 }
 
-// shellName returns a short name for the login shell, or empty when unknown.
-func shellName() string {
-	shell := os.Getenv("SHELL")
-	switch {
-	case strings.HasSuffix(shell, "/bash"):
-		return "bash"
-	case strings.HasSuffix(shell, "/zsh"):
-		return "zsh"
-	case strings.HasSuffix(shell, "/fish"):
-		return "fish"
-	default:
-		return ""
+// listCwd returns the sorted names of entries in dir, dirs marked with a trailing
+// slash like ls. Absent or unreadable dirs yield nil so the section is omitted.
+func listCwd(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
 	}
-}
-
-// gitBranch returns the current branch name via git rev-parse.
-func gitBranch() string {
-	out := runGit("rev-parse", "--abbrev-ref", "HEAD")
-	return strings.TrimSpace(out)
-}
-
-// gitDirty reports whether the working tree has uncommitted changes.
-func gitDirty() bool { return gitDirtyIn("") }
-
-// gitDirtyIn is gitDirty scoped to a directory, for tests. Untracked files do
-// not count as dirty since they are new rather than modified.
-func gitDirtyIn(dir string) bool {
-	out := runGitIn(dir, "status", "--porcelain")
-	for _, line := range strings.Split(out, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "??") {
-			return true
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
 		}
+		names = append(names, name)
 	}
-	return false
-}
-
-// runGit invokes git quietly, returning stdout or empty on any failure.
-func runGit(args ...string) string {
-	return runGitIn("", args...)
-}
-
-// runGitIn runs git in dir, returning stdout or empty on any failure. The empty
-// dir means the current working directory; tests pass a temp dir to exercise
-// the silent-failure path.
-func runGitIn(dir string, args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	if err := cmd.Run(); err != nil {
-		return ""
-	}
-	return buf.String()
+	slices.Sort(names)
+	return names
 }
