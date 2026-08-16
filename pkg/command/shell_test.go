@@ -94,7 +94,9 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 	}, time.Second, time.Millisecond,
 		"both staged commands must start immediately")
 
-	require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond,
+	// budget clears the bash tool's 5s WaitDelay ceiling so a slow CI runner
+	// (throttled login-shell startup) doesn't flake; a genuine hang still fails.
+	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond,
 		"quick commands finish")
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 4, "one assistant+user pair per run")
@@ -154,7 +156,8 @@ func TestStagerNonZeroExitStagesAsError(t *testing.T) {
 
 	s, _ := newShellStager(t)
 	s.Run("exit 3")
-	require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
+	// budget clears the bash tool's 5s WaitDelay ceiling (see RunsAndFlushesInOrder).
+	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 2)
 	tr := msgs[1].Content[0].(llm.ToolResultBlock)
