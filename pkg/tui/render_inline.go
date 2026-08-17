@@ -3,30 +3,18 @@ package tui
 import "strings"
 
 // inlineRenderer writes history straight to the main screen and redraws the live
-// block immediately below it. It never positions the cursor into history, so the
-// terminal keeps full ownership of wrapping, reflow and scrollback. All cursor
-// motion is relative to the caret, which makes it immune to scrolling.
+// block immediately below it. Once a line is committed it belongs to the
+// terminal, exactly like output from cat: it is never addressed, re-rendered or
+// re-wrapped again, so the terminal keeps full ownership of wrapping, reflow and
+// scrollback. All cursor motion is relative to the caret and confined to the
+// live block, which makes it immune to scrolling.
 type inlineRenderer struct {
 	t *termState
 
-	hist []histLine // everything committed; a width change repaints the viewport from it
-
 	live     []string // the block as last drawn
-	caretRow int      // caret's index within live, not a terminal row offset
+	caretRow int      // caret's index within live, never a terminal row offset
 	caretCol int
 	drawn    bool
-
-	// Geometry of the last actual draw, so the block can be found again after the
-	// terminal reflows it. Widths are what was emitted (already truncated), which
-	// is not the same as the width of the live strings. blockTop is the screen
-	// row the block starts at when a repaintFull placed it (negative when the
-	// block is taller than the screen and its top scrolled off); a plain draw
-	// leaves it zero, meaning no cap. frameW is the width the frame was drawn
-	// at: size() re-reads the terminal size on every call, so a width change
-	// can only be detected against this, never against t.width.
-	drawnW   []int
-	blockTop int
-	frameW   int
 }
 
 func (r *inlineRenderer) start(inFd int) error { return r.resume(inFd) }
@@ -35,7 +23,9 @@ func (r *inlineRenderer) resume(inFd int) error {
 	if err := r.t.makeRaw(inFd); err != nil {
 		return err
 	}
-	r.t.write(bracketedPasteOn)
+	// the caret is painted into the block, so the terminal's own cursor stays
+	// hidden for the whole session and never enters the row maths
+	r.t.write(bracketedPasteOn + hideCursor)
 	return nil
 }
 
@@ -56,57 +46,58 @@ func (r *inlineRenderer) size() (int, int) {
 // not. Staying off the last column makes reflow predictable everywhere.
 func (r *inlineRenderer) liveWidth() int { return max(r.t.width-1, 1) }
 
-// caretOffset is how many terminal rows sit above the caret right now, derived
-// from the geometry actually drawn and the current width. After the terminal
-// reflows a resized block those rows have multiplied, and this finds the top of
-// the block again without the renderer having to track the reflow itself.
-func (r *inlineRenderer) caretOffset() int {
-	w := r.t.width
-	if w <= 0 {
-		return r.caretRow
-	}
-	var above int
-	for i := 0; i < r.caretRow && i < len(r.drawnW); i++ {
-		above += rowsForWidth(r.drawnW[i], w)
-	}
-	off := above + r.caretCol/w
-	if r.blockTop < 0 {
-		off = max(off+r.blockTop, 0) // rows above the screen cannot be erased
-	}
-	return off
-}
-
-// eraseLive returns to the first row of the live block and clears it along with
-// everything below, leaving the cursor there.
+// eraseLive clears the live block and everything below it, leaving the cursor
+// where the block starts.
+//
+// There is deliberately no row arithmetic here. Every draw parks the cursor on
+// the block's first row, so erasing is only "return to the start of this line
+// and clear downward": nothing counts how many rows the block occupies, so
+// nothing can miscount them. That is what makes it immune to the emulator
+// reflowing the block, to a glyph the terminal measures wider than we do, and to
+// a resize racing the draw — the failures that used to strand a divider, once
+// per miss, compounding. A reflow leaves the cursor on the first cell of its
+// logical line, which is the cell we parked on.
 func (r *inlineRenderer) eraseLive() string {
 	if !r.drawn {
 		return ""
 	}
-	return cursorUp(r.caretOffset()) + "\r" + eraseBelow
+	return "\r" + eraseBelow
 }
 
-// drawLive writes the block from the current row and leaves the cursor on the caret.
+// drawLive writes the block from the current row, then parks the cursor back on
+// the block's first row for the next erase. The caret is drawn into its row
+// rather than left under the terminal's cursor (paintCaret).
 func (r *inlineRenderer) drawLive() string {
-	r.frameW = r.t.width
 	if len(r.live) == 0 {
-		r.drawnW = nil
 		return ""
 	}
 	var b strings.Builder
-	r.drawnW = make([]int, len(r.live))
+	widths := make([]int, len(r.live))
 	for i, row := range r.live {
 		if i > 0 {
 			b.WriteString("\r\n")
 		}
-		row = truncateDisplay(row, r.liveWidth())
-		r.drawnW[i] = displayWidth(row)
+		// oneLine so a row carrying a newline cannot silently become two rows
+		row = truncateDisplay(oneLine(row), r.liveWidth())
+		if i == r.caretRow {
+			row = paintCaret(row, r.caretCol, r.liveWidth())
+		}
+		widths[i] = displayWidth(row)
 		b.WriteString(row)
 	}
-	b.WriteString(cursorUp(len(r.live) - 1 - r.caretRow))
+	// Park on the block's first row, ready for the next erase. This counts only
+	// rows being written right now, at the width in force right now — never how
+	// the emulator reflowed something written earlier, which is the thing no
+	// model can get right. The size is re-read first so a resize landing
+	// mid-frame is accounted for before the count is taken.
+	r.t.refreshSize()
+	var rows int
+	for _, w := range widths {
+		rows += rowsForWidth(w, r.t.width)
+	}
+	b.WriteString(cursorUp(rows - 1))
 	b.WriteString("\r")
-	b.WriteString(cursorRight(r.caretCol))
 	r.drawn = true
-	r.blockTop = 0 // the block's absolute position is unknown; no erase cap
 	return b.String()
 }
 
@@ -116,34 +107,32 @@ func (r *inlineRenderer) commit(lines []histLine) {
 	if len(lines) == 0 {
 		return
 	}
-	r.hist = append(r.hist, lines...) // retained so a width change can repaint
-	r.t.refreshSize()                 // the erase below must use the width the block is reflowed at
+	r.t.refreshSize() // the erase below must use the width the block is reflowed at
 	var b strings.Builder
 	b.WriteString(beginSync)
 	b.WriteString(hideCursor)
 	b.WriteString(r.eraseLive())
+	emit := func(row string) {
+		b.WriteString(row)
+		b.WriteString("\r\n")
+	}
 	for _, l := range lines {
 		switch {
 		case l.table != nil:
 			for _, row := range layoutTable(l.table, r.t.width) {
-				b.WriteString(row)
-				b.WriteString("\r\n")
+				emit(row)
 			}
 		case l.flow == flowWrap:
 			for _, row := range wrapLine(l.text, r.t.width) {
-				b.WriteString(row)
-				b.WriteString("\r\n")
+				emit(row)
 			}
 		case l.flow == flowClip:
-			b.WriteString(truncateDisplay(l.text, r.t.width))
-			b.WriteString("\r\n")
+			emit(truncateDisplay(l.text, r.t.width))
 		default:
-			b.WriteString(l.text)
-			b.WriteString("\r\n")
+			emit(l.text) // left long on purpose: the terminal wraps and reflows it
 		}
 	}
 	b.WriteString(r.drawLive())
-	b.WriteString(showCursor)
 	b.WriteString(endSync)
 	r.t.write(b.String())
 }
@@ -152,8 +141,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 // terminal in this mode and cannot be erased. The UI resets its own buffers.
 func (r *inlineRenderer) clearHistory() {
 	r.t.write(r.eraseLive())
-	r.hist = nil
-	r.live, r.drawnW = nil, nil
+	r.live = nil
 	r.drawn = false
 }
 
@@ -163,74 +151,21 @@ func (r *inlineRenderer) setLive(rows []string, caretRow, caretCol int) {
 	b.WriteString(beginSync)
 	b.WriteString(hideCursor)
 	b.WriteString(r.eraseLive())
-	r.live, r.caretRow, r.caretCol = rows, caretRow, caretCol
+	// clamp: drawLive paints the caret into live[caretRow], so an out of range
+	// caret would panic or silently land on the wrong row
+	r.live, r.caretCol = rows, caretCol
+	r.caretRow = min(max(caretRow, 0), max(len(rows)-1, 0))
 	b.WriteString(r.drawLive())
-	b.WriteString(showCursor)
 	b.WriteString(endSync)
 	r.t.write(b.String())
 }
 
-// resize picks up the new terminal size. A width change means the emulator
-// reflowed the grid — possibly including bytes drawn before the change but
-// consumed after it — so the previous frame can no longer be located by row
-// math. Instead of locating it, the viewport is repainted from retained
-// history, which also heals whatever a racing draw stranded. A height-only
-// change needs nothing: the caret math is height independent.
-func (r *inlineRenderer) resize() {
-	r.t.refreshSize()
-	if r.t.width <= 0 || r.t.width == r.frameW || (len(r.hist) == 0 && !r.drawn) {
-		return
-	}
-	r.repaintFull()
-}
-
-// repaintFull rebuilds the whole viewport at the current width: the tail of
-// retained history followed by the live block, every row erased and rewritten
-// from the top of the screen, so no erase ever has to find the previous frame.
-// Terminal scrollback above the screen is untouched; rows that no longer fit
-// are simply not painted (the emulator keeps them in scrollback).
-func (r *inlineRenderer) repaintFull() {
-	w := r.liveWidth()
-	var rows []string
-	for _, l := range r.hist {
-		for _, row := range l.rows(w) {
-			rows = append(rows, truncateDisplay(row, w))
-		}
-	}
-	histRows := len(rows)
-	r.drawnW = make([]int, len(r.live))
-	for i, row := range r.live {
-		row = truncateDisplay(row, w)
-		r.drawnW[i] = displayWidth(row)
-		rows = append(rows, row)
-	}
-	if len(rows) == 0 {
-		return
-	}
-
-	start := max(len(rows)-r.t.height, 0)
-	r.blockTop = histRows - start
-	r.drawn = len(r.live) > 0
-	r.frameW = r.t.width
-
-	var b strings.Builder
-	b.WriteString(beginSync)
-	b.WriteString(hideCursor)
-	for i, row := range rows[start:] {
-		b.WriteString(cursorTo(1+i, 1))
-		b.WriteString(eraseLine)
-		b.WriteString(row)
-	}
-	if below := len(rows) - start + 1; below <= r.t.height {
-		b.WriteString(cursorTo(below, 1)) // clear whatever the old frame left below
-		b.WriteString(eraseBelow)
-	}
-	caret := min(max(r.blockTop+r.caretRow, 0), r.t.height-1)
-	b.WriteString(cursorTo(caret+1, min(r.caretCol, w-1)+1))
-	b.WriteString(showCursor)
-	b.WriteString(endSync)
-	r.t.write(b.String())
-}
+// resize picks up the new terminal size; nothing needs redrawing here. The next
+// ordinary draw erases from the cursor parked on the block's first row, which
+// the reflow carried along with its cell, so no size is baked into the erase at
+// all. Committed lines are the terminal's, exactly like cat output: they reflow
+// however the emulator reflows them and are never re-rendered.
+func (r *inlineRenderer) resize() { r.t.refreshSize() }
 
 // scroll is the terminal's job in this mode.
 func (r *inlineRenderer) scroll(int) bool { return false }
@@ -244,11 +179,6 @@ func (r *inlineRenderer) suspend(inFd int) {
 }
 
 func (r *inlineRenderer) close(inFd int) { r.suspend(inFd) }
-
-// rowsFor returns how many terminal rows a line occupies at the given width.
-func rowsFor(line string, width int) int {
-	return rowsForWidth(displayWidth(line), width)
-}
 
 // rowsForWidth returns how many terminal rows a run of w columns occupies.
 func rowsForWidth(w, width int) int {

@@ -17,6 +17,54 @@ func displayWidth(s string) int {
 	return w
 }
 
+// oneLine folds s onto a single terminal row, replacing the line breaks and
+// tabs that would otherwise move the cursor. A live row must occupy exactly one
+// row: the block is erased by counting rows, so a stray newline hides a row from
+// that count and every later erase stops short of the block's top.
+func oneLine(s string) string {
+	if !strings.ContainsAny(s, "\r\n\v\f\t") {
+		return s
+	}
+	s = strings.ReplaceAll(s, "\r\n", "\n") // one break, not two blanks
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', '\v', '\f':
+			return ' '
+		case '\t':
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// paintCaret returns row with the cell at display column col reversed, padding
+// with blanks when the caret sits past the end of the text. Drawing the caret
+// into the row is what frees the terminal's own cursor to park at the top of the
+// live block, so erasing the block never has to work out where the cursor
+// drifted to. maxW bounds the result so a caret at the end of a full row cannot
+// push it into the last column.
+func paintCaret(row string, col, maxW int) string {
+	if col < 0 || maxW <= 0 {
+		return row
+	}
+	col = min(col, maxW-1)
+
+	cs := cells(row)
+	var i, start int
+	for ; i < len(cs) && start < col; i++ {
+		start += cs[i].width
+	}
+	if i == len(cs) { // past the text: pad out to the caret and add its cell
+		for start < col {
+			cs = append(cs, cell{text: " ", width: 1})
+			start++
+		}
+		cs = append(cs, cell{text: " ", width: 1})
+	}
+	cs[i].style += caretReverse
+	return renderCells(cs, "")
+}
+
 // TruncateDisplay returns s limited to max columns, keeping escape sequences
 // intact. Use it to size text by what the terminal shows rather than by bytes.
 func TruncateDisplay(s string, max int) string { return truncateDisplay(s, max) }

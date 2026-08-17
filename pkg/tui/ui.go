@@ -21,7 +21,10 @@ const (
 	userContinue   = "  "
 	tabSpaces      = "    " // tabs are expanded so column math stays exact
 	// resize events arrive in bursts while dragging, only rebuild once it settles
-	resizeSettle    = 80 * time.Millisecond
+	resizeSettle = 80 * time.Millisecond
+	// a burst holds drawing back, so a long drag must settle periodically rather
+	// than leave the UI frozen for as long as the user keeps dragging
+	resizeMaxHold   = 500 * time.Millisecond
 	spinnerInterval = 90 * time.Millisecond
 	maxInputRatio   = 3 // input may take at most this fraction of the screen
 )
@@ -236,6 +239,11 @@ func (u *UI) Close() {
 		close(ch)      // ends drainEdits; its range loop exits cleanly
 	}
 	close(u.done)
+	if len(u.deferred) > 0 {
+		// a burst overlapping the end of a turn must not swallow committed output
+		u.render.commit(u.deferred)
+		u.deferred = nil
+	}
 	u.render.close(u.inFd)
 }
 
@@ -328,7 +336,11 @@ func (u *UI) UserEcho(text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.gap()
-	u.commit(indentLines(u.theme.User.Wrap(text), u.theme.User.Wrap(userMarker), userContinue), flowWrap)
+	// flowReflow, not flowWrap: pre-wrapping it here would freeze the message at
+	// the width it was sent at, and the terminal could never reflow it again.
+	// Explicit newlines keep their continuation indent; soft wraps are the
+	// terminal's, exactly like the rest of committed output.
+	u.commit(indentLines(u.theme.User.Wrap(text), u.theme.User.Wrap(userMarker), userContinue), flowReflow)
 }
 
 // Thinking streams reasoning output, shaded so it does not read as a reply.
@@ -564,12 +576,33 @@ func (u *UI) repaint() {
 		w--
 	}
 
+	// the status block is composed first so every budget below it is exact
+	st := u.status
+	frame := spinnerFrames[u.spinner%len(spinnerFrames)]
+	if !u.busy && u.tool == "" {
+		frame = spinnerFrames[0] // static resting frame when idle; bottom-left of the cell
+	}
+	st.Spinner = u.theme.Spinner.Wrap(frame)
+	st.Tool = u.tool
+	statusRows := st.rows(u.theme, w)
+
 	var rows []string
 	if u.noticeText != "" {
 		rows = append(rows, u.noticeText)
 	}
-	// in-progress markdown streams above the input so a reply appears live
-	rows = append(rows, u.streamingRows(w)...)
+	// In-progress markdown streams above the input so a reply appears live. It
+	// is the one part of the block whose height follows the content rather than
+	// the screen, so it yields hardest: a reply longer than the terminal is
+	// tall would otherwise make the whole block overflow, and drawing it would
+	// scroll the previous frame into scrollback where no erase can reach it,
+	// leaving a copy behind on every delta. The tail is what a reader watches.
+	if sr := u.streamingRows(w); len(sr) > 0 {
+		room := h - len(rows) - 1 - len(statusRows) - 1 // divider, status, input
+		if room < len(sr) {
+			sr = sr[len(sr)-max(room, 0):]
+		}
+		rows = append(rows, sr...)
+	}
 	// a narrow rule atop the prompt area sets it apart from committed and streamed
 	// output; row accounting stays exact because this is one more real row here.
 	if w > 0 {
@@ -594,18 +627,7 @@ func (u *UI) repaint() {
 		offset += len(compRows)
 	}
 
-	// working glyph and running tool live at the status bar's bottom-left; compute
-	// the block first so the activity budget below is exact.
-	st := u.status
-	frame := spinnerFrames[u.spinner%len(spinnerFrames)]
-	if !u.busy && u.tool == "" {
-		frame = spinnerFrames[0] // static resting frame when idle; bottom-left of the cell
-	}
-	st.Spinner = u.theme.Spinner.Wrap(frame)
-	st.Tool = u.tool
-	statusRows := st.rows(u.theme, w)
-
-	// activity yields first on a short terminal: it renders into whatever remains
+	// activity yields next on a short terminal: it renders into whatever remains
 	// after the status rows and one line for the input/interaction minimum.
 	budget := maxActivityBudget // text cap plus the "+N more" row when overflowed
 	if room := h - len(rows) - 1 - len(statusRows); room < budget {
@@ -630,7 +652,18 @@ func (u *UI) repaint() {
 	}
 	rows = append(rows, statusRows...)
 
-	u.render.setLive(rows, offset+curRow, curCol)
+	// Last line of defence on the block's height. Every producer above budgets
+	// itself, but a floor (search, completion) or an unlucky width can still
+	// push the total past the screen, and a block taller than the screen scrolls
+	// as it is drawn — which strands the previous frame's rows above it, one
+	// copy per redraw, somewhere no erase can reach. Drop from the top, which is
+	// the oldest streamed text, and carry the caret with it.
+	caret := offset + curRow
+	if over := len(rows) - h; over > 0 && h > 0 {
+		rows = rows[over:]
+		caret = max(caret-over, 0)
+	}
+	u.render.setLive(rows, caret, curCol)
 }
 
 func (u *UI) startSpinner() {
@@ -1013,6 +1046,8 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	case keyKillWord:
 		u.editor.KillWordBack()
 	case keyRedraw:
+		// the fallthrough repaint redraws the live block; committed rows are the
+		// terminal's and stay exactly as they are
 		u.render.resize()
 	case keyPageUp:
 		u.render.scroll(u.page())
@@ -1093,6 +1128,31 @@ func (u *UI) readLines() {
 	}
 }
 
+// burst tracks a run of resize signals. Drawing is held back for its duration,
+// so it ends either when the signals stop for resizeSettle or when it has held
+// on for resizeMaxHold, whichever comes first: a slow drag settles periodically
+// instead of freezing the UI for as long as the user keeps dragging.
+type burst struct {
+	start time.Time // zero while no burst is in flight
+}
+
+// signal starts or extends a burst, reporting whether it has held long enough
+// that it must settle now rather than debounce further.
+func (b *burst) signal(now time.Time) bool {
+	if b.start.IsZero() {
+		b.start = now
+	}
+	return b.expired(now)
+}
+
+// expired reports whether the burst has held drawing back for its full budget.
+func (b *burst) expired(now time.Time) bool {
+	return !b.start.IsZero() && !now.Before(b.start.Add(resizeMaxHold))
+}
+
+// done ends the burst, so the next signal starts a fresh budget.
+func (b *burst) done() { b.start = time.Time{} }
+
 // watchSignals rebuilds the layout once a burst of resize events settles, and
 // retakes the terminal after the process is continued.
 func (u *UI) watchSignals() {
@@ -1105,6 +1165,11 @@ func (u *UI) watchSignals() {
 	if !timer.Stop() {
 		<-timer.C
 	}
+	var b burst
+	settle := func() {
+		b.done()
+		u.resize()
+	}
 	for {
 		select {
 		case <-u.done:
@@ -1112,10 +1177,12 @@ func (u *UI) watchSignals() {
 		case sig := <-ch:
 			if sig == syscall.SIGCONT {
 				u.resume()
+				continue
+			}
+			u.holdForResize()
+			if b.signal(time.Now()) {
+				settle()
 			} else {
-				u.mu.Lock()
-				u.resizing = true // hold all drawing until the burst settles
-				u.mu.Unlock()
 				timer.Reset(resizeSettle)
 			}
 		case <-timer.C:
@@ -1135,13 +1202,22 @@ func (u *UI) watchSignals() {
 					break drain
 				}
 			}
-			if pending {
+			if pending && !b.expired(time.Now()) {
 				timer.Reset(resizeSettle)
 			} else {
-				u.resize()
+				settle()
 			}
 		}
 	}
+}
+
+// holdForResize gates drawing until the burst settles. Only inline can be
+// corrupted by an erase landing mid-reflow; alt owns its screen and plain has
+// none, so neither should pay the hold.
+func (u *UI) holdForResize() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.resizing = u.mode == ModeInline
 }
 
 // resize ends a resize burst: the size goes to the renderer, held-back

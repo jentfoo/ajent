@@ -35,7 +35,9 @@ func (r *altRenderer) resume(inFd int) error {
 	if err := r.t.makeRaw(inFd); err != nil {
 		return err
 	}
-	r.t.write(altScreenOn + clearScreen + bracketedPasteOn)
+	// same as inline: the caret is painted into its row, the terminal's cursor
+	// stays hidden for the session
+	r.t.write(altScreenOn + clearScreen + bracketedPasteOn + hideCursor)
 	return nil
 }
 
@@ -133,10 +135,12 @@ func (r *altRenderer) render() {
 		if r.offset > 0 && i == len(r.live)-1 {
 			row = r.scrollNote() + row
 		}
-		b.WriteString(cursorTo(view+1+i, 1) + eraseLine + truncateDisplay(row, r.t.width))
+		row = truncateDisplay(oneLine(row), r.t.width)
+		if i == r.caretRow {
+			row = paintCaret(row, r.caretCol, r.t.width)
+		}
+		b.WriteString(cursorTo(view+1+i, 1) + eraseLine + row)
 	}
-	b.WriteString(cursorTo(view+1+r.caretRow, r.caretCol+1))
-	b.WriteString(showCursor)
 	b.WriteString(endSync)
 	r.t.write(b.String())
 }

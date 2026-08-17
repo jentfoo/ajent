@@ -134,8 +134,7 @@ widths, since permissions is a safety indicator that must stay visible.
 ```
 ui.go            public API, state machine, key handling, locking
   renderer.go        mode selection, terminal ownership, renderer interface
-    render_inline.go   main screen, terminal owns wrapping and scrollback;
-                       retains history to repaint the viewport on a width change
+    render_inline.go   main screen, terminal owns wrapping, reflow and scrollback
     render_alt.go      alternate screen, we own wrapping and scrollback
   markdown.go      goldmark AST -> ANSI (+ go-pretty tables)
   diff.go          go-udiff -> full file diff, shaded changes, intraline emphasis
@@ -182,7 +181,7 @@ So there are two modes, chosen by `ResolveMode`:
 | Who wraps prose | terminal | us |
 | Who scrolls | terminal | us |
 | Scrollback | native, whole session | ours, replayed on exit |
-| Reflow on resize | emulator reflows; the settled resize repaints the viewport from retained history | always correct |
+| Reflow on resize | whatever the emulator does; we only redraw the live block | always correct |
 | Selection / scrollbar | native | on-screen only |
 
 ```
@@ -214,36 +213,38 @@ reflow" in general, which is why the flag exists.
 
 These are load bearing. Each one exists because breaking it produced a real bug.
 
-**1. Inline never addresses history — except in the settled-resize repaint.**
-No scroll region, no absolute cursor positioning, no repainting of committed
-lines during normal operation. Every cursor move in `render_inline.go` is
-relative (`cursorUp`, `\r`, `eraseBelow`) and confined to the live block. This
-is what makes the terminal's own reflow and scrollback work exactly as they do
-for `cat`. The single exception is `repaintFull`, which runs only when a resize
-burst has *settled* at a new width: at that point the emulator has already
-reflowed (possibly racing bytes we had queued), so the old frame cannot be
-located by row math at all, and the viewport is rebuilt wholesale instead (rule
-5 below). It uses absolute positioning, but it is sync-wrapped, touches only
-the visible screen, and — crucially — is *self-healing*: it does not depend on
-where the previous frame landed, so any damage a racing draw left behind is
-erased by the next settle rather than stranded permanently.
+**1. Inline never addresses history.** No scroll region, no absolute cursor
+positioning, no `cursorTo` anywhere in `render_inline.go`. Every cursor move is
+relative (`cursorUp`, `\r`, `eraseLine`, `eraseBelow`). This is what makes the
+terminal's own reflow and scrollback work exactly as they do for `cat`, and it
+is why a resize cannot damage anything the terminal held before the session
+started. A single `cursorTo` into the history area reintroduces the entire
+class of corruption we removed.
+
+There is no exception. A resize does not re-render history: `resize()` only
+picks the new size up, and the next ordinary draw erases and redraws the live
+block alone. Committed rows reflow however the emulator reflows them, exactly
+as `cat` output does.
 
 **2. Row accounting is exact, never predicted.** We emit N rows and the cursor
 advances N rows. We do not compute "how many rows will the terminal wrap this
-into". Predicting requires agreeing with the terminal about width, and any
-disagreement (a resize mid-write, an emoji whose width the emulator measures
-differently) desyncs permanently and every later write lands on live text.
+into" for anything already on screen. Predicting requires agreeing with the
+terminal about width and about reflow, and any disagreement (a resize mid-write,
+an emoji the emulator measures differently, an emulator that reflows unlike
+ours) desyncs permanently, and the damage accumulates one row at a time because
+by then it is committed content. This is why the erase carries no arithmetic at
+all and the cursor is parked where the next erase must begin.
 
 **3. Committed output is never re-rendered in place.** Streaming markdown
 commits at block boundaries only (`splitCompleteBlocks`); an open block stays
 buffered until it closes. Re-rendering committed scrollback is the
-Ink/Claude-Code bug that destroys history in tmux and VS Code. The settled
-resize repaint is the one exception, and it is not scrollback re-rendering: the
-renderer retains every committed `histLine` (unwrapped, with its flow) and, on
-a width change only, re-lays just the rows that fit the *visible screen* from
-the top down, each row erased and rewritten once inside one sync update.
-Scrollback above the screen is never touched, and the steady-state streaming
-path never repaints a committed line.
+Ink/Claude-Code bug that destroys history in tmux and VS Code. Nothing —
+including a resize — rewrites a line once it has been committed, so inline
+retains no history at all: the renderer keeps only the live block. Committed
+prose goes out unwrapped (`flowReflow`) precisely so the terminal owns its
+wrapping and can reflow it on resize; pre-wrapping it here would freeze it at
+the width it was written at. That is why `UserEcho` commits the submitted
+message as `flowReflow` rather than wrapping it the way the input editor does.
 
 The live preview must be refreshed **before** those blocks are committed: a
 completed block still sitting in `r.live` would otherwise be redrawn by
@@ -527,78 +528,77 @@ the activity budget so row accounting stays exact.
 
 ### Finding the live block again after a resize
 
-Inline mode erases the live block by moving the cursor up to its first row
-(`eraseLive`), which means it must know how many *terminal* rows sit above the
-caret. On resize the emulator has already reflowed what was drawn, so that count
-is no longer the number of rows in the block. Four rules keep ordinary redraws
-recoverable, and one structural rule removes the need for recovery to be
-perfect:
+Inline mode redraws by erasing the live block and writing it again, which means
+it has to find the block's first row. Committed rows are never part of that: they
+belong to the terminal and are never re-rendered (invariant 1), so the only
+question is where the block starts.
 
-1. **The live block never fills the last column.** `repaint` composes every row
-   one column short of the terminal. A row ending in the last column leaves the
-   cursor in the deferred-wrap state, and emulators disagree on whether the line
-   is then marked as continued — which is exactly what decides how a resize
-   reflows it. Composing narrow rather than truncating at draw time means nothing
-   is cut off the editor or a dialog. The full-width divider and the shaded
-   activity band are the rows this most obviously applies to.
-2. **Reflow is measured from what was drawn, not from the live strings.**
-   `drawLive` records the display width it actually emitted per row (already
-   truncated to the width available); `caretOffset` reflows *those* widths at the
-   current width. Measuring the untruncated string instead would over-count for
-   any row wider than the terminal and send `eraseLive` too far up, erasing
-   committed history above the prompt.
-3. **`caretRow` is an index into the block, never a terminal offset.** The
-   terminal offset is derived on demand by `caretOffset` from the recorded draw
-   geometry (`drawnW`) and the current width, so nothing about it compounds
-   across resizes. When a repaint cut into the block (rule 5), `blockTop`
-   records how many of its rows sit above the screen and `caretOffset` caps the
-   erase at what is actually visible.
-4. **No draw happens during a resize burst.** Rules 1–3 assume the width
-   `caretOffset` divides by is exactly what the emulator applied to the content
-   on screen. That holds once reflow has settled, but not while it is still in
-   flight: an erase computed against one width and applied to another (a
-   spinner tick or progress row landing mid-burst) under-shoots —
-   `caretOffset` counts too few rows, so `eraseLive` strands the old divider
-   above the freshly drawn block.
+The answer is: **the cursor is already there.** Every draw ends by parking the
+cursor on the block's first row, so `eraseLive` is nothing but `\r` +
+`eraseBelow` — return to the start of this line, clear downward. There is no row
+arithmetic in the erase at all, which is what makes it immune to the failures
+that produced this bug repeatedly:
 
-   So every draw must wait for a single, stable width. A SIGWINCH sets
-   `UI.resizing`; `repaint` returns immediately while it is set (the spinner
-   simply skips frames for the ~80 ms of `resizeSettle`), and `commitHist`
-   buffers its lines in `UI.deferred`, because `commit` erases the live block
-   too. The debounce timer first drains any SIGWINCH already queued behind it —
-   a pending signal means the burst is not over — and only then calls
-   `resize()`, which clears `resizing` and settles (`settleResizeLocked`):
-   the renderer picks up the new size (inline repaints the viewport, rule 5),
-   `repaint` recomposes the live block so deferred rows leave its preview
-   first (the Text/EndText ghost invariant), and the deferred commits flush
-   in order. This turns an unbounded timing race into a bounded debounce:
-   redraws never straddle a reflow boundary.
+- the emulator reflowing the block into a different number of rows than we
+  predicted (every emulator reflows a little differently, and some not at all),
+- a glyph the terminal measures wider than `displayWidth` does, so a row spans
+  two rows and the count is short,
+- a resize landing between composing a frame and the terminal consuming it.
 
-   `resize()` and `resume()` clear the flag because both run after the emulator
-   has settled; `suspend` does not, so a Ctrl+Z mid-burst still comes back to one
-   clean block. The renderer's own `size`, `commit` and `setLive` re-read the size
-   via `refreshSize` on every actual draw as before — that stays true for draws,
-   but the gate above is what decides *when* it is safe to draw at all.
-5. **A settled width change repaints the viewport; it never locates the old
-   frame.** Rules 1–4 shrink the race but cannot close it: output bytes queued
-   before a resize can be consumed by the emulator *after* it reflows, and a
-   resize can land between the settle check and the erase. Any erase that must
-   *find* the previous frame strands rows permanently when it guesses wrong —
-   no later erase reaches above the new block's top. So `resize()` does not
-   try: `repaintFull` rebuilds the whole screen from `r.hist` (every committed
-   line, retained unwrapped like alt mode's buffer) plus the live block,
-   re-laid at the new width, each row erased and rewritten from the top of the
-   screen down, capped at what fits. Recovery no longer depends on where the
-   old frame landed, which is what makes the class of bug finite: any stranding
-   a race still causes is healed by the next settle, not carried forever.
+Each of those used to leave the block's top row behind, once per miss — and the
+misses accumulate, because the stranded row is committed terminal content by the
+time anyone could notice. A reflow keeps the cursor on the first cell of its
+logical line, and the first cell of the block's first row is exactly where we
+parked, so none of it matters any more.
 
-   Width changes are detected against `frameW` (the width the frame was drawn
-   at), never against `t.width`: `size()` re-reads the terminal size on every
-   call, so by the time `resize()` runs the new size may already be stored.
-   A height-only change needs no repaint — the caret math is height
-   independent. A resize landing mid-settle needs no retry loop either: it
-   delivers its own SIGWINCH, and the settle that follows heals whatever it
-   raced.
+Five rules keep that true, and one bounds what the resize gate costs:
+
+1. **The caret is painted, not parked on.** The terminal's own cursor is hidden
+   for the whole session; `paintCaret` reverses the cell the caret sits on as the
+   row is written. That is what frees the cursor to sit where the *erase* needs
+   it rather than where the *user* needs it, and it is why the erase can be
+   position-free. Both renderers do it, so the caret looks the same in either.
+2. **Every live row is exactly one terminal row.** Row text arrives from callers
+   (`SetActivity`, `NotifyKeyed`, a tool label), and tool progress in particular
+   is arbitrary text that may carry a newline. One newline moves the cursor a row
+   nothing counted, and the park lands inside the block instead of on top of it.
+   `drawLive` folds every row through `oneLine` before writing it, so the
+   invariant holds whatever a caller passes.
+3. **The live block never fills the last column.** `repaint` composes every row
+   one column short. A row ending in the last column leaves the cursor in the
+   deferred-wrap state, and emulators disagree on whether the next byte lands on
+   the same row or the next one — which would put the park a row out. Composing
+   narrow rather than truncating at draw time means nothing is cut off the editor
+   or a dialog.
+4. **The park counts only what it is writing, at the width in force now.**
+   Parking still has to move up over the rows just written, so `drawLive` sums
+   them — but only rows it is emitting itself, never rows the emulator may have
+   reflowed since. It re-reads the size after composing them, so a resize that
+   landed mid-frame is accounted for before the count is taken
+   (`TestInlineRendererResizeRace`). This is the one piece of counting left in
+   the design, over data one function wrote microseconds earlier.
+5. **The live block never exceeds the screen.** All of the above assumes the
+   block is erasable, and a block taller than the screen is not: drawing it
+   scrolls, so the previous frame's top rows are pushed into scrollback where no
+   erase can reach them — one stranded copy per redraw, compounding, which is
+   what a long reply streaming into a short terminal used to do. Every producer
+   budgets itself against the rows left, and the streaming preview yields
+   hardest because it is the only one whose height follows the content rather
+   than the terminal: it keeps its tail, which is what a reader is watching.
+   `repaint` then clamps the total as a last line of defence, dropping from the
+   top and carrying the caret with it, so a floor (search, completion) or an
+   unlucky width cannot overflow either (`TestUILiveBlockFitsTheScreen`).
+6. **The gate cannot hold forever.** A burst holds drawing back for as long as
+   signals keep arriving, so a slow window drag would otherwise freeze the
+   spinner, the keystroke echo and every commit for its whole duration. `burst`
+   (in `ui.go`) settles once the run has held for `resizeMaxHold` even if signals
+   are still coming, so a long drag redraws at ~2 Hz instead of going dark; the
+   next signal starts a fresh budget. `Close` flushes whatever is still in
+   `UI.deferred`, so a burst overlapping the end of a turn cannot swallow
+   committed output.
+
+   `resize()` itself draws nothing — it only picks the new size up. Ctrl+L
+   redraws the live block; it cannot repair committed rows and does not try.
 
 ## Input
 
@@ -721,11 +721,15 @@ Patterns:
 
 - Renderer tests construct a `termState` directly with `fd: -1` and a fixed size.
   Point `sizeFn` at the emulator (`return v.w, v.h, nil`) and drive `v.setSize`
-  for a reflow-faithful resize; leaving `sizeFn` nil pins the size. The
-  corruption regressions (`TestInlineRendererResizeHealsStranding`,
-  `TestUIResizeStorm`) are built this way: one strands a divider with a
-  stale-width erase and asserts the settled repaint heals it, the other storms
-  resizes against progress updates asserting one divider at every step.
+  for a reflow-faithful resize; leaving `sizeFn` nil pins the size. Pointing
+  `sizeFn` at a width the emulator no longer has is how the tests reproduce a
+  draw that raced the reflow. The corruption regressions are built this way:
+  `TestInlineRendererStaleWidthStrands` shows the stale-width erase stranding a
+  row and the true-width erase not, `committed_rows_are_never_re_rendered` and
+  `leaves_content_above_the_session` pin invariant 1 against the emulator's own
+  reflow, `TestUIActivityNewlineKeepsRowCount` covers rule 5 from the public API,
+  and `TestUIResizeStorm` storms resizes against progress updates asserting one
+  divider and no duplicated history at every step.
 - `newTestUI` in `ui_test.go` drives a full `UI` in inline mode against the
   emulator, with an `io.Pipe` for keystrokes. Assertions use
   `require.Eventually` against a locked read of the emulator.
@@ -747,6 +751,18 @@ Things that look fine and are not:
   a thematic break and `=== RUN` as a setext heading. Use `Output`/`EndOutput`.
 - **Do not emit `ESC[2J` or `ESC[3J` in the main screen.** That is what destroys
   scrollback in tmux and VS Code.
+- **Do not put caller text in a live row without `oneLine`.** A newline in a
+  progress or notice string makes the terminal use a row nothing counted, so the
+  cursor parks inside the block instead of on top of it. `drawLive` folds rows
+  for you; do not add a draw path that skips it.
+- **Do not add an unbudgeted row to the live block.** Anything that grows with
+  content rather than with the terminal must yield to the rows below it. A block
+  taller than the screen scrolls as it is drawn, and scrolled rows are committed
+  content that no erase can take back.
+- **Do not leave the terminal cursor on the caret.** It is parked on the live
+  block's first row so the erase needs no arithmetic; the caret is drawn with
+  `paintCaret`. Re-showing the cursor mid-session, or moving it to the caret,
+  reintroduces the whole class of stranding bugs.
 - **A gutter prefix does not survive terminal wrapping.** Prose is marked by SGR
   styling only (thinking is dim + italic), never by a per-line prefix, because
   continuation rows would lose it. `flowWrap` lines can use prefixes since we
@@ -779,11 +795,11 @@ width instead of clipping.
 - Alt mode's scrollback is ours, so the terminal scrollbar does not cover the
   session while it runs. The transcript is replayed on exit to compensate.
 - Alt mode retains the whole session uncapped, and re-lays every line on a width
-  change. Bounded by the resize debounce, not by session length. Inline retains
-  the same unwrapped history (for the viewport repaint), so the two modes cost
-  the same memory; only inline's repaint is capped at the visible screen.
-- Inline's viewport repaint re-wraps the visible tail of history on a width
-  change, so a line can appear both in scrollback (where the emulator's reflow
-  put it) and on the repainted screen in emulators that do not pull scrollback
-  back on grow. Cosmetic, bounded to the resize moment, and preferred over the
-  alternative of locating a reflowed frame.
+  change. Bounded by the resize debounce, not by session length. It has to keep
+  everything: `close` replays the transcript onto the main screen.
+- Inline retains no history at all: it never re-renders a committed line, so it
+  has nothing to keep. Its memory is flat in session length, unlike alt.
+- A racing draw (bytes composed before a reflow and consumed after it) can still
+  strand a row. Nothing can repair it afterwards — by then it is committed
+  terminal content — so the resize gate exists to keep draws out of that window
+  rather than to clean up behind them.

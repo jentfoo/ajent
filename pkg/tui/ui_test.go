@@ -856,24 +856,25 @@ func TestUIResizeGate(t *testing.T) {
 		assert.Equal(t, 1, dividers, "exactly one live divider after the settled redraw")
 	})
 
-	t.Run("width_change_repaints_the_viewport", func(t *testing.T) {
+	t.Run("width_change_repaints_our_rows", func(t *testing.T) {
 		v := newVT(40, 10)
 		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 		u.Print("committed before the resize")
-		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return 20, 10, nil }
 
+		v.setSize(20, 10) // the emulator reflows, then the settled signal arrives
 		u.resize()
 
 		screen := u.snapshot(v)
 		assert.Contains(t, screen, "committed before", "history survives, re-wrapped at the new width")
-		assert.Contains(t, screen, "the resize")
+		assert.Equal(t, 1, strings.Count(screen, "resize"), "re-laid once, never doubled")
 		var dividers int
 		for line := range strings.Lines(screen) {
 			if strings.TrimRight(line, " \n") == strings.Repeat(ruleChar, 19) {
 				dividers++
 			}
 		}
-		assert.Equal(t, 1, dividers, "the viewport repaint rewrites the old divider row")
+		assert.Equal(t, 1, dividers, "the repaint rewrites the old divider row")
 	})
 
 	t.Run("reset_drops_held_commits", func(t *testing.T) {
@@ -887,12 +888,56 @@ func TestUIResizeGate(t *testing.T) {
 
 		assert.NotContains(t, u.snapshot(v), "held then dropped")
 	})
+
+	t.Run("close_flushes_held_commits", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		setResizing(u, true)
+
+		u.UserEcho("held at the end of the turn")
+		u.Close() // a burst overlapping the end of a turn must not swallow output
+
+		assert.Contains(t, v.Screen(), "held at the end of the turn")
+	})
+}
+
+// countRules counts rows made up entirely of the divider glyph, at any width:
+// a reflowed divider can be left spread across several rows.
+func countRules(screen string) int {
+	var n int
+	for line := range strings.Lines(screen) {
+		if l := strings.TrimRight(line, " \n"); l != "" && strings.Trim(l, ruleChar) == "" {
+			n++
+		}
+	}
+	return n
+}
+
+// TestResizeBurst covers the hold budget: a burst debounces while signals keep
+// arriving, but must settle anyway once it has held drawing back long enough,
+// so a slow drag does not freeze the UI for its whole duration.
+func TestResizeBurst(t *testing.T) {
+	t.Parallel()
+
+	t0 := time.Now()
+	var b burst
+
+	assert.False(t, b.signal(t0), "a fresh burst debounces")
+	assert.False(t, b.signal(t0.Add(resizeMaxHold/2)), "still inside the budget")
+	assert.False(t, b.expired(t0.Add(resizeMaxHold/2)))
+	assert.True(t, b.expired(t0.Add(resizeMaxHold)), "the budget is spent")
+	assert.True(t, b.signal(t0.Add(resizeMaxHold+time.Second)), "a later signal settles at once")
+
+	b.done()
+	assert.False(t, b.expired(t0.Add(time.Hour)), "no burst in flight")
+	assert.False(t, b.signal(t0.Add(time.Hour)), "the next burst starts a fresh budget")
 }
 
 // TestUIResizeStorm drives a burst of resizes while tool progress updates, the
-// shape of the reported corruption: gated draws never land mid-reflow, and the
-// settled repaint leaves the screen coherent at every step — one divider, each
-// piece of content exactly once.
+// shape of the reported corruption: gated draws never land mid-reflow, so the
+// settled redraw leaves exactly one divider at every step and never duplicates
+// a committed line. The history lines are short enough to survive the narrowest
+// step unwrapped, so counting them stays independent of where the terminal wraps.
 func TestUIResizeStorm(t *testing.T) {
 	t.Parallel()
 
@@ -900,7 +945,10 @@ func TestUIResizeStorm(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 
-	u.Print("alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima")
+	history := []string{"alpha", "bravo", "charlie", "delta"}
+	for _, l := range history {
+		u.Print(l)
+	}
 	done := u.ToolStart("write notes.go")
 	defer done("")
 
@@ -912,17 +960,84 @@ func TestUIResizeStorm(t *testing.T) {
 		u.SetActivity("write", "writing notes.go") // gated: draws nothing
 		u.resize()                                 // the debounce settled
 
-		var dividers int
-		for line := range strings.Lines(u.snapshot(v)) {
-			if l := strings.TrimRight(line, " \n"); l != "" && strings.Trim(l, ruleChar) == "" {
-				dividers++
-			}
+		screen := u.snapshot(v)
+		assert.Equal(t, 1, countRules(screen), "width %d", w)
+		for _, l := range history {
+			// on screen or scrolled into the terminal's scrollback, never twice
+			assert.LessOrEqual(t, strings.Count(screen, l), 1, "%q at width %d", l, w)
 		}
-		assert.Equal(t, 1, dividers, "width %d", w)
 	}
 
 	screen := u.snapshot(v)
-	assert.Equal(t, 1, strings.Count(screen, "alpha bravo charlie"), "history appears exactly once")
 	assert.Contains(t, screen, "write notes.go")
 	assert.Contains(t, screen, "writing notes.go")
+}
+
+// TestUIActivityNewlineKeepsRowCount guards invariant 2 against caller text: a
+// live row carrying a newline moves the cursor a row nothing counted, so every
+// later erase stops short of the block's top and strands the divider. Tool
+// progress is arbitrary caller text, so this is reachable from the public API.
+func TestUIActivityNewlineKeepsRowCount(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(48, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+	u.Print("committed reply line")
+	done := u.ToolStart("bash: go test ./...")
+	defer done("")
+	u.SetActivity("bash", "running tests\nPASS pkg/tui") // multi line command output
+
+	screen := u.snapshot(v)
+	require.Equal(t, 1, countRules(screen), "the row folded onto one line")
+	assert.Contains(t, screen, "running tests PASS pkg/tui")
+
+	v.setSize(30, 12)
+	u.resize()
+
+	screen = u.snapshot(v)
+	assert.Equal(t, 1, countRules(screen), "and the erase still finds the block's top")
+	assert.Contains(t, screen, "committed reply line", "history is untouched")
+}
+
+// TestUILiveBlockFitsTheScreen guards the block's height. The streaming preview
+// is the one part whose size follows the content rather than the terminal, so a
+// reply longer than the screen is tall used to push the block past the bottom.
+// Drawing a block taller than the screen scrolls it, and the previous frame's
+// rows — divider included — land in scrollback, where no erase can ever reach
+// them: one stranded copy per delta, compounding.
+func TestUILiveBlockFitsTheScreen(t *testing.T) {
+	t.Parallel()
+
+	t.Run("long_reply_never_scrolls_the_block", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+		for range 6 {
+			u.Text("word " + strings.Repeat("filler ", 6) + "\n")
+			require.Empty(t, v.scrollback, "the live block must never scroll")
+			require.Equal(t, 1, countRules(u.snapshot(v)))
+		}
+		screen := u.snapshot(v)
+		assert.Contains(t, screen, promptFirst, "the input survives the trim")
+		assert.Contains(t, screen, "0/1k · test", "and so does the status row")
+	})
+
+	t.Run("narrowing_mid_stream_keeps_it_in", func(t *testing.T) {
+		v := newVT(60, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+		// narrowing re-wraps the buffered reply taller, which is how a resize
+		// during streaming used to overflow the screen
+		u.Text("alpha bravo charlie delta echo foxtrot golf hotel india juliet ")
+		for _, w := range []int{40, 26, 18} {
+			v.setSize(w, 10)
+			u.Text("kilo lima mike november oscar papa quebec romeo sierra ")
+			assert.Equal(t, 1, countRules(u.snapshot(v)), "width %d", w)
+			assert.Contains(t, u.snapshot(v), promptFirst, "width %d", w)
+		}
+	})
 }

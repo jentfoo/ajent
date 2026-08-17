@@ -63,14 +63,17 @@ func TestInlineRendererCommit(t *testing.T) {
 		assert.Equal(t, "│ aaaa │ b", v.Line(0))
 		assert.Empty(t, v.Line(1), "structural lines never wrap")
 	})
-	t.Run("caret_left_in_the_input", func(t *testing.T) {
+	t.Run("cursor_parks_on_the_block_not_the_caret", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
 		r.setLive([]string{"❯ ab", "ctx"}, 0, 4)
 		r.commit([]histLine{{text: "x"}})
 
-		v.WriteString("Z")
-		assert.Equal(t, "❯ abZ", v.Line(1))
+		// the caret is painted into its row (paintCaret), which frees the
+		// terminal's cursor to sit where the next erase needs to start
+		assert.Equal(t, "❯ ab", v.Line(1), "the caret does not alter the text")
+		assert.Equal(t, 1, v.row, "parked on the block's first row")
+		assert.Equal(t, 0, v.col)
 	})
 	t.Run("multi_row_block", func(t *testing.T) {
 		v := newVT(20, 8)
@@ -80,9 +83,9 @@ func TestInlineRendererCommit(t *testing.T) {
 
 		assert.Equal(t, "hist", v.Line(0))
 		assert.Equal(t, "⠋ tool", v.Line(1))
+		assert.Equal(t, "  b", v.Line(3), "the caret row keeps its text")
 		assert.Equal(t, "ctx", v.Line(4))
-		v.WriteString("Z")
-		assert.Equal(t, "  bZ", v.Line(3), "caret sat on the second input row")
+		assert.Equal(t, 1, v.row, "the cursor parks on the block's first row")
 	})
 }
 
@@ -105,123 +108,113 @@ func TestInlineRendererScrollsNaturally(t *testing.T) {
 func TestInlineRendererResize(t *testing.T) {
 	t.Parallel()
 
-	t.Run("caret_offset_follows_the_reflow", func(t *testing.T) {
+	t.Run("cursor_parks_on_the_blocks_first_row", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
-		// two input rows, caret on the second; the first is 12 columns wide
-		r.setLive([]string{"❯ 0123456789", "  x", "ctx"}, 1, 3)
-		assert.Equal(t, 1, r.caretOffset())
-
-		r.t.width = 6 // what the emulator's reflow would leave the rows at
-
-		assert.Equal(t, 1, r.caretRow, "caretRow stays an index into the block")
-		assert.Equal(t, 2, r.caretOffset(), "the 12 column row now occupies two rows")
-	})
-	t.Run("width_change_repaints_the_viewport", func(t *testing.T) {
-		v := newVT(20, 8)
-		r := newTestInline(v)
-		r.commit([]histLine{{text: "one two three four five", flow: flowReflow}})
-		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
-
-		r.t.sizeFn = func() (int, int, error) { return 10, 8, nil }
-		r.resize()
-
-		screen := v.Screen()
-		assert.Contains(t, screen, "one two", "history re-wraps at the new width")
-		var rules int
-		for i := 0; i < v.h; i++ {
-			if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
-				rules++
-				assert.Equal(t, 9, displayWidth(l), "the divider is redrawn at the new live width")
-			}
-		}
-		assert.Equal(t, 1, rules, "the repaint rewrites the old divider row, never duplicates it")
-	})
-	t.Run("repaint_full_clears_leftovers_below", func(t *testing.T) {
-		v := newVT(20, 8)
-		r := newTestInline(v)
-		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
-		// junk the previous frame left below the content (a racing draw, a
-		// resize that shrank the block): the repaint must clear it
-		v.WriteString(cursorTo(5, 1) + "junk" + cursorTo(6, 1) + "junk")
-
-		r.t.sizeFn = func() (int, int, error) { return 10, 8, nil }
-		r.resize()
-
-		assert.NotContains(t, v.Screen(), "junk")
-	})
-	t.Run("resizing_twice_is_idempotent", func(t *testing.T) {
-		v := newVT(20, 8)
-		r := newTestInline(v)
+		r.commit([]histLine{{text: "kept"}})
 		r.setLive([]string{"❯ 0123456789", "  x", "ctx"}, 1, 3)
 
-		r.t.sizeFn = func() (int, int, error) { return 6, 8, nil }
-		r.resize()
-		first := v.Screen()
-		r.resize() // a second burst at the same size is a no-op
-		assert.Equal(t, first, v.Screen())
+		// the erase depends on this and nothing else: not on the width, not on
+		// how many rows the block turned out to occupy
+		assert.Equal(t, 1, v.row, "parked on the divider row, below the history line")
+		assert.Equal(t, 0, v.col)
 	})
-	t.Run("height_only_change_draws_nothing", func(t *testing.T) {
+	t.Run("resize_alone_draws_nothing", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
 		r.commit([]histLine{{text: "kept"}})
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 		before := v.Screen()
 
-		r.t.sizeFn = func() (int, int, error) { return 20, 6, nil }
+		r.t.sizeFn = func() (int, int, error) { return 10, 8, nil }
 		r.resize()
 
-		assert.Equal(t, before, v.Screen(), "no reflow means no repaint")
+		assert.Equal(t, before, v.Screen(), "resize only picks the size up")
+		assert.Equal(t, 10, r.t.width)
 	})
-	t.Run("caret_offset_never_erases_above_the_screen", func(t *testing.T) {
-		v := newVT(20, 4)
+	t.Run("erase_lands_on_the_reflowed_block", func(t *testing.T) {
+		v := newVT(40, 10)
 		r := newTestInline(v)
-		// a live block taller than the screen: the repaint cuts into it, and the
-		// erase must count only the rows actually visible
-		r.setLive([]string{"a", "b", "c", "d", "e", "f"}, 5, 1)
-		r.t.sizeFn = func() (int, int, error) { return 10, 4, nil }
+		r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		r.commit([]histLine{{text: "committed output", flow: flowReflow}})
+		r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
+
+		// the divider now spans two rows on the narrower grid; the next erase
+		// has to climb both or it strands one above the redrawn block
+		v.setSize(20, 10)
 		r.resize()
+		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
 
-		assert.Equal(t, 3, r.caretOffset(), "capped at the caret's screen row")
+		assert.Equal(t, 1, countRules(v.Screen()), "exactly one divider")
+		assert.Equal(t, "committed output", v.Line(0))
 	})
-	t.Run("measures_what_was_drawn_not_the_full_row", func(t *testing.T) {
-		v := newVT(20, 8)
+	t.Run("committed_rows_are_never_re_rendered", func(t *testing.T) {
+		v := newVT(40, 12)
 		r := newTestInline(v)
-		// far wider than the terminal: only what fits was ever emitted, so only
-		// that can reflow. Measuring the full string would erase history above.
-		r.setLive([]string{strings.Repeat("x", 200), "ctx"}, 1, 0)
+		r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		r.commit([]histLine{
+			{text: "❯ alpha bravo charlie delta echo foxtrot golf hotel india", flow: flowWrap},
+			{text: "a reply that also runs past the edge of this narrow screen", flow: flowReflow},
+		})
+		r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
 
-		r.t.width = 10
+		// whatever the emulator's reflow makes of those rows is the truth; a
+		// redraw at the new width must leave every one of them alone
+		v.setSize(20, 12)
+		reflowed := []string{v.Line(0), v.Line(1), v.Line(2), v.Line(3), v.Line(4), v.Line(5)}
 
-		assert.Equal(t, 2, r.caretOffset(), "19 drawn columns reflow to two rows at width 10")
+		r.resize()
+		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
+
+		assert.Equal(t, reflowed, []string{
+			v.Line(0), v.Line(1), v.Line(2), v.Line(3), v.Line(4), v.Line(5),
+		}, "committed rows belong to the terminal, exactly like cat output")
 	})
-	t.Run("erase_uses_the_live_width_not_the_last_signal", func(t *testing.T) {
-		v := newVT(40, 8)
+	t.Run("leaves_content_above_the_session", func(t *testing.T) {
+		v := newVT(40, 12)
 		r := newTestInline(v)
-		r.setLive([]string{strings.Repeat(ruleChar, 40), "❯ x", "ctx"}, 1, 2)
+		r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		// whatever the terminal held before the session started
+		v.WriteString("$ ls\r\nREADME.md  main.go\r\n$ ajent\r\n")
+		r.commit([]histLine{{text: "session line one", flow: flowReflow}})
+		r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
 
-		// the terminal narrowed but the debounced SIGWINCH has not fired yet, so
-		// resize() has not run. A repaint landing now (spinner tick, progress row)
-		// must still erase against the width the block is actually reflowed at,
-		// or it under-shoots and strands the old divider on screen.
-		r.t.sizeFn = func() (int, int, error) { return 20, 8, nil }
-		r.setLive([]string{strings.Repeat(ruleChar, 20), "❯ x", "ctx"}, 1, 2)
+		v.setSize(20, 12)
+		r.resize()
+		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
 
-		assert.Equal(t, 20, r.t.width, "the draw picked up the new width itself")
-		var rules int
-		for i := 0; i < v.h; i++ {
-			if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
-				rules++
-			}
+		screen := v.Screen()
+		assert.Contains(t, screen, "README.md", "the shell's own output is untouchable")
+		assert.Contains(t, screen, "$ ajent")
+		assert.Equal(t, 1, strings.Count(screen, "session line one"))
+	})
+	t.Run("erase_needs_no_row_maths", func(t *testing.T) {
+		v := newVT(20, 10)
+		r := newTestInline(v)
+		r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		r.commit([]histLine{{text: "kept"}})
+		// a block whose rows reflow into several each: nothing counts them
+		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
+
+		v.setSize(6, 10)
+		r.setLive([]string{strings.Repeat(ruleChar, 5), "❯ x", "ctx"}, 1, 2)
+
+		assert.Equal(t, 1, countRules(v.Screen()), "the whole reflowed block went")
+		assert.Equal(t, "kept", v.Line(0), "and history was left alone")
+	})
+	t.Run("repeated_draws_never_accumulate", func(t *testing.T) {
+		v := newVT(40, 10)
+		r := newTestInline(v)
+		r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		r.commit([]histLine{{text: "kept"}})
+
+		// each miss used to leave another divider behind; drive many draws
+		// across many widths and assert nothing ever piles up
+		for _, w := range []int{40, 17, 33, 9, 26, 40} {
+			v.setSize(w, 10)
+			r.setLive([]string{strings.Repeat(ruleChar, max(w-1, 1)), "❯ x", "ctx"}, 1, 2)
+			assert.Equal(t, 1, countRules(v.Screen()), "width %d", w)
 		}
-		assert.Equal(t, 1, rules, "exactly one divider; the old block was fully erased")
-	})
-	t.Run("no_change_when_width_is_stable", func(t *testing.T) {
-		v := newVT(20, 8)
-		r := newTestInline(v)
-		r.setLive([]string{"❯ a", "ctx"}, 0, 3)
-		r.resize()
-		assert.Equal(t, 0, r.caretOffset())
 	})
 	t.Run("live_rows_never_fill_the_last_column", func(t *testing.T) {
 		v := newVT(20, 8)
@@ -263,55 +256,38 @@ func TestInlineRendererSuspend(t *testing.T) {
 	})
 }
 
-func TestRowsFor(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, 1, rowsFor("", 10))
-	assert.Equal(t, 1, rowsFor("0123456789", 10))
-	assert.Equal(t, 2, rowsFor("0123456789a", 10))
-	assert.Equal(t, 1, rowsFor("abc", 0))
-	assert.Equal(t, 1, rowsFor("\x1b[1mabc\x1b[0m", 10))
-}
-
-// TestInlineRendererResizeHealsStranding reproduces the reported corruption: a
-// progress redraw computed at the old width is consumed after the emulator has
-// reflowed to a narrower one, the erase under-shoots, and the old divider is
-// stranded above the new block. The settled resize must heal it, because
-// repaintFull rebuilds the viewport instead of locating the stale frame.
-func TestInlineRendererResizeHealsStranding(t *testing.T) {
+// TestInlineRendererResizeRace models a resize landing in the middle of a frame:
+// the rows are composed at the old width, but the terminal has reflowed by the
+// time they are written. This is the window the resize gate narrows but cannot
+// close, and it is what used to strand a divider on every miss, compounding.
+// The park re-reads the size after composing the rows, so it still lands on the
+// block's first row and the next erase takes the whole block with it.
+func TestInlineRendererResizeRace(t *testing.T) {
 	t.Parallel()
 
 	v := newVT(40, 10)
 	r := newTestInline(v)
-	r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
-
-	// the terminal narrows and reflows while our next draw is still computed at
-	// the old width (queued output, a signal not yet delivered)
-	v.setSize(20, 10)
-	r.t.sizeFn = func() (int, int, error) { return 40, 10, nil } // stale read
-	r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
-
-	var stranded int
-	for i := 0; i < v.h; i++ {
-		if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
-			stranded++
-		}
-	}
-	// one stranded row of the old divider (the erase stopped one row short),
-	// two from the new divider wrapping on the narrower grid
-	require.Equal(t, 3, stranded, "the stale erase strands the reflowed divider")
-
 	r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
-	r.resize() // the settled SIGWINCH
+	r.commit([]histLine{{text: "committed history", flow: flowReflow}})
+	r.setLive([]string{strings.Repeat(ruleChar, 39), "\u276f x", "ctx"}, 1, 2)
 
-	var dividers int
-	for i := 0; i < v.h; i++ {
-		if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
-			dividers++
-			assert.Equal(t, 19, displayWidth(l), "redrawn at the settled live width")
+	// the terminal has already reflowed, but the size read that composes the
+	// frame has not caught up; the one the park takes has
+	var reads int
+	r.t.sizeFn = func() (int, int, error) {
+		if reads++; reads == 1 {
+			v.setSize(20, 10)  // the emulator reflowed
+			return 40, 10, nil // and this read is still stale
 		}
+		return v.w, v.h, nil
 	}
-	assert.Equal(t, 1, dividers, "the viewport repaint heals the stranding")
-	assert.Equal(t, "❯ x", v.Line(1))
-	assert.Equal(t, "ctx", v.Line(2))
+	r.setLive([]string{strings.Repeat(ruleChar, 39), "\u276f x", "ctx"}, 1, 2)
+
+	// the divider was drawn too wide and wrapped, but nothing was stranded: the
+	// next frame at the true width erases all of it
+	r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	r.setLive([]string{strings.Repeat(ruleChar, 19), "\u276f x", "ctx"}, 1, 2)
+
+	assert.Equal(t, 1, countRules(v.Screen()), "the whole reflowed block was erased")
+	assert.Equal(t, "committed history", v.Line(0), "and history was left alone")
 }

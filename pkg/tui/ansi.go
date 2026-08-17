@@ -27,6 +27,9 @@ const (
 	endSync   = csi + "?2026l"
 
 	sgrReset = csi + "0m"
+	// the caret is drawn as a reversed cell rather than parked on with the
+	// terminal's own cursor, which stays hidden and out of the row maths
+	caretReverse = csi + "7m"
 )
 
 // cursorTo moves the cursor to an absolute 1-indexed position.

@@ -85,3 +85,43 @@ func TestSplitANSI(t *testing.T) {
 		assert.Equal(t, []ansiSegment{{text: "\x1b[1", escape: true}}, splitANSI("\x1b[1"))
 	})
 }
+
+func TestOneLine(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "plain", oneLine("plain"))
+	assert.Equal(t, "a b", oneLine("a\nb"))
+	assert.Equal(t, "a b", oneLine("a\r\nb"), "CRLF folds to one blank, not two")
+	assert.Equal(t, "a b c", oneLine("a\tb\vc"))
+}
+
+func TestPaintCaret(t *testing.T) {
+	t.Parallel()
+
+	// the caret reverses a cell rather than adding one, so widths never move
+	assert.Equal(t, 3, displayWidth(paintCaret("abc", 1, 10)))
+	assert.Contains(t, paintCaret("abc", 1, 10), caretReverse)
+
+	t.Run("past_the_text_pads", func(t *testing.T) {
+		out := paintCaret("ab", 4, 10)
+		assert.Equal(t, 5, displayWidth(out), "padded out to the caret cell")
+		assert.Contains(t, out, caretReverse)
+	})
+	t.Run("never_past_the_bound", func(t *testing.T) {
+		assert.LessOrEqual(t, displayWidth(paintCaret("ab", 9, 5)), 5)
+	})
+	t.Run("keeps_the_row_readable", func(t *testing.T) {
+		out := paintCaret("\x1b[2mdim\x1b[0m", 0, 10)
+		assert.Equal(t, 3, displayWidth(out))
+		var text string
+		for _, seg := range splitANSI(out) {
+			if !seg.escape {
+				text += seg.text
+			}
+		}
+		assert.Equal(t, "dim", text, "styling is re-cut around the caret, text is not")
+	})
+	t.Run("empty_row", func(t *testing.T) {
+		assert.Equal(t, 1, displayWidth(paintCaret("", 0, 10)))
+	})
+}
