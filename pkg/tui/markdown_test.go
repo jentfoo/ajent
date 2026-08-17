@@ -276,3 +276,12 @@ func TestFenceMarker(t *testing.T) {
 	assert.Equal(t, "~~~", fenceMarker("~~~"))
 	assert.Empty(t, fenceMarker("nope"))
 }
+
+// TestRuleCharSingleColumn guards the one glyph repeated to fill an entire
+// row: the live-block erase counts the divider as one terminal row, so uniseg's
+// measured width for the rule glyph must be exactly one column.
+func TestRuleCharSingleColumn(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 1, displayWidth(ruleChar))
+}

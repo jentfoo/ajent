@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // vt is a minimal terminal emulator covering the sequences this package emits,
@@ -14,8 +16,9 @@ import (
 type vt struct {
 	w, h       int
 	cells      [][]rune
-	row, col   int // zero based
-	top, bot   int // scroll region, zero based inclusive
+	cont       []bool // row i soft-wraps from row i-1
+	row, col   int    // zero based
+	top, bot   int    // scroll region, zero based inclusive
 	savedRow   int
 	savedCol   int
 	wrapDefer  bool
@@ -36,7 +39,7 @@ func setRegionSeq(top, bottom int) string {
 }
 
 func newVT(w, h int) *vt {
-	v := &vt{w: w, h: h, bot: h - 1}
+	v := &vt{w: w, h: h, bot: h - 1, cont: make([]bool, h)}
 	v.cells = make([][]rune, h)
 	for i := range v.cells {
 		v.cells[i] = blankRow(w)
@@ -67,7 +70,7 @@ func (v *vt) WriteString(s string) {
 			v.col, v.wrapDefer = 0, false
 		case '\n':
 			v.lineFeed()
-			v.wrapDefer = false
+			v.cont[v.row], v.wrapDefer = false, false // an explicit newline ends the line
 		case '\b':
 			v.col, v.wrapDefer = max(v.col-1, 0), false
 		default:
@@ -182,6 +185,7 @@ func (v *vt) put(r rune) {
 	} else if v.wrapDefer {
 		v.col = 0
 		v.lineFeed()
+		v.cont[v.row] = true // the row we wrapped onto continues the one above
 		v.wrapDefer = false
 	}
 	v.cells[v.row][v.col] = r
@@ -204,7 +208,80 @@ func (v *vt) lineFeed() {
 func (v *vt) scrollUp() {
 	v.scrollback = append(v.scrollback, strings.TrimRight(string(v.cells[v.top]), " "))
 	copy(v.cells[v.top:v.bot], v.cells[v.top+1:v.bot+1])
+	copy(v.cont[v.top:v.bot], v.cont[v.top+1:v.bot+1])
 	v.cells[v.bot] = blankRow(v.w)
+	v.cont[v.bot] = false
+}
+
+// setSize changes the grid size, reflowing soft-wrapped rows the way an
+// emulator does on resize: continuation rows join their logical line and
+// re-wrap at the new width, overflow retires to scrollback, and the cursor
+// rides its cell. Growing adds blank rows at the bottom; it does not pull rows
+// back from scrollback (some emulators do — the renderer must cope with both).
+func (v *vt) setSize(w, h int) {
+	if w <= 0 || h <= 0 || (w == v.w && h == v.h) {
+		return
+	}
+
+	// join continuation rows into their logical lines
+	var logical [][]rune
+	starts := make([]int, v.h) // logical-line index each screen row belongs to
+	for i := 0; i < v.h; i++ {
+		if v.cont[i] && len(logical) > 0 {
+			logical[len(logical)-1] = append(logical[len(logical)-1], v.cells[i]...)
+		} else {
+			logical = append(logical, slices.Clone(v.cells[i]))
+		}
+		starts[i] = len(logical) - 1
+	}
+	// the cursor's column as an offset into its logical line (chunks are full)
+	cursorOff := v.col
+	for i := v.row; i > 0 && v.cont[i]; i-- {
+		cursorOff += v.w
+	}
+	// trailing blank rows are empty space, not content: reflowing them would
+	// push real rows into scrollback
+	for len(logical) > 0 && strings.TrimRight(string(logical[len(logical)-1]), " ") == "" {
+		logical = logical[:len(logical)-1]
+	}
+
+	// re-wrap every logical line at the new width
+	var cells [][]rune
+	var cont []bool
+	lineStart := make([]int, len(logical))
+	for li, line := range logical {
+		lineStart[li] = len(cells)
+		text := []rune(strings.TrimRight(string(line), " "))
+		for first := true; ; first = false {
+			n := min(len(text), w)
+			row := blankRow(w)
+			copy(row, text[:n])
+			cells = append(cells, row)
+			cont = append(cont, !first)
+			if n == len(text) {
+				break
+			}
+			text = text[n:]
+		}
+	}
+	newRow, newCol := 0, 0
+	if len(logical) > 0 {
+		newRow = lineStart[min(starts[v.row], len(logical)-1)] + cursorOff/w
+		newCol = min(cursorOff%w, w-1)
+	}
+
+	for len(cells) > h {
+		v.scrollback = append(v.scrollback, strings.TrimRight(string(cells[0]), " "))
+		cells, cont = cells[1:], cont[1:]
+		newRow--
+	}
+	for len(cells) < h {
+		cells = append(cells, blankRow(w))
+		cont = append(cont, false)
+	}
+	v.w, v.h, v.cells, v.cont = w, h, cells, cont
+	v.row, v.col = max(newRow, 0), newCol
+	v.top, v.bot, v.wrapDefer = 0, h-1, false
 }
 
 // Line returns the visible row i with trailing blanks removed.
@@ -276,5 +353,51 @@ func TestVT(t *testing.T) {
 		v := newVT(6, 2)
 		v.WriteString(sgr(attrBold) + "hi" + sgrReset)
 		assert.Equal(t, "hi", v.Line(0))
+	})
+}
+
+func TestVTReflow(t *testing.T) {
+	t.Parallel()
+
+	t.Run("narrowing_multiplies_wrapped_rows", func(t *testing.T) {
+		v := newVT(10, 4)
+		v.WriteString("abcdefghijklmno") // wraps to two rows
+		require.Equal(t, "klmno", v.Line(1))
+
+		v.setSize(5, 4)
+		assert.Equal(t, "abcde", v.Line(0))
+		assert.Equal(t, "fghij", v.Line(1))
+		assert.Equal(t, "klmno", v.Line(2))
+	})
+	t.Run("hard_lines_stay_separate", func(t *testing.T) {
+		v := newVT(10, 4)
+		v.WriteString("abc\r\ndef")
+
+		v.setSize(2, 4)
+		assert.Equal(t, "ab", v.Line(0))
+		assert.Equal(t, "c", v.Line(1))
+		assert.Equal(t, "de", v.Line(2))
+		assert.Equal(t, "f", v.Line(3))
+	})
+	t.Run("widening_rejoins", func(t *testing.T) {
+		v := newVT(5, 4)
+		v.WriteString("abcdefghij")
+		v.setSize(20, 4)
+		assert.Equal(t, "abcdefghij", v.Line(0))
+	})
+	t.Run("overflow_retires_to_scrollback", func(t *testing.T) {
+		v := newVT(10, 2)
+		v.WriteString("abcdefghijklmno")
+		v.setSize(5, 2) // three rows needed, two fit
+		assert.Equal(t, []string{"abcde"}, v.scrollback)
+		assert.Equal(t, "fghij", v.Line(0))
+		assert.Equal(t, "klmno", v.Line(1))
+	})
+	t.Run("cursor_rides_its_cell", func(t *testing.T) {
+		v := newVT(10, 4)
+		v.WriteString("abcdefghijklmno") // cursor on row 1 col 5
+		v.setSize(5, 4)
+		assert.Equal(t, 3, v.row)
+		assert.Equal(t, 0, v.col)
 	})
 }

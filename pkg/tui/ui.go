@@ -120,6 +120,14 @@ type UI struct {
 
 	started   bool
 	lastBlank bool
+
+	// A resize burst holds back all drawing: while SIGWINCHs are still arriving
+	// the emulator is mid-reflow, and an erase computed against one width but
+	// applied to another under-shoots the top of the live block, stranding rows
+	// (a duplicated divider) that no later erase can reach. resizing gates
+	// repaint; commits buffer in deferred until the burst settles (see resize).
+	resizing bool
+	deferred []histLine
 }
 
 // New starts the UI, taking over the terminal until Close is called.
@@ -250,6 +258,7 @@ func (u *UI) Reset() {
 	u.textStart = false
 	u.started = false // the next gap no longer needs a leading blank line
 	u.lastBlank = false
+	u.deferred = nil // held-back commits belong to the dropped state
 	u.thinking = false
 	u.tool = ""
 	u.busy = false
@@ -521,6 +530,12 @@ func (u *UI) commitHist(lines []histLine) {
 	}
 	u.lastBlank = lines[len(lines)-1].text == ""
 	u.started = true
+	if u.resizing {
+		// commit erases the live block too, so it waits out the burst with
+		// repaints; resize flushes these in order once the size settles
+		u.deferred = append(u.deferred, lines...)
+		return
+	}
 	u.render.commit(lines)
 }
 
@@ -534,10 +549,20 @@ func (u *UI) gap() {
 // repaint redraws the live block: notice/streaming/search/completion, activity,
 // input or interaction, then the status rows.
 func (u *UI) repaint() {
-	if u.closed || u.mode == ModePlain {
+	// While a resize burst is in flight no draw is safe: the erase could land
+	// mid-reflow and strand rows (see resize). The settled redraw repaints.
+	if u.closed || u.mode == ModePlain || u.resizing {
 		return
 	}
 	w, h := u.render.size()
+	// The live block is composed one column short of the terminal. A row that
+	// fills the last column leaves the cursor in the deferred-wrap state, and
+	// emulators disagree on whether that marks the line as continued — which is
+	// what decides how a resize reflows it. Composing narrow (rather than
+	// truncating at draw time) means nothing is cut off the editor or a dialog.
+	if w > 1 {
+		w--
+	}
 
 	var rows []string
 	if u.noticeText != "" {
@@ -548,7 +573,7 @@ func (u *UI) repaint() {
 	// a narrow rule atop the prompt area sets it apart from committed and streamed
 	// output; row accounting stays exact because this is one more real row here.
 	if w > 0 {
-		rows = append(rows, u.theme.Dim.Wrap(strings.Repeat("─", w)))
+		rows = append(rows, u.theme.Dim.Wrap(strings.Repeat(ruleChar, w)))
 	}
 	offset := len(rows)
 
@@ -1088,23 +1113,64 @@ func (u *UI) watchSignals() {
 			if sig == syscall.SIGCONT {
 				u.resume()
 			} else {
+				u.mu.Lock()
+				u.resizing = true // hold all drawing until the burst settles
+				u.mu.Unlock()
 				timer.Reset(resizeSettle)
 			}
 		case <-timer.C:
-			u.resize()
+			// A SIGWINCH queued behind this timer read means the burst is still
+			// going; keep debouncing rather than redraw mid-reflow.
+			var pending bool
+		drain:
+			for {
+				select {
+				case sig := <-ch:
+					if sig == syscall.SIGCONT {
+						u.resume()
+					} else {
+						pending = true
+					}
+				default:
+					break drain
+				}
+			}
+			if pending {
+				timer.Reset(resizeSettle)
+			} else {
+				u.resize()
+			}
 		}
 	}
 }
 
-// resize hands the new size to the renderer and redraws the live block.
+// resize ends a resize burst: the size goes to the renderer, held-back
+// commits flush, and the live block redraws once at the settled size.
 func (u *UI) resize() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.closed || u.mode == ModePlain {
 		return
 	}
+	u.settleResizeLocked()
+}
+
+// settleResizeLocked redraws once the terminal size has settled: the renderer
+// picks up the new size (inline repaints the whole viewport on a width change,
+// healing whatever the reflow raced), the live block is recomposed (which also
+// drops any deferred rows from its preview, the Text/EndText ghost invariant),
+// then held-back commits flush above it. Caller holds the lock.
+func (u *UI) settleResizeLocked() {
+	u.resizing = false
 	u.render.resize()
 	u.repaint()
+	if len(u.deferred) > 0 {
+		lines := u.deferred
+		u.deferred = nil
+		u.render.commit(lines)
+	}
+	// A resize landing mid-settle delivers its own SIGWINCH, and the settle
+	// that follows heals whatever it raced (repaintFull locates nothing).
 }
 
 // suspend restores the terminal and stops the process, as Ctrl+Z would outside
@@ -1130,8 +1196,7 @@ func (u *UI) resume() {
 	} else if err := u.render.resume(u.inFd); err != nil {
 		return
 	}
-	u.render.resize()
-	u.repaint()
+	u.settleResizeLocked()
 }
 
 // page is one screenful of scrolling, leaving a couple of rows of overlap.

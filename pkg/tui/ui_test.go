@@ -71,7 +71,7 @@ func TestUIInput(t *testing.T) {
 
 	t.Run("block_starts_at_the_top", func(t *testing.T) {
 		// the divider rule leads, then input and status beneath it
-		assert.Equal(t, strings.Repeat(ruleChar, 40), v.Line(0))
+		assert.Equal(t, strings.Repeat(ruleChar, 39), v.Line(0)) // one column reserved, see repaint
 		assert.Equal(t, promptFirst+inputHint, v.Line(1))
 		// the leftmost working glyph always leads the status line
 		assert.Equal(t, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test", v.Line(2))
@@ -788,4 +788,141 @@ func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
 	}, time.Second, testPoll)
 
 	_ = pw.Close()
+}
+
+// TestUIResizeGate covers the burst gate: while a resize is in flight no draw
+// may happen, because an erase landing mid-reflow under-shoots the top of the
+// live block and strands rows (a duplicated divider) no later erase can reach.
+func TestUIResizeGate(t *testing.T) {
+	t.Parallel()
+
+	setResizing := func(u *UI, on bool) {
+		u.mu.Lock()
+		u.resizing = on
+		u.mu.Unlock()
+	}
+
+	t.Run("repaints_hold_until_the_burst_settles", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		setResizing(u, true)
+
+		u.SetTokens(777) // a repaint trigger; held back while resizing
+		assert.NotContains(t, u.snapshot(v), "777")
+
+		u.resize()
+		assert.Contains(t, u.snapshot(v), "777")
+		assert.False(t, u.resizing)
+	})
+
+	t.Run("commits_flush_in_order_at_settle", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		setResizing(u, true)
+
+		u.UserEcho("first held line")
+		u.Print("second held line")
+		screen := u.snapshot(v)
+		assert.NotContains(t, screen, "first held line")
+		assert.NotContains(t, screen, "second held line")
+
+		u.resize()
+		screen = u.snapshot(v)
+		one := strings.Index(screen, "first held line")
+		two := strings.Index(screen, "second held line")
+		require.NotEqual(t, -1, one)
+		require.NotEqual(t, -1, two)
+		assert.Less(t, one, two, "held commits keep their order")
+	})
+
+	t.Run("stream_commit_during_burst_leaves_one_divider", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		setResizing(u, true)
+
+		u.Text("streamed during the burst\n\nacross two blocks")
+		u.EndText()
+		u.resize()
+
+		screen := u.snapshot(v)
+		assert.Contains(t, screen, "streamed during the burst")
+		assert.Contains(t, screen, "across two blocks")
+		var dividers int
+		for line := range strings.Lines(screen) {
+			if strings.TrimRight(line, " \n") == strings.Repeat(ruleChar, 39) {
+				dividers++
+			}
+		}
+		assert.Equal(t, 1, dividers, "exactly one live divider after the settled redraw")
+	})
+
+	t.Run("width_change_repaints_the_viewport", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.Print("committed before the resize")
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return 20, 10, nil }
+
+		u.resize()
+
+		screen := u.snapshot(v)
+		assert.Contains(t, screen, "committed before", "history survives, re-wrapped at the new width")
+		assert.Contains(t, screen, "the resize")
+		var dividers int
+		for line := range strings.Lines(screen) {
+			if strings.TrimRight(line, " \n") == strings.Repeat(ruleChar, 19) {
+				dividers++
+			}
+		}
+		assert.Equal(t, 1, dividers, "the viewport repaint rewrites the old divider row")
+	})
+
+	t.Run("reset_drops_held_commits", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		setResizing(u, true)
+
+		u.UserEcho("held then dropped")
+		u.Reset()
+		u.resize()
+
+		assert.NotContains(t, u.snapshot(v), "held then dropped")
+	})
+}
+
+// TestUIResizeStorm drives a burst of resizes while tool progress updates, the
+// shape of the reported corruption: gated draws never land mid-reflow, and the
+// settled repaint leaves the screen coherent at every step — one divider, each
+// piece of content exactly once.
+func TestUIResizeStorm(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(48, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+	u.Print("alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima")
+	done := u.ToolStart("write notes.go")
+	defer done("")
+
+	for _, w := range []int{20, 33, 15, 40, 26} {
+		v.setSize(w, 12)
+		u.mu.Lock()
+		u.resizing = true // the SIGWINCH arrived; the burst is in flight
+		u.mu.Unlock()
+		u.SetActivity("write", "writing notes.go") // gated: draws nothing
+		u.resize()                                 // the debounce settled
+
+		var dividers int
+		for line := range strings.Lines(u.snapshot(v)) {
+			if l := strings.TrimRight(line, " \n"); l != "" && strings.Trim(l, ruleChar) == "" {
+				dividers++
+			}
+		}
+		assert.Equal(t, 1, dividers, "width %d", w)
+	}
+
+	screen := u.snapshot(v)
+	assert.Equal(t, 1, strings.Count(screen, "alpha bravo charlie"), "history appears exactly once")
+	assert.Contains(t, screen, "write notes.go")
+	assert.Contains(t, screen, "writing notes.go")
 }

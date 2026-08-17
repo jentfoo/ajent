@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -104,23 +105,131 @@ func TestInlineRendererScrollsNaturally(t *testing.T) {
 func TestInlineRendererResize(t *testing.T) {
 	t.Parallel()
 
-	t.Run("recomputes_caret_row_after_reflow", func(t *testing.T) {
+	t.Run("caret_offset_follows_the_reflow", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
 		// two input rows, caret on the second; the first is 12 columns wide
 		r.setLive([]string{"❯ 0123456789", "  x", "ctx"}, 1, 3)
+		assert.Equal(t, 1, r.caretOffset())
 
-		r.t.sizeFn = func() (int, int, error) { return 6, 8, nil } // terminal narrowed
+		r.t.width = 6 // what the emulator's reflow would leave the rows at
+
+		assert.Equal(t, 1, r.caretRow, "caretRow stays an index into the block")
+		assert.Equal(t, 2, r.caretOffset(), "the 12 column row now occupies two rows")
+	})
+	t.Run("width_change_repaints_the_viewport", func(t *testing.T) {
+		v := newVT(20, 8)
+		r := newTestInline(v)
+		r.commit([]histLine{{text: "one two three four five", flow: flowReflow}})
+		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
+
+		r.t.sizeFn = func() (int, int, error) { return 10, 8, nil }
 		r.resize()
 
-		assert.Equal(t, 2, r.caretRow, "the 12 column row now occupies two rows")
+		screen := v.Screen()
+		assert.Contains(t, screen, "one two", "history re-wraps at the new width")
+		var rules int
+		for i := 0; i < v.h; i++ {
+			if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
+				rules++
+				assert.Equal(t, 9, displayWidth(l), "the divider is redrawn at the new live width")
+			}
+		}
+		assert.Equal(t, 1, rules, "the repaint rewrites the old divider row, never duplicates it")
+	})
+	t.Run("repaint_full_clears_leftovers_below", func(t *testing.T) {
+		v := newVT(20, 8)
+		r := newTestInline(v)
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		// junk the previous frame left below the content (a racing draw, a
+		// resize that shrank the block): the repaint must clear it
+		v.WriteString(cursorTo(5, 1) + "junk" + cursorTo(6, 1) + "junk")
+
+		r.t.sizeFn = func() (int, int, error) { return 10, 8, nil }
+		r.resize()
+
+		assert.NotContains(t, v.Screen(), "junk")
+	})
+	t.Run("resizing_twice_is_idempotent", func(t *testing.T) {
+		v := newVT(20, 8)
+		r := newTestInline(v)
+		r.setLive([]string{"❯ 0123456789", "  x", "ctx"}, 1, 3)
+
+		r.t.sizeFn = func() (int, int, error) { return 6, 8, nil }
+		r.resize()
+		first := v.Screen()
+		r.resize() // a second burst at the same size is a no-op
+		assert.Equal(t, first, v.Screen())
+	})
+	t.Run("height_only_change_draws_nothing", func(t *testing.T) {
+		v := newVT(20, 8)
+		r := newTestInline(v)
+		r.commit([]histLine{{text: "kept"}})
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		before := v.Screen()
+
+		r.t.sizeFn = func() (int, int, error) { return 20, 6, nil }
+		r.resize()
+
+		assert.Equal(t, before, v.Screen(), "no reflow means no repaint")
+	})
+	t.Run("caret_offset_never_erases_above_the_screen", func(t *testing.T) {
+		v := newVT(20, 4)
+		r := newTestInline(v)
+		// a live block taller than the screen: the repaint cuts into it, and the
+		// erase must count only the rows actually visible
+		r.setLive([]string{"a", "b", "c", "d", "e", "f"}, 5, 1)
+		r.t.sizeFn = func() (int, int, error) { return 10, 4, nil }
+		r.resize()
+
+		assert.Equal(t, 3, r.caretOffset(), "capped at the caret's screen row")
+	})
+	t.Run("measures_what_was_drawn_not_the_full_row", func(t *testing.T) {
+		v := newVT(20, 8)
+		r := newTestInline(v)
+		// far wider than the terminal: only what fits was ever emitted, so only
+		// that can reflow. Measuring the full string would erase history above.
+		r.setLive([]string{strings.Repeat("x", 200), "ctx"}, 1, 0)
+
+		r.t.width = 10
+
+		assert.Equal(t, 2, r.caretOffset(), "19 drawn columns reflow to two rows at width 10")
+	})
+	t.Run("erase_uses_the_live_width_not_the_last_signal", func(t *testing.T) {
+		v := newVT(40, 8)
+		r := newTestInline(v)
+		r.setLive([]string{strings.Repeat(ruleChar, 40), "❯ x", "ctx"}, 1, 2)
+
+		// the terminal narrowed but the debounced SIGWINCH has not fired yet, so
+		// resize() has not run. A repaint landing now (spinner tick, progress row)
+		// must still erase against the width the block is actually reflowed at,
+		// or it under-shoots and strands the old divider on screen.
+		r.t.sizeFn = func() (int, int, error) { return 20, 8, nil }
+		r.setLive([]string{strings.Repeat(ruleChar, 20), "❯ x", "ctx"}, 1, 2)
+
+		assert.Equal(t, 20, r.t.width, "the draw picked up the new width itself")
+		var rules int
+		for i := 0; i < v.h; i++ {
+			if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
+				rules++
+			}
+		}
+		assert.Equal(t, 1, rules, "exactly one divider; the old block was fully erased")
 	})
 	t.Run("no_change_when_width_is_stable", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
 		r.setLive([]string{"❯ a", "ctx"}, 0, 3)
 		r.resize()
-		assert.Equal(t, 0, r.caretRow)
+		assert.Equal(t, 0, r.caretOffset())
+	})
+	t.Run("live_rows_never_fill_the_last_column", func(t *testing.T) {
+		v := newVT(20, 8)
+		r := newTestInline(v)
+		r.setLive([]string{strings.Repeat(ruleChar, 20), "ctx"}, 1, 0)
+		// a row ending in the last column leaves the cursor in deferred wrap, which
+		// emulators reflow inconsistently
+		assert.Equal(t, 19, displayWidth(v.Line(0)))
 	})
 	t.Run("history_is_never_touched", func(t *testing.T) {
 		v := newVT(20, 8)
@@ -162,4 +271,47 @@ func TestRowsFor(t *testing.T) {
 	assert.Equal(t, 2, rowsFor("0123456789a", 10))
 	assert.Equal(t, 1, rowsFor("abc", 0))
 	assert.Equal(t, 1, rowsFor("\x1b[1mabc\x1b[0m", 10))
+}
+
+// TestInlineRendererResizeHealsStranding reproduces the reported corruption: a
+// progress redraw computed at the old width is consumed after the emulator has
+// reflowed to a narrower one, the erase under-shoots, and the old divider is
+// stranded above the new block. The settled resize must heal it, because
+// repaintFull rebuilds the viewport instead of locating the stale frame.
+func TestInlineRendererResizeHealsStranding(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	r := newTestInline(v)
+	r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
+
+	// the terminal narrows and reflows while our next draw is still computed at
+	// the old width (queued output, a signal not yet delivered)
+	v.setSize(20, 10)
+	r.t.sizeFn = func() (int, int, error) { return 40, 10, nil } // stale read
+	r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
+
+	var stranded int
+	for i := 0; i < v.h; i++ {
+		if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
+			stranded++
+		}
+	}
+	// one stranded row of the old divider (the erase stopped one row short),
+	// two from the new divider wrapping on the narrower grid
+	require.Equal(t, 3, stranded, "the stale erase strands the reflowed divider")
+
+	r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	r.resize() // the settled SIGWINCH
+
+	var dividers int
+	for i := 0; i < v.h; i++ {
+		if l := v.Line(i); l != "" && strings.Trim(l, ruleChar) == "" {
+			dividers++
+			assert.Equal(t, 19, displayWidth(l), "redrawn at the settled live width")
+		}
+	}
+	assert.Equal(t, 1, dividers, "the viewport repaint heals the stranding")
+	assert.Equal(t, "❯ x", v.Line(1))
+	assert.Equal(t, "ctx", v.Line(2))
 }

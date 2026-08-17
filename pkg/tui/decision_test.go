@@ -50,7 +50,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		defer d.Close()
 
 		go func() { _, _ = d.Wait(context.Background()) }()
-		waitFor(t, u, v, strings.Repeat("x", 80))
+		waitFor(t, u, v, strings.Repeat("x", 79))
 		assert.NotContains(t, stripANSI(u.snapshot(v)), long)
 	})
 	t.Run("marks_when_the_subject_is_cut_by_height", func(t *testing.T) {

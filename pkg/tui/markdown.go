@@ -12,10 +12,16 @@ import (
 )
 
 const (
-	bulletMarker   = "• "
-	quotePrefix    = "▏ "
-	codeIndent     = "  "
-	minRuleWidth   = 8
+	bulletMarker = "• "
+	quotePrefix  = "▏ "
+	codeIndent   = "  "
+	minRuleWidth = 8
+	// ruleChar is the one glyph repeated to fill a whole row, so uniseg's width
+	// for it must match the terminal's: the live-block erase counts the divider
+	// as one row. "─" is East Asian Ambiguous, which uniseg and effectively all
+	// emulators in their default configuration measure as one column; the live
+	// divider is also composed a column short (see repaint) so it never enters
+	// the deferred-wrap state.
 	ruleChar       = "─"
 	maxTableWidth  = 120
 	checkedBox     = "[x] "
