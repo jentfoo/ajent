@@ -22,9 +22,13 @@ const (
 	tabSpaces      = "    " // tabs are expanded so column math stays exact
 	// resize events arrive in bursts while dragging, only rebuild once it settles
 	resizeSettle = 80 * time.Millisecond
-	// a burst holds drawing back, so a long drag must settle periodically rather
-	// than leave the UI frozen for as long as the user keeps dragging
-	resizeMaxHold   = 500 * time.Millisecond
+	// after a settled burst the redraw waits on the terminal's status reply;
+	// a terminal that never answers gets this much grace before we draw anyway
+	resizeProbeTimeout = 300 * time.Millisecond
+	// after the reply, the draw waits one more quiet grace: a SIGWINCH already
+	// in flight (or delivered late to a busy goroutine) invalidates it, so a
+	// frame never goes out alongside a resize we have not seen yet
+	resizeDrawGrace = 80 * time.Millisecond
 	spinnerInterval = 90 * time.Millisecond
 	maxInputRatio   = 3 // input may take at most this fraction of the screen
 )
@@ -125,12 +129,22 @@ type UI struct {
 	lastBlank bool
 
 	// A resize burst holds back all drawing: while SIGWINCHs are still arriving
-	// the emulator is mid-reflow, and an erase computed against one width but
-	// applied to another under-shoots the top of the live block, stranding rows
-	// (a duplicated divider) that no later erase can reach. resizing gates
-	// repaint; commits buffer in deferred until the burst settles (see resize).
+	// the emulator is mid-reflow, and a frame whose size reads disagree with
+	// the emulator's grid under-parks the cursor, stranding rows (a duplicated
+	// divider) that no later erase can reach. resizing gates repaint; commits
+	// buffer in deferred until the burst settles (see resize). Even the settled
+	// redraw waits on a status-probe barrier (probeResize): the ioctl reports
+	// the new size before the emulator has finished reflowing to it, so a quiet
+	// signal stream alone cannot prove the grid is stable.
 	resizing bool
 	deferred []histLine
+	// resizeSeq counts SIGWINCHs; probeSeq is the burst generation the
+	// outstanding probe belongs to. A reply (or timeout) starts the draw grace
+	// only when they still match, and the draw itself re-checks them — a newer
+	// signal at either point means another reflow is in flight.
+	resizeSeq int
+	probeSeq  int
+	probeOut  bool
 }
 
 // New starts the UI, taking over the terminal until Close is called.
@@ -182,6 +196,7 @@ func New(opts Options) (*UI, error) {
 	u.safeGo(u.reader.run)
 	u.safeGo(u.readKeys)
 	u.safeGo(u.watchSignals)
+	u.safeGo(u.watchStatus)
 	if opts.OnEdit != nil {
 		u.editCh = make(chan string, 1)
 		u.safeGo(u.drainEdits) // runs OnEdit outside the UI lock
@@ -418,7 +433,13 @@ func (u *UI) streamingRows(w int) []string {
 	lines := renderMarkdown(u.theme, w, u.textBuf)
 	var out []string
 	for _, l := range lines {
-		out = append(out, wrapLine(l.text, w)...)
+		if l.table != nil || l.rule {
+			// structured lines carry no text; lay them out or the preview
+			// shows a blank row until the block commits
+			out = append(out, l.rows(w)...)
+		} else {
+			out = append(out, wrapLine(l.text, w)...)
+		}
 	}
 	return out
 }
@@ -536,7 +557,8 @@ func (u *UI) commitHist(lines []histLine) {
 	if len(lines) == 0 {
 		return
 	}
-	u.flushNotice() // a keyed notice stops being collapsible once anything follows
+	u.flushNotice()               // a keyed notice stops being collapsible once anything follows
+	lines = splitHistLines(lines) // histLine.text is single-line by construction
 	for i, l := range lines {
 		lines[i].text = strings.ReplaceAll(l.text, "\t", tabSpaces)
 	}
@@ -1128,33 +1150,12 @@ func (u *UI) readLines() {
 	}
 }
 
-// burst tracks a run of resize signals. Drawing is held back for its duration,
-// so it ends either when the signals stop for resizeSettle or when it has held
-// on for resizeMaxHold, whichever comes first: a slow drag settles periodically
-// instead of freezing the UI for as long as the user keeps dragging.
-type burst struct {
-	start time.Time // zero while no burst is in flight
-}
-
-// signal starts or extends a burst, reporting whether it has held long enough
-// that it must settle now rather than debounce further.
-func (b *burst) signal(now time.Time) bool {
-	if b.start.IsZero() {
-		b.start = now
-	}
-	return b.expired(now)
-}
-
-// expired reports whether the burst has held drawing back for its full budget.
-func (b *burst) expired(now time.Time) bool {
-	return !b.start.IsZero() && !now.Before(b.start.Add(resizeMaxHold))
-}
-
-// done ends the burst, so the next signal starts a fresh budget.
-func (b *burst) done() { b.start = time.Time{} }
-
-// watchSignals rebuilds the layout once a burst of resize events settles, and
-// retakes the terminal after the process is continued.
+// watchSignals redraws once a burst of resize events settles, and retakes the
+// terminal after the process is continued. Drawing never happens mid-burst:
+// every frame emitted while the emulator is still reflowing risks parking the
+// cursor against a grid that no longer exists, stranding a row no erase can
+// reach. A long drag freezes the live block until it pauses — cheap, since the
+// emulator is busy mangling the screen then anyway.
 func (u *UI) watchSignals() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGWINCH, syscall.SIGCONT)
@@ -1164,11 +1165,6 @@ func (u *UI) watchSignals() {
 	defer timer.Stop()
 	if !timer.Stop() {
 		<-timer.C
-	}
-	var b burst
-	settle := func() {
-		b.done()
-		u.resize()
 	}
 	for {
 		select {
@@ -1180,11 +1176,7 @@ func (u *UI) watchSignals() {
 				continue
 			}
 			u.holdForResize()
-			if b.signal(time.Now()) {
-				settle()
-			} else {
-				timer.Reset(resizeSettle)
-			}
+			timer.Reset(resizeSettle)
 		case <-timer.C:
 			// A SIGWINCH queued behind this timer read means the burst is still
 			// going; keep debouncing rather than redraw mid-reflow.
@@ -1202,10 +1194,10 @@ func (u *UI) watchSignals() {
 					break drain
 				}
 			}
-			if pending && !b.expired(time.Now()) {
+			if pending {
 				timer.Reset(resizeSettle)
 			} else {
-				settle()
+				u.probeResize()
 			}
 		}
 	}
@@ -1218,6 +1210,74 @@ func (u *UI) holdForResize() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.resizing = u.mode == ModeInline
+	u.resizeSeq++
+}
+
+// probeResize starts the settled redraw behind a barrier: the status query is
+// answered only after the terminal has processed everything preceding it,
+// including the reflow of the resize we just settled on, so the redraw cannot
+// land on a grid mid-reflow. The reply (or a timeout, for terminals that never
+// answer) drives the actual redraw. Non-inline modes self-heal (alt re-paints
+// every cell it owns) or draw nothing (plain), so they settle immediately.
+func (u *UI) probeResize() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed || u.mode == ModePlain {
+		return
+	} else if u.mode != ModeInline {
+		u.settleResizeLocked()
+		return
+	}
+	u.probeSeq = u.resizeSeq
+	u.probeOut = true
+	gen := u.probeSeq
+	u.render.probe()
+	u.afterDelay(resizeProbeTimeout, func() { u.settleProbed(gen) })
+}
+
+// settleProbed arms the settled redraw once the terminal answered the probe
+// (or the timeout fired). A stale generation — a newer SIGWINCH arrived after
+// the probe was sent — means another reflow is in flight, so the answer proves
+// nothing and is ignored; the newer burst's own probe drives the redraw.
+func (u *UI) settleProbed(gen int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed || !u.probeOut || gen != u.probeSeq || u.probeSeq != u.resizeSeq {
+		return
+	}
+	u.probeOut = false
+	// one quiet grace before drawing: the reply proves the terminal caught up,
+	// but a resize starting right now (its SIGWINCH perhaps still in flight)
+	// would reflow onto the frame we are about to write
+	u.afterDelay(resizeDrawGrace, func() { u.drawSettled(gen) })
+}
+
+// drawSettled runs the settled redraw once the draw grace elapsed without a
+// newer SIGWINCH. During continuous fast resizing every grace is invalidated
+// before it fires, so no frame is emitted until a genuine pause — frames and
+// reflows never share the wire, which is what strands a divider.
+func (u *UI) drawSettled(gen int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed || gen != u.probeSeq || u.probeSeq != u.resizeSeq {
+		return
+	}
+	u.settleResizeLocked()
+}
+
+// probeAnswered routes a status reply from the input stream to the barrier.
+func (u *UI) probeAnswered() {
+	u.mu.Lock()
+	gen := u.probeSeq
+	u.mu.Unlock()
+	u.settleProbed(gen)
+}
+
+// watchStatus consumes terminal status replies until the input closes.
+func (u *UI) watchStatus() {
+	for range u.reader.status {
+		u.probeAnswered()
+	}
 }
 
 // resize ends a resize burst: the size goes to the renderer, held-back
@@ -1232,10 +1292,10 @@ func (u *UI) resize() {
 }
 
 // settleResizeLocked redraws once the terminal size has settled: the renderer
-// picks up the new size (inline repaints the whole viewport on a width change,
-// healing whatever the reflow raced), the live block is recomposed (which also
-// drops any deferred rows from its preview, the Text/EndText ghost invariant),
-// then held-back commits flush above it. Caller holds the lock.
+// picks up the new size (alt re-lays and repaints its whole viewport; inline
+// just re-reads it and redraws the live block), the live block is recomposed
+// (which also drops any deferred rows from its preview, the Text/EndText ghost
+// invariant), then held-back commits flush above it. Caller holds the lock.
 func (u *UI) settleResizeLocked() {
 	u.resizing = false
 	u.render.resize()
@@ -1246,7 +1306,7 @@ func (u *UI) settleResizeLocked() {
 		u.render.commit(lines)
 	}
 	// A resize landing mid-settle delivers its own SIGWINCH, and the settle
-	// that follows heals whatever it raced (repaintFull locates nothing).
+	// that follows redraws at the final size.
 }
 
 // suspend restores the terminal and stops the process, as Ctrl+Z would outside

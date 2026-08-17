@@ -19,8 +19,9 @@ func displayWidth(s string) int {
 
 // oneLine folds s onto a single terminal row, replacing the line breaks and
 // tabs that would otherwise move the cursor. A live row must occupy exactly one
-// row: the block is erased by counting rows, so a stray newline hides a row from
-// that count and every later erase stops short of the block's top.
+// row: the cursor is parked by counting the rows just drawn, and displayWidth
+// measures a newline as zero columns, so a stray one parks the cursor inside
+// the block and the next erase starts too low.
 func oneLine(s string) string {
 	if !strings.ContainsAny(s, "\r\n\v\f\t") {
 		return s

@@ -31,10 +31,13 @@ func newTestUI(t *testing.T, v *vt, in io.Reader) *UI {
 		msgs:     make(chan string),
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
+		// afterDelay is the probe-timeout seam; tests override it per case
+		afterDelay: time.AfterFunc,
 	}
 	u.reader = newInputReader(in)
 	go u.reader.run()
 	go u.readKeys()
+	go u.watchStatus()
 	u.mu.Lock() // a key may already be decoding; serialize with readKeys
 	u.repaint()
 	u.mu.Unlock()
@@ -913,26 +916,6 @@ func countRules(screen string) int {
 	return n
 }
 
-// TestResizeBurst covers the hold budget: a burst debounces while signals keep
-// arriving, but must settle anyway once it has held drawing back long enough,
-// so a slow drag does not freeze the UI for its whole duration.
-func TestResizeBurst(t *testing.T) {
-	t.Parallel()
-
-	t0 := time.Now()
-	var b burst
-
-	assert.False(t, b.signal(t0), "a fresh burst debounces")
-	assert.False(t, b.signal(t0.Add(resizeMaxHold/2)), "still inside the budget")
-	assert.False(t, b.expired(t0.Add(resizeMaxHold/2)))
-	assert.True(t, b.expired(t0.Add(resizeMaxHold)), "the budget is spent")
-	assert.True(t, b.signal(t0.Add(resizeMaxHold+time.Second)), "a later signal settles at once")
-
-	b.done()
-	assert.False(t, b.expired(t0.Add(time.Hour)), "no burst in flight")
-	assert.False(t, b.signal(t0.Add(time.Hour)), "the next burst starts a fresh budget")
-}
-
 // TestUIResizeStorm drives a burst of resizes while tool progress updates, the
 // shape of the reported corruption: gated draws never land mid-reflow, so the
 // settled redraw leaves exactly one divider at every step and never duplicates
@@ -1040,4 +1023,131 @@ func TestUILiveBlockFitsTheScreen(t *testing.T) {
 			assert.Contains(t, u.snapshot(v), promptFirst, "width %d", w)
 		}
 	})
+}
+
+// TestStreamingRowsLaysOutStructuredLines pins that a table or rule still
+// buffered in textBuf previews as itself, not as a blank row: structured
+// histLines carry no text, so the preview must lay them out like commit does.
+func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
+	t.Parallel()
+
+	t.Run("table", func(t *testing.T) {
+		u := &UI{theme: NewTheme(ColorNone), streaming: true, textBuf: "| A | B |\n|---|---|\n| 1 | 2 |"}
+		rows := u.streamingRows(40)
+		require.NotEmpty(t, rows)
+		assert.Contains(t, strings.Join(rows, "\n"), "│ A │ B │", "the preview shows the table, not a blank")
+	})
+	t.Run("rule", func(t *testing.T) {
+		u := &UI{theme: NewTheme(ColorNone), streaming: true, textBuf: "---"}
+		rows := u.streamingRows(40)
+		require.NotEmpty(t, rows)
+		assert.Equal(t, strings.Repeat(ruleChar, 40), rows[0], "the preview shows the rule, not a blank")
+	})
+}
+
+// TestUIResizeProbeGatesTheRedraw covers the barrier end to end: after a
+// settled burst the redraw waits for the terminal's status reply, because the
+// ioctl reports the new size before the emulator has reflowed to it — drawing
+// on that say-so alone is what strands a divider.
+func TestUIResizeProbeGatesTheRedraw(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	v := newVT(48, 12)
+	u := newTestUI(t, v, pr)
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	u.Print("committed reply")
+
+	v.setSize(30, 12)
+	u.holdForResize() // the SIGWINCH arrived
+	u.probeResize()   // the burst settled; the redraw waits on the terminal
+
+	assert.Equal(t, 1, v.dsrCount, "the barrier probe was emitted")
+	assert.Equal(t, 2, countRules(u.snapshot(v)),
+		"nothing redraws until the terminal proves it caught up: the old divider stays reflowed in two rows")
+
+	_, err := pw.Write([]byte("\x1b[0n"))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return countRules(u.snapshot(v)) == 1
+	}, time.Second, 5*time.Millisecond, "the reply releases the redraw")
+}
+
+// TestUIResizeProbeTimeoutSettles covers terminals that never answer the
+// status query: the grace timeout releases the redraw anyway.
+func TestUIResizeProbeTimeoutSettles(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(48, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	var fire func()
+	u.afterDelay = func(_ time.Duration, fn func()) *time.Timer {
+		fire = fn
+		return time.NewTimer(time.Hour) // never fires inside the test
+	}
+	u.Print("committed reply")
+
+	v.setSize(30, 12)
+	u.holdForResize()
+	u.probeResize()
+	require.NotNil(t, fire)
+	assert.Equal(t, 2, countRules(u.snapshot(v)), "no redraw before the grace expires")
+
+	fire() // the terminal never answered; the grace expired
+	assert.Equal(t, 2, countRules(u.snapshot(v)), "the draw still waits out its quiet grace")
+	fire() // the quiet grace elapsed
+	assert.Equal(t, 1, countRules(u.snapshot(v)), "the timeout releases the redraw")
+}
+
+// TestUIResizeProbeStaleReplyIgnored covers a reply that arrives after a newer
+// SIGWINCH: it only proves the terminal caught up with the older burst, so the
+// redraw keeps waiting for the newer burst's own probe.
+func TestUIResizeProbeStaleReplyIgnored(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(48, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	u.Print("committed reply")
+
+	v.setSize(30, 12)
+	u.holdForResize()
+	u.probeResize()
+	u.holdForResize() // a newer SIGWINCH arrived before the reply
+	u.probeAnswered() // the reply covers only the older probe
+	assert.Equal(t, 2, countRules(u.snapshot(v)), "a stale reply proves nothing")
+
+	u.probeResize() // the newer burst settles with its own probe
+	u.probeAnswered()
+	require.Eventually(t, func() bool {
+		return countRules(u.snapshot(v)) == 1
+	}, time.Second, 5*time.Millisecond, "and its fresh reply releases the redraw after the grace")
+}
+
+// TestUIResizeDrawGraceCancelledBySignal covers the last window: the terminal
+// answered and the quiet grace is running, but a new resize begins before the
+// draw goes out. The draw must be abandoned — the frame would land on a grid
+// the next reflow is about to move.
+func TestUIResizeDrawGraceCancelledBySignal(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(48, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	var fire func()
+	u.afterDelay = func(_ time.Duration, fn func()) *time.Timer {
+		fire = fn
+		return time.NewTimer(time.Hour) // never fires inside the test
+	}
+	u.Print("committed reply")
+
+	v.setSize(30, 12)
+	u.holdForResize()
+	u.probeResize()
+	u.probeAnswered() // the terminal caught up; the quiet grace starts
+	u.holdForResize() // but a new resize begins before the draw goes out
+	fire()            // the grace elapses
+
+	assert.Equal(t, 2, countRules(u.snapshot(v)), "the draw was abandoned")
 }

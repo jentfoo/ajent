@@ -36,25 +36,65 @@ type lineFlow uint8
 
 const (
 	flowReflow lineFlow = iota // prose, the terminal may reflow it
-	flowWrap                   // we wrap, keeping hanging indent
-	flowClip                   // structural, clipped not wrapped
+	flowWrap                   // carries alignment: alt wraps it keeping the hanging indent, inline emits it whole like prose
 )
 
-// histLine is one committed logical line.
+// histLine is one committed logical line. text never contains a newline —
+// commitHist enforces that by construction (splitHistLines).
 type histLine struct {
 	text  string
 	flow  lineFlow
 	table *mdTable // non-nil for a markdown table; laid out fresh at each width
+	rule  bool     // true: a horizontal rule drawn to fit the width it is laid at
+	style Style    // styling re-applied when rendering a rule (or empty)
 }
 
-// rows lays the line out at width, for renderers that own their viewport.
+// rows lays the line out at width, for the renderers that lay history out
+// themselves: alt's viewport, inline's structured content, plain's fixed width.
 func (l histLine) rows(width int) []string {
-	if l.table != nil {
+	switch {
+	case l.table != nil:
 		return layoutTable(l.table, width)
-	} else if l.flow == flowClip {
-		return []string{l.text} // the caller truncates it to the viewport
+	case l.rule:
+		// a rule is drawn to fit whatever width it is laid at, not the one it
+		// was committed with; style is re-applied so re-laying matches commit.
+		txt := strings.Repeat(ruleChar, max(width, minRuleWidth))
+		if l.style.Open() != "" {
+			txt = l.style.Wrap(txt)
+		}
+		return []string{txt}
+	default:
+		return wrapLine(l.text, width)
 	}
-	return wrapLine(l.text, width)
+}
+
+// splitHistLines enforces the single-line invariant on histLine.text. Producers
+// are expected to split already, but a multi-line line would silently corrupt
+// every renderer (each writes one row per line), so the commit funnel splits
+// defensively. A no-op when nothing contains a newline, the common case.
+func splitHistLines(lines []histLine) []histLine {
+	multi := -1
+	for i, l := range lines {
+		if strings.Contains(l.text, "\n") {
+			multi = i
+			break
+		}
+	}
+	if multi < 0 {
+		return lines
+	}
+	out := make([]histLine, 0, len(lines)+1)
+	out = append(out, lines[:multi]...)
+	for _, l := range lines[multi:] {
+		if !strings.Contains(l.text, "\n") {
+			out = append(out, l)
+			continue
+		}
+		for _, part := range strings.Split(l.text, "\n") {
+			out = append(out, histLine{text: part, flow: l.flow})
+		}
+	}
+	return out
 }
 
 // renderer paints committed history and the live block of input and status.
@@ -64,6 +104,7 @@ type renderer interface {
 	setLive(rows []string, caretRow, caretCol int)
 	clearHistory() // drop retained lines where the mode owns scrollback (alt); no-op elsewhere
 	resize()
+	probe()                // ask the terminal for a status reply, a barrier against mid-reflow draws
 	scroll(lines int) bool // false when the mode has no viewport of its own
 	suspend(inFd int)      // hand the terminal back to another program
 	resume(inFd int) error // retake it
@@ -192,8 +233,10 @@ func (p *plainRenderer) start(int) error { return nil }
 func (p *plainRenderer) commit(lines []histLine) {
 	var b strings.Builder
 	for _, l := range lines {
-		if l.table != nil {
-			for _, row := range layoutTable(l.table, defaultWidth) {
+		if l.table != nil || l.rule {
+			// rows() lays intent out as text; plain's ColorNone theme means a
+			// rule's style is empty, so no SGR leaks into a pipe
+			for _, row := range l.rows(defaultWidth) {
 				b.WriteString(row)
 				b.WriteString("\n")
 			}
@@ -207,6 +250,7 @@ func (p *plainRenderer) commit(lines []histLine) {
 
 func (p *plainRenderer) setLive([]string, int, int) {}
 func (p *plainRenderer) resize()                    {}
+func (p *plainRenderer) probe()                     {} // plain draws nothing; no barrier needed
 func (p *plainRenderer) scroll(int) bool            { return false }
 func (p *plainRenderer) suspend(int)                {}
 func (p *plainRenderer) resume(int) error           { return nil }

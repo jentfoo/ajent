@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func envFunc(m map[string]string) func(string) string {
@@ -50,6 +51,31 @@ func TestMultiplexed(t *testing.T) {
 	assert.False(t, multiplexed(envFunc(map[string]string{})))
 }
 
+func TestSplitHistLines(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no_op_without_newlines", func(t *testing.T) {
+		lines := []histLine{{text: "a"}, {rule: true}, {text: "b", flow: flowWrap}}
+		assert.Equal(t, lines, splitHistLines(lines))
+	})
+	t.Run("splits_embedded_newlines", func(t *testing.T) {
+		lines := []histLine{{text: "one\ntwo", flow: flowWrap}, {text: "three"}}
+		assert.Equal(t, []histLine{
+			{text: "one", flow: flowWrap},
+			{text: "two", flow: flowWrap},
+			{text: "three"},
+		}, splitHistLines(lines), "each piece becomes its own row, keeping the flow")
+	})
+	t.Run("keeps_structured_lines", func(t *testing.T) {
+		table := histLine{table: &mdTable{}}
+		lines := []histLine{{text: "x\ny"}, table, {rule: true}}
+		out := splitHistLines(lines)
+		require.Len(t, out, 4)
+		assert.Equal(t, table, out[2], "a structured line is never rewritten")
+		assert.True(t, out[3].rule)
+	})
+}
+
 func TestParseMode(t *testing.T) {
 	t.Parallel()
 
@@ -81,10 +107,11 @@ func TestPlainRenderer(t *testing.T) {
 
 	var buf strings.Builder
 	p := &plainRenderer{out: &buf}
-	p.commit([]histLine{{text: "one"}, {text: "two", flow: flowClip}})
+	p.commit([]histLine{{text: "one"}, {text: "two"}, {rule: true}})
 	p.setLive([]string{"❯ ignored"}, 0, 0)
 
-	assert.Equal(t, "one\ntwo\n", buf.String(), "flow is ignored and no live block")
+	assert.Equal(t, "one\ntwo\n"+strings.Repeat(ruleChar, defaultWidth)+"\n", buf.String(),
+		"a rule renders as text, not a blank line; a zero style keeps it SGR-free")
 	assert.False(t, p.scroll(1))
 }
 
@@ -95,9 +122,5 @@ func TestHistLineRows(t *testing.T) {
 		want := []string{"aaaa", "bbbb"}
 		assert.Equal(t, want, histLine{text: "aaaa bbbb", flow: flowReflow}.rows(6))
 		assert.Equal(t, want, histLine{text: "aaaa bbbb", flow: flowWrap}.rows(6))
-	})
-	t.Run("clip_stays_one_row", func(t *testing.T) {
-		l := histLine{text: "aaaa bbbb", flow: flowClip}
-		assert.Equal(t, []string{"aaaa bbbb"}, l.rows(6))
 	})
 }

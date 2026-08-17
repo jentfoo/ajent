@@ -56,6 +56,8 @@ func TestDecodeKey(t *testing.T) {
 		{"unknown_csi", "\x1b[9Z", key{typ: keyIgnore}, 4},
 		{"cursor_report", "\x1b[12;40R", key{typ: keyCursorReport, row: 12}, 8},
 		{"malformed_report", "\x1b[;R", key{typ: keyIgnore}, 4},
+		{"status_report", "\x1b[0n", key{typ: keyStatusReport}, 4},
+		{"other_dsr_ignored", "\x1b[3n", key{typ: keyIgnore}, 4},
 		{"paste", "\x1b[200~hi\x1b[201~", key{typ: keyPaste, text: "hi"}, 14},
 		{"paste_multiline", "\x1b[200~a\nb\x1b[201~", key{typ: keyPaste, text: "a\nb"}, 15},
 	}

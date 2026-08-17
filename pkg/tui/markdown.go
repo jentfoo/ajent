@@ -17,10 +17,10 @@ const (
 	codeIndent   = "  "
 	minRuleWidth = 8
 	// ruleChar is the one glyph repeated to fill a whole row, so uniseg's width
-	// for it must match the terminal's: the live-block erase counts the divider
-	// as one row. "─" is East Asian Ambiguous, which uniseg and effectively all
-	// emulators in their default configuration measure as one column; the live
-	// divider is also composed a column short (see repaint) so it never enters
+	// for it must match the terminal's: a disagreement would wrap a rule that
+	// was meant to fit exactly. "─" is East Asian Ambiguous, which uniseg and
+	// effectively all emulators in their default configuration measure as one
+	// column; rules are drawn a column short of the edge so they never enter
 	// the deferred-wrap state.
 	ruleChar       = "─"
 	maxTableWidth  = 120
@@ -59,6 +59,14 @@ func (r mdRenderer) blocks(n ast.Node, src []byte) []histLine {
 				out = append(out, histLine{})
 			}
 			out = append(out, histLine{table: r.buildTable(c, src)})
+			continue
+		} else if c.Kind() == ast.KindThematicBreak {
+			// a rule is drawn to fit the width it is laid at; retain intent and
+			// style so re-laying (on resize) reproduces commit exactly.
+			if len(out) > 0 {
+				out = append(out, histLine{})
+			}
+			out = append(out, histLine{rule: true, style: r.theme.Dim})
 			continue
 		}
 		b, flow := r.block(c, src)
@@ -104,11 +112,14 @@ func (r mdRenderer) block(n ast.Node, src []byte) (string, lineFlow) {
 	case ast.KindList:
 		return r.list(n.(*ast.List), src), flowWrap
 	case ast.KindThematicBreak:
+		// top-level breaks are handled in blocks() as a histLine{rule}; this
+		// path covers nested ones (inside a list or quote), which stay baked at
+		// width because they cannot carry the intent through the string return.
 		w := max(r.width, minRuleWidth)
-		return r.theme.Dim.Wrap(strings.Repeat(ruleChar, w)), flowClip
+		return r.theme.Dim.Wrap(strings.Repeat(ruleChar, w)), flowWrap
 	case east.KindTable: // nested table (inside a list or quote): laid out once
 		t := r.buildTable(n, src)
-		return strings.Join(layoutTable(t, r.width), "\n"), flowClip
+		return strings.Join(layoutTable(t, r.width), "\n"), flowWrap
 	case ast.KindHTMLBlock:
 		return r.theme.Dim.Wrap(strings.TrimRight(rawLines(n, src), "\n")), flowWrap
 	default:

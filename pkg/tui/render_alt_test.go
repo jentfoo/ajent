@@ -137,14 +137,6 @@ func TestAltRendererLineFlow(t *testing.T) {
 		assert.Equal(t, "• alpha beta", v.Line(1))
 		assert.Equal(t, "  gamma", v.Line(2))
 	})
-	t.Run("clipped_lines_are_not_wrapped", func(t *testing.T) {
-		v := newVT(12, 5)
-		r := newTestAlt(v)
-		r.setLive([]string{"❯", "ctx"}, 0, 1)
-		r.commit([]histLine{{text: "│ alpha │ beta │", flow: flowClip}})
-
-		assert.Equal(t, "│ alpha │ be", v.Line(2), "one row, clipped to the viewport")
-	})
 }
 
 // TestAltRendererTableReflows guards resize behaviour for a committed table: it must

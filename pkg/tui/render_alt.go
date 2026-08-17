@@ -96,6 +96,10 @@ func (r *altRenderer) resize() {
 	r.render()
 }
 
+// probe is a no-op: alt re-paints every cell it owns on each frame, so a draw
+// that raced a reflow is fully repaired by the next one — no barrier needed.
+func (r *altRenderer) probe() {}
+
 // scroll moves the viewport, positive scrolls back toward older output.
 func (r *altRenderer) scroll(lines int) bool {
 	before := r.offset

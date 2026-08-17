@@ -8,6 +8,27 @@ import "strings"
 // re-wrapped again, so the terminal keeps full ownership of wrapping, reflow and
 // scrollback. All cursor motion is relative to the caret and confined to the
 // live block, which makes it immune to scrolling.
+//
+// This means inline mode never rewrites committed history on a resize: we cannot
+// know how many physical terminal rows our content occupies after an emulator
+// reflow (widening pulls scrollback back; narrowing wraps), so any attempt to
+// rewrite it would land on rows that are not where we expect. Three designs tried
+// to repaint the visible screen from retained history — a full viewport redraw, an
+// absolute cursorTo pass, and a relative climb bounded by owned rows — and each
+// surfaced new corruption on real terminals (scrolled-up or widened). Instead,
+// committed lines are emitted so that what can reflow natively does:
+//
+//   - every text line (`flowReflow` and `flowWrap` alike: prose, code, lists,
+//     quotes, diffs, tool output) goes out as one logical line, exactly like
+//     cat. The terminal wraps it and reflows it on resize in both directions,
+//     and selections carry no fake continuation indents — a hard break from us
+//     would freeze the line at commit width and fragment copies.
+//   - only genuinely two-dimensional content (tables, rules) is laid out at
+//     commit width and keeps it; wrapping a table would garble it outright.
+//
+// The live block, whose top is the parked cursor the terminal tracks through
+// reflow, is always redrawn at the current width. Alt mode exists for full resize
+// fidelity: it owns a viewport and re-lays everything from retained lines.
 type inlineRenderer struct {
 	t *termState
 
@@ -118,18 +139,21 @@ func (r *inlineRenderer) commit(lines []histLine) {
 	}
 	for _, l := range lines {
 		switch {
-		case l.table != nil:
-			for _, row := range layoutTable(l.table, r.t.width) {
+		case l.table != nil || l.rule:
+			// structured content arrives as intent (markdown.go), not baked text;
+			// rows() lays it out at the width in force, so a later re-lay at any
+			// other width (alt mode) reproduces commit exactly. One column short
+			// of the edge, the same precaution as live rows: a full-width row
+			// enters the deferred-wrap state, which emulators reflow
+			// inconsistently (a table border could fuse with the next row).
+			for _, row := range l.rows(max(r.t.width-1, 1)) {
 				emit(row)
 			}
-		case l.flow == flowWrap:
-			for _, row := range wrapLine(l.text, r.t.width) {
-				emit(row)
-			}
-		case l.flow == flowClip:
-			emit(truncateDisplay(l.text, r.t.width))
 		default:
-			emit(l.text) // left long on purpose: the terminal wraps and reflows it
+			// one logical line, left long on purpose: the terminal wraps it and
+			// reflows it on resize. Hard-breaking here would freeze the line at
+			// commit width and fragment selections with our continuation indents.
+			emit(l.text)
 		}
 	}
 	b.WriteString(r.drawLive())
@@ -166,6 +190,12 @@ func (r *inlineRenderer) setLive(rows []string, caretRow, caretCol int) {
 // all. Committed lines are the terminal's, exactly like cat output: they reflow
 // however the emulator reflows them and are never re-rendered.
 func (r *inlineRenderer) resize() { r.t.refreshSize() }
+
+// probe emits a status query whose reply (decoded as keyStatusReport) proves
+// the terminal has processed everything sent before it — including the resize
+// reflow a settled burst is about to draw behind. The gate narrows the
+// mid-reflow draw window; this closes it.
+func (r *inlineRenderer) probe() { r.t.write(statusQuery) }
 
 // scroll is the terminal's job in this mode.
 func (r *inlineRenderer) scroll(int) bool { return false }

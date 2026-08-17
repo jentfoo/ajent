@@ -36,6 +36,7 @@ const (
 	keyPageUp
 	keyPageDown
 	keyCursorReport
+	keyStatusReport // DSR reply (CSI 0 n): the terminal has caught up
 	keyEscape
 	keyTab
 	keyBackTab
@@ -180,6 +181,11 @@ func decodeCSI(b []byte) (key, int, bool) {
 			return key{typ: keyIgnore}, n, true
 		}
 		return key{typ: keyCursorReport, row: v}, n, true
+	case 'n':
+		if params == "0" { // DSR "no malfunction": answers statusQuery
+			return key{typ: keyStatusReport}, n, true
+		}
+		return key{typ: keyIgnore}, n, true
 	case '~':
 		return decodeTilde(b, params, n)
 	case 'Z':
@@ -240,12 +246,14 @@ func arrowKey(final byte, params string) keyType {
 	}
 }
 
-// inputReader decodes keys from a terminal in raw mode. Cursor position reports
-// are delivered separately so a startup query cannot swallow a keystroke.
+// inputReader decodes keys from a terminal in raw mode. Cursor position and
+// status reports are delivered separately so a query cannot swallow a
+// keystroke.
 type inputReader struct {
 	src     io.Reader
 	keys    chan key
 	reports chan int
+	status  chan struct{} // DSR replies answering the resize barrier probe
 
 	newTimer func() escTimer // defaults to newRealEsc, tests inject a manual one
 	escDelay time.Duration   // how long a lone escape byte is held, seeded from escTimeout
@@ -256,6 +264,7 @@ func newInputReader(src io.Reader) *inputReader {
 		src:      src,
 		keys:     make(chan key, 64),
 		reports:  make(chan int, 4),
+		status:   make(chan struct{}, 4),
 		newTimer: newRealEsc,
 		escDelay: escTimeout,
 	}
@@ -274,6 +283,7 @@ type readResult struct {
 // escTimeout before being reported as keyEscape.
 func (r *inputReader) run() {
 	defer close(r.keys)
+	defer close(r.status)
 
 	reads := make(chan readResult, 1)
 	go func() {
@@ -329,12 +339,19 @@ func (r *inputReader) run() {
 
 // emit routes a decoded key to the right consumer.
 func (r *inputReader) emit(k key) {
-	if k.typ == keyCursorReport {
+	switch k.typ {
+	case keyCursorReport:
 		select {
 		case r.reports <- k.row:
 		default:
 		}
-	} else if k.typ != keyIgnore {
+	case keyStatusReport:
+		select {
+		case r.status <- struct{}{}:
+		default:
+		}
+	case keyIgnore:
+	default:
 		r.keys <- k
 	}
 }
