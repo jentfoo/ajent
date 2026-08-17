@@ -4,6 +4,7 @@
 package sink
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -69,6 +70,33 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResul
 
 // ToolOutput streams raw tool output a chunk at a time.
 func (s *Sink) ToolOutput(callID, delta string) { s.ui.Output(delta) }
+
+// ToolProgress shows a call the model is still composing as an activity row, so
+// a long set of arguments reports its size instead of sitting silent. The row
+// clears when the call is complete and its own header takes over.
+func (s *Sink) ToolProgress(p agent.ToolProgress) {
+	if p.Done {
+		s.ui.SetActivity(progressKey(p.CallID), "")
+		return
+	}
+	s.ui.SetActivity(progressKey(p.CallID), progressRow(p))
+}
+
+// progressKey namespaces a call's activity row against sub-agent rows.
+func progressKey(callID string) string { return "call:" + callID }
+
+// progressRow renders "write notes.go · 132 lines · 4.1k".
+func progressRow(p agent.ToolProgress) string {
+	parts := []string{p.Name}
+	if p.Path != "" {
+		parts = append(parts, p.Path)
+	}
+	row := strings.Join(parts, " ")
+	if p.Lines > 0 {
+		row += " · " + strconv.Itoa(p.Lines) + " lines"
+	}
+	return row + " · " + tui.FormatBytes(p.Bytes)
+}
 
 // Diff commits a colorized file edit.
 func (s *Sink) Diff(path, before, after string) { s.ui.Diff(path, before, after) }

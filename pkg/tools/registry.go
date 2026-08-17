@@ -133,15 +133,21 @@ type DryRunner interface {
 	DryRun(call agent.ToolCall) error
 }
 
-// Previewer is implemented by tools that can render what a call would change, so
-// the approval dialog shows content or a diff instead of raw arguments.
-type Previewer interface {
-	Preview(call agent.ToolCall) (path, before, after string, err error)
+// Change is the file delta a call would make, rendered before it runs.
+type Change struct {
+	Path          string
+	Before, After string
 }
 
-// Preview reports whether call's effect is previewable and returns its path with
-// the current and resulting text. Tools without one report ok=false.
-func (r *Registry) Preview(call agent.ToolCall) (string, string, string, bool) {
+// Previewer is implemented by tools that can render what a call would change, so
+// the change is shown before the call is vetted rather than after it applies.
+type Previewer interface {
+	Preview(call agent.ToolCall) (Change, error)
+}
+
+// Preview reports whether call's effect is previewable and returns the delta it
+// would make. Tools without one report ok=false.
+func (r *Registry) Preview(call agent.ToolCall) (Change, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	for _, rt := range r.tools {
@@ -150,15 +156,15 @@ func (r *Registry) Preview(call agent.ToolCall) (string, string, string, bool) {
 		}
 		pv, ok := rt.tool.(Previewer)
 		if !ok {
-			return "", "", "", false
+			return Change{}, false
 		}
-		path, before, after, err := pv.Preview(call)
+		ch, err := pv.Preview(call)
 		if err != nil {
-			return "", "", "", false
+			return Change{}, false
 		}
-		return path, before, after, true
+		return ch, true
 	}
-	return "", "", "", false
+	return Change{}, false
 }
 
 // DryRun reports whether call would fail before running. Tools without a dry run
@@ -526,6 +532,15 @@ func (g *guardedTool) Mode() agent.ExecutionMode { return g.t.Mode() }
 // Execute vets the call through every guard, then delegates to the wrapped tool.
 // A denial becomes an error result carrying its reason and nothing touches disk.
 func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
+	// the change is rendered before the call is vetted, so an approval dialog sits
+	// below the full diff rather than repeating a truncated copy of it. Once, not
+	// per guard, and in every mode including the ones that never prompt.
+	if pv, ok := g.t.(Previewer); ok {
+		if ch, err := pv.Preview(c); err == nil {
+			ensureOutput(out).Diff(ch.Path, ch.Before, ch.After)
+		}
+	}
+
 	guards, asker := g.reg.guardSnapshot()
 	for _, guard := range guards {
 		d := guard(ctx, c)

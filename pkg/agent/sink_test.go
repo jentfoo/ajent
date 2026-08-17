@@ -8,7 +8,8 @@ import (
 // recordingSink captures every sink call in order, for asserting exact
 // sequences.
 type recordingSink struct {
-	calls []string
+	calls    []string
+	progress []ToolProgress
 }
 
 func (r *recordingSink) TurnStart(TurnInfo) { r.calls = append(r.calls, "turn_start") }
@@ -21,6 +22,10 @@ func (r *recordingSink) ToolStart(call ToolCall, _ string) func(ToolResult) {
 	return func(ToolResult) {}
 }
 func (r *recordingSink) ToolOutput(string, string) { r.calls = append(r.calls, "tool_output") }
+func (r *recordingSink) ToolProgress(p ToolProgress) {
+	r.calls = append(r.calls, "tool_progress")
+	r.progress = append(r.progress, p)
+}
 func (r *recordingSink) Diff(string, string, string) {
 	r.calls = append(r.calls, "diff")
 }
@@ -46,6 +51,7 @@ func (c *resultCatcher) ToolStart(ToolCall, string) func(ToolResult) {
 	return func(ToolResult) {}
 }
 func (c *resultCatcher) ToolOutput(string, string)   {}
+func (c *resultCatcher) ToolProgress(ToolProgress)   {}
 func (c *resultCatcher) Diff(string, string, string) {}
 func (c *resultCatcher) Usage(llm.Usage)             {}
 func (c *resultCatcher) Context(tokens.ContextState) {}

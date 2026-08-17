@@ -75,9 +75,10 @@ func (s *recordingSink) ToolStart(call agent.ToolCall, label string) func(agent.
 	return s.next.ToolStart(call, label)
 }
 
-func (s *recordingSink) ToolOutput(id, d string) { s.next.ToolOutput(id, d) }
-func (s *recordingSink) Diff(p, b, a string)     { s.next.Diff(p, b, a) }
-func (s *recordingSink) Usage(u llm.Usage)       { s.next.Usage(u) }
+func (s *recordingSink) ToolOutput(id, d string)           { s.next.ToolOutput(id, d) }
+func (s *recordingSink) ToolProgress(p agent.ToolProgress) { s.next.ToolProgress(p) }
+func (s *recordingSink) Diff(p, b, a string)               { s.next.Diff(p, b, a) }
+func (s *recordingSink) Usage(u llm.Usage)                 { s.next.Usage(u) }
 func (s *recordingSink) Context(c tokens.ContextState) {
 	s.next.Context(c)
 }

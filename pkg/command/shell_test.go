@@ -38,9 +38,10 @@ func (r *recordingSinkForShell) ToolOutput(_, d string) {
 	r.outputs = append(r.outputs, d)
 	r.mu.Unlock()
 }
-func (r *recordingSinkForShell) Diff(string, string, string) {}
-func (r *recordingSinkForShell) Usage(llm.Usage)             {}
-func (r *recordingSinkForShell) Context(tokens.ContextState) {}
+func (r *recordingSinkForShell) ToolProgress(agent.ToolProgress) {}
+func (r *recordingSinkForShell) Diff(string, string, string)     {}
+func (r *recordingSinkForShell) Usage(llm.Usage)                 {}
+func (r *recordingSinkForShell) Context(tokens.ContextState)     {}
 func (r *recordingSinkForShell) Notice(msg string, _ agent.Level) {
 	r.mu.Lock()
 	r.notices = append(r.notices, msg)

@@ -143,7 +143,9 @@ func NewTheme(p ColorProfile) Theme {
 
 	t.DiffAdd = styleFg(78, attrFgGreen)
 	t.DiffDel = styleFg(167, attrFgRed)
-	t.DiffHunk = styleFg(245, attrFgCyan, attrDim)
+	// @@ range markers get their own hue, distinct from the add/del/context trio,
+	// so a hunk boundary reads as a separator. Cyan, as git colours diff.frag.
+	t.DiffHunk = styleFg(45, attrFgCyan)
 	t.DiffFile = styleFg(111, attrFgBlue, attrBold)
 	t.UserTag = styleFg(69, attrFgBlue)   // blue: user prompts
 	t.Assist = styleFg(221, attrFgYellow) // yellow: assistant replies

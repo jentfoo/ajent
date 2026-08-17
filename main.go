@@ -393,14 +393,14 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// config-declared denied commands refuse outright without prompting, every mode.
 		barrier.SetDeniedCommands(set.Settings().Permissions.DeniedCommands)
 		barrier.SetDryRun(toolsReg.DryRun)
-		// an approval dialog shows what a write/edit call would change (content or a
-		// plain diff) rather than its raw JSON arguments.
+		// the full diff is already committed above the dialog by guardedTool.Execute,
+		// so the subject names it rather than repeating a truncated copy.
 		barrier.SetPreview(func(call agent.ToolCall) string {
-			path, before, after, ok := toolsReg.Preview(call)
+			ch, ok := toolsReg.Preview(call)
 			if !ok {
 				return ""
 			}
-			return tui.UnifiedPreview(path, before, after)
+			return tui.DiffSummary(ch.Path, ch.Before, ch.After)
 		})
 		toolsReg.AddGuard(barrier.Guard())
 		toolsReg.SetAsker(barrier.Asker())

@@ -56,6 +56,7 @@ type Sink interface {
 	EndText()
 	ToolStart(call ToolCall) func(ToolResult)
 	ToolOutput(callID, delta string)
+	ToolProgress(ToolProgress)
 	Diff(path, before, after string)
 	Usage(llm.Usage)
 	Notice(msg string, level Level)
@@ -66,6 +67,33 @@ type Sink interface {
 `cmd/ajent` provides a `tuisink` that maps these almost 1:1 onto `tui.UI`.
 `NopSink` discards everything; a headless child agent uses it as an embedded
 base and overrides only the events that feed its activity row (phase 13).
+
+### Tool-call progress
+
+`ToolProgress` reports a call the model is still *composing*, before it can run.
+Without it a large `write` is silent for as long as its content streams — the
+loop's only tool-visible event was `ToolStart`, which fires after the arguments
+are complete. `forward` folds `EventToolCall{Start,Delta,End}` into a
+`toolProgress` tracker and reports the argument bytes and lines accumulated so
+far, which the TUI renders as an activity row.
+
+Constraints that keep it honest:
+
+- Arguments stream as **partial JSON**, so a newline inside an argument is the
+  two-character `\n` escape, not a byte. `lineEscapeCounter` counts those escapes
+  and carries its escape state across fragment boundaries, so a chunk may end
+  mid-escape and `\\n` is not miscounted as a newline.
+- Events are paired by **block index**, not by id: providers repeat `ToolCallID`
+  on some events but always carry `Index` (see `event.go`). Resolving on id first
+  and index second keeps parallel calls apart either way.
+- The target is looked up **by argument name** (`path`, `file_path`, …), never by
+  position: a marshalled Go map sorts its keys, so a write's long `content`
+  commonly streams ahead of its `path`. It stays empty until a complete value has
+  arrived.
+- Republishing is throttled by an argument-byte step, not a timer, so the row
+  cannot repaint per token and the behaviour stays deterministic under test.
+- A stream that ends with calls still in flight (an interrupt) reports `Done` for
+  each, so an aborted turn never strands a row.
 
 ### Sink fan-out
 

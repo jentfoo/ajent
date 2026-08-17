@@ -37,35 +37,35 @@ var _ Previewer = (*editTool)(nil)
 
 // resolveApply resolves the path and returns the current file text with the edits
 // applied, so DryRun and Preview share one code path.
-func (t *editTool) resolveApply(call agent.ToolCall) (path string, before, after string, err error) {
+func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
 	var p editParams
-	err = decode(call.Input, &p)
+	err := decode(call.Input, &p)
 	if err != nil {
-		return "", "", "", errors.New("bad args: " + err.Error())
+		return Change{}, errors.New("bad args: " + err.Error())
 	}
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
-		return "", "", "", err
+		return Change{}, err
 	}
 	data, err := readAllFile(full) // missing or unreadable counts as will-fail
 	if err != nil {
-		return "", "", "", err
+		return Change{}, err
 	}
-	after, err = applyEdits(p.Path, string(data), p.Edits)
-	return p.Path, string(data), after, err
+	after, err := applyEdits(p.Path, string(data), p.Edits)
+	return Change{Path: p.Path, Before: string(data), After: after}, err
 }
 
 // DryRun reports whether an edit call would fail before it runs: the file is
 // missing or unreadable, or applyEdits rejects any op. The barrier uses it to skip
 // a prompt for a doomed call and let Execute return its natural error.
 func (t *editTool) DryRun(call agent.ToolCall) error {
-	_, _, _, err := t.resolveApply(call)
+	_, err := t.resolveApply(call)
 	return err
 }
 
-// Preview returns the path with the file's current text and what it would become,
-// so an approval dialog can show a diff of the change before allowing it.
-func (t *editTool) Preview(call agent.ToolCall) (path, before, after string, err error) {
+// Preview returns the file's current text and what it would become, so the diff
+// is shown before the call is vetted.
+func (t *editTool) Preview(call agent.ToolCall) (Change, error) {
 	return t.resolveApply(call)
 }
 
@@ -82,9 +82,9 @@ func (t *editTool) Mode() agent.ExecutionMode {
 }
 
 // Execute applies every edit against an in-memory buffer, then writes once so a
-// failure mid-list leaves the file byte-identical.
+// failure mid-list leaves the file byte-identical. The diff is rendered by the
+// guard wrapper before this runs.
 func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
-	out = ensureOutput(out)
 	var p editParams
 	if err := decode(call.Input, &p); err != nil {
 		return resultErr("bad args: " + err.Error()), nil
@@ -113,7 +113,6 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		return resultErr("edit: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, final, fileInfo(full))
-	out.Diff(p.Path, buf, applied)
 
 	return agent.ToolResult{
 		Content: llmBlock(fmt.Sprintf("applied %d edits to %s", len(p.Edits), p.Path)),

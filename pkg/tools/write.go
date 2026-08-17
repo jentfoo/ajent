@@ -27,24 +27,23 @@ type writeTool struct {
 var _ agent.Tool = (*writeTool)(nil)
 var _ Previewer = (*writeTool)(nil)
 
-// Preview returns the path with the file's current and new content for a write
-// call, so an approval dialog can show what would be written (a brand-new file
-// previews as all additions).
-func (t *writeTool) Preview(call agent.ToolCall) (path, before, after string, err error) {
+// Preview returns the file's current and new content for a write call, so the
+// change is shown before it runs (a brand-new file previews as all additions).
+func (t *writeTool) Preview(call agent.ToolCall) (Change, error) {
 	var p writeParams
 	if err := decode(call.Input, &p); err != nil {
-		return "", "", "", errors.New("bad args: " + err.Error())
+		return Change{}, errors.New("bad args: " + err.Error())
 	}
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
-		return "", "", "", err
+		return Change{}, err
 	}
 	var existing string
 	if _, statErr := os.Stat(full); statErr == nil { // show the delta when overwriting too
 		b, _ := readAllFile(full)
 		existing = string(b)
 	}
-	return p.Path, existing, p.Content, nil
+	return Change{Path: p.Path, Before: existing, After: p.Content}, nil
 }
 
 func (t *writeTool) Name() string { return "write" }
@@ -61,10 +60,9 @@ func (t *writeTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
-// Execute writes the file, emitting a diff through out and refusing stale or
-// unread overwrites.
+// Execute writes the file, refusing stale or unread overwrites. The diff is
+// rendered by the guard wrapper before this runs.
 func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
-	out = ensureOutput(out)
 	var p writeParams
 	if err := decode(call.Input, &p); err != nil {
 		return resultErr("bad args: " + err.Error()), nil
@@ -74,13 +72,10 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 		return resultErr(err.Error()), nil
 	}
 
-	var before string
 	if _, statErr := os.Stat(full); statErr == nil { // existing file needs a fresh read
 		if ck := t.tracker.Check(full); ck != nil {
 			return resultErr("refusing to overwrite: " + ck.Error()), nil
 		}
-		beforeBytes, _ := readAllFile(full)
-		before = string(beforeBytes)
 	}
 
 	data := []byte(p.Content)
@@ -88,7 +83,6 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 		return resultErr("write: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, data, fileInfo(full))
-	out.Diff(p.Path, before, string(data))
 
 	return agent.ToolResult{
 		Content: llmBlock(fmt.Sprintf("wrote %s (%d lines)", p.Path, countLines(string(data)))),

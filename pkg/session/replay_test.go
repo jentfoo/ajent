@@ -27,12 +27,13 @@ func (s *replaySink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolRes
 	return func(res agent.ToolResult) { s.calls = append(s.calls, fmt.Sprintf("result:%v", res.IsError)) }
 }
 
-func (s *replaySink) ToolOutput(string, string)      {}
-func (s *replaySink) Diff(string, string, string)    {}
-func (s *replaySink) Usage(llm.Usage)                {}
-func (s *replaySink) Context(tokens.ContextState)    {}
-func (s *replaySink) Notice(m string, _ agent.Level) { s.calls = append(s.calls, "notice:"+m) }
-func (s *replaySink) TurnEnd(agent.TurnResult)       { s.calls = append(s.calls, "turn_end") }
+func (s *replaySink) ToolOutput(string, string)       {}
+func (s *replaySink) ToolProgress(agent.ToolProgress) {}
+func (s *replaySink) Diff(string, string, string)     {}
+func (s *replaySink) Usage(llm.Usage)                 {}
+func (s *replaySink) Context(tokens.ContextState)     {}
+func (s *replaySink) Notice(m string, _ agent.Level)  { s.calls = append(s.calls, "notice:"+m) }
+func (s *replaySink) TurnEnd(agent.TurnResult)        { s.calls = append(s.calls, "turn_end") }
 
 // branchWith builds a minimal session branch from helper entries.
 func replayBranch() []Entry {

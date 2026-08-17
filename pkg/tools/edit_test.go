@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -10,33 +9,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// diffCatcher records the last Diff a tool emitted through its output.
+// diffCatcher records every Diff emitted through a tool's output.
 type diffCatcher struct {
-	path, before, after string
+	calls []Change
 }
 
 func (d *diffCatcher) Write(p []byte) (int, error) { return len(p), nil }
 func (d *diffCatcher) Diff(path, before, after string) {
-	d.path, d.before, d.after = path, before, after
+	d.calls = append(d.calls, Change{Path: path, Before: before, After: after})
 }
 
-// TestEditDiffShowsAppliedText asserts a successful edit renders the post-edit
-// text on the diff's after side, so history shows what actually changed.
-func TestEditDiffShowsAppliedText(t *testing.T) {
+// last returns the most recent recorded change.
+func (d *diffCatcher) last() Change { return d.calls[len(d.calls)-1] }
+
+// TestEditPreview asserts an edit previews the post-edit text on the after side,
+// so what is rendered is what the call would produce.
+func TestEditPreview(t *testing.T) {
 	t.Parallel()
 
 	e := newToolEnv(t.TempDir())
 	e.writeFile("a.txt", "hello world\n")
-	dc := &diffCatcher{}
-	// the tracker refuses edits to a file this session has not read first
-	e.readExec(context.Background(), `{"path":"a.txt"}`)
 	c := agent.ToolCall{ID: "c", Name: "edit",
 		Input: json.RawMessage(`{"path":"a.txt","edits":[{"oldText":"world","newText":"ajent"}]}`)}
-	res, err := (&editTool{policy: e.policy, tracker: e.tracker}).Execute(context.Background(), c, dc)
+	ch, err := (&editTool{policy: e.policy, tracker: e.tracker}).Preview(c)
 	require.NoError(t, err)
-	assert.False(t, res.IsError)
 
-	assert.Equal(t, "a.txt", dc.path)
-	assert.Equal(t, "hello world\n", dc.before) // pre-edit text
-	assert.Equal(t, "hello ajent\n", dc.after)  // post-edit text, not the same buffer twice
+	assert.Equal(t, "a.txt", ch.Path)
+	assert.Equal(t, "hello world\n", ch.Before) // pre-edit text
+	assert.Equal(t, "hello ajent\n", ch.After)  // post-edit text, not the same buffer twice
+}
+
+// TestWritePreview asserts a new file previews as all additions.
+func TestWritePreview(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	c := agent.ToolCall{ID: "c", Name: "write",
+		Input: json.RawMessage(`{"path":"new.txt","content":"hello\n"}`)}
+	ch, err := (&writeTool{policy: e.policy, tracker: e.tracker}).Preview(c)
+	require.NoError(t, err)
+
+	assert.Equal(t, "new.txt", ch.Path)
+	assert.Empty(t, ch.Before)
+	assert.Equal(t, "hello\n", ch.After)
 }

@@ -300,12 +300,16 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	defer close(watchDone)
 
 	var acc llm.Accumulator
+	var prog toolProgress
 	for ev, ok := st.Next(); ok; ev, ok = st.Next() {
-		a.forward(sink, keepThink, ev)
+		a.forward(sink, keepThink, &prog, ev)
 		acc.Add(ev)
 		if ctx.Err() != nil {
 			break // nothing renders after an interrupt
 		}
+	}
+	for _, p := range prog.clear() { // an aborted stream must not strand a row
+		sink.ToolProgress(p)
 	}
 
 	msg := acc.Message()
@@ -351,9 +355,26 @@ func (a *Agent) buildRequest() llm.Request {
 // forward maps one event onto sink calls and ledger updates. Block boundaries
 // come from the end events; deltas stream through so rendering and assembly share
 // a loop.
-func (a *Agent) forward(sink Sink, keepThink bool, ev llm.Event) {
+func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Event) {
 	t := a.state.Tokens
 	switch ev.Type {
+	case llm.EventToolCallStart:
+		sink.ToolProgress(prog.start(ev.ToolCallID, ev.Index, ev.ToolName))
+	case llm.EventToolCallDelta:
+		// arguments stream as partial JSON; report the size so a long write shows
+		// movement rather than nothing until the call is complete
+		if p, ok := prog.delta(ev.ToolCallID, ev.Index, ev.Text); ok {
+			sink.ToolProgress(p)
+		}
+		if t != nil {
+			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
+		}
+		a.syncContext(false)
+	case llm.EventToolCallEnd:
+		if p, ok := prog.end(ev.ToolCallID, ev.Index); ok {
+			sink.ToolProgress(p)
+		}
+		a.syncContext(true)
 	case llm.EventThinkingDelta:
 		sink.Thinking(ev.Text)
 		if t != nil && keepThink {

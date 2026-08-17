@@ -1,11 +1,21 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// numbered builds the source of a file whose lines are "L1".."Ln".
+func numberedFile(n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		b.WriteString("L" + strconv.Itoa(i) + "\n")
+	}
+	return b.String()
+}
 
 func TestRenderDiff(t *testing.T) {
 	t.Parallel()
@@ -26,13 +36,68 @@ func TestRenderDiff(t *testing.T) {
 	})
 	t.Run("marks_added_and_removed", func(t *testing.T) {
 		out := RenderDiff(plain, "x.go", "a\n", "b\n")
-		assert.Contains(t, out, "\n-a\n")
-		assert.Contains(t, out, "\n+b\n")
+		assert.Contains(t, out, "\n 1 - a\n")
+		assert.Contains(t, out, "\n 1 + b\n")
 	})
-	t.Run("keeps_hunk_and_context", func(t *testing.T) {
-		out := RenderDiff(plain, "x.go", "a\nb\nc\n", "a\nB\nc\n")
-		assert.Contains(t, out, "@@")
-		assert.Contains(t, out, "\n a\n")
+	t.Run("keeps_only_modest_context", func(t *testing.T) {
+		before := numberedFile(20)
+		after := strings.Replace(before, "L10\n", "TEN\n", 1)
+		out := RenderDiff(plain, "x.go", before, after)
+
+		assert.Contains(t, out, "@@ -7,7 +7,7 @@")
+		assert.Contains(t, out, "\n10 - L10\n")
+		assert.Contains(t, out, "\n10 + TEN\n")
+		for _, want := range []string{"\n 7   L7\n", "\n 9   L9\n", "\n11   L11\n", "\n13   L13\n"} {
+			assert.Contains(t, out, want)
+		}
+		// the rest of the file is not reprinted around the change
+		for _, skip := range []string{"L1\n", "\n 6   L6\n", "\n14   L14\n", "L20"} {
+			assert.NotContains(t, out, skip)
+		}
+	})
+	t.Run("separate_changes_get_separate_hunks", func(t *testing.T) {
+		before := numberedFile(40)
+		after := strings.Replace(before, "L5\n", "FIVE\n", 1)
+		after = strings.Replace(after, "L30\n", "THIRTY\n", 1)
+		out := RenderDiff(plain, "x.go", before, after)
+
+		assert.Contains(t, out, "@@ -2,7 +2,7 @@")
+		assert.Contains(t, out, "@@ -27,7 +27,7 @@")
+		assert.NotContains(t, out, "L18") // the untouched middle is skipped entirely
+	})
+	t.Run("hunk_header_drops_a_single_line_count", func(t *testing.T) {
+		out := RenderDiff(plain, "x.go", "a\n", "b\n")
+		assert.Contains(t, out, "@@ -1 +1 @@")
+	})
+	t.Run("new_file_is_all_additions", func(t *testing.T) {
+		out := RenderDiff(plain, "x.go", "", "a\nb\n")
+		assert.True(t, strings.HasPrefix(out, "x.go +2 -0\n"))
+		assert.Contains(t, out, "\n 1 + a\n")
+		assert.Contains(t, out, "\n 2 + b\n")
+	})
+	t.Run("gutter_widens_with_line_count", func(t *testing.T) {
+		before := numberedFile(120)
+		after := strings.Replace(before, "L100\n", "HUNDRED\n", 1)
+		out := RenderDiff(plain, "x.go", before, after)
+		assert.Contains(t, out, "\n 97   L97\n")  // right aligned in a 3 wide gutter
+		assert.Contains(t, out, "\n100 - L100\n") // deletions carry the old number
+		assert.Contains(t, out, "\n100 + HUNDRED\n")
+	})
+	t.Run("numbers_follow_the_new_file_after_a_shift", func(t *testing.T) {
+		out := RenderDiff(plain, "x.go", "a\nb\n", "a\nx\ny\nb\n")
+		assert.Contains(t, out, "\n 1   a\n")
+		assert.Contains(t, out, "\n 2 + x\n")
+		assert.Contains(t, out, "\n 3 + y\n")
+		assert.Contains(t, out, "\n 4   b\n") // context renumbered, not left at 2
+	})
+	t.Run("tabs_expanded", func(t *testing.T) {
+		out := RenderDiff(plain, "x.go", "\ta\n", "\tb\n")
+		assert.NotContains(t, out, "\t")
+		assert.Contains(t, out, "\n 1 - "+tabSpaces+"a\n")
+	})
+	t.Run("plain_theme_has_no_escapes", func(t *testing.T) {
+		out := RenderDiff(plain, "x.go", "aaaa\n", "aaab\n")
+		assert.NotContains(t, out, "\x1b")
 	})
 	t.Run("intraline_emphasis_applied", func(t *testing.T) {
 		th := NewTheme(Color256)
@@ -43,6 +108,34 @@ func TestRenderDiff(t *testing.T) {
 		th := NewTheme(Color256)
 		out := RenderDiff(th, "x.go", "aaaaaaaaaa\n", "zzzzzzzzzz\n")
 		assert.NotContains(t, out, th.DiffAddWord.Open())
+	})
+	t.Run("no_background_shading", func(t *testing.T) {
+		th := NewTheme(Color256)
+		out := RenderDiff(th, "x.go", "short\nsecond\n", "a much longer line\nsecond\n")
+		assert.NotContains(t, out, "\x1b[48;") // no background SGR anywhere
+		// and no padding: the short side keeps its own length
+		assert.Contains(t, stripANSI(out), "\n 1 - short\n")
+		assert.Contains(t, stripANSI(out), "\n 2   second\n")
+	})
+}
+
+func TestDiffSummary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("counts_both_sides", func(t *testing.T) {
+		assert.Equal(t, "x.go +2 -1 (shown above)",
+			DiffSummary("x.go", "a\nb\nc\n", "a\nB\nc\nd\n"))
+	})
+	t.Run("new_file_is_all_additions", func(t *testing.T) {
+		assert.Equal(t, "x.go +2 -0 (shown above)", DiffSummary("x.go", "", "a\nb\n"))
+	})
+	t.Run("identical_is_empty", func(t *testing.T) {
+		assert.Empty(t, DiffSummary("x.go", "same\n", "same\n"))
+	})
+	t.Run("matches_render_header", func(t *testing.T) {
+		before, after := numberedFile(20), strings.Replace(numberedFile(20), "L10\n", "TEN\n", 1)
+		header, _, _ := strings.Cut(RenderDiff(NewTheme(ColorNone), "x.go", before, after), "\n")
+		assert.Equal(t, header+" (shown above)", DiffSummary("x.go", before, after))
 	})
 }
 

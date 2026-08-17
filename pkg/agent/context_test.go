@@ -26,6 +26,7 @@ func (c *ctxCatcher) ToolStart(ToolCall, string) func(ToolResult) {
 	return func(ToolResult) {}
 }
 func (c *ctxCatcher) ToolOutput(string, string)   {}
+func (c *ctxCatcher) ToolProgress(ToolProgress)   {}
 func (c *ctxCatcher) Diff(string, string, string) {}
 func (c *ctxCatcher) Usage(llm.Usage)             {}
 func (c *ctxCatcher) Context(s tokens.ContextState) {

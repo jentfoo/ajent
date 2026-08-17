@@ -26,6 +26,7 @@ func (c *captureSink) ToolStart(agent.ToolCall, string) func(agent.ToolResult) {
 	return func(agent.ToolResult) {}
 }
 func (c *captureSink) ToolOutput(string, string)        {}
+func (c *captureSink) ToolProgress(agent.ToolProgress)  {}
 func (c *captureSink) Diff(string, string, string)      {}
 func (c *captureSink) Usage(llm.Usage)                  {}
 func (c *captureSink) Context(tokens.ContextState)      {}

@@ -30,7 +30,7 @@ The originating brief, and what satisfies each item.
 | Markdown output | `UI.Text` -> `renderMarkdown` |
 | Status line under the text field, reporting context usage | `status.go`, composed by `UI.repaint` |
 | Text field accepting further user replies | `editor.go` + `input.go`, submitted over `UI.Messages()` |
-| Edit actions highlight the changes | `UI.Diff` -> `RenderDiff`, per line and intraline |
+| Edit actions show the whole file and highlight the changes | `UI.Diff` -> `RenderDiff`, shaded per line and intraline |
 | Thinking visually distinct from reply output | semantic styles in `style.go` |
 | As minimal as possible, maximum room for output | 2 reserved rows, no borders or rules |
 | Let the CLI wrap the text where possible | prose is emitted unwrapped in inline mode |
@@ -57,11 +57,16 @@ separating it from committed output above (see "Prompt divider" below).
 - The status block sits on one dim row by default (see Status line).
 - A running tool adds one transient spinner row directly above the input. It is
   never committed to history; only its header and result are.
-- Activity rows (`SetActivity`) put keyed, single-line status for work that is
-  not the current tool call — their real consumer is phase 11's live sub-agent
-  jobs (one row per running investigation showing its task or most recent output)
-  — between any
-  overlays and the input. Rendered in insertion order, each elided to width —
+- Activity rows (`SetActivity`) put keyed, single-line status for in-flight work
+  between any overlays and the input. Two producers: live sub-agent jobs (one row
+  per running investigation, showing its task or most recent output) and
+  **tool-call progress** — a call the model is still composing, keyed `call:<id>`,
+  showing its name, target and the argument lines/bytes accumulated so far. Sizes
+  go through `FormatBytes` (binary, explicit `b`/`kb`/`mb`), never `FormatTokens`
+  (decimal, unsuffixed), so a stream size is never misread as a token count. The
+  latter fills the silence while a large `write` streams; it clears when the call
+  completes and its `⏺` header and diff take over. Rendered in insertion order,
+  each elided to width —
   never wrapped, so a row always occupies exactly one terminal line. Each status
   row is padded inside its background shade to fill the full terminal width
   (`shadeRow`), so live work reads as an edge-to-edge band rather than text with a
@@ -132,7 +137,7 @@ ui.go            public API, state machine, key handling, locking
     render_inline.go   main screen, terminal owns wrapping and scrollback
     render_alt.go      alternate screen, we own wrapping and scrollback
   markdown.go      goldmark AST -> ANSI (+ go-pretty tables)
-  diff.go          go-udiff -> colorized unified diff with intraline emphasis
+  diff.go          go-udiff -> full file diff, shaded changes, intraline emphasis
   wrap.go          width aware wrapping, hanging indents
   editor.go        multi line input buffer, grapheme aware, plus its layout
   input.go         byte stream -> key events (escape sequences, paste)
@@ -420,12 +425,42 @@ Fenced code is styled but not syntax highlighted. See "Extending".
 
 ### Diffs
 
-`go-udiff` computes the change; `diff.go` renders a header (`path +N -M`), then
-green additions, red deletions, cyan hunk markers and dim context. Paired
-deletion/addition runs additionally get **intraline** emphasis: a character level
-diff marks the changed spans in reverse video, applied only when the two lines
-are at least 50% similar so unrelated rewrites are not turned into confetti.
-Adjacent spans within a few characters are merged to avoid speckling.
+`go-udiff` computes the change; `diff.go` renders it **git shaped**: a file
+header (`path +N -M`), then one `@@ -a,b +c,d @@` hunk per changed region with
+`contextLines = 3` of surrounding code, matching git's default. Whole-file
+rendering was tried and reverted — reprinting a large file around a two-line edit
+buries the change it is meant to show.
+
+Every row carries a right-aligned line number and a ` `/`-`/`+` marker;
+deletions keep their old-file number, everything else numbers as the new file.
+The gutter is sized from the whole file, so it does not jump between hunks. Hunk
+headers follow git in dropping the count when a side spans one line
+(`@@ -1 +1 @@`).
+
+Changed lines are marked by **foreground colour and the marker only** — green
+additions, red deletions, dim context, and `DiffHunk` cyan on the `@@` markers so
+a hunk boundary reads as a separator rather than more content. That is four
+distinct roles on screen at once (add / del / context / boundary), which is why
+the hunk colour is its own hue and not a shade of the dim used for context. No
+background shading: a shade behind every changed line reads as noise, and it
+forced padding every line in a run out to a common width to stay rectangular.
+
+Paired deletion/addition runs additionally get **intraline** emphasis: a
+character level diff marks the changed spans in reverse video, applied only when
+the two lines are at least 50% similar so unrelated rewrites are not turned into
+confetti. Adjacent spans within a few characters are merged to avoid speckling.
+
+**A diff is committed before its call is vetted, not after it applies.**
+`guardedTool.Execute` (`pkg/tools/registry.go`) renders any `Previewer`'s
+`Change` through `Output.Diff` ahead of the guard chain, so the record shows what
+was requested and an approval dialog opens *below* the full diff instead of
+repeating a truncated copy inside itself. `DiffSummary` gives the dialog its
+one-line subject (`path +N -M (shown above)`).
+
+Consequences that must hold: it renders once per call (before the guard loop, not
+inside it); it renders in every permission mode, including the ones that never
+prompt; and a denied or failed call still leaves its proposed diff in the record,
+followed by the denial summary or error notice.
 
 ### Semantic styling
 

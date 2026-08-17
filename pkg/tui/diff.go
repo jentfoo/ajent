@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,47 +15,41 @@ const (
 	minIntralineSimilarity = 0.5
 	// spans closer together than this are merged to avoid speckled highlights
 	minSpanGap = 4
+	// minGutter is the narrowest the line number column gets
+	minGutter = 2
+	// contextLines kept around each change, matching git's default. Enough to place
+	// a change without reprinting the file around it.
+	contextLines = 3
 )
 
-// UnifiedPreview returns a plain (uncolored) unified diff of before and after,
-// empty when they match. Used for approval-dialog subjects whose dim-styled
-// context cannot carry ANSI codes.
-func UnifiedPreview(path, before, after string) string {
-	return udiff.Unified(path, path, before, after)
-}
-
-// RenderDiff returns a colorized unified diff of before and after, empty when they match.
-func RenderDiff(t Theme, path, before, after string) string {
-	unified := udiff.Unified(path, path, before, after)
-	if unified == "" {
+// DiffSummary names a change in one line, for an approval dialog whose subject
+// sits below the rendered diff. Empty when before and after match.
+func DiffSummary(path, before, after string) string {
+	added, removed, ok := diffStat(before, after)
+	if !ok {
 		return ""
 	}
+	return fmt.Sprintf("%s +%d -%d (shown above)", path, added, removed)
+}
+
+// RenderDiff returns a colorized, line numbered unified diff of before and
+// after, empty when they match. Git shaped: each changed region is its own hunk
+// under an @@ header, with contextLines of surrounding code.
+func RenderDiff(t Theme, path, before, after string) string {
+	hunks, ok := diffHunks(before, after)
+	if !ok {
+		return ""
+	}
+	gw := max(minGutter, len(strconv.Itoa(max(lineCount(before), lineCount(after)))))
+
 	var body []string
 	var added, removed int
-	var dels, adds []string
-	flush := func() {
-		body = append(body, renderDiffRun(t, dels, adds)...)
-		dels, adds = nil, nil
+	for _, h := range hunks {
+		body = append(body, t.DiffHunk.Wrap(hunkHeader(h)))
+		rows, a, d := renderHunk(t, h, gw)
+		body = append(body, rows...)
+		added, removed = added+a, removed+d
 	}
-	for _, line := range strings.Split(strings.TrimRight(unified, "\n"), "\n") {
-		switch {
-		case strings.HasPrefix(line, "---"), strings.HasPrefix(line, "+++"):
-			continue // replaced by our own header
-		case strings.HasPrefix(line, "-"):
-			removed++
-			dels = append(dels, line[1:])
-		case strings.HasPrefix(line, "+"):
-			added++
-			adds = append(adds, line[1:])
-		case strings.HasPrefix(line, "@@"):
-			flush()
-			body = append(body, t.DiffHunk.Wrap(line))
-		default:
-			flush()
-			body = append(body, t.Dim.Wrap(line))
-		}
-	}
-	flush()
 
 	header := t.DiffFile.Wrap(path) + " " +
 		t.DiffAdd.Wrap("+"+strconv.Itoa(added)) + " " +
@@ -62,29 +57,142 @@ func RenderDiff(t Theme, path, before, after string) string {
 	return header + "\n" + strings.Join(body, "\n") + "\n"
 }
 
+// hunkHeader renders a hunk's @@ range marker, following git in dropping the
+// count when a side spans a single line.
+func hunkHeader(h *udiff.Hunk) string {
+	var fromCount, toCount int
+	for _, l := range h.Lines {
+		switch l.Kind {
+		case udiff.Delete:
+			fromCount++
+		case udiff.Insert:
+			toCount++
+		default:
+			fromCount++
+			toCount++
+		}
+	}
+	return "@@ -" + hunkRange(h.FromLine, fromCount) + " +" + hunkRange(h.ToLine, toCount) + " @@"
+}
+
+func hunkRange(start, count int) string {
+	switch count {
+	case 0: // an empty side starts at 0, as diff -u reports it
+		return "0,0"
+	case 1:
+		return strconv.Itoa(start)
+	default:
+		return strconv.Itoa(start) + "," + strconv.Itoa(count)
+	}
+}
+
+// diffHunks returns the line diff of before and after as hunks, ok reporting
+// whether they differ at all.
+func diffHunks(before, after string) ([]*udiff.Hunk, bool) {
+	if before == after {
+		return nil, false
+	}
+	edits := udiff.Lines(before, after)
+	if len(edits) == 0 {
+		return nil, false
+	}
+	u, err := udiff.ToUnifiedDiff("", "", before, edits, contextLines)
+	if err != nil || len(u.Hunks) == 0 {
+		return nil, false
+	}
+	return u.Hunks, true
+}
+
+// diffStat counts the added and removed lines between before and after.
+func diffStat(before, after string) (added, removed int, ok bool) {
+	hunks, ok := diffHunks(before, after)
+	if !ok {
+		return 0, 0, false
+	}
+	for _, h := range hunks {
+		for _, l := range h.Lines {
+			switch l.Kind {
+			case udiff.Insert:
+				added++
+			case udiff.Delete:
+				removed++
+			}
+		}
+	}
+	return added, removed, true
+}
+
+// lineCount returns the number of lines in s, counting a trailing partial line.
+func lineCount(s string) int {
+	if s == "" {
+		return 1
+	}
+	return strings.Count(strings.TrimSuffix(s, "\n"), "\n") + 1
+}
+
+// diffRow is one file line with the number to show beside it.
+type diffRow struct {
+	num  int
+	text string
+}
+
+// renderHunk renders every line of a hunk, tracking the old and new file line
+// numbers so each row carries the number it has in the file it came from.
+func renderHunk(t Theme, h *udiff.Hunk, gw int) (rows []string, added, removed int) {
+	oldNo, newNo := h.FromLine, h.ToLine
+	var dels, adds []diffRow
+	flush := func() {
+		rows = append(rows, renderDiffRun(t, gw, dels, adds)...)
+		dels, adds = nil, nil
+	}
+	for _, l := range h.Lines {
+		text := strings.ReplaceAll(strings.TrimRight(l.Content, "\r\n"), "\t", tabSpaces)
+		switch l.Kind {
+		case udiff.Delete:
+			dels = append(dels, diffRow{num: oldNo, text: text})
+			oldNo++
+			removed++
+		case udiff.Insert:
+			adds = append(adds, diffRow{num: newNo, text: text})
+			newNo++
+			added++
+		default:
+			flush()
+			rows = append(rows, t.Dim.Wrap(rowPrefix(gw, newNo, ' ')+text))
+			oldNo++
+			newNo++
+		}
+	}
+	flush()
+	return rows, added, removed
+}
+
+// rowPrefix returns the line number gutter and change marker for one row.
+func rowPrefix(gw, num int, marker byte) string {
+	return fmt.Sprintf("%*d %c ", gw, num, marker)
+}
+
 // renderDiffRun renders a removed/added run, emphasizing word level changes when
 // the two sides line up one to one.
-func renderDiffRun(t Theme, dels, adds []string) []string {
+func renderDiffRun(t Theme, gw int, dels, adds []diffRow) []string {
 	if len(dels) == 0 && len(adds) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(dels)+len(adds))
 	paired := len(dels) == len(adds)
 	for i, d := range dels {
-		if !paired {
-			out = append(out, t.DiffDel.Wrap("-"+d))
-			continue
+		var spans [][2]int
+		if paired {
+			spans, _ = intralineSpans(d.text, adds[i].text)
 		}
-		delSpans, _ := intralineSpans(d, adds[i])
-		out = append(out, applySpans("-", d, delSpans, t.DiffDel, t.DiffDelWord))
+		out = append(out, applySpans(rowPrefix(gw, d.num, '-'), d.text, spans, t.DiffDel, t.DiffDelWord))
 	}
 	for i, a := range adds {
-		if !paired {
-			out = append(out, t.DiffAdd.Wrap("+"+a))
-			continue
+		var spans [][2]int
+		if paired {
+			_, spans = intralineSpans(dels[i].text, a.text)
 		}
-		_, addSpans := intralineSpans(dels[i], a)
-		out = append(out, applySpans("+", a, addSpans, t.DiffAdd, t.DiffAddWord))
+		out = append(out, applySpans(rowPrefix(gw, a.num, '+'), a.text, spans, t.DiffAdd, t.DiffAddWord))
 	}
 	return out
 }

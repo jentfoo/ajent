@@ -74,9 +74,9 @@ never included).
 - `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
   `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be detected
   before prompting; returns nil for tools that cannot predict.
-- `Preview(call)` → `(path, before, after, ok)` — dispatches to a tool's optional
-  `Previewer` (`editTool`, `writeTool`), returning what a call would change so an
-  approval dialog shows content or a diff instead of raw JSON arguments.
+- `Preview(call)` → `(Change, ok)` — dispatches to a tool's optional `Previewer`
+  (`editTool`, `writeTool`). `Change{Path, Before, After}` is what the call would
+  do to the file; see "Rendering a change before it runs".
 
 ### Guards (`guard.go`, `asker.go`)
 
@@ -97,6 +97,32 @@ the reason, and nothing touches disk.
 asker turns it into a final allow or deny, and returning `Ask` again is treated
 as a denial. With no asker registered an `Ask` still refuses — nothing changes
 for callers that do not opt in.
+
+### Rendering a change before it runs
+
+`guardedTool.Execute` renders a `Previewer`'s `Change` through `Output.Diff`
+**before the guard chain**, not after the tool applies it. That ordering is the
+point: an approval dialog is a transient live-block region capped at a handful of
+rows, so a diff shown *inside* it is necessarily truncated. Committing the full
+diff first puts the whole change in the permanent record and lets the dialog sit
+below it with a one-line subject that names what is already on screen.
+
+Invariants:
+
+- **Once per call.** The render sits before the guard loop, so a re-asking asker
+  cannot print the change twice.
+- **Every mode.** It does not hang off the preview closure the permission layer
+  installs — that is reached only when a dialog is about to open, so `allow-all`,
+  a remembered session grant, a `!` user-initiated line and the doomed-edit skip
+  would all show nothing.
+- **Proposed, not applied.** A denied or failed call still leaves its diff in the
+  record, followed by the denial summary or the error. What is rendered is the
+  change *requested*.
+- A `Preview` error (bad arguments, unreadable file) renders nothing and lets
+  `Execute` surface its own error. Tools must therefore not rely on the render
+  having happened.
+
+Cost: write/edit read the target file twice per call (preview, then execute).
 
 The permission layer (phase 12) registers both: one guard from `permit.Barrier`
 runs static classification, and its asker resolves prompts into allow/deny with
@@ -141,7 +167,8 @@ read is recorded in the tracker.
 Writes a whole file atomically (temp file + rename) and creates parent
 directories. Refuses to overwrite a file the session has not read, or one that
 changed since it was read — the error tells the model to read first. Emits a
-diff (empty → content for new files) through `Output.Diff`.
+`Change` (empty → content for new files) through `Previewer`, rendered before the
+call is vetted rather than after it applies.
 
 ### edit (`edit.go`)
 
@@ -155,7 +182,7 @@ near-match suggestion (most token-overlapping line); multiple matches without
 `replace_all` returns the occurrence count and locations — both still reported
 through the per-op loop. Both errors are designed to be actionable, since they
 are the model's main feedback loop. Stale files are refused via the tracker.
-Renders through `Output.Diff`. The edit tool implements `DryRunner`, so the
+Renders through `Previewer`, sharing `resolveApply` with `DryRun`. The edit tool implements `DryRunner`, so the
 permission barrier can skip prompting for a call that cannot succeed and let
 the real apply path surface its natural error.
 

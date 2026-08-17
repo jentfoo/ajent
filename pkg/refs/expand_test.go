@@ -29,12 +29,13 @@ func (s *sinkCapturer) ToolStart(_ agent.ToolCall, label string) func(agent.Tool
 	s.starts = append(s.starts, label)
 	return func(agent.ToolResult) {}
 }
-func (s *sinkCapturer) ToolOutput(string, string)   {}
-func (s *sinkCapturer) Diff(string, string, string) {}
-func (s *sinkCapturer) Usage(llm.Usage)             {}
-func (s *sinkCapturer) Context(tokens.ContextState) {}
-func (s *sinkCapturer) Notice(string, agent.Level)  {}
-func (s *sinkCapturer) TurnEnd(agent.TurnResult)    {}
+func (s *sinkCapturer) ToolOutput(string, string)       {}
+func (s *sinkCapturer) ToolProgress(agent.ToolProgress) {}
+func (s *sinkCapturer) Diff(string, string, string)     {}
+func (s *sinkCapturer) Usage(llm.Usage)                 {}
+func (s *sinkCapturer) Context(tokens.ContextState)     {}
+func (s *sinkCapturer) Notice(string, agent.Level)      {}
+func (s *sinkCapturer) TurnEnd(agent.TurnResult)        {}
 
 // newExpander builds a real tools registry rooted at dir and an expander.
 func newExpander(t *testing.T, dir string) (*Expander, *sinkCapturer) {

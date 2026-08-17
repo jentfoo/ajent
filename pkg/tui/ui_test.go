@@ -227,10 +227,10 @@ func TestUIDiff(t *testing.T) {
 	u.Diff("pkg/client/retry.go", "a\nb\n", "a\nB\n")
 
 	assert.Equal(t, "pkg/client/retry.go +1 -1", v.Line(0))
-	assert.Contains(t, v.Line(1), "@@")
-	assert.Equal(t, " a", v.Line(2))
-	assert.Equal(t, "-b", v.Line(3))
-	assert.Equal(t, "+B", v.Line(4))
+	assert.Equal(t, "@@ -1,2 +1,2 @@", v.Line(1))
+	assert.Equal(t, " 1   a", v.Line(2))
+	assert.Equal(t, " 2 - b", v.Line(3))
+	assert.Equal(t, " 2 + B", v.Line(4))
 
 	t.Run("unchanged_writes_nothing", func(t *testing.T) {
 		before := u.snapshot(v)

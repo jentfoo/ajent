@@ -224,6 +224,24 @@ func FormatTokens(n int) string {
 	return formatTokens(n)
 }
 
+// FormatBytes abbreviates a byte count, such as 259b, 3.5kb or 1.2mb. Binary
+// units with an explicit suffix, so a size is never mistaken for a token count;
+// kept in step with tools.HumanSize, which annotations use.
+func FormatBytes(n int) string {
+	const (
+		kb = 1024.0
+		mb = 1024.0 * 1024.0
+	)
+	switch {
+	case float64(n) >= mb:
+		return trimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
+	case float64(n) >= kb:
+		return trimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
+	default:
+		return strconv.Itoa(n) + "b"
+	}
+}
+
 // formatTokens abbreviates a token count, such as 68.2k or 1.2M.
 func formatTokens(n int) string {
 	switch {

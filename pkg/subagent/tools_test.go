@@ -22,8 +22,9 @@ func exec(t *testing.T, tl agent.Tool, input any) (agent.ToolResult, error) {
 
 type discardOutput struct{}
 
-func (discardOutput) Write(p []byte) (int, error) { return len(p), nil }
-func (discardOutput) Diff(string, string, string) {}
+func (discardOutput) Write(p []byte) (int, error)     { return len(p), nil }
+func (discardOutput) ToolProgress(agent.ToolProgress) {}
+func (discardOutput) Diff(string, string, string)     {}
 
 // toolsManager wires a Manager over scripted turns for tool-level tests.
 func toolsManager(t *testing.T, d *delayedProvider, timeout time.Duration) (*Manager, []agent.Tool) {

@@ -24,6 +24,9 @@ type Sink interface {
 	EndText()
 	ToolStart(call ToolCall, label string) func(ToolResult)
 	ToolOutput(callID, delta string)
+	// ToolProgress reports a call the model is still streaming, so a long set of
+	// arguments shows movement before the call can run.
+	ToolProgress(ToolProgress)
 	Diff(path, before, after string)
 	Usage(llm.Usage)
 	// Context reports how full the next request will be, exact after a response
@@ -85,6 +88,11 @@ func (f *fanoutSink) ToolOutput(id, d string) {
 		s.ToolOutput(id, d)
 	}
 }
+func (f *fanoutSink) ToolProgress(p ToolProgress) {
+	for _, s := range f.sinks {
+		s.ToolProgress(p)
+	}
+}
 func (f *fanoutSink) Diff(p, b, a string) {
 	for _, s := range f.sinks {
 		s.Diff(p, b, a)
@@ -123,6 +131,7 @@ func (NopSink) ToolStart(call ToolCall, label string) func(ToolResult) {
 	return func(ToolResult) {}
 }
 func (NopSink) ToolOutput(string, string)   {}
+func (NopSink) ToolProgress(ToolProgress)   {}
 func (NopSink) Diff(string, string, string) {}
 func (NopSink) Usage(llm.Usage)             {}
 func (NopSink) Context(tokens.ContextState) {}

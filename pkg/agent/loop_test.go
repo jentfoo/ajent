@@ -504,3 +504,38 @@ func TestBuildRequest(t *testing.T) {
 		assert.NotPanics(t, func() { _ = a3.buildRequest() })
 	})
 }
+
+// TestLoopToolProgressReachesSink asserts a call's streamed arguments are
+// reported before it runs, and that the row is closed when the call completes.
+func TestLoopToolProgressReachesSink(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Repeat("line\\n", 200) // escaped newlines, as JSON carries them
+	args := `{"path":"notes.go","content":"` + body + `"}`
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: []llm.Event{
+			{Type: llm.EventToolCallStart, Index: 0, ToolCallID: "c1", ToolName: "write"},
+			{Type: llm.EventToolCallDelta, Index: 0, Text: args},
+			{Type: llm.EventToolCallEnd, Index: 0, ToolCallID: "c1", ToolName: "write",
+				Block: llm.ToolCallBlock{ID: "c1", Name: "write", Input: json.RawMessage(args)}},
+			doneEvent(),
+		}},
+		{Events: textOnly("done")},
+	}}
+	rec := &recordingSink{}
+	a := newTestAgent(nil, p, rec)
+	a.opts.Tools = &mapSet{tools: map[string]Tool{"write": &stubTool{name: "write", result: "ok"}}}
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "hi"}))
+
+	require.NotEmpty(t, rec.progress)
+	first := rec.progress[0]
+	assert.Equal(t, "write", first.Name)
+	assert.False(t, first.Done)
+
+	last := rec.progress[len(rec.progress)-1]
+	assert.True(t, last.Done, "the row is closed when the call completes")
+	assert.Equal(t, "notes.go", last.Path)
+	assert.Equal(t, 200, last.Lines)
+	assert.Equal(t, len(args), last.Bytes)
+}
