@@ -21,6 +21,8 @@ func TestTokenizeRaw(t *testing.T) {
 		// backslash escape outside quotes yields the escaped char
 		{`backslash`, `a\ b c`, []string{"a b", "c"}},
 		{`empty single quote`, `echo '' x`, []string{"echo", "", "x"}},
+		// backslash survives inside single quotes so regexes hold
+		{`quoted regex survives`, `grep 'a\.b' f`, []string{"grep", "a\\.b", "f"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -84,6 +86,9 @@ func TestUnwrapLaunchers(t *testing.T) {
 		// sudo must not unwrap — it changes privilege
 		{"sudo stays", []string{"sudo", "ls"}, []string{"sudo", "ls"}},
 		{"env stays", []string{"env", "FOO=1", "cmd"}, []string{"env", "FOO=1", "cmd"}},
+		// xargs/nice/stdbuf are not launchers and must never unwrap
+		{"xargs preserved", []string{"find", ".", "-print0", "|", "xargs", "rm"},
+			[]string{"find", ".", "-print0", "|", "xargs", "rm"}},
 		// confused timeout parse returns original tokens
 		{"timeout no duration", []string{"timeout", "-k", "5", "ls"},
 			[]string{"timeout", "-k", "5", "ls"}},

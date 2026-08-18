@@ -35,7 +35,7 @@ func (s *replaySink) Context(tokens.ContextState)     {}
 func (s *replaySink) Notice(m string, _ agent.Level)  { s.calls = append(s.calls, "notice:"+m) }
 func (s *replaySink) TurnEnd(agent.TurnResult)        { s.calls = append(s.calls, "turn_end") }
 
-// branchWith builds a minimal session branch from helper entries.
+// replayBranch builds a minimal session branch from helper entries.
 func replayBranch() []Entry {
 	return []Entry{
 		{ID: "s", Type: TypeSession},
@@ -61,69 +61,12 @@ func noticeEntry(id string, nd NoticeData) Entry {
 	return Entry{ID: id, Type: TypeNotice, Data: mustJSON(nd)}
 }
 
-func TestReplayCondensedSequence(t *testing.T) {
-	t.Parallel()
-
-	s := &replaySink{}
-	Replay(replayBranch(), s, ReplayOptions{})
-
-	assert.Equal(t, []string{
-		"start:hello world",
-		"text:hi there", "end_text",
-		"notice:careful",
-		"turn_end",
-	}, s.calls)
-}
-
-func TestReplayThinkingSuppressedByDefault(t *testing.T) {
-	t.Parallel()
-
-	branch := []Entry{
-		{ID: "s", Type: TypeSession},
-		msgUser("m1", llm.Text(llm.RoleUser, "q")),
-		assistantWithThinking("a1"),
-	}
-	s := &replaySink{}
-	Replay(branch, s, ReplayOptions{})
-	assert.NotContains(t, s.calls, "thinking")
-}
-
-func TestReplayThinkingPresentWhenEnabled(t *testing.T) {
-	t.Parallel()
-
-	branch := []Entry{
-		{ID: "s", Type: TypeSession},
-		msgUser("m1", llm.Text(llm.RoleUser, "q")),
-		assistantWithThinking("a1"),
-	}
-	s := &replaySink{}
-	Replay(branch, s, ReplayOptions{Thinking: true})
-	assert.Contains(t, s.calls, "thinking")
-	assert.Contains(t, s.calls, "end_thinking")
-}
-
 func assistantWithThinking(id string) Entry {
 	m := MessageData{
 		Message: llm.Message{Role: llm.RoleAssistant,
 			Content: llm.BlockList{llm.ThinkingBlock{Text: "let me think"}, llm.TextBlock{Text: "answer"}}},
 	}
 	return Entry{ID: id, Type: TypeMessage, Data: mustJSON(m)}
-}
-
-func TestReplayToolCallAndResult(t *testing.T) {
-	t.Parallel()
-
-	branch := []Entry{
-		{ID: "s", Type: TypeSession},
-		msgUser("m1", llm.Text(llm.RoleUser, "run it")),
-		assistantWithToolCall("a1"),
-		resultMessage("r1", "c1", "output here\nmore lines"),
-	}
-	s := &replaySink{}
-	Replay(branch, s, ReplayOptions{})
-
-	assert.Contains(t, s.calls, "tool:bash")
-	assert.Contains(t, s.calls, "result:false") // non-error result
 }
 
 func assistantWithToolCall(id string) Entry {
@@ -142,20 +85,6 @@ func resultMessage(id, callID, text string) Entry {
 	return Entry{ID: id, Type: TypeMessage, Data: mustJSON(m)}
 }
 
-func TestReplayToolErrorShowsStatus(t *testing.T) {
-	t.Parallel()
-
-	branch := []Entry{
-		{ID: "s", Type: TypeSession},
-		msgUser("m1", llm.Text(llm.RoleUser, "run it")),
-		assistantWithToolCall("a1"),
-		resultMessageErr("r1", "c1"),
-	}
-	s := &replaySink{}
-	Replay(branch, s, ReplayOptions{})
-	assert.Contains(t, s.calls, "result:true")
-}
-
 func resultMessageErr(id, callID string) Entry {
 	m := MessageData{
 		Message: llm.Message{Role: llm.RoleUser,
@@ -164,20 +93,89 @@ func resultMessageErr(id, callID string) Entry {
 	return Entry{ID: id, Type: TypeMessage, Data: mustJSON(m)}
 }
 
-func TestReplayMultipleTurnsCloseEach(t *testing.T) {
+func TestReplay(t *testing.T) {
 	t.Parallel()
 
-	branch := []Entry{
-		{ID: "s", Type: TypeSession},
-		msgUser("m1", llm.Text(llm.RoleUser, "first")),
-		assistantText("a1", "one"),
-		msgUser("m2", llm.Text(llm.RoleUser, "second")),
-		assistantText("a2", "two"),
-	}
-	s := &replaySink{}
-	Replay(branch, s, ReplayOptions{})
-	assert.Equal(t,
-		[]string{"start:first", "text:one", "end_text", "turn_end",
-			"start:second", "text:two", "end_text", "turn_end"},
-		s.calls)
+	t.Run("condensed_sequence", func(t *testing.T) {
+		s := &replaySink{}
+		Replay(replayBranch(), s, ReplayOptions{})
+
+		assert.Equal(t, []string{
+			"start:hello world",
+			"text:hi there", "end_text",
+			"notice:careful",
+			"turn_end",
+		}, s.calls)
+	})
+
+	t.Run("thinking_option", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			msgUser("m1", llm.Text(llm.RoleUser, "q")),
+			assistantWithThinking("a1"),
+		}
+		cases := []struct {
+			name    string
+			enabled bool
+			wantIn  []string // expected when enabled; absent means suppressed
+		}{
+			{"suppressed_by_default", false, nil},
+			{"present_when_enabled", true, []string{"thinking", "end_thinking"}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				s := &replaySink{}
+				Replay(branch, s, ReplayOptions{Thinking: tc.enabled})
+				if len(tc.wantIn) == 0 {
+					assert.NotContains(t, s.calls, "thinking")
+					return
+				}
+				for _, w := range tc.wantIn {
+					assert.Contains(t, s.calls, w)
+				}
+			})
+		}
+	})
+
+	t.Run("tool_call_and_result", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			msgUser("m1", llm.Text(llm.RoleUser, "run it")),
+			assistantWithToolCall("a1"),
+			resultMessage("r1", "c1", "output here\nmore lines"),
+		}
+		s := &replaySink{}
+		Replay(branch, s, ReplayOptions{})
+
+		assert.Contains(t, s.calls, "tool:bash")
+		assert.Contains(t, s.calls, "result:false") // non-error result
+	})
+
+	t.Run("tool_error_shows_status", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			msgUser("m1", llm.Text(llm.RoleUser, "run it")),
+			assistantWithToolCall("a1"),
+			resultMessageErr("r1", "c1"),
+		}
+		s := &replaySink{}
+		Replay(branch, s, ReplayOptions{})
+		assert.Contains(t, s.calls, "result:true")
+	})
+
+	t.Run("multiple_turns_close_each", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			msgUser("m1", llm.Text(llm.RoleUser, "first")),
+			assistantText("a1", "one"),
+			msgUser("m2", llm.Text(llm.RoleUser, "second")),
+			assistantText("a2", "two"),
+		}
+		s := &replaySink{}
+		Replay(branch, s, ReplayOptions{})
+		assert.Equal(t,
+			[]string{"start:first", "text:one", "end_text", "turn_end",
+				"start:second", "text:two", "end_text", "turn_end"},
+			s.calls)
+	})
 }

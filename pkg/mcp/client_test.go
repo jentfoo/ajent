@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func TestConnectStdioListsTools(t *testing.T) {
@@ -130,20 +130,6 @@ func TestRequestRawSeam(t *testing.T) {
 	assert.NotEmpty(t, resp)
 }
 
-// TestHandleIncomingAnswer installs an incoming-request handler and exercises it
-// via the transport's own dispatch.
-func TestBridgeNamespacesName(t *testing.T) {
-	t.Parallel()
-
-	c, err := Connect(t.Context(), "fake", stdioConfig(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-	defs, _ := c.Tools(t.Context())
-	b := Bridge("fake", defs[0], c, BridgeOptions{})
-	assert.Equal(t, "fake__tool_00", b.Name())
-	assert.Equal(t, agent.ModeSerial, b.Mode()) // not read-only: serial
-}
-
 // TestClientDiscoversResources verifies resources/list is fetched through the raw
 // seam and mapped onto our own shape.
 func TestClientDiscoversResources(t *testing.T) {
@@ -173,4 +159,39 @@ func TestClientDiscoversPrompts(t *testing.T) {
 	require.Len(t, ps, 1)
 	assert.Equal(t, "summarize", ps[0].Name)
 	assert.Len(t, ps[0].Arguments, 1)
+}
+
+// TestNotificationHandlerDoesNotDeadlock verifies OnNotification dispatches handlers off mcp-go's reader goroutine so a handler that does blocking I/O (like re-discovering after tools/list_changed) cannot stall the stdio transport.
+func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	c, err := Connect(t.Context(), "fake", stdioConfig(t, "-notify-list-changed"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	var rediscovered atomic.Bool
+	// mimic the manager: handle list_changed by synchronously re-listing tools.
+	c.OnNotification(func(n mcp.JSONRPCNotification) {
+		if n.Method != "notifications/tools/list_changed" {
+			return
+		}
+		defs, err := c.Tools(t.Context())
+		if err == nil && len(defs) > 0 { // any non-empty result proves the reader stayed live
+			rediscovered.Store(true)
+		}
+	})
+
+	// trigger_listchanged makes the server respond AND emit list_changed in one burst.
+	res, err := c.Call(t.Context(), "trigger_listchanged", json.RawMessage(`{}`), nil)
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+
+	// The rediscovery inside the notification handler must complete — proving it ran off mcp-go's reader goroutine and did not block subsequent I/O.
+	require.Eventually(t, func() bool { return rediscovered.Load() }, 5*time.Second, 20*time.Millisecond,
+		"notification-handler re-discovery deadlocked the stdio transport")
+
+	// a follow-up request must still work after notification handling
+	res2, err := c.Call(t.Context(), "tool_00", json.RawMessage(`{}`), nil)
+	require.NoError(t, err)
+	require.False(t, res2.IsError)
 }

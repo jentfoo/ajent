@@ -60,12 +60,12 @@ func TestGuardedToolExecuteWithAsker(t *testing.T) {
 			require.NoError(t, err) // a denial is a result, not an error
 			if tc.wantRun {
 				assert.False(t, res.IsError)
-				assert.True(t, inner.ran)
+				assert.True(t, inner.done)
 				return
 			}
 			assert.True(t, res.IsError)
 			assert.Contains(t, textOf(res), tc.wantDenyReason)
-			assert.False(t, inner.ran) // nothing executed on a refusal
+			assert.False(t, inner.done) // nothing executed on a refusal
 		})
 	}
 }
@@ -88,7 +88,9 @@ func TestAskerReceivesGuardDecision(t *testing.T) {
 		return Allow(callWith(nil))
 	})
 
-	tool, _ := r.Get("bash")
+	tool, ok := r.Get("bash")
+	require.True(t, ok)
+
 	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), nil)
 	require.NoError(t, err)
 
@@ -112,10 +114,12 @@ func TestSetAskerNilRestoresDenial(t *testing.T) {
 	r.SetAsker(func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) })
 	r.SetAsker(nil)
 
-	tool, _ := r.Get("bash")
+	tool, ok := r.Get("bash")
+	require.True(t, ok)
+
 	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), nil)
 	require.NoError(t, err)
 
 	assert.True(t, res.IsError) // asker gone, so the Ask denies again
-	assert.False(t, inner.ran)
+	assert.False(t, inner.done)
 }

@@ -72,7 +72,7 @@ func TestInterruptDuringToolExecution(t *testing.T) {
 
 	require.NoError(t, <-errCh)
 	assert.Equal(t, llm.StopAborted, catch.result.Stop)
-	assert.True(t, wellFormed(a.state.Messages), "every tool call needs a matching result")
+	assert.True(t, wellFormed(a.state.Messages)) // every tool call has a matching result
 }
 
 // TestInterruptTwoUnansweredCalls interrupts while two tools are mid-execution
@@ -103,5 +103,50 @@ func TestInterruptTwoUnansweredCalls(t *testing.T) {
 	a.Interrupt()
 
 	require.NoError(t, <-errCh)
-	assert.True(t, wellFormed(a.state.Messages), "every tool call needs a matching result")
+	assert.True(t, wellFormed(a.state.Messages)) // every tool call has a matching result
+}
+
+// TestAbortResults covers the pure mapping that keeps an interrupted transcript
+// well formed: real results pass through in call order, missing calls get a
+// synthetic error, empty-call-id results are ignored.
+func TestAbortResults(t *testing.T) {
+	t.Parallel()
+
+	call := func(id string) llm.Block { return llm.ToolCallBlock{ID: id, Name: "bash"} }
+
+	t.Run("real_results_preserve_call_order", func(t *testing.T) {
+		// completion order c2 then c1 must come back in call order.
+		out := abortResults(llm.Message{Content: llm.BlockList{
+			call("c1"), call("c2"),
+		}}, []llm.ToolResultBlock{{CallID: "c2"}, {CallID: "c1"}})
+		assert.Equal(t, []string{"c1", "c2"}, resultIDs(out))
+	})
+
+	t.Run("missing_call_gets_synthetic_error", func(t *testing.T) {
+		out := abortResults(llm.Message{Content: llm.BlockList{
+			call("c1"), call("c2"),
+		}}, []llm.ToolResultBlock{{CallID: "c2"}})
+		require.Len(t, out, 2) // both calls filled in
+		assert.Equal(t, "c1", out[0].CallID)
+		assert.True(t, out[0].IsError)
+		tb := out[0].Content[0].(llm.TextBlock)
+		assert.Equal(t, interruptedText, tb.Text)
+	})
+
+	t.Run("empty_call_id_result_ignored", func(t *testing.T) {
+		out := abortResults(llm.Message{Content: llm.BlockList{
+			call("c1"),
+		}}, []llm.ToolResultBlock{{CallID: ""}})
+		require.Len(t, out, 1)
+		assert.True(t, out[0].IsError) // the empty-id result was not matched
+	})
+}
+
+// resultIDs extracts call ids in order for assertions.
+func resultIDs(blocks []llm.ToolResultBlock) []string {
+	out := make([]string, len(blocks))
+	for i, b := range blocks {
+		out[i] = b.CallID
+	}
+	return out
 }

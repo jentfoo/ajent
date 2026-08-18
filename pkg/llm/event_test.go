@@ -75,14 +75,26 @@ func TestStopReasonString(t *testing.T) {
 func TestStopReasonMarshalRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	for _, reason := range []StopReason{StopEndTurn, StopToolUse, StopMaxTokens, StopAborted, StopError} {
-		b, err := json.Marshal(reason)
-		require.NoError(t, err)
-		assert.Equal(t, `"`+reason.String()+`"`, string(b))
+	reasons := []struct {
+		name   string
+		reason StopReason
+	}{
+		{"end_turn", StopEndTurn},
+		{"tool_use", StopToolUse},
+		{"max_tokens", StopMaxTokens},
+		{"aborted", StopAborted},
+		{"error", StopError},
+	}
+	for _, tc := range reasons {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(tc.reason)
+			require.NoError(t, err)
+			assert.Equal(t, `"`+tc.reason.String()+`"`, string(b))
 
-		var back StopReason
-		require.NoError(t, json.Unmarshal(b, &back))
-		assert.Equal(t, reason, back)
+			var back StopReason
+			require.NoError(t, json.Unmarshal(b, &back))
+			assert.Equal(t, tc.reason, back)
+		})
 	}
 }
 

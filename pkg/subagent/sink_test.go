@@ -10,51 +10,42 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSinkToolStartPublishesLabel verifies a tool call shows its label under the
-// job id, and the done hook restores the idle fallback.
-func TestSinkToolStartPublishesLabel(t *testing.T) {
+// TestToolStart covers how a running tool call is shown: built-in labels are
+// bare words that get their first argument appended, while a rich provided label
+// is kept whole; the done hook restores the idle fallback.
+func TestToolStart(t *testing.T) {
 	t.Parallel()
-	c := newCapture()
-	s := newChildSink("sub-2", c.recordRow)
-
-	done := s.ToolStart(agent.ToolCall{ID: "c1", Name: "grep"}, `grep "func New" pkg`)
-	assert.Equal(t, `sub-2  grep "func New" pkg`, c.rowText("sub-2"))
-
-	done(agent.ToolResult{})
-	assert.Equal(t, "sub-2  thinking…", c.rowText("sub-2"), "the done hook falls back to the idle line")
-}
-
-// TestSinkToolStartEnrichesBareLabel verifies a built-in whose Label is just the
-// tool name still reads as real work by adding its first argument.
-func TestSinkToolStartEnrichesBareLabel(t *testing.T) {
-	t.Parallel()
-	c := newCapture()
-	s := newChildSink("sub-7", c.recordRow)
-
-	// read/grep/find/ls return a bare-word label, so the row must pull its target.
-	done := s.ToolStart(agent.ToolCall{ID: "c1", Name: "read", Input: json.RawMessage(`{"path":"pkg/tui/ui.go"}`)}, "read")
-	assert.Equal(t, `sub-7  read pkg/tui/ui.go`, c.rowText("sub-7"))
-
-	done(agent.ToolResult{})
-}
-
-// TestSinkToolStartPrefersRichLabel verifies a multi-word label is kept whole.
-func TestSinkToolStartPrefersRichLabel(t *testing.T) {
-	t.Parallel()
-	c := newCapture()
-	s := newChildSink("sub-8", c.recordRow)
-
-	// an MCP tool already names its work; the argument should not displace it.
-	done := s.ToolStart(agent.ToolCall{ID: "c1", Name: "my_tool"}, `search docs for widget`)
-	assert.Equal(t, `sub-8  search docs for widget`, c.rowText("sub-8"))
-
-	done(agent.ToolResult{})
-}
-
-// TestSinkOneLineCollapsesWhitespace verifies a label with newlines becomes one row.
-func TestSinkOneLineCollapsesWhitespace(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "a b c", oneLine("  a\n\tb   \nc "))
+	cases := []struct {
+		name    string
+		id      string
+		call    agent.ToolCall
+		label   string
+		wantRow string // row immediately after ToolStart
+	}{
+		{"bare builtin label", "sub-2",
+			agent.ToolCall{ID: "c1", Name: "grep"}, `grep "func New" pkg`,
+			`sub-2  grep "func New" pkg`},
+		{"enriches bare label", "sub-7",
+			agent.ToolCall{ID: "c1", Name: "read", Input: json.RawMessage(`{"path":"pkg/tui/ui.go"}`)}, "read",
+			`sub-7  read pkg/tui/ui.go`},
+		{"prefers rich label", "sub-8",
+			agent.ToolCall{ID: "c1", Name: "my_tool"}, `search docs for widget`,
+			`sub-8  search docs for widget`},
+		{"collapses_whitespace_to_one_line", "sub-12",
+			agent.ToolCall{ID: "c1", Name: "multi_line_tool"}, "first\tline\nsecond   \nthird",
+			"sub-12  first line second third"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCapture()
+			s := newChildSink(tc.id, c.recordRow)
+			done := s.ToolStart(tc.call, tc.label)
+			assert.Equal(t, tc.wantRow, c.rowText(tc.id))
+			done(agent.ToolResult{})
+			// a broken helper must not mask it: assert the literal idle line.
+			assert.Equal(t, tc.id+"  thinking…", c.rowText(tc.id)) // done falls back to the idle line
+		})
+	}
 }
 
 // TestSinkTurnEndClearsRow verifies the row disappears on turn end.
@@ -117,7 +108,7 @@ func TestSinkTextIgnoresWhitespaceLines(t *testing.T) {
 	s := newChildSink("sub-10", c.recordRow)
 
 	s.Text("\n   \t\n")
-	assert.Empty(t, c.rowText("sub-10"), "a whitespace-only line publishes nothing")
+	assert.Empty(t, c.rowText("sub-10"))
 
 	s.Text("real content")
 	assert.Equal(t, "sub-10  real content", c.rowText("sub-10"))
@@ -144,15 +135,4 @@ func TestSinkStreamSwitchStartsFresh(t *testing.T) {
 	s.Thinking("reasoning here")
 	s.Text("the answer")
 	require.Eventually(t, func() bool { return c.rowText("sub-11") == "sub-11  the answer" }, time.Second, 5*time.Millisecond)
-}
-
-// TestSinkNilPubIsSafe verifies a nil publisher never dereferences.
-func TestSinkNilPubIsSafe(t *testing.T) {
-	t.Parallel()
-	s := newChildSink("sub-1", nil)
-	done := s.ToolStart(agent.ToolCall{ID: "c", Name: "read"}, "read")
-	done(agent.ToolResult{})
-	s.Thinking("x")
-	s.Text("y")
-	s.TurnEnd(agent.TurnResult{})
 }

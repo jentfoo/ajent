@@ -564,6 +564,21 @@ func (s *responsesStream) onCompleted(ev respEvent) []Event {
 }
 
 // finish emits the terminal event.
+// respStopReason maps a terminal response status.
+func respStopReason(status string, sawToolCall bool) StopReason {
+	switch status {
+	case "incomplete":
+		return StopMaxTokens
+	case "failed":
+		return StopError
+	default:
+		if sawToolCall {
+			return StopToolUse
+		}
+		return StopEndTurn
+	}
+}
+
 func (s *responsesStream) finish(cause error) []Event {
 	if s.done {
 		return nil

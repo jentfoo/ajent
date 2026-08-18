@@ -33,7 +33,8 @@ func TestTipsLinearAndFork(t *testing.T) {
 	add("a", "root", userTextMsg(llm.RoleUser, "first question"))
 	add("b", "a", userTextMsg(llm.RoleAssistant, "an answer"))
 
-	assert.Equal(t, []string{"b"}, tipIDs(entries), "one chain has one tip")
+	// a single linear chain yields exactly its tail as the only tip.
+	assert.Equal(t, []string{"b"}, tipIDs(entries))
 
 	forked := slices.Clone(entries)
 	// a second fork growing from the root
@@ -46,7 +47,8 @@ func TestTipsLinearAndFork(t *testing.T) {
 	tip2.ParentID = "c"
 	forked = append(forked, tip2)
 
-	assert.Equal(t, []string{"b", "d"}, tipIDs(forked), "both chains stay reachable")
+	// both the original chain and the new fork keep their own tips.
+	assert.Equal(t, []string{"b", "d"}, tipIDs(forked))
 
 	tips := Tips(forked)
 	assert.Contains(t, tips[0].First, "first question")
@@ -58,8 +60,8 @@ func TestTipsEmpty(t *testing.T) {
 	t.Parallel()
 
 	assert.Empty(t, Tips(nil))
-	assert.Equal(t, []string{"root"}, tipIDs([]Entry{{ID: "root", Type: TypeSession}}),
-		"a lone session entry is still a tip")
+	// a transcript with only the session root is itself one reachable tip.
+	assert.Equal(t, []string{"root"}, tipIDs([]Entry{{ID: "root", Type: TypeSession}}))
 }
 
 // userTextMsg builds a message entry carrying one text block of the given role.

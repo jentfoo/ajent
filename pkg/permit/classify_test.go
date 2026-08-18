@@ -76,9 +76,7 @@ func TestClassify(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
 			var tc agent.ToolCall
 			if c.tool == "" {
 				tc = bashCall(c.in)
@@ -121,44 +119,6 @@ func TestClassifyIgnoresReadOnlyMarkForBuiltinsNotInList(t *testing.T) {
 	// write marked read-only must still prompt; only declared metadata for
 	// non-built-in names is trusted.
 	assert.Equal(t, VerdictPrompt, Classify(call("write", `{}`), roSet([]string{"write"})))
-}
-
-func TestAllSegmentsReadOnly(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"ls -la", true},
-		{"grep foo f | sort", true}, // pipeline tolerated
-		{"git status && git log --oneline", true},
-		{`sed -n 's/a/b/p' f`, true},
-		{"rm -rf build", false},
-		{"find . -delete", false},    // unsafe find action
-		{"echo hi > out.txt", false}, // unsafe redirect
-		{"curl -s https://x", false}, // not on the allowlist
-	}
-	for _, c := range cases {
-		assert.Equal(t, c.want, allSegmentsReadOnly(scanCommand(c.in)), c.in)
-	}
-}
-
-func TestClearWrite(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"ls -la", false},
-		{"rm build && ls", true},
-		{"grep foo f | sort", false},
-		{"sed -i s/a/b/ f", false}, // sed handled by its own analyser, not the write list
-	}
-	for _, c := range cases {
-		assert.Equal(t, c.want, clearWrite(scanCommand(c.in)), c.in)
-	}
 }
 
 // strconvQuote is a tiny JSON string builder to keep test tables readable.

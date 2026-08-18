@@ -10,7 +10,7 @@ import (
 func TestLevelValue(t *testing.T) {
 	t.Parallel()
 
-	caps := Capabilities{}
+	var caps Capabilities
 
 	t.Run("absent_key_uses_level_name", func(t *testing.T) {
 		e, ok := levelValue(caps, LevelHigh)
@@ -43,7 +43,7 @@ func TestLevelValue(t *testing.T) {
 func TestOffValueAndSuppressed(t *testing.T) {
 	t.Parallel()
 
-	caps := Capabilities{}
+	var caps Capabilities
 
 	t.Run("absent_off_uses_default", func(t *testing.T) {
 		e, ok := offValue(caps, "none")

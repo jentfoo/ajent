@@ -276,6 +276,13 @@ func TestLoopToolErrorContinues(t *testing.T) {
 	resultMsg := a.state.Messages[2]
 	tb := resultMsg.Content[0].(llm.ToolResultBlock)
 	assert.True(t, tb.IsError) // an erroring tool is a result, not a failure
+
+	// the loop must continue to a second model step with its recovery reply.
+	require.Len(t, a.state.Messages, 4) // echo, call, error result, recovery
+	recovery := a.state.Messages[3]
+	tb2, ok := recovery.Content[0].(llm.TextBlock)
+	require.True(t, ok)
+	assert.Equal(t, "recovered", tb2.Text)
 }
 
 func TestLoopUnknownToolContinues(t *testing.T) {
@@ -295,7 +302,14 @@ func TestLoopUnknownToolContinues(t *testing.T) {
 
 	resultMsg := a.state.Messages[2]
 	tb := resultMsg.Content[0].(llm.ToolResultBlock)
-	assert.True(t, tb.IsError)
+	assert.True(t, tb.IsError) // an unknown tool is a result, not a failure
+
+	// the loop must continue to a second model step with its recovery reply.
+	require.Len(t, a.state.Messages, 4) // echo, call, error result, recovery
+	recovery := a.state.Messages[3]
+	tb2, ok := recovery.Content[0].(llm.TextBlock)
+	require.True(t, ok)
+	assert.Equal(t, "ok", tb2.Text)
 }
 
 func TestLoopStepLimitTrips(t *testing.T) {
@@ -494,14 +508,15 @@ func TestBuildRequest(t *testing.T) {
 		req := a2.buildRequest()
 		assert.LessOrEqual(t, req.MaxTokens, 200000) // never exceeds the window
 	})
-	t.Run("nil_ledger_yields_zero_input", func(t *testing.T) {
+	t.Run("nil_ledger_yields_full_output_cap", func(t *testing.T) {
 		st3 := &State{
 			Model:     m,
 			Reasoning: llm.ReasoningConfig{Level: llm.LevelHigh},
 			Tokens:    nil, // no accounting configured
 		}
 		a3 := newTestAgent(st3, nil, NopSink{})
-		assert.NotPanics(t, func() { _ = a3.buildRequest() })
+		req := a3.buildRequest()
+		assert.Equal(t, llm.MaxOutputFor(m, 0), req.MaxTokens) // no used tokens -> full window cap
 	})
 }
 
@@ -534,7 +549,7 @@ func TestLoopToolProgressReachesSink(t *testing.T) {
 	assert.False(t, first.Done)
 
 	last := rec.progress[len(rec.progress)-1]
-	assert.True(t, last.Done, "the row is closed when the call completes")
+	assert.True(t, last.Done) // the row is closed when the call completes
 	assert.Equal(t, "notes.go", last.Path)
 	assert.Equal(t, 200, last.Lines)
 	assert.Equal(t, len(args), last.Bytes)

@@ -27,7 +27,7 @@ func TestNewIDLengthAndAlphabet(t *testing.T) {
 // TestNewIDSortedByTime pins increasing timestamps and checks the ids sort in
 // that order. It mutates the package clock so it is not parallel.
 func TestNewIDSortedByTime(t *testing.T) {
-	defer setClock(time.UnixMilli(1_700_000_000_123).UTC())()
+	t.Cleanup(setClock(time.UnixMilli(1_700_000_000_123).UTC()))
 
 	base := int64(1_750_234_567_890)
 	var prev string
@@ -43,7 +43,7 @@ func TestNewIDSortedByTime(t *testing.T) {
 
 // TestNewIDMonotonicWithinMs pins one timestamp and checks ids stay increasing.
 func TestNewIDMonotonicWithinMs(t *testing.T) {
-	defer setClock(time.UnixMilli(1_700_000_123).UTC())()
+	t.Cleanup(setClock(time.UnixMilli(1_700_000_123).UTC()))
 
 	var prev string
 	for range 200 {

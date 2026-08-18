@@ -11,38 +11,66 @@ import (
 func TestAccountingPendingLiveLifecycle(t *testing.T) {
 	t.Parallel()
 
-	a := New(llm.Model{ID: "m1", Provider: "p", ContextWindow: 100000})
 	const key = "p/m1"
+	newLedger := func() *Accounting {
+		return New(llm.Model{ID: "m1", Provider: "p", ContextWindow: 100000})
+	}
 
-	assert.Zero(t, a.Context().Used)
-	assert.False(t, a.Context().Estimated)
+	t.Run("fresh_ledger_is_empty_and_exact", func(t *testing.T) {
+		a := newLedger()
+		assert.Zero(t, a.Context().Used)
+		assert.False(t, a.Context().Estimated)
+	})
 
-	// an appended user message is estimated pending until the provider reports.
-	added := 200
-	a.Add(added)
-	cs := a.Context()
-	assert.True(t, cs.Estimated)
-	assert.Equal(t, added, cs.Used) // pass-through of the raw estimate at factor 1
+	t.Run("pending_estimate_counts_added_messages", func(t *testing.T) {
+		a := newLedger()
 
-	// anthropic reports input mid-stream: that snaps promptExact and clears pending.
-	snapIn := 1000
-	a.Partial(llm.Usage{Input: snapIn})
-	cs = a.Context()
-	assert.False(t, cs.Estimated) // no live yet -> exact
-	assert.Equal(t, snapIn, cs.Used)
+		// an appended user message is estimated pending until the provider reports.
+		added := 200
+		a.Add(added)
+		cs := a.Context()
+		assert.True(t, cs.Estimated)
+		assert.Equal(t, added, cs.Used) // pass-through of the raw estimate at factor 1
+	})
 
-	// text deltas make the bar estimated again and grow Used above the snapshot.
-	a.Stream(50)
-	cs = a.Context()
-	assert.True(t, cs.Estimated)
-	assert.Greater(t, cs.Used, snapIn)
+	t.Run("partial_snapshot_clears_pending", func(t *testing.T) {
+		a := newLedger()
 
-	// a completed response clears every estimate bucket: exact, no longer growing.
-	in2 := 1000
-	out2 := 500
-	a.Response(key, llm.Usage{Input: in2, Output: out2}, 200)
-	cs = a.Context()
-	assert.False(t, cs.Estimated)
+		// anthropic reports input mid-stream: that snaps promptExact and clears pending.
+		snapIn := 1000
+		a.Partial(llm.Usage{Input: snapIn})
+		cs := a.Context()
+		assert.False(t, cs.Estimated) // no live yet -> exact
+		assert.Equal(t, snapIn, cs.Used)
+	})
+
+	t.Run("stream_grows_used_above_snapshot", func(t *testing.T) {
+		a := newLedger()
+
+		// text deltas make the bar estimated again and grow Used above the snapshot.
+		snapIn := 1000
+		a.Partial(llm.Usage{Input: snapIn})
+		a.Stream(50)
+		cs := a.Context()
+		assert.True(t, cs.Estimated)
+		assert.Greater(t, cs.Used, snapIn)
+	})
+
+	t.Run("response_clears_every_bucket", func(t *testing.T) {
+		a := newLedger()
+
+		// build up both estimate buckets first so clearing them is observable.
+		a.Add(300)                        // pending: appended messages
+		a.Partial(llm.Usage{Input: 1000}) // exact snapshot lands mid-stream
+		a.Stream(50)                      // live: response still streaming
+		assert.True(t, a.Context().Estimated)
+
+		// a completed response clears every estimate bucket: exact, no longer growing.
+		a.Response(key, llm.Usage{Input: 1000, Output: 500}, 200)
+		cs := a.Context()
+		assert.False(t, cs.Estimated)  // no pending or live estimates remain
+		assert.Equal(t, 1500, cs.Used) // exact input + output supersedes them
+	})
 }
 
 func TestAccountingUnreportedTurnIsEstimated(t *testing.T) {

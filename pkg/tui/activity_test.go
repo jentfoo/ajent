@@ -18,12 +18,12 @@ func TestShadeRowPadsToFullWidth(t *testing.T) {
 	text := "sub-2  grep pattern" // 21 columns; the rest is trailing shade blanks
 	short := shadeRow(th.Activity, text, w)
 	assert.Equal(t, th.Activity.Open()+text+strings.Repeat(" ", w-displayWidth(text))+sgrReset,
-		short, "shade spans edge to edge")
-	assert.Zero(t, displayWidth(short)-w, "exactly one row wide")
+		short)
+	assert.Zero(t, displayWidth(short)-w)
 
 	// over-long text elides yet still fills the width exactly
 	trunc := shadeRow(th.Activity, strings.Repeat("x", 100), 20)
-	assert.Zero(t, displayWidth(trunc)-20, "elided row is still full width")
+	assert.Zero(t, displayWidth(trunc)-20)
 }
 
 // TestShadeRowNoColorIsPlain verifies a no-op theme falls back to an elided row.

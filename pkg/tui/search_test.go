@@ -61,7 +61,7 @@ func TestSearchOverlayRefilter(t *testing.T) {
 		},
 	}
 	s.refilter()
-	assert.Empty(t, s.matches, "an empty query shows nothing until content is typed")
+	assert.Empty(t, s.matches)
 
 	s.query = "RETRY"
 	s.refilter() // case-insensitive substring
@@ -90,7 +90,7 @@ func TestSearchOverlayRows(t *testing.T) {
 		s := &searchOverlay{items: []SearchItem{{Text: "line one\nline two"}}}
 		s.refilter()
 		rows := s.rows(theme, 80, 8)
-		assert.Len(t, rows, 1, "only the query-echo header renders before typing")
+		assert.Len(t, rows, 1)
 	})
 	t.Run("shows_full_multiline_prompt", func(t *testing.T) {
 		s := &searchOverlay{query: "line", items: []SearchItem{{Text: "line one\nline two\nline three"}}}

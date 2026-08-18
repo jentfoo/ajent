@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // fakeserver binary, built once per test run from ./testdata/fakeserver with the
@@ -71,17 +73,16 @@ func startHTTP(t *testing.T, args ...string) string {
 
 	// wait until the HTTP endpoint answers so Connect does not race startup
 	url := fmt.Sprintf("http://127.0.0.1:%d/mcp", port)
-	for i := 0; i < 100; i++ { // ~2s budget
-		d := net.Dialer{Timeout: 50 * time.Millisecond}
+	require.Eventually(t, func() bool {
+		d := net.Dialer{Timeout: 500 * time.Millisecond}
 		conn, err := d.DialContext(t.Context(), "tcp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err == nil {
-			_ = conn.Close()
-			return url
+		if err != nil {
+			return false
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("fakeserver http never came up")
-	return ""
+		_ = conn.Close()
+		return true
+	}, 2*time.Second, 20*time.Millisecond)
+	return url
 }
 
 // stdioConfig builds a ServerConfig pointing at the fakeserver binary.

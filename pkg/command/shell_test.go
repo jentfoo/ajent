@@ -126,29 +126,36 @@ func TestStagerFlushWaitsForInFlight(t *testing.T) {
 	msgs := s.Flush(t.Context())
 	elapsed := time.Since(start)
 	require.Len(t, msgs, 2)
-	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond, "Flush must wait for the command to finish")
+	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
 	require.False(t, s.Pending())
 }
 
 func TestStagerEmptyCommandNoticesAndRunsNothing(t *testing.T) {
 	t.Parallel()
 
-	for _, cmd := range []string{"", "   ", "\t"} {
-		s, sink := newShellStager(t)
-		s.Run(cmd)
-		require.Eventually(t, func() bool {
+	cases := []struct{ name, cmd string }{
+		{"bare_empty", ""},
+		{"only_spaces", "   "},
+		{"only_tab", "\t"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cmd := c.cmd
+			s, sink := newShellStager(t)
+			s.Run(cmd)
+			require.Eventually(t, func() bool {
+				sink.mu.Lock()
+				defer sink.mu.Unlock()
+				return len(sink.notices) > 0
+			}, time.Second, time.Millisecond)
 			sink.mu.Lock()
-			defer sink.mu.Unlock()
-			return len(sink.notices) > 0
-		}, time.Second, time.Millisecond,
-			"an empty shell command must produce a notice")
-		sink.mu.Lock()
-		first := sink.notices[0]
-		sink.mu.Unlock()
-		assert.Contains(t, first, "empty")
-		require.False(t, s.Pending(), "nothing was staged for an empty command")
-		msgs := s.Flush(t.Context())
-		assert.Empty(t, msgs, "an empty command stages no call+result pair")
+			first := sink.notices[0]
+			sink.mu.Unlock()
+			assert.Contains(t, first, "empty")
+			require.False(t, s.Pending())
+			msgs := s.Flush(t.Context())
+			assert.Empty(t, msgs)
+		})
 	}
 }
 
@@ -157,7 +164,7 @@ func TestStagerNonZeroExitStagesAsError(t *testing.T) {
 
 	s, _ := newShellStager(t)
 	s.Run("exit 3")
-	// budget clears the bash tool's 5s WaitDelay ceiling (see RunsAndFlushesInOrder).
+	// budget clears the bash tool's 5s WaitDelay ceiling (see TestStagerRunsAndFlushesInOrder).
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 2)
@@ -175,10 +182,9 @@ func TestStagerCancelStagesPartial(t *testing.T) {
 	require.True(t, s.Pending())
 
 	s.Cancel()
-	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond,
-		"cancelling must reap the running command")
+	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
-	require.Len(t, msgs, 2, "a cancelled command still stages its result")
+	require.Len(t, msgs, 2)
 }
 
 // firstResultText extracts the text of a tool result block.

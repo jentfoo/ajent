@@ -103,7 +103,7 @@ func runAndAnswer(t *testing.T, p *fakePrompter, b *Barrier, name string, input 
 	t.Helper()
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), name, input); close(done) }()
+	go func() { got = runAsk(b, t.Context(), name, input); close(done) }()
 	waitDialog(t, p).answer(idx)
 	<-done
 	return got
@@ -178,12 +178,11 @@ func TestGuardModeMatrix(t *testing.T) {
 		{"block reject", ModeBlockAll, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			b := newTestBarrier(newFakePrompter())
 			b.SetMode(c.mode)
 			d := b.Guard()(context.Background(), c.call)
-			assert.Equal(t, c.want, d.Action, c.name)
+			assert.Equal(t, c.want, d.Action)
 		})
 	}
 }
@@ -214,11 +213,10 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 		{"safe bash block", ModeBlockAll, bashCall("git status"), tools.ActionAsk},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			b.SetMode(c.mode)
 			d := b.Guard()(context.Background(), c.call)
-			assert.Equal(t, c.want, d.Action, c.name)
+			assert.Equal(t, c.want, d.Action)
 		})
 	}
 
@@ -261,11 +259,10 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		{"deny write tool", ModeAllowAll, call("write", `{}`), tools.ActionDeny},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			b.SetMode(c.mode)
 			d := b.Guard()(context.Background(), c.call)
-			assert.Equal(t, c.want, d.Action, c.name)
+			assert.Equal(t, c.want, d.Action)
 		})
 	}
 
@@ -359,7 +356,7 @@ func TestAskerDenyCapturesReason(t *testing.T) {
 
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "write", []byte(`{}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "write", []byte(`{}`)); close(done) }()
 	waitDialog(t, p).answer(int(optDeny))
 	<-done
 
@@ -460,7 +457,7 @@ func TestAskerAutoClassifiesReadOnlyAndResolvesDialog(t *testing.T) {
 
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 	<-done // the classifier resolves allow without a keystroke
 
 	assert.Equal(t, tools.ActionAllow, got.Action)
@@ -477,7 +474,7 @@ func TestAskerAutoWriteVerdictKeepsDialogWaiting(t *testing.T) {
 
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
 	// the write verdict must not resolve; a user keystroke still decides.
 	waitDialog(t, p).answer(int(optDeny))
@@ -498,11 +495,13 @@ func TestAskerAutoClassifiesClearWriteAndApprovesOnReadOnly(t *testing.T) {
 
 	// a confident write (rm) is still classified in auto mode; a readonly verdict
 	// resolves the dialog open without a keystroke.
+	var got tools.Decision
 	done := make(chan struct{})
-	go func() { _ = runAsk(b, context.Background(), "bash", []byte(`{"command":"rm build"}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build"}`)); close(done) }()
 	<-done
 
 	assert.Equal(t, 1, cl.calls)
+	assert.Equal(t, tools.ActionAllow, got.Action)
 }
 
 func TestAskerAutoClassifiesNativeWriteTool(t *testing.T) {
@@ -516,14 +515,16 @@ func TestAskerAutoClassifiesNativeWriteTool(t *testing.T) {
 	b.SetClassifier(cl)
 
 	// native write/edit tools are classified too, so the demo server can approve them.
+	var got tools.Decision
 	done := make(chan struct{})
 	go func() {
-		_ = runAsk(b, context.Background(), "write", []byte(`{"path":"a.txt","content":"x"}`))
+		got = runAsk(b, t.Context(), "write", []byte(`{"path":"a.txt","content":"x"}`))
 		close(done)
 	}()
 	<-done
 
 	assert.Equal(t, 1, cl.calls)
+	assert.Equal(t, tools.ActionAllow, got.Action)
 }
 
 func TestAskerAutoReadOnlyEmitsNotice(t *testing.T) {
@@ -538,7 +539,7 @@ func TestAskerAutoReadOnlyEmitsNotice(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		runAsk(b, context.Background(), "bash", []byte(`{"command":"stat f.txt"}`))
+		runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		close(done)
 	}()
 	<-done // the classifier resolves allow; no keystroke needed
@@ -557,7 +558,7 @@ func TestAskerAutoWriteVerdictEmitsNoNotice(t *testing.T) {
 	n := &noticeRecorder{}
 	b.SetNotice(n.record)
 
-	go runAsk(b, context.Background(), "bash", []byte(`{"command":"stat f.txt"}`))
+	go runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 	d := waitDialog(t, p)
 	d.answer(int(optDeny)) // the user decides; no auto-allow notice fires
 	require.Empty(t, n.all())
@@ -592,7 +593,7 @@ func TestAskerAutoUserAnswerCancelsInFlightClassification(t *testing.T) {
 
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
 	waitDialog(t, p).answer(int(optDeny)) // the user answers before classification returns
 	<-done
@@ -625,7 +626,7 @@ func TestSetModeResolvesOpenDialogAsAllowForAllowAll(t *testing.T) {
 
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "write", []byte(`{}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "write", []byte(`{}`)); close(done) }()
 	_ = waitDialog(t, p)
 
 	b.SetMode(ModeAllowAll) // resolving the open dialog as allow
@@ -643,7 +644,7 @@ func TestSetModeOutOfBlockAllResolvesReadOnlyDialogAsAllow(t *testing.T) {
 
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "bash", []byte(`{"command":"ls -la"}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"ls -la"}`)); close(done) }()
 	_ = waitDialog(t, p)
 
 	b.SetMode(ModeAllowRead) // a read becomes auto-allowed
@@ -660,7 +661,7 @@ func TestSetModeIntoBlockAllLeavesWriteDialogWaiting(t *testing.T) {
 
 	var got tools.Decision
 	done := make(chan struct{})
-	go func() { got = runAsk(b, context.Background(), "write", []byte(`{}`)); close(done) }()
+	go func() { got = runAsk(b, t.Context(), "write", []byte(`{}`)); close(done) }()
 	_ = waitDialog(t, p)
 
 	b.SetMode(ModeBlockAll) // block-all still prompts writes; dialog stays open
@@ -670,15 +671,13 @@ func TestSetModeIntoBlockAllLeavesWriteDialogWaiting(t *testing.T) {
 	assert.Equal(t, tools.ActionDeny, got.Action)
 }
 
-func TestCycleWalksModesAndPublishesSegmentValue(t *testing.T) {
+func TestCycleAdvancesModesInOrder(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBarrier(newFakePrompter())
 	want := []Mode{ModeAuto, ModeBlockAll, ModeAllowAll, ModeAllowRead}
 	for _, w := range want {
-		m := b.Cycle()
-		assert.Equal(t, w, m)
-		assert.Equal(t, w.String(), m.String())
+		assert.Equal(t, w, b.Cycle())
 	}
 }
 

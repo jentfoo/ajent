@@ -25,22 +25,19 @@ func fullSource() *fakeSource {
 	}
 }
 
-func TestChildToolsFiltersToReadOnly(t *testing.T) {
+func TestChildTools(t *testing.T) {
 	t.Parallel()
-	names := toolNames(childTools(fullSource()))
-	assert.ElementsMatch(t, []string{"read", "grep", "find", "ls", "mcp_search"}, names)
-	// write/edit/bash are unreachable
-	for _, n := range []string{"bash", "write", "edit"} {
-		assert.NotContains(t, names, n)
-	}
-}
-
-func TestChildToolsBarsAgentStartEvenIfReadOnly(t *testing.T) {
-	t.Parallel()
-	src := fullSource() // agent_start is marked read-only here
+	src := fullSource()
+	assert.ElementsMatch(t, []string{"read", "grep", "find", "ls", "mcp_search"}, toolNames(childTools(src)))
 	for _, tl := range childTools(src) {
-		assert.False(t, slices.Contains([]string{"agent_start", "agent_poll", "agent_list"}, tl.Name()))
+		name := tl.Name()
+		assert.NotContains(t, []string{"bash", "write", "edit"}, name)
+		assert.False(t, slices.Contains([]string{"agent_start", "agent_poll", "agent_list"}, name))
 	}
+
+	src = &fakeSource{tools: []agent.Tool{&fakeTool{name: "bash"}, roTool("read")}}
+	// read is builtin-read-only so it survives; bash does not
+	assert.Equal(t, []string{"read"}, toolNames(childTools(src)))
 }
 
 func TestToolSetView(t *testing.T) {
@@ -48,21 +45,13 @@ func TestToolSetView(t *testing.T) {
 	set := &toolSet{tools: childTools(fullSource())}
 	assert.Equal(t, []string{"read", "grep", "find", "ls", "mcp_search"}, set.Names())
 
-	if _, ok := set.Get("bash"); ok {
-		t.Fatal("child tool set must not expose bash")
-	}
-	if got, ok := set.Get("read"); !ok || got.Name() != "read" {
-		t.Fatalf("expected read in child tool set, got %v/%v", got, ok)
+	_, ok := set.Get("bash")
+	assert.False(t, ok)
+	got, ok := set.Get("read")
+	if assert.True(t, ok) {
+		assert.Equal(t, "read", got.Name())
 	}
 	assert.Len(t, set.Schemas(), len(set.Names()))
-}
-
-// TestChildToolsNilSource is a no-op guard: nil source yields an empty set.
-func TestChildToolsEmptyWhenNoReadOnly(t *testing.T) {
-	t.Parallel()
-	src := &fakeSource{tools: []agent.Tool{&fakeTool{name: "bash"}, roTool("read")}}
-	// read is builtin-read-only so it survives; bash does not
-	assert.Equal(t, []string{"read"}, toolNames(childTools(src)))
 }
 
 func toolNames(ts []agent.Tool) []string {

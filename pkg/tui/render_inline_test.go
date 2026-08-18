@@ -297,9 +297,9 @@ func TestInlineRendererResize(t *testing.T) {
 		r.resize()
 		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
 
-		assert.Equal(t, reflowed, []string{
+		assert.Equal(t, []string{
 			v.Line(0), v.Line(1), v.Line(2), v.Line(3), v.Line(4), v.Line(5),
-		}, "committed rows belong to the terminal, exactly like cat output")
+		}, reflowed, "committed rows belong to the terminal, exactly like cat output")
 	})
 	t.Run("leaves_content_above_the_session", func(t *testing.T) {
 		v := newVT(40, 12)

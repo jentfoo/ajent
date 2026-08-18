@@ -35,16 +35,7 @@ func TestTaskPromptFramesInstructionsAndTask(t *testing.T) {
 func TestChildSnippetsIsSingleContract(t *testing.T) {
 	t.Parallel()
 	s := childSnippets()
-	requireLen(t, s, 1)
-	if len(s) != 0 {
+	if assert.Len(t, s, 1) {
 		assert.Equal(t, childContract, s[0])
-	}
-}
-
-// requireLen is a tiny helper to avoid importing testify just for this.
-func requireLen[T any](t *testing.T, got []T, want int) {
-	t.Helper()
-	if len(got) != want {
-		t.Fatalf("expected length %d, got %d", want, len(got))
 	}
 }

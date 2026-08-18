@@ -12,104 +12,89 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCandidatesListTopLevel(t *testing.T) {
-	t.Parallel()
+func TestCandidates(t *testing.T) {
+	t.Run("list_top_level", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "main.go", "src/main.go")
+		idx := NewIndex(dir, tools.PathPolicy{})
 
-	dir := t.TempDir()
-	writeTree(t, dir, "main.go", "src/main.go")
-	idx := NewIndex(dir, tools.PathPolicy{})
+		cands := idx.Candidates("", nil)
+		assert.Equal(t, []string{"main.go", "src/"}, labelsOf(cands))
+	})
 
-	cands := idx.Candidates("", nil)
-	assert.Equal(t, []string{"main.go", "src/"}, labelsOf(cands),
-		"an empty query offers top-level files and directories only")
-}
+	t.Run("directory_drills_deeper", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "src/main.go", "src/cmd/run.go")
+		idx := NewIndex(dir, tools.PathPolicy{})
 
-func TestCandidatesDirectoryDrillsDeeper(t *testing.T) {
-	t.Parallel()
+		cands := idx.Candidates("src/", nil)
+		assert.Equal(t, []string{"src/cmd/", "src/main.go"}, labelsOf(cands))
 
-	dir := t.TempDir()
-	writeTree(t, dir, "src/main.go", "src/cmd/run.go")
-	idx := NewIndex(dir, tools.PathPolicy{})
+		files := idx.Candidates("src/m", nil)
+		assert.Equal(t, []string{"src/main.go"}, labelsOf(files))
+	})
 
-	cands := idx.Candidates("src/", nil)
-	assert.Equal(t, []string{"src/cmd/", "src/main.go"}, labelsOf(cands),
-		"a trailing slash lists the directory's children with dirs marked")
+	t.Run("partial_dir_completes_slash", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "pkg/refs/index.go")
+		idx := NewIndex(dir, tools.PathPolicy{})
 
-	files := idx.Candidates("src/m", nil)
-	assert.Equal(t, []string{"src/main.go"}, labelsOf(files))
-}
+		cands := idx.Candidates("pk", nil)
+		assert.Equal(t, []string{"pkg/"}, labelsOf(cands))
 
-func TestCandidatesPartialDirNameCompletesSlash(t *testing.T) {
-	t.Parallel()
+		sub := idx.Candidates("pkg/r", nil)
+		assert.Equal(t, []string{"pkg/refs/"}, labelsOf(sub))
+	})
 
-	dir := t.TempDir()
-	writeTree(t, dir, "pkg/refs/index.go")
-	idx := NewIndex(dir, tools.PathPolicy{})
+	t.Run("excludes_skipped_dirs", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "main.go")
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "node_modules", "x"), 0o700))
+		idx := NewIndex(dir, tools.PathPolicy{})
 
-	cands := idx.Candidates("pk", nil)
-	assert.Equal(t, []string{"pkg/"}, labelsOf(cands))
+		for _, q := range []string{"", "no"} {
+			assert.NotContains(t, labelsOf(idx.Candidates(q, nil)), "node_modules/")
+		}
+	})
 
-	sub := idx.Candidates("pkg/r", nil)
-	assert.Equal(t, []string{"pkg/refs/"}, labelsOf(sub))
-}
+	t.Run("conversation_ranked_first", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "a.go", "b.go")
+		idx := NewIndex(dir, tools.PathPolicy{})
 
-func TestCandidatesExcludesSkippedDirs(t *testing.T) {
-	t.Parallel()
+		inConvo := func(path string) bool { return filepath.Base(path) == "b.go" }
+		cands := idx.Candidates("", inConvo)
+		assert.Equal(t, []string{"b.go", "a.go"}, labelsOf(cands))
+	})
 
-	dir := t.TempDir()
-	writeTree(t, dir, "main.go")
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "node_modules", "x"), 0o700))
-	idx := NewIndex(dir, tools.PathPolicy{})
+	// tilde completion mutates the global userHome, so it stays sequential and
+	// shares one root + home tree across its cases.
+	t.Run("tilde", func(t *testing.T) {
+		root := t.TempDir() // workspace, must not leak into home completion
+		home := t.TempDir()
+		writeTree(t, root, "main.go")
+		writeTree(t, home, ".bashrc", "docs/a.txt", "pkg/main.go", "bin/run.sh")
+		restoreHome(t, home)
+		idx := NewIndex(root, tools.PathPolicy{})
 
-	for _, q := range []string{"", "no"} {
-		assert.NotContains(t, labelsOf(idx.Candidates(q, nil)), "node_modules/")
-	}
-}
+		t.Run("offers_home_top_level_only", func(t *testing.T) {
+			cands := idx.Candidates("~", nil)
+			for _, c := range cands {
+				assert.True(t, strings.HasPrefix(c.Label, "~/"))
+			}
+			assert.NotContains(t, labelsOf(cands), "main.go")
+		})
+		t.Run("drills_deeper_with_slash", func(t *testing.T) {
+			docs := idx.Candidates("~/d", nil)
+			require.Equal(t, []string{"~/docs/"}, labelsOf(docs))
 
-func TestCandidatesTildeCompletesHomeTopLevel(t *testing.T) {
-	root := t.TempDir() // workspace, must not leak into home completion
-	home := t.TempDir()
-	writeTree(t, root, "main.go")
-	writeTree(t, home, ".bashrc", "docs/notes.md")
-	restoreHome(t, home)
+			pk := idx.Candidates("~/pkg/m", nil)
+			assert.Equal(t, []string{"~/pkg/main.go"}, labelsOf(pk))
 
-	idx := NewIndex(root, tools.PathPolicy{})
-	cands := idx.Candidates("~", nil)
-	haveTildePrefix := true
-	for _, c := range cands {
-		haveTildePrefix = haveTildePrefix && strings.HasPrefix(c.Label, "~/")
-	}
-	assert.True(t, haveTildePrefix, "bare ~ offers home entries prefixed with ~/")
-	assert.NotContains(t, labelsOf(cands), "main.go",
-		"workspace files must not appear for a ~ query")
-
-	docs := idx.Candidates("~/d", nil)
-	require.Equal(t, []string{"~/docs/"}, labelsOf(docs))
-}
-
-func TestCandidatesTildeDrillsDeeper(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	writeTree(t, home, "pkg/main.go", "docs/a.txt")
-	restoreHome(t, home)
-
-	idx := NewIndex(root, tools.PathPolicy{})
-	cands := idx.Candidates("~/pk", nil)
-	assert.Equal(t, []string{"~/pkg/"}, labelsOf(cands))
-
-	sub := idx.Candidates("~/pkg/m", nil)
-	require.Equal(t, []string{"~/pkg/main.go"}, labelsOf(sub))
-}
-
-func TestCandidatesTildeTrailingSlashListsChildren(t *testing.T) {
-	root := t.TempDir()
-	home := t.TempDir()
-	writeTree(t, home, "bin/run.sh", "docs/a.txt")
-	restoreHome(t, home)
-
-	idx := NewIndex(root, tools.PathPolicy{})
-	cands := idx.Candidates("~/bin/", nil)
-	assert.Equal(t, []string{"~/bin/run.sh"}, labelsOf(cands))
+			bin := idx.Candidates("~/bin/", nil)
+			assert.Equal(t, []string{"~/bin/run.sh"}, labelsOf(bin))
+		})
+	})
 }
 
 // restoreHome points the injected userHome at home for the duration of a test.
@@ -118,19 +103,6 @@ func restoreHome(t *testing.T, home string) {
 	orig := userHome
 	userHome = func() (string, error) { return home, nil }
 	t.Cleanup(func() { userHome = orig })
-}
-
-func TestCandidatesConversationRankedFirst(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	writeTree(t, dir, "a.go", "b.go")
-	idx := NewIndex(dir, tools.PathPolicy{})
-
-	inConvo := func(path string) bool { return filepath.Base(path) == "b.go" }
-	cands := idx.Candidates("", inConvo)
-	assert.Equal(t, []string{"b.go", "a.go"}, labelsOf(cands),
-		"an already-referenced file outranks a newer sibling")
 }
 
 // writeTree creates the given relative files (creating parent dirs) under root.

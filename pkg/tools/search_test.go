@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newSearchEnv(t *testing.T) (string, PathPolicy) {
@@ -29,9 +31,9 @@ func TestFindMatchesGlob(t *testing.T) {
 	mkfile(dir, "a.go", "x")
 	mkfile(dir, "b.txt", "y")
 
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"*.go"}`)), nil)
-	assert.False(t, res.IsError)
+	require.NoError(t, err)
 	out := textOf(res)
 	assert.Contains(t, out, "a.go")
 	assert.NotContains(t, out, "b.txt")
@@ -44,9 +46,9 @@ func TestFindBarePatternMatchesAtAnyDepth(t *testing.T) {
 	mkfile(dir, "top.go", "x")
 	mkfile(dir, "pkg/tools/nested.go", "y")
 
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"*.go"}`)), nil)
-	assert.False(t, res.IsError)
+	require.NoError(t, err)
 	out := textOf(res)
 	assert.Contains(t, out, "top.go")
 	assert.Contains(t, out, filepath.Join("pkg", "tools", "nested.go")) // bare glob reaches any depth
@@ -60,9 +62,9 @@ func TestFindDoublestarMatchesRootAndNested(t *testing.T) {
 	mkfile(dir, "sub/inner.go", "y")
 	mkfile(dir, "sub/skip.txt", "z")
 
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"**/*.go"}`)), nil)
-	assert.False(t, res.IsError)
+	require.NoError(t, err)
 	out := textOf(res)
 	assert.Contains(t, out, "root.go") // ** spans zero segments too
 	assert.Contains(t, out, filepath.Join("sub", "inner.go"))
@@ -76,9 +78,9 @@ func TestFindLimitParamTruncates(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 	}
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"*.txt","limit":2}`)), nil)
-	assert.False(t, res.IsError)
+	require.NoError(t, err)
 	out := textOf(res)
 	assert.Equal(t, 2, strings.Count(out, ".txt"))
 	assert.Contains(t, out, "more results") // truncation is named, not silent
@@ -88,8 +90,9 @@ func TestFindEmptyPatternRejected(t *testing.T) {
 	t.Parallel()
 
 	_, policy := newSearchEnv(t)
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"  "}`)), nil)
+	require.NoError(t, err)
 	assert.True(t, res.IsError)
 }
 
@@ -99,8 +102,9 @@ func TestFindNoMatchIsEmptyNotError(t *testing.T) {
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.md", "x")
 
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"*.rs"}`)), nil)
+	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	assert.Empty(t, textOf(res))
 }
@@ -112,9 +116,9 @@ func TestFindBoundedResults(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 	}
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"*.txt"}`)), nil)
-	assert.False(t, res.IsError)
+	require.NoError(t, err)
 	out := textOf(res)
 	assert.LessOrEqual(t, strings.Count(out, ".txt"), FindResultLimit().Lines)
 }
@@ -123,8 +127,9 @@ func TestFindMalformedArgsIsError(t *testing.T) {
 	t.Parallel()
 
 	_, policy := newSearchEnv(t)
-	res, _ := (&findTool{policy: policy}).Execute(t.Context(),
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`not json`)), nil)
+	require.NoError(t, err)
 	assert.True(t, res.IsError)
 }
 
@@ -134,8 +139,9 @@ func TestGrepContentModeFindsLineNumbers(t *testing.T) {
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.txt", "hello world\nfoo bar\n")
 
-	res, _ := (&grepTool{policy: policy}).Execute(t.Context(),
+	res, err := (&grepTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"world"}`)), nil)
+	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	out := textOf(res)
 	assert.Contains(t, out, "a.txt") // content mode names the file
@@ -146,8 +152,9 @@ func TestGrepCountModeReportsPerFile(t *testing.T) {
 
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.txt", "one one two\n")
-	res, _ := (&grepTool{policy: policy}).Execute(t.Context(),
+	res, err := (&grepTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"one","mode":"count"}`)), nil)
+	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	assert.Contains(t, textOf(res), "a.txt") // count mode still names the file
 }
@@ -159,8 +166,9 @@ func TestGrepFilesModeListsMatchingOnly(t *testing.T) {
 	mkfile(dir, "hit.txt", "needle")
 	mkfile(dir, "miss.txt", "nothing")
 
-	res, _ := (&grepTool{policy: policy}).Execute(t.Context(),
+	res, err := (&grepTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"needle","mode":"files"}`)), nil)
+	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	out := textOf(res)
 	assert.Contains(t, out, "hit.txt")
@@ -171,8 +179,9 @@ func TestGrepInvalidModeIsError(t *testing.T) {
 	t.Parallel()
 
 	_, policy := newSearchEnv(t)
-	res, _ := (&grepTool{policy: policy}).Execute(t.Context(),
+	res, err := (&grepTool{policy: policy}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"x","mode":"bogus"}`)), nil)
+	require.NoError(t, err)
 	assert.True(t, res.IsError)
 }
 
@@ -188,8 +197,9 @@ func TestGrepInvalidRegexIsActionableError(t *testing.T) {
 		"rg-or-go": {policy: policy},
 		"go-only":  {policy: policy, forceGo: true},
 	} {
-		res, _ := tool.Execute(t.Context(),
+		res, err := tool.Execute(t.Context(),
 			callWith([]byte(`{"pattern":"[unclosed"}`)), nil)
+		require.NoError(t, err, name)
 		assert.True(t, res.IsError, name)
 		assert.Contains(t, textOf(res), "unclosed", name)
 	}
@@ -204,27 +214,30 @@ func TestGrepFallbackHonoursShapeParams(t *testing.T) {
 
 	tool := &grepTool{policy: policy, forceGo: true}
 
+	assertGrepResult := func(args string) agent.ToolResult {
+		res, err := tool.Execute(t.Context(), callWith([]byte(args)), nil)
+		require.NoError(t, err)
+		return res
+	}
+
 	// ignoreCase reaches the capitalized match
-	res, _ := tool.Execute(t.Context(),
-		callWith([]byte(`{"pattern":"hello","ignoreCase":true}`)), nil)
-	assert.Contains(t, textOf(res), "Hello world")
+	out := textOf(assertGrepResult(`{"pattern":"hello","ignoreCase":true}`))
+	assert.Contains(t, out, "Hello world")
 
 	// glob filters which files are searched
-	res, _ = tool.Execute(t.Context(),
-		callWith([]byte(`{"pattern":"hello","ignoreCase":true,"glob":"*.txt"}`)), nil)
-	out := textOf(res)
+	out = textOf(assertGrepResult(`{"pattern":"hello","ignoreCase":true,"glob":"*.txt"}`))
 	assert.Contains(t, out, "b.txt")
 	assert.NotContains(t, out, "a.go")
 
 	// literal treats regex metacharacters as plain text
-	res, _ = tool.Execute(t.Context(),
-		callWith([]byte(`{"pattern":"other line\n","literal":true}`)), nil)
-	assert.Empty(t, textOf(res)) // the \n is literal, not a newline
+	res := assertGrepResult(`{"pattern":"other line\n","literal":true}`)
+	assert.False(t, res.IsError)
+	out = textOf(res)
+	assert.Empty(t, out) // the \n is literal, not a newline
 
 	// limit caps the match count
-	res, _ = tool.Execute(t.Context(),
-		callWith([]byte(`{"pattern":"hello","ignoreCase":true,"limit":1}`)), nil)
-	assert.Equal(t, 1, strings.Count(textOf(res), "hello")+strings.Count(textOf(res), "Hello"))
+	out = textOf(assertGrepResult(`{"pattern":"hello","ignoreCase":true,"limit":1}`))
+	assert.Equal(t, 1, strings.Count(out, "hello")+strings.Count(out, "Hello"))
 }
 
 func TestGrepFallbackContextLines(t *testing.T) {
@@ -233,8 +246,9 @@ func TestGrepFallbackContextLines(t *testing.T) {
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.txt", "before\nmatch here\nafter\n")
 
-	res, _ := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"match","context":1}`)), nil)
+	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	out := textOf(res)
 	assert.Contains(t, out, ":1: before") // one line of context each side
@@ -249,8 +263,9 @@ func TestGrepFallbackCountModeSorted(t *testing.T) {
 	mkfile(dir, "zeta.txt", "hit\n")
 	mkfile(dir, "alpha.txt", "hit\nhit\n") // two matching lines
 
-	res, _ := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
 		callWith([]byte(`{"pattern":"hit","mode":"count"}`)), nil)
+	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	out := textOf(res)
 	assert.Less(t, strings.Index(out, "alpha.txt"), strings.Index(out, "zeta.txt")) // deterministic order

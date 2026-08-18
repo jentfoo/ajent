@@ -28,8 +28,7 @@ func TestResolveAllowsAbsoluteOutsideCwd(t *testing.T) {
 	t.Parallel()
 
 	cwd := t.TempDir()
-	outside, _ := os.MkdirTemp("", "outside")
-	defer func() { _ = os.RemoveAll(outside) }()
+	outside := t.TempDir() // a dir outside Cwd to prove no containment
 
 	p := PathPolicy{Cwd: cwd}
 	abs, err := p.Resolve(filepath.Join(outside, "secret.txt"))
@@ -41,8 +40,7 @@ func TestResolveSymlinkFoldedToCanonicalPath(t *testing.T) {
 	t.Parallel()
 
 	cwd := t.TempDir()
-	outside, _ := os.MkdirTemp("", "outside")
-	defer func() { _ = os.RemoveAll(outside) }()
+	outside := t.TempDir() // symlink target outside Cwd is folded to canonical
 
 	link := filepath.Join(cwd, "linked")
 	require.NoError(t, os.Symlink(outside, link))

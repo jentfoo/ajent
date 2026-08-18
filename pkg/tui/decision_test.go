@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"io"
 	"strings"
 	"testing"
@@ -35,9 +34,10 @@ func TestUIDecisionRenders(t *testing.T) {
 		// numbered options on it.
 		u, v, _ := tallUI(t)
 		d := u.OpenDecision(req)
-		defer d.Close()
+		t.Cleanup(d.Close)
 
-		go func() { _, _ = d.Wait(context.Background()) }()
+		ctx := t.Context()
+		go func() { _, _ = d.Wait(ctx) }()
 		waitFor(t, u, v, "Run command?")
 		waitFor(t, u, v, "rm -rf /tmp/x")
 		assert.Contains(t, u.snapshot(v), "> 1 Allow", "cursor marks the first numbered option")
@@ -47,9 +47,10 @@ func TestUIDecisionRenders(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		long := strings.Repeat("x", 200)
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: long, Options: []Option{{Label: "A"}}})
-		defer d.Close()
+		t.Cleanup(d.Close)
 
-		go func() { _, _ = d.Wait(context.Background()) }()
+		ctx := t.Context()
+		go func() { _, _ = d.Wait(ctx) }()
 		waitFor(t, u, v, strings.Repeat("x", 79))
 		assert.NotContains(t, stripANSI(u.snapshot(v)), long)
 	})
@@ -60,9 +61,10 @@ func TestUIDecisionRenders(t *testing.T) {
 			lines = append(lines, "line-"+strings.Repeat("a", i))
 		}
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Join(lines, "\n"), Options: []Option{{Label: "A"}}})
-		defer d.Close()
+		t.Cleanup(d.Close)
 
-		go func() { _, _ = d.Wait(context.Background()) }()
+		ctx := t.Context()
+		go func() { _, _ = d.Wait(ctx) }()
 		waitFor(t, u, v, "…+3 lines")
 		assert.NotContains(t, stripANSI(u.snapshot(v)), "line-"+strings.Repeat("a", decisionContextRows+2))
 	})
@@ -73,9 +75,10 @@ func TestUIDecisionRenders(t *testing.T) {
 			lines = append(lines, strings.Repeat("y", decisionContextChars/10))
 		}
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Join(lines, "\n"), Options: []Option{{Label: "A"}}})
-		defer d.Close()
+		t.Cleanup(d.Close)
 
-		go func() { _, _ = d.Wait(context.Background()) }()
+		ctx := t.Context()
+		go func() { _, _ = d.Wait(ctx) }()
 		// the total exceeds decisionContextChars, so some lines are dropped
 		assert.Eventually(t, func() bool {
 			s := stripANSI(u.snapshot(v))
@@ -94,12 +97,13 @@ func TestUIDecisionKeys(t *testing.T) {
 	t.Run("digit_selects_directly_and_not_external", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}, {Label: "B"}, {Label: "C"}}))
-		defer d.Close()
+		t.Cleanup(d.Close)
 
+		ctx := t.Context()
 		resCh := make(chan DecisionResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			r, err := d.Wait(context.Background())
+			r, err := d.Wait(ctx)
 			resCh <- r
 			errCh <- err
 		}()
@@ -112,11 +116,12 @@ func TestUIDecisionKeys(t *testing.T) {
 	t.Run("arrows_then_enter", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}, {Label: "B"}}))
-		defer d.Close()
+		t.Cleanup(d.Close)
 
+		ctx := t.Context()
 		resCh := make(chan DecisionResult, 1)
 		go func() {
-			r, _ := d.Wait(context.Background())
+			r, _ := d.Wait(ctx)
 			resCh <- r
 		}()
 		waitFor(t, u, v, "Pick:")
@@ -129,11 +134,12 @@ func TestUIDecisionKeys(t *testing.T) {
 	t.Run("escape_cancels", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}}))
-		defer d.Close()
+		t.Cleanup(d.Close)
 
+		ctx := t.Context()
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := d.Wait(context.Background())
+			_, err := d.Wait(ctx)
 			errCh <- err
 		}()
 		waitFor(t, u, v, "Pick:")
@@ -149,12 +155,13 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 	t.Run("caller_settles_the_dialog", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		d := u.OpenDecision(DecisionRequest{Prompt: "Go?", Context: "cmd", Options: []Option{{Label: "Yes"}, {Label: "No"}}})
-		defer d.Close()
+		t.Cleanup(d.Close)
 
 		resCh := make(chan DecisionResult, 1)
 		errCh := make(chan error, 1)
+		ctx := t.Context()
 		go func() {
-			r, err := d.Wait(context.Background())
+			r, err := d.Wait(ctx)
 			resCh <- r
 			errCh <- err
 		}()
@@ -167,12 +174,13 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 	t.Run("a_keystroke_wins_a_later_resolve_is_noop", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(DecisionRequest{Prompt: "Go?", Context: "cmd", Options: []Option{{Label: "Yes"}, {Label: "No"}}})
-		defer d.Close()
+		t.Cleanup(d.Close)
 
 		resCh := make(chan DecisionResult, 1)
 		errCh := make(chan error, 1)
+		ctx := t.Context()
 		go func() {
-			r, err := d.Wait(context.Background())
+			r, err := d.Wait(ctx)
 			resCh <- r
 			errCh <- err
 		}()
@@ -192,13 +200,14 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 	t.Run("resolving_a_queued_dialog_promotes_the_next", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		d1 := u.OpenDecision(DecisionRequest{Prompt: "First?", Context: "", Options: []Option{{Label: "A"}}})
-		defer d1.Close()
+		t.Cleanup(d1.Close)
 		d2 := u.OpenDecision(DecisionRequest{Prompt: "Second?", Context: "", Options: []Option{{Label: "B"}}})
-		defer d2.Close()
+		t.Cleanup(d2.Close)
 
+		ctx := t.Context()
 		resCh := make(chan DecisionResult, 1)
 		go func() {
-			r, _ := d1.Wait(context.Background())
+			r, _ := d1.Wait(ctx)
 			resCh <- r
 		}()
 		waitFor(t, u, v, "+1 waiting")
@@ -215,19 +224,20 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 	t.Run("reports_waiters_behind_the_active_dialog", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		d1 := u.OpenDecision(DecisionRequest{Prompt: "First?", Context: "", Options: []Option{{Label: "A"}}})
-		defer d1.Close()
-		go func() { _, _ = d1.Wait(context.Background()) }()
+		t.Cleanup(d1.Close)
+		ctx := t.Context()
+		go func() { _, _ = d1.Wait(ctx) }()
 
 		d2 := u.OpenDecision(DecisionRequest{Prompt: "Second?", Context: "", Options: []Option{{Label: "B"}}})
-		defer d2.Close()
-		go func() { _, _ = d2.Wait(context.Background()) }()
+		t.Cleanup(d2.Close)
+		go func() { _, _ = d2.Wait(ctx) }()
 
 		waitFor(t, u, v, "+1 waiting")
 		assert.NotContains(t, u.snapshot(v), "Second?", "the queued prompt is not drawn")
 
 		d3 := u.OpenDecision(DecisionRequest{Prompt: "Third?", Context: "", Options: []Option{{Label: "C"}}})
-		defer d3.Close()
-		go func() { _, _ = d3.Wait(context.Background()) }()
+		t.Cleanup(d3.Close)
+		go func() { _, _ = d3.Wait(ctx) }()
 
 		waitFor(t, u, v, "+2 waiting")
 		assert.NotContains(t, u.snapshot(v), "Third?")
@@ -235,13 +245,14 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 	t.Run("escape_resolves_only_the_active_and_promotes", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d1 := u.OpenDecision(DecisionRequest{Prompt: "First?", Context: "", Options: []Option{{Label: "A"}}})
-		defer d1.Close()
+		t.Cleanup(d1.Close)
 		d2 := u.OpenDecision(DecisionRequest{Prompt: "Second?", Context: "", Options: []Option{{Label: "B"}}})
-		defer d2.Close()
+		t.Cleanup(d2.Close)
 
+		ctx := t.Context()
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := d1.Wait(context.Background())
+			_, err := d1.Wait(ctx)
 			errCh <- err
 		}()
 		waitFor(t, u, v, "+1 waiting")
@@ -251,7 +262,7 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 
 		res2 := make(chan DecisionResult, 1)
 		go func() {
-			r, _ := d2.Wait(context.Background())
+			r, _ := d2.Wait(ctx)
 			res2 <- r
 		}()
 		waitFor(t, u, v, "Second?")
@@ -271,9 +282,10 @@ func TestUIDecisionHeightCap(t *testing.T) {
 
 	many := DecisionRequest{Prompt: "Approve?", Context: strings.Repeat("context line\n", decisionContextRows+5), Options: []Option{{Label: "Allow"}}}
 	d := u.OpenDecision(many)
-	defer d.Close()
+	t.Cleanup(d.Close)
 
-	go func() { _, _ = d.Wait(context.Background()) }()
+	ctx := t.Context()
+	go func() { _, _ = d.Wait(ctx) }()
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Approve?") }, time.Second, testPoll)
 	assert.LessOrEqual(t, liveRowCount(u.snapshot(v)), 5, "the dialog fits a five row terminal")
 }
@@ -283,16 +295,20 @@ func TestUIDecisionSummary(t *testing.T) {
 
 	u, v, pw := interactionUI(t)
 	d := u.OpenDecision(DecisionRequest{Prompt: "Approve edit?", Context: "pkg/x.go", Options: []Option{{Label: "Allow"}, {Label: "Deny"}}})
-	defer d.Close()
+	t.Cleanup(d.Close)
 
+	ctx := t.Context()
+	resCh := make(chan DecisionResult, 1)
 	go func() {
-		r, _ := d.Wait(context.Background())
-		assert.Equal(t, 1, r.Index)
+		r, _ := d.Wait(ctx)
+		resCh <- r
 	}()
 	waitFor(t, u, v, "Approve edit?")
 	press(t, pw, "\x1b[B") // down to Deny
 	waitFor(t, u, v, "> 2 Deny")
 	press(t, pw, "\r")
+
+	assert.Equal(t, DecisionResult{Index: 1}, <-resCh)
 
 	// a one-line history summary names the decision and its subject choice
 	waitFor(t, u, v, "! Approve edit? Deny")
@@ -308,32 +324,32 @@ func TestUIDecisionNoUI(t *testing.T) {
 		t.Cleanup(d.Close)
 
 		dd := d.OpenDecision(DecisionRequest{Prompt: "P", Options: []Option{{Label: "A"}}})
-		defer dd.Close()
-		_, err := dd.Wait(context.Background())
+		t.Cleanup(dd.Close)
+		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrNoUI)
 	})
 	t.Run("no_options_reports_no_ui", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		dd := u.OpenDecision(DecisionRequest{Prompt: "P"})
-		defer dd.Close()
-		_, err := dd.Wait(context.Background())
+		t.Cleanup(dd.Close)
+		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrNoUI)
 	})
 	t.Run("closed_ui_cancels", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		dd := u.OpenDecision(DecisionRequest{Prompt: "P", Options: []Option{{Label: "A"}}})
-		defer dd.Close()
+		t.Cleanup(dd.Close)
 		waitFor(t, u, v, "P") // ensure the dialog was enqueued before close
 		u.Close()
-		_, err := dd.Wait(context.Background())
+		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
 	t.Run("open_after_close_reports_no_ui", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		u.Close()
 		dd := u.OpenDecision(DecisionRequest{Prompt: "P", Options: []Option{{Label: "A"}}})
-		defer dd.Close()
-		_, err := dd.Wait(context.Background())
+		t.Cleanup(dd.Close)
+		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrNoUI) // a closed UI has nobody to ask
 	})
 }

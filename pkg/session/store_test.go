@@ -32,7 +32,7 @@ func TestStoreDirDeterministic(t *testing.T) {
 func TestStoreListLatestFind(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()
-	defer setClock(time.UnixMilli(1_700_000_000).UTC())()
+	t.Cleanup(setClock(time.UnixMilli(1_700_000_000).UTC()))
 
 	// far-apart timestamps so the ids share no prefix and newest-first is clear
 	setClock(time.UnixMilli(1_700_000_001).UTC())
@@ -80,7 +80,7 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoSessions)
 
 	ws := t.TempDir()
-	defer setClock(time.UnixMilli(1_900_000_001).UTC())()
+	t.Cleanup(setClock(time.UnixMilli(1_900_000_001).UTC()))
 
 	// two sessions at the same millisecond share a timestamp prefix.
 	w1, cerr := s.Create(ws, SessionData{Version: sessionVersion})
@@ -141,4 +141,65 @@ func TestStoreListEmptyWhenMissingDir(t *testing.T) {
 	list, err := s.List("anywhere")
 	require.NoError(t, err)
 	assert.Empty(t, list)
+}
+
+// TestReadInfoCountsActiveBranchOnly regresses the fork over-count: after a
+// branch, readInfo must describe only the persisted head's chain, so resume
+// metadata matches what resuming would actually rebuild.
+func TestReadInfoCountsActiveBranchOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-01T00-00-00Z-abcd.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+
+	e1, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "first on main")})
+	require.NoError(t, aerr)
+	e2, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "reply one")})
+	require.NoError(t, aerr)
+
+	w.SetHead(e1.ID) // fork from the first message
+	_, ferr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
+	require.NoError(t, ferr)
+	_, ferr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "fork reply")})
+	require.NoError(t, ferr)
+	w.SetHead(e2.ID) // head the resume picker would actually use
+	require.NoError(t, w.Close())
+
+	info, ok := readInfo(p)
+	require.True(t, ok)
+
+	assert.Equal(t, 2, info.Messages) // fork messages are not counted
+	assert.Contains(t, info.First, "first on main")
+}
+
+// TestReadInfoBranchPointsAtFork verifies metadata reflects a head that sits on
+// the abandoned fork rather than the file tail.
+func TestReadInfoBranchPointsAtFork(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "s.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+
+	e1, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "main prompt")})
+	require.NoError(t, aerr)
+	_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "main reply")})
+	require.NoError(t, aerr)
+
+	w.SetHead(e1.ID) // rewind onto the fork
+	forkA, ferr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
+	require.NoError(t, ferr)
+	_, ferr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "fork reply")})
+	require.NoError(t, ferr)
+	w.SetHead(forkA.ID) // active head is the fork start
+	require.NoError(t, w.Close())
+
+	info, ok := readInfo(p)
+	require.True(t, ok)
+
+	assert.Equal(t, 2, info.Messages) // root,e1,forkA: e1 + fork prompt
+	assert.Contains(t, info.First, "main prompt")
 }

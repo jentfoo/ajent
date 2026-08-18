@@ -54,7 +54,7 @@ func TestMeasureBinary(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, m.Dir)
 	assert.Equal(t, KindBinary, m.Kind)
-	assert.Zero(t, m.Lines, "binary files do not count lines")
+	assert.Zero(t, m.Lines) // binary files do not count lines
 	assert.Equal(t, int64(5), m.Bytes)
 }
 
@@ -72,7 +72,7 @@ func TestMeasureLargeFileSkipsLineCount(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, KindText, m.Kind)
 	assert.Equal(t, int64(size), m.Bytes)
-	assert.Zero(t, m.Lines, "a giant file is not read to count lines")
+	assert.Zero(t, m.Lines) // a giant file is not read to count lines
 }
 
 // TestMeasureMissing asserts a missing path surfaces the stat error.

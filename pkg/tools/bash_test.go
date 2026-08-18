@@ -12,6 +12,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // captureOutput is a test Output that records streamed bytes.
@@ -48,7 +49,8 @@ func newBashCtxLim(ctx context.Context, t *testing.T, lim Limit, args string) *b
 	dir := t.TempDir()
 	r := &bashRun{env: toolEnv{cwd: dir, tracker: NewTracker(), policy: PathPolicy{Cwd: dir}}}
 	c := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(args)}
-	res, _ := (&bashTool{policy: r.env.policy, limit: lim}).Execute(ctx, c, &r.out)
+	res, err := (&bashTool{policy: r.env.policy, limit: lim}).Execute(ctx, c, &r.out)
+	require.NoError(t, err) // bash surfaces failures as error results, not Go errors
 	r.res = res
 	return r
 }
@@ -88,16 +90,17 @@ func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
 
 	data, err := os.ReadFile(r.env.cwd + "/pid.txt")
 	if err != nil {
-		return // the grandchild may never have been written before the kill
+		t.Skipf("grandchild pid not written before the kill: %v", err)
 	}
-	grandchildPid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	grandchildPid, aerr := strconv.Atoi(strings.TrimSpace(string(data)))
+	require.NoError(t, aerr)
 	assertEventuallyGone(t, grandchildPid)
 }
 
 func TestBashCancellationViaContext(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // already cancelled: the command must not run to completion
 	r := newBashCtx(ctx, t, `{"command":"echo should-not-appear"}`)
 	assert.False(t, r.res.IsError) // cancellation is a clean stop, not an error result
@@ -130,14 +133,12 @@ func TestBashRespectsCwdOverride(t *testing.T) {
 	assert.Contains(t, textOf(r.res), r.env.cwd)
 }
 
+// assertEventuallyGone waits until a process is gone, proving the whole group
+// (including grandchildren) was killed on timeout.
 func assertEventuallyGone(t *testing.T, pid int) {
 	t.Helper()
-	for i := 0; i < 50; i++ { // ~1.5s budget before failing
+	require.Eventually(t, func() bool {
 		err := syscall.Kill(pid, 0)
-		if err != nil && errors.Is(err, syscall.ESRCH) {
-			return // process is gone: the whole group was killed
-		}
-		time.Sleep(30 * time.Millisecond)
-	}
-	t.Fatalf("grandchild pid %d still alive after timeout", pid)
+		return err != nil && errors.Is(err, syscall.ESRCH)
+	}, time.Second*2, time.Millisecond*30)
 }

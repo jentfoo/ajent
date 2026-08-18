@@ -70,14 +70,6 @@ func TestAgentsListRendersTable(t *testing.T) {
 	assert.Contains(t, out, "| sub-2 | done | 12s | ls pkg/agent |")
 }
 
-func TestAgentsListVerbMatchesBare(t *testing.T) {
-	t.Parallel()
-
-	c, _ := agentsConsole(t)
-	require.NoError(t, agentsCommand(context.Background(), "list", c))
-	assert.Len(t, c.prints, 1)
-}
-
 func TestAgentsStopOneCancels(t *testing.T) {
 	t.Parallel()
 

@@ -20,8 +20,8 @@ func TestSettingsSectionOpensDirectly(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// /settings reasoning jumps straight to the reasoning picker. The fake's two
-	// models both reason; supported levels start at off and index 3 is "high".
+	// /settings reasoning jumps straight to the reasoning picker. Supported levels
+	// are [off, minimal, low, medium, high]; index 4 selects "high".
 	c.picks = []fakePick{{result: 4}}
 	cmd, _ := r.Get("settings")
 	require.NoError(t, cmd.Handler(context.Background(), "reasoning", c))
@@ -63,9 +63,8 @@ func TestSettingsRetentionRowEditsStateAndSaves(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// menu opens on the retention row (2); Select picks "none" (index 0); save → user.
-	c.picks = []fakePick{{result: 1}}
-	c.selects = []int{0, 1}
+	// section jump lands on the retention row; Select picks "none" (index 0).
+	c.selects = []int{0}
 
 	cmd, _ := r.Get("settings")
 	require.NoError(t, cmd.Handler(context.Background(), "reasoning retention", c))
@@ -94,6 +93,7 @@ func TestSettingsCompactionRowSetsSessionKeys(t *testing.T) {
 	require.NoError(t, cmd.Handler(context.Background(), "", c))
 	set := c.settings.Settings()
 	assert.True(t, set.Compaction.Auto)
+	assert.InDelta(t, 0.6, set.Compaction.Threshold, 1e-09)
 }
 
 func TestSettingsMenuSavesToProjectLayer(t *testing.T) {
@@ -212,18 +212,20 @@ func TestIntRowRecordsAndValidatesSubagentConcurrency(t *testing.T) {
 func TestIntRowRejectsOutOfRangeWithoutPersisting(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
-
 	for _, bad := range []string{"0", "65", "abc"} {
-		c.inputs = []string{bad}
-		changes, err := r.edit(context.Background(), c)
-		require.NoError(t, err)
-		assert.Empty(t, changes) // invalid input aborts the edit
-		_, srcName, _ := c.settings.Explain("subagent.maxConcurrent")
-		assert.NotEqual(t, "session", srcName) // nothing recorded
+		t.Run(bad, func(t *testing.T) {
+			c := newFakeConsole(t)
+			r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
+
+			c.inputs = []string{bad}
+			changes, err := r.edit(context.Background(), c)
+			require.NoError(t, err)
+			assert.Empty(t, changes)                            // invalid input aborts the edit
+			assert.True(t, c.noticeContains("must be between")) // and explains why
+			_, srcName, _ := c.settings.Explain("subagent.maxConcurrent")
+			assert.NotEqual(t, "session", srcName) // nothing recorded
+		})
 	}
-	assert.Len(t, c.noticesSeen(), 3)
 }
 
 func TestSettingsPermissionRowInMenu(t *testing.T) {

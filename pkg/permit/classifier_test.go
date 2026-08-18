@@ -29,9 +29,8 @@ func TestNormalizeClass(t *testing.T) {
 		{"empty", "", ClassUnsure},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, NormalizeClass(c.in), c.in)
+			assert.Equal(t, c.want, NormalizeClass(c.in))
 		})
 	}
 }

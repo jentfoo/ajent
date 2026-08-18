@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"slices"
 	"sync"
@@ -150,7 +149,7 @@ func TestLoadOnFirstMessageConnects(t *testing.T) {
 	assert.Empty(t, fr.AllNames("mcp: fake"))
 	require.Nil(t, mgr.serverByName("fake").client())
 
-	mgr.LoadOnFirstMessage(context.Background())
+	mgr.LoadOnFirstMessage(t.Context())
 
 	for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
 		st, ok := fr.state("fake__" + n)
@@ -174,14 +173,14 @@ func TestLoadOnFirstMessageRunsOnce(t *testing.T) {
 		"fake": {Command: buildFakeServer(t)},
 	}, Options{Registrar: fr})
 
-	mgr.LoadOnFirstMessage(context.Background())
+	mgr.LoadOnFirstMessage(t.Context())
 	first, ok := fr.toolByName("fake__tool_00")
 	require.True(t, ok)
 
 	// disconnect is a manual act; LoadOnFirstMessage must not reconnect it again
 	mgr.Disconnect("fake")
-	mgr.LoadOnFirstMessage(context.Background())
-	assert.Nil(t, mgr.serverByName("fake").client(), "load-once must not re-connect after a manual disconnect")
+	mgr.LoadOnFirstMessage(t.Context())
+	assert.Nil(t, mgr.serverByName("fake").client())
 	_ = first // registration object itself is unchanged; the point is no reconnect
 }
 
@@ -197,10 +196,10 @@ func TestConfigDisabledServerLoadsButStaysInactive(t *testing.T) {
 		"fake": {Command: buildFakeServer(t), Enabled: &disabled},
 	}, Options{Registrar: fr})
 
-	mgr.LoadOnFirstMessage(context.Background())
+	mgr.LoadOnFirstMessage(t.Context())
 
 	srv := mgr.serverByName("fake")
-	require.NotNil(t, srv.client(), "config-disabled server still connects so its tools are listable")
+	require.NotNil(t, srv.client())
 	for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
 		st, ok := fr.state("fake__" + n)
 		assert.True(t, ok)
@@ -236,7 +235,8 @@ func TestManagerDiscoversResourcesAndPrompts(t *testing.T) {
 	mgr := New(map[string]ServerConfig{
 		"fake": {Command: buildFakeServer(t)},
 	}, Options{Registrar: fr})
-	require.NoError(t, mgr.Connect(context.Background(), "fake"))
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	t.Cleanup(mgr.Close)
 
 	rs := mgr.ServerResources("fake")
 	require.Len(t, rs, 1)
@@ -247,8 +247,6 @@ func TestManagerDiscoversResourcesAndPrompts(t *testing.T) {
 	assert.Equal(t, "summarize", ps[0].Name)
 	require.Len(t, ps[0].Arguments, 1)
 	assert.True(t, ps[0].Arguments[0].Required)
-
-	mgr.Close()
 }
 
 // TestManagerRediscoverAfterListChanged drives tools/list_changed through the manager's
@@ -260,7 +258,8 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 		"fake": stdioConfig(t, "-notify-list-changed"),
 	}, Options{Registrar: fr})
 
-	require.NoError(t, mgr.Connect(context.Background(), "fake"))
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	t.Cleanup(mgr.Close)
 	_, ok := fr.toolByName("fake__tool_00")
 	require.True(t, ok) // connected and registered before the notification fires
 
@@ -268,7 +267,7 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	s := mgr.serverByName("fake")
 	rc := s.client()
 	require.NotNil(t, rc)
-	res, err := rc.Call(context.Background(), "trigger_listchanged", json.RawMessage(`{}`), nil)
+	res, err := rc.Call(t.Context(), "trigger_listchanged", json.RawMessage(`{}`), nil)
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
 
@@ -286,11 +285,9 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	s = mgr.serverByName("fake")
 	rc = s.client()
 	require.NotNil(t, rc)
-	res2, err := rc.Call(context.Background(), "tool_00", json.RawMessage(`{}`), nil)
+	res2, err := rc.Call(t.Context(), "tool_00", json.RawMessage(`{}`), nil)
 	require.NoError(t, err)
 	assert.False(t, res2.IsError)
-
-	mgr.Close()
 }
 
 // jsonRawObject is a minimal valid tool schema.

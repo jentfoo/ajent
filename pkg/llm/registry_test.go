@@ -2,6 +2,7 @@ package llm
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +65,7 @@ func TestNewRegistry(t *testing.T) {
 		f := testFile()
 		f.DefaultModel = "nonexistent"
 		_, warnings := NewRegistry(f, nil, RegistryOptions{})
+		require.NotEmpty(t, warnings)
 		assert.Contains(t, warnings[0], "nonexistent")
 	})
 	t.Run("disabled_provider_is_skipped", func(t *testing.T) {
@@ -252,5 +254,60 @@ func TestRegistryWithCache(t *testing.T) {
 		r, _ := NewRegistry(f, cache, RegistryOptions{})
 		require.Len(t, r.Models(), 1)
 		assert.Equal(t, 800000, r.Models()[0].ContextWindow) // still enriched
+	})
+}
+
+func TestRegistryRefresh(t *testing.T) {
+	t.Parallel()
+
+	t.Run("adds_discovered_models", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{"openrouter": {BaseURL: srv.URL}}}
+
+		r, _ := NewRegistry(f, nil, RegistryOptions{Env: func(string) string { return "" }})
+		assert.Empty(t, r.Models())
+
+		cache, warnings := r.Refresh(t.Context(), DiscoverOptions{
+			Env: func(string) string { return "" },
+			Now: func() time.Time { return testNow },
+		})
+		assert.Empty(t, warnings)
+		assert.Len(t, r.Models(), 2)
+		assert.Len(t, cache["openrouter"].Models, 2)
+	})
+	t.Run("keeps_the_active_model", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{
+			"openrouter": {BaseURL: srv.URL, Models: []ModelConfig{{ID: "z-ai/glm-5.2"}}},
+		}}
+
+		r, _ := NewRegistry(f, nil, RegistryOptions{Env: func(string) string { return "" }})
+		before := r.Active().Key()
+		require.NotEmpty(t, before)
+
+		_, _ = r.Refresh(t.Context(), DiscoverOptions{
+			Env: func(string) string { return "" },
+			Now: func() time.Time { return testNow },
+		})
+		assert.Equal(t, before, r.Active().Key())
+	})
+	t.Run("declared_models_survive_a_refresh", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{
+			"openrouter": {BaseURL: srv.URL, Models: []ModelConfig{{ID: "z-ai/glm-5.2"}}},
+		}}
+
+		r, _ := NewRegistry(f, nil, RegistryOptions{Env: func(string) string { return "" }})
+		_, _ = r.Refresh(t.Context(), DiscoverOptions{
+			Env: func(string) string { return "" },
+			Now: func() time.Time { return testNow },
+		})
+
+		// the declared list stays the whole list, but gains what discovery knows
+		require.Len(t, r.Models(), 1)
+		assert.Equal(t, 800000, r.Models()[0].ContextWindow)
 	})
 }

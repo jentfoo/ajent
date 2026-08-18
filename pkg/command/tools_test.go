@@ -1,0 +1,80 @@
+package command
+
+import (
+	"context"
+	"slices"
+	"testing"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestToolsFreeSelectBeforeStarted(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	// register a couple of tools; ls is disabled by default
+	c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+	c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
+	r := NewRegistry()
+	c.commands = r
+	RegisterBuiltins(r, c)
+
+	// free select: pick read and ls (indexes 0,1) → both enabled
+	c.multiPicks = []fakeMultiPick{{result: []int{0, 1}}}
+	cmd, _ := r.Get("tools")
+	require.NoError(t, cmd.Handler(t.Context(), "", c))
+	assert.Equal(t, []string{"read", "ls"}, c.tools.Names())
+	assert.Equal(t, 1, c.toolsChanged)
+}
+
+func TestToolsWidenOnlyAfterStarted(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+	c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
+	c.tools.Register(&fakeToolAdapter{name: "find"}, false)
+	c.started = true // after first prompt: widen only
+
+	r := NewRegistry()
+	c.commands = r
+	RegisterBuiltins(r, c)
+
+	// only disabled tools offered; pick ls (index 0 of disabled slice)
+	c.multiPicks = []fakeMultiPick{{result: []int{0}}}
+	cmd, _ := r.Get("tools")
+	require.NoError(t, cmd.Handler(t.Context(), "", c))
+	assert.True(t, slices.Contains(c.tools.Names(), "read"))
+	assert.True(t, slices.Contains(c.tools.Names(), "ls"))
+	assert.False(t, slices.Contains(c.tools.Names(), "find"))
+}
+
+func TestToolsWidenOnlyNothingDisabled(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+	c.started = true
+
+	r := NewRegistry()
+	c.commands = r
+	RegisterBuiltins(r, c)
+	cmd, _ := r.Get("tools")
+	require.NoError(t, cmd.Handler(t.Context(), "", c))
+	assert.True(t, c.noticeContains("all tools already enabled"))
+}
+
+// fakeToolAdapter adapts a name into a minimal agent.Tool for the registry.
+type fakeToolAdapter struct{ name string }
+
+func (f *fakeToolAdapter) Name() string                { return f.name }
+func (f *fakeToolAdapter) Label(agent.ToolCall) string { return f.name }
+func (f *fakeToolAdapter) Description() string         { return "test" }
+func (f *fakeToolAdapter) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: f.name} }
+func (f *fakeToolAdapter) Mode() agent.ExecutionMode   { return agent.ModeParallel }
+func (f *fakeToolAdapter) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
+	return agent.ToolResult{}, nil
+}

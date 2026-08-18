@@ -41,3 +41,34 @@ func (f *fakeTool) Mode() agent.ExecutionMode { return f.mode }
 func (f *fakeTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
 }
+
+// recordingTool records whether Execute ran so a denial can be shown to touch
+// nothing on disk.
+type recordingTool struct {
+	done bool
+}
+
+func (t *recordingTool) Name() string { return "bash" }
+func (t *recordingTool) Label(agent.ToolCall) string {
+	return "bash: ..."
+}
+func (t *recordingTool) Description() string       { return "" }
+func (t *recordingTool) Schema() llm.ToolSchema    { return llm.ToolSchema{Name: "bash"} }
+func (t *recordingTool) Mode() agent.ExecutionMode { return agent.ModeSerial }
+func (t *recordingTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
+	t.done = true
+	return agent.ToolResult{}, nil
+}
+
+// diffCatcher records every Diff emitted through a tool's output.
+type diffCatcher struct {
+	calls []Change
+}
+
+func (d *diffCatcher) Write(p []byte) (int, error) { return len(p), nil }
+func (d *diffCatcher) Diff(path, before, after string) {
+	d.calls = append(d.calls, Change{Path: path, Before: before, After: after})
+}
+
+// last returns the most recent recorded change.
+func (d *diffCatcher) last() Change { return d.calls[len(d.calls)-1] }

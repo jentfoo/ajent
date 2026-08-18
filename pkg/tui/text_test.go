@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,9 +52,18 @@ func TestTruncateDisplay(t *testing.T) {
 func TestGraphemesOf(t *testing.T) {
 	t.Parallel()
 
-	assert.Nil(t, graphemesOf(""))
-	assert.Equal(t, []string{"a", "b"}, graphemesOf("ab"))
-	assert.Equal(t, []string{"é"}, graphemesOf("é"))
+	for _, tc := range []struct {
+		name, in string
+		want     []string
+	}{
+		{name: "empty", in: ""},
+		{name: "plain_runes", in: "ab", want: []string{"a", "b"}},
+		{name: "combining_mark_kept_together", in: "é", want: []string{"é"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, graphemesOf(tc.in))
+		})
+	}
 }
 
 func TestSplitANSI(t *testing.T) {
@@ -89,22 +99,33 @@ func TestSplitANSI(t *testing.T) {
 func TestOneLine(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "plain", oneLine("plain"))
-	assert.Equal(t, "a b", oneLine("a\nb"))
-	assert.Equal(t, "a b", oneLine("a\r\nb"), "CRLF folds to one blank, not two")
-	assert.Equal(t, "a b c", oneLine("a\tb\vc"))
+	for _, tc := range []struct {
+		name, in, want string
+	}{
+		{name: "already_plain", in: "plain", want: "plain"},
+		{name: "newline_folds_to_space", in: "a\nb", want: "a b"},
+		// CRLF folds to one blank, not two
+		{name: "crlf_single_blank", in: "a\r\nb", want: "a b"},
+		{name: "tabs_and_vtab_fold", in: "a\tb\vc", want: "a b c"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, oneLine(tc.in))
+		})
+	}
 }
 
 func TestPaintCaret(t *testing.T) {
 	t.Parallel()
 
 	// the caret reverses a cell rather than adding one, so widths never move
-	assert.Equal(t, 3, displayWidth(paintCaret("abc", 1, 10)))
-	assert.Contains(t, paintCaret("abc", 1, 10), caretReverse)
+	t.Run("reverses_in_place_without_growing_width", func(t *testing.T) {
+		assert.Equal(t, 3, displayWidth(paintCaret("abc", 1, 10)))
+		assert.Contains(t, paintCaret("abc", 1, 10), caretReverse)
+	})
 
 	t.Run("past_the_text_pads", func(t *testing.T) {
 		out := paintCaret("ab", 4, 10)
-		assert.Equal(t, 5, displayWidth(out), "padded out to the caret cell")
+		assert.Equal(t, 5, displayWidth(out))
 		assert.Contains(t, out, caretReverse)
 	})
 	t.Run("never_past_the_bound", func(t *testing.T) {
@@ -113,13 +134,15 @@ func TestPaintCaret(t *testing.T) {
 	t.Run("keeps_the_row_readable", func(t *testing.T) {
 		out := paintCaret("\x1b[2mdim\x1b[0m", 0, 10)
 		assert.Equal(t, 3, displayWidth(out))
-		var text string
+		var b strings.Builder
 		for _, seg := range splitANSI(out) {
 			if !seg.escape {
-				text += seg.text
+				b.WriteString(seg.text)
 			}
 		}
-		assert.Equal(t, "dim", text, "styling is re-cut around the caret, text is not")
+		text := b.String()
+		// styling is re-cut around the caret, text is not
+		assert.Equal(t, "dim", text)
 	})
 	t.Run("empty_row", func(t *testing.T) {
 		assert.Equal(t, 1, displayWidth(paintCaret("", 0, 10)))

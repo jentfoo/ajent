@@ -45,7 +45,7 @@ func toolsManager(t *testing.T, d *delayedProvider, timeout time.Duration) (*Man
 
 func TestAgentStartReturnsId(t *testing.T) {
 	t.Parallel()
-	m, tools := toolsManager(t, nil, time.Second)
+	_, tools := toolsManager(t, nil, time.Second)
 	res, err := exec(t, tools[0], map[string]any{"task": "investigate x"})
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
@@ -56,7 +56,6 @@ func TestAgentStartReturnsId(t *testing.T) {
 	b, err2 := json.Marshal(res.Details)
 	require.NoError(t, err2)
 	require.NoError(t, json.Unmarshal(b, &details))
-	_ = m // the manager is exercised through Poll below
 	assert.Equal(t, "sub-1", details.ID)
 }
 
@@ -76,7 +75,6 @@ func TestAgentPollReturnsSummaryOnCompletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	assert.Contains(t, textOf(res), "summary text")
-	_ = m
 }
 
 func TestAgentPollAcceptsBareId(t *testing.T) {
@@ -113,7 +111,7 @@ func TestAgentPollAborted(t *testing.T) {
 	t.Parallel()
 	b := &blockingProvider{}
 	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
-	defer m.Close()
+	t.Cleanup(m.Close)
 	id := m.Start("x", "")
 	require.NoError(t, m.Stop(id))
 	res, err := exec(t, m.Tools()[1], map[string]any{"id": id})
@@ -125,11 +123,13 @@ func TestAgentPollAborted(t *testing.T) {
 func TestAgentListEmptyAndPopulated(t *testing.T) {
 	t.Parallel()
 	m, tools := toolsManager(t, nil, time.Second)
-	res, _ := exec(t, tools[2], map[string]any{})
+	res, err := exec(t, tools[2], map[string]any{})
+	require.NoError(t, err)
 	assert.Equal(t, "(no sub-agents)", textOf(res))
 
 	id := m.Start("x", "")
-	res, _ = exec(t, tools[2], map[string]any{})
+	res, err = exec(t, tools[2], map[string]any{})
+	require.NoError(t, err)
 	out := textOf(res)
 	assert.Contains(t, out, id) // the job appears as a row
 	assert.True(t, containsAny(out, "queued", "running", "done"))
@@ -151,19 +151,21 @@ func TestSubagentLabelsNameTheirTarget(t *testing.T) {
 	_, tools := toolsManager(t, nil, time.Second)
 
 	startLabel := func(task string) string {
-		in, _ := json.Marshal(map[string]string{"task": task})
+		in, err := json.Marshal(map[string]string{"task": task})
+		require.NoError(t, err)
 		return tools[0].Label(agent.ToolCall{Input: in})
 	}
-	assert.Equal(t, "sub-agent: start inspect", startLabel("inspect\npkg"), "label uses the task's first line")
+	assert.Equal(t, "sub-agent: start inspect", startLabel("inspect\npkg"))
 	long := strings.Repeat("x", 100)
-	assert.Len(t, []rune(startLabel(long)), len([]rune("sub-agent: start "))+maxLabelLen, "task elides to maxLabelLen")
+	assert.Len(t, []rune(startLabel(long)), len([]rune("sub-agent: start "))+maxLabelLen)
 
 	poll := func(id string) string {
-		in, _ := json.Marshal(map[string]string{"id": id})
+		in, err := json.Marshal(map[string]string{"id": id})
+		require.NoError(t, err)
 		return tools[1].Label(agent.ToolCall{Input: in})
 	}
 	assert.Equal(t, "sub-agent: poll sub-2", poll("sub-2"))
-	assert.Equal(t, "sub-agent: poll sub-3", poll("3"), "bare id normalizes to the canonical form")
+	assert.Equal(t, "sub-agent: poll sub-3", poll("3")) // bare id normalizes
 
 	// unparseable or empty args fall back to the generic label.
 	assert.Contains(t, tools[0].Label(agent.ToolCall{}), "start")

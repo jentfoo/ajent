@@ -76,39 +76,64 @@ func TestSedCommandReadSafe(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
+		name string
 		in   string
 		want bool
 	}{
-		{"s/a/b/", true},
-		{"s|a|b|g", true}, // non-slash delimiter
-		{"1,5d", true},
-		{"/re/d", true},
-		{"$p", true},
-		{"!p", false}, // bare ! with no address is not a valid command
-		{"s/a/b/w f", false},
-		{"y/a-z/A-Z/", true},
-		{"g", true}, // hold/get read commands
-		{"x", true}, // exchange buffers (no file effect)
-		{"q", true}, // quit is fine
-		{"s/a/b/e", false},
+		{"subst", "s/a/b/", true},
+		{"non slash delimiter", "s|a|b|g", true},
+		{"range delete", "1,5d", true},
+		{"regex address", "/re/d", true},
+		{"last line print", "$p", true},
+		{"bare negate invalid", "!p", false}, // bare ! with no address is not a valid command
+		{"subst write flag", "s/a/b/w f", false},
+		{"translit", "y/a-z/A-Z/", true},
+		{"hold get read", "g", true}, // hold/get read commands
+		{"exchange buffers", "x", true},
+		{"quit fine", "q", true},
+		{"subst exec flag", "s/a/b/e", false},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, sedCommandReadSafe(c.in), "%q", c.in)
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, sedCommandReadSafe(c.in))
+		})
 	}
 }
 
-func TestParseSedSubstEscapesDelimiterInBody(t *testing.T) {
+func TestParseSedSubst(t *testing.T) {
 	t.Parallel()
 
-	// an escaped delimiter inside the pattern must not terminate it
-	assert.True(t, parseSedSubst(`s/foo\/bar/baz/g`))
-	assert.False(t, parseSedSubst(`s/a/b/c/d`)) // too many parts / bad flag
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// an escaped delimiter inside the pattern must not terminate it
+		{"escaped delim in body", `s/foo\/bar/baz/g`, true},
+		{"too many parts bad flag", "s/a/b/c/d", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, parseSedSubst(c.in))
+		})
+	}
 }
 
-func TestParseSedTranslitNoFlags(t *testing.T) {
+func TestParseSedTranslit(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, parseSedTranslit("y/a-z/A-Z/"))
-	// a trailing flag is rejected: transliteration takes no flags
-	assert.False(t, parseSedTranslit("y/a-z/A-Z/g"))
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"plain translit", "y/a-z/A-Z/", true},
+		// a trailing flag is rejected: transliteration takes no flags
+		{"trailing flag rejected", "y/a-z/A-Z/g", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, parseSedTranslit(c.in))
+		})
+	}
 }

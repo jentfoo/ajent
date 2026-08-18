@@ -44,11 +44,21 @@ func TestResolveMode(t *testing.T) {
 func TestMultiplexed(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, multiplexed(envFunc(map[string]string{"TMUX": "x"})))
-	assert.True(t, multiplexed(envFunc(map[string]string{"STY": "x"})))
-	assert.True(t, multiplexed(envFunc(map[string]string{"TERM": "screen"})))
-	assert.False(t, multiplexed(envFunc(map[string]string{"TERM": "xterm-256color"})))
-	assert.False(t, multiplexed(envFunc(map[string]string{})))
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want bool
+	}{
+		{name: "tmux_env", env: map[string]string{"TMUX": "x"}, want: true},
+		{name: "screen_style_env", env: map[string]string{"STY": "x"}, want: true},
+		{name: "screen_term", env: map[string]string{"TERM": "screen"}, want: true},
+		{name: "plain_xterm_not_multiplexed", env: map[string]string{"TERM": "xterm-256color"}},
+		{name: "empty_env", env: map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, multiplexed(envFunc(tc.env)))
+		})
+	}
 }
 
 func TestSplitHistLines(t *testing.T) {

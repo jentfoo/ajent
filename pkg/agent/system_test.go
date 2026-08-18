@@ -21,26 +21,39 @@ func TestBuildSystem(t *testing.T) {
 	assert.Len(t, blocks, 1)
 
 	tb, ok := blocks[0].(llm.TextBlock)
-	if !ok {
-		t.Fatal("system prompt must be a single text block")
-	}
+	require.True(t, ok) // a single text block is the whole system prompt
 	for _, want := range []string{"/repo", "linux/amd64", "2024-01-02"} {
 		assert.Contains(t, tb.Text, want)
 	}
 }
 
+// TestBuildSystemCacheStable asserts equal inputs produce byte-identical blocks,
+// so the provider prompt cache survives between requests.
 func TestBuildSystemCacheStable(t *testing.T) {
 	t.Parallel()
 
 	s := &State{Model: llm.Model{ID: "test"}}
-	// two calls with the same env must produce identical bytes so the prompt
-	// cache survives; Date is day granularity, never sub-day.
-	env1 := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}
-	env2 := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-03 08:59"}
+	env := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}
 
-	b1, _ := buildSystem(s, env1, nil, nil)[0].(llm.TextBlock)
-	b2, _ := buildSystem(s, env2, nil, nil)[0].(llm.TextBlock)
-	assert.NotEqual(t, b1.Text, b2.Text, "the date differs across days")
+	b1, ok := buildSystem(s, env, nil, nil)[0].(llm.TextBlock)
+	require.True(t, ok)
+	b2, ok := buildSystem(s, env, nil, nil)[0].(llm.TextBlock)
+	require.True(t, ok)
+	assert.Equal(t, b1.Text, b2.Text)
+}
+
+// TestBuildSystemDateDayGranular asserts the date changes at day granularity,
+// not sub-day.
+func TestBuildSystemDateDayGranular(t *testing.T) {
+	t.Parallel()
+
+	s := &State{Model: llm.Model{ID: "test"}}
+	b1, ok := buildSystem(s, Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}, nil, nil)[0].(llm.TextBlock)
+	require.True(t, ok)
+	b2, ok := buildSystem(s, Environment{Cwd: "/r", OS: "linux", Date: "2024-01-03 08:59"}, nil, nil)[0].(llm.TextBlock)
+	require.True(t, ok)
+
+	assert.NotEqual(t, b1.Text, b2.Text) // the date differs across days
 }
 
 // TestBuildSystemListsCwd asserts the ls-style directory listing is emitted.
@@ -82,21 +95,26 @@ func TestBuildSystemSnippetsAppendAfterProject(t *testing.T) {
 	base := &State{Model: llm.Model{ID: "test"}}
 	env := Environment{Cwd: "/repo", Date: "2024-01-02"}
 
-	empty, _ := buildSystem(base, env, nil, nil)[0].(llm.TextBlock)
-	withProj, _ := buildSystem(base, env,
+	empty, ok := buildSystem(base, env, nil, nil)[0].(llm.TextBlock)
+	require.True(t, ok)
+	withProj, ok := buildSystem(base, env,
 		[]ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\n"}}, nil)[0].(llm.TextBlock)
+	require.True(t, ok)
 
-	snippets, _ := buildSystem(base, env,
+	snippets, ok := buildSystem(base, env,
 		[]ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\n"}},
 		[]string{"first snippet", "second snippet"})[0].(llm.TextBlock)
+	require.True(t, ok)
 
-	// empty snippets must not change the block at all, with or without project text.
-	assert.Equal(t, empty.Text, buildSystem(base, env, nil, []string{})[0].(llm.TextBlock).Text)
+	snippetsOnly, ok := buildSystem(base, env, nil, []string{})[0].(llm.TextBlock)
+	require.True(t, ok)
+	// empty snippets must not change the block at all.
+	assert.Equal(t, empty.Text, snippetsOnly.Text)
 	assert.NotEqual(t, empty.Text, withProj.Text) // proj alone still differs
 
-	snippetsOnly, _ := buildSystem(base, env, nil, []string{"first snippet"})[0].(llm.TextBlock)
+	snippetsOnlyText := buildSystem(base, env, nil, []string{"first snippet"})[0].(llm.TextBlock)
 	// a snippet appended without project instructions is separated by a blank line.
-	assert.Contains(t, snippetsOnly.Text, "\n\nfirst snippet\n")
+	assert.Contains(t, snippetsOnlyText.Text, "\n\nfirst snippet\n")
 
 	// each snippet appears after the project context and is newline-separated.
 	i1 := strings.Index(snippets.Text, "</project_context>")

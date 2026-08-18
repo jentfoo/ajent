@@ -12,11 +12,11 @@ func TestCalibratorConverges(t *testing.T) {
 	c := NewCalibrator()
 	const key = "p/m"
 
-	// feed a steady 2x undercount; the factor should settle near 2.
+	// feed a steady 2x undercount; the factor settles at exactly that ratio.
 	for i := 0; i < 20; i++ {
 		c.Feed(key, 1000, 2000)
 	}
-	assert.InDelta(t, 1.9999, c.Factor(key), 3)
+	assert.InDelta(t, 2.0, c.Factor(key), 1e-6)
 
 	// a single outlier cannot swing a settled factor to its own ratio: EWMA
 	// damps the jump well below it.
@@ -35,11 +35,11 @@ func TestCalibratorFirstSampleSeedsDirectly(t *testing.T) {
 	const key = "p/m"
 
 	identity := c.Factor(key) // unsampled: the identity factor (one)
-	assert.InDelta(t, 1.0, identity, 3)
+	assert.InDelta(t, 1.0, identity, 1e-9)
 
 	// a single sample with ratio three moves the factor to it immediately.
 	c.Feed(key, 100, 300)
-	assert.InDelta(t, 5.0, c.Factor(key), 6) // first sample seeds directly
+	assert.InDelta(t, 3.0, c.Factor(key), 1e-9) // first sample seeds directly
 }
 
 func TestCalibratorIgnoresZeroPrediction(t *testing.T) {
@@ -54,6 +54,6 @@ func TestCalibratorIgnoresZeroPrediction(t *testing.T) {
 
 	// zero predicted: nothing to ratio against, factor unchanged.
 	afterSample := c.Factor(key)
-	c.Feed(key, 0, 50000)
-	assert.InDelta(t, afterSample, c.Factor(key), 3)
+	c.Feed(key, 0, 900000)
+	assert.InDelta(t, afterSample, c.Factor(key), 1e-9)
 }

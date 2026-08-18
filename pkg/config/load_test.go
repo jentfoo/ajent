@@ -38,8 +38,10 @@ func TestLoadLayeredPrecedence(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "project", src)
 
-	// default still supplies reasoning.level's source where nothing else does not exist
-	v, _, _ := s.Explain("reasoning.level")
+	// Explain reports the merged value and its source layer for a nested key
+	v, src2, found := s.Explain("reasoning.level")
+	require.True(t, found)
+	assert.Equal(t, "user", src2) // only the user file sets it
 	var lvl string
 	require.NoError(t, json.Unmarshal(v, &lvl))
 	assert.Equal(t, "low", lvl)
@@ -112,11 +114,12 @@ func TestSaveWritesAndReResolves(t *testing.T) {
 	_, src, _ := s.Explain("reasoning.level")
 	assert.Equal(t, "user", src)
 
-	// the file on disk carries it
+	// the file on disk carries it too
 	var raw map[string]any
 	b, err := os.ReadFile(s.userPath)
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(b, &raw))
+	assert.Equal(t, "high", raw["reasoning"].(map[string]any)["level"])
 }
 
 func TestSaveUnknownLayerErrors(t *testing.T) {
@@ -156,8 +159,6 @@ func mustFlagLayer(t *testing.T, kvs map[string]any) Layer {
 	}
 	return Layer{Name: "flag", Data: data}
 }
-
-var _ = mustFlagLayer // keep helper referenced even if tests change
 
 func TestLoadMissingFilesAreNotErrors(t *testing.T) {
 	home := t.TempDir()

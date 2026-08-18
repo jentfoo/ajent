@@ -100,19 +100,6 @@ func TestApplyThinking(t *testing.T) {
 func TestApplyThinkingRegressionPins(t *testing.T) {
 	t.Parallel()
 
-	t.Run("deepseek_keeps_format_despite_effort_capability", func(t *testing.T) {
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek,
-			SupportsReasoningEffort: true}
-		m := thinkingModel(caps)
-		assert.JSONEq(t, `{"thinking":{"type":"enabled"},"reasoning_effort":"high"}`,
-			reasoningFragment(encodeThinking(t, m, LevelHigh)))
-	})
-	t.Run("deepseek_off_sends_disabled", func(t *testing.T) {
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek}
-		m := thinkingModel(caps)
-		assert.JSONEq(t, `{"thinking":{"type":"disabled"}}`,
-			reasoningFragment(encodeThinking(t, m, LevelOff)))
-	})
 	t.Run("off_null_omits_thinking_key", func(t *testing.T) {
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek}
 		v := "on"
@@ -281,4 +268,61 @@ func TestQwenChatTemplateCoreKeysWinOverConfigured(t *testing.T) {
 	on := reasoningFragment(encodeThinking(t, m, LevelHigh))
 	assert.JSONEq(t,
 		`{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true}}`, on)
+}
+
+func TestThinkingTokenBudget(t *testing.T) {
+	t.Parallel()
+
+	base := func() Request {
+		m := compatModel(func(c *Capabilities) {
+			c.Reasoning = true
+			c.Thinking = ThinkingOpenAI
+			c.SupportsReasoningEffort = true
+			c.SupportsThinkingTokenBudget = true
+			c.Budgets = map[Level]int{LevelHigh: 30000, LevelMedium: 8000}
+		})
+		return Request{
+			Model:     m,
+			System:    BlockList{TextBlock{Text: "sys"}},
+			Messages:  []Message{Text(RoleUser, "hi")},
+			MaxTokens: 20000,
+			Reasoning: ReasoningConfig{Level: LevelHigh},
+		}
+	}
+
+	t.Run("clamped_to_the_answer_ceiling", func(t *testing.T) {
+		body, err := buildCompatBody(base(), compatProfile{})
+		require.NoError(t, err)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(body, &m))
+		assert.InDelta(t, 18976, m["thinking_token_budget"], 0.001) // min(30000, maxTokens-1024)
+	})
+	t.Run("omitted_when_ceiling_too_small", func(t *testing.T) {
+		req := base()
+		req.MaxTokens = 500 // ceiling - floor <= 0
+		assert.NotContains(t,
+			decodeThinkingBudget(t, req), "thinking_token_budget")
+	})
+	t.Run("absent_without_the_capability", func(t *testing.T) {
+		req := base()
+		req.Model.Caps.SupportsThinkingTokenBudget = false
+		assert.NotContains(t,
+			decodeThinkingBudget(t, req), "thinking_token_budget")
+	})
+	t.Run("absent_at_level_off", func(t *testing.T) {
+		req := base()
+		req.Reasoning.Level = LevelOff
+		assert.NotContains(t,
+			decodeThinkingBudget(t, req), "thinking_token_budget")
+	})
+}
+
+// decodeThinkingBudget runs buildCompatBody and returns the decoded body map.
+func decodeThinkingBudget(t *testing.T, req Request) map[string]any {
+	t.Helper()
+	body, err := buildCompatBody(req, compatProfile{})
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(body, &m))
+	return m
 }

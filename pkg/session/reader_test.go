@@ -34,7 +34,8 @@ func TestReadToleratesGarbageAndTruncation(t *testing.T) {
 
 	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
 	require.NoError(t, err)
-	_, _ = f.WriteString(`{"id":"c","parentId":"b","type":"notice","ts":3,"data":{"message":"partial"}}`)
+	_, werr := f.WriteString(`{"id":"c","parentId":"b","type":"notice","ts":3,"data":{"message":"partial"}}`)
+	require.NoError(t, werr)
 	require.NoError(t, f.Close()) // trailing line without newline: partial write
 
 	entries, warns, rerr := Read(p)

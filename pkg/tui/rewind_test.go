@@ -66,9 +66,8 @@ func TestDoubleEscRewindsWhileIdle(t *testing.T) {
 	default:
 	}
 
-	// space the presses beyond escTimeout so they decode as two lone keyEscapes,
-	// but keep them within the (wide) double-Esc window
-	time.Sleep(escTimeout + 10*time.Millisecond)
+	// escPending above already proves the first lone Esc was fully decoded and
+	// armed the gesture; a fresh press now lands as an independent keyEscape.
 	feedEscape(t, pw) // second Esc -> rewind
 	select {
 	case <-rewound:

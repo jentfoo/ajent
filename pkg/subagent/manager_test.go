@@ -10,6 +10,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,11 +27,11 @@ func TestJobCompletes(t *testing.T) {
 			&fakeTool{name: "read"}, roTool("grep")},
 		},
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("find the bug", "")
 	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok, "job should complete")
+	require.True(t, ok)
 	assert.Equal(t, StatusDone, j.Status)
 	assert.Contains(t, j.Summary, "pkg/a.go:12")
 }
@@ -51,7 +52,7 @@ func TestCompletionNotifiesAndSteersWithoutPoll(t *testing.T) {
 			return true // parent running; the steer lands
 		},
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("x", "")
 	require.Eventually(t, func() bool {
@@ -59,7 +60,7 @@ func TestCompletionNotifiesAndSteersWithoutPoll(t *testing.T) {
 		return ok && s == StatusDone
 	}, time.Second, 5*time.Millisecond)
 
-	assert.Equal(t, 1, c.noticeCount(), "a completion notice reached the user")
+	assert.Equal(t, 1, c.noticeCount())
 	// a steer naming the completed id was offered to the running parent
 	txts := c.deliveredTexts()
 	require.NotEmpty(t, txts)
@@ -70,7 +71,7 @@ func TestJobErrors(t *testing.T) {
 	t.Parallel()
 	p, _ := scripted([]llm.ScriptedTurn{{Err: errors.New("provider exploded")}})
 	m := New(Options{Provider: p})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("boom", "")
 	j, ok := m.Poll(t.Context(), id)
@@ -82,7 +83,7 @@ func TestJobErrors(t *testing.T) {
 func TestJobAbortedByStop(t *testing.T) {
 	t.Parallel()
 	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("long", "")
 	require.NoError(t, m.Stop(id))
@@ -98,7 +99,7 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 		Provider:    func(llm.Model) (llm.Provider, error) { return d, nil },
 		PollTimeout: 30 * time.Millisecond,
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("slow", "")
 	j1, ok := m.Poll(t.Context(), id)
@@ -128,7 +129,7 @@ func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
 		MaxConcurrent: max,
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	var ids []string
 	for i := 0; i < total; i++ {
@@ -154,15 +155,14 @@ func TestNotificationSuppressedWhenPolling(t *testing.T) {
 		Provider: p,
 		Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("x", "")
 	j, ok := m.Poll(t.Context(), id)
 	require.True(t, ok)
 	assert.Equal(t, StatusDone, j.Status)
-	// a poll held the wait for this job, so no completion notice was sent
-	time.Sleep(10 * time.Millisecond) // allow any stray goroutine to run before asserting absence
-	assert.Zero(t, c.noticeCount(), "a waiting poll suppresses the notice")
+	// a poll held the wait for this job and consumed it, so no completion notice was sent
+	assert.Zero(t, c.noticeCount())
 }
 
 func TestDeliverIdleLeavesPendingAndFlushReoffers(t *testing.T) {
@@ -178,7 +178,7 @@ func TestDeliverIdleLeavesPendingAndFlushReoffers(t *testing.T) {
 			return false
 		},
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("x", "")
 	require.Eventually(t, func() bool {
@@ -206,7 +206,7 @@ func TestDeliveredClearsOnlyNamedIds(t *testing.T) {
 			return true
 		},
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id1 := m.Start("a", "")
 	m.mu.Lock()
@@ -230,7 +230,7 @@ func TestIdleCompletionNeverStartsTurn(t *testing.T) {
 		Provider: p,
 		Deliver:  func(in agent.Input) bool { return false }, // parent idle
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id := m.Start("x", "")
 	j, ok := m.Poll(t.Context(), id)
@@ -251,9 +251,7 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 	m.Close() // must cancel and return promptly
 
 	j, ok := m.Poll(t.Context(), id)
-	if !ok {
-		return
-	}
+	require.True(t, ok)
 	assert.Equal(t, StatusAborted, j.Status)
 
 	// the activity row was cleared on close (empty text for the key)
@@ -271,6 +269,7 @@ func TestStartPublishesActivityRow(t *testing.T) {
 		Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 		Activity: c.recordRow,
 	})
+	t.Cleanup(m.Close)
 
 	id := m.Start("one", "")
 	// the row appears immediately while the job is queued/running and pinned open.
@@ -291,6 +290,7 @@ func TestQueuedCancelledClearsActivityRow(t *testing.T) {
 		Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 		Activity: c.recordRow,
 	})
+	t.Cleanup(m.Close)
 
 	m.Start("one", "")
 	m.Start("two", "") // queued behind the blocking first job
@@ -320,7 +320,7 @@ func TestStatusSegmentAndList(t *testing.T) {
 			mu.Unlock()
 		},
 	})
-	defer m.Close()
+	t.Cleanup(m.Close)
 
 	id1 := m.Start("one", "")
 	m.Start("two", "")
@@ -346,6 +346,7 @@ func TestStopAllCancelsEverything(t *testing.T) {
 	t.Parallel()
 	b := &blockingProvider{}
 	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
+	t.Cleanup(m.Close)
 	var ids []string
 	for i := 0; i < 3; i++ {
 		ids = append(ids, m.Start("x", ""))
@@ -354,11 +355,57 @@ func TestStopAllCancelsEverything(t *testing.T) {
 	assert.Equal(t, 3, n)
 	for _, id := range ids {
 		j, ok := m.Poll(t.Context(), id)
-		if !ok {
-			continue
-		}
+		require.True(t, ok)
 		assert.Equal(t, StatusAborted, j.Status)
 	}
+}
+
+// TestChildSpendRollsIntoParentLedger verifies a child's usage appears as child
+// spend on the parent ledger without moving its context.
+func TestChildSpendRollsIntoParentLedger(t *testing.T) {
+	t.Parallel()
+	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})
+	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{Input: 200, Output: 40})}})
+	m := New(Options{
+		Provider: p,
+		Parent:   func() *tokens.Accounting { return parent },
+	})
+	t.Cleanup(m.Close)
+
+	id := m.Start("q", "")
+	j, ok := m.Poll(t.Context(), id)
+	require.True(t, ok)
+	assert.Equal(t, StatusDone, j.Status)
+
+	require.Eventually(t, func() bool { return !tokens.Zero(parent.ChildTotal()) }, time.Second, 5*time.Millisecond)
+	child := parent.ChildTotal()
+	assert.Equal(t, 200, child.Input)
+	assert.Equal(t, 40, child.Output)
+	// the delegated subset is also part of total
+	total := parent.Total()
+	assert.GreaterOrEqual(t, total.Input, child.Input)
+}
+
+// TestParentContextUnchangedByChild verifies a running child does not move the
+// parent's context bar.
+func TestParentContextUnchangedByChild(t *testing.T) {
+	t.Parallel()
+	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})
+	g := &gatedProvider{}
+	m := New(Options{
+		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
+		Parent:        func() *tokens.Accounting { return parent },
+		MaxConcurrent: 1,
+	})
+	t.Cleanup(m.Close)
+
+	id := m.Start("q", "")
+	require.Eventually(t, func() bool { return g.active.Load() == 1 }, time.Second, 5*time.Millisecond) // child streaming
+	before := parent.Context().Used
+	g.releaseAll()
+	_, ok := m.Poll(t.Context(), id)
+	require.True(t, ok)
+	assert.Equal(t, before, parent.Context().Used, "a child's run must not move the parent context bar")
 }
 
 // jobStatus returns id's live status, with ok=false when unknown.

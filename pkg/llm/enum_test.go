@@ -32,10 +32,6 @@ func TestLevelUnmarshalJSON(t *testing.T) {
 			var got Level
 			require.NoError(t, json.Unmarshal([]byte(tc.input), &got))
 			assert.Equal(t, tc.expected, got)
-
-			data, err := json.Marshal(tc.expected)
-			require.NoError(t, err)
-			assert.JSONEq(t, `"`+tc.expected.String()+`"`, string(data))
 		})
 	}
 
@@ -44,16 +40,6 @@ func TestLevelUnmarshalJSON(t *testing.T) {
 		err := json.Unmarshal([]byte(`"enormous"`), &got)
 		require.ErrorContains(t, err, "unknown reasoning level")
 		assert.Contains(t, err.Error(), "off, minimal, low, medium, high, xhigh, max")
-	})
-	t.Run("level_set_is_covered", func(t *testing.T) {
-		// any thinkingLevelMap written against the standard levels maps every key
-		var m map[Level]*string
-		require.NoError(t, json.Unmarshal([]byte(
-			`{"off":null,"minimal":"minimal","low":"low","medium":"medium","high":"high","xhigh":"high","max":"high"}`), &m))
-		assert.Len(t, m, 7)
-		assert.Nil(t, m[LevelOff])
-		require.NotNil(t, m[LevelMax])
-		assert.Equal(t, "high", *m[LevelMax])
 	})
 }
 

@@ -275,17 +275,33 @@ func TestSplitCompleteBlocks(t *testing.T) {
 func TestIndentLines(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "> a\n  b", indentLines("a\nb", "> ", "  "))
-	assert.Equal(t, "> a", indentLines("a", "> ", "  "))
-	assert.Equal(t, "| a\n| b", indentLines("a\nb", "| ", "| "))
+	for _, tc := range []struct {
+		name, in, first, rest, want string
+	}{
+		{name: "first_only_gets_first_prefix", in: "a", first: "> ", rest: "  ", want: "> a"},
+		{name: "subsequent_lines_get_rest_prefix", in: "a\nb", first: "> ", rest: "  ", want: "> a\n  b"},
+		{name: "same_prefix_for_all", in: "a\nb", first: "| ", rest: "| ", want: "| a\n| b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, indentLines(tc.in, tc.first, tc.rest))
+		})
+	}
 }
 
 func TestFenceMarker(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "```", fenceMarker("```go"))
-	assert.Equal(t, "~~~", fenceMarker("~~~"))
-	assert.Empty(t, fenceMarker("nope"))
+	for _, tc := range []struct {
+		name, line, want string
+	}{
+		{name: "backtick_fence", line: "```go", want: "```"},
+		{name: "tilde_fence", line: "~~~", want: "~~~"},
+		{name: "not_a_fence", line: "nope"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, fenceMarker(tc.line))
+		})
+	}
 }
 
 // TestRuleCharSingleColumn guards the one glyph repeated to fill an entire

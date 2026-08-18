@@ -1,10 +1,8 @@
 package mcp
 
 import (
-	"fmt"
 	"os/exec"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -27,25 +25,16 @@ func TestFetchGoStdioEndToEnd(t *testing.T) {
 
 	mgr.LoadOnFirstMessage(t.Context()) // connects every configured server in full
 
-	var c *Client
-	for i := 0; i < 20 && c == nil; i++ { // LoadOnFirstMessage is synchronous, but be safe
-		s := mgr.serverByName("browser")
-		if s != nil {
-			s.mu.Lock()
-			c = s.c
-			s.mu.Unlock()
-		}
-		if c == nil {
-			time.Sleep(50 * time.Millisecond)
-		}
-	}
+	s := mgr.serverByName("browser")
+	require.NotNil(t, s, "browser server not configured")
+	c := s.client()
 	require.NotNil(t, c, "browser server never connected")
 
 	defs, err := c.Tools(t.Context())
 	require.NoError(t, err)
 	t.Logf("discovered %d tool(s)", len(defs))
 	for _, d := range defs {
-		fmt.Printf("- %s: %s\n", d.Name, d.Description)
+		t.Logf("- %s: %s", d.Name, d.Description)
 	}
 
 	if len(defs) > 0 {

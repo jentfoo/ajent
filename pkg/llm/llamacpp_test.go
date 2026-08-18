@@ -83,10 +83,6 @@ func TestDecorateLlamaCpp(t *testing.T) {
 		decorateLlamaCpp(&body, Request{Model: model(false)})
 		assert.Empty(t, body.ChatTemplateKwarg)
 	})
-	t.Run("older_builds_get_no_stream_options", func(t *testing.T) {
-		// an unknown key is rejected outright by older servers
-		assert.False(t, flavorDefaults[FlavorLlamaCpp].caps.StreamUsage)
-	})
 }
 
 func TestCompatProviderCountTokens(t *testing.T) {

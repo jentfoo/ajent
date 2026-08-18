@@ -72,7 +72,7 @@ func TestRecallIndexLines(t *testing.T) {
 func TestRecallIndexTimestampFromPrompt(t *testing.T) {
 	s, ws, h, idx := newRecallIndex(t)
 	h.Append("shared line") // no timestamp of its own
-	defer setClock(time.UnixMilli(1_700_000_001).UTC())()
+	t.Cleanup(setClock(time.UnixMilli(1_700_000_001).UTC()))
 	recordPrompt(t, s, ws, "shared line")
 
 	for _, p := range idx.Lines() {

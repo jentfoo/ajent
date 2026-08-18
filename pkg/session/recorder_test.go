@@ -74,7 +74,9 @@ func TestRecorderSinkPersistsNoticesAndSyncsOnTurnEnd(t *testing.T) {
 	s.Notice("hello", agent.LevelWarn)
 	assert.Equal(t, []string{"hello"}, caps.notices)
 
-	entries, _, _ := Read(p)
+	entries, _, err := Read(p)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
 	var nd NoticeData
 	require.NoError(t, entries[len(entries)-1].Decode(&nd))
 	assert.Equal(t, "hello", nd.Message)
@@ -86,7 +88,7 @@ func TestRecorderSinkPersistsNoticesAndSyncsOnTurnEnd(t *testing.T) {
 	// durability path survives a reopen after the turn boundary
 	w2, oerr := Open(p)
 	require.NoError(t, oerr)
-	defer func() { _ = w2.Close() }()
+	t.Cleanup(func() { _ = w2.Close() })
 	assert.NotEmpty(t, w2.Head())
 }
 
@@ -120,7 +122,9 @@ func TestRecorderSettingAndCustomRoundTrip(t *testing.T) {
 	require.NoError(t, r.SettingChange("tools", []string{"read"}))
 	require.NoError(t, r.Custom("plan", map[string]any{"step": 1}))
 
-	entries, _, _ := Read(p)
+	entries, _, err := Read(p)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(entries), 3) // session + setting + custom
 	assert.Equal(t, TypeSettingChange, entries[1].Type)
 	var sd SettingData
 	require.NoError(t, entries[1].Decode(&sd))
@@ -141,7 +145,9 @@ func TestRecorderModelChangePersistsKey(t *testing.T) {
 
 	r.ModelChange(llm.Model{Provider: "anthropic", ID: "claude"}, "manual")
 
-	entries, _, _ := Read(p)
+	entries, _, err := Read(p)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(entries), 2) // session + model change
 	var md ModelData
 	require.NoError(t, entries[1].Decode(&md))
 	assert.Equal(t, "anthropic/claude", md.Model)

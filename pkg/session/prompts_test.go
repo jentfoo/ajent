@@ -53,7 +53,7 @@ func TestStorePrompts(t *testing.T) {
 func TestStorePromptsDedupeKeepsNewest(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()
-	defer setClock(time.UnixMilli(1_700_000_001).UTC())()
+	t.Cleanup(setClock(time.UnixMilli(1_700_000_001).UTC()))
 	w, err := s.Create(ws, SessionData{Version: sessionVersion})
 	require.NoError(t, err)
 	setClock(time.UnixMilli(1_800_000_002).UTC())
@@ -142,7 +142,7 @@ func TestStorePromptsLimit(t *testing.T) {
 func TestStorePromptsScanFilesCap(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()
-	defer setClock(time.UnixMilli(1_700_000_001).UTC())()
+	t.Cleanup(setClock(time.UnixMilli(1_700_000_001).UTC()))
 	for i := 0; i < promptScanFiles+5; i++ {
 		setClock(time.UnixMilli(int64(2_100_000_002 + i)))
 		w, err := s.Create(ws, SessionData{Version: sessionVersion})
@@ -170,9 +170,8 @@ func TestPromptIndexPromptsTTL(t *testing.T) {
 	ws := t.TempDir()
 	dir, err := s.Dir(ws)
 	require.NoError(t, err)
-	defer setClock(time.UnixMilli(1_000_001).UTC())()
-	restoreNow := setPromptFollowsClock() // promptNow tracks the mocked clock
-	defer restoreNow()
+	t.Cleanup(setClock(time.UnixMilli(1_000_001).UTC()))
+	t.Cleanup(setPromptFollowsClock()) // promptNow tracks the mocked clock
 
 	// explicit timestamped names so file order is deterministic across a refresh
 	w, err := Create(filepath.Join(dir, "2026-01-02T00-00-00Z-a.jsonl"), SessionData{Version: sessionVersion})
@@ -218,8 +217,7 @@ func TestPromptIndexPromptsBumpRefreshes(t *testing.T) {
 	_, aerr = w2.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "two")})
 	require.NoError(t, aerr)
 
-	restoreNow := setPromptNow(time.UnixMilli(9_900_000_000_003).UTC()) // ~year 2300, past the first scan's real-time expiry
-	defer restoreNow()
+	t.Cleanup(setPromptNow(time.UnixMilli(9_900_000_000_003).UTC())) // ~year 2300, past the first scan's real-time expiry
 	assert.Equal(t, []string{"two", "one"}, promptTexts(pIdx.Prompts()), "a now bump refreshes")
 }
 

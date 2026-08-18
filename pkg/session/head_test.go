@@ -24,20 +24,28 @@ func TestWriteReadHeadRoundTrip(t *testing.T) {
 func TestReadHeadMissingAndCorruptFallback(t *testing.T) {
 	t.Parallel()
 
-	_, ok := ReadHead(t.TempDir())
-	assert.False(t, ok, "no HEAD file is not a cursor")
-
-	dir := t.TempDir()
-	p := filepath.Join(dir, "HEAD")
-	require.NoError(t, os.WriteFile(p, []byte("not json"), 0o600))
-	_, ok = ReadHead(dir)
-	assert.False(t, ok, "garbage HEAD falls back to tail recovery")
-
-	empty := t.TempDir()
-	p2 := filepath.Join(empty, "HEAD")
-	require.NoError(t, os.WriteFile(p2, []byte(`{"file":"","id":""}`), 0o600))
-	_, ok = ReadHead(empty)
-	assert.False(t, ok, "an empty cursor is not valid")
+	cases := []struct {
+		name  string
+		setup func(dir string)
+	}{
+		{"no_head_file", func(string) {}},
+		{"garbage_json", func(dir string) {
+			p := filepath.Join(dir, "HEAD")
+			require.NoError(t, os.WriteFile(p, []byte("not json"), 0o600))
+		}},
+		{"empty_cursor", func(dir string) {
+			p := filepath.Join(dir, "HEAD")
+			require.NoError(t, os.WriteFile(p, []byte(`{"file":"","id":""}`), 0o600))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.setup(dir)
+			_, ok := ReadHead(dir)
+			assert.False(t, ok)
+		})
+	}
 }
 
 func TestWriteHeadOverwritesPrevious(t *testing.T) {
@@ -75,7 +83,6 @@ func TestHeadForIgnoresCursorPointingElsewhere(t *testing.T) {
 	dir := t.TempDir()
 	p1 := filepath.Join(dir, "one.jsonl")
 	p2 := filepath.Join(dir, "two.jsonl")
-	_ = []Entry{{ID: "x", Type: TypeSession}}
 	e2 := []Entry{{ID: "y", Type: TypeSession}}
 
 	require.NoError(t, WriteHead(p1, "x"))

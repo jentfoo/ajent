@@ -69,95 +69,110 @@ func TestGitReadOnly(t *testing.T) {
 	}
 }
 
-func TestGitBranchVerification(t *testing.T) {
+func TestIsGitBranchReadOnly(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
+		name string
 		in   string
 		want bool
 	}{
-		{"-l foo", true},
-		{"--list 'foo*'", true},
-		{"-avv", true},
+		{"list short", "-l foo", true},
+		{"list long glob", "--list 'foo*'", true},
+		{"verbose all", "-avv", true},
 		// creation flags write
-		{"--track foo", false},
-		{"--set-upstream-to=origin/main", false},
+		{"track creates", "--track foo", false},
+		{"set upstream writes", "--set-upstream-to=origin/main", false},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, isGitBranchReadOnly(stringsFields(c.in)), "%q", c.in)
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isGitBranchReadOnly(stringsFields(c.in)))
+		})
 	}
 }
 
-func TestGitTagVerification(t *testing.T) {
+func TestIsGitTagReadOnly(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
+		name string
 		in   string
 		want bool
 	}{
-		{"-n5 v*", true},
-		{"--list 'v1.*'", true},
-		{"--verify v1.0", true},
+		{"num lines", "-n5 v*", true},
+		{"list glob", "--list 'v1.*'", true},
+		{"verify", "--verify v1.0", true},
 		// annotated / delete write
-		{"-a -m msg v1.0", false},
-		{"-d v1.0", false},
+		{"annotated creates", "-a -m msg v1.0", false},
+		{"delete writes", "-d v1.0", false},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, isGitTagReadOnly(stringsFields(c.in)), "%q", c.in)
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isGitTagReadOnly(stringsFields(c.in)))
+		})
 	}
 }
 
-func TestGitConfigVerification(t *testing.T) {
+func TestIsGitConfigReadOnly(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
+		name string
 		in   string
 		want bool
 	}{
-		{"--get user.name", true},
-		{"-l", true},
-		{"user.name", true}, // lone dotted key reads
+		{"get flag", "--get user.name", true},
+		{"list short", "-l", true},
+		{"lone dotted key reads", "user.name", true},
 		// two positionals write a value
-		{"user.name Foo", false},
-		{"edit", false}, // action word without a dot is rejected
+		{"key and value writes", "user.name Foo", false},
+		{"action word rejected", "edit", false}, // action word without a dot is rejected
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, isGitConfigReadOnly(stringsFields(c.in)), "%q", c.in)
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isGitConfigReadOnly(stringsFields(c.in)))
+		})
 	}
 }
 
-func TestGitActionVerification(t *testing.T) {
+func TestGitActionReadOnly(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
+		name string
 		in   string
 		want bool
 	}{
-		{"show origin", true},
-		{"get-url origin", true},
+		{"show origin", "show origin", true},
+		{"get url", "get-url origin", true},
 		// mutating actions fail
-		{"add origin git@x", false},
+		{"add writes", "add origin git@x", false},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, gitActionReadOnly("remote", stringsFields(c.in)), "%q", c.in)
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, gitActionReadOnly("remote", stringsFields(c.in)))
+		})
 	}
 }
 
-func TestGitExecOrWriteToken(t *testing.T) {
+func TestIsGitExecOrWriteToken(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
+		name string
 		in   string
 		want bool
 	}{
-		{"--output=out.patch", true},
-		{"--ext-diff", true},
-		{"--textconv", true},
-		{"--filters", true},
-		{"--stat", false},
+		{"output flag", "--output=out.patch", true},
+		{"ext diff", "--ext-diff", true},
+		{"textconv", "--textconv", true},
+		{"filters", "--filters", true},
+		{"stat is read only", "--stat", false},
 	}
 	for _, c := range cases {
-		assert.Equal(t, c.want, isGitExecOrWriteToken(c.in), "%q", c.in)
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isGitExecOrWriteToken(c.in))
+		})
 	}
 }
 

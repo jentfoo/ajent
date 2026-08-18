@@ -36,14 +36,10 @@ func TestRunningReportsState(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
-	assert.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval,
-		"running must be true while the tool is in flight")
+	assert.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
 
 	close(block) // let it finish
-	requireNoError := <-errCh
-	if requireNoError != nil {
-		t.Fatalf("prompt: %v", requireNoError)
-	}
+	require.NoError(t, <-errCh)
 	assert.False(t, a.Running())
 }
 

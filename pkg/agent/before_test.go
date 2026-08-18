@@ -32,7 +32,7 @@ func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	require.NoError(t, err)
 
 	// before pair, then the user text, then the assistant reply
-	require.GreaterOrEqual(t, len(seen), 3)
+	require.Len(t, seen, 4)
 	assert.Equal(t, llm.RoleAssistant, seen[0].Role) // staged tool call
 	assert.Equal(t, llm.RoleUser, seen[1].Role)      // staged tool result
 	assert.Equal(t, llm.RoleUser, seen[2].Role)      // the user's actual text
@@ -53,6 +53,6 @@ func TestNewOutputForwardsToSink(t *testing.T) {
 	require.NoError(t, err)
 	out.Diff("a.go", "before", "after")
 
-	assert.Contains(t, sink.calls, "tool_output")
-	assert.Contains(t, sink.calls, "diff")
+	// writes stream as tool output, then the diff lands after it.
+	assert.Equal(t, []string{"tool_output", "diff"}, sink.calls)
 }

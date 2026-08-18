@@ -719,14 +719,11 @@ func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
 	require.NoError(t, err)
 	_, err = io.WriteString(pw, "\r") // enter submits
 	require.NoError(t, err)
-	for i := 0; i < 10000; i++ { // spin until submit lands (readKeys writes it)
+	require.Eventually(t, func() bool { // submit lands via readKeys in the key loop
 		u.mu.Lock()
-		done := len(u.editor.history) == 1
-		u.mu.Unlock()
-		if done {
-			break
-		}
-	}
+		defer u.mu.Unlock()
+		return len(u.editor.history) == 1
+	}, time.Second, testPoll)
 
 	_, err = io.WriteString(pw, "\x1b[A") // up arrow: recall the last sent message
 	require.NoError(t, err)

@@ -30,7 +30,6 @@ type fakeConsole struct {
 	confirms   []bool          // queued Confirm answers
 	inputs     []string        // queued Input replies
 	saveCalls  []saveCall      // recorded SaveSetting calls
-	ssChanges  map[string]any  // recorded SetSessionSetting key/value pairs
 
 	settings *config.Set
 	agents   Agents // set by tests exercising /agents; nil when unavailable
@@ -41,11 +40,8 @@ type fakeConsole struct {
 	commands     *Registry
 	started      bool
 	setModel     llm.Model
-	reasoning    llm.ReasoningConfig
 	toolsChanged int
 	exited       bool
-	compactCalls int
-	compactInstr string
 }
 
 type fakePick struct {
@@ -184,33 +180,15 @@ func (f *fakeConsole) SaveSetting(layer, key string, value any) error {
 	return nil
 }
 func (f *fakeConsole) SetSessionSetting(key string, value any) error {
-	if err := f.settings.SetSession(key, value); err != nil {
-		return err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.ssChanges == nil {
-		f.ssChanges = map[string]any{}
-	}
-	f.ssChanges[key] = value
-	return nil
+	return f.settings.SetSession(key, value)
 }
-func (f *fakeConsole) SetModel(m llm.Model) { f.models.SetActive(m); f.state.Model = m; f.setModel = m }
-func (f *fakeConsole) SetReasoning(c llm.ReasoningConfig) {
-	f.reasoning = c
-	f.state.Reasoning = c
-}
-func (f *fakeConsole) ToolsChanged() { f.mu.Lock(); f.toolsChanged++; f.mu.Unlock() }
-func (f *fakeConsole) Started() bool { return f.started }
-func (f *fakeConsole) Exit()         { f.exited = true }
+func (f *fakeConsole) SetModel(m llm.Model)               { f.models.SetActive(m); f.state.Model = m; f.setModel = m }
+func (f *fakeConsole) SetReasoning(c llm.ReasoningConfig) { f.state.Reasoning = c }
+func (f *fakeConsole) ToolsChanged()                      { f.mu.Lock(); f.toolsChanged++; f.mu.Unlock() }
+func (f *fakeConsole) Started() bool                      { return f.started }
+func (f *fakeConsole) Exit()                              { f.exited = true }
 
-func (f *fakeConsole) Compact(_ context.Context, instructions string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.compactCalls++
-	f.compactInstr = instructions
-	return nil
-}
+func (f *fakeConsole) Compact(context.Context, string) error { return nil }
 
 // noticesSeen returns a snapshot of recorded notices.
 func (f *fakeConsole) noticesSeen() []string {

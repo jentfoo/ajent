@@ -166,19 +166,4 @@ func (u *respUsage) toUsage() Usage {
 	}
 }
 
-// respStopReason maps a terminal response status.
-func respStopReason(status string, sawToolCall bool) StopReason {
-	switch status {
-	case "incomplete":
-		return StopMaxTokens
-	case "failed":
-		return StopError
-	default:
-		if sawToolCall {
-			return StopToolUse
-		}
-		return StopEndTurn
-	}
-}
-
 const maxReplayTextID = 64

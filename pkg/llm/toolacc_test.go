@@ -111,6 +111,7 @@ func TestToolAccumulatorClose(t *testing.T) {
 		a.Delta(0, "c1", "now", `""`)
 
 		got := a.Close()
+		require.Len(t, got, 1)
 		require.NoError(t, got[0].Err)
 		block := got[0].Block.(ToolCallBlock)
 		assert.JSONEq(t, `{}`, string(block.Input))

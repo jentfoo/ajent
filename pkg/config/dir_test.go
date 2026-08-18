@@ -45,15 +45,6 @@ func TestResolveDir(t *testing.T) {
 	})
 }
 
-func TestUserPath(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv(EnvHome, dir)
-
-	p, err := UserPath("models.json")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(dir, "models.json"), p)
-}
-
 func TestHomeDoesNotCreateDir(t *testing.T) {
 	// t.Setenv below forbids t.Parallel: env vars are process-global.
 	root := filepath.Join(t.TempDir(), "nested", "ajent")

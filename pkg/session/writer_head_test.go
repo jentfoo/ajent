@@ -32,6 +32,7 @@ func TestWriterSyncPersistsCursorAtTurnBoundary(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := Create(p, SessionData{Version: sessionVersion})
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
 	e1, err := w.Append(TypeMessage, MessageData{Message: llmText("one")})
 	require.NoError(t, err)
 
@@ -50,9 +51,11 @@ func TestWriterOpenRecoversPersistedBranchNotTail(t *testing.T) {
 	w, err := Create(p, SessionData{Version: sessionVersion})
 	require.NoError(t, err)
 
-	e1, _ := w.Append(TypeMessage, MessageData{Message: llmText("one")})
-	e2, _ := w.Append(TypeMessage, MessageData{Message: llmText("two")}) // tail
-	w.SetHead(e1.ID)                                                     // fork back to one
+	e1, aerr := w.Append(TypeMessage, MessageData{Message: llmText("one")})
+	require.NoError(t, aerr)
+	e2, aerr := w.Append(TypeMessage, MessageData{Message: llmText("two")}) // tail
+	require.NoError(t, aerr)
+	w.SetHead(e1.ID) // fork back to one
 	require.NoError(t, w.Close())
 
 	// the file tail is e2, but HEAD points at e1; a reopen must resume from e1.
@@ -71,7 +74,8 @@ func TestWriterOpenRecoversPersistedBranchNotTail(t *testing.T) {
 	for i, tp := range tips {
 		ids[i] = tp.ID
 	}
-	assert.Equal(t, []string{e2.ID, e3.ID}, ids, "both the abandoned tip and the new one survive")
+	// both the abandoned tip and the new fork stay reachable.
+	assert.Equal(t, []string{e2.ID, e3.ID}, ids)
 }
 
 func TestWriterDiscardWritesNoHeadCursor(t *testing.T) {

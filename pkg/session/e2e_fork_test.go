@@ -48,7 +48,8 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 	// so the new branch still carries that prompt but not its old reply.
 	branch1 := Branch(readEntries(t, p), tip1)
 	w.SetHead(branch1[1].ID) // first user "first"
-	forkA, _ := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
+	forkA, ferr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
+	require.NoError(t, ferr)
 	require.NoError(t, w.Sync())
 	tip2 := forkA.ID
 

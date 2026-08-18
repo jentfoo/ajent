@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"io"
 	"strconv"
 	"strings"
@@ -17,10 +16,11 @@ func TestUIAsk(t *testing.T) {
 
 	t.Run("free_text_collects_typed", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
+		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, err := u.Ask(context.Background(), Question{Text: "What should I name the branch?"})
+			a, err := u.Ask(ctx, Question{Text: "What should I name the branch?"})
 			assert.NoError(t, err)
 			result <- a
 		}()
@@ -36,10 +36,11 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("offered_options_selects", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
+		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, err := u.Ask(context.Background(), Question{
+			a, err := u.Ask(ctx, Question{
 				Text:    "Which approach?",
 				Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
 			})
@@ -58,10 +59,11 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("number_key_selects_directly", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
+		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, _ := u.Ask(context.Background(), Question{
+			a, _ := u.Ask(ctx, Question{
 				Text:    "Pick a plan",
 				Options: []Option{{Label: "A"}, {Label: "B"}},
 			})
@@ -77,7 +79,8 @@ func TestUIAsk(t *testing.T) {
 	t.Run("multi_line_prompt_renders", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
-		go func() { _, _ = u.Ask(context.Background(), Question{Text: "Line one\nLine two"}) }()
+		ctx := t.Context()
+		go func() { _, _ = u.Ask(ctx, Question{Text: "Line one\nLine two"}) }()
 
 		waitFor(t, u, v, "Line one")
 		waitFor(t, u, v, "Line two")
@@ -90,7 +93,8 @@ func TestUIAsk(t *testing.T) {
 		for i := 0; i < 12; i++ {
 			many.WriteString("question line " + strconv.Itoa(i) + "\n")
 		}
-		go func() { _, _ = u.Ask(context.Background(), Question{Text: many.String()}) }()
+		ctx := t.Context()
+		go func() { _, _ = u.Ask(ctx, Question{Text: many.String()}) }()
 
 		waitFor(t, u, v, "… +9 lines")
 		// the live block stays inside its share of a 12 row screen, divider included
@@ -101,11 +105,12 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("escape_declines_with_no_error", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
+		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			a, err := u.Ask(context.Background(), Question{Text: "Proceed?"})
+			a, err := u.Ask(ctx, Question{Text: "Proceed?"})
 			result <- a
 			errCh <- err
 		}()
@@ -120,8 +125,9 @@ func TestUIAsk(t *testing.T) {
 	t.Run("commits_one_summary_line", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
+		ctx := t.Context()
 		go func() {
-			_, _ = u.Ask(context.Background(), Question{Text: "Color?", Options: []Option{{Label: "Red"}}})
+			_, _ = u.Ask(ctx, Question{Text: "Color?", Options: []Option{{Label: "Red"}}})
 		}()
 
 		waitFor(t, u, v, "Color?")
@@ -137,9 +143,10 @@ func TestUIAsk(t *testing.T) {
 		go func() { _, _ = u.Select("First:", []Option{{Label: "A"}}) }()
 		waitFor(t, u, v, "First:")
 
+		ctx := t.Context()
 		result := make(chan Answer, 1)
 		go func() {
-			a, _ := u.Ask(context.Background(), Question{Text: "Second?"})
+			a, _ := u.Ask(ctx, Question{Text: "Second?"})
 			result <- a
 		}()
 
@@ -177,14 +184,14 @@ func TestUIPlainAsk(t *testing.T) {
 	t.Run("free_text_takes_the_line", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("feature/x\n"))
 
-		a, err := u.Ask(context.Background(), Question{Text: "Name?"})
+		a, err := u.Ask(t.Context(), Question{Text: "Name?"})
 		require.NoError(t, err)
 		assert.Equal(t, "feature/x", a.Text)
 	})
 	t.Run("number_selects_an_option", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("2\n"))
 
-		a, err := u.Ask(context.Background(), Question{
+		a, err := u.Ask(t.Context(), Question{
 			Text:    "Approach?",
 			Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
 		})
@@ -194,7 +201,7 @@ func TestUIPlainAsk(t *testing.T) {
 	t.Run("out_of_range_number_cancels", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("9\n"))
 
-		a, err := u.Ask(context.Background(), Question{
+		a, err := u.Ask(t.Context(), Question{
 			Text:    "Approach?",
 			Options: []Option{{Label: "Rewrite"}},
 		})
@@ -210,7 +217,7 @@ func TestUIAskNoUITerminal(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		u.Close()
 
-		a, err := u.Ask(context.Background(), Question{Text: "Proceed?"})
+		a, err := u.Ask(t.Context(), Question{Text: "Proceed?"})
 		require.ErrorIs(t, err, ErrNoUI)
 		assert.False(t, a.Declined)
 	})

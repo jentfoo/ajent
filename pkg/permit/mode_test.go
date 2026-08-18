@@ -60,13 +60,13 @@ func TestModeNextCyclesInOrder(t *testing.T) {
 	}
 }
 
-func TestParseModeRejectsEmptyStringForConfigNameOnly(t *testing.T) {
+func TestModeStringRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	// String() must round-trip through ParseMode for every valid mode.
-	for _, c := range []struct{ m Mode }{{ModeAllowAll}, {ModeAllowRead}, {ModeAuto}, {ModeBlockAll}} {
-		m, ok := ParseMode(c.m.String())
+	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeBlockAll} {
+		got, ok := ParseMode(m.String())
 		assert.True(t, ok)
-		assert.Equal(t, c.m, m)
+		assert.Equal(t, m, got)
 	}
 }
