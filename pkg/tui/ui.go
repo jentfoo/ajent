@@ -138,13 +138,15 @@ type UI struct {
 	// signal stream alone cannot prove the grid is stable.
 	resizing bool
 	deferred []histLine
-	// resizeSeq counts SIGWINCHs; probeSeq is the burst generation the
-	// outstanding probe belongs to. A reply (or timeout) starts the draw grace
-	// only when they still match, and the draw itself re-checks them — a newer
-	// signal at either point means another reflow is in flight.
+	// resizeSeq counts SIGWINCHs; probeSeq is the burst generation the newest
+	// probe belongs to. A reply (or timeout) starts the draw grace only when
+	// they still match, and the draw itself re-checks them — a newer signal at
+	// either point means another reflow is in flight. probesOut counts probes
+	// still unanswered; replies carry no identity, so only the last one in
+	// flight can release the barrier.
 	resizeSeq int
 	probeSeq  int
-	probeOut  bool
+	probesOut int
 }
 
 // New starts the UI, taking over the terminal until Close is called.
@@ -1229,23 +1231,31 @@ func (u *UI) probeResize() {
 		return
 	}
 	u.probeSeq = u.resizeSeq
-	u.probeOut = true
+	u.probesOut++
 	gen := u.probeSeq
 	u.render.probe()
-	u.afterDelay(resizeProbeTimeout, func() { u.settleProbed(gen) })
+	u.afterDelay(resizeProbeTimeout, func() { u.probeTimedOut(gen) })
 }
 
-// settleProbed arms the settled redraw once the terminal answered the probe
-// (or the timeout fired). A stale generation — a newer SIGWINCH arrived after
-// the probe was sent — means another reflow is in flight, so the answer proves
-// nothing and is ignored; the newer burst's own probe drives the redraw.
-func (u *UI) settleProbed(gen int) {
+// probeTimedOut arms the settled redraw when the terminal never answered,
+// writing off every outstanding probe.
+func (u *UI) probeTimedOut(gen int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.closed || !u.probeOut || gen != u.probeSeq || u.probeSeq != u.resizeSeq {
+	if u.probesOut == 0 || gen != u.probeSeq {
+		return // a newer burst owns the barrier; its own timeout releases it
+	}
+	u.probesOut = 0
+	u.settleProbedLocked(gen)
+}
+
+// settleProbedLocked arms the settled redraw once the barrier is satisfied. A
+// stale generation means another reflow is in flight, so it is ignored and the
+// newer burst's own probe drives the redraw. Caller holds the lock.
+func (u *UI) settleProbedLocked(gen int) {
+	if u.closed || gen != u.probeSeq || u.probeSeq != u.resizeSeq {
 		return
 	}
-	u.probeOut = false
 	// one quiet grace before drawing: the reply proves the terminal caught up,
 	// but a resize starting right now (its SIGWINCH perhaps still in flight)
 	// would reflow onto the frame we are about to write
@@ -1266,11 +1276,20 @@ func (u *UI) drawSettled(gen int) {
 }
 
 // probeAnswered routes a status reply from the input stream to the barrier.
+// Replies carry no identity, so one answers the oldest outstanding probe: it
+// proves the terminal caught up with the bytes before that probe, not with a
+// newer burst's reflow.
 func (u *UI) probeAnswered() {
 	u.mu.Lock()
-	gen := u.probeSeq
-	u.mu.Unlock()
-	u.settleProbed(gen)
+	defer u.mu.Unlock()
+	if u.probesOut == 0 {
+		return // nothing outstanding: a reply we never asked for, or a late one
+	}
+	u.probesOut--
+	if u.probesOut > 0 {
+		return // answers a superseded probe; the newest is still in flight
+	}
+	u.settleProbedLocked(u.probeSeq)
 }
 
 // watchStatus consumes terminal status replies until the input closes.

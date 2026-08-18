@@ -162,6 +162,12 @@ truncation marker names the next `offset`. Binary files (NUL in the first 8 kB)
 are refused with a useful message; images are refused for now. Every successful
 read is recorded in the tracker.
 
+The model always sees the full line-numbered content (`Content`); only the
+history/display summary differs — it shows what was actually pulled in as counts
+alone, never the text: `read <path> (<lines> lines, <chars> chars)`. Both count
+the returned slice (honoring `offset`/`limit` and per-line truncation), not the
+whole file, so paging reports exactly what entered context.
+
 ### write (`write.go`)
 
 Writes a whole file atomically (temp file + rename) and creates parent

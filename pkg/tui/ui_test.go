@@ -1098,29 +1098,52 @@ func TestUIResizeProbeTimeoutSettles(t *testing.T) {
 	assert.Equal(t, 1, countRules(u.snapshot(v)), "the timeout releases the redraw")
 }
 
-// TestUIResizeProbeStaleReplyIgnored covers a reply that arrives after a newer
-// SIGWINCH: it only proves the terminal caught up with the older burst, so the
+// TestUIResizeProbeStaleReplyIgnored covers a reply answering a superseded
+// probe: it proves the terminal caught up with the older burst only, so the
 // redraw keeps waiting for the newer burst's own probe.
 func TestUIResizeProbeStaleReplyIgnored(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(48, 12)
-	u := newTestUI(t, v, strings.NewReader(""))
-	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
-	u.Print("committed reply")
+	t.Run("reply_before_newer_probe", func(t *testing.T) {
+		v := newVT(48, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		u.Print("committed reply")
 
-	v.setSize(30, 12)
-	u.holdForResize()
-	u.probeResize()
-	u.holdForResize() // a newer SIGWINCH arrived before the reply
-	u.probeAnswered() // the reply covers only the older probe
-	assert.Equal(t, 2, countRules(u.snapshot(v)), "a stale reply proves nothing")
+		v.setSize(30, 12)
+		u.holdForResize()
+		u.probeResize()
+		u.holdForResize() // a newer SIGWINCH arrived before the reply
+		u.probeAnswered() // the reply covers only the older probe
+		assert.Equal(t, 2, countRules(u.snapshot(v)), "a stale reply proves nothing")
 
-	u.probeResize() // the newer burst settles with its own probe
-	u.probeAnswered()
-	require.Eventually(t, func() bool {
-		return countRules(u.snapshot(v)) == 1
-	}, time.Second, 5*time.Millisecond, "and its fresh reply releases the redraw after the grace")
+		u.probeResize() // the newer burst settles with its own probe
+		u.probeAnswered()
+		require.Eventually(t, func() bool {
+			return countRules(u.snapshot(v)) == 1
+		}, time.Second, testPoll, "and its fresh reply releases the redraw after the grace")
+	})
+
+	t.Run("reply_after_newer_probe", func(t *testing.T) {
+		v := newVT(48, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		var graceArmed bool
+		u.afterDelay = func(d time.Duration, _ func()) *time.Timer {
+			if d == resizeDrawGrace {
+				graceArmed = true
+			}
+			return time.NewTimer(time.Hour) // never fires inside the test
+		}
+
+		u.holdForResize()
+		u.probeResize() // probe A, its reply still in flight
+		u.holdForResize()
+		u.probeResize()   // probe B written while A is still outstanding
+		u.probeAnswered() // A's reply, not B's
+
+		assert.False(t, graceArmed)
+	})
 }
 
 // TestUIResizeDrawGraceCancelledBySignal covers the last window: the terminal

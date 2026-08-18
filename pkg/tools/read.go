@@ -71,7 +71,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	if start < 1 {
 		start = 1
 	}
-	out, truncatedAt := numberLines(data, start, n)
+	out, truncatedAt, linesRead, charsRead := numberLines(data, start, n)
 
 	var b strings.Builder
 	b.WriteString(out)
@@ -81,6 +81,6 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 
 	return agent.ToolResult{
 		Content: llmBlock(b.String()),
-		Display: fmt.Sprintf("read %s (%d lines)", p.Path, countLines(string(data))),
+		Display: fmt.Sprintf("read %s (%d lines, %d chars)", p.Path, linesRead, charsRead),
 	}, nil
 }
