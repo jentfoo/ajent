@@ -49,15 +49,16 @@ Dependency direction is load-bearing. Actual internal edges:
 
 ```
 config   (no internal deps — paths, JSON merge, layered settings)
-llm      -> config
+strutil  (no internal deps — tiny shared string helpers)
+llm      -> config, strutil
 tokens   -> llm
 agent    -> llm, tokens
-tools    -> agent, config, llm
-session  -> agent, config, llm, tokens, tools
-compact  -> llm, session, tokens, tools
-tui      (no internal deps)
-mcp      -> agent, config, llm (+ mcp-go; never tools/tui/command — adapters live in main.go)
-subagent -> agent, llm, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by main.go)
+tools    -> agent, config, llm, strutil
+session  -> agent, config, llm, strutil, tokens, tools
+compact  -> llm, session, strutil, tokens, tools
+tui      -> strutil
+mcp      -> agent, config, llm, strutil (+ mcp-go; never tools/tui/command — adapters live in main.go)
+subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by main.go)
 permit   -> agent, tools (never tui; prompter/classifier interfaces are supplied by main.go)
 refs     -> agent, llm, tokens, tools, tui
 command  -> agent, config, llm, refs, tokens, tools, tui

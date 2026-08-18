@@ -3,6 +3,7 @@ package tui
 import (
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -76,27 +77,6 @@ func TestUsageBar(t *testing.T) {
 	}
 }
 
-func TestFormatTokens(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    int
-		expected string
-	}{
-		{"small", 950, "950"},
-		{"exact_thousand", 1000, "1k"},
-		{"fractional_k", 68200, "68.2k"},
-		{"exact_million", 1000000, "1M"},
-		{"fractional_m", 1260000, "1.3M"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, formatTokens(tc.input))
-		})
-	}
-}
-
 func TestFormatBytes(t *testing.T) {
 	t.Parallel()
 
@@ -126,6 +106,6 @@ func TestFormatBytesNotTokens(t *testing.T) {
 	t.Parallel()
 
 	// the same number reads differently: ÷1000 unsuffixed vs ÷1024 with a unit
-	assert.Equal(t, "3.7k", FormatTokens(3686))
+	assert.Equal(t, "3.7k", strutil.FormatTokens(3686))
 	assert.Equal(t, "3.6kb", FormatBytes(3686))
 }

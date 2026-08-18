@@ -54,7 +54,7 @@ func Measure(path string) (Measurement, error) {
 	if info.Size() > MeasureCeiling {
 		return m, nil // too big to count lines; bytes already set
 	}
-	data, err := readAllFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return m, nil // stat said it existed; treat a vanishing read as no lines
 	}

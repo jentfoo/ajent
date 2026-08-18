@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
@@ -21,7 +22,7 @@ func mapCallResult(r *mcp.CallToolResult) Result {
 	for _, c := range r.Content {
 		switch b := c.(type) {
 		case mcp.TextContent:
-			if t := stringsTrim(b.Text); t != "" {
+			if t := strings.TrimSpace(b.Text); t != "" {
 				res.Content = append(res.Content, t)
 			}
 		case mcp.ImageContent:
@@ -50,7 +51,7 @@ func mapCallResult(r *mcp.CallToolResult) Result {
 func refText(c mcp.Content) string {
 	switch b := c.(type) {
 	case mcp.ResourceLink:
-		if stringsTrim(b.Description) != "" {
+		if strings.TrimSpace(b.Description) != "" {
 			return fmt.Sprintf("[resource: %s (%s)]", b.URI, b.Description)
 		}
 		return "[resource: " + b.URI + "]"
@@ -67,18 +68,3 @@ func (r Result) toBlocks() llm.BlockList {
 	}
 	return out
 }
-
-// stringsTrim trims ASCII whitespace from both ends of s.
-func stringsTrim(s string) string {
-	i := 0
-	for i < len(s) && isSpace(s[i]) {
-		i++
-	}
-	j := len(s)
-	for j > i && isSpace(s[j-1]) {
-		j--
-	}
-	return s[i:j]
-}
-
-func isSpace(c byte) bool { return c == ' ' || c == '\t' || c == '\n' || c == '\r' }

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -252,9 +253,9 @@ func TestUIToolStart(t *testing.T) {
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0), "the header commits up front")
 	// no separate spinner row above the input; the tool rides in the status bar.
 	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
-	assert.True(t, strings.HasPrefix(stripANSI(statusRow), spinnerFrames[0]),
+	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]),
 		"spinner still leads the bottom-left status line while a tool runs")
-	assert.Contains(t, stripANSI(statusRow), "bash: go test ./...",
+	assert.Contains(t, strutil.StripANSI(statusRow), "bash: go test ./...",
 		"running tool label sits next to the working glyph in the status bar")
 
 	done("ok  0.4s")
@@ -285,7 +286,7 @@ func TestUIBusy(t *testing.T) {
 	doneTool := u.ToolStart("bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
 	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1 (divider), input then status
-	assert.Contains(t, stripANSI(statusRow), "bash: go test ./...")
+	assert.Contains(t, strutil.StripANSI(statusRow), "bash: go test ./...")
 	doneTool("ok  0.4s")
 
 	stop()
@@ -299,7 +300,7 @@ func TestUIStatusSpinnerLeftmost(t *testing.T) {
 
 	// the spinner is the first element of the status line, before model and tokens.
 	statusRow := u.line(v, 2) // live block: divider on row 0, input on row 1, status on row 2
-	assert.True(t, strings.HasPrefix(stripANSI(statusRow), spinnerFrames[0]),
+	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]),
 		"spinner occupies the leftmost column of the status bar")
 }
 
@@ -521,12 +522,12 @@ func TestUISearchOverlay(t *testing.T) {
 	t.Run("ctrl_r_opens_overlay", func(t *testing.T) {
 		press(key{typ: keyReverseSearch})
 		deliver()
-		assert.Contains(t, stripANSI(v.Line(1)), "(reverse-i-search)`':")
+		assert.Contains(t, strutil.StripANSI(v.Line(1)), "(reverse-i-search)`':")
 	})
 	t.Run("typing_narrows", func(t *testing.T) {
 		press(key{typ: keyRune, text: "retry"})
 		// the header shows the query and detail; the full match renders below it
-		assert.Contains(t, stripANSI(v.Line(1)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
+		assert.Contains(t, strutil.StripANSI(v.Line(1)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
 		assert.Contains(t, v.Line(2), "fix the retry loop")
 	})
 	t.Run("enter_fills_editor_without_submitting", func(t *testing.T) {

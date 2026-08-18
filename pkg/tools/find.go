@@ -78,7 +78,7 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 // git ls-files inside a repo for .gitignore semantics and walks otherwise.
 func listFiles(root, pattern string, max int) ([]string, bool) {
 	var entries []string
-	if isGitRepo(root) {
+	if IsGitRepo(root) {
 		out := runQuiet("git", "-C", root, "ls-files", "-co", "--exclude-standard")
 		for line := range strings.Lines(out) {
 			if trimmed := strings.TrimSpace(line); trimmed != "" {
@@ -91,7 +91,7 @@ func listFiles(root, pattern string, max int) ([]string, bool) {
 				return nil
 			}
 			if d.IsDir() {
-				if isSkipped(p) {
+				if IsSkippedDir(p) {
 					return filepath.SkipDir // never descend into VCS or dependency dirs
 				}
 				return nil
@@ -115,13 +115,13 @@ func listFiles(root, pattern string, max int) ([]string, bool) {
 	return out, truncated
 }
 
-// isGitRepo reports whether root is inside a git work tree.
-func isGitRepo(root string) bool {
+// IsGitRepo reports whether root is inside a git work tree.
+func IsGitRepo(root string) bool {
 	return runQuiet("git", "-C", root, "rev-parse", "--is-inside-work-tree") == "true"
 }
 
-// isSkipped reports whether path lies under a VCS or dependency directory.
-func isSkipped(path string) bool {
+// IsSkippedDir reports whether path lies under a VCS or dependency directory.
+func IsSkippedDir(path string) bool {
 	for part := range strings.SplitSeq(filepath.Clean(path), string(filepath.Separator)) {
 		switch part {
 		case ".git", ".hg", ".svn", "node_modules", ".venv":

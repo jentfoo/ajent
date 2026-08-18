@@ -1,7 +1,6 @@
 package subagent
 
 import (
-	"encoding/json"
 	"strings"
 	"sync"
 	"time"
@@ -155,25 +154,10 @@ func toolLabel(call agent.ToolCall, label string) string {
 		return oneLine(label)
 	}
 	lbl := call.Name
-	if arg := firstArgText(call.Input); arg != "" { // bare built-in labels: add its target
+	if arg := strutil.FirstArgText(call.Input); arg != "" { // bare built-in labels: add its target
 		lbl += " " + strutil.FirstLine(arg)
 	}
 	return oneLine(lbl)
-}
-
-// firstArgText pulls the first non-empty string field out of a tool call's JSON
-// input for display; most tools take an object whose values name their targets.
-func firstArgText(input json.RawMessage) string {
-	var m map[string]any
-	if err := json.Unmarshal(input, &m); err != nil {
-		return ""
-	}
-	for _, v := range m {
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return s
-		}
-	}
-	return ""
 }
 
 // oneLine collapses newlines and runs of whitespace to single spaces.

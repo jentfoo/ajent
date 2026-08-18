@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -466,7 +467,7 @@ func TestGuardedToolPreviewOrdering(t *testing.T) {
 		require.Len(t, dc.calls, 1)
 		assert.Equal(t, "hello ajent\n", dc.last().After)
 
-		got, readErr := readAllFile(e.policy.Cwd + "/a.txt")
+		got, readErr := os.ReadFile(e.policy.Cwd + "/a.txt")
 		require.NoError(t, readErr)
 		assert.Equal(t, "hello world\n", string(got)) // nothing touched disk
 	})

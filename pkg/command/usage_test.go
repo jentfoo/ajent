@@ -5,9 +5,8 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/tui"
-
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,7 +30,7 @@ func TestUsageShowsChildSpendWhenDelegated(t *testing.T) {
 	out := strings.Join(c.prints, "\n")
 	ct := a.ChildTotal() // the delegated subset is exactly what /usage shows
 	assert.Contains(t, out, "of which sub-agents:")
-	assert.Contains(t, out, tui.FormatTokens(ct.Input)+" in / "+tui.FormatTokens(ct.Output)+" out")
+	assert.Contains(t, out, strutil.FormatTokens(ct.Input)+" in / "+strutil.FormatTokens(ct.Output)+" out")
 }
 
 func TestUsageOmitsChildRowWithoutDelegation(t *testing.T) {

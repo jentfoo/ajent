@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
@@ -84,7 +85,7 @@ func modelCompletion(c Console) func(prefix string) []string {
 func modelDetail(m llm.Model) string {
 	parts := []string{m.Display()}
 	if m.ContextWindow > 0 {
-		parts = append(parts, tui.FormatTokens(m.ContextWindow))
+		parts = append(parts, strutil.FormatTokens(m.ContextWindow))
 	}
 	if m.Caps.Reasoning {
 		parts = append(parts, "reasoning")

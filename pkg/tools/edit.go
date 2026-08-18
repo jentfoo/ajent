@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -47,7 +48,7 @@ func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	data, err := readAllFile(full) // missing or unreadable counts as will-fail
+	data, err := os.ReadFile(full) // missing or unreadable counts as will-fail
 	if err != nil {
 		return Change{}, err
 	}
@@ -100,7 +101,7 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		return resultErr("edit refused: " + ck.Error()), nil
 	}
 
-	data, _ := readAllFile(full)
+	data, _ := os.ReadFile(full)
 	buf := string(data)
 
 	applied, err := applyEdits(p.Path, buf, p.Edits)

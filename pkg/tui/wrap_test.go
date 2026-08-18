@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,7 +109,7 @@ func TestWrapLineStyled(t *testing.T) {
 		rows := wrapLine(line, 12)
 		var joined strings.Builder
 		for _, r := range rows {
-			joined.WriteString(stripANSI(r))
+			joined.WriteString(strutil.StripANSI(r))
 		}
 		assert.Contains(t, joined.String(), "strong")
 		assert.Contains(t, rows[0]+rows[1], bold.Open())

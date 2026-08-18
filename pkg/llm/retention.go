@@ -28,7 +28,7 @@ func resolveRetention(policy RetainPolicy, caps Capabilities) RetainPolicy {
 func retentionBounds(msgs []Message) (keepFrom, lastAssistant int) {
 	lastAssistant = -1
 	for i, m := range msgs {
-		if m.Role == RoleUser && !onlyToolResults(m.Content) {
+		if m.Role == RoleUser && !OnlyToolResults(m.Content) {
 			keepFrom = i
 		} else if m.Role == RoleAssistant {
 			lastAssistant = i
@@ -79,7 +79,7 @@ func hasThinking(blocks BlockList) bool {
 	})
 }
 
-func onlyToolResults(blocks BlockList) bool {
+func OnlyToolResults(blocks BlockList) bool {
 	if len(blocks) == 0 {
 		return false
 	}

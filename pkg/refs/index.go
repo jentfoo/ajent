@@ -189,14 +189,14 @@ func (idx *Index) ensureFresh() []entry {
 func enumerate(root string) ([]entry, map[string]time.Time) {
 	var entries []entry
 	mtimes := make(map[string]time.Time)
-	if isGitRepo(root) {
+	if tools.IsGitRepo(root) {
 		return enumerateRepo(root, &entries, mtimes), mtimes
 	}
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil || p == root {
 			return nil // descend past the root but never offer it as a candidate
 		}
-		if isSkippedDir(p) && d.IsDir() {
+		if tools.IsSkippedDir(p) && d.IsDir() {
 			return filepath.SkipDir
 		}
 		entries = append(entries, entry{path: p, isDir: d.IsDir()})
@@ -253,23 +253,4 @@ func statMod(path string) time.Time {
 		return fi.ModTime()
 	}
 	return time.Time{}
-}
-
-// isGitRepo reports whether root is inside a git work tree.
-func isGitRepo(root string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--is-inside-work-tree").Output()
-	return strings.TrimSpace(string(out)) == "true" && err == nil
-}
-
-// isSkippedDir reports whether path lies under a VCS or dependency directory.
-func isSkippedDir(path string) bool {
-	for part := range strings.SplitSeq(filepath.Clean(path), string(filepath.Separator)) {
-		switch part {
-		case ".git", ".hg", ".svn", "node_modules", ".venv":
-			return true
-		}
-	}
-	return false
 }

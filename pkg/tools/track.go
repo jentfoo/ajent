@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"sync"
@@ -63,7 +62,7 @@ func (t *Tracker) Check(path string) error {
 	if err != nil {
 		return fmt.Errorf("tools: cannot stat %s: %w", path, err)
 	}
-	data, err := readAllFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("tools: cannot re-read %s: %w", path, err)
 	}
@@ -99,14 +98,4 @@ func ErrStale(path string) error { return errStale{path: path} }
 func IsStale(err error) bool {
 	var e errStale
 	return errors.As(err, &e)
-}
-
-// readAllFile reads the whole file at path.
-func readAllFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	return io.ReadAll(f)
 }

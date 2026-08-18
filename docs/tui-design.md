@@ -62,8 +62,9 @@ separating it from committed output above (see "Prompt divider" below).
   per running investigation, showing its task or most recent output) and
   **tool-call progress** — a call the model is still composing, keyed `call:<id>`,
   showing its name, target and the argument lines/bytes accumulated so far. Sizes
-  go through `FormatBytes` (binary, explicit `b`/`kb`/`mb`), never `FormatTokens`
-  (decimal, unsuffixed), so a stream size is never misread as a token count. The
+  go through `FormatBytes` (binary, explicit `b`/`kb`/`mb`), never
+  `strutil.FormatTokens` (decimal, unsuffixed), so a stream size is never
+  misread as a token count. The
   latter fills the silence while a large `write` streams; it clears when the call
   completes and its `⏺` header and diff take over. Rendered in insertion order,
   each elided to width —

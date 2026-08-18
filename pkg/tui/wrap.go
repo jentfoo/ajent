@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/rivo/uniseg"
 )
 
@@ -126,7 +127,7 @@ func breakPoint(cs []cell, start, end int) int {
 // hangWidth returns the display width of a line's leading indent plus any list
 // or quote marker, so continuation rows align under the text.
 func hangWidth(line string) int {
-	plain := stripANSI(line)
+	plain := strutil.StripANSI(line)
 	var w int
 	for len(plain) > 0 && plain[0] == ' ' {
 		plain, w = plain[1:], w+1

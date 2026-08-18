@@ -9,6 +9,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/compact"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -177,5 +178,5 @@ func reportLine(res *compact.Result) string {
 		detail = " (" + strings.Join(clauses, ", ") + ")"
 	}
 	return fmt.Sprintf("compacted %s → %s%s",
-		tui.FormatTokens(res.Before), tui.FormatTokens(res.After), detail)
+		strutil.FormatTokens(res.Before), strutil.FormatTokens(res.After), detail)
 }

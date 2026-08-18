@@ -23,7 +23,7 @@ func probeFile(path string) (data []byte, info os.FileInfo, kind fileKind, err e
 	if err != nil {
 		return nil, nil, fileText, err
 	}
-	data, err = readAllFile(path)
+	data, err = os.ReadFile(path)
 	if err != nil {
 		return nil, nil, fileText, err
 	}

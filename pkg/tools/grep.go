@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -127,7 +128,7 @@ func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Re
 		if p.Glob != "" && !matchGlob(p.Glob, relTo(cwd, path)) {
 			continue
 		}
-		data, err := readAllFile(path)
+		data, err := os.ReadFile(path)
 		if err != nil || binary(data) {
 			continue
 		}
@@ -258,7 +259,7 @@ type grepHit struct {
 func listAllFiles(cwd string) []string {
 	var out []string
 	for _, p := range allWalk(cwd) {
-		if !isSkipped(p) {
+		if !IsSkippedDir(p) {
 			out = append(out, p)
 		}
 	}

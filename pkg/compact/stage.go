@@ -80,7 +80,7 @@ func structural(branch []session.Entry, cwd string) (stubs []session.Stub, drops
 			stats.Aborted++
 			continue
 		}
-		if m.Role != llm.RoleUser || !onlyToolResults(m.Content) {
+		if m.Role != llm.RoleUser || !llm.OnlyToolResults(m.Content) {
 			continue
 		}
 
@@ -145,7 +145,7 @@ func truncate(branch []session.Entry, cwd string, r *session.Reduce) []session.S
 			}
 			continue
 		}
-		if m.Role != llm.RoleUser || !onlyToolResults(m.Content) {
+		if m.Role != llm.RoleUser || !llm.OnlyToolResults(m.Content) {
 			continue
 		}
 		for _, b := range m.Content {
@@ -206,7 +206,7 @@ func failedStub(name string, tr llm.ToolResultBlock) string {
 	if line == "" {
 		return "[tool " + name + " failed: output dropped]"
 	}
-	return "[tool " + name + " failed: " + clip(line, 80) + "]"
+	return "[tool " + name + " failed: " + strutil.Clip(line, 80) + "]"
 }
 
 // canonicalPath resolves the path argument of a tool call input to one key.
@@ -219,7 +219,7 @@ func canonicalPath(resolve func(string) (string, error), input json.RawMessage) 
 	}
 	r, err := resolve(p.Path)
 	if err != nil {
-		return fileClean(p.Path)
+		return p.Path // bare fallback keeps superseded detection on a stable key
 	}
 	return r
 }
@@ -251,7 +251,7 @@ func turnCounts(branch []session.Entry) (turns []int, total int) {
 		m := md.Message
 		switch m.Role {
 		case llm.RoleUser:
-			if !onlyToolResults(m.Content) {
+			if !llm.OnlyToolResults(m.Content) {
 				total++ // a real user prompt opens the next turn
 			}
 		}
@@ -296,29 +296,3 @@ func blankText(content llm.BlockList) bool {
 	}
 	return !saw
 }
-
-// onlyToolResults reports whether a user message carries nothing but results.
-func onlyToolResults(blocks llm.BlockList) bool {
-	if len(blocks) == 0 {
-		return false
-	}
-	for _, b := range blocks {
-		if _, ok := b.(llm.ToolResultBlock); !ok {
-			return false
-		}
-	}
-	return true
-}
-
-// clip truncates s to n runes for a stub label.
-func clip(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
-
-// fileClean is a bare fallback cleaner when PathPolicy resolution fails; it never
-// errors so superseded detection still has a stable key.
-func fileClean(p string) string { return p }

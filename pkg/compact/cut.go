@@ -73,7 +73,7 @@ func isValidCut(e session.Entry) bool {
 	}
 	switch md.Message.Role {
 	case llm.RoleUser:
-		return !onlyToolResults(md.Message.Content) // a turn start, never mid-result
+		return !llm.OnlyToolResults(md.Message.Content) // a turn start, never mid-result
 	case llm.RoleAssistant:
 		return true // keeps its own tool_use and the results that follow in [i:]
 	default:

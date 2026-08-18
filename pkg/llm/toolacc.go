@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // toolAccumulator assembles tool calls from chat-completions deltas, which
@@ -106,15 +108,7 @@ func finishToolInput(raw string) (json.RawMessage, error) {
 	if raw == "" || raw == `""` {
 		return json.RawMessage("{}"), nil // several local models mean "no arguments"
 	} else if !json.Valid([]byte(raw)) {
-		return json.RawMessage(raw), fmt.Errorf("%w: %s", ErrMalformedToolArgs, truncate(raw, 120))
+		return json.RawMessage(raw), fmt.Errorf("%w: %s", ErrMalformedToolArgs, strutil.Clip(raw, 120))
 	}
 	return json.RawMessage(raw), nil
-}
-
-// truncate shortens s for an error message.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }

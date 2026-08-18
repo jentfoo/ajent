@@ -40,7 +40,7 @@ func (t *writeTool) Preview(call agent.ToolCall) (Change, error) {
 	}
 	var existing string
 	if _, statErr := os.Stat(full); statErr == nil { // show the delta when overwriting too
-		b, _ := readAllFile(full)
+		b, _ := os.ReadFile(full)
 		existing = string(b)
 	}
 	return Change{Path: p.Path, Before: existing, After: p.Content}, nil

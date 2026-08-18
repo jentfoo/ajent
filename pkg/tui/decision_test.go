@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +53,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		ctx := t.Context()
 		go func() { _, _ = d.Wait(ctx) }()
 		waitFor(t, u, v, strings.Repeat("x", 79))
-		assert.NotContains(t, stripANSI(u.snapshot(v)), long)
+		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), long)
 	})
 	t.Run("marks_when_the_subject_is_cut_by_height", func(t *testing.T) {
 		u, v, _ := tallUI(t)
@@ -66,7 +67,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		ctx := t.Context()
 		go func() { _, _ = d.Wait(ctx) }()
 		waitFor(t, u, v, "…+3 lines")
-		assert.NotContains(t, stripANSI(u.snapshot(v)), "line-"+strings.Repeat("a", decisionContextRows+2))
+		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "line-"+strings.Repeat("a", decisionContextRows+2))
 	})
 	t.Run("cuts_the_subject_to_its_char_budget", func(t *testing.T) {
 		u, v, _ := tallUI(t)
@@ -81,7 +82,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		go func() { _, _ = d.Wait(ctx) }()
 		// the total exceeds decisionContextChars, so some lines are dropped
 		assert.Eventually(t, func() bool {
-			s := stripANSI(u.snapshot(v))
+			s := strutil.StripANSI(u.snapshot(v))
 			return strings.Contains(s, "+") && !strings.Contains(s, "yyyy yyyy")
 		}, time.Second, testPoll)
 	})
@@ -194,7 +195,7 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		assert.Eventually(t, func() bool {
 			return strings.Contains(u.snapshot(v), "! Go? Yes")
 		}, time.Second, testPoll)
-		count := strings.Count(stripANSI(u.snapshot(v)), "Go? Yes")
+		count := strings.Count(strutil.StripANSI(u.snapshot(v)), "Go? Yes")
 		assert.Equal(t, 1, count, "the summary is committed exactly once")
 	})
 	t.Run("resolving_a_queued_dialog_promotes_the_next", func(t *testing.T) {

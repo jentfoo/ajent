@@ -8,6 +8,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // Summariser prompts, from docs/prompt-design.md. They are the exact-format spec
@@ -204,7 +205,7 @@ func serialise(b *strings.Builder, entries []session.Entry) {
 		case llm.RoleUser:
 			for _, blk := range m.Content {
 				if tr, ok := blk.(llm.ToolResultBlock); ok {
-					fmt.Fprintf(b, "[Tool result]: %s\n", clip(resultText(tr), 2048))
+					fmt.Fprintf(b, "[Tool result]: %s\n", strutil.Clip(resultText(tr), 2048))
 				}
 			}
 			if t := userPlain(m); t != "" {
@@ -219,10 +220,10 @@ func serialise(b *strings.Builder, entries []session.Entry) {
 					}
 				case llm.ThinkingBlock:
 					if strings.TrimSpace(c.Text) != "" {
-						b.WriteString("[Assistant thinking]: " + clip(c.Text, 1024) + "\n")
+						b.WriteString("[Assistant thinking]: " + strutil.Clip(c.Text, 1024) + "\n")
 					}
 				case llm.ToolCallBlock:
-					fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, clip(string(c.Input), 512))
+					fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, strutil.Clip(string(c.Input), 512))
 				}
 			}
 		default:
@@ -257,7 +258,7 @@ func lastUserTurn(branch []session.Entry) int {
 		if err := e.Decode(&md); err != nil || md.Message.Role != llm.RoleUser {
 			continue
 		}
-		if !onlyToolResults(md.Message.Content) {
+		if !llm.OnlyToolResults(md.Message.Content) {
 			return i
 		}
 	}

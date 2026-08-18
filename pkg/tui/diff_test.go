@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -114,8 +115,8 @@ func TestRenderDiff(t *testing.T) {
 		out := RenderDiff(th, "x.go", "short\nsecond\n", "a much longer line\nsecond\n")
 		assert.NotContains(t, out, "\x1b[48;") // no background SGR anywhere
 		// and no padding: the short side keeps its own length
-		assert.Contains(t, stripANSI(out), "\n 1 - short\n")
-		assert.Contains(t, stripANSI(out), "\n 2   second\n")
+		assert.Contains(t, strutil.StripANSI(out), "\n 1 - short\n")
+		assert.Contains(t, strutil.StripANSI(out), "\n 2   second\n")
 	})
 }
 

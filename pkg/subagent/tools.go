@@ -55,7 +55,7 @@ func (t *startTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Ou
 	if err := json.Unmarshal(call.Input, &p); err != nil {
 		return resultErr("bad args: " + err.Error()), nil
 	}
-	p.Task = trimSpace(p.Task)
+	p.Task = strings.TrimSpace(p.Task)
 	if p.Task == "" {
 		return resultErr("agent_start requires a task"), nil
 	}
@@ -75,7 +75,7 @@ func (t *pollTool) Name() string { return "agent_poll" }
 func (t *pollTool) Label(call agent.ToolCall) string {
 	var p pollParams
 	if json.Unmarshal(call.Input, &p) == nil {
-		if id := trimSpace(p.ID); id != "" {
+		if id := strings.TrimSpace(p.ID); id != "" {
 			return "sub-agent: poll " + normalizeID(id)
 		}
 	}
@@ -103,7 +103,7 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 	j, ok := t.m.lookup(p.ID)
 	if !ok {
-		return resultErr("unknown sub-agent id " + trimSpace(p.ID)), nil
+		return resultErr("unknown sub-agent id " + strings.TrimSpace(p.ID)), nil
 	}
 	snap, complete := t.m.Poll(ctx, j.id)
 	if ctx.Err() != nil { // the turn was interrupted; release promptly and let abort fill this call
@@ -117,7 +117,7 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	case snap.Status == StatusError && snap.Err != nil:
 		return resultErr(snap.Err.Error()), nil
 	default: // done with a summary, or an empty one fell back to the placeholder
-		out := trimSpace(snap.Summary)
+		out := strings.TrimSpace(snap.Summary)
 		if out == "" {
 			out = placeholder
 		}
@@ -189,6 +189,3 @@ func resultErr(msg string) agent.ToolResult {
 	r.IsError = true
 	return r
 }
-
-// trimSpace trims surrounding whitespace from a tool argument.
-func trimSpace(s string) string { return strings.TrimSpace(s) }

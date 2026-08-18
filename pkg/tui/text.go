@@ -105,17 +105,6 @@ func truncateDisplay(s string, max int) string {
 	return b.String()
 }
 
-// stripANSI returns s with every escape sequence removed.
-func stripANSI(s string) string {
-	var b strings.Builder
-	for _, seg := range splitANSI(s) {
-		if !seg.escape {
-			b.WriteString(seg.text)
-		}
-	}
-	return b.String()
-}
-
 // GraphemeCells splits s into grapheme clusters, one cell per element.
 func GraphemeCells(s string) []string {
 	return graphemesOf(s)

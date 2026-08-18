@@ -11,6 +11,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
@@ -461,12 +462,10 @@ func formatElapsed(d time.Duration) string {
 // shortLabel reduces task text to one rune-safe line.
 func shortLabel(text string) string {
 	line := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
-	r := []rune(line)
-	if len(r) <= maxLabelLen {
+	if len([]rune(line)) <= maxLabelLen {
 		return line
 	}
-	r = append(r[:maxLabelLen-3], []rune("...")...)
-	return string(r)
+	return strutil.Clip(line, maxLabelLen-1) // the ellipsis takes one rune of the budget
 }
 
 // normalizeID accepts sub-2 or bare 2.

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,7 +79,7 @@ func TestRenderMarkdown(t *testing.T) {
 			assert.True(t, lines[0].rule)
 			rows := lines[0].rows(12)
 			require.Len(t, rows, 1)
-			assert.Equal(t, strings.Repeat(ruleChar, 12), stripANSI(rows[0]), "a rule draws to the width it is laid at")
+			assert.Equal(t, strings.Repeat(ruleChar, 12), strutil.StripANSI(rows[0]), "a rule draws to the width it is laid at")
 		}
 	})
 	t.Run("table_rendered", func(t *testing.T) {

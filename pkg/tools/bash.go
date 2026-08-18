@@ -174,7 +174,7 @@ type syncSink struct {
 }
 
 func (s *syncSink) Write(p []byte) (int, error) {
-	san := stripANSI(string(p))
+	san := strutil.StripANSI(string(p))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, _ = s.out.Write([]byte(san))

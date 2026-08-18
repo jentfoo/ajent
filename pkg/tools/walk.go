@@ -27,7 +27,7 @@ func allWalk(root string) []string {
 			return nil
 		}
 		if d.IsDir() {
-			if isSkipped(p) {
+			if IsSkippedDir(p) {
 				return filepath.SkipDir
 			}
 			return nil

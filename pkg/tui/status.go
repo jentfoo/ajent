@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 const (
@@ -99,7 +101,7 @@ func (s Status) fixedParts(t Theme) []string {
 		if s.Estimated {
 			tilde = "~" // the count is approximate until the next provider report
 		}
-		toks := t.Dim.Wrap(tilde + formatTokens(s.Tokens) + "/" + formatTokens(s.MaxTokens))
+		toks := t.Dim.Wrap(tilde + strutil.FormatTokens(s.Tokens) + "/" + strutil.FormatTokens(s.MaxTokens))
 		parts = append(parts, bar+" "+toks)
 	}
 	if s.Model != "" {
@@ -219,11 +221,6 @@ func usageBar(pct int) string {
 	return strings.Repeat(barFull, filled) + strings.Repeat(barEmpty, statusBarCells-filled)
 }
 
-// FormatTokens abbreviates a token count, such as 68.2k or 1.2M.
-func FormatTokens(n int) string {
-	return formatTokens(n)
-}
-
 // FormatBytes abbreviates a byte count, such as 259b, 3.5kb or 1.2mb. Binary
 // units with an explicit suffix, so a size is never mistaken for a token count;
 // kept in step with tools.HumanSize, which annotations use.
@@ -234,26 +231,10 @@ func FormatBytes(n int) string {
 	)
 	switch {
 	case float64(n) >= mb:
-		return trimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
+		return strutil.TrimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
 	case float64(n) >= kb:
-		return trimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
+		return strutil.TrimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
 	default:
 		return strconv.Itoa(n) + "b"
 	}
-}
-
-// formatTokens abbreviates a token count, such as 68.2k or 1.2M.
-func formatTokens(n int) string {
-	switch {
-	case n >= 1_000_000:
-		return trimZero(strconv.FormatFloat(float64(n)/1_000_000, 'f', 1, 64)) + "M"
-	case n >= 1_000:
-		return trimZero(strconv.FormatFloat(float64(n)/1_000, 'f', 1, 64)) + "k"
-	default:
-		return strconv.Itoa(n)
-	}
-}
-
-func trimZero(s string) string {
-	return strings.TrimSuffix(s, ".0")
 }

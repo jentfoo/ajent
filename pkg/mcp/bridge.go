@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // defaultCallTimeout bounds a single MCP tool call when the server sets none.
@@ -105,17 +105,5 @@ func (b *bridgeTool) Execute(ctx context.Context, call agent.ToolCall, out agent
 
 // displayOf renders a one-line history summary of the result.
 func displayOf(r Result) string {
-	return elide(strings.Join(r.Content, ""), 1000)
-}
-
-// elide truncates s to at most n bytes with an ellipsis marker. The cut backs off
-// to a UTF-8 rune boundary so multibyte content is never split mid-rune.
-func elide(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) { // step back from the cut to a rune start
-		n--
-	}
-	return s[:n] + "…"
+	return strutil.Clip(strings.Join(r.Content, ""), 1000)
 }

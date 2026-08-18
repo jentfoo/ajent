@@ -58,7 +58,7 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 			m := md.Message
 			switch m.Role {
 			case llm.RoleUser:
-				if onlyToolResults(m.Content) {
+				if llm.OnlyToolResults(m.Content) {
 					foldResults(pending, m.Content)
 					continue
 				}
@@ -142,17 +142,4 @@ func modelFromKey(key string) llm.Model {
 		return llm.Model{Provider: key[:i], ID: key[i+1:]}
 	}
 	return llm.Model{ID: key}
-}
-
-// onlyToolResults reports whether a user message carries nothing but results.
-func onlyToolResults(blocks llm.BlockList) bool {
-	if len(blocks) == 0 {
-		return false
-	}
-	for _, b := range blocks {
-		if _, ok := b.(llm.ToolResultBlock); !ok {
-			return false
-		}
-	}
-	return true
 }

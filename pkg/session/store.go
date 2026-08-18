@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 const (
@@ -174,7 +175,7 @@ func slug(p string) string {
 	for _, r := range strings.ToLower(filepath.Base(p)) {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
-		} else if b.Len() > 0 && lastChar(b) != '-' {
+		} else if b.Len() > 0 && b.String()[b.Len()-1] != '-' {
 			b.WriteByte('-')
 		}
 	}
@@ -184,8 +185,6 @@ func slug(p string) string {
 	}
 	return s
 }
-
-func lastChar(b strings.Builder) byte { return b.String()[b.Len()-1] }
 
 // hash8 returns the first 32 bits of sha256 over p, as hex.
 func hash8(p string) string {
@@ -197,8 +196,5 @@ const maxFirstLen = 80
 
 // truncate caps s for Info.First display.
 func truncate(s string) string {
-	if len(s) <= maxFirstLen {
-		return s
-	}
-	return s[:maxFirstLen] + "…"
+	return strutil.Clip(s, maxFirstLen)
 }

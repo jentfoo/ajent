@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -230,7 +231,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		got := s.rows(plain, 30)
 		assert.Len(t, got, 2) // one row overflows, so segments take a second row
 		row2 := got[1]
-		assert.Equal(t, "pr", stripANSI(row2)) // short form, never the full text
+		assert.Equal(t, "pr", strutil.StripANSI(row2)) // short form, never the full text
 	})
 	t.Run("empty_segment_text_skipped", func(t *testing.T) {
 		got := Status{Model: "m", Segments: []Segment{{Key: "a", Text: ""}}}.rows(plain, 80)

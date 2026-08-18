@@ -409,7 +409,7 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 		}
 
 		// a new turn boundary flushes any still-unanswered prior calls first
-		if m.Role == RoleAssistant || (m.Role == RoleUser && !onlyToolResults(m.Content)) {
+		if m.Role == RoleAssistant || (m.Role == RoleUser && !OnlyToolResults(m.Content)) {
 			flushPending()
 		}
 
@@ -444,7 +444,7 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 		if len(content) == 0 {
 			continue // a message emptied by skipped results is dropped
 		}
-		lastWasResults = m.Role == RoleUser && onlyToolResults(content)
+		lastWasResults = m.Role == RoleUser && OnlyToolResults(content)
 		out = append(out, Message{Role: m.Role, Content: content})
 	}
 

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -104,12 +105,12 @@ func TestSearchOverlayRows(t *testing.T) {
 		s := &searchOverlay{query: "zzz"}
 		s.refilter()
 		rows := s.rows(theme, 80, 8)
-		assert.Equal(t, selectIndent+"no match", stripANSI(rows[1]))
+		assert.Equal(t, selectIndent+"no match", strutil.StripANSI(rows[1]))
 	})
 	t.Run("searching_while_pending", func(t *testing.T) {
 		s := &searchOverlay{pending: true}
 		rows := s.rows(theme, 80, 8)
-		assert.Equal(t, selectIndent+"searching…", stripANSI(rows[1]))
+		assert.Equal(t, selectIndent+"searching…", strutil.StripANSI(rows[1]))
 	})
 	t.Run("detail_in_header", func(t *testing.T) {
 		s := &searchOverlay{query: "h", items: []SearchItem{{Text: "hi", Detail: "2026-01-02 03:04 UTC"}}}
@@ -120,7 +121,7 @@ func TestSearchOverlayRows(t *testing.T) {
 		s := &searchOverlay{query: "a", items: []SearchItem{{Text: strings.Join([]string{"a", "b", "c", "d", "e"}, "\n")}}}
 		s.refilter()
 		rows := s.rows(theme, 80, 3)
-		assert.Contains(t, stripANSI(rows[4]), moreLabel(2)) // 5 lines, budget 3 -> 2 hidden
+		assert.Contains(t, strutil.StripANSI(rows[4]), moreLabel(2)) // 5 lines, budget 3 -> 2 hidden
 	})
 }
 

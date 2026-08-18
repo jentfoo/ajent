@@ -1,9 +1,7 @@
 package session
 
 import (
-	"encoding/json"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -208,7 +206,7 @@ func RewindTarget(entries []Entry, rowID string) (head, fill string, ok bool) {
 			}
 			switch md.Message.Role {
 			case llm.RoleUser:
-				if onlyToolResults(md.Message.Content) {
+				if llm.OnlyToolResults(md.Message.Content) {
 					return e.ID, "", true // a tool result stays as its own head
 				}
 				return e.ParentID, EntryMessageText(e), true // user prompt: rewind before it and pre-fill
@@ -223,20 +221,6 @@ func RewindTarget(entries []Entry, rowID string) (head, fill string, ok bool) {
 	}
 	return "", "", false
 }
-
-// formatTokens abbreviates a token count for picker labels, mirroring the TUI's.
-func formatTokens(n int) string {
-	switch {
-	case n >= 1_000_000:
-		return trimZero(strconv.FormatFloat(float64(n)/1_000_000, 'f', 1, 64)) + "M"
-	case n >= 1000:
-		return trimZero(strconv.FormatFloat(float64(n)/1000, 'f', 1, 64)) + "k"
-	default:
-		return strconv.Itoa(n)
-	}
-}
-
-func trimZero(s string) string { return strings.TrimSuffix(s, ".0") }
 
 // EntryMessageText returns the full plain-text of a user or assistant message
 // entry, untruncated and newline-preserving. It is what rewinding onto that
@@ -275,7 +259,7 @@ func rowFor(e Entry) *PickerRow {
 		if err := e.Decode(&cd); err != nil || (cd.Before == 0 && cd.After == 0) {
 			return nil // unreadable or not yet measured; nothing to label
 		}
-		lbl := "compaction: " + formatTokens(cd.Before) + " → " + formatTokens(cd.After)
+		lbl := "compaction: " + strutil.FormatTokens(cd.Before) + " → " + strutil.FormatTokens(cd.After)
 		if cd.Summary != "" {
 			lbl += " · summarized"
 		}
@@ -291,7 +275,7 @@ func rowFor(e Entry) *PickerRow {
 	m := md.Message
 	switch m.Role {
 	case llm.RoleUser:
-		if onlyToolResults(m.Content) {
+		if llm.OnlyToolResults(m.Content) {
 			lbl := toolResultLabel(m)
 			if lbl == "" {
 				return nil
@@ -339,26 +323,11 @@ func toolCallLabel(m llm.Message) string {
 	for _, b := range m.Content {
 		if tc, ok := b.(llm.ToolCallBlock); ok {
 			lbl := "[" + tc.Name + "]"
-			if s := strings.TrimSpace(firstArgText(tc.Input)); s != "" {
+			if s := strings.TrimSpace(strutil.FirstArgText(tc.Input)); s != "" {
 				lbl += " " + truncate(strutil.FirstLine(s))
 			}
 			parts = append(parts, lbl)
 		}
 	}
 	return strings.Join(parts, " ")
-}
-
-// firstArgText pulls the first string field out of a tool call's JSON input for
-// display; most tools take an object whose values name their targets.
-func firstArgText(input json.RawMessage) string {
-	var m map[string]any
-	if err := json.Unmarshal(input, &m); err != nil {
-		return ""
-	}
-	for _, v := range m {
-		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
-			return s
-		}
-	}
-	return ""
 }
