@@ -23,9 +23,11 @@ type Tool interface {
 `Output` is the tool's display channel: writes stream to the UI as they arrive,
 and `Diff(path, before, after)` commits a rendered file change. `ToolResult`
 splits what the model sees (`Content`) from what history shows (`Display`) and
-carries structured `Details` for extensions and the transcript. A failing tool
-returns an error *result* (`IsError: true`), not a Go error — the turn
-continues and the model adapts.
+carries structured `Details` for extensions and the transcript. A tool **either
+streams to `agent.Output` or sets `ToolResult.Display`, never both** — otherwise
+its head renders twice (see the output-head rule in `tui-design.md`).
+A failing tool returns an error *result* (`IsError: true`), not a Go error —
+the turn continues and the model adapts.
 
 ### Schemas (`schema.go`)
 
@@ -162,11 +164,10 @@ truncation marker names the next `offset`. Binary files (NUL in the first 8 kB)
 are refused with a useful message; images are refused for now. Every successful
 read is recorded in the tracker.
 
-The model always sees the full line-numbered content (`Content`); only the
-history/display summary differs — it shows what was actually pulled in as counts
-alone, never the text: `read <path> (<lines> lines, <chars> chars)`. Both count
-the returned slice (honoring `offset`/`limit` and per-line truncation), not the
-whole file, so paging reports exactly what entered context.
+The model always sees the full line-numbered content (`Content`); `Display` is
+that same block, which the TUI elides to a head plus a collapse count via the
+shared output-head rule in `tui-design.md`. The path already rides on the tool
+header that `ToolStart` commits, so no bespoke summary string is produced here.
 
 ### write (`write.go`)
 

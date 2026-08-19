@@ -264,7 +264,10 @@ on a settled size change (`resize()` just picks up the new size; the next ordina
 frame erases from the parked cursor). Every text line goes out unwrapped
 (`flowReflow` and `flowWrap` alike) so the terminal owns its wrapping, which is
 why `UserEcho` commits the submitted message as `flowReflow` rather than
-pre-wrapping it. Structural fidelity on resize is alt mode's job: it owns a
+pre-wrapping it. The prompt is echoed at **submission time** (the driver's select
+loop, before any session-store write), not when a turn starts — so the typed line
+lands above the input instantly instead of waiting on MCP loading, ref expansion
+turn admission. Only prompts echo; `/commands` and `!shell` lines do not. Structural fidelity on resize is alt mode's job: it owns a
 viewport and re-lays everything from retained lines.
 
 The live preview must be refreshed **before** those blocks are committed: a
@@ -430,6 +433,29 @@ Table cells reuse the same `cell` machinery (`wrapCellLine`) so wrapped cell tex
 keeps its styling; column widths come from content and are shrunk (widest first)
 when they would overflow, never dropping data. Rows get a separator line between
 them.
+
+### The output head (`output.go`)
+
+Tool output reaches history through one mechanism shared by streamed `bash`
+output and a finished tool's `Display`, so both render identically instead of
+one flooding scrollback while the other shows nothing. An `outputHead` commits
+only the first `outputHeadLines` (4) whole lines; everything past it is counted,
+not shown, and collapses into one dim indented summary row (`… +N lines, X chars`)
+at call end. The head uses a `lineBuffer`, so an escape sequence or partial line
+is never split across the boundary.
+
+- **Streaming** (`UI.Output`) feeds the head incrementally; while more than the
+  head is pending it also refreshes a transient keyed activity row
+  (`outputKey`: `bash · N lines · B`), so long output still shows movement.
+- **A finished tool** sets `ToolResult.Display`, which the `ToolStart` done hook
+  runs through a throwaway `outputHead` for the identical head-plus-summary
+  treatment. A tool must therefore either stream or set `Display`, never both.
+- The head is owned by one call, not one turn: `ToolStart` resets it on entry and
+  its done hook closes (flush + summary) before committing any result, so two
+  calls in a single turn each get their own collapse line. `EndOutput` at turn
+  end remains as a safety flush.
+
+The model still receives the full unmodified `Content`; only history is elided.
 
 ## Content rendering
 

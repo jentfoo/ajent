@@ -27,11 +27,9 @@ type Sink struct {
 // New returns a sink that drives ui.
 func New(ui *tui.UI) *Sink { return &Sink{ui: ui} }
 
-// TurnStart echoes the user prompt and lights the working spinner until TurnEnd.
-func (s *Sink) TurnStart(info agent.TurnInfo) {
-	if strings.TrimSpace(info.Input.Text) != "" {
-		s.ui.UserEcho(info.Input.Text)
-	}
+// TurnStart lights the working spinner until TurnEnd. The prompt is echoed at
+// submission time, not here, so it lands above the line without waiting on the turn.
+func (s *Sink) TurnStart(agent.TurnInfo) {
 	s.busy = s.ui.Busy()
 }
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,7 +85,7 @@ type UI struct {
 
 	thinkBuf  lineBuffer
 	thinking  bool
-	outBuf    lineBuffer
+	out       outputHead
 	textBuf   string
 	streaming bool // a text block is partially buffered; show it live above input
 	textStart bool
@@ -288,7 +289,7 @@ func (u *UI) Reset() {
 	u.stopSpinner()
 	u.cancelRewindLocked()
 	u.thinkBuf.Flush()
-	u.outBuf.Flush()
+	u.out.reset()
 	u.textBuf = ""
 	u.streaming = false
 	u.textStart = false
@@ -458,18 +459,47 @@ func (u *UI) streamingRows(w int) []string {
 }
 
 // Output streams raw tool output, committed a line at a time with no markdown
-// parsing, so log and test output keep their exact shape.
+// parsing, so log and test output keep their exact shape. Only the first few
+// lines reach history; past that an activity row counts the rest as it runs.
 func (u *UI) Output(delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.commit(styleLines(u.theme.Dim, u.outBuf.Add(delta)), flowWrap)
+	if head := styleLines(u.theme.Dim, u.out.add(delta)); head != "" {
+		u.commit(head, flowWrap)
+	}
+	if u.out.hidden() > 0 {
+		u.setActivityLocked(outputKey, outputRow(&u.out))
+	}
 }
 
-// EndOutput flushes a partial output line.
+// EndOutput flushes a partial output line and closes the head.
 func (u *UI) EndOutput() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.commit(styleLines(u.theme.Dim, u.outBuf.Flush()), flowWrap)
+	u.endOutputLocked()
+}
+
+// endOutputLocked commits this call's streamed head, its collapse line and clears
+// the activity row. Caller holds the lock.
+func (u *UI) endOutputLocked() {
+	if tail := styleLines(u.theme.Dim, u.out.flush()); tail != "" {
+		u.commit(tail, flowWrap)
+	}
+	u.commitSummary(&u.out)
+	u.setActivityLocked(outputKey, "")
+	u.out.reset()
+}
+
+// outputRow renders the transient row a long-running tool shows past its head.
+func outputRow(h *outputHead) string {
+	return "bash · " + strconv.Itoa(h.hidden()) + " lines · " + FormatBytes(h.bytes)
+}
+
+// commitSummary appends h's collapse line, indented and dim, when anything is hidden.
+func (u *UI) commitSummary(h *outputHead) {
+	if sum := h.summary(); sum != "" {
+		u.commit(styleLines(u.theme.Dim, indentLines(sum, userContinue, userContinue)), flowWrap)
+	}
 }
 
 // Diff commits a colorized diff of a file edit.
@@ -491,6 +521,8 @@ func (u *UI) Diff(path, before, after string) {
 func (u *UI) ToolStart(label string) func(result string) {
 	u.mu.Lock()
 	label = sanitizeRow(label) // feeds the status row and the committed header
+	// a new call owns the output head; it must never share with a prior one in this turn.
+	u.out.reset()
 	u.gap()
 	u.commit(u.theme.Accent.Wrap(toolMarker)+" "+u.theme.Dim.Wrap(label), flowReflow)
 	u.tool = label
@@ -502,9 +534,19 @@ func (u *UI) ToolStart(label string) func(result string) {
 	return func(result string) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
+		// close this call's stream before showing its result, so two calls in one
+		// turn each get their own head and summary (EndOutput alone waits for TurnEnd).
+		u.endOutputLocked()
 		u.tool = ""
-		if result != "" {
-			u.commit(styleLines(u.theme.Dim, indentLines(result, userContinue, userContinue)), flowWrap)
+		if strings.TrimSpace(result) != "" {
+			// a non-streaming tool's Display gets the identical head-plus-summary treatment.
+			var h outputHead // add returns whole lines; flush picks up any trailing partial
+			head := styleLines(u.theme.Dim, h.add(result))
+			head += styleLines(u.theme.Dim, h.flush())
+			if head != "" {
+				u.commit(head, flowWrap)
+			}
+			u.commitSummary(&h)
 		}
 		// the tool label leaves the status bar; a busy turn keeps its glyph animated
 		u.syncSpinnerLocked()

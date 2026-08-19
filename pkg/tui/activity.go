@@ -50,6 +50,11 @@ type activityRow struct {
 func (u *UI) SetActivity(key, text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.setActivityLocked(key, text)
+}
+
+// setActivityLocked adds/replaces/removes a keyed activity row. Caller holds the lock.
+func (u *UI) setActivityLocked(key, text string) {
 	text = sanitizeRow(text)
 
 	for i := range u.activity {

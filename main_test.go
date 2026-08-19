@@ -281,6 +281,28 @@ func TestResumeByID(t *testing.T) {
 // TestExtractResume locks in how --resume and its optional id are parsed out of
 // argv: bare means pick, a following token or = form carries the id, and unrelated
 // args pass through untouched for flag.Parse.
+// TestSubmittedEcho asserts a submitted KindPrompt echoes above the line, while
+// commands and shell lines do not — matching TurnStart's old behaviour.
+func TestSubmittedEcho(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"prompt_echoes", "refactor the parser", "refactor the parser"},
+		{"blank_prompt_silent", "   ", ""},
+		{"command_not_echoed", "/model", ""},
+		{"shell_not_echoed", "!git status", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, submittedEcho(tc.in))
+		})
+	}
+}
+
 func TestExtractResume(t *testing.T) {
 	t.Parallel()
 	given, id, rest := extractResume([]string{"--resume", "01JXYZ"})

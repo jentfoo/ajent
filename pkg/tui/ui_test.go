@@ -2,10 +2,12 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -275,7 +277,8 @@ func TestUIToolStart(t *testing.T) {
 
 	done("ok  0.4s")
 
-	assert.Equal(t, "  ok  0.4s", v.Line(1))
+	// the result is a short Display; it commits as-is (no indent) under its header.
+	assert.Equal(t, "ok  0.4s", v.Line(1))
 	assert.Contains(t, v.Line(3), promptFirst, "no spinner row is left behind")
 }
 
@@ -351,6 +354,95 @@ func TestUIOutput(t *testing.T) {
 		u.EndOutput()
 		assert.Equal(t, "--- PASS: TestX (0.00s)", v.Line(5), "would be a thematic break as markdown")
 	})
+}
+
+// TestUIOutputHeadSummary asserts the shared output-head contract: 30 streamed
+// lines commit only the head plus one summary row, and the activity row tracks
+// the running count past it.
+func TestUIOutputHeadSummary(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	done := u.ToolStart("bash: long")
+	var b strings.Builder
+	for i := 1; i <= 30; i++ {
+		b.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+	u.Output(b.String())
+	// the committed head is four lines under the header.
+	assert.Equal(t, "⏺ bash: long", v.Line(0))
+	for i := 1; i <= outputHeadLines; i++ {
+		assert.Contains(t, u.snapshot(v), "line "+strconv.Itoa(i))
+	}
+	// the activity row counts lines past the head while it runs.
+	u.mu.Lock()
+	act := slices.Clone(u.activity)
+	u.mu.Unlock()
+	require.Len(t, act, 1)
+	assert.Equal(t, outputKey, act[0].key)
+
+	// closing the call commits one summary row and clears the activity row.
+	done("")
+	assert.Contains(t, u.snapshot(v), "… +26 lines")
+	u.mu.Lock()
+	act = slices.Clone(u.activity)
+	u.mu.Unlock()
+	require.Empty(t, act)
+}
+
+func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 14)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	// first call streams past the head.
+	doneA := u.ToolStart("bash: a")
+	var b strings.Builder
+	for i := 1; i <= 30; i++ {
+		b.WriteString("a" + strconv.Itoa(i) + "\n")
+	}
+	u.Output(b.String())
+	doneA("")
+
+	// second call in the same turn streams its own output past the head.
+	doneB := u.ToolStart("bash: b")
+	b.Reset()
+	for i := 1; i <= 30; i++ {
+		b.WriteString("b" + strconv.Itoa(i) + "\n")
+	}
+	u.Output(b.String())
+	doneB("")
+
+	// each call leaves exactly one summary row, so two appear in history.
+	screen := u.snapshot(v)
+	assert.Equal(t, 2, strings.Count(screen, "… +26 lines"), "one collapse per call")
+}
+
+func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 14)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	// a non-streaming tool (read) sets Display; the done hook elides it.
+	var b strings.Builder
+	for i := 1; i <= 30; i++ {
+		fmt.Fprintf(&b, "%6d\tline %d\n", i, i)
+	}
+	done := u.ToolStart("read big.txt")
+	done(b.String())
+
+	screen := u.snapshot(v)
+	assert.Equal(t, "⏺ read big.txt", v.Line(0))
+	// head shows the numbered lines; past it a single summary row.
+	for i := 1; i <= outputHeadLines; i++ {
+		assert.Contains(t, screen, fmt.Sprintf("%6d    line %d", i, i)) // tab renders as spaces
+	}
+	// exactly one collapse row for the whole body (the remaining 26 lines).
+	assert.Equal(t, 1, strings.Count(screen, "… +26 lines"))
 }
 
 func TestUICommit(t *testing.T) {

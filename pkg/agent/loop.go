@@ -274,7 +274,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	// the system prompt and tool schemas are built into every request, so they
 	// must occupy context from the very first turn — not just after an exact report.
 	if t := a.state.Tokens; t != nil {
-		t.SeedBase(tokens.EstimateFixed(req))
+		t.SetBase(tokens.EstimateFixed(req)) // replaced, so it self-corrects any seeded floor
 	}
 
 	// thinking deltas move the bar only when retention keeps them in the next request

@@ -70,7 +70,9 @@ type ToolCall struct {
 // aborting.
 type ToolResult struct {
 	Content llm.BlockList // what the model sees
-	Display string        // what history shows, when it differs from streamed output
-	Details any           // structured detail for extensions and the transcript
+	// Display is what history shows. A tool either streams to agent.Output or sets
+	// this — never both, or its head renders twice.
+	Display string
+	Details any // structured detail for extensions and the transcript
 	IsError bool
 }

@@ -139,6 +139,24 @@ guidelines, environment facts — where only a day-granular date changes between
 requests, so the provider's prompt cache survives. Composition and wording are
 specified in `prompt-design.md`.
 
+### Fixed-overhead accounting (`base`) is replaced, not accumulated
+
+The system block plus tool schemas ride with every request but carry no provider
+report of their own. The ledger holds that as a single **replaced** bucket:
+`SetBase(est)` overwrites it (never adds), and `Context()` folds it in only while
+there is no exact prompt report — once `promptExact` lands the base drops out,
+since an exact count already includes system and schemas. Replacing rather than
+accumulating keeps a fresh epoch from double-counting across steps.
+
+Two callers seed it: `Agent.BaseEstimate(tools bool)` exposes what rides along so
+the front end can paint an honest bar before the first turn (system-only at
+startup, tool schemas joining on the first prompt), and `stream()` itself calls
+`SetBase(EstimateFixed(req))` with the real built request — which self-corrects
+whatever was seeded. A separate **submitted** bucket (`SetSubmit`) carries a sent
+prompt across the gap between the editor clearing and its message landing in
+state; `Input.Delivered` clears it once `pending` owns the text, so it is never
+counted twice.
+
 ### Step limit
 
 A runaway tool loop must stop. `defaultMaxSteps = 100`; hitting it ends the turn

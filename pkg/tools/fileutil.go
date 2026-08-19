@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"unicode/utf8"
 )
 
 // fileKind discriminates what a probed path holds.
@@ -71,25 +70,20 @@ func hasImageSig(data []byte) bool {
 }
 
 // numberLines renders data as line-numbered text starting at the given 1-based
-// offset, capping each line and the total to limit. It also reports how many of
-// the file's lines were emitted (linesRead) and the rune count of their capped
-// content (charsRead), so read can show what was actually pulled in without
-// exposing it.
-func numberLines(data []byte, start, limit int) (out string, truncatedAt, linesRead, charsRead int) {
+// offset, capping each line and the total to limit. It reports truncatedAt (the
+// next offset) when more lines remain past what was emitted.
+func numberLines(data []byte, start, limit int) (out string, truncatedAt int) {
 	lines := bytes.Split(bytes.ReplaceAll(data, []byte{'\r'}, nil), []byte{'\n'})
 	var b strings.Builder
 	end := min(start+limit-1, len(lines))
 	if end < start { // offset past EOF
-		return "", 0, 0, 0
+		return "", 0
 	}
 	for i := start - 1; i < end; i++ {
-		line := capLine(string(lines[i]))
-		charsRead += utf8.RuneCountInString(line)
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
+		fmt.Fprintf(&b, "%6d\t%s\n", i+1, capLine(string(lines[i])))
 	}
-	linesRead = end - (start - 1)
 	if end < len(lines) { // more lines remain past what was emitted
-		return b.String(), end, linesRead, charsRead
+		return b.String(), end
 	}
-	return b.String(), 0, linesRead, charsRead
+	return b.String(), 0
 }

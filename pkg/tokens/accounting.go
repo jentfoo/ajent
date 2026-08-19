@@ -23,6 +23,8 @@ type Accounting struct {
 	pending     float64 // raw estimate of messages appended since the last report
 	live        float64 // raw estimate of the response currently streaming
 	composing   float64 // raw estimate of text being typed but not yet sent
+	submitted   float64 // sent text not yet appended to a message; cleared when it lands
+	base        float64 // constant request overhead: system prompt + tool schemas
 
 	total      llm.Usage            // cumulative billed input/output across the session
 	totalChild llm.Usage            // delegated subset of total: what sub-agents spent
@@ -56,6 +58,23 @@ func (a *Accounting) SetCompose(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.composing = float64(est)
+}
+
+// SetSubmit sets the estimate of text handed to the agent but not yet appended as
+// a message. Pass zero once the message lands and pending covers it.
+func (a *Accounting) SetSubmit(est int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.submitted = float64(est)
+}
+
+// SetBase replaces the estimate of the constant request overhead: the system
+// prompt and tool schemas that ride with every request but carry no provider
+// report of their own. Messages are excluded; callers account those as they append.
+func (a *Accounting) SetBase(est int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.base = float64(est)
 }
 
 // Response records one completed response: snaps exact terms to u, resets both
@@ -105,19 +124,6 @@ func (a *Accounting) Add(est int) {
 	a.pending += float64(est)
 }
 
-// SeedBase estimates the constant context overhead — the system prompt and tool
-// schemas that ride with every request but carry no provider report of their own.
-// It adds est to pending only while no exact terms cover it yet, so a fresh epoch
-// is seeded once and the next Response snapshot supersedes it. Messages are not
-// included; callers account them individually as they append.
-func (a *Accounting) SeedBase(est int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if est > 0 && a.promptExact == 0 && a.outputExact == 0 {
-		a.pending += float64(est)
-	}
-}
-
 // Stream adds to the live estimate of the response currently streaming.
 func (a *Accounting) Stream(est int) {
 	a.mu.Lock()
@@ -154,7 +160,11 @@ func (a *Accounting) Context() ContextState {
 	// every estimate bucket scales by the same per-model factor so composing text
 	// is corrected exactly like pending and live are.
 	factor := a.cal.Factor(a.model.Key())
-	estimated := (float64(a.pending+a.live) + float64(a.composing)) * factor
+	est := a.pending + a.live + a.composing + a.submitted
+	if a.promptExact == 0 {
+		est += a.base // an exact prompt report already includes system and schemas
+	}
+	estimated := est * factor
 	usedEst := int(estimated + 0.5)
 	return ContextState{
 		Used:      a.promptExact + a.outputExact + usedEst,

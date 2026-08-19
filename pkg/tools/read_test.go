@@ -22,10 +22,8 @@ func TestReadHappyPath(t *testing.T) {
 	out := textOf(res)
 	assert.Contains(t, out, "     1\tline one") // line-numbered output
 	assert.Contains(t, out, "     2\tline two")
-	// display reports counts of what was read in without exposing the content.
-	// numberLines emits a trailing empty row for the final newline, so 3 rows
-	// whose capped text totals 16 runes (the blank adds none).
-	assert.Equal(t, "read a.txt (3 lines, 16 chars)", res.Display)
+	// Display is the content itself; the TUI elides it to a head plus summary.
+	assert.Equal(t, res.Display, textOf(res))
 }
 
 func TestReadDisplayCountsHonorOffsetAndLimit(t *testing.T) {
@@ -43,8 +41,9 @@ func TestReadDisplayCountsHonorOffsetAndLimit(t *testing.T) {
 	out := textOf(res)
 	assert.Contains(t, out, "     2\tline 2")
 	assert.NotContains(t, out, "line 5") // limit respected
-	// only the read-in slice is counted: lines 2..4 = 3 lines, each "line N" (6 runes)
-	assert.Equal(t, "read big.txt (3 lines, 18 chars)", res.Display)
+	// Display mirrors the line-numbered block (no truncation marker); paging honored.
+	assert.Contains(t, res.Display, "     2\tline 2")
+	assert.NotContains(t, res.Display, "... truncated at line 4")
 }
 
 func TestReadMissingFileIsErrorResult(t *testing.T) {

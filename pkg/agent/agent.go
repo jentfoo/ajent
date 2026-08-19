@@ -86,6 +86,24 @@ func (a *Agent) Running() bool {
 	return a.running
 }
 
+// BaseEstimate returns the token estimate of what rides with every request: the
+// system block, plus the tool schemas when tools is true. It reports 0 while a
+// turn is running, which owns State.
+func (a *Agent) BaseEstimate(tools bool) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running {
+		return 0
+	}
+	req := llm.Request{System: buildSystem(a.state, a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets)}
+	if tools {
+		if ts := a.opts.Tools; ts != nil {
+			req.Tools = ts.Schemas() // registry-cached
+		}
+	}
+	return tokens.EstimateFixed(req)
+}
+
 // Steer queues input to be injected into the running turn at its next step
 // boundary, or reports false when idle. It does not cancel the in-flight model
 // call; FollowUp is for the impatient case.

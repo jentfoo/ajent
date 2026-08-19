@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -258,15 +259,21 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// feed the editor's in-progress text into accounting so the context bar grows
 	// as you type or paste, then clears it once submitted (the buffer empties).
 	editSinks := opts.Sinks // may be empty before a session is set up
-	ui.SetOnEdit(func(text string) {
-		t := st.Tokens
-		if t == nil || len(editSinks) == 0 {
+	pushContext := func() {
+		if st.Tokens == nil || len(editSinks) == 0 {
 			return
 		}
-		t.SetCompose(tokens.EstimateText(text, tokens.KindProse))
+		c := st.Tokens.Context()
 		for _, s := range editSinks {
-			s.Context(t.Context())
+			s.Context(c)
 		}
+	}
+	ui.SetOnEdit(func(text string) {
+		if st.Tokens == nil || len(editSinks) == 0 {
+			return
+		}
+		st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
+		pushContext()
 	})
 	var ag *agent.Agent
 
@@ -319,6 +326,14 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	ag = agent.New(st, opts)
+
+	// seed the constant request overhead (system + AGENTS.md) so the bar is honest
+	// from startup; tool schemas join at the first prompt. Agent.stream's own SetBase
+	// replaces this floor with the exact built request once a turn actually starts.
+	var seedToolsOnce sync.Once
+	st.Tokens.SetBase(ag.BaseEstimate(false))
+	pushContext()
+
 	if rec != nil {
 		rec.bindRewind(ui, ag, reg)
 		comp = &compactor{
@@ -453,11 +468,25 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	pump := make(chan pumpLine, 16)
-	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started)
+	// once a submitted prompt lands in state as a message, pending owns its tokens;
+	// the submit bucket must clear so it is never counted twice.
+	delivered := func() {
+		if st.Tokens != nil && len(editSinks) > 0 {
+			st.Tokens.SetSubmit(0)
+			pushContext()
+		}
+	}
+	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started, delivered)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
 		initial := strings.Join(args, " ")
 		hist.AppendHidden(initial) // durable in the workspace store yet excluded from ↑/↓ and Ctrl+R
+		// bypasses ui.Messages(), so echo it here like the driver would.
+		if text := submittedEcho(initial); text != "" {
+			ui.UserEcho(text)
+			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
+			submitPrompt(st, editSinks, tokens.EstimateText(text, tokens.KindProse), pushContext)
+		}
 		pump <- pumpLine{kind: command.KindPrompt, rest: initial, injected: true}
 	}
 
@@ -476,6 +505,12 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			if !ok {
 				close(pump)
 				return rec // UI closed
+			}
+			// echo the prompt above the line now; a session-store write below must not delay it.
+			if text := submittedEcho(msg); text != "" {
+				ui.UserEcho(text)
+				seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
+				submitPrompt(st, editSinks, tokens.EstimateText(text, tokens.KindProse), pushContext)
 			}
 			hist.Append(msg) // every line (prompt /cmd !shell), recorded or not; nil-safe
 			line := command.ParseLine(msg)
@@ -505,7 +540,30 @@ type pumpLine struct {
 // runPump owns ordering for commands and prompts. Commands run inline (pickers
 // block only the pump); prompts flush staged shell results, expand @ refs and
 // steer or start a turn. Submissions stay in order and the UI never stalls.
-func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool) {
+// submittedEcho returns the prompt text to echo above the input for a submitted
+// line, "" when nothing should appear (commands and shell lines are not echoed).
+func submittedEcho(msg string) string {
+	line := command.ParseLine(msg)
+	if line.Kind == command.KindPrompt && strings.TrimSpace(line.Rest) != "" {
+		return line.Rest
+	}
+	return ""
+}
+
+// submitPrompt carries the sent text's estimate in the ledger until it lands as a
+// message, so the bar does not dip between the editor clearing and appendSteer.
+func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func()) {
+	if st.Tokens == nil || len(editSinks) == 0 {
+		return
+	}
+	st.Tokens.SetSubmit(est)
+	push()
+}
+
+// runPump owns ordering for commands and prompts. Commands run inline (pickers
+// block only the pump); prompts flush staged shell results, expand @ refs and
+// steer or start a turn. Submissions stay in order and the UI never stalls.
+func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, delivered func()) {
 	for line := range pump {
 		switch line.kind {
 		case command.KindCommand:
@@ -542,6 +600,8 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 				console.Notify(n, tui.LevelWarn)
 			}
 			input := agent.Input{Text: res.Text, Before: append(before, res.Before...), Injected: line.injected}
+			// pending owns the text once it lands; clear the submit bucket so it never double counts.
+			input.Delivered = delivered
 			startPrompt(ui, recording, ag, input, started)
 		}
 	}
