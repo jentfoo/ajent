@@ -388,7 +388,10 @@ placeholder (`answer…`) marks where the reply is typed.
 A lone `Esc` is indistinguishable from the start of a longer escape sequence
 until more bytes arrive or enough time passes, so `inputReader.run` holds it for
 `escTimeout` before reporting `keyEscape`. Without that there is no cancel key
-at all.
+at all. The timer is **not armed** while an in-progress paste sits in the buffer,
+since a paste body can legitimately stall mid-arrival; and when it does fire on a
+truncated sequence, the whole remaining buffer is dropped rather than re-decoded as
+runes — only a genuine lone `Esc` (buffer length 1) is reported.
 
 ## Wrapping policy
 
@@ -756,7 +759,15 @@ retains rule intent rather than baking width in.
 ## Input
 
 `input.go` turns bytes into `key` values: printable runes, control keys, arrows,
-Home/End/Delete, PgUp/PgDn, Ctrl+Z and bracketed paste. It is a pure function
+Home/End/Delete, PgUp/PgDn, Ctrl+Z and bracketed paste. SS3 (`ESC O <x>`) maps a
+safe subset only — the four arrows plus Home (`H`), End (`F`) and keypad Enter
+(`M`); `p`-`y` are deliberately absent because tcell reads them as PC-keypad
+*navigation*, not digits, so mapping them could turn an inert key into a wrong
+action inside a dialog. The CSI arrow modifier is parsed as tcell's raw bitmask:
+Ctrl or Alt promotes to word movement (`;4 ;6 ;7 ;8` and sub-parameters included),
+Shift alone does not (the editor has no selection). A bare `CSI R` is CPR here
+while it is F3 elsewhere — there is no F-key type, so the parameterless branch
+stays ignored. It is a pure function
 over a byte slice (`decodeKey`) plus a goroutine that feeds a channel, so it is
 testable without a terminal.
 

@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bytes"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -38,11 +40,20 @@ func TestDecodeKey(t *testing.T) {
 		{"mouse_report_ignored", "\x1b[<64;10;5M", key{typ: keyIgnore}, 11},
 		{"arrow_up", "\x1b[A", key{typ: keyUp}, 3},
 		{"alt_arrow_up", "\x1b[1;3A", key{typ: keyAltUp}, 6},
+		{"shift_arrow_moves", "\x1b[1;2C", key{typ: keyRight}, 6},
+		{"ctrl_shift_arrow_word", "\x1b[1;6C", key{typ: keyWordRight}, 6},
+		{"alt_ctrl_arrow_word", "\x1b[1;7D", key{typ: keyWordLeft}, 6},
+		{"subparam_modifier", "\x1b[1;5:3C", key{typ: keyWordRight}, 8},
 		{"arrow_down", "\x1b[B", key{typ: keyDown}, 3},
 		{"arrow_right", "\x1b[C", key{typ: keyRight}, 3},
 		{"alt_arrow_right_word", "\x1b[1;3C", key{typ: keyWordRight}, 6},
 		{"arrow_left", "\x1b[D", key{typ: keyLeft}, 3},
 		{"application_arrow", "\x1bOC", key{typ: keyRight}, 3},
+		{"ss3_home", "\x1bOH", key{typ: keyHome}, 3},
+		{"ss3_end", "\x1bOF", key{typ: keyEnd}, 3},
+		{"ss3_keypad_enter", "\x1bOM", key{typ: keyEnter}, 3},
+		{"ss3_f1_ignored", "\x1bOP", key{typ: keyIgnore}, 3},
+		{"ss3_keypad_digit_ignored", "\x1bOs", key{typ: keyIgnore}, 3},
 		{"ctrl_arrow_word", "\x1b[1;5C", key{typ: keyWordRight}, 6},
 		{"alt_arrow_word", "\x1b[1;3D", key{typ: keyWordLeft}, 6},
 		{"home_csi", "\x1b[H", key{typ: keyHome}, 3},
@@ -50,6 +61,8 @@ func TestDecodeKey(t *testing.T) {
 		{"home_tilde", "\x1b[1~", key{typ: keyHome}, 4},
 		{"end_tilde", "\x1b[4~", key{typ: keyEnd}, 4},
 		{"delete", "\x1b[3~", key{typ: keyDelete}, 4},
+		{"shift_tab_modified", "\x1b[1;2Z", key{typ: keyBackTab}, 6},
+		{"bare_csi_r_ignored", "\x1b[R", key{typ: keyIgnore}, 3},
 		{"alt_enter", "\x1b\r", key{typ: keyNewline}, 2},
 		{"alt_b_word_left", "\x1bb", key{typ: keyWordLeft}, 2},
 		{"alt_f_word_right", "\x1bf", key{typ: keyWordRight}, 2},
@@ -95,6 +108,15 @@ func TestDecodeKeyIncomplete(t *testing.T) {
 			assert.Zero(t, n)
 		})
 	}
+
+	t.Run("unterminated_paste_at_cap", func(t *testing.T) {
+		b := append([]byte(pasteStart), bytes.Repeat([]byte{'a'}, maxPasteLen)...)
+		k, n, ok := decodeKey(b)
+		assert.True(t, ok, "the capped body is delivered rather than dropped")
+		assert.Equal(t, keyPaste, k.typ)
+		assert.Len(t, []byte(k.text), maxPasteLen)
+		assert.Equal(t, len(b), n)
+	})
 }
 
 // manualEsc is an escTimer a test drives directly, so the timeout paths need no
@@ -263,5 +285,170 @@ func TestInputReaderRun(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, key{typ: keyRune, text: "x"}, <-r.keys)
 		require.NoError(t, pw.Close())
+	})
+}
+
+func TestCSIModifier(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		params string
+		want   int
+	}{
+		{"no_modifier", "", 0},
+		{"plain_cursor_row", "1", 0}, // single field: no modifier column
+		{"ctrl_only", "1;5", modCtrl},
+		{"shift_only", "1;2", modShift},
+		{"alt_ctrl_subparam", "1;7:3", modAlt | modCtrl},
+		{"extra_field_ignored", "1;5;9", modCtrl},
+		{"bare_modifier_field", ";3", modAlt}, // params not starting with a row
+		{"garbage_value", "1;x", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, csiModifier(tc.params))
+		})
+	}
+}
+
+func TestDecodeKeyResync(t *testing.T) {
+	t.Parallel()
+
+	// decodeAll feeds b and returns every key decoded until an incomplete one.
+	decodeAll := func(b []byte) (out []keyType) {
+		for len(b) > 0 {
+			k, n, ok := decodeKey(b)
+			if !ok {
+				break
+			}
+			out = append(out, k.typ)
+			b = b[n:]
+		}
+		return out
+	}
+
+	tests := []struct {
+		name  string
+		input string
+		want  []keyType
+	}{
+		{"esc_aborts_partial_csi", "\x1b[1;5\x1b[A", []keyType{keyIgnore, keyUp}},
+		{"esc_aborts_partial_ss3", "\x1bO\x1b[C", []keyType{keyIgnore, keyRight}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, decodeAll([]byte(tc.input)))
+		})
+	}
+
+	t.Run("overlong_csi_dropped", func(t *testing.T) {
+		// an unterminated CSI (no final byte for > maxControlLen params) must not
+		// swallow the Enter behind it: cap and resync let decoding reach it.
+		b := append([]byte("\x1b["), bytes.Repeat([]byte{0x01}, maxControlLen+64)...)
+		b = append(b, '\r')
+		var enter bool
+		for len(b) > 0 {
+			k, n, ok := decodeKey(b)
+			if !ok {
+				break // would stall forever: the cap failed to resync
+			}
+			if k.typ == keyEnter {
+				enter = true
+			}
+			b = b[n:]
+		}
+		assert.True(t, enter, "an unterminated CSI must not swallow Enter")
+	})
+	t.Run("short_csi_still_waits", func(t *testing.T) {
+		// the cap must not turn a split read into a drop.
+		_, _, ok := decodeKey([]byte("\x1b[1;5"))
+		assert.False(t, ok)
+	})
+}
+
+func TestDecodeKeyPasteFrom(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hint_finds_same_terminator", func(t *testing.T) {
+		b := []byte(pasteStart + "hello" + pasteEnd)
+		k0, n0, ok0 := decodeKey(b)
+		require.True(t, ok0)
+		k1, n1, ok1 := decodeKeyFrom(b, 3) // any non-zero hint
+		require.True(t, ok1)
+		assert.Equal(t, k0, k1)
+		assert.Equal(t, n0, n1)
+	})
+	t.Run("terminator_straddles_boundary", func(t *testing.T) {
+		// run keeps the last len(pasteEnd)-1 body bytes re-scannable; a terminator
+		// split across reads must still be found from that resume offset.
+		first := []byte(pasteStart + "abc" + pasteEnd[:len(pasteEnd)-1]) // partial terminator
+		scanned := max(len(first)-len(pasteStart)-len(pasteEnd)+1, 0)
+		buf := append(append([]byte{}, first...), pasteEnd[len(pasteEnd)-1:]+"\r"...)
+		k, _, ok := decodeKeyFrom(buf, scanned)
+		require.True(t, ok)
+		assert.Equal(t, key{typ: keyPaste, text: "abc"}, k)
+	})
+	t.Run("out_of_range_hint_does_not_panic", func(t *testing.T) {
+		b := []byte(pasteStart + "hi" + pasteEnd)
+		_, _, ok := decodeKeyFrom(b, 1000) // hint beyond the body: clamped, no panic
+		assert.False(t, ok)
+	})
+}
+
+func TestInputReaderPasteStall(t *testing.T) {
+	t.Parallel()
+
+	t.Run("stalled_paste_never_arms_timer", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r, esc := newManualReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, pasteStart+"partia")
+		require.NoError(t, err)
+		_, err = io.WriteString(pw, "l"+pasteEnd)
+		require.NoError(t, err)
+
+		assert.Equal(t, key{typ: keyPaste, text: "partial"}, <-r.keys) // blocks until decoded
+		assert.Zero(t, esc.resetCount(), "a confirmed paste must never arm the escape timer")
+	})
+}
+
+func TestInputReaderStalledSequenceDropped(t *testing.T) {
+	t.Parallel()
+
+	t.Run("truncated_csi_drops_no_runes", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r, esc := newManualReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b[1;5")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll,
+			"a truncated CSI must arm the escape timer")
+
+		esc.fire(t) // the stall elapses: nothing may be emitted for it
+
+		_, err = io.WriteString(pw, "z")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys,
+			"no spurious Escape or [ 1 ; 5 runes may leak before the next keystroke")
+	})
+}
+
+func TestInputReaderBounded(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keystroke_behind_wedged_sequence", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
+
+		// an unterminated CSI must not eat the Enter behind it: cap and resync.
+		filler := strings.Repeat("\x1c", maxControlLen+64) //  is an unbound control byte
+		_, err := io.WriteString(pw, "\x1b["+filler+"\r")
+		require.NoError(t, err)
+
+		assert.Equal(t, key{typ: keyEnter}, <-r.keys) // only Enter lands; filler is ignored
 	})
 }

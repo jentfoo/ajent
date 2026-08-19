@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"io"
 	"strconv"
 	"strings"
@@ -52,8 +53,19 @@ type key struct {
 }
 
 const (
-	readChunk = 1024
-	escByte   = 0x1b
+	readChunk     = 1024 // bytes read from the source per call
+	escByte       = 0x1b
+	maxControlLen = 1024 // a CSI longer than this without a final byte is dropped as truncated
+)
+
+// maxPasteLen bounds an unterminated paste; on reaching it the body so far is
+// delivered rather than held forever. Far above tcell's cap because applyKey
+// turns anything over pasteThreshold into a placeholder, so large pastes are supported.
+const maxPasteLen = 4 << 20
+
+var (
+	pasteStartBytes = []byte(pasteStart)
+	pasteEndBytes   = []byte(pasteEnd)
 )
 
 // escTimeout is how long a lone escape byte is held before it is reported as
@@ -116,11 +128,16 @@ var controlKeys = map[byte]keyType{
 
 // decodeKey decodes the first key in b. ok is false when b holds only part of a
 // sequence and more input is needed.
-func decodeKey(b []byte) (k key, n int, ok bool) {
+func decodeKey(b []byte) (key, int, bool) { return decodeKeyFrom(b, 0) }
+
+// decodeKeyFrom is decodeKey plus a hint: pasteFrom bytes at the start of an
+// in-progress paste body are already known to hold no terminator. Still pure:
+// the offset is just another input.
+func decodeKeyFrom(b []byte, pasteFrom int) (k key, n int, ok bool) {
 	if len(b) == 0 {
 		return key{}, 0, false
 	} else if b[0] == escByte {
-		return decodeEscape(b)
+		return decodeEscape(b, pasteFrom)
 	} else if t, found := controlKeys[b[0]]; found {
 		return key{typ: t}, 1, true
 	} else if b[0] < 0x20 {
@@ -133,18 +150,21 @@ func decodeKey(b []byte) (k key, n int, ok bool) {
 	return key{typ: keyRune, text: string(b[:size])}, size, true
 }
 
-func decodeEscape(b []byte) (key, int, bool) {
+func decodeEscape(b []byte, pasteFrom int) (key, int, bool) {
 	if len(b) < 2 {
 		return key{}, 0, false
 	}
 	switch b[1] {
 	case '[':
-		return decodeCSI(b)
+		return decodeCSI(b, pasteFrom)
 	case 'O':
 		if len(b) < 3 {
-			return key{}, 0, false
+			return key{}, 0, false // SS3 is a fixed three bytes
 		}
-		return key{typ: arrowKey(b[2], "")}, 3, true
+		if b[2] == escByte {
+			return key{typ: keyIgnore}, 2, true // ESC aborts; leave it for the next decode
+		}
+		return key{typ: ss3Key(b[2])}, 3, true
 	case 0x0d, 0x0a:
 		return key{typ: keyNewline}, 2, true // alt+enter
 	case 'b':
@@ -158,13 +178,19 @@ func decodeEscape(b []byte) (key, int, bool) {
 	}
 }
 
-func decodeCSI(b []byte) (key, int, bool) {
+func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 	i := 2
-	for i < len(b) && (b[i] < 0x40 || b[i] > 0x7e) {
+	for i < len(b) && b[i] != escByte && (b[i] < 0x40 || b[i] > 0x7e) {
+		if i >= maxControlLen {
+			return key{typ: keyIgnore}, i, true // cap reached; resync at the next byte
+		}
 		i++
 	}
 	if i >= len(b) {
-		return key{}, 0, false
+		return key{}, 0, false // incomplete: wait for the final byte
+	}
+	if b[i] == escByte {
+		return key{typ: keyIgnore}, i, true // ESC aborts; resync at the next byte
 	}
 	params, final, n := string(b[2:i]), b[i], i+1
 
@@ -188,9 +214,9 @@ func decodeCSI(b []byte) (key, int, bool) {
 		}
 		return key{typ: keyIgnore}, n, true
 	case '~':
-		return decodeTilde(b, params, n)
+		return decodeTilde(b, params, n, pasteFrom)
 	case 'Z':
-		if params == "" {
+		if field, _, _ := strings.Cut(params, ";"); field == "" || field == "1" {
 			return key{typ: keyBackTab}, n, true
 		}
 		return key{typ: keyIgnore}, n, true
@@ -199,7 +225,7 @@ func decodeCSI(b []byte) (key, int, bool) {
 	}
 }
 
-func decodeTilde(b []byte, params string, n int) (key, int, bool) {
+func decodeTilde(b []byte, params string, n int, pasteFrom int) (key, int, bool) {
 	code, _, _ := strings.Cut(params, ";")
 	switch code {
 	case "1", "7":
@@ -213,36 +239,85 @@ func decodeTilde(b []byte, params string, n int) (key, int, bool) {
 	case "6":
 		return key{typ: keyPageDown}, n, true
 	case "200":
-		end := strings.Index(string(b[n:]), pasteEnd)
+		pasteFrom = min(max(pasteFrom, 0), max(len(b)-n, 0)) // clamp an out-of-range hint
+		end := bytes.Index(b[n+pasteFrom:], pasteEndBytes)
 		if end < 0 {
-			return key{}, 0, false // wait for the whole paste
+			if len(b)-n >= maxPasteLen {
+				return key{typ: keyPaste, text: string(b[n:])}, len(b), true // deliver the capped body
+			}
+			return key{}, 0, false // wait for more of the body
 		}
-		return key{typ: keyPaste, text: string(b[n : n+end])}, n + end + len(pasteEnd), true
+		termAt := n + pasteFrom + end
+		return key{typ: keyPaste, text: string(b[n:termAt])}, termAt + len(pasteEnd), true
 	default:
 		return key{typ: keyIgnore}, n, true
+	}
+}
+
+// modifier bits in tcell's CSI parameter encoding (the value is 1 + bitmask).
+const (
+	modShift = 1 << iota // shift: never promotes word movement
+	modAlt               // alt: Alt+↑ recalls, and with ctrl promotes to word movement
+	modCtrl              // ctrl: promotes arrows to word movement
+	modMeta              // meta: modeled but unused here
+)
+
+// csiModifier parses the second field of a CSI params string into tcell's raw
+// modifier bitmask (the value minus its leading 1), masked to the modeled bits so
+// a stray high value cannot alias into Ctrl or Alt.
+func csiModifier(params string) int {
+	_, rest, _ := strings.Cut(params, ";")
+	if rest == "" {
+		return 0 // no modifier field: plain key
+	}
+	field, _, _ := strings.Cut(rest, ";")   // drop any fields after the modifier
+	modStr, _, _ := strings.Cut(field, ":") // drop sub-parameters (CSI u)
+	v, err := strconv.Atoi(modStr)
+	if err != nil || v < 2 {
+		return 0 // malformed or unmodified
+	}
+	const modeled = modShift | modAlt | modCtrl | modMeta
+	return (v - 1) & modeled
+}
+
+// ss3Key maps an SS3 final byte to a key. Only the safe subset is mapped: tcell
+// would give PC-keypad navigation for p-y, but we never emit DECKPAM so they are
+// unreachable here, and mapping them could turn an inert key into a wrong action.
+func ss3Key(final byte) keyType {
+	switch final {
+	case 'A', 'B', 'C', 'D':
+		return arrowKey(final, "")
+	case 'H':
+		return keyHome
+	case 'F':
+		return keyEnd
+	case 'M':
+		return keyEnter // keypad enter
+	default:
+		return keyIgnore
 	}
 }
 
 // arrowKey maps a final byte to a movement, promoting to word movement when the
 // parameters carry a ctrl or alt modifier.
 func arrowKey(final byte, params string) keyType {
-	word := strings.HasSuffix(params, ";5") || strings.HasSuffix(params, ";3")
 	switch final {
 	case 'A':
-		if strings.HasSuffix(params, ";3") { // Alt+↑ (\x1b[1;3A)
+		if csiModifier(params)&modAlt != 0 { // Alt+↑ recalls the newest queued prompt
 			return keyAltUp
 		}
 		return keyUp
 	case 'B':
 		return keyDown
-	case 'C':
-		if word {
-			return keyWordRight
-		}
-		return keyRight
-	case 'D':
-		if word {
+	case 'C', 'D':
+		if csiModifier(params)&(modCtrl|modAlt) != 0 {
+			if final == 'C' {
+				return keyWordRight
+			}
 			return keyWordLeft
+		}
+		if final == 'C' {
+			return keyRight
 		}
 		return keyLeft
 	default:
@@ -302,23 +377,28 @@ func (r *inputReader) run() {
 	}()
 
 	var buf []byte
+	var pasteScanned int // bytes of an in-progress paste body already known to hold no terminator
 	timer := r.newTimer()
 
 	for {
 		for {
-			k, n, ok := decodeKey(buf)
+			k, n, ok := decodeKeyFrom(buf, pasteScanned)
 			if !ok {
 				break
 			}
 			buf = buf[n:]
+			pasteScanned = 0 // any in-progress paste resolved (or was delivered at cap)
 			r.emit(k)
 		}
 		if len(buf) == 0 {
 			buf = nil // drop the consumed backing array
+		} else if bytes.HasPrefix(buf, pasteStartBytes) {
+			// no terminator yet: only the last len(pasteEnd)-1 body bytes can still begin one
+			pasteScanned = max(len(buf)-len(pasteStart)-len(pasteEnd)+1, 0)
 		}
 
 		var pendingEsc <-chan time.Time
-		if len(buf) > 0 && buf[0] == escByte {
+		if len(buf) > 0 && buf[0] == escByte && !bytes.HasPrefix(buf, pasteStartBytes) {
 			timer.Reset(r.escDelay)
 			pendingEsc = timer.C()
 		}
@@ -335,8 +415,11 @@ func (r *inputReader) run() {
 				return
 			}
 		case <-pendingEsc:
-			r.keys <- key{typ: keyEscape}
-			buf = buf[1:]
+			if len(buf) == 1 {
+				r.keys <- key{typ: keyEscape} // a genuine lone Esc
+			}
+			buf = nil // truncated sequence: drop it rather than leak its bytes as runes
+			pasteScanned = 0
 		}
 	}
 }
