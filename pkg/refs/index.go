@@ -32,13 +32,10 @@ type Index struct {
 	root   string
 	policy tools.PathPolicy
 
-	mu          sync.Mutex
-	entries     []entry // files and directories under root
-	mtime       map[string]time.Time
-	expires     time.Time
-	homeEntries []entry // lazily enumerated home dir for ~ completion
-	homeMtime   map[string]time.Time
-	homeExpires time.Time
+	mu      sync.Mutex
+	entries []entry // files and directories under root
+	mtime   map[string]time.Time
+	expires time.Time
 }
 
 // NewIndex returns an index rooted at root. The root is resolved through policy
@@ -59,7 +56,8 @@ func (idx *Index) Candidates(query string, inConversation func(path string) bool
 
 	// a ~ or ~/… query completes within the user's home directory.
 	home := strings.HasPrefix(query, "~/") || query == "~"
-	base := idx.root // base directory candidates are displayed relative to
+	qrel := query // path under base we are completing within
+	base := idx.root
 	var entries []entry
 	var mtime map[string]time.Time
 	if home {
@@ -67,8 +65,13 @@ func (idx *Index) Candidates(query string, inConversation func(path string) bool
 		if hdir == "" {
 			return nil // no ~ completion without a resolvable home
 		}
-		entries, mtime = idx.ensureHomeFresh(hdir)
+		qrel = strings.TrimPrefix(strings.TrimPrefix(query, "~"), "/")
 		base = hdir
+		// list only the single directory under the cursor, never walk the whole
+		// tree: @~ on a large home froze input because enumeration ran a full
+		// recursive WalkDir synchronously under the UI lock.
+		target := filepath.Join(hdir, filepath.Dir(qrel))
+		entries, mtime = listDir(target)
 	} else {
 		entries = idx.ensureFresh()
 		mtime = idx.mtime
@@ -77,12 +80,6 @@ func (idx *Index) Candidates(query string, inConversation func(path string) bool
 		return nil
 	}
 
-	// the query relative to base: strip a leading ~ (and slash) for home queries,
-	// keep as-is for workspace ones.
-	qrel := query
-	if home {
-		qrel = strings.TrimPrefix(strings.TrimPrefix(query, "~"), "/")
-	}
 	dir, prefix := filepath.Split(qrel)
 
 	var out []tui.Completion
@@ -155,18 +152,24 @@ func homeDir() string {
 	return home
 }
 
-// ensureHomeFresh refreshes the cached enumeration of root (the user's home)
-// when its TTL has elapsed.
-func (idx *Index) ensureHomeFresh(root string) ([]entry, map[string]time.Time) {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	if time.Now().Before(idx.homeExpires) && idx.homeEntries != nil {
-		return idx.homeEntries, idx.homeMtime
+// listDir lists only path's immediate children — one directory deep, never a
+// recursive walk. Home ~ completion uses it so @~ stays cheap however large
+// the home tree is.
+func listDir(path string) ([]entry, map[string]time.Time) {
+	des, err := os.ReadDir(path)
+	if err != nil {
+		return nil, make(map[string]time.Time)
 	}
-	entries, mtimes := enumerate(root)
-	idx.homeEntries = entries
-	idx.homeMtime = mtimes
-	idx.homeExpires = time.Now().Add(indexTTL)
+	entries := make([]entry, 0, len(des))
+	mtimes := make(map[string]time.Time, len(des))
+	for _, de := range des {
+		p := filepath.Join(path, de.Name())
+		if de.IsDir() && tools.IsSkippedDir(p) {
+			continue // never offer VCS/dependency dirs
+		}
+		entries = append(entries, entry{path: p, isDir: de.IsDir()})
+		mtimes[p] = statMod(p)
+	}
 	return entries, mtimes
 }
 

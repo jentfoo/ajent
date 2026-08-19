@@ -340,9 +340,11 @@ since `Complete` cannot block. Enumeration reuses the tool `find`'s approach:
 `git ls-files -co --exclude-standard` in a repo for true `.gitignore`
 semantics (directory entries derived from each listed file's ancestors),
 `filepath.WalkDir` with the existing skip list otherwise. A `~` or `~/…` query
-completes within the user's home directory instead, enumerated lazily on its own
-TTL and offered back with the leading `~` kept in each candidate (so accepting a
-home path inserts one that expands). Ranking is (a) already in the conversation
+completes within the user's home directory instead, offered back with the leading
+`~` kept in each candidate (so accepting a home path inserts one that expands).
+Home completion lists only the single directory under the cursor — never a
+recursive walk of the whole tree, which is what made `@~` block input on a large
+home; drilling deeper re-lists one level at a time. Ranking is (a) already in the conversation
 (`Tracker.Records()`), (b) recent mtime, (c) fuzzy score (reusing
 `tui.MatchScore` rather than a second implementation). Directories complete with
 a trailing `/` and keep completing.

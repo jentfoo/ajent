@@ -12,6 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestHomeOneLevel proves ~ completion lists one directory and never recurses:
+// a deeply nested file must not surface from a top-level query.
+func TestHomeOneLevel(t *testing.T) {
+	home := t.TempDir()
+	writeTree(t, home, "deep/one/two/three.txt", ".bashrc")
+	restoreHome(t, home)
+	idx := NewIndex(t.TempDir(), tools.PathPolicy{})
+
+	top := labelsOf(idx.Candidates("~", nil))
+	assert.Equal(t, []string{"~/.bashrc", "~/deep/"}, top) // deep once, never its contents
+}
+
 func TestCandidates(t *testing.T) {
 	t.Run("list_top_level", func(t *testing.T) {
 		dir := t.TempDir()
