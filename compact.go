@@ -63,7 +63,9 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		run = func(ctx context.Context, req llm.Request) (string, error) {
 			text, usage, serr := runSummary(ctx, provider, req)
 			if t := c.st.Tokens; t != nil && serr == nil {
-				t.Response(model.Key(), usage, tokens.EstimateRequest(req))
+				// spend-only: the summariser's prompt is not this session's context, so a
+				// failed compaction must not leave the bar at its (much larger) size
+				t.Spend(model.Key(), usage)
 			}
 			return text, serr
 		}
@@ -72,12 +74,18 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	// A manual /compact is an explicit request to reduce context now, so it forces a
 	// summary+cut even when the session sits far below the automatic threshold.
 	force := reason == agent.CompactManual
+	// measure full usage (system + AGENTS.md + tool schemas), not just messages
+	var base int
+	if c.ag != nil && reason != agent.CompactOverflow {
+		base = c.ag.BaseEstimate(true) // 0 only mid-turn, where the reseed is transient anyway
+	}
 	opts := compact.Options{
 		Cwd:          cwdOrDot(),
 		Instructions: instructions,
 		Retain:       c.st.Reasoning.Retain,
 		Caps:         model.Caps,
 		Force:        force,
+		Base:         base,
 	}
 	res, cerr := compact.Compact(ctx, branch, model, run, opts)
 	if cerr != nil {
@@ -117,7 +125,12 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 
 	if t := c.st.Tokens; t != nil {
-		t.Reseed(res.After)
+		// the reseed stays an estimate: pending carries the reduced messages only
+		// (After already counts base, so it is subtracted back) and the ledger's own
+		// base rides on top exactly once. The calibrator's factor still applies and
+		// the bar keeps its ~ marker, unlike Rebase, which is reserved for exact
+		// tokenizer counts.
+		t.Reseed(max(0, res.After-base))
 		c.sink.Context(t.Context())
 	}
 	c.sink.Notice(reportLine(res), agent.LevelInfo)

@@ -221,3 +221,38 @@ func TestCompactNoDuplicateStubs(t *testing.T) {
 		assert.Equal(t, 1, n, "call id %s stubbed more than once", id) // message carries the offending id
 	}
 }
+
+// The before/after measure must apply request-build retention: thinking a
+// non-RetainAll policy drops from completed turns is not context compaction saves,
+// so it never inflates Before.
+func TestCompactMeasuresRequestRetention(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("ponder ", 4000)
+	branch := []session.Entry{
+		userText("u1", "q1"),
+		callMsg("a1", "c1", "bash", ""),
+		resultMsg("r1", "c1", strings.Repeat("detail ", 100), true), // old failure: stage-1 stub
+		msg("t1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ThinkingBlock{Text: big}}}),
+		userText("u2", "q2"),
+		userText("u3", "q3"), // r1 is older than the last two turns
+	}
+	model := llm.Model{
+		Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000,
+		Caps: llm.Capabilities{Reasoning: true},
+	}
+
+	t.Run("whole_turn_drops_old_thinking_before_measure", func(t *testing.T) {
+		res, err := Compact(context.Background(), branch, model, nil, Options{Retain: llm.RetainWholeTurn})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Less(t, res.Before, 2000) // completed-turn thinking is never counted
+	})
+
+	t.Run("retain_all_counts_thinking_before_measure", func(t *testing.T) {
+		res, err := Compact(context.Background(), branch, model, nil, Options{Retain: llm.RetainAll})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Greater(t, res.Before, 2000) // with RetainAll the thinking is real context
+	})
+}

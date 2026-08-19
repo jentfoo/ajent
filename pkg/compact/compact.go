@@ -32,6 +32,7 @@ type Options struct {
 	Retain       llm.RetainPolicy // session retention policy, for stage 3
 	Caps         llm.Capabilities // model caps, used to resolve that retention policy
 	Force        bool             // always summarise older turns even far below target (manual /compact)
+	Base         int              // fixed request overhead (system block + tool schemas), added to every measure
 }
 
 // Result is what one compaction produced: enough to write a session entry and
@@ -54,7 +55,7 @@ type RunPrompt func(ctx context.Context, req llm.Request) (string, error)
 // what the next request would send. A nil result means nothing worth doing changed.
 func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run RunPrompt, opts Options) (*Result, error) {
 	target := resolveTarget(model, opts.TargetTokens)
-	before := tokensFor(branch, session.CompactionData{})
+	before := tokensFor(branch, session.CompactionData{}, model, opts.Retain, opts.Base)
 
 	r := &session.Reduce{}
 	var stats session.Stats
@@ -78,7 +79,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	r.Stats = stats // record what the stages did, for the notice
 
 	res := &Result{Before: before, Reduce: *r}
-	after123 := tokensFor(branch, session.CompactionData{Reduce: r})
+	after123 := tokensFor(branch, session.CompactionData{Reduce: r}, model, opts.Retain, opts.Base)
 	// forced proceeds even under target so older turns can fold into a summary
 	if !opts.Force && (after123 <= target || len(branch) == 0) {
 		res.After = after123
@@ -101,7 +102,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	res.FirstKeptEntryID = firstKept
 
 	cd := session.CompactionData{Summary: summary, FirstKeptEntryID: firstKept, Reduce: r}
-	res.After = tokensFor(measureBranch(branch, cd), cd)
+	res.After = tokensFor(measureBranch(branch, cd), cd, model, opts.Retain, opts.Base)
 	return finish(res)
 }
 

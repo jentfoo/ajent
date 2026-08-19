@@ -39,3 +39,27 @@ func TestSettingsDecodesMergedConfig(t *testing.T) {
 	assert.Equal(t, "wholeTurn", st.Reasoning.Retain) // default retain name survives the level override
 	assert.Equal(t, "auto", st.UI.Render)
 }
+
+func TestAgentMaxStepsLayers(t *testing.T) {
+	t.Parallel()
+
+	// no compiled-in cap: the key is absent from defaults, so the zero value
+	// (unlimited) is what an unconfigured install runs with.
+	var base Settings
+	require.NoError(t, json.Unmarshal(Defaults().Data, &base))
+	assert.Zero(t, base.Agent.MaxSteps)
+	baseResolved, err := Merge(Defaults())
+	require.NoError(t, err)
+	_, _, ok := baseResolved.Explain("agent.maxSteps")
+	assert.False(t, ok) // reports "(default)" in /settings terms
+
+	r, err := Merge(
+		Defaults(),
+		Layer{Name: "user", Data: []byte(`{"agent":{"maxSteps":50}}`)},
+	)
+	require.NoError(t, err)
+
+	var st Settings
+	require.NoError(t, json.Unmarshal(r.Bytes(), &st))
+	assert.Equal(t, 50, st.Agent.MaxSteps) // the user layer caps it
+}

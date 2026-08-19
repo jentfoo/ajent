@@ -101,7 +101,11 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		return resultErr("edit refused: " + ck.Error()), nil
 	}
 
-	data, _ := os.ReadFile(full)
+	// Check re-reads the file, so this only fails if it vanished in the race window.
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return resultErr("edit: " + err.Error()), nil
+	}
 	buf := string(data)
 
 	applied, err := applyEdits(p.Path, buf, p.Edits)

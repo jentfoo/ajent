@@ -35,6 +35,7 @@ it — the difference between a config system and a mystery.
 type Settings struct {
     Model       string          // llm model key; sets models.json defaultModel
     Reasoning   Reasoning       // level/retain as text names, parsed by caller
+    Agent       Agent           // turn loop: optional per-turn step cap (maxSteps)
     Providers   json.RawMessage // folded over models.json providers (pkg/llm)
     Models      json.RawMessage // "provider/id" overrides (pkg/llm)
     Tools       Tools           // enabled set + per-tool output limits
@@ -88,6 +89,18 @@ resolved against the model registry by the caller — never an llm import here.
 imports it for paths, and a typed reference would cycle. `models.json` is decoded
 in `pkg/llm`, and config's provider/model blocks fold over it via
 `llm.ApplyOverrides`.
+
+### Agent
+
+The agent block holds `maxSteps`, an **optional** cap on one turn's tool-calling
+iterations. Like `subagent.model`, it is deliberately absent from the defaults
+layer, so `Explain("agent.maxSteps")` reports `(default)` and an empty value
+means **unlimited** — the zero value of `agent.Options.MaxSteps` (see
+agent-loop-design.md). `AJENT_AGENT_MAXSTEPS` binds for free through EnvLayer;
+a positive value caps the turn, any non-positive value (or none) leaves it
+uncapped. It is startup-time configuration: main.go copies it into
+`agent.Options.MaxSteps` once at process start, so it is deliberately absent
+from `/settings`, whose session overrides could never reach the running agent.
 
 ## The writer
 

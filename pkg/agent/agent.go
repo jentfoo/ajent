@@ -9,10 +9,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
-// defaultMaxSteps caps a single turn's tool-calling iterations so a runaway
-// loop cannot spin forever.
-const defaultMaxSteps = 100
-
 // CompactReason tells the compact hook why it was asked to reduce context.
 type CompactReason uint8
 
@@ -41,8 +37,10 @@ type Options struct {
 	OnBoundary func() []Input
 	// Compact reduces the live context at a turn boundary or after an overflow,
 	// reporting whether anything changed. It never runs mid-stream.
-	Compact   func(ctx context.Context, r CompactReason) (bool, error)
-	MaxSteps  int    // defaults to defaultMaxSteps
+	Compact func(ctx context.Context, r CompactReason) (bool, error)
+	// MaxSteps caps one turn's tool-calling iterations; <= 0 (the zero value)
+	// means unlimited, leaving compaction and the context window as the bounds.
+	MaxSteps  int
 	SessionID string // session-affinity headers on requests that support them
 }
 
@@ -69,9 +67,6 @@ type Agent struct {
 // fan-out so the loop always emits on one field; with none supplied events go
 // nowhere.
 func New(state *State, opts Options) *Agent {
-	if opts.MaxSteps == 0 {
-		opts.MaxSteps = defaultMaxSteps
-	}
 	a := &Agent{state: state, opts: opts}
 	switch len(opts.Sinks) {
 	case 0:

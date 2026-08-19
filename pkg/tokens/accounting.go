@@ -153,6 +153,20 @@ func (a *Accounting) Reseed(est int) {
 	a.pending = float64(est)
 }
 
+// Spend folds usage into the session totals without touching any context term:
+// for requests whose prompt is not the session's own context (a compaction
+// summary call), so a failed compaction cannot leave the bar at the summariser's
+// prompt size.
+func (a *Accounting) Spend(key string, u llm.Usage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if Zero(u) {
+		return
+	}
+	a.total.Add(u)
+	addByModel(a, key, u)
+}
+
 // Context returns how full the next request will be.
 func (a *Accounting) Context() ContextState {
 	a.mu.Lock()

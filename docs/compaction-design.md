@@ -29,6 +29,18 @@ The target after any compaction is half the usable window budget (`Window` minus
 the response reserve). The point at which an automatic compaction fires is the
 per-model `compactThreshold` — see "Triggers".
 
+Every before/after measure includes the fixed request overhead (system block +
+AGENTS.md + tool schemas), supplied as `Options.Base`. A message-only measure would
+under-report full usage and let stages 1-3 exit early while context still sits above
+the target, since the bar counts that overhead too.
+
+The measure is also taken **after `llm.Prepare`** with the session's model and
+retain policy — the same normalisation pass every wire request goes through.
+Without it the measure counts thinking blocks that retention would drop from
+completed turns (nor do they reach the wire on a non-`RetainAll` policy), so every
+number came out high and a "successful" compaction could still leave the estimate
+far above what the next request actually sends. What is measured is what is sent.
+
 ## Where reductions live
 
 A load-bearing invariant is *everything the model sees is reconstructible from the
@@ -249,7 +261,8 @@ entry and `ContextMessages` applies it on every rebuild. Rewriting only the
 in-memory list would vanish on resume.
 
 **2. A measured saving is the saving the next request gets.** Every stage measures
-through the same `ContextMessages` the rebuild uses, never a separate estimate.
+through the same `ContextMessages` the rebuild uses and the same `Prepare` pass the
+wire uses, never a separate estimate.
 
 **3. A cut never orphans a `tool_use`.** Cuts land only on a turn start or an
 assistant message; a tool call and its result always travel together. Fuzz-tested
@@ -268,6 +281,14 @@ otherwise resume/rewind would over-report occupancy and threshold auto-compactio
 could fire immediately after context was reduced. Cumulative spend is unaffected in
 live sessions (it accumulates independently); the minor live-vs-resumed asymmetry
 for compacted-away turns is accepted.
+
+The same applies to a live compaction: it reseeds with `Reseed(res.After - base)` —
+the reduced **messages** only, since `After` already counts base and the ledger adds
+its own base on top at read time. The reseeded figure stays an estimate: the
+calibrator's factor applies and the bar keeps its `~` marker, unlike `Rebase`,
+which is reserved for exact tokenizer counts. The summariser call itself is
+recorded spend-only (`Accounting.Spend`), so a failed compaction cannot leave the
+bar at the summariser's (much larger) prompt size.
 
 **8. A model switch remeasures, never reads empty.** `SetModel` drops every context
 term for the new window; it immediately reseeds from the actual in-memory messages,

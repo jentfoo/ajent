@@ -244,6 +244,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 			return comp.run(ctx, reason, "")
 		},
+		MaxSteps:  set.Settings().Agent.MaxSteps, // <= 0 or unset means unlimited
 		SessionID: sessionHint(rec),
 	}
 	if rec != nil {

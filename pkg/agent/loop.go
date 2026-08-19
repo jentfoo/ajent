@@ -203,7 +203,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 			break
 		}
 
-		if step >= maxSteps {
+		if maxSteps > 0 && step >= maxSteps {
 			sink.Notice("turn hit the "+strconv.Itoa(maxSteps)+" step limit", LevelWarn)
 			result.Stop = llm.StopMaxTokens // loop ran out, treat as a hard stop
 			// answer this message's tool_use so the next request stays well formed

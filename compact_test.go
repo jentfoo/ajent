@@ -198,3 +198,72 @@ func textOfMain(m llm.Message) string {
 	}
 	return sb.String()
 }
+
+// ctxSink captures the last Context event a compactor pushes.
+type ctxSink struct{ last tokens.ContextState }
+
+func (c *ctxSink) Context(s tokens.ContextState) { c.last = s }
+func (c *ctxSink) TurnStart(agent.TurnInfo)      {}
+func (c *ctxSink) Thinking(string)               {}
+func (c *ctxSink) EndThinking()                  {}
+func (c *ctxSink) Text(string)                   {}
+func (c *ctxSink) EndText()                      {}
+func (c *ctxSink) ToolStart(agent.ToolCall, string) func(agent.ToolResult) {
+	return func(agent.ToolResult) {}
+}
+func (c *ctxSink) ToolOutput(string, string)       {}
+func (c *ctxSink) ToolProgress(agent.ToolProgress) {}
+func (c *ctxSink) Diff(string, string, string)     {}
+func (c *ctxSink) Usage(llm.Usage)                 {}
+func (c *ctxSink) Notice(string, agent.Level)      {}
+func (c *ctxSink) TurnEnd(agent.TurnResult)        {}
+
+// After a manual /compact the bar must drop to a calibrated estimate of the
+// reduced full usage: pending carries the reduced messages, the ledger's base
+// rides on top once, and the calibrator's factor still applies (the ~ marker
+// stays). The recorded Before/After include base, and the summariser's own call
+// must never snap the context terms.
+func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textStream("## Goal\nuser wanted a story about lighthouses")},
+	}}
+	c, st, w := testCompactor(t, model, sp)
+
+	longAssist := strings.Repeat("The Last Lighthouse. ", 3000)
+	msgs := []llm.Message{llm.Text(llm.RoleUser, "read me a short story"), llm.Text(llm.RoleAssistant, longAssist)}
+	for _, m := range msgs {
+		st.Messages = append(st.Messages, m)
+		if _, err := w.Append(session.TypeMessage, session.MessageData{Message: m}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a settled calibrator overestimates raw estimates and a large ledger base sits
+	// on top; both must apply to the reseed exactly as they do to every estimate.
+	predicted := tokens.EstimateMessages(msgs)
+	st.Tokens.SetBase(9000)
+	st.Tokens.Response("test/m", llm.Usage{Input: predicted * 4, Output: 100}, predicted*2)
+
+	sink := &ctxSink{}
+	c.sink = sink
+	did, err := c.run(context.Background(), agent.CompactManual, "")
+	require.NoError(t, err)
+	require.True(t, did)
+
+	comp := compactionEntries(t, w)
+	require.Len(t, comp, 1)
+	var cd session.CompactionData
+	require.NoError(t, comp[0].Decode(&cd))
+	// recorded Before counts full usage: fixed overhead plus all messages.
+	base := c.ag.BaseEstimate(true)
+	assert.Equal(t, base+tokens.EstimateMessages(msgs), cd.Before)
+	assert.Less(t, cd.After, cd.Before)
+
+	// the bar drops below the stale exact usage immediately and stays an estimate:
+	// pending holds the reduced messages, the ledger base adds once, factor scales.
+	cs := st.Tokens.Context()
+	assert.Less(t, cs.Used, predicted*4)
+	assert.True(t, cs.Estimated)
+	assert.Equal(t, 2*(cd.After-base+9000), cs.Used)
+	assert.Equal(t, sink.last.Used, cs.Used)
+}

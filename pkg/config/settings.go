@@ -9,6 +9,7 @@ import "encoding/json"
 type Settings struct {
 	Model       string          `json:"model,omitempty"`
 	Reasoning   Reasoning       `json:"reasoning,omitzero"`
+	Agent       Agent           `json:"agent,omitzero"`      // turn loop (pkg/agent)
 	Providers   json.RawMessage `json:"providers,omitempty"` // llm.ProviderConfig map
 	Models      json.RawMessage `json:"models,omitempty"`    // llm.ModelConfig by "provider/id"
 	Tools       Tools           `json:"tools,omitzero"`
@@ -25,6 +26,12 @@ type Reasoning struct {
 	Retain string `json:"retain,omitempty"` // llm.RetainPolicy name
 	Budget int    `json:"budget,omitempty"`
 	Show   bool   `json:"show,omitempty"`
+}
+
+// Agent configures the turn loop. MaxSteps optionally caps one turn's
+// tool-calling iterations; absent or <= 0 (the zero value) means unlimited.
+type Agent struct {
+	MaxSteps int `json:"maxSteps,omitempty"`
 }
 
 // Tools configures the enabled set and output bounds.

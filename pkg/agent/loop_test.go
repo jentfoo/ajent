@@ -318,7 +318,7 @@ func TestLoopStepLimitTrips(t *testing.T) {
 	set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash"}}}
 	// every turn ends with a tool call that produces no text; the loop spins
 	var turns []llm.ScriptedTurn
-	for i := 0; i < defaultMaxSteps+1; i++ {
+	for i := 0; i < 5; i++ {
 		turns = append(turns, llm.ScriptedTurn{Events: toolCallEvents("c", "bash")})
 	}
 	p := &llm.ScriptedProvider{Turns: turns}
@@ -331,6 +331,28 @@ func TestLoopStepLimitTrips(t *testing.T) {
 	require.NoError(t, err) // hitting the limit ends cleanly, not as an error
 	assert.NotEqual(t, llm.StopEndTurn, catch.result.Stop)
 	assert.Equal(t, 3, catch.result.Steps)
+}
+
+// TestLoopUnlimitedByDefault verifies a zero MaxSteps (the default) never
+// trips: the loop runs as many steps as the model keeps calling tools.
+func TestLoopUnlimitedByDefault(t *testing.T) {
+	t.Parallel()
+
+	set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash"}}}
+	turns := make([]llm.ScriptedTurn, 0, 6)
+	for i := 0; i < 5; i++ { // five tool-call steps would trip any small cap
+		turns = append(turns, llm.ScriptedTurn{Events: toolCallEvents("c", "bash")})
+	}
+	turns = append(turns, llm.ScriptedTurn{Events: textOnly("done")})
+	p := &llm.ScriptedProvider{Turns: turns}
+	catch := &resultCatcher{}
+	a := newTestAgent(nil, p, catch)
+	a.opts.Tools = set // MaxSteps stays 0: unlimited
+
+	err := a.Prompt(t.Context(), Input{Text: "x"})
+	require.NoError(t, err)
+	assert.Equal(t, llm.StopEndTurn, catch.result.Stop) // ran to the natural end
+	assert.Equal(t, 6, catch.result.Steps)
 }
 
 func TestLoopProviderErrorMidStream(t *testing.T) {

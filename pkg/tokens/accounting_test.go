@@ -241,3 +241,24 @@ func TestAccountingReseedKeepsSpendResetsContext(t *testing.T) {
 	assert.Equal(t, 1200, cs.Used)
 	assert.Equal(t, 5300, a.Total().Input+a.Total().Output)
 }
+
+// Spend folds out-of-context usage (a compaction summary call) into session spend
+// without touching any context term, so a failed compaction cannot leave the bar
+// at the summariser's prompt size.
+func TestAccountingSpendCountsTotalOnly(t *testing.T) {
+	t.Parallel()
+
+	const key = "p/m1"
+	a := New(llm.Model{ID: "m1", Provider: "p", ContextWindow: 100000})
+	a.SetBase(400)
+	before := a.Context()
+
+	a.Spend(key, llm.Usage{Input: 90000, Output: 500})
+	assert.Equal(t, 90500, a.Total().Input+a.Total().Output)
+
+	// context terms untouched: the bar still shows only the seeded base
+	assert.Equal(t, before, a.Context())
+
+	a.Spend(key, llm.Usage{}) // zero usage is a no-op, not a zeroed total
+	assert.Equal(t, 90500, a.Total().Input+a.Total().Output)
+}

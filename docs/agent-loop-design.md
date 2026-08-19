@@ -111,7 +111,7 @@ path.
 drain follow-up queue -> for each turn:
     sink.TurnStart
     append the prompt and any pre-start steering as user messages
-    for step := 0; step < maxSteps; step++ {
+    for step := 0; maxSteps <= 0 || step < maxSteps; step++ {
         drain push-steers, then OnBoundary inputs         (step boundary)
         req = request(state, env, tools)                 assemble()
         msg, usage = a.stream(ctx, req)                  forwards deltas to sink
@@ -159,8 +159,12 @@ counted twice.
 
 ### Step limit
 
-A runaway tool loop must stop. `defaultMaxSteps = 100`; hitting it ends the turn
-cleanly with a notice, not as an error.
+A runaway tool loop is bounded by the context window and compaction, not an
+arbitrary cap: the default is **unlimited** (`Options.MaxSteps <= 0`, the zero
+value), so a legitimate long turn is never cut short. A positive `MaxSteps`,
+when set, ends the turn cleanly with a notice once hit, not as an error. The
+cap is configurable: the `agent.maxSteps` config key (see config-design.md) is
+read once at startup; absent or non-positive means unlimited.
 
 ## Streaming and cancellation
 
