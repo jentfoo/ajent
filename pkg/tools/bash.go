@@ -32,8 +32,8 @@ const (
 
 const toolBash = "bash"
 
-// bashTool runs one bash -lc process per call. A fresh shell each time keeps cd
-// and state from confusing later calls.
+// bashTool runs one non-login bash -c process per call. A fresh shell each time
+// keeps cd and state from confusing later calls.
 type bashTool struct {
 	policy    PathPolicy
 	sessionID string // names the spill directory for long output
@@ -101,7 +101,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "bash", "-lc", p.Command)
+	cmd := exec.CommandContext(runCtx, "bash", "-c", p.Command)
 	cmd.Dir = cwd
 	cmd.Env = bashEnv()
 	// own process group: a timeout kill then sweeps grandchildren too

@@ -125,6 +125,18 @@ func TestBashStripsANSIFromCapturedOutput(t *testing.T) {
 	assert.Contains(t, out, "plain")
 }
 
+// TestBashPreservesParentPath guards against running bash as a login shell,
+// which resets PATH to the system default and hides user dirs (~/.local/bin,
+// Homebrew, nvm). A non-login shell must inherit our env verbatim.
+func TestBashPreservesParentPath(t *testing.T) {
+	t.Parallel()
+
+	want := os.Getenv("PATH")
+	r := newBash(t, `{"command":"printf %s \"$PATH\""}`)
+	assert.False(t, r.res.IsError)
+	assert.Equal(t, want, textOf(r.res))
+}
+
 func TestBashRespectsCwdOverride(t *testing.T) {
 	t.Parallel()
 

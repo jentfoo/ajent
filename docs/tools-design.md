@@ -195,7 +195,9 @@ the real apply path surface its natural error.
 
 ### bash (`bash.go`)
 
-One `bash -lc` process per call — no persistent shell, so `cd` and state cannot
+One non-login `bash -c` process per call (a login shell would reset PATH to the
+system default and hide user dirs like `~/.local/bin`, Homebrew or nvm) — no
+persistent shell, so `cd` and state cannot
 confuse later calls. Streams stdout and stderr interleaved to the UI while
 teeing a bounded copy for the model; output past the limit spills to a file
 under `os.TempDir()/ajent-<session>` and the model gets a pointer to it. ANSI
