@@ -347,6 +347,33 @@ func TestAskerAllowThisCallOnly(t *testing.T) {
 	assert.Equal(t, tools.ActionAsk, b.Guard()(context.Background(), call("write", `{}`)).Action)
 }
 
+func TestAskerAllowEmitsDescriptiveNotices(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input []byte
+		opt   int
+		want  string
+	}{
+		{"this_time", []byte(`{"command":"git status"}`), optAllow, "Tool call allowed this time"},
+		{"session", []byte(`{"command":"ls -la"}`), optAllowSession, "Tool allowed for session"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := newFakePrompter() // a fresh prompter per case so waitDialog targets its own dialog
+			b := newTestBarrier(p)
+			n := &noticeRecorder{}
+			b.SetNotice(n.record)
+
+			got := runAndAnswer(t, p, b, "bash", c.input, c.opt)
+			assert.Equal(t, tools.ActionAllow, got.Action)
+			require.Len(t, n.all(), 1)
+			assert.Equal(t, c.want, n.all()[0])
+		})
+	}
+}
+
 func TestAskerDenyCapturesReason(t *testing.T) {
 	t.Parallel()
 
@@ -545,7 +572,7 @@ func TestAskerAutoReadOnlyEmitsNotice(t *testing.T) {
 	<-done // the classifier resolves allow; no keystroke needed
 
 	require.Eventually(t, func() bool { return len(n.all()) == 1 }, time.Second, 10*time.Millisecond)
-	assert.Contains(t, n.all()[0], "auto-allowed as read-only")
+	assert.Equal(t, "Tool auto allowed", n.all()[0])
 }
 
 func TestAskerAutoWriteVerdictEmitsNoNotice(t *testing.T) {

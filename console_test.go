@@ -2,11 +2,13 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -83,4 +85,55 @@ func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 
 	assert.Greater(t, tk.Context().Used, 100,
 		"a model switch must remeasure the ledger from actual messages, not read empty")
+}
+
+// TestUIConsoleSetModelNoChangeSilent verifies re-selecting the already-active
+// model is a no-op: it neither rebases state nor records an announcement line, so
+// a stray /model on the current model stays quiet. A real change still records.
+func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ui.Close()
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+
+	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	active := llm.Model{Provider: "p", ID: "same"}
+	st := &agent.State{
+		Model:  active,
+		Tokens: tokens.New(active),
+	}
+
+	// a real recorder so we can assert what does (and does not) get recorded.
+	trPath := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := session.Create(trPath, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	c := &uiConsole{ui: ui, reg: reg, st: st, rec: session.NewRecorder(w)}
+
+	// re-selecting the same model must not record a change.
+	c.SetModel(active)
+	assert.NotContains(t, readFileString(t, trPath), "model_change",
+		"same-model SetModel must be a silent no-op")
+
+	// selecting a different model still records the switch.
+	c.SetModel(llm.Model{Provider: "p", ID: "other"})
+	assert.Contains(t, readFileString(t, trPath), "model_change",
+		"a real change must record a model_change entry")
+}
+
+// readFileString returns a file's contents as text for assertions.
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(b)
 }

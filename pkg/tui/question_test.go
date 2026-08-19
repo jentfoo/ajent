@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -133,7 +134,8 @@ func TestUIAsk(t *testing.T) {
 		waitFor(t, u, v, "Color?")
 		press(t, pw, "\r")
 
-		waitFor(t, u, v, "! answer: Red")
+		// an answered question echoes no summary line (the caller logs its outcome)
+		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "answer:")
 		// the live block reverted to the input prompt
 		waitFor(t, u, v, userMarker)
 	})

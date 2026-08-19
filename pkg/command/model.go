@@ -29,8 +29,9 @@ func modelCommand(_ context.Context, arg string, c Console) error {
 		}
 		m = target
 	} else {
-		// pre-select the active model so an empty /model shows where it sits
-		m, err = pickModel(context.Background(), c, c.Models().Active().Key())
+		// pre-select the active model so an empty /model shows where it sits.
+		// SetModel announces the change below, so skip the picker's own summary line.
+		m, err = pickModel(context.Background(), c, c.Models().Active().Key(), tui.PickOptions{Silent: true})
 		if err != nil {
 			return err // cancelled or failed
 		}
@@ -40,8 +41,9 @@ func modelCommand(_ context.Context, arg string, c Console) error {
 }
 
 // pickModel opens the model picker and returns the chosen model without touching
-// the session; callers apply it. current pre-selects a row by key (empty for none).
-func pickModel(ctx context.Context, c Console, current string) (llm.Model, error) {
+// the session; callers apply it. current pre-selects a row by key (empty for none);
+// opts tune the pick, e.g. Silent when the caller will announce the change itself.
+func pickModel(ctx context.Context, c Console, current string, opts tui.PickOptions) (llm.Model, error) {
 	models := c.Models().Models()
 	var m llm.Model
 	if len(models) == 0 {
@@ -60,8 +62,11 @@ func pickModel(ctx context.Context, c Console, current string) (llm.Model, error
 			Terms:  append([]string{mod.Name}, mod.Aliases...),
 		}
 	}
-	picked, err := c.Pick(ctx, "Model", items,
-		tui.PickOptions{Placeholder: "filter", Initial: initial})
+	opts.Placeholder = "filter" // keep the default filter hint unless overridden
+	if opts.Initial == 0 {
+		opts.Initial = initial
+	}
+	picked, err := c.Pick(ctx, "Model", items, opts)
 	if err != nil {
 		return m, err
 	}

@@ -184,7 +184,7 @@ func modelRow(name, key string) settingsRow {
 		raw, _, _ := c.Settings().Explain(key)
 		var cur string
 		_ = json.Unmarshal(raw, &cur)
-		m, err := pickModel(ctx, c, cur)
+		m, err := pickModel(ctx, c, cur, tui.PickOptions{})
 		if err != nil {
 			return nil, err
 		}

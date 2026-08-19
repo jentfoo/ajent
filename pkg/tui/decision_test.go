@@ -192,11 +192,9 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		assert.Equal(t, DecisionResult{Index: 0}, <-resCh)
 
 		d.Resolve(1) // already settled; must not double-commit
-		assert.Eventually(t, func() bool {
-			return strings.Contains(u.snapshot(v), "! Go? Yes")
-		}, time.Second, testPoll)
-		count := strings.Count(strutil.StripANSI(u.snapshot(v)), "Go? Yes")
-		assert.Equal(t, 1, count, "the summary is committed exactly once")
+		// a resolved decision commits no echo line (permit logs its own outcome);
+		// the late Resolve stays a no-op and never repaints one.
+		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "Go? Yes")
 	})
 	t.Run("resolving_a_queued_dialog_promotes_the_next", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
@@ -311,8 +309,8 @@ func TestUIDecisionSummary(t *testing.T) {
 
 	assert.Equal(t, DecisionResult{Index: 1}, <-resCh)
 
-	// a one-line history summary names the decision and its subject choice
-	waitFor(t, u, v, "! Approve edit? Deny")
+	// no echo line is committed; permit reports the outcome as a descriptive notice
+	assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "Approve edit?")
 }
 
 func TestUIDecisionNoUI(t *testing.T) {

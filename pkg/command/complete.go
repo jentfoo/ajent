@@ -109,10 +109,15 @@ func (c *Completer) commandArgComplete(cells []string, pos, ls int) (int, []tui.
 
 // pathComplete offers workspace paths after @.
 func (c *Completer) pathComplete(cells []string, pos, start int) (int, []tui.Completion) {
-	if c.paths == nil {
+	if c.paths == nil || start >= len(cells) {
 		return pos, nil
 	}
-	query := strings.Join(cells[start+1:pos], "")
+	// cursor on the @ with nothing typed after it yet: nothing to complete
+	end := min(pos, len(cells))
+	if end <= start {
+		return pos, nil
+	}
+	query := strings.Join(cells[start+1:end], "")
 	items := c.paths.Candidates(query, nil)
 	if len(items) == 0 {
 		return pos, nil

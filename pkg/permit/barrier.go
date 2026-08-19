@@ -50,6 +50,7 @@ type pendingAsk struct {
 	call   agent.ToolCall
 	dlg    Dialog
 	cancel context.CancelFunc // stops the concurrent classifier, nil when none started
+	auto   bool               // a read-only verdict resolved this dialog (auto mode)
 }
 
 // NewBarrier builds a barrier with read-only metadata lookup ro. It starts in
@@ -240,13 +241,15 @@ func (b *Barrier) Asker() tools.Asker {
 			subject := classifierSubject(call)
 			go func() {
 				// a user answer cancels the context; skip both the resolve and its
-				// auto-allowed notice so a denial is never reported as auto-allowed.
+				// auto-allowed report so a denial is never claimed as auto-allowed.
 				if b.classifier.Classify(classifierCtx, subject) != ClassReadOnly ||
 					classifierCtx.Err() != nil { // user answered while classifying
 					return
 				}
+				b.mu.Lock()
+				pa.auto = true // set before Resolve so Wait's return already sees it
+				b.mu.Unlock()
 				dlg.Resolve(int(optAllow)) // first resolver wins; a keystroke beats this
-				b.noticeAutoAllowed(subject)
 			}()
 		}
 
@@ -254,6 +257,7 @@ func (b *Barrier) Asker() tools.Asker {
 		cancel() // the user answered or gave up; stop any in-flight classification
 
 		b.mu.Lock()
+		auto := pa.auto
 		b.open = bulk.SliceFilterInPlace(func(p *pendingAsk) bool { return p != pa }, b.open)
 		b.mu.Unlock()
 
@@ -263,7 +267,7 @@ func (b *Barrier) Asker() tools.Asker {
 			}
 			return tools.Deny(noUIReason)
 		}
-		return b.resolveChoice(ctx, call, idx)
+		return b.resolveChoice(ctx, call, idx, auto)
 	}
 }
 
@@ -271,11 +275,12 @@ func (b *Barrier) Asker() tools.Asker {
 // side effects (session memory, note injection). displayIdx is the position in
 // the rendered option list, translated through optionActions so Deny on a plain
 // command (where the compound grant was dropped) still refuses.
-func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displayIdx int) tools.Decision {
+func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displayIdx int, auto bool) tools.Decision {
 	actions := optionActions(bashCommand(call.Input))
 	if displayIdx >= 0 && displayIdx < len(actions) {
 		switch actions[displayIdx] {
 		case optAllow:
+			b.resolveNotice("once", auto)
 			return allowDecision()
 		case optAllowNote:
 			if prompter, _ := b.prompterSnapshot(); prompter != nil {
@@ -283,6 +288,7 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 					b.note(call, note)
 				}
 			}
+			b.resolveNotice("once", auto)
 			return allowDecision()
 		case optAllowSession:
 			if key, ok := b.sessionKey(call); ok && key != "" {
@@ -290,11 +296,13 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 				b.allows[key] = true
 				b.mu.Unlock()
 			}
+			b.resolveNotice("session", auto)
 			return allowDecision()
 		case optAllowCompound:
 			b.mu.Lock()
 			b.compoundAllowed = true
 			b.mu.Unlock()
+			b.resolveNotice("session", false) // only the named grant is auto-resolved, never the broad one
 			return allowDecision()
 		}
 	}
@@ -368,10 +376,20 @@ func classifierSubject(call agent.ToolCall) string {
 	return call.Name + " " + s
 }
 
-// noticeAutoAllowed tells the user a readonly verdict resolved an open dialog.
-func (b *Barrier) noticeAutoAllowed(command string) {
-	if n := b.noticeSnapshot(); n != nil {
-		n("auto-allowed as read-only: " + elideSubject(command))
+// resolveNotice reports how an approved call was granted, replacing the dialog's
+// generic prompt echo with a descriptive outcome line.
+func (b *Barrier) resolveNotice(scope string, auto bool) {
+	n := b.noticeSnapshot()
+	if n == nil {
+		return
+	}
+	switch {
+	case auto:
+		n("Tool auto allowed")
+	case scope == "session":
+		n("Tool allowed for session")
+	default:
+		n("Tool call allowed this time")
 	}
 }
 

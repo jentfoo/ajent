@@ -44,6 +44,7 @@ type PickOptions struct {
 	Placeholder string
 	Initial     int    // index selected when the list opens
 	Filter      string // initial filter text
+	Silent      bool   // skip committing the one-line selection summary to history
 }
 
 // MultiPickOptions tunes a MultiPick.
@@ -106,7 +107,7 @@ func (u *UI) PickContext(ctx context.Context, prompt string, items []PickItem, o
 	if len(items) == 0 {
 		return 0, ErrCancelled
 	}
-	s := &pickState{prompt: prompt, items: items, filter: opts.Filter, placeholder: opts.Placeholder}
+	s := &pickState{prompt: prompt, items: items, filter: opts.Filter, placeholder: opts.Placeholder, silent: opts.Silent}
 	s.refilter()
 	if i := slices.Index(s.matches, opts.Initial); i >= 0 {
 		s.cursor = i
@@ -231,6 +232,7 @@ type pickState struct {
 	matches     []int // indexes into items, best first
 	cursor      int   // index into matches
 	chosen      int   // index into items
+	silent      bool  // do not commit the selection summary to history
 }
 
 // refilter recomputes the match set, keeping the order stable for equal scores.
@@ -331,7 +333,7 @@ func (s *pickState) key(k key) (bool, error) {
 }
 
 func (s *pickState) summary(t Theme) string {
-	if len(s.items) == 0 {
+	if len(s.items) == 0 || s.silent {
 		return ""
 	}
 	return t.Dim.Wrap(noticeMarker + " " + s.prompt + " " + s.items[s.chosen].Label)

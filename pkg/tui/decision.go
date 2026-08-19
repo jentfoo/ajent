@@ -196,12 +196,9 @@ func (s *decisionState) key(k key) (bool, error) {
 	return false, nil
 }
 
-func (s *decisionState) summary(t Theme) string {
-	if len(s.options) == 0 || s.cursor >= len(s.options) {
-		return ""
-	}
-	return t.Dim.Wrap(noticeMarker + " " + s.prompt + " " + s.options[s.cursor].Label)
-}
+// summary reports nothing: the caller (permit's barrier) logs a descriptive
+// outcome notice, so echoing prompt+label here would duplicate it.
+func (s *decisionState) summary(t Theme) string { return "" }
 
 // numberedOptionRow renders one option with a leading number, marked when it is
 // the cursor. n is the option's one-based display position.

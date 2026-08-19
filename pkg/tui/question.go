@@ -139,14 +139,12 @@ func (s *questionState) key(k key) (bool, error) {
 }
 
 func (s *questionState) summary(t Theme) string {
-	switch {
-	case s.declined:
+	if s.declined {
+		// a declined ask is worth recording; an answered one echoes nothing because
+		// the caller logs its own outcome.
 		return t.Dim.Wrap(noticeMarker + " question declined")
-	case len(s.options) > 0 && s.cursor < len(s.options):
-		return t.Dim.Wrap(noticeMarker + " answer: " + s.options[s.cursor].Label)
-	default:
-		return t.Dim.Wrap(noticeMarker + " answer: " + s.value)
 	}
+	return ""
 }
 
 func splitLines(s string) []string {

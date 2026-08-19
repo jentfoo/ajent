@@ -165,7 +165,7 @@ dispatched, never on a command or a `!`.
 | Command | Behaviour |
 |---|---|
 | `/help` | markdown list of commands and keybindings through `Console.Print` |
-| `/model [name]` | resolve by name, or open the picker; records a model-change entry |
+| `/model [name]` | resolve by name, or open the picker; `SetModel` announces `! model: <key>` and records a model-change entry — a no-op when the key is unchanged, and its picker runs silent so only that one line lands (see tui-design) |
 | `/reasoning [level]` | report, or set/clear the level for capable models |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set), `modelRow` (key through the model picker) and `intRow` (numeric key with min/max validation — phase 13's concurrency, since an enum stores a string that won't unmarshal into an int field) builders cover phase 12's mode and phase 13's sub-agent settings |

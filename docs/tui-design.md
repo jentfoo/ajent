@@ -336,8 +336,14 @@ and are driver-owned, so `Reset()` does not clear them — the steer queue re-re
 Concurrency follows invariant 4. A blocking `Select` cannot hold `u.mu`, so the
 caller registers a `pending` under the lock, requests a repaint, releases, then
 waits on a result channel. The input goroutine checks for an active interaction
-before the editor sees a key. Resolution commits a one line summary to history,
-promotes the queue head and repaints. Interactions **queue in arrival order**
+before the editor sees a key. Resolution promotes the queue head and repaints.
+`Select` and `Pick` commit a one-line summary of the chosen row; approval
+dialogs (`OpenDecision`) and answered questions (`Ask`) echo nothing, because
+permit's barrier logs its own descriptive outcome notice (see below) — echoing
+the prompt plus label here would duplicate it. The same duplication rule lets a
+`Pick` opt out via `PickOptions.Silent`: `/model` sets it so the picker does not
+commit its own summary when `SetModel` immediately announces the chosen key.
+Interactions **queue in arrival order**
 rather than being refused, because parallel tool calls will each want to ask
 something and denying them for being simultaneous is the wrong default.
 `pending.resolve` is a `sync.Once`, so a cancellation racing a keystroke settles
@@ -384,6 +390,12 @@ The question's prompt rides above the answer row in the live block and elides to
 the interaction height budget with an ellipsis marker when it would overflow, so
 a long multi-line question cannot blow past the bounded live block. The free-text
 placeholder (`answer…`) marks where the reply is typed.
+
+An **approval dialog** resolution reports nothing to history by itself; the
+caller (`permit.Barrier`) commits a descriptive notice instead — "Tool call
+allowed this time", "Tool allowed for session" or "Tool auto allowed". That
+keeps one source of truth for what happened and avoids duplicating the dialog's
+prompt-and-label echo.
 
 A lone `Esc` is indistinguishable from the start of a longer escape sequence
 until more bytes arrive or enough time passes, so `inputReader.run` holds it for

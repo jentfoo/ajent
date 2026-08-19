@@ -107,6 +107,11 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 }
 
 func (c *uiConsole) SetModel(m llm.Model) {
+	// picking the already-active model is a no-op: nothing to rebase, record or
+	// announce, so a stray /model does not spam the history with an unchanged line.
+	if c.st != nil && m.Key() == c.st.Model.Key() {
+		return
+	}
 	c.reg.SetActive(m)
 	c.st.Model = m
 	// rebase the ledger's window and reserve onto the new model so a mid-session

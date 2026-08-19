@@ -331,6 +331,25 @@ func TestUIPick(t *testing.T) {
 
 		press(t, pw, "\x1b")
 	})
+	t.Run("silent_pick_skips_the_summary_line", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		items := []PickItem{{Label: "zai/glm-5.2"}, {Label: "openrouter/claude"}}
+		done := make(chan struct{})
+		go func() {
+			_, _ = u.Pick("Model", items, PickOptions{Silent: true})
+			close(done)
+		}()
+
+		waitFor(t, u, v, "Model")
+		press(t, pw, "\r")
+		<-done
+
+		// the picker still resolves and reverts to the input prompt, but no
+		// `! Model <key>` line is committed when a caller announces itself.
+		waitFor(t, u, v, userMarker)
+		assert.NotContains(t, u.snapshot(v), "! Model")
+	})
 }
 
 // liveRowCount counts non blank screen rows.

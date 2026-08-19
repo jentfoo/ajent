@@ -46,6 +46,21 @@ func TestCompleterPathAfterAt(t *testing.T) {
 	assert.Contains(t, labels, "main.go")
 }
 
+func TestCompleterCursorOnAtDoesNotPanic(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
+	idx := refs.NewIndex(dir, tools.PathPolicy{})
+	c := newFakeConsole(t)
+	r := NewRegistry()
+	comp := NewCompleter(r, c, idx)
+
+	// cursor sits on the @ (a break precedes it) with nothing after; no path to complete.
+	_, items := comp.Complete(" @", 1)
+	assert.Empty(t, items)
+}
+
 func TestCompleterNoTriggerMidToken(t *testing.T) {
 	t.Parallel()
 
