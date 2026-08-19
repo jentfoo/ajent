@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/rivo/uniseg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,11 +67,13 @@ func (v *vt) WriteString(s string) {
 		switch rs[i] {
 		case 0x1b:
 			i += v.escape(rs[i+1:])
+		case 0x9b: // C1 CSI: xterm decodes UTF-8 then acts on U+009B
+			i += v.csi(rs[i+1:])
 		case '\r':
 			v.col, v.wrapDefer = 0, false
-		case '\n':
+		case '\n', '\v', '\f':
 			v.lineFeed()
-			v.cont[v.row], v.wrapDefer = false, false // an explicit newline ends the line
+			v.cont[v.row], v.wrapDefer = false, false // an explicit line feed ends the line
 		case '\b':
 			v.col, v.wrapDefer = max(v.col-1, 0), false
 		default:
@@ -90,6 +93,18 @@ func (v *vt) escape(rs []rune) int {
 		return 1
 	case '8':
 		v.row, v.col, v.wrapDefer = v.savedRow, v.savedCol, false
+		return 1
+	case 'D': // IND
+		v.lineFeed()
+		v.cont[v.row], v.wrapDefer = false, false
+		return 1
+	case 'E': // NEL
+		v.col = 0
+		v.lineFeed()
+		v.cont[v.row], v.wrapDefer = false, false
+		return 1
+	case 'M': // RI
+		v.reverseIndex()
 		return 1
 	case '[':
 		return 1 + v.csi(rs[1:])
@@ -125,27 +140,65 @@ func (v *vt) apply(params string, final rune) {
 		}
 		return def
 	}
-	v.wrapDefer = false
+	// only cursor motion clears a pending wrap; SGR and the erasers must not,
+	// or an exact-width row followed by styling stops deferring
 	switch final {
 	case 'H', 'f':
 		v.row = min(max(arg(0, 1)-1, 0), v.h-1)
 		v.col = min(max(arg(1, 1)-1, 0), v.w-1)
+		v.wrapDefer = false
 	case 'A':
 		v.row = max(v.row-arg(0, 1), 0)
+		v.wrapDefer = false
 	case 'B':
 		v.row = min(v.row+arg(0, 1), v.h-1)
+		v.wrapDefer = false
 	case 'C':
 		v.col = min(v.col+arg(0, 1), v.w-1)
+		v.wrapDefer = false
 	case 'D':
 		v.col = max(v.col-arg(0, 1), 0)
+		v.wrapDefer = false
+	case 'd': // VPA
+		v.row = min(max(arg(0, 1)-1, 0), v.h-1)
+		v.wrapDefer = false
+	case 'G': // CHA
+		v.col = min(max(arg(0, 1)-1, 0), v.w-1)
+		v.wrapDefer = false
 	case 'K':
 		v.eraseLine(arg(0, 0))
 	case 'J':
 		v.eraseDisplay(arg(0, 0))
+	case 'L': // IL: blank lines appear at the cursor, region bottom lost
+		if v.row >= v.top && v.row <= v.bot {
+			n := min(arg(0, 1), v.bot-v.row+1)
+			copy(v.cells[v.row+n:v.bot+1], v.cells[v.row:v.bot+1-n])
+			copy(v.cont[v.row+n:v.bot+1], v.cont[v.row:v.bot+1-n])
+			for i := v.row; i < v.row+n; i++ {
+				v.cells[i], v.cont[i] = blankRow(v.w), false
+			}
+		}
+	case 'M': // DL: cursor row and below shift up, blanks at region bottom
+		if v.row >= v.top && v.row <= v.bot {
+			n := min(arg(0, 1), v.bot-v.row+1)
+			copy(v.cells[v.row:v.bot+1-n], v.cells[v.row+n:v.bot+1])
+			copy(v.cont[v.row:v.bot+1-n], v.cont[v.row+n:v.bot+1])
+			for i := v.bot + 1 - n; i <= v.bot; i++ {
+				v.cells[i], v.cont[i] = blankRow(v.w), false
+			}
+		}
+	case 'S': // SU
+		for n := arg(0, 1); n > 0; n-- {
+			v.scrollUp()
+		}
+	case 'T': // SD
+		for n := arg(0, 1); n > 0; n-- {
+			v.scrollDown()
+		}
 	case 'r':
 		v.top = min(max(arg(0, 1)-1, 0), v.h-1)
 		v.bot = min(max(arg(1, v.h)-1, 0), v.h-1)
-		v.row, v.col = 0, 0
+		v.row, v.col, v.wrapDefer = 0, 0, false
 	case 'n':
 		v.dsrCount++
 	}
@@ -180,9 +233,17 @@ func (v *vt) eraseDisplay(mode int) {
 }
 
 func (v *vt) put(r rune) {
-	if r < 0x20 {
+	if r == '\t' {
+		v.col, v.wrapDefer = min((v.col/8+1)*8, v.w-1), false
 		return
-	} else if v.wrapDefer {
+	}
+	if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+		return // C0, DEL and C1 print nothing; 0x9b is CSI before this
+	}
+	if uniseg.StringWidth(string(r)) == 0 {
+		return // zero-width runes attach to the prior cell: no advance, no wrap
+	}
+	if v.wrapDefer {
 		v.col = 0
 		v.lineFeed()
 		v.cont[v.row] = true // the row we wrapped onto continues the one above
@@ -211,6 +272,24 @@ func (v *vt) scrollUp() {
 	copy(v.cont[v.top:v.bot], v.cont[v.top+1:v.bot+1])
 	v.cells[v.bot] = blankRow(v.w)
 	v.cont[v.bot] = false
+}
+
+// scrollDown shifts the scroll region down one row, retiring the bottom line.
+func (v *vt) scrollDown() {
+	copy(v.cells[v.top+1:v.bot+1], v.cells[v.top:v.bot])
+	copy(v.cont[v.top+1:v.bot+1], v.cont[v.top:v.bot])
+	v.cells[v.top] = blankRow(v.w)
+	v.cont[v.top] = false
+}
+
+// reverseIndex moves the cursor up one row, scrolling the region down at the top.
+func (v *vt) reverseIndex() {
+	if v.row == v.top {
+		v.scrollDown()
+	} else if v.row > 0 {
+		v.row--
+	}
+	v.wrapDefer = false
 }
 
 // setSize changes the grid size, reflowing soft-wrapped rows the way an
@@ -353,6 +432,109 @@ func TestVT(t *testing.T) {
 		v := newVT(6, 2)
 		v.WriteString(sgr(attrBold) + "hi" + sgrReset)
 		assert.Equal(t, "hi", v.Line(0))
+	})
+	t.Run("sgr_keeps_deferred_wrap", func(t *testing.T) {
+		v := newVT(4, 3)
+		v.WriteString("abcd") // fills the row, wrap deferred
+		v.WriteString(sgr(attrBold) + "x")
+		assert.Equal(t, "abcd", v.Line(0), "styling does not cancel the pending wrap")
+		assert.Equal(t, "x", v.Line(1))
+	})
+	t.Run("tab_advances_to_next_stop", func(t *testing.T) {
+		v := newVT(24, 2)
+		v.WriteString("a\tb")
+		assert.Equal(t, "a       b", v.Line(0)) // b lands at column 8
+	})
+	t.Run("tab_clamps_at_margin", func(t *testing.T) {
+		v := newVT(9, 2)
+		v.WriteString("abcdefgh\t") // already at the last column
+		assert.Equal(t, "abcdefgh", v.Line(0))
+		assert.Empty(t, v.Line(1), "a tab at the margin neither wraps nor scrolls")
+	})
+	t.Run("vertical_tab_and_form_feed_feed", func(t *testing.T) {
+		v := newVT(8, 4)
+		v.WriteString("a\vb\fc") // column rides, like a bare line feed
+		assert.Equal(t, "a", v.Line(0))
+		assert.Equal(t, " b", v.Line(1))
+		assert.Equal(t, "  c", v.Line(2))
+	})
+	t.Run("ind_feeds_a_line", func(t *testing.T) {
+		v := newVT(8, 4)
+		v.WriteString("a\x1bDb")
+		assert.Equal(t, "a", v.Line(0))
+		assert.Equal(t, " b", v.Line(1))
+	})
+	t.Run("nel_returns_and_feeds", func(t *testing.T) {
+		v := newVT(8, 3)
+		v.WriteString("ab\x1bEc")
+		assert.Equal(t, "ab", v.Line(0))
+		assert.Equal(t, "c", v.Line(1))
+	})
+	t.Run("reverse_index_scrolls_at_top", func(t *testing.T) {
+		v := newVT(8, 3)
+		v.WriteString("a\r\nb\r\nc")
+		v.WriteString(cursorTo(1, 1) + "\x1bMz")
+		assert.Equal(t, "z", v.Line(0))
+		assert.Equal(t, "a", v.Line(1))
+		assert.Equal(t, "b", v.Line(2), "the bottom line retires")
+	})
+	t.Run("reverse_index_moves_up_below_top", func(t *testing.T) {
+		v := newVT(8, 3)
+		v.WriteString("a\r\nb\x1bMc")
+		assert.Equal(t, "ac", v.Line(0))
+	})
+	t.Run("vpa_sets_row", func(t *testing.T) {
+		v := newVT(8, 4)
+		v.WriteString("a\x1b[3db") // row moves, column stays
+		assert.Equal(t, "a", v.Line(0))
+		assert.Equal(t, " b", v.Line(2))
+	})
+	t.Run("cha_sets_column", func(t *testing.T) {
+		v := newVT(8, 2)
+		v.WriteString("a\x1b[4Gb")
+		assert.Equal(t, "a  b", v.Line(0))
+	})
+	t.Run("insert_lines", func(t *testing.T) {
+		v := newVT(8, 4)
+		v.WriteString("a\r\nb\r\nc\r\nd")
+		v.WriteString(cursorTo(1, 1) + csi + "1L")
+		assert.Empty(t, v.Line(0))
+		assert.Equal(t, "a", v.Line(1))
+		assert.Equal(t, "c", v.Line(3), "the bottom line is lost")
+	})
+	t.Run("delete_lines", func(t *testing.T) {
+		v := newVT(8, 4)
+		v.WriteString("a\r\nb\r\nc\r\nd")
+		v.WriteString(cursorTo(1, 1) + csi + "1M")
+		assert.Equal(t, "b", v.Line(0))
+		assert.Equal(t, "c", v.Line(1))
+		assert.Empty(t, v.Line(3), "a blank appears at the bottom")
+	})
+	t.Run("scroll_up", func(t *testing.T) {
+		v := newVT(8, 3)
+		v.WriteString("a\r\nb\r\nc")
+		v.WriteString(csi + "1S")
+		assert.Equal(t, "b", v.Line(0))
+		assert.Equal(t, []string{"a"}, v.scrollback)
+	})
+	t.Run("scroll_down", func(t *testing.T) {
+		v := newVT(8, 3)
+		v.WriteString("a\r\nb\r\nc")
+		v.WriteString(cursorTo(1, 1) + csi + "1T")
+		assert.Empty(t, v.Line(0))
+		assert.Equal(t, "a", v.Line(1))
+		assert.Equal(t, "b", v.Line(2))
+	})
+	t.Run("c1_csi_parsed", func(t *testing.T) {
+		v := newVT(8, 4)
+		v.WriteString("a\u009b2Bb")
+		assert.Equal(t, "a", v.Line(0))
+		assert.Equal(t, " b", v.Line(2))
+	})
+	t.Run("del_and_c1_print_nothing", func(t *testing.T) {
+		v := newVT(8, 2)
+		v.WriteString("a\x7f\u0090b")
+		assert.Equal(t, "ab", v.Line(0))
 	})
 }
 

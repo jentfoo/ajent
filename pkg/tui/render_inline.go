@@ -32,11 +32,43 @@ import "strings"
 type inlineRenderer struct {
 	t *termState
 
-	live     []string // the block as last drawn
+	live     []string // the block as last set
 	caretRow int      // caret's index within live, never a terminal row offset
 	caretCol int
-	drawn    bool
+
+	// base holds the bookkeeping for diffing against the frame on screen: a
+	// skipped row writes only the newline that walks past it, so the cursor
+	// walk, and with it the park, stays byte-identical to a full redraw.
+	base baseline
+
+	// sigGen reads the UI's resize-signal generation. nil never aborts.
+	sigGen func() uint64
 }
+
+// baseline is the bookkeeping for row-diffing against the frame on screen.
+// A width change reflows rows we did not write, a count change is what the full
+// erase covers, and an invalidation means the block itself is gone — each makes
+// the next draw fall back to today's full erase-and-redraw. The periodic full
+// redraw bounds how long a stale row can linger in erasable territory.
+type baseline struct {
+	drawn     bool     // a frame reached the terminal (eraseLive depends on this)
+	frames    int      // monotonic paint count; forces a full draw via diffFullEvery
+	prev      []string // emitted rows (post-caret) of the last written frame
+	prevWidth int      // width that frame was drawn at
+	forceFull bool     // commit/suspend/clearHistory: the on-screen block is gone
+}
+
+// invalidate marks the on-screen block as unknown so the next draw repaints it
+// whole. Used when committed history moved or another program owned the screen.
+func (b *baseline) invalidate() {
+	b.drawn, b.prev = false, nil
+	b.forceFull = true
+}
+
+// diffFullEvery forces a whole-block redraw every so many frames. A stale row
+// inside the live block is erasable territory that the next full frame heals;
+// this bounds how long a diff miss can linger.
+const diffFullEvery = 64
 
 func (r *inlineRenderer) start(inFd int) error { return r.resume(inFd) }
 
@@ -79,47 +111,127 @@ func (r *inlineRenderer) liveWidth() int { return max(r.t.width-1, 1) }
 // per miss, compounding. A reflow leaves the cursor on the first cell of its
 // logical line, which is the cell we parked on.
 func (r *inlineRenderer) eraseLive() string {
-	if !r.drawn {
+	if !r.base.drawn {
 		return ""
 	}
 	return "\r" + eraseBelow
 }
 
-// drawLive writes the block from the current row, then parks the cursor back on
-// the block's first row for the next erase. The caret is drawn into its row
-// rather than left under the terminal's cursor (paintCaret).
-func (r *inlineRenderer) drawLive() string {
-	if len(r.live) == 0 {
-		return ""
-	}
+// setLive stores the block and paints one frame. The caret is drawn into its
+// row rather than left under the terminal's cursor (paintCaret).
+func (r *inlineRenderer) setLive(rows []string, caretRow, caretCol int) {
+	r.t.refreshSize() // same reason as commit: never erase against a stale width
+	// clamp: the caret is painted into live[caretRow], so an out of range
+	// caret would panic or silently land on the wrong row
+	r.live, r.caretCol = rows, caretCol
+	r.caretRow = min(max(caretRow, 0), max(len(rows)-1, 0))
+	r.paint()
+}
+
+// paint composes and writes one frame of the live block: the erase plus every
+// row, or only the rows that changed when the previous frame is still
+// comparable. The write is abandoned when a resize signal arrived while the
+// frame composed, and the burst starting now redraws at its settled size.
+func (r *inlineRenderer) paint() {
+	gen := r.generation()
+	diff := r.canDiff()
 	var b strings.Builder
+	b.WriteString(beginSync)
+	b.WriteString(hideCursor)
+	if !diff {
+		b.WriteString(r.eraseLive())
+	}
+	emitted := r.composeRows(&b, diff)
+	b.WriteString(endSync)
+	if r.stale(gen) {
+		return
+	}
+	r.t.write(b.String())
+	r.record(emitted, diff)
+}
+
+// canDiff reports whether unchanged rows may be skipped: a frame is on screen,
+// drawn at this width with this many rows, and nothing invalidated it. A width
+// change is the only thing that reflows rows we did not write; a count change
+// is what the full erase was covering.
+func (r *inlineRenderer) canDiff() bool {
+	b := &r.base
+	return b.drawn && !b.forceFull && b.prevWidth == r.t.width &&
+		len(b.prev) == len(r.live) && b.frames%diffFullEvery != 0
+}
+
+// record updates the diff baseline once a frame reached the terminal.
+func (r *inlineRenderer) record(emitted []string, diff bool) {
+	b := &r.base
+	b.drawn = true
+	b.frames++
+	if diff {
+		b.prev = emitted
+		return
+	}
+	b.prev, b.prevWidth, b.forceFull = emitted, r.t.width, false
+}
+
+// composeRows writes the live rows into b and returns the emitted rows to
+// record as the diff baseline. sanitizeRow keeps each row to exactly one
+// terminal row whatever a caller passed; truncation and the caret stay as they
+// were. The park counts only these rows at the width in force now.
+func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
+	if len(r.live) == 0 {
+		return nil
+	}
+	width := r.liveWidth()
+	emitted := make([]string, len(r.live))
 	widths := make([]int, len(r.live))
 	for i, row := range r.live {
 		if i > 0 {
 			b.WriteString("\r\n")
 		}
-		// oneLine so a row carrying a newline cannot silently become two rows
-		row = truncateDisplay(oneLine(row), r.liveWidth())
+		row = truncateDisplay(sanitizeRow(row), width)
 		if i == r.caretRow {
-			row = paintCaret(row, r.caretCol, r.liveWidth())
+			row = paintCaret(row, r.caretCol, width)
 		}
-		widths[i] = displayWidth(row)
-		b.WriteString(row)
+		emitted[i], widths[i] = row, displayWidth(row)
+		if !diff || i >= len(r.base.prev) || r.base.prev[i] != row {
+			b.WriteString(row)
+			if diff {
+				b.WriteString(eraseTail) // a shorter replacement leaves no tail
+			}
+		}
 	}
-	// Park on the block's first row, ready for the next erase. This counts only
-	// rows being written right now, at the width in force right now — never how
-	// the emulator reflowed something written earlier, which is the thing no
-	// model can get right. The size is re-read first so a resize landing
-	// mid-frame is accounted for before the count is taken.
+	// Park on the block's first row, ready for the next erase. The climb
+	// counts only what this frame descended through: every row boundary is one
+	// newline, and a written row adds its wrapped continuations (counted at the
+	// width in force right now, re-read so a resize landing mid-frame is
+	// accounted for before the count is taken). A skipped row never descended
+	// anything beyond its boundary, so it counts as one regardless of how the
+	// emulator has reflowed it since — the cursor returns exactly to where the
+	// previous frame parked, which is the block's top.
 	r.t.refreshSize()
-	var rows int
-	for _, w := range widths {
-		rows += rowsForWidth(w, r.t.width)
+	var climb int
+	for i, w := range widths {
+		if !diff || i >= len(r.base.prev) || r.base.prev[i] != emitted[i] {
+			climb += rowsForWidth(w, r.t.width)
+		} else {
+			climb++ // skipped: only its newline boundary was crossed
+		}
 	}
-	b.WriteString(cursorUp(rows - 1))
+	b.WriteString(cursorUp(climb - 1))
 	b.WriteString("\r")
-	r.drawn = true
-	return b.String()
+	return emitted
+}
+
+// generation captures the resize-signal generation a frame starts at.
+func (r *inlineRenderer) generation() uint64 {
+	if r.sigGen == nil {
+		return 0
+	}
+	return r.sigGen()
+}
+
+// stale reports whether a resize signal arrived since gen was captured.
+func (r *inlineRenderer) stale(gen uint64) bool {
+	return r.sigGen != nil && r.sigGen() != gen
 }
 
 // commit writes history above the live block, laying each line out according to
@@ -129,6 +241,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 		return
 	}
 	r.t.refreshSize() // the erase below must use the width the block is reflowed at
+	gen := r.generation()
 	var b strings.Builder
 	b.WriteString(beginSync)
 	b.WriteString(hideCursor)
@@ -156,9 +269,22 @@ func (r *inlineRenderer) commit(lines []histLine) {
 			emit(l.text)
 		}
 	}
-	b.WriteString(r.drawLive())
+	if r.stale(gen) {
+		// A resize arrived while the frame composed. History must still land
+		// (committed text reflows like any other), but the block half would park
+		// by a count taken on the old grid. The erase went out with this frame,
+		// so the next paint rebuilds the block from the current row.
+		b.WriteString(endSync)
+		r.t.write(b.String())
+		r.base.invalidate()
+		return
+	}
+	// the block moved down the screen behind the new history: the diff cannot
+	// carry over
+	emitted := r.composeRows(&b, false)
 	b.WriteString(endSync)
 	r.t.write(b.String())
+	r.record(emitted, false)
 }
 
 // clearHistory clears the live block; committed scrollback belongs to the
@@ -166,22 +292,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 func (r *inlineRenderer) clearHistory() {
 	r.t.write(r.eraseLive())
 	r.live = nil
-	r.drawn = false
-}
-
-func (r *inlineRenderer) setLive(rows []string, caretRow, caretCol int) {
-	r.t.refreshSize() // same reason as commit: never erase against a stale width
-	var b strings.Builder
-	b.WriteString(beginSync)
-	b.WriteString(hideCursor)
-	b.WriteString(r.eraseLive())
-	// clamp: drawLive paints the caret into live[caretRow], so an out of range
-	// caret would panic or silently land on the wrong row
-	r.live, r.caretCol = rows, caretCol
-	r.caretRow = min(max(caretRow, 0), max(len(rows)-1, 0))
-	b.WriteString(r.drawLive())
-	b.WriteString(endSync)
-	r.t.write(b.String())
+	r.base.invalidate()
 }
 
 // resize picks up the new terminal size; nothing needs redrawing here. The next
@@ -204,7 +315,7 @@ func (r *inlineRenderer) scroll(int) bool { return false }
 // or another program lands cleanly.
 func (r *inlineRenderer) suspend(inFd int) {
 	r.t.write(r.eraseLive() + bracketedPasteOff + showCursor)
-	r.drawn = false
+	r.base.invalidate() // another program owned the screen
 	r.t.restore(inFd)
 }
 

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
 )
@@ -36,6 +37,73 @@ func oneLine(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// sanitizeRow returns s safe to draw as exactly one terminal row: line breaks
+// and tabs fold to single spaces, other control bytes drop, and of the escape
+// sequences only complete non-private SGR survives. A cursor-motion or screen
+// escape in caller text moves the cursor in ways no row count predicted, so
+// the park lands inside the block and the next erase strands its top row; a
+// truncated escape would swallow the park sequence as parameters. Runs at the
+// public boundary, in shadeRow and in the renderers, so it must be idempotent.
+func sanitizeRow(s string) string {
+	if !strings.Contains(s, esc) && !strings.ContainsFunc(s, isControl) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, seg := range splitANSI(s) {
+		if seg.escape {
+			if isSGR(seg.text) {
+				b.WriteString(seg.text)
+			}
+			continue
+		}
+		b.WriteString(foldControls(seg.text))
+	}
+	return b.String()
+}
+
+// isSGR reports whether seq is a complete CSI sequence that only sets graphic
+// rendition. Checking the parameter bytes rather than the final byte alone is
+// what rejects private-parameter sequences (mode sets, mouse) that happen to
+// end in 'm'.
+func isSGR(seq string) bool {
+	if len(seq) < 3 || seq[0] != esc[0] || seq[1] != '[' || seq[len(seq)-1] != 'm' {
+		return false
+	}
+	for i := 2; i < len(seq)-1; i++ {
+		switch c := seq[i]; {
+		case c >= '0' && c <= '9', c == ';', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// foldControls folds line breaks and tabs to single spaces, collapsing CRLF to
+// one, and drops the remaining C0, DEL and C1 controls. Invalid UTF-8 is
+// re-encoded, so bytes adjoining a dropped escape cannot combine into a valid
+// C1 sequence the next pass would treat differently (idempotence).
+func foldControls(s string) string {
+	s = oneLine(s)
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, isControl) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if isControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// isControl reports the C0, DEL and C1 code points, which a terminal acts on
+// rather than prints (xterm decodes U+009B and treats it as CSI; uniseg calls
+// it zero width).
+func isControl(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
 }
 
 // paintCaret returns row with the cell at display column col reversed, padding

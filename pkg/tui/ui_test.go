@@ -20,10 +20,17 @@ const testPoll = time.Millisecond
 
 // newTestUI drives a UI in inline mode against the emulator, with no real
 // terminal behind it.
-func newTestUI(t *testing.T, v *vt, in io.Reader) *UI {
-	t.Helper()
+func newTestUI(tb testing.TB, v *vt, in io.Reader) *UI {
+	tb.Helper()
+	return newTestUIWith(tb, v, in, NewTheme(ColorNone))
+}
+
+// newTestUIWith is newTestUI with an explicit theme, so shade and colour
+// paths are reachable from tests.
+func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
+	tb.Helper()
 	u := &UI{
-		theme:    NewTheme(ColorNone),
+		theme:    theme,
 		render:   newTestInline(v),
 		mode:     ModeInline,
 		status:   Status{Model: "test", MaxTokens: 1000},
@@ -42,7 +49,7 @@ func newTestUI(t *testing.T, v *vt, in io.Reader) *UI {
 	u.mu.Lock() // a key may already be decoding; serialize with readKeys
 	u.repaint()
 	u.mu.Unlock()
-	t.Cleanup(u.Close)
+	tb.Cleanup(u.Close)
 	return u
 }
 
@@ -58,6 +65,14 @@ func (u *UI) line(v *vt, row int) string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return v.Line(row)
+}
+
+// cursor reads the emulator's caret while holding the UI lock, for park
+// assertions: after any settled draw it sits on the live block's first row.
+func (u *UI) cursor(v *vt) (int, int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return v.row, v.col
 }
 
 func TestUIInput(t *testing.T) {
@@ -902,6 +917,33 @@ func TestUIResizeGate(t *testing.T) {
 	})
 }
 
+// TestCommitSanitizesToolOutput pins the committed boundary: Output streams
+// caller bytes verbatim into the line buffer, so a motion or screen escape in
+// tool output must be dropped at commit (an ESC[2J would fire the no-full-erase
+// trap through caller data; a motion escape desyncs the park identically)
+// while SGR survives so colored tools still read.
+func TestCommitSanitizesToolOutput(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	u.Output("\x1b[2Jwiping\x1b[5A up\r\n\x1b[31mred line\x1b[0m\r\n")
+	u.EndOutput()
+
+	screen := u.snapshot(v)
+	assert.NotContains(t, screen, "\x1b")
+	assert.Contains(t, screen, "wiping up")
+	assert.Contains(t, screen, "red line")
+	for _, row := range v.scrollback {
+		assert.NotContains(t, row, "\x1b[2J")
+		assert.NotContains(t, row, "\x1b[5A")
+	}
+	row, col := u.cursor(v)
+	assert.Equal(t, 0, col)
+	assert.Equal(t, strings.Repeat(ruleChar, 39), v.Line(row), "the park sits on the divider row")
+}
+
 // countRules counts rows made up entirely of the divider glyph, at any width:
 // a reflowed divider can be left spread across several rows.
 func countRules(screen string) int {
@@ -919,6 +961,8 @@ func countRules(screen string) int {
 // settled redraw leaves exactly one divider at every step and never duplicates
 // a committed line. The history lines are short enough to survive the narrowest
 // step unwrapped, so counting them stays independent of where the terminal wraps.
+// The progress row carries an escape and a wide glyph, so the storm exercises
+// contaminated caller text end to end.
 func TestUIResizeStorm(t *testing.T) {
 	t.Parallel()
 
@@ -938,8 +982,8 @@ func TestUIResizeStorm(t *testing.T) {
 		u.mu.Lock()
 		u.resizing = true // the SIGWINCH arrived; the burst is in flight
 		u.mu.Unlock()
-		u.SetActivity("write", "writing notes.go") // gated: draws nothing
-		u.resize()                                 // the debounce settled
+		u.SetActivity("write", "writing \u4e16\u754c notes.go \x1b[2B streaming") // gated: draws nothing
+		u.resize()                                                                // the debounce settled
 
 		screen := u.snapshot(v)
 		assert.Equal(t, 1, countRules(screen), "width %d", w)
@@ -947,11 +991,15 @@ func TestUIResizeStorm(t *testing.T) {
 			// on screen or scrolled into the terminal's scrollback, never twice
 			assert.LessOrEqual(t, strings.Count(screen, l), 1, "%q at width %d", l, w)
 		}
+		// the settled redraw parks on the block's top: the divider row itself
+		row, col := u.cursor(v)
+		assert.Equal(t, 0, col, "width %d", w)
+		assert.Equal(t, strings.Repeat(ruleChar, max(v.w-1, 1)), v.Line(row), "width %d", w)
 	}
 
 	screen := u.snapshot(v)
 	assert.Contains(t, screen, "write notes.go")
-	assert.Contains(t, screen, "writing notes.go")
+	assert.Contains(t, screen, "writing \u4e16\u754c notes.go")
 }
 
 // TestUIActivityNewlineKeepsRowCount guards invariant 2 against caller text: a

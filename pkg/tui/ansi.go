@@ -12,6 +12,7 @@ const (
 
 	eraseLine  = csi + "2K"
 	eraseBelow = csi + "0J"
+	eraseTail  = csi + "0K" // row diffs clear the tail of a rewritten row
 
 	hideCursor = csi + "?25l"
 	showCursor = csi + "?25h"

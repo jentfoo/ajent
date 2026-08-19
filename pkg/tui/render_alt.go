@@ -139,7 +139,7 @@ func (r *altRenderer) render() {
 		if r.offset > 0 && i == len(r.live)-1 {
 			row = r.scrollNote() + row
 		}
-		row = truncateDisplay(oneLine(row), r.t.width)
+		row = truncateDisplay(sanitizeRow(row), r.t.width)
 		if i == r.caretRow {
 			row = paintCaret(row, r.caretCol, r.t.width)
 		}

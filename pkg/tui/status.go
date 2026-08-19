@@ -166,6 +166,8 @@ func joinStatus(parts []string, t Theme) string {
 func (u *UI) SetStatusSegment(seg Segment) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	seg.Text = sanitizeRow(seg.Text) // arbitrary caller text; keep SGR only
+	seg.Short = sanitizeRow(seg.Short)
 
 	for i := range u.status.Segments {
 		if u.status.Segments[i].Key != seg.Key {
@@ -191,7 +193,7 @@ func (u *UI) SetModel(name string, maxTokens int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
-	u.status.Model = name
+	u.status.Model = sanitizeRow(name)
 	if maxTokens > 0 {
 		u.status.MaxTokens = maxTokens
 	}

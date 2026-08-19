@@ -94,6 +94,13 @@ activity and the editor sit below. It costs one real row per repaint, which on a
 short terminal shrinks interaction/dialog height by one line; tests that pin
 dialogs to small screens are sized accordingly.
 
+Unlike activity rows the rule keeps the **full** composed width (one column
+short of the terminal, like everything `repaint` composes) with no extra slack
+column: it is a fixed glyph we chose, not caller text, so there is nothing to
+sanitize and nothing to absorb — an ambiguous-width terminal renders the whole
+rule at double width, which no one-column reserve could survive, and a visible
+gap in a rule reads as a defect.
+
 ## Status line
 
 The status block (`status.go`) is the fixed chrome beneath the input: a ten cell
@@ -173,6 +180,14 @@ The central design tension: native scrollback is owned by the terminal, which
 reflows it on resize using its own rules. Anything we pin to the bottom lives in
 that same buffer and gets reflowed too. You cannot both re-wrap history yourself
 and keep the terminal's scrollback coherent.
+
+A cell or frame-buffer renderer (bubbletea v2's ultraviolet) was evaluated on
+the abandoned `refactor/bubbletea-tui` branch and rejected: it models cells,
+not reflow, so when the emulator re-wraps a row into two every cell is still
+"correct" while the buffer's origin on screen has moved — nothing in the cell
+model can detect that. The relative erase from a cursor parked by the terminal
+itself wins because only the terminal tracks that cursor through a reflow, so
+this renderer keeps its one-terminal-row invariant enforced at the boundary.
 
 So there are two modes, chosen by `ResolveMode`:
 
@@ -529,7 +544,7 @@ never splits a cluster, and `truncateDisplay` never cuts one in half.
 agent (or demo) -> UI.Text("...delta")
   -> buffer until a markdown block closes      splitCompleteBlocks
   -> renderMarkdown: goldmark AST -> []histLine  markdown.go
-  -> UI.commitHist: expand tabs, track section gaps
+  -> UI.commitHist: expand tabs, sanitize rows, track section gaps
   -> renderer.commit([]histLine)
        inline: erase live block, write lines, redraw block below
        alt:    append to buffer, re-render the frame
@@ -581,23 +596,37 @@ Five rules keep that true, and one bounds what the resize gate costs:
    position-free. Both renderers do it, so the caret looks the same in either.
 2. **Every live row is exactly one terminal row.** Row text arrives from callers
    (`SetActivity`, `NotifyKeyed`, a tool label), and tool progress in particular
-   is arbitrary text that may carry a newline. One newline moves the cursor a row
-   nothing counted, and the park lands inside the block instead of on top of it.
-   `drawLive` folds every row through `oneLine` before writing it, so the
-   invariant holds whatever a caller passes.
+   is arbitrary text that may carry newlines, tabs or escape sequences.
+   `sanitizeRow` folds line breaks and tabs to single spaces, drops the
+   remaining C0/DEL/C1 controls, and keeps only complete non-private SGR from
+   the escapes — a cursor-motion or screen sequence moves the cursor in ways no
+   row count predicted (the park lands inside the block) and a truncated escape
+   would swallow the park sequence as parameters. Keeping SGR is why styled tool
+   output still reads, and it runs at every boundary: `composeRows` folds each
+   live row, `commitHist` sanitizes committed lines once, and the public setters
+   (`SetActivity`, `NotifyKeyed`, `ToolStart`, status) do too. Zero-width escapes
+   are exactly why this is row accounting rather than cosmetics.
 3. **The live block never fills the last column.** `repaint` composes every row
-   one column short. A row ending in the last column leaves the cursor in the
-   deferred-wrap state, and emulators disagree on whether the next byte lands on
-   the same row or the next one — which would put the park a row out. Composing
-   narrow rather than truncating at draw time means nothing is cut off the editor
-   or a dialog.
+   one column short, and activity rows carry an extra spare column of slack on
+   top (`shadeRow` pads to `w-1`, reserving measurement room). A row ending in
+   the last column leaves the cursor in the deferred-wrap state, and emulators
+   disagree on whether the next byte lands on the same row or the next one —
+   which would put the park a row out. Composing narrow rather than truncating at
+   draw time means nothing is cut off the editor or a dialog; the spare column
+   converts the most likely width disagreement (`uniseg` vs the terminal) from
+   corrupting to reflow-ambiguous.
 4. **The park counts only what it is writing, at the width in force now.**
-   Parking still has to move up over the rows just written, so `drawLive` sums
+   Parking still has to move up over the rows just written, so `composeRows` sums
    them — but only rows it is emitting itself, never rows the emulator may have
    reflowed since. It re-reads the size after composing them, so a resize that
-   landed mid-frame is accounted for before the count is taken
-   (`TestInlineRendererResizeRace`). This is the one piece of counting left in
-   the design, over data one function wrote microseconds earlier.
+   landed mid-frame is accounted for before the count is taken; a diff frame
+   counts each skipped row as exactly its one newline boundary (it descended no
+   further), which returns the cursor precisely to where the previous frame
+   parked. And the write itself is gated: `watchSignals` bumps an atomic the
+   instant a SIGWINCH arrives, before it contends for the lock; a draw captures
+   that generation before composing and abandons the frame if it moved by the
+   time of the syscall, leaving the old block until the burst's settled redraw.
+   This narrows the mid-reflow window from compose-duration to syscall-duration.
 5. **The live block never exceeds the screen.** All of the above assumes the
    block is erasable, and a block taller than the screen is not: drawing it
    scrolls, so the previous frame's top rows are pushed into scrollback where no
@@ -633,6 +662,20 @@ Five rules keep that true, and one bounds what the resize gate costs:
    or timer belonging to an older burst never releases a draw. `Close` flushes
    whatever is still in `UI.deferred`, so a burst overlapping the end of a
    turn cannot swallow committed output.
+7. **The live block diffs against its previous frame.** A 90ms spinner tick was
+   reprinting the whole block; now unchanged rows are skipped, writing only the
+   newlines that walk past them and an erase-to-end-of-line after each written
+   row, so a tick emits no editor bytes. The diff falls back to today's full
+   erase-and-redraw on four guards: a width change (the one thing that reflows
+   rows it did not write), a row-count change (what the single erase-below used
+   to cover), nothing drawn yet or an invalidation set by `commit`/`suspend`/
+   `resume`/`clearHistory`, and every 64th frame as a cheap safety net. Comparing
+   post-caret strings means a moved caret dirties both its old and new row.
+
+   The severity asymmetry is why this is acceptable: a stale row inside the live
+   block sits in erasable territory, healed by the next commit or full redraw,
+   whereas a stranded row above the block is committed content nothing can reach.
+   Diff staleness is self-healing; stranding is permanent.
 
 ### Why inline does not re-render committed history on resize
 
@@ -793,6 +836,15 @@ to scrollback, the way a real emulator does on resize. Renderer tests write
 into it and assert on the rendered screen rather than on raw escape bytes,
 which is what makes layout bugs visible.
 
+The emulator models every sequence this package emits *and* the ones caller
+text may carry — cursor motion (`H f A B C D d G`), IND/NEL/RI, IL/DL/SU/SD,
+C1 CSI (`U+009B`), tabs to 8-column stops and zero-width attachment. This
+fidelity is load bearing: a sequence the emulator silently ignores cannot be
+distinguished from one that was stripped, so proving `sanitizeRow` drops motion
+escapes would be vacuous without it. SGR deliberately does **not** clear a
+pending deferred wrap (only cursor motion does), which makes exact-width tests
+honest.
+
 Patterns:
 
 - Renderer tests construct a `termState` directly with `fd: -1` and a fixed size.
@@ -804,9 +856,17 @@ Patterns:
   parking correctly because the park re-reads the size, `committed_rows_are_never_re_rendered`,
   `leaves_content_above_the_session` and `history_is_never_touched` pin invariant 1
   against the emulator's own reflow (a resize must never rewrite committed rows),
-  `TestUIActivityNewlineKeepsRowCount` covers rule 5 from the public API, and
-  `TestUIResizeStorm` storms resizes against progress updates asserting one divider
-  and no duplicated history at every step. Because a scrolled viewport is not
+  `TestUIActivityNewlineKeepsRowCount`, `TestUIActivityEscapeKeepsRowCount`,
+  `TestUIActivityTabKeepsPark` and `TestPastedEscape*` cover rule 2 from the
+  public API (a contaminated progress row, pasted escape staying byte-exact in
+  the buffer), and `TestUIResizeStorm` storms resizes against an escape-laden,
+  wide-glyph progress update asserting one divider, no duplicated history and a
+  parked cursor at every step. Row diff behaviour is pinned by
+  `TestInlineDiffSkipsUnchangedRows` (a tick emits no editor bytes) and the two
+  fallback tests; `repeated_draws_never_accumulate` still drives full redraws.
+  The park itself is asserted with a geometry primitive (`assertParked`, plus
+  `UI.cursor`) rather than by screen content: contaminated rows must leave the
+  cursor on the block's top row. Because a scrolled viewport is not
   representable in `vt`, the corruption mechanism that sank three earlier designs —
   absolute addressing into committed rows on resize — is pinned as an emitted-stream
   property: `TestInlineNeverAbsolute` drives narrow *and* wide resizes and asserts no
@@ -816,10 +876,16 @@ Patterns:
 - `newTestUI` in `ui_test.go` drives a full `UI` in inline mode against the
   emulator, with an `io.Pipe` for keystrokes. Assertions use
   `require.Eventually` against a locked read of the emulator.
-- For end to end checks against a real pty, run the binary under
-  `script -qec '...' /dev/null`, then resize it from outside with
-  `stty -F /dev/pts/N cols 120 rows 30`. Useful for asserting what we emit;
-  it cannot verify emulator reflow, since nothing is interpreting the stream.
+- For end to end checks against a real terminal, `pty_test.go` (Linux) opens
+  `/dev/ptmx`, runs the UI against the slave and drives an emulator from the
+  master. The kernel owns the size reports (`TIOCSWINSZ`) and the line
+discipline owns the bytes; because the slave is not a controlling terminal no
+SIGWINCH arrives, so the test calls `u.resize()` the way `watchSignals` would.
+`TestPTYResizeStrandsNoRow` narrows to 21 and widens to 80 asserting one
+divider, never-doubled history and the park each step. This is where reflow
+cases the emulator can only approximate are checked; a manual `script -qec
+'...' /dev/null` run plus an external `stty -F /dev/pts/N cols 120 rows 30`
+still verifies what we emit over ssh, where reply latency widens the window.
 
 ## Traps
 
@@ -834,10 +900,19 @@ Things that look fine and are not:
   a thematic break and `=== RUN` as a setext heading. Use `Output`/`EndOutput`.
 - **Do not emit `ESC[2J` or `ESC[3J` in the main screen.** That is what destroys
   scrollback in tmux and VS Code.
-- **Do not put caller text in a live row without `oneLine`.** A newline in a
-  progress or notice string makes the terminal use a row nothing counted, so the
-  cursor parks inside the block instead of on top of it. `drawLive` folds rows
-  for you; do not add a draw path that skips it.
+- **Do not put caller text in a live row without `sanitizeRow`.** A newline or
+  tab makes the terminal use columns and rows nothing counted, so the cursor
+  parks inside the block instead of on top of it; an escape sequence moves the
+  cursor outright. `composeRows` sanitizes every row for you; do not add a draw
+  path that skips it.
+- **Do not pad to a width measured on a different string than the one drawn.**
+  Padding computed over raw text (`shadeRow` once did) is arithmetic on a
+  string that no longer exists by draw time, because folding changes its width;
+  sanitize, then truncate, then pad, so what you measure is what you emit.
+- **Do not send caller text to history unsanitized.** Tool output streams raw
+  bytes; `cat` of a file containing `ESC[2J` would fire the no-full-erase trap
+  through caller data. Sanitize at commit (`commitHist`) keeping SGR, so colored
+  tools still read and motion/screen escapes never reach the terminal.
 - **Do not add an unbudgeted row to the live block.** Anything that grows with
   content rather than with the terminal must yield to the rows below it. A block
   taller than the screen scrolls as it is drawn, and scrolled rows are committed
@@ -900,7 +975,8 @@ Things that look fine and are not:
   a row no later erase can repair — by then it is committed terminal content.
   The resize machinery exists to keep draws out of that window rather than to
   clean up behind it: no draws mid-burst, and the settled redraw gated on the
-  terminal's status reply plus a quiet grace (rule 6). What cannot be closed
+  terminal's status reply plus a quiet grace, and the per-frame generation
+  abort that skips a write whose grid moved mid-compose (rules 4 and 6). What cannot be closed
   is signal latency itself: a resize whose SIGWINCH arrives after the grace
   check but before the frame lands. That window is milliseconds, and closing
   it entirely means owning the screen — alt mode.

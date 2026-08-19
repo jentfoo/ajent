@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -147,6 +148,13 @@ type UI struct {
 	resizeSeq int
 	probeSeq  int
 	probesOut int
+
+	// sigGen is bumped the instant a resize signal arrives, before
+	// holdForResize contends for the lock, so a draw already composing can see
+	// it without waiting. The draw path compares it around the frame write and
+	// abandons a frame whose generation moved: landing it would park by a row
+	// count taken on the old grid, the classic stranding miss.
+	sigGen atomic.Uint64
 }
 
 // New starts the UI, taking over the terminal until Close is called.
@@ -185,6 +193,9 @@ func New(opts Options) (*UI, error) {
 	u.doubleEscWindow = doubleEsc
 	u.onRewind = opts.OnRewind
 	u.afterDelay = time.AfterFunc
+	if inl, ok := u.render.(*inlineRenderer); ok {
+		inl.sigGen = u.sigGen.Load // only inline parks by row count
+	}
 
 	if err := u.render.start(u.inFd); err != nil {
 		return nil, err
@@ -479,6 +490,7 @@ func (u *UI) Diff(path, before, after string) {
 // it and commits result, which may be empty when output was already streamed.
 func (u *UI) ToolStart(label string) func(result string) {
 	u.mu.Lock()
+	label = sanitizeRow(label) // feeds the status row and the committed header
 	u.gap()
 	u.commit(u.theme.Accent.Wrap(toolMarker)+" "+u.theme.Dim.Wrap(label), flowReflow)
 	u.tool = label
@@ -554,7 +566,10 @@ func (u *UI) commit(text string, flow lineFlow) {
 	u.commitHist(lines)
 }
 
-// commitHist expands tabs and hands the lines to the renderer.
+// commitHist expands tabs, sanitizes and hands the lines to the renderer.
+// Sanitizing once here covers every committed surface (inline, alt's retained
+// lines, plain), keeping SGR so colored tool output reads, dropping the motion
+// and screen escapes caller text may carry.
 func (u *UI) commitHist(lines []histLine) {
 	if len(lines) == 0 {
 		return
@@ -562,7 +577,7 @@ func (u *UI) commitHist(lines []histLine) {
 	u.flushNotice()               // a keyed notice stops being collapsible once anything follows
 	lines = splitHistLines(lines) // histLine.text is single-line by construction
 	for i, l := range lines {
-		lines[i].text = strings.ReplaceAll(l.text, "\t", tabSpaces)
+		lines[i].text = sanitizeRow(strings.ReplaceAll(l.text, "\t", tabSpaces))
 	}
 	u.lastBlank = lines[len(lines)-1].text == ""
 	u.started = true
@@ -1177,6 +1192,7 @@ func (u *UI) watchSignals() {
 				u.resume()
 				continue
 			}
+			u.sigGen.Add(1) // visible to an in-flight draw before it waits on the lock
 			u.holdForResize()
 			timer.Reset(resizeSettle)
 		case <-timer.C:

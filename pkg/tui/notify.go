@@ -37,7 +37,8 @@ func (u *UI) NotifyKeyed(key, msg string, level Level) {
 	u.repaint()
 }
 
-// noticeLine renders a notice with its level styling.
+// noticeLine renders a notice with its level styling. Sanitized here so the
+// later flushNotice commit is already clean.
 func (u *UI) noticeLine(msg string, level Level) string {
 	style := u.theme.Dim
 	switch level {
@@ -46,7 +47,7 @@ func (u *UI) noticeLine(msg string, level Level) string {
 	case LevelError:
 		style = u.theme.Error
 	}
-	return style.Wrap(noticeMarker + " " + msg)
+	return style.Wrap(noticeMarker + " " + sanitizeRow(msg))
 }
 
 // flushNotice moves a live keyed notice into history. Caller holds the lock.

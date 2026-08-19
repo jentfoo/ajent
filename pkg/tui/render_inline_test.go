@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,41 @@ func TestInlineNeverAbsolute(t *testing.T) {
 			"width %d: a resize must never address an absolute row; the parked cursor is the only anchor", width)
 	}
 }
+
+// assertParked asserts the cursor sits on the live block's first row: every
+// draw parks there so the next erase needs no row maths.
+func assertParked(t *testing.T, v *vt, want int) {
+	t.Helper()
+	assert.Equal(t, want, v.row)
+	assert.Equal(t, 0, v.col)
+}
+
+// TestInlineContaminatedRowParks drives live rows carrying the escapes caller
+// text may hold. Unsanitized, each moves the cursor in ways no row count
+// predicted, so the park lands inside the block and the next erase strands
+// its top row.
+func TestInlineContaminatedRowParks(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ name, row string }{
+		{name: "escape_row_parks_on_the_top_row", row: "sub-1 \x1b[2B boom"},
+		{name: "index_escape_row_parks_on_the_top_row", row: "sub-1\x1bD boom"},
+		{name: "c1_csi_row_parks_on_the_top_row", row: "sub-1 \u009b2B boom"},
+		{name: "truncated_escape_does_not_eat_the_park", row: "sub-1 \x1b[12"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newVT(40, 8)
+			r := newTestInline(v)
+			r.commit([]histLine{{text: "hist"}})
+			top := v.row
+			// caret off the contaminated row: paintCaret's cell rebuild would
+			// strip the escape itself, hiding the bug from the raw emission
+			r.setLive([]string{tc.row, "ctx"}, 1, 1)
+			assertParked(t, v, top)
+		})
+	}
+}
+
 func TestInlineRendererCommit(t *testing.T) {
 	t.Parallel()
 
@@ -218,6 +254,93 @@ func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 	}
 	assert.Equal(t, []string{line}, rejoined,
 		"widening restores an indented line in full form, indent intact")
+}
+
+// TestInlineDiffSkipsUnchangedRows pins the row-level diff: a frame where
+// only one row changed (a spinner tick, a caret move) rewrites just that row,
+// so the wire bytes for the untouched rows vanish. The cursor walk and the
+// park stay byte-identical to a full redraw.
+func TestInlineDiffSkipsUnchangedRows(t *testing.T) {
+	t.Parallel()
+
+	var buf strings.Builder
+	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+	rows := []string{"draft text", "mid row", "third row", "status"}
+	r.setLive(rows, 1, 2)
+	require.Contains(t, buf.String(), "draft text")
+
+	buf.Reset()
+	tick := []string{"draft text", "mid row", "third row", "status tick"}
+	r.setLive(tick, 1, 2)
+	out := buf.String()
+	assert.Contains(t, out, "status tick")
+	assert.Contains(t, out, cursorUp(3), "the park still climbs the whole block")
+	assert.NotContains(t, out, "draft", "the first row emits no bytes")
+	assert.NotContains(t, out, "third row", "nor any unchanged row")
+	assert.NotContains(t, out, eraseBelow, "no full erase when nothing moved rows")
+	assert.Contains(t, out, eraseTail, "a rewritten row clears its own tail")
+}
+
+// TestInlineDiffFallsBackOnWidthChange: only the width can reflow rows the
+// diff did not write, so a width change redraws the whole block.
+func TestInlineDiffFallsBackOnWidthChange(t *testing.T) {
+	t.Parallel()
+
+	var buf strings.Builder
+	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+	r.setLive([]string{"draft text", "ctx"}, 1, 1)
+
+	buf.Reset()
+	r.t.width = 30
+	r.setLive([]string{"draft text", "ctx"}, 1, 1)
+	out := buf.String()
+	assert.Contains(t, out, eraseBelow, "the whole block is erased and redrawn")
+	assert.Contains(t, out, "draft text")
+}
+
+// TestInlineDiffFallsBackOnRowCountChange: the single erase-below used to
+// cover a block that grew or shrank; the diff cannot, so it falls back.
+func TestInlineDiffFallsBackOnRowCountChange(t *testing.T) {
+	t.Parallel()
+
+	var buf strings.Builder
+	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+	r.setLive([]string{"draft text", "ctx"}, 0, 2)
+
+	buf.Reset()
+	r.setLive([]string{"draft text", "extra row", "ctx"}, 0, 2)
+	assert.Contains(t, buf.String(), eraseBelow)
+
+	buf.Reset()
+	r.setLive([]string{"draft text", "ctx"}, 0, 2)
+	assert.Contains(t, buf.String(), eraseBelow)
+}
+
+// TestInlineAbortsFrameOnResizeSignal pins the pre-write gate: a resize
+// signal arriving while a frame composed means the emulator is reflowing onto
+// a different grid, and the park's row count was taken on the old one. The
+// frame is abandoned; the burst's settled redraw repaints at its own size.
+func TestInlineAbortsFrameOnResizeSignal(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 8)
+	r := newTestInline(v)
+	r.commit([]histLine{{text: "hist"}})
+	r.setLive([]string{"old row", "ctx"}, 0, 1)
+	before := v.Screen()
+	top := v.row
+
+	var gen atomic.Uint64
+	r.sigGen = func() uint64 { return gen.Add(1) } // moves between capture and check
+	r.setLive([]string{"fresh row", "ctx"}, 0, 1)
+	assert.Equal(t, before, v.Screen(), "the frame never reached the terminal")
+	assertParked(t, v, top)
+	assert.NotContains(t, v.Screen(), "fresh row")
+
+	r.sigGen = gen.Load // stable now
+	r.setLive([]string{"fresh row", "ctx"}, 0, 1)
+	assert.Contains(t, v.Screen(), "fresh row")
+	assertParked(t, v, top)
 }
 
 func TestInlineRendererScrollsNaturally(t *testing.T) {

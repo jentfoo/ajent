@@ -6,17 +6,20 @@ import (
 	"strings"
 )
 
-// shadeRow renders one activity line padded to exactly w columns inside its
-// style's background, so the shade spans edge to edge rather than sitting under
-// the status text alone. The row is elided first (never wrapped) and keeps exact
-// width maths: a full-width line occupies precisely one terminal row.
+// shadeRow renders one activity line padded inside its style's background,
+// so the shade spans the row rather than sitting under the status text alone.
+// The row is sanitized first so the fill measures exactly what is drawn, elided
+// (never wrapped) and padded one column short of w: uniseg and the terminal
+// can disagree by a column on a wide glyph, and a disagreement then reflows
+// instead of wrapping the band into a second row.
 func shadeRow(st Style, text string, w int) string {
 	open := st.Open()
 	if open == "" || w <= 0 { // no color or unknown width: plain elided row
-		return truncateDisplay(text, max(w, 1))
+		return truncateDisplay(sanitizeRow(text), max(w-1, 1))
 	}
-	body := truncateDisplay(text, w)
-	fill := w - displayWidth(body)
+	sw := max(w-1, 1)
+	body := truncateDisplay(sanitizeRow(text), sw)
+	fill := sw - displayWidth(body)
 	var b strings.Builder
 	b.WriteString(open)
 	b.WriteString(body)
@@ -47,6 +50,7 @@ type activityRow struct {
 func (u *UI) SetActivity(key, text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	text = sanitizeRow(text)
 
 	for i := range u.activity {
 		if u.activity[i].key != key {
