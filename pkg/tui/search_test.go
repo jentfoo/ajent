@@ -36,7 +36,12 @@ func TestSearchOverlayKey(t *testing.T) {
 			s.refilter()
 		}, key{typ: keyEnter}, searchAccept},
 		{"enter_closes_without_match", nil, key{typ: keyEnter}, searchClose},
-		{"escape_closes", nil, key{typ: keyEscape}, searchClose},
+		{"escape_accepts_with_match", func(s *searchOverlay) {
+			s.query = "hi"
+			s.items = []SearchItem{{Text: "hit"}}
+			s.refilter()
+		}, key{typ: keyEscape}, searchAccept},
+		{"escape_closes_without_match", nil, key{typ: keyEscape}, searchClose},
 		{"interrupt_closes", nil, key{typ: keyInterrupt}, searchClose},
 		{"unhandled_passes", nil, key{typ: keyLeft}, searchPass},
 	}

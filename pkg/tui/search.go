@@ -68,12 +68,14 @@ func (s *searchOverlay) key(k key) searchAction {
 	case keyDown:
 		s.cursor = wrapIndex(s.cursor-1, len(s.matches)) // newer match
 		return searchStay
-	case keyEnter:
+	// Enter and the first Escape both select the highlighted match; a second
+	// Escape (now that the overlay is closed) clears via the editor's own handler.
+	case keyEnter, keyEscape:
 		if _, ok := s.current(); ok {
 			return searchAccept
 		}
 		return searchClose
-	case keyEscape, keyInterrupt:
+	case keyInterrupt:
 		return searchClose
 	default:
 		return searchPass

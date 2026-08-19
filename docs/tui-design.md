@@ -801,7 +801,7 @@ The key table:
 |---|---|
 | Enter | submit (accepts an open completion or search selection) |
 | Alt+Enter, Ctrl+J | insert a newline |
-| `↑`/`↓` | history recall / move line; in overlays select |
+| `↑`/`↓` | move the caret through visual rows; only at the prompt's very start (↑) or end (↓) do they recall history. In overlays select |
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |
@@ -828,6 +828,24 @@ to the next older match, Enter fills the editor with the full line and does not 
 it, Esc closes leaving whatever was typed untouched. In the overlay ↑/↓ select: one
 press fills the editor with the highlighted line and closes the overlay without
 sending; subsequent plain arrows keep scrolling that same recalled list.
+
+Plain ↑/↓ are **cursor-first** for multi-line prompts rather than always recalling
+history. They move the caret across *visual* rows (the same word-wrapped layout
+the editor renders) keeping roughly the same column, clamping to a shorter line.
+Only at the buffer's edges do they touch history: on the first display row an Up
+moves mid-text back to the prompt's start and only a press already sitting on the
+very first character recalls older; symmetrically a Down on the last display row
+jumps mid-text to the prompt's end and only a press at the very end moves toward
+the live buffer. So scrolling history from an edited line takes two presses — one
+to reach the start/end, one to scroll.
+
+Recall state never short-circuits this: browsing recorded prompts is tracked by
+`promptIdx`, but ↑/↓ apply cursor movement first and only fall through to
+`promptPrev`/`promptNext` at a boundary. That keeps an edited or recalled multi-
+line prompt fully navigable with the arrows — pressing Up after recalling fills
+the caret back toward the start before it steps to the next older entry, and Down
+returns newer from the end. The held-draft restore (`stashP`) still works because
+`promptNext` guards on `browsingPrompts()` internally.
 
 The recall source is shared: plain ↑/↓ (no Ctrl+R) walk the same newest-first set as
 the search overlay — first ↑ recalls your most recent sent line, further ↑ steps

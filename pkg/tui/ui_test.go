@@ -676,6 +676,43 @@ func TestUISearchOverlayEscapeLeavesBuffer(t *testing.T) {
 	assert.Equal(t, "keep me", u.editor.Value(), "Esc leaves whatever was typed untouched")
 }
 
+func TestUISearchEscapeSelectsThenClears(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 10)
+	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem {
+		return []SearchItem{{Text: "found prompt"}}
+	})
+
+	press := func(k key) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		_, dirty, _ := u.applyKey(k)
+		if dirty {
+			u.repaint()
+		}
+	}
+
+	press(key{typ: keyReverseSearch})
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.search != nil && !u.search.pending
+	}, time.Second, testPoll)
+	press(key{typ: keyRune, text: "foun"}) // narrow to the match so current() holds
+
+	// first Escape selects the highlighted prompt and closes the overlay
+	press(key{typ: keyEscape})
+	require.Nil(t, u.search)
+	assert.Equal(t, "found prompt", u.editor.Value(), "first Esc fills the editor with the match")
+
+	// second Escape clears the now-selected prompt
+	press(key{typ: keyEscape})
+	assert.Empty(t, u.editor.Value(), "second Esc clears the buffer")
+}
+
 // openSearch waits until the Ctrl+R overlay is up and its provider delivered.
 func (u *UI) waitOpenSearch(t *testing.T) {
 	t.Helper()
@@ -754,13 +791,21 @@ func TestUISearchArrowCommitsThenBrowsesOlder(t *testing.T) {
 	require.Nil(t, u.search, "up closes the overlay after selecting")
 	assert.Equal(t, "newest recorded", u.editor.Value(), "the selected prompt fills the field without scrolling")
 
-	// subsequent presses walk older through the same recorded-prompt list.
+	// subsequent presses are cursor-first: the recalled single-line prompt with its
+	// caret at the end needs one Up to reach the start before history can scroll.
 	submit = press(key{typ: keyUp})
 	assert.Nil(t, submit)
-	assert.Equal(t, "newest recorded", u.editor.Value(), "second up re-shows the newest before stepping further")
+	assert.Equal(t, "newest recorded", u.editor.Value())
+	assert.Equal(t, 0, u.editor.pos) // first up moves the caret to the prompt's start
 	submit = press(key{typ: keyUp})
 	assert.Nil(t, submit)
-	assert.Equal(t, "older recorded", u.editor.Value(), "up scrolls older on later presses")
+	assert.Equal(t, "newest recorded", u.editor.Value()) // second up recalls without a visible change
+	submit = press(key{typ: keyUp})
+	assert.Nil(t, submit)
+	assert.Equal(t, 0, u.editor.pos) // recalled text again ends at its caret; Up reaches the start first
+	submit = press(key{typ: keyUp})
+	assert.Nil(t, submit)
+	assert.Equal(t, "older recorded", u.editor.Value())
 }
 
 func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
@@ -787,28 +832,41 @@ func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
 		return submit
 	}
 
-	// plain ↑ walks the recorded prompts newest → oldest without ever opening Ctrl+R.
+	// plain ↑ is cursor-first: each recall fills the field with its caret at the
+	// end, so stepping older takes two presses — one Up reaches the start of the
+	// recalled line (moving nothing else), a second recalls the next entry.
 	submit := press(key{typ: keyUp})
 	assert.Nil(t, submit)
-	assert.Equal(t, "third", u.editor.Value(), "first up recalls the newest prompt")
+	assert.Equal(t, "third", u.editor.Value(), "first up on an empty field recalls the newest prompt")
 
+	press(key{typ: keyUp}) // caret to start of "third"
+	assert.Equal(t, "third", u.editor.Value())
+	assert.Equal(t, 0, u.editor.pos)
 	press(key{typ: keyUp})
-	assert.Equal(t, "second", u.editor.Value())
+	assert.Equal(t, "second", u.editor.Value(), "at the start up steps older")
 
+	press(key{typ: keyUp}) // caret to start of "second"
 	press(key{typ: keyUp})
-	assert.Equal(t, "first", u.editor.Value(), "third up reaches the oldest prompt")
+	assert.Equal(t, "first", u.editor.Value(), "reaches the oldest prompt")
 
-	// at the oldest there is nothing more to recall; it stays put.
-	press(key{typ: keyUp})
+	// at the oldest there is nothing more to recall; Up just moves within it.
+	press(key{typ: keyUp}) // caret to start of "first"
 	assert.Equal(t, "first", u.editor.Value())
+	assert.Equal(t, 0, u.editor.pos)
+	press(key{typ: keyUp})
+	assert.Equal(t, "first", u.editor.Value(), "no older entry; it stays put")
 
-	// ↓ walks back toward the live buffer and finally restores the empty draft.
+	// ↓ is cursor-first too: the caret sits at the start of "first"; one Down moves
+	// it back to the end before further Downs return newer toward the live draft.
 	press(key{typ: keyDown})
-	assert.Equal(t, "second", u.editor.Value())
+	assert.Equal(t, "first", u.editor.Value())
+	assert.Equal(t, len("first"), u.editor.pos)
+	press(key{typ: keyDown})
+	assert.Equal(t, "second", u.editor.Value(), "at the end down returns newer")
 	press(key{typ: keyDown})
 	assert.Equal(t, "third", u.editor.Value())
 	press(key{typ: keyDown})
-	assert.Empty(t, u.editor.Value(), "down returns to the live buffer")
+	assert.Empty(t, u.editor.Value(), "down restores the live buffer")
 }
 
 func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
@@ -841,6 +899,104 @@ func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
 		defer u.mu.Unlock()
 		return u.editor.Value() == "last sent"
 	}, time.Second, testPoll, "up arrow fills the last sent message into the field")
+}
+
+// pressKey runs one key through applyKey and repaints if it dirtied state.
+func pressKey(u *UI, k key) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if _, dirty, _ := u.applyKey(k); dirty {
+		u.repaint()
+	}
+}
+
+// TestUIMultiLineArrowsAreCursorFirst locks in the requested cursor behaviour for
+// multi-line prompts: arrows move the caret through visual rows and only recall
+// history at the prompt's very start (Up) or end (Down).
+func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
+	const wide = 40 // no wrapping; each logical line is its own visual row
+
+	press := func(u *UI, k key) { pressKey(u, k) }
+	// point editorWidth at the emulator so arrow movement sees a stable width.
+	pinSize := func(v *vt, u *UI) {
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	}
+	// editor access goes through the lock: the key loop owns the same fields.
+	setEditor := func(u *UI, s string, pos int) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		u.editor.SetValue(s)
+		u.editor.pos = pos
+	}
+	editorPos := func(u *UI) int {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.editor.pos
+	}
+	editorVal := func(u *UI) string {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.editor.Value()
+	}
+
+	t.Run("up_mid_first_line_goes_to_start_then_history", func(t *testing.T) {
+		v := newVT(wide, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		pinSize(v, u)
+		setEditor(u, "hello world", 5)
+
+		press(u, key{typ: keyUp})
+		assert.Equal(t, 0, editorPos(u)) // mid-first-line up jumps to the prompt's start
+		// second press at the very first character recalls history (none here -> noop).
+		press(u, key{typ: keyUp})
+		assert.Equal(t, 0, editorPos(u))
+
+		u.SetHistorySearch(func() []SearchItem {
+			return []SearchItem{{Text: "prior prompt"}}
+		})
+		press(u, key{typ: keyUp}) // still at pos 0; now the recall list exists
+		assert.Equal(t, "prior prompt", editorVal(u))
+	})
+	t.Run("up_later_line_moves_to_row_above", func(t *testing.T) {
+		v := newVT(wide, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		pinSize(v, u)
+		setEditor(u, "abcd\nefgh", 7) // 'g' on the second line
+		press(u, key{typ: keyUp})
+		assert.Equal(t, 2, editorPos(u)) // moves up to the same column on the first line
+	})
+	t.Run("down_mid_last_line_goes_to_end_then_history", func(t *testing.T) {
+		v := newVT(wide, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		pinSize(v, u)
+		setEditor(u, "hello world", 5)
+
+		press(u, key{typ: keyDown})
+		assert.Equal(t, len("hello world"), editorPos(u)) // mid-last-line down jumps to the prompt's end
+		// second press at the very end walks toward newer history (none -> noop).
+		press(u, key{typ: keyDown})
+		assert.Equal(t, len("hello world"), editorPos(u))
+
+		// with a recall list installed, an Up at the start recalls newer; a Down then
+		// returns toward (and finally restores) the held live draft.
+		u.SetHistorySearch(func() []SearchItem {
+			return []SearchItem{{Text: "next prompt"}}
+		})
+		press(u, key{typ: keyUp}) // move to the start of the current line
+		assert.Equal(t, 0, editorPos(u))
+		press(u, key{typ: keyUp}) // now at the start: recall the newest prompt
+		assert.Equal(t, "next prompt", editorVal(u))
+		press(u, key{typ: keyDown})
+		assert.Equal(t, "hello world", editorVal(u)) // restores the held draft on returning to it
+	})
+	t.Run("down_line_before_last_moves_to_row_below", func(t *testing.T) {
+		v := newVT(wide, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		pinSize(v, u)
+		setEditor(u, "abcd\nefgh", 2) // 'c' on the first line
+		press(u, key{typ: keyDown})
+		assert.Equal(t, 7, editorPos(u)) // moves down to the same column on the second line
+	})
 }
 
 func TestStyleLines(t *testing.T) {

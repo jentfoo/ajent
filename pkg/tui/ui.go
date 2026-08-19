@@ -1036,6 +1036,16 @@ func (u *UI) deliverSearch(items []SearchItem) {
 	u.repaint()
 }
 
+// editorWidth returns the width the input is laid out at: one column short of the
+// terminal, matching repaint so caret movement tracks the visible rows.
+func (u *UI) editorWidth() int {
+	w, _ := u.render.size()
+	if w > 1 {
+		w--
+	}
+	return w
+}
+
 // applyKey mutates the editor for one key and reports whether it changed any
 // rendered state. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
@@ -1147,18 +1157,31 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.emitControl(ControlRecallQueued) // the driver updates the editor via SetInput/PrependInput
 		return nil, false, false           // no repaint here: those methods repaint
 	case keyUp:
-		// cursor first, then browse recorded prompts; fall back to editor history
-		// when no prompt list is configured (or it ran out).
-		if !u.editor.Up() && !u.promptPrev() {
-			u.editor.HistoryPrev()
+		// Cursor-first: move up through visual rows, and only a press already on
+		// the very first character (or an empty buffer) recalls older history.
+		// This holds even while browsing recorded prompts — a recalled multi-line
+		// prompt is editable text whose caret must reach its start before Up steps
+		// to the next older entry, and Down restores the live draft from there.
+		if !u.editor.Up(u.editorWidth()) {
+			// already on the first visual row.
+			if u.editor.pos > 0 {
+				// mid-text: jump to the prompt's beginning; a second Up recalls history
+				u.editor.LineStart()
+			} else if !u.promptPrev() { // at the very start (or empty): recall older
+				u.editor.HistoryPrev() // fall back when no recorded list exists
+			}
 		}
 	case keyDown:
-		// while mid-way through the recorded prompts, Down walks back toward the
-		// live buffer; otherwise normal cursor/history behaviour.
-		if u.browsingPrompts() {
-			u.promptNext()
-		} else if !u.editor.Down() {
-			u.editor.HistoryNext()
+		// Cursor-first: move down through visual rows, and only a press already on
+		// the very last character (or an empty buffer) recalls newer history.
+		if !u.editor.Down(u.editorWidth()) {
+			// already on the last visual row.
+			if u.editor.pos < len(u.editor.cells) {
+				// mid-text: jump to the prompt's end; a second Down recalls next
+				u.editor.pos = len(u.editor.cells)
+			} else if !u.promptNext() { // at the very end (or empty): recall newer
+				u.editor.HistoryNext()
+			}
 		}
 	case keyHome:
 		u.editor.LineStart()

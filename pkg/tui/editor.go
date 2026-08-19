@@ -121,27 +121,27 @@ func (e *editor) KillWordBack() {
 	e.pos = start
 }
 
-// Up moves to the previous line, reporting false when already on the first line.
-func (e *editor) Up() bool {
-	start := e.lineStart(e.pos)
-	if start == 0 {
+// Up moves the caret to the visual row above at roughly the same column,
+// reporting false when already on the first display row.
+func (e *editor) Up(width int) bool {
+	starts, ends := e.layout(width)
+	r := e.displayRow(starts, ends)
+	if r == 0 {
 		return false
 	}
-	col := e.pos - start
-	prevStart := e.lineStart(start - 1)
-	e.pos = min(prevStart+col, start-1)
+	e.pos = min(starts[r-1]+(e.pos-starts[r]), ends[r-1])
 	return true
 }
 
-// Down moves to the next line, reporting false when already on the last line.
-func (e *editor) Down() bool {
-	end := e.lineEnd(e.pos)
-	if end == len(e.cells) {
+// Down moves the caret to the visual row below at roughly the same column,
+// reporting false when already on the last display row.
+func (e *editor) Down(width int) bool {
+	starts, ends := e.layout(width)
+	r := e.displayRow(starts, ends)
+	if r == len(ends)-1 {
 		return false
 	}
-	col := e.pos - e.lineStart(e.pos)
-	nextStart := end + 1
-	e.pos = min(nextStart+col, e.lineEnd(nextStart))
+	e.pos = min(starts[r+1]+(e.pos-starts[r]), ends[r+1])
 	return true
 }
 
@@ -207,27 +207,26 @@ func isSpaceCell(c string) bool {
 	return c == " " || c == "\t" || c == "\n"
 }
 
-// inputView lays the editor out into display rows of at most width columns,
-// wrapping on word boundaries so a word is never split across lines (only an
-// unbroken token wider than a full row hard-splits), and returns the zero based
-// cursor offset within those rows. Wrapping is purely visual: Value() is
-// untouched, so submitted input gains no newlines.
-func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, curCol int) {
-	// A leading `!` marks a shell command: let it serve as the prompt glyph itself
-	// rather than duplicating it beside ❯. Backspacing that first character returns
-	// the marker to the ordinary prompt.
-	shell := len(e.cells) > 0 && e.cells[0] == "!"
-	marker, cont := promptFirst, promptCont
-	if shell {
-		marker = "" // the literal `!` in cells[0] is now the marker
+// prefixWidths returns the display widths of the prompt glyph and a continuation
+// indent. A leading `!` shell marker replaces ❯ with nothing, so its width is 0.
+func (e *editor) prefixWidths() (firstW, contW int) {
+	marker := promptFirst
+	if len(e.cells) > 0 && e.cells[0] == "!" { // the literal `!` serves as the marker
+		marker = ""
 	}
-	firstW, contW := displayWidth(marker), displayWidth(cont)
+	return displayWidth(marker), displayWidth(promptCont)
+}
+
+// layout returns the buffer's visual rows as cell ranges [starts[k]:ends[k]], laid
+// out at width by the same word-wrap rules inputView renders with. A leading `!`
+// shell marker occupies row 0 without a glyph, so it wraps differently.
+func (e *editor) layout(width int) (starts, ends []int) {
+	firstW, contW := e.prefixWidths()
 	cells := e.cells
 
 	// Rows as cell ranges: row k renders cells[starts[k]:ends[k]]. Breaks fall on
 	// word boundaries (trailing spaces dropped) so a word wraps whole to the next
 	// line; explicit newlines and too-wide tokens still split.
-	var starts, ends []int
 	starts = append(starts, 0)
 	i := 0
 	for i < len(cells) {
@@ -279,6 +278,29 @@ func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, 
 		starts = append(starts, len(cells))
 		ends = append(ends, len(cells))
 	}
+	return starts, ends
+}
+
+// displayRow returns the index of the visual row containing pos (first match,
+// matching inputView's caret mapping).
+func (e *editor) displayRow(starts, ends []int) int {
+	for k := range starts {
+		if e.pos >= starts[k] && e.pos <= ends[k] {
+			return k
+		}
+	}
+	return 0
+}
+
+// inputView lays the editor out into display rows of at most width columns,
+// wrapping on word boundaries so a word is never split across lines (only an
+// unbroken token wider than a full row hard-splits), and returns the zero based
+// cursor offset within those rows. Wrapping is purely visual: Value() is
+// untouched, so submitted input gains no newlines.
+func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, curCol int) {
+	firstW, contW := e.prefixWidths()
+	shell := len(e.cells) > 0 && e.cells[0] == "!"
+	starts, ends := e.layout(width)
 
 	// Render each range: the first row carries the prompt glyph (or nothing for a
 	// leading `!`), continuations are indented by two raw spaces.
@@ -289,14 +311,14 @@ func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, 
 		case k == 0 && shell:
 			// the literal `!` in cells[0] is already content; no glyph needed
 		case k == 0:
-			line.WriteString(t.Prompt.Wrap(marker))
+			line.WriteString(t.Prompt.Wrap(promptFirst))
 		default:
-			line.WriteString(cont)
+			line.WriteString(promptCont)
 		}
 		for j := s; j < en; j++ {
-			line.WriteString(cells[j])
+			line.WriteString(e.cells[j])
 		}
-		if len(cells) == 0 && k == 0 { // empty buffer: dim hint on the first row
+		if len(e.cells) == 0 && k == 0 { // empty buffer: dim hint on the first row
 			line.WriteString(t.Dim.Wrap(truncateDisplay(inputHint, width-firstW)))
 		}
 		rows = append(rows, line.String())
@@ -312,7 +334,7 @@ func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, 
 			}
 			col := pw
 			for j := s; j < e.pos; j++ {
-				col += displayWidth(cells[j])
+				col += displayWidth(e.cells[j])
 			}
 			curRow, curCol = k, col
 			break

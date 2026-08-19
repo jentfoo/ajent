@@ -131,28 +131,50 @@ func TestEditorKill(t *testing.T) {
 func TestEditorLineNavigation(t *testing.T) {
 	t.Parallel()
 
+	// a wide layout keeps each logical line on its own visual row.
+	const wide = 60
+
 	t.Run("up_keeps_column", func(t *testing.T) {
 		e := newEditorAt("abcd\nefgh", 7)
-		require.True(t, e.Up())
+		require.True(t, e.Up(wide))
 		assert.Equal(t, 2, e.pos)
 	})
 	t.Run("up_clamps_to_shorter_line", func(t *testing.T) {
 		e := newEditorAt("ab\nefgh", 6)
-		require.True(t, e.Up())
+		require.True(t, e.Up(wide))
 		assert.Equal(t, 2, e.pos)
 	})
 	t.Run("up_on_first_line_declines", func(t *testing.T) {
 		e := newEditorAt("abc", 1)
-		assert.False(t, e.Up())
+		assert.False(t, e.Up(wide))
 	})
 	t.Run("down_keeps_column", func(t *testing.T) {
 		e := newEditorAt("abcd\nefgh", 2)
-		require.True(t, e.Down())
+		require.True(t, e.Down(wide))
 		assert.Equal(t, 7, e.pos)
 	})
 	t.Run("down_on_last_line_declines", func(t *testing.T) {
 		e := newEditorAt("abc", 1)
-		assert.False(t, e.Down())
+		assert.False(t, e.Down(wide))
+	})
+	t.Run("up_walks_wrapped_rows_same_column", func(t *testing.T) {
+		// "one two three" wraps to rows [one][two][three] at width 7; the caret on
+		// row one ('o' of "two") moves up to row zero keeping its within-row column.
+		e := newEditorAt("one two three", 6)
+		require.True(t, e.Up(7))
+		assert.Equal(t, 2, e.pos) // moves from 'two' onto the end of 'one'
+	})
+	t.Run("down_walks_wrapped_rows_same_column", func(t *testing.T) {
+		// the caret on row zero ('n' of "one") moves down to row one at the same column.
+		e := newEditorAt("one two three", 1)
+		require.True(t, e.Down(7))
+		assert.Equal(t, 5, e.pos) // moves from 'one' onto 'two' at the same column
+	})
+	t.Run("down_clamps_to_shorter_visual_row", func(t *testing.T) {
+		// a row below that ends before the target column clamps to its end.
+		e := newEditorAt("abcdef\nx", 3)
+		require.True(t, e.Down(wide))
+		assert.Equal(t, 8, e.pos) // row below is shorter than the same column
 	})
 }
 
