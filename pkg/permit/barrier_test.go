@@ -233,6 +233,41 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(context.Background(), call("edit", `{"path":"x.go","edits":[]}`)).Action)
 }
 
+func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
+	t.Parallel()
+
+	// naming an MCP server (tools register as server__tool) covers every tool it exposes.
+	b := newTestBarrier(newFakePrompter())
+	b.SetSafeCommands([]string{"sectool"})
+
+	for _, name := range []string{"sectool__proxy_poll", "sectool__flow_get", "sectool__js_surface"} {
+		d := b.Guard()(context.Background(), call(name, `{}`))
+		assert.Equal(t, tools.ActionAllow, d.Action, name)
+	}
+
+	// a different server's tool still prompts.
+	b2 := newTestBarrier(newFakePrompter())
+	b2.SetSafeCommands([]string{"sectool"})
+	d := b2.Guard()(context.Background(), call("github__get_repo", `{}`))
+	assert.Equal(t, tools.ActionAsk, d.Action)
+
+	// an exact namespaced tool name still matches that one tool only.
+	b3 := newTestBarrier(newFakePrompter())
+	b3.SetSafeCommands([]string{"sectool__proxy_poll"})
+	assert.Equal(t, tools.ActionAllow, b3.Guard()(context.Background(), call("sectool__proxy_poll", `{}`)).Action)
+	assert.Equal(t, tools.ActionAsk, b3.Guard()(context.Background(), call("sectool__flow_get", `{}`)).Action)
+}
+
+func TestGuardDeniedCommandsMatchMCPServerNamespace(t *testing.T) {
+	t.Parallel()
+
+	b := newTestBarrier(newFakePrompter())
+	b.SetDeniedCommands([]string{"sectool"})
+	assert.Equal(t, tools.ActionDeny, b.Guard()(context.Background(), call("sectool__proxy_poll", `{}`)).Action)
+	// naming one server does not deny another.
+	assert.Equal(t, tools.ActionAsk, b.Guard()(context.Background(), call("github__get_repo", `{}`)).Action)
+}
+
 func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 	t.Parallel()
 

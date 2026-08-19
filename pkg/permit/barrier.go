@@ -454,7 +454,7 @@ func DenyMatches(call agent.ToolCall, cmds []string) bool {
 		if e == "" {
 			continue
 		}
-		if call.Name != bashTool && call.Name == e {
+		if call.Name != bashTool && toolNameCovered(call.Name, e) {
 			return true
 		}
 		if call.Name == bashTool && commandHasPrefix(bashCommand(call.Input), e) {
@@ -478,7 +478,7 @@ func SafeMatches(call agent.ToolCall, cmds []string) bool {
 		if e == "" {
 			continue
 		}
-		if call.Name != bashTool && call.Name == e {
+		if call.Name != bashTool && toolNameCovered(call.Name, e) {
 			return true
 		}
 		if call.Name == bashTool && commandHasPrefix(bashCommand(call.Input), e) {
@@ -486,6 +486,17 @@ func SafeMatches(call agent.ToolCall, cmds []string) bool {
 		}
 	}
 	return false
+}
+
+// toolNameCovered reports whether a non-bash tool name is covered by a configured
+// entry: the exact tool name, or — when the entry names an MCP server namespace
+// (tools are registered server__tool) — every tool that server exposes. An extension
+// whose own name carries __ still matches exactly.
+func toolNameCovered(name, e string) bool {
+	if name == e {
+		return true
+	}
+	return strings.HasPrefix(name, e+"__")
 }
 
 // commandHasPrefix reports whether cmd starts with prefix at a token boundary, so

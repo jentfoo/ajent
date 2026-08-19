@@ -129,8 +129,9 @@ Cost: write/edit read the target file twice per call (preview, then execute).
 The permission layer (phase 12) registers both: one guard from `permit.Barrier`
 runs static classification, and its asker resolves prompts into allow/deny with
 session memory. Config's `permissions.safeCommands` lets a user declare extra
-tools or exact bash lines to auto-allow as read-only (see phase 12); it can never
-name `write`/`edit`. Core never does. The `WithUserInitiated` marker rides the context
+tools, whole MCP server namespaces (`sectool` covers every `sectool__*` tool), or
+exact bash lines to auto-allow as read-only (see phase 12); it can never name
+`write`/`edit`. Core never does. The `WithUserInitiated` marker rides the context
 so a user's own staged `!` shell line is exempt in every permission mode — it is
 the human's shell, not the model's.
 

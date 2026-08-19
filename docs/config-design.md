@@ -68,9 +68,9 @@ It can never name a core writer (`write`, `edit`) or un-reject an in-place sed,
 so no config entry overrides a known mutation. It gates on the live call's tool
 name (exact) or bash line prefix (see permit), independent of registry metadata.
 
-`deniedCommands` is its hard inverse: exact tool names or bash command prefixes that
-are always refused **without prompting**, in every mode — including allow-all and
-user-initiated `!` lines. Matching follows the same token-boundary rule as
+`deniedCommands` is its hard inverse: exact tool names, whole MCP server namespaces,
+or bash command prefixes that are always refused **without prompting**, in every mode
+— including allow-all and user-initiated `!` lines. Matching follows the same token-boundary rule as
 `safeCommands`, but may also name core writers, since denying one is a legitimate
 safety gate. A denied check runs first in the barrier verdict, so it wins over any
 safe-command or session allow.
