@@ -33,6 +33,12 @@ type Options struct {
 	Transforms          []Transform                           // applied in assembly order, nil entries skipped
 	OnMessage           []func(MessageInfo)                   // called per appended message, in registration order
 	OnSettled           []func(context.Context)               // agent drained and idle; observers may queue work
+	// OnBoundary, when set, is called on the loop goroutine at each step boundary
+	// (the point steering drains), just before the next model call. Returned inputs
+	// are appended as user messages at this same boundary, so a host can hand over
+	// queued prompts with no extra step of latency. It must be cheap and never
+	// block; nil disables.
+	OnBoundary func() []Input
 	// Compact reduces the live context at a turn boundary or after an overflow,
 	// reporting whether anything changed. It never runs mid-stream.
 	Compact   func(ctx context.Context, r CompactReason) (bool, error)

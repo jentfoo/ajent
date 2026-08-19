@@ -233,6 +233,12 @@ func (a *Agent) drainSteer() {
 	in := a.steer
 	a.steer = nil
 	a.mu.Unlock()
+
+	// host-queued prompts land after push-steers: they are the user's next
+	// direction, read after this step's injected context
+	if a.opts.OnBoundary != nil {
+		in = append(in, a.opts.OnBoundary()...)
+	}
 	if len(in) > 0 {
 		a.appendSteer(in)
 	}

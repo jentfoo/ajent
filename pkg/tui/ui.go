@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,7 +47,8 @@ const (
 	ControlEscape Control = iota
 	ControlInterrupt
 	ControlEOF
-	ControlModeCycle // Shift+Tab; meaning belongs to the front end
+	ControlModeCycle    // Shift+Tab; meaning belongs to the front end
+	ControlRecallQueued // Alt+↑: recall the newest queued prompt into the editor
 )
 
 // Options configures a UI.
@@ -111,6 +113,7 @@ type UI struct {
 	act        *pending // interaction owning the live block
 	queue      []*pending
 	activity   []activityRow // transient keyed rows above the input, insertion order
+	queued     []string      // pending prompts awaiting a steer boundary; oldest first
 	noticeKey  string        // keyed notice still collapsible in the live block
 	noticeText string
 
@@ -357,6 +360,34 @@ func (u *UI) SetInput(text string) {
 		return
 	}
 	u.editor.SetValue(text)
+	u.repaint()
+}
+
+// SetQueued replaces the dimmed pending-prompt rows shown above the input,
+// oldest first. The driver (steer queue) owns the list; empty clears.
+func (u *UI) SetQueued(texts []string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(texts) == 0 && len(u.queued) == 0 {
+		return
+	}
+	u.queued = slices.Clone(texts)
+	u.repaint()
+}
+
+// PrependInput inserts text at the top of the editor buffer, followed by a
+// newline when a draft exists. No-op while an interaction owns the input.
+func (u *UI) PrependInput(text string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed || u.act != nil { // never clobber an active interaction's input
+		return
+	}
+	if cur := u.editor.Value(); cur == "" {
+		u.editor.SetValue(text)
+	} else {
+		u.editor.SetValue(text + "\n" + cur) // cursor lands at the end
+	}
 	u.repaint()
 }
 
@@ -717,6 +748,16 @@ func (u *UI) repaint() {
 	actRows := u.activityRows(w, budget)
 	rows = append(rows, actRows...)
 	offset += len(actRows)
+
+	// queued pending prompts render after activity and yield like it on a short
+	// terminal: they take whatever remains after the status rows and one input line.
+	qBudget := maxQueuedBudget
+	if room := h - len(rows) - 1 - len(statusRows); room < qBudget {
+		qBudget = max(room, 0)
+	}
+	queuedR := u.queuedRows(w, qBudget)
+	rows = append(rows, queuedR...)
+	offset += len(queuedR)
 
 	// an interaction takes the input's place while it is active, so the editor
 	// keeps whatever was typed and shows it again once the prompt resolves
@@ -1102,6 +1143,9 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.editor.WordLeft()
 	case keyWordRight:
 		u.editor.WordRight()
+	case keyAltUp:
+		u.emitControl(ControlRecallQueued) // the driver updates the editor via SetInput/PrependInput
+		return nil, false, false           // no repaint here: those methods repaint
 	case keyUp:
 		// cursor first, then browse recorded prompts; fall back to editor history
 		// when no prompt list is configured (or it ran out).

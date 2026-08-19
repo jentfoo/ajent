@@ -58,9 +58,21 @@ prompt lines go to a single **prompt pump** goroutine that owns ordering.
 `main.go`'s loop is a thin classifier feeding one pump channel:
 
 - loop: `ParseLine` → shell to `Stager.Run` (non-blocking); command and prompt
-  lines to the pump; the `quit` case is unchanged.
+  lines to the pump; the `quit` case is unchanged. The echo of a submitted
+  prompt now lives in the pump, so a mid-turn submission renders as a queued row
+  instead of an immediate echo.
 - pump: a command runs its handler (pickers block only the pump); a prompt
-  `Stager.Flush` → `refs.Expand` → `agent.Input{Text, Before}` → steer or start.
+  `Stager.Flush` → `refs.Expand` → queue-or-start via the **steer queue**
+  (`queue.go`). Idle, it spawns the single drain goroutine with this input;
+  busy, it queues the item (rendering as a dimmed row) and defers its echo to
+  delivery.
+
+The steer queue turns mid-turn prompts into **steering messages**: they deliver
+as ONE newline-joined user message at the agent's next step boundary via
+`Options.OnBoundary`, or — if no boundary comes first — as the next turn's prompt
+drained by `startDrain`. Esc/Ctrl+C during a turn recovers every queued item back
+into the editor (collapsed with newlines) before interrupting; Alt+Up recalls the
+newest queued message. See `agent-loop-design.md` for the boundary contract.
 
 Submissions therefore stay in order, the UI never stalls, and "the turn is held
 until the pending command finishes" falls out of `Flush` blocking the pump. Only

@@ -112,7 +112,7 @@ drain follow-up queue -> for each turn:
     sink.TurnStart
     append the prompt and any pre-start steering as user messages
     for step := 0; step < maxSteps; step++ {
-        drain new steering into state as user messages   (boundary)
+        drain push-steers, then OnBoundary inputs         (step boundary)
         req = request(state, env, tools)                 assemble()
         msg, usage = a.stream(ctx, req)                  forwards deltas to sink
         append msg to state.Messages
@@ -252,9 +252,17 @@ Two kinds of mid-turn input:
   appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R / up
   arrow) can exclude it; injected messages still appear in assembled context.
 - **`FollowUp`** queues input as a separate turn once the current one settles.
+- **`Options.OnBoundary`**, when set, is called on the loop goroutine at each
+  step boundary just before the next model call, after push-steers have been
+  drained. Returned inputs are appended as user messages at this same boundary,
+  so a host can hand over queued prompts with zero extra step of latency and no
+  drop window (append follows synchronously). It must be cheap and never block;
+  nil disables it. `Input.Delivered` still fires per returned input, exactly as
+  for push-steers.
 
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
-drops everything queued and cancels the running turn.
+drops everything queued (including any host inputs already handed over at a
+boundary) and cancels the running turn.
 
 ### Message observers and settled notifications
 

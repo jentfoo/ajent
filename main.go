@@ -275,6 +275,21 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
 		pushContext()
 	})
+	// once a submitted prompt lands in state as a message, pending owns its tokens;
+	// the submit bucket must clear so it is never counted twice.
+	delivered := func() {
+		if st.Tokens != nil && len(editSinks) > 0 {
+			st.Tokens.SetSubmit(0)
+			pushContext()
+		}
+	}
+	// prompts submitted while a turn runs queue here: they render as dimmed rows,
+	// hand over at the next step boundary (or the next turn), and recover to the
+	// editor on interrupt or Alt+Up.
+	q := newSteerQueue(ui,
+		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
+		delivered,
+	)
 	var ag *agent.Agent
 
 	// sub-agent investigations fan read-only work into throwaway child agents,
@@ -324,6 +339,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// flush pending completion steers into the running parent turn at start.
 		opts.Sinks = append(opts.Sinks, subagentSink{mgr: sag})
 	}
+
+	// queued mid-turn prompts land at the next step boundary via this hook.
+	opts.OnBoundary = q.pull
 
 	ag = agent.New(st, opts)
 
@@ -452,7 +470,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// resume restores it; the config file is never rewritten.
 		_ = console.SetSessionSetting("permissions.mode", m.String())
 	}
-	watchControls(ui, ag, stager, quit, onModeCycle)
+	watchControls(ui, ag, q, stager, quit, onModeCycle)
 	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
 	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
@@ -468,25 +486,13 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	pump := make(chan pumpLine, 16)
-	// once a submitted prompt lands in state as a message, pending owns its tokens;
-	// the submit bucket must clear so it is never counted twice.
-	delivered := func() {
-		if st.Tokens != nil && len(editSinks) > 0 {
-			st.Tokens.SetSubmit(0)
-			pushContext()
-		}
-	}
-	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started, delivered)
+	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started,
+		delivered, q, st, editSinks, &seedToolsOnce, pushContext)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
 		initial := strings.Join(args, " ")
 		hist.AppendHidden(initial) // durable in the workspace store yet excluded from ↑/↓ and Ctrl+R
-		// bypasses ui.Messages(), so echo it here like the driver would.
-		if text := submittedEcho(initial); text != "" {
-			ui.UserEcho(text)
-			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
-			submitPrompt(st, editSinks, tokens.EstimateText(text, tokens.KindProse), pushContext)
-		}
+		// echo and accounting happen in the pump like every other prompt.
 		pump <- pumpLine{kind: command.KindPrompt, rest: initial, injected: true}
 	}
 
@@ -505,12 +511,6 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			if !ok {
 				close(pump)
 				return rec // UI closed
-			}
-			// echo the prompt above the line now; a session-store write below must not delay it.
-			if text := submittedEcho(msg); text != "" {
-				ui.UserEcho(text)
-				seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
-				submitPrompt(st, editSinks, tokens.EstimateText(text, tokens.KindProse), pushContext)
 			}
 			hist.Append(msg) // every line (prompt /cmd !shell), recorded or not; nil-safe
 			line := command.ParseLine(msg)
@@ -561,9 +561,9 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 }
 
 // runPump owns ordering for commands and prompts. Commands run inline (pickers
-// block only the pump); prompts flush staged shell results, expand @ refs and
-// steer or start a turn. Submissions stay in order and the UI never stalls.
-func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, delivered func()) {
+// block only the pump); prompts flush staged shell results, expand @ refs then
+// queue-or-start a turn. Submissions stay in order and the UI never stalls.
+func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, delivered func(), q *steerQueue, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func()) {
 	for line := range pump {
 		switch line.kind {
 		case command.KindCommand:
@@ -599,23 +599,43 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			for _, n := range res.Notices {
 				console.Notify(n, tui.LevelWarn)
 			}
-			input := agent.Input{Text: res.Text, Before: append(before, res.Before...), Injected: line.injected}
-			// pending owns the text once it lands; clear the submit bucket so it never double counts.
-			input.Delivered = delivered
-			startPrompt(ui, recording, ag, input, started)
+
+			echo := submittedEcho(line.rest) // "" unless a real prompt (commands/shell are not echoed here)
+			est := tokens.EstimateText(res.Text, tokens.KindProse)
+			in := agent.Input{Text: res.Text, Before: append(before, res.Before...), Injected: line.injected}
+			if q.offer(in, echo, est) {
+				continue // queued as a dimmed row; the echo lands at delivery
+			}
+			if echo != "" {
+				ui.UserEcho(echo)
+			}
+			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
+			submitPrompt(st, editSinks, est, pushContext)
+			in.Delivered = delivered
+			startDrain(ui, recording, ag, q, in, started)
 		}
 	}
 }
 
-// startPrompt echoes a submitted message and runs it to completion in the
-// background so the pump keeps receiving input while the model streams.
-// recording reports whether sessions are on, which is what lets double-Esc rewind;
-// idle flips false for the turn's duration so Esc interrupts instead of rewinding.
-func startPrompt(ui *tui.UI, recording bool, ag *agent.Agent, input agent.Input, started *bool) {
+// startDrain runs the submitted prompt to completion in the background, then
+// keeps draining the steer queue as further turns while it stays non-empty. The
+// pump never spawns a second drain: offer() only hands back false when no drain
+// goroutine exists, so exactly one goroutine drives turns at a time.
+func startDrain(ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, input agent.Input, started *bool) {
 	ui.SetIdle(false)
 	*started = true
 	go func() {
-		_ = ag.Prompt(context.Background(), input)
+		for {
+			if err := ag.Prompt(context.Background(), input); err != nil {
+				q.stopDrain() // leave items queued as rows; do not hammer a failing provider
+				break
+			}
+			next, ok := q.take()
+			if !ok {
+				break
+			}
+			input = next
+		}
 		if recording {
 			ui.SetIdle(true)
 		}
@@ -1157,19 +1177,21 @@ const doublePressWindow = 2 * time.Second
 // turn, while Ctrl+D or a double Ctrl+C on an idle empty editor quits. Closing
 // quit signals driver to return, which lets main's deferred ui.Close restore the
 // terminal. onModeCycle runs when Shift+Tab is pressed; the front end wires it.
-func watchControls(ui *tui.UI, ag *agent.Agent, stager *command.Stager, quit chan struct{}, onModeCycle func()) {
+func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, quit chan struct{}, onModeCycle func()) {
 	go func() {
 		var lastInt time.Time
 		for c := range ui.Controls() {
 			switch c {
 			case tui.ControlEscape:
 				if ag.Running() {
+					q.abort() // queued messages return to the editor, joined with newlines
 					ag.Interrupt()
 				} else if stager.Pending() {
 					stager.Cancel() // Esc cancels an in-flight staged shell command
 				}
 			case tui.ControlInterrupt:
 				if ag.Running() {
+					q.abort()
 					ag.Interrupt()
 					continue
 				}
@@ -1192,6 +1214,8 @@ func watchControls(ui *tui.UI, ag *agent.Agent, stager *command.Stager, quit cha
 				}
 				close(quit)
 				return
+			case tui.ControlRecallQueued:
+				q.recall() // Alt+Up: pop the newest queued message back into the editor
 			case tui.ControlModeCycle:
 				if onModeCycle != nil {
 					onModeCycle()

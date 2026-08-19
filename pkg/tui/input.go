@@ -41,6 +41,7 @@ const (
 	keyTab
 	keyBackTab
 	keyReverseSearch
+	keyAltUp // Alt+↑ recalls the newest queued prompt into the editor (ControlRecallQueued)
 )
 
 // key is one decoded input event.
@@ -228,6 +229,9 @@ func arrowKey(final byte, params string) keyType {
 	word := strings.HasSuffix(params, ";5") || strings.HasSuffix(params, ";3")
 	switch final {
 	case 'A':
+		if strings.HasSuffix(params, ";3") { // Alt+↑ (\x1b[1;3A)
+			return keyAltUp
+		}
 		return keyUp
 	case 'B':
 		return keyDown

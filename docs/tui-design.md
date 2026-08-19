@@ -151,7 +151,8 @@ ui.go            public API, state machine, key handling, locking
   input.go         byte stream -> key events (escape sequences, paste)
   decision.go      approval dialog: context elision, numbered options, handle
   question.go      agent-initiated Ask: free-text or offered-option answer row
-  activity.go      transient keyed rows above the input, capped with +N more
+  activity.go      transient keyed rows above the input, and queued pending-prompt
+                   rows (driver-owned), each capped with +N more
   status.go        status block model, two-row packing, keyed segments
   style.go         color profile detection and the palette
   text.go          ANSI aware width, truncation, escape splitting
@@ -327,6 +328,10 @@ The height cap is `maxInteractionRatio` (half the screen) rather than the input'
 a short terminal is not a usable picker. Lists scroll internally with a
 `... N more` footer, which counts against the budget so row accounting stays
 exact per invariant 2.
+
+Queued pending-prompt rows (`SetQueued`) sit above an active interaction like any
+other live-block content: they yield first on a short terminal (activity-style)
+and are driver-owned, so `Reset()` does not clear them — the steer queue re-renders.
 
 Concurrency follows invariant 4. A blocking `Select` cannot hold `u.mu`, so the
 caller registers a `pending` under the lock, requests a repaint, releases, then
@@ -577,16 +582,19 @@ agent (or demo) -> UI.Text("...delta")
 ```
 
 The live block is rebuilt separately by `UI.repaint`, which composes
-`notice? + streaming* + search? + completion? + activity* + (input | interaction)
-+ status rows` and hands it to `renderer.setLive` with the caret position.
-Anything that changes the input, status, tool or activity state calls `repaint`.
+`notice? + streaming* + search? + completion? + activity* + queued*
++ (input | interaction) + status rows` and hands it to `renderer.setLive` with
+the caret position. Anything that changes the input, status, tool or activity
+state calls `repaint`. Queued pending-prompt rows (`SetQueued`) render after
+activity and yield like them on a short terminal; they are driver-owned, so
+`Reset()` deliberately leaves them in place for the steer queue to re-render.
 When a markdown block completes mid-stream, `Text`/`EndText` repaint **first** so
 the just-committed rows leave the preview before `writeMarkdown` runs (invariant
 3) — otherwise the inline renderer's commit pass would redraw them as a stale
 ghost and push fresh output off screen.
-Activity renders into whatever height remains after the status block and one
-line of editor, so on a short terminal it yields first. Status is computed before
-the activity budget so row accounting stays exact.
+Activity (and queued pending-prompt rows) render into whatever height remains
+after the status block and one line of editor, so on a short terminal they yield
+first. Status is computed before those budgets so row accounting stays exact.
 
 ### Finding the live block again after a resize
 
@@ -773,6 +781,7 @@ The key table:
 | `↑`/`↓` | history recall / move line; in overlays select |
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
+| Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`) |
 | Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |
@@ -780,7 +789,10 @@ The key table:
 Keys that resolve to nothing are emitted on `Controls()` as `Control` events so
 the host decides their meaning. Shift+Tab is special: it reaches the control
 channel even while an interaction or overlay owns the keyboard, because changing
-a permission mode with a prompt already on screen must work. The front end maps
+a permission mode with a prompt already on screen must work. Alt+↑ emits
+`ControlRecallQueued`, which the front end maps to popping the newest queued
+prompt back into the editor; like every non-Shift+Tab key it is swallowed while an
+interaction or overlay owns the keyboard. The front end maps
 it to `Barrier.Cycle()`, which re-evaluates any open approval dialog under the new
 mode — moving to `allow-all` resolves one as allow without a keystroke.
 

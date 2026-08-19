@@ -39,6 +39,13 @@ const (
 	maxActivityBudget = maxActivityRows + 1 // includes the indicator row when capped
 )
 
+// Queued pending-prompt rows mirror activity: up to maxQueuedRows text rows,
+// then a dim "+N more" line, so they never grow past maxQueuedBudget.
+const (
+	maxQueuedRows   = 3
+	maxQueuedBudget = maxQueuedRows + 1 // includes the indicator row when capped
+)
+
 // activityRow is one transient, keyed status line above the input.
 type activityRow struct {
 	key  string
@@ -92,6 +99,34 @@ func (u *UI) activityRows(w, budget int) []string {
 		rows = append(rows, shadeRow(u.theme.Activity, u.activity[i].text, w))
 	}
 	extra := len(u.activity) - len(rows)
+	if extra > 0 && len(rows) < budget {
+		rows = append(rows, u.theme.Dim.Wrap("+"+strconv.Itoa(extra)+" more"))
+	}
+	return rows
+}
+
+// queuedRows renders the ordered pending-prompt labels into at most budget dim
+// shaded rows (oldest first), each prefixed with the user marker and showing only
+// its first line, then a dim "+N more" overflow row when more remain. Caller holds
+// the lock.
+func (u *UI) queuedRows(w, budget int) []string {
+	if len(u.queued) == 0 || budget <= 0 {
+		return nil
+	}
+	n := min(len(u.queued), maxQueuedRows)
+	var rows []string
+	for i := range n {
+		if len(rows) >= budget {
+			break
+		}
+		label := u.queued[i]
+		// a queued message can be multi-line; only its first line fits one shaded row
+		if first, _, ok := strings.Cut(label, "\n"); ok {
+			label = first
+		}
+		rows = append(rows, shadeRow(u.theme.Activity, userMarker+label, w))
+	}
+	extra := len(u.queued) - len(rows)
 	if extra > 0 && len(rows) < budget {
 		rows = append(rows, u.theme.Dim.Wrap("+"+strconv.Itoa(extra)+" more"))
 	}
