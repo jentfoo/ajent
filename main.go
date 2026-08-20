@@ -1164,6 +1164,8 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.
 	ui.Reset()
+	// mark where restored history begins so it reads clearly in scrollback
+	ui.Divider()
 	session.Replay(session.Branch(entries, newHead), tuisink.New(ui), session.ReplayOptions{})
 	if fillText != "" {
 		ui.SetInput(fillText)

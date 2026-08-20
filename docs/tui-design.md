@@ -256,8 +256,7 @@ all and the cursor is parked where the next erase must begin.
 **3. Committed output is re-rendered only in alt mode; inline never rewrites a
 committed line after it lands.** Streaming markdown commits at block boundaries
 only (`splitCompleteBlocks`); an open block stays buffered until it closes.
-Re-rendering committed *scrollback* is the Ink/Claude-Code bug that destroys
-history in tmux and VS Code — so inline never rewrites rows outside the viewport,
+Re-rendering committed *scrollback* is what destroys history in tmux and VS Code — so inline never rewrites rows outside the viewport,
 even on resize; every committed row keeps whatever layout it was given (and, for
 prose, whatever the emulator's own reflow makes of it), which is exactly how `cat`
 output behaves. The live block is redrawn at the current width on every repaint and
@@ -420,9 +419,10 @@ inferred from its text:
   In alt mode `wrapLine` breaks it on word boundaries and indents continuations
   to align under the text, since alt owns the re-layout on every resize. Code
   blocks, diffs, list items, blockquotes and raw tool output.
-- **Tables and thematic breaks travel as intent, not text** (`histLine.table`,
-  `histLine.rule`) and are laid out at the width in force every time they are
-  drawn, so alt mode re-lays them on resize. A table or break nested inside a
+- **Tables, thematic breaks and dividers travel as intent, not text**
+  (`histLine.table`, `histLine.rule`, `histLine.divider`) and are laid out at the
+  width in force every time they are drawn, so alt mode re-lays them on resize.
+  A table or break nested inside a
   list or quote cannot carry intent through the enclosing block's text, so it
   is laid out once at commit width and merged into the block's `flowWrap` lines.
 
@@ -767,6 +767,58 @@ price of never corrupting: we touch only what the emulator can reflow for us.
 Alt mode exists for full resize fidelity — it owns a viewport and re-lays everything from
 retained lines (`histLine.rows`), including thematic breaks now that `markdown.go`
 retains rule intent rather than baking width in.
+
+### Rewind and resume replay the branch, not erase scrollback
+
+The other place committed rows look like they move is a **rewind** (double-Esc onto an earlier
+context-tree point) or a **resume** (`--continue` / `--resume`). Both route through
+the same manoeuvre in the front end: rebuild agent state from a branch head, then call
+`ui.Reset()` and drive `session.Replay(branch, tuisink.New(ui))`. Two distinct things
+happen, and they must not be conflated:
+
+1. **Nothing above is erased.** Inline's `clearHistory` emits only `\r` + `eraseBelow`
+   from the parked cursor (near the bottom of the viewport when content fills it), so it
+   clears the live block, never committed history or native terminal scrollback. Rows that
+   have scrolled off remain untouched and fully intact — scrolling up still shows them.
+2. **The restored branch is re-submitted as fresh committed lines.** `session.Replay` walks
+every entry in the branch and emits sink events (`TurnStart`, `UserPrompt`, `Text`,
+`ToolStart`, ...) which render *again* below whatever survived. So a rewind does not
+replace scrollback; it appends a second, condensed rendering of the restored context.
+
+The front end commits a **divider** — one solid full-width band (`ui.Divider()`) in the
+theme's `Divider` style (reverse video) — *before* replaying, so where restored history
+begins is obvious when scrolling up past it. It is committed on a **rewind**, not at startup:
+a resumed session opens onto a fresh screen whose only content is that same restored branch,
+so there is nothing above the replay to mark off; a rewind lands below already-committed rows,
+where the boundary must be visible. The divider is a `histLine.divider`, drawn to the width
+in force like a thematic break; with color disabled it falls back to a thin rule.
+
+The result is that scrolling up reads continuously — because nothing was deleted — while
+the live area shows a fresh copy of the branch. This is why a restore can look both
+"unchanged above" (native scrollback) and "rebuilt below" (the replay). The two layers are
+independent.
+
+Replay rendering differs from live output in ways that matter for fidelity:
+
+- **User prompts render their words.** `session.Replay` emits each prompt's text through
+  `TurnStart(Input.Text)` *and* `UserPrompt(text)`, and `tuisink.UserPrompt` routes it to
+  `ui.UserEcho` — the same path a live session uses at submission time, so restored context
+  shows user prompts above their replies. The `TurnStart` itself only lights the working
+  spinner; its text is carried by the separate `UserPrompt` call.
+- **Thinking is dropped.** Replay opens with `ReplayOptions{}`, so `opts.Thinking` is false
+  and the `llm.ThinkingBlock` branch never fires. This is deliberate — thinking reads as
+  noise on a restore.
+- **Tool calls render headers plus their result bodies.** Each `ToolCallBlock`
+  becomes `sink.ToolStart(...)` (a header via `ui.ToolStart`) and its matching tool-result
+  message is handed to that call's completion hook with the full body as its display text
+  (`foldResults` → `toolBody`). The commit path runs through the same output-head / collapse
+  rules live streaming uses, so only the first few lines reach history and the rest fold into
+  a count summary — bodies replay without unbounded scrollback.
+- **Assistant text replays verbatim** through `Text`/`EndText`, so replies survive intact.
+
+The design intent: a restore reproduces the committed history — user prompts, tool
+headers with their bodies, and assistant content — minus thinking only. Dropping thinking
+is accepted as noise on a restore.
 
 ## Input
 

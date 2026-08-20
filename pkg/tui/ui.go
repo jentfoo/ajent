@@ -307,6 +307,16 @@ func (u *UI) Reset() {
 	u.render.clearHistory()
 }
 
+// Divider commits a solid full-width band marking the start of restored context.
+func (u *UI) Divider() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.closed {
+		return
+	}
+	u.commitHist([]histLine{{divider: true, style: u.theme.Divider}})
+}
+
 // SetStatus replaces the whole status line, including the model and every
 // segment. To update one part use SetModel, SetTokens or SetStatusSegment,
 // which is almost always what a caller means.
@@ -478,7 +488,7 @@ func (u *UI) streamingRows(w int) []string {
 	lines := renderMarkdown(u.theme, w, u.textBuf)
 	var out []string
 	for _, l := range lines {
-		if l.table != nil || l.rule {
+		if l.structured() {
 			// structured lines carry no text; lay them out or the preview
 			// shows a blank row until the block commits
 			out = append(out, l.rows(w)...)

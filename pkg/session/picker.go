@@ -317,6 +317,18 @@ func toolResultLabel(m llm.Message) string {
 	return truncate(strings.Join(parts, " "))
 }
 
+// summarize collapses a tool result into one display line for the picker.
+func summarize(tr llm.ToolResultBlock) string {
+	var parts []string
+	for _, b := range tr.Content {
+		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
+			parts = append(parts, strutil.FirstLine(strings.TrimSpace(tb.Text)))
+		}
+	}
+	s := strings.Join(parts, " ")
+	return truncate(s)
+}
+
 // toolCallLabel renders assistant tool calls as [name] args collapsed labels.
 func toolCallLabel(m llm.Message) string {
 	var parts []string

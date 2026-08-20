@@ -204,6 +204,7 @@ type ctxSink struct{ last tokens.ContextState }
 
 func (c *ctxSink) Context(s tokens.ContextState) { c.last = s }
 func (c *ctxSink) TurnStart(agent.TurnInfo)      {}
+func (c *ctxSink) UserPrompt(string)             {}
 func (c *ctxSink) Thinking(string)               {}
 func (c *ctxSink) EndThinking()                  {}
 func (c *ctxSink) Text(string)                   {}

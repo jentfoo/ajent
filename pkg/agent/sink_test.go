@@ -13,6 +13,7 @@ type recordingSink struct {
 }
 
 func (r *recordingSink) TurnStart(TurnInfo) { r.calls = append(r.calls, "turn_start") }
+func (r *recordingSink) UserPrompt(string)  {}
 func (r *recordingSink) Thinking(string)    { r.calls = append(r.calls, "thinking") }
 func (r *recordingSink) EndThinking()       { r.calls = append(r.calls, "end_thinking") }
 func (r *recordingSink) Text(string)        { r.calls = append(r.calls, "text") }
@@ -43,6 +44,7 @@ type resultCatcher struct {
 }
 
 func (c *resultCatcher) TurnStart(TurnInfo) {}
+func (c *resultCatcher) UserPrompt(string)  {}
 func (c *resultCatcher) Thinking(string)    {}
 func (c *resultCatcher) EndThinking()       {}
 func (c *resultCatcher) Text(string)        {}

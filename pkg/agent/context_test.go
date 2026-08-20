@@ -18,6 +18,7 @@ type ctxCatcher struct {
 }
 
 func (c *ctxCatcher) TurnStart(TurnInfo) {}
+func (c *ctxCatcher) UserPrompt(string)  {}
 func (c *ctxCatcher) Thinking(string)    {}
 func (c *ctxCatcher) EndThinking()       {}
 func (c *ctxCatcher) Text(string)        {}

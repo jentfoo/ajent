@@ -66,6 +66,7 @@ type recordingSink struct {
 }
 
 func (s *recordingSink) TurnStart(i agent.TurnInfo) { s.next.TurnStart(i) }
+func (s *recordingSink) UserPrompt(text string)     { s.next.UserPrompt(text) }
 func (s *recordingSink) Thinking(d string)          { s.next.Thinking(d) }
 func (s *recordingSink) EndThinking()               { s.next.EndThinking() }
 func (s *recordingSink) Text(d string)              { s.next.Text(d) }

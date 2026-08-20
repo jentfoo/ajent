@@ -87,6 +87,7 @@ type Theme struct {
 	Link     Style
 	Quote    Style
 	Spinner  Style
+	Divider  Style // full-width solid band marking restored-context boundaries
 	Activity Style // live sub-agent status rows: dim on a subtle background
 	UserTag  Style // "user:" role tag in the rewind tree picker (blue)
 	Assist   Style // "assistant:" role tag in the rewind tree picker (yellow)
@@ -131,6 +132,9 @@ func NewTheme(p ColorProfile) Theme {
 	t.Link = styleFg(110, attrFgBlue)
 	t.Quote = style(attrDim, attrItalic)
 	t.Spinner = styleFg(213, attrFgMagenta)
+	// the divider is a solid full-width band; reverse video swaps default fg/bg
+	// per cell into an inverted block that reads as thick and obvious in scrollback.
+	t.Divider = style(attrReverse)
 	// activity rows sit in the live block above the prompt; a soft background sets
 	// them apart from committed output. Basic terminals lack a usable dark shade.
 	if p >= Color256 {

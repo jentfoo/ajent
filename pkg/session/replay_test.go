@@ -16,6 +16,7 @@ type replaySink struct {
 }
 
 func (s *replaySink) TurnStart(i agent.TurnInfo) { s.calls = append(s.calls, "start:"+i.Input.Text) }
+func (s *replaySink) UserPrompt(text string)     { s.calls = append(s.calls, "user:"+text) }
 func (s *replaySink) Thinking(string)            { s.calls = append(s.calls, "thinking") }
 func (s *replaySink) EndThinking()               { s.calls = append(s.calls, "end_thinking") }
 func (s *replaySink) Text(d string)              { s.calls = append(s.calls, "text:"+d) }
@@ -24,7 +25,9 @@ func (s *replaySink) EndText()                   { s.calls = append(s.calls, "en
 // ToolStart records the call and captures its completion hook.
 func (s *replaySink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResult) {
 	s.calls = append(s.calls, "tool:"+call.Name)
-	return func(res agent.ToolResult) { s.calls = append(s.calls, fmt.Sprintf("result:%v", res.IsError)) }
+	return func(res agent.ToolResult) {
+		s.calls = append(s.calls, fmt.Sprintf("result:%v|%s", res.IsError, res.Display))
+	}
 }
 
 func (s *replaySink) ToolOutput(string, string)       {}
@@ -77,6 +80,30 @@ func assistantWithToolCall(id string) Entry {
 	return Entry{ID: id, Type: TypeMessage, Data: mustJSON(m)}
 }
 
+// parallelResults builds one assistant message with two tool calls and a single
+// user result message resolving both, mirroring a parallel dispatch turn.
+func parallelBranch() []Entry {
+	return []Entry{
+		{ID: "s", Type: TypeSession},
+		msgUser("m1", llm.Text(llm.RoleUser, "inspect")),
+		assistantToolCalls("a1", llm.ToolCallBlock{ID: "c1", Name: "bash"}, llm.ToolCallBlock{ID: "c2", Name: "read"}),
+		resultMessagePair("r1", []llm.Block{
+			llm.ToolResultBlock{CallID: "c1", Content: llm.BlockList{llm.TextBlock{Text: "ls out"}}},
+			llm.ToolResultBlock{CallID: "c2", Content: llm.BlockList{llm.TextBlock{Text: "go mod body"}}},
+		}),
+	}
+}
+
+func assistantToolCalls(id string, calls ...llm.Block) Entry {
+	return Entry{ID: id, Type: TypeMessage,
+		Data: mustJSON(MessageData{Message: llm.Message{Role: llm.RoleAssistant, Content: calls}})}
+}
+
+func resultMessagePair(id string, blocks []llm.Block) Entry {
+	return Entry{ID: id, Type: TypeMessage,
+		Data: mustJSON(MessageData{Message: llm.Message{Role: llm.RoleUser, Content: blocks}})}
+}
+
 func resultMessage(id, callID, text string) Entry {
 	m := MessageData{
 		Message: llm.Message{Role: llm.RoleUser,
@@ -101,7 +128,7 @@ func TestReplay(t *testing.T) {
 		Replay(replayBranch(), s, ReplayOptions{})
 
 		assert.Equal(t, []string{
-			"start:hello world",
+			"start:hello world", "user:hello world",
 			"text:hi there", "end_text",
 			"notice:careful",
 			"turn_end",
@@ -147,8 +174,23 @@ func TestReplay(t *testing.T) {
 		s := &replaySink{}
 		Replay(branch, s, ReplayOptions{})
 
-		assert.Contains(t, s.calls, "tool:bash")
-		assert.Contains(t, s.calls, "result:false") // non-error result
+		// header must render directly above its body, as live streaming interleaves them
+		assert.Equal(t,
+			[]string{"start:run it", "user:run it", "tool:bash", "result:false|output here\nmore lines"},
+			s.calls[:4])
+	})
+
+	t.Run("parallel_calls_interleave_headers_and_bodies", func(t *testing.T) {
+		s := &replaySink{}
+		Replay(parallelBranch(), s, ReplayOptions{})
+
+		assert.Equal(t,
+			[]string{
+				"start:inspect", "user:inspect",
+				"tool:bash", "result:false|ls out", // header above its own body
+				"tool:read", "result:false|go mod body",
+			},
+			s.calls[:6])
 	})
 
 	t.Run("tool_error_shows_status", func(t *testing.T) {
@@ -160,7 +202,10 @@ func TestReplay(t *testing.T) {
 		}
 		s := &replaySink{}
 		Replay(branch, s, ReplayOptions{})
-		assert.Contains(t, s.calls, "result:true")
+		// an erroring call still renders its header above the status
+		assert.Equal(t,
+			[]string{"start:run it", "user:run it", "tool:bash", "result:true|"},
+			s.calls[:4])
 	})
 
 	t.Run("multiple_turns_close_each", func(t *testing.T) {
@@ -174,8 +219,8 @@ func TestReplay(t *testing.T) {
 		s := &replaySink{}
 		Replay(branch, s, ReplayOptions{})
 		assert.Equal(t,
-			[]string{"start:first", "text:one", "end_text", "turn_end",
-				"start:second", "text:two", "end_text", "turn_end"},
+			[]string{"start:first", "user:first", "text:one", "end_text", "turn_end",
+				"start:second", "user:second", "text:two", "end_text", "turn_end"},
 			s.calls)
 	})
 }

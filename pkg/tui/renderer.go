@@ -42,11 +42,12 @@ const (
 // histLine is one committed logical line. text never contains a newline —
 // commitHist enforces that by construction (splitHistLines).
 type histLine struct {
-	text  string
-	flow  lineFlow
-	table *mdTable // non-nil for a markdown table; laid out fresh at each width
-	rule  bool     // true: a horizontal rule drawn to fit the width it is laid at
-	style Style    // styling re-applied when rendering a rule (or empty)
+	text    string
+	flow    lineFlow
+	table   *mdTable // non-nil for a markdown table; laid out fresh at each width
+	rule    bool     // true: a horizontal rule drawn to fit the width it is laid at
+	divider bool     // true: a solid full-width band marking a session boundary
+	style   Style    // styling re-applied when rendering a rule or divider (or empty)
 }
 
 // rows lays the line out at width, for the renderers that lay history out
@@ -63,9 +64,36 @@ func (l histLine) rows(width int) []string {
 			txt = l.style.Wrap(txt)
 		}
 		return []string{txt}
+	case l.divider:
+		// a solid full-width band, re-filled at the width it is laid at so
+		// resize reproduces commit; style carries the background that makes it read.
+		return []string{dividerRow(l.style, max(width, minRuleWidth))}
 	default:
 		return wrapLine(l.text, width)
 	}
+}
+
+// structured reports whether a line carries layout intent rather than baked text,
+// so renderers lay it out fresh at the width in force instead of emitting its empty
+// text field.
+func (l histLine) structured() bool {
+	return l.table != nil || l.rule || l.divider
+}
+
+// dividerRow renders a solid full-width band: every cell filled with a space that
+// carries the style's background, so it reads as one thick line in scrollback.
+func dividerRow(st Style, w int) string {
+	open := st.Open()
+	if open == "" || w <= 0 { // no color or unknown width: fall back to a thin rule
+		return strings.Repeat(ruleChar, max(w-1, 1))
+	}
+	var b strings.Builder
+	b.WriteString(open)
+	for i := 0; i < max(w-1, 1); i++ {
+		b.WriteByte(' ')
+	}
+	b.WriteString(sgrReset)
+	return b.String()
 }
 
 // splitHistLines enforces the single-line invariant on histLine.text. Producers
@@ -233,7 +261,7 @@ func (p *plainRenderer) start(int) error { return nil }
 func (p *plainRenderer) commit(lines []histLine) {
 	var b strings.Builder
 	for _, l := range lines {
-		if l.table != nil || l.rule {
+		if l.structured() {
 			// rows() lays intent out as text; plain's ColorNone theme means a
 			// rule's style is empty, so no SGR leaks into a pipe
 			for _, row := range l.rows(defaultWidth) {

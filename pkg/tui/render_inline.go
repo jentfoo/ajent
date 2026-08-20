@@ -252,7 +252,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 	}
 	for _, l := range lines {
 		switch {
-		case l.table != nil || l.rule:
+		case l.structured():
 			// structured content arrives as intent (markdown.go), not baked text;
 			// rows() lays it out at the width in force, so a later re-lay at any
 			// other width (alt mode) reproduces commit exactly. One column short

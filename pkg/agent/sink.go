@@ -18,6 +18,9 @@ const (
 // tui.UI; a headless caller can supply a JSON writer and a sub-agent a null sink.
 type Sink interface {
 	TurnStart(TurnInfo)
+	// UserPrompt echoes a prompt's words. Live sessions echo at submission time;
+	// replay calls this so restored context shows each user message above its reply.
+	UserPrompt(text string)
 	Thinking(delta string)
 	EndThinking()
 	Text(delta string)
@@ -45,6 +48,11 @@ type fanoutSink struct {
 func (f *fanoutSink) TurnStart(i TurnInfo) {
 	for _, s := range f.sinks {
 		s.TurnStart(i)
+	}
+}
+func (f *fanoutSink) UserPrompt(text string) {
+	for _, s := range f.sinks {
+		s.UserPrompt(text)
 	}
 }
 func (f *fanoutSink) Thinking(d string) {
@@ -123,6 +131,7 @@ func (f *fanoutSink) TurnEnd(r TurnResult) {
 type NopSink struct{}
 
 func (NopSink) TurnStart(TurnInfo) {}
+func (NopSink) UserPrompt(string)  {}
 func (NopSink) Thinking(string)    {}
 func (NopSink) EndThinking()       {}
 func (NopSink) Text(string)        {}

@@ -33,6 +33,11 @@ func (s *Sink) TurnStart(agent.TurnInfo) {
 	s.busy = s.ui.Busy()
 }
 
+// UserPrompt echoes a prompt's words as committed history. Live sessions call
+// ui.UserEcho at submission time; replay uses this so restored context shows each
+// user message above its reply.
+func (s *Sink) UserPrompt(text string) { s.ui.UserEcho(text) }
+
 // Thinking streams reasoning output.
 func (s *Sink) Thinking(delta string) { s.ui.Thinking(delta) }
 

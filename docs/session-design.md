@@ -232,6 +232,12 @@ Two consumers read the transcript back:
   reopened session shows its history: user prompts open turns, assistant content
   and tool calls stream through, notices replay, and each turn closes with its
   stop reason and usage. Thinking is off by default — it reads as noise on resume.
+  A prompt reaches the sink as both `TurnStart(Input.Text)` (which only lights the
+  spinner) *and* a separate `UserPrompt(text)` event that carries its words, so a
+  renderer can echo them into committed history (the TUI routes it to
+  `ui.UserEcho`; see `tui-design.md` "Rewind and resume"). Tool results replay their
+  bodies through each call's completion hook (`Display`), bounded by the same output-head
+  / collapse rules live streaming uses.
 
 Both share one invariant carried over from the agent loop: the rebuilt context
 must stay well formed (every `ToolCallBlock` matched by a `ToolResultBlock`) or

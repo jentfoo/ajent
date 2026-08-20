@@ -23,6 +23,7 @@ type recordingSinkForShell struct {
 }
 
 func (r *recordingSinkForShell) TurnStart(agent.TurnInfo) {}
+func (r *recordingSinkForShell) UserPrompt(string)        {}
 func (r *recordingSinkForShell) Thinking(string)          {}
 func (r *recordingSinkForShell) EndThinking()             {}
 func (r *recordingSinkForShell) Text(string)              {}
