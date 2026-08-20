@@ -71,7 +71,9 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		b.WriteString("... more results; narrow your pattern or raise limit\n")
 	}
 
-	return agent.ToolResult{Content: llmBlock(strings.TrimRight(b.String(), "\n"))}, nil
+	trimmed := strings.TrimRight(b.String(), "\n")
+	// Display mirrors the model-visible text so history shows head+collapse.
+	return agent.ToolResult{Content: llmBlock(trimmed), Display: trimmed}, nil
 }
 
 // listFiles returns files under root matching pattern, bounded by max. It uses

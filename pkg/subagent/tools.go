@@ -178,9 +178,11 @@ func strProp(desc string) map[string]any {
 	return map[string]any{"type": "string", "description": desc}
 }
 
-// result wraps text as a successful model-visible block.
+// result wraps text as a successful model-visible block. Display mirrors it so
+// the TUI's output head shows the same payload: a poll timeout commits its
+// elapsed line and a summary gets the head-plus-collapse treatment.
 func result(text string) agent.ToolResult {
-	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: text}}}
+	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: text}}, Display: text}
 }
 
 // resultErr builds an error ToolResult carrying the message the model should see.

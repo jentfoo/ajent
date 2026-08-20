@@ -223,6 +223,10 @@ Off-by-default extras for no-shell agents.
 - `ls`: one directory's entries, sorted alphabetically, `/` suffix on
   directories, named truncation marker at the limit.
 
+Like `read`, each sets `ToolResult.Display` to the same text as its model-visible
+`Content`, so history renders it through the shared output-head rule instead of a
+tool header with no body.
+
 These off-by-default extras are exactly what a read-only sub-agent needs (phase
 13): they are always available to a child regardless of parent enable state, so
 a delegated investigation can `find`/`grep`/`ls` without ever reaching for shell.

@@ -235,6 +235,11 @@ directly), final message is the entire return value.
   act on. Accepts `sub-2` or bare `2`.
 - **`agent_list()`** returns id/status/elapsed rows, or `(no sub-agents)`.
 
+All three set `ToolResult.Display` to the same text as `Content`, so history shows
+the payload through the shared output-head rule (`tui-design.md`) instead of a bare
+tool header: a poll timeout commits its elapsed/context line, a completed summary
+gets head-plus-collapse treatment, and start/list render their rows.
+
 ## Concurrency and notification
 
 ### Polling

@@ -96,7 +96,8 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 			return resultErr("grep: " + rgErr.Error()), nil
 		}
 		elided, _ := Elide(out, grepLimit)
-		return agent.ToolResult{Content: llmBlock(elided)}, nil
+		// Display mirrors the model-visible text so history shows head+collapse.
+		return agent.ToolResult{Content: llmBlock(elided), Display: elided}, nil
 	}
 
 	return t.goSearch(cwd, p, mode, re, max), nil
@@ -167,7 +168,8 @@ func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Re
 		}
 	}
 	outStr, _ := Elide(b.String(), GrepResultLimit())
-	return agent.ToolResult{Content: llmBlock(strings.TrimRight(outStr, "\n"))}
+	trimmed := strings.TrimRight(outStr, "\n")
+	return agent.ToolResult{Content: llmBlock(trimmed), Display: trimmed}
 }
 
 // rgOnPath reports whether ripgrep is available.

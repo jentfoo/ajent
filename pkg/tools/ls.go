@@ -73,5 +73,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 		b.WriteString(name + "\n")
 	}
 
-	return agent.ToolResult{Content: llmBlock(strings.TrimRight(b.String(), "\n"))}, nil
+	trimmed := strings.TrimRight(b.String(), "\n")
+	// Display mirrors the model-visible text so history shows head+collapse.
+	return agent.ToolResult{Content: llmBlock(trimmed), Display: trimmed}, nil
 }
