@@ -31,9 +31,8 @@ type State struct {
 	Tokens    *tokens.Accounting
 }
 
-// Transform rewrites an assembled message list before it is sent. Compaction
-// and plan projection both rewrite the request this way, never by mutating
-// State.
+// Transform rewrites an assembled message list before it is sent, never by
+// mutating State.
 type Transform func([]llm.Message) []llm.Message
 
 // TurnInfo describes one turn to the sink when it starts.
@@ -75,4 +74,7 @@ type ToolResult struct {
 	Display string
 	Details any // structured detail for extensions and the transcript
 	IsError bool
+	// EndTurn stops the turn once this call's results are appended, with no
+	// further model call. Control tools set it to hand a phase over.
+	EndTurn bool
 }

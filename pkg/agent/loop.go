@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -211,13 +212,18 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 			break
 		}
 
-		results := a.dispatch(turnCtx, sink, calls)
+		results, endTurn := a.dispatch(turnCtx, sink, calls)
 		a.appendToolResults(msg, results)
 
 		if turnCtx.Err() != nil {
 			// interrupted during tool execution; abortResults filled the gaps
 			sink.Notice("interrupted by user", LevelInfo)
 			result.Stop = llm.StopAborted
+			break
+		}
+		if endTurn {
+			// a control tool handed the turn over; nothing more streams after its result
+			result.Stop = llm.StopEndTurn
 			break
 		}
 	}
@@ -418,9 +424,10 @@ func streamErr(st llm.Stream, acc *llm.Accumulator) error {
 
 // dispatch runs tool calls in parallel where every call is Parallel and the
 // model supports it, otherwise serially, appending results in call order.
-func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlock) []llm.ToolResultBlock {
+func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlock) ([]llm.ToolResultBlock, bool) {
 	parallel := a.state.Model.Caps.ParallelTools && allParallel(a.opts.Tools, calls)
 	out := make([]llm.ToolResultBlock, len(calls))
+	ends := make([]bool, len(calls)) // written by index, like out
 
 	if parallel {
 		sem := make(chan struct{}, runtime.NumCPU())
@@ -430,34 +437,34 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 			go func(i int, c llm.ToolCallBlock) {
 				defer wg.Done()
 				sem <- struct{}{}
-				out[i] = a.runTool(ctx, sink, callFrom(c))
+				out[i], ends[i] = a.runTool(ctx, sink, callFrom(c))
 				<-sem
 			}(i, c)
 		}
 		wg.Wait()
-		return out
+		return out, slices.Contains(ends, true)
 	}
 
 	for i, c := range calls {
 		if ctx.Err() != nil {
 			break // a cancelled batch leaves the rest unanswered; abort fills them
 		}
-		out[i] = a.runTool(ctx, sink, callFrom(c))
+		out[i], ends[i] = a.runTool(ctx, sink, callFrom(c))
 	}
-	return out
+	return out, slices.Contains(ends, true)
 }
 
 // runTool executes one tool and streams its output to the sink. A malformed or
 // erroring tool is still a result, not a turn failure.
-func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) llm.ToolResultBlock {
+func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.ToolResultBlock, bool) {
 	if a.opts.Tools == nil {
 		return llm.ToolResultBlock{CallID: call.ID, IsError: true,
-			Content: llm.BlockList{llm.TextBlock{Text: "no tools configured"}}}
+			Content: llm.BlockList{llm.TextBlock{Text: "no tools configured"}}}, false
 	}
 	tool, ok := a.opts.Tools.Get(call.Name)
 	if !ok {
 		return llm.ToolResultBlock{CallID: call.ID, IsError: true,
-			Content: llm.BlockList{llm.TextBlock{Text: "unknown tool"}}}
+			Content: llm.BlockList{llm.TextBlock{Text: "unknown tool"}}}, false
 	}
 
 	out := NewOutput(sink, call.ID)
@@ -485,7 +492,7 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) llm.ToolR
 	return llm.ToolResultBlock{
 		CallID: call.ID, ToolName: call.Name, Content: res.Content, IsError: res.IsError,
 		Display: res.Display, Details: res.Details,
-	}
+	}, res.EndTurn && !res.IsError
 }
 
 // appendToolResults appends one user message holding every tool result in the

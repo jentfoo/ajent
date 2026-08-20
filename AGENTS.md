@@ -41,6 +41,7 @@ needed update — every document that names the affected package.
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. Reference phase 11's extension protocol builds on this client. |
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
 | `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by main.go. |
+| `plan-design.md` | `pkg/plan` (+ seams in `pkg/agent`, `pkg/session`, `pkg/tools`) | The two-model `/plan` workflow: phases as branches of the session tree rather than projections of one message list, the `Host` boundary, the user gate on the drafted plan, per-phase model and tool scope with guaranteed restore, `dev_*` control tools and `ToolResult.EndTurn`, persistence and resume. |
 | `prompt-design.md` | every string sent to a model | Each prompt surface ajent sends; the principles enforced by tests: cache-stability of the system block, cheap/stable/honest prompts, provenance markers on all injected content. The single reference for prompting. |
 
 ## Architecture
@@ -59,6 +60,7 @@ compact  -> llm, session, strutil, tokens, tools
 tui      -> strutil
 mcp      -> agent, config, llm, strutil (+ mcp-go; never tools/tui/command — adapters live in main.go)
 subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by main.go)
+plan     -> agent, llm (never tools/tui/command/session — the driver supplies Host)
 permit   -> agent, tools (never tui; prompter/classifier interfaces are supplied by main.go)
 refs     -> agent, llm, tokens, tools, tui
 command  -> agent, config, llm, refs, tokens, tools, tui

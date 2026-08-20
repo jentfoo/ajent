@@ -63,7 +63,7 @@ than this build understands; older or equal files are fine.
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
 | `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON |
 | `notice` | `NoticeData` | a user-visible notice worth replaying on resume |
-| `custom` | `CustomData` | opaque extension state that must survive a resume |
+| `custom` | `CustomData` | opaque extension state that must survive a resume; `LatestCustom(branch, type, v)` reads the newest one back, so a feature stores latest-wins state rather than writing its own reverse scan |
 
 Unknown types and unknown payload fields round-trip untouched, so older binaries
 can read files written by newer ones.
@@ -273,6 +273,14 @@ make that usable:
   align at one level; nodes on the current head's path are marked active. Newest
   work sits at the bottom, near where the picker opens.
 
+**Multiple roots.** A tree normally has one root, the `session` entry. Appending
+after `SetHead("")` stamps an empty `ParentID` and starts a second, which
+`Branch` stops at: state rebuilt from that head contains only that root's own
+chain. The plan workflow uses this to give an implementation round a genuinely
+empty context (see `plan-design.md`), and `Tips`/`TreeRows` already render every
+root, so an extra one stays visible in the rewind picker. A new root must lead
+with a `model_change` entry, or `State` has no model to resolve for that branch.
+
 **Rewinding** is how you start a new branch: picking an earlier message moves
 the writer's `SetHead` to that message's *parent* (so the picked text becomes the
 start of the new branch), rebuilds agent state from that head, redraws the UI,
@@ -331,15 +339,21 @@ History search is the deliberate exception: it scans every entry of each file in
 raw append order (newest first) rather than only the persisted head branch, so
 a prompt on an abandoned rewind fork stays findable.
 
-**3. The head advances only on success.** An append updates the cursor after a
+**3. The live head wins over the file tail.** They agree only until the first
+fork. After a rewind, or a plan workflow that leaves `HEAD` on the review branch
+while the tail is an implementation entry, the tail belongs to a different
+branch. Resume and rebuild prefer the writer's head and fall back to the tail
+only when it no longer resolves.
+
+**4. The head advances only on success.** An append updates the cursor after a
 successful write; an fsync records it at turn boundaries. A lost or corrupt
 `HEAD` falls back to tail recovery rather than losing the branch entirely.
 
-**4. Rebuilt context stays well formed.** Every `ToolCallBlock` is matched by a
+**5. Rebuilt context stays well formed.** Every `ToolCallBlock` is matched by a
 `ToolResultBlock`, exactly as in the agent loop, or the next request would be
 invalid. This is checked on rebuild and warned about when violated.
 
-**5. Persistence failures never end the conversation.** A broken disk degrades to
+**6. Persistence failures never end the conversation.** A broken disk degrades to
 "not recorded", surfaced as an error-level notice, rather than failing a turn.
 
 ## Conventions

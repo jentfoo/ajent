@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -209,7 +210,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// build the built-in tool registry and hand it to the loop so the model can
 	// read, write, edit and run commands.
-	toolsReg, terr := tools.Builtins(tools.Options{SessionID: cwdOrDot()})
+	// ask_user rides the TUI's question queue, so it never pre-empts a permission
+	// dialog. It stays disabled until a workflow enables it.
+	toolsReg, terr := tools.Builtins(tools.Options{SessionID: cwdOrDot(), Ask: askUser(ui)})
 	if terr != nil {
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
 	}
@@ -341,6 +344,11 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		opts.Sinks = append(opts.Sinks, subagentSink{mgr: sag})
 	}
 
+	// record each turn's outcome so a turn-boundary hook can tell a clean stop
+	// from an abort or a provider error.
+	turnRec := &turnRecorder{}
+	opts.Sinks = append(opts.Sinks, turnRec)
+
 	// queued mid-turn prompts land at the next step boundary via this hook.
 	opts.OnBoundary = q.pull
 
@@ -459,7 +467,18 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		console.rec = rec.rec
 		console.comp = comp
 	}
-	command.RegisterBuiltins(cmds, console)
+	// the plan workflow needs a transcript to branch and a registry to scope;
+	// without either it is simply absent and nothing else changes.
+	ctl := newPlanController(planDeps{
+		rec: rec, ag: ag, reg: reg, st: st, ui: ui, console: console, toolsReg: toolsReg, q: q,
+	})
+	hooks := planHooksFor(ctl, turnRec)
+	registerCommands(cmds, console, planCommands(ctl)...)
+	if ctl != nil && comp != nil {
+		// automatic compaction inside a phase keeps its own focus; an explicit
+		// /compact <instructions> still wins.
+		comp.focus = ctl.Focus
+	}
 	onModeCycle := func() {
 		if barrier == nil {
 			return
@@ -486,9 +505,20 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
 	}
 
+	if ctl != nil {
+		// a manual rewind invalidates the workflow's branch points, so it ends first
+		ui.SetOnRewind(func() {
+			if ctl.Active() {
+				ctl.Stop()
+			}
+			rec.rewind(ui, ag, reg)
+		})
+		ctl.Restore() // pick a mid-workflow session back up before the first prompt
+	}
+
 	pump := make(chan pumpLine, 16)
 	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started,
-		delivered, q, st, editSinks, &seedToolsOnce, pushContext)
+		delivered, q, st, editSinks, &seedToolsOnce, pushContext, hooks)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
 		initial := strings.Join(args, " ")
@@ -530,6 +560,27 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 }
 
+// planHooks are the workflow seams the pump and drain loop consult. A zero value
+// disables both, leaving dispatch exactly as it is with no workflow running.
+type planHooks struct {
+	// beforePrompt may rewrite a submitted input before it starts a turn. It runs
+	// on the pump goroutine with the agent idle, so it may switch branches.
+	beforePrompt func(context.Context, agent.Input) (agent.Input, bool)
+	// advance runs at every turn boundary on the drain goroutine, errored turns
+	// included. A returned input continues the same drain loop as the next turn.
+	advance func(context.Context) (agent.Input, bool)
+}
+
+// registerCommands wires the built-in commands, then any workflow commands on
+// top. Every registration path goes through here so a new feature can never
+// displace the built-in set the way a stray edit at the call site could.
+func registerCommands(cmds *command.Registry, console *uiConsole, extra ...command.Command) {
+	command.RegisterBuiltins(cmds, console)
+	for _, c := range extra {
+		cmds.Register(c)
+	}
+}
+
 // pumpLine is one classified submitted line handed to the prompt pump. injected marks
 // programmatic input (e.g. an argv bootstrap prompt) so it never enters recall/search.
 type pumpLine struct {
@@ -564,7 +615,7 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 // runPump owns ordering for commands and prompts. Commands run inline (pickers
 // block only the pump); prompts flush staged shell results, expand @ refs then
 // queue-or-start a turn. Submissions stay in order and the UI never stalls.
-func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, delivered func(), q *steerQueue, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func()) {
+func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, delivered func(), q *steerQueue, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
 	for line := range pump {
 		switch line.kind {
 		case command.KindCommand:
@@ -607,13 +658,20 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			if q.offer(in, echo, est) {
 				continue // queued as a dimmed row; the echo lands at delivery
 			}
+			// only reached with no drain running, so a workflow may branch here
+			if hooks.beforePrompt != nil {
+				if wrapped, ok := hooks.beforePrompt(context.Background(), in); ok {
+					in = wrapped
+					est = tokens.EstimateText(in.Text, tokens.KindProse)
+				}
+			}
 			if echo != "" {
 				ui.UserEcho(echo)
 			}
 			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
 			submitPrompt(st, editSinks, est, pushContext)
 			in.Delivered = delivered
-			startDrain(ui, recording, ag, q, in, started)
+			startDrain(ui, recording, ag, q, in, started, hooks)
 		}
 	}
 }
@@ -622,12 +680,21 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 // keeps draining the steer queue as further turns while it stays non-empty. The
 // pump never spawns a second drain: offer() only hands back false when no drain
 // goroutine exists, so exactly one goroutine drives turns at a time.
-func startDrain(ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, input agent.Input, started *bool) {
+func startDrain(ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, input agent.Input, started *bool, hooks planHooks) {
 	ui.SetIdle(false)
 	*started = true
 	go func() {
 		for {
-			if err := ag.Prompt(context.Background(), input); err != nil {
+			err := ag.Prompt(context.Background(), input)
+			// a workflow owns the next turn when it says so, errored turns included:
+			// its executor-retry rule depends on being reached after a failure.
+			if hooks.advance != nil {
+				if next, ok := hooks.advance(context.Background()); ok {
+					input = next
+					continue
+				}
+			}
+			if err != nil {
 				q.stopDrain() // leave items queued as rows; do not hammer a failing provider
 				break
 			}
@@ -676,6 +743,29 @@ type subagentSink struct {
 }
 
 func (s subagentSink) TurnStart(agent.TurnInfo) { s.mgr.Flush() }
+
+// turnRecorder keeps the last turn's result so a turn-boundary hook can tell a
+// clean stop from an abort or a provider error. Prompt only returns an error, and
+// an aborted turn is not one.
+type turnRecorder struct {
+	agent.NopSink
+
+	mu     sync.Mutex
+	result agent.TurnResult
+}
+
+func (t *turnRecorder) TurnEnd(r agent.TurnResult) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.result = r
+}
+
+// last returns the most recently ended turn's result.
+func (t *turnRecorder) last() agent.TurnResult {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.result
+}
 
 // resolveSubAgentModel returns the configured child model resolved through the
 // registry, or the session's current model when unset or unresolvable. Resolved
@@ -1054,7 +1144,8 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	if err != nil || len(entries) == 0 {
 		return
 	}
-	rebuilt, warns := r.stateFor(modelResolver(reg), entries, session.Head(entries))
+	head := resumeHead(r.w.Head(), entries)
+	rebuilt, warns := r.stateFor(modelResolver(reg), entries, head)
 	for _, wmsg := range warns {
 		ui.Notify("resume: "+wmsg, tui.LevelWarn)
 	}
@@ -1080,7 +1171,7 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 		toolsReg.SetEnabled(resumed.Tools.Enabled)
 	}
 	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
-	session.Replay(session.Branch(entries, session.Head(entries)), tuisink.New(ui), session.ReplayOptions{})
+	session.Replay(session.Branch(entries, head), tuisink.New(ui), session.ReplayOptions{})
 }
 
 // bindRewind wires the double-Esc gesture to a picker over this transcript's
@@ -1095,6 +1186,67 @@ func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 // stateFor rebuilds agent state from a transcript's branch rooted at head.
 func (r *sessRec) stateFor(resolve func(string) (llm.Model, error), entries []session.Entry, head string) (agent.State, []string) {
 	return session.State(session.Branch(entries, head), resolve)
+}
+
+// switchState points the writer and the live agent state at head's branch. An
+// empty head starts a new root, leaving an empty context behind. The display is
+// untouched: callers that want the screen redrawn do that themselves. Warnings
+// are reported under prefix; an unreadable transcript leaves everything as it
+// was and reports the error.
+func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head, prefix string) error {
+	var rebuilt agent.State
+	if head != "" {
+		// rebuild before moving HEAD, so a failed read leaves writer and state in step
+		entries, _, err := session.Read(r.w.Path())
+		if err != nil {
+			ui.Notify(prefix+err.Error(), tui.LevelWarn)
+			return err
+		}
+		var warns []string
+		rebuilt, warns = r.stateFor(modelResolver(reg), entries, head)
+		for _, wmsg := range warns {
+			ui.Notify(prefix+wmsg, tui.LevelWarn)
+		}
+	}
+	r.w.SetHead(head)
+
+	// mutate the live state in place so every holder (the console, this handler)
+	// sees the restored context.
+	ag.WithState(func(st *agent.State) {
+		st.Messages = rebuilt.Messages
+		if rebuilt.Model.ID != "" {
+			st.Model = rebuilt.Model
+		}
+		if rebuilt.Tokens != nil {
+			st.Tokens = rebuilt.Tokens // ledger rebuilt for exactly this branch point
+		} else {
+			st.Tokens = tokens.New(st.Model) // a new root starts an empty ledger
+		}
+		pushSwitchedContext(ui, st)
+	})
+	return nil
+}
+
+// pushSwitchedContext republishes the context bar after a ledger swap, which no
+// sink event would otherwise report until the next turn.
+func pushSwitchedContext(ui *tui.UI, st *agent.State) {
+	if ui == nil || st.Tokens == nil {
+		return
+	}
+	cs := st.Tokens.Context()
+	ui.SetContext(tui.ContextInfo{
+		Used: cs.Used, Window: cs.Window, Reserve: cs.Reserve,
+		Compact: cs.Compact, Estimated: cs.Estimated,
+	})
+}
+
+// resumeHead prefers the live head over the file tail; they differ after a
+// rewind or a workflow that left HEAD on an earlier branch.
+func resumeHead(live string, entries []session.Entry) string {
+	if live != "" && slices.ContainsFunc(entries, func(e session.Entry) bool { return e.ID == live }) {
+		return live
+	}
+	return session.Head(entries)
 }
 
 // modelResolver adapts the registry's Resolve to a plain key resolver.
@@ -1113,7 +1265,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
 		return
 	}
-	head := session.Head(entries)
+	head := resumeHead(r.w.Head(), entries)
 	tree := session.TreeRows(entries, head)
 	if len(tree) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
@@ -1144,22 +1296,9 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		ui.Notify("cannot rewind onto that entry", tui.LevelWarn)
 		return
 	}
-	r.w.SetHead(newHead)
-
-	rebuilt, warns := r.stateFor(modelResolver(reg), entries, newHead)
-	for _, wmsg := range warns {
-		ui.Notify("rewind: "+wmsg, tui.LevelWarn)
+	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
+		return
 	}
-
-	// mutate the live state in place so every holder (the console, this rewind
-	// handler) sees the restored context; keep the current model and reasoning.
-	ag.WithState(func(st *agent.State) {
-		st.Messages = rebuilt.Messages
-		if rebuilt.Model.ID != "" {
-			st.Model = rebuilt.Model
-		}
-		st.Tokens = rebuilt.Tokens // ledger rebuilt for exactly this branch point
-	})
 
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.

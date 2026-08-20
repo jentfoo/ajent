@@ -28,9 +28,9 @@ understand why caching resets.
 **2. Prompts are data plus instructions, kept separable.** The model should be
 able to tell "this is the conversation you must summarise" from "here is how to
 summarise". Injected content goes in explicit XML-ish tags (`<summary>`,
-`<project_instructions path=...>`); instruction text stays outside them. This is
-what makes compaction and plan projection work as pure transforms of an
-assembled message list, never as mutations of state.
+`<plan>`, `<git_status>`, `<project_instructions path=...>`); instruction text
+stays outside them. This is what lets one model hand work to another — the plan
+workflow's kickoffs are read by a model with no other context at all.
 
 **3. Structured output beats prose wherever a machine or another model consumes
 the result.** Summaries use fixed headings with exact formats spelled out in the
@@ -70,6 +70,7 @@ governs its assembly and use.
 | Prompt templates / slash commands | markdown templates expanded into prompts; `/init` survey |
 | Compaction summarisation | staged free reductions + exact-format LLM summary |
 | Sub-agent prompt | the child contract appended as a system snippet to every investigation, plus the empty-summary nudge |
+| Plan workflow kickoffs | the planning contract, the implementation kickoff, the review kickoff and the retry prompt |
 | Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
 
 ---
@@ -410,6 +411,50 @@ came back from"). Nothing is ever deleted; `/compact undo` drops the newest entr
 
 Compaction reports real numbers as a replayable notice so users never think the
 agent "forgot" for no reason. The exact shape is specified in `compaction-design.md`.
+
+---
+
+## Plan workflow kickoffs (`pkg/plan/prompt.go`)
+
+Four surfaces, all shaped by one fact: **the receiving model has no prior
+context**. Structural design is in `plan-design.md`; the wording contract is here.
+
+**Planning contract.** Appended to the user's first goal as its own content
+block, so `Input.Text` — and therefore the echoed line and the recall entry —
+stays the user's own words. `appendSteer` emits `Text` before `Blocks`, so the
+model reads the goal and then the contract; that placement is deliberate, putting
+the no-prior-context rule closest to where the plan gets written. It sets the planning role, tells the model to ground
+the plan in the codebase it can read, and to put a genuine design fork to the
+user with `ask_user` rather than guessing. The load-bearing paragraph is that the
+plan goes to a separate model that will not see this conversation: every file
+path, interface, constraint and acceptance criterion has to be carried in the
+plan text. It asks for interfaces and signatures where they pin the design down
+and no implementation beyond that, then: call `dev_implement` when the plan is
+complete, and edit nothing yourself.
+
+**Implementation kickoff.** The first and only message of a fresh root. It opens
+by saying so — "You have no prior context. Everything you need is below." — then
+`<plan>`, and `<revision_instructions>` on later rounds, described as work still
+outstanding. It asks the model to verify the way the project does, and to call
+`dev_review` with a summary, warning that review starts anyway if it stops. The
+summary's description says plainly that the reviewer sees none of this
+conversation and only learns what it reports, which is why the field is
+required; a round that never calls the tool falls back to its closing message.
+
+**Review kickoff.** Carries `<plan>` **as the user approved it**, labelled as
+such since it may differ from the draft the reviewer watched itself write, plus
+`<git_status>`, `<git_diff_stat>` and `<implementation_summary>`. It states that
+the implementation conversation is deliberately absent and files must be re-read
+rather than assumed. Two exits, `dev_complete` or `dev_revise`, with the same
+no-prior-context warning attached to the instructions the latter produces.
+
+**Retry prompt.** Self-contained by necessity — it may follow a turn that died
+mid-edit: continue from where you stopped, do not repeat completed work, call
+`dev_review` when done.
+
+The compaction focus strings live here too: implementation keeps files changed,
+approaches tried, decisions made and unfinished plan items (reproduced verbatim);
+review keeps files inspected, issues found and conclusions reached.
 
 ---
 

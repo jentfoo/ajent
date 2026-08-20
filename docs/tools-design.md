@@ -230,6 +230,37 @@ tool header with no body.
 These off-by-default extras are exactly what a read-only sub-agent needs (phase
 13): they are always available to a child regardless of parent enable state, so
 a delegated investigation can `find`/`grep`/`ls` without ever reaching for shell.
+The plan workflow's planning and review scopes enable them explicitly for the
+same reason.
+
+### ask_user (`ask.go`)
+
+Also off by default. `ask_user(question, options?)` puts a decision back to the
+user and waits: a closed choice when `options` are given, free text otherwise.
+`pkg/tools` must not import `pkg/tui`, so it takes an injected `Options.Ask`;
+`main.go` supplies an adapter over `(*tui.UI).Ask`, which already queues behind
+permission dialogs, reports Esc as declined, and reports `ErrNoUI` in plain mode.
+
+`ModeSerial` — a question owns the terminal until answered. Every outcome is a
+**normal** result, never an error: a declined question, a missing terminal and an
+asker failure all come back as text telling the model to decide for itself and
+state its assumption, so a headless run never blocks and never fails a turn. It
+touches nothing on disk, so it is marked read-only and needs no approval. Its
+description tells the model to ask only when the decision is genuinely the
+user's, and never to ask permission to act — that is the barrier's job.
+
+### Plan control tools (`pkg/plan`, source `plan`)
+
+`dev_implement`, `dev_review`, `dev_revise` and `dev_complete` are registered by
+`pkg/plan` under source `"plan"` as one `/tools` group, **lazily on `/plan` and
+unregistered on every exit path**, so they never exist outside a workflow. They
+are marked read-only, so the barrier runs them free without being widened for
+anything else. They are the only tools that set `ToolResult.EndTurn`, and only on
+their success path — see `plan-design.md` and `agent-loop-design.md`.
+
+`Unregister(source)` drops the tools but leaves `Registry.groups` in place;
+`Units`' all-present check hides a row whose members are gone, and
+`RegisterGroup` dedupes by name, so a second `/plan` re-registers cleanly.
 
 ## Shared infrastructure
 

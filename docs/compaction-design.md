@@ -178,8 +178,11 @@ no summariser call is spent.
 One call on the **active session model**. The request carries the dedicated summariser system
 prompt, then one user message: `<conversation>...</conversation>` (the serialised
 span, each result clipped), an optional `<previous-summary>` when merging, the
-six-section format spec, and an optional `Additional focus:` line from
-`/compact <instructions>`. The exact wording lives in `prompt-design.md`.
+six-section format spec, and an optional `Additional focus:` line. That focus is
+either the user's `/compact <instructions>` or, on an automatic run, a
+caller-supplied default through `compactor.focus` — which is how a plan phase
+keeps its summary on implementation work or review findings. An explicit
+`/compact <instructions>` always wins. The exact wording lives in `prompt-design.md`.
 `MaxTokens` is capped below the span's own size, so a runaway summary comes out
 smaller than what it replaces; a blank response is a failure, not "nothing to
 compact".
@@ -197,6 +200,11 @@ supports.
 
 The summariser's own usage folds into the session ledger so `/usage` counts it.
 The stream is driven with `llm.Accumulator`, the same as the agent loop.
+
+Nothing else is needed to make compaction phase-aware. It already plans against
+the live head's branch, and under the plan workflow that branch *is* the phase
+(see `plan-design.md`), so the cut point cannot wander outside it — no minimum
+cut, no segment-aware entries, no summary that has to masquerade as a phase seed.
 
 ## Triggers
 

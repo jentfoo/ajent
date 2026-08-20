@@ -137,6 +137,13 @@ form `sub 2` when only the count matters, cleared with an empty text when no job
 exist. It carries a default priority and drops before `permissions` under narrow
 widths, since permissions is a safety indicator that must stay visible.
 
+The plan workflow publishes a `plan` segment (`Key: "plan"`) on every phase
+transition — full form `plan: reviewing (r2/4)`, short form `plan r2` — cleared
+when the workflow ends. It also drops before `permissions`. The workflow never
+resets the screen: a phase switch changes what the *model* sees, not what the
+user sees, so the whole run reads top to bottom with a divider per phase and the
+segment is what makes the divergence inspectable.
+
 ## Layers
 
 ```

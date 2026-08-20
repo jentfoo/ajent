@@ -25,6 +25,9 @@ type compactor struct {
 	ui          *tui.UI
 	sink        agent.Sink
 	providerFor func(llm.Model) (llm.Provider, error)
+	// focus supplies a caller's summariser instructions for automatic runs; an
+	// explicit /compact <instructions> still wins. nil leaves runs unguided.
+	focus func() string
 }
 
 // run performs one compaction for reason, returning whether anything changed. A
@@ -78,6 +81,9 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	var base int
 	if c.ag != nil && reason != agent.CompactOverflow {
 		base = c.ag.BaseEstimate(true) // 0 only mid-turn, where the reseed is transient anyway
+	}
+	if instructions == "" && c.focus != nil {
+		instructions = c.focus() // a plan phase keeps its own focus across auto-compaction
 	}
 	opts := compact.Options{
 		Cwd:          cwdOrDot(),

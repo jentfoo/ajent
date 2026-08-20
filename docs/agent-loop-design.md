@@ -128,9 +128,10 @@ drain follow-up queue -> for each turn:
 
 `assemble(state, transforms)` returns the message list for one request as a pure
 function of `State`: each transform in the ordered chain (nil entries skipped)
-rewrites the list and hands it to the next. It never mutates `State`. Compaction
-and plan projection both work by transforming this assembled list rather than
-rewriting `State`, so they coexist by registering two transforms.
+rewrites the list and hands it to the next. It never mutates `State`. The chain
+is an extension seam nothing registers today — compaction records a `Reduce` plan
+replayed on rebuild, and the plan workflow switches branches rather than
+projecting, so what the model sees is always what the transcript holds.
 
 ### System prompt stays cache-stable
 
@@ -239,6 +240,16 @@ Dispatch rules:
 - **Tool errors are results, not failures.** An erroring tool produces a
   `ToolResultBlock{IsError: true}` and the loop continues. Only transport or
   context errors abort; they surface as a notice plus `TurnEnd{Err}`.
+- **A tool may end the turn** by returning `ToolResult{EndTurn: true}`: results
+  are appended as usual and the loop stops with `StopEndTurn` instead of
+  streaming another reply. It is how a control tool hands a phase to another
+  model (see `plan-design.md`). Two rules make it safe. The signal rides on the
+  **result**, so a tool that was never reached — denied by a guard, given bad
+  arguments — cannot silence the model; and `runTool` reports
+  `EndTurn && !IsError`, so a *rejected* control call always leaves the model
+  free to correct itself in the same turn. An earlier attempt keyed this off a
+  marker interface checked before `Execute` ran, and a rejected call silently
+  ended the turn.
 
 ## Steering and follow-up
 
@@ -275,6 +286,14 @@ per appended message in registration order — so more than one feature can watc
 the transcript without displacing the session recorder (which keeps its own slot).
 The turn boundary needs no new hook: `Sink.TurnEnd` already marks it, and sink
 fan-out makes that event available to a second consumer.
+
+A front end that needs the boundary reached on **errored** turns too — the plan
+workflow's implementor-retry rule does — hooks the driver's own drain loop rather
+than the agent: `main.go` consults its `planHooks.advance` after every
+`ag.Prompt` return, reading the last `TurnResult` from a `turnRecorder` sink
+(an `agent.NopSink` embed overriding `TurnEnd`). The agent is idle at that point,
+so `WithState` is legal and a returned input continues the same drain loop with
+no extra latency.
 
 `Options.OnSettled` is a slice of callbacks invoked on the loop goroutine once
 the queues are drained, nothing is running, and the last turn did not error. They

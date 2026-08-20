@@ -74,6 +74,14 @@ drained by `startDrain`. Esc/Ctrl+C during a turn recovers every queued item bac
 into the editor (collapsed with newlines) before interrupting; Alt+Up recalls the
 newest queued message. See `agent-loop-design.md` for the boundary contract.
 
+A workflow that needs to act on a submission before it becomes a turn hooks the
+pump through `planHooks.beforePrompt`, consulted **after** `q.offer` returns
+false — so mid-turn typing still steers normally and the hook only ever fires
+with the agent idle, where switching branches is legal. It may rewrite the input
+(the estimate is recomputed) or leave it alone. The matching `planHooks.advance`
+runs in `startDrain` after every turn; both are documented in
+`agent-loop-design.md` and used by `plan-design.md`.
+
 Submissions therefore stay in order, the UI never stalls, and "the turn is held
 until the pending command finishes" falls out of `Flush` blocking the pump. Only
 prompts flush — `!ls` followed by `/model` leaves the stage pending for the next
@@ -170,10 +178,24 @@ dispatched, never on a command or a `!`.
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set), `modelRow` (key through the model picker) and `intRow` (numeric key with min/max validation — phase 13's concurrency, since an enum stores a string that won't unmarshal into an int field) builders cover phase 12's mode and phase 13's sub-agent settings |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation as a markdown table (id, status, elapsed, task), or cancel one (`sub-2`, bare `2`) / all; unknown verbs warn. Esc never cancels jobs — this is the only stop path (see phase 13) |
+| `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
+| `/plan-stop` | end the workflow and restore the model and tool set `/plan` found |
+| `/plan-status` | report the phase, round and both models |
 | `/exit` | quit |
 
 `/settings`, `/compact`, `/resume`, `/cost` and `/init` also register into
 the same registry.
+
+Registration goes through one `registerCommands` helper in `main.go` that always
+calls `RegisterBuiltins` first and then any feature commands. A feature that
+registers its own must not be written where the built-in call lives: an earlier
+plan-workflow attempt replaced that line and silently lost every built-in
+command. A root-package test asserts the built-in set survives with and without
+workflow commands.
+
+`command.PickModel(ctx, console, title, current, opts)` is the shared picker
+behind `/model` and `/settings`, exported so a feature can offer its own model
+choice under its own title rather than reimplementing the list.
 
 ### `/tools` and the enabled set
 
@@ -186,6 +208,11 @@ dropping it would leave the transcript describing a tool that no longer exists:
 - **After the first prompt** the picker lists only `Registry.Disabled()`;
   selecting enables them via `Enable` (additive, vs `SetEnabled`'s replacement).
   Nothing can be turned off again for the rest of the session.
+
+The plan workflow is the deliberate exception: a phase scope *narrows* the set
+by calling `Registry.SetEnabled` directly. The widen-only rule is a command-layer
+policy protecting the user from a tool set shrinking under them; a plan scope is
+explicit, user-initiated, and restored on every exit path.
 
 Widening the set changes the tool block and therefore busts the prompt cache
 (worth a one-line notice). `/tools` groups rows by `Registry.Source` (builtin,
