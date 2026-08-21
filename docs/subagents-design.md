@@ -4,8 +4,7 @@ How `pkg/subagent` fans expensive read-only investigation out of the main
 context into throwaway child agents whose *only* return value is a final summary
 paragraph, why that keeps context small enough that compaction stays simple, and
 the invariants (structural tool filtering, no idle turns, delivery confirmation)
-that keep it safe. This is phase 13's spec; `docs/phases/13-subagents.md` records
-its staged progress.
+that keep it safe.
 
 ## What it is
 
@@ -67,7 +66,7 @@ type Options struct {
     Status   func(text, short string)
     Deliver  func(agent.Input) bool   // steer into a running parent turn; false when idle
 
-    MaxConcurrent int           // 0 -> defaultMaxConcurrent (4)
+    MaxConcurrent int           // 0 -> defaultMaxConcurrent
     PollTimeout   time.Duration // 0 -> defaultPollTimeout (10m)
 }
 
@@ -192,14 +191,12 @@ committed history:
   into the current in-progress line and publish `<id>  <one-lined text>` (capped
   at `maxBuf = 2048`, keeping only the head so a long stream never jumps its
   display to the tail) — most sub-agent activity is reasoning, so chain-of-thought
-  is surfaced rather than collapsed. A single delta is only one word or character,
-  so replacing rather than appending would show no real progress. Each scrolls per
-  line: content after the last newline is kept and completed lines fall off the
-  row. Switching streams (thinking → text) starts fresh instead of appending prose
-  onto leftover reasoning. The row shows the child's most recent
-  actual output rather than a static label; deltas coalesce to one republish per
-  A current line that is blank or whitespace-only after trim publishes nothing,
-  so empty streaming lines never flash. Deltas coalesce to one republish per
+  is surfaced rather than collapsed. A single delta is one word or character,
+  so replacing rather than appending would show no real progress; each scrolls per
+  line (content after the last newline stays, completed lines fall off). Switching
+  streams (thinking → text) starts fresh instead of appending prose onto leftover
+  reasoning. A current line that is blank or whitespace-only after trim publishes
+  nothing, so empty streaming never flashes. Deltas coalesce to one republish per
   `deltaFlush = 150ms` so streaming does not repaint per token.
 - `TurnEnd` clears the row, and every terminal path in `Manager.spawn` also clears
   it — covering a job cancelled before it ever acquired its slot (no sink ran).
@@ -299,7 +296,8 @@ model differs.
 ### Configuration (`pkg/config`)
 
 The `subagent` block lives in `config-design.md`: `model` (empty inherits the
-session model) and `maxConcurrent` (default 4), both bound for free through env
+session model) and `maxConcurrent` (compiled-in default from `pkg/config`), both
+bound for free through env
 reflection. Here it sizes the manager's semaphore; `/settings` edits it.
 
 ## Front-end wiring (`main.go` / `console.go`)

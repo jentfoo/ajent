@@ -33,7 +33,7 @@ version negotiation, OAuth) is delegated to mcp-go; what ajent owns is the bound
 - **A tool of unknown effect does not run in an unobserved agent.** Read-only marking
   (from `annotations.readOnlyHint` OR config globs) defaults to *not* read-only; only a
   server or the user opts a tool into sub-agent publication. This is recorded as
-  registry metadata, and phase 13's child tool set reads it: a marked MCP tool joins a
+  registry metadata, and the sub-agent tool set reads it: a marked MCP tool joins a
   sub-agent's `read`, `grep`, `find`, `ls` so delegated investigation can call remote
   read-only tools too.
 
@@ -183,7 +183,7 @@ package stays free of `pkg/tools`.
   a second notification while one pass is in flight is coalesced (the running pass reads
   the current tool set anyway) — and bounds each pass with its own timeout so an
   unresponsive server surfaces an error rather than leaking a goroutine or hanging.
-  Resources/prompts changes trigger best-effort capability refresh for later phases; both
+  Resources/prompts changes trigger best-effort capability refresh on reconnects; both
   paths are safe to do blocking I/O because notifications arrive asynchronously from the
   client (see *Notifications never block mcp-go's reader*).
 - **Disconnect / Reload.** `/mcp disconnect` closes and unregisters without removing the
@@ -213,8 +213,8 @@ StateEnabled  // in the prompt and callable
 - `SetEnabled(names)` replaces the enabled set. `Enable(names)` widens from either state —
   what `/tools` calls after the first prompt; there is no other promotion method.
 - `RegisterState(source, t, s)`, `Unregister(source)`, `BySource`, `EnabledNames(source)`,
-  and read-only metadata (`MarkReadOnly`/`ReadOnly`) serve the manager; phase 13's child
-  tool filter is their sub-agent consumer (a marked remote tool joins a child's set).
+  and read-only metadata (`MarkReadOnly`/`ReadOnly`) serve the manager; the sub-agent
+  tool filter is their consumer (a marked remote tool joins a child's set).
   Every mutator nils the schema cache.
 
 ## Front end wiring

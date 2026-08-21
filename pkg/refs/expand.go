@@ -58,6 +58,12 @@ func (x *Expander) Expand(ctx context.Context, text string) Result {
 	out := text
 	for i := len(refs) - 1; i >= 0; i-- {
 		ref := refs[i]
+		// wildcard reference: list matching files via ls so the model sees which
+		// paths matched before choosing what to read.
+		if tools.HasGlob(ref.Path) {
+			before = append(injectPair(ctx, x, "ls", "ref-ls-", ref.Path), before...)
+			continue
+		}
 		full, err := x.policy.Resolve(ref.Path)
 		if err != nil {
 			notices = append(notices, "could not resolve @"+ref.Path+": "+err.Error())
@@ -77,7 +83,7 @@ func (x *Expander) Expand(ctx context.Context, text string) Result {
 			continue
 		}
 		// dedupe against an unchanged read this session; the literal stays
-		if x.tracker != nil && x.tracker.Check(full) == nil {
+		if x.tracker != nil && x.tracker.Unchanged(full) {
 			continue
 		}
 		rl := tools.RefInjectLimit()

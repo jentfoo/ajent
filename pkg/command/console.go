@@ -72,7 +72,8 @@ type Console interface {
 	SetSessionSetting(key string, value any) error
 
 	// SetModel makes m active, reflects it in the status line and agent state,
-	// and records a model-change entry in the session.
+	// records a model-change entry in the session, and persists the selection
+	// to the user config so the next start keeps it.
 	SetModel(m llm.Model)
 	// SetReasoning sets the session reasoning level and persists it.
 	SetReasoning(c llm.ReasoningConfig)

@@ -66,7 +66,7 @@ type Sink interface {
 
 `cmd/ajent` provides a `tuisink` that maps these almost 1:1 onto `tui.UI`.
 `NopSink` discards everything; a headless child agent uses it as an embedded
-base and overrides only the events that feed its activity row (phase 13).
+base and overrides only the events that feed its activity row.
 
 ### Tool-call progress
 
@@ -312,13 +312,13 @@ forever, exactly like a self-queueing follow-up does today.
   instructions, an explicit input to `buildSystem` so sub-agents can inject their
   contract without touching cache-stable composition. Empty keeps the block
   byte-identical.
-- A child agent (phase 13) is a separate `Agent` with its own single-owner loop:
+- A child agent is a separate `Agent` with its own single-owner loop:
   one goroutine per job, each owning its fresh `State`. The parent and its
   children never share an `Agent`, so there is no cross-loop ownership to reason
   about — the only shared surface is the child's ledger rolling into the parent's
   via `Accounting.Child()`.
 
-## Child agents (phase 13)
+## Child agents
 
 The main agent can fan read-only investigation out to throwaway children whose
 only return value is a final summary paragraph, so findings enter context as one

@@ -52,8 +52,8 @@ func TestModeStrings(t *testing.T) {
 func TestModeNextCyclesInOrder(t *testing.T) {
 	t.Parallel()
 
-	want := []Mode{ModeAllowRead, ModeAuto, ModeBlockAll, ModeAllowAll}
-	m := ModeAllowAll
+	want := []Mode{ModeAuto, ModeAllowAll, ModeBlockAll, ModeAllowRead}
+	m := ModeAllowRead
 	for _, w := range want {
 		assert.Equal(t, w, m.Next())
 		m = w

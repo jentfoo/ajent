@@ -10,6 +10,7 @@ import (
 var readOnlyCommands = bulk.SliceToSet([]string{
 	"awk", "ls", "find", "grep", "rg", "diff", "which", "ps", "jq",
 	"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "sort", "du",
+	"date",
 })
 
 // writeCommands unconditionally mutate state regardless of their arguments. Kept

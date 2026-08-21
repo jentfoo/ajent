@@ -283,7 +283,7 @@ assembly function").
 **5. Only the newest compaction applies, and it is cumulative.** Each run
 recomputes every stage over the whole branch.
 
-**7. The ledger's context terms reflect only surviving messages.** `State` rebuilds
+**6. The ledger's context terms reflect only surviving messages.** `State` rebuilds
 usage from entries, but skips those summarized away by a cut or dropped outright —
 otherwise resume/rewind would over-report occupancy and threshold auto-compaction
 could fire immediately after context was reduced. Cumulative spend is unaffected in
@@ -298,12 +298,12 @@ which is reserved for exact tokenizer counts. The summariser call itself is
 recorded spend-only (`Accounting.Spend`), so a failed compaction cannot leave the
 bar at the summariser's (much larger) prompt size.
 
-**8. A model switch remeasures, never reads empty.** `SetModel` drops every context
+**7. A model switch remeasures, never reads empty.** `SetModel` drops every context
 term for the new window; it immediately reseeds from the actual in-memory messages,
 so switching to a smaller window reflects real occupancy and lets threshold
 auto-compaction fire on that model instead of waiting for an overflow.
 
-**6. At most one overflow retry per turn.** A second overflow fails the turn
+**8. At most one overflow retry per turn.** A second overflow fails the turn
 rather than compacting in a loop.
 
 ## Conventions

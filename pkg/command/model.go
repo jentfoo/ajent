@@ -13,7 +13,7 @@ import (
 
 // modelCommand resolves arg by name, or opens the picker when empty. The
 // registry stays the single source of truth; Console.SetModel reflects the
-// choice in the status line, agent state and session entry.
+// choice in the status line, agent state, session entry and user config.
 func modelCommand(_ context.Context, arg string, c Console) error {
 	if len(c.Models().Models()) == 0 {
 		c.Notify("no models configured; add some to ~/.ajent/"+llm.ModelsFileName, levelWarn)

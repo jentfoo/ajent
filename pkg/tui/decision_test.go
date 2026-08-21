@@ -15,7 +15,7 @@ import (
 // block plus its cut marker, so those rows are deterministic in tests.
 func tallUI(t *testing.T) (*UI, *vt, *io.PipeWriter) {
 	t.Helper()
-	v := newVT(80, 30)
+	v := newVT(80, 45)
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
 	return newTestUI(t, v, pr), v, pw

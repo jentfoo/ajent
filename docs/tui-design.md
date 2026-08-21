@@ -74,8 +74,7 @@ separating it from committed output above (see "Prompt divider" below).
   colour patch underneath; the dim `+N more` overflow indicator stays unshaded.
   The true cap is `maxActivityRows = 3` text rows **plus** a dim `+N more`
   indicator (see
-  `activity.go`); the phase-13 doc's "four rows" was wrong and this is the
-  correction. Activity is live-block only: it yields first on a short terminal
+  `activity.go`). Activity is live-block only: it yields first on a short terminal
   and never reaches committed history.
 - The input block grows with the buffer, capped at a third of the screen
   (`maxInputRatio`), after which it scrolls internally around the caret.
@@ -363,11 +362,11 @@ budget (caret position unchanged because it rides below).
 An **approval dialog** (`OpenDecision`) is an interaction with a caller-held
 handle: `Wait` blocks for the answer, `Resolve(index)` settles it from the
 caller, and `Close` abandons it so `defer d.Close()` is always safe. The first
-to resolve wins — whether that is a keystroke or an external resolver (phase 12's
+to resolve wins — whether that is a keystroke or an external resolver (the permission
 classifier or a mode cycle) — by writing the result into `decisionState` under
 `u.mu` before calling `resolve`, then committing only if it won; the loser reads
 nothing. The subject is shown above numbered options, elided to at most
-eight lines and 240 characters with a dim `… +N lines` marker when cut, and is
+sixteen lines and 480 characters with a dim `… +N lines` marker when cut, and is
 **never** passed through `renderMarkdown`: tool output belongs in the trap-free
 `Output` path (see Traps). Number keys select directly up to `interactionCap`,
 arrows/Enter take the highlight, Esc cancels — returned as `ErrCancelled` so the

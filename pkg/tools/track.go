@@ -3,17 +3,11 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
-	"fmt"
 	"maps"
 	"os"
 	"sync"
 	"time"
 )
-
-// ErrNotRead is returned when a write or edit targets a file the session has
-// never read.
-var ErrNotRead = errors.New("file was not read this session")
 
 // Record is what a tool observed about a file when it last read it.
 type Record struct {
@@ -22,8 +16,8 @@ type Record struct {
 	Hash    string // sha256 of the content
 }
 
-// Tracker records what the session has read so write and edit can detect a file
-// that changed underneath them. Safe for concurrent use.
+// Tracker records what the session has observed so @ref expansion can dedupe
+// against an unchanged in-context read. Safe for concurrent use.
 type Tracker struct {
 	mu sync.Mutex
 	m  map[string]Record
@@ -49,28 +43,25 @@ func (t *Tracker) Observe(path string, data []byte, info os.FileInfo) {
 	t.m[path] = Record{ModTime: mod, Size: size, Hash: hex.EncodeToString(sum[:])}
 }
 
-// Check returns ErrNotRead when path was never read and ErrStale when the file
-// changed since it was observed.
-func (t *Tracker) Check(path string) error {
+// Unchanged reports whether path was observed earlier in the session and still
+// matches what was recorded. It is false for a file never observed.
+func (t *Tracker) Unchanged(path string) bool {
 	t.mu.Lock()
 	rec, ok := t.m[path]
 	t.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("%w: %s", ErrNotRead, path)
+		return false
 	}
 	fi, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("tools: cannot stat %s: %w", path, err)
+		return false
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("tools: cannot re-read %s: %w", path, err)
+		return false
 	}
 	sum := sha256.Sum256(data)
-	if hex.EncodeToString(sum[:]) != rec.Hash || fi.ModTime() != rec.ModTime || fi.Size() != rec.Size {
-		return ErrStale(path)
-	}
-	return nil
+	return hex.EncodeToString(sum[:]) == rec.Hash && fi.ModTime().Equal(rec.ModTime) && fi.Size() == rec.Size
 }
 
 // Records returns a snapshot of the observed paths and their records.
@@ -81,21 +72,4 @@ func (t *Tracker) Records() map[string]Record {
 		return map[string]Record{}
 	}
 	return maps.Clone(t.m)
-}
-
-// ErrStale reports that a file changed after it was read and must be re-read.
-type errStale struct{ path string }
-
-func (e errStale) Error() string {
-	return fmt.Sprintf("tools: %s changed since it was read; read it again", e.path)
-}
-func (e errStale) Unwrap() error { return nil }
-
-// ErrStale returns the stale-file sentinel for path.
-func ErrStale(path string) error { return errStale{path: path} }
-
-// IsStale reports whether err is a stale-file error, matching by value or wrap.
-func IsStale(err error) bool {
-	var e errStale
-	return errors.As(err, &e)
 }

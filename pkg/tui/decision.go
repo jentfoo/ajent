@@ -9,8 +9,8 @@ import (
 
 // Context block bounds: the subject elides to at most these rows and characters.
 const (
-	decisionContextRows  = 8
-	decisionContextChars = 240
+	decisionContextRows  = 16
+	decisionContextChars = 480
 )
 
 // DecisionRequest describes an approval prompt: the question, the subject shown

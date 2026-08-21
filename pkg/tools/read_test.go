@@ -89,12 +89,12 @@ func TestReadTruncationMarkerNamesNextOffset(t *testing.T) {
 	assert.Contains(t, out, "... truncated at line 200, read again with offset=201")
 }
 
-func TestReadObservesTrackerForEditStaleCheck(t *testing.T) {
+func TestReadObservesTrackerForRefDedupe(t *testing.T) {
 	t.Parallel()
 
 	e := newToolEnv(t.TempDir())
 	e.writeFile("a.txt", "hello\nworld\n")
 	assert.False(t, e.readExec(t.Context(), `{"path":"a.txt"}`).IsError)
 	_, ok := e.tracker.Records()[filepath.Join(e.cwd, "a.txt")]
-	assert.True(t, ok) // read records the file so edit/write can check staleness
+	assert.True(t, ok) // read records the file so @ref expansion can dedupe
 }

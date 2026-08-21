@@ -97,11 +97,8 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	if err != nil {
 		return resultErr(err.Error()), nil
 	}
-	if ck := t.tracker.Check(full); ck != nil { // stale or unread: re-read first
-		return resultErr("edit refused: " + ck.Error()), nil
-	}
 
-	// Check re-reads the file, so this only fails if it vanished in the race window.
+	// The file is re-read here; a stale or changed file simply fails the exact-text match in applyEdits.
 	data, err := os.ReadFile(full)
 	if err != nil {
 		return resultErr("edit: " + err.Error()), nil

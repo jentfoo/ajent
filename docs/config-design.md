@@ -33,7 +33,7 @@ it — the difference between a config system and a mystery.
 
 ```go
 type Settings struct {
-    Model       string          // llm model key; sets models.json defaultModel
+    Model       string          // llm model key; the default a fresh start uses
     Reasoning   Reasoning       // level/retain as text names, parsed by caller
     Agent       Agent           // turn loop: optional per-turn step cap (maxSteps)
     Providers   json.RawMessage // folded over models.json providers (pkg/llm)
@@ -50,6 +50,18 @@ type Settings struct {
 Enum-valued keys are stored as their text names and parsed by the caller
 (`llm.ParseLevel`, `llm.ParseRetain`, `tui.ParseMode`, `permit.ParseMode`).
 
+### Model
+
+`model` is the model a fresh start defaults to, resolved through normal layer
+precedence and handed to the registry before discovery runs. Every `/model`
+change (and the `/settings` Model row, which routes through the same command)
+writes the selection to the **user** layer in addition to the session override,
+so the next start keeps the most recent choice — there is no separate
+last-used key. Because the write lands in the user layer, a `model` pinned in
+project/local config or an `-m` flag still outranks it, and a resumed session
+replays its own `model_change` entries instead. A failed save is a warning,
+never a lost switch.
+
 ### Permissions
 
 The permission block defaults to `{"mode": "allow-read"}`, so
@@ -62,23 +74,29 @@ via `SetSessionSetting("permissions.mode", …)` — never rewriting the config 
 `/settings`'s Permissions row edits the persistent default instead, offering save
 to user/project layer like any other enum row.
 
-`safeCommands` lists exact MCP/extension tool names or bash command prefixes that
-auto-allow as read-only in allow-read/auto; a shell entry matches at a token
-boundary, so `git` covers every git invocation and `git status` its subcommands.
-It can never name a core writer (`write`, `edit`) or un-reject an in-place sed,
-so no config entry overrides a known mutation. It gates on the live call's tool
-name (exact) or bash line prefix (see permit), independent of registry metadata.
+`safeCommands` lists exact MCP/extension tool names or bash command lines that
+auto-allow as read-only in allow-read/auto. A single shell entry matches at a token
+boundary, so `git` covers every git invocation and `git status` its subcommands; a
+compound line (`cd … && make lint | tail`) instead requires **every** component to be
+either a listed entry or verifiably read-only — wrapping in `cd`/pipe never defeats
+the match, and an appended write can't ride in on a listed prefix. It can never name
+a core writer (`write`, `edit`) or un-reject an in-place sed, so no config entry
+overrides a known mutation. It gates on the live call's tool name (exact) or bash
+components (see permit), independent of registry metadata.
 
 `deniedCommands` is its hard inverse: exact tool names, whole MCP server namespaces,
-or bash command prefixes that are always refused **without prompting**, in every mode
-— including allow-all and user-initiated `!` lines. Matching follows the same token-boundary rule as
-`safeCommands`, but may also name core writers, since denying one is a legitimate
-safety gate. A denied check runs first in the barrier verdict, so it wins over any
-safe-command or session allow.
+or bash command lines that are always refused **without prompting** in every mode —
+including allow-all. Matching follows the same token-boundary rule as `safeCommands`;
+a compound line is refused when *any* component matches, so nesting a denied
+command behind `cd … &&` never escapes it. It may also name core writers, since
+denying one is a legitimate safety gate. A denied check runs first in the barrier
+verdict (after user-initiation), and only an agent call hits it: a human's own staged
+`!` line owns its shell and always runs.
 
 ### Subagent
 
-The sub-agent block defaults to `{"maxConcurrent": 4}`; `model` is deliberately
+The sub-agent block ships a compiled-in `maxConcurrent` default (it lives in
+`defaultsJSON`, beside this package); `model` is deliberately
 left out so `Explain("subagent.model")` reports `(default)` and an empty value
 means inherit the session model. Both keys bind for free through EnvLayer's
 reflection (`AJENT_SUBAGENT_MODEL`, `AJENT_SUBAGENT_MAXCONCURRENT`) and are edited

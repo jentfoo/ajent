@@ -10,15 +10,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTrackerNotRead(t *testing.T) {
+func TestTrackerNeverReadIsUnchangedFalse(t *testing.T) {
 	t.Parallel()
 
 	tr := NewTracker()
-	err := tr.Check("/nonexistent")
-	assert.ErrorIs(t, err, ErrNotRead)
+	assert.False(t, tr.Unchanged("/nonexistent")) // no baseline for dedupe
 }
 
-func TestTrackerReadThenUnchanged(t *testing.T) {
+func TestTrackerObserveThenUnchanged(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "f.txt")
@@ -29,10 +28,10 @@ func TestTrackerReadThenUnchanged(t *testing.T) {
 	info, _ := os.Stat(path)
 	tr.Observe(path, data, info)
 
-	assert.NoError(t, tr.Check(path))
+	assert.True(t, tr.Unchanged(path))
 }
 
-func TestTrackerReadThenModified(t *testing.T) {
+func TestTrackerObserveThenModified(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "f.txt")
@@ -43,10 +42,10 @@ func TestTrackerReadThenModified(t *testing.T) {
 	info, _ := os.Stat(path)
 	tr.Observe(path, data, info)
 
-	// modify the file in place; size changes so Check must report stale
+	// modify the file in place; size changes so Unchanged reports false
 	changed := []byte("hello\nworld\nmore")
 	require.NoError(t, os.WriteFile(path, changed, 0o644))
-	assert.True(t, IsStale(tr.Check(path)))
+	assert.False(t, tr.Unchanged(path))
 }
 
 func TestTrackerRecordsSnapshotIsCopy(t *testing.T) {

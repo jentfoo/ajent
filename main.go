@@ -543,8 +543,12 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				close(pump)
 				return rec // UI closed
 			}
-			hist.Append(msg) // every line (prompt /cmd !shell), recorded or not; nil-safe
 			line := command.ParseLine(msg)
+			if line.Kind == command.KindCommand {
+				hist.AppendHidden(msg) // slash commands stay durable yet excluded from ↑/↓ and Ctrl+R
+			} else {
+				hist.Append(msg) // every prompt and !shell line recorded for recall; nil-safe
+			}
 			switch line.Kind {
 			case command.KindShell:
 				stager.Run(line.Rest)

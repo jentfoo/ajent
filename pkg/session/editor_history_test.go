@@ -118,6 +118,16 @@ func TestEditorHistoryRecent(t *testing.T) {
 		assert.Equal(t, []string{"in memory", "on disk"}, h.Recent())
 	})
 
+	t.Run("hidden_excluded_but_persisted", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.AppendHidden("/tools") // a slash command: durable yet never recalled
+		h.Append("a real prompt")
+		assert.Equal(t, []string{"a real prompt"}, h.Recent(), "hidden rows are absent from recall")
+		raw := readHistLines(h.path) // hidden rows still land on disk and round-trip
+		require.Len(t, raw, 2)
+		assert.Equal(t, histLine{msg: "/tools", hidden: true}, raw[0])
+	})
+
 	t.Run("missing_file_is_empty", func(t *testing.T) {
 		h := newTestHistory(t, t.TempDir()) // no file written yet
 		assert.Empty(t, h.Recent())

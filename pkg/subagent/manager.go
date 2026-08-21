@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	defaultMaxConcurrent = 4
+	defaultMaxConcurrent = 8
 	defaultPollTimeout   = 10 * time.Minute
 	closeWait            = 2 * time.Second // bound on Close waiting for jobs to stop
 	maxLabelLen          = 72              // single-line label truncation, in runes

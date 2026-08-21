@@ -258,6 +258,46 @@ func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("sectool__flow_get", `{}`)).Action)
 }
 
+func TestGuardSafeMatchesBashCommandComponents(t *testing.T) {
+	t.Parallel()
+
+	// a compound line matches when every component is either the listed entry or
+	// verifiably read-only; wrapping in cd/pipe no longer defeats the safe match.
+	b := newTestBarrier(newFakePrompter())
+	b.SetSafeCommands([]string{"make lint"})
+	d := b.Guard()(t.Context(), bashCall("cd /tmp && make lint 2>&1 | tail -5"))
+	assert.Equal(t, tools.ActionAllow, d.Action)
+
+	// an appended write never rides in on a listed prefix.
+	b2 := newTestBarrier(newFakePrompter())
+	b2.SetSafeCommands([]string{"make lint"})
+	d = b2.Guard()(t.Context(), bashCall("make lint && rm -rf /tmp/x"))
+	assert.Equal(t, tools.ActionAsk, d.Action)
+
+	// a compound whose unlisted component is neither read-only nor listed prompts.
+	b3 := newTestBarrier(newFakePrompter())
+	b3.SetSafeCommands([]string{"make lint"})
+	d = b3.Guard()(t.Context(), bashCall("cd /tmp && make test"))
+	assert.Equal(t, tools.ActionAsk, d.Action)
+
+	// unsafe ops (redirect/substitution) defeat component matching entirely.
+	b4 := newTestBarrier(newFakePrompter())
+	b4.SetSafeCommands([]string{"make lint", "tail"})
+	d = b4.Guard()(t.Context(), bashCall("cd /tmp && make lint > out.txt"))
+	assert.Equal(t, tools.ActionAsk, d.Action)
+}
+
+func TestGuardDenyMatchesBashCommandComponents(t *testing.T) {
+	t.Parallel()
+
+	// a denied command nested in a compound is still refused.
+	b := newTestBarrier(newFakePrompter())
+	b.SetMode(ModeAllowAll)
+	b.SetDeniedCommands([]string{"git stash"})
+	d := b.Guard()(t.Context(), bashCall("cd /x && git stash push -m wip"))
+	assert.Equal(t, tools.ActionDeny, d.Action)
+}
+
 func TestGuardDeniedCommandsMatchMCPServerNamespace(t *testing.T) {
 	t.Parallel()
 
@@ -301,10 +341,10 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		})
 	}
 
-	// user-initiated ! lines are not exempt from a configured denial.
+	// a user's own ! line runs regardless of config denial — the human owns that shell.
 	ctx := tools.WithUserInitiated(t.Context())
 	d := b.Guard()(ctx, bashCall("git stash"))
-	assert.Equal(t, tools.ActionDeny, d.Action)
+	assert.Equal(t, tools.ActionAllow, d.Action)
 
 	// clearing the list lifts the denial for a previously listed command.
 	b.SetMode(ModeAllowRead)
@@ -737,7 +777,7 @@ func TestCycleAdvancesModesInOrder(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBarrier(newFakePrompter())
-	want := []Mode{ModeAuto, ModeBlockAll, ModeAllowAll, ModeAllowRead}
+	want := []Mode{ModeAuto, ModeAllowAll, ModeBlockAll, ModeAllowRead}
 	for _, w := range want {
 		assert.Equal(t, w, b.Cycle())
 	}

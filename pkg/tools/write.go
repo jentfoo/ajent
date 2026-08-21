@@ -17,8 +17,7 @@ type writeParams struct {
 	Content string `json:"content" desc:"full new contents of the file"`
 }
 
-// writeTool writes a whole file atomically. It refuses to overwrite a file this
-// session has not read, forcing the model to look before it clobbers.
+// writeTool writes a whole file atomically.
 type writeTool struct {
 	policy  PathPolicy
 	tracker *Tracker
@@ -51,7 +50,7 @@ func (t *writeTool) Label(agent.ToolCall) string {
 	return "write"
 }
 func (t *writeTool) Description() string {
-	return "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories. Read an existing file first."
+	return "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
 }
 func (t *writeTool) Schema() llm.ToolSchema {
 	return llm.ToolSchema{Parameters: SchemaOf[writeParams]()}
@@ -60,8 +59,7 @@ func (t *writeTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
-// Execute writes the file, refusing stale or unread overwrites. The diff is
-// rendered by the guard wrapper before this runs.
+// Execute writes the file, then observes it so @ref dedupe sees current content.
 func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	var p writeParams
 	if err := decode(call.Input, &p); err != nil {
@@ -70,12 +68,6 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
 		return resultErr(err.Error()), nil
-	}
-
-	if _, statErr := os.Stat(full); statErr == nil { // existing file needs a fresh read
-		if ck := t.tracker.Check(full); ck != nil {
-			return resultErr("refusing to overwrite: " + ck.Error()), nil
-		}
 	}
 
 	data := []byte(p.Content)

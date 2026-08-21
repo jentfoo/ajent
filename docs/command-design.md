@@ -151,7 +151,8 @@ type Console interface {
 
 `main.go` implements it once (`uiConsole`) over the objects the driver already
 holds. `SetModel` records a `model_change` entry the old bespoke switch never
-did; `ToolsChanged` records a `setting_change("tools.enabled", names)` (dotted
+did, and persists the selection to the user config so a fresh start keeps it
+(see config-design.md's Model section); `ToolsChanged` records a `setting_change("tools.enabled", names)` (dotted
 config key) so resume keeps the set. The three interaction methods are one-line
 forwarders to `tui.SelectContext`/`ConfirmContext`/`InputContext`, and the two
 settings methods delegate to the resolved `*config.Set`. Each mutator also calls
@@ -173,11 +174,11 @@ dispatched, never on a command or a `!`.
 | Command | Behaviour |
 |---|---|
 | `/help` | markdown list of commands and keybindings through `Console.Print` |
-| `/model [name]` | resolve by name, or open the picker; `SetModel` announces `! model: <key>` and records a model-change entry — a no-op when the key is unchanged, and its picker runs silent so only that one line lands (see tui-design) |
+| `/model [name]` | resolve by name, or open the picker; `SetModel` announces `! model: <key>`, records a model-change entry and saves the key to the user config — a no-op when the key is unchanged, and its picker runs silent so only that one line lands (see tui-design) |
 | `/reasoning [level]` | report, or set/clear the level for capable models |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
-| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set), `modelRow` (key through the model picker) and `intRow` (numeric key with min/max validation — phase 13's concurrency, since an enum stores a string that won't unmarshal into an int field) builders cover phase 12's mode and phase 13's sub-agent settings |
-| `/agents [list\|stop <id>\|all]` | list every running/finished investigation as a markdown table (id, status, elapsed, task), or cancel one (`sub-2`, bare `2`) / all; unknown verbs warn. Esc never cancels jobs — this is the only stop path (see phase 13) |
+| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set), `modelRow` (key through the model picker) and `intRow` (numeric key with min/max validation — sub-agent concurrency, since an enum stores a string that won't unmarshal into an int field) builders cover permission modes and sub-agent settings |
+| `/agents [list\|stop <id>\|all]` | list every running/finished investigation as a markdown table (id, status, elapsed, task), or cancel one (`sub-2`, bare `2`) / all; unknown verbs warn. Esc never cancels jobs — this is the only stop path |
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
 | `/plan-stop` | end the workflow and restore the model and tool set `/plan` found |
 | `/plan-status` | report the phase, round and both models |
@@ -342,6 +343,7 @@ for `Input.Before`, and notices. Per distinct resolved path (via the tool
 
 | Case | Outcome |
 |---|---|
+| wildcard pattern (contains `*`, `?` or `[`) | `ls` pair injected via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read; the pattern stays literal in prose |
 | missing | literal, warning notice |
 | directory | `ls` pair injected via `Registry.Lookup` (ignores enabled state) |
 | already read, unchanged (`Tracker.Check == nil`) | nothing injected, literal |
@@ -402,8 +404,7 @@ transcript/recorder is active. The store lives in the sessions tree
 (`pkg/session.EditorHistory`, JSONL: one message per row) and excludes messages
 prefixed by the host-owned secret marker on every path, so a pasted secret never
 reaches disk. Recall (↑/↓ and Ctrl+R) walks `session.RecallIndex` — typed messages
-merged with recorded prompts. The legacy global `~/.ajent/history` is abandoned in
-place: never read, migrated or deleted.
+merged with recorded prompts.
 
 ## File map
 

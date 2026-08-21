@@ -66,6 +66,12 @@ func expandTilde(path string) (string, bool) {
 // isSlash reports whether c separates path components.
 func isSlash(c byte) bool { return c == '/' || c == '\\' }
 
+// HasGlob reports whether s contains a wildcard metacharacter, so it cannot be
+// treated as one concrete path and must instead match many.
+func HasGlob(s string) bool {
+	return strings.ContainsAny(s, "*?[")
+}
+
 // cleanAbs returns the absolute cleaned form of path joined to base.
 func cleanAbs(base, path string) string {
 	if !filepath.IsAbs(path) {

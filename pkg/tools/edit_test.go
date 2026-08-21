@@ -155,17 +155,17 @@ func TestEditMultiAtomicRollbackOnFailure(t *testing.T) {
 	assert.Equal(t, orig, string(data)) // byte-identical: first edit rolled back
 }
 
-func TestEditStaleCheckRefusesAfterExternalChange(t *testing.T) {
+func TestEditAppliesAfterExternalChangeWhenMatchHolds(t *testing.T) {
 	t.Parallel()
 
 	e := newToolEnv(t.TempDir())
 	e.writeFile("a.txt", "original\n")
 	_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
-	e.writeFile("a.txt", "changed externally\n")
+	e.writeFile("a.txt", "kept line original\n") // changed externally, oldText still present
 
 	res := e.editExec(t.Context(),
 		`{"path":"a.txt","edits":[{"oldText":"original","newText":"mine"}]}`)
-	assert.True(t, res.IsError) // must re-read before editing
+	assert.False(t, res.IsError) // match validation governs, not a stale gate
 }
 
 func TestEditEmptyOldTextRejected(t *testing.T) {

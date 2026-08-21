@@ -110,7 +110,7 @@ const defaultsJSON = `{
   },
   "permissions": { "mode": "allow-read" },
   "compaction": { "auto": true, "threshold": 0.8 },
-  "subagent": { "maxConcurrent": 4 },
+  "subagent": { "maxConcurrent": 8 },
   "ui": { "render": "auto" }
 }`
 

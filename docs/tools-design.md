@@ -64,7 +64,7 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   `annotations.readOnlyHint` or config globs. The permission barrier uses this
   for non-built-in (MCP/extension) tools; core writers never consult it.
 
-### Sub-agent tool set (`toolset.go`, phase 13)
+### Sub-agent tool set (`toolset.go`)
 
 A child agent's tools are a fixed structural subset of `Registry.All()` —
 unwrapped (no guards or dialogs), independent of the parent's enabled set — so
@@ -126,11 +126,11 @@ Invariants:
 
 Cost: write/edit read the target file twice per call (preview, then execute).
 
-The permission layer (phase 12) registers both: one guard from `permit.Barrier`
+The permission layer registers both: one guard from `permit.Barrier`
 runs static classification, and its asker resolves prompts into allow/deny with
 session memory. Config's `permissions.safeCommands` lets a user declare extra
 tools, whole MCP server namespaces (`sectool` covers every `sectool__*` tool), or
-exact bash lines to auto-allow as read-only (see phase 12); it can never name
+bash command lines to auto-allow as read-only; it can never name
 `write`/`edit`. Core never does. The `WithUserInitiated` marker rides the context
 so a user's own staged `!` shell line is exempt in every permission mode — it is
 the human's shell, not the model's.
@@ -138,7 +138,7 @@ the human's shell, not the model's.
 ## Built-in tools
 
 The sub-agent trio (`agent_start`, `agent_poll`, `agent_list`) is also registered
-under the builtin source (see phase 13), so `/tools` sorts it up front with the
+under the builtin source, so `/tools` sorts it up front with the
 core tools, ahead of any MCP group. The three are presented and toggled as one
 row — a single `subagents` entry (`RegisterGroup`) rather than three individual
 tools.
@@ -173,10 +173,8 @@ header that `ToolStart` commits, so no bespoke summary string is produced here.
 ### write (`write.go`)
 
 Writes a whole file atomically (temp file + rename) and creates parent
-directories. Refuses to overwrite a file the session has not read, or one that
-changed since it was read — the error tells the model to read first. Emits a
-`Change` (empty → content for new files) through `Previewer`, rendered before the
-call is vetted rather than after it applies.
+directories. Emits a `Change` (empty → content for new files) through
+`Previewer`, rendered before the call is vetted rather than after it applies.
 
 ### edit (`edit.go`)
 
@@ -189,7 +187,8 @@ or duplicated `oldText`, two edits overlapping the same region and a no-op
 near-match suggestion (most token-overlapping line); multiple matches without
 `replace_all` returns the occurrence count and locations — both still reported
 through the per-op loop. Both errors are designed to be actionable, since they
-are the model's main feedback loop. Stale files are refused via the tracker.
+are the model's main feedback loop, so no pre-read gate is needed — a wrong
+assumption fails naturally against live content.
 Renders through `Previewer`, sharing `resolveApply` with `DryRun`. The edit tool implements `DryRunner`, so the
 permission barrier can skip prompting for a call that cannot succeed and let
 the real apply path surface its natural error.
@@ -220,16 +219,18 @@ Off-by-default extras for no-shell agents.
   surfaces stderr as an error), falling back to a bounded Go `regexp` walk.
   Modes: `content` (line numbers, optional context lines), `files`, `count`.
   Invalid patterns are actionable errors on both paths.
-- `ls`: one directory's entries, sorted alphabetically, `/` suffix on
-  directories, named truncation marker at the limit.
+- `ls`: one directory's entries — or the files a wildcard pattern matches
+  (via `filepath.Glob`) — sorted alphabetically, `/` suffix on directories,
+  named truncation marker at the limit. A glob with no matches is an error so it
+  is never mistaken for an empty dir.
 
 Like `read`, each sets `ToolResult.Display` to the same text as its model-visible
 `Content`, so history renders it through the shared output-head rule instead of a
 tool header with no body.
 
-These off-by-default extras are exactly what a read-only sub-agent needs (phase
-13): they are always available to a child regardless of parent enable state, so
-a delegated investigation can `find`/`grep`/`ls` without ever reaching for shell.
+These off-by-default extras are exactly what a read-only sub-agent needs: they
+are always available to a child regardless of parent enable state, so a
+delegated investigation can `find`/`grep`/`ls` without ever reaching for shell.
 The plan workflow's planning and review scopes enable them explicitly for the
 same reason.
 
@@ -271,7 +272,7 @@ asker.go        Asker type and SetAsker registration
 guard.go        Guard, Decision, Allow/Deny helpers
 schema.go       SchemaOf[T] reflection helper
 path.go         PathPolicy — resolves relative paths against Cwd, folds symlinks
-track.go        Tracker — read tracking for stale-write detection
+track.go        Tracker — observed-file records for @ref dedupe
 limits.go       Limit, Elide, bounded Writer, per-tool budgets
 spill.go        lazy per-session spill file for oversized bash output
 fileutil.go     file probing (text/binary/image), line numbering
@@ -289,11 +290,11 @@ containment check by default — extensions layer their own limits via guards.
 
 ### Read tracking (`track.go`)
 
-The tracker records `path → (mtime, size, sha256)` on every read. `write` and
-`edit` consult it before touching an existing file: never-read → "read it
-first"; changed since read → "re-read it". Shared by `read`/`write`/`edit` and
-exported so compaction can drop superseded reads using it. Safe for
-concurrent use.
+The tracker records `path → (mtime, size, sha256)` on every observation.
+`@ref` expansion uses those records (via `Unchanged`) to dedupe against an
+unchanged in-context read. It is shared by `read`/`write`/`edit`, which each
+observe the content they produce so a later `@file` reflects current state,
+and exported for reuse outside the package. Safe for concurrent use.
 
 ### Output limits (`limits.go`, `spill.go`)
 

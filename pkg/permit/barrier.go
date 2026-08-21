@@ -3,6 +3,7 @@ package permit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -109,8 +110,8 @@ func (b *Barrier) SetPreview(p func(agent.ToolCall) string) {
 }
 
 // SetSafeCommands installs config-declared safe commands: exact tool names or
-// verbatim bash command lines that skip the approval prompt. write/edit can never
-// be listed (they always prompt); an empty list clears any prior set.
+// bash command lines that skip the approval prompt. write/edit can never be
+// listed (they always prompt); an empty list clears any prior set.
 func (b *Barrier) SetSafeCommands(cmds []string) {
 	var fn func(agent.ToolCall) bool
 	if len(cmds) > 0 {
@@ -122,7 +123,7 @@ func (b *Barrier) SetSafeCommands(cmds []string) {
 }
 
 // SetDeniedCommands installs config-declared denied commands: exact tool names or
-// verbatim bash command lines that are always refused without prompting, in every
+// bash command lines that are always refused without prompting, in every
 // mode (allow-all and user-initiated included). An empty list clears any prior set.
 func (b *Barrier) SetDeniedCommands(cmds []string) {
 	var fn func(agent.ToolCall) bool
@@ -209,7 +210,7 @@ func (b *Barrier) Asker() tools.Asker {
 		if prompter == nil {
 			return tools.Deny(noUIReason)
 		}
-		dlg, err := prompter.Open(promptText(m), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
+		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
 		if err != nil || dlg == nil {
 			return tools.Deny(noUIReason)
 		}
@@ -414,11 +415,15 @@ func (b *Barrier) noticeSnapshot() func(string) {
 // A configured safe command overrides a prompt but never a reject, and still
 // respects block-all (nothing auto-runs there).
 func staticVerdict(m Mode, ctx context.Context, call agent.ToolCall, ro func(string) bool, dryRun func(agent.ToolCall) error, safe func(agent.ToolCall) bool, deny func(agent.ToolCall) bool) tools.Decision {
+	// a user-issued ! line runs regardless of config denial or mode
+	if tools.IsUserInitiated(ctx) {
+		return tools.Allow(call)
+	}
 	// a config-declared denied command is refused outright in every mode.
 	if deny != nil && deny(call) {
 		return tools.Deny(deniedReason(call))
 	}
-	if m.allowsEverything() || tools.IsUserInitiated(ctx) {
+	if m.allowsEverything() {
 		return tools.Allow(call)
 	}
 	switch Classify(call, ro) {
@@ -446,8 +451,9 @@ func staticVerdict(m Mode, ctx context.Context, call agent.ToolCall, ro func(str
 // DenyMatches reports whether call is named by a configured denied command: an exact
 // tool name for any non-bash tool (MCP/extension/built-in), or — for bash — the
 // trimmed command line matched as a token-boundary prefix, so "git" covers every
-// git invocation and "git stash" its subcommands. Unlike SafeMatches it may also
-// name core writers; denying one is a legitimate safety gate.
+// git invocation and "git stash" its subcommands. A compound line is refused when
+// any of its components matches, so wrapping in `cd … &&` never escapes the gate.
+// Unlike SafeMatches it may also name core writers; denying one is a legitimate safety gate.
 func DenyMatches(call agent.ToolCall, cmds []string) bool {
 	for _, e := range cmds {
 		e = strings.TrimSpace(e)
@@ -457,8 +463,12 @@ func DenyMatches(call agent.ToolCall, cmds []string) bool {
 		if call.Name != bashTool && toolNameCovered(call.Name, e) {
 			return true
 		}
-		if call.Name == bashTool && commandHasPrefix(bashCommand(call.Input), e) {
-			return true
+	}
+	if call.Name == bashTool {
+		for _, seg := range scanCommand(bashCommand(call.Input)).Segments {
+			if entryCovered(seg, cmds) {
+				return true
+			}
 		}
 	}
 	return false
@@ -467,8 +477,10 @@ func DenyMatches(call agent.ToolCall, cmds []string) bool {
 // SafeMatches reports whether call is named by a configured safe command: an exact
 // tool name for any non-bash tool (MCP/extension/built-in), or — for bash — the
 // trimmed command line matched as a token-boundary prefix, so "git" covers every
-// git invocation and "git status" its subcommands. write/edit can never be listed,
-// so no config entry overrides a known writer.
+// git invocation and "git status" its subcommands. A compound line matches only when
+// every component is either a listed entry or verifiably read-only (mirroring
+// allSegmentsReadOnly's all-or-nothing gate), so an appended write never rides in.
+// write/edit can never be listed, so no config entry overrides a known writer.
 func SafeMatches(call agent.ToolCall, cmds []string) bool {
 	if _, isWrite := coreWriteTools[call.Name]; isWrite {
 		return false
@@ -481,7 +493,43 @@ func SafeMatches(call agent.ToolCall, cmds []string) bool {
 		if call.Name != bashTool && toolNameCovered(call.Name, e) {
 			return true
 		}
-		if call.Name == bashTool && commandHasPrefix(bashCommand(call.Input), e) {
+	}
+	if call.Name == bashTool {
+		return safeBashLine(bashCommand(call.Input), cmds)
+	}
+	return false
+}
+
+// safeBashLine reports whether a bash line is covered by configured entries. A single
+// command matches on the token-boundary prefix of its trimmed text; a compound (control
+// operators or substitution) instead requires every component to be either a listed entry
+// or verifiably read-only, so "make lint" can never smuggle in an appended write.
+func safeBashLine(cmd string, cmds []string) bool {
+	s := scanCommand(cmd)
+	if s.HasUnsafeOp { // > ` $( <( defeat analysis; fail to the prompt path
+		return false
+	}
+	if !s.HasSplitOp && len(s.Segments) <= 1 {
+		return entryCovered(strings.TrimSpace(cmd), cmds)
+	}
+	for i, seg := range s.Segments {
+		rw := ""
+		if i < len(s.Raw) { // Segments and Raw stay index-aligned from pushSegment
+			rw = s.Raw[i]
+		}
+		if entryCovered(seg, cmds) || segmentIsReadOnly(seg, rw) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// entryCovered reports whether line starts with a configured command at a token boundary.
+func entryCovered(line string, cmds []string) bool {
+	for _, e := range cmds {
+		e = strings.TrimSpace(e)
+		if commandHasPrefix(line, e) {
 			return true
 		}
 	}
@@ -529,17 +577,17 @@ func rejectionReason(call agent.ToolCall) string {
 // deniedReason names a config-denied command and why, guiding the model.
 func deniedReason(call agent.ToolCall) string {
 	if call.Name == bashTool {
-		return "denied by configured deniedCommands"
+		return "denied by configuration, ask user to run if necessary"
 	}
 	return "refused: " + call.Name
 }
 
-// promptText is the dialog's question line for a mode.
-func promptText(m Mode) string {
+// promptText is the dialog's question line for a mode and tool.
+func promptText(m Mode, name string) string {
 	if m == ModeBlockAll {
 		return "block-all permits nothing without approval — run this?"
 	}
-	return "Allow this tool call?"
+	return fmt.Sprintf("Allow `%s` tool call?", name)
 }
 
 // allowDecision builds an allow decision (no reason needed).

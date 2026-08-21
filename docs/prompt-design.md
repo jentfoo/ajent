@@ -179,7 +179,7 @@ anything that changes how the model should use the tool:
 - `write`: creates or overwrites files, making parent directories.
 - `edit`: exact text replacement that applies atomically or not at all.
 
-The `agent_*` sub-agent tools (phase 13) carry their whole contract in the
+The `agent_*` sub-agent tools carry their whole contract in the
 description because a model that learns them by trial burns a round trip each:
 no session context — pass file paths and key facts, not content; read-only
 (`read`, `grep`, `find`, `ls` plus read-only MCP tools); and the final message is
@@ -188,7 +188,7 @@ the entire return value.
 There is deliberately **no "Available tools" list inside the system prompt**:
 the schema channel already tells the model exactly what it may call, and a second
 text copy would only cost tokens. For the same reason there is no `promptSnippet`-style
-one-line tool hint injected into a child's system block (the reference does this);
+one-line tool hint injected into a child's system block;
 `childContract` carries only constraints and the output contract, never an enum of
 tools — those ride the schema channel like any other request.
 
@@ -405,7 +405,8 @@ The conversation history before this point was compacted into the following summ
 ```
 
 A branch return uses similar framing ("a summary of a branch this conversation
-came back from"). Nothing is ever deleted; `/compact undo` drops the newest entry.
+came back from"). Nothing is ever deleted; recovery is a rewind onto the compaction
+row (see `compaction-design.md`).
 
 ### Honesty
 
@@ -480,7 +481,7 @@ classifier read-only.
 
 ---
 
-## Sub-agent prompt (phase 13)
+## Sub-agent prompt
 
 Every investigation child gets a fresh system block built by the same
 `buildSystem` with one extra snippet appended after project instructions:

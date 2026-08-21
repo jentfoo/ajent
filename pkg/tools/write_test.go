@@ -22,16 +22,16 @@ func TestWriteNewFileCreatesParentsAndDiffs(t *testing.T) {
 	assert.Equal(t, "hi\n", string(data))
 }
 
-func TestWriteRefusesUnreadOverwrite(t *testing.T) {
+func TestWriteAllowsUnreadOverwrite(t *testing.T) {
 	t.Parallel()
 
 	e := newToolEnv(t.TempDir())
 	e.writeFile("a.txt", "original")
 	res := e.writeExec(t.Context(), `{"path":"a.txt","content":"changed"}`)
-	assert.True(t, res.IsError) // not read this session
+	assert.False(t, res.IsError) // no read gate: content may come from grep/sed
 	data, err := os.ReadFile(filepath.Join(e.cwd, "a.txt"))
 	require.NoError(t, err)
-	assert.Equal(t, "original", string(data)) // untouched
+	assert.Equal(t, "changed", string(data)) // applied
 }
 
 func TestWriteAllowsAfterRead(t *testing.T) {
@@ -47,7 +47,7 @@ func TestWriteAllowsAfterRead(t *testing.T) {
 	assert.Equal(t, "new\n", string(data))
 }
 
-func TestWriteRefusesStaleOverwriteAfterExternalChange(t *testing.T) {
+func TestWriteOverwritesAfterExternalChange(t *testing.T) {
 	t.Parallel()
 
 	e := newToolEnv(t.TempDir())
@@ -55,7 +55,7 @@ func TestWriteRefusesStaleOverwriteAfterExternalChange(t *testing.T) {
 	_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
 	e.writeFile("a.txt", "changed externally") // not through the tracker
 	res := e.writeExec(t.Context(), `{"path":"a.txt","content":"mine"}`)
-	assert.True(t, res.IsError) // stale: file changed since read
+	assert.False(t, res.IsError) // no stale gate: write overwrites as told
 }
 
 func TestWritePreview(t *testing.T) {

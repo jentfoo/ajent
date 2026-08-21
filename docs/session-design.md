@@ -14,7 +14,7 @@ directory so sessions survive renames deterministically without an index, keyed
 by `<slug>-<hash>` of the absolute workspace path.
 
 A session belongs to one agent; nothing requires every agent to have one. A
-phase-13 sub-agent runs on an **in-memory session** — no transcript file, recorder,
+A sub-agent runs on an **in-memory session** — no transcript file, recorder,
 or resume/rewind — so its only lasting trace is child spend rolled into the parent
 ledger.
 
@@ -202,9 +202,8 @@ runs once on exit via `defer hist.Compact()`; it writes nothing when there is no
 message to persist, so an idle workspace never gains a phantom empty file.
 
 `RecallIndex` unifies recall onto one source: every typed message first, then any
-recorded prompt not already present (backfilling transcripts written before this
-phase). It reuses the `Prompt` type; a typed-only line carries a zero `At`. The old
-global `~/.ajent/history` is abandoned in place — never read, migrated or deleted.
+recorded prompt not already present (backfilling older transcripts). It reuses
+the `Prompt` type; a typed-only line carries a zero `At`.
 
 ## Reading and rebuilding
 
@@ -385,8 +384,6 @@ Repository style this package follows (shared with `pkg/tui` and `pkg/agent`):
 
 - Recall (↑/↓ and Ctrl+R) is per-workspace: each session dir holds only its own
   typed lines, so history does not follow you across projects.
-- The legacy global `~/.ajent/history` file is abandoned in place — never read,
-  migrated or deleted. Only newly typed lines reach the sessions tree.
 - Sessions are scoped to the workspace directory they started in; resuming from
   a different path sees nothing. There is no cross-workspace search yet.
 - The transcript keeps every branch uncapped, so heavy forking grows the file.

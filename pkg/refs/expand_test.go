@@ -95,6 +95,19 @@ func TestExpand(t *testing.T) {
 		assert.Contains(t, sink.starts, "read a.go")
 	})
 
+	t.Run("wildcard_injects_ls_listing_matches", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, f := range []string{"a.go", "b.txt"} {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte("hi\n"), 0o600))
+		}
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand(t.Context(), "see @*.txt")
+		assert.Equal(t, "see @*.txt", res.Text) // the pattern stays literal in prose
+		require.Len(t, res.Before, 2)
+		assert.Contains(t, sink.starts, "ls *.txt")
+	})
+
 	t.Run("directory_injects_ls", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,54 @@ func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 	c.SetModel(llm.Model{Provider: "p", ID: "other"})
 	assert.Contains(t, readFileString(t, trPath), "model_change",
 		"a real change must record a model_change entry")
+}
+
+// TestUIConsoleSetModelPersistsUserConfig verifies a /model switch writes the
+// selection into the user layer config, so a fresh start resolves it through the
+// existing model-key path and keeps the model. A same-model no-op must not
+// touch the file.
+func TestUIConsoleSetModelPersistsUserConfig(t *testing.T) {
+	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+	home := t.TempDir()
+	t.Setenv("AJENT_HOME", home)
+	userCfg := filepath.Join(home, "config.json")
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ui.Close()
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	active := llm.Model{Provider: "p", ID: "first"}
+	st := &agent.State{Model: active, Tokens: tokens.New(active)}
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+
+	// the same-model no-op must not create the file.
+	c.SetModel(active)
+	assert.NoFileExists(t, userCfg)
+
+	c.SetModel(llm.Model{Provider: "p", ID: "picked"})
+
+	// the selection landed in ~/.ajent/config.json under the model key.
+	var saved map[string]any
+	require.NoError(t, json.Unmarshal([]byte(readFileString(t, userCfg)), &saved))
+	assert.Equal(t, "p/picked", saved["model"])
+
+	// a fresh Set over the same home resolves it, proving the next start keeps it.
+	reloaded, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	assert.Equal(t, "p/picked", reloaded.Settings().Model)
 }
 
 // readFileString returns a file's contents as text for assertions.

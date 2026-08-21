@@ -17,8 +17,8 @@ var ErrDenied = errors.New("denied by user")
 // Elision bounds for the dialog subject, matching tui's decision context budget
 // so its own elide never has to cut twice.
 const (
-	decisionContextRows  = 8
-	decisionContextChars = 240
+	decisionContextRows  = 16
+	decisionContextChars = 480
 )
 
 // Prompter opens approval dialogs and asks for free-text reasons. main.go

@@ -61,14 +61,14 @@ func (m Mode) Short() string {
 // Next returns the following mode in cycle order.
 func (m Mode) Next() Mode {
 	switch m {
-	case ModeAllowAll:
-		return ModeAllowRead
 	case ModeAllowRead:
 		return ModeAuto
 	case ModeAuto:
+		return ModeAllowAll
+	case ModeAllowAll:
 		return ModeBlockAll
 	case ModeBlockAll:
-		return ModeAllowAll
+		return ModeAllowRead
 	default:
 		return ModeAllowRead
 	}
