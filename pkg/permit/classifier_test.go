@@ -42,7 +42,7 @@ type countingFn struct {
 	verdict Class
 }
 
-func (f *countingFn) call(ctx context.Context, command string) Class {
+func (f *countingFn) call(ctx context.Context, s Subject) Class {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.n++
@@ -56,10 +56,10 @@ func TestCachedClassifierHitsCache(t *testing.T) {
 	fn := &countingFn{verdict: ClassReadOnly}
 	c := NewCachedClassifier(fn.call)
 
-	assert.Equal(t, ClassReadOnly, c.Classify(context.Background(), "stat a"))
+	assert.Equal(t, ClassReadOnly, c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"}))
 	assert.Equal(t, 1, fn.count())
-	// an identical command is served from cache without re-invoking the model.
-	assert.Equal(t, ClassReadOnly, c.Classify(context.Background(), "stat a"))
+	// an identical subject is served from cache without re-invoking the model.
+	assert.Equal(t, ClassReadOnly, c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"}))
 	assert.Equal(t, 1, fn.count())
 }
 
@@ -69,8 +69,8 @@ func TestCachedClassifierDistinctCommandsMissCache(t *testing.T) {
 	fn := &countingFn{verdict: ClassWrite}
 	c := NewCachedClassifier(fn.call)
 
-	_ = c.Classify(context.Background(), "a")
-	_ = c.Classify(context.Background(), "b") // different command text misses
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "a"})
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "b"}) // different subject misses
 	assert.Equal(t, 2, fn.count())
 }
 
@@ -80,15 +80,15 @@ func TestCachedClassifierNeverStoresUnsure(t *testing.T) {
 	fn := &countingFn{verdict: ClassUnsure}
 	c := NewCachedClassifier(fn.call)
 
-	_ = c.Classify(context.Background(), "stat a")
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 1, fn.count())
-	// unsure is transient and never cached; the same command runs the model again.
-	_ = c.Classify(context.Background(), "stat a")
+	// unsure is transient and never cached; the same subject runs the model again.
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 2, fn.count())
 
 	fn.verdict = ClassReadOnly // next call now succeeds and gets stored
-	assert.Equal(t, ClassReadOnly, c.Classify(context.Background(), "stat b"))
-	_ = c.Classify(context.Background(), "stat b") // cached from here on
+	assert.Equal(t, ClassReadOnly, c.Classify(context.Background(), Subject{Name: "bash", Args: "stat b"}))
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "stat b"}) // cached from here on
 	assert.Equal(t, 3, fn.count())
 }
 
@@ -99,15 +99,15 @@ func TestCachedClassifierEvictsLeastRecentlyUsedAtCap(t *testing.T) {
 	c := newCachedClassifierMax(fn.call, 2)
 
 	// fill the cache to its cap.
-	_ = c.Classify(context.Background(), "a")
-	_ = c.Classify(context.Background(), "b")
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "a"})
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "b"})
 
 	// touch a so b becomes least-recently-used, then push past the cap: b evicts.
-	_ = c.Classify(context.Background(), "a")
-	_ = c.Classify(context.Background(), "c") // forces an eviction
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "a"})
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "c"}) // forces an eviction
 
 	assert.Equal(t, 3, fn.count()) // a,b,c each classified once
 	// b was evicted and must run the model again; a survived via recency touch.
-	_ = c.Classify(context.Background(), "b")
+	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "b"})
 	assert.Equal(t, 4, fn.count())
 }

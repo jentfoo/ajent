@@ -427,6 +427,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		barrier.SetClassifier(permit.NewCachedClassifier(classifierAdapter{
 			providerFor: providers.ProviderFor,
 			model:       func() llm.Model { return st.Model }, // current model so /model applies
+			schema:      toolSchema(toolsReg),
 		}.Classify))
 		barrier.SetNotice(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 		// config-declared safe commands (exact MCP tool names or verbatim bash lines)
@@ -801,16 +802,55 @@ Use your general knowledge of Unix tools. The examples below are illustrative, N
 
 Reserve "unsure" for unrecognized commands. Respond with ONLY the classification word.`
 
-// classifierAdapter classifies an unverifiable shell command with a one-shot call
-// to the session's current model in a fresh context; the verdict never enters the
-// session. providerFor resolves the active vendor, model yields the live state so
-// /model switches apply.
+// toolSchema returns a lookup for an enabled tool's metadata (description and
+// parameters), used to judge MCP/extension calls in auto+mcp mode.
+func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
+	return func(name string) (llm.ToolSchema, bool) {
+		t, ok := reg.Get(name)
+		if !ok {
+			return llm.ToolSchema{}, false
+		}
+		sch := t.Schema()
+		sch.Name = name
+		sch.Description = t.Description()
+		return sch, true
+	}
+}
+
+// mcpClassifierSystem is auto+mcp's prompt: classify one tool call by whether it
+// changes any state. The no-change bar is explicit — a read-only verdict must leave
+// every system untouched, and network reads alone are not safe.
+func mcpClassifierSystem(sch llm.ToolSchema) string {
+	return fmt.Sprintf(`You classify a single tool invocation by its effect on the system. Reply with exactly one word and nothing else.
+
+Categories:
+- "readonly" — the call only reads or inspects: it changes no files, repo, process, network, remote service, permissions, configs, caches, credentials or any other state anywhere.
+- "write" — has any side effect at all: mutates data, alters a remote system, sends commands with lasting effects, changes credentials or configuration.
+- "unsure" — only when you cannot determine the tool's effect from its description and arguments.
+
+A readonly verdict requires NO observable change to anything. Reading from the network is not readonly on its own (it can exfiltrate); it must also leave every system unchanged.
+
+Tool under evaluation:
+Name: %s
+Description: %s
+Parameters (JSON Schema):
+%s`, sch.Name, strings.TrimSpace(sch.Description), string(sch.Parameters))
+}
+
+// classifierAdapter classifies an unverifiable call with a one-shot call to the
+// session's current model in a fresh context; the verdict never enters the session.
+// providerFor resolves the active vendor, model yields the live state so /model
+// switches apply, schema fetches tool metadata for non-shell (MCP) calls.
 type classifierAdapter struct {
 	providerFor func(llm.Model) (llm.Provider, error)
 	model       func() llm.Model
+	schema      func(name string) (llm.ToolSchema, bool) // nil: no MCP metadata available
 }
 
-func (a classifierAdapter) Classify(ctx context.Context, command string) permit.Class {
+func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permit.Class {
+	if a.schema == nil && !s.IsShell() {
+		return permit.ClassUnsure // an MCP call needs its tool metadata to be judged
+	}
 	m := a.model()
 	if m.ID == "" { // no model configured; nothing to classify with
 		return permit.ClassUnsure
@@ -819,10 +859,20 @@ func (a classifierAdapter) Classify(ctx context.Context, command string) permit.
 	if err != nil {
 		return permit.ClassUnsure
 	}
+	var sys = classifierSystem
+	userMsg := s.Args
+	if !s.IsShell() { // an MCP/extension tool call is judged with its own framing and metadata
+		sch, ok := a.schema(s.Name)
+		if !ok {
+			return permit.ClassUnsure // unknown tool cannot be evaluated safely
+		}
+		sys = mcpClassifierSystem(sch)
+		userMsg = s.Args
+	}
 	req := llm.Request{
 		Model:     m,
-		System:    llm.BlockList{llm.TextBlock{Text: classifierSystem}},
-		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: command}}}},
+		System:    llm.BlockList{llm.TextBlock{Text: sys}},
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: userMsg}}}},
 		MaxTokens: classifyBudget(m),
 	}
 	req.Reasoning = llm.ReasoningConfig{Level: llm.ClampLevel(m, llm.LevelMinimal)}

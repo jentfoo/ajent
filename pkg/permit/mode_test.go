@@ -18,6 +18,7 @@ func TestModeParse(t *testing.T) {
 		{"allow-read", ModeAllowRead, true},
 		{"allow-all", ModeAllowAll, true},
 		{"auto", ModeAuto, true},
+		{"auto+mcp", ModeAutoMCP, true},
 		{"block-all", ModeBlockAll, true},
 		{"bogus", 0, false},
 	}
@@ -41,6 +42,7 @@ func TestModeStrings(t *testing.T) {
 		{ModeAllowAll, "allow-all", "all"},
 		{ModeAllowRead, "allow-read", "read"},
 		{ModeAuto, "auto", "auto"},
+		{ModeAutoMCP, "auto+mcp", "auto+"},
 		{ModeBlockAll, "block-all", "block"},
 	}
 	for _, c := range cases {
@@ -52,7 +54,7 @@ func TestModeStrings(t *testing.T) {
 func TestModeNextCyclesInOrder(t *testing.T) {
 	t.Parallel()
 
-	want := []Mode{ModeAuto, ModeAllowAll, ModeBlockAll, ModeAllowRead}
+	want := []Mode{ModeAuto, ModeAutoMCP, ModeAllowAll, ModeBlockAll, ModeAllowRead}
 	m := ModeAllowRead
 	for _, w := range want {
 		assert.Equal(t, w, m.Next())
@@ -64,7 +66,7 @@ func TestModeStringRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	// String() must round-trip through ParseMode for every valid mode.
-	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeBlockAll} {
+	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoMCP, ModeBlockAll} {
 		got, ok := ParseMode(m.String())
 		assert.True(t, ok)
 		assert.Equal(t, m, got)

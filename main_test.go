@@ -526,13 +526,13 @@ func TestClassifierAdapterClassifiesShellCommands(t *testing.T) {
 	}
 
 	t.Run("readonly_verdict", func(t *testing.T) {
-		assert.Equal(t, permit.ClassReadOnly, adapterFor("read-only").Classify(t.Context(), "stat a"))
+		assert.Equal(t, permit.ClassReadOnly, adapterFor("read-only").Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
 	})
 	t.Run("write_verdict_with_noise", func(t *testing.T) {
-		assert.Equal(t, permit.ClassWrite, adapterFor("WRITE: it modifies the file!").Classify(t.Context(), "rm a"))
+		assert.Equal(t, permit.ClassWrite, adapterFor("WRITE: it modifies the file!").Classify(t.Context(), permit.Subject{Name: "bash", Args: "rm a"}))
 	})
 	t.Run("garbled_maps_to_unsure", func(t *testing.T) {
-		assert.Equal(t, permit.ClassUnsure, adapterFor("? maybe 42").Classify(t.Context(), "weird cmd"))
+		assert.Equal(t, permit.ClassUnsure, adapterFor("? maybe 42").Classify(t.Context(), permit.Subject{Name: "bash", Args: "weird cmd"}))
 	})
 }
 
@@ -557,7 +557,7 @@ func TestClassifierAdapterFailuresAreUnsure(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, permit.ClassUnsure, tc.ad.Classify(t.Context(), "anything"))
+			assert.Equal(t, permit.ClassUnsure, tc.ad.Classify(t.Context(), permit.Subject{Name: "bash", Args: "anything"}))
 		})
 	}
 }
@@ -572,7 +572,7 @@ func TestClassifierAdapterRequestUsesFreshContextAndMinimalReasoning(t *testing.
 		model:       func() llm.Model { return model },
 	}
 
-	_ = adapter.Classify(t.Context(), "stat a")
+	_ = adapter.Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"})
 	reqs := sp.Requests()
 	require.Len(t, reqs, 1)
 	r := reqs[0]
@@ -586,6 +586,50 @@ func TestClassifierAdapterRequestUsesFreshContextAndMinimalReasoning(t *testing.
 	assert.Contains(t, sys.String(), "readonly")
 	// a model that cannot reason clamps minimal to off; the field is always populated.
 	assert.Equal(t, llm.ClampLevel(model, llm.LevelMinimal), r.Reasoning.Level)
+}
+
+func TestClassifierAdapterClassifiesMCPCallWithMetadata(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{ID: "p/m", Provider: "scripted"}
+	sp := newScripted("readonly")
+	adapter := classifierAdapter{
+		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		model:       func() llm.Model { return model },
+		schema: func(name string) (llm.ToolSchema, bool) {
+			if name != "srv__list" {
+				return llm.ToolSchema{}, false
+			}
+			return llm.ToolSchema{Name: name, Description: "lists things", Parameters: []byte(`{"type":"object"}`)}, true
+		},
+	}
+
+	assert.Equal(t, permit.ClassReadOnly, adapter.Classify(t.Context(), permit.Subject{Name: "srv__list", Args: `{}`}))
+
+	reqs := sp.Requests()
+	require.Len(t, reqs, 1)
+	var sys strings.Builder
+	for _, b := range reqs[0].System {
+		if tb, ok := b.(llm.TextBlock); ok {
+			sys.WriteString(tb.Text)
+		}
+	}
+	// the MCP prompt embeds description and parameters so the model can judge it.
+	assert.Contains(t, sys.String(), "lists things")
+	assert.Contains(t, sys.String(), `{"type":"object"}`)
+}
+
+func TestClassifierAdapterUnknownMCPSafelyUnsure(t *testing.T) {
+	t.Parallel()
+
+	adapter := classifierAdapter{ // no schema lookup wired at all
+		providerFor: func(llm.Model) (llm.Provider, error) { return nil, nil },
+		model:       func() llm.Model { return llm.Model{ID: "p/m"} },
+	}
+	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "srv__list", Args: `{}`}))
+
+	adapter.schema = func(string) (llm.ToolSchema, bool) { return llm.ToolSchema{}, false } // unknown tool
+	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "ghost", Args: `{}`}))
 }
 
 func newScripted(reply string) *llm.ScriptedProvider {

@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-// Class is a model classifier's verdict on one shell command.
+// Class is a model classifier's verdict on one tool call.
 type Class uint8
 
 const (
@@ -16,27 +16,41 @@ const (
 	ClassUnsure                // garbled or failed response; never cached
 )
 
-// Classifier decides whether an unverifiable shell command is read-only. main.go
-// supplies a fresh-context model adapter in auto mode.
+// Subject is one call sent to the model classifier in auto/auto+mcp mode: a shell
+// command, or any other (MCP/extension) tool named with its elided arguments.
+type Subject struct {
+	Name string // tool name; bashTool for shell calls
+	Args string // bash command text, or elided JSON arguments for other tools
+}
+
+// key is the cache identity: a call is judged by tool and exact payload together,
+// so different args to one MCP tool are classified independently.
+func (s Subject) key() string { return s.Name + "\x00" + s.Args }
+
+// IsShell reports whether the subject is a shell command rather than an MCP/extension call.
+func (s Subject) IsShell() bool { return s.Name == bashTool }
+
+// Classifier decides whether an unverifiable tool call is read-only. main.go
+// supplies a fresh-context model adapter in auto/auto+mcp mode.
 type Classifier interface {
-	Classify(ctx context.Context, command string) Class
+	Classify(ctx context.Context, s Subject) Class
 }
 
 // classCacheMax bounds the session LRU so it stays cheap and forgets old commands.
 const classCacheMax = 500
 
 // ClassifierFn is one uncached classification; main.go supplies the model call.
-type ClassifierFn func(ctx context.Context, command string) Class
+type ClassifierFn func(ctx context.Context, s Subject) Class
 
 // cachedClassifier wraps an uncached classifier with a session-scoped LRU keyed by
-// exact command text. unsure verdicts are never stored — they are usually transient
-// (an abort, missing auth, an API error).
+// subject identity (tool + exact payload). unsure verdicts are never stored — they
+// are usually transient (an abort, missing auth, an API error).
 type cachedClassifier struct {
 	fn ClassifierFn
 
 	mu    sync.Mutex
 	max   int              // cache cap, classCacheMax for production use
-	vals  map[string]Class // exact command -> verdict
+	vals  map[string]Class // subject key -> verdict
 	order []string         // least-recently-used first; the tail is most recent
 }
 
@@ -51,31 +65,32 @@ func newCachedClassifierMax(fn ClassifierFn, max int) *cachedClassifier {
 }
 
 // Classify consults the cache and otherwise runs fn, storing non-unsure verdicts.
-func (c *cachedClassifier) Classify(ctx context.Context, command string) Class {
+func (c *cachedClassifier) Classify(ctx context.Context, s Subject) Class {
+	key := s.key()
 	c.mu.Lock()
-	if v, ok := c.vals[command]; ok {
-		touch(c.order, command)
+	if v, ok := c.vals[key]; ok {
+		touch(c.order, key)
 		c.mu.Unlock()
 		return v
 	}
 	c.mu.Unlock()
 
-	v := c.fn(ctx, command)
+	v := c.fn(ctx, s)
 	if v == ClassUnsure { // unsure is usually transient; never cached
 		return v
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.vals[command]; !ok {
+	if _, ok := c.vals[key]; !ok {
 		if len(c.order) >= c.max {
 			delete(c.vals, c.order[0]) // evict the least-recently-used entry
 			c.order = slices.Delete(c.order, 0, 1)
 		}
-		c.vals[command] = v
-		c.order = append(c.order, command)
+		c.vals[key] = v
+		c.order = append(c.order, key)
 	} else {
-		touch(c.order, command) // another caller cached it meanwhile; refresh recency
+		touch(c.order, key) // another caller cached it meanwhile; refresh recency
 	}
 	return v
 }

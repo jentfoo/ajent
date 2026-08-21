@@ -215,11 +215,11 @@ func (b *Barrier) Asker() tools.Asker {
 			return tools.Deny(noUIReason)
 		}
 
-		// auto mode classifies every prompted call concurrently with the dialog; a
+		// auto/auto+mcp classifies every prompted call concurrently with the dialog; a
 		// readonly verdict resolves it open. A user answer cancels classification.
 		var classifierCtx context.Context
 		cancel := func() {}
-		if m == ModeAuto && b.classifier != nil {
+		if b.classifyCall(m, call.Name) {
 			classifierCtx, cancel = context.WithCancel(ctx)
 		}
 
@@ -239,7 +239,7 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 
 		if classifierCtx != nil && classifierCtx.Err() == nil {
-			subject := classifierSubject(call)
+			subject := classifySubject(call)
 			go func() {
 				// a user answer cancels the context; skip both the resolve and its
 				// auto-allowed report so a denial is never claimed as auto-allowed.
@@ -364,17 +364,34 @@ func (b *Barrier) note(call agent.ToolCall, note string) {
 	b.noter("User allowed `" + name + "` with note: " + strings.TrimSpace(note))
 }
 
-// classifierSubject is what auto mode sends to classify call: the bash command,
-// or the tool name plus its elided arguments for any other tool.
-func classifierSubject(call agent.ToolCall) string {
+// classifyCall reports whether mode sends this call type to the model classifier:
+// auto judges shell commands only, while auto+mcp also classifies MCP/extension
+// tool calls. A nil classifier never starts one.
+func (b *Barrier) classifyCall(m Mode, name string) bool {
+	if b.classifier == nil {
+		return false
+	}
+	switch m {
+	case ModeAuto:
+		return name == bashTool // shell commands only in auto
+	case ModeAutoMCP:
+		return true // MCP and other tools too, judged with their metadata
+	default:
+		return false
+	}
+}
+
+// classifySubject is what auto/auto+mcp sends to classify call: the bash command,
+// or the tool name plus its elided arguments for any other (MCP) tool.
+func classifySubject(call agent.ToolCall) Subject {
 	if call.Name == bashTool {
-		return bashCommand(call.Input)
+		return Subject{Name: bashTool, Args: bashCommand(call.Input)}
 	}
 	s := strings.TrimSpace(string(call.Input))
 	if len(s) > maxClassifierArgs {
 		s = s[:maxClassifierArgs] + "…"
 	}
-	return call.Name + " " + s
+	return Subject{Name: call.Name, Args: s}
 }
 
 // resolveNotice reports how an approved call was granted, replacing the dialog's

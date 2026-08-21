@@ -7,6 +7,7 @@ const (
 	ModeAllowAll  Mode = iota // no gate; every call runs
 	ModeAllowRead             // verifiably read-only calls run, everything else prompts (default)
 	ModeAuto                  // allow-read plus model classification of unverifiable shell commands
+	ModeAutoMCP               // auto plus model classification of MCP/extension tool calls with their metadata
 	ModeBlockAll              // nothing writes or reads without a prompt; ! lines exempt
 )
 
@@ -19,6 +20,8 @@ func ParseMode(s string) (Mode, bool) {
 		return ModeAllowAll, true
 	case "auto":
 		return ModeAuto, true
+	case "auto+mcp":
+		return ModeAutoMCP, true
 	case "block-all":
 		return ModeBlockAll, true
 	default:
@@ -35,6 +38,8 @@ func (m Mode) String() string {
 		return "allow-read"
 	case ModeAuto:
 		return "auto"
+	case ModeAutoMCP:
+		return "auto+mcp"
 	case ModeBlockAll:
 		return "block-all"
 	default:
@@ -51,6 +56,8 @@ func (m Mode) Short() string {
 		return "read"
 	case ModeAuto:
 		return "auto"
+	case ModeAutoMCP:
+		return "auto+"
 	case ModeBlockAll:
 		return "block"
 	default:
@@ -64,6 +71,8 @@ func (m Mode) Next() Mode {
 	case ModeAllowRead:
 		return ModeAuto
 	case ModeAuto:
+		return ModeAutoMCP
+	case ModeAutoMCP:
 		return ModeAllowAll
 	case ModeAllowAll:
 		return ModeBlockAll

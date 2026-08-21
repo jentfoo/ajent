@@ -203,7 +203,7 @@ func allRows() []settingsRow {
 		{name: "Show thinking", render: rowThinking, edit: editThinking},
 		{name: "Tools", render: rowTools, edit: editTools},
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
-		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "block-all"}),
+		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+mcp", "block-all"}),
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
 		{name: "Tool limits",

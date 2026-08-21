@@ -459,25 +459,39 @@ review keeps files inspected, issues found and conclusions reached.
 
 ---
 
-## Tool-call classifier (`auto` mode)
+## Tool-call classifier (`auto` / `auto+mcp` modes)
 
-The permission barrier classifies an unverifiable shell command in `auto` with a
-one-shot call to the session's current model — **fresh context**, never the
-session history, and its verdict never enters the session. It asks for exactly one
-word: `readonly`, `write` or `unsure`. Reasoning is clamped minimal; the output
-token budget leaves room for a thinking block. Verdicts normalise by lowercasing,
+The permission barrier classifies an unverifiable tool call with a one-shot
+call to the session's current model — **fresh context**, never the session
+history, and its verdict never enters the session. It asks for exactly one word:
+`readonly`, `write` or `unsure`. Reasoning is clamped minimal; the output token
+budget leaves room for a thinking block. Verdicts normalise by lowercasing,
 dropping non-letters and prefix-matching, so `` `readonly` ``, `read-only` and
 `readonly.` all collapse to one word; anything else is `unsure`. The response is
 never cached when unsure (usually transient: an abort, missing auth, an API
-error); confident verdicts are LRU-cached per exact command string.
+error); confident verdicts are LRU-cached per subject identity — tool name plus
+exact payload.
 
-The prompt keeps the reference's framing — compound constructs classify by the
-commands they actually run, examples are illustrative not exhaustive — with one
+The two modes differ only in what they classify. **`auto`** judges shell commands;
+**`auto+mcp`** also classifies MCP/extension tool calls, sending the model the
+call's description and JSON-Schema parameters so it can judge functionality it has
+never seen before. In auto mode a non-shell call is never classified; in
+auto+mcp both are.
+
+The shell prompt keeps the reference's framing — compound constructs classify by
+the commands they actually run, examples are illustrative not exhaustive — with one
 deliberate change: **reading from the network is *not* read-only**. The exfiltration
 channel means "does not write locally" never equals safe; the classifier must say
 so explicitly rather than inheriting the reference's opposite claim. Network tools
 (`curl`, `wget`, `nc`) are absent from both the static allowlist and any notion of
 classifier read-only.
+
+The MCP prompt applies the same no-change bar to a single tool invocation: a
+`readonly` verdict requires **no observable change anywhere** — files, repo,
+process, network, remote service, permissions, configs, caches or credentials —
+and reading from the network alone is never enough. The tool's name, description
+and parameters are embedded verbatim so an unfamiliar MCP server can be judged by
+what it declares rather than guessed at.
 
 ---
 

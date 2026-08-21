@@ -116,7 +116,7 @@ type fakeClassifier struct {
 	calls   int  // invocation count (guarded by the single asker goroutine)
 }
 
-func (c *fakeClassifier) Classify(ctx context.Context, command string) Class {
+func (c *fakeClassifier) Classify(ctx context.Context, s Subject) Class {
 	if c.block {
 		<-ctx.Done()
 		return ClassUnsure
@@ -610,7 +610,7 @@ func TestAskerAutoClassifiesNativeWriteTool(t *testing.T) {
 	t.Parallel()
 
 	b := NewBarrier(noRO)
-	b.SetMode(ModeAuto)
+	b.SetMode(ModeAutoMCP)
 	p := newFakePrompter()
 	b.SetPrompter(p)
 	cl := &fakeClassifier{verdict: ClassReadOnly}
@@ -711,10 +711,46 @@ func TestAskerAutoUserAnswerCancelsInFlightClassification(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestAskerAutoDoesNotClassifyNonBashCalls(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	b := newTestBarrier(p)
+	b.SetMode(ModeAuto) // plain auto judges shell commands only
+	cl := &fakeClassifier{verdict: ClassReadOnly}
+	b.SetClassifier(cl)
+
+	// an MCP call is never sent to the classifier in auto mode; it just waits on the dialog.
+	done := make(chan struct{})
+	go func() { runAsk(b, t.Context(), "mcp__list", []byte(`{}`)); close(done) }()
+	waitDialog(t, p).answer(int(optAllow))
+	<-done
+
+	assert.Equal(t, 0, cl.calls)
+}
+
+func TestAskerAutoMCPClassifiesNonBashCalls(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	b := newTestBarrier(p)
+	b.SetMode(ModeAutoMCP) // auto+mcp also classifies MCP/extension calls
+	cl := &fakeClassifier{verdict: ClassReadOnly}
+	b.SetClassifier(cl)
+
+	var got tools.Decision
+	done := make(chan struct{})
+	go func() { got = runAsk(b, t.Context(), "mcp__list", []byte(`{}`)); close(done) }()
+	<-done // the readonly verdict resolves without a keystroke
+
+	assert.Equal(t, tools.ActionAllow, got.Action)
+	assert.Equal(t, 1, cl.calls)
+}
+
 // blockingClassifier waits for ctx cancellation and reports it.
 type blockingClassifier struct{ cancel chan struct{} }
 
-func (c *blockingClassifier) Classify(ctx context.Context, command string) Class {
+func (c *blockingClassifier) Classify(ctx context.Context, s Subject) Class {
 	<-ctx.Done()
 	close(c.cancel)
 	return ClassUnsure
@@ -777,7 +813,7 @@ func TestCycleAdvancesModesInOrder(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBarrier(newFakePrompter())
-	want := []Mode{ModeAuto, ModeAllowAll, ModeBlockAll, ModeAllowRead}
+	want := []Mode{ModeAuto, ModeAutoMCP, ModeAllowAll, ModeBlockAll, ModeAllowRead}
 	for _, w := range want {
 		assert.Equal(t, w, b.Cycle())
 	}
