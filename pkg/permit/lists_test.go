@@ -12,7 +12,7 @@ func TestReadOnlyCommandsContents(t *testing.T) {
 	want := []string{
 		"awk", "ls", "find", "grep", "rg", "diff", "which", "ps", "jq",
 		"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "sort", "du",
-		"date",
+		"date", "od",
 	}
 	assert.Len(t, readOnlyCommands, len(want))
 	for _, cmd := range want {

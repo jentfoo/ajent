@@ -65,10 +65,11 @@ func TestElideSubjectBoundsLinesAndChars(t *testing.T) {
 		assert.Failf(t, "too many lines kept", "kept %d want <= %d", got, decisionContextRows)
 	}
 
+	// a long first line is kept whole for the dialog to wrap
 	wide := strings.Repeat("x", decisionContextChars+50)
-	if len(elideSubject(wide)) > decisionContextChars {
-		assert.Fail(t, "subject exceeds character budget")
-	}
+	assert.Equal(t, wide, elideSubject(wide))
+	// past the first line the character budget still applies
+	assert.Equal(t, "head", elideSubject("head\n"+wide+"\ntail"))
 }
 
 func TestElideSubjectEmptyAndSingleLine(t *testing.T) {

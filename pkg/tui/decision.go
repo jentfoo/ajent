@@ -132,17 +132,19 @@ type decisionState struct {
 func (s *decisionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	out := []string{t.Accent.Wrap(s.prompt)}
 
-	// elide the subject to its budget; render as many lines as room allows while
-	// always leaving at least one option row below.
-	ctxLines, cut := s.elideContext()
-	availCtx := min(len(ctxLines), max(0, maxRows-len(out)-1))
-	for _, l := range ctxLines[:availCtx] {
-		out = append(out, truncateDisplay(t.Dim.Wrap(strings.TrimRight(l, " \t")), width))
+	// wrap the subject over as many rows as room allows, while always leaving at
+	// least one option row below.
+	avail := max(0, maxRows-len(out)-1)
+	ctxRows, cut := s.contextRows(t, width, avail)
+	if cut > 0 && avail > 0 {
+		// re-render a row shorter: an incomplete subject must always be flagged
+		ctxRows, cut = s.contextRows(t, width, avail-1)
 	}
+	out = append(out, ctxRows...)
 
 	// a dim marker reports the subject lines that were cut or did not fit
-	if hidden := cut + len(ctxLines) - availCtx; hidden > 0 && len(out) < maxRows-1 {
-		out = append(out, t.Dim.Wrap("…+"+strconv.Itoa(hidden)+" lines"))
+	if cut > 0 {
+		out = append(out, t.Dim.Wrap("…+"+strconv.Itoa(cut)+" lines"))
 	}
 
 	listRows := max(1, maxRows-len(out))
@@ -156,16 +158,34 @@ func (s *decisionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	return out, 0, 0
 }
 
+// contextRows renders the elided subject wrapped to width, filling at most budget
+// rows. Long lines wrap rather than truncate, so the whole command being approved
+// is readable. It returns the rows and how many subject lines are not fully shown.
+func (s *decisionState) contextRows(t Theme, width, budget int) ([]string, int) {
+	lines, cut := s.elideContext()
+	var out []string
+	for i, ln := range lines {
+		for _, row := range wrapLine(t.Dim.Wrap(strings.TrimRight(ln, " \t")), width) {
+			if len(out) >= budget {
+				return out, cut + len(lines) - i // line i is only partly shown
+			}
+			out = append(out, row)
+		}
+	}
+	return out, cut
+}
+
 // elideContext splits the subject into up to decisionContextLines source lines whose
-// total length stays under decisionContextChars. It returns the kept lines and how
-// many input lines were dropped. The result is tool output: never passed through
+// total length stays under decisionContextChars. The first line is always kept, so a
+// single long command is never dropped whole. It returns the kept lines and how many
+// input lines were dropped. The result is tool output: never passed through
 // renderMarkdown.
 func (s *decisionState) elideContext() ([]string, int) {
 	var out []string
 	total := 0
 	cut := 0
 	for _, ln := range strings.Split(s.context, "\n") {
-		if len(out) >= decisionContextRows || total+len(ln) > decisionContextChars {
+		if len(out) > 0 && (len(out) >= decisionContextRows || total+len(ln) > decisionContextChars) {
 			cut++ // count dropped lines so the marker can name them
 			continue
 		}

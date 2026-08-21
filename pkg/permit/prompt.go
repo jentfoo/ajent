@@ -103,8 +103,10 @@ func allowSessionKey(call agent.ToolCall) string {
 	return "bash:" + stripPath(firstToken(toks))
 }
 
-// elideSubject bounds the dialog subject to 8 lines then 240 characters, so tui's
-// own decision-context elision never has to cut twice.
+// elideSubject bounds the dialog subject to decisionContextRows lines then
+// decisionContextChars characters, so tui's own decision-context elision never has
+// to cut twice. The first line always survives however long it is: the dialog wraps
+// it, and a command must never be approved half-shown.
 func elideSubject(s string) string {
 	if s == "" {
 		return ""
@@ -112,7 +114,7 @@ func elideSubject(s string) string {
 	var out []string
 	total := 0
 	for _, ln := range strings.Split(s, "\n") {
-		if len(out) >= decisionContextRows || total+len(ln) > decisionContextChars {
+		if len(out) > 0 && (len(out) >= decisionContextRows || total+len(ln) > decisionContextChars) {
 			break
 		}
 		out = append(out, ln)

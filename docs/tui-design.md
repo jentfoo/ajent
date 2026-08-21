@@ -366,7 +366,12 @@ to resolve wins — whether that is a keystroke or an external resolver (the per
 classifier or a mode cycle) — by writing the result into `decisionState` under
 `u.mu` before calling `resolve`, then committing only if it won; the loser reads
 nothing. The subject is shown above numbered options, elided to at most
-sixteen lines and 480 characters with a dim `… +N lines` marker when cut, and is
+sixteen lines and 480 characters — except the first line, which always survives
+however long it is, so a single long command is never dropped whole. Subject
+lines **wrap** to the width rather than being clipped: what is approved has to be
+readable in full. Whatever still does not fit the height budget is reported by a
+dim `… +N lines` marker, which takes a row from the subject when there is no
+spare one, since an incomplete subject must never look complete. The subject is
 **never** passed through `renderMarkdown`: tool output belongs in the trap-free
 `Output` path (see Traps). Number keys select directly up to `interactionCap`,
 arrows/Enter take the highlight, Esc cancels — returned as `ErrCancelled` so the

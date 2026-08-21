@@ -44,16 +44,41 @@ func TestUIDecisionRenders(t *testing.T) {
 		assert.Contains(t, u.snapshot(v), "> 1 Allow")
 		assert.Contains(t, u.snapshot(v), "  2 Deny")
 	})
-	t.Run("elides_long_lines_to_the_width", func(t *testing.T) {
-		u, v, _ := interactionUI(t)
+	t.Run("wraps_long_lines_to_the_width", func(t *testing.T) {
+		u, v, _ := tallUI(t)
 		long := strings.Repeat("x", 200)
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: long, Options: []Option{{Label: "A"}}})
 		t.Cleanup(d.Close)
 
 		ctx := t.Context()
 		go func() { _, _ = d.Wait(ctx) }()
-		waitFor(t, u, v, strings.Repeat("x", 79))
-		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), long)
+		waitFor(t, u, v, "> 1 A")
+		// every character is on screen, spread over rows rather than cut at the width
+		screen := strutil.StripANSI(u.snapshot(v))
+		assert.Equal(t, 200, strings.Count(screen, "x"))
+		assert.NotContains(t, screen, "lines") // nothing hidden, so no cut marker
+	})
+	t.Run("wrapped_line_cut_by_height", func(t *testing.T) {
+		u, v, _ := interactionUI(t) // 12 rows: no room for a 200 column subject
+		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Repeat("x", 200),
+			Options: []Option{{Label: "A"}}})
+		t.Cleanup(d.Close)
+
+		ctx := t.Context()
+		go func() { _, _ = d.Wait(ctx) }()
+		waitFor(t, u, v, "…+1 lines") // the partly shown line is reported as hidden
+		// the rows that do fit still carry the command
+		assert.Contains(t, strutil.StripANSI(u.snapshot(v)), strings.Repeat("x", 60))
+	})
+	t.Run("long_single_line_survives_the_char_budget", func(t *testing.T) {
+		u, v, _ := tallUI(t)
+		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Repeat("z", decisionContextChars+50),
+			Options: []Option{{Label: "A"}}})
+		t.Cleanup(d.Close)
+
+		ctx := t.Context()
+		go func() { _, _ = d.Wait(ctx) }()
+		waitFor(t, u, v, strings.Repeat("z", 79)) // kept, not elided away to nothing
 	})
 	t.Run("subject_cut_by_height", func(t *testing.T) {
 		u, v, _ := tallUI(t)

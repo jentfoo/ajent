@@ -44,7 +44,9 @@ var _ agent.Tool = (*bashTool)(nil)
 
 func (t *bashTool) Name() string { return toolBash }
 
-// Label returns a one-line summary of the command, truncated to fit a header.
+// Label returns a one-line summary of the command, bounded so a pathological
+// one-liner cannot flood the header. The header wraps it; the status bar, which
+// gets one row, truncates it to the width in force.
 func (t *bashTool) Label(call agent.ToolCall) string {
 	var p bashParams
 	if err := decode(call.Input, &p); err != nil {
@@ -54,7 +56,7 @@ func (t *bashTool) Label(call agent.ToolCall) string {
 	if cmd == "" {
 		return "bash"
 	}
-	const maxLabel = 60
+	const maxLabel = 240
 	r := []rune(cmd)
 	if len(r) > maxLabel {
 		return "bash: " + string(r[:maxLabel]) + "..."
