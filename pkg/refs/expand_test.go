@@ -57,7 +57,7 @@ func TestExpand(t *testing.T) {
 		x, sink := newExpander(t, root)
 		res := x.Expand(t.Context(), "see @~/notes.md")
 		assert.Equal(t, "see @~/notes.md", res.Text)
-		require.Len(t, res.Before, 2, "a home-dir ref injects a read pair")
+		require.Len(t, res.Before, 2)
 		assert.Contains(t, sink.starts, "read ~/notes.md")
 	})
 
@@ -70,7 +70,7 @@ func TestExpand(t *testing.T) {
 
 		x, _ := newExpander(t, root)
 		res := x.Expand(t.Context(), "see @~/big.md")
-		assert.Contains(t, res.Text, "@~/big.md (", "large home-dir file annotated in place")
+		assert.Contains(t, res.Text, "@~/big.md (")
 		assert.Empty(t, res.Before)
 	})
 
@@ -89,7 +89,7 @@ func TestExpand(t *testing.T) {
 
 		res := x.Expand(t.Context(), "look at @a.go")
 		assert.Equal(t, "look at @a.go", res.Text)
-		require.Len(t, res.Before, 2, "one call + result pair")
+		require.Len(t, res.Before, 2)
 		assert.Equal(t, llm.RoleAssistant, res.Before[0].Role)
 		assert.Equal(t, llm.RoleUser, res.Before[1].Role)
 		assert.Contains(t, sink.starts, "read a.go")
@@ -113,7 +113,7 @@ func TestExpand(t *testing.T) {
 		x.reg.SetEnabled([]string{"read", "write", "edit"}) // ls disabled
 
 		res := x.Expand(t.Context(), "list @sub")
-		require.Len(t, res.Before, 2, "ls runs regardless of enabled state")
+		require.Len(t, res.Before, 2)
 	})
 
 	t.Run("large_file_annotates", func(t *testing.T) {
@@ -122,9 +122,9 @@ func TestExpand(t *testing.T) {
 		x, _ := newExpander(t, dir)
 
 		res := x.Expand(t.Context(), "see @big.go")
-		assert.Contains(t, res.Text, "@big.go (", "large file annotated in place")
+		assert.Contains(t, res.Text, "@big.go (")
 		assert.Contains(t, res.Text, "lines")
-		assert.Empty(t, res.Before, "nothing injected for a large file")
+		assert.Empty(t, res.Before)
 	})
 
 	t.Run("binary_file_annotates", func(t *testing.T) {
@@ -160,7 +160,7 @@ func TestExpand(t *testing.T) {
 
 		// second expand: file unchanged in the tracker → nothing injected
 		res2 := x.Expand(t.Context(), "@a.go")
-		assert.Empty(t, res2.Before, "an unchanged, already-read file is not re-injected")
+		assert.Empty(t, res2.Before)
 	})
 
 	t.Run("reinjects_when_file_changes", func(t *testing.T) {
@@ -171,20 +171,20 @@ func TestExpand(t *testing.T) {
 
 		// first inclusion reads the file and injects it
 		res1 := x.Expand(t.Context(), "@a.go")
-		require.Len(t, res1.Before, 2, "first @ include must inject the read pair")
+		require.Len(t, res1.Before, 2)
 
 		// unchanged → not injected again
 		res2 := x.Expand(t.Context(), "@a.go")
-		assert.Empty(t, res2.Before, "unchanged, already-read file is not re-injected")
+		assert.Empty(t, res2.Before)
 
 		// hash changed → must be read and injected again
 		require.NoError(t, os.WriteFile(p, []byte("package a\nvar X = 1\n"), 0o600))
 		res3 := x.Expand(t.Context(), "@a.go")
-		require.Len(t, res3.Before, 2, "an @ is re-injected after its hash changes")
+		require.Len(t, res3.Before, 2)
 
 		// unchanged again → deduped once more
 		res4 := x.Expand(t.Context(), "@a.go")
-		assert.Empty(t, res4.Before, "dedups again once the changed content has been read")
+		assert.Empty(t, res4.Before)
 	})
 
 	t.Run("replaces_existing_annotation", func(t *testing.T) {

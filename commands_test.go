@@ -54,6 +54,7 @@ func TestTurnRecorderLast(t *testing.T) {
 
 	rec.TurnEnd(agent.TurnResult{Stop: llm.StopAborted, Steps: 2})
 	assert.Equal(t, llm.StopAborted, rec.last().Stop)
+	assert.Equal(t, 2, rec.last().Steps)
 
 	rec.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn})
 	assert.Equal(t, llm.StopEndTurn, rec.last().Stop) // latest wins

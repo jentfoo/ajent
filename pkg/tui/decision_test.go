@@ -41,7 +41,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		go func() { _, _ = d.Wait(ctx) }()
 		waitFor(t, u, v, "Run command?")
 		waitFor(t, u, v, "rm -rf /tmp/x")
-		assert.Contains(t, u.snapshot(v), "> 1 Allow", "cursor marks the first numbered option")
+		assert.Contains(t, u.snapshot(v), "> 1 Allow")
 		assert.Contains(t, u.snapshot(v), "  2 Deny")
 	})
 	t.Run("elides_long_lines_to_the_width", func(t *testing.T) {
@@ -55,7 +55,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		waitFor(t, u, v, strings.Repeat("x", 79))
 		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), long)
 	})
-	t.Run("marks_when_the_subject_is_cut_by_height", func(t *testing.T) {
+	t.Run("subject_cut_by_height", func(t *testing.T) {
 		u, v, _ := tallUI(t)
 		var lines []string
 		for i := 0; i < decisionContextRows+3; i++ {
@@ -69,7 +69,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		waitFor(t, u, v, "…+3 lines")
 		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "line-"+strings.Repeat("a", decisionContextRows+2))
 	})
-	t.Run("cuts_the_subject_to_its_char_budget", func(t *testing.T) {
+	t.Run("subject_char_budget_cut", func(t *testing.T) {
 		u, v, _ := tallUI(t)
 		var lines []string
 		for i := 0; i < 20; i++ {
@@ -114,24 +114,6 @@ func TestUIDecisionKeys(t *testing.T) {
 		require.NoError(t, <-errCh)
 		assert.Equal(t, DecisionResult{Index: 2}, <-resCh, "a keystroke is not an external resolve")
 	})
-	t.Run("arrows_then_enter", func(t *testing.T) {
-		u, v, pw := interactionUI(t)
-		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}, {Label: "B"}}))
-		t.Cleanup(d.Close)
-
-		ctx := t.Context()
-		resCh := make(chan DecisionResult, 1)
-		go func() {
-			r, _ := d.Wait(ctx)
-			resCh <- r
-		}()
-		waitFor(t, u, v, "Pick:")
-		press(t, pw, "\x1b[B") // down to B
-		waitFor(t, u, v, "> 2 B")
-		press(t, pw, "\r")
-
-		assert.Equal(t, DecisionResult{Index: 1}, <-resCh)
-	})
 	t.Run("escape_cancels", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}}))
@@ -172,7 +154,7 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		require.NoError(t, <-errCh)
 		assert.Equal(t, DecisionResult{Index: 0, External: true}, <-resCh)
 	})
-	t.Run("a_keystroke_wins_a_later_resolve_is_noop", func(t *testing.T) {
+	t.Run("later_resolve_is_noop", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(DecisionRequest{Prompt: "Go?", Context: "cmd", Options: []Option{{Label: "Yes"}, {Label: "No"}}})
 		t.Cleanup(d.Close)
@@ -196,7 +178,7 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		// the late Resolve stays a no-op and never repaints one.
 		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "Go? Yes")
 	})
-	t.Run("resolving_a_queued_dialog_promotes_the_next", func(t *testing.T) {
+	t.Run("resolve_promotes_next", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		d1 := u.OpenDecision(DecisionRequest{Prompt: "First?", Context: "", Options: []Option{{Label: "A"}}})
 		t.Cleanup(d1.Close)

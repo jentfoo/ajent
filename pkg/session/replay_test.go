@@ -164,20 +164,34 @@ func TestReplay(t *testing.T) {
 		}
 	})
 
-	t.Run("tool_call_and_result", func(t *testing.T) {
-		branch := []Entry{
-			{ID: "s", Type: TypeSession},
-			msgUser("m1", llm.Text(llm.RoleUser, "run it")),
-			assistantWithToolCall("a1"),
-			resultMessage("r1", "c1", "output here\nmore lines"),
+	t.Run("tool_result_renders_header_and_body", func(t *testing.T) {
+		cases := []struct {
+			name string
+			res  Entry
+			want [4]string
+		}{
+			{"success_shows_output",
+				resultMessage("r1", "c1", "output here\nmore lines"),
+				[4]string{"start:run it", "user:run it", "tool:bash", "result:false|output here\nmore lines"}},
+			// an erroring call still renders its header above the status
+			{"error_shows_status",
+				resultMessageErr("r1", "c1"),
+				[4]string{"start:run it", "user:run it", "tool:bash", "result:true|"}},
 		}
-		s := &replaySink{}
-		Replay(branch, s, ReplayOptions{})
 
-		// header must render directly above its body, as live streaming interleaves them
-		assert.Equal(t,
-			[]string{"start:run it", "user:run it", "tool:bash", "result:false|output here\nmore lines"},
-			s.calls[:4])
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				branch := []Entry{
+					{ID: "s", Type: TypeSession},
+					msgUser("m1", llm.Text(llm.RoleUser, "run it")),
+					assistantWithToolCall("a1"),
+					tc.res,
+				}
+				s := &replaySink{}
+				Replay(branch, s, ReplayOptions{})
+				assert.Equal(t, tc.want[:], s.calls[:4])
+			})
+		}
 	})
 
 	t.Run("parallel_calls_interleave_headers_and_bodies", func(t *testing.T) {
@@ -191,21 +205,6 @@ func TestReplay(t *testing.T) {
 				"tool:read", "result:false|go mod body",
 			},
 			s.calls[:6])
-	})
-
-	t.Run("tool_error_shows_status", func(t *testing.T) {
-		branch := []Entry{
-			{ID: "s", Type: TypeSession},
-			msgUser("m1", llm.Text(llm.RoleUser, "run it")),
-			assistantWithToolCall("a1"),
-			resultMessageErr("r1", "c1"),
-		}
-		s := &replaySink{}
-		Replay(branch, s, ReplayOptions{})
-		// an erroring call still renders its header above the status
-		assert.Equal(t,
-			[]string{"start:run it", "user:run it", "tool:bash", "result:true|"},
-			s.calls[:4])
 	})
 
 	t.Run("multiple_turns_close_each", func(t *testing.T) {

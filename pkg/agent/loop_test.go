@@ -258,58 +258,44 @@ func TestLoopParallelCalls(t *testing.T) {
 	assert.Equal(t, []string{"c1", "c2"}, ids)
 }
 
-func TestLoopToolErrorContinues(t *testing.T) {
+// A tool call that fails — either the tool itself errors or it is unknown to the
+// set — must surface as an IsError result and let the loop continue, never abort.
+func TestLoopToolFailureContinues(t *testing.T) {
 	t.Parallel()
 
-	tool := &stubTool{name: "bash", err: errors.New("boom")}
-	set := &mapSet{tools: map[string]Tool{"bash": tool}}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: toolCallEvents("c1", "bash")},
-		{Events: textOnly("recovered")},
-	}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.Tools = set
+	cases := []struct {
+		name     string
+		set      map[string]Tool
+		recovery string
+	}{
+		{"tool_errors", map[string]Tool{"bash": &stubTool{name: "bash", err: errors.New("boom")}}, "recovered"},
+		// model calls a tool that is not in the set; loop must keep going
+		{"unknown_tool", map[string]Tool{}, "ok"},
+	}
 
-	err := a.Prompt(t.Context(), Input{Text: "x"})
-	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+				{Events: toolCallEvents("c1", "bash")},
+				{Events: textOnly(tc.recovery)},
+			}}
+			a := newTestAgent(nil, p, nil)
+			a.opts.Tools = &mapSet{tools: tc.set}
 
-	resultMsg := a.state.Messages[2]
-	tb := resultMsg.Content[0].(llm.ToolResultBlock)
-	assert.True(t, tb.IsError) // an erroring tool is a result, not a failure
+			err := a.Prompt(t.Context(), Input{Text: "x"})
+			require.NoError(t, err)
 
-	// the loop must continue to a second model step with its recovery reply.
-	require.Len(t, a.state.Messages, 4) // echo, call, error result, recovery
-	recovery := a.state.Messages[3]
-	tb2, ok := recovery.Content[0].(llm.TextBlock)
-	require.True(t, ok)
-	assert.Equal(t, "recovered", tb2.Text)
-}
+			resultMsg := a.state.Messages[2]
+			tb := resultMsg.Content[0].(llm.ToolResultBlock)
+			assert.True(t, tb.IsError) // an erroring tool is a result, not a failure
 
-func TestLoopUnknownToolContinues(t *testing.T) {
-	t.Parallel()
-
-	// model calls a tool that is not in the set; loop must keep going
-	set := &mapSet{tools: map[string]Tool{}}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: toolCallEvents("c1", "ghost")},
-		{Events: textOnly("ok")},
-	}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.Tools = set
-
-	err := a.Prompt(t.Context(), Input{Text: "x"})
-	require.NoError(t, err)
-
-	resultMsg := a.state.Messages[2]
-	tb := resultMsg.Content[0].(llm.ToolResultBlock)
-	assert.True(t, tb.IsError) // an unknown tool is a result, not a failure
-
-	// the loop must continue to a second model step with its recovery reply.
-	require.Len(t, a.state.Messages, 4) // echo, call, error result, recovery
-	recovery := a.state.Messages[3]
-	tb2, ok := recovery.Content[0].(llm.TextBlock)
-	require.True(t, ok)
-	assert.Equal(t, "ok", tb2.Text)
+			// the loop must continue to a second model step with its recovery reply.
+			require.Len(t, a.state.Messages, 4) // echo, call, error result, recovery
+			tb2, ok := a.state.Messages[3].Content[0].(llm.TextBlock)
+			require.True(t, ok)
+			assert.Equal(t, tc.recovery, tb2.Text)
+		})
+	}
 }
 
 func TestLoopStepLimitTrips(t *testing.T) {
@@ -355,32 +341,36 @@ func TestLoopUnlimitedByDefault(t *testing.T) {
 	assert.Equal(t, 6, catch.result.Steps)
 }
 
-func TestLoopProviderErrorMidStream(t *testing.T) {
+// A provider failure surfaces on the Prompt call and as the turn result,
+// whether it arrives mid-stream or before any events.
+func TestLoopProviderErrorPropagates(t *testing.T) {
 	t.Parallel()
 
-	sentinel := errors.New("wire failure")
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: append(textEvents("partial"), llm.Event{Type: llm.EventDone, Err: sentinel})},
-	}}
-	catch := &resultCatcher{}
-	a := newTestAgent(nil, p, catch)
+	cases := []struct {
+		name string
+		turn func(error) llm.ScriptedTurn
+	}{
+		{"error_mid_stream", func(sentinel error) llm.ScriptedTurn {
+			return llm.ScriptedTurn{Events: append(textEvents("partial"),
+				llm.Event{Type: llm.EventDone, Err: sentinel})}
+		}},
+		{"error_before_events", func(sentinel error) llm.ScriptedTurn {
+			return llm.ScriptedTurn{Err: sentinel}
+		}},
+	}
 
-	err := a.Prompt(t.Context(), Input{Text: "x"})
-	require.ErrorIs(t, err, sentinel)
-	assert.Equal(t, sentinel, catch.result.Err)
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sentinel := errors.New("wire failure")
+			catch := &resultCatcher{}
+			a := newTestAgent(nil,
+				&llm.ScriptedProvider{Turns: []llm.ScriptedTurn{tc.turn(sentinel)}}, catch)
 
-func TestLoopProviderStreamErrorBeforeEvents(t *testing.T) {
-	t.Parallel()
-
-	sentinel := errors.New("stream refused")
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: sentinel}}}
-	catch := &resultCatcher{}
-	a := newTestAgent(nil, p, catch)
-
-	err := a.Prompt(t.Context(), Input{Text: "x"})
-	require.ErrorIs(t, err, sentinel)
-	assert.Equal(t, sentinel, catch.result.Err)
+			err := a.Prompt(t.Context(), Input{Text: "x"})
+			require.ErrorIs(t, err, sentinel)
+			assert.Equal(t, sentinel, catch.result.Err)
+		})
+	}
 }
 
 // TestSinkOrder asserts the exact sink call sequence for a thinking+text turn.
@@ -530,7 +520,7 @@ func TestBuildRequest(t *testing.T) {
 		req := a2.buildRequest()
 		assert.LessOrEqual(t, req.MaxTokens, 200000) // never exceeds the window
 	})
-	t.Run("nil_ledger_yields_full_output_cap", func(t *testing.T) {
+	t.Run("nil_ledger_full_cap", func(t *testing.T) {
 		st3 := &State{
 			Model:     m,
 			Reasoning: llm.ReasoningConfig{Level: llm.LevelHigh},

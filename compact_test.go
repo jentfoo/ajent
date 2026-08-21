@@ -101,7 +101,7 @@ func TestCompactorManualSingleTurn(t *testing.T) {
 	appendText(t, w, llm.RoleUser, "read me a short story")
 	appendText(t, w, llm.RoleAssistant, strings.Repeat("The Last Lighthouse. ", 200))
 
-	did, err := c.run(context.Background(), agent.CompactManual, "")
+	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
 	require.True(t, did, "single-turn session must compact")
 
@@ -132,7 +132,7 @@ func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
 	appendText(t, w, llm.RoleAssistant, strings.Repeat("Vending Machine. ", 200))
 	w.SetHead(kept.ID) // rewind to a single-turn live branch; old tail stays in the file
 
-	did, err := c.run(context.Background(), agent.CompactManual, "")
+	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
 	require.True(t, did)
 
@@ -170,8 +170,8 @@ func TestCompactorOverflowRunsMidTurn(t *testing.T) {
 	})
 	c.ag = ag
 
-	err := ag.Prompt(context.Background(), agent.Input{Text: "once more"})
-	require.NoError(t, err, "overflow retry after compaction must succeed")
+	err := ag.Prompt(t.Context(), agent.Input{Text: "once more"})
+	require.NoError(t, err)
 
 	require.NotEmpty(t, compactionEntries(t, w))
 	var sb strings.Builder
@@ -247,7 +247,7 @@ func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 
 	sink := &ctxSink{}
 	c.sink = sink
-	did, err := c.run(context.Background(), agent.CompactManual, "")
+	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
 	require.True(t, did)
 

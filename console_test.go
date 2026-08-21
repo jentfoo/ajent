@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -39,11 +40,29 @@ func TestUIConsoleStartedFlag(t *testing.T) {
 	assert.True(t, c.Started())
 }
 
-// TestUIConsoleToolsChangedNilRecorder verifies ToolsChanged is a no-op when no
-// recorder is attached (recording disabled).
-func TestUIConsoleToolsChangedNilRecorder(t *testing.T) {
-	c := &uiConsole{tools: tools.New()}
+// TestUIConsoleToolsChangedWritesThrough verifies a /tools change persists the
+// enabled names into session settings, and is safe with no wiring attached.
+func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
+	t.Parallel()
+
+	reg := tools.New()
+	reg.Register(&stubTool{name: "read"}, true)
+	reg.Register(&stubTool{name: "bash"}, false)
+
+	// unwired console must not panic on the no-op path.
+	assert.NotPanics(t, func() { (&uiConsole{tools: reg}).ToolsChanged() })
+
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	c := &uiConsole{tools: reg, set: set}
+
 	assert.NotPanics(t, func() { c.ToolsChanged() })
+
+	// the enabled names land in session settings.
+	raw, layer, ok := set.Explain("tools.enabled")
+	require.True(t, ok)
+	assert.Equal(t, "session", layer)
+	assert.JSONEq(t, `["read"]`, string(raw))
 }
 
 // TestUIConsoleSetModelRemasuresLedger verifies a mid-session /model switch does
@@ -51,6 +70,7 @@ func TestUIConsoleToolsChangedNilRecorder(t *testing.T) {
 // window; it must remeasure against the actual in-memory messages so switching to a
 // smaller window immediately reflects real occupancy and threshold auto-compaction can fire.
 func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
+	t.Parallel()
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
 	outR, outW, err := os.Pipe()
@@ -91,6 +111,7 @@ func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 // model is a no-op: it neither rebases state nor records an announcement line, so
 // a stray /model on the current model stays quiet. A real change still records.
 func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
+	t.Parallel()
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
 	outR, outW, err := os.Pipe()

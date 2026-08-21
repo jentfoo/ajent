@@ -91,7 +91,7 @@ func TestRewindStateRebuild(t *testing.T) {
 			oldActive = tr.Active
 		}
 	}
-	assert.False(t, oldActive, "the rewound-away branch must read as a fork, not active")
+	assert.False(t, oldActive)
 }
 
 // TestRewindToPrior verifies picking a message maps to rewinding *before* it:
@@ -120,7 +120,7 @@ func TestRewindTarget(t *testing.T) {
 	// picking the first user message rewinds to its parent (the session entry),
 	// so only that text sits in the editor.
 	head2, fill2, ok := session.RewindTarget(entries, u1.ID)
-	assert.True(t, ok, "even the root-most message has the session line before it")
+	assert.True(t, ok)
 	assert.Equal(t, entries[0].ID, head2) // the session entry
 	assert.Equal(t, "hello world", fill2)
 }
@@ -197,52 +197,28 @@ func TestOpenSessionModes(t *testing.T) {
 	// --continue: reuse the most recent transcript (the seed, still alone).
 	wCont, err := openSession(store, modeContinue, ws, "", "", pickFirst)
 	require.NoError(t, err)
-	assert.Equal(t, firstPath, wCont.Path(), "--continue must resume the latest session")
+	assert.Equal(t, firstPath, wCont.Path())
 
 	// --resume with a selection: reuse that root's transcript.
 	wPick, err := openSession(store, modeResumePick, ws, "", "", pickFirst)
 	require.NoError(t, err)
-	assert.Equal(t, firstPath, wPick.Path(), "--resume must reopen the selected session")
+	assert.Equal(t, firstPath, wPick.Path())
 
 	// --resume <id>: reuse that exact saved transcript directly.
 	wID, err := openSession(store, modeResumeID, ws, seedID, "", pickFirst)
 	require.NoError(t, err)
-	assert.Equal(t, firstPath, wID.Path(), "--resume <id> must reopen that exact session")
+	assert.Equal(t, firstPath, wID.Path())
 
 	// no flag: always a fresh file, never reuses.
 	wNew, err := openSession(store, modeNewSession, ws, "", "", pickFirst)
 	require.NoError(t, err)
-	assert.NotEqual(t, firstPath, wNew.Path(), "no flag must start a new session")
+	assert.NotEqual(t, firstPath, wNew.Path())
 
 	// --resume cancelled (ErrCancelled): start fresh rather than stall.
 	wCancel, err := openSession(store, modeResumePick, ws, "", "",
 		func([]session.Info) (int, error) { return 0, tui.ErrCancelled })
 	require.NoError(t, err)
-	assert.NotEqual(t, firstPath, wCancel.Path(), "cancelling --resume should start a new session")
-}
-
-// TestOpenSessionResumePick verifies --resume opens the selected root's file.
-func TestOpenSessionResumePick(t *testing.T) {
-	t.Parallel()
-	ws := t.TempDir() + "/w"
-	require.NoError(t, os.MkdirAll(ws, 0o700))
-	store := session.StoreAt(filepath.Join(t.TempDir(), "root"))
-
-	// two distinct saved sessions.
-	_, err := store.Create(ws, session.SessionData{Version: session.Version()})
-	require.NoError(t, err)
-	have, _ := store.List(ws)
-	require.Len(t, have, 1)
-	target := have[0]
-
-	// picker returns the only root's index -> open that exact file.
-	w, err := openSession(store, modeResumePick, ws, "", "",
-		func(list []session.Info) (int, error) {
-			assert.Len(t, list, 1)
-			return 0, nil
-		})
-	require.NoError(t, err)
-	assert.Equal(t, target.Path, w.Path())
+	assert.NotEqual(t, firstPath, wCancel.Path())
 }
 
 // TestResumeByID verifies --resume <id> reopens exactly that saved transcript by
@@ -268,6 +244,17 @@ func TestResumeByID(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, want.ID)
+
+	// the picker's chosen index maps to that exact root among several.
+	for i, in := range list {
+		if in.Path != older.Path() {
+			continue
+		}
+		wPick, err := openSession(store, modeResumePick, ws, "", "",
+			func([]session.Info) (int, error) { return i, nil })
+		require.NoError(t, err)
+		assert.Equal(t, older.Path(), wPick.Path())
+	}
 
 	w, err := openSession(store, modeResumeID, ws, want.ID, "", nil)
 	require.NoError(t, err)
@@ -348,6 +335,7 @@ func TestSessionHint(t *testing.T) {
 }
 
 func TestSearchItems(t *testing.T) {
+	t.Parallel()
 	got := searchItems([]session.Prompt{
 		{Text: "fix retry", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 		{Text: "line one\nline two"},
@@ -405,6 +393,7 @@ func reasoningModel() llm.Model {
 }
 
 func TestReasoningFromConfig(t *testing.T) {
+	t.Parallel()
 	rc := reasoningFrom(config.Reasoning{Level: "high", Retain: "none", Show: false}, reasoningModel())
 	assert.Equal(t, llm.LevelHigh, rc.Level)
 	assert.Equal(t, llm.RetainNone, rc.Retain)
@@ -417,6 +406,7 @@ func TestReasoningFromConfig(t *testing.T) {
 }
 
 func TestToolLimitsFromConfig(t *testing.T) {
+	t.Parallel()
 	l := toolLimitsFrom(config.ToolLimits{Bash: config.Limit{Lines: 10}, Read: config.Limit{Bytes: 4096}})
 	// each configured axis copies straight through; unset axes stay zero here,
 	// and ApplyLimits fills them from the package defaults at startup.
@@ -546,24 +536,30 @@ func TestClassifierAdapterClassifiesShellCommands(t *testing.T) {
 	})
 }
 
-func TestClassifierAdapterNoModelIsUnsure(t *testing.T) {
+// A classifier adapter that cannot reach a provider must fail safe to "unsure"
+// rather than guess.
+func TestClassifierAdapterFailuresAreUnsure(t *testing.T) {
 	t.Parallel()
 
-	adapter := classifierAdapter{
-		providerFor: func(llm.Model) (llm.Provider, error) { return nil, nil },
-		model:       func() llm.Model { return llm.Model{} }, // no model configured
+	cases := []struct {
+		name string
+		ad   classifierAdapter
+	}{
+		{"no_model_configured", classifierAdapter{ // zero model means no provider
+			providerFor: func(llm.Model) (llm.Provider, error) { return nil, nil },
+			model:       func() llm.Model { return llm.Model{} },
+		}},
+		{"provider_error", classifierAdapter{
+			providerFor: func(llm.Model) (llm.Provider, error) { return nil, errors.New("no provider") },
+			model:       func() llm.Model { return llm.Model{ID: "p/m"} },
+		}},
 	}
-	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), "anything"))
-}
 
-func TestClassifierAdapterProviderErrorIsUnsure(t *testing.T) {
-	t.Parallel()
-
-	adapter := classifierAdapter{
-		providerFor: func(llm.Model) (llm.Provider, error) { return nil, errors.New("no provider") },
-		model:       func() llm.Model { return llm.Model{ID: "p/m"} },
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, permit.ClassUnsure, tc.ad.Classify(t.Context(), "anything"))
+		})
 	}
-	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), "anything"))
 }
 
 func TestClassifierAdapterRequestUsesFreshContextAndMinimalReasoning(t *testing.T) {

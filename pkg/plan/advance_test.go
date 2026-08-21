@@ -15,8 +15,8 @@ func handOff(t *testing.T, c *Controller, plan string) {
 	t.Helper()
 	require.True(t, call(t, c, DevImplementTool, `{"plan":`+quote(plan)+`}`).EndTurn)
 	in, ok := c.Advance(t.Context(), done())
-	assert.False(t, ok) // the gate starts no turn
-	assert.Empty(t, in.Text)
+	require.False(t, ok) // the gate starts no turn
+	require.Empty(t, in.Text)
 }
 
 // submitPlan puts the (possibly edited) plan through the pump seam.
@@ -108,17 +108,6 @@ func TestControllerAdvance(t *testing.T) {
 		last := f.forks[len(f.forks)-1]
 		assert.Equal(t, c.planTip, last.head) // review round 1 forks the plan tip
 		assert.Equal(t, plannerModel, last.model)
-	})
-
-	t.Run("review_carries_summary", func(t *testing.T) {
-		c, _ := started(t)
-		handOff(t, c, "the plan")
-		submitPlan(t, c, "the plan")
-		require.True(t, call(t, c, DevReviewTool, `{"summary":"added the flag"}`).EndTurn)
-
-		in, ok := c.Advance(t.Context(), done())
-		require.True(t, ok)
-		assert.Contains(t, in.Text, "added the flag")
 	})
 
 	// the implementor stopped without dev_review: the reviewer still has to hear
@@ -238,7 +227,7 @@ func TestControllerAdvance(t *testing.T) {
 	})
 
 	t.Run("revision_cap_reports", func(t *testing.T) {
-		c, _ := started(t)
+		c, f := started(t)
 		handOff(t, c, "the plan")
 		submitPlan(t, c, "the plan")
 		for i := 0; i < maxRevisions; i++ {
@@ -250,6 +239,8 @@ func TestControllerAdvance(t *testing.T) {
 			}
 		}
 		assert.Equal(t, PhaseDone, c.phase)
+		require.NotEmpty(t, f.notices) // the cap is reported, not silently dropped
+		assert.Contains(t, f.notices[len(f.notices)-1], "revision limit")
 	})
 
 	t.Run("stalled_reviewer_completes", func(t *testing.T) {

@@ -52,7 +52,8 @@ func TestBranchAcrossRoots(t *testing.T) {
 	assert.Equal(t, 1, got.Round)
 
 	// the trunk is untouched and still rebuilds its own context
-	trunk, _ := State(Branch(entries, trunkTip), resolveModel)
+	trunk, trunkWarns := State(Branch(entries, trunkTip), resolveModel)
+	assert.Empty(t, trunkWarns)
 	assert.Len(t, trunk.Messages, 2)
 
 	// the rewind picker renders both roots, marking only the live one active

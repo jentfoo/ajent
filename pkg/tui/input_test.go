@@ -112,7 +112,7 @@ func TestDecodeKeyIncomplete(t *testing.T) {
 	t.Run("unterminated_paste_at_cap", func(t *testing.T) {
 		b := append([]byte(pasteStart), bytes.Repeat([]byte{'a'}, maxPasteLen)...)
 		k, n, ok := decodeKey(b)
-		assert.True(t, ok, "the capped body is delivered rather than dropped")
+		assert.True(t, ok)
 		assert.Equal(t, keyPaste, k.typ)
 		assert.Len(t, []byte(k.text), maxPasteLen)
 		assert.Equal(t, len(b), n)

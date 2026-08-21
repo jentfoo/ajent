@@ -13,7 +13,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 
 	t.Run("system_only", func(t *testing.T) {
 		a := newTestAgent(nil, &llm.ScriptedProvider{}, nil)
-		assert.Positive(t, a.BaseEstimate(false), "identity + environment facts always ride along")
+		assert.Positive(t, a.BaseEstimate(false))
 	})
 	t.Run("with_tools", func(t *testing.T) {
 		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
@@ -24,7 +24,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 			"read": fakeRead{},
 		}}
 		a.opts.Tools = set
-		assert.Greater(t, a.BaseEstimate(true), sysOnly, "tool schemas add to the fixed overhead")
+		assert.Greater(t, a.BaseEstimate(true), sysOnly)
 	})
 	t.Run("zero_while_running", func(t *testing.T) {
 		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
@@ -40,7 +40,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 		bare := a.BaseEstimate(false)
 
 		a.opts.ProjectInstructions = []ProjectInstruction{{Body: "the entire AGENTS.md body rides in the system block"}}
-		assert.Greater(t, a.BaseEstimate(false), bare, "AGENTS.md content reaches the startup estimate")
+		assert.Greater(t, a.BaseEstimate(false), bare)
 	})
 }
 

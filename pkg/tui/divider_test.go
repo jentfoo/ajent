@@ -29,7 +29,8 @@ func TestDividerRow(t *testing.T) {
 	})
 
 	t.Run("zero_width_is_safe", func(t *testing.T) {
-		assert.NotPanics(t, func() { dividerRow(NewTheme(Color256).Divider, 0) })
+		// unknown width falls back to a thin rule rather than an empty band.
+		assert.Equal(t, strings.Repeat(ruleChar, 1), dividerRow(NewTheme(Color256).Divider, 0))
 	})
 }
 

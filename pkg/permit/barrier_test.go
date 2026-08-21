@@ -162,26 +162,26 @@ func TestGuardModeMatrix(t *testing.T) {
 		want tools.Action // read-only, write, rejected and unverifiable per mode
 	}{
 		// allow-all runs everything.
-		{"allow-all readonly", ModeAllowAll, bashCall("ls -la"), tools.ActionAllow},
-		{"allow-all write", ModeAllowAll, call("write", `{}`), tools.ActionAllow},
-		{"allow-all reject", ModeAllowAll, bashCall(`sed -i s/a/b/ f`), tools.ActionAllow},
+		{"allow_all_readonly", ModeAllowAll, bashCall("ls -la"), tools.ActionAllow},
+		{"allow_all_write", ModeAllowAll, call("write", `{}`), tools.ActionAllow},
+		{"allow_all_reject", ModeAllowAll, bashCall(`sed -i s/a/b/ f`), tools.ActionAllow},
 
 		// allow-read runs reads, asks writes and unverifiable, denies sed -i.
-		{"read readonly", ModeAllowRead, bashCall("ls -la"), tools.ActionAllow},
-		{"read write", ModeAllowRead, call("write", `{}`), tools.ActionAsk},
-		{"read reject", ModeAllowRead, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
-		{"read unverifiable", ModeAllowRead, bashCall("stat f"), tools.ActionAsk},
+		{"read_readonly", ModeAllowRead, bashCall("ls -la"), tools.ActionAllow},
+		{"read_write", ModeAllowRead, call("write", `{}`), tools.ActionAsk},
+		{"read_reject", ModeAllowRead, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
+		{"read_unverifiable", ModeAllowRead, bashCall("stat f"), tools.ActionAsk},
 
 		// block-all asks reads and writes alike; sed stays a hard deny.
-		{"block readonly", ModeBlockAll, bashCall("ls -la"), tools.ActionAsk},
-		{"block write", ModeBlockAll, call("write", `{}`), tools.ActionAsk},
-		{"block reject", ModeBlockAll, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
+		{"block_readonly", ModeBlockAll, bashCall("ls -la"), tools.ActionAsk},
+		{"block_write", ModeBlockAll, call("write", `{}`), tools.ActionAsk},
+		{"block_reject", ModeBlockAll, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			b := newTestBarrier(newFakePrompter())
 			b.SetMode(c.mode)
-			d := b.Guard()(context.Background(), c.call)
+			d := b.Guard()(t.Context(), c.call)
 			assert.Equal(t, c.want, d.Action)
 		})
 	}
@@ -201,21 +201,21 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 		want tools.Action
 	}{
 		// an unverifiable bash line named verbatim auto-runs in allow-read/auto.
-		{"safe bash read", ModeAllowRead, bashCall("git status"), tools.ActionAllow},
-		{"safe bash auto", ModeAuto, bashCall("git status"), tools.ActionAllow},
+		{"safe_bash_read", ModeAllowRead, bashCall("git status"), tools.ActionAllow},
+		{"safe_bash_auto", ModeAuto, bashCall("git status"), tools.ActionAllow},
 		// whitespace is tolerated; a different command still prompts.
-		{"safe bash padded", ModeAllowRead, bashCall("  git status "), tools.ActionAllow},
-		{"unsafe bash prompt", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
+		{"safe_bash_padded", ModeAllowRead, bashCall("  git status "), tools.ActionAllow},
+		{"unsafe_bash_prompt", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
 		// an exact MCP tool name auto-runs without needing registry metadata.
-		{"safe mcp tool", ModeAllowRead, call("mcp__list", `{}`), tools.ActionAllow},
-		{"other mcp prompt", ModeAllowRead, call("mcp__write", `{}`), tools.ActionAsk},
+		{"safe_mcp_tool", ModeAllowRead, call("mcp__list", `{}`), tools.ActionAllow},
+		{"other_mcp_prompt", ModeAllowRead, call("mcp__write", `{}`), tools.ActionAsk},
 		// block-all still asks even a listed safe command.
-		{"safe bash block", ModeBlockAll, bashCall("git status"), tools.ActionAsk},
+		{"safe_bash_block", ModeBlockAll, bashCall("git status"), tools.ActionAsk},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			b.SetMode(c.mode)
-			d := b.Guard()(context.Background(), c.call)
+			d := b.Guard()(t.Context(), c.call)
 			assert.Equal(t, c.want, d.Action)
 		})
 	}
@@ -223,14 +223,14 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	// a config entry can never un-reject an in-place write.
 	b2 := newTestBarrier(newFakePrompter())
 	b2.SetSafeCommands([]string{"sed -i s/a/b/ f"})
-	d := b2.Guard()(context.Background(), bashCall("sed -i s/a/b/ f"))
+	d := b2.Guard()(t.Context(), bashCall("sed -i s/a/b/ f"))
 	assert.Equal(t, tools.ActionDeny, d.Action)
 
 	// write/edit are excluded from safe matching by name.
 	b3 := newTestBarrier(newFakePrompter())
 	b3.SetSafeCommands([]string{"write", "edit"})
-	assert.Equal(t, tools.ActionAsk, b3.Guard()(context.Background(), call("write", `{}`)).Action)
-	assert.Equal(t, tools.ActionAsk, b3.Guard()(context.Background(), call("edit", `{"path":"x.go","edits":[]}`)).Action)
+	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("write", `{}`)).Action)
+	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`)).Action)
 }
 
 func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
@@ -241,21 +241,21 @@ func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
 	b.SetSafeCommands([]string{"sectool"})
 
 	for _, name := range []string{"sectool__proxy_poll", "sectool__flow_get", "sectool__js_surface"} {
-		d := b.Guard()(context.Background(), call(name, `{}`))
+		d := b.Guard()(t.Context(), call(name, `{}`))
 		assert.Equal(t, tools.ActionAllow, d.Action, name)
 	}
 
 	// a different server's tool still prompts.
 	b2 := newTestBarrier(newFakePrompter())
 	b2.SetSafeCommands([]string{"sectool"})
-	d := b2.Guard()(context.Background(), call("github__get_repo", `{}`))
+	d := b2.Guard()(t.Context(), call("github__get_repo", `{}`))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 
 	// an exact namespaced tool name still matches that one tool only.
 	b3 := newTestBarrier(newFakePrompter())
 	b3.SetSafeCommands([]string{"sectool__proxy_poll"})
-	assert.Equal(t, tools.ActionAllow, b3.Guard()(context.Background(), call("sectool__proxy_poll", `{}`)).Action)
-	assert.Equal(t, tools.ActionAsk, b3.Guard()(context.Background(), call("sectool__flow_get", `{}`)).Action)
+	assert.Equal(t, tools.ActionAllow, b3.Guard()(t.Context(), call("sectool__proxy_poll", `{}`)).Action)
+	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("sectool__flow_get", `{}`)).Action)
 }
 
 func TestGuardDeniedCommandsMatchMCPServerNamespace(t *testing.T) {
@@ -263,9 +263,9 @@ func TestGuardDeniedCommandsMatchMCPServerNamespace(t *testing.T) {
 
 	b := newTestBarrier(newFakePrompter())
 	b.SetDeniedCommands([]string{"sectool"})
-	assert.Equal(t, tools.ActionDeny, b.Guard()(context.Background(), call("sectool__proxy_poll", `{}`)).Action)
+	assert.Equal(t, tools.ActionDeny, b.Guard()(t.Context(), call("sectool__proxy_poll", `{}`)).Action)
 	// naming one server does not deny another.
-	assert.Equal(t, tools.ActionAsk, b.Guard()(context.Background(), call("github__get_repo", `{}`)).Action)
+	assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), call("github__get_repo", `{}`)).Action)
 }
 
 func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
@@ -282,34 +282,34 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		want tools.Action
 	}{
 		// a configured bash prefix denies in every mode, even allow-all.
-		{"deny git stash allow all", ModeAllowAll, bashCall("git stash"), tools.ActionDeny},
-		{"deny git stash subcommand", ModeAuto, bashCall("git stash push -m x"), tools.ActionDeny},
+		{"deny_git_stash_allow_all", ModeAllowAll, bashCall("git stash"), tools.ActionDeny},
+		{"deny_git_stash_subcommand", ModeAuto, bashCall("git stash push -m x"), tools.ActionDeny},
 		// whitespace is tolerated; a different command still asks.
-		{"deny padded", ModeAllowRead, bashCall("  git stash "), tools.ActionDeny},
-		{"unlisted bash prompts", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
+		{"deny_padded", ModeAllowRead, bashCall("  git stash "), tools.ActionDeny},
+		{"unlisted_bash_prompts", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
 		// an exact tool name denies regardless of registry metadata.
-		{"deny mcp tool", ModeAuto, call("mcp__danger", `{}`), tools.ActionDeny},
-		{"other mcp prompts", ModeAllowRead, call("mcp__safe", `{}`), tools.ActionAsk},
+		{"deny_mcp_tool", ModeAuto, call("mcp__danger", `{}`), tools.ActionDeny},
+		{"other_mcp_prompts", ModeAllowRead, call("mcp__safe", `{}`), tools.ActionAsk},
 		// a denied core writer refuses even under allow-all.
-		{"deny write tool", ModeAllowAll, call("write", `{}`), tools.ActionDeny},
+		{"deny_write_tool", ModeAllowAll, call("write", `{}`), tools.ActionDeny},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			b.SetMode(c.mode)
-			d := b.Guard()(context.Background(), c.call)
+			d := b.Guard()(t.Context(), c.call)
 			assert.Equal(t, c.want, d.Action)
 		})
 	}
 
 	// user-initiated ! lines are not exempt from a configured denial.
-	ctx := tools.WithUserInitiated(context.Background())
+	ctx := tools.WithUserInitiated(t.Context())
 	d := b.Guard()(ctx, bashCall("git stash"))
 	assert.Equal(t, tools.ActionDeny, d.Action)
 
 	// clearing the list lifts the denial for a previously listed command.
 	b.SetMode(ModeAllowRead)
 	b.SetDeniedCommands(nil)
-	d = b.Guard()(context.Background(), bashCall("git stash"))
+	d = b.Guard()(t.Context(), bashCall("git stash"))
 	assert.NotEqual(t, tools.ActionDeny, d.Action)
 }
 
@@ -319,7 +319,7 @@ func TestGuardUserInitiatedExemptInEveryMode(t *testing.T) {
 	b := newTestBarrier(newFakePrompter())
 	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeBlockAll} {
 		b.SetMode(m)
-		ctx := tools.WithUserInitiated(context.Background())
+		ctx := tools.WithUserInitiated(t.Context())
 		d := b.Guard()(ctx, call("write", `{}`))
 		assert.Equal(t, tools.ActionAllow, d.Action, m.String())
 	}
@@ -331,12 +331,12 @@ func TestGuardDoomedEditRunsInsteadOfPrompting(t *testing.T) {
 	b := newTestBarrier(newFakePrompter())
 	failDryRun := func(agent.ToolCall) error { return errors.New("missing") }
 	b.SetDryRun(failDryRun)
-	d := b.Guard()(context.Background(), call("edit", `{"path":"x.go","edits":[]}`))
+	d := b.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`))
 	assert.Equal(t, tools.ActionAllow, d.Action)
 
 	// without a dry run the barrier cannot predict and prompts.
 	b2 := newTestBarrier(newFakePrompter())
-	d = b2.Guard()(context.Background(), call("edit", `{"path":"x.go","edits":[]}`))
+	d = b2.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 }
 
@@ -344,7 +344,7 @@ func TestAskerNoUIdeniesWhenHeadless(t *testing.T) {
 	t.Parallel()
 
 	b := NewBarrier(noRO) // no prompter installed
-	d := runAsk(b, context.Background(), "write", []byte(`{}`))
+	d := runAsk(b, t.Context(), "write", []byte(`{}`))
 	assert.Equal(t, tools.ActionDeny, d.Action)
 	assert.Contains(t, d.Reason, "permission required")
 }
@@ -354,7 +354,7 @@ func TestAskerNoUIdeniesReadsUnderBlockAll(t *testing.T) {
 
 	b := NewBarrier(noRO)
 	b.SetMode(ModeBlockAll)
-	d := runAsk(b, context.Background(), "bash", []byte(`{"command":"ls -la"}`))
+	d := runAsk(b, t.Context(), "bash", []byte(`{"command":"ls -la"}`))
 	assert.Equal(t, tools.ActionDeny, d.Action)
 }
 
@@ -364,7 +364,7 @@ func TestAskerOpenErrNoUIdenies(t *testing.T) {
 	p := newFakePrompter()
 	p.err = errors.New("tui: no interactive terminal")
 	b := newTestBarrier(p)
-	d := runAsk(b, context.Background(), "write", []byte(`{}`))
+	d := runAsk(b, t.Context(), "write", []byte(`{}`))
 	assert.Equal(t, tools.ActionDeny, d.Action)
 }
 
@@ -379,7 +379,7 @@ func TestAskerAllowThisCallOnly(t *testing.T) {
 	assert.Equal(t, tools.ActionAllow, d1.Action)
 
 	// a second identical write still prompts (no session memory for this-call-only).
-	assert.Equal(t, tools.ActionAsk, b.Guard()(context.Background(), call("write", `{}`)).Action)
+	assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), call("write", `{}`)).Action)
 }
 
 func TestAskerAllowEmitsDescriptiveNotices(t *testing.T) {
@@ -455,7 +455,7 @@ func TestAskerAllowForSessionShortCircuitsNextCall(t *testing.T) {
 
 	// a different git command matches the same bash:git grant and opens no dialog.
 	n := p.count()
-	d2 := runAsk(b, context.Background(), "bash", []byte(`{"command":"git log --oneline"}`))
+	d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"git log --oneline"}`))
 	assert.Equal(t, tools.ActionAllow, d2.Action)
 	assert.Equal(t, n, p.count())
 }
@@ -470,7 +470,7 @@ func TestAskerSessionGrantIsToolScopedNotGlobal(t *testing.T) {
 	assert.Equal(t, tools.ActionAllow, got.Action)
 
 	// a different tool name is not covered by the write grant.
-	assert.Equal(t, tools.ActionAsk, b.Guard()(context.Background(), call("edit", `{}`)).Action)
+	assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), call("edit", `{}`)).Action)
 }
 
 func TestAskerCompoundGrantCoversOnlyCompoundCommands(t *testing.T) {

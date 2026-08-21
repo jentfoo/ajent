@@ -40,9 +40,8 @@ func TestShadeRowSanitizesCallerText(t *testing.T) {
 
 	const w = 24
 	emitted := shadeRow(th.Activity, "a\t"+strings.Repeat("x", 15)+"\x1b[2B", w)
-	assert.Zero(t, displayWidth(emitted)-(w-1), "padded to its target")
-	assert.Equal(t, displayWidth(sanitizeRow(emitted)), displayWidth(emitted),
-		"the fill was measured on the string actually drawn")
+	assert.Zero(t, displayWidth(emitted)-(w-1))
+	assert.Equal(t, displayWidth(sanitizeRow(emitted)), displayWidth(emitted))
 	assert.NotContains(t, emitted, "\t")
 	assert.NotContains(t, emitted, "\x1b[2B")
 }

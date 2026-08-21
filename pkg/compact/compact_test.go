@@ -69,7 +69,8 @@ func TestCompactForceSummarisesSmallSession(t *testing.T) {
 }
 
 // A forced compact on a single exchange has no older turn to keep: the whole
-// history folds into a summary-only plan.
+// history folds into a summary-only plan. The summariser's reply decides whether
+// that is recorded or surfaces as an error.
 func TestCompactForceSingleTurnSummaryOnly(t *testing.T) {
 	t.Parallel()
 
@@ -77,25 +78,37 @@ func TestCompactForceSingleTurnSummaryOnly(t *testing.T) {
 		userText("u1", "Read me a short sci-fi story"),
 		assistText("a1", strings.Repeat("Mira ran her hand along the spines. ", 100)),
 	}
-	run := func(_ context.Context, _ llm.Request) (string, error) {
-		return "## Goal\nwanted a story\n## Progress\n### Done\n- [x] told The Last Librarian", nil
-	}
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
 
-	res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Empty(t, res.FirstKeptEntryID) // nothing survives verbatim
-	assert.NotEmpty(t, res.Summary)
-	assert.Less(t, res.After, res.Before)
+	t.Run("valid_summary_rebuilds_context", func(t *testing.T) {
+		run := func(_ context.Context, _ llm.Request) (string, error) {
+			return "## Goal\nwanted a story\n## Progress\n### Done\n- [x] told The Last Librarian", nil
+		}
 
-	// once recorded, the rebuilt context is the summary plus anything newer.
-	recorded := append(slices.Clone(branch), compactEntry("c1", res.Summary, ""), userText("u2", "another?"))
-	msgs, warns := session.ContextMessages(recorded, session.CompactionData{Summary: res.Summary}, nil)
-	require.Empty(t, warns)
-	require.Len(t, msgs, 2)
-	assert.Contains(t, textOf(msgs[0]), "The Last Librarian")
-	assert.Equal(t, "another?", textOf(msgs[1]))
+		res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Empty(t, res.FirstKeptEntryID) // nothing survives verbatim
+		assert.NotEmpty(t, res.Summary)
+		assert.Less(t, res.After, res.Before)
+
+		// once recorded, the rebuilt context is the summary plus anything newer.
+		recorded := append(slices.Clone(branch), compactEntry("c1", res.Summary, ""), userText("u2", "another?"))
+		msgs, warns := session.ContextMessages(recorded, session.CompactionData{Summary: res.Summary}, nil)
+		require.Empty(t, warns)
+		require.Len(t, msgs, 2)
+		assert.Contains(t, textOf(msgs[0]), "The Last Librarian")
+		assert.Equal(t, "another?", textOf(msgs[1]))
+	})
+
+	t.Run("blank_summary_is_error", func(t *testing.T) {
+		run := func(_ context.Context, _ llm.Request) (string, error) { return "  \n", nil }
+
+		res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		assert.Contains(t, err.Error(), "empty summary")
+	})
 }
 
 // A forced compact whose summary cannot shrink the conversation is refused, never
@@ -112,23 +125,6 @@ func TestCompactForceRefusesWhenSummaryWouldGrow(t *testing.T) {
 	res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
 	require.NoError(t, err)
 	assert.Nil(t, res) // a summary that grows context is never recorded
-}
-
-// A blank summariser response is a failure, never a silent "nothing to compact".
-func TestCompactEmptySummaryIsAnError(t *testing.T) {
-	t.Parallel()
-
-	branch := []session.Entry{
-		userText("u1", "Read me a short sci-fi story"),
-		assistText("a1", strings.Repeat("Mira ran her hand along the spines. ", 100)),
-	}
-	run := func(_ context.Context, _ llm.Request) (string, error) { return "  \n", nil }
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
-
-	res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
-	require.Error(t, err)
-	assert.Nil(t, res)
-	assert.Contains(t, err.Error(), "empty summary")
 }
 
 // Regression: a cut that keeps nearly everything and adds a summary on top grows
@@ -243,14 +239,14 @@ func TestCompactMeasuresRequestRetention(t *testing.T) {
 	}
 
 	t.Run("whole_turn_drops_old_thinking_before_measure", func(t *testing.T) {
-		res, err := Compact(context.Background(), branch, model, nil, Options{Retain: llm.RetainWholeTurn})
+		res, err := Compact(t.Context(), branch, model, nil, Options{Retain: llm.RetainWholeTurn})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		assert.Less(t, res.Before, 2000) // completed-turn thinking is never counted
 	})
 
 	t.Run("retain_all_counts_thinking_before_measure", func(t *testing.T) {
-		res, err := Compact(context.Background(), branch, model, nil, Options{Retain: llm.RetainAll})
+		res, err := Compact(t.Context(), branch, model, nil, Options{Retain: llm.RetainAll})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		assert.Greater(t, res.Before, 2000) // with RetainAll the thinking is real context

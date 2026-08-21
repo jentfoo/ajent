@@ -81,6 +81,7 @@ func TestMultiStepTurnDoesNotMultiplyContext(t *testing.T) {
 	require.NoError(t, err)
 
 	// after the final response the bar is exact: promptExact + outputExact.
+	require.NotEmpty(t, catch.states)
 	finalState := catch.states[len(catch.states)-1]
 	assert.False(t, finalState.Estimated)
 	// each step reports Input=per; the final context must sit near per, never
@@ -124,7 +125,7 @@ func TestFirstTurnContextIncludesSystemAndTools(t *testing.T) {
 			sawBase = true
 		}
 	}
-	assert.True(t, sawBase, "no emitted context bar carried the system+tools overhead")
+	assert.True(t, sawBase)
 }
 
 // bigDelta is prose long enough that a single delta moves Used past the emit

@@ -102,9 +102,9 @@ func TestCompleterPathNonASCIICellIndexes(t *testing.T) {
 	arg := "@é"
 	pos := len(tui.GraphemeCells(arg)) // 2 cells (@ é), not byte length
 	start, items := comp.Complete(arg, pos)
-	assert.Equal(t, 1, start, "the replacement starts just past @ regardless of encoding")
+	assert.Equal(t, 1, start)
 	labels := labelsOf(items)
-	require.Contains(t, labels, "é.go", "a non-ASCII filename completes through cell indexing")
+	require.Contains(t, labels, "é.go")
 }
 
 func TestCompleterArgumentDelegates(t *testing.T) {

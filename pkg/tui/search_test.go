@@ -140,38 +140,49 @@ func TestMatchSpans(t *testing.T) {
 	assert.Equal(t, [][2]int{{0, 5}, {6, 11}}, matchSpans("retry RETRY again", "RETRY"))
 }
 
+// The search overlay wraps every matched occurrence of the query in the accent
+// style across wrapped rows, and emits no emphasis escapes on a plain terminal.
 func TestSearchOverlayRowsHighlightsMatch(t *testing.T) {
 	t.Parallel()
 
-	theme := NewTheme(ColorBasic)
-	s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the retry loop"}}}
-	s.refilter()
-	row := s.rows(theme, 80, 8)[1] // first prompt line under the header
-	// the matched occurrence is wrapped in the accent style (magenta) inside the line
-	assert.Contains(t, row, theme.Accent.Open()+"Fix"+sgrReset)
+	accent := NewTheme(ColorBasic).Accent.Open()
+
+	type highlight struct {
+		row     int
+		wrapped string
+	}
+	cases := []struct {
+		name string
+		item SearchItem
+		want []highlight // (row index, expected accent-wrapped substring)
+	}{
+		{"single_line_match",
+			SearchItem{Text: "Fix the retry loop"},
+			[]highlight{{1, accent + "Fix" + sgrReset}}},
+		{"across_wrapped_lines", SearchItem{Text: "Fix the loop\nthen fix again"}, []highlight{
+			{1, accent + "Fix" + sgrReset}, // first occurrence on its line
+			{2, accent + "fix" + sgrReset}, // second occurrence wraps to next row
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &searchOverlay{query: "fix", items: []SearchItem{tc.item}}
+			s.refilter()
+			rows := s.rows(NewTheme(ColorBasic), 80, 8)
+			for _, want := range tc.want {
+				assert.Contains(t, rows[want.row], want.wrapped)
+			}
+		})
+	}
+
+	t.Run("plain_terminal_no_escapes", func(t *testing.T) {
+		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the retry loop"}}}
+		s.refilter()
+		rows := s.rows(NewTheme(ColorNone), 80, 8)
+		assert.NotContains(t, strings.Join(rows, "\n"), sgrReset) // no emphasis escapes
+	})
 }
-
-func TestSearchOverlayRowsHighlightsAcrossLines(t *testing.T) {
-	t.Parallel()
-
-	theme := NewTheme(ColorBasic)
-	s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the loop\nthen fix again"}}}
-	s.refilter()
-	rows := s.rows(theme, 80, 8)
-	// the matched occurrences are wrapped in the accent style (magenta)
-	assert.Contains(t, rows[1], theme.Accent.Open()+"Fix"+sgrReset) // first line
-	assert.Contains(t, rows[2], theme.Accent.Open()+"fix"+sgrReset) // second occurrence
-}
-
-func TestSearchOverlayRowsHighlightNoopOnPlain(t *testing.T) {
-	t.Parallel()
-
-	s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the retry loop"}}}
-	s.refilter()
-	rows := s.rows(NewTheme(ColorNone), 80, 8)
-	assert.NotContains(t, strings.Join(rows, "\n"), sgrReset) // no emphasis escapes on a plain terminal
-}
-
 func TestSearchOverlayCurrentAndCursorWrap(t *testing.T) {
 	t.Parallel()
 

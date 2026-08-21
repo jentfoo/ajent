@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/plan"
@@ -83,7 +84,8 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 	toolsReg, err := tools.Builtins(tools.Options{Cwd: dir})
 	require.NoError(t, err)
 
-	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	reg, warns := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	assert.Empty(t, warns)
 	st := &agent.State{Model: e2eImplementor, Tokens: tokens.New(e2eImplementor)}
 
 	h := &planHarness{
@@ -257,11 +259,6 @@ func TestPlanWorkflowBranchesPerPhase(t *testing.T) {
 	entries, _, err := session.Read(h.rec.w.Path())
 	require.NoError(t, err)
 
-	var roots int
-	for _, e := range entries {
-		if e.ParentID == "" {
-			roots++
-		}
-	}
-	assert.Equal(t, 2, roots) // the session line, plus the implementation round
+	// two roots: the session line, plus the independent implementation round.
+	assert.Len(t, bulk.SliceFilter(func(e session.Entry) bool { return e.ParentID == "" }, entries), 2)
 }

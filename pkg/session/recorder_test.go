@@ -107,6 +107,7 @@ func TestRecorderWriteFailureNoticesInsteadOfFailing(t *testing.T) {
 	s := r.Sink(caps)
 
 	s.Notice("hello", agent.LevelInfo) // persistence fails; a notice surfaces instead
+	require.Len(t, caps.notices, 2)
 	assert.Contains(t, caps.notices[0], "failed to persist session")
 	// the original notice still forwards so nothing is lost from the UI
 	assert.Equal(t, "hello", caps.notices[1])

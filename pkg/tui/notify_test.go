@@ -20,13 +20,30 @@ func TestUINotify(t *testing.T) {
 		u.Notify("model loaded", LevelInfo)
 		assert.Contains(t, u.snapshot(v), "! model loaded")
 	})
-	t.Run("levels_render", func(t *testing.T) {
-		for _, level := range []Level{LevelInfo, LevelWarn, LevelError} {
-			v := newVT(80, 12)
-			u := newTestUI(t, v, strings.NewReader(""))
+	t.Run("levels_styled_distinctly", func(t *testing.T) {
+		th := NewTheme(Color256)
+		for _, tc := range []struct {
+			name  string
+			level Level
+			style Style // the notice style that level must carry
+		}{
+			{"info", LevelInfo, th.Dim},
+			{"warn", LevelWarn, th.Warn},
+			{"error", LevelError, th.Error},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				u := &UI{theme: th}
 
-			u.Notify("something", level)
-			assert.Contains(t, u.snapshot(v), "! something")
+				got := u.noticeLine("something", tc.level)
+				assert.True(t, strings.HasPrefix(got, tc.style.Open()))
+				// each level carries only its own style.
+				for _, other := range []Style{th.Dim, th.Warn, th.Error} {
+					if other == tc.style {
+						continue
+					}
+					assert.NotContains(t, got, other.Open())
+				}
+			})
 		}
 	})
 }
