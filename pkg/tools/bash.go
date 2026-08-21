@@ -136,7 +136,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 
 	if err := cmd.Start(); err != nil {
 		if runCtx.Err() != nil { // cancelled before launch; the loop aborts this turn
-			return agent.ToolResult{}, nil
+			return resultErr(agent.InterruptedText), nil
 		}
 		return resultErr("bash: " + err.Error()), nil
 	}
@@ -153,9 +153,15 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	w.Flush()      // trailing partial line still held in the buffer
 	killGroup(cmd) // sweep backgrounded survivors so they don't linger (safe post-Wait)
 	statusText := exitStatus(waitErr, cmd.ProcessState)
+	var interrupted bool
 	if runCtx.Err() == context.DeadlineExceeded {
 		// surface a timeout distinctly from an ordinary exit
 		statusText = fmt.Sprintf("killed after %s timeout\n", timeout) + statusText
+	} else if runCtx.Err() == context.Canceled {
+		// parent cancelled (turn interrupt or Stager.Cancel): drop the SIGKILL exit
+		// noise and mark the result so it reads as an interruption, not a failure.
+		interrupted = true
+		statusText = agent.InterruptedText + "\n"
 	}
 
 	captured := head.String()
@@ -164,7 +170,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		captured = elided + fmt.Sprintf("\n... output truncated; full log in @%s\n", spill.path)
 	}
 
-	return agent.ToolResult{Content: llmBlock(statusText + captured)}, nil
+	return agent.ToolResult{Content: llmBlock(statusText + captured), IsError: interrupted}, nil
 }
 
 // syncSink writes sanitized output to both the live stream and the capture,

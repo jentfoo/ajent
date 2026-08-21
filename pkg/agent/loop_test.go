@@ -493,6 +493,53 @@ const (
 	pollInterval   = time.Millisecond
 )
 
+// TestInterruptDuringOverflowCompaction interrupts while an overflow compaction's
+// model call is running; the retry runs under the turn context so Interrupt stops it.
+func TestInterruptDuringOverflowCompaction(t *testing.T) {
+	t.Parallel()
+
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Err: llm.ErrContextOverflow},
+	}}
+	catch := &resultCatcher{}
+
+	entered := make(chan struct{}, 1)
+	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Sinks:    []Sink{catch},
+		Env:      testEnv,
+		Compact: func(ctx context.Context, r CompactReason) (bool, error) {
+			if r != CompactOverflow {
+				return false, nil // threshold boundary compaction is uninterruptible by design
+			}
+			entered <- struct{}{}
+			<-ctx.Done() // the summariser call blocks until the interrupt
+			return false, ctx.Err()
+		},
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+	require.Eventually(t, func() bool {
+		select {
+		case <-entered:
+			return true
+		default:
+			return false
+		}
+	}, defaultTimeout, pollInterval, "the overflow compaction must start before the interrupt")
+
+	a.Interrupt()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err) // an interrupted retry is a clean abort, not a failure
+	case <-time.After(defaultTimeout):
+		t.Fatal("Prompt did not return after the interrupt")
+	}
+	assert.Equal(t, llm.StopAborted, catch.result.Stop)
+}
+
 func TestBuildRequest(t *testing.T) {
 	t.Parallel()
 

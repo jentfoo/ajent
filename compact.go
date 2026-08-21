@@ -151,10 +151,18 @@ func runSummary(ctx context.Context, p llm.Provider, req llm.Request) (string, l
 		return "", llm.Usage{}, err
 	}
 	defer func() { _ = st.Close() }()
+	stop := llm.CloseOnDone(ctx, st)
+	defer stop()
 
 	var acc llm.Accumulator
 	for ev, ok := st.Next(); ok; ev, ok = st.Next() {
 		acc.Add(ev)
+		if ctx.Err() != nil {
+			return "", llm.Usage{}, ctx.Err() // cancelled: stop consuming the response
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return "", llm.Usage{}, err // deliberate close leaves st.Err nil; never return partial text
 	}
 	if err := st.Err(); err != nil {
 		return "", llm.Usage{}, err

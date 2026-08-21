@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"slices"
@@ -16,6 +17,22 @@ type Stream interface {
 	Next() (Event, bool)
 	Err() error
 	Close() error
+}
+
+// CloseOnDone closes s as soon as ctx finishes, so a blocked Next unblocks and
+// buffered events are abandoned rather than drained. The returned stop function
+// ends the watch; call it once the stream is drained or deliberately closed.
+func CloseOnDone(ctx context.Context, s Stream) (stop func()) {
+	var once sync.Once
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = s.Close()
+		case <-done:
+		}
+	}()
+	return func() { once.Do(func() { close(done) }) }
 }
 
 // Accumulator rebuilds the assistant message from a stream's events, so a

@@ -204,7 +204,15 @@ under `os.TempDir()/ajent-<session>` and the model gets a pointer to it. ANSI
 escapes are stripped from captured output. The child runs in its own process
 group (`setpgid`); on timeout (default 120 s, max 600 s) or cancellation the
 whole group is killed so grandchildren cannot leak, and the model is told it
-was a timeout. The environment forces non-interactive settings (`PAGER=cat`,
+was a timeout.
+
+The cancellation contract: each run owns its process group; when the parent
+context is cancelled (a turn interrupt, or `Stager.Cancel` on a `!` line), the
+whole group is SIGKILLed, whatever partial stdout/stderr arrived rides in the
+result, and the result is an **error result** beginning `interrupted by user`
+(the shared `agent.InterruptedText`) so the transcript reads as an interruption.
+A timeout stays a distinct non-error `"killed after … timeout"` result. The
+environment forces non-interactive settings (`PAGER=cat`,
 `GIT_PAGER=cat`, `TERM=dumb`, `GIT_TERMINAL_PROMPT=0`, `AJENT=1`, …).
 
 ### find / grep / ls (`find.go`, `grep.go`, `ls.go`)

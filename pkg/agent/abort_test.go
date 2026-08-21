@@ -46,6 +46,11 @@ func TestInterruptMidStream(t *testing.T) {
 
 	require.NoError(t, <-errCh) // an interrupt is a clean stop reason, not an error
 	assert.Equal(t, llm.StopAborted, catch.result.Stop)
+	// ending the turn closes the model stream: zero incoming tokens after interrupt
+	s := gp.current()
+	require.NotNil(t, s)
+	require.Eventually(t, s.isClosed, defaultTimeout, pollInterval,
+		"the model stream must be closed when the turn ends")
 }
 
 // TestInterruptDuringToolExecution verifies synthetic results fill unanswered
@@ -130,7 +135,7 @@ func TestAbortResults(t *testing.T) {
 		assert.Equal(t, "c1", out[0].CallID)
 		assert.True(t, out[0].IsError)
 		tb := out[0].Content[0].(llm.TextBlock)
-		assert.Equal(t, interruptedText, tb.Text)
+		assert.Equal(t, InterruptedText, tb.Text)
 	})
 
 	t.Run("empty_call_id_result_ignored", func(t *testing.T) {

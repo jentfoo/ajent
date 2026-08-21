@@ -13,9 +13,10 @@ import (
 type hangStream struct {
 	events []llm.Event
 
-	mu   sync.Mutex
-	pos  int
-	done chan struct{}
+	mu     sync.Mutex
+	pos    int
+	done   chan struct{}
+	closed bool // set once Close runs, for asserting the stream was abandoned
 }
 
 func (s *hangStream) Next() (llm.Event, bool) {
@@ -44,6 +45,7 @@ func (s *hangStream) Err() error { return nil }
 func (s *hangStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.closed = true
 	if s.done != nil {
 		close(s.done)
 		s.done = nil
@@ -75,4 +77,11 @@ func (p *hangProvider) current() *hangStream {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.cur
+}
+
+// isClosed reports whether the last-served stream was closed, safely.
+func (s *hangStream) isClosed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closed
 }

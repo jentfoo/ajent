@@ -461,7 +461,10 @@ what people reach for first and it leaks on every early `Close`.
 
 **3. `Close` abandons whatever is still buffered, and is not an error.** `Next`
 checks the closed flag before draining pending events, and `Err` returns nil
-after a deliberate close. The agent loop's interrupt depends on both halves.
+after a deliberate close. The caller-side pattern — watch ctx and Close so a
+blocked `Next` unblocks instead of draining on cancellation — is codified in
+`llm.CloseOnDone`, used by the agent loop and every one-shot call (classifier,
+compaction summary), so cancellation is Close-not-drain everywhere.
 
 **4. Thinking blocks keep every provider's replay token, and unreplayable ones
 are dropped.** See "The content model" and "Reasoning".

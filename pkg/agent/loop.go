@@ -159,13 +159,20 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 
 		if err != nil {
 			// an oversized request: compact aggressively and retry the same step once.
-			// Nothing was appended for the failed call, so state stays in agreement.
-			if llm.IsOverflow(err) && !overflowRetried && a.opts.Compact != nil {
-				did, cerr := a.opts.Compact(ctx, CompactOverflow)
+			// Nothing was appended for the failed call, so state stays in agreement. The
+			// turn's own context drives the retry so an interrupt stops its model call.
+			if turnCtx.Err() == nil && llm.IsOverflow(err) && !overflowRetried && a.opts.Compact != nil {
+				did, cerr := a.opts.Compact(turnCtx, CompactOverflow)
 				if did && cerr == nil {
 					overflowRetried = true
 					continue // retry with the reduced context
 				}
+			}
+			if turnCtx.Err() != nil {
+				// interrupted mid-call or during the overflow retry: a clean abort, not a failure
+				sink.Notice("interrupted by user", LevelInfo)
+				result.Stop = llm.StopAborted
+				break
 			}
 			sink.Notice("turn failed: "+err.Error(), LevelError)
 			result.Err = err
@@ -301,15 +308,8 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	// watch for cancellation and close the stream so a blocked Next unblocks.
 	// Close abandons buffered events rather than draining them, which is what
 	// stops in-flight tokens after an interrupt instead of flushing them out.
-	watchDone := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = st.Close()
-		case <-watchDone:
-		}
-	}()
-	defer close(watchDone)
+	stopWatch := llm.CloseOnDone(ctx, st)
+	defer stopWatch()
 
 	var acc llm.Accumulator
 	var prog toolProgress

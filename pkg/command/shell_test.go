@@ -186,6 +186,11 @@ func TestStagerCancelStagesPartial(t *testing.T) {
 	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 2)
+
+	// a cancelled command stages an interrupted error result so the model sees it
+	tr := msgs[1].Content[0].(llm.ToolResultBlock)
+	assert.True(t, tr.IsError)
+	assert.Contains(t, firstResultText(tr), "interrupted by user")
 }
 
 // firstResultText extracts the text of a tool result block.

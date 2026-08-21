@@ -4,7 +4,10 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -267,4 +270,121 @@ func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 	assert.True(t, cs.Estimated)
 	assert.Equal(t, 2*(cd.After-base+9000), cs.Used)
 	assert.Equal(t, sink.last.Used, cs.Used)
+}
+
+// blockingStream delivers one text event then blocks in Next until Close, so a
+// caller can cancel mid-drain. It mirrors pkg/agent's hangStream for package main.
+type blockingStream struct {
+	events []llm.Event
+
+	mu      sync.Mutex
+	pos     int
+	done    chan struct{}
+	closed  bool            // set once Close runs, so a repeat Close stays silent
+	onClose chan<- struct{} // signalled (once) when the stream is closed
+}
+
+func (s *blockingStream) Next() (llm.Event, bool) {
+	s.mu.Lock()
+	if !s.closed && s.pos < len(s.events) {
+		i := s.pos
+		s.pos++
+		ev := s.events[i]
+		s.mu.Unlock()
+		return ev, true // deliver events immediately; hold the pull open after them
+	}
+	// no more events and not closed: block until Close abandons the stream.
+	done := s.done
+	closed := s.closed
+	s.mu.Unlock()
+	if !closed {
+		<-done
+	}
+	return llm.Event{}, false
+}
+
+func (s *blockingStream) Err() error { return nil }
+
+// Close unblocks a pending Next and signals the owner once.
+func (s *blockingStream) Close() error {
+	s.mu.Lock()
+	if s.done != nil {
+		close(s.done)
+		s.done = nil
+	}
+	first := !s.closed
+	s.closed = true
+	onClose := s.onClose
+	s.mu.Unlock()
+	if first && onClose != nil {
+		select {
+		case onClose <- struct{}{}:
+		default:
+		}
+	}
+	return nil
+}
+
+// blockingProvider serves one turn through a blockingStream. onCreate reports the
+// stream to its owner; onClosed is signalled when the stream closes.
+type blockingProvider struct {
+	turn     []llm.Event
+	onCreate chan *blockingStream
+	onClose  chan struct{}
+	created  atomic.Int32 // streams created so far, for re-invocation assertions
+}
+
+func (p *blockingProvider) Name() string { return "block" }
+
+func (p *blockingProvider) Stream(_ context.Context, _ llm.Request) (llm.Stream, error) {
+	p.created.Add(1)
+	s := &blockingStream{events: p.turn, done: make(chan struct{}), onClose: p.onClose}
+	if p.onCreate != nil {
+		p.onCreate <- s
+	}
+	return s, nil
+}
+
+// TestRunSummaryCancelStopsDraining cancels mid-drain and asserts runSummary stops
+// promptly with context.Canceled instead of returning partial text.
+func TestRunSummaryCancelStopsDraining(t *testing.T) {
+	t.Parallel()
+
+	onClose := make(chan struct{}, 1)
+	p := &blockingProvider{
+		turn:    []llm.Event{{Type: llm.EventTextDelta, Text: "read"}}, // prefix-matches readonly
+		onClose: onClose,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+
+	type res struct {
+		text string
+		err  error
+	}
+	resCh := make(chan res, 1)
+	go func() {
+		text, _, err := runSummary(ctx, p, llm.Request{})
+		resCh <- res{text, err}
+	}()
+
+	cancel()
+
+	var got res
+	select {
+	case got = <-resCh:
+	case <-time.After(time.Second * 3):
+		t.Fatal("runSummary did not return after cancellation")
+	}
+	require.ErrorIs(t, got.err, context.Canceled)
+	assert.Empty(t, got.text) // never partial text: "read" must not normalize to readonly
+
+	// the stream was closed so its blocked Next unblocked
+	require.Eventually(t, func() bool {
+		select {
+		case <-onClose:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }

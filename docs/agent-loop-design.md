@@ -192,9 +192,17 @@ Interruption is cancellation, not draining:
   agent mutex; `Agent.Interrupt()` calls it. Key handling in `cmd/ajent` never
   touches the agent's internals.
 - `a.stream` starts one watcher goroutine that calls `stream.Close()` on
-  `ctx.Done()`. Close abandons buffered events rather than draining them, so
-  in-flight tokens are dropped at the boundary instead of being flushed out —
-  the goal is zero incoming tokens after an interrupt.
+  `ctx.Done()`, via the shared `llm.CloseOnDone` helper. Close abandons buffered
+  events rather than draining them, so in-flight tokens are dropped at the boundary
+  instead of being flushed out — the goal is zero incoming tokens after an interrupt.
+- Tools receive the cancelled turn context; a tool that observes cancellation (e.g.
+  `bash`) records its partial output as an interrupted **error result** beginning
+  `interrupted by user` in call order. `abortResults` keeps those real results over
+  the synthetic ones it fills in for calls that never returned.
+- An overflow-compaction retry runs under the turn's own context, so an interrupt
+  stops its model call and the turn ends `StopAborted` rather than surfacing
+  `context canceled` as a failure. (Threshold-boundary compaction keeps the outer
+  context and is not interruptible by decision.)
 - On abort the partial assistant message from the Accumulator is still appended,
   then every unanswered `ToolCallBlock` gets a synthetic error result reading
   "interrupted by user". Without this, a cancelled turn leaves a dangling

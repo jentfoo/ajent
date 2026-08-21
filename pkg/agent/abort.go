@@ -4,9 +4,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// interruptedText is the result content for a tool call abandoned by an
-// interrupt, so the next request stays well formed.
-const interruptedText = "interrupted by user"
+// InterruptedText is the result content for work abandoned by an interrupt;
+// tools that observe cancellation reuse it so the transcript reads consistently.
+const InterruptedText = "interrupted by user"
 
 // abortResults returns one tool_result per call in msg: its real result when
 // results answers it, or a synthetic error marked interrupted otherwise. A
@@ -33,7 +33,7 @@ func abortResults(msg llm.Message, results []llm.ToolResultBlock) []llm.ToolResu
 		out = append(out, llm.ToolResultBlock{
 			CallID: tc.ID, ToolName: tc.Name,
 			IsError: true,
-			Content: llm.BlockList{llm.TextBlock{Text: interruptedText}},
+			Content: llm.BlockList{llm.TextBlock{Text: InterruptedText}},
 		})
 	}
 	return out

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -103,7 +104,71 @@ func TestBashCancellationViaContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // already cancelled: the command must not run to completion
 	r := newBashCtx(ctx, t, `{"command":"echo should-not-appear"}`)
-	assert.False(t, r.res.IsError) // cancellation is a clean stop, not an error result
+	assert.True(t, r.res.IsError) // cancellation is a clean stop marked as interrupted
+	assert.Contains(t, textOf(r.res), "interrupted by user")
+	assert.NotContains(t, textOf(r.res), "should-not-appear")
+}
+
+// TestBashMidRunCancelKillsGroupAndRecordsPartial interrupts a running command,
+// proving the whole process group (including a TERM-trapping grandchild) is killed
+// and the partial output comes back as an interrupted error result.
+func TestBashMidRunCancelKillsGroupAndRecordsPartial(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	dir := t.TempDir()
+	// a TERM-trapping child proves a leader-only SIGTERM would leak it; the group
+	// SIGKILL must take it down with the parent.
+	cmd := fmt.Sprintf(`echo started; echo $$ > %s/pid.txt; sh -c 'trap "" TERM; sleep 30'; echo finished`, dir)
+	env := toolEnv{cwd: dir, tracker: NewTracker(), policy: PathPolicy{Cwd: dir}}
+	out := captureOutput{}
+	call := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":` + strconv.Quote(cmd) + `}`)}
+
+	resCh := make(chan agent.ToolResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := (&bashTool{policy: env.policy}).Execute(ctx, call, &out)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resCh <- res
+	}()
+
+	// wait for the command to be running (pid written) before interrupting
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(dir + "/pid.txt")
+		return err == nil && len(strings.TrimSpace(string(data))) > 0
+	}, time.Second*2, time.Millisecond*10, "the command must be running before the interrupt")
+
+	cancel()
+
+	var res agent.ToolResult
+	select {
+	case res = <-resCh:
+	case err := <-errCh:
+		t.Fatalf("Execute returned an error: %v", err)
+	case <-time.After(time.Second * 5):
+		t.Fatal("Execute did not return after cancellation")
+	}
+
+	assert.True(t, res.IsError) // a cancelled run is marked as interrupted
+	text := textOf(res)
+	assert.Contains(t, text, "interrupted by user")
+	assert.Contains(t, text, "started")     // partial output rides in the result
+	assert.NotContains(t, text, "finished") // the command was cut off mid-run
+
+	// prove the whole group (leader and TERM-trapping grandchild) is gone
+	data, err := os.ReadFile(dir + "/pid.txt")
+	require.NoError(t, err)
+	pid, aerr := strconv.Atoi(strings.TrimSpace(string(data)))
+	require.NoError(t, aerr)
+	assertEventuallyGone(t, pid) // the leader is gone
+	// and no descendant of its group survives
+	require.Eventually(t, func() bool {
+		err := syscall.Kill(-pid, 0)
+		return err != nil && errors.Is(err, syscall.ESRCH)
+	}, time.Second*2, time.Millisecond*30, "the whole process group must be gone")
 }
 
 func TestBashElisionByLineBoundSpillsFileSuffix(t *testing.T) {
