@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // AgentJob is one /agents row.
@@ -66,7 +68,7 @@ func agentsList(c Console, a Agents) {
 	b.WriteString("|----|--------|---------:|------|\n")
 	for _, j := range jobs {
 		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n",
-			j.ID, j.Status, agentsElapsed(j.Elapsed), orDash(j.Task))
+			j.ID, j.Status, strutil.Elapsed(j.Elapsed), orDash(j.Task))
 	}
 	c.Print(b.String())
 }
@@ -99,13 +101,4 @@ func agentsCompletion(c Console) func(prefix string) []string {
 			return nil
 		}
 	}
-}
-
-// agentsElapsed renders a duration compactly for table cells.
-func agentsElapsed(d time.Duration) string {
-	d = d.Round(time.Second)
-	if d < time.Second {
-		return "0s"
-	}
-	return d.String()
 }

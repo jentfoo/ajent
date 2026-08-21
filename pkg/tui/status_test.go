@@ -77,29 +77,6 @@ func TestUsageBar(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    int
-		expected string
-	}{
-		{"zero", 0, "0b"},
-		{"bytes", 259, "259b"},
-		{"just_under_kb", 1023, "1023b"},
-		{"exact_kb", 1024, "1kb"},
-		{"fractional_kb", 3686, "3.6kb"},
-		{"exact_mb", 1024 * 1024, "1mb"},
-		{"fractional_mb", 1258291, "1.2mb"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, FormatBytes(tc.input))
-		})
-	}
-}
-
 // TestFormatBytesNotTokens pins the distinction: sizes are binary with an
 // explicit unit, token counts are decimal with none.
 func TestFormatBytesNotTokens(t *testing.T) {
@@ -107,5 +84,5 @@ func TestFormatBytesNotTokens(t *testing.T) {
 
 	// the same number reads differently: ÷1000 unsuffixed vs ÷1024 with a unit
 	assert.Equal(t, "3.7k", strutil.FormatTokens(3686))
-	assert.Equal(t, "3.6kb", FormatBytes(3686))
+	assert.Equal(t, "3.6kb", strutil.HumanSize(3686))
 }

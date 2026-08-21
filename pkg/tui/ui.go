@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
+
 	"golang.org/x/term"
 )
 
@@ -533,7 +535,7 @@ func (u *UI) endOutputLocked() {
 
 // outputRow renders the transient row a long-running tool shows past its head.
 func outputRow(h *outputHead) string {
-	return "bash · " + strconv.Itoa(h.hidden()) + " lines · " + FormatBytes(h.bytes)
+	return "bash · " + strconv.Itoa(h.hidden()) + " lines · " + strutil.HumanSize(int64(h.bytes))
 }
 
 // commitSummary appends h's collapse line, indented and dim, when anything is hidden.

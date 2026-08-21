@@ -92,23 +92,3 @@ func repeatByte(b byte, n int) string {
 	}
 	return string(buf)
 }
-
-// TestHumanSize asserts the abbreviated byte forms annotations show.
-func TestHumanSize(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		in   int64
-		want string
-	}{
-		{0, "0b"},
-		{512, "512b"},
-		{1 << 10, "1kb"},
-		{int64(1.5 * 1024), "1.5kb"},
-		{1 << 20, "1mb"},
-		{int64(1258291), "1.2mb"},
-	}
-	for _, c := range cases {
-		assert.Equal(t, c.want, HumanSize(c.in))
-	}
-}

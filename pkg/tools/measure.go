@@ -4,8 +4,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strconv"
-	"strings"
 )
 
 // FileKind classifies what a measured path holds: text, binary or image.
@@ -83,27 +81,4 @@ func sniffKind(path string) (FileKind, error) {
 	default:
 		return KindText, nil
 	}
-}
-
-// HumanSize abbreviates a byte count the way annotations show it: 64kb, 1.2mb.
-// It rounds to one decimal and drops a trailing .0.
-func HumanSize(n int64) string {
-	const (
-		kb = 1024.0
-		mb = 1024.0 * 1024.0
-	)
-	switch {
-	case float64(n) >= mb:
-		return trimSizeFloat(float64(n)/mb) + "mb"
-	case float64(n) >= kb:
-		return trimSizeFloat(float64(n)/kb) + "kb"
-	default:
-		return strconv.FormatInt(n, 10) + "b"
-	}
-}
-
-// trimSizeFloat formats v to one decimal and drops a trailing .0.
-func trimSizeFloat(v float64) string {
-	s := strconv.FormatFloat(v, 'f', 1, 64)
-	return strings.TrimSuffix(s, ".0")
 }

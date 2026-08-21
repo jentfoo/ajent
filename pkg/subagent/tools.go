@@ -9,6 +9,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // sharedToolHint is appended to every agent_* description so a model learns the
@@ -153,7 +154,7 @@ func (t *listTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output
 		if !j.Ended.IsZero() {
 			elapsed = j.Ended.Sub(j.Started)
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\n", j.ID, j.Status, formatElapsed(elapsed))
+		fmt.Fprintf(&b, "%s\t%s\t%s\n", j.ID, j.Status, strutil.Elapsed(elapsed))
 	}
 	return result(b.String()), nil
 }

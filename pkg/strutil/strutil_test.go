@@ -3,6 +3,7 @@ package strutil
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -104,5 +105,37 @@ func TestStripANSI(t *testing.T) {
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, StripANSI(tc.in))
+	}
+}
+
+func TestHumanSize(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{0, "0b"},
+		{259, "259b"},
+		{3686, "3.6kb"},
+		{1024 * 1200, "1.2mb"},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, HumanSize(tc.in))
+	}
+}
+
+func TestElapsed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "0s"},
+		{200 * time.Millisecond, "0s"},
+		{41 * time.Second, "41s"},
+		{2*time.Minute + 3*time.Second, "2m3s"},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, Elapsed(tc.in))
 	}
 }

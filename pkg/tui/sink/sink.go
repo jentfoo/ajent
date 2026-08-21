@@ -9,6 +9,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -98,7 +99,7 @@ func progressRow(p agent.ToolProgress) string {
 	if p.Lines > 0 {
 		row += " · " + strconv.Itoa(p.Lines) + " lines"
 	}
-	return row + " · " + tui.FormatBytes(p.Bytes)
+	return row + " · " + strutil.HumanSize(int64(p.Bytes))
 }
 
 // Diff commits a colorized file edit.

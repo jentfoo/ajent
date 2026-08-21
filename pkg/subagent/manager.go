@@ -398,7 +398,7 @@ func (m *Manager) publishStatus() {
 	var b strings.Builder
 	fmt.Fprintf(&b, "subagents: %d running", running)
 	if oldest > 0 {
-		fmt.Fprintf(&b, " (oldest %s)", formatElapsed(oldest))
+		fmt.Fprintf(&b, " (oldest %s)", strutil.Elapsed(oldest))
 	}
 	if done > 0 {
 		fmt.Fprintf(&b, ", %d done", done)
@@ -439,7 +439,7 @@ func (j *job) pollProgress() string {
 		c := t.Context()
 		used, win = c.Used, c.Window
 	}
-	s := fmt.Sprintf("sub-agent %s still running after %s", id, formatElapsed(elapsed))
+	s := fmt.Sprintf("sub-agent %s still running after %s", id, strutil.Elapsed(elapsed))
 	switch {
 	case win > 0:
 		return s + fmt.Sprintf(", context %d/%d tokens used against its window", used, win)
@@ -448,15 +448,6 @@ func (j *job) pollProgress() string {
 	default:
 		return s
 	}
-}
-
-// formatElapsed renders a rounded duration as "41s" / "2m0s".
-func formatElapsed(d time.Duration) string {
-	d = d.Round(time.Second)
-	if d < time.Second {
-		return "0s"
-	}
-	return d.String()
 }
 
 // shortLabel reduces task text to one rune-safe line.

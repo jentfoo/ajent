@@ -2,7 +2,6 @@ package tui
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -223,20 +222,4 @@ func usageBar(pct int) string {
 	return strings.Repeat(barFull, filled) + strings.Repeat(barEmpty, statusBarCells-filled)
 }
 
-// FormatBytes abbreviates a byte count, such as 259b, 3.5kb or 1.2mb. Binary
-// units with an explicit suffix, so a size is never mistaken for a token count;
-// kept in step with tools.HumanSize, which annotations use.
-func FormatBytes(n int) string {
-	const (
-		kb = 1024.0
-		mb = 1024.0 * 1024.0
-	)
-	switch {
-	case float64(n) >= mb:
-		return strutil.TrimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
-	case float64(n) >= kb:
-		return strutil.TrimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
-	default:
-		return strconv.Itoa(n) + "b"
-	}
-}
+// Segment is a keyed status line item

@@ -7,6 +7,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
@@ -154,14 +155,14 @@ func measurementText(m tools.Measurement) string {
 	}
 	switch m.Kind {
 	case tools.KindBinary:
-		return "binary, " + tools.HumanSize(m.Bytes)
+		return "binary, " + strutil.HumanSize(m.Bytes)
 	case tools.KindImage:
-		return "image, " + tools.HumanSize(m.Bytes)
+		return "image, " + strutil.HumanSize(m.Bytes)
 	default:
 		if m.Lines > 0 {
-			return fmt.Sprintf("%d lines, %s", m.Lines, tools.HumanSize(m.Bytes))
+			return fmt.Sprintf("%d lines, %s", m.Lines, strutil.HumanSize(m.Bytes))
 		}
-		return tools.HumanSize(m.Bytes)
+		return strutil.HumanSize(m.Bytes)
 	}
 }
 

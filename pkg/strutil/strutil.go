@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // FirstLine returns s up to the first newline, or s when it has none. Used for
@@ -37,6 +38,33 @@ func Clip(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
+}
+
+// HumanSize abbreviates a byte count as 259b, 3.5kb or 1.2mb: binary units,
+// one decimal place, trailing .0 dropped.
+func HumanSize(n int64) string {
+	const (
+		kb = 1024.0
+		mb = 1024.0 * 1024.0
+	)
+	switch {
+	case float64(n) >= mb:
+		return TrimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
+	case float64(n) >= kb:
+		return TrimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
+	default:
+		return strconv.FormatInt(n, 10) + "b"
+	}
+}
+
+// Elapsed renders a duration rounded to the second as "41s" or "2m0s", and
+// "0s" for anything under one second.
+func Elapsed(d time.Duration) string {
+	d = d.Round(time.Second)
+	if d < time.Second {
+		return "0s"
+	}
+	return d.String()
 }
 
 // FirstArgText returns the first non-empty string field of a JSON object, or ""
