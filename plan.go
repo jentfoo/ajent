@@ -260,6 +260,8 @@ func askUser(ui *tui.UI) tools.AskFunc {
 		ans, err := ui.Ask(ctx, tui.Question{Text: question, Options: options})
 		if err != nil {
 			return 0, "", false, err
+		} else if ans.Chat { // replied in their own words rather than choosing
+			return -1, ans.Text, false, nil
 		}
 		return ans.Index, ans.Text, ans.Declined, nil
 	}

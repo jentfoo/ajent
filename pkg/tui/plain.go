@@ -72,13 +72,17 @@ func applyPlainAnswer(it interactor, line string) error {
 		slices.Sort(s.chosen)
 		return nil
 	case *questionState:
-		if len(s.options) > 0 { // a number selects an offered option
-			n, err := strconv.Atoi(line)
-			if err != nil || n < 1 || n > len(s.options) {
+		if len(s.options) > 0 {
+			if n, err := strconv.Atoi(line); err == nil { // a number selects an offered option
+				if n < 1 || n > len(s.options) {
+					return ErrCancelled
+				}
+				s.cursor = n - 1
+				return nil
+			} else if line == "" {
 				return ErrCancelled
 			}
-			s.cursor = n - 1
-			return nil
+			s.chatting = true // anything else is a reply in the user's own words
 		}
 		s.value = line // free text is the answer verbatim
 		return nil

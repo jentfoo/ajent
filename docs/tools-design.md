@@ -242,6 +242,11 @@ user and waits: a closed choice when `options` are given, free text otherwise.
 `main.go` supplies an adapter over `(*tui.UI).Ask`, which already queues behind
 permission dialogs, reports Esc as declined, and reports `ErrNoUI` in plain mode.
 
+No option list is closed: the TUI offers a "Chat about this" row and returns the
+typed reply with a **negative index**, reported as "chose none of the options and
+replied: …" rather than as a choice. The distinction matters — a reply dressed as
+an option would have the model act on a decision the user never made.
+
 `ModeSerial` — a question owns the terminal until answered. Every outcome is a
 **normal** result, never an error: a declined question, a missing terminal and an
 asker failure all come back as text telling the model to decide for itself and

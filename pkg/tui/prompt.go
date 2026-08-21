@@ -354,6 +354,28 @@ func optionRow(t Theme, o Option, selected bool, width int) string {
 	return truncateDisplay(line, width)
 }
 
+// optionRows renders one list row wrapped to width rather than clipped, with
+// continuations aligned under the label.
+func optionRows(t Theme, o Option, selected bool, width int) []string {
+	marker, style := selectIndent, t.Dim
+	if selected {
+		marker, style = selectMarker, t.Accent
+	}
+	body := style.Wrap(o.Label)
+	if o.Detail != "" {
+		body += t.Dim.Wrap("  " + o.Detail)
+	}
+	rows := wrapLine(body, max(1, width-displayWidth(marker)))
+	for i := range rows {
+		if i == 0 {
+			rows[i] = style.Wrap(marker) + rows[i]
+		} else {
+			rows[i] = selectIndent + rows[i]
+		}
+	}
+	return rows
+}
+
 // pickItemRow renders one Pick row: a cursor marker, an optional role tag colored
 // independently of selection so user/assistant reads at a glance, then the label
 // and detail under the base (dim/accent) style.

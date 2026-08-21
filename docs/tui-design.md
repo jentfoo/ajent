@@ -396,10 +396,25 @@ the existing prompt-and-read-from-the-message-queue path carries it, and against
 a closed UI (no one can be asked) `Ask` returns `ErrNoUI` immediately so a
 non-interactive run is never blocked.
 
-The question's prompt rides above the answer row in the live block and elides to
-the interaction height budget with an ellipsis marker when it would overflow, so
-a long multi-line question cannot blow past the bounded live block. The free-text
-placeholder (`answer…`) marks where the reply is typed.
+Options are never the only way out. `Ask` appends a **chat row** ("Chat about
+this") below them; taking it replaces the list with the free-text row, so the
+user answers in their own words. The result is `Answer{Chat: true}` with the
+reply in `Text` — kept distinct from a choice, because a user who liked none of
+the options must not have their reply read as picking one. `Esc` in the reply
+goes *back to the options*; only `Esc` on the list (or `Ctrl+C` anywhere)
+declines. Plain mode has no row to type into, so any line that is not an option
+number is the chat reply; an empty line still cancels.
+
+The question's prompt rides above the answer row in the live block. Prompt text,
+options and the typed reply all **wrap** to the width instead of being clipped: a
+question the user cannot read is one they cannot answer. Option continuations
+align under the label, reply continuations under the prompt glyph like the input
+row. All three stay inside the interaction height budget — the prompt takes at
+most every row but one and ends in a `… +N lines` marker when it overflows, the
+option window grows out from the cursor by whole options while they fit (the
+`... N more` footer costs a row), and an over-long reply shows its tail, where
+the caret is. The placeholder (`answer…`, `message…` in the chat row) marks where
+the reply is typed.
 
 An **approval dialog** resolution reports nothing to history by itself; the
 caller (`permit.Barrier`) commits a descriptive notice instead — "Tool call

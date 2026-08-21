@@ -11,7 +11,8 @@ import (
 
 // AskFunc puts question to the user and returns the chosen option index, or
 // declined when they dismissed it. An empty options slice asks for free text,
-// returned in place of an index.
+// returned in place of an index. A negative index means the user replied in
+// their own words, in text, instead of choosing.
 type AskFunc func(ctx context.Context, question string, options []string) (index int, text string, declined bool, err error)
 
 // askParams is the model-facing parameter block for ask_user.
@@ -78,8 +79,8 @@ func (t *askUserTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 		return askAnswer("The user declined to answer. Decide for yourself and state the " +
 			"assumption you made."), nil
 	}
-	if len(p.Options) > 0 {
-		if index < 0 || index >= len(p.Options) {
+	if len(p.Options) > 0 && index >= 0 {
+		if index >= len(p.Options) {
 			return askAnswer("The user's choice could not be read; treat the question as unanswered."), nil
 		}
 		return askAnswer("The user chose: " + p.Options[index]), nil
@@ -87,6 +88,9 @@ func (t *askUserTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 	if strings.TrimSpace(text) == "" {
 		return askAnswer("The user answered with nothing. Decide for yourself and state the " +
 			"assumption you made."), nil
+	}
+	if len(p.Options) > 0 { // replied in their own words instead of choosing
+		return askAnswer("The user chose none of the options and replied: " + text), nil
 	}
 	return askAnswer("The user answered: " + text), nil
 }

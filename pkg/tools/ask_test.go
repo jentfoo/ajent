@@ -41,6 +41,16 @@ func TestAskUserToolExecute(t *testing.T) {
 		assert.Contains(t, res.Display, "use postgres")
 	})
 
+	t.Run("reply_instead_of_option", func(t *testing.T) {
+		tool := &askUserTool{ask: func(context.Context, string, []string) (int, string, bool, error) {
+			return -1, "neither, split it in two", false, nil
+		}}
+		res := askCall(t, tool, askParams{Question: "which?", Options: []string{"a", "b"}})
+		assert.False(t, res.IsError)
+		assert.Contains(t, res.Display, "chose none of the options")
+		assert.Contains(t, res.Display, "neither, split it in two")
+	})
+
 	t.Run("declined_is_not_error", func(t *testing.T) {
 		tool := &askUserTool{ask: func(context.Context, string, []string) (int, string, bool, error) {
 			return 0, "", true, nil

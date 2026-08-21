@@ -123,6 +123,55 @@ func TestUIAsk(t *testing.T) {
 		a := <-result
 		assert.True(t, a.Declined)
 	})
+	t.Run("chat_row_takes_a_typed_reply", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+		ctx := t.Context()
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, err := u.Ask(ctx, Question{
+				Text:    "Which approach?",
+				Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
+			})
+			assert.NoError(t, err)
+			result <- a
+		}()
+
+		waitFor(t, u, v, chatOptionLabel)
+		press(t, pw, "3") // the chat row sits below the offered options
+		waitFor(t, u, v, chatPlaceholder)
+		press(t, pw, "neither, split it in two\r")
+
+		a := <-result
+		assert.True(t, a.Chat)
+		assert.False(t, a.Declined)
+		assert.Equal(t, "neither, split it in two", a.Text)
+	})
+	t.Run("chat_escape_returns_to_options", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+		ctx := t.Context()
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, _ := u.Ask(ctx, Question{
+				Text:    "Which approach?",
+				Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
+			})
+			result <- a
+		}()
+
+		waitFor(t, u, v, chatOptionLabel)
+		press(t, pw, "3")
+		waitFor(t, u, v, chatPlaceholder)
+		press(t, pw, "half typed\x1b") // Esc abandons the reply, not the question
+		waitFor(t, u, v, "Rewrite")
+		press(t, pw, "2")
+
+		a := <-result
+		assert.False(t, a.Chat)
+		assert.False(t, a.Declined)
+		assert.Equal(t, 1, a.Index)
+	})
 	t.Run("commits_one_summary_line", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -163,6 +212,76 @@ func TestUIAsk(t *testing.T) {
 	})
 }
 
+func TestQuestionStateRows(t *testing.T) {
+	t.Parallel()
+	th := NewTheme(ColorNone)
+
+	// widest returns the widest rendered row.
+	widest := func(rows []string) int {
+		var w int
+		for _, r := range rows {
+			w = max(w, displayWidth(r))
+		}
+		return w
+	}
+
+	t.Run("prompt_wraps_to_width", func(t *testing.T) {
+		s := &questionState{text: "should the retry budget be shared across providers", chatIndex: -1}
+
+		rows, _, _ := s.rows(th, 20, 8)
+
+		require.Greater(t, len(rows), 2)
+		assert.LessOrEqual(t, widest(rows), 20)
+		assert.Contains(t, strings.Join(rows, " "), "providers")
+	})
+	t.Run("options_wrap_under_the_label", func(t *testing.T) {
+		s := &questionState{
+			text:      "Which?",
+			options:   []Option{{Label: "share one budget across every provider"}, {Label: "Patch"}},
+			chatIndex: -1,
+		}
+
+		rows, _, _ := s.rows(th, 24, 10)
+
+		assert.LessOrEqual(t, widest(rows), 24)
+		joined := strings.Join(rows, "\n")
+		assert.Contains(t, joined, "provider")
+		assert.Contains(t, joined, "Patch")
+		// the continuation of the first option is indented under its label
+		assert.Contains(t, joined, "\n"+selectIndent)
+	})
+	t.Run("wrapped_options_stay_within_budget", func(t *testing.T) {
+		var opts []Option
+		for i := 0; i < 6; i++ {
+			opts = append(opts, Option{Label: "a fairly long option label " + strconv.Itoa(i)})
+		}
+		s := &questionState{text: "Which?", options: opts, cursor: 5, chatIndex: -1}
+
+		rows, _, _ := s.rows(th, 24, 6)
+
+		assert.LessOrEqual(t, len(rows), 6)
+		assert.Contains(t, strings.Join(rows, "\n"), "more") // the hidden options are named
+		assert.Contains(t, strings.Join(rows, "\n"), "label 5")
+	})
+	t.Run("typed_reply_wraps", func(t *testing.T) {
+		s := &questionState{
+			text:      "Which?",
+			options:   []Option{{Label: "A"}},
+			chatIndex: 1,
+			chatting:  true,
+			value:     "split it in two so the retry budget stays per provider",
+		}
+
+		rows, caret, col := s.rows(th, 20, 8)
+
+		require.Greater(t, len(rows), 2)
+		assert.LessOrEqual(t, widest(rows), 20)
+		assert.Equal(t, len(rows)-1, caret) // the caret sits at the end of the last row
+		assert.Equal(t, displayWidth(rows[len(rows)-1]), col)
+		assert.NotContains(t, strings.Join(rows, "\n"), "A") // the option list gave way to the reply
+	})
+}
+
 func TestUIPlainAsk(t *testing.T) {
 	t.Parallel()
 
@@ -199,6 +318,17 @@ func TestUIPlainAsk(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, a.Index)
+	})
+	t.Run("non_numeric_line_is_a_chat_reply", func(t *testing.T) {
+		u, _ := newPlainUI(t, strings.NewReader("neither, split it in two\n"))
+
+		a, err := u.Ask(t.Context(), Question{
+			Text:    "Approach?",
+			Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
+		})
+		require.NoError(t, err)
+		assert.True(t, a.Chat)
+		assert.Equal(t, "neither, split it in two", a.Text)
 	})
 	t.Run("out_of_range_number_cancels", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("9\n"))
