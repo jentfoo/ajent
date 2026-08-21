@@ -71,3 +71,17 @@ func TestWritePreview(t *testing.T) {
 	assert.Empty(t, ch.Before)
 	assert.Equal(t, "hello\n", ch.After)
 }
+
+func TestWritePreservesExistingPerms(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "secret.txt")
+	require.NoError(t, os.WriteFile(p, []byte("old\n"), 0o600))
+
+	res := e.writeExec(t.Context(), `{"path":"secret.txt","content":"new\n"}`)
+	assert.False(t, res.IsError)
+	fi, err := os.Stat(p)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm()) // owner-only mode kept
+}

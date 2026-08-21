@@ -71,7 +71,7 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	}
 
 	data := []byte(p.Content)
-	if err := config.WriteFileAtomic(full, data, 0o644); err != nil {
+	if err := config.WriteFileAtomic(full, data, writePerm(full)); err != nil {
 		return resultErr("write: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, data, fileInfo(full))

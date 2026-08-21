@@ -39,6 +39,15 @@ func probeFile(path string) (data []byte, info os.FileInfo, kind fileKind, err e
 
 const sniffLen = 8 << 10
 
+// writePerm returns path's existing permission bits, or 0o644 for a new file.
+// Overwrites must not silently widen (or narrow) an owner-only mode like 0o600.
+func writePerm(path string) os.FileMode {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.Mode().Perm()
+	}
+	return 0o644
+}
+
 // detect classifies a buffer as text, binary or image.
 func detect(data []byte) (out fileKind) {
 	sniff := data

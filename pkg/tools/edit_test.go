@@ -189,3 +189,17 @@ func TestEditEmptyEditsRejected(t *testing.T) {
 	res := e.editExec(t.Context(), `{"path":"a.txt","edits":[]}`)
 	assert.True(t, res.IsError)
 }
+
+func TestEditPreservesExistingPerms(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "secret.txt")
+	require.NoError(t, os.WriteFile(p, []byte("old\n"), 0o600))
+
+	res := e.editExec(t.Context(), `{"path":"secret.txt","edits":[{"oldText":"old","newText":"new"}]}`)
+	assert.False(t, res.IsError)
+	fi, err := os.Stat(p)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm()) // owner-only mode kept
+}

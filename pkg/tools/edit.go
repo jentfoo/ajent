@@ -111,7 +111,7 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}
 
 	final := []byte(applied)
-	if err := config.WriteFileAtomic(full, final, 0o644); err != nil {
+	if err := config.WriteFileAtomic(full, final, writePerm(full)); err != nil {
 		return resultErr("edit: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, final, fileInfo(full))
