@@ -78,3 +78,31 @@ func TestElideSubjectEmptyAndSingleLine(t *testing.T) {
 	assert.Empty(t, elideSubject(""))
 	assert.Equal(t, "one line", elideSubject("one line"))
 }
+
+// TestClassifierSystemVerbatim pins the shell classifier prompt so a wording change
+// is deliberate and reviewed.
+func TestClassifierSystemVerbatim(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, ClassifierSystem, "You classify a single shell command")
+	assert.Contains(t, ClassifierSystem, `"readonly" — only reads or inspects data with no side effects`)
+	assert.Contains(t, ClassifierSystem, `downloads, installs or runs software, redirects output`)
+	assert.NotContains(t, ClassifierSystem, "with lasting effects")
+	assert.Contains(t, ClassifierSystem, `Reserve "unsure" for unrecognized commands. Respond with ONLY the classification word.`)
+}
+
+// TestMCPClassifierSystemVerbatim pins the MCP classifier prompt so a wording change
+// is deliberate and reviewed.
+func TestMCPClassifierSystemVerbatim(t *testing.T) {
+	t.Parallel()
+	p := MCPClassifierSystem("mcp_tool", "  does a thing  ", `{"type":"object"}`)
+
+	assert.Contains(t, p, "You classify a single tool invocation")
+	assert.Contains(t, p, "A readonly verdict requires NO observable change to anything.")
+	assert.Contains(t, p, "sends commands with lasting effects")
+
+	// name/description/params embedded (description trimmed like the old site did)
+	assert.Contains(t, p, "Name: mcp_tool")
+	assert.Contains(t, p, "Description: does a thing")
+	assert.Contains(t, p, `Parameters (JSON Schema):
+{"type":"object"}`)
+}

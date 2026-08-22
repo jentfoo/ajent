@@ -578,17 +578,18 @@ func (u *UI) Diff(path, before, after string) {
 }
 
 // ToolStart commits the tool header to history. While active, the running tool's
-// label rides in the status bar next to the working glyph (bottom-left corner);
-// no separate spinner row is drawn above the input. The returned function clears
-// it and commits result, which may be empty when output was already streamed.
-func (u *UI) ToolStart(label string) func(result string) {
+// short name rides in the status bar next to the working glyph (bottom-left
+// corner); no separate spinner row is drawn above the input. The returned
+// function clears it and commits result, which may be empty when output was
+// already streamed.
+func (u *UI) ToolStart(name, label string) func(result string) {
 	u.mu.Lock()
-	label = sanitizeRow(label) // feeds the status row and the committed header
+	label = sanitizeRow(label) // feeds the committed header; name is short and trusted
 	// a new call owns the output head; it must never share with a prior one in this turn.
 	u.out.reset()
 	u.gap()
 	u.commit(u.theme.Accent.Wrap(toolMarker)+" "+u.theme.Dim.Wrap(label), flowReflow)
-	u.tool = label
+	u.tool = name
 	u.spinner = 0
 	u.syncSpinnerLocked()
 	u.repaint()

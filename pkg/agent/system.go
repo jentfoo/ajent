@@ -78,8 +78,7 @@ func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 func buildSystem(s *State, env Environment, proj []ProjectInstruction, snippets []string) llm.BlockList {
 	var b strings.Builder
 
-	b.WriteString(identityLine(cwdOrDot(env.Cwd)))
-	b.WriteString("You help by reading files, running commands, editing code and writing new files.\n\n")
+	b.WriteString(identityLine())
 
 	// guidelines first, then environment facts per the design doc
 	b.WriteString(buildGuidelines(s.Tools))
@@ -110,10 +109,15 @@ func writeProjectInstructions(b *strings.Builder, proj []ProjectInstruction) {
 	b.WriteString("</project_context>")
 }
 
-// identityLine is the neutral first sentence naming the working directory. It is
-// deliberately not a persona and claims only what the toolset can do.
-func identityLine(cwd string) string {
-	return fmt.Sprintf("You are an expert coding assistant that works in the repository at %s.\n", cwd)
+// identityLine is the neutral first sentence stating how the agent works. It names no
+// domain or tool so the same block serves coding, security work and plain Q&A alike.
+func identityLine() string {
+	return "You help by following the user's instructions: research and review until you understand them, then focus on what is asked.\n\n"
+}
+
+// hasAny reports whether names holds at least one of want.
+func hasAny(names []string, want ...string) bool {
+	return slices.ContainsFunc(want, func(w string) bool { return slices.Contains(names, w) })
 }
 
 // buildGuidelines returns the guideline block: the always-included bullets first,
@@ -126,7 +130,7 @@ func buildGuidelines(names []string) string {
 	b.WriteString("- Show file paths clearly when working with files\n")
 
 	// search hint only when bash is present and no dedicated find/grep tool is
-	if slices.Contains(names, "bash") && !slices.Contains(names, "find") && !slices.Contains(names, "grep") {
+	if hasAny(names, "bash") && !hasAny(names, "find", "grep") {
 		b.WriteString("- Use bash for file operations like ls, grep, find\n")
 	}
 

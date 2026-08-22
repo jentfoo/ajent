@@ -1,6 +1,9 @@
 package llm
 
-import "slices"
+import (
+	"slices"
+	"strings"
+)
 
 // defaultReserveFraction is the fraction of a model's window held back for a
 // response when no contextReserve configures it.
@@ -36,6 +39,14 @@ type Model struct {
 
 // Key returns the canonical provider/id identifier.
 func (m Model) Key() string { return m.Provider + "/" + m.ID }
+
+// ShortName is the part of Key after the last slash; falls back to Key when it has none.
+func (m Model) ShortName() string {
+	if i := strings.LastIndexByte(m.Key(), '/'); i >= 0 && i+1 < len(m.Key()) {
+		return m.Key()[i+1:]
+	}
+	return m.Key()
+}
 
 // Accepts reports whether the model takes the given input kind.
 func (m Model) Accepts(mod Modality) bool { return slices.Contains(m.Input, mod) }

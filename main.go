@@ -802,25 +802,7 @@ func resolveSubAgentModel(set *config.Set, reg *llm.Registry, st *agent.State) l
 	return st.Model
 }
 
-// classifierSystem is auto-mode's prompt: classify one shell command as exactly
-// one word. Reading from the network is deliberately NOT read-only — it is the
-// exfiltration channel, so "does not write locally" never means safe.
-const classifierSystem = `You classify a single shell command by its effect on the system. Reply with exactly one word and nothing else.
-
-Categories:
-- "readonly" — only reads or inspects data with no side effects: nothing is created, modified, or deleted, and no file, repo, process, network, or system state changes. Writing to stdout/stderr is fine.
-- "write" — has any side effect: creates/modifies/deletes files, changes permissions or ownership, alters repo/process/system state, downloads, installs or runs software, redirects output to a file (>, >>), or reads from the network.
-- "unsure" — only when you do not recognize the command name or genuinely cannot determine its effect.
-
-Compound constructs — pipelines, command substitution $(...) or backticks, loops (for/while/until), and conditionals (if/case) — have no side effect of their own. Classify them by the commands they actually run: if every command inside only reads or inspects, the whole thing is "readonly"; if any one of them writes, it is "write". Examples: 'for f in *.md; do head -20 "$f"; done' and 'echo "=== $(basename "$f") ==="' are readonly; 'for f in *.tmp; do rm "$f"; done' and 'x=$(mktemp)' are write.
-
-Use your general knowledge of Unix tools. The examples below are illustrative, NOT exhaustive — classify any unlisted command by what it actually does, not by whether it appears here.
-- readonly examples: ls, cat, head, tail, grep, rg, find (no -exec/-delete), stat, file, df, du, wc, echo, printf, ps, env, uname, hostname, which, date, awk, jq, sed (without -i/--in-place and with no s///w or s///e flags in the script), tree, git status/log/diff/show.
-- write examples: rm, mv, cp, touch, mkdir, rmdir, chmod, chown, ln, dd, truncate, tee, sed -i or sed --in-place; find -exec/-delete; git add/commit/checkout/reset/restore/push/pull/rebase/merge/stash; package installs (npm/pnpm/yarn/pip/apt/brew/cargo/go install); docker run/rm/kill, systemctl, mount, kill; curl/wget reading from or saving to the network.
-
-Reserve "unsure" for unrecognized commands. Respond with ONLY the classification word.`
-
-// toolSchema returns a lookup for an enabled tool's metadata (description and
+// classifierAdapter classifies an unverifiable call with a one-shot call to the
 // parameters), used to judge MCP/extension calls in auto+mcp mode.
 func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 	return func(name string) (llm.ToolSchema, bool) {
@@ -833,26 +815,6 @@ func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 		sch.Description = t.Description()
 		return sch, true
 	}
-}
-
-// mcpClassifierSystem is auto+mcp's prompt: classify one tool call by whether it
-// changes any state. The no-change bar is explicit — a read-only verdict must leave
-// every system untouched, and network reads alone are not safe.
-func mcpClassifierSystem(sch llm.ToolSchema) string {
-	return fmt.Sprintf(`You classify a single tool invocation by its effect on the system. Reply with exactly one word and nothing else.
-
-Categories:
-- "readonly" — the call only reads or inspects: it changes no files, repo, process, network, remote service, permissions, configs, caches, credentials or any other state anywhere.
-- "write" — has any side effect at all: mutates data, alters a remote system, sends commands with lasting effects, changes credentials or configuration.
-- "unsure" — only when you cannot determine the tool's effect from its description and arguments.
-
-A readonly verdict requires NO observable change to anything. Reading from the network is not readonly on its own (it can exfiltrate); it must also leave every system unchanged.
-
-Tool under evaluation:
-Name: %s
-Description: %s
-Parameters (JSON Schema):
-%s`, sch.Name, strings.TrimSpace(sch.Description), string(sch.Parameters))
 }
 
 // classifierAdapter classifies an unverifiable call with a one-shot call to the
@@ -877,14 +839,14 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 	if err != nil {
 		return permit.ClassUnsure
 	}
-	var sys = classifierSystem
+	var sys = permit.ClassifierSystem
 	userMsg := s.Args
 	if !s.IsShell() { // an MCP/extension tool call is judged with its own framing and metadata
 		sch, ok := a.schema(s.Name)
 		if !ok {
 			return permit.ClassUnsure // unknown tool cannot be evaluated safely
 		}
-		sys = mcpClassifierSystem(sch)
+		sys = permit.MCPClassifierSystem(sch.Name, sch.Description, string(sch.Parameters))
 		userMsg = s.Args
 	}
 	req := llm.Request{

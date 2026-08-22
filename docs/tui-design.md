@@ -104,7 +104,8 @@ gap in a rule reads as a defect.
 
 The status block (`status.go`) is the fixed chrome beneath the input: a ten cell
 context bar, used/total tokens, the model, then keyed `Segment`s in insertion
-order. The bar fills against the compaction budget (`window - reserve`) so a full
+order. A running tool shows only its short name next to the spinner; the full
+tool label (e.g. the bash command) lives on the committed header alone. The bar fills against the compaction budget (`window - reserve`) so a full
 bar means "compaction fires now" rather than at raw capacity; the count shows
 used against the real window. A `~` prefixes the count while it is an estimate
 (mid-stream or between provider reports). The colour escalates at 70% and again

@@ -88,28 +88,26 @@ not this block.
 ### Parts, in order
 
 ```
-1. Identity sentence        — one neutral line naming the harness + repo cwd.
-2. "How you help" line      — read files, run commands, edit code, write new files.
-3. Guidelines               — concise bullets; some derived from which tools exist.
-4. Environment facts        — working directory, an ls-style listing of it, plus
+1. Opening sentence         — how the agent works, domain- and tool-neutral.
+2. Guidelines               — concise bullets; some derived from which tools exist.
+3. Environment facts        — working directory, an ls-style listing of it, plus
                               platform and day-granular date.
-5. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
-6. Extension snippets       — caller-supplied, blank-line separated; sub-agents inject their contract here.
+4. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
+5. Extension snippets       — caller-supplied, blank-line separated; sub-agents inject their contract here.
 ```
 
-### Identity
+### Opening sentence
 
-Neutral and specific to the harness name, not a persona:
+A single neutral line stating how the agent works, deliberately naming neither a domain
+nor specific tools so the same block serves coding, security work and plain Q&A:
 
 ```
-You are an expert coding assistant that works in the repository at /path.
-You help by reading files, running commands, editing code and writing new files.
+You help by following the user's instructions: research and review until you understand them, then focus on what is asked.
 ```
 
-The first line names the working directory because everything else assumes it;
-the second states the four verbs the toolset actually supports. No personality,
-no capability claims beyond what is true — a model told "you are brilliant" costs
-more than one simply given accurate scope.
+It stays focused on the user's request and puts understanding before action. It claims no
+tool or capability beyond that — a model told "you are brilliant" costs more than one
+simply given accurate scope.
 
 ### Guidelines
 
@@ -191,7 +189,8 @@ the entire return value.
 There is deliberately **no "Available tools" list inside the system prompt**:
 the schema channel already tells the model exactly what it may call, and a second
 text copy would only cost tokens. For the same reason there is no `promptSnippet`-style
-one-line tool hint injected into a child's system block;
+one-line tool hint injected into a child's system block — the schema channel
+carries the tool list, so a second text copy is a token tax on every request:
 `childContract` carries only constraints and the output contract, never an enum of
 tools — those ride the schema channel like any other request.
 
@@ -464,9 +463,13 @@ review keeps files inspected, issues found and conclusions reached.
 
 ## Tool-call classifier (`auto` / `auto+mcp` modes)
 
-The permission barrier classifies an unverifiable tool call with a one-shot
-call to the session's current model — **fresh context**, never the session
-history, and its verdict never enters the session. It asks for exactly one word:
+Both prompts live in **`pkg/permit`** (`ClassifierSystem`, `MCPClassifierSystem`),
+the package that owns the `Classifier` interface — not in `main.go`. The shell
+prompt keeps its strict unconditional bar (running arbitrary software is always a
+write); the MCP variant states the no-observable-change and network-exfiltration
+rules. The permission barrier classifies an unverifiable tool call
+with a one-shot call to the session's current model — **fresh context**, never the
+session history, and its verdict never enters the session. It asks for exactly one word:
 `readonly`, `write` or `unsure`. Reasoning is clamped minimal; the output token
 budget leaves room for a thinking block. Verdicts normalise by lowercasing,
 dropping non-letters and prefix-matching, so `` `readonly` ``, `read-only` and

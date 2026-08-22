@@ -15,6 +15,24 @@ func TestModelAccepts(t *testing.T) {
 	assert.False(t, Model{}.Accepts(ModalityText))
 }
 
+func TestModelShortName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		m    Model
+		want string
+	}{
+		{"provider_and_id", Model{Provider: "openai", ID: "gpt-4o"}, "gpt-4o"},
+		{"id_with_slash", Model{Provider: "anthropic", ID: "claude/sonnet"}, "sonnet"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.m.ShortName())
+		})
+	}
+}
+
 func TestReserve(t *testing.T) {
 	t.Parallel()
 

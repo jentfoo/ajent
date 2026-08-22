@@ -27,6 +27,13 @@ func TestBuildSystem(t *testing.T) {
 	}
 }
 
+// TestIdentityLine pins the domain-neutral opening sentence so a wording change is
+// deliberate and reviewed.
+func TestIdentityLine(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "You help by following the user's instructions: research and review until you understand them, then focus on what is asked.\n\n", identityLine())
+}
+
 // TestBuildSystemCacheStable asserts equal inputs produce byte-identical blocks,
 // so the provider prompt cache survives between requests.
 func TestBuildSystemCacheStable(t *testing.T) {

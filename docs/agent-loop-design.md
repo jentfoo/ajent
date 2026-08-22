@@ -135,10 +135,12 @@ projecting, so what the model sees is always what the transcript holds.
 
 ### System prompt stays cache-stable
 
-`buildSystem(state, env)` builds one cache-stable system block — identity,
-guidelines, environment facts — where only a day-granular date changes between
-requests, so the provider's prompt cache survives. Composition and wording are
-specified in `prompt-design.md`.
+`buildSystem(state, env, proj, snippets)` builds one cache-stable system block — a
+domain-neutral opening sentence (no tool or domain claims), guidelines some of which are
+derived from the enabled tools, environment facts, project instructions and caller
+snippets — where only a day-granular date changes between requests (plus instruction
+reloads and tool-set changes), so the provider's prompt cache survives. Composition and
+wording are specified in `prompt-design.md`.
 
 ### Fixed-overhead accounting (`base`) is replaced, not accumulated
 

@@ -58,7 +58,7 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResul
 	if strings.TrimSpace(label) == "" {
 		label = call.Name
 	}
-	done := s.ui.ToolStart(label)
+	done := s.ui.ToolStart(call.Name, label)
 	return func(res agent.ToolResult) {
 		var result string
 		if res.IsError {

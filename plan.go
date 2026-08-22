@@ -191,7 +191,7 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 		}
 		pushSwitchedContext(ui, st.Tokens)
 	})
-	ui.SetModel(m.Key(), m.ContextWindow)
+	ui.SetModel(m.ShortName(), m.ContextWindow)
 	if moved {
 		ui.Divider() // phase boundaries read as breaks in scrollback
 	}

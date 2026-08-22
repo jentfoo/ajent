@@ -288,14 +288,16 @@ func TestUIToolStart(t *testing.T) {
 	v := newVT(40, 10)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	done := u.ToolStart("bash: go test ./...")
+	done := u.ToolStart("bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0), "the header commits up front")
 	// no separate spinner row above the input; the tool rides in the status bar.
 	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
 	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]),
 		"spinner still leads the bottom-left status line while a tool runs")
-	assert.Contains(t, strutil.StripANSI(statusRow), "bash: go test ./...",
-		"running tool label sits next to the working glyph in the status bar")
+	assert.Contains(t, strutil.StripANSI(statusRow), "bash",
+		"short tool name sits next to the working glyph in the status bar")
+	assert.NotContains(t, strutil.StripANSI(statusRow), "go test ./...",
+		"the command stays out of the status bar; only the header carries it")
 
 	done("ok  0.4s")
 
@@ -323,10 +325,10 @@ func TestUIBusy(t *testing.T) {
 	assert.Contains(t, u.snapshot(v), spinnerFrames[1%len(spinnerFrames)], "busy advances the frame")
 
 	// a running tool shares the bottom-left status line with the busy glyph.
-	doneTool := u.ToolStart("bash: go test ./...")
+	doneTool := u.ToolStart("bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
 	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1 (divider), input then status
-	assert.Contains(t, strutil.StripANSI(statusRow), "bash: go test ./...")
+	assert.Contains(t, strutil.StripANSI(statusRow), "bash")
 	doneTool("ok  0.4s")
 
 	stop()
@@ -351,7 +353,7 @@ func TestUIOutput(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	t.Run("streams_under_the_tool_header", func(t *testing.T) {
-		done := u.ToolStart("bash: go test -v")
+		done := u.ToolStart("bash", "bash: go test -v")
 		u.Output("=== RUN   TestRetry\n--- PASS: TestRetry (0.01s)\n")
 		u.EndOutput()
 		done("")
@@ -387,7 +389,7 @@ func TestUIOutputHeadSummary(t *testing.T) {
 	v := newVT(40, 12)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	done := u.ToolStart("bash: long")
+	done := u.ToolStart("bash", "bash: long")
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
 		b.WriteString("line " + strconv.Itoa(i) + "\n")
@@ -421,7 +423,7 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	// first call streams past the head.
-	doneA := u.ToolStart("bash: a")
+	doneA := u.ToolStart("bash", "bash: a")
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
 		b.WriteString("a" + strconv.Itoa(i) + "\n")
@@ -430,7 +432,7 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	doneA("")
 
 	// second call in the same turn streams its own output past the head.
-	doneB := u.ToolStart("bash: b")
+	doneB := u.ToolStart("bash", "bash: b")
 	b.Reset()
 	for i := 1; i <= 30; i++ {
 		b.WriteString("b" + strconv.Itoa(i) + "\n")
@@ -454,7 +456,7 @@ func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 	for i := 1; i <= 30; i++ {
 		fmt.Fprintf(&b, "%6d\tline %d\n", i, i)
 	}
-	done := u.ToolStart("read big.txt")
+	done := u.ToolStart("read", "read big.txt")
 	done(b.String())
 
 	screen := u.snapshot(v)
@@ -1184,7 +1186,7 @@ func TestUIResizeStorm(t *testing.T) {
 	for _, l := range history {
 		u.Print(l)
 	}
-	done := u.ToolStart("write notes.go")
+	done := u.ToolStart("write", "write notes.go")
 	t.Cleanup(func() { done("") })
 
 	for _, w := range []int{20, 33, 15, 40, 26} {
@@ -1224,7 +1226,7 @@ func TestUIActivityNewlineKeepsRowCount(t *testing.T) {
 	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 
 	u.Print("committed reply line")
-	done := u.ToolStart("bash: go test ./...")
+	done := u.ToolStart("bash", "bash: go test ./...")
 	t.Cleanup(func() { done("") })
 	u.SetActivity("bash", "running tests\nPASS pkg/tui") // multi line command output
 
