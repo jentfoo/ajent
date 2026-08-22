@@ -386,6 +386,30 @@ func TestSessionHint(t *testing.T) {
 	assert.Empty(t, sessionHint(nil))
 }
 
+// TestEmptyReportsNoConversation verifies a fresh transcript with zero message
+// entries is detected as empty so it can be dropped on exit, while any recorded
+// turn (or an unrecorded run) keeps the session.
+func TestEmptyReportsNoConversation(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	s := session.StoreAt(filepath.Dir(p))
+	r := &sessRec{w: w, store: s}
+
+	// a brand-new transcript with only its root entry is empty.
+	assert.True(t, r.empty())
+
+	// any message (even just the prompt) makes it worth keeping.
+	_, aerr := w.Append(session.TypeMessage, session.MessageData{
+		Message: llm.Text(llm.RoleUser, "hello"),
+	})
+	require.NoError(t, aerr)
+	assert.False(t, r.empty())
+
+	// an unrecorded run (nil store) is never dropped.
+	assert.False(t, (&sessRec{w: w}).empty())
+}
+
 func TestSearchItems(t *testing.T) {
 	t.Parallel()
 	got := searchItems([]session.Prompt{

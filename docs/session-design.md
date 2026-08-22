@@ -302,6 +302,13 @@ Run `ajent --resume <id>` to resume this session.
 
 so a conversation is never more than one command away.
 
+An **empty session** — started but abandoned before its first prompt, so the
+transcript holds zero `message` entries — is deleted on exit instead of saved:
+it has nothing to resume and would only surface as an "(empty session)" row in
+the picker. The deletion also drops its head cursor when it points at that
+file; sibling sessions in the workspace are untouched, so a resumed non-empty
+session is never removed even if no new prompt lands this run.
+
 ## Invariants
 
 These are load bearing. Each exists because breaking it produced a real bug.

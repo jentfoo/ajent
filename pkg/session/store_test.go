@@ -143,6 +143,44 @@ func TestStoreListEmptyWhenMissingDir(t *testing.T) {
 	assert.Empty(t, list)
 }
 
+// TestStoreRemoveDeletesOneSession verifies Remove drops the transcript and its
+// head cursor without touching a sibling session in the same workspace.
+func TestStoreRemoveDeletesOneSession(t *testing.T) {
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+
+	w1, err := s.Create(ws, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	_, aerr := w1.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "keep me")})
+	require.NoError(t, aerr)
+	require.NoError(t, w1.Sync()) // persist HEAD for w1
+	require.NoError(t, w1.Close())
+
+	w2, err := s.Create(ws, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	removedID := w2.Head()
+	require.NoError(t, w2.Sync()) // HEAD now names w2
+	require.NoError(t, w2.Close())
+
+	dir, derr := s.Dir(ws)
+	require.NoError(t, derr)
+	_, herr := ReadHead(dir)
+	require.True(t, herr) // cursor points at the removed session before cleanup
+
+	// removing the empty w2 leaves only its own file and clears HEAD for it.
+	rerr := s.Remove(w2.Path())
+	require.NoError(t, rerr)
+
+	list, lerr := s.List(ws)
+	require.NoError(t, lerr)
+	assert.Len(t, list, 1)
+	assert.NotEqual(t, removedID, list[0].ID)
+
+	dir2, _ := s.Dir(ws)
+	_, ok := ReadHead(dir2)
+	assert.False(t, ok) // cursor for the removed file is gone
+}
+
 // TestReadInfoCountsActiveBranchOnly regresses the fork over-count: after a
 // branch, readInfo must describe only the persisted head's chain, so resume
 // metadata matches what resuming would actually rebuild.

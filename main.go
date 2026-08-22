@@ -555,12 +555,22 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 	}()
 
+	// an abandoned session with no conversation is worthless to resume; drop it and
+	// return nil so main skips the "to resume this session" hint.
+	finish := func(r *sessRec) *sessRec {
+		if r != nil && r.empty() {
+			_ = r.store.Remove(r.w.Path())
+			return nil
+		}
+		return r
+	}
+
 	for {
 		select {
 		case msg, ok := <-ui.Messages():
 			if !ok {
 				close(pump)
-				return rec // UI closed
+				return finish(rec) // UI closed
 			}
 			line := command.ParseLine(msg)
 			if line.Kind == command.KindCommand {
@@ -578,7 +588,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 		case <-quit:
 			close(pump)
-			return rec
+			return finish(rec)
 		}
 	}
 }
@@ -1012,6 +1022,25 @@ func sessionHint(r *sessRec) string {
 		}
 	}
 	return ""
+}
+
+// empty reports whether this run recorded no conversation: the transcript holds
+// zero message entries. A resumed non-empty session stays, so only a brand-new
+// session abandoned before its first prompt is dropped.
+func (r *sessRec) empty() bool {
+	if r == nil || r.w == nil || r.store == nil {
+		return false
+	}
+	entries, _, err := session.Read(r.w.Path())
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.Type == session.TypeMessage {
+			return false
+		}
+	}
+	return true
 }
 
 // resumeMode says what this run should do with saved sessions.

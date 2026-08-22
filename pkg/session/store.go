@@ -134,6 +134,22 @@ func (s *Store) OutputPath(sessionPath, callID string) string {
 	return filepath.Join(filepath.Dir(sessionPath), "output-"+callID+".txt")
 }
 
+// Remove deletes one saved transcript and its head cursor when it points at this
+// file. Other sessions in the directory (and editor history) are untouched.
+func (s *Store) Remove(path string) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	if err := os.Remove(filepath.Join(dir, base)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	// clear the cursor only when it named this transcript; a dangling HEAD for an
+	// unrelated file would otherwise fall back to tail recovery.
+	if cur, ok := ReadHead(dir); ok && cur.File == base {
+		_ = os.Remove(headPath(dir))
+	}
+	return nil
+}
+
 // Info describes one saved session for the resume picker.
 type Info struct {
 	Path     string
