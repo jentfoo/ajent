@@ -480,8 +480,40 @@ func TestAskerAllowWithNoteInjectsSteering(t *testing.T) {
 	assert.Equal(t, tools.ActionAllow, got.Action)
 	notes := n.all()
 	require.Len(t, notes, 1)
-	assert.Contains(t, notes[0], "User allowed `rm`")
+	assert.Contains(t, notes[0], "Allowed with note:")
 	assert.Contains(t, notes[0], "only inside build/")
+}
+
+func TestAskerDenyInjectsNoteWhenReasonGiven(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	p.reasons["reason for denying"] = "not now"
+	n := &fakeNoter{}
+	b := newTestBarrier(p)
+	b.SetNoter(n.Note)
+
+	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build"}`), int(optDeny))
+
+	assert.Equal(t, tools.ActionDeny, got.Action)
+	notes := n.all()
+	require.Len(t, notes, 1)
+	assert.Contains(t, notes[0], "Denied with note:")
+	assert.Contains(t, notes[0], "not now")
+}
+
+func TestAskerDenyNoReasonInjectsNothing(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter() // no canned reason -> Reason returns false
+	n := &fakeNoter{}
+	b := newTestBarrier(p)
+	b.SetNoter(n.Note)
+
+	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build"}`), int(optDeny))
+
+	assert.Equal(t, tools.ActionDeny, got.Action)
+	require.Empty(t, n.all())
 }
 
 func TestAskerAllowForSessionShortCircuitsNextCall(t *testing.T) {

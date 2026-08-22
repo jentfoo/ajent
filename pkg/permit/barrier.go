@@ -286,7 +286,7 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 		case optAllowNote:
 			if prompter, _ := b.prompterSnapshot(); prompter != nil {
 				if note, ok := prompter.Reason(ctx, "note for allowing"); ok && strings.TrimSpace(note) != "" {
-					b.note(call, note)
+					b.noteAllowed(call, note)
 				}
 			}
 			b.resolveNotice("once", auto)
@@ -314,6 +314,7 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 			reason = strings.TrimSpace(r)
 		}
 	}
+	b.noteDenied(call, reason) // a typed denial reason reaches the model as a user message
 	if reason == "" {
 		return tools.Deny("denied by user")
 	}
@@ -348,20 +349,21 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	return key, b.allows[key]
 }
 
-// note injects a steering note naming what was allowed and why.
-func (b *Barrier) note(call agent.ToolCall, note string) {
-	if b.noter == nil {
+// noteAllowed injects a steering note naming what was allowed and why.
+func (b *Barrier) noteAllowed(call agent.ToolCall, note string) {
+	if b.noter == nil || strings.TrimSpace(note) == "" {
 		return
 	}
-	name := call.Name
-	if name == bashTool {
-		s := scanCommand(bashCommand(call.Input))
-		if len(s.Segments) > 0 {
-			toks := segmentTokens(s.Segments[0])
-			name = stripPath(firstToken(toks))
-		}
+	b.noter("Allowed with note: " + strings.TrimSpace(note))
+}
+
+// noteDenied injects a denial reason as a user message so the model sees why a
+// call was refused, mirroring allow-with-note; an empty reason injects nothing.
+func (b *Barrier) noteDenied(call agent.ToolCall, reason string) {
+	if b.noter == nil || strings.TrimSpace(reason) == "" {
+		return
 	}
-	b.noter("User allowed `" + name + "` with note: " + strings.TrimSpace(note))
+	b.noter("Denied with note: " + strings.TrimSpace(reason))
 }
 
 // classifyCall reports whether mode sends this call type to the model classifier:

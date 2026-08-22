@@ -37,7 +37,8 @@ type Dialog interface {
 }
 
 // Noter injects a short user note into agent context at the next step boundary,
-// used by "allow with note" so the model adapts without stopping the turn.
+// used by "allow with note" and deny-with-reason so the model adapts without
+// stopping the turn.
 type Noter func(note string)
 
 // dialogOption indexes one choice in an approval prompt. A plain command offers

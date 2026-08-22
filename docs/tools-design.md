@@ -128,7 +128,10 @@ Cost: write/edit read the target file twice per call (preview, then execute).
 
 The permission layer registers both: one guard from `permit.Barrier`
 runs static classification, and its asker resolves prompts into allow/deny with
-session memory. Config's `permissions.safeCommands` lets a user declare extra
+session memory. A reason typed for an "allow with note" or a denial is injected
+as a user message immediately after the tool call it governs — never as tool
+output — so the model treats it as operator intent (see `prompt-design.md`,
+provenance). Config's `permissions.safeCommands` lets a user declare extra
 tools, whole MCP server namespaces (`sectool` covers every `sectool__*` tool), or
 bash command lines to auto-allow as read-only; it can never name
 `write`/`edit`. Core never does. The `WithUserInitiated` marker rides the context

@@ -50,7 +50,10 @@ try and fail.
 **6. Provenance everywhere.** Every block of injected content carries where it
 came from: `<project_instructions path="/abs/AGENTS.md">`, a compaction summary
 that says "history before this point". The model must never mistake one kind of
-text for another.
+text for another. Permission-barrier notes ("Allowed with note:" / "Denied with
+note:") are surfaced as **user** messages immediately after the tool call they
+govern, so they carry operator-level authority rather than being read as injected
+or tool output.
 
 **7. Background prompts are short.** Compaction calls reuse the provider client,
 use minimal reasoning, ask for exactly what is needed and no more. A long prompt
