@@ -274,6 +274,9 @@ Two kinds of mid-turn input:
   steers, permission-barrier notes) rather than a typed prompt. It rides onto the
   appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R / up
   arrow) can exclude it; injected messages still appear in assembled context.
+- An injected steer with visible text is echoed to the sink (`UserPrompt`) when it
+  lands — it has no submission echo, unlike typed prompts. Tool-result folds render
+  through their own path.
 - **`FollowUp`** queues input as a separate turn once the current one settles.
 - **`Options.OnBoundary`**, when set, is called on the loop goroutine at each
   step boundary just before the next model call, after push-steers have been

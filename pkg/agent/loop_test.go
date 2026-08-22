@@ -465,7 +465,8 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 		// the second model call sees the steered message injected at the boundary
 		{Events: textOnly("after steer")},
 	}}
-	a := newTestAgent(nil, p, nil)
+	sink := &recordingSink{}
+	a := newTestAgent(nil, p, sink)
 	a.opts.Tools = set
 
 	errCh := make(chan error, 1)
@@ -474,7 +475,9 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 		"the turn must be in flight before steering is accepted")
 
 	assert.True(t, a.Steer(Input{Text: "steered!"}))
-	close(block) // release the tool; the next step boundary drains the steer
+	// an injected steer surfaces live (no submission echo) while the typed one stays silent.
+	assert.True(t, a.Steer(Input{Text: "Allowed with note: keep it", Injected: true}))
+	close(block) // release the tool; the next step boundary drains the steers
 
 	require.NoError(t, <-errCh)
 	foundSteer := false
@@ -486,6 +489,13 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 		}
 	}
 	assert.True(t, foundSteer)
+	var live []string
+	for _, c := range sink.calls {
+		if strings.HasPrefix(c, "user:") {
+			live = append(live, c)
+		}
+	}
+	assert.Equal(t, []string{"user:Allowed with note: keep it"}, live) // only the injected steer echoes
 }
 
 const (

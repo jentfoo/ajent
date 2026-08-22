@@ -13,11 +13,15 @@ type recordingSink struct {
 }
 
 func (r *recordingSink) TurnStart(TurnInfo) { r.calls = append(r.calls, "turn_start") }
-func (r *recordingSink) UserPrompt(string)  {}
-func (r *recordingSink) Thinking(string)    { r.calls = append(r.calls, "thinking") }
-func (r *recordingSink) EndThinking()       { r.calls = append(r.calls, "end_thinking") }
-func (r *recordingSink) Text(string)        { r.calls = append(r.calls, "text") }
-func (r *recordingSink) EndText()           { r.calls = append(r.calls, "end_text") }
+func (r *recordingSink) UserPrompt(text string) {
+	if text != "" {
+		r.calls = append(r.calls, "user:"+text)
+	}
+}
+func (r *recordingSink) Thinking(string) { r.calls = append(r.calls, "thinking") }
+func (r *recordingSink) EndThinking()    { r.calls = append(r.calls, "end_thinking") }
+func (r *recordingSink) Text(string)     { r.calls = append(r.calls, "text") }
+func (r *recordingSink) EndText()        { r.calls = append(r.calls, "end_text") }
 func (r *recordingSink) ToolStart(call ToolCall, _ string) func(ToolResult) {
 	r.calls = append(r.calls, "tool_start:"+call.Name)
 	return func(ToolResult) {}

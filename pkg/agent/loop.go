@@ -275,6 +275,10 @@ func (a *Agent) appendSteer(inputs []Input) {
 			continue // an empty steer would inject a blank user turn
 		}
 		a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}, Injected: in.Injected})
+		// injected steers have no submission echo; surface them live like replay does
+		if in.Injected && !llm.OnlyToolResults(blocks) {
+			a.sink.UserPrompt(in.Text)
+		}
 		if in.Delivered != nil {
 			in.Delivered() // delivery is confirmed only when the message actually lands
 		}
