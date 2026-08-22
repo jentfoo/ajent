@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/mcp"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -716,6 +719,75 @@ func newScripted(reply string) *llm.ScriptedProvider {
 		{Type: llm.EventTextEnd, Index: 0},
 		{Type: llm.EventDone, StopReason: llm.StopEndTurn},
 	}}}}
+}
+
+// TestMCPConfigDisabledToolsEnableViaSlashTools wires a real tools.Registry to
+// an MCP manager for a config-disabled server and verifies /tools can bring its
+// tools into the agent context via live free-select (SetEnabled after load). The
+// resume path is covered by TestMCPConfigDisabledToolsResumeRestoresEnablement.
+func TestMCPConfigDisabledToolsEnableViaSlashTools(t *testing.T) {
+	reg := tools.New()
+	reg.RegisterState("builtin", &stubTool{name: "read"}, tools.StateEnabled)
+
+	disabled := false
+	mgr := mcp.New(map[string]mcp.ServerConfig{
+		"fake": {Command: buildFakeMCPServer(t), Enabled: &disabled},
+	}, mcp.Options{Registrar: registryAdapter{reg}})
+
+	// first-message load registers every fake tool as disabled (config-off default)
+	mgr.LoadOnFirstMessage(t.Context())
+	t.Cleanup(mgr.Close)
+	assert.NotContains(t, reg.Names(), "fake__tool_00")
+	assert.Contains(t, reg.DisabledNames("mcp: fake"), "fake__tool_00")
+
+	// /tools free-select enables the MCP tool alongside builtins
+	reg.SetEnabled([]string{"read", "fake__tool_00"})
+
+	// it must now be in the agent context (Schemas/Names) and active for status
+	assert.Contains(t, reg.Names(), "fake__tool_00")
+	assert.NotEmpty(t, reg.Schemas())
+	hasSchema := false
+	for _, s := range reg.Schemas() {
+		if s.Name == "fake__tool_00" {
+			hasSchema = true
+		}
+	}
+	assert.True(t, hasSchema, "enabled MCP tool must reach the agent's tool block")
+	assert.NotContains(t, reg.DisabledNames("mcp: fake"), "fake__tool_00")
+}
+
+// TestMCPConfigDisabledToolsResumeRestoresEnablement verifies a resumed session's
+// persisted tools.enabled (Options.Restore) re-enables an MCP tool even when its
+// server is config-disabled — /tools enablement is explicit, not vetoed by the
+// config default.
+func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
+	reg := tools.New()
+	reg.RegisterState("builtin", &stubTool{name: "read"}, tools.StateEnabled)
+
+	disabled := false
+	mgr := mcp.New(map[string]mcp.ServerConfig{
+		"fake": {Command: buildFakeMCPServer(t), Enabled: &disabled},
+	}, mcp.Options{
+		Registrar: registryAdapter{reg},
+		Restore:   []string{"read", "fake__tool_00"}, // persisted from a prior session
+	})
+
+	mgr.LoadOnFirstMessage(t.Context())
+	t.Cleanup(mgr.Close)
+
+	assert.Contains(t, reg.Names(), "fake__tool_00")
+}
+
+// buildFakeMCPServer builds the pkg/mcp fakeserver binary and returns its path.
+func buildFakeMCPServer(t *testing.T) string {
+	t.Helper()
+	out := filepath.Join(os.TempDir(), fmt.Sprintf("ajent-main-fakeserver-%d", os.Getpid()))
+	ctx := context.Background() // build is not tied to a test's lifetime
+	cmd := exec.CommandContext(ctx, "go", "build", "-o", out, "./pkg/mcp/testdata/fakeserver")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fakeserver: %v\n%s", err, b)
+	}
+	return out
 }
 
 // TestGuardRegisteredAgainstRegistry verifies the barrier's guard and asker are

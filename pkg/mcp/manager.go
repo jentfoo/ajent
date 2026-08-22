@@ -223,11 +223,13 @@ func (m *Manager) register(s *server, defs []ToolDef, forceEnabled map[string]st
 	for _, d := range defs {
 		n := s.name + "__" + d.Name
 		tool := Bridge(s.name, d, s.c, BridgeOptions{ReadOnly: d.ReadOnly, Timeout: dur})
-		st := StateEnabled
-		if disabledByCfg { // known but inactive; /tools can re-enable it later
-			st = StateDisabled
-		} else if restore != nil && !has(restore, n) {
-			st = StateDisabled // resumed session enabled a subset; the rest stay off
+		st := StateDisabled // known but inactive by default; config-off or a restored subset leaves the rest off
+		if !disabledByCfg && restore == nil {
+			st = StateEnabled // fully-enabled, fresh server exposes everything
+		} else if has(restore, n) {
+			// an explicit enabled set is authoritative: /tools enablements win over the
+			// config default, and a restored subset keeps only its members on
+			st = StateEnabled
 		}
 		if forceEnabled != nil && has(forceEnabled, n) { // live registry state wins over restore/default
 			st = StateEnabled

@@ -207,6 +207,36 @@ func TestConfigDisabledServerLoadsButStaysInactive(t *testing.T) {
 	}
 }
 
+// TestConfigDisabledServerHonoursRestoredEnablement verifies an explicit session
+// enablement survives resume: a tool the user turned on via /tools (persisted to
+// tools.enabled and fed back as Restore) must come back enabled even when its
+// server is config-disabled. The config flag is only a default, never a veto.
+func TestConfigDisabledServerHonoursRestoredEnablement(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	disabled := false
+	mgr := New(nil, Options{
+		Registrar: fr,
+		Restore:   []string{"fake__tool_01"}, // enabled via /tools in the prior session
+	})
+	s := newServer("fake", ServerConfig{Enabled: &disabled})
+
+	defs := []ToolDef{
+		{Name: "tool_00", InputSchema: jsonRawObject},
+		{Name: "tool_01", InputSchema: jsonRawObject},
+	}
+	mgr.register(s, defs, nil)
+
+	st, ok := fr.state("fake__tool_00")
+	require.True(t, ok)
+	assert.Equal(t, StateDisabled, st) // never enabled: config-off default holds
+
+	st, ok = fr.state("fake__tool_01")
+	require.True(t, ok)
+	assert.Equal(t, StateEnabled, st) // explicit /tools enablement wins over the default
+}
+
 // TestRegisterMarksReadOnlyTools verifies bridged read-only tools are recorded on
 // the registrar as publication metadata.
 func TestRegisterMarksReadOnlyTools(t *testing.T) {
