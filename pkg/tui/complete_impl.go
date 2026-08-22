@@ -3,7 +3,7 @@ package tui
 // completionOverlay is the live completion list rendered above the editor. It
 // is distinct from u.act (an interaction): the editor keeps focus and keeps
 // receiving characters, and only keyTab/keyUp/keyDown/keyEnter/keyEscape are
-// consumed — everything else falls through to the editor, after which the
+// consumed; everything else falls through to the editor, after which the
 // completer is re-queried.
 type completionOverlay struct {
 	items  []Completion

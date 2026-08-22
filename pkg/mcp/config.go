@@ -130,7 +130,7 @@ func loadOne(path string) (map[string]ServerConfig, []string, error) {
 }
 
 // expandEnv expands ${env:VAR} references in Env values, Headers and URL. An
-// unset variable is an error naming it — never an empty value.
+// unset variable is an error naming it, never an empty value.
 func expandEnv(cfg ServerConfig) (ServerConfig, error) {
 	for k, v := range cfg.Env {
 		x, err := expandVar(v)

@@ -17,7 +17,7 @@ type Completion struct {
 
 // Completer supplies candidates for the live completion overlay. Complete is
 // called under the UI lock from the key goroutine, so it must not block or call
-// back into the UI — a path source keeps a cached index for exactly this reason.
+// back into the UI; a path source keeps a cached index for exactly this reason.
 // start is the grapheme index the accepted Text replaces, up to the cursor.
 type Completer interface {
 	Complete(text string, pos int) (start int, items []Completion)

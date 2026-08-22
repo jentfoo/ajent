@@ -5,7 +5,7 @@ import "encoding/json"
 // Settings is the typed surface of every configuration layer. Enum valued keys
 // are stored as their text names and parsed by the caller (llm.ParseLevel,
 // llm.ParseRetain, tui.ParseMode); providers and models stay raw so pkg/llm can
-// fold them over its own schema without a config→llm import.
+// fold them over its own schema without a config->llm import.
 type Settings struct {
 	Model       string          `json:"model,omitempty"`
 	Reasoning   Reasoning       `json:"reasoning,omitzero"`

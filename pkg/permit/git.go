@@ -209,7 +209,7 @@ var (
 	gitConfigValueFlags = bulk.SliceToSet([]string{
 		"--file", "--blob", "--type", "--default", "--value", "--url",
 	})
-	// git config subcommand form (≥2.46). edit/set/unset/rename-section and
+	// git config subcommand form (git >= 2.46). edit/set/unset/rename-section and
 	// anything else unrecognized fall through to the key check, which rejects:
 	// a config key always contains a dot.
 	gitConfigReadActions = bulk.SliceToSet([]string{
@@ -263,7 +263,7 @@ func gitActionReadOnly(sub string, args []string) bool {
 }
 
 // gitReadOnly reports whether tokens name a verifiably read-only git call.
-// Pre-subcommand flags outside the tiny allowlist disqualify — in particular -c
+// Pre-subcommand flags outside the tiny allowlist disqualify; in particular -c
 // can set pager.log=<cmd> that git executes. Flags that write a file or run a
 // command are rejected globally and per subcommand, and subcommands with both
 // read and write forms (branch/tag/config/remote/reflog/worktree) are verified

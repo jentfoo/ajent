@@ -178,7 +178,7 @@ func relTo(root, path string) string {
 	return rel
 }
 
-// mtimeCmp orders a before b by modification time (a newer → negative for desc).
+// mtimeCmp orders a before b by modification time (a newer => negative for desc).
 func mtimeCmp(a, b string) int {
 	ai, _ := os.Stat(a)
 	bi, _ := os.Stat(b)

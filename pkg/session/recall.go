@@ -2,7 +2,7 @@ package session
 
 import "time"
 
-// RecallIndex is the single source for editor ↑/↓ and Ctrl+R: every typed line
+// RecallIndex is the single source for editor Up/Down and Ctrl+R: every typed line
 // from EditorHistory first, then recorded prompts that never reached the line file
 // (e.g. transcripts written before this phase). Newest first, deduped by text.
 type RecallIndex struct {

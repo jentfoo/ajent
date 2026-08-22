@@ -97,7 +97,7 @@ func (r *altRenderer) resize() {
 }
 
 // probe is a no-op: alt re-paints every cell it owns on each frame, so a draw
-// that raced a reflow is fully repaired by the next one — no barrier needed.
+// that raced a reflow is fully repaired by the next one; no barrier needed.
 func (r *altRenderer) probe() {}
 
 func (r *altRenderer) setTheme(t Theme) { r.theme = t }

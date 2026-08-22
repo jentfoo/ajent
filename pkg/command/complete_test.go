@@ -116,7 +116,7 @@ func TestCompleterArgumentDelegates(t *testing.T) {
 	RegisterBuiltins(r, c)
 	comp := NewCompleter(r, c, nil)
 
-	// /reasoning <prefix> → delegates to reasoning's Complete, offering levels
+	// /reasoning <prefix> => delegates to reasoning's Complete, offering levels
 	start, items := comp.Complete("/reasoning me", 13)
 	assert.Equal(t, 11, start) // past "/reasoning "
 	labels := labelsOf(items)

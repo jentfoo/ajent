@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoadConfig exercises the user→project merge by server name with whole-entry
+// TestLoadConfig exercises the user-to-project merge by server name with whole-entry
 // replacement, env interpolation and validation.
 func TestLoadConfig(t *testing.T) {
 	t.Run("user_overridden_by_whole_entry", func(t *testing.T) {

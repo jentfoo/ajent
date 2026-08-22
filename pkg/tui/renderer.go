@@ -39,7 +39,7 @@ const (
 	flowWrap                   // carries alignment: alt wraps it keeping the hanging indent, inline emits it whole like prose
 )
 
-// histLine is one committed logical line. text never contains a newline —
+// histLine is one committed logical line. text never contains a newline;
 // commitHist enforces that by construction (splitHistLines).
 type histLine struct {
 	text    string

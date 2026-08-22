@@ -171,7 +171,7 @@ func TestExpand(t *testing.T) {
 		res1 := x.Expand(t.Context(), "@a.go")
 		require.Len(t, res1.Before, 2)
 
-		// second expand: file unchanged in the tracker → nothing injected
+		// second expand: file unchanged in the tracker, nothing injected
 		res2 := x.Expand(t.Context(), "@a.go")
 		assert.Empty(t, res2.Before)
 	})
@@ -186,16 +186,16 @@ func TestExpand(t *testing.T) {
 		res1 := x.Expand(t.Context(), "@a.go")
 		require.Len(t, res1.Before, 2)
 
-		// unchanged → not injected again
+		// unchanged: not injected again
 		res2 := x.Expand(t.Context(), "@a.go")
 		assert.Empty(t, res2.Before)
 
-		// hash changed → must be read and injected again
+		// hash changed: must be read and injected again
 		require.NoError(t, os.WriteFile(p, []byte("package a\nvar X = 1\n"), 0o600))
 		res3 := x.Expand(t.Context(), "@a.go")
 		require.Len(t, res3.Before, 2)
 
-		// unchanged again → deduped once more
+		// unchanged again: deduped once more
 		res4 := x.Expand(t.Context(), "@a.go")
 		assert.Empty(t, res4.Before)
 	})

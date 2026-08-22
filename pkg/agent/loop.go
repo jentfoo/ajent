@@ -14,9 +14,7 @@ import (
 )
 
 // contextThrottle is the minimum Used movement that triggers a Context emit, and
-// contextInterval the longest we go without one while a stream moves at all. The
-// pair keeps a streaming response from repainting on every tiny delta while still
-// advancing visibly as tokens land.
+// contextInterval the longest we go without one while a stream moves at all.
 const (
 	contextThrottle = 32
 	contextInterval = 80 * time.Millisecond
@@ -295,7 +293,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	req := a.buildRequest()
 	predicted := tokens.EstimateRequest(req)
 	// the system prompt and tool schemas are built into every request, so they
-	// must occupy context from the very first turn — not just after an exact report.
+	// must occupy context from the very first turn, not just after an exact report.
 	if t := a.state.Tokens; t != nil {
 		t.SetBase(tokens.EstimateFixed(req)) // replaced, so it self-corrects any seeded floor
 	}
@@ -513,15 +511,14 @@ func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock
 	a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: content}})
 }
 
-// append records one message in state and notifies the OnMessage hook so a
-// session can persist it as the loop appends it. Called on the loop goroutine,
-// so ordering matches the transcript exactly.
 // modelOrigin returns the Origin stamp for an assistant message produced by the
 // current model.
 func (a *Agent) modelOrigin() *llm.Origin {
 	return &llm.Origin{Provider: a.state.Model.Provider, Dialect: a.state.Model.Caps.Dialect, Model: a.state.Model.ID}
 }
 
+// append records one message in state and notifies the OnMessage hook so a
+// session can persist it as the loop appends it.
 func (a *Agent) append(info MessageInfo) {
 	// an assistant response is stamped with its producing model so cross-model history
 	// can be degraded correctly on the next request; user and tool messages stay bare.

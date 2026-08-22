@@ -740,7 +740,7 @@ func TestUISearchArrowCommits(t *testing.T) {
 			if tc.browseOlder {
 				arrow = key{typ: keyUp}
 			}
-			// the arrow selects the highlighted (newest) prompt and closes the overlay —
+			// the arrow selects the highlighted (newest) prompt and closes the overlay;
 			// it does not scroll on this same press, nor send the message.
 			submit := searchPress(u, arrow)
 			assert.Nil(t, submit)
@@ -785,7 +785,7 @@ func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
 	})
 
 	// plain ↑ is cursor-first: each recall fills the field with its caret at the
-	// end, so stepping older takes two presses — one Up reaches the start of the
+	// end, so stepping older takes two presses; one Up reaches the start of the
 	// recalled line (moving nothing else), a second recalls the next entry.
 	submit := searchPress(u, key{typ: keyUp})
 	assert.Nil(t, submit)
@@ -1246,7 +1246,7 @@ func TestUIActivityNewlineKeepsRowCount(t *testing.T) {
 // is the one part whose size follows the content rather than the terminal, so a
 // reply longer than the screen is tall used to push the block past the bottom.
 // Drawing a block taller than the screen scrolls it, and the previous frame's
-// rows — divider included — land in scrollback, where no erase can ever reach
+// rows (divider included) land in scrollback, where no erase can ever reach
 // them: one stranded copy per delta, compounding.
 func TestUILiveBlockFitsTheScreen(t *testing.T) {
 	t.Parallel()
@@ -1305,7 +1305,7 @@ func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 
 // TestUIResizeProbeGatesTheRedraw covers the barrier end to end: after a
 // settled burst the redraw waits for the terminal's status reply, because the
-// ioctl reports the new size before the emulator has reflowed to it — drawing
+// ioctl reports the new size before the emulator has reflowed to it; drawing
 // on that say-so alone is what strands a divider.
 func TestUIResizeProbeGatesTheRedraw(t *testing.T) {
 	t.Parallel()
@@ -1408,7 +1408,7 @@ func TestUIResizeProbeStaleReplyIgnored(t *testing.T) {
 
 // TestUIResizeDrawGraceCancelledBySignal covers the last window: the terminal
 // answered and the quiet grace is running, but a new resize begins before the
-// draw goes out. The draw must be abandoned — the frame would land on a grid
+// draw goes out. The draw must be abandoned; the frame would land on a grid
 // the next reflow is about to move.
 func TestUIResizeDrawGraceCancelledBySignal(t *testing.T) {
 	t.Parallel()

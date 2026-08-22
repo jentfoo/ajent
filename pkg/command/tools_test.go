@@ -22,7 +22,7 @@ func TestToolsFreeSelectBeforeStarted(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// free select: pick read and ls (indexes 0,1) → both enabled
+	// free select: pick read and ls (indexes 0,1) => both enabled
 	c.multiPicks = []fakeMultiPick{{result: []int{0, 1}}}
 	cmd, _ := r.Get("tools")
 	require.NoError(t, cmd.Handler(t.Context(), "", c))

@@ -446,8 +446,7 @@ func detailOrDefault(c Console, key string) string {
 	return d
 }
 
-// sessionOrFlag reports the source layer for a value that is not in defaults.
-
+// sessionOrFlag always reports the runtime/session layer.
 func sessionOrFlag(_ Console) string { return "session" }
 
 func orDefault(src string) string {

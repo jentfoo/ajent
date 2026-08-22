@@ -49,7 +49,7 @@ type Job struct {
 // job is the live state behind a public Job. Fields under mu are read by Pollers
 // while the owning goroutine mutates them.
 type job struct {
-	id           string // sub-1, sub-2, …
+	id           string // sub-1, sub-2, ...
 	task         string // full task text for the prompt
 	label        string // shortened single-line label for rows and /agents
 	instructions string

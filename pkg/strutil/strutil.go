@@ -31,7 +31,7 @@ func FormatTokens(n int) string {
 	}
 }
 
-// Clip returns s truncated to at most n runes, appending "…" when it was cut.
+// Clip returns s truncated to at most n runes, appending an ellipsis when cut.
 func Clip(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {

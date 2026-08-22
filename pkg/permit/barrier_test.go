@@ -341,7 +341,7 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		})
 	}
 
-	// a user's own ! line runs regardless of config denial — the human owns that shell.
+	// a user's own ! line runs regardless of config denial; the human owns that shell.
 	ctx := tools.WithUserInitiated(t.Context())
 	d := b.Guard()(ctx, bashCall("git stash"))
 	assert.Equal(t, tools.ActionAllow, d.Action)

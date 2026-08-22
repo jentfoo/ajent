@@ -11,17 +11,14 @@ import "strings"
 //
 // This means inline mode never rewrites committed history on a resize: we cannot
 // know how many physical terminal rows our content occupies after an emulator
-// reflow (widening pulls scrollback back; narrowing wraps), so any attempt to
-// rewrite it would land on rows that are not where we expect. Three designs tried
-// to repaint the visible screen from retained history — a full viewport redraw, an
-// absolute cursorTo pass, and a relative climb bounded by owned rows — and each
-// surfaced new corruption on real terminals (scrolled-up or widened). Instead,
+// reflow, so any attempt to rewrite it would land on rows that are not where we
+// expect. Instead,
 // committed lines are emitted so that what can reflow natively does:
 //
 //   - every text line (`flowReflow` and `flowWrap` alike: prose, code, lists,
 //     quotes, diffs, tool output) goes out as one logical line, exactly like
-//     cat. The terminal wraps it and reflows it on resize in both directions,
-//     and selections carry no fake continuation indents — a hard break from us
+//     cat. The terminal wraps it and reflows it on resize in both directions;
+//     selections carry no fake continuation indents (a hard break from us
 //     would freeze the line at commit width and fragment copies.
 //   - only genuinely two-dimensional content (tables, rules) is laid out at
 //     commit width and keeps it; wrapping a table would garble it outright.
@@ -47,7 +44,7 @@ type inlineRenderer struct {
 
 // baseline is the bookkeeping for row-diffing against the frame on screen.
 // A width change reflows rows we did not write, a count change is what the full
-// erase covers, and an invalidation means the block itself is gone — each makes
+// erase covers, and an invalidation means the block itself is gone; each makes
 // the next draw fall back to today's full erase-and-redraw. The periodic full
 // redraw bounds how long a stale row can linger in erasable territory.
 type baseline struct {
@@ -85,7 +82,7 @@ func (r *inlineRenderer) resume(inFd int) error {
 // size reports the terminal's current size, re-reading it rather than trusting
 // the last SIGWINCH. Resize signals are debounced (resizeSettle) but repaints are
 // not: a spinner tick or a progress row landing mid-burst would otherwise compose
-// and — worse — erase against a stale width, under-shooting the top of the
+// and, worse, erase against a stale width, under-shooting the top of the
 // reflowed block and stranding its rows on screen.
 func (r *inlineRenderer) size() (int, int) {
 	r.t.refreshSize()
@@ -95,7 +92,7 @@ func (r *inlineRenderer) size() (int, int) {
 // liveWidth is how wide a live row may be drawn. One column short of the
 // terminal on purpose: a row that fills the last column leaves the cursor in the
 // deferred-wrap state, and emulators disagree on whether the line is then marked
-// as continued — which decides whether a resize reflows it into the next row or
+// as continued; that decides whether a resize reflows it into the next row or
 // not. Staying off the last column makes reflow predictable everywhere.
 func (r *inlineRenderer) liveWidth() int { return max(r.t.width-1, 1) }
 
@@ -107,8 +104,8 @@ func (r *inlineRenderer) liveWidth() int { return max(r.t.width-1, 1) }
 // and clear downward": nothing counts how many rows the block occupies, so
 // nothing can miscount them. That is what makes it immune to the emulator
 // reflowing the block, to a glyph the terminal measures wider than we do, and to
-// a resize racing the draw — the failures that used to strand a divider, once
-// per miss, compounding. A reflow leaves the cursor on the first cell of its
+// a resize racing the draw; those failures used to strand a divider once per miss,
+// compounding. A reflow leaves the cursor on the first cell of its
 // logical line, which is the cell we parked on.
 func (r *inlineRenderer) eraseLive() string {
 	if !r.base.drawn {
@@ -205,7 +202,7 @@ func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 	// width in force right now, re-read so a resize landing mid-frame is
 	// accounted for before the count is taken). A skipped row never descended
 	// anything beyond its boundary, so it counts as one regardless of how the
-	// emulator has reflowed it since — the cursor returns exactly to where the
+	// emulator has reflowed it since; the cursor returns exactly to where the
 	// previous frame parked, which is the block's top.
 	r.t.refreshSize()
 	var climb int
@@ -303,7 +300,7 @@ func (r *inlineRenderer) clearHistory() {
 func (r *inlineRenderer) resize() { r.t.refreshSize() }
 
 // probe emits a status query whose reply (decoded as keyStatusReport) proves
-// the terminal has processed everything sent before it — including the resize
+// the terminal has processed everything sent before it, including the resize
 // reflow a settled burst is about to draw behind. The gate narrows the
 // mid-reflow draw window; this closes it.
 func (r *inlineRenderer) probe() { r.t.write(statusQuery) }

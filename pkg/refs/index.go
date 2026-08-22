@@ -47,14 +47,14 @@ func NewIndex(root string, policy tools.PathPolicy) *Index {
 // Candidates returns paths matching query, ranked by (a) already in the
 // conversation, (b) recent mtime, (c) fuzzy score. Directories complete with a
 // trailing `/` so accepting one re-opens it deeper. The result is relative to
-// the root for display; a `~` or `~/…` query completes within the user's home
+// the root for display; a `~` or `~/...` query completes within the user's home
 // directory instead, keeping the leading ~ in each candidate.
 func (idx *Index) Candidates(query string, inConversation func(path string) bool) []tui.Completion {
 	if inConversation == nil {
 		inConversation = func(string) bool { return false }
 	}
 
-	// a ~ or ~/… query completes within the user's home directory.
+	// a ~ or ~/... query completes within the user's home directory.
 	home := strings.HasPrefix(query, "~/") || query == "~"
 	qrel := query // path under base we are completing within
 	base := idx.root
@@ -152,7 +152,7 @@ func homeDir() string {
 	return home
 }
 
-// listDir lists only path's immediate children — one directory deep, never a
+// listDir lists only path's immediate children: one directory deep, never a
 // recursive walk. Home ~ completion uses it so @~ stays cheap however large
 // the home tree is.
 func listDir(path string) ([]entry, map[string]time.Time) {

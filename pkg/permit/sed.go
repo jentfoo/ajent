@@ -51,8 +51,8 @@ var sedLongReadFlags = bulk.SliceToSet([]string{
 // sedAddr matches one address: $, a line number (optionally N~M), or /regex/.
 const sedAddr = `(?:\$|\d+(?:~\d+)?|/(?:[^/\\]|\\.)*/)`
 
-// sedAddrPrefix is an optional single address or range with trailing !. RE2
-// supports \b and non-capturing groups, so this ports from the reference as-is.
+// sedAddrStartRe matches an optional single address or range with trailing !.
+// RE2 supports \b and non-capturing groups, so this ports from the reference as-is.
 var (
 	sedAddrStartRe = regexp.MustCompile("^(?:" + sedAddr +
 		`(?:\s*,\s*(?:` + sedAddr + `))?\s*!?\s*)?`)
@@ -191,7 +191,7 @@ func sedReadSafe(raw string) bool {
 			case sedBoolFlagRe.MatchString(tok) || isSedLongReadFlag(tok):
 				// read-only flag; skip
 			default:
-				// -f/--file (script unverifiable), --, unknown flags → prompt
+				// -f/--file (script unverifiable), --, unknown flags => prompt
 				return false
 			}
 			continue

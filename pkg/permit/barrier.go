@@ -24,8 +24,7 @@ const maxClassifierArgs = 500
 const bashTool = "bash"
 
 // Barrier gates every tool call through static classification plus an optional
-// approval dialog. It holds the live mode, session allows and any open dialogs,
-// so a Shift+Tab cycle can re-evaluate what is on screen.
+// approval dialog, holding the live mode and any open dialogs.
 type Barrier struct {
 	mu         sync.Mutex
 	mode       Mode
@@ -468,10 +467,10 @@ func staticVerdict(m Mode, ctx context.Context, call agent.ToolCall, ro func(str
 }
 
 // DenyMatches reports whether call is named by a configured denied command: an exact
-// tool name for any non-bash tool (MCP/extension/built-in), or — for bash — the
+// tool name for any non-bash tool (MCP/extension/built-in), or, for bash, the
 // trimmed command line matched as a token-boundary prefix, so "git" covers every
 // git invocation and "git stash" its subcommands. A compound line is refused when
-// any of its components matches, so wrapping in `cd … &&` never escapes the gate.
+// any of its components matches, so wrapping in `cd ... &&` never escapes the gate.
 // Unlike SafeMatches it may also name core writers; denying one is a legitimate safety gate.
 func DenyMatches(call agent.ToolCall, cmds []string) bool {
 	for _, e := range cmds {
@@ -494,7 +493,7 @@ func DenyMatches(call agent.ToolCall, cmds []string) bool {
 }
 
 // SafeMatches reports whether call is named by a configured safe command: an exact
-// tool name for any non-bash tool (MCP/extension/built-in), or — for bash — the
+// tool name for any non-bash tool (MCP/extension/built-in), or, for bash, the
 // trimmed command line matched as a token-boundary prefix, so "git" covers every
 // git invocation and "git status" its subcommands. A compound line matches only when
 // every component is either a listed entry or verifiably read-only (mirroring
@@ -556,8 +555,8 @@ func entryCovered(line string, cmds []string) bool {
 }
 
 // toolNameCovered reports whether a non-bash tool name is covered by a configured
-// entry: the exact tool name, or — when the entry names an MCP server namespace
-// (tools are registered server__tool) — every tool that server exposes. An extension
+// entry: the exact tool name, or (when the entry names an MCP server namespace,
+// tools are registered server__tool) every tool that server exposes. An extension
 // whose own name carries __ still matches exactly.
 func toolNameCovered(name, e string) bool {
 	if name == e {

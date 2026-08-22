@@ -186,7 +186,8 @@ func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res.IsError)
 
-	// The rediscovery inside the notification handler must complete — proving it ran off mcp-go's reader goroutine and did not block subsequent I/O.
+	// Rediscovery inside the handler proves it runs off mcp-go's reader goroutine,
+	// not blocking subsequent I/O.
 	require.Eventually(t, func() bool { return rediscovered.Load() }, 5*time.Second, 20*time.Millisecond,
 		"notification-handler re-discovery deadlocked the stdio transport")
 

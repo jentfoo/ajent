@@ -92,7 +92,7 @@ func TestMultiStepTurnDoesNotMultiplyContext(t *testing.T) {
 // TestFirstTurnContextIncludesSystemAndTools locks in the fix for the start-of-
 // session undercount: before any exact provider report, the context bar must
 // already carry the fixed system-prompt + tool-schema overhead that rides with
-// every request — not just the appended message estimate.
+// every request, not just the appended message estimate.
 func TestFirstTurnContextIncludesSystemAndTools(t *testing.T) {
 	t.Parallel()
 

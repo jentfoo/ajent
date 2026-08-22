@@ -29,7 +29,7 @@ func ParseLine(s string) Line {
 	if strings.HasPrefix(s, " ") {
 		return Line{Kind: KindPrompt, Rest: s[1:]}
 	}
-	// `//x` → prompt `/x`; `!!x` → prompt `!x`
+	// `//x` => prompt `/x`; `!!x` => prompt `!x`
 	if strings.HasPrefix(s, "//") {
 		return Line{Kind: KindPrompt, Rest: s[1:]}
 	}

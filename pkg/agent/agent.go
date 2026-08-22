@@ -176,8 +176,8 @@ func (a *Agent) Recount(ctx context.Context) (int, error) {
 }
 
 // recount replaces the ledger's estimate with the provider tokenizer's exact count
-// of what buildRequest would send. It is shared by the external Recount and the
-// turn loop (which calls it while running, so it must not take the agent lock).
+// of what buildRequest would send. It is shared by Recount and the turn loop, which
+// calls it while running (so it must not take the agent lock).
 func (a *Agent) recount(ctx context.Context) (int, error) {
 	p, err := a.opts.Provider(a.state.Model)
 	if err != nil {

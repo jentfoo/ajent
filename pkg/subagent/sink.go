@@ -29,8 +29,8 @@ const (
 )
 
 // childSink publishes one activity row per running job: the current tool call or
-// a "thinking…" line, elided to a single line and cleared on turn end. Nothing it
-// emits ever reaches committed history — it feeds Options.Activity only.
+// a "thinking..." line, elided to a single line and cleared on turn end. Nothing it
+// emits ever reaches committed history; it feeds Options.Activity only.
 type childSink struct {
 	agent.NopSink
 	id  string // row key, e.g. sub-2

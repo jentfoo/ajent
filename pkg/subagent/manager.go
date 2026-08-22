@@ -53,7 +53,7 @@ type Manager struct {
 	mu      sync.Mutex
 	jobs    map[string]*job
 	pending []string // completed ids not yet delivered into the parent context
-	count   int      // id counter -> sub-1, sub-2, …
+	count   int      // id counter; ids are sub-N
 }
 
 // New returns a Manager with defaults resolved.

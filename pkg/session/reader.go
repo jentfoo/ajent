@@ -70,7 +70,7 @@ func versionErr(entries []Entry) error {
 }
 
 // Branch returns the chain from head back to its root by walking parentID
-// through an id index. It is the only read path anything else uses — never raw
+// through an id index. It is the only read path anything else uses; never raw
 // file order.
 func Branch(entries []Entry, head string) []Entry {
 	if head == "" || len(entries) == 0 {

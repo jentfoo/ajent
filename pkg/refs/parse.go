@@ -14,7 +14,7 @@ type Ref struct {
 	Path  string // the path as written, without @ or annotation
 	Start int    // byte offset of the leading @ in the message
 	End   int    // byte offset just past the token (path or annotation)
-	Note  string // any absorbed trailing (…), empty when none
+	Note  string // any absorbed trailing (...), empty when none
 }
 
 // Parse returns every @path reference in text. @ matches only at a word
@@ -43,7 +43,7 @@ func Parse(text string) []Ref {
 		}
 		path := text[pathStart:j]
 		note := ""
-		// absorb a trailing (…) measurement, allowing a single space before it
+		// absorb a trailing (...) measurement, allowing a single space before it
 		noteStart := j
 		if noteStart < len(text) && text[noteStart] == ' ' && noteStart+1 < len(text) && text[noteStart+1] == '(' {
 			noteStart++ // the leading space is part of the annotation span
@@ -84,7 +84,7 @@ func isSpaceOrPunct(c byte) bool {
 	return false
 }
 
-// absorbNote returns the end index of a trailing `(…)` annotation immediately
+// absorbNote returns the end index of a trailing `(...)` annotation immediately
 // after pos, when one is present. It matches balanced parens so a measurement
 // containing a parenthesised unit still terminates. ok is false when there is
 // no annotation or it does not look like a measurement.

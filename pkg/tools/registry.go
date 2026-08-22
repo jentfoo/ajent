@@ -565,7 +565,7 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 }
 
 // denied builds an error result carrying the denial's reason. Reasons are already
-// self-framing ("refused …", "permission required …"), so no prefix is added.
+// self-framing ("refused ...", "permission required ..."), so no prefix is added.
 func denied(reason string) (agent.ToolResult, error) {
 	if strings.TrimSpace(reason) == "" { // guards always carry a reason; stay safe anyway
 		reason = "permission required"

@@ -43,7 +43,7 @@ const classCacheMax = 500
 type ClassifierFn func(ctx context.Context, s Subject) Class
 
 // cachedClassifier wraps an uncached classifier with a session-scoped LRU keyed by
-// subject identity (tool + exact payload). unsure verdicts are never stored — they
+// subject identity (tool + exact payload). unsure verdicts are never stored; they
 // are usually transient (an abort, missing auth, an API error).
 type cachedClassifier struct {
 	fn ClassifierFn

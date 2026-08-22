@@ -9,7 +9,7 @@ import (
 
 // TestFetchGoStdioEndToEnd drives the real mcp-fetch-go stdio server (which emits
 // notifications/tools/list_changed at startup, like many real servers) through a full
-// connect → list → call cycle via the Manager. It is skipped when that binary is not on
+// connect-to-list-call cycle via the Manager. It is skipped when that binary is not on
 // PATH, and guards against the notification deadlock regressing.
 func TestFetchGoStdioEndToEnd(t *testing.T) {
 	path, err := exec.LookPath("mcp-fetch-go")

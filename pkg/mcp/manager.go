@@ -111,8 +111,8 @@ func (m *Manager) serverByName(name string) *server {
 }
 
 // LoadOnFirstMessage connects and registers every server, exactly once,
-// just before the user's first message is assembled into a turn. Doing it here —
-// not at session start — means any /tools or /mcp changes made up to that point
+// just before the user's first message is assembled into a turn. Doing it here,
+// not at session start, means any /tools or /mcp changes made up to that point
 // take effect; later prompts never re-trigger it. Config-disabled servers still
 // register their tools as StateDisabled so they remain visible and toggleable in
 // /tools.

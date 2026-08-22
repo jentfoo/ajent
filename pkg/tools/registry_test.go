@@ -160,7 +160,7 @@ func TestRegistryEnabledNamesBySource(t *testing.T) {
 }
 
 // TestRegistryLookupIgnoresEnabled asserts Lookup returns a tool regardless of
-// enabled state, while Get respects it — the silent bug picking the wrong one
+// enabled state, while Get respects it; the silent bug picking the wrong one
 // causes is what separate methods prevent.
 func TestRegistryLookupIgnoresEnabled(t *testing.T) {
 	t.Parallel()

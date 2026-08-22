@@ -9,9 +9,9 @@ import (
 // Accounting is a session's token ledger: per-response usage, running totals,
 // and how full the next request will be (Context).
 //
-// Used = promptExact + outputExact + factor*(pending+live), where pending/live
-// are raw estimates scaled by the calibration factor at read time; both reset on
-// each Response.
+// Used = promptExact + outputExact + factor*(pending+live+composing+submitted),
+// where the estimate terms are raw and scaled by the calibration factor at read
+// time; they reset on each Response.
 type Accounting struct {
 	mu sync.Mutex
 

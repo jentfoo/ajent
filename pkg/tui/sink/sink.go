@@ -89,7 +89,7 @@ func (s *Sink) ToolProgress(p agent.ToolProgress) {
 // progressKey namespaces a call's activity row against sub-agent rows.
 func progressKey(callID string) string { return "call:" + callID }
 
-// progressRow renders "write notes.go · 132 lines · 4.1k".
+// progressRow renders a row like "write notes.go · 132 lines · 4.1k".
 func progressRow(p agent.ToolProgress) string {
 	parts := []string{p.Name}
 	if p.Path != "" {

@@ -9,9 +9,8 @@ import (
 const InterruptedText = "interrupted by user"
 
 // abortResults returns one tool_result per call in msg: its real result when
-// results answers it, or a synthetic error marked interrupted otherwise. A
-// partial assistant message with an unanswered tool_use makes the next Anthropic
-// request 400, so every cancelled turn must fill them all.
+// results answers it, or a synthetic interrupted error otherwise. Every cancelled
+// turn must fill all unanswered calls so the next request stays well formed.
 func abortResults(msg llm.Message, results []llm.ToolResultBlock) []llm.ToolResultBlock {
 	byCall := make(map[string]llm.ToolResultBlock, len(results))
 	for _, r := range results {

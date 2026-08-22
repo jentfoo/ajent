@@ -258,8 +258,8 @@ func TestLoopParallelCalls(t *testing.T) {
 	assert.Equal(t, []string{"c1", "c2"}, ids)
 }
 
-// A tool call that fails — either the tool itself errors or it is unknown to the
-// set — must surface as an IsError result and let the loop continue, never abort.
+// TestLoopToolFailureContinues asserts failed or unknown tools yield IsError
+// results, letting the loop continue rather than aborting.
 func TestLoopToolFailureContinues(t *testing.T) {
 	t.Parallel()
 
@@ -341,8 +341,8 @@ func TestLoopUnlimitedByDefault(t *testing.T) {
 	assert.Equal(t, 6, catch.result.Steps)
 }
 
-// A provider failure surfaces on the Prompt call and as the turn result,
-// whether it arrives mid-stream or before any events.
+// TestLoopProviderErrorPropagates asserts a provider error returns from Prompt
+// and lands in TurnResult, whether mid-stream or before any events.
 func TestLoopProviderErrorPropagates(t *testing.T) {
 	t.Parallel()
 

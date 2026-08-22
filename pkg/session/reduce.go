@@ -113,7 +113,7 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 		reduced := applyReduce(md.Message, stripThinking, stubs)
 		// stripping thinking can leave an assistant message with no content at all (it
 		// held only thinking blocks); providers reject empty assistant messages. Drop such
-		// entries only when we actually stripped — a pre-existing empty assistant is left
+		// entries only when we actually stripped; a pre-existing empty assistant is left
 		// as recorded so resume keeps exactly the context it had.
 		if stripThinking && md.Message.Role == llm.RoleAssistant && len(reduced.Content) == 0 {
 			continue

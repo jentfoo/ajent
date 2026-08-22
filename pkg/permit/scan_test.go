@@ -41,7 +41,7 @@ func TestScanOperatorsInsideQuotesAreInert(t *testing.T) {
 	}{
 		{`semicolon in double`, `echo "a;b"`, false, false},
 		{"redirect in single", "echo 'x > y'", false, false},
-		// $() inside double quotes expands and executes — unsafe but not a split
+		// $() inside double quotes expands and executes; unsafe but not a split
 		{"subst in double", `echo "$(pwd)"`, false, true},
 	}
 	for _, c := range cases {

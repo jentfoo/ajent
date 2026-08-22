@@ -296,7 +296,7 @@ func (v *vt) reverseIndex() {
 // emulator does on resize: continuation rows join their logical line and
 // re-wrap at the new width, overflow retires to scrollback, and the cursor
 // rides its cell. Growing adds blank rows at the bottom; it does not pull rows
-// back from scrollback (some emulators do — the renderer must cope with both).
+// back from scrollback (some emulators do; the renderer must cope with both).
 func (v *vt) setSize(w, h int) {
 	if w <= 0 || h <= 0 || (w == v.w && h == v.h) {
 		return

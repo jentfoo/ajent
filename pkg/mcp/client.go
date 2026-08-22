@@ -406,7 +406,7 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage, ou
 // OnNotification registers a handler for server notifications (progress,
 // tools/list_changed). Handlers are invoked asynchronously: mcp-go delivers
 // notifications on its transport's single reader goroutine, so doing blocking I/O
-// inside a handler (e.g. re-discovering after list_changed) would deadlock stdio —
+// inside a handler (e.g. re-discovering after list_changed) would deadlock stdio;
 // the reader is what returns those responses. Dispatching each notification to its
 // own goroutine keeps that invariant at this boundary for every current and future
 // handler.
@@ -459,7 +459,7 @@ func (c *Client) Close() error {
 	return err
 }
 
-// Request sends an arbitrary JSON-RPC request to the server — the raw seam
+// Request sends an arbitrary JSON-RPC request to the server, the raw seam
 // extensions use for methods we do not type.
 func (c *Client) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	resp, err := c.c.GetTransport().SendRequest(ctx, transport.JSONRPCRequest{
@@ -477,7 +477,7 @@ func (c *Client) Request(ctx context.Context, method string, params any) (json.R
 	return slices.Clone(resp.Result), nil
 }
 
-// Handle installs a handler for an incoming server→client request method.
+// Handle installs a handler for an incoming server-to-client request method.
 // mcp-go's own handlers are replaced after Start; ping is re-implemented.
 func (c *Client) Handle(method string, h func(ctx context.Context, params json.RawMessage) (any, error)) {
 	bidir, ok := c.c.GetTransport().(transport.BidirectionalInterface)

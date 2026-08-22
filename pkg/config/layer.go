@@ -21,7 +21,7 @@ type Layer struct {
 // map Merge built.
 type Resolved struct {
 	root *val
-	src  map[string]string // dotted leaf path → layer name, last writer wins
+	src  map[string]string // dotted leaf path => layer name, last writer wins
 }
 
 // Bytes returns the merged JSON, indented at two spaces with key order kept.

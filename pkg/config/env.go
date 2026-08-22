@@ -9,8 +9,8 @@ import (
 )
 
 // EnvLayer returns the layer bound from AJENT_* variables, one per scalar key
-// the schema declares. Var names derive from the dotted path: reasoning.level ←
-// AJENT_REASONING_LEVEL. An unparseable number or bool is a warning, not an error.
+// the schema declares. Var names derive from the dotted path: reasoning.level maps
+// to AJENT_REASONING_LEVEL. An unparseable number or bool is a warning, not an error.
 func EnvLayer(env func(string) string) (Layer, []string) {
 	var warns []string
 	data := []byte("{}")
@@ -60,7 +60,6 @@ func scalarLeaves(t reflect.Type, prefix string) []leafPath {
 	return out
 }
 
-// isRawMessage reports whether t is encoding/json.RawMessage (a named []byte).
 // isRawMessage reports whether t is encoding/json.RawMessage.
 func isRawMessage(t reflect.Type) bool { return t == rawMessageType }
 

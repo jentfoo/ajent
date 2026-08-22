@@ -563,7 +563,6 @@ func (s *responsesStream) onCompleted(ev respEvent) []Event {
 	return append(out, s.finish(io.EOF)...)
 }
 
-// finish emits the terminal event.
 // respStopReason maps a terminal response status.
 func respStopReason(status string, sawToolCall bool) StopReason {
 	switch status {

@@ -115,7 +115,7 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 	return items, initial
 }
 
-// mcpGroupLabels builds source→header-label for MCP servers from the manager.
+// mcpGroupLabels builds source-to-header-label for MCP servers from the manager.
 func mcpGroupLabels(c Console) map[string]string {
 	labels := make(map[string]string)
 	if mgr := c.MCP(); mgr != nil {

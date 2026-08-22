@@ -11,7 +11,7 @@ import (
 )
 
 // State rebuilds agent state from a branch, resolving model switches through
-// resolve. A failure to resolve is a warning, never an error — the caller falls
+// resolve. A failure to resolve is a warning, never an error; the caller falls
 // back to its registry's active model.
 func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.State, []string) {
 	var st agent.State
@@ -25,7 +25,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 
 	// the ledger's context terms must reflect only messages that survive compaction:
 	// entries summarized away by a cut or dropped outright are gone from what the next
-	// request sends. Cumulative spend (Accounting.Total) is unaffected — it comes from
+	// request sends. Cumulative spend (Accounting.Total) is unaffected; it comes from
 	// recorded usage, not this rebuild.
 	keepIdx := cutIndex(branch, cd)
 	var dropped map[string]struct{}
@@ -112,7 +112,7 @@ func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
 	if t == nil {
 		return
 	}
-	if tokens.Zero(md.Usage) { // unreported provider → estimate the message instead of exact terms
+	if tokens.Zero(md.Usage) { // unreported provider: estimate the message instead of exact terms
 		t.Add(tokens.EstimateMessages([]llm.Message{md.Message}))
 		return
 	}

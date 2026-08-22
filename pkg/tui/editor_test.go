@@ -208,8 +208,8 @@ func TestEditorKill(t *testing.T) {
 		assert.Equal(t, 0, e.pos)
 	})
 	t.Run("repeat_presses_consume_one_unit_each", func(t *testing.T) {
-		// Delete semantics: each press removes exactly one row — join, clear, join,
-		// clear — never more than one per press
+		// Delete semantics: each press removes exactly one row (join, clear,
+		// join, clear), never more than one per press
 		e := newEditorAt("ab\n\ncd", 3)
 		e.KillToLineEnd(wide)
 		assert.Equal(t, "ab\ncd", e.Value())

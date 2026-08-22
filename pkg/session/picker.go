@@ -56,8 +56,8 @@ type TreeRow struct {
 
 // TreeRows walks a whole transcript as a tree and emits one row per pickable
 // message, oldest (root) first so branches read top-down. Newer continuations of
-// a fork are appended after older ones, so the most recent work sits at the bottom
-// — near where the rewind picker opens.
+// a fork are appended after older ones, so the most recent work sits at the bottom,
+// near where the rewind picker opens.
 func TreeRows(entries []Entry, head string) []TreeRow {
 	if len(entries) == 0 {
 		return nil
@@ -198,7 +198,7 @@ func RewindTarget(entries []Entry, rowID string) (head, fill string, ok bool) {
 		}
 		switch e.Type {
 		case TypeCompaction:
-			return e.ParentID, "", true // parent is a valid head when it exists; caller checks ok via empty check? keep simple: return parent even if root
+			return e.ParentID, "", true
 		case TypeMessage:
 			var md MessageData
 			if err := e.Decode(&md); err != nil {

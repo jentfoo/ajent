@@ -13,7 +13,7 @@ import (
 
 // TestForkResumeAcrossBranches drives the full session-tree loop: a live agent
 // grows a chain, we rewind via SetHead to an earlier point and grow a new tip,
-// then kill and reopen — resume must come back on the persisted (new) branch
+// then kill and reopen; resume must come back on the persisted (new) branch
 // with its exact context, while the old path stays reachable as another tip.
 func TestForkResumeAcrossBranches(t *testing.T) {
 	t.Parallel()

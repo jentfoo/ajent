@@ -20,7 +20,7 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 	switch {
 	case c.phase == PhasePlanning && !in.Injected && !c.goalCaptured && text != "":
 		// the contract rides as its own block so the echoed line stays the goal;
-		// appendSteer emits Text before Blocks, so the model reads goal then contract
+		// appendSteer emits Text before Blocks, keeping goal then contract
 		c.goalCaptured = true
 		c.persistLocked()
 		in.Blocks = append(llm.BlockList{llm.TextBlock{Text: planningContract()}}, in.Blocks...)
@@ -68,7 +68,7 @@ func (c *Controller) Advance(ctx context.Context, last agent.TurnResult) (agent.
 			return c.retryImplementationLocked()
 		}
 		c.retries = 0
-		// a stopped implementor is a finished implementor, dev_review or not — but the
+		// a stopped implementor is a finished implementor, dev_review or not; but the
 		// reviewer must still hear what it did, so an unreported round falls back to
 		// its closing message. Read before the fork replaces the context.
 		if pending != nil && pending.to == PhaseReviewing {

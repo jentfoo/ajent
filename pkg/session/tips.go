@@ -14,7 +14,7 @@ type Tip struct {
 	First string // first user message on that branch, for display; empty if none
 }
 
-// Tips returns every chain tip in file order — entries whose id is not another
+// Tips returns every chain tip in file order: entries whose id is not another
 // entry's parent. The persisted head and each fork appear exactly once.
 func Tips(entries []Entry) []Tip {
 	if len(entries) == 0 {

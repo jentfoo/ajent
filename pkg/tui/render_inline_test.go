@@ -47,11 +47,9 @@ func hasCursorTo(s string) bool {
 
 // TestInlineNeverAbsolute pins invariant 1 as an emitted-stream property: inline
 // mode never issues an absolute cursor address, even across a resize (both narrow
-// and wide). Every prior repaint design — attempt 3's absolute cursorTo pass and
-// the relative climb that followed it — corrupted scrollback on real terminals
-// because we cannot know where our committed rows sit after emulator reflow. The
-// only anchor is the parked cursor, which the terminal tracks for us; everything
-// else must be relative.
+// and wide), because we cannot know where our committed rows sit after emulator
+// reflow. The only anchor is the parked cursor, which the terminal tracks for us;
+// everything else must be relative.
 func TestInlineNeverAbsolute(t *testing.T) {
 	t.Parallel()
 
@@ -157,7 +155,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		r.commit([]histLine{{rule: true}})
 
 		// a committed row that fills the last column enters the deferred-wrap
-		// state, which emulators reflow inconsistently — same precaution as
+		// state, which emulators reflow inconsistently (same precaution as
 		// live_rows_never_fill_the_last_column
 		assert.Equal(t, 19, displayWidth(v.Line(0)), "a committed rule stays off the last column")
 	})
@@ -190,7 +188,7 @@ func TestInlineRendererCommit(t *testing.T) {
 // TestInlineUnalignedFlowReflowsOnWiden pins that flowWrap content with nothing to
 // align (hangWidth == 0: diffs, tool output) is emitted as a single logical line so
 // the emulator reflows it on resize. This is what makes committed structural rows
-// come back in full form when the window widens — without our ever rewriting them.
+// come back in full form when the window widens without our ever rewriting them.
 func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 	t.Parallel()
 
@@ -208,7 +206,7 @@ func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 		"the long line must wrap into several terminal rows at w=40")
 
 	// widen: the emulator rejoins that one logical line into its full form. We only
-	// resize — never redraw committed history — so whatever is on screen is exactly
+	// resize; never redraw committed history, so whatever is on screen is exactly
 	// what the emulator's own reflow made of our single emitted line.
 	v.setSize(120, 4) // wide enough that the whole line fits on one row
 	r.resize()
@@ -227,7 +225,7 @@ func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 // continuation we used to indent (hangWidth > 0: code, lists, quotes) goes out as
 // a single logical line: the terminal wraps it flush-left, reflows it on resize,
 // and copies it whole. Hard-breaking it kept the alignment but froze the line at
-// commit width — the corruption-seam the user sees when widening.
+// commit width; that is the corruption-seam the user sees when widening.
 func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 	t.Parallel()
 
@@ -546,8 +544,8 @@ func TestInlineRendererResizeRace(t *testing.T) {
 	assert.Equal(t, "committed history", v.Line(0), "and history was left alone")
 }
 
-// relayout lays histLine values out at width w via their own rows() method — the
-// path alt mode uses to rebuild its viewport on resize. It lets a test compare
+// relayout lays histLine values out at width w via their own rows() method; that is
+// the path alt mode uses to rebuild its viewport on resize. It lets a test compare
 // "committed at A, re-laid at B" against "freshly rendered at B". Inline mode does
 // not use it (it never re-renders committed history), but the retained-intent rule
 // that makes alt's re-layout exact is shared and must hold for every producer.

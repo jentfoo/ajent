@@ -82,7 +82,7 @@ func TestUsageBar(t *testing.T) {
 func TestFormatBytesNotTokens(t *testing.T) {
 	t.Parallel()
 
-	// the same number reads differently: ÷1000 unsuffixed vs ÷1024 with a unit
+	// the same number reads differently: /1000 unsuffixed vs /1024 with a unit
 	assert.Equal(t, "3.7k", strutil.FormatTokens(3686))
 	assert.Equal(t, "3.6kb", strutil.HumanSize(3686))
 }

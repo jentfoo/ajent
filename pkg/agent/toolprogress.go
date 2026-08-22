@@ -13,8 +13,8 @@ type ToolProgress struct {
 	Name   string
 	Path   string // target argument once complete, empty until then
 	// Bytes is the argument JSON received so far, which is what the stream is
-	// actually delivering — not the size of any file the call would produce, which
-	// is smaller once the JSON escaping and key names come off.
+	// actually delivering, not the size of any file the call would produce (which
+	// is smaller once the JSON escaping and key names come off).
 	Bytes int
 	Lines int // newline escapes within the arguments
 	Done  bool
@@ -132,8 +132,8 @@ func (c *lineEscapeCounter) count(s string) {
 
 // targetKeys are the argument names that identify what a call acts on, tried in
 // order. Looking them up by name rather than position matters because argument
-// order is not guaranteed — a marshalled Go map sorts its keys, so a write's
-// long "content" commonly streams ahead of its "path".
+// order is not guaranteed; a marshalled Go map sorts its keys, so a write's long
+// "content" commonly streams ahead of its "path".
 var targetKeys = []string{"path", "file_path", "file", "pattern", "command"}
 
 // argTarget names what a call acts on, from a partial JSON object. Empty until a

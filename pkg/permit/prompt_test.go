@@ -100,7 +100,7 @@ func TestMCPClassifierSystemVerbatim(t *testing.T) {
 	assert.Contains(t, p, "A readonly verdict requires NO observable change to anything.")
 	assert.Contains(t, p, "sends commands with lasting effects")
 
-	// name/description/params embedded (description trimmed like the old site did)
+	// name/description/params embedded (description trimmed)
 	assert.Contains(t, p, "Name: mcp_tool")
 	assert.Contains(t, p, "Description: does a thing")
 	assert.Contains(t, p, `Parameters (JSON Schema):

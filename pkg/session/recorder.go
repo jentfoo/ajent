@@ -30,7 +30,7 @@ func (r *Recorder) Message(info agent.MessageInfo) {
 
 // Sink wraps next so notices persist and the file is fsynced at each turn end.
 // Write failures surface as a notice through the wrapped sink rather than
-// failing the turn — a broken disk should not end the conversation.
+// failing the turn; a broken disk should not end the conversation.
 func (r *Recorder) Sink(next agent.Sink) agent.Sink {
 	return &recordingSink{next: next, rec: r}
 }

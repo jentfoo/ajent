@@ -3,7 +3,7 @@ package mcp
 import "sync"
 
 // ringLog is a bounded, thread-safe buffer of recent server stderr and protocol
-// lines for /mcp logs. No logging framework — the repo has none.
+// lines for /mcp logs. No logging framework in the repo.
 type ringLog struct {
 	mu  sync.Mutex
 	buf []string

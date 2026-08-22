@@ -24,7 +24,7 @@ func (m *Manager) newTestServer(name string) *server {
 // importing pkg/tools. It keeps both the latest tool object and its state by name.
 type fakeRegistrar struct {
 	mu       sync.Mutex
-	tool     map[string]State // namespaced name → state, latest registration wins
+	tool     map[string]State // namespaced name to state, latest registration wins
 	impls    map[string]agent.Tool
 	readOnly []string // names marked read-only via MarkReadOnly
 }
@@ -186,7 +186,7 @@ func TestLoadOnFirstMessageRunsOnce(t *testing.T) {
 
 // TestConfigDisabledServerLoadsButStaysInactive verifies a config-disabled server
 // server still connects so its tools appear in /tools, but registers each tool as
-// StateDisabled — known and toggleable, never callable by default.
+// StateDisabled: known and toggleable, never callable by default.
 func TestConfigDisabledServerLoadsButStaysInactive(t *testing.T) {
 	t.Parallel()
 

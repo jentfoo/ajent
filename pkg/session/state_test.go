@@ -158,7 +158,7 @@ func TestStateRebuildsLedgerFromRecordedUsage(t *testing.T) {
 }
 
 // TestStateLedgerIgnoresSummarizedAwayMessages asserts that after a compaction,
-// the rebuilt ledger's context terms reflect only surviving messages — never the
+// the rebuilt ledger's context terms reflect only surviving messages; never the
 // entries dropped by a cut. A reported turn before the cut must not inflate Used on
 // resume/rewind, or threshold auto-compaction would fire immediately even though
 // context was just reduced.

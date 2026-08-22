@@ -83,5 +83,5 @@ func (m Mode) Next() Mode {
 	}
 }
 
-// all returns whether the mode lets everything run without a gate.
+// allowsEverything reports whether every call runs ungated.
 func (m Mode) allowsEverything() bool { return m == ModeAllowAll }

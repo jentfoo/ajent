@@ -36,7 +36,7 @@ func TestSettingsMenuCancelledClosesSilently(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// no queued pick → Pick returns ErrCancelled; the menu closes with no notice.
+	// no queued pick: Pick returns ErrCancelled, the menu closes silently.
 	cmd, _ := r.Get("settings")
 	require.NoError(t, cmd.Handler(context.Background(), "", c))
 	assert.Empty(t, c.notices)
@@ -104,7 +104,7 @@ func TestSettingsMenuSavesToProjectLayer(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// pick the Model row (0); modelCommand picks index 1 = beta; save prompt → project.
+	// pick the Model row (0); modelCommand picks index 1 = beta; save prompt => project.
 	c.picks = []fakePick{{result: 0}, {result: 1}}
 	c.selects = []int{2} // "save to project config"
 
@@ -148,7 +148,7 @@ func TestEnumRowCancelledLeavesSessionUntouched(t *testing.T) {
 	c := newFakeConsole(t)
 	r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all"})
 
-	// no queued Select → ErrCancelled; nothing is recorded.
+	// no queued Select: ErrCancelled, nothing recorded.
 	changes, err := r.edit(context.Background(), c)
 	require.ErrorIs(t, err, tui.ErrCancelled)
 	assert.Empty(t, changes)
@@ -182,7 +182,7 @@ func TestModelRowCancelledReturnsErr(t *testing.T) {
 	c := newFakeConsole(t)
 	r := modelRow("Sub-agent model", "subagent.model")
 
-	// no queued pick → ErrCancelled, nothing recorded.
+	// no queued pick: ErrCancelled, nothing recorded.
 	changes, err := r.edit(context.Background(), c)
 	require.ErrorIs(t, err, tui.ErrCancelled)
 	assert.Empty(t, changes)

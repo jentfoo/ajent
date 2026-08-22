@@ -21,7 +21,7 @@ const historyFileName = "editor-history.lines"
 
 // histLine is one persisted message plus whether it may be offered for recall.
 // Hidden lines (e.g. an argv bootstrap prompt) are durable but never surface in
-// ↑/↓ or Ctrl+R, so they stay distinct from editor-typed messages.
+// Up/Down or Ctrl+R, so they stay distinct from editor-typed messages.
 type histLine struct {
 	msg    string
 	hidden bool // persisted yet excluded from Recent()/RecallIndex
@@ -52,7 +52,7 @@ func NewEditorHistory(s *Store, workspace, secretPrefix string) (*EditorHistory,
 // Append records a submitted editor message immediately and offers it for recall.
 func (h *EditorHistory) Append(msg string) { h.append(msg, false) }
 
-// AppendHidden records a submitted message durably but excludes it from ↑/↓ and
+// AppendHidden records a submitted message durably but excludes it from Up/Down and
 // Ctrl+R, so non-editor inputs stay distinct from typed lines. A nil receiver is
 // a no-op.
 func (h *EditorHistory) AppendHidden(msg string) { h.append(msg, true) }
@@ -177,7 +177,7 @@ func encodeHistLine(l histLine) []byte {
 }
 
 // readMessages returns path's recallable message texts (hidden rows excluded), for
-// callers that only care about what ↑/↓ would offer.
+// callers that only care about what Up/Down would offer.
 func readMessages(path string) []string {
 	lines := readHistLines(path)
 	out := make([]string, 0, len(lines))

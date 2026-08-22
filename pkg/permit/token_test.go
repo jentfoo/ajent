@@ -83,7 +83,7 @@ func TestUnwrapLaunchers(t *testing.T) {
 			[]string{"rm", "-rf", "/"}},
 		{"timeout attached", []string{"timeout", "--signal=TERM", "30s", "git", "status"},
 			[]string{"git", "status"}},
-		// sudo must not unwrap — it changes privilege
+		// sudo must not unwrap; it changes privilege
 		{"sudo stays", []string{"sudo", "ls"}, []string{"sudo", "ls"}},
 		{"env stays", []string{"env", "FOO=1", "cmd"}, []string{"env", "FOO=1", "cmd"}},
 		// xargs/nice/stdbuf are not launchers and must never unwrap

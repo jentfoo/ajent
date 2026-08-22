@@ -131,7 +131,7 @@ type UI struct {
 	promptIdx int      // -1 at the live buffer, else index of the recalled prompt
 	stashP    string   // live draft held aside while browsing recorded prompts
 
-	pastes map[string]string // placeholder → pasted content, expanded at submit
+	pastes map[string]string // placeholder => pasted content, expanded at submit
 
 	started   bool
 	lastBlank bool
@@ -148,7 +148,7 @@ type UI struct {
 	deferred []histLine
 	// resizeSeq counts SIGWINCHs; probeSeq is the burst generation the newest
 	// probe belongs to. A reply (or timeout) starts the draw grace only when
-	// they still match, and the draw itself re-checks them — a newer signal at
+	// they still match, and the draw itself re-checks them; a newer signal at
 	// either point means another reflow is in flight. probesOut counts probes
 	// still unanswered; replies carry no identity, so only the last one in
 	// flight can release the barrier.
@@ -714,7 +714,7 @@ func (u *UI) repaint() {
 	w, h := u.render.size()
 	// The live block is composed one column short of the terminal. A row that
 	// fills the last column leaves the cursor in the deferred-wrap state, and
-	// emulators disagree on whether that marks the line as continued — which is
+	// emulators disagree on whether that marks the line as continued; that is
 	// what decides how a resize reflows it. Composing narrow (rather than
 	// truncating at draw time) means nothing is cut off the editor or a dialog.
 	if w > 1 {
@@ -810,7 +810,7 @@ func (u *UI) repaint() {
 	// Last line of defence on the block's height. Every producer above budgets
 	// itself, but a floor (search, completion) or an unlucky width can still
 	// push the total past the screen, and a block taller than the screen scrolls
-	// as it is drawn — which strands the previous frame's rows above it, one
+	// as it is drawn; that strands the previous frame's rows above it, one
 	// copy per redraw, somewhere no erase can reach. Drop from the top, which is
 	// the oldest streamed text, and carry the caret with it.
 	caret := offset + curRow
@@ -1094,7 +1094,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	}
 	// an open history search consumes keys ahead of completion and the editor. Up
 	// and Down select: they commit the highlighted prompt into the field, close the
-	// overlay, but do not scroll on this same press — subsequent arrows browse.
+	// overlay, but do not scroll on this same press; subsequent arrows browse.
 	if u.search != nil {
 		switch k.typ {
 		case keyUp, keyDown:
@@ -1192,7 +1192,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	case keyUp:
 		// Cursor-first: move up through visual rows, and only a press already on
 		// the very first character (or an empty buffer) recalls older history.
-		// This holds even while browsing recorded prompts — a recalled multi-line
+		// This holds even while browsing recorded prompts: a recalled multi-line
 		// prompt is editable text whose caret must reach its start before Up steps
 		// to the next older entry, and Down restores the live draft from there.
 		if !u.editor.Up(u.editorWidth()) {
@@ -1313,7 +1313,7 @@ func (u *UI) readLines() {
 // terminal after the process is continued. Drawing never happens mid-burst:
 // every frame emitted while the emulator is still reflowing risks parking the
 // cursor against a grid that no longer exists, stranding a row no erase can
-// reach. A long drag freezes the live block until it pauses — cheap, since the
+// reach. A long drag freezes the live block until it pauses; cheap, since the
 // emulator is busy mangling the screen then anyway.
 func (u *UI) watchSignals() {
 	ch := make(chan os.Signal, 1)
@@ -1422,7 +1422,7 @@ func (u *UI) settleProbedLocked(gen int) {
 
 // drawSettled runs the settled redraw once the draw grace elapsed without a
 // newer SIGWINCH. During continuous fast resizing every grace is invalidated
-// before it fires, so no frame is emitted until a genuine pause — frames and
+// before it fires, so no frame is emitted until a genuine pause; frames and
 // reflows never share the wire, which is what strands a divider.
 func (u *UI) drawSettled(gen int) {
 	u.mu.Lock()

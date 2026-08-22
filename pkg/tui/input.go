@@ -39,7 +39,7 @@ const (
 	keyCursorReport
 	keyStatusReport // DSR reply (CSI 0 n): the terminal has caught up
 	keyColorReport  // OSC 11 reply: the terminal's default background color
-	keyDeviceAttrs  // DA1 reply (CSI … c), used only to fence an earlier query
+	keyDeviceAttrs  // DA1 reply (CSI ... c), used only to fence an earlier query
 	keyEscape
 	keyTab
 	keyBackTab

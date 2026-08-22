@@ -29,8 +29,8 @@ const (
 
 	// statusQuery asks the terminal for a DSR "no malfunction" reply (CSI 0 n).
 	// The reply is emitted only after the terminal has processed everything
-	// that preceded the query — including a pending resize reflow — so it
-	// serves as a barrier before drawing after a settled resize.
+	// that preceded the query, including a pending resize reflow; it serves as
+	// a barrier before drawing after a settled resize.
 	statusQuery = csi + "5n"
 
 	sgrReset = csi + "0m"
