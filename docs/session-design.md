@@ -32,16 +32,10 @@ the rewind picker all exist for it.
 
 One line per entry:
 
-```go
-type Entry struct {
-	ID       string          // ULID (Crockford base32), lexically sortable by time
-	ParentID string          // empty on the root; else this entry's predecessor
-	Type     Type            // session | message | compaction | model_change |
-	                        // setting_change | notice | custom
-	TS       int64           // unix milliseconds (UTC)
-	Data     json.RawMessage // opaque payload whose shape follows from Type
-}
-```
+One line per entry. An entry names its own id and — except on the root — its
+parent's id, a type tag drawn from a small set (session | message | compaction |
+model_change | setting_change | notice | custom), a unix-millisecond timestamp,
+and an opaque payload whose shape follows from the type.
 
 `ParentID` is what makes forking possible: every entry names the one it extends,
 so a transcript is not a linear log but a tree of branches. `Branch(entries, id)`
@@ -78,14 +72,8 @@ incrementing the previous random suffix rather than re-rolling entropy.
 
 ## The writer
 
-```go
-type Writer struct {
-	f    *os.File // nil for Discard
-	path string   // transcript file; empty for Discard, drives HEAD persistence
-	head string   // last appended entry id (or the rewind target after SetHead)
-	mu   sync.Mutex
-}
-```
+The writer owns the transcript file, its path and the current head id, under a
+mutex so concurrent appends form one linear chain.
 
 `Append(typ, data)` stamps `ParentID` from the current head and writes exactly
 one line under the mutex, so concurrent appends form one linear chain. The new
@@ -123,12 +111,10 @@ The one mutable piece of an otherwise append-only design is `HEAD`, persisted at
 `<session dir>/HEAD`. It points where work continues after a fork: which
 transcript file in the directory and which entry id inside it.
 
-```go
-type HeadCursor struct {
-	File string // base name of one .jsonl session in the directory
-	ID   string // active branch head inside that file
-}
-```
+The one mutable piece of an otherwise append-only design is `HEAD`, persisted at
+`<session dir>/HEAD`. It points where work continues after a fork: which
+transcript file in the directory and which entry id inside it. That pair — file
+base name plus active branch head id — is what a rewind updates.
 
 `WriteHead` is atomic (temp-file rename) and runs on every `SetHead` and at turn
 boundaries. `headFor(path, entries)` resolves a transcript's effective head: the
@@ -138,12 +124,9 @@ corrupt, resume degrades to "continue from the end" instead of losing the branch
 
 ## The store
 
-```go
-type Store struct { root string } // <config dir>/sessions
-```
-
-A workspace maps to one directory `<root>/<slug>-<hash>`, so renaming a project
-does not orphan its sessions (the slug is cosmetic; the hash pins it). The store:
+The store maps workspaces to directories under `<config dir>/sessions`: a workspace
+is one `<root>/<slug>-<hash>` directory, so renaming a project does not orphan its
+sessions (the slug is cosmetic; the hash pins it). The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
 - **List** returns every session for a workspace, newest first (`Info`: path,
@@ -245,15 +228,10 @@ the next request would be invalid. Rebuild checks this and warns if not.
 ## The recorder
 
 The `Recorder` bridges an agent turn stream onto a writer without coupling the
-agent to sessions:
-
-```go
-rec.Message(info)          // append one message entry (durability path)
-rec.Sink(next)             // wrap: persist notices, fsync at TurnEnd
-rec.ModelChange(m, reason) // append model_change by canonical key
-rec.SettingChange(k, v)    // append setting_change; k is a config dotted key
-rec.Custom(type, v)        // append opaque extension state
-```
+agent to sessions: it appends one message entry per message (the durability path),
+wraps a sink so notices persist and each `TurnEnd` fsyncs, records model changes by
+canonical key, setting changes against a dotted config key, and opaque extension
+state.
 
 The wrapped sink forwards every event to the real one while persisting what must
 survive. Tool results are folded into their message entries (the loop appends a
@@ -289,16 +267,10 @@ and every earlier branch remain in the file.
 
 ## Resume modes
 
-How a run decides which transcript to write is one of four modes:
-
-```go
-const (
-	modeNewSession // no flag: always a brand-new transcript
-	modeContinue   // --continue: auto-resume the most recent one
-	modeResumePick // --resume: picker over session roots, then resume its leaf
-	modeResumeID   // --resume <id>: reopen that exact saved transcript directly
-)
-```
+How a run decides which transcript to write is one of four modes: always a
+brand-new transcript, auto-resume the most recent one (`--continue`), pick from
+the session roots then resume its leaf (bare `--resume`), or reopen an exact saved
+transcript by id (`--resume <id>`).
 
 | Invocation | Behaviour |
 |---|---|
@@ -313,7 +285,15 @@ argument. A requested id resolves *before* the TUI opens, so a bad id fails with
 clear message instead of silently starting a fresh transcript.
 
 Every resume path reopens the file with `session.Open` (head recovery as
-above), rebuilds state and replays history.
+above), rebuilds state and replays history. `(*sessRec).restoreState` is the
+UI-free half of that — rebuilt state and setting overrides, no replay — so a
+headless run resumes the same way without a front end.
+
+A one-shot run (`-p`) records its turn like any other, which is what makes
+`ajent -p "…"` and a follow-up `ajent -p "…" --continue` share one transcript.
+`--continue` and `--resume <id>` both compose with `-p`; a bare `--resume` does
+not, because its picker needs a terminal, and the combination is a usage error
+rather than a hang.
 On exit, `cmd/ajent` prints:
 
 ```

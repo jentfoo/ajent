@@ -11,19 +11,21 @@ import (
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
-	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 // compactor runs staged compaction over the live session. It reads the current
 // branch, asks pkg/compact for a reduction plan, persists the compaction entry,
 // rebuilds state and reseeds the ledger, then reports what changed.
 type compactor struct {
-	rec         *sessRec
-	st          *agent.State
-	ag          *agent.Agent
-	reg         *llm.Registry
-	ui          *tui.UI
-	sink        agent.Sink
+	rec  *sessRec
+	st   *agent.State
+	ag   *agent.Agent
+	reg  *llm.Registry
+	sink agent.Sink
+	// notify and busy are the front end's seams: headless writes notices to
+	// stderr and has no working glyph to light.
+	notify      func(msg string, level agent.Level)
+	busy        func() func()
 	providerFor func(llm.Model) (llm.Provider, error)
 	// focus supplies a caller's summariser instructions for automatic runs; an
 	// explicit /compact <instructions> still wins. nil leaves runs unguided.
@@ -36,12 +38,12 @@ type compactor struct {
 // turn's own goroutine.
 func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instructions string) (bool, error) {
 	if reason != agent.CompactOverflow && c.ag != nil && c.ag.Running() {
-		c.ui.Notify("compaction refused: press Esc to stop the turn first", tui.LevelWarn)
+		c.notify("compaction refused: press Esc to stop the turn first", agent.LevelWarn)
 		return false, nil
 	}
 	// an in-flight turn already has the working glyph lit
-	if c.ag == nil || !c.ag.Running() {
-		done := c.ui.Busy()
+	if c.busy != nil && (c.ag == nil || !c.ag.Running()) {
+		done := c.busy()
 		defer done()
 	}
 	model := c.st.Model
@@ -95,12 +97,12 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 	res, cerr := compact.Compact(ctx, branch, model, run, opts)
 	if cerr != nil {
-		c.ui.Notify("compaction failed: "+cerr.Error(), tui.LevelWarn)
+		c.notify("compaction failed: "+cerr.Error(), agent.LevelWarn)
 		return false, cerr
 	}
 	if res == nil {
 		if reason == agent.CompactManual {
-			c.ui.Notify("nothing to compact", tui.LevelInfo)
+			c.notify("nothing to compact", agent.LevelInfo)
 		}
 		return false, nil
 	}
@@ -121,7 +123,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	entries2, _, _ := session.Read(path)
 	rebuilt, warns := session.State(session.Branch(entries2, session.Head(entries2)), c.reg.Resolve)
 	for _, wmsg := range warns {
-		c.ui.Notify("compact: "+wmsg, tui.LevelWarn)
+		c.notify("compact: "+wmsg, agent.LevelWarn)
 	}
 	if c.ag != nil && reason != agent.CompactOverflow {
 		c.ag.WithState(func(s *agent.State) { s.Messages = rebuilt.Messages })

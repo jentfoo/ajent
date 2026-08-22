@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/spf13/pflag"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
@@ -34,37 +35,27 @@ import (
 const secretPrefix = "secret:"
 
 func main() {
-	var modelFlag string
-	flag.StringVar(&modelFlag, "m", "", "initial model to use")
-	flag.StringVar(&modelFlag, "model", "", "initial model to use")
-	render := flag.String("render", "auto",
-		"paint mode: auto, inline (terminal scrollback, unsupported under tmux or screen), "+
-			"alt (own scrollback), plain")
-	cont := flag.Bool("continue", false, "resume the most recent session automatically")
-
-	// --resume takes an optional id: bare means pick among saved roots, with a
-	// value it reopens that exact transcript. It is parsed out of argv first so
-	// flag.Parse does not greedily consume a following positional argument.
-	flag.Usage = func() {
-		out := flag.CommandLine.Output()
-		_, _ = fmt.Fprintf(out, "usage of %s:\n", os.Args[0])
-		flag.PrintDefaults()
-		_, _ = fmt.Fprintln(out, "  -resume [id]")
-		_, _ = fmt.Fprintln(out, "    \tlist saved sessions and resume one; with an id, resume that session directly (new by default)")
+	f, err := parseFlags(os.Args[1:])
+	if errors.Is(err, pflag.ErrHelp) {
+		return
+	} else if err != nil {
+		fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
+		os.Exit(exitUsage)
 	}
-
-	resumeGiven, resumeID, argv := extractResume(os.Args[1:])
-	_ = flag.CommandLine.Parse(argv)
+	if verr := f.validate(); verr != nil {
+		fmt.Fprintf(os.Stderr, "ajent: %v\n", verr)
+		os.Exit(exitUsage)
+	}
 
 	// --resume overrides --continue; neither means a brand-new session.
 	sessMode := modeNewSession
-	if *cont {
+	if f.cont {
 		sessMode = modeContinue
 	}
 	switch {
-	case resumeGiven && resumeID != "":
+	case f.resume && f.resumeID != "":
 		sessMode = modeResumeID // reopen that exact saved transcript by id
-	case resumeGiven:
+	case f.resume:
 		sessMode = modeResumePick // pick among saved roots, then resume its leaf
 	}
 
@@ -72,14 +63,14 @@ func main() {
 	// with a clear message instead of silently starting a fresh transcript.
 	if sessMode == modeResumeID {
 		sid := cwdOrDot()
-		store, err := session.NewStore()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
-			os.Exit(1)
+		store, serr := session.NewStore()
+		if serr != nil {
+			fmt.Fprintf(os.Stderr, "ajent: %v\n", serr)
+			os.Exit(exitUsage)
 		}
-		if _, ferr := store.Find(sid, resumeID); ferr != nil {
-			fmt.Fprintf(os.Stderr, "ajent: no session matches id %q\n", resumeID)
-			os.Exit(2)
+		if _, ferr := store.Find(sid, f.resumeID); ferr != nil {
+			fmt.Fprintf(os.Stderr, "ajent: no session matches id %q\n", f.resumeID)
+			os.Exit(exitUsage)
 		}
 	}
 
@@ -87,14 +78,14 @@ func main() {
 	stop := startDemo()
 	defer stop()
 
-	// the flag layer outranks every file layer; -m/-render stop being ad hoc.
+	// the flag layer outranks every file layer; -m/--render stop being ad hoc.
 	flagLayer := config.Layer{Name: "flag"}
 	var ferr error
-	if modelFlag != "" {
-		flagLayer.Data, ferr = config.SetKey(flagLayer.Data, "model", modelFlag)
+	if f.model != "" {
+		flagLayer.Data, ferr = config.SetKey(flagLayer.Data, "model", f.model)
 	}
-	if *render != "auto" && ferr == nil {
-		flagLayer.Data, _ = config.SetKey(flagLayer.Data, "ui.render", *render)
+	if f.render != "auto" && ferr == nil {
+		flagLayer.Data, _ = config.SetKey(flagLayer.Data, "ui.render", f.render)
 	}
 
 	set, warnings, err := config.Load(config.Options{
@@ -103,14 +94,14 @@ func main() {
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ajent:", err)
-		os.Exit(1)
+		os.Exit(exitUsage)
 	}
 
 	modeName := set.Settings().UI.Render
 	mode, ok := tui.ParseMode(modeName)
 	if !ok || modeName == "" {
 		fmt.Fprintf(os.Stderr, "ajent: unknown render mode %q\n", modeName)
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 	themeName := set.Settings().UI.Theme
 	pal, known := tui.LookupPalette(themeName)
@@ -123,13 +114,13 @@ func main() {
 	file, w, err := llm.LoadUserFile()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ajent:", err)
-		os.Exit(1)
+		os.Exit(exitUsage)
 	}
 	warnings = append(warnings, w...)
 	overridden, owarns, oerr := llm.ApplyOverrides(file, set.Settings().Providers, set.Settings().Models)
 	if oerr != nil {
-		fmt.Fprintln(os.Stderr, "ajent:", err)
-		os.Exit(1)
+		fmt.Fprintln(os.Stderr, "ajent:", oerr)
+		os.Exit(exitUsage)
 	}
 	warnings = append(warnings, owarns...)
 	file = overridden
@@ -141,12 +132,23 @@ func main() {
 	warnings = append(warnings, regWarnings...)
 
 	active := reg.Active()
-	if modelFlag != "" {
+	if f.model != "" {
 		// the flag already set config's model; resolve it through the registry.
-		if m, rerr := reg.Resolve(modelFlag); rerr == nil {
+		if m, rerr := reg.Resolve(f.model); rerr == nil {
 			reg.SetActive(m)
 			active = m
 		}
+	}
+
+	// a one-shot run never opens a terminal: it drains the same loop onto stdout
+	// and exits with a code a script can branch on.
+	if f.prompt != "" {
+		code := runHeadless(headlessOptions{
+			flags: f, set: set, reg: reg, active: active,
+			sessMode: sessMode, resumeID: f.resumeID, warnings: warnings,
+		})
+		stop() // os.Exit skips the deferred demo teardown
+		os.Exit(code)
 	}
 
 	// a model with no reported window renders no context bar rather than one drawn
@@ -164,7 +166,7 @@ func main() {
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ajent:", err)
-		os.Exit(1)
+		os.Exit(exitUsage)
 	}
 	defer ui.Close()
 
@@ -181,7 +183,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	sess := driver(ui, set, reg, active, sessMode, resumeID, flag.Args())
+	sess := driver(ui, set, reg, active, sessMode, f.resumeID, f.args)
 
 	// Restore the terminal before printing so the hint is visible after a Ctrl+C /
 	// Ctrl+D quit, then tell the user how to get back to this conversation.
@@ -371,8 +373,10 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	if rec != nil {
 		rec.bindRewind(ui, ag, reg)
 		comp = &compactor{
-			rec: rec, st: st, ag: ag, reg: reg, ui: ui,
+			rec: rec, st: st, ag: ag, reg: reg,
 			sink:        opts.Sinks[0], // set above when rec != nil
+			notify:      func(msg string, level agent.Level) { ui.Notify(msg, tuiLevel(level)) },
+			busy:        ui.Busy,
 			providerFor: providers.ProviderFor,
 		}
 	}
@@ -1204,21 +1208,19 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		tui.PickOptions{Placeholder: "filter"})
 }
 
-// rebuild reconstructs the agent state from the resumed branch and replays it
-// onto the UI so a reopened session shows its history. It is best-effort: any
-// problem falls back to a fresh empty context.
-func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
+// restoreState reconstructs the agent state from the resumed branch, folding the
+// transcript's setting overrides back into set. It returns the branch entries,
+// its head and any warnings; a nil entry slice means there was nothing to
+// restore. Best-effort: any problem leaves st untouched.
+func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) ([]session.Entry, string, []string) {
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil || len(entries) == 0 {
-		return
+		return nil, "", nil
 	}
 	head := resumeHead(r.w.Head(), entries)
 	rebuilt, warns := r.stateFor(modelResolver(reg), entries, head)
-	for _, wmsg := range warns {
-		ui.Notify("resume: "+wmsg, tui.LevelWarn)
-	}
 	if len(rebuilt.Messages) == 0 && rebuilt.Model.ID == "" {
-		return // a brand-new transcript carries no history yet
+		return nil, "", warns // a brand-new transcript carries no history yet
 	}
 	st.Messages = rebuilt.Messages
 	if rebuilt.Model.ID != "" {
@@ -1238,11 +1240,25 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	if toolsReg != nil && len(resumed.Tools.Enabled) > 0 {
 		toolsReg.SetEnabled(resumed.Tools.Enabled)
 	}
+	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
+	return entries, head, warns
+}
+
+// rebuild reconstructs the agent state from the resumed branch and replays it
+// onto the UI so a reopened session shows its history. It is best-effort: any
+// problem falls back to a fresh empty context.
+func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
+	entries, head, warns := r.restoreState(set, reg, st, toolsReg)
+	for _, wmsg := range warns {
+		ui.Notify("resume: "+wmsg, tui.LevelWarn)
+	}
+	if entries == nil {
+		return
+	}
 	// the resumed palette must land before the replay bakes its colors into history
-	if pal, ok := tui.LookupPalette(resumed.UI.Theme); ok {
+	if pal, ok := tui.LookupPalette(set.Settings().UI.Theme); ok {
 		ui.SetTheme(pal)
 	}
-	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
 	session.Replay(session.Branch(entries, head), tuisink.New(ui), session.ReplayOptions{})
 }
 

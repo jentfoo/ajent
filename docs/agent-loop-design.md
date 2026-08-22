@@ -7,33 +7,16 @@ the turn loop; tools, sessions and compaction all build on it.
 
 ## Shape
 
-`Agent` owns one `State`, which is the in-memory projection of the session:
-
-```go
-type State struct {
-	Messages  []llm.Message      // the transcript, appended as turns progress
-	Model     llm.Model          // what requests default to; /model switches this
-	Reasoning llm.ReasoningConfig
-	Tools     []string           // active tool names, in declaration order
-}
-```
+`Agent` owns one `State`, which is the in-memory projection of the session: it
+holds the transcript messages, the model requests default to (and `/model`
+switches), the reasoning configuration and the active tool names in declaration
+order.
 
 `State` is owned by whatever goroutine runs a turn. The only fields guarded by
 the agent's mutex are the queue and the running flag — never `Messages`, so the
-loop can append without contending with steering.
-
-```go
-type Agent struct {
-	opts  Options
-	state *State
-
-	mu      sync.Mutex
-	running bool       // a turn owns the agent while true
-	steer   []Input    // injected into the running turn at the next boundary
-	follow  []Input    // run as separate turns once the current one settles
-	cancel  context.CancelFunc // interrupts cancel this
-}
-```
+loop can append without contending with steering. Everything else on the agent —
+the pending steer/follow queues and the interrupt cancel func — sits under that
+same lock.
 
 `Prompt(ctx, input)` runs `input` to completion including any follow-up queued
 while it ran, and returns when both queues are empty or the context ends. It is
@@ -47,26 +30,43 @@ The agent emits events on a `Sink`; it never imports the TUI and the TUI never
 imports it. That is what makes headless mode, a sub-agent and tests all possible
 with one loop.
 
-```go
-type Sink interface {
-	TurnStart(TurnInfo)
-	Thinking(delta string)
-	EndThinking()
-	Text(delta string)
-	EndText()
-	ToolStart(call ToolCall) func(ToolResult)
-	ToolOutput(callID, delta string)
-	ToolProgress(ToolProgress)
-	Diff(path, before, after string)
-	Usage(llm.Usage)
-	Notice(msg string, level Level)
-	TurnEnd(TurnResult)
-}
-```
+A sink receives one callback per thing the user might want to watch: turn start,
+a submitted prompt's text, streaming thinking and reply deltas (each with an end
+marker), tool starts plus their incremental output and progress while a call is
+still being composed, rendered diffs, usage and context-state reports, notices,
+and the final `TurnEnd` outcome.
 
 `cmd/ajent` provides a `tuisink` that maps these almost 1:1 onto `tui.UI`.
 `NopSink` discards everything; a headless child agent uses it as an embedded
 base and overrides only the events that feed its activity row.
+
+### The one-shot drain
+
+`-p` proves the seam: `oneshot_sink.go` is a second front end over the same
+loop, chosen instead of `tuisink` before `tui.New` is ever called. `textSink`
+writes each `Text` delta straight through to stdout — holding whitespace back
+until content follows, so the blank block a model emits before a tool call never
+reaches the terminal — and puts tool progress and notices on stderr, so the two
+streams stay separable; `jsonSink` buffers a block and writes one JSON object
+per line. Both embed `NopSink` and both hold a mutex around their writer,
+because `ToolStart`, `ToolOutput`, `Diff` and the done closure can all fire from
+parallel tool goroutines.
+
+`textSink` also shows what a partial front end gets from `ToolProgress`: the
+loop has already resolved each call's target argument by name, so the drain can
+name a tool whose own `Label` is just its name, without re-parsing arguments the
+tool owns.
+
+Two constraints a non-TUI drain has to respect:
+
+- **`Prompt` returning nil does not mean success.** An aborted turn sets
+  `TurnResult.Stop = llm.StopAborted` and returns nil, so the outcome must be
+  read off `TurnEnd` — the drain doubles as the `turnRecorder` for that.
+- **The final answer is not a sink event.** The sink sees text deltas per block,
+  not which block was last. The answer comes off `State.Messages` once the loop
+  is idle, the same way `pkg/subagent` reads a child's summary. A streaming
+  front end therefore prints prose from the sink and reads state only to decide
+  the exit code — printing both would double the answer.
 
 ### Tool-call progress
 
@@ -218,23 +218,12 @@ leaves `State.Messages` with each `ToolCallBlock` matched by a
 ## Tool dispatch
 
 The tool surface is an interface, keeping the loop decoupled from any concrete
-tool implementation and fully testable:
-
-```go
-type Tool interface {
-	Schema() llm.ToolSchema
-	Parallel() bool // a future ExecutionMode could widen this
-	Execute(ctx context.Context, call ToolCall, out io.Writer) (ToolResult, error)
-}
-
-type ToolSet interface {
-	Get(name string) (Tool, bool)
-	Schemas() []llm.ToolSchema
-}
-```
-
-`out` streams incremental tool output; the loop forwards it to
-`sink.ToolOutput(callID, delta)`.
+tool implementation and fully testable. A `Tool` declares its schema (what the
+model may call), whether it may run in parallel with siblings, and executes a
+call against an output writer that streams incremental tool output; the loop
+forwards those bytes to `sink.ToolOutput(callID, delta)`. The agent reads tools
+through a narrow view that resolves one by name and returns the full schema set,
+so the registry stays behind one seam.
 
 Dispatch rules:
 

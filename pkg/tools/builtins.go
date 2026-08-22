@@ -7,6 +7,10 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 )
 
+// ReadOnlyBuiltins names the built-in tools that only read. pkg/subagent keeps
+// its own copy (readOnlyBuiltins) because it may not import this package.
+var ReadOnlyBuiltins = []string{"read", "grep", "find", "ls"}
+
 // Options configures the built-in tool set.
 type Options struct {
 	Cwd       string // base for relative paths; empty uses os.Getwd

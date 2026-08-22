@@ -16,6 +16,7 @@ type ToolSource interface {
 
 // readOnlyBuiltins are the built-in tools a child may call, by name. find/grep/ls
 // ship disabled in the parent but must still reach a child, which has no shell.
+// Kept in step with tools.ReadOnlyBuiltins, which this package may not import.
 var readOnlyBuiltins = []string{"read", "grep", "find", "ls"}
 
 // childTools returns the read-only tools a child may call: the read-only built-ins

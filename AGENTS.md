@@ -124,6 +124,14 @@ applies, so each run recomputes cumulatively over the whole branch.
 owns ordering; shell lines go straight to the non-blocking `Stager`. Prompts flush the
 stage, expand `@` refs, then steer or start a turn.
 
+A one-shot run takes the other path: `-p/--prompt` branches in `main.go` before
+`tui.New` into `runHeadless` (`oneshot.go`), which wires the same loop, session,
+MCP, compaction and sub-agents onto a stdout drain (`oneshot_sink.go`) instead of
+the TUI. Its safety model is the tool set, not the barrier: the gate runs at
+`allow-all` and the scope flags decide what the model is offered, so a headless
+turn never meets a tool it cannot call. Flags are parsed with `spf13/pflag` in
+`flags.go`; exit codes are 0 answer, 1 usage/setup, 2 failed turn.
+
 The demo lives in `demo/`, its own stdlib-only module: `ajent-demosrv` is a
 standalone OpenAI-compatible chat server that plays a fixed script of real tool
 calls over SSE. Building with the `demo` tag (`make build-demo`) produces

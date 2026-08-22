@@ -27,16 +27,10 @@ can drive the same commands with a different front end.
 
 ## Dispatch
 
-A submitted line is classified once, then routed:
+A submitted line is classified once into a small kind set — prompt, command or
+shell — then routed by the host's loop.
 
-```go
-type Kind uint8
-const ( KindPrompt Kind = iota; KindCommand; KindShell )
-
-func ParseLine(s string) Line
-```
-
-`ParseLine` covers every escape hatch in the spec:
+`ParseLine(s)` covers every escape hatch in the spec:
 
 | Input | Kind | Rest |
 |---|---|---|
@@ -90,64 +84,36 @@ too, so its references expand like any other prompt.
 
 ## Commands
 
-```go
-type Command struct {
-    Name        string
-    Description string
-    Args        string // usage hint, e.g. "<optional-instructions>"
-    Complete    func(prefix string) []string // argument completion, optional
-    Handler     func(ctx context.Context, args string, c Console) error
-}
-```
+A command is a named, described handler: its name and one-line description for
+`/help`, an optional usage hint, an optional argument-completion func, and a
+handler that runs the parsed arguments against the `Console` view, returning an
+error.
 
 `Complete` is for *argument* completion: past the first space the matched
 command supplies its candidates. `/model` supplies model keys and aliases;
-`/reasoning` supplies `llm.Levels()`; a command with a nil `Complete` offers
-nothing.
+`/reasoning` supplies `llm.Levels()`; a command with no completer offers nothing.
 
 ### Registry
 
-```go
-type Registry struct{ ... }
-func (r *Registry) Register(cmd Command)        // add or replace; last wins, order kept
-func (r *Registry) Get(name string) (Command, bool)
-func (r *Registry) List() []Command             // registration order, for /help
-func (r *Registry) Names() []string
-```
-
-`Register` is add-or-replace so it can be widened to cover more behaviour; the
-registration order is preserved for `/help` and command completion.
+The registry holds commands in registration order. Register is add-or-replace so
+it can be widened to cover more behaviour; the registration order is preserved
+for `/help` and command completion, and lookup by name plus listing are the only
+read paths.
 
 ### Console
 
 `Console` is a command's view of the world — an interface, not a struct, so
 the extension host can back it with its own protocol:
 
-```go
-type Console interface {
-    Notify(msg string, level tui.Level)
-    Print(markdown string)                       // /help renders a markdown list
-    Pick(ctx, prompt, items, opts) (int, error)
-    MultiPick(ctx, prompt, items, opts) ([]int, error)
-    Select(ctx, prompt, options) (int, error)    // enum picker for /settings rows
-    Confirm(ctx, prompt) (bool, error)           // yes/no for toggles
-    Input(ctx, label, placeholder) (string, error) // free text for numbers/limits
-
-    Models() *llm.Registry
-    State() *agent.State
-    Tools() *tools.Registry
-    Commands() *Registry
-    Settings() *config.Set                       // resolved configuration handle
-    SaveSetting(layer, key string, value any) error // write to user/project layer
-    SetSessionSetting(key string, value any) error  // session override + recording
-
-    SetModel(m llm.Model)                        // registry + state + status + session entry
-    SetReasoning(c llm.ReasoningConfig)
-    ToolsChanged()                              // persists the enabled set to the session
-    Started() bool                              // has a user prompt been sent this session
-    Exit()
-}
-```
+`Console` is a command's view of the world — an interface, not a struct, so
+the extension host can back it with its own protocol. It exposes notices and a
+markdown printer (`/help` renders through it), the blocking interaction methods
+(pick one or many from items, select from options, confirm yes/no, free-text
+input for numbers and limits), read handles onto the model registry, agent state,
+tool registry, command registry and resolved config, settings writers (save to a
+layer, record a session override), and mutators that apply and persist a model or
+reasoning change, announce tool-set changes, report whether any prompt has been
+sent this session, and exit.
 
 `main.go` implements it once (`uiConsole`) over the objects the driver already
 holds. `SetModel` records a `model_change` entry the old bespoke switch never
@@ -223,15 +189,10 @@ changes. Space or Tab toggles the highlighted row; typed text narrows the filter
 
 ## Shell mode (`!`)
 
-`command.Stager` owns staged runs:
-
-```go
-func NewStager(reg *tools.Registry, sink agent.Sink) *Stager
-func (s *Stager) Run(cmd string)        // starts immediately, non-blocking
-func (s *Stager) Pending() bool
-func (s *Stager) Cancel()
-func (s *Stager) Flush(ctx) []llm.Message // waits, returns call+result pairs
-```
+`command.Stager` owns staged runs: constructed over the tool registry and a
+sink, it starts a command immediately (non-blocking), reports whether any run is
+pending, cancels every in-flight run, and flushes — waiting for each staged pair
+to finish then returning them as call + result pairs.
 
 `Run` resolves `bash` through `Registry.Get` (enabled-only, so a disabled `bash`
 is a refusal notice), mints a call id, opens the display with
@@ -286,16 +247,11 @@ editor keeps focus and keeps receiving characters. Only `Tab`/`↑`/`↓`/`Enter
 `Esc` are consumed before the editor; everything else falls through so typing
 still narrows the list. After every editor mutation the completer is re-queried.
 
-```go
-type Completion struct { Text, Label, Detail string; Score int }
-type Completer interface {
-    // Complete is called under the UI lock from the key goroutine; it must not
-    // block or call back into the UI. start is the grapheme index the accepted
-    // Text replaces, up to the cursor.
-    Complete(text string, pos int) (start int, items []Completion)
-}
-func (u *UI) SetCompleter(c Completer)
-```
+The completion model pairs a replacement text with an optional label, detail and
+score; the `Completer` interface answers one query — given the buffer and cursor,
+it returns where accepted text should start replacing from plus the candidate
+items. It is called under the UI lock from the key goroutine, so it must not block
+or call back into the UI.
 
 The path source keeps a cached index for exactly this reason — `Complete` may
 not block.

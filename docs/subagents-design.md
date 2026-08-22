@@ -51,35 +51,15 @@ prompt.go       childContract / continueNudge verbatim constants, taskPrompt ass
 
 ### `manager.go` — lifecycle
 
-```go
-type Options struct {
-    Provider  func(llm.Model) (llm.Provider, error)
-    Model     func() llm.Model           // configured sub-agent model, else the session's
-    Reasoning func() llm.ReasoningConfig // inherited from the parent verbatim
-    Parent    func() *tokens.Accounting  // parent ledger; Child() per job
-    Tools     ToolSource                 // nil disables a child's tool set entirely
-    Env       agent.Environment
-    ProjectInstructions []agent.ProjectInstruction
-
-    Activity func(key, text string)   // nil disables activity rows
-    Notice   func(msg string)         // keyed UI notice for completions
-    Status   func(text, short string)
-    Deliver  func(agent.Input) bool   // steer into a running parent turn; false when idle
-
-    MaxConcurrent int           // 0 -> defaultMaxConcurrent
-    PollTimeout   time.Duration // 0 -> defaultPollTimeout (10m)
-}
-
-func New(opts Options) *Manager
-func (m *Manager) Start(task, instructions string) string
-func (m *Manager) Poll(ctx context.Context, id string) (Job, bool) // false = still running
-func (m *Manager) List() []Job
-func (m *Manager) Stop(id string) error    // accepts sub-2 or bare 2; finished jobs error
-func (m *Manager) StopAll() int            // cancels every in-flight job
-func (m *Manager) Flush()                  // re-offer pending completion steers
-func (m *Manager) Tools() []agent.Tool     // agent_start / agent_poll / agent_list
-func (m *Manager) Close()                  // cancel everything, wait briefly
-```
+The manager is configured by func fields supplied by `main.go`, mirroring
+`permit.Barrier`: how to build a provider and resolve the child model/reasoning,
+the parent ledger (for per-job `Child()` spend), the read-only tool source, env
+and project instructions; UI callbacks for activity rows, keyed notices and the
+status segment; a delivery hook that steers into a running parent turn; and the
+concurrency cap plus poll timeout. Its surface is lifecycle operations: construct,
+start (returning an id immediately), poll by id (`false` while still running),
+list, stop one or all, re-offer pending completion steers, expose the three tools,
+and close.
 
 Concurrency model:
 
@@ -102,19 +82,10 @@ itself keeps running.
 
 ### `job.go` — one investigation
 
-```go
-type Status uint8 // queued, running, done, error, aborted
-
-type Job struct {   // public snapshot for List and Poll callers
-    ID      string  // sub-1, sub-2, …
-    Status  Status
-    Task    string  // shortened single-line label
-    Started time.Time
-    Ended   time.Time
-    Summary string
-    Err     error
-}
-```
+A job carries a status from a small enum — queued, running, done, error,
+aborted — and the public snapshot callers read pairs that with an id (`sub-N`), a
+shortened task label, start/end times, the summary paragraph and any terminal
+error.
 
 Ids are `sub-N` from a manager counter. The internal `job` carries the per-job
 context/cancel/done channel, the child ledger (`*tokens.Accounting`, created at
@@ -154,12 +125,9 @@ the user stopped is not reported as done.
 
 ### `toolset.go` — the structural filter
 
-```go
-type ToolSource interface {
-    All() []agent.Tool      // unwrapped tools; a child runs no parent guards or dialogs
-    ReadOnly(name string) bool
-}
-```
+The parent tool registry arrives as a narrow source with two operations: return
+every declared tool **unwrapped** (a child runs no parent guards or dialogs), and
+report whether a named tool is read-only.
 
 A child's tool set is a fixed, structural subset of `Registry.All()`:
 

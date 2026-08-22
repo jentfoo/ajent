@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,29 +12,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
-	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// testUI returns a plain-mode UI over pipes.
-func testUI(t *testing.T) *tui.UI {
-	t.Helper()
-	inR, inW, err := os.Pipe()
-	require.NoError(t, err)
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
-	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ui.Close()
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = outR.Close()
-		_ = outW.Close()
-	})
-	return ui
-}
 
 // textStream is one scripted provider turn emitting parts as a text message.
 func textStream(parts ...string) []llm.Event {
@@ -64,8 +43,9 @@ func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*co
 	st := &agent.State{Model: model, Tokens: tokens.New(model)}
 	ag := agent.New(st, agent.Options{Sinks: []agent.Sink{agent.NopSink{}}})
 	c := &compactor{
-		rec: &sessRec{w: w}, st: st, ag: ag, reg: reg, ui: testUI(t),
+		rec: &sessRec{w: w}, st: st, ag: ag, reg: reg,
 		sink:        agent.NopSink{},
+		notify:      func(string, agent.Level) {},
 		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
 	}
 	return c, st, w

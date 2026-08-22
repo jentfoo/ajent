@@ -21,7 +21,8 @@ Configuration resolves lowest to highest precedence:
 5. **env** — `AJENT_*` variables, derived by reflection from the schema: a scalar
    key at dotted path `p.q.r` binds to `AJENT_P_Q_R`. An unparseable number or
    bool is a warning, never fatal.
-6. **flag** — built by the caller with `config.SetKey` over `{}`.
+6. **flag** — built by the caller with `config.SetKey` over `{}`. Only `model`
+   and `ui.render` ride it; the one-shot flags deliberately do not (see below).
 7. **session** — what `/settings`, `/model`, `/reasoning` and `/tools` change at
    runtime; empty at startup.
 
@@ -31,21 +32,12 @@ it — the difference between a config system and a mystery.
 
 ## The schema
 
-```go
-type Settings struct {
-    Model       string          // llm model key; the default a fresh start uses
-    Reasoning   Reasoning       // level/retain as text names, parsed by caller
-    Agent       Agent           // turn loop: optional per-turn step cap (maxSteps)
-    Providers   json.RawMessage // folded over models.json providers (pkg/llm)
-    Models      json.RawMessage // "provider/id" overrides (pkg/llm)
-    Tools       Tools           // enabled set + per-tool output limits
-    Permissions Permissions     // mode + safeCommands; enforced by the tool barrier (permit)
-    Compaction  Compaction      // auto toggle + threshold fraction
-    Subagent    Subagent        // research sub-agent model + concurrency cap
-    UI          UI              // render mode + color palette; showCost/showThinking
-    Extensions  Extensions      // loaded by the extension host, accepted now
-}
-```
+The schema is a single typed settings root whose fields mirror the config blocks:
+the default model key, reasoning level/retain as text names, the agent turn-loop
+options (an optional per-turn step cap), raw JSON passthroughs for providers and
+per-model overrides (folded over `models.json` by `pkg/llm`, never typed here),
+and typed blocks for tools, permissions, compaction, sub-agent settings, UI
+render/palette, and extensions.
 
 Enum-valued keys are stored as their text names and parsed by the caller
 (`llm.ParseLevel`, `llm.ParseRetain`, `tui.ParseMode`, `permit.ParseMode`).
@@ -94,9 +86,26 @@ denying one is a legitimate safety gate. A denied check runs first in the barrie
 verdict (after user-initiation), and only an agent call hits it: a human's own staged
 `!` line owns its shell and always runs.
 
+### Permissions and tools in a one-shot run
+
+`-p` does not write any permission or tool key into the flag layer. Its
+`--allow-all` / `--read-only` / `--allow-tools` / `--deny-tools` flags choose the
+*offered tool set* rather than a gate, so there is no key for them to set and
+`Explain` keeps reporting the file's own values. A headless run therefore:
+
+- ignores `permissions.mode` and runs the barrier at `allow-all`, since no dialog
+  can be opened;
+- still applies `permissions.deniedCommands`, the one refusal an operator can
+  configure into a headless run;
+- overrides `tools.enabled` for built-in names, because the default set omits
+  `grep`/`ls`/`find` and a scope flag is the more specific instruction.
+
+See `tools-design.md` for the rule and `phases/21-one-shot-noninteractive.md` for
+the flag surface.
+
 ### Subagent
 
-The sub-agent block ships a compiled-in `maxConcurrent` default (it lives in
+The `subagent` block ships a compiled-in `maxConcurrent` default (it lives in
 `defaultsJSON`, beside this package); `model` is deliberately
 left out so `Explain("subagent.model")` reports `(default)` and an empty value
 means inherit the session model. Both keys bind for free through EnvLayer's

@@ -51,25 +51,14 @@ is recorded on the `compaction` entry and replayed on every context rebuild.
 `pkg/session` owns the schema and the replay (it already owns assembly);
 `pkg/compact` computes the plan. No import cycle: `compact -> session -> agent`.
 
-```go
-// Stub replaces one recorded tool result when context is rebuilt: Text swaps its
-// content outright, Limit elides it to that many bytes. Exactly one is set.
-type Stub struct {
-	CallID string
-	Text   string // replacement, e.g. "[read superseded by a later read...]"
-	Limit  int    // elide the original to this many bytes
-}
+The reduction plan records, per tool result to replace or elide by call id, a
+**stub**: either `Text` swaps the content outright (e.g. "[read superseded by a
+later read...]") or `Limit` elides it to that many bytes — exactly one of the
+two is set. The plan as a whole carries those stubs, the message entry ids
+dropped outright, whether thinking is stripped from the kept tail, and per-stage
+stats for the notice.
 
-// Reduce is the structural reduction plan a compaction recorded.
-type Reduce struct {
-	Stubs         []Stub   // tool results replaced or elided, by call id
-	Drop          []string // message entry ids removed outright
-	StripThinking bool
-	Stats         Stats    // what each stage did, for the notice
-}
-```
-
-`Stub.Limit` rather than an inlined replacement string keeps the JSONL small:
+A stub's limit rather than an inlined replacement string keeps the JSONL small:
 assembly re-elides from the original bytes with `tools.Elide`.
 
 Only the **newest** compaction is applied. `pkg/compact` therefore recomputes
@@ -79,11 +68,9 @@ replay" in `session-design.md`.
 
 ## The one assembly function
 
-```go
-// ContextMessages returns the messages branch contributes to the next request,
-// applying cd's cut point and structural reductions.
-func ContextMessages(branch []Entry, cd CompactionData) ([]llm.Message, []string)
-```
+One assembly function is shared by rebuild and measurement: given a branch and a
+candidate compaction's data, it returns the messages that contribute to the next
+request plus any warnings naming entries it could not use.
 
 `session.State` calls it with the newest compaction; `pkg/compact` calls it with
 candidate `CompactionData` values to measure each stage. One implementation, so a
@@ -224,12 +211,8 @@ cut, no segment-aware entries, no summary that has to masquerade as a phase seed
 
 The agent cannot import `session` or `compact` (session already imports agent),
 so the trigger is a func field on `agent.Options`, matching `Provider` and
-`OnMessage`:
-
-```go
-type CompactReason uint8 // CompactManual | CompactThreshold | CompactOverflow
-Compact func(ctx context.Context, r CompactReason) (bool, error)
-```
+`OnMessage`: it receives a small reason enum — manual, threshold-crossed or
+overflow — and reports whether a compaction ran.
 
 The context bar and `/usage` fill against `CompactAt`, so the bar reads full
 exactly when an automatic compact would fire.

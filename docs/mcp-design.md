@@ -39,21 +39,11 @@ version negotiation, OAuth) is delegated to mcp-go; what ajent owns is the bound
 
 ## Configuration (`config.go`)
 
-```go
-type ServerConfig struct {
-    Command   string            // stdio: command + Args + Env
-    Args      []string
-    Env       map[string]string
-    Transport string            // "http" (default) or legacy "sse", for url servers
-    URL       string            // network server base URL (+ Headers)
-    Headers   map[string]string
-    Enabled      *bool          // nil means enabled
-    Tools        ToolFilter    // Allow/Deny globs applied before registration
-    ExcludeTools []string      // exact tool names omitted from registration entirely
-    ReadOnly     []string      // additional tools marked safe for sub-agents
-    Timeout   string            // per-call cap; zero uses the default
-}
-```
+A server's config carries its stdio command plus args and env overrides, or a
+network base URL with headers and an optional transport selection (`http`
+default, legacy `sse`); enable state (nil means enabled), allow/deny tool globs,
+exact exclusions from registration entirely, extra tools marked safe for
+sub-agents, and a per-call timeout.
 
 `LoadConfig(workspace)` reads user then project files and merges **by server name with
 whole-entry replacement** — a project entry replaces the user's for that server in full,
@@ -70,13 +60,8 @@ would merge entries key by key against this spec.
 
 ## Client wrapper (`client.go`)
 
-```go
-func Connect(ctx, name string, cfg ServerConfig) (*Client, error)
-func (c *Client) Tools(ctx context.Context) ([]ToolDef, error)
-func (c *Client) Call(ctx, name string, args json.RawMessage, out agent.Output) (Result, error)
-func (c *Client) Ping(ctx) error
-func (c *Client) Close() error
-```
+A `Client` is obtained by connecting to a named server; it lists the remote
+tools, calls one with raw JSON arguments and an output writer, pings, and closes.
 
 - **stdio** — `NewStdioMCPClientWithOptions` with a command func that sets
   `Setpgid` and builds the child env from the parent plus config overrides. The
@@ -114,9 +99,8 @@ structured content with empty `content` falls back to its raw JSON. `isError` ma
 
 ## Bridging into the registry (`bridge.go`)
 
-```go
-func Bridge(server string, def ToolDef, c *Client, opts BridgeOptions) agent.Tool
-```
+A remote tool definition and its owning client are turned into an ordinary
+`agent.Tool` for one server.
 
 The isolation seam: a remote tool becomes an ordinary `agent.Tool`, so `/tools`,
 permissions, token accounting and the sub-agent treat it like any built-in.
@@ -146,16 +130,12 @@ permissions, token accounting and the sub-agent treat it like any built-in.
 One supervisor owns every configured server's lifecycle; `main.go` passes a registry
 adapter and notice/status callbacks.
 
-```go
-type Registrar interface {
-    RegisterState(source string, t agent.Tool, s State)
-    Unregister(source string)
-    EnabledNames(source string) []string
-    MarkReadOnly(names []string)
-}
-```
+One supervisor owns every configured server's lifecycle; `main.go` passes a registry
+adapter and notice/status callbacks. The adapter registers a source's tool under an
+explicit state, unregisters a whole source, lists a source's enabled, disabled or all
+names (so live enable state survives re-registration), and marks extra tools read-only.
 
-The local `State` enum mirrors the registry's (Disabled / Enabled / Deferred) so this
+The local `State` enum mirrors the registry's (Disabled / Enabled) so this
 package stays free of `pkg/tools`.
 
 - **First-message load (`LoadOnFirstMessage`)** — there is no startup spawn. Every
@@ -201,12 +181,10 @@ tracks consecutive connect failures for the notice/status path (`reconnecting (n
 ## Registry integration (`pkg/tools/registry.go`)
 
 MCP mutates the registry from notification goroutines while the loop reads it, so every
-method takes a lock. The single enabled bool became three states:
-
-```go
-StateDisabled // known, not in the prompt, not callable
-StateEnabled  // in the prompt and callable
-```
+method takes a lock. The single enabled bool became two states — known-but-disabled
+(enabled in the prompt and callable). There is no deferred state: every configured server
+is connected in full on first-message load, so each bridged tool registers as one of
+these two.
 
 - `Schemas()` includes only `StateEnabled`; `Names()` stays enabled-only (it feeds
   state + transcript); `Get()` answers Enabled tools only.

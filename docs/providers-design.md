@@ -77,16 +77,10 @@ decodes in `pkg/llm/config.go` rather than in `pkg/config`.
 
 ## The content model
 
-```go
-type Message struct {
-    Role    Role
-    Content BlockList
-}
-
-type Block interface{ blockType() BlockType }   // sealed
-```
-
-`TextBlock`, `ThinkingBlock`, `ToolCallBlock`, `ToolResultBlock`, `ImageBlock`.
+A message pairs a role with its content; the content is an opaque tagged block
+list. The `Block` surface is sealed — only the five concrete kinds (`TextBlock`,
+`ThinkingBlock`, `ToolCallBlock`, `ToolResultBlock`, `ImageBlock`) exist, so
+every switch over blocks is exhaustive and a new kind is a deliberate change.
 
 Blocks are stored as **values, not pointers**, so a block is immutable once
 appended. That is what makes `Prepare` safe to write as a filter.
@@ -381,17 +375,9 @@ offline with no cache still resolves declared models.
 
 ## Errors, retry and overflow
 
-```go
-type APIError struct {
-    Provider   string
-    Status     int
-    Code       string
-    Message    string
-    Retryable  bool
-    RetryAfter time.Duration
-    Body       []byte
-}
-```
+Transport and provider failures surface as a structured error carrying the
+provider name, HTTP status, an optional code and message, whether it is retryable,
+any `Retry-After` hint, and the (redacted) response body.
 
 Retry covers 408, 429, 425, 5xx and connection errors, plus 409 only when the
 server sent a `Retry-After` (some gateways use it for "model loading").

@@ -9,16 +9,10 @@ directly and never imports `pkg/tui`, so the front end stays interchangeable.
 
 ### Tool interface (`pkg/agent/tool.go`)
 
-```go
-type Tool interface {
-    Name() string
-    Label(call ToolCall) string   // short header line for the UI
-    Description() string          // shown to the model
-    Schema() llm.ToolSchema       // JSON Schema for the parameters
-    Mode() ExecutionMode          // ModeSerial | ModeParallel
-    Execute(ctx context.Context, call ToolCall, out Output) (ToolResult, error)
-}
-```
+A tool exposes its name, a short UI header label, the description shown to the
+model, its JSON schema for parameters, whether it may run in parallel with
+siblings (`ModeSerial | ModeParallel`), and executes a call against an output
+writer.
 
 `Output` is the tool's display channel: writes stream to the UI as they arrive,
 and `Diff(path, before, after)` commits a rendered file change. `ToolResult`
@@ -82,13 +76,9 @@ never included).
 
 ### Guards (`guard.go`, `asker.go`)
 
-```go
-type Guard func(ctx context.Context, call agent.ToolCall) Decision // Allow | Deny | Ask
-type Asker func(ctx context.Context, call agent.ToolCall, d Decision) Decision
-func (r *Registry) SetAsker(a Asker)
-func WithUserInitiated(ctx context.Context) context.Context  // mark a user's own shell line
-func IsUserInitiated(ctx context.Context) bool
-```
+A guard decides a call — allow, deny or ask — and an optional registered asker
+turns any `Ask` verdict into a final allow/deny. A user's own staged shell line is
+marked on the context so it stays exempt from every permission mode.
 
 Guards run in registration order before a tool executes; first non-allow wins.
 Core registers none by default — the agent runs unguarded unless configured with
@@ -137,6 +127,25 @@ bash command lines to auto-allow as read-only; it can never name
 `write`/`edit`. Core never does. The `WithUserInitiated` marker rides the context
 so a user's own staged `!` shell line is exempt in every permission mode — it is
 the human's shell, not the model's.
+
+### Headless: the tool set is the gate
+
+A one-shot run (`-p`, see `phases/21-one-shot-noninteractive.md`) has no dialog to
+open, so it never lets an ask arise. The barrier runs at `allow-all` and the
+**offered tool set** carries the policy instead: the model is only ever handed
+tools it is allowed to call, so it never spends a step discovering a refusal.
+`tools.ReadOnlyBuiltins` names what survives `--read-only`; `ask_user` is
+excluded from every headless scope because nobody can answer it.
+
+The one exception is `permissions.deniedCommands`, which is still installed and
+still refuses before the allow-all short circuit. It is the only headless refusal
+path, it only fires when an operator configured it, and it covers what a
+tool-name flag cannot — a bash command line rather than a tool. Such a refusal is
+an error result like any other, so the turn adapts and continues.
+
+The scope decides the built-in names outright, ignoring `tools.enabled`, because
+the config default omits `grep`/`ls`/`find`. It does **not** re-enable a tool its
+source registered disabled, so an MCP server switched off in `mcp.json` stays off.
 
 ## Built-in tools
 
