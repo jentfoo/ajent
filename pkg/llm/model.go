@@ -23,6 +23,9 @@ type Model struct {
 	ID       string
 	Name     string
 	Aliases  []string
+	// BaseURL is the resolved endpoint serving this model, which may differ from
+	// its provider's when the model entry overrides it.
+	BaseURL string
 	// ContextWindow is the full input window in tokens; 0 when unknown.
 	ContextWindow int
 	MaxOutput     int

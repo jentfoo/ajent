@@ -1,0 +1,97 @@
+{
+  "providers": {
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [{ "id": "llama3.1:8b" }, { "id": "qwen2.5-coder:7b" }]
+    },
+    "my-google": {
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "api": "google-generative-ai",
+      "apiKey": "$GEMINI_API_KEY",
+      "models": [{ "id": "gemma-4-31b-it", "name": "Gemma 4 31B", "input": ["text", "image"] }]
+    },
+    "custom-proxy": {
+      "name": "Proxy",
+      "baseUrl": "https://proxy.example.com/v1",
+      "apiKey": "!op read 'op://vault/item/credential'",
+      "api": "anthropic-messages",
+      "oauth": "radius",
+      "authHeader": true,
+      "headers": { "x-portkey-api-key": "$PORTKEY_API_KEY" },
+      "models": [
+        {
+          "id": "claude-opus-4-7",
+          "name": "Opus via proxy",
+          "api": "anthropic-messages",
+          "baseUrl": "https://proxy.example.com/anthropic",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 400000,
+          "maxTokens": 40000,
+          "headers": { "X-Org": "acme" },
+          "samplingParams": { "temperature": 1.0, "top_p": 0.95, "min_p": 0.0 },
+          "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 6.25 },
+          "thinkingLevelMap": { "off": null, "minimal": null, "low": null, "medium": null, "high": "high", "xhigh": null, "max": "max" },
+          "compat": {
+            "supportsEagerToolInputStreaming": false,
+            "supportsLongCacheRetention": true,
+            "sendSessionAffinityHeaders": true,
+            "supportsCacheControlOnTools": false,
+            "supportsTemperature": false,
+            "forceAdaptiveThinking": true,
+            "allowEmptySignature": true,
+            "supportsStrictTools": true,
+            "supportsToolReferences": true
+          }
+        }
+      ]
+    },
+    "local-llm": {
+      "baseUrl": "http://localhost:8080/v1",
+      "api": "openai-completions",
+      "compat": {
+        "supportsStore": false,
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": true,
+        "supportsUsageInStreaming": false,
+        "supportsFinishReason": false,
+        "maxTokensField": "max_tokens",
+        "requiresToolResultName": true,
+        "requiresAssistantAfterToolResult": true,
+        "requiresThinkingAsText": true,
+        "requiresReasoningContentOnAssistantMessages": true,
+        "thinkingFormat": "chat-template",
+        "chatTemplateKwargs": { "thinking": { "$var": "thinking.enabled" } },
+        "chatTemplateArgs": { "effort": { "$var": "thinking.effort" } },
+        "cacheControlFormat": "anthropic",
+        "supportsOpenAIGrammarTools": true,
+        "supportsStrictMode": true,
+        "deferredToolsMode": "kimi",
+        "sessionAffinityFormat": "openai-nosession",
+        "thinkingTokenBudgetField": "thinking_budget",
+        "supportsThinkingTokenBudget": false,
+        "vercelGatewayRouting": { "only": ["fireworks"], "order": ["fireworks", "novita"] }
+      },
+      "models": [{ "id": "deepseek-v4-flash" }]
+    },
+    "openrouter": {
+      "modelOverrides": {
+        "anthropic/claude-sonnet-4": {
+          "name": "Claude Sonnet 4 (Bedrock Route)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 1050000,
+          "maxTokens": 64000,
+          "headers": { "X-Route": "bedrock" },
+          "samplingParams": { "temperature": 0.7 },
+          "cost": { "input": 3 },
+          "thinkingLevelMap": { "xhigh": null },
+          "compat": { "openRouterRouting": { "only": ["amazon-bedrock"] } }
+        }
+      }
+    }
+  }
+}

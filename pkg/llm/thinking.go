@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strconv"
+)
 
 const (
 	// minAnswerTokens is the floor an output budget keeps for the answer, so a
@@ -126,11 +129,12 @@ func setReasoningEffort(body *compatRequest, caps Capabilities, l Level) {
 	body.ReasoningEffort = &e
 }
 
-// applyThinkingTokenBudget emits the vLLM thinking_token_budget for a capped
-// reasoning phase, clamped so at least minAnswerTokens stay for the reply. It is
-// independent of thinking format: any chat-completions model may be served by vLLM.
+// applyThinkingTokenBudget caps the reasoning phase under caps.ThinkingBudgetField,
+// clamped so at least minAnswerTokens stay for the reply. It is independent of
+// thinking format: any chat-completions model may be served by vLLM.
 func applyThinkingTokenBudget(body *compatRequest, req Request, lvl Level, on bool) {
-	if !on || !req.Model.Caps.SupportsThinkingTokenBudget {
+	field := req.Model.Caps.ThinkingBudgetField
+	if !on || field == "" {
 		return
 	}
 	ceiling := req.Model.MaxOutput
@@ -141,7 +145,7 @@ func applyThinkingTokenBudget(body *compatRequest, req Request, lvl Level, on bo
 	}
 	budget := min(req.Model.Caps.Budgets[lvl], max(0, ceiling-minAnswerTokens))
 	if budget > 0 {
-		body.ThinkingTokenBudget = &budget
+		body.setExtra(field, json.RawMessage(strconv.Itoa(budget)))
 	}
 }
 

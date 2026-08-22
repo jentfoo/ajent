@@ -58,6 +58,9 @@ type APIError struct {
 	Retryable  bool
 	RetryAfter time.Duration
 	Body       []byte // truncated and scrubbed, for the debug log
+	// Hint names the models.json setting that would fix the request, for the
+	// rejections a user cannot diagnose from the provider's own message.
+	Hint string
 
 	overflow bool // classified once, by the adapter that knows the dialect
 }
@@ -77,6 +80,11 @@ func (e *APIError) Error() string {
 	if e.Message != "" {
 		b.WriteString(": ")
 		b.WriteString(e.Message)
+	}
+	if e.Hint != "" {
+		b.WriteString(" (")
+		b.WriteString(e.Hint)
+		b.WriteString(")")
 	}
 	return b.String()
 }

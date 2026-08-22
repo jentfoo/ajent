@@ -23,6 +23,9 @@ const (
 	DialectAnthropic
 	DialectOpenAIResponses
 	DialectOpenAICompletions
+	// DialectUnknown is a configured api this build cannot speak. It disables its
+	// provider rather than falling back, since a wrong dialect is a wrong protocol.
+	DialectUnknown
 )
 
 var dialectNames = enumNames[Dialect]{
@@ -30,6 +33,14 @@ var dialectNames = enumNames[Dialect]{
 	DialectAnthropic:         "anthropic-messages",
 	DialectOpenAIResponses:   "openai-responses",
 	DialectOpenAICompletions: "openai-completions",
+	DialectUnknown:           "unknown",
+}
+
+// dialectChoices are the api values a provider entry may name.
+func dialectChoices() []string {
+	return []string{
+		DialectAnthropic.String(), DialectOpenAIResponses.String(), DialectOpenAICompletions.String(),
+	}
 }
 
 // dialectAliases maps legacy spellings pi's catalogue once used onto their
@@ -44,17 +55,18 @@ func (d Dialect) String() string { return dialectNames.name(d) }
 // MarshalText encodes the dialect as its configuration name.
 func (d Dialect) MarshalText() ([]byte, error) { return dialectNames.marshalText(d) }
 
-// UnmarshalText decodes the configuration name.
+// UnmarshalText decodes the configuration name. An unrecognized value decodes to
+// DialectUnknown rather than failing, so one unsupported provider does not cost
+// the user every other provider in the file.
 func (d *Dialect) UnmarshalText(data []byte) error {
-	if v, ok := dialectNames.lookup(string(data)); ok {
+	if v, ok := dialectNames.lookup(string(data)); ok && v != DialectUnknown {
 		*d = v
-		return nil
-	}
-	if v, ok := dialectAliases[string(data)]; ok {
+	} else if v, ok := dialectAliases[string(data)]; ok {
 		*d = v
-		return nil
+	} else {
+		*d = DialectUnknown
 	}
-	return fmt.Errorf("llm: unknown api dialect %q, want one of %s", data, strings.Join(dialectNames.sorted(), ", "))
+	return nil
 }
 
 // Flavor selects discovery and quirk defaults. It is separate from Dialect so
@@ -70,6 +82,9 @@ const (
 	FlavorLMStudio
 	FlavorLlamaCpp
 	FlavorGeneric
+	// FlavorUnknown is a configured flavor this build does not know. It degrades to
+	// FlavorGeneric, since a flavor only picks defaults and never the protocol.
+	FlavorUnknown
 )
 
 var flavorNames = enumNames[Flavor]{
@@ -80,6 +95,15 @@ var flavorNames = enumNames[Flavor]{
 	FlavorLMStudio:   "lmstudio",
 	FlavorLlamaCpp:   "llamacpp",
 	FlavorGeneric:    "generic",
+	FlavorUnknown:    "unknown",
+}
+
+// flavorChoices are the flavor values a provider entry may name.
+func flavorChoices() []string {
+	return []string{
+		FlavorAnthropic.String(), FlavorOpenAI.String(), FlavorOpenRouter.String(),
+		FlavorLMStudio.String(), FlavorLlamaCpp.String(), FlavorGeneric.String(),
+	}
 }
 
 // String returns the configuration name of the flavor.
@@ -88,9 +112,15 @@ func (f Flavor) String() string { return flavorNames.name(f) }
 // MarshalText encodes the flavor as its configuration name.
 func (f Flavor) MarshalText() ([]byte, error) { return flavorNames.marshalText(f) }
 
-// UnmarshalText decodes the configuration name.
+// UnmarshalText decodes the configuration name. An unrecognized value decodes to
+// FlavorUnknown rather than failing the whole file.
 func (f *Flavor) UnmarshalText(data []byte) error {
-	return flavorNames.unmarshalText(data, f, "provider flavor")
+	if v, ok := flavorNames.lookup(string(data)); ok && v != FlavorUnknown {
+		*f = v
+	} else {
+		*f = FlavorUnknown
+	}
+	return nil
 }
 
 // File is the decoded models.json.
@@ -117,7 +147,10 @@ type ProviderConfig struct {
 	Routing    *Routing          `json:"routing,omitempty"` // openrouter only
 	Compat     *Compat           `json:"compat,omitempty"`  // defaults for every model here
 	Models     []ModelConfig     `json:"models,omitempty"`
-	Disabled   bool              `json:"disabled,omitempty"`
+	// ModelOverrides adjusts discovered models by id without restating them. An id
+	// declared in Models is not a valid target: edit the declaration instead.
+	ModelOverrides map[string]ModelOverride `json:"modelOverrides,omitempty"`
+	Disabled       bool                     `json:"disabled,omitempty"`
 }
 
 // Routing is openrouter's upstream provider preference. The four camelCase
@@ -146,6 +179,8 @@ type Routing struct {
 type ModelConfig struct {
 	ID               string            `json:"id"`
 	Name             string            `json:"name,omitempty"`
+	API              Dialect           `json:"api,omitempty"`     // overrides the provider's
+	BaseURL          string            `json:"baseUrl,omitempty"` // overrides the provider's
 	Aliases          []string          `json:"aliases,omitempty"`
 	Reasoning        *bool             `json:"reasoning,omitempty"`
 	Input            []Modality        `json:"input,omitempty"`
@@ -160,6 +195,23 @@ type ModelConfig struct {
 
 	Headers        map[string]string `json:"headers,omitempty"`        // merged over the provider's per request
 	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // opaque additions to the request body
+	Cost           json.RawMessage   `json:"cost,omitempty"`           // accepted for compatibility; pricing is out of scope
+}
+
+// ModelOverride is a partial model applied over a discovered entry. It carries
+// pi's documented override field set, which is narrower than ModelConfig: an
+// override cannot introduce a model, rename its id or change its endpoint.
+type ModelOverride struct {
+	Name          string            `json:"name,omitempty"`
+	Reasoning     *bool             `json:"reasoning,omitempty"`
+	Input         []Modality        `json:"input,omitempty"`
+	ContextWindow *int              `json:"contextWindow,omitempty"`
+	MaxTokens     *int              `json:"maxTokens,omitempty"`
+	Compat        *Compat           `json:"compat,omitempty"`
+	LevelMap      map[Level]*string `json:"thinkingLevelMap,omitempty"`
+
+	Headers        map[string]string `json:"headers,omitempty"`        // merged per key
+	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // merged per key
 	Cost           json.RawMessage   `json:"cost,omitempty"`           // accepted for compatibility; pricing is out of scope
 }
 
@@ -203,7 +255,10 @@ type Compat struct {
 	RequiresThinkingAsText           *bool `json:"requiresThinkingAsText,omitempty" dialect:"openai-completions"`
 	SupportsOpenAIGrammarTools       *bool `json:"supportsOpenAIGrammarTools,omitempty" dialect:"openai-completions,openai-responses"`
 	SupportsThinkingTokenBudget      *bool `json:"supportsThinkingTokenBudget,omitempty" dialect:"openai-completions"`
-	ZaiToolStream                    *bool `json:"zaiToolStream,omitempty" dialect:"openai-completions"`
+	// ThinkingTokenBudgetField is pi's canonical spelling; SupportsThinkingTokenBudget
+	// is the boolean alias for "thinking_token_budget".
+	ThinkingTokenBudgetField *string `json:"thinkingTokenBudgetField,omitempty" dialect:"openai-completions"`
+	ZaiToolStream            *bool   `json:"zaiToolStream,omitempty" dialect:"openai-completions"`
 
 	ForceAdaptiveThinking       *bool `json:"forceAdaptiveThinking,omitempty" dialect:"anthropic-messages"`
 	AllowEmptySignature         *bool `json:"allowEmptySignature,omitempty" dialect:"anthropic-messages"`
@@ -300,6 +355,25 @@ func compatWarnings(o *Compat, d Dialect) []string {
 		}
 	}
 	return out
+}
+
+// mergeCompat returns a new block holding base with every field over sets laid
+// on top. A nil argument on either side leaves the other untouched.
+func mergeCompat(base, over *Compat) *Compat {
+	if over == nil {
+		return base
+	} else if base == nil {
+		return over
+	}
+	out := *base
+	dst := reflect.ValueOf(&out).Elem()
+	src := reflect.ValueOf(*over)
+	for i := range src.NumField() {
+		if compatFieldSet(src, i) {
+			dst.Field(i).Set(src.Field(i))
+		}
+	}
+	return &out
 }
 
 // compatFieldSet reports whether the struct field at i was set in configuration.

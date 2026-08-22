@@ -35,6 +35,27 @@ func testFile() File {
 func TestNewRegistry(t *testing.T) {
 	t.Parallel()
 
+	t.Run("unknown_flavor_names_the_one_that_won", func(t *testing.T) {
+		// the provider key still names a known flavor, so "generic" would be a lie
+		f := File{Providers: map[string]ProviderConfig{
+			"lmstudio": {Flavor: FlavorUnknown, Models: []ModelConfig{{ID: "m1"}}},
+		}}
+		r, warnings := NewRegistry(f, nil, RegistryOptions{})
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "unknown flavor ignored, using lmstudio")
+
+		m, err := r.Resolve("lmstudio/m1")
+		require.NoError(t, err)
+		assert.Equal(t, flavorDefaults[FlavorLMStudio].baseURL, m.BaseURL)
+	})
+	t.Run("unknown_flavor_falls_back_to_generic", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"proxy": {Flavor: FlavorUnknown, BaseURL: "http://x/v1", Models: []ModelConfig{{ID: "m1"}}},
+		}}
+		_, warnings := NewRegistry(f, nil, RegistryOptions{})
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "unknown flavor ignored, using generic")
+	})
 	t.Run("sorts_by_provider_then_id", func(t *testing.T) {
 		r, warnings := NewRegistry(testFile(), nil, RegistryOptions{})
 		assert.Empty(t, warnings)
@@ -182,18 +203,18 @@ func TestMergeModels(t *testing.T) {
 	}
 
 	t.Run("declared_list_is_the_whole_list", func(t *testing.T) {
-		got := mergeModels(declared, discovered)
+		got, _ := mergeModels(declared, discovered, nil)
 		require.Len(t, got, 2) // "c" is not added
 		assert.Equal(t, "a", got[0].ID)
 		assert.Equal(t, "b", got[1].ID)
 	})
 	t.Run("declared_fields_win", func(t *testing.T) {
-		got := mergeModels(declared, discovered)
+		got, _ := mergeModels(declared, discovered, nil)
 		require.NotNil(t, got[0].ContextWindow)
 		assert.Equal(t, 1000, *got[0].ContextWindow)
 	})
 	t.Run("discovery_fills_unset_fields", func(t *testing.T) {
-		got := mergeModels(declared, discovered)
+		got, _ := mergeModels(declared, discovered, nil)
 		assert.Equal(t, "Discovered A", got[0].Name)
 		require.NotNil(t, got[1].ContextWindow)
 		assert.Equal(t, 2000, *got[1].ContextWindow) // the real loaded window
@@ -201,19 +222,116 @@ func TestMergeModels(t *testing.T) {
 	t.Run("thinking_budgets_fill_from_discovery", func(t *testing.T) {
 		d := []ModelConfig{{ID: "b"}}
 		disc := []ModelConfig{{ID: "b", ThinkingBudgets: map[Level]int{LevelHigh: 7777}}}
-		got := mergeModels(d, disc)
+		got, _ := mergeModels(d, disc, nil)
 		assert.Equal(t, 7777, got[0].ThinkingBudgets[LevelHigh])
 	})
 	t.Run("discovery_supplies_everything_when_nothing_declared", func(t *testing.T) {
-		got := mergeModels(nil, discovered)
+		got, _ := mergeModels(nil, discovered, nil)
 		assert.Len(t, got, 3)
 	})
 	t.Run("declared_only", func(t *testing.T) {
-		got := mergeModels(declared, nil)
+		got, _ := mergeModels(declared, nil, nil)
 		assert.Len(t, got, 2)
 	})
 	t.Run("both_empty", func(t *testing.T) {
-		assert.Empty(t, mergeModels(nil, nil))
+		got, _ := mergeModels(nil, nil, nil)
+		assert.Empty(t, got)
+	})
+	t.Run("override_adjusts_a_discovered_entry", func(t *testing.T) {
+		got, w := mergeModels(nil, discovered,
+			map[string]ModelOverride{"c": {Name: "Renamed C", ContextWindow: ptr(4096)}})
+		require.Len(t, got, 3)
+		assert.Empty(t, w)
+		assert.Equal(t, "Renamed C", got[2].Name)
+		require.NotNil(t, got[2].ContextWindow)
+		assert.Equal(t, 4096, *got[2].ContextWindow)
+	})
+	t.Run("override_never_adds_a_model", func(t *testing.T) {
+		got, w := mergeModels(nil, discovered, map[string]ModelOverride{"nope": {Name: "X"}})
+		assert.Len(t, got, 3)
+		assert.Empty(t, w) // an id discovery has not returned yet is not a mistake
+	})
+	t.Run("override_on_an_excluded_id_warns", func(t *testing.T) {
+		// "c" is discovered but the declared list is the whole list, so the
+		// override is inert; silence here would look like it applied
+		_, w := mergeModels(declared, discovered, map[string]ModelOverride{"c": {Name: "X"}})
+		require.Len(t, w, 1)
+		assert.Contains(t, w[0], `modelOverrides "c" is not in models`)
+	})
+	t.Run("override_on_a_declared_id_warns", func(t *testing.T) {
+		got, w := mergeModels(declared, discovered, map[string]ModelOverride{"a": {Name: "X"}})
+		require.Len(t, w, 1)
+		assert.Contains(t, w[0], `modelOverrides "a"`)
+		assert.Equal(t, "Discovered A", got[0].Name) // the declaration still wins
+	})
+	t.Run("override_does_not_mutate_the_cache", func(t *testing.T) {
+		disc := []ModelConfig{{ID: "a", Name: "Discovered A"}}
+		_, _ = mergeModels(nil, disc, map[string]ModelOverride{"a": {Name: "Renamed"}})
+		assert.Equal(t, "Discovered A", disc[0].Name)
+	})
+}
+
+func TestApplyOverride(t *testing.T) {
+	t.Parallel()
+
+	base := ModelConfig{
+		ID: "m1", Name: "Base", ContextWindow: ptr(1000), MaxTokens: ptr(100),
+		Reasoning:      ptr(false),
+		Input:          []Modality{ModalityText},
+		Headers:        map[string]string{"X-Base": "1", "X-Both": "base"},
+		SamplingParams: map[string]any{"temperature": 0.2, "top_p": 0.9},
+		Compat:         &Compat{SupportsStore: ptr(true), SupportsImages: ptr(true)},
+	}
+
+	t.Run("scalars_replace", func(t *testing.T) {
+		got := applyOverride(base, ModelOverride{
+			Name: "Over", ContextWindow: ptr(2000), MaxTokens: ptr(200), Reasoning: ptr(true),
+			Input: []Modality{ModalityText, ModalityImage},
+		})
+		assert.Equal(t, "Over", got.Name)
+		assert.Equal(t, 2000, *got.ContextWindow)
+		assert.Equal(t, 200, *got.MaxTokens)
+		assert.True(t, *got.Reasoning)
+		assert.Equal(t, []Modality{ModalityText, ModalityImage}, got.Input)
+	})
+	t.Run("unset_fields_leave_the_base", func(t *testing.T) {
+		got := applyOverride(base, ModelOverride{Name: "Over"})
+		assert.Equal(t, 1000, *got.ContextWindow)
+		assert.False(t, *got.Reasoning)
+	})
+	t.Run("headers_merge_per_key", func(t *testing.T) {
+		got := applyOverride(base, ModelOverride{
+			Headers: map[string]string{"X-Both": "over", "X-New": "2"},
+		})
+		assert.Equal(t, map[string]string{"X-Base": "1", "X-Both": "over", "X-New": "2"}, got.Headers)
+	})
+	t.Run("sampling_params_merge_per_key", func(t *testing.T) {
+		got := applyOverride(base, ModelOverride{SamplingParams: map[string]any{"temperature": 1.0}})
+		assert.InDelta(t, 1.0, got.SamplingParams["temperature"], 1e-9)
+		assert.InDelta(t, 0.9, got.SamplingParams["top_p"], 1e-9)
+	})
+	t.Run("compat_merges_per_field", func(t *testing.T) {
+		got := applyOverride(base, ModelOverride{
+			Compat: &Compat{SupportsImages: ptr(false), SupportsPromptCache: ptr(true)},
+		})
+		require.NotNil(t, got.Compat)
+		assert.True(t, *got.Compat.SupportsStore)       // untouched
+		assert.False(t, *got.Compat.SupportsImages)     // replaced
+		assert.True(t, *got.Compat.SupportsPromptCache) // added
+	})
+	t.Run("level_map_replaces", func(t *testing.T) {
+		got := applyOverride(base, ModelOverride{LevelMap: map[Level]*string{LevelOff: nil}})
+		assert.Contains(t, got.LevelMap, LevelOff)
+	})
+	t.Run("does_not_mutate_the_base_maps", func(t *testing.T) {
+		_ = applyOverride(base, ModelOverride{
+			Headers:        map[string]string{"X-Both": "over"},
+			SamplingParams: map[string]any{"temperature": 1.0},
+			Compat:         &Compat{SupportsStore: ptr(false)},
+		})
+		assert.Equal(t, "base", base.Headers["X-Both"])
+		assert.InDelta(t, 0.2, base.SamplingParams["temperature"], 1e-9)
+		assert.True(t, *base.Compat.SupportsStore)
 	})
 }
 

@@ -190,15 +190,37 @@ that takes a reasoning effort and another that does not, and a provider-level
 answer cannot express it. So capabilities live on `Model.Caps`, and the adapter
 reads `req.Model.Caps`.
 
-Resolution is four layers, field by field, later winning. The detection layer
+Resolution is six layers, field by field, later winning. The detection layer
 sits between the flavor defaults and configured compat: it derives the quirks pi
 auto-detects from a chat-completions provider's name and base URL (never a model
 id except openrouter's `anthropic/` / `openai/` prefixes), so an entry carrying
 only a name and endpoint resolves like pi without any explicit config.
 
 ```
-flavorDefaults[flavor].caps  ->  detected(name, baseURL)  ->  ProviderConfig.Compat  ->  ModelConfig.Compat
+flavorDefaults[flavor].caps
+  ->  detected(name, resolved baseURL)
+    ->  ProviderConfig.Compat
+      ->  discovered model
+        ->  modelOverrides[id]        (only where the provider declares no models)
+          ->  models[] entry
+            ->  schema defaults
 ```
+
+Only the last layer is new in kind. Defaults run **last** so a discovered context
+window is never replaced by a guess, and they are applied before the thinking
+ladder is computed so a defaulted `maxTokens` caps it. They are pi's, exactly:
+`contextWindow` 128000, `maxTokens` 16384, `name` = `id`, `input` `["text"]`,
+`reasoning` false. That is what makes `{"id": "llama3.1:8b"}` a complete entry;
+without them both values resolve to zero, and zero means the context bar has no
+denominator, auto-compaction never fires, and Anthropic gets `max_tokens: 0`.
+
+`api` and `baseUrl` are settable per model as well as per provider, so one
+gateway serving two dialects is one provider entry. Dialect and endpoint are
+therefore resolved at **model**-resolution time, and `Model.BaseURL` plus
+`Model.Caps.Dialect` are what the adapter is built from — it never re-derives
+them. `Providers` caches on `provider + dialect + baseURL` for that reason; the
+vendor name alone would collapse two models onto whichever adapter was built
+first.
 
 Detection returns a sparse `Compat` (a zero one when no vendor family matches)
 and never sets `Reasoning`, which comes from the model entry. It runs only for
@@ -337,6 +359,19 @@ Deliberate choices in this loader:
   than a warning, and a hard failure locks the user out of their agent.
 - **No `cost` block.** See "Deliberately not done".
 
+- **An unrecognised `api` or `flavor` disables one provider, not the file.** pi
+  ships apis ajent cannot speak (`google-generative-ai`), and decoding used to
+  return an error, which aborts `encoding/json` for the whole document and loads
+  *zero* providers. Both now decode to `DialectUnknown` / `FlavorUnknown`. An
+  unknown dialect disables its provider, because a wrong dialect is a wrong
+  protocol and falling back would silently speak chat-completions at a Google
+  endpoint. An unknown flavor only degrades to `generic`, since a flavor picks
+  defaults and never the protocol.
+- **Models are displayed by `Display()`, which prefers `name`.** pi shows the
+  `id` and uses `name` for matching and secondary detail. Defaulting `name` to
+  `id` makes the two agree for every entry that omits one; the divergence remains
+  only where a user set a descriptive `name`, and there showing it is the point.
+
 `models.json` is user scope only, because it may hold a literal `apiKey`. The
 loader warns when such a file is group or world readable. Key resolution order
 is the configured env var, then the literal, then the dialect's conventional
@@ -358,10 +393,31 @@ that declares nothing. This is what lets you name three lm-studio models you
 actually use without the picker filling with everything the server has, while
 still learning the real loaded context length of the ones you named.
 
-Discovery endpoints: openrouter `GET /models`, lm-studio `GET /api/v0/models`,
-llama.cpp `GET /props`. The local ones report the context length the model was
-*loaded* with, which is often smaller than its maximum and which nothing else
-can know.
+**`modelOverrides`** adjusts a *discovered* model by id without restating it as a
+full `ModelConfig`. It exists because discovery is the primary source for
+openrouter, lm-studio and llama.cpp, and correcting one field of one discovered
+entry should not cost a whole declaration. It is deliberately narrower than pi's,
+which also targets built-in catalogue models: ajent has no catalogue, so the only
+models a user has not defined are discovered ones. A user who declares a model
+declares it with the configuration they want, so an override on a declared id is
+**inert and warns** — pi ignores it silently. By the merge rule above, a provider
+that declares any models has no undeclared ones, so its `modelOverrides` never
+apply at all. Unknown ids are ignored without a warning, because discovery is
+asynchronous and an id that has not arrived yet is not a mistake.
+
+Discovery endpoints and what each supplies — the rest must come from `models[]`,
+`modelOverrides`, or the schema defaults:
+
+| endpoint | supplies |
+|---|---|
+| openrouter `GET /models` | id, name, context window, max completion tokens, input modalities, reasoning support, tool support |
+| lm-studio `GET /api/v0/models` | id, context window (loaded or maximum), input modalities, tool support |
+| llama.cpp `GET /props` | one entry: id and context window |
+
+There is no generic OpenAI-style `/models` discovery: it returns ids only, which
+the schema defaults already cover. The local endpoints report the context length
+the model was *loaded* with, which is often smaller than its maximum and which
+nothing else can know.
 
 Refetch is conditional on `ETag` / `Last-Modified`; a `304` keeps the models and
 only bumps the check time. Results cache to `~/.ajent/models-cache.json` at
@@ -531,6 +587,11 @@ accumulator including arguments that parse early.
   models that require it. `max_tokens` is inflated by the thinking budget first,
   capped at the model cap, so the reply keeps its full window. `display` is
   deliberately never sent.
+- **`deferredToolsMode` is accepted and not yet honoured.** It resolves onto
+  `Caps.DeferredTools` and nothing reads it; pi's only value is `"kimi"`.
+- **Do not cache a provider adapter by vendor name.** `api` and `baseUrl` are
+  per model, so two models on one provider entry can need two adapters.
+  `Providers` keys on provider, dialect and base URL together.
 - **A `Compat` bool must stay a pointer** and a `Timeouts` duration must stay a
   pointer. Both need the unset/explicit distinction.
 - **Enums encode as text, not JSON.** `encoding/json` uses `TextUnmarshaler` for

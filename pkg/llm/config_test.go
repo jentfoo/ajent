@@ -177,6 +177,78 @@ func TestModelConfigCompatParity(t *testing.T) {
 	require.NotNil(t, m.Cost)
 }
 
+func TestLoadFilePiParity(t *testing.T) {
+	t.Parallel()
+
+	f, warnings, err := loadFixture(t, "models_pi_full.json")
+	require.NoError(t, err)
+	// every field pi documents must survive the load without a complaint
+	assert.Empty(t, warnings)
+	require.Len(t, f.Providers, 5)
+
+	t.Run("per_model_api_and_base_url", func(t *testing.T) {
+		m := f.Providers["custom-proxy"].Models[0]
+		assert.Equal(t, DialectAnthropic, m.API)
+		assert.Equal(t, "https://proxy.example.com/anthropic", m.BaseURL)
+	})
+	t.Run("unsupported_api_keeps_other_providers", func(t *testing.T) {
+		assert.Equal(t, DialectUnknown, f.Providers["my-google"].API)
+		assert.Equal(t, DialectOpenAICompletions, f.Providers["ollama"].API)
+	})
+	t.Run("thinking_token_budget_field", func(t *testing.T) {
+		c := f.Providers["local-llm"].Compat
+		require.NotNil(t, c.ThinkingTokenBudgetField)
+		assert.Equal(t, "thinking_budget", *c.ThinkingTokenBudgetField)
+	})
+	t.Run("model_overrides_carry_pis_field_set", func(t *testing.T) {
+		ov := f.Providers["openrouter"].ModelOverrides["anthropic/claude-sonnet-4"]
+		assert.Equal(t, "Claude Sonnet 4 (Bedrock Route)", ov.Name)
+		require.NotNil(t, ov.Reasoning)
+		assert.True(t, *ov.Reasoning)
+		require.NotNil(t, ov.ContextWindow)
+		assert.Equal(t, 1050000, *ov.ContextWindow)
+		assert.Equal(t, map[string]string{"X-Route": "bedrock"}, ov.Headers)
+		assert.InDelta(t, 0.7, ov.SamplingParams["temperature"], 1e-9)
+		assert.Contains(t, ov.LevelMap, LevelXHigh)
+		require.NotNil(t, ov.Compat)
+		assert.NotEmpty(t, ov.Compat.OpenRouterRouting)
+	})
+	t.Run("unsupported_api_disables_only_its_provider", func(t *testing.T) {
+		reg, w := NewRegistry(f, nil, RegistryOptions{})
+		joined := strings.Join(w, "\n")
+		assert.Contains(t, joined, `provider my-google: unsupported api`)
+		assert.NotContains(t, reg.ProviderNames(), "my-google")
+		assert.Contains(t, reg.ProviderNames(), "ollama")
+		assert.Contains(t, reg.ProviderNames(), "custom-proxy")
+	})
+}
+
+func TestMergeCompat(t *testing.T) {
+	t.Parallel()
+
+	base := &Compat{SupportsStore: ptr(true), SupportsImages: ptr(true), MaxTokensField: ptr("max_tokens")}
+
+	t.Run("nil_over_returns_base", func(t *testing.T) {
+		assert.Equal(t, base, mergeCompat(base, nil))
+	})
+	t.Run("nil_base_returns_over", func(t *testing.T) {
+		over := &Compat{SupportsStore: ptr(false)}
+		assert.Equal(t, over, mergeCompat(nil, over))
+	})
+	t.Run("set_fields_win_field_by_field", func(t *testing.T) {
+		got := mergeCompat(base, &Compat{SupportsImages: ptr(false), SupportsToolChoice: ptr(true)})
+		require.NotNil(t, got)
+		assert.True(t, *got.SupportsStore)                 // untouched
+		assert.False(t, *got.SupportsImages)               // explicit false wins over true
+		assert.True(t, *got.SupportsToolChoice)            // added
+		assert.Equal(t, "max_tokens", *got.MaxTokensField) // untouched string
+	})
+	t.Run("does_not_mutate_either_side", func(t *testing.T) {
+		_ = mergeCompat(base, &Compat{SupportsStore: ptr(false)})
+		assert.True(t, *base.SupportsStore)
+	})
+}
+
 func TestDialectUnmarshalText(t *testing.T) {
 	t.Parallel()
 
@@ -203,19 +275,29 @@ func TestDialectUnmarshalText(t *testing.T) {
 		require.NoError(t, got.UnmarshalText([]byte("anthropic")))
 		assert.Equal(t, DialectAnthropic, got)
 	})
-	t.Run("unknown_errors", func(t *testing.T) {
+	t.Run("unsupported_is_not_an_error", func(t *testing.T) {
+		// pi ships apis ajent cannot speak; failing here would cost the user every
+		// other provider in the file
 		var got Dialect
-		assert.Error(t, got.UnmarshalText([]byte("grpc")))
+		require.NoError(t, got.UnmarshalText([]byte("google-generative-ai")))
+		assert.Equal(t, DialectUnknown, got)
 	})
 }
 
 func TestFlavorUnmarshalText(t *testing.T) {
 	t.Parallel()
 
-	var got Flavor
-	require.NoError(t, got.UnmarshalText([]byte("lmstudio")))
-	assert.Equal(t, FlavorLMStudio, got)
-	assert.Equal(t, "lmstudio", got.String())
+	t.Run("known_name", func(t *testing.T) {
+		var got Flavor
+		require.NoError(t, got.UnmarshalText([]byte("lmstudio")))
+		assert.Equal(t, FlavorLMStudio, got)
+		assert.Equal(t, "lmstudio", got.String())
+	})
+	t.Run("unknown_is_not_an_error", func(t *testing.T) {
+		var got Flavor
+		require.NoError(t, got.UnmarshalText([]byte("bogus")))
+		assert.Equal(t, FlavorUnknown, got)
+	})
 }
 
 func TestCompatWarnings(t *testing.T) {

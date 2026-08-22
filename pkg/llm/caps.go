@@ -44,7 +44,6 @@ type Capabilities struct {
 	SupportsStrict                   bool // openai-completions strict mode on tools
 	SupportsStrictTools              bool // anthropic strict tool schemas
 	SupportsGrammarTools             bool // openai custom Lark/regex grammar tools
-	SupportsThinkingTokenBudget      bool
 	ForceAdaptiveThinking            bool // anthropic adaptive thinking regardless of id
 	AllowEmptySignature              bool // replay empty signatures instead of text conversion
 	RequiresThinkingAsText           bool
@@ -61,6 +60,7 @@ type Capabilities struct {
 
 	SessionAffinityFormat string                     // header format when SessionAffinity is set
 	DeferredTools         string                     // deferred tool serialization mode
+	ThinkingBudgetField   string                     // request key capping reasoning tokens; empty disables
 	ChatTemplateKwargs    map[string]json.RawMessage // chat_template_kwargs additions
 	ChatTemplateArgs      map[string]json.RawMessage // baseten chat_template_args additions
 	OpenRouterRouting     json.RawMessage            // verbatim openrouter provider routing

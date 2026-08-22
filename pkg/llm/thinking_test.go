@@ -278,7 +278,7 @@ func TestThinkingTokenBudget(t *testing.T) {
 			c.Reasoning = true
 			c.Thinking = ThinkingOpenAI
 			c.SupportsReasoningEffort = true
-			c.SupportsThinkingTokenBudget = true
+			c.ThinkingBudgetField = fieldThinkingTokenBudget
 			c.Budgets = map[Level]int{LevelHigh: 30000, LevelMedium: 8000}
 		})
 		return Request{
@@ -305,7 +305,7 @@ func TestThinkingTokenBudget(t *testing.T) {
 	})
 	t.Run("absent_without_the_capability", func(t *testing.T) {
 		req := base()
-		req.Model.Caps.SupportsThinkingTokenBudget = false
+		req.Model.Caps.ThinkingBudgetField = ""
 		assert.NotContains(t,
 			decodeThinkingBudget(t, req), "thinking_token_budget")
 	})

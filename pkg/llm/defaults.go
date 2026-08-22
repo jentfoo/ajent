@@ -13,8 +13,10 @@ const (
 	fieldMaxOutputTokens = "max_output_tokens"
 	fieldReasoning       = "reasoning"
 	fieldReasoningConten = "reasoning_content"
-	thinkOpenTag         = "<think>"
-	thinkCloseTag        = "</think>"
+	// vLLM's spelling, the value pi's supportsThinkingTokenBudget alias selects
+	fieldThinkingTokenBudget = "thinking_token_budget"
+	thinkOpenTag             = "<think>"
+	thinkCloseTag            = "</think>"
 )
 
 // flavorDefault is everything built in about a known provider. It carries no
@@ -170,9 +172,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 // flavorFor returns the flavor for a provider entry, defaulting to the one its
 // configuration key names so a provider called "lmstudio" needs no flavor field.
 func flavorFor(name string, cfg ProviderConfig) Flavor {
-	if cfg.Flavor != FlavorUnset {
+	if cfg.Flavor != FlavorUnset && cfg.Flavor != FlavorUnknown {
 		return cfg.Flavor
-	} else if f, ok := flavorNames.lookup(name); ok && f != FlavorUnset {
+	} else if f, ok := flavorNames.lookup(name); ok && f != FlavorUnset && f != FlavorUnknown {
 		return f
 	}
 	return FlavorGeneric
@@ -194,6 +196,19 @@ func resolveBaseURL(cfg, def string) string {
 		return cfg
 	}
 	return def
+}
+
+// modelEndpoint returns the dialect and base URL one model talks over: its own
+// when set, otherwise the provider's.
+func modelEndpoint(ctx modelContext, mc ModelConfig) (Dialect, string) {
+	dialect, baseURL := ctx.dialect, ctx.baseURL
+	if mc.API != DialectUnset {
+		dialect = mc.API
+	}
+	if mc.BaseURL != "" {
+		baseURL = mc.BaseURL
+	}
+	return dialect, baseURL
 }
 
 // resolveCaps layers detection and compat blocks over the flavor defaults in
@@ -251,7 +266,15 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.SupportsStrict = orBool(c.SupportsStrict, o.SupportsStrictMode)
 	c.SupportsStrictTools = orBool(c.SupportsStrictTools, o.SupportsStrictTools)
 	c.SupportsGrammarTools = orBool(c.SupportsGrammarTools, o.SupportsOpenAIGrammarTools)
-	c.SupportsThinkingTokenBudget = orBool(c.SupportsThinkingTokenBudget, o.SupportsThinkingTokenBudget)
+	// supportsThinkingTokenBudget is the boolean alias for pi's thinkingTokenBudgetField,
+	// so the canonical spelling wins when a block carries both
+	if o.SupportsThinkingTokenBudget != nil {
+		c.ThinkingBudgetField = ""
+		if *o.SupportsThinkingTokenBudget {
+			c.ThinkingBudgetField = fieldThinkingTokenBudget
+		}
+	}
+	c.ThinkingBudgetField = orStr(c.ThinkingBudgetField, o.ThinkingTokenBudgetField)
 	c.ForceAdaptiveThinking = orBool(c.ForceAdaptiveThinking, o.ForceAdaptiveThinking)
 	c.AllowEmptySignature = orBool(c.AllowEmptySignature, o.AllowEmptySignature)
 	c.RequiresThinkingAsText = orBool(c.RequiresThinkingAsText, o.RequiresThinkingAsText)
@@ -323,25 +346,50 @@ func orStr(dst string, p *string) string {
 	return dst
 }
 
-// modelContext carries what resolveModel needs beyond the config entry: the
-// resolved endpoint and dialect that drive detection.
+// pi's documented defaults for a model entry that omits them, so a one line
+// entry is a complete one. See pi/packages/coding-agent/docs/models.md.
+const (
+	defaultContextWindow = 128000
+	defaultMaxTokens     = 16384
+)
+
+// modelContext carries the provider level fallbacks a model resolves against.
 type modelContext struct {
 	provider string
-	dialect  Dialect
-	baseURL  string // resolved endpoint, for detection
+	dialect  Dialect // the provider's, which ModelConfig.API overrides
+	baseURL  string  // the provider's, which ModelConfig.BaseURL overrides
+}
+
+// applyModelDefaults fills what a model entry left unset with pi's defaults. It
+// runs after configuration and discovery have merged, so a discovered value wins.
+func applyModelDefaults(mc ModelConfig) ModelConfig {
+	if mc.Name == "" {
+		mc.Name = mc.ID
+	}
+	if mc.ContextWindow == nil {
+		mc.ContextWindow = ptrOf(defaultContextWindow)
+	}
+	if mc.MaxTokens == nil {
+		mc.MaxTokens = ptrOf(defaultMaxTokens)
+	}
+	return mc
 }
 
 // resolveModel builds a Model from a config entry against a provider's defaults,
-// layering flavor caps then detection then the compat blocks. Detection runs only
-// for chat-completions and never overrides configured compat.
+// layering flavor caps then detection then the compat blocks, and finally the
+// schema defaults. Detection runs only for chat-completions and never overrides
+// configured compat.
 func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, mc ModelConfig) Model {
+	mc = applyModelDefaults(mc)
+	dialect, baseURL := modelEndpoint(ctx, mc)
+
 	layers := []*Compat{providerCompat, mc.Compat}
-	if ctx.dialect == DialectOpenAICompletions {
-		d := detectCompat(ctx.provider, ctx.baseURL, mc.ID)
+	if dialect == DialectOpenAICompletions {
+		d := detectCompat(ctx.provider, baseURL, mc.ID)
 		layers = append([]*Compat{&d}, layers...)
 	}
 	caps := resolveCaps(base, layers...)
-	caps.Dialect = ctx.dialect
+	caps.Dialect = dialect
 
 	if mc.Reasoning != nil {
 		caps.Reasoning = *mc.Reasoning
@@ -373,6 +421,7 @@ func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, m
 		Provider: ctx.provider,
 		ID:       mc.ID,
 		Name:     mc.Name,
+		BaseURL:  baseURL,
 		Aliases:  slices.Clone(mc.Aliases),
 		Input:    slices.Clone(mc.Input),
 		Caps:     caps,

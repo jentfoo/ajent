@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -67,8 +68,19 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 			continue
 		}
 		flavor := flavorFor(name, cfg)
+		if cfg.Flavor == FlavorUnknown {
+			// the provider key may still name a known flavor, so report what won
+			warnings = append(warnings, fmt.Sprintf("provider %s: unknown flavor ignored, using %s; want one of %s",
+				name, flavor, strings.Join(flavorChoices(), ", ")))
+		}
 		def := flavorDefaults[flavor]
 		dialect := dialectFor(cfg, def.dialect)
+		if dialect == DialectUnknown {
+			// a wrong dialect is a wrong protocol, so disable rather than guess
+			warnings = append(warnings, fmt.Sprintf("provider %s: unsupported api, provider disabled; want one of %s",
+				name, strings.Join(dialectChoices(), ", ")))
+			continue
+		}
 		ctx := modelContext{provider: name, dialect: dialect, baseURL: resolveBaseURL(cfg.BaseURL, def.baseURL)}
 		entries[name] = cfg
 		flavors[name] = flavor
@@ -77,17 +89,25 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 			warnings = append(warnings, "provider "+name+": "+w)
 		}
 
-		declared := cfg.Models
 		var discovered []ModelConfig
 		if e, ok := cache[name]; ok {
 			discovered = e.Models
 		}
-		merged := mergeModels(declared, discovered)
+		merged, mw := mergeModels(cfg.Models, discovered, cfg.ModelOverrides)
+		for _, w := range mw {
+			warnings = append(warnings, "provider "+name+": "+w)
+		}
 		if len(merged) == 0 {
-			warnings = append(warnings, "provider "+name+" has no models declared or discovered")
+			warnings = append(warnings, zeroModelsWarning(name, flavor, orBool(def.discover, cfg.Discover)))
 		}
 		for _, mc := range merged {
-			for _, w := range compatWarnings(mc.Compat, dialect) {
+			if mc.API == DialectUnknown {
+				warnings = append(warnings, fmt.Sprintf("provider %s model %s: unsupported api, model skipped; want one of %s",
+					name, mc.ID, strings.Join(dialectChoices(), ", ")))
+				continue
+			}
+			modelDialect, _ := modelEndpoint(ctx, mc)
+			for _, w := range compatWarnings(mc.Compat, modelDialect) {
 				warnings = append(warnings, fmt.Sprintf("provider %s model %s: %s", name, mc.ID, w))
 			}
 			models = append(models, resolveModel(ctx, def.caps, cfg.Compat, mc))
@@ -116,19 +136,34 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	return warnings
 }
 
-// mergeModels combines the declared and discovered entries for one provider.
+// zeroModelsWarning names the ways to populate a provider that resolved empty.
+func zeroModelsWarning(name string, flavor Flavor, discover bool) string {
+	_, discoverable := discoverySpecs[flavor]
+	switch {
+	case discoverable && discover:
+		return "provider " + name + ` has no models yet; discovery has not returned, or add a "models" array`
+	case discoverable:
+		return "provider " + name + ` has no models; add a "models" array or set "discover": true`
+	default:
+		return "provider " + name + ` has no models; add a "models" array`
+	}
+}
+
+// mergeModels combines the declared, discovered and overridden entries for one
+// provider, returning the merged list and warnings for unusable overrides.
 //
 // When a provider declares models, that list is the whole list: discovery may
 // fill gaps in those entries but never adds or removes one. Discovery supplies
-// the full list only for a provider that declares nothing.
-func mergeModels(declared, discovered []ModelConfig) []ModelConfig {
+// the full list only for a provider that declares nothing. Overrides adjust a
+// discovered entry, so an id the user declared is not a valid target.
+func mergeModels(declared, discovered []ModelConfig, overrides map[string]ModelOverride) ([]ModelConfig, []string) {
 	if len(declared) == 0 {
-		return discovered
+		return applyOverrides(discovered, overrides), nil
 	}
-	byID := make(map[string]ModelConfig, len(discovered))
-	for _, d := range discovered {
-		byID[d.ID] = d
-	}
+	// a declared list is the whole list, so no override on this provider is reachable
+	warnings := unreachableOverrides(declared, discovered, overrides)
+
+	byID := bulk.SliceToIndexBy(func(m ModelConfig) string { return m.ID }, discovered)
 	out := make([]ModelConfig, len(declared))
 	for i, d := range declared {
 		if disc, ok := byID[d.ID]; ok {
@@ -136,6 +171,95 @@ func mergeModels(declared, discovered []ModelConfig) []ModelConfig {
 		}
 		out[i] = d
 	}
+	return out, warnings
+}
+
+// applyOverrides layers each matching override onto a copy of the discovered list.
+func applyOverrides(discovered []ModelConfig, overrides map[string]ModelOverride) []ModelConfig {
+	if len(overrides) == 0 {
+		return discovered
+	}
+	out := slices.Clone(discovered)
+	for i, d := range out {
+		if ov, ok := overrides[d.ID]; ok {
+			out[i] = applyOverride(d, ov)
+		}
+	}
+	return out
+}
+
+// unreachableOverrides names every override a declared model list makes inert, so
+// a user is not left wondering why nothing changed. An id that is neither declared
+// nor discovered stays silent: discovery is asynchronous, so an id that has not
+// arrived yet is not a mistake.
+func unreachableOverrides(declared, discovered []ModelConfig, overrides map[string]ModelOverride) []string {
+	if len(overrides) == 0 {
+		return nil
+	}
+	declaredIDs := bulk.SliceToSetBy(func(m ModelConfig) string { return m.ID }, declared)
+	discoveredIDs := bulk.SliceToSetBy(func(m ModelConfig) string { return m.ID }, discovered)
+
+	var out []string
+	for _, id := range slices.Sorted(maps.Keys(overrides)) {
+		if _, ok := declaredIDs[id]; ok {
+			out = append(out, fmt.Sprintf("modelOverrides %q is also declared in models, the declaration wins", id))
+		} else if _, ok := discoveredIDs[id]; ok {
+			out = append(out, fmt.Sprintf("modelOverrides %q is not in models, which is the whole list for this provider; declare it to use the override", id))
+		}
+	}
+	return out
+}
+
+// applyOverride layers a partial override over a discovered entry, the override
+// winning. Headers, sampling params and compat merge per key rather than replace.
+func applyOverride(mc ModelConfig, ov ModelOverride) ModelConfig {
+	if ov.Name != "" {
+		mc.Name = ov.Name
+	}
+	if ov.Reasoning != nil {
+		mc.Reasoning = ov.Reasoning
+	}
+	if len(ov.Input) > 0 {
+		mc.Input = slices.Clone(ov.Input)
+	}
+	if ov.ContextWindow != nil {
+		mc.ContextWindow = ov.ContextWindow
+	}
+	if ov.MaxTokens != nil {
+		mc.MaxTokens = ov.MaxTokens
+	}
+	if len(ov.LevelMap) > 0 {
+		mc.LevelMap = maps.Clone(ov.LevelMap)
+	}
+	mc.Compat = mergeCompat(mc.Compat, ov.Compat)
+	mc.Headers = mergeStrings(mc.Headers, ov.Headers)
+	mc.SamplingParams = mergeAny(mc.SamplingParams, ov.SamplingParams)
+	return mc
+}
+
+// mergeStrings overlays src keys onto a clone of base.
+func mergeStrings(base, src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return base
+	}
+	out := maps.Clone(base)
+	if out == nil {
+		out = make(map[string]string, len(src))
+	}
+	maps.Copy(out, src)
+	return out
+}
+
+// mergeAny overlays src keys onto a clone of base.
+func mergeAny(base, src map[string]any) map[string]any {
+	if len(src) == 0 {
+		return base
+	}
+	out := maps.Clone(base)
+	if out == nil {
+		out = make(map[string]any, len(src))
+	}
+	maps.Copy(out, src)
 	return out
 }
 
@@ -163,9 +287,7 @@ func enrichModel(declared, discovered ModelConfig) ModelConfig {
 	if len(declared.Aliases) == 0 {
 		declared.Aliases = discovered.Aliases
 	}
-	if declared.Compat == nil {
-		declared.Compat = discovered.Compat
-	}
+	declared.Compat = mergeCompat(discovered.Compat, declared.Compat)
 	if len(declared.LevelMap) == 0 {
 		declared.LevelMap = discovered.LevelMap
 	}

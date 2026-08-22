@@ -185,6 +185,18 @@ func TestResolveModel(t *testing.T) {
 		})
 		assert.Equal(t, map[string]string{"X-Org": "acme"}, got.Headers)
 	})
+	t.Run("per_model_api_overrides_the_provider", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, nil, ModelConfig{ID: "m1", API: DialectAnthropic})
+		assert.Equal(t, DialectAnthropic, got.Caps.Dialect)
+	})
+	t.Run("per_model_base_url_overrides_the_provider", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, nil, ModelConfig{ID: "m1", BaseURL: "http://other:9/v1"})
+		assert.Equal(t, "http://other:9/v1", got.BaseURL)
+	})
+	t.Run("base_url_falls_back_to_the_provider", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, nil, ModelConfig{ID: "m1"})
+		assert.Equal(t, "http://192.168.1.100:1111/v1", got.BaseURL)
+	})
 	t.Run("sampling_params_fold_into_the_body_escape_hatch", func(t *testing.T) {
 		got := resolveModel(tagCtx, base, nil, ModelConfig{
 			ID: "m1", SamplingParams: map[string]any{"temperature": 0.2, "seed": 7},
@@ -193,6 +205,75 @@ func TestResolveModel(t *testing.T) {
 		assert.JSONEq(t, `0.2`, string(got.Caps.ExtraBody["temperature"]))
 		assert.JSONEq(t, `7`, string(got.Caps.ExtraBody["seed"]))
 	})
+}
+
+func TestApplyModelDefaults(t *testing.T) {
+	t.Parallel()
+
+	base := flavorDefaults[FlavorLMStudio].caps
+	ctx := modelContext{provider: "lmstudio", dialect: DialectOpenAICompletions}
+
+	t.Run("id_only_entry_is_complete", func(t *testing.T) {
+		got := resolveModel(ctx, base, nil, ModelConfig{ID: "llama3.1:8b"})
+		assert.Equal(t, "llama3.1:8b", got.Name)
+		assert.Equal(t, defaultContextWindow, got.ContextWindow)
+		assert.Equal(t, defaultMaxTokens, got.MaxOutput)
+		assert.Equal(t, []Modality{ModalityText}, got.Input)
+	})
+	t.Run("reasoning_defaults_off", func(t *testing.T) {
+		// unset reasoning takes the flavor's opinion, which is false when it has none
+		got := resolveModel(ctx, Capabilities{}, nil, ModelConfig{ID: "m1"})
+		assert.False(t, got.Caps.Reasoning)
+	})
+	t.Run("configured_values_win", func(t *testing.T) {
+		got := resolveModel(ctx, base, nil, ModelConfig{
+			ID: "m1", Name: "Model One", ContextWindow: ptr(400000), MaxTokens: ptr(40000),
+		})
+		assert.Equal(t, "Model One", got.Name)
+		assert.Equal(t, 400000, got.ContextWindow)
+		assert.Equal(t, 40000, got.MaxOutput)
+	})
+	t.Run("discovered_window_beats_the_default", func(t *testing.T) {
+		// defaults run after the merge, so a real loaded window is never replaced
+		merged, _ := mergeModels(nil, []ModelConfig{{ID: "m1", ContextWindow: ptr(8192)}}, nil)
+		got := resolveModel(ctx, base, nil, merged[0])
+		assert.Equal(t, 8192, got.ContextWindow)
+	})
+	t.Run("defaulted_max_tokens_caps_the_ladder", func(t *testing.T) {
+		got := resolveModel(ctx, base, nil, ModelConfig{ID: "m1", Reasoning: ptr(true)})
+		assert.Equal(t, defaultMaxTokens-1, got.Caps.Budgets[LevelMax])
+	})
+}
+
+// TestModelLayering pins the whole precedence chain in one case, each layer
+// visibly winning over the one below it. Overrides participate only where the
+// provider declares nothing, since a declared list is the whole list.
+func TestModelLayering(t *testing.T) {
+	t.Parallel()
+
+	providerCompat := &Compat{SupportsToolChoice: ptr(true), SupportsStore: ptr(true)}
+	discovered := []ModelConfig{{
+		ID: "m1", Name: "Discovered", ContextWindow: ptr(1000), MaxTokens: ptr(100),
+		Compat: &Compat{SupportsStore: ptr(false), SupportsImages: ptr(true)},
+	}}
+	overrides := map[string]ModelOverride{"m1": {
+		Name: "Overridden", ContextWindow: ptr(2000),
+		Compat: &Compat{SupportsImages: ptr(false), SupportsPromptCache: ptr(true)},
+	}}
+
+	merged, warnings := mergeModels(nil, discovered, overrides)
+	require.Len(t, merged, 1)
+	assert.Empty(t, warnings)
+	got := resolveModel(modelContext{provider: "p", dialect: DialectOpenAICompletions},
+		flavorDefaults[FlavorGeneric].caps, providerCompat, merged[0])
+
+	assert.Equal(t, "Overridden", got.Name)  // override beats discovery
+	assert.Equal(t, 2000, got.ContextWindow) // override beats discovery
+	assert.Equal(t, 100, got.MaxOutput)      // discovery beats the schema default
+	assert.True(t, got.Caps.ToolChoice)      // provider compat survives
+	assert.False(t, got.Caps.Store)          // discovered compat beats provider compat
+	assert.False(t, got.Caps.Images)         // override compat beats discovered compat
+	assert.True(t, got.Caps.PromptCache)     // override adds what nothing below set
 }
 
 func TestFlavorDefaults(t *testing.T) {

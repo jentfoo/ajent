@@ -475,11 +475,28 @@ func anthropicClassifier(provider string) func(int, []byte) error {
 			Provider: provider, Status: status, Code: code, Message: msg, Body: body,
 			Retryable: shouldRetryStatus(status, false),
 		}
-		if status == http.StatusBadRequest && matchesOverflow(msg, FlavorAnthropic) {
-			return err.Overflow()
+		if status == http.StatusBadRequest {
+			if matchesOverflow(msg, FlavorAnthropic) {
+				return err.Overflow()
+			}
+			err.Hint = anthropicCompatHint(msg)
 		}
 		return err
 	}
+}
+
+// anthropicCompatHint names the compat flag a rejection is asking for. These two
+// default to the value newer models reject, and the provider's message never
+// mentions the setting that would fix it.
+func anthropicCompatHint(msg string) string {
+	l := strings.ToLower(msg)
+	switch {
+	case strings.Contains(l, "temperature"):
+		return `set compat.supportsTemperature to false for this model`
+	case strings.Contains(l, "thinking"), strings.Contains(l, "effort"):
+		return `set compat.forceAdaptiveThinking to true for this model`
+	}
+	return ""
 }
 
 // anthropicStream decodes a Messages API event stream.

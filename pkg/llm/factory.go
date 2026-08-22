@@ -12,6 +12,12 @@ type ProviderOptions struct {
 	Env       func(string) string // defaults to os.Getenv
 	Transport http.RoundTripper   // tests inject
 	Log       func(HTTPLogEvent)
+
+	// Dialect and BaseURL are the model's resolved endpoint, overriding what the
+	// provider entry and flavor would give. Callers holding a Model pass its
+	// values so the adapter speaks exactly what the registry resolved.
+	Dialect Dialect
+	BaseURL string
 }
 
 // NewProvider builds the adapter serving one configured provider.
@@ -22,12 +28,17 @@ func NewProvider(name string, cfg ProviderConfig, flavor Flavor, opts ProviderOp
 	}
 	def := flavorDefaults[flavor]
 
-	baseURL := cfg.BaseURL
+	baseURL := opts.BaseURL
 	if baseURL == "" {
-		baseURL = def.baseURL
+		baseURL = resolveBaseURL(cfg.BaseURL, def.baseURL)
 	}
 	if baseURL == "" {
 		return nil, fmt.Errorf("llm: provider %s has no baseUrl", name)
+	}
+
+	dialect := opts.Dialect
+	if dialect == DialectUnset {
+		dialect = dialectFor(cfg, def.dialect)
 	}
 
 	headers := maps.Clone(cfg.Headers)
@@ -55,7 +66,7 @@ func NewProvider(name string, cfg ProviderConfig, flavor Flavor, opts ProviderOp
 		return nil, err
 	}
 
-	switch dialectFor(cfg, def.dialect) {
+	switch dialect {
 	case DialectAnthropic:
 		return newAnthropicProvider(name, client), nil
 	case DialectOpenAIResponses:
@@ -71,6 +82,11 @@ func NewProvider(name string, cfg ProviderConfig, flavor Flavor, opts ProviderOp
 const anthropicVersion = "2023-06-01"
 
 // applyAuthHeader sets the credential header a flavor expects.
+//
+// It keys on flavor rather than the resolved dialect, which phase 17 corrects.
+// Per-model api made that gap newly reachable: a model declaring
+// api:"anthropic-messages" under a generic-flavor provider gets
+// Authorization: Bearer instead of x-api-key, and no anthropic-version header.
 func applyAuthHeader(headers map[string]string, flavor Flavor, key string) {
 	if key == "" {
 		return

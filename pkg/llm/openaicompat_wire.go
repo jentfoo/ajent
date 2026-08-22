@@ -13,27 +13,38 @@ const (
 
 // compatRequest is a chat-completions request body.
 type compatRequest struct {
-	Model               string             `json:"model"`
-	Messages            []compatMessage    `json:"messages"`
-	Stream              bool               `json:"stream"`
-	StreamOptions       *compatStreamOpts  `json:"stream_options,omitempty"`
-	MaxTokens           *int               `json:"max_tokens,omitempty"`
-	MaxCompletion       *int               `json:"max_completion_tokens,omitempty"`
-	Temperature         *float64           `json:"temperature,omitempty"`
-	Tools               []compatTool       `json:"tools,omitempty"`
-	ToolChoice          any                `json:"tool_choice,omitempty"`
-	ParallelToolCalls   *bool              `json:"parallel_tool_calls,omitempty"`
-	ReasoningEffort     *string            `json:"reasoning_effort,omitempty"`
-	Reasoning           *compatReasoning   `json:"reasoning,omitempty"`
-	Thinking            any                `json:"thinking,omitempty"` // object or bare string
-	EnableThinking      *bool              `json:"enable_thinking,omitempty"`
-	ChatTemplateKwarg   map[string]any     `json:"chat_template_kwargs,omitempty"`
-	ChatTemplateArgs    map[string]any     `json:"chat_template_args,omitempty"`
-	ThinkingTokenBudget *int               `json:"thinking_token_budget,omitempty"`
-	ToolStream          *bool              `json:"tool_stream,omitempty"`
-	Provider            any                `json:"provider,omitempty"` // typed routing or verbatim compat JSON
-	Usage               *compatUsageOption `json:"usage,omitempty"`
-	CachePrompt         *bool              `json:"cache_prompt,omitempty"`
+	Model             string             `json:"model"`
+	Messages          []compatMessage    `json:"messages"`
+	Stream            bool               `json:"stream"`
+	StreamOptions     *compatStreamOpts  `json:"stream_options,omitempty"`
+	MaxTokens         *int               `json:"max_tokens,omitempty"`
+	MaxCompletion     *int               `json:"max_completion_tokens,omitempty"`
+	Temperature       *float64           `json:"temperature,omitempty"`
+	Tools             []compatTool       `json:"tools,omitempty"`
+	ToolChoice        any                `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort   *string            `json:"reasoning_effort,omitempty"`
+	Reasoning         *compatReasoning   `json:"reasoning,omitempty"`
+	Thinking          any                `json:"thinking,omitempty"` // object or bare string
+	EnableThinking    *bool              `json:"enable_thinking,omitempty"`
+	ChatTemplateKwarg map[string]any     `json:"chat_template_kwargs,omitempty"`
+	ChatTemplateArgs  map[string]any     `json:"chat_template_args,omitempty"`
+	ToolStream        *bool              `json:"tool_stream,omitempty"`
+	Provider          any                `json:"provider,omitempty"` // typed routing or verbatim compat JSON
+	Usage             *compatUsageOption `json:"usage,omitempty"`
+	CachePrompt       *bool              `json:"cache_prompt,omitempty"`
+
+	// extra carries body keys whose name comes from configuration, folded in at
+	// marshal time; unexported so encoding/json skips it
+	extra map[string]json.RawMessage
+}
+
+// setExtra records one configuration named body key.
+func (r *compatRequest) setExtra(key string, val json.RawMessage) {
+	if r.extra == nil {
+		r.extra = make(map[string]json.RawMessage, 1)
+	}
+	r.extra[key] = val
 }
 
 // compatReasoning is the openrouter reasoning parameter.
