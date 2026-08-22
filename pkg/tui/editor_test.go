@@ -99,20 +99,134 @@ func TestEditorMovement(t *testing.T) {
 	})
 	t.Run("line_start_and_end", func(t *testing.T) {
 		e := newEditorAt("one\ntwo", 5)
-		e.LineStart()
+		e.LineStart(60)
 		assert.Equal(t, 4, e.pos)
-		e.LineEnd()
+		e.LineEnd(60)
 		assert.Equal(t, 7, e.pos)
+	})
+	t.Run("line_start_and_end_wrapped", func(t *testing.T) {
+		// "hello world foo" at width 9 wraps to [hello][world][foo]: home and end
+		// bound the visual row, not the whole buffer
+		e := newEditorAt("hello world foo", 8)
+		e.LineStart(9)
+		assert.Equal(t, 6, e.pos)
+		e.LineEnd(9)
+		assert.Equal(t, 11, e.pos)
+	})
+	t.Run("line_end_stops_at_newline", func(t *testing.T) {
+		// a wrapped row ending on an explicit newline stops before it
+		e := newEditorAt("hello world\nfoo", 2)
+		e.LineEnd(9)
+		assert.Equal(t, 5, e.pos)
+		e.LineStart(9)
+		assert.Equal(t, 0, e.pos)
 	})
 }
 
 func TestEditorKill(t *testing.T) {
 	t.Parallel()
 
+	const wide = 60 // wide enough that short fixtures never wrap
+
 	t.Run("to_line_end", func(t *testing.T) {
 		e := newEditorAt("abc\ndef", 1)
-		e.KillToLineEnd()
+		e.KillToLineEnd(wide)
 		assert.Equal(t, "a\ndef", e.Value())
+		assert.Equal(t, 1, e.pos)
+	})
+	t.Run("mid_line_caret_stays_put", func(t *testing.T) {
+		e := newEditorAt("abcdef", 3)
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "abc", e.Value())
+		assert.Equal(t, 3, e.pos)
+	})
+	t.Run("wrapped_row_clears_only_to_row_end", func(t *testing.T) {
+		// "hello world" at width 9 wraps to [hello][world]; killing from the first
+		// row clears only that row, never the wrapped remainder below
+		e := newEditorAt("hello world", 2)
+		e.KillToLineEnd(9)
+		assert.Equal(t, "he world", e.Value())
+		assert.Equal(t, 2, e.pos)
+	})
+	t.Run("wrapped_second_row_clears_only_that_row", func(t *testing.T) {
+		e := newEditorAt("hello world", 6)
+		e.KillToLineEnd(9)
+		assert.Equal(t, "hello ", e.Value())
+		assert.Equal(t, 6, e.pos)
+	})
+	t.Run("wrapped_far_left_stays_column_zero", func(t *testing.T) {
+		// far-left of a wrapped continuation row with content below: the caret must
+		// land on column zero of where content resumes, not drift up onto the line
+		// above. "hello world foo" at width 9 wraps to [hello][world][foo].
+		e := newEditorAt("hello world foo", 6)
+		e.KillToLineEnd(9)
+		assert.Equal(t, "hello foo", e.Value())
+		assert.Equal(t, 6, e.pos)
+		starts, _ := e.layout(9)
+		assert.Contains(t, starts, e.pos, "caret on a visual row start")
+	})
+	t.Run("wrapped_far_left_follows_content_up", func(t *testing.T) {
+		// "ab cdefg hi" at width 9 wraps to [ab][cdefg][hi]; clearing the middle row
+		// lets "hi" fit on the first, and the caret follows it there
+		e := newEditorAt("ab cdefg hi", 3)
+		e.KillToLineEnd(9)
+		assert.Equal(t, "ab hi", e.Value())
+		assert.Equal(t, 3, e.pos, "caret before the content that moved up")
+	})
+	t.Run("wrapped_far_left_hard_split_keeps_space", func(t *testing.T) {
+		// the row below is joined by a hard split rather than a dropped space, so the
+		// space before the cleared row must survive
+		e := newEditorAt("ab cdefghijklmno", 3)
+		e.KillToLineEnd(9)
+		assert.Equal(t, "ab jklmno", e.Value())
+		assert.Equal(t, 3, e.pos)
+	})
+	t.Run("wrapped_far_left_last_row_keeps_end", func(t *testing.T) {
+		// far-left of the final wrapped row has nothing below to pull up; caret stays
+		// at the end like a mid-line kill.
+		e := newEditorAt("hello world foo", 12)
+		e.KillToLineEnd(9)
+		assert.Equal(t, "hello world ", e.Value())
+		assert.Equal(t, 12, e.pos)
+	})
+	t.Run("empty_trailing_line_deletes_join", func(t *testing.T) {
+		e := newEditorAt("abc\n", 4)
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "abc", e.Value())
+		assert.Equal(t, 0, e.pos)
+	})
+	t.Run("empty_middle_line_joins_below", func(t *testing.T) {
+		e := newEditorAt("ab\n\ncd", 3)
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "ab\ncd", e.Value())
+		assert.Equal(t, 3, e.pos, "cursor at the start of the joined line below")
+	})
+	t.Run("empty_first_line_joins_below", func(t *testing.T) {
+		e := newEditorAt("\nabc", 0)
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "abc", e.Value())
+		assert.Equal(t, 0, e.pos)
+	})
+	t.Run("repeat_presses_consume_one_unit_each", func(t *testing.T) {
+		// Delete semantics: each press removes exactly one row — join, clear, join,
+		// clear — never more than one per press
+		e := newEditorAt("ab\n\ncd", 3)
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "ab\ncd", e.Value())
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "ab\n", e.Value())
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "ab", e.Value())
+		e.KillToLineEnd(wide)
+		assert.Empty(t, e.Value())
+		e.KillToLineEnd(wide)
+		assert.Empty(t, e.Value(), "nothing left to remove")
+	})
+	t.Run("nonempty_line_tail_is_noop", func(t *testing.T) {
+		e := newEditorAt("hello\nworld", 5)
+		e.KillToLineEnd(wide)
+		assert.Equal(t, "hello\nworld", e.Value())
+		assert.Equal(t, 5, e.pos)
 	})
 	t.Run("line_before_cursor", func(t *testing.T) {
 		e := newEditorAt("abc\ndef", 6)

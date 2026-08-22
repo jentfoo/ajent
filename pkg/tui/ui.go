@@ -1198,7 +1198,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			// already on the first visual row.
 			if u.editor.pos > 0 {
 				// mid-text: jump to the prompt's beginning; a second Up recalls history
-				u.editor.LineStart()
+				u.editor.pos = 0
 			} else if !u.promptPrev() { // at the very start (or empty): recall older
 				u.editor.HistoryPrev() // fall back when no recorded list exists
 			}
@@ -1216,11 +1216,11 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			}
 		}
 	case keyHome:
-		u.editor.LineStart()
+		u.editor.LineStart(u.editorWidth())
 	case keyEnd:
-		u.editor.LineEnd()
+		u.editor.LineEnd(u.editorWidth())
 	case keyKillToEnd:
-		u.editor.KillToLineEnd()
+		u.editor.KillToLineEnd(u.editorWidth())
 	case keyKillLine:
 		u.editor.KillLine()
 	case keyKillWord:

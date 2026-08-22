@@ -949,7 +949,15 @@ its own layout (`inputView`), wrapping the buffer into display rows on word
 boundaries (a word moves whole to the next line rather than being split across
 lines; only an unbroken token wider than a full row hard-splits) and reporting
 the caret's row and column within them. Wrapping is purely visual: `Value()` is
-untouched, so submitted input never gains newlines.
+untouched, so submitted input never gains newlines. Movement and editing keys
+respect the same rows: Home and End bound the current wrapped row rather than
+the logical line, matching `↑`/`↓`. Ctrl+K kills only to the end of that row
+(no newline is inserted where the remainder joins), and on an already-empty row
+removes it like Delete — the caret stays put as content after it joins at the cursor, or
+as an empty row is removed (the row below joins, or the row above when nothing
+is below). Clearing a whole wrapped row would leave the spaces both wrap breaks
+dropped, so the leading one is consumed and no double space remains where the
+rows join.
 
 The key table:
 
@@ -961,6 +969,7 @@ The key table:
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |
+| Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`) |
 | Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |

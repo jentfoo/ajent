@@ -99,12 +99,45 @@ func (e *editor) WordRight() {
 	e.pos = i
 }
 
-func (e *editor) LineStart() { e.pos = e.lineStart(e.pos) }
-func (e *editor) LineEnd()   { e.pos = e.lineEnd(e.pos) }
+// LineStart moves the caret to the first column of the current visual row (the
+// wrapped line on screen), not the start of the whole buffer.
+func (e *editor) LineStart(width int) {
+	starts, ends := e.layout(width)
+	e.pos = starts[e.displayRow(starts, ends)]
+}
 
-// KillToLineEnd removes from the cursor to the end of the current line.
-func (e *editor) KillToLineEnd() {
-	e.cells = slices.Delete(e.cells, e.pos, e.lineEnd(e.pos))
+// LineEnd moves the caret to the last column of the current visual row.
+func (e *editor) LineEnd(width int) {
+	starts, ends := e.layout(width)
+	e.pos = ends[e.displayRow(starts, ends)]
+}
+
+// KillToLineEnd clears from the cursor to the end of the current visual row
+// (the wrapped line on screen), leaving the caret where it was. An already-
+// empty line is removed like Delete: the newline in front of the caret goes,
+// the line below joins at the caret, and the caret stays put. A trailing empty
+// line joins the one above instead; a non-empty row tail is a no-op.
+func (e *editor) KillToLineEnd(width int) {
+	starts, ends := e.layout(width)
+	r := e.displayRow(starts, ends)
+	switch {
+	case ends[r] > e.pos: // content after the cursor: clear to the row's end
+		from := e.pos
+		// Wrapping drops the space each row breaks on. Clearing a whole row leaves the
+		// breaks on both sides of it, so consume the leading one to avoid a double
+		// space where the rows join.
+		if from == starts[r] && from > 0 && ends[r] < len(e.cells) &&
+			e.cells[from-1] == " " && e.cells[ends[r]] == " " {
+			from--
+		}
+		e.cells = slices.Delete(e.cells, from, ends[r]) // caret unmoved: content below joins at it
+	case e.lineStart(e.pos) != e.pos: // text before the cursor: nothing to clear
+	case e.pos < len(e.cells): // empty line: delete joins the line below at the caret
+		e.cells = slices.Delete(e.cells, e.pos, e.pos+1) // cells[pos] is the newline
+	case e.pos > 0: // trailing empty line: join the line above
+		e.cells = slices.Delete(e.cells, e.pos-1, e.pos)
+		e.pos = e.lineStart(e.pos - 1)
+	}
 }
 
 // KillLine removes from the start of the current line to the cursor.
@@ -179,16 +212,6 @@ func (e *editor) lineStart(pos int) int {
 		}
 	}
 	return 0
-}
-
-// lineEnd returns the index of the newline at or after pos, or the buffer length.
-func (e *editor) lineEnd(pos int) int {
-	for i := pos; i < len(e.cells); i++ {
-		if e.cells[i] == "\n" {
-			return i
-		}
-	}
-	return len(e.cells)
 }
 
 // wordStart returns the index at the start of the word before the cursor.
