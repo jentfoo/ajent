@@ -183,12 +183,14 @@ a multi-edit batch is all-or-nothing. The validation loop lives in a shared
 `applyEdits(buf string, ops []editOp) (string, error)` used by both `Execute`
 and `DryRun`, preceded by an order-independent `validateEdits` pass: an empty
 or duplicated `oldText`, two edits overlapping the same region and a no-op
-(`oldText == newText`) all fail before any write. Zero matches returns a
-near-match suggestion (most token-overlapping line); multiple matches without
-`replace_all` returns the occurrence count and locations — both still reported
-through the per-op loop. Both errors are designed to be actionable, since they
-are the model's main feedback loop, so no pre-read gate is needed — a wrong
-assumption fails naturally against live content.
+(`oldText == newText`) all fail before any write. Zero matches returns an
+actionable diagnostic naming each reliably-detected cause (whitespace or casing
+differences, genuinely-absent content) plus one closest-line hint — never a blanket
+"whitespace must match" claim; multiple matches without `replace_all` returns the
+occurrence count and locations. Messages tell the model it **must provide text
+exactly** rather than asking it to copy. All are reported through the per-op loop,
+designed to be actionable since they are the model's main feedback loop, so no
+pre-read gate is needed — a wrong assumption fails naturally against live content.
 Renders through `Previewer`, sharing `resolveApply` with `DryRun`. The edit tool implements `DryRunner`, so the
 permission barrier can skip prompting for a call that cannot succeed and let
 the real apply path surface its natural error.

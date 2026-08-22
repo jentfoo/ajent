@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
@@ -182,7 +184,7 @@ func validateEdits(buf string, ops []editOp) error {
 		e := s + len(op.OldText)
 		for _, p := range spans {
 			if s < p.e && p.s < e { // regions share at least one byte in the original text
-				return fmt.Errorf("edits %d and %d target overlapping regions", p.idx+1, i+1)
+				return fmt.Errorf("edits %d and %d target overlapping regions; adjust their oldText so each targets a distinct region", p.idx+1, i+1)
 			}
 		}
 		spans = append(spans, matchSpan{i, s, e})
@@ -190,11 +192,311 @@ func validateEdits(buf string, ops []editOp) error {
 	return nil
 }
 
-// notFoundError guides a retry after zero matches: name the failure, say why
-// exact copy matters, and offer one closest line for context.
+// notFoundError diagnoses why a zero-match edit failed and guides a retry:
+// name the failure, report each reliably-detected cause (line endings,
+// indentation type/count), and offer one closest line for context.
 func notFoundError(idx int, path, old, buf string) string {
-	return fmt.Sprintf("no match for edit %d in %s; whitespace/newlines must match exactly. Include a unique surrounding line if the text is ambiguous.\nclosest context:\n%s",
-		idx, path, nearMatch(old, buf))
+	var b strings.Builder
+	fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, path)
+	issues := diagnoseNoMatch(old, buf)
+	if len(issues) == 0 {
+		b.WriteString("you must provide the oldText exactly as it appears in the file\n")
+	} else {
+		for _, it := range issues {
+			fmt.Fprintf(&b, "- %s\n", it)
+		}
+	}
+	if ctx := nearMatch(old, buf); ctx != "" && ctx != "(none)" {
+		b.WriteString("closest context:\n" + ctx + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// diagnoseNoMatch inspects why old is absent from buf and reports each reliably
+// detectable cause: line-ending style, then per-line indentation/spacing when the
+// words are all present (a pure-spacing mismatch). Returns nil when nothing
+// reliable can be said.
+func diagnoseNoMatch(old, buf string) []string {
+	compact := stripSpace(old)
+	if compact == "" {
+		return nil // only-whitespace oldText: no anchor to reason about
+	}
+
+	nlIssue := newlineStyleIssue(old, buf)
+	var issues []string
+	if nlIssue != "" {
+		issues = append(issues, nlIssue)
+	}
+
+	switch {
+	case strings.Contains(stripSpace(buf), compact) && nlIssue == "":
+		// every word present: a pure-spacing mismatch, name it per line when we can
+		specific := lineWhitespaceIssues(old, buf)
+		if len(specific) == 0 {
+			issues = append(issues, "your words are all in the file but separated by different whitespace; you must match it exactly")
+		} else {
+			issues = append(issues, specific...)
+		}
+	case strings.Contains(strings.ToLower(stripSpace(buf)), strings.ToLower(compact)) && nlIssue == "":
+		// words and order present ignoring case: only letter casing differs
+		issues = append(issues, "the text matches the file only if you ignore letter case; your oldText's capitalization differs — copy it exactly")
+	case nlIssue == "":
+		// content genuinely absent, not just spacing
+		if stripSpace(buf) == "" {
+			issues = append(issues, "the file appears empty or whitespace-only")
+		} else {
+			issues = append(issues, "the text is not in the file — its words differ; provide oldText exactly as shown below")
+		}
+	}
+	return issues
+}
+
+// newlineStyleIssue reports when old and buf disagree on CRLF vs LF.
+func newlineStyleIssue(old, buf string) string {
+	switch {
+	case strings.Contains(buf, "\r\n") && !strings.Contains(old, "\r\n"):
+		return "the file uses CRLF (\\r\\n) line endings but your oldText has LF; you must include the \\r before each newline"
+	case !strings.Contains(buf, "\r\n") && strings.Contains(old, "\r\n"):
+		return "your oldText has \\r\\n newlines but the file is LF-only; you must use plain \\n"
+	}
+	return ""
+}
+
+// stripSpace removes all unicode whitespace.
+func stripSpace(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if !unicode.IsSpace(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// buildContent maps a text's non-empty lines to their 1-based line numbers and the
+// count of blank (whitespace-only) lines immediately following each one.
+type contentLine struct {
+	n     int // 1-based original line number
+	c     string
+	after int // blank lines until the next content line or end of text
+}
+
+func buildContent(lines []string) []contentLine {
+	var seq []contentLine
+	for i := 0; i < len(lines); {
+		if c := stripSpace(lines[i]); c == "" {
+			i++
+			continue
+		} else {
+			cl := contentLine{n: i + 1, c: c}
+			i++
+			for i < len(lines) && stripSpace(lines[i]) == "" {
+				cl.after++
+				i++
+			}
+			seq = append(seq, cl)
+		}
+	}
+	return seq
+}
+
+// blankGapIssue reports when the number of blank lines after a matched content line
+// differs between oldText and the file. want is what oldText has, have is ground truth.
+func blankGapIssue(fileLine int, want, have int) string {
+	switch {
+	case want > have:
+		return fmt.Sprintf("your oldText has %s after line %d, but the file has only %s there; remove them", countPhrase(want), fileLine, countPhrase(have))
+	case want < have:
+		return fmt.Sprintf("the file has %s after line %d that your oldText omits; add them to match exactly", countPhrase(have-want), fileLine)
+	}
+	return ""
+}
+
+// countPhrase renders a blank-line count as prose, singular-aware and zero-safe.
+func countPhrase(n int) string {
+	switch n {
+	case 0:
+		return "no blank lines"
+	case 1:
+		return "1 blank line"
+	default:
+		return strconv.Itoa(n) + " blank lines"
+	}
+}
+
+// lineWhitespaceIssues aligns old's non-empty lines against the file and reports,
+// per matched file line, how its whitespace differs from oldText. Only called when
+// every word is present (a pure-spacing mismatch), so each pair shares stripped form.
+func lineWhitespaceIssues(old, buf string) []string {
+	oldLines := strings.Split(old, "\n")
+	bufLines := strings.Split(buf, "\n")
+
+	seq := buildContent(oldLines)
+	fileSeq := buildContent(bufLines)
+
+	match := -1
+outer:
+	for s := 0; s+len(seq) <= len(fileSeq); s++ {
+		for k := range seq {
+			if fileSeq[s+k].c != seq[k].c {
+				continue outer
+			}
+		}
+		match = s
+		break
+	}
+	if match < 0 {
+		return nil // lines don't align word-for-word; fall back to the generic note
+	}
+
+	var issues []string
+	for k := range seq {
+		d := lineWhitespaceDiff(oldLines[seq[k].n-1], bufLines[fileSeq[match+k].n-1])
+		if d != "" {
+			issues = append(issues, fmt.Sprintf("line %d: %s", fileSeq[match+k].n, d))
+		}
+		d = blankGapIssue(fileSeq[match+k].n, seq[k].after, fileSeq[match+k].after)
+		if d != "" {
+			issues = append(issues, d)
+		}
+	}
+	return issues
+}
+
+// lineWhitespaceDiff names how a matched pair's whitespace differs. Both lines have
+// identical stripped content, so only leading/trailing indentation or inter-word
+// spacing can vary.
+func lineWhitespaceDiff(oldLine, fileLine string) string {
+	ot := strings.TrimSpace(oldLine)
+	ft := strings.TrimSpace(fileLine)
+
+	var parts []string
+
+	if ot != ft { // internal word-spacing differs; leading/trailing handled below
+		if d := interWordIssue(ft, ot); d != "" {
+			parts = append(parts, d) // file is ground truth; state what it has
+		}
+	}
+
+	if d := indentIssue(leadingWS(oldLine), leadingWS(fileLine)); d != "" {
+		parts = append(parts, d)
+	}
+
+	oTail := oldLine[len(strings.TrimRightFunc(oldLine, unicode.IsSpace)):]
+	fTail := fileLine[len(strings.TrimRightFunc(fileLine, unicode.IsSpace)):]
+	switch {
+	case oTail != "" && fTail == "": // text has a trailing run the file lacks
+		parts = append(parts, fmt.Sprintf("your line ends with %s that is not in the file; remove it", describeRun(oTail)))
+	case fTail != "" && !strings.HasSuffix(oldLine, fTail): // file's trailing run text omits
+		parts = append(parts, fmt.Sprintf("the file line ends with %s your text omits", describeRun(fTail)))
+	}
+
+	return strings.Join(parts, "; ")
+}
+
+// leadingWS returns the whitespace prefix of s. Indentation is ASCII space/tab, so
+// byte-wise scanning is rune-safe for the prefixes that matter here.
+func leadingWS(s string) string {
+	i := 0
+	for i < len(s) && unicode.IsSpace(rune(s[i])) {
+		i++
+	}
+	return s[:i]
+}
+
+// indentIssue describes how want (oldText's indent) and have (the file line's)
+// differ: tab-vs-space, or a count difference of the same kind.
+func indentIssue(want, have string) string {
+	wTabs, wSpaces := countWS(want)
+	hTabs, hSpaces := countWS(have)
+	switch {
+	case wTabs > 0 && hTabs == 0:
+		if hSpaces == 0 { // file line has no indentation at all
+			return fmt.Sprintf("your text indents with %s but the file line is not indented", plural(wTabs, "tab"))
+		}
+		return fmt.Sprintf("your text indents with %d tab(s) but the file line uses %d space(s); you must use spaces", wTabs, hSpaces)
+	case hTabs > 0 && wTabs == 0:
+		if wSpaces == 0 { // your text has no leading whitespace
+			return fmt.Sprintf("the file line indents with %s but your text is not indented; match it exactly", plural(hTabs, "tab"))
+		}
+		return fmt.Sprintf("the file line indents with %d tab(s) but your text uses %d space(s); you must match it exactly", hTabs, wSpaces)
+
+	case wTabs == 0 && hTabs == 0 && wSpaces != hSpaces:
+		return fmt.Sprintf("indentation count differs: your text has %d leading spaces, the file line has %d; you must provide that exact count", wSpaces, hSpaces)
+	case wTabs > 0 && hTabs > 0 && len(want) != len(have):
+		return "tab indentation depth differs; match the file's exact number of tabs"
+	}
+	return "" // indistinguishable or already covered
+}
+
+// countWS tallies tabs and spaces in s.
+func countWS(s string) (tabs, spaces int) {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\t':
+			tabs++
+		case ' ':
+			spaces++
+		}
+	}
+	return tabs, spaces
+}
+
+// interWordIssue names how the file and oldText space their words apart. Both a
+// (file body) and b (text body) have identical stripped content but differ in at
+// least one internal whitespace run; report the first difference with exact counts.
+func interWordIssue(a, b string) string {
+	ar := wsRuns(a)
+	br := wsRuns(b)
+	n := len(ar)
+	if len(br) < n {
+		n = len(br)
+	}
+	for i := 0; i < n; i++ {
+		if ar[i] == br[i] {
+			continue
+		}
+		return fmt.Sprintf("spacing between words differs: the file has %s, your text has %s", describeRun(ar[i]), describeRun(br[i]))
+	}
+	return "" // indistinguishable or already covered by indentation
+}
+
+// wsRuns returns the whitespace runs separating a body's leading-trimmed words.
+func wsRuns(s string) []string {
+	var runs []string
+	cur := strings.Builder{}
+	for _, r := range s {
+		if unicode.IsSpace(r) {
+			cur.WriteRune(r)
+			continue
+		}
+		if cur.Len() > 0 { // a word ended; flush the preceding whitespace run
+			runs = append(runs, cur.String())
+			cur.Reset()
+		}
+	}
+	return runs
+}
+
+// describeRun renders one whitespace run as its exact tabs/spaces composition.
+func describeRun(run string) string {
+	tabs, spaces := countWS(run)
+	switch {
+	case tabs > 0 && spaces == 0:
+		return plural(tabs, "tab")
+	case spaces > 0 && tabs == 0:
+		return plural(spaces, "space")
+	default:
+		return fmt.Sprintf("mixed %s and %s", plural(tabs, "tab"), plural(spaces, "space"))
+	}
+}
+
+// plural renders n unit(s), singular for one.
+func plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return strconv.Itoa(n) + " " + unit + "s"
 }
 
 // nearMatch finds the closest matching line of buf to old, as read-only context.
