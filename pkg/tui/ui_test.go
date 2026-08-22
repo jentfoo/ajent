@@ -25,7 +25,7 @@ const testPoll = time.Millisecond
 // terminal behind it.
 func newTestUI(tb testing.TB, v *vt, in io.Reader) *UI {
 	tb.Helper()
-	return newTestUIWith(tb, v, in, NewTheme(ColorNone))
+	return newTestUIWith(tb, v, in, NewTheme(ColorNone, DefaultPalette()))
 }
 
 // newTestUIWith is newTestUI with an explicit theme, so shade and colour
@@ -54,6 +54,27 @@ func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 	u.mu.Unlock()
 	tb.Cleanup(u.Close)
 	return u
+}
+
+// newRecordingUI drives a UI whose input carries pre-loaded terminal replies and
+// whose renderer writes into the returned buffer.
+func newRecordingUI(tb testing.TB, in io.Reader) (*UI, *strings.Builder) {
+	tb.Helper()
+	var out strings.Builder
+	u := &UI{
+		theme:      NewTheme(ColorNone, DefaultPalette()),
+		render:     &inlineRenderer{t: &termState{out: &out, fd: -1, width: 80, height: 24}},
+		mode:       ModeInline,
+		in:         in,
+		inFd:       -1,
+		msgs:       make(chan string),
+		controls:   make(chan Control, 4),
+		done:       make(chan struct{}),
+		afterDelay: time.AfterFunc,
+	}
+	u.reader = newInputReader(in)
+	go u.reader.run()
+	return u, &out
 }
 
 // snapshot reads the emulator screen while holding the UI lock.
@@ -1267,13 +1288,13 @@ func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 	t.Parallel()
 
 	t.Run("table", func(t *testing.T) {
-		u := &UI{theme: NewTheme(ColorNone), streaming: true, textBuf: "| A | B |\n|---|---|\n| 1 | 2 |"}
+		u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "| A | B |\n|---|---|\n| 1 | 2 |"}
 		rows := u.streamingRows(40)
 		require.NotEmpty(t, rows)
 		assert.Contains(t, strings.Join(rows, "\n"), "│ A │ B │", "the preview shows the table, not a blank")
 	})
 	t.Run("rule", func(t *testing.T) {
-		u := &UI{theme: NewTheme(ColorNone), streaming: true, textBuf: "---"}
+		u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"}
 		rows := u.streamingRows(40)
 		require.NotEmpty(t, rows)
 		assert.Equal(t, strings.Repeat(ruleChar, 40), rows[0], "the preview shows the rule, not a blank")
@@ -1408,4 +1429,26 @@ func TestUIResizeDrawGraceCancelledBySignal(t *testing.T) {
 	fire()            // the grace elapses
 
 	assert.Equal(t, 2, countRules(u.snapshot(v)), "the draw was abandoned")
+}
+
+func TestSetTheme(t *testing.T) {
+	t.Parallel()
+
+	u, out := newRecordingUI(t, strings.NewReader(""))
+	u.theme = NewTheme(Color256, DefaultPalette())
+	u.UserEcho("hello")
+	u.mu.Lock()
+	u.repaint()
+	u.mu.Unlock()
+	assert.Contains(t, out.String(), u.theme.Prompt.Open())
+
+	light, ok := LookupPalette("light")
+	require.True(t, ok)
+	out.Reset()
+	u.SetTheme(light)
+
+	assert.Equal(t, "light", u.theme.Palette)
+	assert.Contains(t, out.String(), NewTheme(Color256, light).Prompt.Open())
+	// committed history is not redrawn: it keeps the colors it was written with
+	assert.NotContains(t, out.String(), "hello")
 }

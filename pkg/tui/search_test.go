@@ -85,7 +85,7 @@ func TestSearchOverlayRefilter(t *testing.T) {
 func TestSearchOverlayRows(t *testing.T) {
 	t.Parallel()
 
-	theme := NewTheme(ColorNone)
+	theme := NewTheme(ColorNone, DefaultPalette())
 
 	t.Run("header_echoes_query", func(t *testing.T) {
 		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the loop"}}}
@@ -145,7 +145,7 @@ func TestMatchSpans(t *testing.T) {
 func TestSearchOverlayRowsHighlightsMatch(t *testing.T) {
 	t.Parallel()
 
-	accent := NewTheme(ColorBasic).Accent.Open()
+	accent := NewTheme(ColorBasic, DefaultPalette()).Accent.Open()
 
 	type highlight struct {
 		row     int
@@ -169,7 +169,7 @@ func TestSearchOverlayRowsHighlightsMatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := &searchOverlay{query: "fix", items: []SearchItem{tc.item}}
 			s.refilter()
-			rows := s.rows(NewTheme(ColorBasic), 80, 8)
+			rows := s.rows(NewTheme(ColorBasic, DefaultPalette()), 80, 8)
 			for _, want := range tc.want {
 				assert.Contains(t, rows[want.row], want.wrapped)
 			}
@@ -179,7 +179,7 @@ func TestSearchOverlayRowsHighlightsMatch(t *testing.T) {
 	t.Run("plain_terminal_no_escapes", func(t *testing.T) {
 		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the retry loop"}}}
 		s.refilter()
-		rows := s.rows(NewTheme(ColorNone), 80, 8)
+		rows := s.rows(NewTheme(ColorNone, DefaultPalette()), 80, 8)
 		assert.NotContains(t, strings.Join(rows, "\n"), sgrReset) // no emphasis escapes
 	})
 }

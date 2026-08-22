@@ -38,6 +38,7 @@ func TestDecodeKey(t *testing.T) {
 		{"ctrl_z_suspend", "\x1a", key{typ: keySuspend}, 1},
 		{"unbound_control", "\x1c", key{typ: keyIgnore}, 1},
 		{"mouse_report_ignored", "\x1b[<64;10;5M", key{typ: keyIgnore}, 11},
+		{"device_attributes", "\x1b[?1;2c", key{typ: keyDeviceAttrs}, 7},
 		{"arrow_up", "\x1b[A", key{typ: keyUp}, 3},
 		{"alt_arrow_up", "\x1b[1;3A", key{typ: keyAltUp}, 6},
 		{"shift_arrow_moves", "\x1b[1;2C", key{typ: keyRight}, 6},
@@ -276,6 +277,40 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
 		require.NoError(t, pw.Close())
 	})
+	t.Run("color_report_separate_channel", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b]11;rgb:ffff/ffff/ffff\x07z")
+		require.NoError(t, err)
+
+		select {
+		case spec := <-r.colors:
+			assert.Equal(t, "rgb:ffff/ffff/ffff", spec)
+		case <-time.After(time.Second):
+			t.Fatal("no color report")
+		}
+		// the whole reply is consumed: its body never reaches the editor
+		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+		require.NoError(t, pw.Close())
+	})
+	t.Run("device_attrs_separate_channel", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b[?62;c z")
+		require.NoError(t, err)
+
+		select {
+		case <-r.attrs:
+		case <-time.After(time.Second):
+			t.Fatal("no device attributes")
+		}
+		assert.Equal(t, key{typ: keyRune, text: " "}, <-r.keys)
+		require.NoError(t, pw.Close())
+	})
 	t.Run("ignored_keys_dropped", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r := newInputReader(pr)
@@ -450,5 +485,41 @@ func TestInputReaderBounded(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, key{typ: keyEnter}, <-r.keys) // only Enter lands; filler is ignored
+	})
+}
+
+func TestDecodeOSC(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected key
+		n        int
+		ok       bool
+	}{
+		{"bel_terminated", "\x1b]11;rgb:1234/5678/9abc\x07",
+			key{typ: keyColorReport, text: "rgb:1234/5678/9abc"}, 24, true},
+		{"st_terminated", "\x1b]11;#ffffff\x1b\\",
+			key{typ: keyColorReport, text: "#ffffff"}, 14, true},
+		{"other_osc_ignored", "\x1b]0;window title\x07", key{typ: keyIgnore}, 17, true},
+		{"incomplete_waits", "\x1b]11;rgb:12", key{}, 0, false},
+		{"trailing_esc_waits", "\x1b]11;rgb:12\x1b", key{}, 0, false},
+		{"esc_aborts", "\x1b]11;\x1b[A", key{typ: keyIgnore}, 5, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			k, n, ok := decodeKeyFrom([]byte(tc.input), 0)
+			assert.Equal(t, tc.ok, ok)
+			assert.Equal(t, tc.expected, k)
+			assert.Equal(t, tc.n, n)
+		})
+	}
+	t.Run("over_long_resyncs", func(t *testing.T) {
+		b := []byte("\x1b]11;" + strings.Repeat("x", maxControlLen) + "\x07")
+		k, n, ok := decodeKeyFrom(b, 0)
+		assert.True(t, ok)
+		assert.Equal(t, key{typ: keyIgnore}, k)
+		assert.Equal(t, maxControlLen, n)
 	})
 }

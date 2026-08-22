@@ -21,7 +21,7 @@ func TestUINotify(t *testing.T) {
 		assert.Contains(t, u.snapshot(v), "! model loaded")
 	})
 	t.Run("levels_styled_distinctly", func(t *testing.T) {
-		th := NewTheme(Color256)
+		th := NewTheme(Color256, DefaultPalette())
 		for _, tc := range []struct {
 			name  string
 			level Level
@@ -170,7 +170,7 @@ func TestUISetTokens(t *testing.T) {
 func TestStatusSegmentDropOrder(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 
 	t.Run("everything_fits_one_row", func(t *testing.T) {
 		s := Status{
@@ -269,7 +269,7 @@ func TestUIPlainInteraction(t *testing.T) {
 		t.Helper()
 		v := newVT(80, 12)
 		u := &UI{
-			theme:  NewTheme(ColorNone),
+			theme:  NewTheme(ColorNone, DefaultPalette()),
 			render: newTestInline(v),
 			mode:   ModePlain,
 			in:     in,

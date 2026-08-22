@@ -27,6 +27,7 @@ type fakeConsole struct {
 	picks      []fakePick      // queued results, consumed in order
 	multiPicks []fakeMultiPick // queued results, consumed in order
 	selects    []int           // queued Select indexes
+	selectOpts [][]tui.Option  // options each Select was offered
 	confirms   []bool          // queued Confirm answers
 	inputs     []string        // queued Input replies
 	saveCalls  []saveCall      // recorded SaveSetting calls
@@ -42,6 +43,10 @@ type fakeConsole struct {
 	setModel     llm.Model
 	toolsChanged int
 	exited       bool
+
+	profile tui.ColorProfile // reported by ColorProfile
+	tone    tui.Tone         // reported by DetectTone
+	palette tui.Palette      // last palette handed to SetTheme
 }
 
 type fakePick struct {
@@ -128,9 +133,10 @@ func (f *fakeConsole) MultiPick(_ context.Context, prompt string, _ []tui.PickIt
 	return next.result, next.err
 }
 
-func (f *fakeConsole) Select(_ context.Context, prompt string, _ []tui.Option) (int, error) {
+func (f *fakeConsole) Select(_ context.Context, prompt string, opts []tui.Option) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.selectOpts = append(f.selectOpts, opts)
 	if len(f.selects) == 0 {
 		return 0, tui.ErrCancelled
 	}
@@ -160,6 +166,10 @@ func (f *fakeConsole) Input(_ context.Context, label, placeholder string) (strin
 	f.inputs = f.inputs[1:]
 	return next, nil
 }
+
+func (f *fakeConsole) ColorProfile() tui.ColorProfile { return f.profile }
+func (f *fakeConsole) DetectTone() tui.Tone           { return f.tone }
+func (f *fakeConsole) SetTheme(pal tui.Palette)       { f.mu.Lock(); f.palette = pal; f.mu.Unlock() }
 
 func (f *fakeConsole) Models() *llm.Registry  { return f.models }
 func (f *fakeConsole) State() *agent.State    { return f.state }

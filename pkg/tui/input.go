@@ -38,6 +38,8 @@ const (
 	keyPageDown
 	keyCursorReport
 	keyStatusReport // DSR reply (CSI 0 n): the terminal has caught up
+	keyColorReport  // OSC 11 reply: the terminal's default background color
+	keyDeviceAttrs  // DA1 reply (CSI … c), used only to fence an earlier query
 	keyEscape
 	keyTab
 	keyBackTab
@@ -48,13 +50,14 @@ const (
 // key is one decoded input event.
 type key struct {
 	typ  keyType
-	text string // literal text for keyRune and keyPaste
+	text string // literal text for keyRune and keyPaste, payload for keyColorReport
 	row  int    // reported cursor row for keyCursorReport
 }
 
 const (
 	readChunk     = 1024 // bytes read from the source per call
 	escByte       = 0x1b
+	belByte       = 0x07
 	maxControlLen = 1024 // a CSI longer than this without a final byte is dropped as truncated
 )
 
@@ -157,6 +160,8 @@ func decodeEscape(b []byte, pasteFrom int) (key, int, bool) {
 	switch b[1] {
 	case '[':
 		return decodeCSI(b, pasteFrom)
+	case ']':
+		return decodeOSC(b)
 	case 'O':
 		if len(b) < 3 {
 			return key{}, 0, false // SS3 is a fixed three bytes
@@ -208,6 +213,8 @@ func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 			return key{typ: keyIgnore}, n, true
 		}
 		return key{typ: keyCursorReport, row: v}, n, true
+	case 'c':
+		return key{typ: keyDeviceAttrs}, n, true
 	case 'n':
 		if params == "0" { // DSR "no malfunction": answers statusQuery
 			return key{typ: keyStatusReport}, n, true
@@ -223,6 +230,36 @@ func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 	default:
 		return key{typ: keyIgnore}, n, true
 	}
+}
+
+// decodeOSC decodes an OSC reply, terminated by BEL or ST. Only the OSC 11
+// background answer is reported; every other OSC is swallowed so a reply to a
+// query we never made cannot leak into the editor as runes.
+func decodeOSC(b []byte) (key, int, bool) {
+	for i := 2; i < len(b); i++ {
+		switch {
+		case b[i] == belByte:
+			return oscKey(string(b[2:i])), i + 1, true
+		case b[i] == escByte:
+			if i+1 >= len(b) {
+				return key{}, 0, false // ST may still be forming
+			} else if b[i+1] != '\\' {
+				return key{typ: keyIgnore}, i, true // ESC aborts; resync at that byte
+			}
+			return oscKey(string(b[2:i])), i + 2, true
+		case i >= maxControlLen:
+			return key{typ: keyIgnore}, i, true // cap reached; resync at the next byte
+		}
+	}
+	return key{}, 0, false // incomplete: wait for the terminator
+}
+
+// oscKey returns the color report an OSC 11 payload carries, else keyIgnore.
+func oscKey(payload string) key {
+	if spec, ok := strings.CutPrefix(payload, "11;"); ok {
+		return key{typ: keyColorReport, text: spec}
+	}
+	return key{typ: keyIgnore}
 }
 
 func decodeTilde(b []byte, params string, n int, pasteFrom int) (key, int, bool) {
@@ -333,6 +370,8 @@ type inputReader struct {
 	keys    chan key
 	reports chan int
 	status  chan struct{} // DSR replies answering the resize barrier probe
+	colors  chan string   // OSC 11 background answers
+	attrs   chan struct{} // DA1 replies, the fence behind an OSC 11 query
 
 	newTimer func() escTimer // defaults to newRealEsc, tests inject a manual one
 	escDelay time.Duration   // how long a lone escape byte is held, seeded from escTimeout
@@ -344,6 +383,8 @@ func newInputReader(src io.Reader) *inputReader {
 		keys:     make(chan key, 64),
 		reports:  make(chan int, 4),
 		status:   make(chan struct{}, 4),
+		colors:   make(chan string, 1),
+		attrs:    make(chan struct{}, 1),
 		newTimer: newRealEsc,
 		escDelay: escTimeout,
 	}
@@ -363,6 +404,8 @@ type readResult struct {
 func (r *inputReader) run() {
 	defer close(r.keys)
 	defer close(r.status)
+	defer close(r.colors)
+	defer close(r.attrs)
 
 	reads := make(chan readResult, 1)
 	go func() {
@@ -435,6 +478,16 @@ func (r *inputReader) emit(k key) {
 	case keyStatusReport:
 		select {
 		case r.status <- struct{}{}:
+		default:
+		}
+	case keyColorReport:
+		select {
+		case r.colors <- k.text:
+		default:
+		}
+	case keyDeviceAttrs:
+		select {
+		case r.attrs <- struct{}{}:
 		default:
 		}
 	case keyIgnore:

@@ -58,6 +58,7 @@ type Options struct {
 	In        *os.File // defaults to os.Stdin
 	Out       *os.File // defaults to os.Stdout
 	Mode      Mode     // paint mode, ModeAuto detects multiplexers
+	Palette   Palette  // color set, the zero value uses DefaultPalette
 	Model     string
 	MaxTokens int
 	// double-Esc rewind: two idle presses within DoubleEscWindow call OnRewind instead of ControlEscape
@@ -176,7 +177,7 @@ func New(opts Options) (*UI, error) {
 
 	isTTY := term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
 	mode := ResolveMode(opts.Mode, osEnv, isTTY)
-	theme := NewTheme(DetectColorProfile(osEnv, mode != ModePlain))
+	theme := NewTheme(DetectColorProfile(osEnv, mode != ModePlain), opts.Palette)
 
 	u := &UI{
 		theme:    theme,
@@ -235,6 +236,25 @@ func (u *UI) safeGo(fn func()) {
 		}()
 		fn()
 	}()
+}
+
+// SetTheme recolors the live block and everything committed after it. History
+// already on screen keeps the colors it was written with.
+func (u *UI) SetTheme(pal Palette) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	u.theme = NewTheme(u.theme.Profile, pal)
+	u.render.setTheme(u.theme)
+	u.repaint()
+}
+
+// ColorProfile reports the color support the theme was built for.
+func (u *UI) ColorProfile() ColorProfile {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	return u.theme.Profile
 }
 
 // Mode reports the paint mode in use.

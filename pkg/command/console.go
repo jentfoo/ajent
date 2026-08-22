@@ -47,6 +47,15 @@ type Console interface {
 	// Input prompts for one line of text.
 	Input(ctx context.Context, label, placeholder string) (string, error)
 
+	// ColorProfile reports the color support the UI detected.
+	ColorProfile() tui.ColorProfile
+	// DetectTone reports the terminal's background tone, ToneUnknown when it
+	// cannot be established. It queries the terminal, so callers keep it on a
+	// startup path with no interaction in flight.
+	DetectTone() tui.Tone
+	// SetTheme recolors the live UI and everything committed after it.
+	SetTheme(pal tui.Palette)
+
 	// Models returns the live model registry, the single source of truth for the
 	// active model.
 	Models() *llm.Registry

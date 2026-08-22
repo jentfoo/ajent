@@ -189,7 +189,7 @@ func TestUIInputPrompt(t *testing.T) {
 // independently of selection so user/assistant reads at a glance.
 func TestPickItemRowRoleTags(t *testing.T) {
 	t.Parallel()
-	th := NewTheme(Color256)
+	th := NewTheme(Color256, DefaultPalette())
 
 	t.Run("user_tag_blue", func(t *testing.T) {
 		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "/ the question"}, false, 80)
@@ -373,7 +373,7 @@ func TestUISelectAltMode(t *testing.T) {
 	t.Cleanup(func() { _ = pw.Close() })
 
 	u := &UI{
-		theme:  NewTheme(ColorNone),
+		theme:  NewTheme(ColorNone, DefaultPalette()),
 		render: newTestAlt(v),
 		mode:   ModeAlt,
 		status: Status{Model: "test", MaxTokens: 1000},

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/mcp"
@@ -38,6 +39,9 @@ type uiConsole struct {
 
 	started *bool // shared with the driver pump
 	quit    chan struct{}
+
+	toneOnce sync.Once // the background query costs a round trip and cannot change
+	tone     tui.Tone
 }
 
 func (c *uiConsole) Notify(msg string, level tui.Level) { c.ui.Notify(msg, level) }
@@ -61,6 +65,14 @@ func (c *uiConsole) Confirm(ctx context.Context, prompt string) (bool, error) {
 
 func (c *uiConsole) Input(ctx context.Context, label, placeholder string) (string, error) {
 	return c.ui.InputContext(ctx, label, placeholder)
+}
+
+func (c *uiConsole) ColorProfile() tui.ColorProfile { return c.ui.ColorProfile() }
+func (c *uiConsole) SetTheme(pal tui.Palette)       { c.ui.SetTheme(pal) }
+
+func (c *uiConsole) DetectTone() tui.Tone {
+	c.toneOnce.Do(func() { c.tone = c.ui.DetectTone() })
+	return c.tone
 }
 
 func (c *uiConsole) Models() *llm.Registry       { return c.reg }

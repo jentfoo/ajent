@@ -206,6 +206,7 @@ func allRows() []settingsRow {
 		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+mcp", "block-all"}),
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
+		themeRow(),
 		{name: "Tool limits",
 			render: func(_ Console) (string, string) { return "Tool limits", "edit per-tool output bounds" },
 			edit:   func(_ context.Context, c Console) ([]settingChange, error) { return editLimits(c) }},

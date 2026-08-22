@@ -100,6 +100,10 @@ func (r *altRenderer) resize() {
 // that raced a reflow is fully repaired by the next one — no barrier needed.
 func (r *altRenderer) probe() {}
 
+func (r *altRenderer) setTheme(t Theme) { r.theme = t }
+
+func (r *altRenderer) query(seq string) { r.t.write(seq) }
+
 // scroll moves the viewport, positive scrolls back toward older output.
 func (r *altRenderer) scroll(lines int) bool {
 	before := r.offset

@@ -12,7 +12,7 @@ import (
 func newTestAlt(v *vt) *altRenderer {
 	return &altRenderer{
 		t:     &termState{out: v, fd: -1, width: v.w, height: v.h},
-		theme: NewTheme(ColorNone),
+		theme: NewTheme(ColorNone, DefaultPalette()),
 	}
 }
 
@@ -144,7 +144,7 @@ func TestAltRendererLineFlow(t *testing.T) {
 func TestAltRendererTableReflows(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 	src := "| A | B |\n|---|---|\n| 1 | a long description that should wrap when the terminal narrows |"
 	hl := renderMarkdown(plain, 60, src)[0]
 	require.NotNil(t, hl.table)

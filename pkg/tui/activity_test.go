@@ -16,7 +16,7 @@ import (
 // one-column width disagreement instead of wrapping the band.
 func TestShadeRowPadsToFullWidth(t *testing.T) {
 	t.Parallel()
-	th := NewTheme(Color256)
+	th := NewTheme(Color256, DefaultPalette())
 
 	const w = 41
 	text := "sub-2  grep pattern" // 21 columns; the rest is trailing shade blanks
@@ -36,7 +36,7 @@ func TestShadeRowPadsToFullWidth(t *testing.T) {
 // sanitized form.
 func TestShadeRowSanitizesCallerText(t *testing.T) {
 	t.Parallel()
-	th := NewTheme(Color256)
+	th := NewTheme(Color256, DefaultPalette())
 
 	const w = 24
 	emitted := shadeRow(th.Activity, "a\t"+strings.Repeat("x", 15)+"\x1b[2B", w)
@@ -49,7 +49,7 @@ func TestShadeRowSanitizesCallerText(t *testing.T) {
 // TestShadeRowNoColorIsPlain verifies a no-op theme falls back to an elided row.
 func TestShadeRowNoColorIsPlain(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "sub-2  work", shadeRow(NewTheme(ColorNone).Activity, "sub-2  work", 40))
+	assert.Equal(t, "sub-2  work", shadeRow(NewTheme(ColorNone, DefaultPalette()).Activity, "sub-2  work", 40))
 }
 
 func TestUIActivity(t *testing.T) {
@@ -151,7 +151,7 @@ func TestUIActivityTabKeepsPark(t *testing.T) {
 	t.Parallel()
 
 	v := newVT(20, 8)
-	u := newTestUIWith(t, v, strings.NewReader(""), NewTheme(Color256))
+	u := newTestUIWith(t, v, strings.NewReader(""), NewTheme(Color256, DefaultPalette()))
 	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 	u.Print("hist")
 	top, _ := u.cursor(v)
@@ -171,7 +171,7 @@ func TestUIActivityEscapeKeepsRowCount(t *testing.T) {
 	t.Parallel()
 
 	v := newVT(40, 10)
-	u := newTestUIWith(t, v, strings.NewReader(""), NewTheme(Color256))
+	u := newTestUIWith(t, v, strings.NewReader(""), NewTheme(Color256, DefaultPalette()))
 	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 	u.Print("committed reply")
 	top, _ := u.cursor(v)

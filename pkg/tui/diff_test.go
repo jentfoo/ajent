@@ -21,7 +21,7 @@ func numberedFile(n int) string {
 func TestRenderDiff(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 
 	t.Run("identical_is_empty", func(t *testing.T) {
 		assert.Empty(t, RenderDiff(plain, "x.go", "same\n", "same\n"))
@@ -101,17 +101,17 @@ func TestRenderDiff(t *testing.T) {
 		assert.NotContains(t, out, "\x1b")
 	})
 	t.Run("intraline_emphasis_applied", func(t *testing.T) {
-		th := NewTheme(Color256)
+		th := NewTheme(Color256, DefaultPalette())
 		out := RenderDiff(th, "x.go", "value := compute(a)\n", "value := compute(a, b)\n")
 		assert.Contains(t, out, th.DiffAddWord.Open())
 	})
 	t.Run("dissimilar_lines_not_emphasized", func(t *testing.T) {
-		th := NewTheme(Color256)
+		th := NewTheme(Color256, DefaultPalette())
 		out := RenderDiff(th, "x.go", "aaaaaaaaaa\n", "zzzzzzzzzz\n")
 		assert.NotContains(t, out, th.DiffAddWord.Open())
 	})
 	t.Run("no_background_shading", func(t *testing.T) {
-		th := NewTheme(Color256)
+		th := NewTheme(Color256, DefaultPalette())
 		out := RenderDiff(th, "x.go", "short\nsecond\n", "a much longer line\nsecond\n")
 		assert.NotContains(t, out, "\x1b[48;") // no background SGR anywhere
 		// and no padding: the short side keeps its own length
@@ -135,7 +135,7 @@ func TestDiffSummary(t *testing.T) {
 	})
 	t.Run("matches_render_header", func(t *testing.T) {
 		before, after := numberedFile(20), strings.Replace(numberedFile(20), "L10\n", "TEN\n", 1)
-		header, _, _ := strings.Cut(RenderDiff(NewTheme(ColorNone), "x.go", before, after), "\n")
+		header, _, _ := strings.Cut(RenderDiff(NewTheme(ColorNone, DefaultPalette()), "x.go", before, after), "\n")
 		assert.Equal(t, header+" (shown above)", DiffSummary("x.go", before, after))
 	})
 }

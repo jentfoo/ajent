@@ -160,7 +160,8 @@ ui.go            public API, state machine, key handling, locking
   activity.go      transient keyed rows above the input, and queued pending-prompt
                    rows (driver-owned), each capped with +N more
   status.go        status block model, two-row packing, keyed segments
-  style.go         color profile detection and the palette
+  style.go         color profile detection, the palettes, the role table
+  detect.go        terminal background classification (COLORFGBG, OSC 11)
   text.go          ANSI aware width, truncation, escape splitting
   ansi.go          escape sequence constants and builders
   history.go       line buffering for streaming input
@@ -588,19 +589,61 @@ followed by the denial summary or error notice.
 ### Semantic styling
 
 Meaning is carried by style, not by prefix characters, so it survives wrapping.
-`style.go` defines the roles; `Theme` is resolved once from the detected colour
-profile (truecolor / 256 / 16 / none, honouring `NO_COLOR` and `TERM=dumb`).
+`style.go` defines the roles. A `Theme` crosses two choices: the detected colour
+profile (truecolor / 256 / 16 / none, honouring `NO_COLOR` and `TERM=dumb`) and a
+**palette** — a named hue table built for a light or a dark terminal background.
+`NewTheme(profile, palette)` is the only constructor, and `ColorNone` returns the
+zero theme whatever the palette: a palette only ever changes *which* SGR bytes are
+produced, never *whether* any are.
+
+Eight palettes ship — `dark`, `dark-cool`, `dark-warm`, `dark-muted` and the four
+`light` equivalents. `dark` is the historical palette byte-for-byte and a golden
+test keeps it that way, so an existing user sees no change. Each role resolves a
+`hue`: a 256 index with its 16-colour fallback, so both depths move together and
+light palettes can drop basic cyan, which is unreadable on white. Attributes
+(bold, dim, italic, reverse) are identical in every palette and live in `NewTheme`.
+A palette also names the syntax-highlighting style its fenced code should use
+(`Theme.CodeStyle`, empty when color is off). The name is carried, never resolved:
+mapping it onto a highlighter's style registry belongs to the build that owns that
+dependency, so `pkg/tui` stays free of it (see phase 29).
+
+Adding a role means a field on `roleHues`, a value in each palette, and a line in
+`NewTheme`. A missing value would zero-fill into `38;5;0` — or a bare `0`, which
+*resets* instead of coloring — so `TestPaletteInvariants` walks `roleHues` by
+reflection and fails on any hue outside 16–255 / 31–36. New roles are covered by
+it automatically; do not replace it with a hand-listed set.
 
 | Role | Look | Used for |
 |---|---|---|
 | `Thinking` | dim + italic | reasoning, so it never reads as reply text |
-| `Activity` | dim on a dark background (256/truecolor) | live sub-agent rows above the prompt, set apart from committed output; falls back to plain dim below 256 colors |
-| `UserTag` / `Assist` | blue / yellow | the leading role word in the rewind tree picker |
+| `Activity` | dim on the palette's shade (256/truecolor) | live sub-agent rows above the prompt, set apart from committed output; falls back to plain dim below 256 colors |
+| `UserTag` / `Assist` | two separable hues | the leading role word in the rewind tree picker |
 | `User` | bold accent | echoed user messages |
 | `Dim` | dim | tool output, status, context lines |
-| `Accent` | magenta | markers: `✻` thinking, `⏺` tool, list bullets |
+| `Accent` | the palette's accent hue | markers: `✻` thinking, `⏺` tool, list bullets |
 | `Heading`, `Bold`, `Italic`, `Strike`, `Code`, `Link`, `Quote` | markdown inline roles |
 | `DiffAdd/Del/Hunk/File` + `*Word` | diff lines and intraline spans |
+
+**Choosing a palette.** `ui.theme` holds the name. `UI.DetectTone` classifies the
+terminal background — `COLORFGBG` when the terminal sets it, otherwise an OSC 11
+query with a DA1 (`CSI c`) fence behind it and a 150 ms cap — and its only consumer
+is the first-run picker (`command.ThemeSetup`), which runs when no layer has chosen
+a palette yet and offers the palettes matching the detected background. Tone is not
+a stored mode: after the first answer the palette is a plain name in the user config
+and the terminal is never queried again. Detection failure offers every palette
+rather than guessing.
+
+The OSC 11 answer and the DA1 fence are decoded into their own channels like the
+DSR resize barrier. Decoding them is a correctness fix as much as a feature: an
+unsolicited OSC reply used to leak its body into the editor as literal runes.
+
+**Restyling is forward-only.** `UI.SetTheme` recolours the live block and everything
+committed after it, but `renderMarkdown` bakes SGR into a `histLine`'s text bytes, so
+history already on screen keeps the colours it was written with until the next start.
+Storing roles instead of bytes would fix that — a renderer-wide change for content the
+user has already read, so the `/settings → Theme` row states the limit instead. A
+resumed session applies its palette *before* `session.Replay`, so restored history is
+baked with the palette that session chose.
 
 ## Unicode
 

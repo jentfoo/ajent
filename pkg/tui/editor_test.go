@@ -235,7 +235,7 @@ func TestEditorHistory(t *testing.T) {
 func TestEditorInputView(t *testing.T) {
 	t.Parallel()
 
-	th := NewTheme(ColorNone)
+	th := NewTheme(ColorNone, DefaultPalette())
 
 	t.Run("empty_shows_hint", func(t *testing.T) {
 		e := &editor{}

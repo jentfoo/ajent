@@ -132,7 +132,9 @@ type renderer interface {
 	setLive(rows []string, caretRow, caretCol int)
 	clearHistory() // drop retained lines where the mode owns scrollback (alt); no-op elsewhere
 	resize()
+	setTheme(t Theme)      // recolor what the mode draws itself; committed bytes are untouched
 	probe()                // ask the terminal for a status reply, a barrier against mid-reflow draws
+	query(seq string)      // write a terminal query verbatim, for replies read off the input stream
 	scroll(lines int) bool // false when the mode has no viewport of its own
 	suspend(inFd int)      // hand the terminal back to another program
 	resume(inFd int) error // retake it
@@ -278,7 +280,9 @@ func (p *plainRenderer) commit(lines []histLine) {
 
 func (p *plainRenderer) setLive([]string, int, int) {}
 func (p *plainRenderer) resize()                    {}
+func (p *plainRenderer) setTheme(Theme)             {} // plain never colors anything
 func (p *plainRenderer) probe()                     {} // plain draws nothing; no barrier needed
+func (p *plainRenderer) query(string)               {} // a pipe has no terminal to ask
 func (p *plainRenderer) scroll(int) bool            { return false }
 func (p *plainRenderer) suspend(int)                {}
 func (p *plainRenderer) resume(int) error           { return nil }

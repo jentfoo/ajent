@@ -99,7 +99,8 @@ func writeDemoConfig(home, url string) {
 
 	const conf = `{
   "tools": { "enabled": ["read", "write", "edit", "bash", "find", "grep", "ls"] },
-  "permissions": { "mode": "allow-read" }
+  "permissions": { "mode": "allow-read" },
+  "ui": { "theme": "dark" }
 }
 `
 	if err := os.WriteFile(filepath.Join(home, config.ConfigFileName), []byte(conf), 0o600); err != nil {

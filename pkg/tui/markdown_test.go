@@ -37,7 +37,7 @@ func mdText(lines []histLine, width int) string {
 func TestRenderMarkdown(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 
 	tests := []struct {
 		name     string
@@ -94,7 +94,7 @@ func TestRenderMarkdown(t *testing.T) {
 func TestRenderMarkdownFlow(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 
 	tests := []struct {
 		name     string
@@ -137,7 +137,7 @@ func TestRenderMarkdownFlow(t *testing.T) {
 func TestRenderMarkdownTable(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 	const src = "| ID | Name |\n|---|---|\n| 1 | alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega |"
 
 	t.Run("one_structured_line_with_separators", func(t *testing.T) {
@@ -172,7 +172,7 @@ func TestRenderMarkdownTable(t *testing.T) {
 func TestRenderMarkdownStyled(t *testing.T) {
 	t.Parallel()
 
-	th := NewTheme(Color256)
+	th := NewTheme(Color256, DefaultPalette())
 
 	t.Run("bold_wrapped", func(t *testing.T) {
 		assert.Equal(t, "a \x1b[1mb\x1b[0m\n", mdText(renderMarkdown(th, 40, "a **b**"), 40))
@@ -191,7 +191,7 @@ func TestRenderMarkdownStyled(t *testing.T) {
 func TestRenderMarkdownDocument(t *testing.T) {
 	t.Parallel()
 
-	th := NewTheme(Color256)
+	th := NewTheme(Color256, DefaultPalette())
 	src := strings.Join([]string{
 		"## Heading two",
 		"",

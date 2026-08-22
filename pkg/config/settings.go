@@ -74,6 +74,7 @@ type Subagent struct {
 // UI configures the terminal surface.
 type UI struct {
 	Render       string `json:"render,omitempty"` // tui.Mode name
+	Theme        string `json:"theme,omitempty"`  // tui.Palette name
 	ShowCost     bool   `json:"showCost,omitzero"`
 	ShowThinking bool   `json:"showThinking,omitzero"`
 }
@@ -111,7 +112,7 @@ const defaultsJSON = `{
   "permissions": { "mode": "allow-read" },
   "compaction": { "auto": true, "threshold": 0.8 },
   "subagent": { "maxConcurrent": 8 },
-  "ui": { "render": "auto" }
+  "ui": { "render": "auto", "theme": "dark" }
 }`
 
 // Defaults returns the compiled-in configuration layer.

@@ -325,7 +325,7 @@ func TestUIDecisionNoUI(t *testing.T) {
 
 	t.Run("plain_mode_reports_no_ui", func(t *testing.T) {
 		v := newVT(40, 10)
-		d := &UI{theme: NewTheme(ColorNone), render: newTestInline(v), mode: ModePlain,
+		d := &UI{theme: NewTheme(ColorNone, DefaultPalette()), render: newTestInline(v), mode: ModePlain,
 			in: strings.NewReader(""), msgs: make(chan string), done: make(chan struct{}), controls: make(chan Control)}
 		t.Cleanup(d.Close)
 

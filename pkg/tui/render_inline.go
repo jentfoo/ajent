@@ -308,6 +308,10 @@ func (r *inlineRenderer) resize() { r.t.refreshSize() }
 // mid-reflow draw window; this closes it.
 func (r *inlineRenderer) probe() { r.t.write(statusQuery) }
 
+func (r *inlineRenderer) setTheme(Theme) {} // inline draws no styled chrome of its own
+
+func (r *inlineRenderer) query(seq string) { r.t.write(seq) }
+
 // scroll is the terminal's job in this mode.
 func (r *inlineRenderer) scroll(int) bool { return false }
 

@@ -10,7 +10,7 @@ import (
 func TestStatusRows(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 
 	single := func(s Status, width int) []string { return s.rows(plain, width) }
 
@@ -37,7 +37,7 @@ func TestStatusRows(t *testing.T) {
 	})
 	t.Run("styled_when_color_enabled", func(t *testing.T) {
 		s := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}
-		assert.Contains(t, s.rows(NewTheme(Color256), 80)[0], "\x1b[2m")
+		assert.Contains(t, s.rows(NewTheme(Color256, DefaultPalette()), 80)[0], "\x1b[2m")
 	})
 	t.Run("fills_to_budget_not_window", func(t *testing.T) {
 		// a full budget (window minus reserve) fills the bar even though raw

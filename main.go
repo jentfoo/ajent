@@ -112,6 +112,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ajent: unknown render mode %q\n", modeName)
 		os.Exit(2)
 	}
+	themeName := set.Settings().UI.Theme
+	pal, known := tui.LookupPalette(themeName)
+	if !known {
+		pal = tui.DefaultPalette()
+		warnings = append(warnings, fmt.Sprintf("unknown ui.theme %q, using %q", themeName, pal.Name))
+	}
 	tools.ApplyLimits(toolLimitsFrom(set.Settings().Tools.Limits))
 
 	file, w, err := llm.LoadUserFile()
@@ -152,6 +158,7 @@ func main() {
 
 	ui, err := tui.New(tui.Options{
 		Mode:      mode,
+		Palette:   pal,
 		Model:     label,
 		MaxTokens: active.ContextWindow,
 	})
@@ -515,6 +522,13 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			rec.rewind(ui, ag, reg)
 		})
 		ctl.Restore() // pick a mid-workflow session back up before the first prompt
+	}
+
+	// a first start with no palette chosen picks one before any output exists
+	if ui.Mode() != tui.ModePlain {
+		if terr := command.ThemeSetup(context.Background(), console); terr != nil {
+			ui.Notify("theme: "+terr.Error(), tui.LevelWarn)
+		}
 	}
 
 	pump := make(chan pumpLine, 16)
@@ -1223,6 +1237,10 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	}
 	if toolsReg != nil && len(resumed.Tools.Enabled) > 0 {
 		toolsReg.SetEnabled(resumed.Tools.Enabled)
+	}
+	// the resumed palette must land before the replay bakes its colors into history
+	if pal, ok := tui.LookupPalette(resumed.UI.Theme); ok {
+		ui.SetTheme(pal)
 	}
 	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
 	session.Replay(session.Branch(entries, head), tuisink.New(ui), session.ReplayOptions{})

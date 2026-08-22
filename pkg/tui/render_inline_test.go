@@ -566,7 +566,7 @@ func relayout(lines []histLine, w int) []string {
 func TestInlineRelayoutBakesNoWidth(t *testing.T) {
 	t.Parallel()
 
-	plain := NewTheme(ColorNone)
+	plain := NewTheme(ColorNone, DefaultPalette())
 	srcs := []string{
 		"prose that runs long enough to wrap across several columns",
 		"- list item one\n- second list item with more text than fits at a narrow width",

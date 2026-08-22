@@ -11,7 +11,7 @@ func TestDividerRow(t *testing.T) {
 	t.Parallel()
 
 	t.Run("solid_band_with_background", func(t *testing.T) {
-		st := NewTheme(Color256).Divider
+		st := NewTheme(Color256, DefaultPalette()).Divider
 		row := dividerRow(st, 40)
 		assert.True(t, strings.HasPrefix(row, st.Open()), "opens with the style")
 		assert.True(t, strings.HasSuffix(row, sgrReset), "resets after the fill")
@@ -23,21 +23,21 @@ func TestDividerRow(t *testing.T) {
 	})
 
 	t.Run("colorless_falls_back_to_rule", func(t *testing.T) {
-		st := NewTheme(ColorNone).Divider
+		st := NewTheme(ColorNone, DefaultPalette()).Divider
 		row := dividerRow(st, 10)
 		assert.Equal(t, strings.Repeat(ruleChar, 9), row)
 	})
 
 	t.Run("zero_width_is_safe", func(t *testing.T) {
 		// unknown width falls back to a thin rule rather than an empty band.
-		assert.Equal(t, strings.Repeat(ruleChar, 1), dividerRow(NewTheme(Color256).Divider, 0))
+		assert.Equal(t, strings.Repeat(ruleChar, 1), dividerRow(NewTheme(Color256, DefaultPalette()).Divider, 0))
 	})
 }
 
 func TestUIDividerCommitsBand(t *testing.T) {
 	t.Parallel()
 	var buf strings.Builder
-	u := &UI{theme: NewTheme(ColorNone), render: &plainRenderer{out: &buf}, mode: ModePlain}
+	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), render: &plainRenderer{out: &buf}, mode: ModePlain}
 	u.Divider()
 	assert.Equal(t, strings.Repeat(ruleChar, max(defaultWidth-1, 1))+"\n", buf.String(),
 		"a divider commits a near-full-width line even without color")

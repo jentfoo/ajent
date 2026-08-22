@@ -214,7 +214,7 @@ func TestUIAsk(t *testing.T) {
 
 func TestQuestionStateRows(t *testing.T) {
 	t.Parallel()
-	th := NewTheme(ColorNone)
+	th := NewTheme(ColorNone, DefaultPalette())
 
 	// widest returns the widest rendered row.
 	widest := func(rows []string) int {
@@ -289,7 +289,7 @@ func TestUIPlainAsk(t *testing.T) {
 		t.Helper()
 		v := newVT(80, 12)
 		u := &UI{
-			theme:  NewTheme(ColorNone),
+			theme:  NewTheme(ColorNone, DefaultPalette()),
 			render: newTestInline(v),
 			mode:   ModePlain,
 			in:     in,

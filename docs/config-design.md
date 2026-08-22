@@ -42,7 +42,7 @@ type Settings struct {
     Permissions Permissions     // mode + safeCommands; enforced by the tool barrier (permit)
     Compaction  Compaction      // auto toggle + threshold fraction
     Subagent    Subagent        // research sub-agent model + concurrency cap
-    UI          UI              // render mode; showCost/showThinking
+    UI          UI              // render mode + color palette; showCost/showThinking
     Extensions  Extensions      // loaded by the extension host, accepted now
 }
 ```
@@ -120,6 +120,23 @@ a positive value caps the turn, any non-positive value (or none) leaves it
 uncapped. It is startup-time configuration: main.go copies it into
 `agent.Options.MaxSteps` once at process start, so it is deliberately absent
 from `/settings`, whose session overrides could never reach the running agent.
+
+### UI
+
+`ui.render` is a `tui.Mode` name defaulting to `"auto"`, read once before
+`tui.New` — a `/settings` override could never reach the live renderer, so, like
+`agent.maxSteps`, it has no row.
+
+`ui.theme` is a `tui.Palette` name (`dark`, `light` and their `-cool`, `-warm`,
+`-muted` variants) defaulting to `"dark"`. `AJENT_UI_THEME` binds for free
+through EnvLayer. The default is what makes the first-run picker possible:
+`command.ThemeSetup` opens only while `Source("ui.theme")` still reports
+`default`, so a value in any layer — env, project, local or a previous answer
+saved to user — suppresses it. Picking (or dismissing) writes the name to the
+**user** layer and records a session override, so a project pin still outranks
+it. Unlike `ui.render` the palette *can* change at runtime: `/settings → Theme`
+recolors the live UI, and a resumed session applies its override before the
+transcript replays (see tui-design.md, "Semantic styling").
 
 ## The writer
 
