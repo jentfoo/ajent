@@ -201,8 +201,8 @@ func (s Style) Close() string {
 type Theme struct {
 	Profile ColorProfile
 	Palette string // the built-in palette the hues came from
-	// CodeStyle names the syntax-highlighting style for fenced code, empty when
-	// color is disabled so a highlighter has nothing to apply.
+	// CodeStyle names the syntax-highlighting style for fenced code, empty below
+	// Color256 so highlighting has nothing to apply.
 	CodeStyle string
 
 	Thinking Style // shaded so it reads as internal, not output
@@ -243,7 +243,11 @@ func NewTheme(p ColorProfile, pal Palette) Theme {
 	if p == ColorNone {
 		return t
 	}
-	t.CodeStyle = pal.codeStyle
+	if p >= Color256 {
+		// below 256 colors chroma snaps every token onto the 8 ANSI hues, which
+		// reads worse than the palette's one hand picked Code color
+		t.CodeStyle = pal.codeStyle
+	}
 	h := pal.hues
 	style := func(params ...int) Style { return Style{open: sgr(params...)} }
 	fg := func(c hue) []int {

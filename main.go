@@ -1294,21 +1294,48 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 		} else {
 			st.Tokens = tokens.New(st.Model) // a new root starts an empty ledger
 		}
-		pushSwitchedContext(ui, st)
+		pushSwitchedContext(ui, st.Tokens)
 	})
 	return nil
 }
 
 // pushSwitchedContext republishes the context bar after a ledger swap, which no
-// sink event would otherwise report until the next turn.
-func pushSwitchedContext(ui *tui.UI, st *agent.State) {
-	if ui == nil || st.Tokens == nil {
+// sink event would otherwise report until the next turn. A nil accounting leaves
+// the bar untouched.
+func pushSwitchedContext(ui *tui.UI, t *tokens.Accounting) {
+	if ui == nil || t == nil {
 		return
 	}
-	cs := st.Tokens.Context()
+	cs := t.Context()
 	ui.SetContext(tui.ContextInfo{
 		Used: cs.Used, Window: cs.Window, Reserve: cs.Reserve,
 		Compact: cs.Compact, Estimated: cs.Estimated,
+	})
+}
+
+// liveModel returns the model currently driving turns, or a zero value when none.
+func (r *sessRec) liveModel(ag *agent.Agent) llm.Model {
+	if ag == nil {
+		return llm.Model{}
+	}
+	save := llm.Model{}
+	ag.WithState(func(st *agent.State) { save = st.Model })
+	return save
+}
+
+// restoreForkModel reapplies a model captured before switchState so a rewind does
+// not silently revert to an earlier branch's model; it is a no-op for the zero one.
+func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, m llm.Model) {
+	if m.ID == "" || ag == nil {
+		return
+	}
+	ag.WithState(func(st *agent.State) {
+		st.Model = m
+		if st.Tokens != nil {
+			st.Tokens.SetModel(m)
+			st.Tokens.Reseed(tokens.EstimateMessages(st.Messages))
+		}
+		pushSwitchedContext(ui, st.Tokens)
 	})
 }
 
@@ -1368,9 +1395,14 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		ui.Notify("cannot rewind onto that entry", tui.LevelWarn)
 		return
 	}
+	// keep the current model across a fork: rebuilding from an earlier point
+	// would otherwise revert to whatever model was active there, silently undoing
+	// a /model switch when that prior message is re-sent.
+	saveModel := r.liveModel(ag)
 	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
 		return
 	}
+	r.restoreForkModel(ui, ag, saveModel)
 
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.

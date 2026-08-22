@@ -8,8 +8,8 @@ when changing it.
 A terminal front end for a coding agent: a scrolling transcript of agent output
 with a live input field and status line beneath it. No external TUI framework.
 Dependencies are `x/term` (raw mode, size), `rivo/uniseg` (grapheme clusters and
-widths), `goldmark` (markdown parsing), `go-pretty` (tables) and `go-udiff`
-(diffs).
+widths), `goldmark` (markdown parsing), `go-pretty` (tables), `go-udiff`
+(diffs) and `chroma` (syntax highlighting).
 
 Goals, in priority order:
 
@@ -161,6 +161,7 @@ ui.go            public API, state machine, key handling, locking
                    rows (driver-owned), each capped with +N more
   status.go        status block model, two-row packing, keyed segments
   style.go         color profile detection, the palettes, the role table
+  highlight.go     chroma -> per-line SGR for fenced code, keyed by the palette
   detect.go        terminal background classification (COLORFGBG, OSC 11)
   text.go          ANSI aware width, truncation, escape splitting
   ansi.go          escape sequence constants and builders
@@ -522,7 +523,7 @@ Supported elements:
 |---|---|
 | Heading | dim `#` markers kept, text in heading style |
 | Paragraph | unwrapped, soft breaks become spaces so it reflows |
-| Fenced / indented code | two space indent, dim language label, code style |
+| Fenced / indented code | two space indent, dim language label, syntax highlighted where the palette and colour depth allow, otherwise the flat code style |
 | Blockquote | `▏ ` prefix, dim italic body |
 | List | `• ` bullets or `N. ` ordered, nested by indent, tight and loose |
 | Task list | `[x]` / `[ ]` checkboxes |
@@ -545,7 +546,40 @@ Nested inline styles are handled with a style stack: closing an inner span emits
 a reset then reopens the ancestors, so bold containing a code span does not lose
 its bold on exit.
 
-Fenced code is styled but not syntax highlighted. See "Extending".
+Fenced code is syntax highlighted. See "Syntax highlighting".
+
+### Syntax highlighting
+
+`highlight.go` lexes a fenced block with `chroma` and formats it with chroma's TTY
+formatter, so the colours arrive as SGR inside `histLine.text` exactly like every
+other role. No renderer knows this happened: highlighted code follows the same
+"history keeps the bytes it was written with" rule as the rest, including the
+forward-only restyle limit.
+
+Which style is used is the palette's choice (`Theme.CodeStyle`), so highlighting
+tracks the theme rather than fighting it. The rules that must hold:
+
+- **`Theme.Code` is the fallback, and it must stay reachable.** Highlighting is
+  skipped for an empty `CodeStyle` (so below `Color256`), an unlabelled or indented
+  block, a language chroma does not know, a lexer that colours nothing (`text`,
+  `plain`), and a block whose highlighted row count does not match its source line
+  count. Every one of those renders exactly as it did before highlighting existed,
+  which is what keeps `TestCodeBlock` and the `ColorNone` goldens honest.
+- **One row in, one row out.** Row accounting is exact (invariant 2), so
+  `splitStyledLines` closes and reopens the active SGR at every line break: a token
+  spanning lines (a raw string, a block comment) must not leave a row without its
+  own styling, and a newline must never sit inside a styled span.
+- **Token backgrounds and the style's base foreground are stripped**
+  (`stripDefaults`). A block carries no shade of its own, so a token background
+  reads as a stray band; and dropping the base foreground leaves punctuation and
+  whitespace unstyled, which keeps code at prose weight and spends escape bytes
+  only where a token is genuinely coloured. Chroma re-inherits a cleared entry from
+  the parent style, so each rebuilt entry sets `NoInherit`.
+- **The live preview is not highlighted** (`renderPreview`). An open fence is
+  re-rendered on *every* delta, and chroma's lexer costs ~100x goldmark's parse, so
+  highlighting there would put milliseconds on each keystroke-scale repaint — and
+  it would churn colours as truncated strings and identifiers resolve. Highlighting
+  runs once, at commit, when the fence closes and the content is final.
 
 ### Diffs
 
@@ -602,10 +636,11 @@ test keeps it that way, so an existing user sees no change. Each role resolves a
 `hue`: a 256 index with its 16-colour fallback, so both depths move together and
 light palettes can drop basic cyan, which is unreadable on white. Attributes
 (bold, dim, italic, reverse) are identical in every palette and live in `NewTheme`.
-A palette also names the syntax-highlighting style its fenced code should use
-(`Theme.CodeStyle`, empty when color is off). The name is carried, never resolved:
-mapping it onto a highlighter's style registry belongs to the build that owns that
-dependency, so `pkg/tui` stays free of it (see phase 29).
+A palette also names the chroma style its fenced code is highlighted with
+(`Theme.CodeStyle`), resolved by `highlight.go`. It is **empty below `Color256`**,
+which is the single rule disabling highlighting for `NO_COLOR`, `TERM=dumb` and
+16-colour terminals alike: chroma snaps every token onto the 8 ANSI hues there,
+which reads worse than the one hue the palette picked for `Theme.Code`.
 
 Adding a role means a field on `roleHues`, a value in each palette, and a line in
 `NewTheme`. A missing value would zero-fill into `38;5;0` — or a bare `0`, which
@@ -1145,8 +1180,8 @@ Things that look fine and are not:
   case in `UI.applyKey`. Ctrl+R (`0x12`) is the reverse search example: it maps
   to `keyReverseSearch`, which calls `openSearchLocked`; while the overlay is
   open its own `search.key` consumes keys first.
-- **Syntax highlighting**: fenced code blocks are styled but not highlighted.
-  `chroma` would slot into `mdRenderer.codeBlock`, at roughly 5 MB of binary.
+- **A new highlighted language**: nothing to do, `chroma` resolves the fence's
+  info string through its own lexer registry and aliases.
 - **Third render mode**: implement `renderer` and add it to `newRenderer` and
   `ResolveMode`. The interface is deliberately small: `start`, `commit`,
   `setLive`, `resize`, `scroll`, `suspend`, `resume`, `close`, `size`.

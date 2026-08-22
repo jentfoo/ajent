@@ -36,17 +36,28 @@ var markdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 // treated on a width change. width is used only for elements that cannot reflow,
 // such as rules and tables.
 func renderMarkdown(t Theme, width int, src string) []histLine {
+	return renderLines(mdRenderer{theme: t, width: width, highlight: true}, src)
+}
+
+// renderPreview is renderMarkdown for content still arriving, leaving fenced code
+// unhighlighted: an open block re-renders on every delta and its colors would churn
+// as truncated tokens resolve.
+func renderPreview(t Theme, width int, src string) []histLine {
+	return renderLines(mdRenderer{theme: t, width: width}, src)
+}
+
+func renderLines(r mdRenderer, src string) []histLine {
 	if strings.TrimSpace(src) == "" {
 		return nil
 	}
 	source := []byte(src)
-	r := mdRenderer{theme: t, width: width}
 	return r.blocks(markdown.Parser().Parse(text.NewReader(source)), source)
 }
 
 type mdRenderer struct {
-	theme Theme
-	width int
+	theme     Theme
+	width     int
+	highlight bool // committed blocks only, see renderPreview
 }
 
 // blocks renders every child of n as history lines, separated by a blank line.
@@ -127,7 +138,8 @@ func (r mdRenderer) block(n ast.Node, src []byte) (string, lineFlow) {
 	}
 }
 
-// codeBlock renders fenced or indented code, indented and styled but not highlighted.
+// codeBlock renders fenced or indented code, syntax highlighted when the theme and
+// language allow and in the flat code style otherwise.
 func (r mdRenderer) codeBlock(n ast.Node, src []byte) string {
 	var lang string
 	if f, ok := n.(*ast.FencedCodeBlock); ok {
@@ -139,11 +151,25 @@ func (r mdRenderer) codeBlock(n ast.Node, src []byte) string {
 		b.WriteString("\n")
 	}
 	body := strings.TrimRight(rawLines(n, src), "\n")
-	for i, line := range strings.Split(body, "\n") {
+	lines := strings.Split(body, "\n")
+	var styled []string
+	if r.highlight {
+		styled = highlight(r.theme, lang, body)
+	}
+	if len(styled) != len(lines) {
+		// row accounting is exact; a block that lexed to a different row count than
+		// it was written with is one we do not understand
+		styled = nil
+	}
+	for i, line := range lines {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(codeIndent + r.theme.Code.Wrap(line))
+		if styled != nil {
+			b.WriteString(codeIndent + styled[i])
+		} else {
+			b.WriteString(codeIndent + r.theme.Code.Wrap(line))
+		}
 	}
 	return b.String()
 }

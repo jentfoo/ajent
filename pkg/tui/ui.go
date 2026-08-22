@@ -35,7 +35,7 @@ const (
 	// frame never goes out alongside a resize we have not seen yet
 	resizeDrawGrace = 80 * time.Millisecond
 	spinnerInterval = 90 * time.Millisecond
-	maxInputRatio   = 3 // input may take at most this fraction of the screen
+	maxInputRatio   = 2 // input may take at most this fraction of the screen
 )
 
 // clockwise frames; ⠦ (bottom-left) leads so idle rests at bottom-left
@@ -507,7 +507,7 @@ func (u *UI) streamingRows(w int) []string {
 	if !u.streaming || strings.TrimSpace(u.textBuf) == "" {
 		return nil
 	}
-	lines := renderMarkdown(u.theme, w, u.textBuf)
+	lines := renderPreview(u.theme, w, u.textBuf)
 	var out []string
 	for _, l := range lines {
 		if l.structured() {

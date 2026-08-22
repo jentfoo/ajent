@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/go-analyze/bulk"
-
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
@@ -23,9 +21,10 @@ func ThemeSetup(ctx context.Context, c Console) error {
 	tone := c.DetectTone()
 	choices := tui.PalettesFor(tone)
 	profile := c.ColorProfile()
-	opts := bulk.SliceTransform(func(p tui.Palette) tui.Option {
-		return tui.Option{Label: p.Name, Detail: paletteSample(profile, p)}
-	}, choices)
+	opts := make([]tui.Option, len(choices))
+	for i, p := range choices {
+		opts[i] = tui.Option{Label: p.Name, Detail: paletteSample(profile, p)}
+	}
 
 	idx, err := c.Select(ctx, "Choose a color theme", opts)
 	if err != nil {
@@ -43,7 +42,11 @@ func ThemeSetup(ctx context.Context, c Console) error {
 // themeRow is the /settings entry over every palette. It applies the choice to
 // the live UI, which enumRow alone cannot do.
 func themeRow() settingsRow {
-	names := bulk.SliceTransform(func(p tui.Palette) string { return p.Name }, tui.Palettes())
+	pals := tui.Palettes()
+	names := make([]string, len(pals))
+	for i, p := range pals {
+		names[i] = p.Name
+	}
 	row := enumRow("Theme", themeKey, names)
 	edit := row.edit
 	row.edit = func(ctx context.Context, c Console) ([]settingChange, error) {

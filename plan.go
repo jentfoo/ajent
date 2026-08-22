@@ -189,7 +189,7 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 			st.Tokens.SetModel(m)
 			st.Tokens.Reseed(tokens.EstimateMessages(st.Messages))
 		}
-		pushSwitchedContext(ui, st)
+		pushSwitchedContext(ui, st.Tokens)
 	})
 	ui.SetModel(m.Key(), m.ContextWindow)
 	if moved {

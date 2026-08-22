@@ -128,3 +128,24 @@ func BenchmarkStreamingRows(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkCodeBlock measures the highlight path against the flat fallback at
+// growing block sizes. Highlighting runs once per block, at commit.
+func BenchmarkCodeBlock(b *testing.B) {
+	chunk := "func handle(ctx context.Context, n int) error {\n\ts := fmt.Sprintf(\"n=%d\", n) // note\n\tif n > 0 {\n\t\treturn errors.New(s)\n\t}\n\treturn nil\n}\n\n"
+	for _, lines := range []int{50, 200, 800} {
+		src := "```go\n" + strings.Repeat(chunk, lines/8+1) + "```"
+		b.Run(strconv.Itoa(lines)+"_highlighted", func(b *testing.B) {
+			th := NewTheme(Color256, DefaultPalette())
+			for b.Loop() {
+				renderMarkdown(th, 118, src)
+			}
+		})
+		b.Run(strconv.Itoa(lines)+"_flat", func(b *testing.B) {
+			th := NewTheme(ColorBasic, DefaultPalette())
+			for b.Loop() {
+				renderMarkdown(th, 118, src)
+			}
+		})
+	}
+}

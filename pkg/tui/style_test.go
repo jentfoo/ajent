@@ -215,6 +215,9 @@ func TestPaletteInvariants(t *testing.T) {
 	t.Run("no_code_style_without_color", func(t *testing.T) {
 		assert.Empty(t, NewTheme(ColorNone, DefaultPalette()).CodeStyle)
 	})
+	t.Run("no_code_style_below_256", func(t *testing.T) {
+		assert.Empty(t, NewTheme(ColorBasic, DefaultPalette()).CodeStyle)
+	})
 }
 
 func TestLookupPalette(t *testing.T) {

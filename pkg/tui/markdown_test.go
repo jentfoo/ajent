@@ -229,7 +229,6 @@ func TestRenderMarkdownDocument(t *testing.T) {
 		"italic":         th.Italic.Wrap("italic"),
 		"inline code":    th.Code.Wrap("code"),
 		"strikethrough":  th.Strike.Wrap("struck"),
-		"code block":     codeIndent + th.Code.Wrap("func f() int { return 1 }"),
 		"code language":  th.Dim.Wrap(codeIndent + "go"),
 		"bullet":         th.Accent.Wrap(bulletMarker) + "bullet one",
 		"ordered marker": th.Accent.Wrap("1. ") + "first",
@@ -243,6 +242,87 @@ func TestRenderMarkdownDocument(t *testing.T) {
 	for name, want := range elements {
 		assert.Contains(t, out, want, "missing rendered %s", name)
 	}
+
+	// the fenced block is highlighted, so its bytes belong to chroma rather than to
+	// a theme role; assert the text and that it carries color, not the exact SGR
+	code := "  func f() int { return 1 }"
+	require.Contains(t, strutil.StripANSI(out), code)
+	for _, line := range strings.Split(out, "\n") {
+		if strutil.StripANSI(line) == code {
+			assert.Contains(t, line, esc, "fenced code is not highlighted")
+			assert.NotContains(t, line, th.Code.Open(), "highlighted code should not use the flat code style")
+		}
+	}
+}
+
+// TestCodeBlock guards the highlight fallback contract: every case that cannot be
+// highlighted must render exactly as it did before highlighting existed.
+func TestCodeBlock(t *testing.T) {
+	t.Parallel()
+
+	th := NewTheme(Color256, DefaultPalette())
+	plain := NewTheme(ColorNone, DefaultPalette())
+
+	// rendered rows as flat text, a fenced block's label row included
+	body := func(t Theme, src string) []string {
+		lines := renderMarkdown(t, 40, src)
+		out := make([]string, 0, len(lines))
+		for _, l := range lines {
+			out = append(out, l.text)
+		}
+		return out
+	}
+
+	t.Run("highlighted_when_styled", func(t *testing.T) {
+		rows := body(th, "```go\nfunc f() {}\n```")
+		require.Len(t, rows, 2)
+		assert.Equal(t, th.Dim.Wrap(codeIndent+"go"), rows[0])
+		assert.Contains(t, rows[1], esc)
+		assert.NotContains(t, rows[1], th.Code.Open())
+		assert.Equal(t, codeIndent+"func f() {}", strutil.StripANSI(rows[1]))
+	})
+	t.Run("no_language_falls_back", func(t *testing.T) {
+		rows := body(th, "```\nfunc f() {}\n```")
+		require.Len(t, rows, 1)
+		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), rows[0])
+	})
+	t.Run("indented_block_falls_back", func(t *testing.T) {
+		rows := body(th, "    func f() {}")
+		require.Len(t, rows, 1)
+		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), rows[0])
+	})
+	t.Run("unknown_language_falls_back", func(t *testing.T) {
+		rows := body(th, "```zzznotalanguage\nfunc f() {}\n```")
+		require.Len(t, rows, 2)
+		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), rows[1])
+	})
+	t.Run("plain_theme_unchanged", func(t *testing.T) {
+		assert.Equal(t, []string{codeIndent + "go", codeIndent + "func f() {}"},
+			body(plain, "```go\nfunc f() {}\n```"))
+	})
+	t.Run("basic_color_falls_back", func(t *testing.T) {
+		basic := NewTheme(ColorBasic, DefaultPalette())
+		rows := body(basic, "```go\nfunc f() {}\n```")
+		require.Len(t, rows, 2)
+		assert.Equal(t, codeIndent+basic.Code.Wrap("func f() {}"), rows[1])
+	})
+	t.Run("preview_falls_back", func(t *testing.T) {
+		// a block still arriving is re-rendered per delta and lexes half typed code
+		lines := renderPreview(th, 40, "```go\nfunc f() {}\n```")
+		require.Len(t, lines, 2)
+		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), lines[1].text)
+	})
+	t.Run("one_row_per_source_line", func(t *testing.T) {
+		// row accounting is exact, so a highlighted block keeps the source line count
+		src := "```go\ns := `multi\nline`\n\nx := 1\n```"
+		rows := body(th, src)
+		require.Len(t, rows, 5) // label plus four code lines
+		for _, r := range rows {
+			assert.NotContains(t, r, "\n")
+		}
+		assert.Equal(t, []string{codeIndent + "s := `multi", codeIndent + "line`", codeIndent, codeIndent + "x := 1"},
+			[]string{strutil.StripANSI(rows[1]), strutil.StripANSI(rows[2]), strutil.StripANSI(rows[3]), strutil.StripANSI(rows[4])})
+	})
 }
 
 func TestSplitCompleteBlocks(t *testing.T) {

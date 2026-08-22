@@ -94,6 +94,58 @@ func TestRewindStateRebuild(t *testing.T) {
 	assert.False(t, oldActive)
 }
 
+// TestRewindKeepsCurrentModel locks in that a rewind onto an earlier message does
+// not silently revert the active model to whatever produced it: /model then fork
+// must keep the switched-to model when that prior message is re-sent.
+func TestRewindKeepsCurrentModel(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{
+			"p": {Models: []llm.ModelConfig{{ID: "a"}, {ID: "b"}}},
+		},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{
+		Version: session.Version(), Model: "p/a",
+	})
+	require.NoError(t, err)
+	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+
+	// grow a chain on model a.
+	a := agent.New(&agent.State{Model: llm.Model{ID: "a"}, Tools: []string{"bash"}}, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) {
+			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("reply one")}}}, nil
+		},
+		Tools:     singleToolSet{tool: noopRewindTool{}},
+		Env:       agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+		OnMessage: []func(agent.MessageInfo){r.rec.Message},
+	})
+	require.NoError(t, a.Prompt(t.Context(), agent.Input{Text: "one"}))
+
+	entries := readEntriesRewind(t, p)
+	branch := session.Branch(entries, w.Head())
+
+	// switch to b live and record it, as /model does.
+	bModel, err := reg.Resolve("p/b")
+	require.NoError(t, err)
+	a.WithState(func(st *agent.State) { st.Model = bModel })
+	r.rec.ModelChange(bModel, "command")
+
+	// rewind onto the first user message and restore the fork model: it must stay b.
+	save := r.liveModel(a)
+	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, "rewind: "))
+	r.restoreForkModel(nil, a, save)
+
+	var got llm.Model
+	a.WithState(func(st *agent.State) { got = st.Model })
+	assert.Equal(t, "b", got.ID)
+	assert.NotEqual(t, "a", got.ID)
+}
+
 // TestRewindToPrior verifies picking a message maps to rewinding *before* it:
 // the head becomes that message's parent and its full text is returned for the
 // editor, so re-sending starts the new branch. A user prompt rewinds to its

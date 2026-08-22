@@ -57,7 +57,7 @@ agent    -> llm, tokens
 tools    -> agent, config, llm, strutil
 session  -> agent, config, llm, strutil, tokens, tools
 compact  -> llm, session, strutil, tokens, tools
-tui      -> strutil
+tui      -> strutil (+ goldmark, uniseg, go-udiff, chroma)
 mcp      -> agent, config, llm, strutil (+ mcp-go; never tools/tui/command — adapters live in main.go)
 subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by main.go)
 plan     -> agent, llm (never tools/tui/command/session — the driver supplies Host)
