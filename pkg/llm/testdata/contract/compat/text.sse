@@ -1,0 +1,12 @@
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"Hello"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":" there"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: {"id":"c1","model":"m1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7}}
+
+data: [DONE]
+

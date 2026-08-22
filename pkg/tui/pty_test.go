@@ -18,11 +18,16 @@ import (
 )
 
 // The vt emulator approximates reflow; a real pty is the reference for the
-// resize path. The kernel owns the size reports and the line discipline owns
-// the bytes, while the slave is not a controlling terminal so no SIGWINCH is
-// delivered: the test sets the size and drives the settle the way watchSignals
-// would. Keep this rig to the reflow-on-resize cases the emulator can only
-// approximate; the emulator carries the broad deterministic coverage.
+// terminal lifecycle. The kernel owns the size reports and the line discipline
+// owns the bytes, so raw mode, keystroke transport, size and teardown are all
+// real here. Only the origin of SIGWINCH is not: the slave is not a controlling
+// terminal, so the kernel delivers nothing and the test raises the signal on
+// itself, which drives the whole real watchSignals chain. Keep this rig to the
+// cases the emulator cannot reach; the emulator carries the broad coverage.
+//
+// None of these tests may call t.Parallel: signal.Notify is process wide, so two
+// live UIs would answer each other's SIGWINCH. Only a UI built through New runs
+// watchSignals, and every such test lives in this file.
 
 func openPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
@@ -56,27 +61,83 @@ func setPTYSize(t *testing.T, f *os.File, w, h int) {
 	require.Zero(t, errno, "set pty size")
 }
 
-// drainPTY reads everything the UI has written so far into the emulator. The
-// deadline ends the read; writes are synchronous, so this is deterministic.
-func drainPTY(t *testing.T, master *os.File, v *vt) {
-	t.Helper()
-	require.NoError(t, master.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+// pumpPTY moves everything readable on the master into the emulator, if one is
+// given, and returns the raw bytes. Read failures come back as an error rather
+// than a test failure so it can run inside a poll loop.
+func pumpPTY(master *os.File, v *vt, wait time.Duration) (string, error) {
+	if err := master.SetReadDeadline(time.Now().Add(wait)); err != nil {
+		return "", err
+	}
+	var raw strings.Builder
 	buf := make([]byte, 32*1024)
 	for {
 		n, err := master.Read(buf)
 		if n > 0 {
-			_, werr := v.Write(buf[:n])
-			require.NoError(t, werr)
+			raw.Write(buf[:n])
+			if v != nil {
+				if _, werr := v.Write(buf[:n]); werr != nil {
+					return raw.String(), werr
+				}
+			}
 		}
 		if err != nil {
-			var timeout bool
 			if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, io.EOF) {
-				timeout = true
+				return raw.String(), nil
 			}
-			require.True(t, timeout, "read the pty master: %v", err)
+			return raw.String(), err
+		}
+	}
+}
+
+// drainPTY reads everything the UI has written so far into the emulator. The
+// deadline ends the read; writes are synchronous, so this is deterministic.
+func drainPTY(t *testing.T, master *os.File, v *vt) {
+	t.Helper()
+	_, err := pumpPTY(master, v, 100*time.Millisecond)
+	require.NoError(t, err, "read the pty master")
+}
+
+// readPTY returns the raw bytes waiting on the master, for asserting on the
+// escape sequences themselves rather than their effect.
+func readPTY(t *testing.T, master *os.File) string {
+	t.Helper()
+	raw, err := pumpPTY(master, nil, 100*time.Millisecond)
+	require.NoError(t, err, "read the pty master")
+	return raw
+}
+
+// sendPTY types bytes into the master and drains what the UI writes back.
+func sendPTY(t *testing.T, master *os.File, v *vt, s string) {
+	t.Helper()
+	_, err := master.WriteString(s)
+	require.NoError(t, err)
+	drainPTY(t, master, v)
+}
+
+// eventuallyPTY pumps the master into the emulator until cond holds, standing in
+// for a sleep against the real settle timers. The pump's own read deadline
+// paces the loop, and everything runs on the test goroutine so the emulator is
+// never read and written at once.
+func eventuallyPTY(t *testing.T, master *os.File, v *vt, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err := pumpPTY(master, v, 2*time.Millisecond)
+		require.NoError(t, err, "read the pty master")
+		if cond() {
 			return
 		}
 	}
+	t.Fatalf("pty never settled: %s\n%s", msg, v.Screen())
+}
+
+// termiosOf reads a terminal's line discipline, for raw-mode assertions.
+func termiosOf(t *testing.T, f *os.File) syscall.Termios {
+	t.Helper()
+	var tio syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&tio)))
+	require.Zero(t, errno, "read termios")
+	return tio
 }
 
 // newPTYUI runs a UI in inline mode against a real pty slave, with a fixed
@@ -149,4 +210,106 @@ func TestPTYContaminatedRowParks(t *testing.T) {
 	assert.Equal(t, 1, countRules(screen))
 	assert.Contains(t, screen, "write notes.go")
 	assert.Equal(t, strings.Repeat(ruleChar, 29), v.Line(v.row), "parked on the divider row")
+}
+
+// TestPTYKeystrokes types through the kernel's line discipline: the bytes reach
+// the decoder, the line submits, and raw mode means the terminal never echoed
+// them, so the only copy on screen is the one the UI painted.
+func TestPTYKeystrokes(t *testing.T) {
+	master, slave := openPTY(t)
+	setPTYSize(t, master, 60, 20)
+	v := newVT(60, 20)
+	u := newPTYUI(t, master, slave)
+	drainPTY(t, master, v)
+
+	sendPTY(t, master, v, "hello")
+	eventuallyPTY(t, master, v, func() bool {
+		return strings.Contains(v.Screen(), "hello")
+	}, "typed text reaches the editor row")
+	assert.Equal(t, 1, strings.Count(v.Screen(), "hello"), "ECHO is off, so nothing echoed it back")
+
+	sendPTY(t, master, v, "\r")
+	select {
+	case got := <-u.Messages():
+		assert.Equal(t, "hello", got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Enter never submitted the typed line")
+	}
+}
+
+// TestPTYRawMode asserts the line discipline itself, the state the whole
+// renderer assumes: raw while the UI is live, exactly as found on teardown.
+func TestPTYRawMode(t *testing.T) {
+	master, slave := openPTY(t)
+	setPTYSize(t, master, 60, 20)
+	v := newVT(60, 20)
+
+	cooked := termiosOf(t, slave)
+	require.NotZero(t, cooked.Lflag&syscall.ECHO, "the pty starts cooked")
+
+	u := newPTYUI(t, master, slave)
+	drainPTY(t, master, v)
+
+	live := termiosOf(t, slave)
+	assert.Zero(t, live.Lflag&syscall.ECHO)
+	assert.Zero(t, live.Lflag&syscall.ICANON)
+
+	u.Close()
+	assert.Equal(t, cooked.Lflag, termiosOf(t, slave).Lflag, "Close restores what it found")
+}
+
+// TestPTYSignalResize drives the real signal path end to end: watchSignals
+// debounces the burst, probeResize writes the DSR barrier query, the answer
+// releases the settled redraw. Nothing here is simulated but the signal's
+// sender.
+func TestPTYSignalResize(t *testing.T) {
+	master, slave := openPTY(t)
+	setPTYSize(t, master, 60, 20)
+	v := newVT(60, 20)
+	u := newPTYUI(t, master, slave)
+	drainPTY(t, master, v)
+
+	u.Print("alpha bravo")
+	u.Print("charlie delta")
+	drainPTY(t, master, v)
+	require.Equal(t, 1, countRules(v.Screen()), "one divider before any resize")
+
+	probes := v.dsrCount
+	setPTYSize(t, master, 34, 20)
+	v.setSize(34, 20)
+	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGWINCH))
+
+	eventuallyPTY(t, master, v, func() bool {
+		return v.dsrCount > probes
+	}, "the settled burst raises the barrier query")
+
+	sendPTY(t, master, v, "\x1b[0n")
+	eventuallyPTY(t, master, v, func() bool {
+		return v.Line(v.row) == strings.Repeat(ruleChar, 33)
+	}, "the answered barrier parks on the divider row")
+
+	screen := v.Screen()
+	assert.Equal(t, 1, countRules(screen))
+	assert.Equal(t, 1, strings.Count(screen, "charlie"), "history never doubled")
+	assert.Equal(t, 0, v.col)
+	assert.Equal(t, 34, u.Width(), "the renderer read the kernel's new size")
+}
+
+// TestPTYTeardown asserts what a terminal is left holding after Close: the
+// cursor back, bracketed paste off, and a second Close changing nothing.
+func TestPTYTeardown(t *testing.T) {
+	master, slave := openPTY(t)
+	setPTYSize(t, master, 60, 20)
+	v := newVT(60, 20)
+	u := newPTYUI(t, master, slave)
+	u.Print("alpha bravo")
+	drainPTY(t, master, v) // everything up to here is startup and paint
+
+	u.Close()
+	restore := readPTY(t, master)
+	assert.Contains(t, restore, showCursor)
+	assert.Contains(t, restore, bracketedPasteOff)
+
+	u.Close()
+	assert.Empty(t, readPTY(t, master), "the second Close writes nothing")
 }

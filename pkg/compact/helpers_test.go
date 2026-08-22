@@ -2,9 +2,12 @@ package compact
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/stretchr/testify/require"
 )
 
 // builders shared by every test file in the package.
@@ -50,4 +53,16 @@ func textOf(m llm.Message) string {
 		}
 	}
 	return ""
+}
+
+// loadFixtureBranch reads a committed transcript from the session package's
+// corpus. The path reaches across because both loaders are test-only, so the
+// fixtures cannot be shared through an exported helper.
+func loadFixtureBranch(t *testing.T, name string) []session.Entry {
+	t.Helper()
+
+	entries, warns, err := session.Read(filepath.Join("..", "session", "testdata", "branches", name))
+	require.NoError(t, err)
+	require.Empty(t, warns)
+	return session.Branch(entries, session.Head(entries))
 }

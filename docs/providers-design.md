@@ -563,6 +563,30 @@ handed to an injected `sleep`; the idle timeout fires through an injected
 `afterFunc` whose armed timer is handed to the firing goroutine over a channel,
 so the expiry is ordered against the read with no polling.
 
+**Cross-dialect parity** is pinned separately, in `contract_test.go`. The
+per-dialect suites above each prove one adapter reads its own vendor correctly;
+none of them prove the three agree. The contract matrix does: `testdata/contract/`
+holds each dialect's encoding of the *same* logical exchange, and every scenario
+asserts the normalised outcome — accumulated text, thinking, tool name and
+decoded arguments, stop reason, input and output tokens — is identical across
+anthropic, responses and chat-completions.
+
+Two things are deliberately **not** compared, because they differ by design and
+comparing them would encode a false contract:
+
+- **Event ordering.** Anthropic reports usage up front, chat-completions reports
+  it last. That is a real difference in when a number arrives, not in the
+  vocabulary, so the matrix compares the distinct set of event kinds and not the
+  sequence.
+- **Tool call ids.** `normalizeCallID` derives them per dialect on purpose. What
+  must hold is that a result still answers its call, which
+  `TestContractRequestParity` asserts on the built body of all three builders
+  using a deliberately awkward `call|item` id that every dialect has to rewrite.
+
+The contract fixtures are separate from the per-dialect ones on purpose: those
+are shared by many call sites with their own assertions, so editing them to make
+payloads line up would leak one test's needs into unrelated tests.
+
 Scenarios covered per dialect: text only, thinking plus text, single tool call,
 parallel tool calls, arguments split mid-token, usage-only final frame,
 mid-stream error, close mid-stream, and overflow classification. Plus the
@@ -622,6 +646,10 @@ Adding a provider that speaks chat-completions:
 7. Record fixtures and run them through the same `collect` helper every other
    provider uses. That the assertions differ only in content, never in shape, is
    the real proof that normalisation worked.
+
+A genuinely new **dialect** also adds a row to `contractDialects` and a
+`testdata/contract/<dir>` beside the others. A dialect that is not in the parity
+matrix is not known to agree with the rest.
 
 A genuinely new dialect is a new `Dialect`, a `*_wire.go`, an adapter
 implementing `Provider`, and a case in `factory.go`.

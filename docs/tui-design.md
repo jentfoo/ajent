@@ -1123,14 +1123,37 @@ Patterns:
   `require.Eventually` against a locked read of the emulator.
 - For end to end checks against a real terminal, `pty_test.go` (Linux) opens
   `/dev/ptmx`, runs the UI against the slave and drives an emulator from the
-  master. The kernel owns the size reports (`TIOCSWINSZ`) and the line
-discipline owns the bytes; because the slave is not a controlling terminal no
-SIGWINCH arrives, so the test calls `u.resize()` the way `watchSignals` would.
-`TestPTYResizeStrandsNoRow` narrows to 21 and widens to 80 asserting one
-divider, never-doubled history and the park each step. This is where reflow
-cases the emulator can only approximate are checked; a manual `script -qec
-'...' /dev/null` run plus an external `stty -F /dev/pts/N cols 120 rows 30`
-still verifies what we emit over ssh, where reply latency widens the window.
+  master. Almost everything there is real: `term.MakeRaw` is a real line
+  discipline change, keystrokes written to the master really cross the kernel,
+  `term.GetSize` really reads `TIOCGWINSZ`, and `Close` restoring the termios is
+  read back with `TCGETS`. **Only the origin of SIGWINCH is not** — the slave is
+  not a controlling terminal, so nothing is delivered and the test raises the
+  signal on itself with `syscall.Kill`, which drives the whole real
+  `watchSignals` chain (debounce, `probeResize`, the DSR barrier, the grace, the
+  redraw). Kernel-originated delivery is the kernel's contract, not ours; making
+  it real would need a re-exec'd child with `Setsid`/`Setctty`, which buys that
+  one fact for a cross-process readiness protocol.
+
+  The barrier is what makes the resize path assertable without a sleep: the
+  emulator counts outgoing `CSI 5n` in `vt.dsrCount`, so the test waits for the
+  probe, writes the `CSI 0n` reply into the master, then waits for the settled
+  redraw. `eventuallyPTY` polls by pumping the master with a short read
+  deadline, on the test goroutine, so the emulator is never read and written at
+  once.
+
+  `TestPTYResizeStrandsNoRow` narrows to 21 and widens to 80 asserting one
+  divider, never-doubled history and the park each step; `TestPTYSignalResize`
+  does the same through a real signal; `TestPTYKeystrokes` proves raw mode by
+  the absence of a kernel echo; `TestPTYRawMode` and `TestPTYTeardown` pin the
+  termios round trip and the `showCursor`/`bracketedPasteOff` restore.
+
+  **No pty test may call `t.Parallel()`**: `signal.Notify` is process wide, so
+  two live UIs would answer each other's SIGWINCH. Only a UI built through `New`
+  runs `watchSignals`, and every such test lives in that file.
+
+  A manual `script -qec '...' /dev/null` run plus an external `stty -F
+  /dev/pts/N cols 120 rows 30` still verifies what we emit over ssh, where reply
+  latency widens the window.
 
 ## Traps
 

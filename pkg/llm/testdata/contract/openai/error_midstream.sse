@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_ce","model":"gpt-5","status":"in_progress"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_ce","role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","output_index":0,"delta":"partial"}
+
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_ce","status":"failed","error":{"code":"server_error","message":"upstream exploded"}}}
+

@@ -357,6 +357,37 @@ Repository style this package follows (shared with `pkg/tui` and `pkg/agent`):
   and timestamps are stable, plus an end-to-end fork test that rewinds onto an
   earlier message and asserts both branches survive.
 
+## The frozen corpus
+
+`testdata/branches/` holds three transcripts — a long tool-heavy branch, a fork
+with two tips, and one carrying a compaction entry with a full `Reduce` plan.
+They were written by an earlier build and are never regenerated.
+
+That is the whole point. Every other test in this package writes a transcript to
+a `t.TempDir()` and reads it back in the same run, so renaming a persisted JSON
+field moves both sides together and the suite stays green while every session
+already on disk stops loading. Renaming `Stub.callId` and `Reduce.stripThinking`
+passes the entire rest of the repository's tests and fails only
+`TestFixtureSchema`.
+
+So: **a change to any `json:` tag under `pkg/session` is a migration, not a
+rename.** If the corpus fails, the question is what happens to users' saved
+sessions, not how to update the fixture. Regenerating it to make a test pass
+throws away the only thing that was guarding the format.
+
+Assertions on assembled context use a `digest` helper — one line per message as
+`role|blockkinds|text-prefix` — compared against an inline `[]string`. Whole
+shape, so a silently added or dropped message fails, but the expectation lives
+in the test where a reviewer can judge it. Deliberately not golden files: a
+rendered blob makes `-update` a rubber stamp, because nobody can tell a safe
+regeneration from a regression.
+
+`pkg/compact` reads the same corpus across the directory boundary (both loaders
+are test-only, so the fixtures cannot be shared through an exported helper).
+Its `plan_replays_to_the_measured_size` case is the one that matters: `Before`
+and `After` are measured through the same `ContextMessages` the next request is
+built from, so a plan recorded differently from how it was measured fails.
+
 ## Extending
 
 - **New entry type**: add a `Type` constant, its payload struct in `entry.go`,
