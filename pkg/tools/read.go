@@ -71,16 +71,24 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	if start < 1 {
 		start = 1
 	}
-	out, truncatedAt := numberLines(data, start, n)
+	out, lastEmitted, truncatedAt := numberLines(data, start, n)
 
 	var b strings.Builder
 	b.WriteString(out)
 	if truncatedAt > 0 {
 		fmt.Fprintf(&b, "\n... truncated at line %d, read again with offset=%d\n", truncatedAt, start+n)
 	}
+	content := b.String()
+
+	// Display shows which section was read; Content stays the bare block so the
+	// model reads no path it already supplied.
+	display := content
+	if lastEmitted > 0 {
+		display = fmt.Sprintf("%s:%d-%d\n", relTo(t.policy.Cwd, full), start, lastEmitted) + content
+	}
 
 	return agent.ToolResult{
-		Content: llmBlock(b.String()),
-		Display: out, // TUI shows the head and counts the rest; Content stays full
+		Content: llmBlock(content),
+		Display: display,
 	}, nil
 }

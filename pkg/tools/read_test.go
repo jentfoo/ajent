@@ -22,8 +22,8 @@ func TestReadHappyPath(t *testing.T) {
 	out := textOf(res)
 	assert.Contains(t, out, "     1\tline one") // line-numbered output
 	assert.Contains(t, out, "     2\tline two")
-	// Display is the content itself; the TUI elides it to a head plus summary.
-	assert.Equal(t, res.Display, textOf(res))
+	// Display adds a section header naming the file and range; Content stays bare.
+	assert.Equal(t, res.Display, "a.txt:1-2\n"+textOf(res))
 }
 
 func TestReadDisplayCountsHonorOffsetAndLimit(t *testing.T) {
@@ -41,9 +41,11 @@ func TestReadDisplayCountsHonorOffsetAndLimit(t *testing.T) {
 	out := textOf(res)
 	assert.Contains(t, out, "     2\tline 2")
 	assert.NotContains(t, out, "line 5") // limit respected
-	// Display mirrors the line-numbered block (no truncation marker); paging honored.
+	// Display mirrors the line-numbered block (no truncation marker); paging honored,
+	// with a header naming the exact range read.
+	assert.Contains(t, res.Display, "big.txt:2-4\n")
 	assert.Contains(t, res.Display, "     2\tline 2")
-	assert.NotContains(t, res.Display, "... truncated at line 4")
+	assert.NotContains(t, res.Display, "... truncated at line 5")
 }
 
 func TestReadMissingFileIsErrorResult(t *testing.T) {
@@ -86,6 +88,8 @@ func TestReadTruncationMarkerNamesNextOffset(t *testing.T) {
 	res := e.readExec(t.Context(), `{"path":"big.txt","limit":200}`)
 	assert.False(t, res.IsError)
 	out := textOf(res)
+	// the Display header names exactly what was shown, even when cut short
+	assert.Contains(t, res.Display, "big.txt:1-200\n")
 	assert.Contains(t, out, "... truncated at line 200, read again with offset=201")
 }
 

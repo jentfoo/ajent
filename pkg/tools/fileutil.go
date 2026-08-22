@@ -79,20 +79,25 @@ func hasImageSig(data []byte) bool {
 }
 
 // numberLines renders data as line-numbered text starting at the given 1-based
-// offset, capping each line and the total to limit. It reports truncatedAt (the
-// next offset) when more lines remain past what was emitted.
-func numberLines(data []byte, start, limit int) (out string, truncatedAt int) {
+// offset, capping each line and the total to limit. It reports lastEmitted (the
+// highest line rendered) and truncatedAt (the next offset) when more lines remain
+// past what was emitted.
+func numberLines(data []byte, start, limit int) (out string, lastEmitted, truncatedAt int) {
 	lines := bytes.Split(bytes.ReplaceAll(data, []byte{'\r'}, nil), []byte{'\n'})
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 { // drop the element a trailing newline leaves
+		lines = lines[:len(lines)-1]
+	}
+	total := len(lines)
 	var b strings.Builder
-	end := min(start+limit-1, len(lines))
+	end := min(start+limit-1, total)
 	if end < start { // offset past EOF
-		return "", 0
+		return "", 0, 0
 	}
 	for i := start - 1; i < end; i++ {
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, capLine(string(lines[i])))
 	}
-	if end < len(lines) { // more lines remain past what was emitted
-		return b.String(), end
+	if end < total { // more lines remain past what was emitted
+		return b.String(), end, end
 	}
-	return b.String(), 0
+	return b.String(), end, 0
 }
