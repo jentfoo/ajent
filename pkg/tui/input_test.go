@@ -246,7 +246,8 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, key{typ: keyEnter}, <-r.keys)
 
 		require.NoError(t, pw.Close())
-		assert.Equal(t, keyEOF, (<-r.keys).typ)
+		_, ok := <-r.keys // stream end emits no editing keystroke, just a channel close
+		assert.False(t, ok)
 	})
 	t.Run("splits_across_reads", func(t *testing.T) {
 		pr, pw := io.Pipe()

@@ -433,6 +433,10 @@ since a paste body can legitimately stall mid-arrival; and when it does fire on 
 truncated sequence, the whole remaining buffer is dropped rather than re-decoded as
 runes — only a genuine lone `Esc` (buffer length 1) is reported.
 
+A closed input stream emits no editing keystroke. Only the literal Ctrl+D byte
+(`0x04`) decodes to `keyEOF`, so an external EOF never races with typed text or
+mutates the buffer; readers stop on the channel close alone.
+
 ## Wrapping policy
 
 Every committed line carries a `lineFlow`, set by whoever produced it rather than

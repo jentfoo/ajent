@@ -396,7 +396,10 @@ type readResult struct {
 	err  error
 }
 
-// run decodes until the source ends, then emits keyEOF and closes keys.
+// run decodes until the source ends, then closes keys. A genuine Ctrl+D byte
+// (0x04) is decoded as keyEOF; a closed input stream emits no keystroke: readers
+// stop on the channel close alone, so an external EOF never races with typed
+// input as an editing key.
 //
 // A lone escape byte is indistinguishable from the start of a longer sequence
 // until either more bytes arrive or enough time passes, so it is held for
@@ -453,9 +456,8 @@ func (r *inputReader) run() {
 			}
 			buf = append(buf, res.data...)
 			if res.err != nil {
-				r.flush(buf)
-				r.keys <- key{typ: keyEOF}
-				return
+				r.flush(buf) // deliver undecoded runes read up to the close
+				return       // defer closes keys; stream end emits no editing keystroke
 			}
 		case <-pendingEsc:
 			if len(buf) == 1 {

@@ -182,6 +182,16 @@ func TestUIInputEditing(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, ControlEOF, <-u.Controls())
 	})
+	t.Run("ctrl_d_deletes_forward", func(t *testing.T) {
+		_, err := io.WriteString(pw, "abc")
+		require.NoError(t, err)
+		waitLine(1, promptFirst+"abc")
+
+		// move the caret before 'c', then Ctrl+D deletes forward, not EOF.
+		_, err = io.WriteString(pw, "\x1b[D\x04")
+		require.NoError(t, err)
+		waitLine(1, promptFirst+"ab")
+	})
 	require.NoError(t, pw.Close())
 }
 
