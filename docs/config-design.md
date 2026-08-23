@@ -36,8 +36,8 @@ The schema is a single typed settings root whose fields mirror the config blocks
 the default model key, reasoning level/retain as text names, the agent turn-loop
 options (an optional per-turn step cap), raw JSON passthroughs for providers and
 per-model overrides (folded over `models.json` by `pkg/llm`, never typed here),
-and typed blocks for tools, permissions, compaction, sub-agent settings, UI
-render/palette, and extensions.
+and typed blocks for tools, permissions, compaction, sub-agent settings, and UI
+render/palette.
 
 Enum-valued keys are stored as their text names and parsed by the caller
 (`llm.ParseLevel`, `llm.ParseRetain`, `tui.ParseMode`, `permit.ParseMode`).

@@ -17,7 +17,6 @@ type Settings struct {
 	Compaction  Compaction      `json:"compaction,omitzero"`
 	Subagent    Subagent        `json:"subagent,omitzero"` // research sub-agents
 	UI          UI              `json:"ui,omitzero"`
-	Extensions  Extensions      `json:"extensions,omitzero"` // loaded by the extension host
 }
 
 // Reasoning is the session reasoning choice. Level and Retain are text names.
@@ -84,12 +83,6 @@ type Permissions struct {
 	Mode           string   `json:"mode,omitempty"`          // permission mode name
 	SafeCommands   []string `json:"safeCommands,omitzero"`   // exact tool names / bash lines auto-allowed as read-only
 	DeniedCommands []string `json:"deniedCommands,omitzero"` // exact tool names / bash lines always denied, never prompted
-}
-
-// Extensions configures extension loading.
-type Extensions struct {
-	Dir      string   `json:"dir,omitempty"`
-	Disabled []string `json:"disabled,omitzero"`
 }
 
 // defaultsJSON is layer one, the compiled-in configuration. Keeping it a JSON
