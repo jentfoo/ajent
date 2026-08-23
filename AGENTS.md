@@ -29,6 +29,15 @@ sessions and compaction all depend on it), and several reference the prompt surf
 collected in `prompt-design.md`. When a change crosses boundaries, read — and if
 needed update — every document that names the affected package.
 
+The README carries the other half of the contract: what a user actually touches.
+It documents the **user-facing surface** — model configuration (`~/.ajent/models.json`),
+the `~/.ajent/config.json` options and their environment bindings, and the
+command-line flags. Unlike the design docs it is prose for humans, not invariants,
+but it drifts just as easily: **any change to a flag, config key, model/provider
+option or environment variable must update README.md in the same change**. The
+design documents say how something works; the README says what users can set. A
+flag added without its `--help` and README entry is unfinished.
+
 | Document | Package(s) / scope | What it contains |
 |---|---|---|
 | `agent-loop-design.md` | `pkg/agent` | The turn loop (prompt → stream → tool-call → repeat), single-owner `State`, the event sink front ends adapt onto, interruption as a first-class operation. Reference for how tools, sessions and compaction build on it. |
