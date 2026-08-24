@@ -126,6 +126,19 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	}
 	c.reg.SetActive(m)
 	c.st.Model = m
+
+	// keep the stored reasoning override untouched so a temporary switch does not lose
+	// the user's choice; recompute only the live effective level for display (buildRequest
+	// already clamps requests) from the raw preference, restoring it on switching back.
+	if c.set != nil {
+		lvl := llm.LevelMedium
+		if parsed, ok := llm.ParseLevel(c.set.Settings().Reasoning.Level); ok {
+			lvl = parsed
+		}
+		c.st.Reasoning.Level = llm.ClampLevel(m, lvl)
+		showReasoningIndicator(c.ui, c.set, c.st)
+	}
+
 	// rebase the ledger's window and reserve onto the new model so a mid-session
 	// /model rescales the bar immediately rather than on the next turn.
 	t := c.st.Tokens
@@ -159,6 +172,7 @@ func (c *uiConsole) SetModel(m llm.Model) {
 		}
 	}
 	c.ui.Notify("model: "+m.Key(), tui.LevelInfo)
+
 	if c.rec != nil {
 		c.rec.ModelChange(m, "command")
 	}

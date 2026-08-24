@@ -200,6 +200,55 @@ func TestUIConsoleSetModelPersistsUserConfig(t *testing.T) {
 	assert.Equal(t, "p/picked", reloaded.Settings().Model)
 }
 
+// TestUIConsoleSetModelPreservesReasoningIntent verifies a mid-session /model
+// switch clamps only the live effective reasoning level for display, leaving the
+// stored override untouched so the user's choice survives switching back.
+func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
+	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+	home := t.TempDir()
+	t.Setenv("AJENT_HOME", home)
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ui.Close()
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	reasoning := llm.Model{
+		Provider: "p", ID: "claude",
+		Caps: llm.Capabilities{Reasoning: true},
+	}
+	st := &agent.State{Model: reasoning, Tokens: tokens.New(reasoning)}
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+
+	// the user's explicit choice persists as a session override (mirrors /reasoning).
+	c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
+
+	// switching to a model that cannot reason clamps only the live effective level.
+	c.SetModel(llm.Model{Provider: "p", ID: "small"})
+	assert.Equal(t, llm.LevelOff, st.Reasoning.Level)
+	rl, layer, ok := set.Explain("reasoning.level")
+	require.True(t, ok)
+	assert.Equal(t, "session", layer)
+	assert.JSONEq(t, `"high"`, string(rl)) // stored intent survives
+
+	// switching back restores the user's original choice.
+	c.SetModel(reasoning)
+	assert.Equal(t, llm.LevelHigh, st.Reasoning.Level,
+		"the raw preference must be re-read on switch-back, not left clamped down")
+}
+
 // readFileString returns a file's contents as text for assertions.
 func readFileString(t *testing.T, path string) string {
 	t.Helper()

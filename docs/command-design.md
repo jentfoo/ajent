@@ -117,8 +117,9 @@ sent this session, and exit.
 
 `main.go` implements it once (`uiConsole`) over the objects the driver already
 holds. `SetModel` records a `model_change` entry the old bespoke switch never
-did, and persists the selection to the user config so a fresh start keeps it
-(see config-design.md's Model section); `ToolsChanged` records a `setting_change("tools.enabled", names)` (dotted
+did, persists the selection to the user config so a fresh start keeps it (see
+config-design.md's Model section), and recomputes only the live effective reasoning
+level for display — leaving the stored override untouched so intent survives switching back; `ToolsChanged` records a `setting_change("tools.enabled", names)` (dotted
 config key) so resume keeps the set. The three interaction methods are one-line
 forwarders to `tui.SelectContext`/`ConfirmContext`/`InputContext`, and the two
 settings methods delegate to the resolved `*config.Set`. Each mutator also calls
