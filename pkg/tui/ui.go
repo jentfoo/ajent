@@ -122,6 +122,7 @@ type UI struct {
 
 	completer     Completer           // nil disables the completion overlay
 	completion    *completionOverlay  // active completion state, nil when closed
+	completionSeq int                 // generation guard for async path queries
 	historySearch func() []SearchItem // nil disables Ctrl+R history search
 	search        *searchOverlay      // active search state, nil when closed
 

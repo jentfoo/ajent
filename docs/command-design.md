@@ -304,8 +304,15 @@ it returns where accepted text should start replacing from plus the candidate
 items. It is called under the UI lock from the key goroutine, so it must not block
 or call back into the UI.
 
-The path source keeps a cached index for exactly this reason — `Complete` may
-not block.
+A path source may take time (a slow directory listing), so `@` queries are
+routed off the key loop: a completer that implements `AsyncPathCompleter`
+(`IsAsyncPath`) has its path queries run in a goroutine and delivered when ready,
+so typing stays free while results are pending. A generation counter drops a
+result superseded by newer typing — if the user out-races a listing to type
+another directory, that stale result is discarded rather than shown; synchronous
+completion also bumps the generation so a slow listing returning after the cursor
+leaves `@` cannot reopen an overlay for dead text. Command and argument completion
+keep the synchronous contract; only path queries go async.
 
 ### Accept rules
 
@@ -371,19 +378,22 @@ measurement rather than appending a second one.
 
 ### Index (`refs/index.go`)
 
-`Index` enumerates files and directories once and refreshes on a TTL (5 s),
-since `Complete` cannot block. Enumeration reuses the tool `find`'s approach:
-`git ls-files -co --exclude-standard` in a repo for true `.gitignore`
-semantics (directory entries derived from each listed file's ancestors),
-`filepath.WalkDir` with the existing skip list otherwise. A `~` or `~/…` query
-completes within the user's home directory instead, offered back with the leading
-`~` kept in each candidate (so accepting a home path inserts one that expands).
-Home completion lists only the single directory under the cursor — never a
-recursive walk of the whole tree, which is what made `@~` block input on a large
-home; drilling deeper re-lists one level at a time. Ranking is (a) already in the conversation
-(`Tracker.Records()`), (b) recent mtime, (c) fuzzy score (reusing
-`tui.MatchScore` rather than a second implementation). Directories complete with
-a trailing `/` and keep completing.
+`Index` never walks the workspace tree: every `@` query lists only the single
+directory under the cursor, so completion is one cheap `ReadDir` however large or
+slow the filesystem. A bare `@` (or a partial name like `@ma`) offers the root's
+immediate children; drilling through a trailing `/` (`@src/`, `@pkg/r…`) descends
+one level at a time — never a recursive walk, which is what made `@` block input
+after typing in a large repo. The skip list (`node_modules`, `.venv`, VCS dirs)
+still applies per directory. A `~` or `~/…` query completes within the user's
+home directory instead, offered back with the leading `~` kept in each candidate
+(so accepting a home path inserts one that expands); a `./` query keeps its prefix,
+and an absolute `/…` path completes anywhere on the filesystem — all three keep
+their leading form so accepting inserts a usable path. Because a listing may still
+take time on a slow mount, `@` queries run off the key loop (see Completion
+overlay): typing stays free and only the newest query's result is shown. Ranking
+is (a) already in the conversation (`Tracker.Records()`), (b) recent mtime,
+(c) fuzzy score (reusing `tui.MatchScore` rather than a second implementation).
+Directories complete with a trailing `/` and keep completing.
 
 ### Measure (`tools/measure.go`)
 

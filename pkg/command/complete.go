@@ -107,6 +107,23 @@ func (c *Completer) commandArgComplete(cells []string, pos, ls int) (int, []tui.
 	return argStart, out
 }
 
+// IsAsyncPath reports whether the token under pos is an @ path query. The TUI
+// runs such queries off the key loop so a slow directory listing never blocks
+// typing; command and argument completion stay synchronous.
+func (c *Completer) IsAsyncPath(text string, pos int) bool {
+	if c.paths == nil || pos <= 0 {
+		return false
+	}
+	cells := tui.GraphemeCells(text)
+	n := len(cells)
+	p := min(pos, n)
+	tokStart := p
+	for tokStart > 0 && !isTokenBreakCell(cells[tokStart-1]) {
+		tokStart--
+	}
+	return tokStart < n && cells[tokStart] == "@"
+}
+
 // pathComplete offers workspace paths after @.
 func (c *Completer) pathComplete(cells []string, pos, start int) (int, []tui.Completion) {
 	if c.paths == nil || start >= len(cells) {

@@ -3,6 +3,7 @@ package refs
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,6 +35,19 @@ func TestCandidates(t *testing.T) {
 		assert.Equal(t, []string{"main.go", "src/"}, labelsOf(cands))
 	})
 
+	t.Run("never_walks_the_tree", func(t *testing.T) {
+		// a bare @ lists only the cwd's immediate children: deep files must not
+		// surface until the user drills into their directory.
+		dir := t.TempDir()
+		writeTree(t, dir, "main.go", "deep/one/two/three.txt")
+		idx := NewIndex(dir, tools.PathPolicy{})
+
+		assert.Equal(t, []string{"deep/", "main.go"}, labelsOf(idx.Candidates("", nil)))
+		// drilling one level at a time reaches the deep file.
+		sub := idx.Candidates("deep/one/two/th", nil)
+		assert.Equal(t, []string{"deep/one/two/three.txt"}, labelsOf(sub))
+	})
+
 	t.Run("directory_drills_deeper", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "src/main.go", "src/cmd/run.go")
@@ -56,6 +70,38 @@ func TestCandidates(t *testing.T) {
 
 		sub := idx.Candidates("pkg/r", nil)
 		assert.Equal(t, []string{"pkg/refs/"}, labelsOf(sub))
+	})
+
+	t.Run("dot_prefix_keeps_slash", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "main.go", "src/main.go", "src/cmd/run.go")
+		idx := NewIndex(dir, tools.PathPolicy{})
+
+		top := idx.Candidates("./", nil)
+		assert.Equal(t, []string{"./main.go", "./src/"}, labelsOf(top))
+
+		drill := idx.Candidates("./src/m", nil)
+		assert.Equal(t, []string{"./src/main.go"}, labelsOf(drill))
+	})
+
+	t.Run("absolute_path_keeps_root_slash", func(t *testing.T) {
+		dir := t.TempDir() // workspace root; a sibling lives alongside it
+		writeTree(t, dir, "main.go")
+		parent := filepath.Dir(dir)
+		baseName := filepath.Base(dir)
+		idx := NewIndex(dir, tools.PathPolicy{})
+
+		drill := idx.Candidates(filepath.Join(dir, "ma"), nil)
+		assert.Equal(t, []string{filepath.Join(dir, "main.go")}, labelsOf(drill))
+
+		// a trailing slash lists that directory's immediate children.
+		children := idx.Candidates(dir+"/", nil)
+		assert.Equal(t, []string{dir + "/main.go"}, labelsOf(children))
+
+		// the parent dir shows the workspace as one completable sibling.
+		siblings := labelsOf(idx.Candidates(parent+"/", nil))
+		require.True(t, slices.ContainsFunc(siblings,
+			func(l string) bool { return strings.HasSuffix(l, baseName+"/") }))
 	})
 
 	t.Run("excludes_skipped_dirs", func(t *testing.T) {
