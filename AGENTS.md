@@ -45,7 +45,7 @@ flag added without its `--help` and README entry is unfinished.
 | `tools-design.md` | `pkg/tools` (+ `pkg/agent.Tool`) | The `Tool` interface and registry, built-in tools, and shared infra: path policy, read tracking, output limits, the guard chain. |
 | `session-design.md` | `pkg/session`, `cmd/ajent` resume | Append-only JSONL transcript as source of truth; entry/parent tree, branching, rewind/fork, resume (`--resume`, `--continue`). Schema and replay rules. |
 | `compaction-design.md` | `pkg/compact` (+ session) | Staged context reduction: cheap structural cuts first (failed/superseded calls, elision), an LLM summary only when those are insufficient; the measured `Reduce` plan recorded on a compaction entry and replayed. Uses `prompt-design.md` summaries. |
-| `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager, `@`-path expansion with auto-read and gitignore-aware completion. |
+| `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager (`!!` runs excluded from context), `@`-path expansion with auto-read and gitignore-aware completion. |
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
@@ -132,8 +132,8 @@ applies, so each run recomputes cumulatively over the whole branch.
 
 `main.go` classifies each submitted line with `command.ParseLine` (prompt / `/command`
 / `!shell`) and feeds commands and prompts to a single **prompt pump** goroutine that
-owns ordering; shell lines go straight to the non-blocking `Stager`. Prompts flush the
-stage, expand `@` refs, then steer or start a turn.
+owns ordering; shell lines (`!cmd`, excluded `!!cmd`) go straight to the non-blocking
+`Stager`. Prompts flush the stage, expand `@` refs, then steer or start a turn.
 
 A one-shot run takes the other path: `-p/--prompt` branches in `main.go` before
 `tui.New` into `runHeadless` (`oneshot.go`), which wires the same loop, session,
@@ -158,7 +158,7 @@ to allow only what is **verifiably** read-only: built-ins (`read`/`grep`/`find`/
 name, non-built-in tools on declared `Registry.ReadOnly` metadata (MCP hint / config
 globs), bash through a quote-aware analyser. Network commands are never read-only.
 Four modes (`allow-all`, the default `allow-read`, `auto`, `block-all`) cycle with
-Shift+Tab; `!` shell lines are exempt in every mode via `tools.WithUserInitiated`. A
+Shift+Tab; `!`/`!!` shell lines are exempt in every mode via `tools.WithUserInitiated`. A
 doomed edit is detected by a dry run of the real apply path so it never prompts. The
 model classifier (`auto`) runs concurrently with an already-open dialog and its verdict
 never enters the session.

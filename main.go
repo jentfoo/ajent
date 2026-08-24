@@ -591,7 +591,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 			switch line.Kind {
 			case command.KindShell:
-				stager.Run(line.Rest)
+				stager.Run(line.Rest, line.Excluded)
 			case command.KindCommand:
 				pump <- pumpLine{kind: command.KindCommand, rest: line.Rest}
 			default:

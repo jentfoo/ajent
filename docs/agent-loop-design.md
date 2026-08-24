@@ -252,10 +252,10 @@ Dispatch rules:
 
 ### Host-run tool calls
 
-Not every tool call comes from the model. A staged `!` line, an `@` reference and
-`/init`'s project survey all run a real tool and place the result in context as
-though the model had called it. `InjectPair(ctx, tool, sink, call, label)` is that
-one path: it executes the call through `NewOutput(sink, callID)` so output streams
+Not every tool call comes from the model. An `@` reference and `/init`'s project
+survey both run a real tool and place the result in context as though the model
+had called it. `InjectPair(ctx, tool, sink, call, label)` is that one path: it
+executes the call through `NewOutput(sink, callID)` so output streams
 and renders exactly as an agent-run tool does, turns a Go error into an error
 `ToolResult` rather than losing it, and returns the assistant call and user result
 messages for `Input.Before` alongside the raw result (whose `Details` the caller
@@ -266,6 +266,10 @@ The **call id is the caller's** and must be unique for the life of the session:
 `Before` messages are appended to `State` and persisted, and Anthropic rejects a
 request whose `tool_use` ids repeat — permanently, on every later turn. A caller
 that can run twice in one session (`/init`) therefore numbers its runs.
+
+A staged `!` line is **not** an `InjectPair` caller: it stages a user-authored
+text message ("User Ran:" / "Output:") via `Input.Before`, not a synthetic tool-call
+pair, so no unique-id contract applies to it.
 
 ## Steering and follow-up
 
@@ -282,6 +286,9 @@ Two kinds of mid-turn input:
   steers, permission-barrier notes) rather than a typed prompt. It rides onto the
   appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R / up
   arrow) can exclude it; injected messages still appear in assembled context.
+- Every `Input.Before` message is appended with the **injected** flag set: by
+definition Before carries system-staged context (`@` reads, `/init`'s survey,
+staged shell results), never a typed prompt, so recall excludes all of it.
 - An injected steer with visible text is echoed to the sink (`UserPrompt`) when it
   lands — it has no submission echo, unlike typed prompts. Tool-result folds render
   through their own path.

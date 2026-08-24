@@ -64,6 +64,11 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 					foldResults(pending, m.Content, sink)
 					continue
 				}
+				// system-injected context (a staged `User Ran:` result or survey text) is not a
+				// typed prompt: it never opens or echoes as its own turn on replay.
+				if md.Injected {
+					continue
+				}
 				endTurn() // close the previous turn with its accumulated state first
 				turnUsage = llm.Usage{}
 				lastStop = llm.StopUnknown

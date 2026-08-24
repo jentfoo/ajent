@@ -76,6 +76,26 @@ governs its assembly and use.
 | Sub-agent prompt | the child contract appended as a system snippet to every investigation, plus the empty-summary nudge |
 | Plan workflow kickoffs | the planning contract, the implementation kickoff, the review kickoff and the retry prompt |
 | Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
+| Staged shell results | the `!` user message: `User Ran:` / `Output:` ahead of your next prompt; `!!` sends nothing |
+
+## Staged shell results
+
+The `!cmd` result lands as a single **user-role** text message staged via
+`Input.Before`, so it reads as the human's own action rather than an agent tool
+call. Its exact format is:
+
+```
+User Ran: <command>
+
+Output:
+<combined stdout+stderr, or "(no output)" when empty>
+```
+
+The body reuses the real `bash` tool's result text verbatim — status prefix,
+interruption marker, timeout note and truncation spill pointer all come from the
+tool path itself, so what the model sees is byte-for-byte honest about how the
+command ended. The user role plus the `User Ran:` voice *is* the provenance marker;
+no separate metadata rides along. A `!!` run sends nothing to the model.
 
 ---
 

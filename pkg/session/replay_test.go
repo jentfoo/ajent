@@ -120,6 +120,14 @@ func resultMessageErr(id, callID string) Entry {
 	return Entry{ID: id, Type: TypeMessage, Data: mustJSON(m)}
 }
 
+func injectedUser(id, text string) Entry {
+	return Entry{ID: id, Type: TypeMessage,
+		Data: mustJSON(MessageData{
+			Injected: true,
+			Message:  llm.Text(llm.RoleUser, text),
+		})}
+}
+
 func TestReplay(t *testing.T) {
 	t.Parallel()
 
@@ -221,5 +229,18 @@ func TestReplay(t *testing.T) {
 			[]string{"start:first", "user:first", "text:one", "end_text", "turn_end",
 				"start:second", "user:second", "text:two", "end_text", "turn_end"},
 			s.calls)
+	})
+
+	t.Run("injected_user_message_skipped", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			msgUser("m1", llm.Text(llm.RoleUser, "real prompt")),
+			assistantText("a1", "one"),
+			injectedUser("i1", "User Ran: echo hi\n\nOutput:\none"), // staged `!` result
+		}
+		s := &replaySink{}
+		Replay(branch, s, ReplayOptions{})
+		// the injected Ran message neither opens a turn nor echoes as typed text
+		assert.Equal(t, []string{"start:real prompt", "user:real prompt", "text:one", "end_text", "turn_end"}, s.calls)
 	})
 }

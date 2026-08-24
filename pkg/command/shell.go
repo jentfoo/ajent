@@ -4,25 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// shellProvenance rides in a ToolResultBlock.Details so the token counter can
-// attribute staged results and prompt assembly can mark them injected.
-type shellProvenance struct {
-	Source string    `json:"source"` // "shell"
-	TS     time.Time `json:"ts"`
-}
-
 // Stager runs `!` shell commands directly through the real bash tool path and
-// stages their call + result pair ahead of the next user message.
+// stages their output ahead of the next user message as a single user-authored
+// text ("User Ran: <cmd> / Output:"), so it reads as the human's own action.
 type Stager struct {
 	reg  *tools.Registry
 	sink agent.Sink
@@ -32,18 +27,18 @@ type Stager struct {
 	nextID int
 }
 
-// stageRun is one staged shell command. Its call + result pair becomes two
-// messages in Flush; the assistant message holds the tool call, the user
-// message holds the result, so the transcript stays well formed.
+// stageRun is one staged shell command. Its finished result becomes one user
+// message in Flush; an excluded run's output goes nowhere.
 type stageRun struct {
-	id     string
-	cmd    string
-	label  string
-	cancel context.CancelFunc
+	id       string
+	cmd      string
+	label    string
+	cancel   context.CancelFunc
+	excluded bool
 
 	// result written by the goroutine once the tool completes
 	done   chan struct{}
-	result llm.ToolResultBlock
+	result agent.ToolResult
 }
 
 // NewStager returns a stager that runs commands through reg's bash tool and
@@ -55,7 +50,9 @@ func NewStager(reg *tools.Registry, sink agent.Sink) *Stager {
 // Run starts cmd executing immediately. A disabled bash tool is a refusal
 // notice rather than a run, matching the /tools widening rule; an empty command
 // produces a notice and runs nothing. Run never blocks on the command itself.
-func (s *Stager) Run(cmd string) {
+// An excluded run (`!!`) still displays but its output never reaches context or
+// the transcript.
+func (s *Stager) Run(cmd string, excluded bool) {
 	if strings.TrimSpace(cmd) == "" {
 		s.sink.Notice("empty shell command", agent.LevelWarn)
 		return
@@ -70,12 +67,17 @@ func (s *Stager) Run(cmd string) {
 	id := fmt.Sprintf("shell-%d", s.nextID)
 	// a `!` line is the human's own shell; mark it so the permission gate exempts it.
 	runCtx, cancel := context.WithCancel(tools.WithUserInitiated(context.Background()))
+	label := "! " + strutil.FirstLine(cmd)
+	if excluded {
+		label = "!! " + strutil.FirstLine(cmd)
+	}
 	run := &stageRun{
-		id:     id,
-		cmd:    cmd,
-		label:  "! " + strutil.FirstLine(cmd),
-		cancel: cancel,
-		done:   make(chan struct{}),
+		id:       id,
+		cmd:      cmd,
+		label:    label,
+		cancel:   cancel,
+		excluded: excluded,
+		done:     make(chan struct{}),
 	}
 	s.runs = append(s.runs, run)
 	s.mu.Unlock()
@@ -97,14 +99,7 @@ func (s *Stager) Run(cmd string) {
 				res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
 			}
 		}
-		res.Details = shellProvenance{Source: "shell", TS: time.Now()}
-		run.result = llm.ToolResultBlock{
-			CallID:  id,
-			Content: res.Content,
-			Display: res.Display,
-			Details: res.Details,
-			IsError: res.IsError,
-		}
+		run.result = res
 		done(res)
 	}()
 }
@@ -113,14 +108,7 @@ func (s *Stager) Run(cmd string) {
 func (s *Stager) Pending() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, r := range s.runs {
-		select {
-		case <-r.done:
-		default:
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.runs, func(r *stageRun) bool { return !isDone(r.done) })
 }
 
 // Cancel interrupts every still-running staged command. A cancelled command
@@ -130,44 +118,77 @@ func (s *Stager) Cancel() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.runs {
-		select {
-		case <-r.done:
-		default:
+		if !isDone(r.done) {
 			r.cancel()
 		}
 	}
 }
 
-// Flush waits for every staged command to finish, in submission order, and
-// returns one assistant + user message pair per run. Building the next model
-// prompt is the only caller that waits, so "the turn is held until the pending
-// command finishes" falls out of Flush blocking.
+// Flush returns one user message per included staged command, staging each
+// completed run's output ahead of the next prompt. Excluded runs never produce a
+// message: finished ones are dropped outright and still-running ones stay in
+// s.runs so Pending/Cancel keep tracking them — their output goes nowhere, so
+// Flush must not hold the next prompt hostage waiting for them.
 func (s *Stager) Flush(ctx context.Context) []llm.Message {
 	s.mu.Lock()
-	runs := s.runs
-	s.runs = nil
+	// included runs are taken out for flushing; excluded finished ones drop, and
+	// still-running excluded stay so Pending/Cancel keep tracking them.
+	included := bulk.SliceFilterInto(nil, func(r *stageRun) bool { return !r.excluded }, s.runs)
+	s.runs = bulk.SliceFilterInPlace(func(r *stageRun) bool { return r.excluded && !isDone(r.done) }, s.runs)
 	s.mu.Unlock()
 
 	var out []llm.Message
-	for _, r := range runs {
+	for i := range included {
+		r := included[i]
 		select {
 		case <-r.done:
 		case <-ctx.Done():
-			// requeue the unfinished run so a later flush picks it up
+			// requeue every unfinished included run (this one and the tail) so a
+			// later flush picks them up instead of dropping staged results.
 			s.mu.Lock()
-			s.runs = append(s.runs, r)
+			s.runs = append(s.runs, included[i:]...)
 			s.mu.Unlock()
 			return out
 		}
-		input, _ := json.Marshal(map[string]any{"command": r.cmd})
-		out = append(out,
-			llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
-				ID: r.id, Name: toolBash, Input: input,
-			}}},
-			llm.Message{Role: llm.RoleUser, Content: llm.BlockList{r.result}},
-		)
+		out = append(out, shellUserMessage(r.cmd, r.result))
 	}
 	return out
+}
+
+// shellUserMessage renders one completed run as the user message the model sees.
+func shellUserMessage(cmd string, res agent.ToolResult) llm.Message {
+	var sb strings.Builder
+	sb.WriteString("User Ran: ")
+	sb.WriteString(cmd)
+	sb.WriteString("\n\nOutput:\n")
+	text := resultText(res.Content)
+	if text == "" {
+		text = "(no output)"
+	}
+	sb.WriteString(text)
+	return llm.Message{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: sb.String()}}}
+}
+
+// resultText concatenates the non-empty TextBlocks in content. The bash tool
+// returns a single text block holding status prefix + combined output.
+func resultText(content llm.BlockList) string {
+	var sb strings.Builder
+	for _, b := range content {
+		if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
+			sb.WriteString(tb.Text)
+		}
+	}
+	return sb.String()
+}
+
+// isDone reports whether a completion channel has closed.
+func isDone(done chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
 }
 
 const toolBash = "bash"

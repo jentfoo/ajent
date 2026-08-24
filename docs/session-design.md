@@ -156,8 +156,7 @@ per row, oldest first — the durable record of *messages typed*, distinct from 
 transcripts that record *turns*. Each message is `json.Marshal`ed onto a single
 physical line, so a multi-line turn (a paste or wrapped prompt) round-trips whole:
 embedded newlines are escaped and never fragment one submission into several recall
-entries. Non-prompt lines (`/cmd`, `!shell`) never touch a transcript and live only
-here; prompts appear in both.
+entries. `/cmd` lines never write a transcript entry, and neither do `!!` runs (excluded from context); both still land as recall rows for ↑/↓ + Ctrl+R. An included `!` run lands as one **injected** user-message entry when flushed — never a typed-prompt entry. Prompts appear in both.
 
 The store is append-only at submit time: `EditorHistory.Append` trims trailing CRs,
 drops blank and secret-prefixed messages (the pasted-secret invariant), then one
@@ -217,7 +216,9 @@ Two consumers read the transcript back:
   A prompt reaches the sink as both `TurnStart(Input.Text)` (which only lights the
   spinner) *and* a separate `UserPrompt(text)` event that carries its words, so a
   renderer can echo them into committed history (the TUI routes it to
-  `ui.UserEcho`; see `tui-design.md` "Rewind and resume"). Tool results replay their
+  `ui.UserEcho`; see `tui-design.md` "Rewind and resume"). Injected user-role
+  text (a staged `User Ran:` result, survey text) is not a typed prompt: Replay skips it,
+  so it never opens or echoes as its own turn. Tool results replay their
   bodies through each call's completion hook (`Display`), bounded by the same output-head
   / collapse rules live streaming uses.
 

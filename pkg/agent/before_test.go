@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -39,6 +40,34 @@ func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	tb, ok := seen[2].Content[0].(llm.TextBlock)
 	require.True(t, ok)
 	assert.Equal(t, "what was that?", tb.Text)
+}
+
+// TestInputBeforeMarkedInjected asserts Input.Before messages are appended as
+// injected context so prompt recall (Ctrl+R / up-arrow) excludes them.
+func TestInputBeforeMarkedInjected(t *testing.T) {
+	t.Parallel()
+
+	var infos []MessageInfo
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { infos = append(infos, info) }}
+
+	before := []llm.Message{
+		{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: "User Ran: echo hi"}}},
+	}
+	err := a.Prompt(t.Context(), Input{Before: before, Text: "next?"})
+	require.NoError(t, err)
+
+	// the Before message and the typed prompt both land; only the former is injected.
+	var gotInjected *MessageInfo
+	for i := range infos {
+		tb, ok := infos[i].Message.Content[0].(llm.TextBlock)
+		if ok && strings.Contains(tb.Text, "User Ran: echo hi") {
+			gotInjected = &infos[i]
+		}
+	}
+	require.NotNil(t, gotInjected)
+	assert.True(t, gotInjected.Injected)
 }
 
 // TestNewOutputForwardsToSink asserts NewOutput streams writes and diffs to the

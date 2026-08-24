@@ -19,28 +19,33 @@ const (
 type Line struct {
 	Kind Kind
 	Rest string // the line after any escape handling and prefix; for commands, the name+args
+	// Excluded marks a `!!` shell run: executed and displayed but kept out of
+	// model context and the transcript.
+	Excluded bool
 }
 
-// ParseLine classifies a submitted line: `//`, `!!` and leading space escape to
-// a literal prompt, `/name args` is a command, `!cmd` a shell command, else a
-// prompt. Unknown `/foo` still parses as a command so dispatch can notice typos.
+// ParseLine classifies a submitted line: `//` and leading space escape to a
+// literal prompt, `/name args` is a command, `!cmd` stages a shell command,
+// `!!cmd` runs one excluded from model context, else a prompt. Unknown `/foo`
+// still parses as a command so dispatch can notice typos.
 func ParseLine(s string) Line {
 	// a leading space escapes anything: the line is a literal prompt
 	if strings.HasPrefix(s, " ") {
 		return Line{Kind: KindPrompt, Rest: s[1:]}
 	}
-	// `//x` => prompt `/x`; `!!x` => prompt `!x`
+	// `//x` => prompt `/x`
 	if strings.HasPrefix(s, "//") {
 		return Line{Kind: KindPrompt, Rest: s[1:]}
 	}
+	// `!!x` runs x but keeps it out of context; `!x` stages x onto context
 	if strings.HasPrefix(s, "!!") {
-		return Line{Kind: KindPrompt, Rest: s[1:]}
-	}
-	if strings.HasPrefix(s, "/") {
-		return Line{Kind: KindCommand, Rest: s[1:]}
+		return Line{Kind: KindShell, Rest: s[2:], Excluded: true}
 	}
 	if strings.HasPrefix(s, "!") {
 		return Line{Kind: KindShell, Rest: s[1:]}
+	}
+	if strings.HasPrefix(s, "/") {
+		return Line{Kind: KindCommand, Rest: s[1:]}
 	}
 	return Line{Kind: KindPrompt, Rest: s}
 }

@@ -68,13 +68,7 @@ func TestStagerRefusesDisabledBash(t *testing.T) {
 	sink := &recordingSinkForShell{}
 	s := NewStager(reg, sink)
 
-	s.Run("echo hi")
-	require.Eventually(t, func() bool {
-		sink.mu.Lock()
-		defer sink.mu.Unlock()
-		return len(sink.notices) > 0
-	}, time.Second, time.Millisecond,
-		"disabled bash must refuse with a notice")
+	s.Run("echo hi", false)
 	sink.mu.Lock()
 	first := sink.notices[0]
 	sink.mu.Unlock()
@@ -85,8 +79,8 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 	t.Parallel()
 
 	s, sink := newShellStager(t)
-	s.Run("echo one")
-	s.Run("echo two")
+	s.Run("echo one", false)
+	s.Run("echo two", false)
 
 	// both start streaming immediately
 	require.Eventually(t, func() bool {
@@ -101,32 +95,30 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond,
 		"quick commands finish")
 	msgs := s.Flush(t.Context())
-	require.Len(t, msgs, 4, "one assistant+user pair per run")
+	require.Len(t, msgs, 2, "one user message per run")
 
-	// pair 0: assistant tool call, pair 1: user tool result; then run 2
-	assert.Equal(t, llm.RoleAssistant, msgs[0].Role)
+	// each run lands as a single user text message in submission order
+	assert.Equal(t, llm.RoleUser, msgs[0].Role)
+	assert.Contains(t, resultText(msgs[0].Content), "User Ran: echo one")
+	assert.Contains(t, resultText(msgs[0].Content), "Output:")
+	assert.Contains(t, resultText(msgs[0].Content), "one")
 	assert.Equal(t, llm.RoleUser, msgs[1].Role)
-	assert.Equal(t, llm.RoleAssistant, msgs[2].Role)
-	assert.Equal(t, llm.RoleUser, msgs[3].Role)
-
-	// provenance marks every result as a shell source
-	for _, m := range []llm.Message{msgs[1], msgs[3]} {
-		tr := m.Content[0].(llm.ToolResultBlock)
-		assert.Equal(t, "shell", tr.Details.(shellProvenance).Source)
-	}
+	assert.Contains(t, resultText(msgs[1].Content), "User Ran: echo two")
+	_, ok := msgs[0].Content[0].(llm.TextBlock)
+	require.True(t, ok, "the staged result is a plain text block, not a tool result")
 }
 
 func TestStagerFlushWaitsForInFlight(t *testing.T) {
 	t.Parallel()
 
 	s, _ := newShellStager(t)
-	s.Run("sleep 0.3; echo done")
+	s.Run("sleep 0.3; echo done", false)
 
 	require.True(t, s.Pending(), "the sleep is still running")
 	start := time.Now()
 	msgs := s.Flush(t.Context())
 	elapsed := time.Since(start)
-	require.Len(t, msgs, 2)
+	require.Len(t, msgs, 1)
 	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
 	require.False(t, s.Pending())
 }
@@ -143,7 +135,7 @@ func TestStagerEmptyCommandNoticesAndRunsNothing(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			cmd := c.cmd
 			s, sink := newShellStager(t)
-			s.Run(cmd)
+			s.Run(cmd, false)
 			require.Eventually(t, func() bool {
 				sink.mu.Lock()
 				defer sink.mu.Unlock()
@@ -164,41 +156,72 @@ func TestStagerNonZeroExitStagesAsError(t *testing.T) {
 	t.Parallel()
 
 	s, _ := newShellStager(t)
-	s.Run("exit 3")
+	s.Run("exit 3", false)
 	// budget clears the bash tool's 5s WaitDelay ceiling (see TestStagerRunsAndFlushesInOrder).
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
-	require.Len(t, msgs, 2)
-	tr := msgs[1].Content[0].(llm.ToolResultBlock)
+	require.Len(t, msgs, 1)
 	// a non-zero exit is an ordinary staged result: the model sees the exit code
-	// in the content, but it is not flagged as a turn failure
-	assert.Contains(t, firstResultText(tr), "exit status 3")
+	// in the Output section, but it is not flagged as a turn failure
+	assert.Contains(t, resultText(msgs[0].Content), "exit status 3")
 }
 
 func TestStagerCancelStagesPartial(t *testing.T) {
 	t.Parallel()
 
 	s, _ := newShellStager(t)
-	s.Run("sleep 30; echo never")
+	s.Run("sleep 30; echo never", false)
 	require.True(t, s.Pending())
 
 	s.Cancel()
 	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
-	require.Len(t, msgs, 2)
+	require.Len(t, msgs, 1)
 
-	// a cancelled command stages an interrupted error result so the model sees it
-	tr := msgs[1].Content[0].(llm.ToolResultBlock)
-	assert.True(t, tr.IsError)
-	assert.Contains(t, firstResultText(tr), "interrupted by user")
+	// a cancelled command stages an interrupted marker so the model sees it was cut off
+	assert.Contains(t, resultText(msgs[0].Content), "interrupted by user")
 }
 
-// firstResultText extracts the text of a tool result block.
-func firstResultText(tr llm.ToolResultBlock) string {
-	for _, b := range tr.Content {
-		if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
-			return tb.Text
-		}
+func TestStagerExcludedRunFlushesNothingAndDoesNotWait(t *testing.T) {
+	t.Parallel()
+
+	s, _ := newShellStager(t)
+	s.Run("sleep 1; echo late", true)
+	require.True(t, s.Pending(), "the excluded run is still in flight")
+
+	// Flush returns immediately empty while the run keeps running: an excluded
+	// result goes nowhere, so it must not hold the next prompt hostage.
+	msgs := s.Flush(t.Context())
+	assert.Empty(t, msgs)
+	require.True(t, s.Pending(), "the excluded run is still tracked after Flush")
+
+	s.Cancel() // stop waiting on the sleep so the test ends promptly
+	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
+}
+
+func TestShellUserMessage(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		cmd     string
+		content llm.BlockList
+		want    string // substring expected in the rendered text
+	}{
+		{"normal_output", "echo hi", blockText("hello\n"), "User Ran: echo hi\n\nOutput:\nhello"},
+		{"empty_output", "true", llm.BlockList{}, "(no output)"},
+		{"multiline_command", "grep x f; wc -l", blockText("a\nb\nc"), "User Ran: grep x f; wc -l"},
 	}
-	return ""
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			msg := shellUserMessage(c.cmd, agent.ToolResult{Content: c.content})
+			assert.Equal(t, llm.RoleUser, msg.Role)
+			assert.Contains(t, resultText(msg.Content), c.want)
+		})
+	}
+}
+
+// blockText builds a single-text-block list.
+func blockText(text string) llm.BlockList {
+	return llm.BlockList{llm.TextBlock{Text: text}}
 }

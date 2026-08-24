@@ -261,7 +261,7 @@ func (a *Agent) drainSteer() {
 func (a *Agent) appendSteer(inputs []Input) {
 	for _, in := range inputs {
 		for _, m := range in.Before {
-			a.append(MessageInfo{Message: m})
+			a.append(MessageInfo{Message: m, Injected: true})
 		}
 		var blocks llm.BlockList
 		if in.Text != "" {

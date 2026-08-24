@@ -2,10 +2,10 @@
 
 How `pkg/command` and `pkg/refs` own everything the user does that is not "send
 a message to the model": slash commands through a registry, direct `!` shell
-execution with staged results, `@`-path expansion with auto-read, and the
-non-blocking completion overlay driving both. It is the single dispatch path for
-submitted lines; extensions and MCP register into the
-same registry, so a built-in `/tools` and a third-party `/plan` are the same
+execution with staged results (`!!` runs excluded from context), `@`-path
+expansion with auto-read, and the non-blocking completion overlay driving both. It
+is the single dispatch path for submitted lines; extensions and MCP register into
+the same registry, so a built-in `/tools` and a third-party `/plan` are the same
 mechanism.
 
 ## What it is
@@ -38,9 +38,9 @@ shell — then routed by the host's loop.
 | `/model gpt` | command | `model gpt` |
 | `//literal` | prompt | `/literal` |
 | ` /notacommand` | prompt | `/notacommand` (leading space escapes) |
-| `!go test ./...` | shell | `go test ./...` |
-| ` !echo hi` | prompt | `!echo hi` (leading space escapes) |
-| `!!echo hi` | prompt | `!echo hi` (double-bang escapes) |
+| `!go test ./...` | shell | `go test ./...` (staged onto context) |
+| `!!echo hi` | shell | `echo hi`, excluded from context (`Excluded`) |
+| ` !echo hi` | prompt | `!echo hi` (leading space is the only literal-`!` escape) |
 
 Unknown `/foo` still parses as a command so dispatch can notice it rather than
 prompting the model — a typo should not cost tokens. The host's loop then routes
@@ -242,11 +242,11 @@ changes. Space or Tab toggles the highlighted row; typed text narrows the filter
 
 `command.Stager` owns staged runs: constructed over the tool registry and a
 sink, it starts a command immediately (non-blocking), reports whether any run is
-pending, cancels every in-flight run, and flushes — waiting for each staged pair
-to finish then returning them as call + result pairs.
+pending, cancels every in-flight run, and flushes — waiting for each included run
+to finish then returning them as one user message each.
 
-`Run` resolves `bash` through `Registry.Get` (enabled-only, so a disabled `bash`
-is a refusal notice), mints a call id, opens the display with
+`Run(cmd, excluded)` resolves `bash` through `Registry.Get` (enabled-only, so a
+disabled `bash` is a refusal notice), mints a call id, opens the display with
 `sink.ToolStart` and executes on a goroutine through `agent.NewOutput`. That
 reuses the whole `bash` path — streaming, ANSI stripping, output cap, spill
 file, process-group kill — with no second implementation. It wraps its context in
@@ -259,27 +259,42 @@ Running `!` for exploration costs no tokens and never interrupts an in-flight
 turn — it only becomes visible when the user next speaks.
 
 **Flush timing.** On the next normal submit the pump first `Flush`es the stager
-— which waits for every staged command to finish, in submission order — then
-injects each pair ahead of the user message. The model therefore sees "here is a
-shell invocation I asked you about and its output" together with whatever the
-user just said. Multiple staged commands flush together, in submission order,
-each as its own call + result pair.
+— which waits for every included staged command to finish, in submission order —
+then injects each result ahead of the user message. The model therefore sees "here
+is a shell invocation I ran and its output" together with whatever the user just
+said. Multiple staged commands flush together, in submission order, each as its
+own **user** message.
 
-**Representation.** Reuse the real `bash` tool end to end. The staged pair is a
-synthetic shell-call + result block carrying provenance (`shellProvenance{Source:
-"shell", TS}` in `ToolResultBlock.Details`) so token accounting can count it
-and compaction's superseded-pass can treat it as injected content.
+**Representation.** A completed run lands as a single `llm.RoleUser` text message,
+not a synthetic tool-call pair — it reads as the human's own action ("User Ran: <cmd>")
+rather than an agent-initiated bash call. The body is built verbatim from the real
+`bash` tool's result text (`shellUserMessage`): `User Ran:` line, blank line,
+`Output:`, then the combined stdout+stderr with any exit-status / interruption /
+truncation marker already baked in by the tool itself — honest because it reuses
+the same bytes the model would see from a real call. Empty output renders
+`(no output)`. The message is appended as **injected** context (see
+agent-loop-design), so prompt recall excludes it; dropping the synthetic pair also
+removes the Anthropic duplicate-`tool_use`-id hazard for staged runs.
+
+**Excluded runs (`!!`).** `Run(cmd, true)` executes and displays exactly like a
+staged run — same bash path, same streaming sink, same barrier exemption — but its
+output is never staged onto model context or the transcript. Because that output
+goes nowhere, `Flush` does not wait on an excluded run: finished ones are dropped,
+still-running ones stay tracked so `Pending()`/`Cancel()` keep working while they
+stream to the sink on their own goroutine.
 
 **Error behaviour.** A non-zero exit code is an ordinary staged result, not a
 turn failure — the model sees the failure (with the exit code) at the next
 message. `!` alone or an empty command produces a notice and runs nothing. A
-literal line beginning with `!` leads with whitespace (` !echo hi`).
+literal line beginning with `!` leads with whitespace (` !echo hi`); a literal
+`!!x` prompt is ` !!!x`.
 
 **Cancellation.** Each staged run owns a cancellable context. `Cancel` cancels
 every still-running run; the `bash` tool kills the whole process group when its
-derived context ends. A cancelled command still stages: its partial output plus
-the killed-status the bash tool records, so the model's view matches what the
-user saw. `Ctrl+C`/Esc cancels an in-flight staged command through the host's
+derived context ends. A cancelled command still stages (if included): its partial
+output plus the killed-status the bash tool records, so the model's view matches
+what the user saw. Excluded runs cancel identically but their partial output goes
+nowhere. `Ctrl+C`/Esc cancels an in-flight staged command through the host's
 interrupt path.
 
 > Staged `!` results live only in memory until the next prompt flushes them. If
