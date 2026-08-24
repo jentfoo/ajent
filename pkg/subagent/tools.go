@@ -108,22 +108,31 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 	snap, complete := t.m.Poll(ctx, j.id)
 	if ctx.Err() != nil { // the turn was interrupted; release promptly and let abort fill this call
-		return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "poll interrupted"}}}, nil
+		res := agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "poll interrupted"}}}
+		return withJob(res, j.id, j.statusOf()), nil
 	}
 	switch {
 	case !complete:
-		return result(j.pollProgress()), nil
+		return withJob(result(j.pollProgress()), j.id, j.statusOf()), nil
 	case snap.Status == StatusAborted:
-		return result("sub-agent " + j.id + " aborted"), nil
+		return withJob(result("sub-agent "+j.id+" aborted"), j.id, snap.Status), nil
 	case snap.Status == StatusError && snap.Err != nil:
-		return resultErr(snap.Err.Error()), nil
+		return withJob(resultErr(snap.Err.Error()), j.id, snap.Status), nil
 	default: // done with a summary, or an empty one fell back to the placeholder
 		out := strings.TrimSpace(snap.Summary)
 		if out == "" {
 			out = placeholder
 		}
-		return result(out), nil
+		return withJob(result(out), j.id, snap.Status), nil
 	}
+}
+
+// withJob tags a poll result with the job it names and that job's status, so a
+// host-driven poller can tell a still-running report from a terminal one without
+// matching the payload prose. Invisible to the model.
+func withJob(r agent.ToolResult, id string, s Status) agent.ToolResult {
+	r.Details = map[string]string{"id": id, "status": s.String()}
+	return r
 }
 
 // listTool lists every job and its status.

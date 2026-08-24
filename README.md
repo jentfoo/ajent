@@ -45,6 +45,12 @@ When a write operation does need approval, you're presented with a dialog that l
 
 Sub-agents only function in a read only form. They exist only to keep the main context free concise, offloading the exploratory research to come back with a targeted summary for the main context history. They are enabled by default, and also gain access to any `readOnly` MCP services configured.
 
+### Project instructions
+
+`AGENTS.md` in the working directory (and `~/.ajent/AGENTS.md` for habits you want everywhere) is read at startup and injected into every turn's system prompt. Editing it applies on the next start, not mid-session.
+
+`/init` writes that file for you. It reads the project's `README*` itself, then fans the build and the codebase out to read-only sub-agents in parallel — one surveying the Makefile, CI config and `CONTRIBUTING.md`, and one to four splitting the tree between them, scaled to its size and balanced by where the code actually is. Their summaries come back as ordinary tool results, and a single turn distills them into `AGENTS.md`. The write goes through the normal permission barrier, so you see the diff and approve it like any other. Run `/init` again later and it corrects the existing file against a fresh survey rather than replacing it. Esc cancels a survey in progress.
+
 ### Tools
 
 MCP and other tools are loaded on the first message (using `/tools`). Once a tool is loaded it can't be unloaded, however we do allow adding tools later at the cost of a cache miss.

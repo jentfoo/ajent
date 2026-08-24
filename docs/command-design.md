@@ -57,7 +57,9 @@ prompt lines go to a single **prompt pump** goroutine that owns ordering.
   instead of an immediate echo.
 - pump: a command runs its handler (pickers block only the pump); a prompt
   `Stager.Flush` → `refs.Expand` → queue-or-start via the **steer queue**
-  (`queue.go`). Idle, it spawns the single drain goroutine with this input;
+  (`queue.go`). A `pumpLine` carrying an already-assembled `input` (the `/init`
+  survey) re-enters here with its `Before` intact, skipping expansion and the
+  echo so the same ordering, accounting and hook path still apply. Idle, it spawns the single drain goroutine with this input;
   busy, it queues the item (rendering as a dimmed row) and defers its echo to
   delivery.
 
@@ -149,10 +151,12 @@ dispatched, never on a command or a `!`.
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
 | `/plan-stop` | end the workflow and restore the model and tool set `/plan` found |
 | `/plan-status` | report the phase, round and both models |
+| `/init` | survey the project and write `AGENTS.md` (see below) |
 | `/exit` | quit |
 
-`/settings`, `/compact`, `/resume`, `/cost` and `/init` also register into
-the same registry.
+`/help`, `/model`, `/reasoning`, `/usage`, `/compact`, `/tools`, `/mcp`,
+`/agents`, `/settings` and `/exit` are the built-ins; `/plan*` and `/init` are
+feature commands the driver adds on top.
 
 Registration goes through one `registerCommands` helper in `main.go` that always
 calls `RegisterBuiltins` first and then any feature commands. A feature that
@@ -164,6 +168,52 @@ workflow commands.
 `command.PickModel(ctx, console, title, current, opts)` is the shared picker
 behind `/model` and `/settings`, exported so a feature can offer its own model
 choice under its own title rather than reimplementing the list.
+
+### `/init` — the project survey
+
+`/init` is the one command whose work outlives its handler. `initController`
+(`init.go`) starts the survey on its own goroutine and returns immediately, so a
+run that takes minutes never stalls the pump. It is refused while a turn streams
+and while another survey is in flight; `Esc`/`Ctrl+C` cancels one, stopping the
+children **it** spawned — by id via `Options.Started`, never `StopAll`, because the
+user may have started a turn during the survey whose own investigations must
+survive (a returning `Poll` does not end a job).
+
+**Slicing.** The agent count scales with the tree (under 50 files → 1, then 2, 3,
+4), and the slices themselves are top-level directories bin-packed largest-first
+into the least loaded bucket. A directory holding more than one slice's share is
+replaced by its own children first, repeatedly — otherwise a repository whose code
+all lives under `pkg/` hands one agent everything and the others nothing. Files
+stage 1 and the build agent already read (`README*`, `AGENTS.md`, `Makefile`,
+`CONTRIBUTING.md`, licences, lockfiles) are dropped, and the loose files left at a
+level collapse into one named unit rather than a scatter of singletons.
+
+`pkg/projinit` does the work and spends no model tokens: it runs the real `read`,
+`agent_start` and `agent_poll` tools through `Registry.Lookup`, collecting their
+genuine call + result pairs — the same `agent.InjectPair` mechanism `@` references
+use. What comes back is an `agent.Input` whose `Before` is that survey and whose
+`Text` is the distillation instruction (`prompt-design.md` owns the wording). The
+controller hands it to the pump as `pumpLine{input: &in}`; `promptInput` takes that
+branch, skipping `@` expansion and using `rest` as a short echo label, and
+everything after is the ordinary prompt path — steer queue, plan hooks, ledger
+seeding, `startDrain`. The model then writes `AGENTS.md` with the `write` tool, so
+the permission barrier gates it exactly as it gates any other write; no
+`tools.WithUserInitiated`, which would bypass the gate. A survey that cannot run
+reports *why* — a missing `read`, missing `agent_*`, or spawns that were refused
+are three different errors, never one "unavailable".
+
+**Call ids carry a run number** (`init-<run>-read-1`). `Input.Before` is appended
+to `State` and persisted, so a second `/init` in one session would otherwise
+replay the first run's `tool_use` ids — and a duplicate id makes every later
+Anthropic request fail permanently. Re-running is the advertised regenerate path,
+so this is not theoretical.
+
+Instructions are read once at startup, so a freshly written file applies on the
+next start. `initWatch` (an `opts.Sinks` member) is armed by the pump — not by the
+survey goroutine, whose arming a turn already running would consume — and reports
+the change once the file's mtime actually moves. It stays armed across turns that
+wrote nothing, so a survey queued behind a running turn still reports, and stays
+quiet when the write was denied.
 
 ### `/tools` and the enabled set
 

@@ -8,9 +8,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// RegisterBuiltins installs /help, /usage, /model, /reasoning, /tools and /exit
-// into r against c. The driver registers /settings, /compact, /resume, /cost
-// and /init into the same registry.
+// RegisterBuiltins installs /help, /model, /reasoning, /usage, /compact, /tools,
+// /mcp, /agents, /settings and /exit into r against c. The driver adds its
+// feature commands (/plan*, /init) to the same registry on top.
 func RegisterBuiltins(r *Registry, c Console) {
 	r.Register(Command{
 		Name:        "help",

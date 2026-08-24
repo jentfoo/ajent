@@ -70,7 +70,8 @@ governs its assembly and use.
 | Tool descriptions & schemas | per-tool `Description` prose plus JSON Schema params, sent via the provider tool channel |
 | `@`-file reference injection | synthetic read call+result ahead of the user message |
 | Project instruction layering | `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, layered with provenance markers |
-| Prompt templates / slash commands | markdown templates expanded into prompts; `/init` survey |
+| Prompt templates / slash commands | markdown templates expanded into prompts |
+| `/init` project survey | the build and codebase sub-agent tasks, and the instruction that distils them into `AGENTS.md` |
 | Compaction summarisation | staged free reductions + exact-format LLM summary |
 | Sub-agent prompt | the child contract appended as a system snippet to every investigation, plus the empty-summary nudge |
 | Plan workflow kickoffs | the planning contract, the implementation kickoff, the review kickoff and the retry prompt |
@@ -292,6 +293,82 @@ Design rules:
 
 - The command registry (`/help`, `/model`, `/tools`, ...) is where templates are
   surfaced; unknown commands error rather than costing tokens.
+
+---
+
+## `/init` project survey (`pkg/projinit/prompt.go`)
+
+Three surfaces, shaped by one fact: **the survey is data the final pass has not
+seen produced.** Stages 1 and 2 spend no model tokens — they run the real `read`,
+`agent_start` and `agent_poll` tools and let their genuine call + result pairs
+carry the findings, so the distilling model reads them as its own tool output
+rather than as a pasted report. Structural design is in `command-design.md`.
+
+**Sub-agent tasks.** One build survey plus one per disjoint slice of the tree.
+Both end with the same tail, so a child returns prose the parent can paste:
+
+```text
+End with a summary written to be pasted into an AGENTS.md: prose, not a raw dump. Report only what you actually read — never guess, and never generalise from convention.
+```
+
+The build task names its inputs explicitly, because "how do I get a footing" is
+the one thing a wrong guess makes expensive:
+
+```text
+Survey how this project is built, tested and linted.
+
+Read the Makefile or equivalent build file, any CI configuration (.github/workflows or this project's equivalent), and CONTRIBUTING.md if it exists.
+
+Report exactly which commands build the project, run its tests and lint it, and what each one expects: toolchains and versions, environment variables, generated files, and any setup step that must run first. Name the file each command came from.
+```
+
+Each codebase task carries its own slice and is told another agent covers the
+rest, so the division is visible in what each one reads:
+
+```text
+Survey this slice of the repository: %s
+
+Stay inside those paths. Another sub-agent covers the rest of the tree.
+
+Report what each package or module does, the dependency edges between them, the key entry points, and any invariant or constraint worth recording for someone changing this code.
+```
+
+**Distillation.** One prompt, one turn. Both variants share a header naming the
+survey as data and a closing rule set; only the middle differs — draft versus
+correct:
+
+```text
+The messages above are a survey of this repository: the files read directly, plus one summary per read-only sub-agent that investigated the build and the code.
+```
+
+```text
+Rules:
+- Every claim must trace to something in the survey above. Never invent commands, conventions or code-style rules that were not reported.
+- Keep the wording clear and concise. This file is read on every turn, so brevity is a feature.
+- Write the finished document to AGENTS.md with the write tool, then stop. Do not repeat it in your reply.
+```
+
+A fresh draft asks for `## Project Overview` (one paragraph), `## Commands`
+(build/test/lint exactly as reported) and `## Architecture` (where code lives,
+design notes, invariants), plus a section per convention the survey actually
+observed. When `AGENTS.md` already exists it is read in stage 1 and the
+instruction becomes a correction pass instead:
+
+```text
+AGENTS.md already exists and was read above. Make sure it is accurate.
+
+The survey is the source of truth: correct anything it contradicts, add what it shows is missing, and keep the existing structure and wording where they are still right. This is a correction pass, not a rewrite.
+```
+
+Two rules are load-bearing and asserted verbatim. **Brevity**: the file is read on
+every turn, so a long one is a tax paid forever (principle 7 applied to the one
+prompt surface the user writes). **Nothing invented**: the structure may echo
+ajent's own `AGENTS.md` (overview → commands → architecture), but its code-style
+sections are project-specific and must never be copied into another repository's
+file — tests assert their absence.
+
+The write is the model's own `write` call, so the permission barrier gates it like
+any other write rather than `/init` inventing a private path to disk.
 
 ---
 

@@ -250,6 +250,23 @@ Dispatch rules:
   marker interface checked before `Execute` ran, and a rejected call silently
   ended the turn.
 
+### Host-run tool calls
+
+Not every tool call comes from the model. A staged `!` line, an `@` reference and
+`/init`'s project survey all run a real tool and place the result in context as
+though the model had called it. `InjectPair(ctx, tool, sink, call, label)` is that
+one path: it executes the call through `NewOutput(sink, callID)` so output streams
+and renders exactly as an agent-run tool does, turns a Go error into an error
+`ToolResult` rather than losing it, and returns the assistant call and user result
+messages for `Input.Before` alongside the raw result (whose `Details` the caller
+may read). Having one implementation is what keeps truncation markers, read
+tracking and display order identical across all three callers.
+
+The **call id is the caller's** and must be unique for the life of the session:
+`Before` messages are appended to `State` and persisted, and Anthropic rejects a
+request whose `tool_use` ids repeat — permanently, on every later turn. A caller
+that can run twice in one session (`/init`) therefore numbers its runs.
+
 ## Steering and follow-up
 
 Two kinds of mid-turn input:

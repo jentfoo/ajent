@@ -118,26 +118,9 @@ func injectPair(ctx context.Context, x *Expander, name, idPrefix, display string
 	}
 	id := idPrefix + display
 	input, _ := json.Marshal(map[string]any{"path": display})
-	call := agent.ToolCall{ID: id, Name: name, Input: input}
-	out := agent.NewOutput(x.sink, id)
-	done := x.sink.ToolStart(call, name+" "+display)
-	res, err := tool.Execute(ctx, call, out)
-	if res.Content == nil {
-		res.Content = llm.BlockList{}
-	}
-	if err != nil && !res.IsError {
-		res.IsError = true
-		if len(res.Content) == 0 {
-			res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
-		}
-	}
-	done(res)
-	return []llm.Message{
-		{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
-			ID: id, Name: name, Input: input}}},
-		{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
-			CallID: id, Content: res.Content, Display: res.Display, IsError: res.IsError}}},
-	}
+	msgs, _ := agent.InjectPair(ctx, tool, x.sink,
+		agent.ToolCall{ID: id, Name: name, Input: input}, name+" "+display)
+	return msgs
 }
 
 // annotate returns the replacement text for a large/non-text reference: the

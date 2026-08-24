@@ -79,9 +79,17 @@ func (c *uiConsole) Models() *llm.Registry       { return c.reg }
 func (c *uiConsole) State() *agent.State         { return c.st }
 func (c *uiConsole) Tools() *tools.Registry      { return c.tools }
 func (c *uiConsole) MCP() command.MCPServers     { return c.mcp }
-func (c *uiConsole) Agents() command.Agents      { return c.agents }
 func (c *uiConsole) Commands() *command.Registry { return c.commands }
 func (c *uiConsole) Settings() *config.Set       { return c.set }
+
+// Agents returns nil when no sub-agent manager was built, so /agents reports
+// unavailable instead of calling through a nil *subagent.Manager.
+func (c *uiConsole) Agents() command.Agents {
+	if c.agents.m == nil {
+		return nil
+	}
+	return c.agents
+}
 
 // SaveSetting delegates to the config Set, surfacing warnings and failures.
 func (c *uiConsole) SaveSetting(layer, key string, value any) error {

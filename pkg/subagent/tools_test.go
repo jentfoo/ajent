@@ -75,6 +75,7 @@ func TestAgentPollReturnsSummaryOnCompletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	assert.Contains(t, textOf(res), "summary text")
+	assert.Equal(t, map[string]string{"id": id, "status": "done"}, res.Details)
 }
 
 func TestAgentPollAcceptsBareId(t *testing.T) {
@@ -105,6 +106,8 @@ func TestAgentPollTimeoutReportsContextUsage(t *testing.T) {
 	assert.False(t, res.IsError)
 	out := textOf(res)
 	assert.Contains(t, out, "still running after")
+	// a host-driven poller reads the status rather than matching the prose
+	assert.Equal(t, map[string]string{"id": id, "status": "running"}, res.Details)
 }
 
 func TestAgentPollAborted(t *testing.T) {
@@ -118,6 +121,7 @@ func TestAgentPollAborted(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	assert.Contains(t, textOf(res), "aborted")
+	assert.Equal(t, map[string]string{"id": id, "status": "aborted"}, res.Details)
 }
 
 func TestAgentListEmptyAndPopulated(t *testing.T) {

@@ -358,6 +358,11 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	turnRec := &turnRecorder{}
 	opts.Sinks = append(opts.Sinks, turnRec)
 
+	// /init's write lands inside a normal turn; this watches for it so the driver
+	// can say the new file only applies on the next start.
+	initSeen := &initWatch{notify: ui.Notify}
+	opts.Sinks = append(opts.Sinks, initSeen)
+
 	// queued mid-turn prompts land at the next step boundary via this hook.
 	opts.OnBoundary = q.pull
 
@@ -465,6 +470,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// the next prompt; prompts expand @ refs and steer the agent.
 	cmds := command.NewRegistry()
 	stager := command.NewStager(toolsReg, sink)
+	pump := make(chan pumpLine, 16)
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		started: &started, quit: quit, permit: barrier,
@@ -485,7 +491,13 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		rec: rec, ag: ag, reg: reg, st: st, ui: ui, console: console, toolsReg: toolsReg, q: q,
 	})
 	hooks := planHooksFor(ctl, turnRec)
-	registerCommands(cmds, console, planCommands(ctl)...)
+	// the survey needs the tool registry to run read and agent_* through; without
+	// one /init is simply absent, like the plan workflow without a transcript.
+	ictl := newInitController(initDeps{
+		cwd: cwdOrDot(), toolsReg: toolsReg, sink: sink, ag: ag,
+		notify: ui.Notify, agents: sag, watch: initSeen, pump: pump,
+	})
+	registerCommands(cmds, console, append(planCommands(ctl), initCommands(ictl)...)...)
 	if ctl != nil && comp != nil {
 		// automatic compaction inside a phase keeps its own focus; an explicit
 		// /compact <instructions> still wins.
@@ -502,7 +514,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// resume restores it; the config file is never rewritten.
 		_ = console.SetSessionSetting("permissions.mode", m.String())
 	}
-	watchControls(ui, ag, q, stager, quit, onModeCycle)
+	watchControls(ui, ag, q, stager, ictl, quit, onModeCycle)
 	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
 	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
@@ -535,7 +547,6 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 	}
 
-	pump := make(chan pumpLine, 16)
 	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started,
 		delivered, q, st, editSinks, &seedToolsOnce, pushContext, hooks)
 
@@ -620,6 +631,12 @@ type pumpLine struct {
 	kind     command.Kind
 	rest     string
 	injected bool // non-typed input, excluded from transcript-derived prompt recall
+	// input is an already-assembled prompt (the /init survey and its tool pairs)
+	// re-entering the pump; it skips @ expansion and carries rest as a short label.
+	input *agent.Input
+	// onTurn runs as that input becomes a turn, so the sender can observe the turn
+	// its work produced rather than guessing when it lands.
+	onTurn func()
 }
 
 // runPump owns ordering for commands and prompts. Commands run inline (pickers
@@ -669,7 +686,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			}
 			_ = cmd.Handler(context.Background(), arg, console)
 		case command.KindPrompt:
-			if strings.TrimSpace(line.rest) == "" {
+			if line.input == nil && strings.TrimSpace(line.rest) == "" {
 				continue
 			}
 			// connect every MCP server in full, once, so its tools exist before this
@@ -680,14 +697,11 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			// flush staged shell results ahead of the message, waiting for any
 			// in-flight command to finish first
 			before := stager.Flush(context.Background())
-			res := expander.Expand(context.Background(), line.rest)
-			for _, n := range res.Notices {
-				console.Notify(n, tui.LevelWarn)
-			}
 
-			echo := submittedEcho(line.rest) // "" unless a real prompt (commands/shell are not echoed here)
-			est := tokens.EstimateText(res.Text, tokens.KindProse)
-			in := agent.Input{Text: res.Text, Before: append(before, res.Before...), Injected: line.injected}
+			in, echo := promptInput(line, before, expander, func(n string) {
+				console.Notify(n, tui.LevelWarn)
+			})
+			est := submitEstimate(in)
 			if q.offer(in, echo, est) {
 				continue // queued as a dimmed row; the echo lands at delivery
 			}
@@ -695,7 +709,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			if hooks.beforePrompt != nil {
 				if wrapped, ok := hooks.beforePrompt(context.Background(), in); ok {
 					in = wrapped
-					est = tokens.EstimateText(in.Text, tokens.KindProse)
+					est = submitEstimate(in)
 				}
 			}
 			if echo != "" {
@@ -707,6 +721,39 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			startDrain(ui, recording, ag, q, in, started, hooks)
 		}
 	}
+}
+
+// promptInput turns one pump line into the input to send plus the text to echo.
+// An already-assembled input (the /init survey) keeps its own Before and uses
+// rest as a short label, since its instruction is far too long to echo.
+func promptInput(line pumpLine, before []llm.Message, expander *refs.Expander, warn func(string)) (agent.Input, string) {
+	if line.input != nil {
+		in := *line.input
+		in.Before = append(before, in.Before...)
+		if line.onTurn != nil {
+			line.onTurn() // this turn writes, not the one running when the sender finished
+		}
+		return in, line.rest
+	}
+	res := expander.Expand(context.Background(), line.rest)
+	for _, n := range res.Notices {
+		warn(n)
+	}
+	return agent.Input{
+		Text:     res.Text,
+		Before:   append(before, res.Before...),
+		Injected: line.injected,
+	}, submittedEcho(line.rest) // "" unless a real prompt; commands and shell lines are not echoed here
+}
+
+// submitEstimate sizes what a submission adds to context: its text plus any
+// injected pairs riding ahead of it, which for a survey are the larger half.
+func submitEstimate(in agent.Input) int {
+	est := tokens.EstimateText(in.Text, tokens.KindProse)
+	if len(in.Before) > 0 {
+		est += tokens.EstimateMessages(in.Before)
+	}
+	return est
 }
 
 // startDrain runs the submitted prompt to completion in the background, then
@@ -1430,22 +1477,28 @@ const doublePressWindow = 2 * time.Second
 // turn, while Ctrl+D or a double Ctrl+C on an idle empty editor quits. Closing
 // quit signals driver to return, which lets main's deferred ui.Close restore the
 // terminal. onModeCycle runs when Shift+Tab is pressed; the front end wires it.
-func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, quit chan struct{}, onModeCycle func()) {
+func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
 	go func() {
 		var lastInt time.Time
 		for c := range ui.Controls() {
 			switch c {
 			case tui.ControlEscape:
-				if ag.Running() {
+				switch {
+				case ag.Running():
 					q.abort() // queued messages return to the editor, joined with newlines
 					ag.Interrupt()
-				} else if stager.Pending() {
+				case initCtl.abort(): // a minutes-long /init survey is escapable too
+				case stager.Pending():
 					stager.Cancel() // Esc cancels an in-flight staged shell command
 				}
 			case tui.ControlInterrupt:
 				if ag.Running() {
 					q.abort()
 					ag.Interrupt()
+					continue
+				}
+				if initCtl.abort() {
+					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled project survey"})
 					continue
 				}
 				// a running `!` cancels on the first Ctrl+C instead of quitting

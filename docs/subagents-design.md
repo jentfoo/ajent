@@ -197,7 +197,10 @@ directly), final message is the entire return value.
   returns the summary (or error / `aborted`). **On timeout** it reports still-running
   *plus* elapsed and the child's context usage against its model window, read from
   the job ledger — a poll that only says "still running" gives the model nothing to
-  act on. Accepts `sub-2` or bare `2`.
+  act on. Accepts `sub-2` or bare `2`. Every outcome also carries
+  `Details{"id","status"}` — invisible to the model, and the only supported way a
+  host-driven poller tells a timeout from a terminal result. Matching the payload
+  prose is not a contract; the status is.
 - **`agent_list()`** returns id/status/elapsed rows, or `(no sub-agents)`.
 
 All three set `ToolResult.Display` to the same text as `Content`, so history shows
@@ -213,6 +216,24 @@ gets head-plus-collapse treatment, and start/list render their rows.
 releases it at once. The count is what suppresses the completion steer: if a poller
 is already waiting, the result rides the poll response back and a duplicate context
 message would waste tokens.
+
+### A host as the poller
+
+`/init` (see `command-design.md`) drives `agent_start` and `agent_poll` itself
+rather than letting a model call them. Two consequences a caller must respect:
+
+- **Register every poll before any child can finish.** Suppression of both the
+  completion notice and the context steer is `pollers > 0` — it is not a mode.
+  `/init` therefore issues all its starts, then polls every id concurrently. The
+  window between the last `Start` and the first `Poll` is a narrow race, not a
+  guarantee: a job finishing inside it still notifies and steers.
+- **Poll until terminal.** A timeout is an ordinary outcome, so the caller loops on
+  `Details["status"]` and keeps only the terminal pair, or the transcript
+  accumulates still-running noise.
+- **Cancel by id, not `StopAll`.** A host survey runs for minutes, during which the
+  user may start a turn whose model spawns investigations of its own. `/init`
+  records the ids it started (`projinit.Options.Started`) and stops exactly those,
+  so aborting the survey never kills the model's work.
 
 ### Completion when nobody is polling
 
