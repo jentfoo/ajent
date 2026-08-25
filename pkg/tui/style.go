@@ -205,25 +205,28 @@ type Theme struct {
 	// Color256 so highlighting has nothing to apply.
 	CodeStyle string
 
-	Thinking Style // shaded so it reads as internal, not output
-	User     Style
-	Prompt   Style
-	Dim      Style
-	Accent   Style
-	Heading  Style
-	Bold     Style
-	Italic   Style
-	Strike   Style
-	Code     Style
-	Link     Style
-	Quote    Style
-	Spinner  Style
-	Divider  Style // full-width solid band marking restored-context boundaries
-	Activity Style // live sub-agent status rows: dim on a subtle background
-	UserTag  Style // "user:" role tag in the rewind tree picker
-	Assist   Style // "assistant:" role tag in the rewind tree picker
-	Warn     Style // notice levels, kept separate from the diff palette
-	Error    Style
+	Thinking      Style // shaded so it reads as internal, not output
+	User          Style
+	Prompt        Style
+	Dim           Style
+	Accent        Style
+	Heading       Style
+	Bold          Style
+	Italic        Style
+	Strike        Style
+	Code          Style
+	Link          Style
+	Quote         Style
+	Spinner       Style // static resting frame at idle; dim so any color means work is in flight
+	SpinnerWait   Style // request sent, nothing streaming back yet
+	SpinnerTool   Style // a tool or command is running
+	SpinnerStream Style // model output arriving; thinking and text alike
+	Divider       Style // full-width solid band marking restored-context boundaries
+	Activity      Style // live sub-agent status rows: dim on a subtle background
+	UserTag       Style // "user:" role tag in the rewind tree picker
+	Assist        Style // "assistant:" role tag in the rewind tree picker
+	Warn          Style // notice levels, kept separate from the diff palette
+	Error         Style
 
 	DiffAdd     Style
 	DiffDel     Style
@@ -272,7 +275,10 @@ func NewTheme(p ColorProfile, pal Palette) Theme {
 	t.Code = styleFg(h.code)
 	t.Link = styleFg(h.link)
 	t.Quote = style(attrDim, attrItalic)
-	t.Spinner = styleFg(h.accent)
+	t.Spinner = style(attrDim)
+	t.SpinnerWait = styleFg(h.thinking) // bare hue: Thinking's dim+italic would erase a braille glyph
+	t.SpinnerTool = styleFg(h.heading)
+	t.SpinnerStream = styleFg(h.accent) // today's spinner color
 	// the divider is a solid full-width band; reverse video swaps default fg/bg
 	// per cell into an inverted block that reads as thick and obvious in scrollback.
 	t.Divider = style(attrReverse)
@@ -289,8 +295,8 @@ func NewTheme(p ColorProfile, pal Palette) Theme {
 	t.DiffAdd = styleFg(h.diffAdd)
 	t.DiffDel = styleFg(h.diffDel)
 	// @@ range markers get their own hue, distinct from the add/del/context trio,
-	// so a hunk boundary reads as a separator
-	t.DiffHunk = styleFg(h.diffHunk)
+	// so a hunk boundary reads as a separator; dimmed like Thinking so it recedes
+	t.DiffHunk = styleFg(h.diffHunk, attrDim)
 	t.DiffFile = styleFg(h.heading, attrBold)
 	t.UserTag = styleFg(h.userTag)
 	t.Assist = styleFg(h.assist)

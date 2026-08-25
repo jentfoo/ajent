@@ -68,6 +68,9 @@ func TestNewTheme(t *testing.T) {
 		th := NewTheme(ColorNone, DefaultPalette())
 		assert.Equal(t, "text", th.Thinking.Wrap("text"))
 		assert.Equal(t, "text", th.DiffAdd.Wrap("text"))
+		for _, s := range []Style{th.SpinnerWait, th.SpinnerTool, th.SpinnerStream} {
+			assert.Equal(t, "text", s.Wrap("text"))
+		}
 	})
 	t.Run("basic_uses_16_color", func(t *testing.T) {
 		th := NewTheme(ColorBasic, DefaultPalette())
@@ -104,10 +107,11 @@ func TestNewTheme(t *testing.T) {
 			"dim": "\x1b[2m", "accent": "\x1b[38;5;213m", "heading": "\x1b[1;38;5;111m",
 			"bold": "\x1b[1m", "italic": "\x1b[3m", "strike": "\x1b[9m",
 			"code": "\x1b[38;5;180m", "link": "\x1b[38;5;110m", "quote": "\x1b[2;3m",
-			"spinner": "\x1b[38;5;213m", "divider": "\x1b[7m", "activity": "\x1b[2;48;5;236m",
+			"spinner": "\x1b[2m", "divider": "\x1b[7m", "activity": "\x1b[2;48;5;236m",
+			"spinnerWait": "\x1b[38;5;245m", "spinnerTool": "\x1b[38;5;111m", "spinnerStream": "\x1b[38;5;213m",
 			"userTag": "\x1b[38;5;69m", "assist": "\x1b[38;5;221m",
 			"warn": "\x1b[38;5;179m", "error": "\x1b[38;5;167m",
-			"diffAdd": "\x1b[38;5;78m", "diffDel": "\x1b[38;5;167m", "diffHunk": "\x1b[38;5;45m",
+			"diffAdd": "\x1b[38;5;78m", "diffDel": "\x1b[38;5;167m", "diffHunk": "\x1b[2;38;5;45m",
 			"diffFile":    "\x1b[1;38;5;111m",
 			"diffAddWord": "\x1b[7;38;5;78m", "diffDelWord": "\x1b[7;38;5;167m",
 		}
@@ -117,6 +121,7 @@ func TestNewTheme(t *testing.T) {
 			"bold": th.Bold.Open(), "italic": th.Italic.Open(), "strike": th.Strike.Open(),
 			"code": th.Code.Open(), "link": th.Link.Open(), "quote": th.Quote.Open(),
 			"spinner": th.Spinner.Open(), "divider": th.Divider.Open(), "activity": th.Activity.Open(),
+			"spinnerWait": th.SpinnerWait.Open(), "spinnerTool": th.SpinnerTool.Open(), "spinnerStream": th.SpinnerStream.Open(),
 			"userTag": th.UserTag.Open(), "assist": th.Assist.Open(),
 			"warn": th.Warn.Open(), "error": th.Error.Open(),
 			"diffAdd": th.DiffAdd.Open(), "diffDel": th.DiffDel.Open(), "diffHunk": th.DiffHunk.Open(),

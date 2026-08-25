@@ -728,7 +728,7 @@ func (u *UI) repaint() {
 	if !u.busy && u.tool == "" {
 		frame = spinnerFrames[0] // static resting frame when idle; bottom-left of the cell
 	}
-	st.Spinner = u.theme.Spinner.Wrap(frame)
+	st.Spinner = u.spinnerStyleLocked().Wrap(frame)
 	st.Tool = u.tool
 	statusRows := st.rows(u.theme, w)
 
@@ -849,6 +849,20 @@ func (u *UI) syncSpinnerLocked() {
 		u.startSpinner()
 	} else {
 		u.stopSpinner()
+	}
+}
+
+// spinnerStyleLocked colors the glyph by what the turn is waiting on. Caller holds the lock.
+func (u *UI) spinnerStyleLocked() Style {
+	switch {
+	case u.tool != "":
+		return u.theme.SpinnerTool
+	case u.streaming || u.thinking:
+		return u.theme.SpinnerStream
+	case u.busy:
+		return u.theme.SpinnerWait
+	default:
+		return u.theme.Spinner
 	}
 }
 

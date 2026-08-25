@@ -158,7 +158,7 @@ func renderHunk(t Theme, h *udiff.Hunk, gw int) (rows []string, added, removed i
 			added++
 		default:
 			flush()
-			rows = append(rows, t.Dim.Wrap(rowPrefix(gw, newNo, ' ')+text))
+			rows = append(rows, rowPrefix(gw, newNo)+t.Dim.Wrap("  "+text))
 			oldNo++
 			newNo++
 		}
@@ -167,9 +167,10 @@ func renderHunk(t Theme, h *udiff.Hunk, gw int) (rows []string, added, removed i
 	return rows, added, removed
 }
 
-// rowPrefix returns the line number gutter and change marker for one row.
-func rowPrefix(gw, num int, marker byte) string {
-	return fmt.Sprintf("%*d %c ", gw, num, marker)
+// rowPrefix returns the line number gutter for one row. The change marker is
+// the caller's so its color can start at it.
+func rowPrefix(gw, num int) string {
+	return fmt.Sprintf("%*d ", gw, num)
 }
 
 // renderDiffRun renders a removed/added run, emphasizing word level changes when
@@ -185,14 +186,14 @@ func renderDiffRun(t Theme, gw int, dels, adds []diffRow) []string {
 		if paired {
 			spans, _ = intralineSpans(d.text, adds[i].text)
 		}
-		out = append(out, applySpans(rowPrefix(gw, d.num, '-'), d.text, spans, t.DiffDel, t.DiffDelWord))
+		out = append(out, rowPrefix(gw, d.num)+applySpans("- ", d.text, spans, t.DiffDel, t.DiffDelWord))
 	}
 	for i, a := range adds {
 		var spans [][2]int
 		if paired {
 			_, spans = intralineSpans(dels[i].text, a.text)
 		}
-		out = append(out, applySpans(rowPrefix(gw, a.num, '+'), a.text, spans, t.DiffAdd, t.DiffAddWord))
+		out = append(out, rowPrefix(gw, a.num)+applySpans("+ ", a.text, spans, t.DiffAdd, t.DiffAddWord))
 	}
 	return out
 }
@@ -245,8 +246,8 @@ func mergeSpans(spans [][2]int) [][2]int {
 	return out
 }
 
-// applySpans styles marker and content with base, switching to emph inside the
-// given ranges of content.
+// applySpans styles the change marker and content with base, switching to emph
+// inside the given ranges of content. The gutter is not part of either string.
 func applySpans(marker, content string, spans [][2]int, base, emph Style) string {
 	if len(spans) == 0 || emph.Open() == "" {
 		return base.Wrap(marker + content)

@@ -100,6 +100,16 @@ func TestRenderDiff(t *testing.T) {
 		out := RenderDiff(plain, "x.go", "aaaa\n", "aaab\n")
 		assert.NotContains(t, out, "\x1b")
 	})
+	t.Run("gutter_stays_plain_before_marker", func(t *testing.T) {
+		th := NewTheme(Color256, DefaultPalette())
+		out := RenderDiff(th, "x.go", "aaaa\n", "aaab\n")
+		// the line number gutter renders in the default foreground: a changed row's
+		// first escape sequence comes after its digits and space, at the marker.
+		delLine := strings.Split(out, "\n")[2] // header, @@ hunk, then rows
+		assert.True(t, strings.HasPrefix(delLine, " 1 "), delLine)
+		_, rest, _ := strings.Cut(delLine, th.DiffDel.Open())
+		assert.True(t, strings.HasPrefix(rest, "- a"), delLine)
+	})
 	t.Run("intraline_emphasis_applied", func(t *testing.T) {
 		th := NewTheme(Color256, DefaultPalette())
 		out := RenderDiff(th, "x.go", "value := compute(a)\n", "value := compute(a, b)\n")

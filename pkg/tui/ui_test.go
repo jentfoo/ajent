@@ -344,6 +344,58 @@ func TestUIBusy(t *testing.T) {
 	stop()
 }
 
+// recordingUI drives a UI whose renderer writes SGR escapes into out, so the
+// phase color of the status glyph is observable (the vt emulator strips them).
+func TestUISpinnerPhaseColor(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	u := &UI{
+		theme:      NewTheme(Color256, DefaultPalette()),
+		render:     &inlineRenderer{t: &termState{out: &out, fd: -1, width: 80, height: 24}},
+		mode:       ModeInline,
+		status:     Status{Model: "test", MaxTokens: 1000},
+		in:         strings.NewReader(""),
+		inFd:       -1,
+		msgs:       make(chan string),
+		controls:   make(chan Control, 4),
+		done:       make(chan struct{}),
+		afterDelay: time.AfterFunc,
+	}
+	u.reader = newInputReader(u.in)
+	go u.reader.run()
+	th := u.theme
+	frame := func() {
+		u.mu.Lock()
+		u.repaint()
+		u.mu.Unlock()
+	}
+
+	// idle: the static resting frame renders dim
+	frame()
+
+	// waiting on the API: busy but nothing streaming yet
+	stop := u.Busy()
+	frame()
+
+	// a running tool takes priority over any streamed output
+	doneTool := u.ToolStart("bash", "bash: go test ./...")
+	u.Text("hello")
+	frame()
+
+	// streaming model output colors the glyph while a turn is in flight
+	doneTool("ok  0.4s")
+	frame()
+
+	stop()
+
+	// each phase's style appears at some point across the accumulated frames (the
+	// renderer diffs, so only changed rows are re-emitted).
+	for _, s := range []Style{th.Spinner, th.SpinnerWait, th.SpinnerTool, th.SpinnerStream} {
+		assert.Contains(t, out.String(), s.Open())
+	}
+}
+
 func TestUIStatusSpinnerLeftmost(t *testing.T) {
 	t.Parallel()
 
