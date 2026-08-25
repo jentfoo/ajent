@@ -52,8 +52,11 @@ func (p PathPolicy) Resolve(path string) (string, error) {
 // expandTilde replaces a leading ~ or ~/ with the user's home directory. ok is
 // false when the path does not start with ~ or no home can be found.
 func expandTilde(path string) (string, bool) {
-	if path != "~" && (len(path) < 2 || !isSlash(path[1])) {
-		return "", false
+	if len(path) == 0 || path[0] != '~' {
+		return "", false // only a leading ~ is special
+	}
+	if len(path) > 1 && !isSlash(path[1]) {
+		return "", false // leading ~ without a following slash stays literal
 	}
 	home, err := userHome()
 	if err != nil || home == "" {

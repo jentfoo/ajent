@@ -106,6 +106,40 @@ func TestResolveTildeMidPathNotExpanded(t *testing.T) {
 	assert.Equal(t, filepath.Join(cwd, "a~b.txt"), abs) // ~ only special at the start
 }
 
+func TestResolveRelativeSubdirNotTildeExpanded(t *testing.T) {
+	t.Parallel()
+
+	// a path whose second char is `/` but first is not `~` must resolve from Cwd,
+	// never as a home expansion: ./ and multi-segment relatives both hit this.
+	cwd := t.TempDir()
+	home := t.TempDir()
+	restore := setTestUserHome(home)
+	t.Cleanup(restore)
+
+	for _, rel := range []string{"./f.txt", "a/b/c.txt", "x/y"} {
+		abs, err := (PathPolicy{Cwd: cwd}).Resolve(rel)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, rel), abs, "relative %q must not become a ~ path", rel)
+	}
+}
+
+func TestResolveLeadingTildeNoSlashNotExpanded(t *testing.T) {
+	t.Parallel()
+
+	// a leading ~ not followed by / (~user, ~~) is left literal; only ~ or ~/
+	// expand to home.
+	cwd := t.TempDir()
+	home := t.TempDir()
+	restore := setTestUserHome(home)
+	t.Cleanup(restore)
+
+	for _, rel := range []string{"~user/x", "~~/y"} {
+		abs, err := (PathPolicy{Cwd: cwd}).Resolve(rel)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, rel), abs, "leading ~ without slash %q must stay literal", rel)
+	}
+}
+
 // setTestUserHome swaps userHome for the duration of a test and returns a
 // restore func.
 func setTestUserHome(home string) func() {
