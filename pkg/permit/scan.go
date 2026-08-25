@@ -198,7 +198,9 @@ func scanCommand(command string) Scan {
 }
 
 // compound reports whether command carries pipes, redirects or substitution that
-// defeat per-command session memory.
+// defeat per-command session memory. A leading env assignment also counts: it can
+// hijack what the head executes, so such a line is never treated as a simple,
+// nameable command.
 func compound(command string) bool {
 	s := scanCommand(command)
 	if s.HasSplitOp || s.HasUnsafeOp {
@@ -209,6 +211,9 @@ func compound(command string) bool {
 			if re.MatchString(seg) {
 				return true
 			}
+		}
+		if toks := segmentTokens(seg); len(toks) > 0 && envAssignRe.MatchString(firstToken(toks)) {
+			return true // leading assignment: not a nameable simple command
 		}
 	}
 	return false
@@ -243,7 +248,11 @@ func segmentIsReadOnly(seg, raw string) bool {
 		}
 	}
 	tokens := segmentTokens(seg)
-	switch head := stripPath(firstToken(tokens)); head {
+	head, ok := headOf(seg)
+	if !ok || head == "" { // env-prefixed or unnameable: never read-only
+		return false
+	}
+	switch head {
 	case "sed":
 		return sedReadSafe(raw) // quoted flags need the verbatim text
 	case "git":

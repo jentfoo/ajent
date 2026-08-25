@@ -580,6 +580,81 @@ func TestAskerCompoundCommandNeverMatchesNamedGrant(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestAskerCompoundSingleHeadGrantsPerNameForSession(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	b := newTestBarrier(p)
+
+	// ifconfig is the one non-readonly head; read-only `head` doesn't count, so the
+	// dialog offers per-name memory and answering it remembers bash:ifconfig.
+	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"ifconfig | head -n 10"}`), int(optAllowSession))
+	assert.Equal(t, tools.ActionAllow, got.Action)
+
+	// the named grant covers a plain ifconfig call (no new dialog).
+	n := p.count()
+	d1 := runAsk(b, t.Context(), "bash", []byte(`{"command":"ifconfig eth0"}`))
+	assert.Equal(t, tools.ActionAllow, d1.Action)
+	assert.Equal(t, n, p.count())
+
+	// and a future compound whose only non-readonly head is ifconfig.
+	d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"ifconfig | grep flags"}`))
+	assert.Equal(t, tools.ActionAllow, d2.Action)
+
+	// an unrelated write command is not covered by the named grant.
+	_, ok := b.sessionAllowed(bashCall("rm build"))
+	assert.False(t, ok)
+}
+
+func TestAskerCompoundMultipleHeadsFallsBackToBroadGrant(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	b := newTestBarrier(p)
+
+	// three distinct non-readonly heads (rm, mkdir, touch) defeat per-name memory; the
+	// dialog offers the broad grant instead.
+	displayIdx := slices.Index(optionActions("rm a && mkdir b && touch c"), int(optAllowCompound))
+	require.NotEqual(t, -1, displayIdx)
+	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm a && mkdir b && touch c"}`), displayIdx)
+	assert.Equal(t, tools.ActionAllow, got.Action)
+
+	// the broad grant covers a different compound command.
+	_, ok := b.sessionAllowed(bashCall("touch x | wc -l"))
+	assert.True(t, ok)
+
+	// but not a plain (non-compound) command.
+	_, ok = b.sessionAllowed(bashCall("rm build"))
+	assert.False(t, ok)
+}
+
+func TestAskerCompoundTwoHeadsGrantsBothForSession(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	b := newTestBarrier(p)
+
+	// rm and mkdir are the two non-readonly heads; answering allow-for-session adds both.
+	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build && mkdir dir"}`), int(optAllowSession))
+	assert.Equal(t, tools.ActionAllow, got.Action)
+
+	// each command is granted on its own (no new dialog).
+	n := p.count()
+	for _, cmd := range []string{"rm old", "mkdir fresh"} {
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":`+strconvQuote(cmd)+`}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+	}
+	assert.Equal(t, n+0, p.count())
+
+	// a compound whose non-readonly heads are both granted matches by name.
+	d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build && mkdir dir"}`))
+	assert.Equal(t, tools.ActionAllow, d2.Action)
+
+	// an unrelated write is not covered.
+	_, ok := b.sessionAllowed(bashCall("touch x"))
+	assert.False(t, ok)
+}
+
 func TestAskerAutoClassifiesReadOnlyAndResolvesDialog(t *testing.T) {
 	t.Parallel()
 

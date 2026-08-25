@@ -113,6 +113,22 @@ func TestClassifyBashUnparseableFailsSafe(t *testing.T) {
 	assert.Equal(t, VerdictPrompt, Classify(c, noRO))
 }
 
+func TestClassifyEnvPrefixNeverReadOnly(t *testing.T) {
+	t.Parallel()
+
+	// a leading env assignment can hijack what the head actually executes (PATH to
+	// another binary, LD_PRELOAD into any dynamically-linked one), so even an
+	// otherwise-read-only command must fail closed and prompt.
+	for _, cmd := range []string{
+		`PATH=/tmp/evil git status`,
+		`LD_PRELOAD=/tmp/evil.so cat x`,
+		`BASH_ENV=/tmp/evil.sh ls`,
+		`ENV=/tmp/evil.sh sh -c 'echo hi'`,
+	} {
+		assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+	}
+}
+
 func TestClassifyIgnoresReadOnlyMarkForBuiltinsNotInList(t *testing.T) {
 	t.Parallel()
 

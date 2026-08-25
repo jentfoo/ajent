@@ -12,22 +12,35 @@ func TestBuildOptions(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		in      string
-		wantLen int // 4 options either way; only the middle label differs
+		in       string
+		wantLen  int    // exactly four options either way; only the session option differs
+		expect   string // expected session-option text, "" if broad/plain (asserted via compound flag)
+		compound bool   // expect the broad compound grant (no per-name memory)
 	}{
-		{"ls -la", 4},
-		{"git status", 4},
-		{"rm build && ls", 4},    // pipe/&& carries control operators
-		{"cat a | sort", 4},      // pipeline
-		{"echo hi > out.txt", 4}, // redirect
+		{"ls -la", 4, "Allow `ls` for session", false},
+		{"/usr/bin/ifconfig eth0", 4, "Allow `ifconfig` for session", false}, // path stripped
+		{"git status", 4, "Allow `git` for session", false},
+		// a compound with one non-readonly head names it; read-only segments don't count
+		{"ifconfig | head -n 10", 4, "Allow `ifconfig` for session", false},
+		{"rm build && ls", 4, "Allow `rm` for session", false}, // ls is read-only, so only rm governs
+		// a repeated head collapses into one grant (git add && git commit)
+		{"git add x && git commit -m y", 4, "Allow `git` for session", false},
+		// two distinct non-readonly heads name both in the option
+		{"rm build && mkdir dir", 4, "Allow `rm` and `mkdir` for session", false},
+		// three or more commands defeat per-name memory -> broad grant
+		{"rm a && mkdir b && touch c", 4, "", true},
+		// redirect/substitution is not a simple command -> broad grant
+		{"echo hi > out.txt", 4, "", true},
 	}
 	for _, c := range cases {
 		opts := buildOptions(c.in)
 		assert.Len(t, opts, c.wantLen, c.in)
-		if compound(c.in) { // the broad grant replaces per-name memory for pipelines
-			assert.Contains(t, opts[2], "compound")
-		} else {
-			assert.NotContains(t, opts[2], "compound")
+		actions := optionActions(c.in) // labels and actions stay aligned
+		_ = actions
+		if c.compound {
+			assert.Contains(t, opts[optAllowSession], "compound")
+		} else if c.expect != "" {
+			assert.Equal(t, c.expect, opts[optAllowSession])
 		}
 	}
 }
@@ -43,7 +56,11 @@ func TestAllowSessionKey(t *testing.T) {
 		{"bash", `git status`, "bash:git"},
 		{"bash", `git -C repo log --oneline`, "bash:git"}, // flags after head still key on git
 		{"bash", `/usr/bin/git status`, "bash:git"},       // path stripped
-		{"write", `{}`, "write"},                          // tool name for non-bash
+		// a leading env assignment is never unwrapped, so the key can't collide with a
+		// real grant: PATH/LD_PRELOAD can hijack what `cmd` executes, so such a line
+		// must re-prompt rather than match an existing bash:<name>.
+		{"bash", `PATH=/tmp/evil git status`, "bash:"},
+		{"write", `{}`, "write"}, // tool name for non-bash
 	}
 	for _, c := range cases {
 		var tc agent.ToolCall

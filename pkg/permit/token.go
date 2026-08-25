@@ -123,6 +123,23 @@ func firstToken(tokens []string) string {
 	return ""
 }
 
+// envAssignRe matches a leading KEY=VALUE environment assignment.
+var envAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+// headOf returns the command name a segment runs after unwrapping launchers, or
+// ("",false) when none can be named reliably. A leading VAR= assignment is never
+// stripped: PATH/LD_PRELOAD/BASH_ENV/ENV — or any var a binary reads — can hijack
+// what the head actually executes, so such a segment has no trustworthy name and
+// must fail closed (never read-only, never matches an existing grant).
+func headOf(seg string) (string, bool) {
+	toks := segmentTokens(seg)
+	if len(toks) == 0 || envAssignRe.MatchString(firstToken(toks)) {
+		return "", false
+	}
+	h := stripPath(firstToken(toks))
+	return h, h != ""
+}
+
 // segmentTokens returns the effective head-walkable tokens of a collapsed segment.
 func segmentTokens(seg string) []string {
 	return unwrapLaunchers(strings.Fields(seg))

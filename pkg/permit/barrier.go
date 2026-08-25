@@ -291,9 +291,11 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 			b.resolveNotice("once", auto)
 			return allowDecision()
 		case optAllowSession:
-			if key, ok := b.sessionKey(call); ok && key != "" {
+			if keys, ok := b.allowSessionKeys(call); ok && len(keys) > 0 {
 				b.mu.Lock()
-				b.allows[key] = true
+				for _, k := range keys {
+					b.allows[k] = true
+				}
 				b.mu.Unlock()
 			}
 			b.resolveNotice("session", auto)
@@ -320,32 +322,49 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 	return tools.Deny("denied by user: " + reason)
 }
 
-// sessionKey returns the allow-session key for a call: command name for bash,
-// tool name otherwise. Compound calls have no named grant.
-func (b *Barrier) sessionKey(call agent.ToolCall) (string, bool) {
-	if b.isCompound(call) {
-		return "", false
+// allowSessionKeys returns the keys an "allow for session" remembers: the tool name,
+// or one "bash:<name>" per identifiable non-readonly command. (nil,false) when only
+// the broad grant applies.
+func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
+	if call.Name != bashTool {
+		return []string{call.Name}, true // tool name for non-bash
 	}
-	return allowSessionKey(call), true
-}
-
-// isCompound reports whether a bash call carries pipes, redirects or substitution.
-func (b *Barrier) isCompound(call agent.ToolCall) bool {
-	return call.Name == bashTool && compound(bashCommand(call.Input))
+	names, ok := sessionNames(bashCommand(call.Input))
+	if !ok || len(names) == 0 {
+		return nil, false // complex compound: no named grant to remember
+	}
+	keys := make([]string, 0, len(names))
+	for _, n := range names {
+		keys = append(keys, "bash:"+n)
+	}
+	return keys, true
 }
 
 // sessionAllowed checks the in-memory allow sets for a call. The returned string
-// is empty when no grant matched; ok distinguishes a match from none.
+// is empty when no grant matched; ok distinguishes a match from none. A named grant
+// covers a plain command and any compound whose non-readonly heads are all granted;
+// only a complex (unidentifiable) compound falls back to the broad grant.
 func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
-	if b.isCompound(call) {
+	cmd := bashCommand(call.Input)
+	if call.Name != bashTool || !compound(cmd) { // plain command or non-bash tool
+		key := allowSessionKey(call)
 		b.mu.Lock()
 		defer b.mu.Unlock()
-		return "", b.compoundAllowed
+		return key, b.allows[key]
 	}
-	key := allowSessionKey(call)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return key, b.allows[key]
+	heads, ok := compoundGoverningHeads(cmd)
+	if !ok || len(heads) == 0 {
+		return "", b.compoundAllowed // unidentifiable: only the broad grant covers it
+	}
+	for _, h := range heads {
+		if !b.allows["bash:"+h] {
+			// a named head missing; the broad grant may still cover this compound.
+			return "", b.compoundAllowed
+		}
+	}
+	return "session", true // every governing command is granted by name
 }
 
 // noteAllowed injects a steering note naming what was allowed and why.

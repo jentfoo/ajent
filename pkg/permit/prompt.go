@@ -42,19 +42,20 @@ type Dialog interface {
 // stopping the turn.
 type Noter func(note string)
 
-// dialogOption indexes one choice in an approval prompt. A plain command offers
-// per-name session memory; a compound one replaces it with the strictly-greater
-// broad grant, so exactly four options are shown either way.
+// dialogOption indexes one choice in an approval prompt. A command with a single
+// identifiable head offers per-name session memory; only a complex compound (no
+// reliable single command) replaces it with the strictly-greater broad grant, so
+// exactly four options are shown either way.
 const (
 	optAllow         = iota // this call only
 	optAllowNote            // allow and inject a steering note
-	optAllowSession         // remember by command/tool name for the session (plain commands)
-	optAllowCompound        // broad grant covering any compound command (compound commands)
+	optAllowSession         // remember by command/tool name for the session
+	optAllowCompound        // broad grant covering any compound command (complex compounds)
 	optDeny                 // refuse with an optional reason
 )
 
-// plainLabels are shown for a single-command call. There is nothing piped to cover,
-// so only per-name memory applies and no broad grant is offered.
+// plainLabels serve tool-name session memory for non-shell calls; a bash line with
+// nameable heads gets its own per-command label instead.
 var plainLabels = []string{
 	"Allow",
 	"Allow with note",
@@ -62,8 +63,8 @@ var plainLabels = []string{
 	"Deny",
 }
 
-// compoundLabels replace "allow for session" with the broader grant: a name can
-// never remember a piped pipeline, so only the broad form is offered.
+// compoundLabels replace per-name memory with the broad grant: a complex compound's
+// command cannot be named, so only the broad form is offered.
 var compoundLabels = []string{
 	"Allow",
 	"Allow with note",
@@ -71,23 +72,95 @@ var compoundLabels = []string{
 	"Deny",
 }
 
-// buildOptions returns the dialog options for a call: per-name memory for a plain
-// command, the broad grant in its place for a piped/redirected/substituted one.
-func buildOptions(command string) []string {
-	if !compound(command) {
-		return slices.Clone(plainLabels)
+// optionsFor returns the dialog's labels and their action mapping for command, kept
+// index-aligned so resolveChoice maps a rendered choice back to its opt constant.
+func optionsFor(command string) (labels []string, actions []int) {
+	if names, ok := sessionNames(command); ok && len(names) > 0 {
+		namedLabels := namedSessionLabel(names)
+		return []string{"Allow", "Allow with note", namedLabels, "Deny"},
+			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
 	}
-	return slices.Clone(compoundLabels)
+	if compound(command) { // complex; only the broad grant reliably covers it
+		return slices.Clone(compoundLabels),
+			[]int{optAllow, optAllowNote, optAllowCompound, optDeny}
+	}
+	// no head to name and not compound (non-bash tool): plain per-name memory.
+	return slices.Clone(plainLabels),
+		[]int{optAllow, optAllowNote, optAllowSession, optDeny}
+}
+
+func buildOptions(command string) []string {
+	labels, _ := optionsFor(command)
+	return labels
 }
 
 // optionActions maps a dialog's display index back to the logical opt constant,
-// matching buildOptions so Deny is always resolved as a denial regardless of where
-// it sits in the rendered list.
+// matching optionsFor so Deny is always resolved as a denial regardless of where it
+// sits in the rendered list.
 func optionActions(command string) []int {
-	if !compound(command) {
-		return []int{optAllow, optAllowNote, optAllowSession, optDeny}
+	_, actions := optionsFor(command)
+	return actions
+}
+
+// namedSessionLabel renders the allow-for-session option for one or two commands:
+// "Allow `ifconfig` for session" / "Allow `rm` and `mkdir` for session". The bash
+// tool prefix is dropped since only shell commands reach here.
+func namedSessionLabel(names []string) string {
+	if len(names) == 2 {
+		return fmt.Sprintf("Allow `%s` and `%s` for session", names[0], names[1])
 	}
-	return []int{optAllow, optAllowNote, optAllowCompound, optDeny}
+	return fmt.Sprintf("Allow `%s` for session", names[0])
+}
+
+// sessionNames returns the distinct non-readonly command names an "allow for
+// session" would remember for a bash line. (nil,false) when no reliable name list
+// exists — sub-shell/redirect or three or more commands — so only the broad grant applies.
+func sessionNames(command string) ([]string, bool) {
+	s := scanCommand(command)
+	if !s.HasSplitOp && len(s.Segments) <= 1 { // a single simple command
+		if s.HasUnsafeOp { // redirect/substitution: not a simple command
+			return nil, false
+		}
+		h, ok := headOf(strings.TrimSpace(command))
+		if !ok || h == "" {
+			return nil, false
+		}
+		return []string{h}, true
+	}
+	heads, ok := compoundGoverningHeads(command)
+	if !ok || len(heads) == 0 || len(heads) > 2 { // sub-shell or many commands: broad grant only
+		return nil, false
+	}
+	return heads, true
+}
+
+// compoundGoverningHeads returns the distinct non-readonly segment heads of a bash
+// line, or (nil,false) when sub-shells/redirects defeat reliable identification. A
+// repeated head collapses so `git add x && git commit` names one command.
+func compoundGoverningHeads(command string) ([]string, bool) {
+	s := scanCommand(command)
+	if s.HasUnsafeOp || len(s.Segments) == 0 {
+		return nil, false
+	}
+	var heads []string
+	for i, seg := range s.Segments {
+		raw := ""
+		if i < len(s.Raw) { // Segments and Raw stay index-aligned from pushSegment
+			raw = s.Raw[i]
+		}
+		if segmentIsReadOnly(seg, raw) {
+			continue // read-only segments never drive the prompt
+		}
+		h, ok := headOf(seg)
+		if !ok || h == "" { // env-prefixed or unidentifiable head defeats analysis
+			return nil, false
+		}
+		if slices.Contains(heads, h) {
+			continue // repeated head collapses into one grant (git add && git commit)
+		}
+		heads = append(heads, h)
+	}
+	return heads, true
 }
 
 // allowSessionKey names what an "allow for session" remembers: the command name
@@ -101,8 +174,11 @@ func allowSessionKey(call agent.ToolCall) string {
 	if len(s.Segments) == 0 {
 		return bashTool
 	}
-	toks := segmentTokens(s.Segments[0])
-	return "bash:" + stripPath(firstToken(toks))
+	h, ok := headOf(s.Segments[0])
+	if !ok || h == "" { // env-prefixed/unnameable: never matches a grant
+		return "bash:"
+	}
+	return "bash:" + h
 }
 
 // elideSubject bounds the dialog subject to decisionContextRows lines then
