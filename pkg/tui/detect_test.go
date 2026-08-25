@@ -82,23 +82,35 @@ func TestDetectTone(t *testing.T) {
 		assert.Empty(t, out.String())
 	})
 	t.Run("light_reply", func(t *testing.T) {
-		u, out := newRecordingUI(t, strings.NewReader("\x1b]11;rgb:ffff/ffff/ffff\x07"))
+		u, pw, out := newReplyUI(t)
 		swapEnv(t, nil)
 
-		assert.Equal(t, ToneLight, u.DetectTone())
+		done := make(chan Tone, 1)
+		go func() { done <- u.DetectTone() }()
+		feed(pw, "\x1b]11;rgb:ffff/ffff/ffff\x07")
+
+		assert.Equal(t, ToneLight, <-done)
 		assert.Contains(t, out.String(), backgroundQuery+attrsQuery)
 	})
 	t.Run("dark_reply", func(t *testing.T) {
-		u, _ := newRecordingUI(t, strings.NewReader("\x1b]11;rgb:1c1c/1c1c/1c1c\x1b\\"))
+		u, pw, _ := newReplyUI(t)
 		swapEnv(t, nil)
 
-		assert.Equal(t, ToneDark, u.DetectTone())
+		done := make(chan Tone, 1)
+		go func() { done <- u.DetectTone() }()
+		feed(pw, "\x1b]11;rgb:1c1c/1c1c/1c1c\x1b\\")
+
+		assert.Equal(t, ToneDark, <-done)
 	})
 	t.Run("attrs_fence_ends_wait", func(t *testing.T) {
-		u, _ := newRecordingUI(t, strings.NewReader("\x1b[?62;c"))
+		u, pw, _ := newReplyUI(t)
 		swapEnv(t, nil)
 
-		assert.Equal(t, ToneUnknown, u.DetectTone())
+		done := make(chan Tone, 1)
+		go func() { done <- u.DetectTone() }()
+		feed(pw, "\x1b[?62;c")
+
+		assert.Equal(t, ToneUnknown, <-done)
 	})
 	t.Run("no_reply_times_out", func(t *testing.T) {
 		pr, pw := io.Pipe()
@@ -121,6 +133,27 @@ func TestDetectTone(t *testing.T) {
 		assert.Equal(t, ToneUnknown, u.DetectTone())
 		assert.Empty(t, out.String())
 	})
+}
+
+// newReplyUI builds a UI whose input is fed on demand via the returned pipe
+// writer. DetectTone's wall-clock deadline is neutralized so a reply-based test
+// waits for its answer instead of racing a timer; closing pw on cleanup unblocks
+// it even when no answer arrives.
+func newReplyUI(tb testing.TB) (*UI, *io.PipeWriter, *strings.Builder) {
+	tb.Helper()
+	pr, pw := io.Pipe()
+	tb.Cleanup(func() { _ = pw.Close() })
+	u, out := newRecordingUI(tb, pr)
+	u.afterDelay = func(_ time.Duration, fn func()) *time.Timer {
+		return time.NewTimer(time.Hour)
+	}
+	return u, pw, out
+}
+
+// feed writes one terminal answer into the UI's input stream while DetectTone is
+// already waiting on its reply channels.
+func feed(pw io.Writer, reply string) {
+	_, _ = io.WriteString(pw, reply)
 }
 
 // swapEnv points the package env lookup at a fixed map for one test.
