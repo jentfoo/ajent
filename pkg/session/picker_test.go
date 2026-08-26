@@ -154,11 +154,38 @@ func TestTreeRowsShowsFork(t *testing.T) {
 	assert.Empty(t, guide["u1"])
 	assert.Equal(t, "├── ", guide["a1"], "older sibling is the first listed branch")
 	assert.Equal(t, "└── ", guide["u2"], "newer sibling closes the fork at the bottom")
-	assert.Equal(t, "   ", guide["a2"], "continuation blank because its parent u2 is last (newest at bottom)")
+	assert.Equal(t, "    ", guide["a2"], "continuation blank because its parent u2 is last (newest at bottom)")
 
 	// u2 is the last/newest sibling -> └──; a1 is not live.
 	assert.True(t, active["u1"] && active["u2"] && active["a2"])
 	assert.False(t, active["a1"])
+}
+
+// TestTreeRowsGuideAlignment verifies every guide cell is four columns wide, so
+// a branch's continuation lines up under the text of its own connector rather
+// than one column left of it.
+func TestTreeRowsGuideAlignment(t *testing.T) {
+	t.Parallel()
+
+	entries := []Entry{
+		sessionOnly("root"),
+		pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
+		pickAssistText("a1", "u1", "an answer"), // older branch, kept growing
+		pickMsg("u2", "a1", llm.Text(llm.RoleUser, "follow up on the old branch")),
+		pickMsg("u3", "u1", llm.Text(llm.RoleUser, "newer branch")),
+	}
+
+	guide := map[string]string{}
+	for _, r := range TreeRows(entries, "u3") {
+		guide[r.ID] = r.Guide
+	}
+	assert.Equal(t, "├── ", guide["a1"])
+	assert.Equal(t, "└── ", guide["u3"])
+	// u2 continues under a1, which is not the last child: a bar, four wide.
+	assert.Equal(t, "│   ", guide["u2"])
+	for id, g := range guide {
+		assert.Zerof(t, len([]rune(g))%4, "guide cells are four columns wide (id=%s, guide=%q)", id, g)
+	}
 }
 
 func idsOf(rows []TreeRow) []string {

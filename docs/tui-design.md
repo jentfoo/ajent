@@ -337,6 +337,21 @@ a short terminal is not a usable picker. Lists scroll internally with a
 `... N more` footer, which counts against the budget so row accounting stays
 exact per invariant 2.
 
+**Pick rows reserve a kind column.** A `PickItem` may carry a `Tag` (a short kind
+word) and a `Mark` (the hue it takes). Every row of a list pads its tag to the
+widest one present plus a space, blank tags included, so a label that draws a
+tree — the rewind picker's `├──`/`└──` guides — starts at one column whatever the
+row's kind. Lists with no tags render exactly as they did before the column
+existed.
+
+The rewind tree marks what is still in context by **shade**, not by a glyph: rows
+on the active branch take the saturated hue and a plain body, rows off it take
+the faint variant and a dim body, and the cursor row accents as always. Shade
+cannot carry that under `ColorNone`, so there — and only there — the row falls
+back to a `*` gutter ahead of the tag. `PickOptions.Initial` opens the list on
+the current head rather than the last row, so reopening after a rewind lands
+back at the same place in the tree.
+
 Queued pending-prompt rows (`SetQueued`) sit above an active interaction like any
 other live-block content: they yield first on a short terminal (activity-style)
 and are driver-owned, so `Reset()` does not clear them — the steer queue re-renders.
@@ -657,7 +672,8 @@ it automatically; do not replace it with a hand-listed set.
 |---|---|---|
 | `Thinking` | dim + italic | reasoning, so it never reads as reply text |
 | `Activity` | dim on the palette's shade (256/truecolor) | live sub-agent rows above the prompt, set apart from committed output; falls back to plain dim below 256 colors |
-| `UserTag` / `Assist` | two separable hues | the leading role word in the rewind tree picker |
+| `UserTag` / `Assist` / `ToolTag` | three separable hues | the leading kind word in the rewind tree picker |
+| `UserTagOff` / `AssistOff` / `ToolTagOff` | the same hues, faint | rewind rows off the active branch, so an abandoned fork recedes |
 | `User` | bold accent | echoed user messages |
 | `Dim` | dim | tool output, status, context lines |
 | `Accent` | the palette's accent hue | markers: `✻` thinking, `⏺` tool, list bullets |

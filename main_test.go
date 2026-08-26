@@ -98,6 +98,65 @@ func TestRewindStateRebuild(t *testing.T) {
 	assert.False(t, oldActive)
 }
 
+// TestInitialRow verifies the rewind picker opens where the context currently
+// ends rather than at the bottom of the newest branch, so reopening it after a
+// rewind lands back at the same place in the tree.
+func TestInitialRow(t *testing.T) {
+	t.Parallel()
+
+	tree := []session.TreeRow{
+		{ID: "u1", Active: true},
+		{ID: "a1", Active: true},  // head sits here after rewinding onto u2
+		{ID: "u2", Active: false}, // an abandoned fork below the head
+		{ID: "a2", Active: false},
+	}
+
+	t.Run("head_row", func(t *testing.T) {
+		assert.Equal(t, 1, initialRow(tree, "a1"))
+	})
+	t.Run("head_without_row", func(t *testing.T) {
+		// a session or tool-only entry has no row: the last row still in context stands in
+		assert.Equal(t, 1, initialRow(tree, "no-row"))
+	})
+	t.Run("nothing_active", func(t *testing.T) {
+		var stale []session.TreeRow
+		for _, r := range tree {
+			stale = append(stale, session.TreeRow{ID: r.ID})
+		}
+		assert.Equal(t, len(stale)-1, initialRow(stale, ""))
+	})
+	t.Run("single_row", func(t *testing.T) {
+		assert.Equal(t, 0, initialRow(tree[:1], "u1"))
+	})
+}
+
+// TestRewindRowLabels verifies each tree row kind carries a tag, so the picker's
+// role column is never blank and the tree guides stay aligned, and that the kind
+// word is not repeated in the row body.
+func TestRewindRowLabels(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		row     session.TreeRow
+		wantTag string
+		want    string
+	}{
+		{"user", session.TreeRow{Kind: session.RowUser, Label: "user: hi"}, "user", "hi"},
+		{"assistant", session.TreeRow{Kind: session.RowAssistant, Label: "assistant: hello"}, "agent", "hello"},
+		{"tool", session.TreeRow{Kind: session.RowTool, Label: "[ls] docs/"}, "tool", "[ls] docs/"},
+		{"compaction", session.TreeRow{Kind: session.RowCompaction, Label: "compaction: 12k → 4k"}, "compact", "12k → 4k"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			tag, mark := roleTag(c.row.Kind)
+			assert.Equal(t, c.wantTag, tag)
+			assert.NotEqual(t, tui.MarkNone, mark)
+			assert.Equal(t, c.want, rewindBody(c.row))
+		})
+	}
+}
+
 // TestRewindKeepsCurrentModel locks in that a rewind onto an earlier message does
 // not silently revert the active model to whatever produced it: /model then fork
 // must keep the switched-to model when that prior message is re-sent.

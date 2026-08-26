@@ -51,7 +51,7 @@ type TreeRow struct {
 	Kind   RowKind
 	Label  string
 	Active bool   // on the current head's path; abandoned forks are not
-	Guide  string // box-drawing branch prefix, e.g. "├──", "│  └──"; empty for flat rows
+	Guide  string // box-drawing branch prefix, e.g. "├── ", "│   └── "; empty for flat rows
 }
 
 // TreeRows walks a whole transcript as a tree and emits one row per pickable
@@ -131,7 +131,8 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 
 // treePrefix builds the box-drawing prefix that draws this node's branch: a "│"
 // continuation for each fork level above it (blank when that sibling was last), then
-// its own connector when it is directly under a fork point.
+// its own connector when it is directly under a fork point. Every cell is four
+// columns wide, connectors included, so a branch's children line up under its text.
 func treePrefix(node string, parentOf map[string]string, children map[string][]string) string {
 	var rev []string // node .. root
 	for id := node; ; {
@@ -154,9 +155,9 @@ func treePrefix(node string, parentOf map[string]string, children map[string][]s
 		kids := children[path[j]]
 		if len(kids) > 1 { // a fork level: does the branch toward node continue past it?
 			if dispLast(kids, path[j+1]) {
-				cols = append(cols, "   ")
+				cols = append(cols, "    ")
 			} else {
-				cols = append(cols, "│  ")
+				cols = append(cols, "│   ")
 			}
 		}
 	}

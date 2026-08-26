@@ -1232,8 +1232,8 @@ func searchItems(prompts []session.Prompt) []tui.SearchItem {
 	return out
 }
 
-// rewindBody returns a tree row's label without its leading role word, which is
-// rendered separately as a colored tag so user/assistant reads at a glance.
+// rewindBody returns a tree row's label without its leading kind word, which is
+// rendered separately as a colored tag so the row kind reads at a glance.
 func rewindBody(row session.TreeRow) string {
 	prefix := ""
 	switch row.Kind {
@@ -1241,20 +1241,24 @@ func rewindBody(row session.TreeRow) string {
 		prefix = "user: "
 	case session.RowAssistant:
 		prefix = "assistant: "
+	case session.RowCompaction:
+		prefix = "compaction: "
 	}
 	return strings.TrimPrefix(row.Label, prefix)
 }
 
-// roleTag maps a tree row kind to its colored tag and mark; tool/compaction rows
-// carry none.
+// roleTag maps a tree row kind to its colored tag and mark. Every kind carries
+// one, so the tag column is never blank and the tree guides stay aligned.
 func roleTag(kind session.RowKind) (string, tui.ItemMark) {
 	switch kind {
 	case session.RowUser:
 		return "user", tui.MarkUser
 	case session.RowAssistant:
-		return "assistant", tui.MarkAssistant
+		return "agent", tui.MarkAssistant
+	case session.RowCompaction:
+		return "compact", tui.MarkTool
 	default:
-		return "", tui.MarkNone
+		return "tool", tui.MarkTool
 	}
 }
 
@@ -1478,6 +1482,21 @@ func modelResolver(reg *llm.Registry) func(string) (llm.Model, error) {
 	return reg.Resolve
 }
 
+// initialRow is the tree row the rewind picker opens on: where the context
+// currently ends. Head is preferred; when it names an entry with no row of its
+// own (a session or tool-only entry) the last row still in context stands in.
+func initialRow(tree []session.TreeRow, head string) int {
+	if i := slices.IndexFunc(tree, func(r session.TreeRow) bool { return r.ID == head }); i >= 0 {
+		return i
+	}
+	for i := len(tree) - 1; i >= 0; i-- {
+		if tree[i].Active {
+			return i
+		}
+	}
+	return len(tree) - 1
+}
+
 // rewind reads the transcript back off disk and offers a picker over its whole
 // context tree, indented by depth so forks read as branches. Picking one of your
 // messages rewinds *before* it — head moves to that message's parent — and pre-
@@ -1498,19 +1517,18 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 
 	items := make([]tui.PickItem, len(tree))
 	for i, row := range tree {
-		lead := "  "
-		if row.Active {
-			lead = "* " // the chain currently in context
-		}
+		tag, mark := roleTag(row.Kind)
 		// Guide draws the branch ("├──", "└──", continuation bars); a flat trunk has none.
-		items[i] = tui.PickItem{Label: lead + row.Guide + rewindBody(row)}
-		if tag, mark := roleTag(row.Kind); tag != "" {
-			items[i].Tag = tag
-			items[i].Mark = mark
+		// Off shades the rows no longer in context, so an abandoned fork recedes.
+		items[i] = tui.PickItem{
+			Label: row.Guide + rewindBody(row),
+			Tag:   tag,
+			Mark:  mark,
+			Off:   !row.Active,
 		}
 	}
 	picked, err := ui.PickContext(context.Background(), "Rewind to", items,
-		tui.PickOptions{Placeholder: "filter", Initial: len(tree) - 1})
+		tui.PickOptions{Placeholder: "filter", Initial: initialRow(tree, head)})
 	if err != nil {
 		return // cancelled
 	}

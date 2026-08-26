@@ -223,8 +223,12 @@ type Theme struct {
 	SpinnerStream Style // model output arriving; thinking and text alike
 	Divider       Style // full-width solid band marking restored-context boundaries
 	Activity      Style // live sub-agent status rows: dim on a subtle background
-	UserTag       Style // "user:" role tag in the rewind tree picker
-	Assist        Style // "assistant:" role tag in the rewind tree picker
+	UserTag       Style // "user" role tag in the rewind tree picker
+	Assist        Style // "agent" role tag in the rewind tree picker
+	ToolTag       Style // "tool" / "compact" role tag in the rewind tree picker
+	UserTagOff    Style // the same three, faint: rows off the active branch recede
+	AssistOff     Style
+	ToolTagOff    Style
 	Warn          Style // notice levels, kept separate from the diff palette
 	Error         Style
 
@@ -300,6 +304,10 @@ func NewTheme(p ColorProfile, pal Palette) Theme {
 	t.DiffFile = styleFg(h.heading, attrBold)
 	t.UserTag = styleFg(h.userTag)
 	t.Assist = styleFg(h.assist)
+	t.ToolTag = styleFg(h.thinking)
+	t.UserTagOff = styleFg(h.userTag, attrDim)
+	t.AssistOff = styleFg(h.assist, attrDim)
+	t.ToolTagOff = styleFg(h.thinking, attrDim)
 	t.DiffAddWord = styleFg(h.diffAdd, attrReverse)
 	t.DiffDelWord = styleFg(h.diffDel, attrReverse)
 	return t

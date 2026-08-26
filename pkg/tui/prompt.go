@@ -25,8 +25,9 @@ type ItemMark int
 
 const (
 	MarkNone      ItemMark = iota
-	MarkUser               // blue "user" tag (rewind tree)
-	MarkAssistant          // yellow "assistant" tag (rewind tree)
+	MarkUser               // "user" tag (rewind tree)
+	MarkAssistant          // "agent" tag (rewind tree)
+	MarkTool               // "tool" / "compact" tag (rewind tree)
 )
 
 // PickItem is one row of a filterable list.
@@ -36,7 +37,8 @@ type PickItem struct {
 	Terms  []string // extra strings the filter matches, not displayed
 	Group  string   // source label; a dim header is emitted when it changes
 	Tag    string   // optional short role word rendered colored before Label
-	Mark   ItemMark // colors Tag; MarkNone leaves Tag uncolored and hidden
+	Mark   ItemMark // colors Tag; MarkNone leaves Tag uncolored and opts out of shading
+	Off    bool     // off the active branch (rewind tree): the whole row renders faint
 }
 
 // PickOptions tunes a Pick.
@@ -266,7 +268,7 @@ func refilterMatches(items []PickItem, filter string) (matches []int) {
 // bestScore returns the best score across an item's matchable strings.
 func bestScore(it PickItem, filter string) (int, bool) {
 	best, found := 0, false
-	for _, field := range append([]string{it.Label, it.Detail}, it.Terms...) {
+	for _, field := range append([]string{it.Label, it.Detail, it.Tag}, it.Terms...) {
 		if score, ok := matchScore(field, filter); ok && (!found || score > best) {
 			best, found = score, true
 		}
@@ -285,10 +287,11 @@ func (s *pickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	rows := []string{header, filterRow}
 
 	listRows := maxRows - len(rows)
+	tagCol := tagColumn(s.items)
 	start, end := windowFor(s.cursor, len(s.matches), listRows)
 	for i := start; i < end; i++ {
 		it := s.items[s.matches[i]]
-		rows = append(rows, pickItemRow(t, it, i == s.cursor, width))
+		rows = append(rows, pickItemRow(t, it, i == s.cursor, width, tagCol))
 	}
 	if len(s.matches) == 0 {
 		rows = append(rows, t.Dim.Wrap(selectIndent+"no matches"))
@@ -377,28 +380,85 @@ func optionRows(t Theme, o Option, selected bool, width int) []string {
 }
 
 // pickItemRow renders one Pick row: a cursor marker, an optional role tag colored
-// independently of selection so user/assistant reads at a glance, then the label
-// and detail under the base (dim/accent) style.
-func pickItemRow(t Theme, it PickItem, selected bool, width int) string {
-	marker, base := selectIndent, t.Dim
+// independently of selection so the row kind reads at a glance, then the label
+// and detail. tagCol is the width every row reserves for its tag, so labels that
+// draw a tree line up in one column whatever their tag.
+func pickItemRow(t Theme, it PickItem, selected bool, width, tagCol int) string {
+	marker := selectIndent
 	if selected {
-		marker, base = selectMarker, t.Accent
+		marker = selectMarker
 	}
-	tagStyle := markStyle(t, it.Mark)
-	line := marker + tagStyle.Wrap(it.Tag) + base.Wrap(it.Label)
+	line := marker + offMarker(t, it) + markStyle(t, it).Wrap(it.Tag) + padTag(it.Tag, tagCol) +
+		bodyStyle(t, it, selected).Wrap(it.Label)
 	if it.Detail != "" {
 		line += t.Dim.Wrap("  " + it.Detail)
 	}
 	return truncateDisplay(line, width)
 }
 
-// markStyle returns the palette style for a role tag; MarkNone is a no-op.
-func markStyle(t Theme, m ItemMark) Style {
-	switch m {
+// tagColumn is the width a list reserves for role tags: the widest tag present,
+// or zero when no row carries one.
+func tagColumn(items []PickItem) int {
+	col := 0
+	for _, it := range items {
+		col = max(col, displayWidth(it.Tag))
+	}
+	return col
+}
+
+// padTag pads a tag out to the column width plus one separating space. The
+// padding sits outside the tag style so no color bleeds across the gap.
+func padTag(tag string, col int) string {
+	if col == 0 {
+		return ""
+	}
+	return strings.Repeat(" ", col-displayWidth(tag)+1)
+}
+
+// offMarker marks the active chain with "*" only when color is unavailable; with
+// color the saturated/faint split carries it, and no glyph is spent on it.
+func offMarker(t Theme, it PickItem) string {
+	if t.Profile != ColorNone || it.Mark == MarkNone {
+		return ""
+	} else if it.Off {
+		return selectIndent
+	}
+	return "* "
+}
+
+// markStyle returns the palette style for a role tag, faint when the row is off
+// the active branch; MarkNone is a no-op.
+func markStyle(t Theme, it PickItem) Style {
+	switch it.Mark {
 	case MarkUser:
+		if it.Off {
+			return t.UserTagOff
+		}
 		return t.UserTag
 	case MarkAssistant:
+		if it.Off {
+			return t.AssistOff
+		}
 		return t.Assist
+	case MarkTool:
+		if it.Off {
+			return t.ToolTagOff
+		}
+		return t.ToolTag
+	default:
+		return Style{}
+	}
+}
+
+// bodyStyle shades a row's label: the cursor row accents, an untagged row (every
+// list but the rewind tree) stays dim as before, and among tagged rows the ones
+// still in context read plain while abandoned branches recede to dim.
+func bodyStyle(t Theme, it PickItem, selected bool) Style {
+	switch {
+	case selected:
+		return t.Accent
+	case it.Mark == MarkNone || it.Off:
+		return t.Dim
 	default:
 		return Style{}
 	}

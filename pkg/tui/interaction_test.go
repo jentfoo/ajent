@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // interactionUI drives a UI with a writable key pipe, for prompt tests.
@@ -186,23 +188,81 @@ func TestUIInputPrompt(t *testing.T) {
 }
 
 // TestPickItemRowRoleTags verifies the rewind tree colors its role word
-// independently of selection so user/assistant reads at a glance.
+// independently of selection so the row kind reads at a glance, and that rows
+// off the active branch recede to the faint variant of the same hue.
 func TestPickItemRowRoleTags(t *testing.T) {
 	t.Parallel()
 	th := NewTheme(Color256, DefaultPalette())
 
-	t.Run("user_tag_blue", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "/ the question"}, false, 80)
-		assert.Equal(t, selectIndent+th.UserTag.Wrap("user")+th.Dim.Wrap("/ the question"), row)
+	t.Run("user_tag_hue", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "the question"}, false, 80, 5)
+		assert.Equal(t, selectIndent+th.UserTag.Wrap("user")+"  "+Style{}.Wrap("the question"), row)
 	})
-	t.Run("assistant_tag_yellow", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Tag: "assistant", Mark: MarkAssistant, Label: "/ a reply"}, false, 80)
-		assert.Equal(t, selectIndent+th.Assist.Wrap("assistant")+th.Dim.Wrap("/ a reply"), row)
+	t.Run("agent_tag_hue", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Tag: "agent", Mark: MarkAssistant, Label: "a reply"}, false, 80, 5)
+		assert.Equal(t, selectIndent+th.Assist.Wrap("agent")+" "+Style{}.Wrap("a reply"), row)
 	})
-	t.Run("no_tag_plain_label", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Label: "a tool row"}, false, 80)
-		assert.Equal(t, selectIndent+th.Dim.Wrap("a tool row"), row)
+	t.Run("tool_tag_hue", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Tag: "tool", Mark: MarkTool, Label: "[ls] docs/"}, false, 80, 5)
+		assert.Equal(t, selectIndent+th.ToolTag.Wrap("tool")+"  "+Style{}.Wrap("[ls] docs/"), row)
 	})
+	t.Run("off_branch_faint", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "abandoned", Off: true}, false, 80, 5)
+		assert.Equal(t, selectIndent+th.UserTagOff.Wrap("user")+"  "+th.Dim.Wrap("abandoned"), row)
+	})
+	t.Run("selected_accents_body", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "picked"}, true, 80, 5)
+		assert.Equal(t, selectMarker+th.UserTag.Wrap("user")+"  "+th.Accent.Wrap("picked"), row)
+	})
+	t.Run("no_tag_plain_label", func(t *testing.T) { // every other picker: unchanged
+		row := pickItemRow(th, PickItem{Label: "a model"}, false, 80, 0)
+		assert.Equal(t, selectIndent+th.Dim.Wrap("a model"), row)
+	})
+}
+
+// TestPickItemRowAlignment verifies every row reserves the same tag column, so
+// the tree guides in a rewind list start at one column whatever the row kind.
+func TestPickItemRowAlignment(t *testing.T) {
+	t.Parallel()
+	th := NewTheme(Color256, DefaultPalette())
+
+	items := []PickItem{
+		{Tag: "user", Mark: MarkUser, Label: "├── a question"},
+		{Tag: "agent", Mark: MarkAssistant, Label: "│   a reply"},
+		{Tag: "tool", Mark: MarkTool, Label: "│   [ls] docs/"},
+		{Tag: "compact", Mark: MarkTool, Label: "│   12k → 4k"},
+		{Label: "an untagged row"},
+	}
+	col := tagColumn(items)
+	assert.Equal(t, 7, col, "the widest tag sets the column")
+
+	want := -1
+	for _, it := range items {
+		row := strutil.StripANSI(pickItemRow(th, it, false, 80, col))
+		guide := strings.Index(row, it.Label)
+		require.GreaterOrEqual(t, guide, 0)
+		if want < 0 {
+			want = guide
+		}
+		assert.Equalf(t, want, guide, "label column must not move with the tag (tag=%q)", it.Tag)
+	}
+}
+
+// TestPickItemRowNoColorMarksActive verifies the active chain stays identifiable
+// where shade cannot carry it: without color the row falls back to a "*" gutter.
+func TestPickItemRowNoColorMarksActive(t *testing.T) {
+	t.Parallel()
+	th := NewTheme(ColorNone, DefaultPalette())
+
+	live := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "in context"}, false, 80, 4)
+	off := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "abandoned", Off: true}, false, 80, 4)
+	assert.Equal(t, selectIndent+"* user in context", live)
+	assert.Equal(t, selectIndent+"  user abandoned", off)
+	assert.Equal(t, displayWidth(live)-len("in context"), displayWidth(off)-len("abandoned"))
+
+	// lists with no tags keep their plain rendering, gutter included
+	plain := pickItemRow(th, PickItem{Label: "a model"}, false, 80, 0)
+	assert.Equal(t, selectIndent+"a model", plain)
 }
 
 func TestUIPick(t *testing.T) {
@@ -246,6 +306,26 @@ func TestUIPick(t *testing.T) {
 		press(t, pw, "\r")
 
 		assert.Equal(t, 0, <-result)
+	})
+	t.Run("matches_role_tag", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		tagged := []PickItem{
+			{Tag: "agent", Mark: MarkAssistant, Label: "a reply"},
+			{Tag: "user", Mark: MarkUser, Label: "a question"},
+		}
+		result := make(chan int, 1)
+		go func() {
+			i, _ := u.Pick("Rewind to", tagged, PickOptions{})
+			result <- i
+		}()
+
+		waitFor(t, u, v, "Rewind to")
+		press(t, pw, "user") // the role word lives in Tag, not Label
+		waitFor(t, u, v, "user  a question")
+		press(t, pw, "\r")
+
+		assert.Equal(t, 1, <-result)
 	})
 	t.Run("initial_selection_honoured", func(t *testing.T) {
 		u, v, pw := interactionUI(t)

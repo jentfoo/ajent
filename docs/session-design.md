@@ -254,9 +254,13 @@ make that usable:
   entry's parent. The persisted head and each fork appear exactly once, so no
   branch becomes unreachable after switching away.
 - **TreeRows** walks the whole transcript as a tree for the rewind picker,
-  indenting by depth with box-drawing guides (`├──`, `└──`). Sibling branches
-  align at one level; nodes on the current head's path are marked active. Newest
-  work sits at the bottom, near where the picker opens.
+  indenting by depth with box-drawing guides (`├──`, `└──`). Every guide cell is
+  four columns wide, continuations (`│   `) included, so a branch's children line
+  up under the text of its own connector. Sibling branches align at one level;
+  nodes on the current head's path are marked active, which is what the picker
+  shades to separate the live chain from abandoned forks. Newest work sits at the
+  bottom, and the picker opens on the current head (`tui-design.md`, "Pick rows
+  reserve a kind column").
 
 **Multiple roots.** A tree normally has one root, the `session` entry. Appending
 after `SetHead("")` stamps an empty `ParentID` and starts a second, which
