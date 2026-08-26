@@ -191,7 +191,7 @@ func (m *Manager) Poll(ctx context.Context, id string) (Job, bool) {
 		j.mu.Lock()
 		j.consumed = true
 		j.mu.Unlock()
-		m.removePending(j.id) // the poll response carries the result; no steer may repeat it
+		m.claim(j.id) // the poll response carries the result; no steer may repeat it
 		return j.snapshot(), true
 	case <-timer.C:
 		return j.snapshot(), false // still running; caller reads progress for the payload
@@ -336,13 +336,7 @@ func (m *Manager) enqueue(id string) {
 // completing are dropped and never named, because the poll response already
 // carries their result.
 func (m *Manager) Boundary() []agent.Input {
-	m.mu.Lock()
-	if len(m.inFlight) > 0 { // a queued input has not landed yet; never double-send
-		m.mu.Unlock()
-		return nil
-	}
 	ids := slices.Clone(m.pending)
-	m.mu.Unlock()
 
 	deliverable := m.take(ids)
 	if len(deliverable) == 0 {
@@ -430,11 +424,14 @@ func dropIDs(ids, drop []string) []string {
 	return bulk.SliceFilterInPlace(func(id string) bool { return !slices.Contains(drop, id) }, ids)
 }
 
-// removePending drops an id whose result a poll is delivering, so no later
-// steer repeats it.
-func (m *Manager) removePending(id string) {
+// claim drops an id whose result a poll is delivering from every delivery list, so
+// no later steer repeats it and no later notice re-names it.
+func (m *Manager) claim(id string) {
 	m.mu.Lock()
-	m.pending = dropIDs(m.pending, []string{id})
+	one := []string{id}
+	m.pending = dropIDs(m.pending, one)
+	m.inFlight = dropIDs(m.inFlight, one)
+	m.noticeBatch = dropIDs(m.noticeBatch, one)
 	m.mu.Unlock()
 }
 

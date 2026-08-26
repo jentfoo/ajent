@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/mcp"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -1005,4 +1007,61 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	assert.Equal(t, 100000, cs.Window) // framed by the live model, not left at zero
 	assert.Equal(t, tokens.CompactAt(model), cs.Compact)
 	assert.NotZero(t, cs.Used)
+}
+
+// TestSubagentSinkTurnEnd pins the TurnEnd release: an aborted turn clears a
+// queued batch's in-flight marks so the next Flush re-offers it, while a clean
+// StopEndTurn leaves them set (no duplicate on a normal turn).
+func TestSubagentSinkTurnEnd(t *testing.T) {
+	t.Parallel()
+
+	newMgr := func() (*subagent.Manager, *atomic.Int32) {
+		var delivered atomic.Int32 // steers accepted by Deliver; Delivered never fires
+		mgr := subagent.New(subagent.Options{
+			Provider: func(llm.Model) (llm.Provider, error) {
+				return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("summary")}}}, nil
+			},
+			Deliver: func(agent.Input) bool { delivered.Add(1); return true },
+		})
+		t.Cleanup(mgr.Close)
+		return mgr, &delivered
+	}
+	settle := func(t *testing.T, m *subagent.Manager, id string) {
+		require.Eventually(t, func() bool {
+			for _, j := range m.List() {
+				if j.ID == id && j.Status == subagent.StatusDone {
+					return true
+				}
+			}
+			return false
+		}, 2*time.Second, 5*time.Millisecond)
+	}
+
+	t.Run("abort_releases_marks", func(t *testing.T) {
+		mgr, delivered := newMgr()
+		id := mgr.Start("task", "")
+		settle(t, mgr, id)
+
+		sink := subagentSink{mgr: mgr}
+		mgr.Flush() // steer accepted; the mark is now in flight
+		assert.EqualValues(t, 1, delivered.Load())
+
+		sink.TurnEnd(agent.TurnResult{Stop: llm.StopAborted})
+		mgr.Flush() // released marks let the pending id ride again
+		assert.EqualValues(t, 2, delivered.Load())
+	})
+
+	t.Run("clean_keeps_marks", func(t *testing.T) {
+		mgr, delivered := newMgr()
+		id := mgr.Start("task", "")
+		settle(t, mgr, id)
+
+		sink := subagentSink{mgr: mgr}
+		mgr.Flush() // steer accepted; the mark is now in flight
+		assert.EqualValues(t, 1, delivered.Load())
+
+		sink.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn}) // no release
+		mgr.Flush() // still in flight; nothing may re-offer
+		assert.EqualValues(t, 1, delivered.Load())
+	})
 }

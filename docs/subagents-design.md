@@ -262,16 +262,17 @@ pieces:
   boundary hook only fires mid-turn). The front end's `Deliver` returns false
   when the parent is idle; ids stay pending.
 
-At most one batch is in flight at a time (`inFlight`); a boundary that finds one
-queued returns nothing. `agent_poll` claiming a result sets `consumed` and drops
-the id from `pending`, so neither channel names it afterwards.
+Marks are per id: a boundary emits whatever is not already spoken for, so no
+single stuck mark can block unrelated ids. `agent_poll` claiming a result sets
+`consumed` and drops the id from every delivery list — `pending`, `inFlight` and
+`noticeBatch` — so neither channel names it afterwards.
 
 **Delivery confirmation.** `Input.Delivered` fires only when the steer actually
 lands in context (appended to `State.Messages`), so it clears exactly the ids
 that message named and starts a fresh UI notice batch. A steer dropped by an
-interrupt never fires it: the front end calls `Manager.Interrupted()` alongside
-`Agent.Interrupt()`, releasing the in-flight marks so the next `Flush` can
-re-offer — delivery is confirmed, not assumed.
+interrupt never fires it: the front-end sink's `TurnEnd` reacts to a turn ending
+`llm.StopAborted`, calling `Manager.Interrupted()` so the in-flight marks release
+and the next `Flush` can re-offer — delivery is confirmed, not assumed.
 
 **Never start a turn on an idle agent.** An agent that talks to the user unprompted
 is a bug. `Boundary` runs only inside a live turn's `drainSteer`, and the front end
@@ -321,10 +322,11 @@ barrier exist, with adapters:
 - `Boundary` → chained ahead of the steer queue's `q.pull` in
   `Options.OnBoundary`, so completion steers and queued user prompts land at the
   same step boundary with the injected notice ahead of the user's direction
-- A tiny sink (`NopSink`, overriding only `TurnStart`) appended to `opts.Sinks`
-  calls `mgr.Flush()`
-- `watchControls`' Esc/Ctrl+C handlers call `mgr.Interrupted()` right after
-  `ag.Interrupt()`, releasing in-flight marks for the re-offer
+- A tiny sink (`NopSink`) appended to `opts.Sinks` overrides `TurnStart` to call
+  `mgr.Flush()` and `TurnEnd` to release in-flight marks whenever the turn ends
+  `llm.StopAborted`, so every interrupt path — Esc/Ctrl+C, the plan controller's
+  `/plan-stop` abort, headless — clears them through one seam instead of each call
+  site remembering
 
 Headless mode (`oneshot.go`) has no steer queue, so `Options.OnBoundary` is
 `mgr.Boundary` directly and the `Deliver` hook drives the idle case.

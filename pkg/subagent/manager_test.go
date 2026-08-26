@@ -222,7 +222,7 @@ func TestCompletionBatching(t *testing.T) {
 		ins := m.Boundary()
 		require.Len(t, ins, 1)
 		assert.Contains(t, ins[0].Text, strings.Join(ids, ", "))
-		// one input is in flight; a second boundary pull sends nothing
+		// ids are now in flight; a second boundary pull sends nothing (per-id marks)
 		assert.Empty(t, m.Boundary())
 	})
 
@@ -301,6 +301,53 @@ func TestCompletionBatching(t *testing.T) {
 		txts := c.deliveredTexts()
 		require.Len(t, txts, 2)
 		assert.Contains(t, txts[1], id)
+	})
+
+	// a poll claiming an id must also clear its notice-batch entry so the next
+	// completion's keyed notice does not re-name work the model already retrieved
+	t.Run("poll_clears_notice_batch", func(t *testing.T) {
+		c := newCapture()
+		g := &gatedProvider{}
+		m := New(Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
+			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
+		})
+		t.Cleanup(m.Close)
+
+		id1 := m.Start("a", "")
+		g.releaseAll()
+		require.Eventually(t, func() bool { return c.noticeCount() == 1 }, 2*time.Second, 5*time.Millisecond)
+		assert.Equal(t, "Sub-agent "+id1+" completed", c.lastNotice())
+
+		_, ok := m.Poll(t.Context(), id1) // the model retrieves the result itself
+		require.True(t, ok)
+
+		id2 := m.Start("b", "")
+		g.releaseAll()
+		require.Eventually(t, func() bool { return c.noticeCount() == 2 }, 2*time.Second, 5*time.Millisecond)
+		assert.Equal(t, "Sub-agent "+id2+" completed", c.lastNotice(), "a polled id must never be re-named")
+	})
+
+	// a leaked in-flight mark for an id that no longer exists must not stall the
+	// boundary: take skips per-id marks, so unrelated completions still ride it
+	t.Run("stranded_mark_never_stalls_boundary", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
+		m := New(Options{Provider: p})
+		t.Cleanup(m.Close)
+
+		m.mu.Lock()
+		m.inFlight = []string{"sub-9"} // a mark for a job that no longer exists
+		m.mu.Unlock()
+
+		id := m.Start("x", "")
+		require.Eventually(t, func() bool {
+			s, ok := jobStatus(m, id)
+			return ok && s == StatusDone
+		}, 2*time.Second, 5*time.Millisecond)
+
+		ins := m.Boundary()
+		require.Len(t, ins, 1)
+		assert.Contains(t, ins[0].Text, id)
 	})
 }
 

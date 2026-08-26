@@ -540,11 +540,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// resume restores it; the config file is never rewritten.
 		_ = console.SetSessionSetting("permissions.mode", m.String())
 	}
-	watchControls(ui, ag, q, stager, ictl, quit, onModeCycle, func() {
-		if sag != nil {
-			sag.Interrupted()
-		}
-	})
+	watchControls(ui, ag, q, stager, ictl, quit, onModeCycle)
 	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
@@ -865,6 +861,15 @@ type subagentSink struct {
 }
 
 func (s subagentSink) TurnStart(agent.TurnInfo) { s.mgr.Flush() }
+
+// TurnEnd releases in-flight marks after an interrupted turn: Agent.Interrupt drops
+// queued steers without their Delivered, so the marks must clear or later batches wait
+// behind a delivery that never comes. Every interrupt path ends its turn StopAborted.
+func (s subagentSink) TurnEnd(r agent.TurnResult) {
+	if r.Stop == llm.StopAborted {
+		s.mgr.Interrupted()
+	}
+}
 
 // turnRecorder keeps the last turn's result so a turn-boundary hook can tell a
 // clean stop from an abort or a provider error. Prompt only returns an error, and
@@ -1601,7 +1606,7 @@ const doublePressWindow = 2 * time.Second
 // turn, while Ctrl+D or a double Ctrl+C on an idle empty editor quits. Closing
 // quit signals driver to return, which lets main's deferred ui.Close restore the
 // terminal. onModeCycle runs when Shift+Tab is pressed; the front end wires it.
-func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle, onInterrupt func()) {
+func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
 	go func() {
 		var lastInt time.Time
 		for c := range ui.Controls() {
@@ -1611,7 +1616,6 @@ func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.S
 				case ag.Running():
 					q.abort() // queued messages return to the editor, joined with newlines
 					ag.Interrupt()
-					onInterrupt() // queued sub-agent steers were dropped without their confirm
 				case initCtl.abort(): // a minutes-long /init survey is escapable too
 				case stager.Pending():
 					stager.Cancel() // Esc cancels an in-flight staged shell command
@@ -1620,7 +1624,6 @@ func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.S
 				if ag.Running() {
 					q.abort()
 					ag.Interrupt()
-					onInterrupt() // queued sub-agent steers were dropped without their confirm
 					continue
 				}
 				if initCtl.abort() {
