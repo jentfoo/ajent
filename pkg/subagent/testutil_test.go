@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -208,6 +209,23 @@ func (c *capture) noticeCount() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.notices)
+}
+
+// noticeTexts returns every notice sent so far.
+func (c *capture) noticeTexts() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.notices)
+}
+
+// lastNotice returns the most recent notice, or "" when none.
+func (c *capture) lastNotice() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.notices) == 0 {
+		return ""
+	}
+	return c.notices[len(c.notices)-1]
 }
 
 var _ agent.Tool = (*fakeTool)(nil)

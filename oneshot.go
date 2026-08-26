@@ -160,6 +160,9 @@ func runHeadless(o headlessOptions) int {
 	}
 	toolsReg.MarkReadOnly([]string{"agent_start", "agent_poll", "agent_list"})
 	opts.Sinks = append(opts.Sinks, subagentSink{mgr: sag})
+	// headless runs have no queued prompts; the boundary hook serves completions
+	// alone, deciding membership when the message lands so polls are never duplicated
+	opts.OnBoundary = sag.Boundary
 
 	servers, mwarns, merr := mcp.LoadConfig(cwdOrDot())
 	if merr != nil {

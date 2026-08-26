@@ -69,9 +69,11 @@ Concurrency model:
 - The `sync.WaitGroup.Add(1)` happens **before** the spawn goroutine launches so
   `Close`'s wait never races a pending add. `wg.Done`, closing `j.done` and
   releasing the semaphore all run in one defer on the job goroutine.
-- A mutex guards the `jobs map[string]*job` and the `pending []string` completion
-  queue; per-job fields (status, timestamps, summary, pollers) sit under a second
-  per-job lock so polls read snapshots while the owning goroutine mutates them.
+- A mutex guards the `jobs map[string]*job` plus the delivery state — `pending`
+  (completed ids awaiting a message), `inFlight` (ids a queued message names) and
+  `noticeBatch` (completions since the last delivered steer) — while per-job fields
+  (status, timestamps, summary, pollers) sit under a second per-job lock so polls
+  read snapshots while the owning goroutine mutates them.
 
 **Shutdown.** `Close` calls `StopAll`, then waits on the waitgroup with a short
 bound (`closeWait = 2s`) before clearing activity rows and the status segment, so
@@ -238,28 +240,46 @@ rather than letting a model call them. Two consequences a caller must respect:
 ### Completion when nobody is polling
 
 A job that finishes while no poll waits must still reach the model, or the work is
-wasted. Two channels:
+wasted. Delivery is **batched and decided late**: completions only accumulate;
+the message naming them is built at the moment it lands, never before. Three
+pieces:
 
-- **UI notice** — `Options.Notice("Sub-agent sub-N completed")`, keyed by the front
-  end (`NotifyKeyed`) so consecutive notices collapse in place rather than stack.
-  Suppressed for aborts.
-- **Context steer** — on completion, if no poller is waiting, the id joins
-  `pending` and the manager calls `Options.Deliver(agent.Input{Text: notice,
-  Delivered: confirm})`. The front end's `Deliver` returns false when the parent is
-  idle; ids stay pending.
+- **UI notice** — fired at completion (`Options.Notice`), keyed by the front end
+  (`NotifyKeyed`) so consecutive notices collapse in place rather than stack. The
+  text names every completion since the last delivered steer, so a fan-out reads
+  as one updating line (`Sub-agents sub-1, sub-2, sub-3 completed`), not one row
+  per agent. Suppressed for aborts.
+- **Context steer at a step boundary** — completed ids park in `pending`; the
+  host chains `Manager.Boundary()` into `agent.Options.OnBoundary`, so on the
+  loop goroutine — at the exact moment `drainSteer` appends the message — the
+  manager filters `pending` down to ids with no poller and no consumption and
+  returns **one** `Input` naming them all. This late decision is what prevents
+  duplicate alerts: a batch that accumulated while the model streamed is
+  re-checked when it lands, so ids the model already retrieved with `agent_poll`
+  in the meantime are dropped and never named again.
+- **Context steer at turn start** — `Manager.Flush()` offers pending ids through
+  the `Options.Deliver` hook for completions that landed while no turn ran (the
+  boundary hook only fires mid-turn). The front end's `Deliver` returns false
+  when the parent is idle; ids stay pending.
+
+At most one batch is in flight at a time (`inFlight`); a boundary that finds one
+queued returns nothing. `agent_poll` claiming a result sets `consumed` and drops
+the id from `pending`, so neither channel names it afterwards.
 
 **Delivery confirmation.** `Input.Delivered` fires only when the steer actually
-lands in context (appended to `State.Messages`), so `confirm` clears exactly the ids
-that message named. One dropped by an interrupt stays pending and is re-offered —
-delivery is confirmed, not assumed.
+lands in context (appended to `State.Messages`), so it clears exactly the ids
+that message named and starts a fresh UI notice batch. A steer dropped by an
+interrupt never fires it: the front end calls `Manager.Interrupted()` alongside
+`Agent.Interrupt()`, releasing the in-flight marks so the next `Flush` can
+re-offer — delivery is confirmed, not assumed.
 
 **Never start a turn on an idle agent.** An agent that talks to the user unprompted
-is a bug. The front end wires `Deliver` as `if !ag.Running() { return false };
-return ag.Steer(in)`, and deliberately does **not** use `OnSettled` (which would let
-a steer append inside the settled window). Pending completions reach the model on
-the next *real* turn via `Flush()` called from a turn-start observer sink:
-at that point `running` is true, so the steer queues and lands at step 1 without
-ever starting a turn.
+is a bug. `Boundary` runs only inside a live turn's `drainSteer`, and the front end
+wires `Deliver` as `if !ag.Running() { return false }; return ag.Steer(in)`, and
+deliberately does **not** use `OnSettled` (which would let a steer append inside
+the settled window). Pending completions reach the model on the next *real* turn
+via `Flush()` called from a turn-start observer sink: at that point `running` is
+true, so the steer queues and lands at step 1 without ever starting a turn.
 
 ### Status segment
 
@@ -298,8 +318,16 @@ barrier exist, with adapters:
 - `Notice` → `ui.NotifyKeyed("subagent", msg, LevelInfo)`
 - `Status` → `ui.SetStatusSegment({Key:"subagents"})`
 - `Deliver` → the `Running()`-guarded `ag.Steer`, per above
+- `Boundary` → chained ahead of the steer queue's `q.pull` in
+  `Options.OnBoundary`, so completion steers and queued user prompts land at the
+  same step boundary with the injected notice ahead of the user's direction
 - A tiny sink (`NopSink`, overriding only `TurnStart`) appended to `opts.Sinks`
   calls `mgr.Flush()`
+- `watchControls`' Esc/Ctrl+C handlers call `mgr.Interrupted()` right after
+  `ag.Interrupt()`, releasing in-flight marks for the re-offer
+
+Headless mode (`oneshot.go`) has no steer queue, so `Options.OnBoundary` is
+`mgr.Boundary` directly and the `Deliver` hook drives the idle case.
 
 The three tools are registered under source `builtin`, enabled by default, before
 the permission barrier's guard attaches (so `/tools` ordering matches other sources),
@@ -340,6 +368,9 @@ Per-file `_test.go`, table-driven, `llm.ScriptedProvider` throughout, no
 - **Notification** — a poll in flight suppresses the steer; with no poller a steer is
   delivered; a false `Deliver` leaves ids pending and later `Flush` re-offers;
   `Delivered` clears exactly the named ids. An idle parent never starts a turn.
+  Batching: completions merge into one boundary input and one accumulating keyed
+  notice; ids polled before the boundary are never named; an interrupt releases
+  the in-flight marks and the next `Flush` re-offers.
 - **Empty summary** — nudge → summary; two empty nudges → placeholder.
 - **Activity rows** — one per job, coalesced/cleared on completion, never in history.
 - **Accounting** — child spend appears in `ChildTotal()` and the parent's `Total()`;
@@ -352,7 +383,8 @@ Per-file `_test.go`, table-driven, `llm.ScriptedProvider` throughout, no
 2. Nothing from a child ever reaches committed history — its sink feeds activity rows
    only.
 3. Completion delivery is confirmed: ids clear only when the steer lands, and one
-   dropped by an interrupt is re-offered.
+   dropped by an interrupt is re-offered. A completion message never names an id
+   a poll already delivered — membership is decided when the message lands.
 4. A completion never starts a turn on an idle parent; `OnSettled` is unused for this.
 5. Child spend rolls up into the parent's totals but never moves its context bar.
 6. `Close` cancels everything and returns promptly even if a provider stalls.

@@ -66,49 +66,59 @@ func TestCompletionNotification(t *testing.T) {
 	t.Parallel()
 
 	// a finished job reaches the user and the model when nobody is polling for it.
-	t.Run("notifies_and_steers_without_poll", func(t *testing.T) {
+	t.Run("notifies_at_completion_steers_at_boundary", func(t *testing.T) {
 		c := newCapture()
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
 		m := New(Options{
 			Provider: p,
 			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
-			Deliver: func(in agent.Input) bool {
-				c.mu.Lock()
-				c.delivers = append(c.delivers, in)
-				c.mu.Unlock()
-				return true // parent running; the steer lands
-			},
 		})
 		t.Cleanup(m.Close)
 
 		id := m.Start("x", "")
-		require.Eventually(t, func() bool {
-			s, ok := jobStatus(m, id)
-			return ok && s == StatusDone
-		}, time.Second, 5*time.Millisecond)
+		require.Eventually(t, func() bool { return c.noticeCount() == 1 }, 2*time.Second, 5*time.Millisecond)
+		assert.Equal(t, []string{"Sub-agent " + id + " completed"}, c.noticeTexts())
 
-		assert.Equal(t, 1, c.noticeCount())
-		// a steer naming the completed id was offered to the running parent
-		txts := c.deliveredTexts()
-		require.NotEmpty(t, txts)
-		assert.Contains(t, txts[len(txts)-1], id)
+		ins := m.Boundary() // the step boundary pulls the batched completion input
+		require.Len(t, ins, 1)
+		assert.Contains(t, ins[0].Text, id)
+		ins[0].Delivered() // simulate the message landing
+		m.mu.Lock()
+		assert.Empty(t, m.pending)
+		m.mu.Unlock()
 	})
 
 	t.Run("suppressed_when_polling", func(t *testing.T) {
 		c := newCapture()
-		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("summary", llm.Usage{})}})
+		g := &gatedProvider{} // completion held until the poller is registered
 		m := New(Options{
-			Provider: p,
+			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
 		})
 		t.Cleanup(m.Close)
 
 		id := m.Start("x", "")
-		j, ok := m.Poll(t.Context(), id)
-		require.True(t, ok)
-		assert.Equal(t, StatusDone, j.Status)
-		// a poll held the wait for this job and consumed it, so no completion notice was sent
+		type pollRes struct {
+			j  Job
+			ok bool
+		}
+		res := make(chan pollRes, 1)
+		go func() { // register the poller before the job can finish
+			j, ok := m.Poll(t.Context(), id)
+			res <- pollRes{j, ok}
+		}()
+		require.Eventually(t, func() bool { // the poller must be waiting first
+			jj, ok := m.lookup(id)
+			return ok && jj.statusOf() == StatusRunning
+		}, 2*time.Second, 5*time.Millisecond)
+
+		g.releaseAll()
+		r := <-res
+		require.True(t, r.ok)
+		assert.Equal(t, StatusDone, r.j.Status)
+		// a poll held the wait for this job and consumed it, so no notice or steer names it
 		assert.Zero(t, c.noticeCount())
+		assert.Empty(t, m.Boundary())
 	})
 
 	t.Run("deliver_idle_leaves_pending_and_flush_reoffers", func(t *testing.T) {
@@ -126,15 +136,19 @@ func TestCompletionNotification(t *testing.T) {
 		t.Cleanup(m.Close)
 
 		id := m.Start("x", "")
+		// completion alone offers nothing while the parent is idle: no timer exists
+		// to fire, so the ids wait for the next turn start
 		require.Eventually(t, func() bool {
 			s, ok := jobStatus(m, id)
 			return ok && s == StatusDone
-		}, time.Second, 5*time.Millisecond)
-		// the completion was offered once and left pending because the parent is idle
-		assert.Len(t, c.deliveredTexts(), 1)
+		}, 2*time.Second, 5*time.Millisecond)
+		assert.Empty(t, c.deliveredTexts())
 
-		m.Flush() // a turn-start observer re-offers pending completions
-		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 2 }, time.Second, 5*time.Millisecond)
+		m.Flush() // a turn-start observer offers pending completions
+		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 1 }, 2*time.Second, 5*time.Millisecond)
+
+		m.Flush() // still undelivered (idle); the next turn start offers again
+		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 2 }, 2*time.Second, 5*time.Millisecond)
 	})
 
 	t.Run("delivered_clears_only_named_ids", func(t *testing.T) {
@@ -182,6 +196,114 @@ func TestCompletionNotification(t *testing.T) {
 		m.Flush() // still no deliverer for an idle agent; nothing must start a turn
 	})
 }
+
+// TestCompletionBatching covers the one-message-per-boundary contract: completions
+// share a single keyed notice and a single steer, ids a poll already claimed are
+// never named, and an interrupt releases the in-flight marks for re-offer.
+func TestCompletionBatching(t *testing.T) {
+	t.Parallel()
+
+	// completions between boundaries ride one input naming every id
+	t.Run("boundary_merges_batch", func(t *testing.T) {
+		c := newCapture()
+		g := &gatedProvider{}
+		m := New(Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
+			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
+		})
+		t.Cleanup(m.Close)
+
+		ids := []string{m.Start("a", ""), m.Start("b", ""), m.Start("c", "")}
+		g.releaseAll()
+		require.Eventually(t, func() bool { return c.noticeCount() == 3 }, 2*time.Second, 5*time.Millisecond)
+		// the keyed notice accumulates: the last one names every completion
+		assert.Equal(t, "Sub-agents "+strings.Join(ids, ", ")+" completed", c.lastNotice())
+
+		ins := m.Boundary()
+		require.Len(t, ins, 1)
+		assert.Contains(t, ins[0].Text, strings.Join(ids, ", "))
+		// one input is in flight; a second boundary pull sends nothing
+		assert.Empty(t, m.Boundary())
+	})
+
+	// the observed failure mode: a batch that queued mid-step must not name ids
+	// the model polled before the message landed
+	t.Run("boundary_drops_polled_ids", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: summaryTurn("one", llm.Usage{})},
+			{Events: summaryTurn("two", llm.Usage{})},
+		})
+		m := New(Options{Provider: p})
+		t.Cleanup(m.Close)
+
+		id1 := m.Start("a", "")
+		id2 := m.Start("b", "")
+		for _, id := range []string{id1, id2} {
+			require.Eventually(t, func() bool {
+				s, ok := jobStatus(m, id)
+				return ok && s == StatusDone
+			}, 2*time.Second, 5*time.Millisecond)
+		}
+
+		_, ok := m.Poll(t.Context(), id1) // the model polls one result itself
+		require.True(t, ok)
+
+		ins := m.Boundary()
+		require.Len(t, ins, 1)
+		assert.Contains(t, ins[0].Text, id2)
+		assert.NotContains(t, ins[0].Text, id1, "a polled id must never be named")
+	})
+
+	// every result polled before the boundary: no input at all
+	t.Run("boundary_silent_when_all_polled", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: summaryTurn("one", llm.Usage{})},
+			{Events: summaryTurn("two", llm.Usage{})},
+		})
+		m := New(Options{Provider: p})
+		t.Cleanup(m.Close)
+
+		ids := []string{m.Start("a", ""), m.Start("b", "")}
+		for _, id := range ids {
+			j, ok := m.Poll(t.Context(), id)
+			require.True(t, ok)
+			assert.Equal(t, StatusDone, j.Status)
+		}
+		assert.Empty(t, m.Boundary())
+	})
+
+	// an interrupt drops a queued steer without its Delivered; the marks must
+	// release so the next turn start can re-offer the same ids
+	t.Run("interrupt_reoffers_dropped_batch", func(t *testing.T) {
+		c := newCapture()
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
+		m := New(Options{
+			Provider: p,
+			Deliver: func(in agent.Input) bool {
+				c.mu.Lock()
+				c.delivers = append(c.delivers, in)
+				c.mu.Unlock()
+				return true
+			},
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("x", "")
+		require.Eventually(t, func() bool {
+			s, ok := jobStatus(m, id)
+			return ok && s == StatusDone
+		}, 2*time.Second, 5*time.Millisecond)
+		m.Flush() // the turn start queued the batch into the interrupted turn
+		require.Len(t, c.deliveredTexts(), 1)
+
+		m.Interrupted() // queued steer dropped; Delivered will never fire
+		m.Flush()       // the next turn start re-offers the pending batch
+		txts := c.deliveredTexts()
+		require.Len(t, txts, 2)
+		assert.Contains(t, txts[1], id)
+	})
+}
+
 func TestPollTimeoutThenComplete(t *testing.T) {
 	t.Parallel()
 	d := &delayedProvider{turn: summaryTurn("slow but done", llm.Usage{}), release: make(chan struct{})}

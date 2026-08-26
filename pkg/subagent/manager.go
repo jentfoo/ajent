@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -8,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/go-analyze/bulk"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -50,10 +53,12 @@ type Manager struct {
 
 	wg sync.WaitGroup
 
-	mu      sync.Mutex
-	jobs    map[string]*job
-	pending []string // completed ids not yet delivered into the parent context
-	count   int      // id counter; ids are sub-N
+	mu          sync.Mutex
+	jobs        map[string]*job
+	pending     []string // completed ids not yet delivered into the parent context
+	inFlight    []string // ids a queued steer names; cleared when it lands or is dropped
+	noticeBatch []string // completions since the last delivered steer, for the keyed notice
+	count       int      // id counter; ids are sub-N
 }
 
 // New returns a Manager with defaults resolved.
@@ -186,6 +191,7 @@ func (m *Manager) Poll(ctx context.Context, id string) (Job, bool) {
 		j.mu.Lock()
 		j.consumed = true
 		j.mu.Unlock()
+		m.removePending(j.id) // the poll response carries the result; no steer may repeat it
 		return j.snapshot(), true
 	case <-timer.C:
 		return j.snapshot(), false // still running; caller reads progress for the payload
@@ -243,8 +249,8 @@ func (m *Manager) StopAll() int {
 }
 
 // Flush retries delivering every completed-but-undelivered id into the parent
-// context. Called from a turn-start observer so pending completions reach the
-// model on the next real turn without ever starting one.
+// context as one batched message. Called from a turn-start observer so pending
+// completions reach the model on the next real turn without ever starting one.
 func (m *Manager) Flush() {
 	m.mu.Lock()
 	ids := slices.Clone(m.pending)
@@ -272,6 +278,8 @@ func (m *Manager) Close() {
 		ids = append(ids, k)
 	}
 	m.pending = nil
+	m.inFlight = nil
+	m.noticeBatch = nil
 	m.mu.Unlock()
 	if fn := m.opts.Activity; fn != nil {
 		for _, id := range ids {
@@ -288,8 +296,9 @@ func (m *Manager) Tools() []agent.Tool {
 	return []agent.Tool{&startTool{m: m}, &pollTool{m: m}, &listTool{m: m}}
 }
 
-// onComplete delivers completion to the user and, unless a poll is waiting or
-// already consumed it, to the model. Aborts are silent.
+// onComplete queues a finished job's completion for the user and the model,
+// unless a poll is waiting or already consumed it. Aborts are silent. Delivery
+// is batched at the next step boundary (Boundary) or turn start (Flush).
 func (m *Manager) onComplete(j *job) {
 	j.mu.Lock()
 	status := j.status
@@ -301,58 +310,150 @@ func (m *Manager) onComplete(j *job) {
 	if status == StatusAborted || pollers > 0 || consumed {
 		return
 	}
-	if fn := m.opts.Notice; fn != nil {
-		fn("Sub-agent " + id + " completed")
-	}
-	m.offer([]string{id})
+	m.enqueue(id)
 }
 
-// offer marks ids pending and attempts to steer them into the running parent turn.
-// A false Deliver (parent idle) leaves them pending for Flush; Delivered clears
-// exactly the names a message carried, so one dropped by an interrupt is re-offered.
+// enqueue parks a completed id and fires the keyed UI notice naming every
+// completion since the last delivered steer, so the collapsed line reads as one
+// batch instead of one row per agent.
+func (m *Manager) enqueue(id string) {
+	m.mu.Lock()
+	if !slices.Contains(m.pending, id) {
+		m.pending = append(m.pending, id)
+	}
+	m.noticeBatch = append(m.noticeBatch, id)
+	slices.SortFunc(m.noticeBatch, byJobNumber)
+	batch := slices.Clone(m.noticeBatch)
+	m.mu.Unlock()
+	if fn := m.opts.Notice; fn != nil {
+		fn(noticeText(batch))
+	}
+}
+
+// Boundary returns one batched completion input for the step boundary, or nil.
+// The host chains it into agent.Options.OnBoundary, so it runs on the loop
+// goroutine at the exact moment the message lands: ids a poll claimed since
+// completing are dropped and never named, because the poll response already
+// carries their result.
+func (m *Manager) Boundary() []agent.Input {
+	m.mu.Lock()
+	if len(m.inFlight) > 0 { // a queued input has not landed yet; never double-send
+		m.mu.Unlock()
+		return nil
+	}
+	ids := slices.Clone(m.pending)
+	m.mu.Unlock()
+
+	deliverable := m.take(ids)
+	if len(deliverable) == 0 {
+		return nil
+	}
+	return []agent.Input{m.noticeInput(deliverable)}
+}
+
+// offer steers a batch into the running parent turn through the front-end
+// Deliver hook. A false return (parent idle) unmarks the batch and leaves the
+// ids pending for the next Flush.
 func (m *Manager) offer(ids []string) {
+	deliverable := m.take(ids)
+	if len(deliverable) == 0 {
+		return
+	}
+	in := m.noticeInput(deliverable)
+	if fn := m.opts.Deliver; fn == nil || !fn(in) {
+		m.mu.Lock()
+		m.inFlight = dropIDs(m.inFlight, deliverable)
+		m.mu.Unlock()
+	}
+}
+
+// take filters ids down to those still needing delivery — not claimed by a poll,
+// not already carried by a queued input — and marks them in flight.
+func (m *Manager) take(ids []string) []string {
 	var deliverable []string
-	for _, id := range ids { // drop any taken by a poll between onComplete and here
-		j, ok := m.lookup(id)
+	m.mu.Lock()
+	for _, id := range ids {
+		if slices.Contains(m.inFlight, id) {
+			continue
+		}
+		j, ok := m.jobs[id]
 		if !ok {
 			continue
 		}
 		j.mu.Lock()
-		if j.pollers == 0 && !j.consumed {
-			deliverable = append(deliverable, id)
-		}
+		free := j.pollers == 0 && !j.consumed // a poller carries the result itself
 		j.mu.Unlock()
-	}
-	if len(deliverable) == 0 {
-		return
-	}
-
-	m.mu.Lock()
-	for _, id := range deliverable {
+		if !free {
+			continue
+		}
+		deliverable = append(deliverable, id)
+		m.inFlight = append(m.inFlight, id)
 		if !slices.Contains(m.pending, id) {
 			m.pending = append(m.pending, id)
 		}
 	}
 	m.mu.Unlock()
+	slices.SortFunc(deliverable, byJobNumber)
+	return deliverable
+}
 
-	in := agent.Input{
-		Text:     completionNotice(deliverable),
+// noticeInput builds the batched completion steer. Delivered clears exactly the
+// names the message carried — one dropped by an interrupt stays pending — and
+// starts a fresh UI notice batch.
+func (m *Manager) noticeInput(ids []string) agent.Input {
+	return agent.Input{
+		Text:     completionNotice(ids),
 		Injected: true, // a system notice, not a typed prompt; excluded from recall
-		Delivered: func() { // clear exactly the names this message carried
+		Delivered: func() {
 			m.mu.Lock()
-			out := m.pending[:0]
-			for _, p := range m.pending {
-				if !slices.Contains(deliverable, p) {
-					out = append(out, p)
-				}
-			}
-			m.pending = out
+			m.pending = dropIDs(m.pending, ids)
+			m.inFlight = dropIDs(m.inFlight, ids)
+			m.noticeBatch = nil
 			m.mu.Unlock()
 		},
 	}
-	if fn := m.opts.Deliver; fn == nil || !fn(in) { // idle: ids stay pending and are re-offered by Flush
-		return
+}
+
+// byJobNumber orders sub-N ids numerically, so batches read sub-1, sub-2, sub-10.
+func byJobNumber(a, b string) int {
+	return cmp.Compare(numberOf(a), numberOf(b))
+}
+
+// numberOf reads the digits after the sub- prefix; unparseable ids sort first.
+func numberOf(id string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(id, "sub-"))
+	return n
+}
+
+// dropIDs removes every named id from ids, in place.
+func dropIDs(ids, drop []string) []string {
+	return bulk.SliceFilterInPlace(func(id string) bool { return !slices.Contains(drop, id) }, ids)
+}
+
+// removePending drops an id whose result a poll is delivering, so no later
+// steer repeats it.
+func (m *Manager) removePending(id string) {
+	m.mu.Lock()
+	m.pending = dropIDs(m.pending, []string{id})
+	m.mu.Unlock()
+}
+
+// Interrupted reports that the parent turn was interrupted: queued completion
+// steers were dropped without their Delivered firing, so the in-flight marks
+// must release or every later batch waits behind a delivery that never comes.
+// The ids stay pending for the next Flush.
+func (m *Manager) Interrupted() {
+	m.mu.Lock()
+	m.inFlight = nil
+	m.mu.Unlock()
+}
+
+// noticeText names a completed batch for the keyed UI notice.
+func noticeText(ids []string) string {
+	if len(ids) == 1 {
+		return "Sub-agent " + ids[0] + " completed"
 	}
+	return "Sub-agents " + strings.Join(ids, ", ") + " completed"
 }
 
 // completionNotice is the steer text naming completed sub-agents.
