@@ -1027,6 +1027,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		return mgr, &delivered
 	}
 	settle := func(t *testing.T, m *subagent.Manager, id string) {
+		t.Helper()
 		require.Eventually(t, func() bool {
 			for _, j := range m.List() {
 				if j.ID == id && j.Status == subagent.StatusDone {
@@ -1061,7 +1062,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		assert.EqualValues(t, 1, delivered.Load())
 
 		sink.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn}) // no release
-		mgr.Flush() // still in flight; nothing may re-offer
+		mgr.Flush()                                           // still in flight; nothing may re-offer
 		assert.EqualValues(t, 1, delivered.Load())
 	})
 }
