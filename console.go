@@ -157,7 +157,7 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	if t != nil {
 		t.SetModel(m) // drops every context term for the new window/reserve
 	}
-	c.ui.SetModel(m.ShortName(), m.ContextWindow)
+	c.ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
 	if t != nil {
 		// SetModel zeroed the ledger, so Used would read empty regardless of real
 		// occupancy. Remeasure against the actual in-memory messages: a switch to a

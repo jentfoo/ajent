@@ -153,16 +153,18 @@ func main() {
 
 	// a model with no reported window renders no context bar rather than one drawn
 	// against a fabricated number; parts() already skips the bar when MaxTokens is 0.
-	var label string
+	var label, short string
 	if active.ID != "" {
 		label = active.Key()
+		short = active.ShortName()
 	}
 
 	ui, err := tui.New(tui.Options{
-		Mode:      mode,
-		Palette:   pal,
-		Model:     label,
-		MaxTokens: active.ContextWindow,
+		Mode:       mode,
+		Palette:    pal,
+		Model:      label,
+		ModelShort: short,
+		MaxTokens:  active.ContextWindow,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ajent:", err)
@@ -1332,6 +1334,13 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	if entries == nil {
 		return
 	}
+	// the restored model drives turns and preselects in /model, so the registry
+	// and the status line must name it rather than the config default: without
+	// this, picking it in /model reads as the no-op it is keyed on and the bar
+	// keeps labelling a model the session is not running.
+	if st.Model.ID != "" {
+		syncModelUI(ui, reg, st.Model)
+	}
 	// the resumed palette must land before the replay bakes its colors into history
 	if pal, ok := tui.LookupPalette(set.Settings().UI.Theme); ok {
 		ui.SetTheme(pal)
@@ -1445,9 +1454,20 @@ func (r *sessRec) liveModel(ag *agent.Agent) llm.Model {
 	return save
 }
 
+// syncModelUI republishes a model switch that did not come through /model: the
+// registry's active entry (the /model preselect) and the status line labels must
+// name the model the session actually runs.
+func syncModelUI(ui *tui.UI, reg *llm.Registry, m llm.Model) {
+	reg.SetActive(m)
+	if ui == nil {
+		return
+	}
+	ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+}
+
 // restoreForkModel reapplies a model captured before switchState so a rewind does
 // not silently revert to an earlier branch's model; it is a no-op for the zero one.
-func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, m llm.Model) {
+func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model) {
 	if m.ID == "" || ag == nil {
 		return
 	}
@@ -1466,6 +1486,7 @@ func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, m llm.Model) {
 		ledger.SetBase(r.baseEstimate(ag))
 	}
 	pushSwitchedContext(ui, ledger)
+	syncModelUI(ui, reg, m)
 }
 
 // resumeHead prefers the live head over the file tail; they differ after a
@@ -1545,7 +1566,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
 		return
 	}
-	r.restoreForkModel(ui, ag, saveModel)
+	r.restoreForkModel(ui, ag, reg, saveModel)
 
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.

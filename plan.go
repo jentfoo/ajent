@@ -182,7 +182,6 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 		return err
 	}
 	r.rec.ModelChange(m, "plan")
-	reg.SetActive(m)
 	var ledger *tokens.Accounting
 	ag.WithState(func(st *agent.State) {
 		st.Model = m
@@ -198,7 +197,7 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 		ledger.SetBase(r.baseEstimate(ag))
 	}
 	pushSwitchedContext(ui, ledger)
-	ui.SetModel(m.ShortName(), m.ContextWindow)
+	syncModelUI(ui, reg, m)
 	if moved {
 		ui.Divider() // phase boundaries read as breaks in scrollback
 	}

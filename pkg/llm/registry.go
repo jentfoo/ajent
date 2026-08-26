@@ -342,7 +342,9 @@ func (r *Registry) Active() Model {
 	return r.active
 }
 
-// SetActive changes the model requests default to.
+// SetActive changes the model requests default to. m must come from this
+// registry (Resolve, Models or Active): callers validate, as the reload path
+// does, rather than SetActive rejecting unknown models.
 func (r *Registry) SetActive(m Model) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

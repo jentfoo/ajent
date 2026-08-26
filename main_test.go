@@ -201,7 +201,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	// rewind onto the first user message and restore the fork model: it must stay b.
 	save := r.liveModel(a)
 	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, "rewind: "))
-	r.restoreForkModel(nil, a, save)
+	r.restoreForkModel(nil, a, reg, save)
 
 	var got llm.Model
 	a.WithState(func(st *agent.State) { got = st.Model })
@@ -378,6 +378,54 @@ func TestResumeByID(t *testing.T) {
 	// a bogus id resolves to ErrNotFound.
 	_, err = openSession(store, modeResumeID, ws, "NO-SUCH-ID", "", nil)
 	assert.ErrorIs(t, err, session.ErrNotFound)
+}
+
+// TestResumeSyncsActiveModel pins the resume fix: a transcript naming p/b must
+// make the registry's active entry follow, so /model preselects and names the
+// model the session runs instead of the config default. Before the sync a
+// restored session kept Active on the default while state ran p/b, so picking
+// p/b read as a silent no-op.
+func TestResumeSyncsActiveModel(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{
+			"p": {Models: []llm.ModelConfig{{ID: "a"}, {ID: "b"}}},
+		},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+	require.Equal(t, "p/a", reg.Active().Key()) // registry default before any resume
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/b"})
+	require.NoError(t, err)
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	set, _, err := config.Load(config.Options{
+		Workspace: t.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(t, err)
+
+	st := &agent.State{Model: reg.Active()}
+	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+
+	assert.Equal(t, "p/b", st.Model.Key())
+	assert.Equal(t, "p/b", reg.Active().Key()) // the /model preselect follows the resume
 }
 
 // TestExtractResume locks in how --resume and its optional id are parsed out of

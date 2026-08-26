@@ -306,7 +306,11 @@ clear message instead of silently starting a fresh transcript.
 Every resume path reopens the file with `session.Open` (head recovery as
 above), rebuilds state and replays history. `(*sessRec).restoreState` is the
 UI-free half of that — rebuilt state and setting overrides, no replay — so a
-headless run resumes the same way without a front end.
+headless run resumes the same way without a front end. A rebuilt model is
+pushed back out too (`syncModelUI`): the registry's active entry — which
+preselects in `/model` — and the status line must name the model the session
+runs, not the config default. Without that, `/model` on the resumed model hits
+`SetModel`'s unchanged-key no-op while the bar keeps labelling another model.
 
 A one-shot run (`-p`) records its turn like any other, which is what makes
 `ajent -p "…"` and a follow-up `ajent -p "…" --continue` share one transcript.

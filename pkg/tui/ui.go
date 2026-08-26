@@ -55,12 +55,13 @@ const (
 
 // Options configures a UI.
 type Options struct {
-	In        *os.File // defaults to os.Stdin
-	Out       *os.File // defaults to os.Stdout
-	Mode      Mode     // paint mode, ModeAuto detects multiplexers
-	Palette   Palette  // color set, the zero value uses DefaultPalette
-	Model     string
-	MaxTokens int
+	In         *os.File // defaults to os.Stdin
+	Out        *os.File // defaults to os.Stdout
+	Mode       Mode     // paint mode, ModeAuto detects multiplexers
+	Palette    Palette  // color set, the zero value uses DefaultPalette
+	Model      string
+	ModelShort string // collapse target for Model on a narrow status row
+	MaxTokens  int
 	// double-Esc rewind: two idle presses within DoubleEscWindow call OnRewind instead of ControlEscape
 	DoubleEscWindow time.Duration // window between two idle Esc presses; 0 = default
 	OnRewind        func()
@@ -184,7 +185,7 @@ func New(opts Options) (*UI, error) {
 		theme:    theme,
 		render:   newRenderer(mode, theme, out, int(out.Fd())),
 		mode:     mode,
-		status:   Status{Model: opts.Model, MaxTokens: opts.MaxTokens},
+		status:   Status{Model: opts.Model, ModelShort: opts.ModelShort, MaxTokens: opts.MaxTokens},
 		in:       in,
 		inFd:     int(in.Fd()),
 		msgs:     make(chan string),

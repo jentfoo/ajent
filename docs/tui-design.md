@@ -111,14 +111,21 @@ used against the real window. A `~` prefixes the count while it is an estimate
 (mid-stream or between provider reports). The colour escalates at 70% and again
 at 90%, both relative to the budget.
 
-A segment carries a `Short` form (fallback: its full text) and a `Priority`, so
-a narrow terminal shortens rather than vanishes. Packing (`Status.rows`) is:
+The model carries a short form (`ModelShort`, from `Model.ShortName`) and each
+segment a `Short` form (fallback: full text) plus a `Priority`; a narrow
+terminal shortens them in that order before anything splits. Packing
+(`Status.rows`) is:
 
 1. Everything on one row at full text, as long as it fits.
-2. Otherwise the fixed part (spinner, tool, bar/tokens, model) stays on row one
-   and segments move to a second row in their `Short` form.
-3. Only if even two rows overflow do segments drop — lowest `Priority` first,
-   ties dropping the later insertion (matching the old drop-last behaviour).
+2. Otherwise the model shortens to its short form — first and always; it never
+   vanishes.
+3. Then segments shorten on the same row, in drop order (lowest `Priority`
+   first, ties the later insertion).
+4. Only when even all-short segments overflow does the block split in two. Row
+   one is the fixed part (spinner, tool, bar/tokens) plus the model, shortening
+   then clipping it. Row two packs the segments full-then-short, dropping in
+   drop order only once every survivor is already short; survivors re-expand
+   into freed width.
 
 The block is capped at two rows; an overflowing segment line is clipped to width
 rather than wrapped, so row accounting stays exact.
