@@ -478,6 +478,36 @@ func TestUIOutputHeadSummary(t *testing.T) {
 	require.Empty(t, act)
 }
 
+// TestUIOutputFull asserts SetOutputFull bypasses the head: every streamed line
+// reaches history and no summary or activity row appears.
+func TestUIOutputFull(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 50)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	done := u.ToolStart("bash", "! long")
+	u.SetOutputFull()
+	var b strings.Builder
+	for i := 1; i <= 30; i++ {
+		b.WriteString("line " + strconv.Itoa(i) + "\n")
+	}
+	u.Output(b.String())
+	assert.Equal(t, "⏺ ! long", v.Line(0))
+	screen := u.snapshot(v)
+	// every line is shown, none collapsed into the head.
+	for i := 1; i <= 30; i++ {
+		assert.Contains(t, screen, "line "+strconv.Itoa(i))
+	}
+	u.mu.Lock()
+	act := slices.Clone(u.activity)
+	u.mu.Unlock()
+	require.Empty(t, act, "no activity row when everything is shown")
+
+	done("")
+	assert.NotContains(t, u.snapshot(v), "… +26 lines", "full output leaves no summary")
+}
+
 func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	t.Parallel()
 

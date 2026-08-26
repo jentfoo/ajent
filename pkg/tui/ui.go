@@ -537,6 +537,15 @@ func (u *UI) Output(delta string) {
 	}
 }
 
+// SetOutputFull marks the current call's streamed head to show every line,
+// bypassing the four-line collapse. The stager calls it for user-initiated
+// `!`/`!!` shells right after ToolStart; endOutputLocked clears it.
+func (u *UI) SetOutputFull() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.out.full = true
+}
+
 // EndOutput flushes a partial output line and closes the head.
 func (u *UI) EndOutput() {
 	u.mu.Lock()

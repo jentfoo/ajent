@@ -529,6 +529,13 @@ is never split across the boundary.
   its done hook closes (flush + summary) before committing any result, so two
   calls in a single turn each get their own collapse line. `EndOutput` at turn
   end remains as a safety flush.
+- **Full mode**: user-initiated `!`/`!!` shells are the one exception to the
+  head-plus-summary rule. The stager opens them through `Sink.ToolStartFull`
+  (an optional capability it type-asserts on its sink), which calls `SetOutputFull`
+  right after `ToolStart`. With `outputHead.full` set, every line is committed to
+  history and no summary or activity row appears — the human sees everything they
+  ran. The flag lives for one call: `reset()` clears it, so an agent bash call in
+  the same turn truncates normally.
 
 The model still receives the full unmodified `Content`; only history is elided.
 

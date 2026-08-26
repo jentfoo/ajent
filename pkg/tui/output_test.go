@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -59,5 +60,17 @@ func TestOutputHead(t *testing.T) {
 		out := h.add(string(b))
 		assert.Equal(t, "line 1\nline 2\nline 3\nline 4\n", out)
 		assert.Equal(t, 2, h.hidden())
+	})
+	t.Run("full_shows_every_line", func(t *testing.T) {
+		var h outputHead
+		h.full = true
+		var b strings.Builder
+		for i := 1; i <= 8; i++ {
+			b.WriteString(h.add(fmt.Sprintf("line %d\n", i)))
+		}
+		assert.Equal(t, "line 1\nline 2\nline 3\nline 4\nline 5\n"+
+			"line 6\nline 7\nline 8\n", b.String())
+		assert.Zero(t, h.hidden())
+		assert.Empty(t, h.summary())
 	})
 }

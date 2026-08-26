@@ -72,6 +72,15 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResul
 	}
 }
 
+// ToolStartFull is ToolStart for a call whose streamed output must be shown in
+// full rather than collapsed to its head. The stager uses it for user-initiated
+// `!`/`!!` shells so the human sees everything they ran.
+func (s *Sink) ToolStartFull(call agent.ToolCall, label string) func(agent.ToolResult) {
+	done := s.ToolStart(call, label)
+	s.ui.SetOutputFull()
+	return done
+}
+
 // ToolOutput streams raw tool output a chunk at a time.
 func (s *Sink) ToolOutput(callID, delta string) { s.ui.Output(delta) }
 

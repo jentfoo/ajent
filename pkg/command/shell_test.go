@@ -199,6 +199,36 @@ func TestStagerExcludedRunFlushesNothingAndDoesNotWait(t *testing.T) {
 	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
 }
 
+// fullSinkForShell records whether ToolStartFull was chosen for a staged run.
+type fullSinkForShell struct {
+	*recordingSinkForShell
+	fullStarts int
+}
+
+func (f *fullSinkForShell) ToolStartFull(_ agent.ToolCall, _ string) func(agent.ToolResult) {
+	f.mu.Lock()
+	f.fullStarts++
+	f.starts++
+	f.mu.Unlock()
+	return func(res agent.ToolResult) { f.mu.Lock(); f.done = append(f.done, res); f.mu.Unlock() }
+}
+
+func TestStagerPrefersFullToolStart(t *testing.T) {
+	t.Parallel()
+
+	s, sink := newShellStager(t)
+	full := &fullSinkForShell{recordingSinkForShell: sink}
+	s.sink = full // the stager's sink is fixed at construction; swap to a fuller one
+	s.Run("echo hi", false)
+
+	require.Eventually(t, func() bool {
+		full.mu.Lock()
+		defer full.mu.Unlock()
+		return !s.Pending() && full.fullStarts == 1
+	}, time.Second, time.Millisecond,
+		"staged shell must route through ToolStartFull when the sink offers it")
+}
+
 func TestShellUserMessage(t *testing.T) {
 	t.Parallel()
 

@@ -259,6 +259,14 @@ file, process-group kill — with no second implementation. It wraps its context
 `tools.WithUserInitiated`, so a staged `!` line is exempt from every permission
 mode: this is the human's own shell, not the model's.
 
+The display differs from an agent bash call in one way: because the output is
+the user's own, it must be shown whole. The stager type-asserts its sink for a
+`ToolStartFull` capability (implemented by the TUI sink) and uses it when present,
+failing back to plain `ToolStart`. That sets full mode on the output head so every
+line reaches history instead of collapsing past four — see tui-design.md. The
+model-side bytes are unchanged: context still carries whatever the bash tool
+returns, cap marker included.
+
 **Staging onto context.** The command text and its result are *not* sent to the
 model immediately. They sit in the pending slot ahead of the next user message.
 Running `!` for exploration costs no tokens and never interrupts an in-flight

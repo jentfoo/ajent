@@ -85,7 +85,7 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	input, _ := json.Marshal(map[string]any{"command": cmd})
 	call := agent.ToolCall{ID: id, Name: toolBash, Input: input}
 	out := agent.NewOutput(s.sink, id)
-	done := s.sink.ToolStart(call, run.label)
+	done := s.startTool(call, run.label)
 
 	go func() {
 		defer close(run.done)
@@ -102,6 +102,22 @@ func (s *Stager) Run(cmd string, excluded bool) {
 		run.result = res
 		done(res)
 	}()
+}
+
+// startTool opens the run's header and stream on sink, preferring a full-display
+// variant when the sink offers one so `!`/`!!` output is never collapsed.
+func (s *Stager) startTool(call agent.ToolCall, label string) func(agent.ToolResult) {
+	if fs, ok := s.sink.(fullToolStarter); ok {
+		return fs.ToolStartFull(call, label)
+	}
+	return s.sink.ToolStart(call, label)
+}
+
+// fullToolStarter is implemented by sinks that can mark a staged shell command's
+// streamed output for full (untruncated) display. The base agent.Sink collapses
+// tool history to its head; user-initiated `!`/`!!` shells show everything.
+type fullToolStarter interface {
+	ToolStartFull(call agent.ToolCall, label string) func(agent.ToolResult)
 }
 
 // Pending reports whether any staged command is still running.

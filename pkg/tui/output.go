@@ -18,12 +18,15 @@ const outputKey = "tool-output"
 
 // outputHead splits a tool's output into a short committed head and a count of
 // everything past it, so long output leaves one summary line instead of pages.
+// When full is set the cap is bypassed: every line reaches history. The stager
+// enables it for user-initiated `!`/`!!` shells, whose output must be shown whole.
 type outputHead struct {
 	buf   lineBuffer // whole lines only; never splits an escape sequence
 	shown int        // head lines already committed
 	lines int        // lines seen in total
 	chars int        // runes seen past the head, for the summary count
 	bytes int        // bytes seen past the head, for a live activity row
+	full  bool       // show every line; no collapse or summary
 }
 
 // add appends s and returns any whole lines to commit, capped at the head. The
@@ -36,7 +39,7 @@ func (h *outputHead) add(s string) string {
 func (h *outputHead) flush() string { return h.commit(h.buf.Flush()) }
 
 // commit counts each newline-terminated whole line, returning those still within
-// the head. Empty when nothing is ready to show.
+// the head (or every line when full). Empty when nothing is ready to show.
 func (h *outputHead) commit(whole string) string {
 	if whole == "" {
 		return ""
@@ -44,7 +47,7 @@ func (h *outputHead) commit(whole string) string {
 	var b strings.Builder
 	for _, ln := range strings.Split(strings.TrimSuffix(whole, "\n"), "\n") {
 		h.lines++
-		if h.shown < outputHeadLines {
+		if h.full || h.shown < outputHeadLines {
 			b.WriteString(ln)
 			b.WriteByte('\n')
 			h.shown++
@@ -56,8 +59,9 @@ func (h *outputHead) commit(whole string) string {
 	return b.String()
 }
 
-// hidden reports how many lines were counted but not shown.
-func (h *outputHead) hidden() int { return h.lines - min(h.shown, outputHeadLines) }
+// hidden reports how many lines were counted but not shown. shown tracks every
+// line actually committed, so it equals lines in full mode and the count is zero.
+func (h *outputHead) hidden() int { return max(0, h.lines-h.shown) }
 
 // summary returns the collapse line for whatever was hidden, "" when nothing.
 func (h *outputHead) summary() string {
@@ -74,4 +78,5 @@ func (h *outputHead) reset() {
 	h.lines = 0
 	h.chars = 0
 	h.bytes = 0
+	h.full = false
 }
