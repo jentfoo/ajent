@@ -40,6 +40,10 @@ type uiConsole struct {
 	started *bool // shared with the driver pump
 	quit    chan struct{}
 
+	// refreshBase re-measures the constant request overhead and republishes the
+	// bar, for the changes that resize the tool block between turns. Nil disables it.
+	refreshBase func()
+
 	toneOnce sync.Once // the background query costs a round trip and cannot change
 	tone     tui.Tone
 }
@@ -159,7 +163,7 @@ func (c *uiConsole) SetModel(m llm.Model) {
 		// occupancy. Remeasure against the actual in-memory messages: a switch to a
 		// smaller window must reflect that it now overflows, or threshold auto-compaction
 		// could never fire on this model.
-		t.Reseed(tokens.EstimateMessages(c.st.Messages))
+		t.Reseed(tokens.EstimateFor(m, c.st.Reasoning.Retain, c.st.Messages))
 		cs := t.Context()
 		c.ui.SetContext(tui.ContextInfo{
 			Used:      cs.Used,
@@ -218,6 +222,11 @@ func (c *uiConsole) ToolsChanged() {
 	// /tools changed which MCP tools are enabled; republish the status ratio
 	if c.mcp.m != nil {
 		c.mcp.RefreshStatus()
+	}
+	// a wider tool block occupies context immediately, not at the next turn. Before
+	// the block is committed schemas are not in the base at all, so nothing to redo.
+	if c.refreshBase != nil && c.Started() {
+		c.refreshBase()
 	}
 }
 

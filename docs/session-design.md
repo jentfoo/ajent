@@ -205,7 +205,10 @@ Two consumers read the transcript back:
   setting changes applied (`applySetting` accepts both `tools.enabled`, the dotted
   config key, and the legacy `tools` alias so old transcripts still replay).
   `session.SettingOverrides(branch)` returns the last value per setting_change
-  key for seeding a resumed session's config layer. Message assembly goes through
+  key for seeding a resumed session's config layer — over the **branch**, never raw
+  file order, or a transcript with forks restores a sibling's settings, the tool set
+  among them. How the rebuilt ledger splits context from spend is invariant 6 of
+  `compaction-design.md`. Message assembly goes through
   one function,
   `session.ContextMessages`, which applies the newest compaction's cut and its
   structural reduction plan (the schema and replay live here; `pkg/compact`

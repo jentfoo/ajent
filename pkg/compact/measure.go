@@ -19,12 +19,7 @@ func tokensFor(branch []session.Entry, cd session.CompactionData, model llm.Mode
 	if msgs == nil && len(warns) > 0 {
 		return math.MaxInt // an unlocatable cut saves nothing
 	}
-	req := llm.Prepare(llm.Request{
-		Model:     model,
-		Messages:  msgs,
-		Reasoning: llm.ReasoningConfig{Retain: retain},
-	})
-	return base + tokens.EstimateMessages(req.Messages)
+	return base + tokens.EstimateFor(model, retain, msgs)
 }
 
 // tokensReserve reports how many tokens a model holds back for its response.

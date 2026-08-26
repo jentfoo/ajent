@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -70,6 +71,7 @@ func TestInputAfterAppendedBehindText(t *testing.T) {
 		Text:      "explain @a.go",
 		After:     after,
 		Delivered: func() { order = append(order, "delivered") },
+		Settled:   func() { order = append(order, "settled") },
 	})
 	require.NoError(t, err)
 
@@ -83,8 +85,9 @@ func TestInputAfterAppendedBehindText(t *testing.T) {
 	assert.Equal(t, llm.RoleUser, seen[2].Message.Role)
 	assert.True(t, seen[1].Injected)
 	assert.True(t, seen[2].Injected)
-	// delivery clears the submit bucket before the reads are counted into pending
-	assert.Equal(t, []string{"delivered", "after"}, order)
+	// the echo lands with the message so the reads render under it, and the reserve
+	// is released only once they have been accounted
+	assert.Equal(t, []string{"delivered", "after", "settled"}, order)
 }
 
 // TestInputAfterOnlyStillLands asserts an input carrying only After is not
@@ -150,4 +153,40 @@ func TestNewOutputForwardsToSink(t *testing.T) {
 
 	// writes stream as tool output, then the diff lands after it.
 	assert.Equal(t, []string{"tool_output", "diff"}, sink.calls)
+}
+
+// TestInputSettledSeesReadsAccounted asserts a host's submit reserve outlives the
+// reads it was holding tokens for. Releasing it on Delivered dropped the whole
+// reserve for the repaint between the two, so a large @ read flashed the bar down
+// and straight back up as its pair landed.
+func TestInputSettledSeesReadsAccounted(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{ID: "test", ContextWindow: 100000}
+	ledger := tokens.New(model)
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+	a := newTestAgent(&State{Model: model, Tokens: ledger}, p, nil)
+
+	read := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
+		CallID: "ref-1-a.go", Content: llm.BlockList{llm.TextBlock{Text: strings.Repeat("x", 8000)}},
+	}}}
+	reserve := tokens.EstimateMessages([]llm.Message{read})
+	ledger.SetSubmit(reserve) // the host holds the reads' tokens from submit
+
+	var atDelivered, afterRelease int
+	err := a.Prompt(t.Context(), Input{
+		Text:      "explain @a.go",
+		After:     func(context.Context) []llm.Message { return []llm.Message{read} },
+		Delivered: func() { atDelivered = ledger.Context().Used },
+		Settled: func() {
+			ledger.SetSubmit(0)
+			afterRelease = ledger.Context().Used
+		},
+	})
+	require.NoError(t, err)
+
+	require.NotZero(t, atDelivered)
+	// releasing the reserve must not take the bar below where delivery left it:
+	// pending has to have grown to cover the reads first
+	assert.GreaterOrEqual(t, afterRelease, atDelivered)
 }

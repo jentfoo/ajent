@@ -20,9 +20,9 @@ func TestUsageShowsChildSpendWhenDelegated(t *testing.T) {
 	c.state.Tokens = a
 
 	// parent spends, then a child rolls its own spend up separately.
-	a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900)
+	a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
 	child := a.Child()
-	child.Response("test/alpha", llm.Usage{Input: 300, Output: 50}, 250)
+	child.Response("test/alpha", llm.Usage{Input: 300, Output: 50}, 250, true)
 
 	err := usageCommand(t.Context(), "", c)
 	require.NoError(t, err)
@@ -38,7 +38,7 @@ func TestUsageOmitsChildRowWithoutDelegation(t *testing.T) {
 
 	c := newFakeConsole(t)
 	a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
-	a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900)
+	a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
 	c.state.Tokens = a
 
 	err := usageCommand(t.Context(), "", c)
@@ -61,7 +61,7 @@ func TestUsagePrintsSessionLedger(t *testing.T) {
 		Reasoning: llm.ReasoningConfig{}}
 	tok := tokens.New(st.Model)
 	const key = "test/alpha"
-	tok.Response(key, llm.Usage{Input: 1000, Output: 200}, 900)
+	tok.Response(key, llm.Usage{Input: 1000, Output: 200}, 900, true)
 	st.Tokens = tok
 	c.state = st
 

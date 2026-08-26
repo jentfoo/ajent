@@ -22,7 +22,9 @@ func NewCalibrator() *Calibrator { return &Calibrator{} }
 // smoothed factor. The first sample seeds the factor directly; later ones are an
 // EWMA so no single outlier can swing a settled value.
 func (c *Calibrator) Feed(key string, predicted, reported int) {
-	if predicted <= 0 {
+	// a provider that reported nothing is not evidence the estimate was too high:
+	// feeding its zero would decay a settled factor toward zero one turn at a time
+	if predicted <= 0 || reported <= 0 {
 		return
 	}
 	ratio := float64(reported) / float64(predicted)

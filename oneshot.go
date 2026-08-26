@@ -192,6 +192,11 @@ func runHeadless(o headlessOptions) int {
 	toolsReg.SetAsker(barrier.Asker())
 
 	ag = agent.New(st, opts)
+	// a resumed ledger carries no base of its own, and buildRequest reads Used for
+	// MaxOutputFor before stream() seeds one. A one-shot's tool set is fixed by its
+	// flags, so the block is committed from the start.
+	st.Tokens.SetBase(ag.BaseEstimate(true))
+
 	if rec != nil {
 		comp = &compactor{
 			rec: rec, st: st, ag: ag, reg: o.reg,

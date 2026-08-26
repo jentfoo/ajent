@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -23,29 +22,25 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	warns = append(warns, mwarns...)
 	st.Messages = msgs
 
-	// the ledger's context terms must reflect only messages that survive compaction:
-	// entries summarized away by a cut or dropped outright are gone from what the next
-	// request sends. Cumulative spend (Accounting.Total) is unaffected; it comes from
-	// recorded usage, not this rebuild.
-	keepIdx := cutIndex(branch, cd)
-	var dropped map[string]struct{}
-	if r := cd.Reduce; r != nil {
-		dropped = bulk.SliceToSet(r.Drop)
-	}
+	// a compaction rewrites what the branch sends, so the prompt sizes recorded
+	// against its surviving messages describe a request that no longer exists. When
+	// one applies the context terms are measured from the assembled messages instead
+	// (below) and recorded usage counts only toward spend.
+	rewritten := cd.rewritesHistory()
 
 	for i := range branch {
 		e := branch[i]
 		switch e.Type {
 		case TypeMessage:
-			if keepIdx != 0 && (keepIdx < 0 || i < keepIdx) { // cut away or cut missing
-				continue
-			}
-			if _, ok := dropped[e.ID]; ok {
-				continue
-			}
 			var md MessageData
 			if err := e.Decode(&md); err != nil {
 				continue // already warned by ContextMessages; ledger just skips it
+			}
+			if rewritten {
+				// spend counts every message, including ones the cut removed: those
+				// tokens were billed whether or not they still occupy context
+				st.Tokens.RecordSpend(st.Model.Key(), md.Usage)
+				continue
 			}
 			rebuildUsage(st.Tokens, st.Model.Key(), md)
 		case TypeModelChange:
@@ -86,6 +81,12 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 		}
 	}
 
+	if rewritten {
+		// the summary message assembly prepends is not an entry, so measuring the
+		// assembled list is also what accounts for it
+		st.Tokens.Reseed(tokens.EstimateFor(st.Model, st.Reasoning.Retain, st.Messages))
+	}
+
 	if !wellFormed(st.Messages) {
 		warns = append(warns, "rebuilt context leaves a tool call unanswered")
 	}
@@ -107,7 +108,9 @@ func newestCompactionData(branch []Entry) CompactionData {
 
 // rebuildUsage folds one message's recorded usage into the ledger under key. A
 // provider report snaps the exact terms; later messages without one stay as an
-// estimate so /usage reconciles with what was actually sent.
+// estimate so /usage reconciles with what was actually sent. It is only reached on
+// a branch no compaction rewrote, where the recorded prompt is still what the next
+// request will carry.
 func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
 	if t == nil {
 		return
@@ -116,7 +119,10 @@ func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
 		t.Add(tokens.EstimateMessages([]llm.Message{md.Message}))
 		return
 	}
-	t.Response(key, md.Usage, 0) // prediction unknown on rebuild; leave calibration unseeded
+	// prediction unknown on rebuild, so calibration stays unseeded. keepThink is
+	// true because the resolved retention of the turn that produced this usage is
+	// not recorded; leaving the reported output whole is the conservative read.
+	t.Response(key, md.Usage, 0, true)
 }
 
 // applySetting folds one setting_change into state. Unknown keys are ignored.

@@ -264,3 +264,117 @@ func usageMessage(id string, text string, u llm.Usage) Entry {
 		Usage:   u,
 	})}
 }
+
+func TestStateCompactedRebuildRemeasures(t *testing.T) {
+	t.Parallel()
+
+	// the cut keeps only m4, so the next request is a short summary plus that message.
+	// m4's recorded prompt describes the 150k request it was sent with, which no
+	// longer exists: replaying it reported the pre-compaction size as exact, and the
+	// next turn would immediately compact again.
+	branch := []Entry{
+		msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
+		msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 50000, Output: 400}),
+		msgUsage("m3", llm.Text(llm.RoleUser, "third"), llm.Usage{}),
+		msgUsage("m4", llm.Text(llm.RoleAssistant, "fourth"), llm.Usage{Input: 150000, Output: 600}),
+		{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"a short summary","firstKeptEntryId":"m4"}`)},
+	}
+	st, warns := State(branch, resolveModel)
+	assert.Empty(t, warns)
+
+	cs := st.Tokens.Context()
+	assert.Less(t, cs.Used, 1000)
+	assert.True(t, cs.Estimated) // re-measured, so the bar must wear its ~
+
+	// spend still counts the turns the cut removed: those tokens were billed
+	total := st.Tokens.Total()
+	assert.Equal(t, 201000, total.Input+total.Output)
+	assert.Equal(t, 2, st.Tokens.TurnsCount()) // the two that reported, not every entry
+}
+
+func TestStateUntouchedRebuildStaysExact(t *testing.T) {
+	t.Parallel()
+
+	// nothing rewrote this branch, so the recorded prompt plus output is still
+	// exactly what the next request carries and the bar keeps its precision
+	branch := []Entry{
+		msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
+		msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 50000, Output: 400}),
+	}
+	st, warns := State(branch, resolveModel)
+	assert.Empty(t, warns)
+
+	cs := st.Tokens.Context()
+	assert.Equal(t, 50400, cs.Used)
+	assert.False(t, cs.Estimated)
+}
+
+func TestCompactionDataRewritesHistory(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		data CompactionData
+		want bool
+	}{
+		{"cut_and_summary", CompactionData{Summary: "s", FirstKeptEntryID: "m3"}, true},
+		// cutIndex falls back to the compaction entry itself, so this still truncates
+		{"summary_only", CompactionData{Summary: "s"}, true},
+		{"stubs_only", CompactionData{Reduce: &Reduce{Stubs: []Stub{{CallID: "c1", Limit: 200}}}}, true},
+		{"drops_only", CompactionData{Reduce: &Reduce{Drop: []string{"m2"}}}, true},
+		{"strip_thinking", CompactionData{Reduce: &Reduce{StripThinking: true}}, true},
+		// a plan that only counted what it looked at changed nothing to re-measure
+		{"stats_only", CompactionData{Reduce: &Reduce{Stats: Stats{Failed: 2}}}, false},
+		{"empty", CompactionData{}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.data.rewritesHistory())
+		})
+	}
+}
+
+func TestStateStatsOnlyReductionStaysExact(t *testing.T) {
+	t.Parallel()
+
+	// a compaction that recorded stats but changed no message must not cost the
+	// branch its exact count
+	branch := []Entry{
+		msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
+		msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 8000, Output: 100}),
+		{ID: "comp", Type: TypeCompaction, Data: compactData(`{"reduce":{"stats":{"failed":2}}}`)},
+	}
+	st, warns := State(branch, resolveModel)
+	assert.Empty(t, warns)
+
+	cs := st.Tokens.Context()
+	assert.Equal(t, 8100, cs.Used)
+	assert.False(t, cs.Estimated)
+}
+
+func msgUsage(id string, m llm.Message, u llm.Usage) Entry {
+	return Entry{ID: id, Type: TypeMessage, Data: mustJSON(MessageData{Message: m, Usage: u})}
+}
+
+func TestStateTurnCountIgnoresCompaction(t *testing.T) {
+	t.Parallel()
+
+	// the recorder persists every appended message, user echoes and tool results
+	// included, so a rebuild that counted each entry as a turn reported a two-response
+	// session as four the moment it was compacted, two of them as unreported turns.
+	msgs := []Entry{
+		msgUsage("m1", llm.Text(llm.RoleUser, "do a thing"), llm.Usage{}),
+		msgUsage("m2", llm.Text(llm.RoleAssistant, "calling"), llm.Usage{Input: 1000, Output: 50}),
+		msgUsage("m3", llm.Text(llm.RoleUser, "tool result"), llm.Usage{}),
+		msgUsage("m4", llm.Text(llm.RoleAssistant, "done"), llm.Usage{Input: 2000, Output: 80}),
+	}
+	compacted := append(append([]Entry{}, msgs...), Entry{ID: "c", Type: TypeCompaction,
+		Data: compactData(`{"summary":"s","firstKeptEntryId":"m3"}`)})
+
+	plain, _ := State(msgs, resolveModel)
+	rewritten, _ := State(compacted, resolveModel)
+
+	assert.Equal(t, 2, plain.Tokens.TurnsCount())
+	assert.Equal(t, plain.Tokens.TurnsCount(), rewritten.Tokens.TurnsCount())
+	assert.Zero(t, rewritten.Tokens.EstimatedTurns())
+}

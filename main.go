@@ -288,9 +288,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
 		pushContext()
 	})
-	// once a submitted prompt lands in state as a message, pending owns its tokens;
-	// the submit bucket must clear so it is never counted twice.
-	delivered := func() {
+	// once a submitted prompt and everything behind it lands in state, pending owns
+	// its tokens; the submit bucket must clear so they are never counted twice.
+	settled := func() {
 		if st.Tokens != nil && len(editSinks) > 0 {
 			st.Tokens.SetSubmit(0)
 			pushContext()
@@ -301,7 +301,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// editor on interrupt or Alt+Up.
 	q := newSteerQueue(ui,
 		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
-		delivered,
+		settled,
 	)
 	var ag *agent.Agent
 
@@ -368,11 +368,18 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	ag = agent.New(st, opts)
 
+	// started is the single answer to "has the tool block been committed?": it gates
+	// both whether tool schemas count toward the bar and whether /tools may still
+	// narrow the set. A resumed branch with history plainly sent one already.
+	started := len(st.Messages) > 0
+
 	// seed the constant request overhead (system + AGENTS.md) so the bar is honest
-	// from startup; tool schemas join at the first prompt. Agent.stream's own SetBase
-	// replaces this floor with the exact built request once a turn actually starts.
+	// from startup; tool schemas join only once the block is committed, since until
+	// then /tools can still take one away. The pump re-seeds at the first prompt,
+	// when MCP servers have connected and their schemas are in the registry, and
+	// Agent.stream's own SetBase replaces this floor once a turn actually starts.
 	var seedToolsOnce sync.Once
-	st.Tokens.SetBase(ag.BaseEstimate(false))
+	st.Tokens.SetBase(ag.BaseEstimate(started))
 	pushContext()
 
 	if rec != nil {
@@ -396,7 +403,6 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	quit := make(chan struct{})
-	started := false
 
 	// MCP servers bridge their remote tools into the registry and are supervised by
 	// a manager. Every server connects in full, eagerly, just before the user's
@@ -475,6 +481,14 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		started: &started, quit: quit, permit: barrier,
 	}
+	console.refreshBase = func() {
+		// BaseEstimate reports 0 while a turn owns State; that turn's own SetBase
+		// picks a widened tool block up at its next step, so skip rather than zero it
+		if est := ag.BaseEstimate(started); est > 0 {
+			st.Tokens.SetBase(est)
+			pushContext()
+		}
+	}
 	if mgr != nil {
 		console.mcp = mcpAdapter{mgr}
 	}
@@ -518,6 +532,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
+		rec.started = &started
 		rec.onSwitch = func(msgs []llm.Message) {
 			if t := toolsReg.Tracker(); t != nil {
 				t.Reset() // reads the new context lacks must re-inject, not dedupe
@@ -557,7 +572,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started,
-		delivered, q, st, editSinks, &seedToolsOnce, pushContext, hooks)
+		settled, q, st, editSinks, &seedToolsOnce, pushContext, hooks)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
 		initial := strings.Join(args, " ")
@@ -674,7 +689,7 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 // runPump owns ordering for commands and prompts. Commands run inline (pickers
 // block only the pump); prompts flush staged shell results, expand @ refs then
 // queue-or-start a turn. Submissions stay in order and the UI never stalls.
-func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, delivered func(), q *steerQueue, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
+func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
 	for line := range pump {
 		switch line.kind {
 		case command.KindCommand:
@@ -726,7 +741,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			}
 			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
 			submitPrompt(st, editSinks, est, pushContext)
-			in.Delivered = delivered
+			in.Settled = settled
 			startDrain(ui, recording, ag, q, in, started, hooks)
 		}
 	}
@@ -1032,6 +1047,9 @@ type sessRec struct {
 	// tracking and @ reference ids stop describing what it replaced. Nil until
 	// main wires it.
 	onSwitch func([]llm.Message)
+	// started is the driver's tool-block-committed flag, shared so a rewind seeds
+	// its base with the same rule the pump uses. Nil until main wires it.
+	started *bool
 }
 
 // extractResume scans argv for a --resume token and its optional trailing session
@@ -1280,8 +1298,10 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 		st.Model = rebuilt.Model
 	}
 	// fold resumed setting overrides into the session config layer so Explain and
-	// Settings report (session) instead of reverting to defaults.
-	set.SeedSession(session.SettingOverrides(entries))
+	// Settings report (session) instead of reverting to defaults. They come off the
+	// branch, not raw file order: a transcript with forks holds settings from
+	// siblings this head never saw, and the tool set among them shapes the request.
+	set.SeedSession(session.SettingOverrides(session.Branch(entries, head)))
 	resumed := set.Settings()
 	if _, ok := llm.ParseLevel(resumed.Reasoning.Level); ok || resumed.Reasoning.Retain != "" {
 		st.Reasoning = reasoningFrom(config.Reasoning{
@@ -1354,8 +1374,11 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 		r.onSwitch(rebuilt.Messages)
 	}
 
+	live := r.liveModel(ag) // captured before the swap, for a branch that names no model
+
 	// mutate the live state in place so every holder (the console, this handler)
 	// sees the restored context.
+	var ledger *tokens.Accounting
 	ag.WithState(func(st *agent.State) {
 		st.Messages = rebuilt.Messages
 		if rebuilt.Model.ID != "" {
@@ -1366,9 +1389,32 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 		} else {
 			st.Tokens = tokens.New(st.Model) // a new root starts an empty ledger
 		}
-		pushSwitchedContext(ui, st.Tokens)
+		ledger = st.Tokens
 	})
+	// both of these need the agent lock WithState holds, so they run after it, not
+	// inside the closure.
+	if ledger != nil {
+		if rebuilt.Model.ID == "" && live.ID != "" {
+			// the branch named no model of its own: frame what the rebuild measured
+			// against the live one rather than leaving a zero window, which would
+			// rescale the bar off the compaction threshold onto the raw context size
+			ledger.SetWindow(live)
+		}
+		ledger.SetBase(r.baseEstimate(ag))
+	}
+	pushSwitchedContext(ui, ledger)
 	return nil
+}
+
+// baseEstimate sizes the constant request overhead for the branch just restored,
+// counting tool schemas only once the tool block has been committed. It must not
+// run inside WithState, whose agent lock Agent.BaseEstimate also takes.
+func (r *sessRec) baseEstimate(ag *agent.Agent) int {
+	var committed bool
+	if r.started != nil {
+		committed = *r.started
+	}
+	return ag.BaseEstimate(committed)
 }
 
 // pushSwitchedContext republishes the context bar after a ledger swap, which no
@@ -1401,14 +1447,21 @@ func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, m llm.Model) {
 	if m.ID == "" || ag == nil {
 		return
 	}
+	var ledger *tokens.Accounting
 	ag.WithState(func(st *agent.State) {
 		st.Model = m
 		if st.Tokens != nil {
 			st.Tokens.SetModel(m)
-			st.Tokens.Reseed(tokens.EstimateMessages(st.Messages))
+			st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
+			ledger = st.Tokens
 		}
-		pushSwitchedContext(ui, st.Tokens)
 	})
+	// this deliberately overwrites what switchState seeded, so the base is measured
+	// again here against the fork's model; BaseEstimate takes the lock WithState held
+	if ledger != nil {
+		ledger.SetBase(r.baseEstimate(ag))
+	}
+	pushSwitchedContext(ui, ledger)
 }
 
 // resumeHead prefers the live head over the file tail; they differ after a

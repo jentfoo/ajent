@@ -111,7 +111,7 @@ path.
 drain follow-up queue -> for each turn:
     sink.TurnStart
     append the prompt and any pre-start steering as user messages
-      (Before, then the text, then Delivered, then After resolves)
+      (Before, the text, Delivered, After resolves, then Settled)
     for step := 0; maxSteps <= 0 || step < maxSteps; step++ {
         drain push-steers, then OnBoundary inputs         (step boundary)
         req = request(state, env, tools)                 assemble()
@@ -153,13 +153,21 @@ since an exact count already includes system and schemas. Replacing rather than
 accumulating keeps a fresh epoch from double-counting across steps.
 
 Two callers seed it: `Agent.BaseEstimate(tools bool)` exposes what rides along so
-the front end can paint an honest bar before the first turn (system-only at
-startup, tool schemas joining on the first prompt), and `stream()` itself calls
-`SetBase(EstimateFixed(req))` with the real built request — which self-corrects
-whatever was seeded. A separate **submitted** bucket (`SetSubmit`) carries a sent
-prompt across the gap between the editor clearing and its message landing in
-state; `Input.Delivered` clears it once `pending` owns the text, so it is never
-counted twice.
+the front end can paint an honest bar before the first turn, and `stream()` itself
+calls `SetBase(EstimateFixed(req))` with the real built request — which
+self-corrects whatever was seeded. Tool schemas join the base only once the tool
+block is **committed**, since `/tools` can still narrow the set before the first
+prompt; after that it can only widen, so the base grows and never shrinks. A
+resumed branch with history has committed one already, and every context-tree jump
+(rewind, fork) re-seeds the base itself, because the ledger `session.State` builds
+carries none of its own.
+
+A separate **submitted** bucket (`SetSubmit`) carries a sent prompt across the gap
+between the editor clearing and its message landing in state. `Input.Settled` —
+not `Delivered` — clears it: `Delivered` fires ahead of `After` so a queued batch's
+reads render under its echo, and releasing the reserve there would drop those reads
+for the repaint between the two. `Settled` fires once everything the input carries
+has been appended, so `pending` already owns it.
 
 ### Step limit
 

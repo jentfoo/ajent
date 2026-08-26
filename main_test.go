@@ -17,6 +17,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/mcp"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
@@ -821,4 +822,80 @@ func (s *stubTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: s.
 func (s *stubTool) Mode() agent.ExecutionMode   { return agent.ModeSerial }
 func (s *stubTool) Execute(_ context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
+}
+
+// TestSwitchStateSeedsBase covers a ledger built by session.State or minted for a
+// new root: neither carries the constant request overhead, so without seeding it
+// here a rewind drops the system prompt and tool block out of the bar entirely,
+// and it stays dropped until the next turn starts.
+func TestSwitchStateSeedsBase(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+
+	model := llm.Model{ID: "a", Provider: "p", ContextWindow: 100000}
+	st := &agent.State{Model: model, Tools: []string{"bash"}, Tokens: tokens.New(model)}
+	ag := agent.New(st, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) {
+			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("hi")}}}, nil
+		},
+		Tools: singleToolSet{tool: noopRewindTool{}},
+		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+
+	committed := true
+	r := &sessRec{w: w, rec: session.NewRecorder(w), started: &committed}
+	wantBase := ag.BaseEstimate(true)
+	require.NotZero(t, wantBase) // the system prompt alone is never free
+
+	// an empty head starts a new root: no messages, but the next request still
+	// carries the system prompt and the committed tool block
+	require.NoError(t, r.switchState(nil, ag, reg, "", "rewind: "))
+	cs := st.Tokens.Context()
+	assert.Equal(t, wantBase, cs.Used)
+	assert.True(t, cs.Estimated) // a base is an estimate, so the bar says so
+	assert.Equal(t, 100000, cs.Window)
+}
+
+// TestSwitchStateKeepsWindowWithoutModel covers a branch that names no model of
+// its own: the rebuilt ledger has a zero window, which would rescale the bar off
+// the compaction threshold onto the raw context size.
+func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()}) // no model key
+	require.NoError(t, err)
+
+	model := llm.Model{ID: "a", Provider: "p", ContextWindow: 100000}
+	st := &agent.State{Model: model, Tokens: tokens.New(model)}
+	ag := agent.New(st, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) {
+			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("hi")}}}, nil
+		},
+		Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+	committed := false
+	r := &sessRec{w: w, rec: session.NewRecorder(w), started: &committed}
+	r.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hello there")})
+
+	entries := readEntriesRewind(t, p)
+	require.NoError(t, r.switchState(nil, ag, reg, entries[len(entries)-1].ID, "rewind: "))
+
+	cs := st.Tokens.Context()
+	assert.Equal(t, 100000, cs.Window) // framed by the live model, not left at zero
+	assert.Equal(t, tokens.CompactAt(model), cs.Compact)
+	assert.NotZero(t, cs.Used)
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestAccountingPendingLiveLifecycle(t *testing.T) {
@@ -66,7 +67,7 @@ func TestAccountingPendingLiveLifecycle(t *testing.T) {
 		assert.True(t, a.Context().Estimated)
 
 		// a completed response clears every estimate bucket: exact, no longer growing.
-		a.Response(key, llm.Usage{Input: 1000, Output: 500}, 200)
+		a.Response(key, llm.Usage{Input: 1000, Output: 500}, 200, true)
 		cs := a.Context()
 		assert.False(t, cs.Estimated)  // no pending or live estimates remain
 		assert.Equal(t, 1500, cs.Used) // exact input + output supersedes them
@@ -80,7 +81,7 @@ func TestAccountingUnreportedTurnIsEstimated(t *testing.T) {
 	const key = "p/m1"
 
 	// a provider that reported nothing (llama.cpp) marks the turn estimated.
-	a.Response(key, llm.Usage{}, 0)
+	a.Response(key, llm.Usage{}, 0, true)
 	assert.Equal(t, 1, a.TurnsCount())
 	assert.Equal(t, 1, a.EstimatedTurns())
 
@@ -97,7 +98,7 @@ func TestAccountingChildRollsUpSpendNotContext(t *testing.T) {
 	child := parent.Child()
 	in, out := 2000, 300
 	// child spends on its own context; the parent must not see that used.
-	child.Response(key, llm.Usage{Input: in, Output: out}, 1500)
+	child.Response(key, llm.Usage{Input: in, Output: out}, 1500, true)
 
 	assert.Zero(t, parent.Context().Used) // child's context is its own
 
@@ -230,7 +231,7 @@ func TestAccountingReseedKeepsSpendResetsContext(t *testing.T) {
 	// a reported turn establishes exact context terms and session spend. The
 	// prediction matches the report so the calibration factor stays 1 and the
 	// reseeded estimate below is unscaled.
-	a.Response(key, llm.Usage{Input: 5000, Output: 300}, 5000)
+	a.Response(key, llm.Usage{Input: 5000, Output: 300}, 5000, true)
 	total := a.Total()
 	assert.Equal(t, 5300, total.Input+total.Output)
 
@@ -261,4 +262,147 @@ func TestAccountingSpendCountsTotalOnly(t *testing.T) {
 
 	a.Spend(key, llm.Usage{}) // zero usage is a no-op, not a zeroed total
 	assert.Equal(t, 90500, a.Total().Input+a.Total().Output)
+}
+
+func TestAccountingUnreportedResponseKeepsEstimate(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "local", Provider: "p", ContextWindow: 32000}
+	a := New(m)
+	a.SetBase(1200)
+	a.Add(5000) // prior history plus the prompt just sent
+	a.Stream(400)
+	before := a.Context().Used
+
+	// a provider reporting nothing snapped no exact term, so the estimate is still
+	// all there is: wiping pending here left the bar at base and never recovered.
+	a.Response(m.Key(), llm.Usage{}, 6200, true)
+	after := a.Context().Used
+	assert.Greater(t, after, 1200)
+	assert.Equal(t, before-400, after) // only live is dropped; append re-adds the message
+	assert.True(t, a.Context().Estimated)
+}
+
+func TestAccountingOutputOnlyReport(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "m1", Provider: "p", ContextWindow: 32000}
+
+	t.Run("response_keeps_prompt_and_counts_output", func(t *testing.T) {
+		a := New(m)
+		a.Response(m.Key(), llm.Usage{Input: 40000, Output: 500}, 40000, true)
+		a.Add(3000)
+		// a prompt-silent report must not zero the prompt term, and its output must
+		// still land: append declines to re-add a message whose usage is non-zero.
+		// It joins pending rather than outputExact, which the first turn's 500 holds
+		// and which a second assignment would overwrite.
+		a.Response(m.Key(), llm.Usage{Output: 120}, 0, true)
+		cs := a.Context()
+		assert.Equal(t, 40000+500+3000+120, cs.Used)
+	})
+
+	t.Run("partial_keeps_prompt_and_pending", func(t *testing.T) {
+		a := New(m)
+		a.Response(m.Key(), llm.Usage{Input: 40000, Output: 500}, 40000, true)
+		a.Add(3000)
+		a.Partial(llm.Usage{Output: 120}) // output-only mid-stream snapshot
+		assert.Equal(t, 40000+500+3000, a.Context().Used)
+	})
+}
+
+func TestAccountingReasoningStrippedByRetention(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "m1", Provider: "p", ContextWindow: 32000}
+	u := llm.Usage{Input: 10000, Output: 4000, Reasoning: 3000}
+
+	kept := New(m)
+	kept.Response(m.Key(), u, 10000, true)
+	assert.Equal(t, 14000, kept.Context().Used)
+
+	// under RetainNone the billed reasoning never rides in the next request
+	stripped := New(m)
+	stripped.Response(m.Key(), u, 10000, false)
+	assert.Equal(t, 11000, stripped.Context().Used)
+}
+
+func TestAccountingPreservesComposing(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "m1", Provider: "p", ContextWindow: 32000}
+	other := llm.Model{ID: "m2", Provider: "p", ContextWindow: 64000}
+
+	// none of these operations has anything to say about the editor buffer, so a
+	// switch, recount or reseed mid-prompt must not drop what is being typed
+	tests := []struct {
+		name string
+		op   func(a *Accounting)
+		want int
+	}{
+		{"rebase", func(a *Accounting) { a.Rebase(5000) }, 5700},      // exact count plus the buffer
+		{"reseed", func(a *Accounting) { a.Reseed(5000) }, 5700},      // reseeded estimate plus it
+		{"set_model", func(a *Accounting) { a.SetModel(other) }, 700}, // context dropped, buffer kept
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := New(m)
+			a.Add(2000)
+			a.SetCompose(700)
+			tc.op(a)
+			cs := a.Context()
+			assert.Equal(t, tc.want, cs.Used)
+			assert.True(t, cs.Estimated) // the buffer is an estimate, so the bar says so
+		})
+	}
+}
+
+func TestAccountingSetWindowKeepsContext(t *testing.T) {
+	t.Parallel()
+
+	small := llm.Model{ID: "m1", Provider: "p", ContextWindow: 32000}
+	big := llm.Model{ID: "m2", Provider: "p", ContextWindow: 200000}
+
+	a := New(small)
+	a.Add(9000)
+	used := a.Context().Used
+	require.NotZero(t, used)
+
+	a.SetWindow(big) // reframes without dropping what was already measured
+	cs := a.Context()
+	assert.Equal(t, used, cs.Used)
+	assert.Equal(t, 200000, cs.Window)
+}
+
+func TestAccountingRecordSpend(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "m1", Provider: "p", ContextWindow: 32000}
+	a := New(m)
+	a.Add(4000)
+	before := a.Context()
+
+	a.RecordSpend(m.Key(), llm.Usage{Input: 50000, Output: 400})
+	// every appended message is a recorded entry, so a user echo or tool result
+	// arrives here too; counting those as turns made /usage report a 5-step session
+	// as 15+ turns once it had been compacted
+	a.RecordSpend(m.Key(), llm.Usage{})
+
+	assert.Equal(t, before, a.Context()) // spend never disturbs a context term
+	assert.Equal(t, 50400, a.Total().Input+a.Total().Output)
+	assert.Equal(t, 1, a.TurnsCount())
+	assert.Zero(t, a.EstimatedTurns())
+}
+
+func TestAccountingOutputOnlyAcrossTurns(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "x", Provider: "p", ContextWindow: 32000}
+	a := New(m)
+	for range 3 {
+		a.Add(100)                                          // the user message
+		a.Response(m.Key(), llm.Usage{Output: 50}, 0, true) // provider reports output only
+	}
+	// three user messages and three responses are all still in context. Parking each
+	// response in outputExact instead lost every earlier one as the next overwrote it.
+	assert.Equal(t, 450, a.Context().Used)
 }

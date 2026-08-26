@@ -75,6 +75,19 @@ type CompactionData struct {
 	Details          json.RawMessage `json:"details,omitempty"`
 }
 
+// rewritesHistory reports whether this compaction changes what the branch sends,
+// through a cut, a drop, a stub or a thinking strip. When it does, the prompt
+// sizes recorded against the surviving messages describe a request that no longer
+// exists, so a rebuild must re-measure rather than replay them. A plan that only
+// carries Stats changed nothing and stays replayable.
+func (c CompactionData) rewritesHistory() bool {
+	if c.FirstKeptEntryID != "" || c.Summary != "" {
+		return true
+	}
+	r := c.Reduce
+	return r != nil && (len(r.Stubs) > 0 || len(r.Drop) > 0 || r.StripThinking)
+}
+
 // ModelData records a model switch.
 type ModelData struct {
 	Model  string `json:"model"` // llm.Model.Key()

@@ -266,12 +266,24 @@ assembly function").
 **5. Only the newest compaction applies, and it is cumulative.** Each run
 recomputes every stage over the whole branch.
 
-**6. The ledger's context terms reflect only surviving messages.** `State` rebuilds
-usage from entries, but skips those summarized away by a cut or dropped outright —
-otherwise resume/rewind would over-report occupancy and threshold auto-compaction
-could fire immediately after context was reduced. Cumulative spend is unaffected in
-live sessions (it accumulates independently); the minor live-vs-resumed asymmetry
-for compacted-away turns is accepted.
+**6. On rebuild, context and spend come from different places.** A compaction
+rewrites what the branch sends, so the prompt sizes recorded against its surviving
+messages describe a request that no longer exists — replaying them reported the
+*pre*-compaction size, and reported it as exact, so the next turn compacted again
+immediately. `CompactionData.rewritesHistory()` (a cut, a drop, a stub or a
+thinking strip; a plan carrying only `Stats` changed nothing) decides between two
+paths in `State`:
+
+- **rewritten** — context is measured from the assembled messages,
+  `Reseed(tokens.EstimateFor(model, retain, msgs))`, which also accounts the
+  synthetic summary message that is not an entry of its own. Recorded usage counts
+  toward spend only, via `Accounting.RecordSpend`, and it counts for **every**
+  message entry including ones the cut removed: those tokens were billed whether or
+  not they still occupy context. Only an entry carrying a report is a turn — the
+  recorder persists user echoes and tool results as entries too.
+- **untouched** — nothing rewrote the branch, so the recorded prompt plus output is
+  still exactly what the next request carries and it is replayed as before, bar and
+  all, with no `~`.
 
 The same applies to a live compaction: it reseeds with `Reseed(res.After - base)` —
 the reduced **messages** only, since `After` already counts base and the ledger adds

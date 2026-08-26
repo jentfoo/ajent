@@ -78,6 +78,23 @@ func hasImageSig(data []byte) bool {
 	return len(data) > 2 && data[0] == 0xff && data[1] == 0xd8 // jpeg
 }
 
+// numberedLinePrefix is what numberLines writes ahead of every line: a six-wide
+// line number and a tab.
+const numberedLinePrefix = 7
+
+// ReadBytes reports how many bytes a read of a measured file injects: its content
+// plus the line-number prefix numberLines writes, bounded by the tool's line
+// limit. It lets a caller size an injected read before running it. A measurement
+// that skipped counting lines (one above the measure ceiling) reports its bytes
+// alone.
+func ReadBytes(m Measurement) int64 {
+	lines := int64(m.Lines)
+	if limit := int64(ReadFileLimit().Lines); limit > 0 && lines > limit {
+		lines = limit
+	}
+	return m.Bytes + lines*numberedLinePrefix
+}
+
 // numberLines renders data as line-numbered text starting at the given 1-based
 // offset, capping each line and the total to limit. It reports lastEmitted (the
 // highest line rendered) and truncatedAt (the next offset) when more lines remain

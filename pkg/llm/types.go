@@ -28,6 +28,14 @@ const (
 	BlockImage      BlockType = "image"
 )
 
+// BlockTypes lists every block discriminator in declaration order. Code that
+// switches over block types — the JSON decoder, the token estimator — is expected
+// to cover all of them, and their tests walk this list, so a new block type
+// belongs here as well as in its own switch.
+var BlockTypes = []BlockType{
+	BlockText, BlockThinking, BlockToolCall, BlockToolResult, BlockImage,
+}
+
 // Origin records which provider, dialect and model produced a message. It is
 // populated on rebuild for identity comparisons; it never reaches the transcript.
 type Origin struct {

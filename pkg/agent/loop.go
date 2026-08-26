@@ -280,9 +280,8 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 			}
 		}
 		// delivery is confirmed only when the message actually lands, and fires
-		// ahead of After because a queued batch echoes here — its reads must render
-		// under that echo, as replay draws them. The cost is the host's submit
-		// reserve clearing one repaint before those reads reach pending.
+		// ahead of After because a queued batch echoes here: its reads must render
+		// under that echo, as replay draws them.
 		if in.Delivered != nil {
 			in.Delivered()
 		}
@@ -290,6 +289,12 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 			for _, m := range in.After(ctx) {
 				a.append(MessageInfo{Message: m, Injected: true})
 			}
+		}
+		// everything this input carries is now accounted, which is when a host may
+		// release the reserve it held from submit. Releasing it on Delivered instead
+		// would drop the reads for the repaint between the two.
+		if in.Settled != nil {
+			in.Settled()
 		}
 	}
 }
@@ -347,7 +352,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	// snap the exact terms to this response's report, unless a provider that
 	// reported nothing needs the local tokenizer recount instead (done after append).
 	if t := a.state.Tokens; t != nil && !needsRecount(a.state.Model.Caps, usage) {
-		t.Response(a.state.Model.Key(), usage, predicted)
+		t.Response(a.state.Model.Key(), usage, predicted, keepThink)
 	}
 	return msg, usage, stop, streamErr(st, &acc)
 }

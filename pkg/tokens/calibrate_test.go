@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCalibratorConverges(t *testing.T) {
@@ -56,4 +57,20 @@ func TestCalibratorIgnoresZeroPrediction(t *testing.T) {
 	afterSample := c.Factor(key)
 	c.Feed(key, 0, 900000)
 	assert.InDelta(t, afterSample, c.Factor(key), 1e-9)
+}
+
+func TestCalibratorIgnoresUnreportedTurns(t *testing.T) {
+	t.Parallel()
+
+	c := NewCalibrator()
+	c.Feed("k", 1000, 1100)
+	settled := c.Factor("k")
+	require.InDelta(t, 1.1, settled, 0.001)
+
+	// a provider that reported nothing is not evidence the estimate ran high; before
+	// this guard each such turn decayed the factor (1.1, 0.77, 0.539, ...) until every
+	// estimate for the model came out far too small.
+	c.Feed("k", 1000, 0)
+	c.Feed("k", 1000, 0)
+	assert.InDelta(t, settled, c.Factor("k"), 1e-9)
 }

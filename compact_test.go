@@ -250,7 +250,7 @@ func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 	// on top; both must apply to the reseed exactly as they do to every estimate.
 	predicted := tokens.EstimateMessages(msgs)
 	st.Tokens.SetBase(9000)
-	st.Tokens.Response("test/m", llm.Usage{Input: predicted * 4, Output: 100}, predicted*2)
+	st.Tokens.Response("test/m", llm.Usage{Input: predicted * 4, Output: 100}, predicted*2, true)
 
 	sink := &ctxSink{}
 	c.sink = sink

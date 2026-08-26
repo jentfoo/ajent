@@ -133,3 +133,18 @@ func TestText(t *testing.T) {
 	require.Len(t, m.Content, 1)
 	assert.Equal(t, TextBlock{Text: "hi"}, m.Content[0])
 }
+
+// TestBlockTypesCoversDecoder keeps llm.BlockTypes honest: every discriminator it
+// lists must decode, so the estimator's own walk over the list cannot silently
+// miss a type.
+func TestBlockTypesCoversDecoder(t *testing.T) {
+	t.Parallel()
+
+	for _, bt := range BlockTypes {
+		t.Run(string(bt), func(t *testing.T) {
+			b, err := decodeBlock(blockEnvelope{Type: bt, Data: []byte(`{}`)})
+			require.NoError(t, err)
+			assert.Equal(t, bt, b.blockType())
+		})
+	}
+}

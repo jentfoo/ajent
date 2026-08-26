@@ -24,7 +24,7 @@ type queueUI interface {
 type steerQueue struct {
 	ui     queueUI
 	submit func(est int) // SetSubmit(sum) while anything is pending; nil-safe in main
-	clear  func()        // SetSubmit(0) once the batch lands in state
+	clear  func()        // SetSubmit(0) once the batch and its reads have landed
 
 	mu       sync.Mutex
 	items    []steerItem // oldest first
@@ -60,8 +60,8 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 
 // join builds one agent.Input from every queued item (caller holds the lock):
 // texts joined by newline, Before blocks and After resolvers chained in submit
-// order, Injected OR-ed, and a Delivered hook that clears accounting and echoes
-// the labels once the batch actually lands.
+// order, Injected OR-ed, a Delivered hook that echoes the labels once the batch
+// lands and a Settled hook that clears accounting once its reads have too.
 func (s *steerQueue) join() agent.Input {
 	texts := make([]string, 0, len(s.items))
 	before := make([]llm.Message, 0, len(s.items))
@@ -83,6 +83,9 @@ func (s *steerQueue) join() agent.Input {
 
 	out := agent.Input{Text: strings.Join(texts, "\n"), Before: before,
 		After: joinAfter(afters), Injected: injected}
+	// the echo lands with the message so the batch's reads render under it; the
+	// reserve is released only once those reads have been accounted too
+	out.Settled = s.settled
 	if labelJoin := strings.Join(labels, "\n"); labelJoin != "" {
 		joined := labelJoin // captured for the closure; landed takes no lock
 		out.Delivered = func() { s.landed(joined) }
@@ -106,14 +109,19 @@ func joinAfter(afters []func(context.Context) []llm.Message) func(context.Contex
 	}
 }
 
-// landed clears accounting and echoes the delivered labels on the loop goroutine.
-// It must not take q.mu (Delivered can fire inside drainSteer).
+// landed echoes the delivered labels on the loop goroutine. It must not take q.mu
+// (Delivered can fire inside drainSteer).
 func (s *steerQueue) landed(labels string) {
-	if s.clear != nil {
-		s.clear() // SetSubmit(0): pending owns the text once it lands
-	}
 	if s.ui != nil && labels != "" {
 		s.ui.UserEcho(labels)
+	}
+}
+
+// settled releases the submit reserve once the batch and everything behind it has
+// been accounted. Same locking rule as landed.
+func (s *steerQueue) settled() {
+	if s.clear != nil {
+		s.clear() // SetSubmit(0): pending owns the text and its reads now
 	}
 }
 

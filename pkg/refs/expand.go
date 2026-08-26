@@ -33,10 +33,28 @@ type Result struct {
 
 // injection is one planned read/ls call, run once the user message lands.
 type injection struct {
-	name string // read or ls
-	id   string
-	path string // as written, what the call is given
-	full string // resolved, for the land-time tracker re-check; empty for ls
+	name  string // read or ls
+	id    string
+	path  string          // as written, what the call is given
+	full  string          // resolved, for the land-time tracker re-check; empty for ls
+	input json.RawMessage // the call's arguments, marshalled at plan time
+	body  int64           // expected result bytes, for the submit reserve
+}
+
+// estimate sizes the call + result pair this injection lands. It bills the same
+// framing EstimateMessages charges once the pair is appended, so the bar does not
+// step as the reads arrive.
+func (p injection) estimate() int {
+	return tokens.EstimateToolPair(
+		llm.ToolCallBlock{ID: p.id, Name: p.name, Input: p.input}, p.body, tokens.KindCode)
+}
+
+// newInjection plans one call, marshalling its arguments now so the reserve and
+// the landed pair are sized from exactly the same call.
+func newInjection(run int64, name, idKind, path, full string, body int64) injection {
+	input, _ := json.Marshal(map[string]any{"path": path})
+	return injection{name: name, id: callID(run, idKind, path), path: path,
+		full: full, input: input, body: body}
 }
 
 // Expander turns @ references in a message into synthetic read/ls tool-call +
@@ -115,7 +133,6 @@ func (x *Expander) Expand(text string) Result {
 	var (
 		plan    []injection
 		notices []string
-		est     int
 		spent   int
 	)
 	seen := make(map[string]struct{}, len(refs))
@@ -174,11 +191,16 @@ func (x *Expander) Expand(text string) Result {
 		if !keep(full) {
 			continue
 		}
-		plan = append(plan, injection{
-			name: "read", id: callID(run, "", ref.Path), path: ref.Path, full: full,
-		})
+		// the tool returns line-numbered text, so what lands is the file plus a
+		// prefix per line, not its raw size
+		plan = append(plan, newInjection(run, "read", "", ref.Path, full, tools.ReadBytes(m)))
 		spent += int(m.Bytes)
-		est += tokens.EstimateBytes(m.Bytes, tokens.KindCode)
+	}
+	// sized here rather than per branch: an injection that forgot to add its own
+	// cost is exactly how ls came to reserve nothing at all
+	var est int
+	for _, p := range plan {
+		est += p.estimate()
 	}
 	res := Result{Text: out, Est: est, Notices: notices}
 	if len(plan) > 0 {
@@ -202,9 +224,15 @@ func (x *Expander) Expand(text string) Result {
 	return res
 }
 
+// lsNominalBytes is the listing size an ls injection reserves. A directory or
+// glob cannot be measured without doing the walk, which is too much to pay on the
+// input path, so this is a floor rather than a measurement: the real size lands
+// with the pair and replaces it moments later.
+const lsNominalBytes = 1024
+
 // lsCall plans the directory listing for a glob or directory reference.
 func lsCall(run int64, path string) injection {
-	return injection{name: "ls", id: callID(run, "ls-", path), path: path}
+	return newInjection(run, "ls", "ls-", path, "", lsNominalBytes)
 }
 
 // callID names one injected reference. The run number is what keeps a later
@@ -230,9 +258,8 @@ func (x *Expander) injectPair(ctx context.Context, p injection) []llm.Message {
 	if !ok {
 		return nil
 	}
-	input, _ := json.Marshal(map[string]any{"path": p.path})
 	msgs, _ := agent.InjectPair(ctx, tool, x.sink,
-		agent.ToolCall{ID: p.id, Name: p.name, Input: input}, p.name+" "+p.path)
+		agent.ToolCall{ID: p.id, Name: p.name, Input: p.input}, p.name+" "+p.path)
 	return msgs
 }
 
