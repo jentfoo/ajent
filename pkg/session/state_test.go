@@ -42,38 +42,39 @@ func TestStateAppliesToolsSetting(t *testing.T) {
 	assert.Equal(t, []string{"read", "bash"}, st.Tools)
 }
 
-func TestStateCompactionEmitsSummaryAndKeptTail(t *testing.T) {
+func TestStateCompactionRebuild(t *testing.T) {
 	t.Parallel()
 
-	branch := []Entry{
-		msgWithID("m1", llm.Text(llm.RoleUser, "first")),
-		msgWithID("m2", llm.Text(llm.RoleAssistant, "second")),
-		{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"summed","firstKeptEntryId":"m3"}`)},
-		msgWithID("m3", llm.Text(llm.RoleUser, "kept start")),
-		msgWithID("m4", llm.Text(llm.RoleAssistant, "kept end")),
-	}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
-	require.Len(t, st.Messages, 3) // summary + m3 + m4
-	summary := st.Messages[0]
-	assert.Equal(t, llm.RoleUser, summary.Role) // a user message reaches every provider
-	assert.Contains(t, textOf(summary), "summed")
-	assert.Equal(t, "kept start", textOf(st.Messages[1]))
-}
+	// a summary plus the kept tail rebuild into messages.
+	t.Run("emits_summary_and_kept_tail", func(t *testing.T) {
+		branch := []Entry{
+			msgWithID("m1", llm.Text(llm.RoleUser, "first")),
+			msgWithID("m2", llm.Text(llm.RoleAssistant, "second")),
+			{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"summed","firstKeptEntryId":"m3"}`)},
+			msgWithID("m3", llm.Text(llm.RoleUser, "kept start")),
+			msgWithID("m4", llm.Text(llm.RoleAssistant, "kept end")),
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		require.Len(t, st.Messages, 3) // summary + m3 + m4
+		summary := st.Messages[0]
+		assert.Equal(t, llm.RoleUser, summary.Role) // a user message reaches every provider
+		assert.Contains(t, textOf(summary), "summed")
+		assert.Equal(t, "kept start", textOf(st.Messages[1]))
+	})
 
-func TestStateCompactionKeepsFromEarlierMessage(t *testing.T) {
-	t.Parallel()
-
-	// firstKeptEntryId points before the compaction entry in file order.
-	branch := []Entry{
-		msgWithID("m1", llm.Text(llm.RoleUser, "drop me")),
-		msgWithID("m2", llm.Text(llm.RoleAssistant, "keep me")),
-		{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"s","firstKeptEntryId":"m2"}`)},
-	}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
-	require.Len(t, st.Messages, 2)
-	assert.Equal(t, "keep me", textOf(st.Messages[1]))
+	// firstKeptEntryId can point before the compaction entry in file order.
+	t.Run("keeps_from_earlier_message", func(t *testing.T) {
+		branch := []Entry{
+			msgWithID("m1", llm.Text(llm.RoleUser, "drop me")),
+			msgWithID("m2", llm.Text(llm.RoleAssistant, "keep me")),
+			{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"s","firstKeptEntryId":"m2"}`)},
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		require.Len(t, st.Messages, 2)
+		assert.Equal(t, "keep me", textOf(st.Messages[1]))
+	})
 }
 
 func TestStateUnresolvableModelWarns(t *testing.T) {
@@ -133,90 +134,84 @@ func TestSettingOverridesLastWriteWins(t *testing.T) {
 	assert.JSONEq(t, `["bash"]`, string(ov["tools.enabled"]))
 }
 
-// TestStateRebuildsLedgerFromRecordedUsage asserts a resumed branch folds each
-// message's reported usage back into the ledger totals.
-func TestStateRebuildsLedgerFromRecordedUsage(t *testing.T) {
+func TestStateLedger(t *testing.T) {
 	t.Parallel()
 
-	branch := []Entry{
-		entry(TypeSession, SessionData{Model: "p/m1"}),
-		usageMessage("a1", "first reply", llm.Usage{Input: 1000, Output: 200}),
-		msgWithID("u2", llm.Text(llm.RoleUser, "more")), // no usage -> estimated
-		usageMessage("a2", "second reply", llm.Usage{Input: 500, Output: 50}),
-	}
+	// a resumed branch folds each message's reported usage back into the ledger totals.
+	t.Run("rebuilds_from_recorded_usage", func(t *testing.T) {
+		branch := []Entry{
+			entry(TypeSession, SessionData{Model: "p/m1"}),
+			usageMessage("a1", "first reply", llm.Usage{Input: 1000, Output: 200}),
+			msgWithID("u2", llm.Text(llm.RoleUser, "more")), // no usage -> estimated
+			usageMessage("a2", "second reply", llm.Usage{Input: 500, Output: 50}),
+		}
 
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
 
-	totals := st.Tokens.Total()
-	assert.Equal(t, 1000+200+500+50,
-		totals.Input+totals.Output+totals.CacheRead+totals.CacheWrite)
+		totals := st.Tokens.Total()
+		assert.Equal(t, 1000+200+500+50,
+			totals.Input+totals.Output+totals.CacheRead+totals.CacheWrite)
 
-	// a recorded response snaps the context exact terms to its input+output.
-	cs := st.Tokens.Context()
-	assert.False(t, cs.Estimated)
-}
+		// a recorded response snaps the context exact terms to its input+output.
+		cs := st.Tokens.Context()
+		assert.False(t, cs.Estimated)
+	})
 
-// TestStateLedgerIgnoresSummarizedAwayMessages asserts that after a compaction,
-// the rebuilt ledger's context terms reflect only surviving messages; never the
-// entries dropped by a cut. A reported turn before the cut must not inflate Used on
-// resume/rewind, or threshold auto-compaction would fire immediately even though
-// context was just reduced.
-func TestStateLedgerIgnoresSummarizedAwayMessages(t *testing.T) {
-	t.Parallel()
+	// after a compaction, the rebuilt ledger's context terms reflect only surviving
+	// messages; never the entries dropped by a cut. A reported turn before the cut must not inflate Used on
+	// resume/rewind, or threshold auto-compaction would fire immediately even though context was just reduced.
+	t.Run("ignores_summarized_away_messages", func(t *testing.T) {
+		branch := append([]Entry(nil),
+			entry(TypeSession, SessionData{Model: "p/m1"}),
+			usageMessage("a0", "summarized away reply", llm.Usage{Input: 4000, Output: 1000}), // before the cut
+			msgWithID("u1", llm.Text(llm.RoleUser, "kept ask")),                               // no usage -> estimated
+		)
+		// a compaction whose firstKept is u1 folds everything before it into the summary.
+		branch = append(branch,
+			Entry{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"s","firstKeptEntryId":"u1"}`)})
 
-	branch := append([]Entry(nil),
-		entry(TypeSession, SessionData{Model: "p/m1"}),
-		usageMessage("a0", "summarized away reply", llm.Usage{Input: 4000, Output: 1000}), // before the cut
-		msgWithID("u1", llm.Text(llm.RoleUser, "kept ask")),                               // no usage -> estimated
-	)
-	// a compaction whose firstKept is u1 folds everything before it into the summary.
-	branch = append(branch,
-		Entry{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"s","firstKeptEntryId":"u1"}`)})
+		stCompact, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		require.Len(t, stCompact.Messages, 2) // summary + kept ask
 
-	stCompact, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
-	require.Len(t, stCompact.Messages, 2) // summary + kept ask
+		// the same history without a cut: a0's exact terms stay in context.
+		fullBranch := branch[:len(branch)-1]
+		stFull, _ := State(fullBranch, resolveModel)
 
-	// the same history without a cut: a0's exact terms stay in context.
-	fullBranch := branch[:len(branch)-1]
-	stFull, _ := State(fullBranch, resolveModel)
+		// skipping summarized-away entries must lower Used below what the full (uncut)
+		// ledger reports; without the fix both would carry a0's 4000+1000 exact terms.
+		assert.Less(t, stCompact.Tokens.Context().Used, stFull.Tokens.Context().Used,
+			"a cut that summarizes away a reported turn must shrink Used")
+	})
 
-	// skipping summarized-away entries must lower Used below what the full (uncut)
-	// ledger reports; without the fix both would carry a0's 4000+1000 exact terms.
-	assert.Less(t, stCompact.Tokens.Context().Used, stFull.Tokens.Context().Used,
-		"a cut that summarizes away a reported turn must shrink Used")
-}
+	// rewinding onto a mid-branch point yields a ledger covering only the messages before it.
+	t.Run("rewind_rebuilds_for_point_only", func(t *testing.T) {
+		branch := []Entry{
+			entry(TypeSession, SessionData{Model: "p/m1"}),
+			usageMessage("a1", "first reply", llm.Usage{Input: 1000, Output: 200}),
+			msgWithID("u2", llm.Text(llm.RoleUser, "more")), // no usage -> estimated
+			usageMessage("a2", "second reply", llm.Usage{Input: 500, Output: 50}),
+		}
 
-// TestStateRewindRebuildsLedgerForPointOnly asserts rewinding onto a mid-branch
-// point yields a ledger covering only the messages before it.
-func TestStateRewindRebuildsLedgerForPointOnly(t *testing.T) {
-	t.Parallel()
+		stFull, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
 
-	branch := []Entry{
-		entry(TypeSession, SessionData{Model: "p/m1"}),
-		usageMessage("a1", "first reply", llm.Usage{Input: 1000, Output: 200}),
-		msgWithID("u2", llm.Text(llm.RoleUser, "more")), // no usage -> estimated
-		usageMessage("a2", "second reply", llm.Usage{Input: 500, Output: 50}),
-	}
+		// rewind before the last assistant message: only a1's spend survives.
+		rewound := branch[:3]
+		stPart, warns := State(rewound, resolveModel)
+		assert.Empty(t, warns)
 
-	stFull, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
+		totalsPart := stPart.Tokens.Total()
+		fullTotals := stFull.Tokens.Total()
 
-	// rewind before the last assistant message: only a1's spend survives.
-	rewound := branch[:3]
-	stPart, warns := State(rewound, resolveModel)
-	assert.Empty(t, warns)
-
-	totalsPart := stPart.Tokens.Total()
-	fullTotals := stFull.Tokens.Total()
-
-	sum := func(u llm.Usage) int {
-		return u.Input + u.Output + u.CacheRead + u.CacheWrite
-	}
-	// the rewound ledger holds strictly less spend than the full one.
-	assert.Less(t, sum(totalsPart), sum(fullTotals))
-	require.NotZero(t, sum(totalsPart)) // but it kept the earlier reported turn
+		sum := func(u llm.Usage) int {
+			return u.Input + u.Output + u.CacheRead + u.CacheWrite
+		}
+		// the rewound ledger holds strictly less spend than the full one.
+		assert.Less(t, sum(totalsPart), sum(fullTotals))
+		require.NotZero(t, sum(totalsPart)) // but it kept the earlier reported turn
+	})
 }
 
 // helpers ---------------------------------------------------------
@@ -265,48 +260,63 @@ func usageMessage(id string, text string, u llm.Usage) Entry {
 	})}
 }
 
-func TestStateCompactedRebuildRemeasures(t *testing.T) {
+func TestStateContextPrecision(t *testing.T) {
 	t.Parallel()
 
-	// the cut keeps only m4, so the next request is a short summary plus that message.
-	// m4's recorded prompt describes the 150k request it was sent with, which no
-	// longer exists: replaying it reported the pre-compaction size as exact, and the
-	// next turn would immediately compact again.
-	branch := []Entry{
-		msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
-		msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 50000, Output: 400}),
-		msgUsage("m3", llm.Text(llm.RoleUser, "third"), llm.Usage{}),
-		msgUsage("m4", llm.Text(llm.RoleAssistant, "fourth"), llm.Usage{Input: 150000, Output: 600}),
-		{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"a short summary","firstKeptEntryId":"m4"}`)},
-	}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
+	// a cut that rewrote the branch re-measures, so the bar wears its ~.
+	t.Run("compacted_rebuild_remeasures", func(t *testing.T) {
+		// the cut keeps only m4, so the next request is a short summary plus that message.
+		// m4's recorded prompt describes the 150k request it was sent with, which no
+		// longer exists: replaying it reported the pre-compaction size as exact, and the
+		// next turn would immediately compact again.
+		branch := []Entry{
+			msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
+			msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 50000, Output: 400}),
+			msgUsage("m3", llm.Text(llm.RoleUser, "third"), llm.Usage{}),
+			msgUsage("m4", llm.Text(llm.RoleAssistant, "fourth"), llm.Usage{Input: 150000, Output: 600}),
+			{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"a short summary","firstKeptEntryId":"m4"}`)},
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
 
-	cs := st.Tokens.Context()
-	assert.Less(t, cs.Used, 1000)
-	assert.True(t, cs.Estimated) // re-measured, so the bar must wear its ~
+		cs := st.Tokens.Context()
+		assert.Less(t, cs.Used, 1000)
+		assert.True(t, cs.Estimated) // re-measured, so the bar must wear its ~
 
-	// spend still counts the turns the cut removed: those tokens were billed
-	total := st.Tokens.Total()
-	assert.Equal(t, 201000, total.Input+total.Output)
-	assert.Equal(t, 2, st.Tokens.TurnsCount()) // the two that reported, not every entry
-}
+		// spend still counts the turns the cut removed: those tokens were billed
+		total := st.Tokens.Total()
+		assert.Equal(t, 201000, total.Input+total.Output)
+		assert.Equal(t, 2, st.Tokens.TurnsCount()) // the two that reported, not every entry
+	})
 
-func TestStateUntouchedRebuildStaysExact(t *testing.T) {
-	t.Parallel()
+	// nothing rewrote this branch, so the recorded prompt plus output is still exactly what the next request carries.
+	t.Run("untouched_rebuild_stays_exact", func(t *testing.T) {
+		branch := []Entry{
+			msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
+			msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 50000, Output: 400}),
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
 
-	// nothing rewrote this branch, so the recorded prompt plus output is still
-	// exactly what the next request carries and the bar keeps its precision
-	branch := []Entry{
-		msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
-		msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 50000, Output: 400}),
-	}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
+		cs := st.Tokens.Context()
+		assert.Equal(t, 50400, cs.Used)
+		assert.False(t, cs.Estimated)
+	})
 
-	cs := st.Tokens.Context()
-	assert.Equal(t, 50400, cs.Used)
-	assert.False(t, cs.Estimated)
+	// a compaction that recorded stats but changed no message must not cost the branch its exact count.
+	t.Run("stats_only_reduction_stays_exact", func(t *testing.T) {
+		branch := []Entry{
+			msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
+			msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 8000, Output: 100}),
+			{ID: "comp", Type: TypeCompaction, Data: compactData(`{"reduce":{"stats":{"failed":2}}}`)},
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+
+		cs := st.Tokens.Context()
+		assert.Equal(t, 8100, cs.Used)
+		assert.False(t, cs.Estimated)
+	})
 }
 
 func TestCompactionDataRewritesHistory(t *testing.T) {
@@ -332,24 +342,6 @@ func TestCompactionDataRewritesHistory(t *testing.T) {
 			assert.Equal(t, tc.want, tc.data.rewritesHistory())
 		})
 	}
-}
-
-func TestStateStatsOnlyReductionStaysExact(t *testing.T) {
-	t.Parallel()
-
-	// a compaction that recorded stats but changed no message must not cost the
-	// branch its exact count
-	branch := []Entry{
-		msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
-		msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 8000, Output: 100}),
-		{ID: "comp", Type: TypeCompaction, Data: compactData(`{"reduce":{"stats":{"failed":2}}}`)},
-	}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
-
-	cs := st.Tokens.Context()
-	assert.Equal(t, 8100, cs.Used)
-	assert.False(t, cs.Estimated)
 }
 
 func msgUsage(id string, m llm.Message, u llm.Usage) Entry {

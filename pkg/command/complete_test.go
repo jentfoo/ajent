@@ -13,114 +13,109 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCompleterCommandsAtLineStart(t *testing.T) {
+func TestCompleter(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-	comp := NewCompleter(r, c, nil)
+	// a slash command at the line start is offered.
+	t.Run("commands_at_line_start", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, nil)
 
-	start, items := comp.Complete("/mo", 3)
-	assert.Equal(t, 0, start)
-	labels := labelsOf(items)
-	assert.Contains(t, labels, "/model")
-}
+		start, items := comp.Complete("/mo", 3)
+		assert.Equal(t, 0, start)
+		labels := labelsOf(items)
+		assert.Contains(t, labels, "/model")
+	})
 
-func TestCompleterPathAfterAt(t *testing.T) {
-	t.Parallel()
+	// a path after @ is completed.
+	t.Run("path_after_at", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "read.go"), []byte("x"), 0o600))
+		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		comp := NewCompleter(r, c, idx)
 
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "read.go"), []byte("x"), 0o600))
-	idx := refs.NewIndex(dir, tools.PathPolicy{})
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	comp := NewCompleter(r, c, idx)
+		start, items := comp.Complete("@main", 5)
+		// the replacement starts just past @ so accepting keeps it
+		assert.Equal(t, 1, start)
+		labels := labelsOf(items)
+		assert.Contains(t, labels, "main.go")
+	})
 
-	start, items := comp.Complete("@main", 5)
-	// the replacement starts just past @ so accepting keeps it
-	assert.Equal(t, 1, start)
-	labels := labelsOf(items)
-	assert.Contains(t, labels, "main.go")
-}
+	// a cursor on @ with nothing after offers no completion.
+	t.Run("cursor_on_at_does_not_panic", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
+		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		comp := NewCompleter(r, c, idx)
 
-func TestCompleterCursorOnAtDoesNotPanic(t *testing.T) {
-	t.Parallel()
+		// cursor sits on the @ (a break precedes it) with nothing after; no path to complete.
+		_, items := comp.Complete(" @", 1)
+		assert.Empty(t, items)
+	})
 
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
-	idx := refs.NewIndex(dir, tools.PathPolicy{})
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	comp := NewCompleter(r, c, idx)
+	// completion does not trigger mid-token without a special char.
+	t.Run("no_trigger_mid_token", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		comp := NewCompleter(r, c, nil)
 
-	// cursor sits on the @ (a break precedes it) with nothing after; no path to complete.
-	_, items := comp.Complete(" @", 1)
-	assert.Empty(t, items)
-}
+		_, items := comp.Complete("hello", 5)
+		assert.Empty(t, items)
+	})
 
-func TestCompleterNoTriggerMidToken(t *testing.T) {
-	t.Parallel()
+	// a trailing space still offers every argument candidate.
+	t.Run("trailing_space_lists_all_args", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, nil)
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	comp := NewCompleter(r, c, nil)
+		start, items := comp.Complete("/model ", len("/model "))
+		assert.Equal(t, len("/model "), start) // replacement starts past the trailing space
+		labels := labelsOf(items)
+		assert.Contains(t, strings.Join(labels, "|"), "beta")
+	})
 
-	_, items := comp.Complete("hello", 5)
-	assert.Empty(t, items)
-}
+	// pos is a grapheme-cell index; start must come back as cells.
+	t.Run("path_non_ascii_cell_indexes", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "é.go"), []byte("x"), 0o600))
+		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		comp := NewCompleter(r, c, idx)
 
-func TestCompleterTrailingSpaceListsAllArgs(t *testing.T) {
-	t.Parallel()
+		arg := "@é"
+		pos := len(tui.GraphemeCells(arg)) // 2 cells (@ é), not byte length
+		start, items := comp.Complete(arg, pos)
+		assert.Equal(t, 1, start)
+		labels := labelsOf(items)
+		require.Contains(t, labels, "é.go")
+	})
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-	comp := NewCompleter(r, c, nil)
+	// a command delegates argument completion to its own Complete.
+	t.Run("argument_delegates", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, nil)
 
-	// a command line ending in a space still offers every argument candidate
-	start, items := comp.Complete("/model ", len("/model "))
-	assert.Equal(t, len("/model "), start) // replacement starts past the trailing space
-	labels := labelsOf(items)
-	assert.Contains(t, strings.Join(labels, "|"), "beta")
-}
-
-func TestCompleterPathNonASCIICellIndexes(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "é.go"), []byte("x"), 0o600))
-	idx := refs.NewIndex(dir, tools.PathPolicy{})
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	comp := NewCompleter(r, c, idx)
-
-	// pos is a grapheme-cell index (bytes differ); start must come back as cells.
-	arg := "@é"
-	pos := len(tui.GraphemeCells(arg)) // 2 cells (@ é), not byte length
-	start, items := comp.Complete(arg, pos)
-	assert.Equal(t, 1, start)
-	labels := labelsOf(items)
-	require.Contains(t, labels, "é.go")
-}
-
-func TestCompleterArgumentDelegates(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-	comp := NewCompleter(r, c, nil)
-
-	// /reasoning <prefix> => delegates to reasoning's Complete, offering levels
-	start, items := comp.Complete("/reasoning me", 13)
-	assert.Equal(t, 11, start) // past "/reasoning "
-	labels := labelsOf(items)
-	assert.Contains(t, labels, "medium")
+		// /reasoning <prefix> => delegates to reasoning's Complete, offering levels
+		start, items := comp.Complete("/reasoning me", 13)
+		assert.Equal(t, 11, start) // past "/reasoning "
+		labels := labelsOf(items)
+		assert.Contains(t, labels, "medium")
+	})
 }
 
 func labelsOf(items []tui.Completion) []string {

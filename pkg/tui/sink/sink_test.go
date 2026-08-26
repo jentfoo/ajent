@@ -74,47 +74,47 @@ func eventuallyContains(t *testing.T, f func() string, want string) bool {
 	return false
 }
 
-func TestToolStartUsesLabelInHeader(t *testing.T) {
+func TestToolStartDisplay(t *testing.T) {
 	t.Parallel()
 
-	h := newHeadless(t)
-	_ = h.s.ToolStart(agent.ToolCall{Name: "bash"}, "bash: go test ./...")
-	assert.True(t, eventuallyContains(t, h.rendered, "bash: go test ./..."),
-		"the resolved label drives the header")
-}
+	// the resolved label drives the header.
+	t.Run("uses_label_in_header", func(t *testing.T) {
+		h := newHeadless(t)
+		_ = h.s.ToolStart(agent.ToolCall{Name: "bash"}, "bash: go test ./...")
+		assert.True(t, eventuallyContains(t, h.rendered, "bash: go test ./..."),
+			"the resolved label drives the header")
+	})
 
-func TestToolCompletionCommitsDisplayOnSuccess(t *testing.T) {
-	t.Parallel()
+	// a successful completion commits its Display string to history.
+	t.Run("completion_commits_display_on_success", func(t *testing.T) {
+		h := newHeadless(t)
+		done := h.s.ToolStart(agent.ToolCall{Name: "edit"}, "")
+		res := agent.ToolResult{Content: llm.BlockList{}, Display: "applied 1 edit to main.go"}
+		assert.NotPanics(t, func() { done(res) })
+		assert.True(t, eventuallyContains(t, h.rendered, "applied 1 edit to main.go"),
+			"history shows the display string")
+	})
 
-	h := newHeadless(t)
-	done := h.s.ToolStart(agent.ToolCall{Name: "edit"}, "")
-	res := agent.ToolResult{Content: llm.BlockList{}, Display: "applied 1 edit to main.go"}
-	assert.NotPanics(t, func() { done(res) })
-	assert.True(t, eventuallyContains(t, h.rendered, "applied 1 edit to main.go"),
-		"history shows the display string")
-}
+	// an errored completion surfaces its message.
+	t.Run("completion_error_shows_message", func(t *testing.T) {
+		h := newHeadless(t)
+		done := h.s.ToolStart(agent.ToolCall{Name: "bash"}, "")
+		res := agent.ToolResult{
+			Content: llm.BlockList{llm.TextBlock{Text: "command not found"}},
+			IsError: true,
+		}
+		assert.NotPanics(t, func() { done(res) })
+		assert.True(t, eventuallyContains(t, h.rendered, "command not found"),
+			"the error message reaches the user")
+	})
 
-func TestToolCompletionErrorShowsMessage(t *testing.T) {
-	t.Parallel()
-
-	h := newHeadless(t)
-	done := h.s.ToolStart(agent.ToolCall{Name: "bash"}, "")
-	res := agent.ToolResult{
-		Content: llm.BlockList{llm.TextBlock{Text: "command not found"}},
-		IsError: true,
-	}
-	assert.NotPanics(t, func() { done(res) })
-	assert.True(t, eventuallyContains(t, h.rendered, "command not found"),
-		"the error message reaches the user")
-}
-
-func TestToolCompletionNoDisplayCommitsNothingExtra(t *testing.T) {
-	t.Parallel()
-
-	h := newHeadless(t)
-	done := h.s.ToolStart(agent.ToolCall{Name: "read"}, "")
-	res := agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "data"}}}
-	assert.NotPanics(t, func() { done(res) })
-	assert.False(t, eventuallyContains(t, h.rendered, "\n  data\n"),
-		"streamed content alone is not re-committed as a Display")
+	// a completion with no Display commits nothing extra.
+	t.Run("completion_no_display_commits_nothing_extra", func(t *testing.T) {
+		h := newHeadless(t)
+		done := h.s.ToolStart(agent.ToolCall{Name: "read"}, "")
+		res := agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "data"}}}
+		assert.NotPanics(t, func() { done(res) })
+		assert.False(t, eventuallyContains(t, h.rendered, "\n  data\n"),
+			"streamed content alone is not re-committed as a Display")
+	})
 }

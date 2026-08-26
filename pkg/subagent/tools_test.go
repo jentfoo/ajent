@@ -43,85 +43,86 @@ func toolsManager(t *testing.T, d *delayedProvider, timeout time.Duration) (*Man
 	return m, m.Tools()
 }
 
-func TestAgentStartReturnsId(t *testing.T) {
+func TestAgentStart(t *testing.T) {
 	t.Parallel()
-	_, tools := toolsManager(t, nil, time.Second)
-	res, err := exec(t, tools[0], map[string]any{"task": "investigate x"})
-	require.NoError(t, err)
-	assert.False(t, res.IsError)
-	var details struct {
-		ID string `json:"id"`
-	}
-	require.NotNil(t, res.Details)
-	b, err2 := json.Marshal(res.Details)
-	require.NoError(t, err2)
-	require.NoError(t, json.Unmarshal(b, &details))
-	assert.Equal(t, "sub-1", details.ID)
+
+	t.Run("returns_id", func(t *testing.T) {
+		_, tools := toolsManager(t, nil, time.Second)
+		res, err := exec(t, tools[0], map[string]any{"task": "investigate x"})
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		var details struct {
+			ID string `json:"id"`
+		}
+		require.NotNil(t, res.Details)
+		b, err2 := json.Marshal(res.Details)
+		require.NoError(t, err2)
+		require.NoError(t, json.Unmarshal(b, &details))
+		assert.Equal(t, "sub-1", details.ID)
+	})
+
+	t.Run("rejects_empty_task", func(t *testing.T) {
+		m, _ := toolsManager(t, nil, time.Second)
+		res, err := exec(t, m.Tools()[0], map[string]any{"task": "   "})
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
+	})
 }
 
-func TestAgentStartRejectsEmptyTask(t *testing.T) {
+func TestAgentPoll(t *testing.T) {
 	t.Parallel()
-	m, _ := toolsManager(t, nil, time.Second)
-	res, err := exec(t, m.Tools()[0], map[string]any{"task": "   "})
-	require.NoError(t, err)
-	assert.True(t, res.IsError)
-}
 
-func TestAgentPollReturnsSummaryOnCompletion(t *testing.T) {
-	t.Parallel()
-	m, tools := toolsManager(t, nil, time.Second)
-	id := m.Start("x", "")
-	res, err := exec(t, tools[1], map[string]any{"id": id})
-	require.NoError(t, err)
-	assert.False(t, res.IsError)
-	assert.Contains(t, textOf(res), "summary text")
-	assert.Equal(t, map[string]string{"id": id, "status": "done"}, res.Details)
-}
+	t.Run("returns_summary_on_completion", func(t *testing.T) {
+		m, tools := toolsManager(t, nil, time.Second)
+		id := m.Start("x", "")
+		res, err := exec(t, tools[1], map[string]any{"id": id})
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "summary text")
+		assert.Equal(t, map[string]string{"id": id, "status": "done"}, res.Details)
+	})
 
-func TestAgentPollAcceptsBareId(t *testing.T) {
-	t.Parallel()
-	_, tools := toolsManager(t, nil, time.Second)
-	_, serr := tools[0].Execute(t.Context(), agent.ToolCall{Name: "agent_start", Input: json.RawMessage(`{"task":"x"}`)}, discardOutput{})
-	require.NoError(t, serr)
-	res, err := exec(t, tools[1], map[string]any{"id": "1"})
-	require.NoError(t, err)
-	assert.False(t, res.IsError) // bare 1 resolves to sub-1
-}
+	t.Run("accepts_bare_id", func(t *testing.T) {
+		_, tools := toolsManager(t, nil, time.Second)
+		_, serr := tools[0].Execute(t.Context(), agent.ToolCall{Name: "agent_start", Input: json.RawMessage(`{"task":"x"}`)}, discardOutput{})
+		require.NoError(t, serr)
+		res, err := exec(t, tools[1], map[string]any{"id": "1"})
+		require.NoError(t, err)
+		assert.False(t, res.IsError) // bare 1 resolves to sub-1
+	})
 
-func TestAgentPollUnknownIdIsError(t *testing.T) {
-	t.Parallel()
-	_, tools := toolsManager(t, nil, time.Second)
-	res, err := exec(t, tools[1], map[string]any{"id": "sub-99"})
-	require.NoError(t, err)
-	assert.True(t, res.IsError)
-}
+	t.Run("unknown_id_is_error", func(t *testing.T) {
+		_, tools := toolsManager(t, nil, time.Second)
+		res, err := exec(t, tools[1], map[string]any{"id": "sub-99"})
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
+	})
 
-func TestAgentPollTimeoutReportsContextUsage(t *testing.T) {
-	t.Parallel()
-	d := &delayedProvider{turn: summaryTurn("slow", llm.Usage{}), release: make(chan struct{})}
-	m, tools := toolsManager(t, d, 30*time.Millisecond)
-	id := m.Start("x", "")
-	res, err := exec(t, tools[1], map[string]any{"id": id})
-	require.NoError(t, err)
-	assert.False(t, res.IsError)
-	out := textOf(res)
-	assert.Contains(t, out, "still running after")
-	// a host-driven poller reads the status rather than matching the prose
-	assert.Equal(t, map[string]string{"id": id, "status": "running"}, res.Details)
-}
+	t.Run("timeout_reports_context_usage", func(t *testing.T) {
+		d := &delayedProvider{turn: summaryTurn("slow", llm.Usage{}), release: make(chan struct{})}
+		m, tools := toolsManager(t, d, 30*time.Millisecond)
+		id := m.Start("x", "")
+		res, err := exec(t, tools[1], map[string]any{"id": id})
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		out := textOf(res)
+		assert.Contains(t, out, "still running after")
+		// a host-driven poller reads the status rather than matching the prose
+		assert.Equal(t, map[string]string{"id": id, "status": "running"}, res.Details)
+	})
 
-func TestAgentPollAborted(t *testing.T) {
-	t.Parallel()
-	b := &blockingProvider{}
-	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
-	t.Cleanup(m.Close)
-	id := m.Start("x", "")
-	require.NoError(t, m.Stop(id))
-	res, err := exec(t, m.Tools()[1], map[string]any{"id": id})
-	require.NoError(t, err)
-	assert.False(t, res.IsError)
-	assert.Contains(t, textOf(res), "aborted")
-	assert.Equal(t, map[string]string{"id": id, "status": "aborted"}, res.Details)
+	t.Run("aborted", func(t *testing.T) {
+		b := &blockingProvider{}
+		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
+		t.Cleanup(m.Close)
+		id := m.Start("x", "")
+		require.NoError(t, m.Stop(id))
+		res, err := exec(t, m.Tools()[1], map[string]any{"id": id})
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "aborted")
+		assert.Equal(t, map[string]string{"id": id, "status": "aborted"}, res.Details)
+	})
 }
 
 func TestAgentListEmptyAndPopulated(t *testing.T) {

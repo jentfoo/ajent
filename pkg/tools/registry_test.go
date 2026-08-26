@@ -243,38 +243,38 @@ func TestRegistryTrackerExposedByBuiltins(t *testing.T) {
 	assert.Nil(t, empty.Tracker())
 }
 
-func TestRegistryDryRunDispatchesToTool(t *testing.T) {
+func TestRegistryDryRun(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	e := newToolEnv(dir)
-	e.writeFile("a.txt", "hello\n")
-	reg, _ := newEditRegistry(dir)
+	// a tool implementing DryRunner is consulted: a doomed call errors.
+	t.Run("dispatches_to_tool", func(t *testing.T) {
+		dir := t.TempDir()
+		e := newToolEnv(dir)
+		e.writeFile("a.txt", "hello\n")
+		reg, _ := newEditRegistry(dir)
 
-	c := agent.ToolCall{ID: "c", Name: "edit", Input: json.RawMessage(`{"path":"a.txt","edits":[{"oldText":"missing","newText":"x"}]}`)}
-	require.Error(t, reg.DryRun(c)) // edit implements DryRunner; a doomed call errors
+		c := agent.ToolCall{ID: "c", Name: "edit", Input: json.RawMessage(`{"path":"a.txt","edits":[{"oldText":"missing","newText":"x"}]}`)}
+		require.Error(t, reg.DryRun(c)) // edit implements DryRunner; a doomed call errors
 
-	c.Input = json.RawMessage(`{"path":"a.txt","edits":[{"oldText":"hello","newText":"hi"}]}`)
-	require.NoError(t, reg.DryRun(c))
-}
+		c.Input = json.RawMessage(`{"path":"a.txt","edits":[{"oldText":"hello","newText":"hi"}]}`)
+		require.NoError(t, reg.DryRun(c))
+	})
 
-func TestRegistryDryRunNilForNonDryTool(t *testing.T) {
-	t.Parallel()
+	// a non-dry tool cannot predict; never skip a prompt on uncertainty.
+	t.Run("nil_for_non_dry_tool", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		reg := New()
+		reg.Register(&readTool{policy: e.policy, tracker: e.tracker}, true)
 
-	e := newToolEnv(t.TempDir())
-	reg := New()
-	reg.Register(&readTool{policy: e.policy, tracker: e.tracker}, true)
+		c := agent.ToolCall{ID: "c", Name: "read", Input: json.RawMessage(`{"path":"x"}`)}
+		assert.NoError(t, reg.DryRun(c)) // cannot predict; never skip a prompt on uncertainty
+	})
 
-	c := agent.ToolCall{ID: "c", Name: "read", Input: json.RawMessage(`{"path":"x"}`)}
-	assert.NoError(t, reg.DryRun(c)) // cannot predict; never skip a prompt on uncertainty
-}
-
-func TestRegistryDryRunNilForUnknownTool(t *testing.T) {
-	t.Parallel()
-
-	reg := New()
-	c := agent.ToolCall{ID: "c", Name: "nope", Input: json.RawMessage(`{}`)}
-	assert.NoError(t, reg.DryRun(c))
+	t.Run("nil_for_unknown_tool", func(t *testing.T) {
+		reg := New()
+		c := agent.ToolCall{ID: "c", Name: "nope", Input: json.RawMessage(`{}`)}
+		assert.NoError(t, reg.DryRun(c))
+	})
 }
 
 // TestLsRegisteredDisabledInBuiltins asserts the off-by-default extras are not

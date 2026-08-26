@@ -168,31 +168,31 @@ func TestAgentCount(t *testing.T) {
 	}
 }
 
-func TestSurveyTasks(t *testing.T) {
+func TestBuildTasks(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	writeTree(t, dir, "pkg/a.go", "cmd/b.go")
-	got := surveyTasks(dir)
-	require.Len(t, got, 2) // one build survey plus one codebase slice
+	t.Run("full_list_with_build_first", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "pkg/a.go", "cmd/b.go")
+		got := surveyTasks(dir)
+		require.Len(t, got, 2) // one build survey plus one codebase slice
 
-	assert.Equal(t, buildTask, got[0])
-	for _, want := range []string{"Makefile", ".github/workflows", "CONTRIBUTING.md"} {
-		assert.Contains(t, got[0], want)
-	}
-	for _, want := range []string{"pkg/", "cmd/"} {
-		assert.Contains(t, got[1], want)
-	}
-	assert.NotContains(t, got[1], "Makefile") // the division is visible in what each reads
-}
+		assert.Equal(t, buildTask, got[0])
+		for _, want := range []string{"Makefile", ".github/workflows", "CONTRIBUTING.md"} {
+			assert.Contains(t, got[0], want)
+		}
+		for _, want := range []string{"pkg/", "cmd/"} {
+			assert.Contains(t, got[1], want)
+		}
+		assert.NotContains(t, got[1], "Makefile") // the division is visible in what each reads
+	})
 
-func TestCodeTask(t *testing.T) {
-	t.Parallel()
-
-	got := codeTask([]string{"pkg/", "main.go"})
-	assert.Contains(t, got, "pkg/, main.go")
-	assert.Contains(t, got, "Stay inside those paths")
-	assert.True(t, strings.HasSuffix(got, summaryTail))
+	t.Run("single_slice_instruction", func(t *testing.T) {
+		got := codeTask([]string{"pkg/", "main.go"})
+		assert.Contains(t, got, "pkg/, main.go")
+		assert.Contains(t, got, "Stay inside those paths")
+		assert.True(t, strings.HasSuffix(got, summaryTail))
+	})
 }
 
 func TestGroup(t *testing.T) {

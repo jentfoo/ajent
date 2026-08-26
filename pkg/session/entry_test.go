@@ -83,32 +83,34 @@ func TestEntryRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEntryUnknownTypePreserved(t *testing.T) {
+func TestEntryUnknowns(t *testing.T) {
 	t.Parallel()
 
-	e := Entry{ID: "id", Type: "future_thing", TS: 1, Data: json.RawMessage(`{"a":1}`)}
-	b, err := json.Marshal(e)
-	require.NoError(t, err)
+	// an unknown type round-trips with its data intact.
+	t.Run("unknown_type_preserved", func(t *testing.T) {
+		e := Entry{ID: "id", Type: "future_thing", TS: 1, Data: json.RawMessage(`{"a":1}`)}
+		b, err := json.Marshal(e)
+		require.NoError(t, err)
 
-	var back Entry
-	require.NoError(t, json.Unmarshal(b, &back))
-	assert.Equal(t, Type("future_thing"), back.Type)
-	assert.JSONEq(t, `{"a":1}`, string(back.Data))
-}
+		var back Entry
+		require.NoError(t, json.Unmarshal(b, &back))
+		assert.Equal(t, Type("future_thing"), back.Type)
+		assert.JSONEq(t, `{"a":1}`, string(back.Data))
+	})
 
-func TestEntryUnknownFieldsIgnored(t *testing.T) {
-	t.Parallel()
+	// unknown fields are ignored on decode.
+	t.Run("unknown_fields_ignored", func(t *testing.T) {
+		b := []byte(`{
+			"id":"x","parentId":"p","type":"message","ts":5,
+			"data":{"message":{"role":"user","content":[{"type":"text","data":{"text":"hi"}}]},"stop":"end_turn","bogusField":99},
+			"extraTop":1
+		}`)
+		var e Entry
+		require.NoError(t, json.Unmarshal(b, &e))
+		assert.Equal(t, "x", e.ID)
 
-	b := []byte(`{
-		"id":"x","parentId":"p","type":"message","ts":5,
-		"data":{"message":{"role":"user","content":[{"type":"text","data":{"text":"hi"}}]},"stop":"end_turn","bogusField":99},
-		"extraTop":1
-	}`)
-	var e Entry
-	require.NoError(t, json.Unmarshal(b, &e))
-	assert.Equal(t, "x", e.ID)
-
-	var md MessageData
-	require.NoError(t, e.Decode(&md))
-	assert.Equal(t, llm.StopEndTurn, md.Stop)
+		var md MessageData
+		require.NoError(t, e.Decode(&md))
+		assert.Equal(t, llm.StopEndTurn, md.Stop)
+	})
 }

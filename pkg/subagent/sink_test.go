@@ -71,47 +71,47 @@ func TestSinkThinkingCoalesces(t *testing.T) {
 	assert.Equal(t, "sub-4  thinking…", c.rowText("sub-4"))
 }
 
-// TestSinkTextShowsLatestOutput verifies Text passes the child's output through
-// rather than collapsing to the static thinking placeholder: a multi-line delta
-// scrolls past completed lines, showing only the current one.
-func TestSinkTextShowsLatestOutput(t *testing.T) {
+// TestSinkText covers how streaming text is rendered: only the current in-progress
+// line shows, completed lines scroll past, and whitespace-only deltas never publish.
+func TestSinkText(t *testing.T) {
 	t.Parallel()
-	c := newCapture()
-	s := newChildSink("sub-5", c.recordRow)
 
-	s.Text("inspecting\npkg/tui/ui.go")
-	assert.Equal(t, "sub-5  pkg/tui/ui.go", c.rowText("sub-5"))
-}
+	// Text passes the child's output through rather than collapsing to the static
+	// thinking placeholder: a multi-line delta scrolls past completed lines, showing only the current one.
+	t.Run("shows_latest_output", func(t *testing.T) {
+		c := newCapture()
+		s := newChildSink("sub-5", c.recordRow)
 
-// TestSinkTextScrollsPerLine verifies streaming deltas show only the current
-// in-progress line: completed lines scroll past and each newline starts fresh.
-func TestSinkTextScrollsPerLine(t *testing.T) {
-	t.Parallel()
-	c := newCapture()
-	s := newChildSink("sub-9", c.recordRow)
+		s.Text("inspecting\npkg/tui/ui.go")
+		assert.Equal(t, "sub-5  pkg/tui/ui.go", c.rowText("sub-5"))
+	})
 
-	for _, d := range []string{"first line ", "scrolled\nsecond ", "line grows"} {
-		s.Text(d)
-	}
-	// the first completed line is gone; only the active one remains on screen
-	require.Eventually(t, func() bool { return c.rowText("sub-9") == "sub-9  second line grows" }, time.Second, 5*time.Millisecond)
+	// streaming deltas show only the current in-progress line: completed lines scroll past and each newline starts fresh.
+	t.Run("scrolls_per_line", func(t *testing.T) {
+		c := newCapture()
+		s := newChildSink("sub-9", c.recordRow)
 
-	s.TurnEnd(agent.TurnResult{}) // next turn starts a fresh line
-	require.Eventually(t, func() bool { return c.rowText("sub-9") == "" }, time.Second, 5*time.Millisecond)
-}
+		for _, d := range []string{"first line ", "scrolled\nsecond ", "line grows"} {
+			s.Text(d)
+		}
+		// the first completed line is gone; only the active one remains on screen
+		require.Eventually(t, func() bool { return c.rowText("sub-9") == "sub-9  second line grows" }, time.Second, 5*time.Millisecond)
 
-// TestSinkTextIgnoresWhitespaceLines verifies a blank or whitespace-only current
-// line never publishes a row, so empty streaming lines don't flash.
-func TestSinkTextIgnoresWhitespaceLines(t *testing.T) {
-	t.Parallel()
-	c := newCapture()
-	s := newChildSink("sub-10", c.recordRow)
+		s.TurnEnd(agent.TurnResult{}) // next turn starts a fresh line
+		require.Eventually(t, func() bool { return c.rowText("sub-9") == "" }, time.Second, 5*time.Millisecond)
+	})
 
-	s.Text("\n   \t\n")
-	assert.Empty(t, c.rowText("sub-10"))
+	// a blank or whitespace-only current line never publishes a row, so empty streaming lines don't flash.
+	t.Run("ignores_whitespace_lines", func(t *testing.T) {
+		c := newCapture()
+		s := newChildSink("sub-10", c.recordRow)
 
-	s.Text("real content")
-	assert.Equal(t, "sub-10  real content", c.rowText("sub-10"))
+		s.Text("\n   \t\n")
+		assert.Empty(t, c.rowText("sub-10"))
+
+		s.Text("real content")
+		assert.Equal(t, "sub-10  real content", c.rowText("sub-10"))
+	})
 }
 
 // TestSinkThinkingShowsReasoning verifies the child's chain-of-thought is surfaced

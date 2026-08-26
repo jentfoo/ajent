@@ -364,47 +364,49 @@ func toolCallIDs(msgs []llm.Message) []string {
 	return out
 }
 
-func TestExpandReserveMatchesLandedPairs(t *testing.T) {
+func TestExpandReserve(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	var src strings.Builder
-	for i := range 400 { // enough lines that the number prefix is a real share
-		src.WriteString("\tfmt.Println(\"line ")
-		src.WriteString(strconv.Itoa(i))
-		src.WriteString("\")\n")
-	}
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.go"), []byte(src.String()), 0o600))
+	// the reserved estimate for a large source-file reference exactly matches what lands.
+	t.Run("matches_landed_pairs", func(t *testing.T) {
+		dir := t.TempDir()
+		var src strings.Builder
+		for i := range 400 { // enough lines that the number prefix is a real share
+			src.WriteString("\tfmt.Println(\"line ")
+			src.WriteString(strconv.Itoa(i))
+			src.WriteString("\")\n")
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "big.go"), []byte(src.String()), 0o600))
 
-	x, _ := newExpander(t, dir)
-	res := x.Expand("look at @big.go")
-	require.NotNil(t, res.Run)
-	require.NotZero(t, res.Est)
+		x, _ := newExpander(t, dir)
+		res := x.Expand("look at @big.go")
+		require.NotNil(t, res.Run)
+		require.NotZero(t, res.Est)
 
-	landed := tokens.EstimateMessages(res.Run(t.Context()))
-	require.NotZero(t, landed)
+		landed := tokens.EstimateMessages(res.Run(t.Context()))
+		require.NotZero(t, landed)
 
-	// the reserve holds the tokens from submit until the pair is appended, so it has
-	// to size exactly what lands: line-numbered text plus the call and result framing.
-	// Reserving the raw file size alone ran 16-20% short on a source file.
-	assert.Equal(t, landed, res.Est)
-}
+		// the reserve holds the tokens from submit until the pair is appended, so it has
+		// to size exactly what lands: line-numbered text plus the call and result framing.
+		// Reserving the raw file size alone ran 16-20% short on a source file.
+		assert.Equal(t, landed, res.Est)
+	})
 
-func TestExpandReservesListings(t *testing.T) {
-	t.Parallel()
+	// directory/glob references get a non-zero reserve even though they cannot be measured without walking.
+	t.Run("lists_listings", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", "a.go"), []byte("package a\n"), 0o600))
 
-	dir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "sub", "a.go"), []byte("package a\n"), 0o600))
-
-	// a listing cannot be measured without doing the walk, but reserving nothing at
-	// all left a directory or glob reference entirely absent from the bar
-	for _, ref := range []string{"@sub/", "@sub/*.go"} {
-		t.Run(ref, func(t *testing.T) {
-			x, _ := newExpander(t, dir)
-			res := x.Expand("see " + ref)
-			require.NotNil(t, res.Run)
-			assert.Positive(t, res.Est)
-		})
-	}
+		// a listing cannot be measured without doing the walk, but reserving nothing at
+		// all left a directory or glob reference entirely absent from the bar
+		for _, ref := range []string{"@sub/", "@sub/*.go"} {
+			t.Run(ref, func(t *testing.T) {
+				x, _ := newExpander(t, dir)
+				res := x.Expand("see " + ref)
+				require.NotNil(t, res.Run)
+				assert.Positive(t, res.Est)
+			})
+		}
+	})
 }

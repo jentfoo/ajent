@@ -12,82 +12,82 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUsageShowsChildSpendWhenDelegated(t *testing.T) {
+func TestUsageCommand(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
-	c.state.Tokens = a
+	// child spend is shown when work was delegated.
+	t.Run("shows_child_spend_when_delegated", func(t *testing.T) {
+		c := newFakeConsole(t)
+		a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
+		c.state.Tokens = a
 
-	// parent spends, then a child rolls its own spend up separately.
-	a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
-	child := a.Child()
-	child.Response("test/alpha", llm.Usage{Input: 300, Output: 50}, 250, true)
+		// parent spends, then a child rolls its own spend up separately.
+		a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
+		child := a.Child()
+		child.Response("test/alpha", llm.Usage{Input: 300, Output: 50}, 250, true)
 
-	err := usageCommand(t.Context(), "", c)
-	require.NoError(t, err)
+		err := usageCommand(t.Context(), "", c)
+		require.NoError(t, err)
 
-	out := strings.Join(c.prints, "\n")
-	ct := a.ChildTotal() // the delegated subset is exactly what /usage shows
-	assert.Contains(t, out, "of which sub-agents:")
-	assert.Contains(t, out, strutil.FormatTokens(ct.Input)+" in / "+strutil.FormatTokens(ct.Output)+" out")
-}
+		out := strings.Join(c.prints, "\n")
+		ct := a.ChildTotal() // the delegated subset is exactly what /usage shows
+		assert.Contains(t, out, "of which sub-agents:")
+		assert.Contains(t, out, strutil.FormatTokens(ct.Input)+" in / "+strutil.FormatTokens(ct.Output)+" out")
+	})
 
-func TestUsageOmitsChildRowWithoutDelegation(t *testing.T) {
-	t.Parallel()
+	// the child row is omitted when nothing was delegated.
+	t.Run("omits_child_row_without_delegation", func(t *testing.T) {
+		c := newFakeConsole(t)
+		a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
+		a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
+		c.state.Tokens = a
 
-	c := newFakeConsole(t)
-	a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
-	a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
-	c.state.Tokens = a
+		err := usageCommand(t.Context(), "", c)
+		require.NoError(t, err)
 
-	err := usageCommand(t.Context(), "", c)
-	require.NoError(t, err)
+		out := strings.Join(c.prints, "\n")
+		assert.NotContains(t, out, "of which sub-agents:")
+	})
 
-	out := strings.Join(c.prints, "\n")
-	assert.NotContains(t, out, "of which sub-agents:")
-}
+	// the session ledger is printed.
+	t.Run("prints_session_ledger", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
 
-func TestUsagePrintsSessionLedger(t *testing.T) {
-	t.Parallel()
+		// give the fake state a ledger with one reported turn so /usage has data.
+		st := &agent.State{Model: llm.Model{ID: "alpha", Provider: "test"},
+			Reasoning: llm.ReasoningConfig{}}
+		tok := tokens.New(st.Model)
+		const key = "test/alpha"
+		tok.Response(key, llm.Usage{Input: 1000, Output: 200}, 900, true)
+		st.Tokens = tok
+		c.state = st
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
+		cmd, ok := r.Get("usage")
+		require.True(t, ok)
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
 
-	// give the fake state a ledger with one reported turn so /usage has data.
-	st := &agent.State{Model: llm.Model{ID: "alpha", Provider: "test"},
-		Reasoning: llm.ReasoningConfig{}}
-	tok := tokens.New(st.Model)
-	const key = "test/alpha"
-	tok.Response(key, llm.Usage{Input: 1000, Output: 200}, 900, true)
-	st.Tokens = tok
-	c.state = st
+		require.Len(t, c.prints, 1)
+		assert.Contains(t, c.prints[0], "# Usage")
+		assert.Contains(t, c.prints[0], "input")
+		assert.Contains(t, c.prints[0], "output")
+	})
 
-	cmd, ok := r.Get("usage")
-	require.True(t, ok)
-	require.NoError(t, cmd.Handler(t.Context(), "", c))
+	// no accounting configured notifies.
+	t.Run("with_no_ledger_notifies", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
 
-	require.Len(t, c.prints, 1)
-	assert.Contains(t, c.prints[0], "# Usage")
-	assert.Contains(t, c.prints[0], "input")
-	assert.Contains(t, c.prints[0], "output")
-}
+		c.state.Tokens = nil // no accounting configured
 
-func TestUsageWithNoLedgerNotifies(t *testing.T) {
-	t.Parallel()
+		cmd, ok := r.Get("usage")
+		require.True(t, ok)
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-
-	c.state.Tokens = nil // no accounting configured
-
-	cmd, ok := r.Get("usage")
-	require.True(t, ok)
-	require.NoError(t, cmd.Handler(t.Context(), "", c))
-
-	assert.True(t, c.noticeContains("no accounting available"))
+		assert.True(t, c.noticeContains("no accounting available"))
+	})
 }

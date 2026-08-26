@@ -94,47 +94,45 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-func TestClassifyBashFindUnsafeActionsPrompt(t *testing.T) {
+func TestClassifyEdgeCases(t *testing.T) {
 	t.Parallel()
 
-	for _, cmd := range []string{
-		"find . -exec rm {} \\;",
-		"find . -delete",
-		"find . -fprint out.txt",
-	} {
-		assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
-	}
-}
+	// find subcommands that mutate or write must prompt.
+	t.Run("bash_find_unsafe_actions_prompt", func(t *testing.T) {
+		for _, cmd := range []string{
+			"find . -exec rm {} \\;",
+			"find . -delete",
+			"find . -fprint out.txt",
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
+	})
 
-func TestClassifyBashUnparseableFailsSafe(t *testing.T) {
-	t.Parallel()
-
-	c := agent.ToolCall{ID: "c", Name: "bash", Input: json.RawMessage(`not json`)}
-	assert.Equal(t, VerdictPrompt, Classify(c, noRO))
-}
-
-func TestClassifyEnvPrefixNeverReadOnly(t *testing.T) {
-	t.Parallel()
+	// unparseable input fails closed.
+	t.Run("bash_unparseable_fails_safe", func(t *testing.T) {
+		c := agent.ToolCall{ID: "c", Name: "bash", Input: json.RawMessage(`not json`)}
+		assert.Equal(t, VerdictPrompt, Classify(c, noRO))
+	})
 
 	// a leading env assignment can hijack what the head actually executes (PATH to
 	// another binary, LD_PRELOAD into any dynamically-linked one), so even an
 	// otherwise-read-only command must fail closed and prompt.
-	for _, cmd := range []string{
-		`PATH=/tmp/evil git status`,
-		`LD_PRELOAD=/tmp/evil.so cat x`,
-		`BASH_ENV=/tmp/evil.sh ls`,
-		`ENV=/tmp/evil.sh sh -c 'echo hi'`,
-	} {
-		assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
-	}
-}
-
-func TestClassifyIgnoresReadOnlyMarkForBuiltinsNotInList(t *testing.T) {
-	t.Parallel()
+	t.Run("env_prefix_never_read_only", func(t *testing.T) {
+		for _, cmd := range []string{
+			`PATH=/tmp/evil git status`,
+			`LD_PRELOAD=/tmp/evil.so cat x`,
+			`BASH_ENV=/tmp/evil.sh ls`,
+			`ENV=/tmp/evil.sh sh -c 'echo hi'`,
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
+	})
 
 	// write marked read-only must still prompt; only declared metadata for
 	// non-built-in names is trusted.
-	assert.Equal(t, VerdictPrompt, Classify(call("write", `{}`), roSet([]string{"write"})))
+	t.Run("ignores_read_only_mark_for_builtins_not_in_list", func(t *testing.T) {
+		assert.Equal(t, VerdictPrompt, Classify(call("write", `{}`), roSet([]string{"write"})))
+	})
 }
 
 // strconvQuote is a tiny JSON string builder to keep test tables readable.

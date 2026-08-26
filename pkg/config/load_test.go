@@ -17,118 +17,129 @@ func loadEnv(vars map[string]string) func(string) string {
 	return func(k string) string { return vars[k] }
 }
 
-func TestLoadLayeredPrecedence(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
-	ws := filepath.Join(home, "proj")
-	require.NoError(t, os.MkdirAll(ws, 0o755))
+func TestLoad(t *testing.T) {
+	t.Run("layered_precedence", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		ws := filepath.Join(home, "proj")
+		require.NoError(t, os.MkdirAll(ws, 0o755))
 
-	writeConfig(t, userPathFor(t), `{"model":"user-model","reasoning":{"level":"low"}}`)
-	writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName), `{"model":"project-model","compaction":{"threshold":0.3}}`)
+		writeConfig(t, userPathFor(t), `{"model":"user-model","reasoning":{"level":"low"}}`)
+		writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName), `{"model":"project-model","compaction":{"threshold":0.3}}`)
 
-	s, warns, err := Load(Options{Workspace: ws})
-	require.NoError(t, err)
-	assert.Empty(t, warns)
+		s, warns, err := Load(Options{Workspace: ws})
+		require.NoError(t, err)
+		assert.Empty(t, warns)
 
-	st := s.Settings()
-	assert.Equal(t, "project-model", st.Model) // project wins over user
-	assert.Equal(t, "low", st.Reasoning.Level) // only user sets it
+		st := s.Settings()
+		assert.Equal(t, "project-model", st.Model) // project wins over user
+		assert.Equal(t, "low", st.Reasoning.Level) // only user sets it
 
-	_, src, ok := s.Explain("model")
-	require.True(t, ok)
-	assert.Equal(t, "project", src)
+		_, src, ok := s.Explain("model")
+		require.True(t, ok)
+		assert.Equal(t, "project", src)
 
-	// Explain reports the merged value and its source layer for a nested key
-	v, src2, found := s.Explain("reasoning.level")
-	require.True(t, found)
-	assert.Equal(t, "user", src2) // only the user file sets it
-	var lvl string
-	require.NoError(t, json.Unmarshal(v, &lvl))
-	assert.Equal(t, "low", lvl)
-}
-
-func TestLoadEnvAndFlagOutrankFiles(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
-
-	s, _, err := Load(Options{
-		Workspace: ".",
-		Env:       loadEnv(map[string]string{"AJENT_REASONING_LEVEL": "high"}),
-		Flags:     mustFlagLayer(t, map[string]any{"model": "flag-model"}),
+		// Explain reports the merged value and its source layer for a nested key
+		v, src2, found := s.Explain("reasoning.level")
+		require.True(t, found)
+		assert.Equal(t, "user", src2) // only the user file sets it
+		var lvl string
+		require.NoError(t, json.Unmarshal(v, &lvl))
+		assert.Equal(t, "low", lvl)
 	})
-	require.NoError(t, err)
 
-	st := s.Settings()
-	assert.Equal(t, "flag-model", st.Model) // flag beats env-less model
-	assert.Equal(t, "high", st.Reasoning.Level)
+	t.Run("env_and_flag_outrank_files", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+
+		s, _, err := Load(Options{
+			Workspace: ".",
+			Env:       loadEnv(map[string]string{"AJENT_REASONING_LEVEL": "high"}),
+			Flags:     mustFlagLayer(t, map[string]any{"model": "flag-model"}),
+		})
+		require.NoError(t, err)
+
+		st := s.Settings()
+		assert.Equal(t, "flag-model", st.Model) // flag beats env-less model
+		assert.Equal(t, "high", st.Reasoning.Level)
+	})
+
+	t.Run("project_api_key_stripped_and_warned", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		ws := filepath.Join(home, "proj")
+		require.NoError(t, os.MkdirAll(ws, 0o755))
+
+		writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName),
+			`{"providers":{"anthropic":{"apiKey":"SECRET","baseUrl":"x"}}}`)
+
+		s, warns, err := Load(Options{Workspace: ws})
+		require.NoError(t, err)
+		assert.NotEmpty(t, warns)
+		assert.Contains(t, strings.ToLower(strings.Join(warns, " ")), "ignored apikey")
+		// the literal secret never reaches settings; unrelated provider fields survive
+		st := s.Settings()
+		require.NotEmpty(t, st.Providers)
+		assert.NotContains(t, string(st.Providers), "SECRET")
+	})
+
+	t.Run("user_secret_perm_warning", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("mode bits are not meaningful on windows")
+		}
+
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		p := userPathFor(t)
+		writeConfig(t, p, `{"providers":{"a":{"apiKey":"x"}}}`)
+		require.NoError(t, os.Chmod(p, 0o644))
+
+		s, warns, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+		assert.NotNil(t, s)
+		assert.Contains(t, strings.ToLower(strings.Join(warns, " ")), "readable by other users")
+	})
+
+	t.Run("missing_files_are_not_errors", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		s, warns, err := Load(Options{Workspace: filepath.Join(home, "empty")})
+		require.NoError(t, err)
+		assert.Empty(t, warns)
+		assert.NotNil(t, s.Settings())
+	})
 }
 
-func TestLoadProjectAPIKeyStrippedAndWarned(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
-	ws := filepath.Join(home, "proj")
-	require.NoError(t, os.MkdirAll(ws, 0o755))
+func TestSave(t *testing.T) {
+	t.Run("writes_and_reresolves", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
 
-	writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName),
-		`{"providers":{"anthropic":{"apiKey":"SECRET","baseUrl":"x"}}}`)
+		warns, err := s.Save("user", "reasoning.level", "high")
+		require.NoError(t, err)
+		assert.Empty(t, warns)
 
-	s, warns, err := Load(Options{Workspace: ws})
-	require.NoError(t, err)
-	assert.NotEmpty(t, warns)
-	assert.Contains(t, strings.ToLower(strings.Join(warns, " ")), "ignored apikey")
-	// the literal secret never reaches settings; unrelated provider fields survive
-	st := s.Settings()
-	require.NotEmpty(t, st.Providers)
-	assert.NotContains(t, string(st.Providers), "SECRET")
-}
+		st := s.Settings()
+		assert.Equal(t, "high", st.Reasoning.Level)
+		_, src, _ := s.Explain("reasoning.level")
+		assert.Equal(t, "user", src)
 
-func TestLoadUserSecretPermWarning(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("mode bits are not meaningful on windows")
-	}
+		// the file on disk carries it too
+		var raw map[string]any
+		b, err := os.ReadFile(s.userPath)
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(b, &raw))
+		assert.Equal(t, "high", raw["reasoning"].(map[string]any)["level"])
+	})
 
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
-	p := userPathFor(t)
-	writeConfig(t, p, `{"providers":{"a":{"apiKey":"x"}}}`)
-	require.NoError(t, os.Chmod(p, 0o644))
-
-	s, warns, err := Load(Options{Workspace: "."})
-	require.NoError(t, err)
-	assert.NotNil(t, s)
-	assert.Contains(t, strings.ToLower(strings.Join(warns, " ")), "readable by other users")
-}
-
-func TestSaveWritesAndReResolves(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
-	s, _, err := Load(Options{Workspace: "."})
-	require.NoError(t, err)
-
-	warns, err := s.Save("user", "reasoning.level", "high")
-	require.NoError(t, err)
-	assert.Empty(t, warns)
-
-	st := s.Settings()
-	assert.Equal(t, "high", st.Reasoning.Level)
-	_, src, _ := s.Explain("reasoning.level")
-	assert.Equal(t, "user", src)
-
-	// the file on disk carries it too
-	var raw map[string]any
-	b, err := os.ReadFile(s.userPath)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(b, &raw))
-	assert.Equal(t, "high", raw["reasoning"].(map[string]any)["level"])
-}
-
-func TestSaveUnknownLayerErrors(t *testing.T) {
-	t.Parallel()
-
-	s, _, err := Load(Options{Workspace: "."})
-	require.NoError(t, err)
-	_, err = s.Save("bogus", "model", "x")
-	assert.Error(t, err)
+	t.Run("unknown_layer_errors", func(t *testing.T) {
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+		_, err = s.Save("bogus", "model", "x")
+		assert.Error(t, err)
+	})
 }
 
 // helpers ----------------------------------------------------------------
@@ -158,13 +169,4 @@ func mustFlagLayer(t *testing.T, kvs map[string]any) Layer {
 		require.NoError(t, err)
 	}
 	return Layer{Name: "flag", Data: data}
-}
-
-func TestLoadMissingFilesAreNotErrors(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
-	s, warns, err := Load(Options{Workspace: filepath.Join(home, "empty")})
-	require.NoError(t, err)
-	assert.Empty(t, warns)
-	assert.NotNil(t, s.Settings())
 }

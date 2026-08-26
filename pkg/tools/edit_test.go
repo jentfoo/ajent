@@ -67,26 +67,28 @@ func TestApplyEditsValidation(t *testing.T) {
 	}
 }
 
-func TestEditDryRunMissingFileIsWillFail(t *testing.T) {
+func TestEditDryRun(t *testing.T) {
 	t.Parallel()
 
-	e := newToolEnv(t.TempDir())
-	err := e.editDryRun(`{"path":"nope.txt","edits":[{"oldText":"a","newText":"b"}]}`)
-	assert.Error(t, err) // missing file counts as doomed; skip the prompt
-}
+	// a missing file counts as doomed so the prompt is skipped.
+	t.Run("missing_file_is_will_fail", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		err := e.editDryRun(`{"path":"nope.txt","edits":[{"oldText":"a","newText":"b"}]}`)
+		assert.Error(t, err) // missing file counts as doomed; skip the prompt
+	})
 
-func TestEditDryRunMutatesNothingOnDisk(t *testing.T) {
-	t.Parallel()
+	// a dry run never writes to disk.
+	t.Run("mutates_nothing_on_disk", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		orig := "one two three\n"
+		e.writeFile("a.txt", orig)
+		err := e.editDryRun(`{"path":"a.txt","edits":[{"oldText":"missing","newText":"x"}]}`)
+		require.Error(t, err)
 
-	e := newToolEnv(t.TempDir())
-	orig := "one two three\n"
-	e.writeFile("a.txt", orig)
-	err := e.editDryRun(`{"path":"a.txt","edits":[{"oldText":"missing","newText":"x"}]}`)
-	require.Error(t, err)
-
-	data, rerr := os.ReadFile(filepath.Join(e.cwd, "a.txt"))
-	require.NoError(t, rerr)
-	assert.Equal(t, orig, string(data)) // dry run never writes
+		data, rerr := os.ReadFile(filepath.Join(e.cwd, "a.txt"))
+		require.NoError(t, rerr)
+		assert.Equal(t, orig, string(data)) // dry run never writes
+	})
 }
 
 func TestEditAppliesSingleMatch(t *testing.T) {

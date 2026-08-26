@@ -40,64 +40,64 @@ func TestSummarizeBudget(t *testing.T) {
 	}
 }
 
-func TestSummariserPromptCarriesInstructions(t *testing.T) {
+func TestSummariserPrompt(t *testing.T) {
 	t.Parallel()
 
-	branch := []session.Entry{
-		userText("u1", "refactor the auth package"),
-		assistText("a1", strings.Repeat("working on auth ", 200)),
-		userText("u2", "now update the tests"),
-		assistText("a2", strings.Repeat("tests updated ", 80)),
-	}
-	var got llm.Request
-	run := func(_ context.Context, req llm.Request) (string, error) {
-		got = req
-		return "## Goal\nrefactor auth", nil
-	}
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 600, MaxOutput: 1000}
+	t.Run("carries_instructions", func(t *testing.T) {
+		branch := []session.Entry{
+			userText("u1", "refactor the auth package"),
+			assistText("a1", strings.Repeat("working on auth ", 200)),
+			userText("u2", "now update the tests"),
+			assistText("a2", strings.Repeat("tests updated ", 80)),
+		}
+		var got llm.Request
+		run := func(_ context.Context, req llm.Request) (string, error) {
+			got = req
+			return "## Goal\nrefactor auth", nil
+		}
+		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 600, MaxOutput: 1000}
 
-	res, err := Compact(t.Context(), branch, model, run, Options{
-		Instructions: "focus on the auth refactor; keep the file paths",
+		res, err := Compact(t.Context(), branch, model, run, Options{
+			Instructions: "focus on the auth refactor; keep the file paths",
+		})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, "## Goal\nrefactor auth", res.Summary)
+		assert.NotEmpty(t, res.FirstKeptEntryID)
+		assert.Less(t, res.After, res.Before)
+
+		require.Len(t, got.Messages, 1)
+		prompt := textOf(got.Messages[0])
+		assert.Contains(t, prompt, "<conversation>")
+		assert.Contains(t, prompt, "## Goal")  // the six-section spec
+		assert.Contains(t, prompt, "synopsis") // produced-content detail rule
+		assert.Contains(t, prompt, "Additional focus: focus on the auth refactor")
 	})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Equal(t, "## Goal\nrefactor auth", res.Summary)
-	assert.NotEmpty(t, res.FirstKeptEntryID)
-	assert.Less(t, res.After, res.Before)
 
-	require.Len(t, got.Messages, 1)
-	prompt := textOf(got.Messages[0])
-	assert.Contains(t, prompt, "<conversation>")
-	assert.Contains(t, prompt, "## Goal")  // the six-section spec
-	assert.Contains(t, prompt, "synopsis") // produced-content detail rule
-	assert.Contains(t, prompt, "Additional focus: focus on the auth refactor")
-}
+	t.Run("merges_previous_summary", func(t *testing.T) {
+		branch := []session.Entry{
+			userText("u1", "first ask"),
+			compactEntry("comp", "an earlier summary", "u2"),
+			userText("u2", "second ask"),
+			assistText("a2", strings.Repeat("more work ", 200)),
+			userText("u3", "third ask"),
+			assistText("a3", strings.Repeat("tail reply ", 120)),
+		}
+		var got llm.Request
+		run := func(_ context.Context, req llm.Request) (string, error) {
+			got = req
+			return "merged", nil
+		}
+		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 600, MaxOutput: 1000}
 
-func TestSummariserMergesPreviousSummary(t *testing.T) {
-	t.Parallel()
+		res, err := Compact(t.Context(), branch, model, run, Options{})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Less(t, res.After, res.Before)
 
-	branch := []session.Entry{
-		userText("u1", "first ask"),
-		compactEntry("comp", "an earlier summary", "u2"),
-		userText("u2", "second ask"),
-		assistText("a2", strings.Repeat("more work ", 200)),
-		userText("u3", "third ask"),
-		assistText("a3", strings.Repeat("tail reply ", 120)),
-	}
-	var got llm.Request
-	run := func(_ context.Context, req llm.Request) (string, error) {
-		got = req
-		return "merged", nil
-	}
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 600, MaxOutput: 1000}
-
-	res, err := Compact(t.Context(), branch, model, run, Options{})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	assert.Less(t, res.After, res.Before)
-
-	prompt := textOf(got.Messages[0])
-	assert.Contains(t, prompt, "<previous-summary>")
-	assert.Contains(t, prompt, "an earlier summary")
-	assert.Contains(t, prompt, "PRESERVE all existing information") // incremental rules
+		prompt := textOf(got.Messages[0])
+		assert.Contains(t, prompt, "<previous-summary>")
+		assert.Contains(t, prompt, "an earlier summary")
+		assert.Contains(t, prompt, "PRESERVE all existing information") // incremental rules
+	})
 }

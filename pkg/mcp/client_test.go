@@ -14,31 +14,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConnectStdioListsTools(t *testing.T) {
+func TestConnectStdio(t *testing.T) {
 	t.Parallel()
 
-	c, err := Connect(t.Context(), "fake", stdioConfig(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
+	t.Run("lists_tools", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
 
-	defs, err := c.Tools(t.Context())
-	require.NoError(t, err)
-	assert.Len(t, defs, 3)
-	assert.Equal(t, "tool_00", defs[0].Name)
-}
+		defs, err := c.Tools(t.Context())
+		require.NoError(t, err)
+		assert.Len(t, defs, 3)
+		assert.Equal(t, "tool_00", defs[0].Name)
+	})
 
-func TestConnectStdioCallsTool(t *testing.T) {
-	t.Parallel()
+	t.Run("calls_tool", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
 
-	c, err := Connect(t.Context(), "fake", stdioConfig(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-
-	res, err := c.Call(t.Context(), "tool_01", json.RawMessage(`{}`), nil)
-	require.NoError(t, err)
-	assert.False(t, res.IsError)
-	assert.Len(t, res.Content, 1)
-	assert.Equal(t, "tool_01: ok", res.Content[0])
+		res, err := c.Call(t.Context(), "tool_01", json.RawMessage(`{}`), nil)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		assert.Len(t, res.Content, 1)
+		assert.Equal(t, "tool_01: ok", res.Content[0])
+	})
 }
 
 // TestCallTimeoutCancelsSlowTool verifies a slow call is cancelled by context.
@@ -130,35 +130,33 @@ func TestRequestRawSeam(t *testing.T) {
 	assert.NotEmpty(t, resp)
 }
 
-// TestClientDiscoversResources verifies resources/list is fetched through the raw
-// seam and mapped onto our own shape.
-func TestClientDiscoversResources(t *testing.T) {
+func TestClientDiscovers(t *testing.T) {
 	t.Parallel()
 
-	c, err := Connect(t.Context(), "fake", stdioConfig(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
+	// resources/list is fetched through the raw seam and mapped onto our own shape.
+	t.Run("resources", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
 
-	rs, err := c.Resources(t.Context())
-	require.NoError(t, err)
-	require.Len(t, rs, 1)
-	assert.Equal(t, "fake://doc", rs[0].URI)
-	assert.Equal(t, "the doc", rs[0].Name)
-}
+		rs, err := c.Resources(t.Context())
+		require.NoError(t, err)
+		require.Len(t, rs, 1)
+		assert.Equal(t, "fake://doc", rs[0].URI)
+		assert.Equal(t, "the doc", rs[0].Name)
+	})
 
-// TestClientDiscoversPrompts verifies prompts/list is fetched and mapped.
-func TestClientDiscoversPrompts(t *testing.T) {
-	t.Parallel()
+	t.Run("prompts", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
 
-	c, err := Connect(t.Context(), "fake", stdioConfig(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-
-	ps, err := c.Prompts(t.Context())
-	require.NoError(t, err)
-	require.Len(t, ps, 1)
-	assert.Equal(t, "summarize", ps[0].Name)
-	assert.Len(t, ps[0].Arguments, 1)
+		ps, err := c.Prompts(t.Context())
+		require.NoError(t, err)
+		require.Len(t, ps, 1)
+		assert.Equal(t, "summarize", ps[0].Name)
+		assert.Len(t, ps[0].Arguments, 1)
+	})
 }
 
 // TestNotificationHandlerDoesNotDeadlock verifies OnNotification dispatches handlers off mcp-go's reader goroutine so a handler that does blocking I/O (like re-discovering after tools/list_changed) cannot stall the stdio transport.

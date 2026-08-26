@@ -116,76 +116,77 @@ func TestSettingsMenuSavesToProjectLayer(t *testing.T) {
 	assert.Equal(t, "model", c.saveCalls[0].key)
 }
 
-// non-parallel: Setenv cannot run alongside parallel siblings, and the home dir
-// is isolated so a real user config never shifts the rendered source away from default.
-func TestEnumRowEditsAndRecordsSessionSetting(t *testing.T) {
-	t.Setenv(config.EnvHome, t.TempDir())
+// non-parallel: the edit case uses Setenv which cannot run alongside parallel siblings.
+func TestEnumRow(t *testing.T) {
+	// a select records a session override; cancel leaves it untouched.
+	t.Run("edit_records_session_setting", func(t *testing.T) {
+		t.Setenv(config.EnvHome, t.TempDir())
 
-	c := newFakeConsole(t)
-	r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "auto"})
+		c := newFakeConsole(t)
+		r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "auto"})
 
-	// render shows the default until a value is set.
-	label, detail := r.render(c)
-	assert.Equal(t, "Permissions mode", label)
-	assert.Contains(t, detail, "default")
+		// render shows the default until a value is set.
+		label, detail := r.render(c)
+		assert.Equal(t, "Permissions mode", label)
+		assert.Contains(t, detail, "default")
 
-	// Select picks index 1 (auto); the row records it as a session override.
-	c.selects = []int{1}
-	changes, err := r.edit(context.Background(), c)
-	require.NoError(t, err)
-	assert.Equal(t, "permissions.mode", changes[0].key)
-	assert.Equal(t, "auto", changes[0].value)
+		// Select picks index 1 (auto); the row records it as a session override.
+		c.selects = []int{1}
+		changes, err := r.edit(context.Background(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "permissions.mode", changes[0].key)
+		assert.Equal(t, "auto", changes[0].value)
 
-	src, srcName, ok := c.settings.Explain("permissions.mode")
-	require.True(t, ok)
-	assert.Equal(t, `"auto"`, string(src))
-	assert.Equal(t, "session", srcName)
+		src, srcName, ok := c.settings.Explain("permissions.mode")
+		require.True(t, ok)
+		assert.Equal(t, `"auto"`, string(src))
+		assert.Equal(t, "session", srcName)
+	})
+
+	t.Run("cancelled_leaves_session_untouched", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all"})
+
+		// no queued Select: ErrCancelled, nothing recorded.
+		changes, err := r.edit(context.Background(), c)
+		require.ErrorIs(t, err, tui.ErrCancelled)
+		assert.Empty(t, changes)
+		_, srcName, ok := c.settings.Explain("permissions.mode")
+		assert.True(t, ok) // resolvable at the default layer now
+		assert.NotEqual(t, "session", srcName)
+	})
 }
 
-func TestEnumRowCancelledLeavesSessionUntouched(t *testing.T) {
+func TestModelRow(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	r := enumRow("Permissions mode", "permissions.mode", []string{"allow-all"})
+	// a pick records the sub-agent model under its own key.
+	t.Run("picks_and_records_subagent_key", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := modelRow("Sub-agent model", "subagent.model")
 
-	// no queued Select: ErrCancelled, nothing recorded.
-	changes, err := r.edit(context.Background(), c)
-	require.ErrorIs(t, err, tui.ErrCancelled)
-	assert.Empty(t, changes)
-	_, srcName, ok := c.settings.Explain("permissions.mode")
-	assert.True(t, ok) // resolvable at the default layer now
-	assert.NotEqual(t, "session", srcName)
-}
+		// picker returns beta (index 1); the row records it under its own key.
+		c.picks = []fakePick{{result: 1}}
+		changes, err := r.edit(context.Background(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "subagent.model", changes[0].key)
+		assert.Equal(t, "test/beta", changes[0].value)
 
-func TestModelRowPicksAndRecordsSubagentKey(t *testing.T) {
-	t.Parallel()
+		raw, srcName, ok := c.settings.Explain("subagent.model")
+		require.True(t, ok)
+		assert.Equal(t, `"test/beta"`, string(raw))
+		assert.Equal(t, "session", srcName)
+	})
 
-	c := newFakeConsole(t)
-	r := modelRow("Sub-agent model", "subagent.model")
+	t.Run("cancelled_returns_err", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := modelRow("Sub-agent model", "subagent.model")
 
-	// picker returns beta (index 1); the row records it under its own key.
-	c.picks = []fakePick{{result: 1}}
-	changes, err := r.edit(context.Background(), c)
-	require.NoError(t, err)
-	assert.Equal(t, "subagent.model", changes[0].key)
-	assert.Equal(t, "test/beta", changes[0].value)
-
-	raw, srcName, ok := c.settings.Explain("subagent.model")
-	require.True(t, ok)
-	assert.Equal(t, `"test/beta"`, string(raw))
-	assert.Equal(t, "session", srcName)
-}
-
-func TestModelRowCancelledReturnsErr(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	r := modelRow("Sub-agent model", "subagent.model")
-
-	// no queued pick: ErrCancelled, nothing recorded.
-	changes, err := r.edit(context.Background(), c)
-	require.ErrorIs(t, err, tui.ErrCancelled)
-	assert.Empty(t, changes)
+		// no queued pick: ErrCancelled, nothing recorded.
+		changes, err := r.edit(context.Background(), c)
+		require.ErrorIs(t, err, tui.ErrCancelled)
+		assert.Empty(t, changes)
+	})
 }
 
 func TestIntRowRecordsAndValidatesSubagentConcurrency(t *testing.T) {

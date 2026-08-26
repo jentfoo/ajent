@@ -254,64 +254,59 @@ func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 		"widening restores an indented line in full form, indent intact")
 }
 
-// TestInlineDiffSkipsUnchangedRows pins the row-level diff: a frame where
-// only one row changed (a spinner tick, a caret move) rewrites just that row,
-// so the wire bytes for the untouched rows vanish. The cursor walk and the
-// park stay byte-identical to a full redraw.
-func TestInlineDiffSkipsUnchangedRows(t *testing.T) {
+// TestInlineDiff covers the live-block diffing and its full-erase fallbacks.
+func TestInlineDiff(t *testing.T) {
 	t.Parallel()
 
-	var buf strings.Builder
-	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
-	rows := []string{"draft text", "mid row", "third row", "status"}
-	r.setLive(rows, 1, 2)
-	require.Contains(t, buf.String(), "draft text")
+	// a frame where only one row changed (a spinner tick, a caret move) rewrites just that row,
+	// so the wire bytes for the untouched rows vanish. The cursor walk and the park stay byte-identical to a full redraw.
+	t.Run("skips_unchanged_rows", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		rows := []string{"draft text", "mid row", "third row", "status"}
+		r.setLive(rows, 1, 2)
+		require.Contains(t, buf.String(), "draft text")
 
-	buf.Reset()
-	tick := []string{"draft text", "mid row", "third row", "status tick"}
-	r.setLive(tick, 1, 2)
-	out := buf.String()
-	assert.Contains(t, out, "status tick")
-	assert.Contains(t, out, cursorUp(3), "the park still climbs the whole block")
-	assert.NotContains(t, out, "draft", "the first row emits no bytes")
-	assert.NotContains(t, out, "third row", "nor any unchanged row")
-	assert.NotContains(t, out, eraseBelow, "no full erase when nothing moved rows")
-	assert.Contains(t, out, eraseTail, "a rewritten row clears its own tail")
-}
+		buf.Reset()
+		tick := []string{"draft text", "mid row", "third row", "status tick"}
+		r.setLive(tick, 1, 2)
+		out := buf.String()
+		assert.Contains(t, out, "status tick")
+		assert.Contains(t, out, cursorUp(3), "the park still climbs the whole block")
+		assert.NotContains(t, out, "draft", "the first row emits no bytes")
+		assert.NotContains(t, out, "third row", "nor any unchanged row")
+		assert.NotContains(t, out, eraseBelow, "no full erase when nothing moved rows")
+		assert.Contains(t, out, eraseTail, "a rewritten row clears its own tail")
+	})
 
-// TestInlineDiffFallsBackOnWidthChange: only the width can reflow rows the
-// diff did not write, so a width change redraws the whole block.
-func TestInlineDiffFallsBackOnWidthChange(t *testing.T) {
-	t.Parallel()
+	// only the width can reflow rows the diff did not write, so a width change redraws the whole block.
+	t.Run("falls_back_on_width_change", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r.setLive([]string{"draft text", "ctx"}, 1, 1)
 
-	var buf strings.Builder
-	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
-	r.setLive([]string{"draft text", "ctx"}, 1, 1)
+		buf.Reset()
+		r.t.width = 30
+		r.setLive([]string{"draft text", "ctx"}, 1, 1)
+		out := buf.String()
+		assert.Contains(t, out, eraseBelow, "the whole block is erased and redrawn")
+		assert.Contains(t, out, "draft text")
+	})
 
-	buf.Reset()
-	r.t.width = 30
-	r.setLive([]string{"draft text", "ctx"}, 1, 1)
-	out := buf.String()
-	assert.Contains(t, out, eraseBelow, "the whole block is erased and redrawn")
-	assert.Contains(t, out, "draft text")
-}
+	// the single erase-below used to cover a block that grew or shrank; the diff cannot, so it falls back.
+	t.Run("falls_back_on_row_count_change", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r.setLive([]string{"draft text", "ctx"}, 0, 2)
 
-// TestInlineDiffFallsBackOnRowCountChange: the single erase-below used to
-// cover a block that grew or shrank; the diff cannot, so it falls back.
-func TestInlineDiffFallsBackOnRowCountChange(t *testing.T) {
-	t.Parallel()
+		buf.Reset()
+		r.setLive([]string{"draft text", "extra row", "ctx"}, 0, 2)
+		assert.Contains(t, buf.String(), eraseBelow)
 
-	var buf strings.Builder
-	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
-	r.setLive([]string{"draft text", "ctx"}, 0, 2)
-
-	buf.Reset()
-	r.setLive([]string{"draft text", "extra row", "ctx"}, 0, 2)
-	assert.Contains(t, buf.String(), eraseBelow)
-
-	buf.Reset()
-	r.setLive([]string{"draft text", "ctx"}, 0, 2)
-	assert.Contains(t, buf.String(), eraseBelow)
+		buf.Reset()
+		r.setLive([]string{"draft text", "ctx"}, 0, 2)
+		assert.Contains(t, buf.String(), eraseBelow)
+	})
 }
 
 // TestInlineAbortsFrameOnResizeSignal pins the pre-write gate: a resize

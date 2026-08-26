@@ -135,106 +135,102 @@ func sourceOf(name string) string {
 	return ""
 }
 
-// TestLoadOnFirstMessageConnects verifies a first-message load connects every
-// server and registers all of its tools as enabled.
-func TestLoadOnFirstMessageConnects(t *testing.T) {
+func TestLoadOnFirstMessage(t *testing.T) {
 	t.Parallel()
 
-	fr := newFakeRegistrar()
-	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t)},
-	}, Options{Registrar: fr})
+	// a first-message load connects every server and registers all of its tools as enabled.
+	t.Run("connects", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: buildFakeServer(t)},
+		}, Options{Registrar: fr})
 
-	// nothing is registered before the first message; no process spawned yet
-	assert.Empty(t, fr.AllNames("mcp: fake"))
-	require.Nil(t, mgr.serverByName("fake").client())
+		// nothing is registered before the first message; no process spawned yet
+		assert.Empty(t, fr.AllNames("mcp: fake"))
+		require.Nil(t, mgr.serverByName("fake").client())
 
-	mgr.LoadOnFirstMessage(t.Context())
+		mgr.LoadOnFirstMessage(t.Context())
 
-	for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
-		st, ok := fr.state("fake__" + n)
-		assert.True(t, ok)
-		assert.Equal(t, StateEnabled, st) // every tool exposed in full
-	}
-	// no _search/_load synthetics exist anymore
-	_, hasSearch := fr.toolByName("fake_search")
-	_, hasLoad := fr.toolByName("fake_load")
-	assert.False(t, hasSearch)
-	assert.False(t, hasLoad)
-}
-
-// TestLoadOnFirstMessageRunsOnce verifies a second load is a no-op: the server
-// stays connected and its tools are not re-registered.
-func TestLoadOnFirstMessageRunsOnce(t *testing.T) {
-	t.Parallel()
-
-	fr := newFakeRegistrar()
-	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t)},
-	}, Options{Registrar: fr})
-
-	mgr.LoadOnFirstMessage(t.Context())
-	first, ok := fr.toolByName("fake__tool_00")
-	require.True(t, ok)
-
-	// disconnect is a manual act; LoadOnFirstMessage must not reconnect it again
-	mgr.Disconnect("fake")
-	mgr.LoadOnFirstMessage(t.Context())
-	assert.Nil(t, mgr.serverByName("fake").client())
-	_ = first // registration object itself is unchanged; the point is no reconnect
-}
-
-// TestConfigDisabledServerLoadsButStaysInactive verifies a config-disabled server
-// server still connects so its tools appear in /tools, but registers each tool as
-// StateDisabled: known and toggleable, never callable by default.
-func TestConfigDisabledServerLoadsButStaysInactive(t *testing.T) {
-	t.Parallel()
-
-	fr := newFakeRegistrar()
-	disabled := false
-	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t), Enabled: &disabled},
-	}, Options{Registrar: fr})
-
-	mgr.LoadOnFirstMessage(t.Context())
-
-	srv := mgr.serverByName("fake")
-	require.NotNil(t, srv.client())
-	for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
-		st, ok := fr.state("fake__" + n)
-		assert.True(t, ok)
-		assert.Equal(t, StateDisabled, st) // visible in /tools but unchecked
-	}
-}
-
-// TestConfigDisabledServerHonoursRestoredEnablement verifies an explicit session
-// enablement survives resume: a tool the user turned on via /tools (persisted to
-// tools.enabled and fed back as Restore) must come back enabled even when its
-// server is config-disabled. The config flag is only a default, never a veto.
-func TestConfigDisabledServerHonoursRestoredEnablement(t *testing.T) {
-	t.Parallel()
-
-	fr := newFakeRegistrar()
-	disabled := false
-	mgr := New(nil, Options{
-		Registrar: fr,
-		Restore:   []string{"fake__tool_01"}, // enabled via /tools in the prior session
+		for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+			st, ok := fr.state("fake__" + n)
+			assert.True(t, ok)
+			assert.Equal(t, StateEnabled, st) // every tool exposed in full
+		}
+		// no _search/_load synthetics exist anymore
+		_, hasSearch := fr.toolByName("fake_search")
+		_, hasLoad := fr.toolByName("fake_load")
+		assert.False(t, hasSearch)
+		assert.False(t, hasLoad)
 	})
-	s := newServer("fake", ServerConfig{Enabled: &disabled})
 
-	defs := []ToolDef{
-		{Name: "tool_00", InputSchema: jsonRawObject},
-		{Name: "tool_01", InputSchema: jsonRawObject},
-	}
-	mgr.register(s, defs, nil)
+	// a second load is a no-op: the server stays connected and its tools are not re-registered.
+	t.Run("runs_once", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: buildFakeServer(t)},
+		}, Options{Registrar: fr})
 
-	st, ok := fr.state("fake__tool_00")
-	require.True(t, ok)
-	assert.Equal(t, StateDisabled, st) // never enabled: config-off default holds
+		mgr.LoadOnFirstMessage(t.Context())
+		first, ok := fr.toolByName("fake__tool_00")
+		require.True(t, ok)
 
-	st, ok = fr.state("fake__tool_01")
-	require.True(t, ok)
-	assert.Equal(t, StateEnabled, st) // explicit /tools enablement wins over the default
+		// disconnect is a manual act; LoadOnFirstMessage must not reconnect it again
+		mgr.Disconnect("fake")
+		mgr.LoadOnFirstMessage(t.Context())
+		assert.Nil(t, mgr.serverByName("fake").client())
+		_ = first // registration object itself is unchanged; the point is no reconnect
+	})
+}
+
+func TestConfigDisabledServer(t *testing.T) {
+	t.Parallel()
+
+	// a config-disabled server still connects so its tools appear in /tools, but
+	// registers each tool as StateDisabled: known and toggleable, never callable by default.
+	t.Run("loads_but_stays_inactive", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		disabled := false
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: buildFakeServer(t), Enabled: &disabled},
+		}, Options{Registrar: fr})
+
+		mgr.LoadOnFirstMessage(t.Context())
+
+		srv := mgr.serverByName("fake")
+		require.NotNil(t, srv.client())
+		for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+			st, ok := fr.state("fake__" + n)
+			assert.True(t, ok)
+			assert.Equal(t, StateDisabled, st) // visible in /tools but unchecked
+		}
+	})
+
+	// an explicit session enablement survives resume: a tool the user turned on via
+	// /tools (persisted to tools.enabled and fed back as Restore) must come back enabled even when its
+	// server is config-disabled. The config flag is only a default, never a veto.
+	t.Run("honours_restored_enablement", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		disabled := false
+		mgr := New(nil, Options{
+			Registrar: fr,
+			Restore:   []string{"fake__tool_01"}, // enabled via /tools in the prior session
+		})
+		s := newServer("fake", ServerConfig{Enabled: &disabled})
+
+		defs := []ToolDef{
+			{Name: "tool_00", InputSchema: jsonRawObject},
+			{Name: "tool_01", InputSchema: jsonRawObject},
+		}
+		mgr.register(s, defs, nil)
+
+		st, ok := fr.state("fake__tool_00")
+		require.True(t, ok)
+		assert.Equal(t, StateDisabled, st) // never enabled: config-off default holds
+
+		st, ok = fr.state("fake__tool_01")
+		require.True(t, ok)
+		assert.Equal(t, StateEnabled, st) // explicit /tools enablement wins over the default
+	})
 }
 
 // TestRegisterMarksReadOnlyTools verifies bridged read-only tools are recorded on

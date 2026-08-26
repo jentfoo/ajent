@@ -119,7 +119,7 @@ func TestInitialRow(t *testing.T) {
 		assert.Equal(t, 1, initialRow(tree, "no-row"))
 	})
 	t.Run("nothing_active", func(t *testing.T) {
-		var stale []session.TreeRow
+		stale := make([]session.TreeRow, 0, len(tree))
 		for _, r := range tree {
 			stale = append(stale, session.TreeRow{ID: r.ID})
 		}

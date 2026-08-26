@@ -21,54 +21,55 @@ func writeLines(t *testing.T, p string, lines []string) {
 	require.NoError(t, f.Close())
 }
 
-func TestReadToleratesGarbageAndTruncation(t *testing.T) {
+func TestRead(t *testing.T) {
 	t.Parallel()
 
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	writeLines(t, p, []string{
-		`{"id":"a","type":"session","ts":1,"data":{"version":1}}`,
-		"garbage line not json", // middle garbage becomes a warning
-		``,
-		`{"id":"b","parentId":"a","type":"notice","ts":2,"data":{"message":"m"}}`,
+	// garbage and truncation are tolerated with warnings.
+	t.Run("tolerates_garbage_and_truncation", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		writeLines(t, p, []string{
+			`{"id":"a","type":"session","ts":1,"data":{"version":1}}`,
+			"garbage line not json", // middle garbage becomes a warning
+			``,
+			`{"id":"b","parentId":"a","type":"notice","ts":2,"data":{"message":"m"}}`,
+		})
+
+		f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+		require.NoError(t, err)
+		_, werr := f.WriteString(`{"id":"c","parentId":"b","type":"notice","ts":3,"data":{"message":"partial"}}`)
+		require.NoError(t, werr)
+		require.NoError(t, f.Close()) // trailing line without newline: partial write
+
+		entries, warns, rerr := Read(p)
+		require.NoError(t, rerr)
+		assert.Len(t, entries, 2) // garbage + blank skipped
+		assert.NotEmpty(t, warns) // the garbage line warned
+		assert.Equal(t, []string{"a", "b"}, ids(entries))
 	})
 
-	f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
-	require.NoError(t, err)
-	_, werr := f.WriteString(`{"id":"c","parentId":"b","type":"notice","ts":3,"data":{"message":"partial"}}`)
-	require.NoError(t, werr)
-	require.NoError(t, f.Close()) // trailing line without newline: partial write
+	// a session with a newer version is rejected.
+	t.Run("rejects_newer_version", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		writeLines(t, p, []string{`{"id":"a","type":"session","ts":1,"data":{"version":99}}`})
 
-	entries, warns, rerr := Read(p)
-	require.NoError(t, rerr)
-	assert.Len(t, entries, 2) // garbage + blank skipped
-	assert.NotEmpty(t, warns) // the garbage line warned
-	assert.Equal(t, []string{"a", "b"}, ids(entries))
-}
-
-func TestReadRejectsNewerVersion(t *testing.T) {
-	t.Parallel()
-
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	writeLines(t, p, []string{`{"id":"a","type":"session","ts":1,"data":{"version":99}}`})
-
-	_, _, err := Read(p)
-	assert.ErrorContains(t, err, "newer than supported v1")
-}
-
-func TestReadKeepsUnknownEntryType(t *testing.T) {
-	t.Parallel()
-
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	writeLines(t, p, []string{
-		`{"id":"a","type":"session","ts":1,"data":{"version":1}}`,
-		`{"id":"b","parentId":"a","type":"future_thing","ts":2,"data":{"x":1}}`,
+		_, _, err := Read(p)
+		assert.ErrorContains(t, err, "newer than supported v1")
 	})
 
-	entries, warns, err := Read(p)
-	require.NoError(t, err)
-	assert.Empty(t, warns)
-	assert.Len(t, entries, 2)
-	assert.Equal(t, Type("future_thing"), entries[1].Type)
+	// an unknown entry type is kept through a read.
+	t.Run("keeps_unknown_entry_type", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		writeLines(t, p, []string{
+			`{"id":"a","type":"session","ts":1,"data":{"version":1}}`,
+			`{"id":"b","parentId":"a","type":"future_thing","ts":2,"data":{"x":1}}`,
+		})
+
+		entries, warns, err := Read(p)
+		require.NoError(t, err)
+		assert.Empty(t, warns)
+		assert.Len(t, entries, 2)
+		assert.Equal(t, Type("future_thing"), entries[1].Type)
+	})
 }
 
 func TestBranchFollowsHeadIgnoresSibling(t *testing.T) {

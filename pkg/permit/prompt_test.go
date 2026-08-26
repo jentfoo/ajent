@@ -73,27 +73,28 @@ func TestAllowSessionKey(t *testing.T) {
 	}
 }
 
-func TestElideSubjectBoundsLinesAndChars(t *testing.T) {
+func TestElideSubject(t *testing.T) {
 	t.Parallel()
 
-	long := strings.Repeat("line\n", decisionContextRows+5)
-	out := elideSubject(long)
-	if got := strings.Count(out, "\n") + 1; got > decisionContextRows {
-		assert.Failf(t, "too many lines kept", "kept %d want <= %d", got, decisionContextRows)
-	}
+	// line and character budgets bound the elided subject.
+	t.Run("bounds_lines_and_chars", func(t *testing.T) {
+		long := strings.Repeat("line\n", decisionContextRows+5)
+		out := elideSubject(long)
+		if got := strings.Count(out, "\n") + 1; got > decisionContextRows {
+			assert.Failf(t, "too many lines kept", "kept %d want <= %d", got, decisionContextRows)
+		}
 
-	// a long first line is kept whole for the dialog to wrap
-	wide := strings.Repeat("x", decisionContextChars+50)
-	assert.Equal(t, wide, elideSubject(wide))
-	// past the first line the character budget still applies
-	assert.Equal(t, "head", elideSubject("head\n"+wide+"\ntail"))
-}
+		// a long first line is kept whole for the dialog to wrap
+		wide := strings.Repeat("x", decisionContextChars+50)
+		assert.Equal(t, wide, elideSubject(wide))
+		// past the first line the character budget still applies
+		assert.Equal(t, "head", elideSubject("head\n"+wide+"\ntail"))
+	})
 
-func TestElideSubjectEmptyAndSingleLine(t *testing.T) {
-	t.Parallel()
-
-	assert.Empty(t, elideSubject(""))
-	assert.Equal(t, "one line", elideSubject("one line"))
+	t.Run("empty_and_single_line", func(t *testing.T) {
+		assert.Empty(t, elideSubject(""))
+		assert.Equal(t, "one line", elideSubject("one line"))
+	})
 }
 
 // TestClassifierSystemVerbatim pins the shell classifier prompt so a wording change

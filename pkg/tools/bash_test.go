@@ -57,28 +57,38 @@ func newBashCtxLim(ctx context.Context, t *testing.T, lim Limit, args string) *b
 	return r
 }
 
-func TestBashExitCodeReported(t *testing.T) {
+func TestBash(t *testing.T) {
 	t.Parallel()
 
-	r := newBash(t, `{"command":"exit 3"}`)
-	assert.False(t, r.res.IsError)
-	assert.Contains(t, textOf(r.res), "exit status 3")
-}
+	// a non-zero exit is reported in the result text.
+	t.Run("exit_code_reported", func(t *testing.T) {
+		r := newBash(t, `{"command":"exit 3"}`)
+		assert.False(t, r.res.IsError)
+		assert.Contains(t, textOf(r.res), "exit status 3")
+	})
 
-func TestBashStreamsStdoutAndStderrInterleaved(t *testing.T) {
-	t.Parallel()
+	// stdout and stderr are both captured for the model.
+	t.Run("streams_stdout_and_stderr_interleaved", func(t *testing.T) {
+		r := newBash(t, `{"command":"echo out; echo err >&2"}`)
+		assert.False(t, r.res.IsError)
+		assert.Contains(t, textOf(r.res), "out")
+		assert.Contains(t, textOf(r.res), "err") // stderr captured for the model
+	})
 
-	r := newBash(t, `{"command":"echo out; echo err >&2"}`)
-	assert.False(t, r.res.IsError)
-	assert.Contains(t, textOf(r.res), "out")
-	assert.Contains(t, textOf(r.res), "err") // stderr captured for the model
-}
+	t.Run("empty_command_rejected", func(t *testing.T) {
+		r := newBash(t, `{"command":"  "}`)
+		assert.True(t, r.res.IsError)
+	})
 
-func TestBashEmptyCommandRejected(t *testing.T) {
-	t.Parallel()
-
-	r := newBash(t, `{"command":"  "}`)
-	assert.True(t, r.res.IsError)
+	// an already-cancelled context means the command never runs to completion.
+	t.Run("cancellation_via_context", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel() // already cancelled: the command must not run to completion
+		r := newBashCtx(ctx, t, `{"command":"echo should-not-appear"}`)
+		assert.True(t, r.res.IsError) // cancellation is a clean stop marked as interrupted
+		assert.Contains(t, textOf(r.res), "interrupted by user")
+		assert.NotContains(t, textOf(r.res), "should-not-appear")
+	})
 }
 
 func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
@@ -97,17 +107,6 @@ func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
 	grandchildPid, aerr := strconv.Atoi(strings.TrimSpace(string(data)))
 	require.NoError(t, aerr)
 	assertEventuallyGone(t, grandchildPid)
-}
-
-func TestBashCancellationViaContext(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel() // already cancelled: the command must not run to completion
-	r := newBashCtx(ctx, t, `{"command":"echo should-not-appear"}`)
-	assert.True(t, r.res.IsError) // cancellation is a clean stop marked as interrupted
-	assert.Contains(t, textOf(r.res), "interrupted by user")
-	assert.NotContains(t, textOf(r.res), "should-not-appear")
 }
 
 // TestBashMidRunCancelKillsGroupAndRecordsPartial interrupts a running command,
@@ -172,82 +171,76 @@ func TestBashMidRunCancelKillsGroupAndRecordsPartial(t *testing.T) {
 	}, time.Second*2, time.Millisecond*30, "the whole process group must be gone")
 }
 
-func TestBashElisionByLineBoundSpillsFileSuffix(t *testing.T) {
+func TestBashOutputElision(t *testing.T) {
 	t.Parallel()
 
-	r := newBashWithLimit(t, Limit{Lines: 5}, `{"command":"seq 1 10000"}`)
-	assert.False(t, r.res.IsError)
-	out := textOf(r.res)
-	// head-only policy with a footer naming shown/total and the spill file
-	assert.Contains(t, out, "... truncated: 5/10000 lines shown")
-	assert.Regexp(t, `full output in @\S+`, out)
+	// a head-only policy names the shown/total counts and spills.
+	t.Run("elision_by_line_bound_spills_file_suffix", func(t *testing.T) {
+		r := newBashWithLimit(t, Limit{Lines: 5}, `{"command":"seq 1 10000"}`)
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		// head-only policy with a footer naming shown/total and the spill file
+		assert.Contains(t, out, "... truncated: 5/10000 lines shown")
+		assert.Regexp(t, `full output in @\S+`, out)
+	})
+
+	// one minified line within every bound must not reach the model whole when the result truncates.
+	t.Run("truncated_head_caps_overlong_lines", func(t *testing.T) {
+		long := strings.Repeat("y", MaxLineRunes+200)
+		cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'; seq 1 20"}`, long)
+		r := newBashWithLimit(t, Limit{Lines: 2}, cmd)
+		assert.False(t, r.res.IsError)
+		for _, ln := range strings.Split(textOf(r.res), "\n") {
+			assert.LessOrEqual(t, len([]rune(ln)), MaxLineRunes)
+		}
+		assert.Regexp(t, `full output in @\S+`, textOf(r.res))
+	})
+
+	// a single overlong line under every bound is still capped and spilled.
+	t.Run("overlong_line_within_bounds_capped_and_spilled", func(t *testing.T) {
+		long := strings.Repeat("y", 2000)
+		cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'"}`, long)
+		r := newBashWithLimit(t, Limit{Lines: 10}, cmd)
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		for _, ln := range strings.Split(out, "\n") {
+			assert.LessOrEqual(t, len([]rune(ln)), MaxLineRunes+100) // footer carries the spill note
+		}
+		// an overlong line alone counts as truncated: full stream spilled with a size summary
+		assert.Regexp(t, `full output in @\S+`, out)
+		m := regexp.MustCompile(`@(\S+)`).FindStringSubmatch(out)
+		require.NotNil(t, m, "spill path must be named")
+		dat, err := os.ReadFile(m[1])
+		require.NoError(t, err) // the spilled file really holds the complete stream
+		assert.Contains(t, string(dat), strings.Repeat("y", 2000))
+	})
 }
 
-func TestBashTruncatedHeadCapsOverlongLines(t *testing.T) {
+func TestBashEnvironment(t *testing.T) {
 	t.Parallel()
 
-	// one minified line within every bound must not reach the model whole when
-	// the result truncates; the spill file keeps the complete text
-	long := strings.Repeat("y", MaxLineRunes+200)
-	cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'; seq 1 20"}`, long)
-	r := newBashWithLimit(t, Limit{Lines: 2}, cmd)
-	assert.False(t, r.res.IsError)
-	for _, ln := range strings.Split(textOf(r.res), "\n") {
-		assert.LessOrEqual(t, len([]rune(ln)), MaxLineRunes)
-	}
-	assert.Regexp(t, `full output in @\S+`, textOf(r.res))
-}
+	// ANSI escapes are stripped before the model sees output.
+	t.Run("strips_ansi_from_captured_output", func(t *testing.T) {
+		r := newBash(t, `{"command":"printf '\\033[31mred\\033[0m plain'"}`)
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		assert.NotContains(t, out, "\x1b") // escapes stripped before the model sees it
+		assert.Contains(t, out, "plain")
+	})
 
-func TestBashOverlongLineWithinBoundsCappedAndSpilled(t *testing.T) {
-	t.Parallel()
+	// a non-login shell inherits our PATH verbatim (a login shell would reset it).
+	t.Run("preserves_parent_path", func(t *testing.T) {
+		want := os.Getenv("PATH")
+		r := newBash(t, `{"command":"printf %s \"$PATH\""}`)
+		assert.False(t, r.res.IsError)
+		assert.Equal(t, want, textOf(r.res))
+	})
 
-	// a single line longer than MaxLineRunes but under every bound must still be
-	// capped for the model and spill, exactly like grep: nothing lost, readable back.
-	long := strings.Repeat("y", 2000)
-	cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'"}`, long)
-	r := newBashWithLimit(t, Limit{Lines: 10}, cmd)
-	assert.False(t, r.res.IsError)
-	out := textOf(r.res)
-	for _, ln := range strings.Split(out, "\n") {
-		assert.LessOrEqual(t, len([]rune(ln)), MaxLineRunes+100) // footer carries the spill note
-	}
-	// an overlong line alone counts as truncated: full stream spilled with a size summary
-	assert.Regexp(t, `full output in @\S+`, out)
-	m := regexp.MustCompile(`@(\S+)`).FindStringSubmatch(out)
-	require.NotNil(t, m, "spill path must be named")
-	dat, err := os.ReadFile(m[1])
-	require.NoError(t, err) // the spilled file really holds the complete stream
-	assert.Contains(t, string(dat), strings.Repeat("y", 2000))
-}
-
-func TestBashStripsANSIFromCapturedOutput(t *testing.T) {
-	t.Parallel()
-
-	r := newBash(t, `{"command":"printf '\\033[31mred\\033[0m plain'"}`)
-	assert.False(t, r.res.IsError)
-	out := textOf(r.res)
-	assert.NotContains(t, out, "\x1b") // escapes stripped before the model sees it
-	assert.Contains(t, out, "plain")
-}
-
-// TestBashPreservesParentPath guards against running bash as a login shell,
-// which resets PATH to the system default and hides user dirs (~/.local/bin,
-// Homebrew, nvm). A non-login shell must inherit our env verbatim.
-func TestBashPreservesParentPath(t *testing.T) {
-	t.Parallel()
-
-	want := os.Getenv("PATH")
-	r := newBash(t, `{"command":"printf %s \"$PATH\""}`)
-	assert.False(t, r.res.IsError)
-	assert.Equal(t, want, textOf(r.res))
-}
-
-func TestBashRespectsCwdOverride(t *testing.T) {
-	t.Parallel()
-
-	r := newBash(t, `{"command":"pwd","cwd":""}`)
-	// cwd empty falls back to the policy cwd; assert pwd printed that dir
-	assert.Contains(t, textOf(r.res), r.env.cwd)
+	// an empty cwd override falls back to the policy cwd.
+	t.Run("respects_cwd_override", func(t *testing.T) {
+		r := newBash(t, `{"command":"pwd","cwd":""}`)
+		assert.Contains(t, textOf(r.res), r.env.cwd)
+	})
 }
 
 // assertEventuallyGone waits until a process is gone, proving the whole group

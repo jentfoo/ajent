@@ -9,39 +9,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPickerRowsInterleaved builds a branch with user, assistant-text and
-// tool-only entries interleaved and asserts exactly which rows appear, newest
-// first, with correct kinds and ordinals.
-func TestPickerRowsInterleaved(t *testing.T) {
+// TestPickerRows covers which rows appear, newest first, with correct kinds and ordinals.
+func TestPickerRows(t *testing.T) {
 	t.Parallel()
 
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
-		pickAssistText("a1", "u1", "an answer"),
-		pickToolCall("t1", "a1"), // assistant turn ending in a tool call
-		pickToolResultMsg("r1", "t1"),
-	}
+	// a branch with user, assistant-text and tool-only entries interleaved.
+	t.Run("interleaved", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
+			pickAssistText("a1", "u1", "an answer"),
+			pickToolCall("t1", "a1"), // assistant turn ending in a tool call
+			pickToolResultMsg("r1", "t1"),
+		}
 
-	rows := PickerRows(entries)
-	assert.Len(t, rows, 4) // session entry is skipped
+		rows := PickerRows(entries)
+		assert.Len(t, rows, 4) // session entry is skipped
 
-	assert.Equal(t, RowTool, rows[0].Kind)
-	assert.Equal(t, "r1", rows[0].ID)
+		assert.Equal(t, RowTool, rows[0].Kind)
+		assert.Equal(t, "r1", rows[0].ID)
 
-	assert.Equal(t, RowTool, rows[1].Kind)
-	assert.Equal(t, "t1", rows[1].ID)
+		assert.Equal(t, RowTool, rows[1].Kind)
+		assert.Equal(t, "t1", rows[1].ID)
 
-	// newest-first means the assistant answer precedes its user prompt
-	assert.Equal(t, RowAssistant, rows[2].Kind)
-	assert.Equal(t, "a1", rows[2].ID)
-	assert.Equal(t, RowUser, rows[3].Kind)
-	assert.Equal(t, "u1", rows[3].ID)
-	assert.Equal(t, 4, rows[0].Ordinal, "ordinals count pickable rows from the root")
-	assert.Equal(t, 2, rows[2].Ordinal)
+		// newest-first means the assistant answer precedes its user prompt
+		assert.Equal(t, RowAssistant, rows[2].Kind)
+		assert.Equal(t, "a1", rows[2].ID)
+		assert.Equal(t, RowUser, rows[3].Kind)
+		assert.Equal(t, "u1", rows[3].ID)
+		assert.Equal(t, 4, rows[0].Ordinal, "ordinals count pickable rows from the root")
+		assert.Equal(t, 2, rows[2].Ordinal)
 
-	// the collapsed tool call shows [name] args
-	assert.Contains(t, rows[1].Label, "[bash]")
+		// the collapsed tool call shows [name] args
+		assert.Contains(t, rows[1].Label, "[bash]")
+	})
+
+	t.Run("tool_result_collapses_to_one_line", func(t *testing.T) {
+		m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+			llm.ToolResultBlock{CallID: "c1", IsError: false,
+				Content: llm.BlockList{llm.TextBlock{Text: "ok  0.4s"}}},
+		}}
+		e := pickMsg("r1", "", m)
+		rows := PickerRows([]Entry{e})
+		require.Len(t, rows, 1)
+		assert.Equal(t, RowTool, rows[0].Kind)
+		assert.Contains(t, rows[0].Label, "ok  0.4s")
+	})
 }
 
 func TestPickerRowLabelsAndKinds(t *testing.T) {
@@ -72,120 +85,101 @@ func TestPickerRowLabelsAndKinds(t *testing.T) {
 	}
 }
 
-func TestPickerRowsToolResultCollapsesToOneLine(t *testing.T) {
+// TestTreeRows covers fork rendering in the tree view.
+func TestTreeRows(t *testing.T) {
 	t.Parallel()
 
-	m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
-		llm.ToolResultBlock{CallID: "c1", IsError: false,
-			Content: llm.BlockList{llm.TextBlock{Text: "ok  0.4s"}}},
-	}}
-	e := pickMsg("r1", "", m)
-	rows := PickerRows([]Entry{e})
-	require.Len(t, rows, 1)
-	assert.Equal(t, RowTool, rows[0].Kind)
-	assert.Contains(t, rows[0].Label, "ok  0.4s")
-}
+	// an un-forked chat stays one flat column: every message at depth 0 with no branch connectors.
+	t.Run("flat_linear", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "hihi hi again")),
+			pickAssistText("a2", "u1", "Hi!"),
+			pickMsg("u3", "a2", llm.Text(llm.RoleUser, "idk how do you feel?")),
+			pickAssistText("a4", "u3", "I don't have feelings per se"),
+		}
 
-// TestTreeRowsFlatLinear verifies an un-forked chat stays one flat column: every
-// message at depth 0 with no branch connectors.
-func TestTreeRowsFlatLinear(t *testing.T) {
-	t.Parallel()
+		tree := TreeRows(entries, "a4")
+		require.Len(t, tree, 4) // session entry skipped
 
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "hihi hi again")),
-		pickAssistText("a2", "u1", "Hi!"),
-		pickMsg("u3", "a2", llm.Text(llm.RoleUser, "idk how do you feel?")),
-		pickAssistText("a4", "u3", "I don't have feelings per se"),
-	}
+		// pre-order from the root: oldest first along a single chain.
+		assert.Equal(t, []string{"u1", "a2", "u3", "a4"}, idsOf(tree))
+		for _, r := range tree {
+			assert.Equalf(t, 0, r.Depth, "linear chain must stay flat (id=%s)", r.ID)
+			assert.Emptyf(t, r.Guide, "no fork means no branch connector (id=%s)", r.ID)
+		}
+		// the whole active path is live.
+		for _, r := range tree {
+			assert.Truef(t, r.Active, "every node of a linear chat is on the head's path (id=%s)", r.ID)
+		}
+	})
 
-	tree := TreeRows(entries, "a4")
-	require.Len(t, tree, 4) // session entry skipped
+	// rewinding + resubmitting produces two branches at the SAME level: both children
+	// of the fork point move down one together, drawn with connectors. The most recent branch lists first.
+	t.Run("shows_fork", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
+		}
+		// u1 forks into a1 (old) and u2->a2 (newer).
+		forked := append([]Entry(nil), entries...)
+		forked = append(forked,
+			pickAssistText("a1", "u1", "an answer"), // old, abandoned
+			pickMsg("u2", "u1", llm.Text(llm.RoleUser, "unrelated fork")),
+			pickAssistText("a2", "u2", "the other reply"))
 
-	// pre-order from the root: oldest first along a single chain.
-	assert.Equal(t, []string{"u1", "a2", "u3", "a4"}, idsOf(tree))
-	for _, r := range tree {
-		assert.Equalf(t, 0, r.Depth, "linear chain must stay flat (id=%s)", r.ID)
-		assert.Emptyf(t, r.Guide, "no fork means no branch connector (id=%s)", r.ID)
-	}
-	// the whole active path is live.
-	for _, r := range tree {
-		assert.Truef(t, r.Active, "every node of a linear chat is on the head's path (id=%s)", r.ID)
-	}
-}
+		// head is a2; u1 and u2 are active, a1 is an abandoned fork.
+		tree := TreeRows(forked, "a2")
+		require.Len(t, tree, 4) // u1 + (a1 | u2,a2)
 
-// TestTreeRowsShowsFork verifies that rewinding + resubmitting produces two
-// branches at the SAME level: both children of the fork point move down one
-// together, drawn with connectors. The most recent branch lists first.
-func TestTreeRowsShowsFork(t *testing.T) {
-	t.Parallel()
+		// pre-order in insertion order: older sibling first, newer branch last (bottom).
+		assert.Equal(t, []string{"u1", "a1", "u2", "a2"}, idsOf(tree))
 
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
-	}
-	// u1 forks into a1 (old) and u2->a2 (newer).
-	forked := append([]Entry(nil), entries...)
-	forked = append(forked,
-		pickAssistText("a1", "u1", "an answer"), // old, abandoned
-		pickMsg("u2", "u1", llm.Text(llm.RoleUser, "unrelated fork")),
-		pickAssistText("a2", "u2", "the other reply"))
+		depth := map[string]int{}
+		guide := map[string]string{}
+		active := map[string]bool{}
+		for _, r := range tree {
+			depth[r.ID], guide[r.ID], active[r.ID] = r.Depth, r.Guide, r.Active
+		}
+		// both siblings of the fork sit at depth 1 together; the shared root stays flat.
+		assert.Equal(t, 0, depth["u1"])
+		assert.Equal(t, 1, depth["a1"], "older branch indented one level")
+		assert.Equal(t, 1, depth["u2"], "newer branch at the SAME level as its sibling")
+		assert.Equal(t, 1, depth["a2"])
 
-	// head is a2; u1 and u2 are active, a1 is an abandoned fork.
-	tree := TreeRows(forked, "a2")
-	require.Len(t, tree, 4) // u1 + (a1 | u2,a2)
+		// drawn with connectors: older child listed first (├──), newer closes the fork (└──).
+		assert.Empty(t, guide["u1"])
+		assert.Equal(t, "├── ", guide["a1"], "older sibling is the first listed branch")
+		assert.Equal(t, "└── ", guide["u2"], "newer sibling closes the fork at the bottom")
+		assert.Equal(t, "    ", guide["a2"], "continuation blank because its parent u2 is last (newest at bottom)")
 
-	// pre-order in insertion order: older sibling first, newer branch last (bottom).
-	assert.Equal(t, []string{"u1", "a1", "u2", "a2"}, idsOf(tree))
+		// u2 is the last/newest sibling -> └──; a1 is not live.
+		assert.True(t, active["u1"] && active["u2"] && active["a2"])
+		assert.False(t, active["a1"])
+	})
 
-	depth := map[string]int{}
-	guide := map[string]string{}
-	active := map[string]bool{}
-	for _, r := range tree {
-		depth[r.ID], guide[r.ID], active[r.ID] = r.Depth, r.Guide, r.Active
-	}
-	// both siblings of the fork sit at depth 1 together; the shared root stays flat.
-	assert.Equal(t, 0, depth["u1"])
-	assert.Equal(t, 1, depth["a1"], "older branch indented one level")
-	assert.Equal(t, 1, depth["u2"], "newer branch at the SAME level as its sibling")
-	assert.Equal(t, 1, depth["a2"])
+	// every guide cell is four columns wide, so a branch's continuation lines up under the text of its own connector.
+	t.Run("guide_alignment", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
+			pickAssistText("a1", "u1", "an answer"), // older branch, kept growing
+			pickMsg("u2", "a1", llm.Text(llm.RoleUser, "follow up on the old branch")),
+			pickMsg("u3", "u1", llm.Text(llm.RoleUser, "newer branch")),
+		}
 
-	// drawn with connectors: older child listed first (├──), newer closes the fork (└──).
-	assert.Empty(t, guide["u1"])
-	assert.Equal(t, "├── ", guide["a1"], "older sibling is the first listed branch")
-	assert.Equal(t, "└── ", guide["u2"], "newer sibling closes the fork at the bottom")
-	assert.Equal(t, "    ", guide["a2"], "continuation blank because its parent u2 is last (newest at bottom)")
-
-	// u2 is the last/newest sibling -> └──; a1 is not live.
-	assert.True(t, active["u1"] && active["u2"] && active["a2"])
-	assert.False(t, active["a1"])
-}
-
-// TestTreeRowsGuideAlignment verifies every guide cell is four columns wide, so
-// a branch's continuation lines up under the text of its own connector rather
-// than one column left of it.
-func TestTreeRowsGuideAlignment(t *testing.T) {
-	t.Parallel()
-
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
-		pickAssistText("a1", "u1", "an answer"), // older branch, kept growing
-		pickMsg("u2", "a1", llm.Text(llm.RoleUser, "follow up on the old branch")),
-		pickMsg("u3", "u1", llm.Text(llm.RoleUser, "newer branch")),
-	}
-
-	guide := map[string]string{}
-	for _, r := range TreeRows(entries, "u3") {
-		guide[r.ID] = r.Guide
-	}
-	assert.Equal(t, "├── ", guide["a1"])
-	assert.Equal(t, "└── ", guide["u3"])
-	// u2 continues under a1, which is not the last child: a bar, four wide.
-	assert.Equal(t, "│   ", guide["u2"])
-	for id, g := range guide {
-		assert.Zerof(t, len([]rune(g))%4, "guide cells are four columns wide (id=%s, guide=%q)", id, g)
-	}
+		guide := map[string]string{}
+		for _, r := range TreeRows(entries, "u3") {
+			guide[r.ID] = r.Guide
+		}
+		assert.Equal(t, "├── ", guide["a1"])
+		assert.Equal(t, "└── ", guide["u3"])
+		// u2 continues under a1, which is not the last child: a bar, four wide.
+		assert.Equal(t, "│   ", guide["u2"])
+		for id, g := range guide {
+			assert.Zerof(t, len([]rune(g))%4, "guide cells are four columns wide (id=%s, guide=%q)", id, g)
+		}
+	})
 }
 
 func idsOf(rows []TreeRow) []string {

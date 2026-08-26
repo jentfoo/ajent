@@ -14,43 +14,45 @@ func setClock(t time.Time) func() {
 	return func() { clock = old }
 }
 
-func TestNewIDLengthAndAlphabet(t *testing.T) {
-	t.Parallel()
+func TestNewID(t *testing.T) {
+	// the sorted-by-time and monotonic cases mutate the package clock, so this
+	// test cannot run in parallel.
 
-	id := NewID()
-	assert.Len(t, id, 26)
-	for _, c := range id {
-		assert.Contains(t, crockford, string(c))
-	}
-}
-
-// TestNewIDSortedByTime pins increasing timestamps and checks the ids sort in
-// that order. It mutates the package clock so it is not parallel.
-func TestNewIDSortedByTime(t *testing.T) {
-	t.Cleanup(setClock(time.UnixMilli(1_700_000_000_123).UTC()))
-
-	base := int64(1_750_234_567_890)
-	var prev string
-	for i := range 5 {
-		setClock(time.UnixMilli(base + int64(i)*1000).UTC())
+	t.Run("length_and_alphabet", func(t *testing.T) {
 		id := NewID()
-		if prev != "" {
-			assert.Greater(t, id, prev)
+		assert.Len(t, id, 26)
+		for _, c := range id {
+			assert.Contains(t, crockford, string(c))
 		}
-		prev = id
-	}
-}
+	})
 
-// TestNewIDMonotonicWithinMs pins one timestamp and checks ids stay increasing.
-func TestNewIDMonotonicWithinMs(t *testing.T) {
-	t.Cleanup(setClock(time.UnixMilli(1_700_000_123).UTC()))
+	// increasing timestamps produce ids that sort in that order.
+	t.Run("sorted_by_time", func(t *testing.T) {
+		t.Cleanup(setClock(time.UnixMilli(1_700_000_000_123).UTC()))
 
-	var prev string
-	for range 200 {
-		id := NewID()
-		if prev != "" {
-			assert.Greater(t, id, prev)
+		base := int64(1_750_234_567_890)
+		var prev string
+		for i := range 5 {
+			setClock(time.UnixMilli(base + int64(i)*1000).UTC())
+			id := NewID()
+			if prev != "" {
+				assert.Greater(t, id, prev)
+			}
+			prev = id
 		}
-		prev = id
-	}
+	})
+
+	// one pinned timestamp still yields increasing ids.
+	t.Run("monotonic_within_ms", func(t *testing.T) {
+		t.Cleanup(setClock(time.UnixMilli(1_700_000_123).UTC()))
+
+		var prev string
+		for range 200 {
+			id := NewID()
+			if prev != "" {
+				assert.Greater(t, id, prev)
+			}
+			prev = id
+		}
+	})
 }

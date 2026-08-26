@@ -238,36 +238,36 @@ func TestChatTemplateValues(t *testing.T) {
 	})
 }
 
-func TestQwenChatTemplateMergesConfiguredKwargs(t *testing.T) {
+func TestQwenChatTemplateConfiguredKwargs(t *testing.T) {
 	t.Parallel()
 
-	caps := Capabilities{Reasoning: true, Thinking: ThinkingQwenChatTemplate,
-		ChatTemplateKwargs: map[string]json.RawMessage{
-			"extra": json.RawMessage(`true`),
-		}}
-	m := thinkingModel(caps)
+	t.Run("merges_configured_kwargs", func(t *testing.T) {
+		caps := Capabilities{Reasoning: true, Thinking: ThinkingQwenChatTemplate,
+			ChatTemplateKwargs: map[string]json.RawMessage{
+				"extra": json.RawMessage(`true`),
+			}}
+		m := thinkingModel(caps)
 
-	on := reasoningFragment(encodeThinking(t, m, LevelHigh))
-	off := reasoningFragment(encodeThinking(t, m, LevelOff))
-	assert.JSONEq(t,
-		`{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true,"extra":true}}`, on)
-	assert.JSONEq(t,
-		`{"chat_template_kwargs":{"enable_thinking":false,"preserve_thinking":true,"extra":true}}`, off)
-}
+		on := reasoningFragment(encodeThinking(t, m, LevelHigh))
+		off := reasoningFragment(encodeThinking(t, m, LevelOff))
+		assert.JSONEq(t,
+			`{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true,"extra":true}}`, on)
+		assert.JSONEq(t,
+			`{"chat_template_kwargs":{"enable_thinking":false,"preserve_thinking":true,"extra":true}}`, off)
+	})
 
-func TestQwenChatTemplateCoreKeysWinOverConfigured(t *testing.T) {
-	t.Parallel()
+	t.Run("core_keys_win_over_configured", func(t *testing.T) {
+		// a configured enable_thinking must not override the resolved level toggle
+		caps := Capabilities{Reasoning: true, Thinking: ThinkingQwenChatTemplate,
+			ChatTemplateKwargs: map[string]json.RawMessage{
+				"enable_thinking": json.RawMessage(`false`),
+			}}
+		m := thinkingModel(caps)
 
-	// a configured enable_thinking must not override the resolved level toggle
-	caps := Capabilities{Reasoning: true, Thinking: ThinkingQwenChatTemplate,
-		ChatTemplateKwargs: map[string]json.RawMessage{
-			"enable_thinking": json.RawMessage(`false`),
-		}}
-	m := thinkingModel(caps)
-
-	on := reasoningFragment(encodeThinking(t, m, LevelHigh))
-	assert.JSONEq(t,
-		`{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true}}`, on)
+		on := reasoningFragment(encodeThinking(t, m, LevelHigh))
+		assert.JSONEq(t,
+			`{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true}}`, on)
+	})
 }
 
 func TestThinkingTokenBudget(t *testing.T) {

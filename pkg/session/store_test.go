@@ -27,45 +27,79 @@ func TestStoreDirDeterministic(t *testing.T) {
 	assert.NotEqual(t, d1, other)
 }
 
-// TestStoreListLatestFind creates sessions at distinct timestamps and checks
-// listing order plus id lookup. It mutates the package clock so it is sequential.
-func TestStoreListLatestFind(t *testing.T) {
-	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-	ws := t.TempDir()
-	t.Cleanup(setClock(time.UnixMilli(1_700_000_000).UTC()))
+func TestStoreList(t *testing.T) {
+	// the latest/find case pins the package clock via setClock, so this is sequential.
 
-	// far-apart timestamps so the ids share no prefix and newest-first is clear
-	setClock(time.UnixMilli(1_700_000_001).UTC())
-	w1, err := s.Create(ws, SessionData{Version: sessionVersion, Model: "a/b"})
-	require.NoError(t, err)
-	aID := w1.Head()
-	_, aerr := w1.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello world")})
-	require.NoError(t, aerr)
-	require.NoError(t, w1.Close())
+	t.Run("latest_find", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		t.Cleanup(setClock(time.UnixMilli(1_700_000_000).UTC()))
 
-	setClock(time.UnixMilli(9_999_000_002).UTC())
-	w2, err := s.Create(ws, SessionData{Version: sessionVersion, Model: "c/d"})
-	require.NoError(t, err)
-	bID := w2.Head()
-	_, berr := w2.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "second")})
-	require.NoError(t, berr)
-	require.NoError(t, w2.Close())
+		// far-apart timestamps so the ids share no prefix and newest-first is clear
+		setClock(time.UnixMilli(1_700_000_001).UTC())
+		w1, err := s.Create(ws, SessionData{Version: sessionVersion, Model: "a/b"})
+		require.NoError(t, err)
+		aID := w1.Head()
+		_, aerr := w1.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello world")})
+		require.NoError(t, aerr)
+		require.NoError(t, w1.Close())
 
-	list, lerr := s.List(ws)
-	require.NoError(t, lerr)
-	assert.Len(t, list, 2)
-	assert.Equal(t, bID, list[0].ID) // newest first
-	assert.Equal(t, "c/d", list[0].Model)
-	assert.Equal(t, aID, list[1].ID)
-	assert.Positive(t, list[0].Messages)
+		setClock(time.UnixMilli(9_999_000_002).UTC())
+		w2, err := s.Create(ws, SessionData{Version: sessionVersion, Model: "c/d"})
+		require.NoError(t, err)
+		bID := w2.Head()
+		_, berr := w2.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "second")})
+		require.NoError(t, berr)
+		require.NoError(t, w2.Close())
 
-	latest, lerr := s.Latest(ws)
-	require.NoError(t, lerr)
-	assert.Equal(t, bID, latest.ID)
+		list, lerr := s.List(ws)
+		require.NoError(t, lerr)
+		assert.Len(t, list, 2)
+		assert.Equal(t, bID, list[0].ID) // newest first
+		assert.Equal(t, "c/d", list[0].Model)
+		assert.Equal(t, aID, list[1].ID)
+		assert.Positive(t, list[0].Messages)
 
-	found, ferr := s.Find(ws, aID)
-	require.NoError(t, ferr)
-	assert.Equal(t, aID, found.ID)
+		latest, lerr := s.Latest(ws)
+		require.NoError(t, lerr)
+		assert.Equal(t, bID, latest.ID)
+
+		found, ferr := s.Find(ws, aID)
+		require.NoError(t, ferr)
+		assert.Equal(t, aID, found.ID)
+	})
+
+	// side files (output-*.txt, the editor-history line file) never surface as phantom sessions.
+	t.Run("skips_non_jsonl_files", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		txID := w.Head()
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+		require.NoError(t, aerr)
+		require.NoError(t, w.Close())
+
+		dir, derr := s.Dir(ws)
+		require.NoError(t, derr)
+		// side files beside the transcript must be ignored by List.
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "output-abc.txt"), []byte("tool out"), 0o600))
+		hh, hherr := NewEditorHistory(s, ws, "")
+		require.NoError(t, hherr)
+		hh.Append("/model")
+
+		list, lerr := s.List(ws)
+		require.NoError(t, lerr)
+		assert.Len(t, list, 1)
+		assert.Equal(t, txID, list[0].ID)
+	})
+
+	t.Run("empty_when_missing_dir", func(t *testing.T) {
+		s := StoreAt(filepath.Join(os.TempDir(), "no-such-store-"+t.Name()))
+		list, err := s.List("anywhere")
+		require.NoError(t, err)
+		assert.Empty(t, list)
+	})
 }
 
 func TestStoreFindAmbiguousAndMissing(t *testing.T) {
@@ -100,43 +134,6 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	found, ferr := s.Find(ws, idB)
 	require.NoError(t, ferr)
 	assert.Equal(t, idB, found.ID)
-}
-
-// TestStoreListSkipsNonJsonlFiles verifies side files (output-*.txt, the
-// editor-history line file) never surface as phantom sessions in the picker.
-func TestStoreListSkipsNonJsonlFiles(t *testing.T) {
-	t.Parallel()
-
-	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-	ws := t.TempDir()
-	w, err := s.Create(ws, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
-	txID := w.Head()
-	_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello")})
-	require.NoError(t, aerr)
-	require.NoError(t, w.Close())
-
-	dir, derr := s.Dir(ws)
-	require.NoError(t, derr)
-	// side files beside the transcript must be ignored by List.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "output-abc.txt"), []byte("tool out"), 0o600))
-	hh, hherr := NewEditorHistory(s, ws, "")
-	require.NoError(t, hherr)
-	hh.Append("/model")
-
-	list, lerr := s.List(ws)
-	require.NoError(t, lerr)
-	assert.Len(t, list, 1)
-	assert.Equal(t, txID, list[0].ID)
-}
-
-func TestStoreListEmptyWhenMissingDir(t *testing.T) {
-	t.Parallel()
-
-	s := StoreAt(filepath.Join(os.TempDir(), "no-such-store-"+t.Name()))
-	list, err := s.List("anywhere")
-	require.NoError(t, err)
-	assert.Empty(t, list)
 }
 
 // TestStoreRemoveDeletesOneSession verifies Remove drops the transcript and its
@@ -177,63 +174,61 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	assert.False(t, ok) // cursor for the removed file is gone
 }
 
-// TestReadInfoCountsActiveBranchOnly regresses the fork over-count: after a
-// branch, readInfo must describe only the persisted head's chain, so resume
-// metadata matches what resuming would actually rebuild.
-func TestReadInfoCountsActiveBranchOnly(t *testing.T) {
+func TestReadInfo(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	p := filepath.Join(dir, "2026-01-01T00-00-00Z-abcd.jsonl")
-	w, err := Create(p, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
+	// regresses the fork over-count: after a branch, readInfo must describe only
+	// the persisted head's chain, so resume metadata matches what resuming would rebuild.
+	t.Run("counts_active_branch_only", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "2026-01-01T00-00-00Z-abcd.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
 
-	e1, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "first on main")})
-	require.NoError(t, aerr)
-	e2, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "reply one")})
-	require.NoError(t, aerr)
+		e1, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "first on main")})
+		require.NoError(t, aerr)
+		e2, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "reply one")})
+		require.NoError(t, aerr)
 
-	w.SetHead(e1.ID) // fork from the first message
-	_, ferr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
-	require.NoError(t, ferr)
-	_, ferr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "fork reply")})
-	require.NoError(t, ferr)
-	w.SetHead(e2.ID) // head the resume picker would actually use
-	require.NoError(t, w.Close())
+		w.SetHead(e1.ID) // fork from the first message
+		_, ferr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
+		require.NoError(t, ferr)
+		_, ferr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "fork reply")})
+		require.NoError(t, ferr)
+		w.SetHead(e2.ID) // head the resume picker would actually use
+		require.NoError(t, w.Close())
 
-	info, ok := readInfo(p)
-	require.True(t, ok)
+		info, ok := readInfo(p)
+		require.True(t, ok)
 
-	assert.Equal(t, 2, info.Messages) // fork messages are not counted
-	assert.Contains(t, info.First, "first on main")
-}
+		assert.Equal(t, 2, info.Messages) // fork messages are not counted
+		assert.Contains(t, info.First, "first on main")
+	})
 
-// TestReadInfoBranchPointsAtFork verifies metadata reflects a head that sits on
-// the abandoned fork rather than the file tail.
-func TestReadInfoBranchPointsAtFork(t *testing.T) {
-	t.Parallel()
+	// metadata reflects a head that sits on the abandoned fork rather than the file tail.
+	t.Run("branch_points_at_fork", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "s.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
 
-	dir := t.TempDir()
-	p := filepath.Join(dir, "s.jsonl")
-	w, err := Create(p, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
+		e1, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "main prompt")})
+		require.NoError(t, aerr)
+		_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "main reply")})
+		require.NoError(t, aerr)
 
-	e1, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "main prompt")})
-	require.NoError(t, aerr)
-	_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "main reply")})
-	require.NoError(t, aerr)
+		w.SetHead(e1.ID) // rewind onto the fork
+		forkA, ferr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
+		require.NoError(t, ferr)
+		_, ferr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "fork reply")})
+		require.NoError(t, ferr)
+		w.SetHead(forkA.ID) // active head is the fork start
+		require.NoError(t, w.Close())
 
-	w.SetHead(e1.ID) // rewind onto the fork
-	forkA, ferr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "fork prompt")})
-	require.NoError(t, ferr)
-	_, ferr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleAssistant, "fork reply")})
-	require.NoError(t, ferr)
-	w.SetHead(forkA.ID) // active head is the fork start
-	require.NoError(t, w.Close())
+		info, ok := readInfo(p)
+		require.True(t, ok)
 
-	info, ok := readInfo(p)
-	require.True(t, ok)
-
-	assert.Equal(t, 2, info.Messages) // root,e1,forkA: e1 + fork prompt
-	assert.Contains(t, info.First, "main prompt")
+		assert.Equal(t, 2, info.Messages) // root,e1,forkA: e1 + fork prompt
+		assert.Contains(t, info.First, "main prompt")
+	})
 }

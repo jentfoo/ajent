@@ -10,46 +10,45 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestShadeRowPadsToFullWidth verifies an activity line is elided and padded
-// inside its background shade to one column short of the live width: the fill
-// measures the sanitized string it draws, and the spare column absorbs a
-// one-column width disagreement instead of wrapping the band.
-func TestShadeRowPadsToFullWidth(t *testing.T) {
+// TestShadeRow covers the padding, sanitization and no-op fallback of shadeRow.
+func TestShadeRow(t *testing.T) {
 	t.Parallel()
-	th := NewTheme(Color256, DefaultPalette())
 
-	const w = 41
-	text := "sub-2  grep pattern" // 21 columns; the rest is trailing shade blanks
-	short := shadeRow(th.Activity, text, w)
-	assert.Equal(t, th.Activity.Open()+text+strings.Repeat(" ", w-1-displayWidth(text))+sgrReset,
-		short)
-	assert.Zero(t, displayWidth(short)-(w-1))
+	// an activity line is elided and padded inside its background shade to one column
+	// short of the live width: the fill measures the sanitized string it draws, and
+	// the spare column absorbs a one-column width disagreement instead of wrapping the band.
+	t.Run("pads_to_full_width", func(t *testing.T) {
+		th := NewTheme(Color256, DefaultPalette())
 
-	// over-long text elides yet still fills the target exactly
-	trunc := shadeRow(th.Activity, strings.Repeat("x", 100), 20)
-	assert.Zero(t, displayWidth(trunc)-19)
-}
+		const w = 41
+		text := "sub-2  grep pattern" // 21 columns; the rest is trailing shade blanks
+		short := shadeRow(th.Activity, text, w)
+		assert.Equal(t, th.Activity.Open()+text+strings.Repeat(" ", w-1-displayWidth(text))+sgrReset,
+			short)
+		assert.Zero(t, displayWidth(short)-(w-1))
 
-// TestShadeRowSanitizesCallerText pins that shadeRow measures the string it
-// emits: a tab costs one column when drawn, so it must cost one when the fill
-// is computed, and the emitted width must equal the width of its own
-// sanitized form.
-func TestShadeRowSanitizesCallerText(t *testing.T) {
-	t.Parallel()
-	th := NewTheme(Color256, DefaultPalette())
+		// over-long text elides yet still fills the target exactly
+		trunc := shadeRow(th.Activity, strings.Repeat("x", 100), 20)
+		assert.Zero(t, displayWidth(trunc)-19)
+	})
 
-	const w = 24
-	emitted := shadeRow(th.Activity, "a\t"+strings.Repeat("x", 15)+"\x1b[2B", w)
-	assert.Zero(t, displayWidth(emitted)-(w-1))
-	assert.Equal(t, displayWidth(sanitizeRow(emitted)), displayWidth(emitted))
-	assert.NotContains(t, emitted, "\t")
-	assert.NotContains(t, emitted, "\x1b[2B")
-}
+	// shadeRow measures the string it emits: a tab costs one column when drawn, so it
+	// must cost one when the fill is computed, and the emitted width equals its own sanitized form.
+	t.Run("sanitizes_caller_text", func(t *testing.T) {
+		th := NewTheme(Color256, DefaultPalette())
 
-// TestShadeRowNoColorIsPlain verifies a no-op theme falls back to an elided row.
-func TestShadeRowNoColorIsPlain(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "sub-2  work", shadeRow(NewTheme(ColorNone, DefaultPalette()).Activity, "sub-2  work", 40))
+		const w = 24
+		emitted := shadeRow(th.Activity, "a\t"+strings.Repeat("x", 15)+"\x1b[2B", w)
+		assert.Zero(t, displayWidth(emitted)-(w-1))
+		assert.Equal(t, displayWidth(sanitizeRow(emitted)), displayWidth(emitted))
+		assert.NotContains(t, emitted, "\t")
+		assert.NotContains(t, emitted, "\x1b[2B")
+	})
+
+	// a no-op theme falls back to an elided row.
+	t.Run("no_color_is_plain", func(t *testing.T) {
+		assert.Equal(t, "sub-2  work", shadeRow(NewTheme(ColorNone, DefaultPalette()).Activity, "sub-2  work", 40))
+	})
 }
 
 func TestUIActivity(t *testing.T) {

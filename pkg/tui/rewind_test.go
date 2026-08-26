@@ -50,140 +50,138 @@ func feedEscape(t *testing.T, w io.Writer) {
 	require.NoError(t, err)
 }
 
-func TestDoubleEscRewindsWhileIdle(t *testing.T) {
+func TestDoubleEsc(t *testing.T) {
 	t.Parallel()
 
-	u, pw := rewindSetup(t)
-	rewound := make(chan struct{})
-	u.setOnRewind(func() { close(rewound) })
+	// two lone Esc presses while idle and within the window invoke OnRewind.
+	t.Run("rewinds_while_idle", func(t *testing.T) {
+		u, pw := rewindSetup(t)
+		rewound := make(chan struct{})
+		u.setOnRewind(func() { close(rewound) })
 
-	feedEscape(t, pw)
-	// wait for the first lone Esc to be decoded and arm the rewind gesture
-	require.Eventually(t, func() bool { return u.isEscPending() }, time.Second, testPoll)
-	select {
-	case c := <-u.Controls():
-		t.Fatalf("first idle Esc must not emit a control immediately, got %v", c)
-	default:
-	}
+		feedEscape(t, pw)
+		// wait for the first lone Esc to be decoded and arm the rewind gesture
+		require.Eventually(t, func() bool { return u.isEscPending() }, time.Second, testPoll)
+		select {
+		case c := <-u.Controls():
+			t.Fatalf("first idle Esc must not emit a control immediately, got %v", c)
+		default:
+		}
 
-	// escPending above already proves the first lone Esc was fully decoded and
-	// armed the gesture; a fresh press now lands as an independent keyEscape.
-	feedEscape(t, pw) // second Esc -> rewind
-	select {
-	case <-rewound:
-	case <-time.After(time.Second):
-		t.Fatal("double-Esc did not invoke OnRewind")
-	}
-}
+		// escPending above already proves the first lone Esc was fully decoded and
+		// armed the gesture; a fresh press now lands as an independent keyEscape.
+		feedEscape(t, pw) // second Esc -> rewind
+		select {
+		case <-rewound:
+		case <-time.After(time.Second):
+			t.Fatal("double-Esc did not invoke OnRewind")
+		}
+	})
 
-func TestSingleEscEmitsControlAfterWindowElapses(t *testing.T) {
-	t.Parallel()
+	// after the window elapses a lone Esc emits its deferred single control.
+	t.Run("single_esc_emits_control_after_window_elapses", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, pw := io.Pipe()
+		u := newTestUI(t, v, pr)
 
-	v := newVT(40, 10)
-	pr, pw := io.Pipe()
-	u := newTestUI(t, v, pr)
+		// short window so the lone-Esc flush fires quickly after one press. A callback
+		// is wired (so rewind would be possible) but only one Esc arrives, and the
+		// deferred single control must still emit once the window elapses.
+		rewound := make(chan struct{})
+		u.mu.Lock()
+		u.idle = true
+		u.doubleEscWindow = 30 * time.Millisecond
+		u.onRewind = func() { close(rewound) }
+		u.mu.Unlock()
 
-	// short window so the lone-Esc flush fires quickly after one press. A callback
-	// is wired (so rewind would be possible) but only one Esc arrives, and the
-	// deferred single control must still emit once the window elapses.
-	rewound := make(chan struct{})
-	u.mu.Lock()
-	u.idle = true
-	u.doubleEscWindow = 30 * time.Millisecond
-	u.onRewind = func() { close(rewound) }
-	u.mu.Unlock()
+		feedEscape(t, pw)
+		assert.Equal(t, ControlEscape, <-u.Controls())
+		select {
+		case <-rewound:
+			t.Fatal("a single Esc must not rewind")
+		default:
+		}
+	})
 
-	feedEscape(t, pw)
-	assert.Equal(t, ControlEscape, <-u.Controls())
-	select {
-	case <-rewound:
-		t.Fatal("a single Esc must not rewind")
-	default:
-	}
-}
+	// mid-turn (idle false) a lone Esc keeps its interrupt role immediately.
+	t.Run("single_esc_not_idle_emits_immediately", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, pw := io.Pipe()
+		u := newTestUI(t, v, pr)
 
-func TestSingleEscNotIdleEmitsImmediately(t *testing.T) {
-	t.Parallel()
+		// mid-turn: idle is false, so a lone Esc keeps its interrupt role
+		feedEscape(t, pw)
+		assert.Equal(t, ControlEscape, <-u.Controls())
+	})
 
-	v := newVT(40, 10)
-	pr, pw := io.Pipe()
-	u := newTestUI(t, v, pr)
+	// with no OnRewind wired, an idle lone Esc still emits a control immediately.
+	t.Run("no_callback_keeps_plain_single_esc", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, pw := io.Pipe()
+		u := newTestUI(t, v, pr)
 
-	// mid-turn: idle is false, so a lone Esc keeps its interrupt role
-	feedEscape(t, pw)
-	assert.Equal(t, ControlEscape, <-u.Controls())
-}
+		// idle but no OnRewind wired: Esc still emits a control immediately
+		u.mu.Lock()
+		u.idle = true
+		u.onRewind = nil
+		u.mu.Unlock()
 
-func TestNoCallbackKeepsPlainSingleEsc(t *testing.T) {
-	t.Parallel()
+		feedEscape(t, pw)
+		assert.Equal(t, ControlEscape, <-u.Controls())
+	})
 
-	v := newVT(40, 10)
-	pr, pw := io.Pipe()
-	u := newTestUI(t, v, pr)
+	// Esc with a non-empty buffer clears it rather than rewinding.
+	t.Run("esc_with_text_clears_buffer_not_rewinds", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, pw := io.Pipe()
+		u := newTestUI(t, v, pr)
 
-	// idle but no OnRewind wired: Esc still emits a control immediately
-	u.mu.Lock()
-	u.idle = true
-	u.onRewind = nil
-	u.mu.Unlock()
+		rewound := make(chan struct{})
+		u.mu.Lock()
+		u.idle = true
+		u.doubleEscWindow = time.Hour
+		u.onRewind = func() { close(rewound) }
+		u.mu.Unlock()
 
-	feedEscape(t, pw)
-	assert.Equal(t, ControlEscape, <-u.Controls())
-}
+		_, err := io.WriteString(pw, "typed")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return u.editorValue() == "typed" },
+			time.Second, testPoll)
 
-func TestEscWithTextClearsBufferNotRewinds(t *testing.T) {
-	t.Parallel()
+		feedEscape(t, pw) // clears the buffer (after escTimeout decodes it)
+		require.Eventually(t, func() bool { return u.editorValue() == "" },
+			time.Second, testPoll)
 
-	v := newVT(40, 10)
-	pr, pw := io.Pipe()
-	u := newTestUI(t, v, pr)
+		select {
+		case <-rewound:
+			t.Fatal("Esc with a non-empty buffer must clear it, not rewind")
+		default:
+		}
+	})
 
-	rewound := make(chan struct{})
-	u.mu.Lock()
-	u.idle = true
-	u.doubleEscWindow = time.Hour
-	u.onRewind = func() { close(rewound) }
-	u.mu.Unlock()
+	// starting a turn before the second Esc cancels the pending gesture.
+	t.Run("set_idle_false_cancels_pending_rewind", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, pw := io.Pipe()
+		u := newTestUI(t, v, pr)
 
-	_, err := io.WriteString(pw, "typed")
-	require.NoError(t, err)
-	require.Eventually(t, func() bool { return u.editorValue() == "typed" },
-		time.Second, testPoll)
+		rewound := make(chan struct{})
+		u.mu.Lock()
+		u.idle = true
+		u.doubleEscWindow = time.Hour
+		u.onRewind = func() { close(rewound) }
+		u.mu.Unlock()
 
-	feedEscape(t, pw) // clears the buffer (after escTimeout decodes it)
-	require.Eventually(t, func() bool { return u.editorValue() == "" },
-		time.Second, testPoll)
+		feedEscape(t, pw)
+		// a turn starts before the second Esc: the pending gesture is cancelled
+		require.Eventually(t, func() bool { return u.isEscPending() }, time.Second, testPoll)
 
-	select {
-	case <-rewound:
-		t.Fatal("Esc with a non-empty buffer must clear it, not rewind")
-	default:
-	}
-}
+		u.SetIdle(false)
+		assert.False(t, u.isEscPending())
 
-func TestSetIdleFalseCancelsPendingRewind(t *testing.T) {
-	t.Parallel()
-
-	v := newVT(40, 10)
-	pr, pw := io.Pipe()
-	u := newTestUI(t, v, pr)
-
-	rewound := make(chan struct{})
-	u.mu.Lock()
-	u.idle = true
-	u.doubleEscWindow = time.Hour
-	u.onRewind = func() { close(rewound) }
-	u.mu.Unlock()
-
-	feedEscape(t, pw)
-	// a turn starts before the second Esc: the pending gesture is cancelled
-	require.Eventually(t, func() bool { return u.isEscPending() }, time.Second, testPoll)
-
-	u.SetIdle(false)
-	assert.False(t, u.isEscPending())
-
-	feedEscape(t, pw) // now mid-turn: plain interrupt control
-	assert.Equal(t, ControlEscape, <-u.Controls())
+		feedEscape(t, pw) // now mid-turn: plain interrupt control
+		assert.Equal(t, ControlEscape, <-u.Controls())
+	})
 }
 
 // isEscPending reads the rewind arm state under lock.

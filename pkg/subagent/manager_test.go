@@ -15,83 +15,173 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestJobCompletes(t *testing.T) {
+func TestJob(t *testing.T) {
 	t.Parallel()
-	p, _ := scripted([]llm.ScriptedTurn{
-		{Events: summaryTurn("found it at pkg/a.go:12", llm.Usage{Input: 100, Output: 20})},
+
+	t.Run("completes", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: summaryTurn("found it at pkg/a.go:12", llm.Usage{Input: 100, Output: 20})},
+		})
+		m := New(Options{
+			Provider: p,
+			Model:    func() llm.Model { return llm.Model{ID: "child", ContextWindow: 8000} },
+			Tools: &fakeSource{tools: []agent.Tool{
+				&fakeTool{name: "read"}, roTool("grep")},
+			},
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("find the bug", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusDone, j.Status)
+		assert.Contains(t, j.Summary, "pkg/a.go:12")
 	})
-	m := New(Options{
-		Provider: p,
-		Model:    func() llm.Model { return llm.Model{ID: "child", ContextWindow: 8000} },
-		Tools: &fakeSource{tools: []agent.Tool{
-			&fakeTool{name: "read"}, roTool("grep")},
-		},
+
+	t.Run("errors", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{{Err: errors.New("provider exploded")}})
+		m := New(Options{Provider: p})
+		t.Cleanup(m.Close)
+
+		id := m.Start("boom", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusError, j.Status)
+		require.Error(t, j.Err)
 	})
-	t.Cleanup(m.Close)
 
-	id := m.Start("find the bug", "")
-	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusDone, j.Status)
-	assert.Contains(t, j.Summary, "pkg/a.go:12")
-}
+	t.Run("aborted_by_stop", func(t *testing.T) {
+		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
+		t.Cleanup(m.Close)
 
-// TestCompletionNotifiesAndSteersWithoutPoll verifies a finished job reaches the
-// user and the model when nobody is polling for it.
-func TestCompletionNotifiesAndSteersWithoutPoll(t *testing.T) {
-	t.Parallel()
-	c := newCapture()
-	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
-	m := New(Options{
-		Provider: p,
-		Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
-		Deliver: func(in agent.Input) bool {
-			c.mu.Lock()
-			c.delivers = append(c.delivers, in)
-			c.mu.Unlock()
-			return true // parent running; the steer lands
-		},
+		id := m.Start("long", "")
+		require.NoError(t, m.Stop(id))
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusAborted, j.Status)
 	})
-	t.Cleanup(m.Close)
-
-	id := m.Start("x", "")
-	require.Eventually(t, func() bool {
-		s, ok := jobStatus(m, id)
-		return ok && s == StatusDone
-	}, time.Second, 5*time.Millisecond)
-
-	assert.Equal(t, 1, c.noticeCount())
-	// a steer naming the completed id was offered to the running parent
-	txts := c.deliveredTexts()
-	require.NotEmpty(t, txts)
-	assert.Contains(t, txts[len(txts)-1], id)
 }
 
-func TestJobErrors(t *testing.T) {
+func TestCompletionNotification(t *testing.T) {
 	t.Parallel()
-	p, _ := scripted([]llm.ScriptedTurn{{Err: errors.New("provider exploded")}})
-	m := New(Options{Provider: p})
-	t.Cleanup(m.Close)
 
-	id := m.Start("boom", "")
-	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusError, j.Status)
-	require.Error(t, j.Err)
+	// a finished job reaches the user and the model when nobody is polling for it.
+	t.Run("notifies_and_steers_without_poll", func(t *testing.T) {
+		c := newCapture()
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
+		m := New(Options{
+			Provider: p,
+			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
+			Deliver: func(in agent.Input) bool {
+				c.mu.Lock()
+				c.delivers = append(c.delivers, in)
+				c.mu.Unlock()
+				return true // parent running; the steer lands
+			},
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("x", "")
+		require.Eventually(t, func() bool {
+			s, ok := jobStatus(m, id)
+			return ok && s == StatusDone
+		}, time.Second, 5*time.Millisecond)
+
+		assert.Equal(t, 1, c.noticeCount())
+		// a steer naming the completed id was offered to the running parent
+		txts := c.deliveredTexts()
+		require.NotEmpty(t, txts)
+		assert.Contains(t, txts[len(txts)-1], id)
+	})
+
+	t.Run("suppressed_when_polling", func(t *testing.T) {
+		c := newCapture()
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("summary", llm.Usage{})}})
+		m := New(Options{
+			Provider: p,
+			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("x", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusDone, j.Status)
+		// a poll held the wait for this job and consumed it, so no completion notice was sent
+		assert.Zero(t, c.noticeCount())
+	})
+
+	t.Run("deliver_idle_leaves_pending_and_flush_reoffers", func(t *testing.T) {
+		c := newCapture()
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s1", llm.Usage{})}})
+		m := New(Options{
+			Provider: p,
+			Deliver: func(in agent.Input) bool { // parent idle; ids stay pending
+				c.mu.Lock()
+				c.delivers = append(c.delivers, in)
+				c.mu.Unlock()
+				return false
+			},
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("x", "")
+		require.Eventually(t, func() bool {
+			s, ok := jobStatus(m, id)
+			return ok && s == StatusDone
+		}, time.Second, 5*time.Millisecond)
+		// the completion was offered once and left pending because the parent is idle
+		assert.Len(t, c.deliveredTexts(), 1)
+
+		m.Flush() // a turn-start observer re-offers pending completions
+		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 2 }, time.Second, 5*time.Millisecond)
+	})
+
+	t.Run("delivered_clears_only_named_ids", func(t *testing.T) {
+		var mu sync.Mutex // offer runs from both the spawn completion and this test
+		var delivered []agent.Input
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("one", llm.Usage{})}})
+		m := New(Options{
+			Provider: p,
+			Deliver: func(in agent.Input) bool {
+				mu.Lock()
+				delivered = append(delivered, in)
+				mu.Unlock()
+				return true
+			},
+		})
+		t.Cleanup(m.Close)
+
+		id1 := m.Start("a", "")
+		m.mu.Lock()
+		m.pending = []string{"sub-9", id1} // a second completion already queued but undelivered
+		m.mu.Unlock()
+
+		m.offer([]string{id1}) // delivers naming only id1; its confirm clears just that id
+		mu.Lock()
+		require.Len(t, delivered, 1)
+		in := delivered[0]
+		mu.Unlock()
+		in.Delivered() // simulate the steer landing in context
+
+		assert.Equal(t, []string{"sub-9"}, m.pending, "only the named id is cleared")
+	})
+
+	t.Run("idle_completion_never_starts_turn", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
+		m := New(Options{
+			Provider: p,
+			Deliver:  func(in agent.Input) bool { return false }, // parent idle
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("x", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusDone, j.Status)
+		m.Flush() // still no deliverer for an idle agent; nothing must start a turn
+	})
 }
-
-func TestJobAbortedByStop(t *testing.T) {
-	t.Parallel()
-	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
-	t.Cleanup(m.Close)
-
-	id := m.Start("long", "")
-	require.NoError(t, m.Stop(id))
-	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusAborted, j.Status)
-}
-
 func TestPollTimeoutThenComplete(t *testing.T) {
 	t.Parallel()
 	d := &delayedProvider{turn: summaryTurn("slow but done", llm.Usage{}), release: make(chan struct{})}
@@ -147,98 +237,6 @@ func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 	assert.LessOrEqual(t, g.peak.Load(), int32(max), "never more than max run at once")
 }
 
-func TestNotificationSuppressedWhenPolling(t *testing.T) {
-	t.Parallel()
-	c := newCapture()
-	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("summary", llm.Usage{})}})
-	m := New(Options{
-		Provider: p,
-		Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
-	})
-	t.Cleanup(m.Close)
-
-	id := m.Start("x", "")
-	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusDone, j.Status)
-	// a poll held the wait for this job and consumed it, so no completion notice was sent
-	assert.Zero(t, c.noticeCount())
-}
-
-func TestDeliverIdleLeavesPendingAndFlushReoffers(t *testing.T) {
-	t.Parallel()
-	c := newCapture()
-	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s1", llm.Usage{})}})
-	m := New(Options{
-		Provider: p,
-		Deliver: func(in agent.Input) bool { // parent idle; ids stay pending
-			c.mu.Lock()
-			c.delivers = append(c.delivers, in)
-			c.mu.Unlock()
-			return false
-		},
-	})
-	t.Cleanup(m.Close)
-
-	id := m.Start("x", "")
-	require.Eventually(t, func() bool {
-		s, ok := jobStatus(m, id)
-		return ok && s == StatusDone
-	}, time.Second, 5*time.Millisecond)
-	// the completion was offered once and left pending because the parent is idle
-	assert.Len(t, c.deliveredTexts(), 1)
-
-	m.Flush() // a turn-start observer re-offers pending completions
-	require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 2 }, time.Second, 5*time.Millisecond)
-}
-
-func TestDeliveredClearsOnlyNamedIds(t *testing.T) {
-	t.Parallel()
-	var mu sync.Mutex // offer runs from both the spawn completion and this test
-	var delivered []agent.Input
-	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("one", llm.Usage{})}})
-	m := New(Options{
-		Provider: p,
-		Deliver: func(in agent.Input) bool {
-			mu.Lock()
-			delivered = append(delivered, in)
-			mu.Unlock()
-			return true
-		},
-	})
-	t.Cleanup(m.Close)
-
-	id1 := m.Start("a", "")
-	m.mu.Lock()
-	m.pending = []string{"sub-9", id1} // a second completion already queued but undelivered
-	m.mu.Unlock()
-
-	m.offer([]string{id1}) // delivers naming only id1; its confirm clears just that id
-	mu.Lock()
-	require.Len(t, delivered, 1)
-	in := delivered[0]
-	mu.Unlock()
-	in.Delivered() // simulate the steer landing in context
-
-	assert.Equal(t, []string{"sub-9"}, m.pending, "only the named id is cleared")
-}
-
-func TestIdleCompletionNeverStartsTurn(t *testing.T) {
-	t.Parallel()
-	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
-	m := New(Options{
-		Provider: p,
-		Deliver:  func(in agent.Input) bool { return false }, // parent idle
-	})
-	t.Cleanup(m.Close)
-
-	id := m.Start("x", "")
-	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusDone, j.Status)
-	m.Flush() // still no deliverer for an idle agent; nothing must start a turn
-}
-
 func TestShutdownCancelsRunningJobs(t *testing.T) {
 	t.Parallel()
 	b := &blockingProvider{}
@@ -258,49 +256,50 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 	require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
 }
 
-// TestStartPublishesActivityRow verifies a job is visible above the prompt as
-// soon as it starts (even before its turn emits), and that every terminal path
-// clears the row.
-func TestStartPublishesActivityRow(t *testing.T) {
+// TestActivityRow covers how a job's row appears and is cleared.
+func TestActivityRow(t *testing.T) {
 	t.Parallel()
-	g := &gatedProvider{}
-	c := newCapture()
-	m := New(Options{
-		Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
-		Activity: c.recordRow,
+
+	// a job is visible above the prompt as soon as it starts (even before its turn
+	// emits), and every terminal path clears the row.
+	t.Run("start_publishes", func(t *testing.T) {
+		g := &gatedProvider{}
+		c := newCapture()
+		m := New(Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
+			Activity: c.recordRow,
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("one", "")
+		// the row appears immediately while the job is queued/running and pinned open.
+		assert.Equal(t, "sub-1  one", c.rowText(id))
+
+		g.releaseAll()
+		m.Poll(t.Context(), id)
+		require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
 	})
-	t.Cleanup(m.Close)
 
-	id := m.Start("one", "")
-	// the row appears immediately while the job is queued/running and pinned open.
-	assert.Equal(t, "sub-1  one", c.rowText(id))
+	// a job cancelled before acquiring its slot still clears the row Start published (no childSink ever ran).
+	t.Run("queued_cancelled_clears", func(t *testing.T) {
+		g := &blockingProvider{}
+		c := newCapture()
+		m := New(Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
+			Activity: c.recordRow,
+		})
+		t.Cleanup(m.Close)
 
-	g.releaseAll()
-	m.Poll(t.Context(), id)
-	require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
-}
+		m.Start("one", "")
+		m.Start("two", "") // queued behind the blocking first job
+		// both jobs show a row: sub-1 is running/pinned open, sub-2 waits on the slot.
+		assert.Equal(t, "sub-1  one", c.rowText("sub-1"))
+		assert.Equal(t, "sub-2  two", c.rowText("sub-2"))
 
-// TestQueuedCancelledClearsActivityRow verifies a job cancelled before acquiring
-// its slot still clears the row Start published (no childSink ever ran).
-func TestQueuedCancelledClearsActivityRow(t *testing.T) {
-	t.Parallel()
-	g := &blockingProvider{}
-	c := newCapture()
-	m := New(Options{
-		Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
-		Activity: c.recordRow,
+		// cancel the queued second job; its row must still be cleared even though it never ran.
+		require.NoError(t, m.Stop("sub-2"))
+		require.Eventually(t, func() bool { return c.rowText("sub-2") == "" }, time.Second, 5*time.Millisecond)
 	})
-	t.Cleanup(m.Close)
-
-	m.Start("one", "")
-	m.Start("two", "") // queued behind the blocking first job
-	// both jobs show a row: sub-1 is running/pinned open, sub-2 waits on the slot.
-	assert.Equal(t, "sub-1  one", c.rowText("sub-1"))
-	assert.Equal(t, "sub-2  two", c.rowText("sub-2"))
-
-	// cancel the queued second job; its row must still be cleared even though it never ran.
-	require.NoError(t, m.Stop("sub-2"))
-	require.Eventually(t, func() bool { return c.rowText("sub-2") == "" }, time.Second, 5*time.Millisecond)
 }
 
 func TestStatusSegmentAndList(t *testing.T) {

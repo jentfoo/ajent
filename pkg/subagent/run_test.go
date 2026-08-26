@@ -9,42 +9,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestEmptySummaryNudgesThenSummarises verifies a thinking-only final message is
-// followed by one nudge and then the real summary.
-func TestEmptySummaryNudgesThenSummarises(t *testing.T) {
+// TestEmptySummary covers the nudge-then-summarise retry for thinking-only replies.
+func TestEmptySummary(t *testing.T) {
 	t.Parallel()
-	p, _ := scripted([]llm.ScriptedTurn{
-		{Events: thinkingOnlyTurn()}, // no text; triggers a nudge
-		{Events: summaryTurn("the answer is 42", llm.Usage{})},
+
+	// a thinking-only final message is followed by one nudge and then the real summary.
+	t.Run("nudges_then_summarises", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: thinkingOnlyTurn()}, // no text; triggers a nudge
+			{Events: summaryTurn("the answer is 42", llm.Usage{})},
+		})
+		m := New(Options{Provider: p})
+		t.Cleanup(m.Close)
+
+		id := m.Start("q", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusDone, j.Status)
+		assert.Contains(t, j.Summary, "the answer is 42")
 	})
-	m := New(Options{Provider: p})
-	t.Cleanup(m.Close)
 
-	id := m.Start("q", "")
-	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusDone, j.Status)
-	assert.Contains(t, j.Summary, "the answer is 42")
-}
+	// the bounded retry gives up and returns a placeholder rather than looping.
+	t.Run("after_two_nudges_is_placeholder", func(t *testing.T) {
+		// three thinking-only turns: initial + two nudges, then nothing useful
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: thinkingOnlyTurn()},
+			{Events: thinkingOnlyTurn()},
+			{Events: thinkingOnlyTurn()},
+		})
+		m := New(Options{Provider: p})
+		t.Cleanup(m.Close)
 
-// TestEmptySummaryAfterTwoNudgesIsPlaceholder verifies the bounded retry gives up
-// and returns a placeholder rather than looping.
-func TestEmptySummaryAfterTwoNudgesIsPlaceholder(t *testing.T) {
-	t.Parallel()
-	// three thinking-only turns: initial + two nudges, then nothing useful
-	p, _ := scripted([]llm.ScriptedTurn{
-		{Events: thinkingOnlyTurn()},
-		{Events: thinkingOnlyTurn()},
-		{Events: thinkingOnlyTurn()},
+		id := m.Start("q", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusDone, j.Status)
+		assert.Contains(t, j.Summary, "no output")
 	})
-	m := New(Options{Provider: p})
-	t.Cleanup(m.Close)
-
-	id := m.Start("q", "")
-	j, ok := m.Poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusDone, j.Status)
-	assert.Contains(t, j.Summary, "no output")
 }
 
 // TestRunAbortedContextIsNotACompletion verifies an interrupted run yields aborted,

@@ -113,44 +113,46 @@ func TestRecorderWriteFailureNoticesInsteadOfFailing(t *testing.T) {
 	assert.Equal(t, "hello", caps.notices[1])
 }
 
-func TestRecorderSettingAndCustomRoundTrip(t *testing.T) {
+func TestRecorderTypedRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	w, err := Create(p, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
-	r := NewRecorder(w)
+	// setting and custom entries round-trip through the transcript.
+	t.Run("setting_and_custom_round_trip", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		r := NewRecorder(w)
 
-	require.NoError(t, r.SettingChange("tools", []string{"read"}))
-	require.NoError(t, r.Custom("plan", map[string]any{"step": 1}))
+		require.NoError(t, r.SettingChange("tools", []string{"read"}))
+		require.NoError(t, r.Custom("plan", map[string]any{"step": 1}))
 
-	entries, _, err := Read(p)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(entries), 3) // session + setting + custom
-	assert.Equal(t, TypeSettingChange, entries[1].Type)
-	var sd SettingData
-	require.NoError(t, entries[1].Decode(&sd))
-	assert.JSONEq(t, `["read"]`, string(sd.Value))
+		entries, _, err := Read(p)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(entries), 3) // session + setting + custom
+		assert.Equal(t, TypeSettingChange, entries[1].Type)
+		var sd SettingData
+		require.NoError(t, entries[1].Decode(&sd))
+		assert.JSONEq(t, `["read"]`, string(sd.Value))
 
-	var cd CustomData
-	require.NoError(t, entries[2].Decode(&cd))
-	assert.Equal(t, "plan", cd.CustomType)
-}
+		var cd CustomData
+		require.NoError(t, entries[2].Decode(&cd))
+		assert.Equal(t, "plan", cd.CustomType)
+	})
 
-func TestRecorderModelChangePersistsKey(t *testing.T) {
-	t.Parallel()
+	// a model change persists its key.
+	t.Run("model_change_persists_key", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		r := NewRecorder(w)
 
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	w, err := Create(p, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
-	r := NewRecorder(w)
+		r.ModelChange(llm.Model{Provider: "anthropic", ID: "claude"}, "manual")
 
-	r.ModelChange(llm.Model{Provider: "anthropic", ID: "claude"}, "manual")
-
-	entries, _, err := Read(p)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(entries), 2) // session + model change
-	var md ModelData
-	require.NoError(t, entries[1].Decode(&md))
-	assert.Equal(t, "anthropic/claude", md.Model)
+		entries, _, err := Read(p)
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, len(entries), 2) // session + model change
+		var md ModelData
+		require.NoError(t, entries[1].Decode(&md))
+		assert.Equal(t, "anthropic/claude", md.Model)
+	})
 }
