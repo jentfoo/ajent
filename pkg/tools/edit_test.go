@@ -48,7 +48,7 @@ func TestApplyEditsValidation(t *testing.T) {
 		{"rejects_empty_old_text", "x\n", `[{"oldText":"","newText":"y"}]`, "empty oldText"},
 		{"rejects_noop_edit", "x\n", `[{"oldText":"same","newText":"same"}]`, "no-op edit"}, // changes nothing
 		{"rejects_duplicate_old_text", "one two\n", `[{"oldText":"one","newText":"1"},{"oldText":"one","newText":"2"}]`, "repeat the same oldText"},
-		{"rejects_overlapping_regions", "abcdef\n", `[{"oldText":"bcd","newText":"X"},{"oldText":"cde","newText":"Y"}]`, "overlapping regions; adjust their oldText so each targets a distinct region"},
+		{"rejects_overlapping_regions", "abcdef\n", `[{"oldText":"bcd","newText":"X"},{"oldText":"cde","newText":"Y"}]`, "target overlapping regions in a.txt"},
 		{"allows_adjacent_non_overlap", "abcdef\n", `[{"oldText":"ab","newText":"1"},{"oldText":"cd","newText":"2"}]`, ""},
 	}
 
@@ -127,8 +127,6 @@ func TestEditFailure(t *testing.T) {
 			[]string{"not in the file"}, []string{"whitespace"}},
 		{"inter_word_spacing", "var  a = 1\n", "var a = 1\n",
 			[]string{"the file has 1 space, your text has 2 spaces"}, nil},
-		{"newline_style_lf_file", "foo\r\nbar", "foo\nbar",
-			[]string{"\\r\\n"}, nil},
 		{"letter_case_differs", "Foo Bar", "foo bar",
 			[]string{"letter case"}, []string{"whitespace"}},
 		{"file_trailing_ws_omitted", "\nfoo", "foo \t",
@@ -244,4 +242,92 @@ func TestEditPreservesExistingPerms(t *testing.T) {
 	fi, err := os.Stat(p)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm()) // owner-only mode kept
+}
+
+// TestEditCrlfFileMatchesLfOldTextAndWritesBackCrlf proves the model reads LF and
+// writes match the document's existing CRLF, never mixing endings.
+func TestEditCrlfPreservesLineEnding(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "a.txt")
+	require.NoError(t, os.WriteFile(p, []byte("alpha\r\nbeta\r\n"), 0o644))
+	_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
+
+	res := e.editExec(t.Context(),
+		`{"path":"a.txt","edits":[{"oldText":"beta","newText":"gamma"}]}`)
+	assert.False(t, res.IsError) // LF oldText matches the CRLF file
+
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "alpha\r\ngamma\r\n", string(data)) // CRLF kept, no mixed endings
+}
+
+// TestEditMixedEndingsFollowNeighborhood pins the per-edit ending rule: a
+// replacement adopts the ending of the line it starts on, and untouched regions
+// keep their exact bytes, in a file that mixes CRLF and LF.
+func TestEditMixedEndingsFollowNeighborhood(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "mix.txt")
+	require.NoError(t, os.WriteFile(p, []byte("aaa\r\nbbb\n"), 0o644))
+	_ = e.readExec(t.Context(), `{"path":"mix.txt"}`)
+
+	// an edit on the LF line writes LF even though the file opens CRLF
+	res := e.editExec(t.Context(),
+		`{"path":"mix.txt","edits":[{"oldText":"bbb","newText":"b1\nb2"}]}`)
+	assert.False(t, res.IsError)
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "aaa\r\nb1\nb2\n", string(data))
+
+	// an edit on the CRLF line writes CRLF; the untouched LF line stays LF
+	require.NoError(t, os.WriteFile(p, []byte("aaa\r\nbbb\n"), 0o644))
+	res = e.editExec(t.Context(),
+		`{"path":"mix.txt","edits":[{"oldText":"aaa","newText":"a1\na2"}]}`)
+	assert.False(t, res.IsError)
+	data, err = os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "a1\r\na2\r\nbbb\n", string(data))
+}
+
+// TestEditCascadeFailsAgainstOriginal proves edit N+1 cannot match text edit N wrote.
+func TestEditCascadeRejectedAndFileUntouched(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "a.txt")
+	require.NoError(t, os.WriteFile(p, []byte("foo"), 0o644))
+	_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
+
+	res := e.editExec(t.Context(),
+		`{"path":"a.txt","edits":[{"oldText":"foo","newText":"bar"},{"oldText":"bar","newText":"baz"}]}`)
+	assert.True(t, res.IsError) // second edit's oldText is not in the original
+	out := textOf(res)
+	assert.Contains(t, out, "edit 2") // names the failing op
+	assert.Contains(t, out, "'bar'")  // names what it looked for
+
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "foo", string(data)) // byte-identical: no cascade applied
+}
+
+// TestEditPiNonCascadeSucceeds pins pi's case that ajent failed before span
+// resolution: edit 1 creates a second copy of the text edit 2 targets.
+func TestEditPiNonCascadeCase(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "a.txt")
+	require.NoError(t, os.WriteFile(p, []byte("foo\nbar\nbaz\n"), 0o644))
+	_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
+
+	res := e.editExec(t.Context(),
+		`{"path":"a.txt","edits":[{"oldText":"foo\n","newText":"foo bar\n"},{"oldText":"bar\n","newText":"BAR\n"}]}`)
+	assert.False(t, res.IsError) // both resolve against the original buffer
+
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "foo bar\nBAR\nbaz\n", string(data))
 }

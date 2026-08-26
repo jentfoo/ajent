@@ -57,9 +57,11 @@ prompt lines go to a single **prompt pump** goroutine that owns ordering.
   instead of an immediate echo.
 - pump: a command runs its handler (pickers block only the pump); a prompt
   `Stager.Flush` → `refs.Expand` → queue-or-start via the **steer queue**
-  (`queue.go`). A `pumpLine` carrying an already-assembled `input` (the `/init`
-  survey) re-enters here with its `Before` intact, skipping expansion and the
-  echo so the same ordering, accounting and hook path still apply. Idle, it spawns the single drain goroutine with this input;
+  (`queue.go`). Flush yields `Input.Before`; expansion yields `Input.After`, whose
+  reads run only when the message lands. A `pumpLine` carrying an already-assembled
+  `input` (the `/init` survey) re-enters here with its `Before` intact, skipping
+  expansion and the echo so the same ordering, accounting and hook path still
+  apply. Idle, it spawns the single drain goroutine with this input;
   busy, it queues the item (rendering as a dimmed row) and defers its echo to
   delivery.
 
@@ -82,7 +84,11 @@ Submissions therefore stay in order, the UI never stalls, and "the turn is held
 until the pending command finishes" falls out of `Flush` blocking the pump. Only
 prompts flush — `!ls` followed by `/model` leaves the stage pending for the next
 real message. The CLI seed (`ajent "explain @main.go"`) goes through the pump
-too, so its references expand like any other prompt.
+too, so its references expand like any other prompt; the headless one
+(`ajent -p …`) expands in `runHeadless` instead, once the tool scope has settled.
+
+Joining a batch joins its resolvers too: `steerQueue.join` chains every queued
+item's `After` into one, run in submit order behind the joined message.
 
 ## Commands
 
@@ -366,20 +372,58 @@ after a path is never eaten.
 
 ### Expand (`refs/expand.go`)
 
-`Expander.Expand(ctx, text)` returns the rewritten text, the `[]llm.Message`
-for `Input.Before`, and notices. Per distinct resolved path (via the tool
-`PathPolicy`):
+`Expander.Expand(text)` **plans**; it does not read. It returns the rewritten
+text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
+`Input.After`. Per distinct resolved path (via the tool `PathPolicy`):
 
 | Case | Outcome |
 |---|---|
-| wildcard pattern (contains `*`, `?` or `[`) | `ls` pair injected via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read; the pattern stays literal in prose |
+| wildcard pattern (contains `*`, `?` or `[`) | `ls` pair planned via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read; the pattern stays literal in prose |
 | missing | literal, warning notice |
-| directory | `ls` pair injected via `Registry.Lookup` (ignores enabled state) |
-| already read, unchanged (`Tracker.Check == nil`) | nothing injected, literal |
-| text file within `RefInject` and under the running `RefTotal` cap | `read` pair injected, stale annotation stripped |
+| directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state) |
+| already read, unchanged (`Tracker.Unchanged`) | nothing planned, literal |
+| a path the same message already named | planned once; the repeat stays literal |
+| text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |
 | large, binary, image, or over the cap | annotation replaced in place; cap trim adds a notice |
 
-Text is rebuilt by splicing spans back to front so earlier offsets stay valid.
+Text is rebuilt by splicing spans back to front so earlier offsets stay valid;
+the plan is reversed once so the reads land in document order.
+
+Because planning no longer reads, the tracker cannot dedupe within one expansion
+— nothing has been observed yet — so **the plan dedupes by resolved path itself**,
+and `Run` re-checks `Unchanged` per injection before executing it. The first
+guard keeps one message from naming a path twice (which would duplicate its
+content *and* its call id); the second keeps a joined batch from re-reading what
+an earlier item in the same batch just read. `Run` also stops on a cancelled
+context rather than appending error pairs for the rest of the batch.
+
+### Reads land behind the message
+
+`Run` is `Input.After`, so the pairs are appended **after** the user message that
+named them, not ahead of it. `session.RewindTarget` rewinds a user prompt to its
+parent, so this is what makes rewinding onto an `@` message drop its reads with
+it — edit the file, press Enter on the refilled text, and the model sees the new
+contents instead of the old inclusion still sitting in context. It also fixes the
+display: the tools run when the message lands, after its echo, so what is on
+screen is the order replay renders.
+
+That makes re-injection routine, so ids must not repeat. Each `Expand` takes a
+run number and mints `ref-<n>-<path>` / `ref-<n>-ls-<path>`; `Expander.Seed(msgs)`
+raises that counter above every `ref-<n>-` id already present, and is called
+whenever the context is rebuilt (resume, rewind, fork) so a reopened transcript's
+ids are never minted twice.
+
+The same rebuild calls `tools.Tracker.Reset`. The tracker is process-wide and
+knows nothing of branches, so without it a rewound-away read would still count as
+"already in context" and the resubmit would inject nothing at all. Both hang off
+`sessRec.onSwitch`, which **every** path that replaces `State.Messages` calls:
+`switchState` (manual rewind, and the plan workflow's `forkTo`) and the
+compactor's rebuild. Compaction counts because a cut drops reads outright and
+`truncate` elides their results to a byte budget, either of which takes file
+content out of context that the tracker still vouches for. Headless seeds its own
+expander from the rebuilt state, since `--continue` reopens a transcript that
+already holds ref ids.
+
 Injected tools run through the same sink as the stager, so the display order
 matches the transcript order and therefore matches what replay renders.
 

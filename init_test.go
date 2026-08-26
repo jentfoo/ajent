@@ -358,7 +358,8 @@ func TestPromptInput(t *testing.T) {
 			onTurn: func() { armed++ },
 		}
 		// a nil expander proves this path never reaches @ expansion
-		in, echo := promptInput(line, staged, nil, func(string) { t.Error("unexpected notice") })
+		in, echo, pending := promptInput(line, staged, nil, func(string) { t.Error("unexpected notice") })
+		assert.Zero(t, pending)
 
 		assert.Equal(t, "distill this", in.Text)
 		assert.True(t, in.Injected)
@@ -372,7 +373,7 @@ func TestPromptInput(t *testing.T) {
 
 	t.Run("assembled_input_without_hook", func(t *testing.T) {
 		line := pumpLine{kind: command.KindPrompt, input: &agent.Input{Text: "x"}}
-		in, echo := promptInput(line, nil, nil, func(string) {})
+		in, echo, _ := promptInput(line, nil, nil, func(string) {})
 		assert.Equal(t, "x", in.Text)
 		assert.Empty(t, echo)
 	})
@@ -385,14 +386,16 @@ func TestPromptInput(t *testing.T) {
 		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir})
 
 		line := pumpLine{kind: command.KindPrompt, rest: "look at @a.go"}
-		in, echo := promptInput(line, staged, expander, func(string) {})
+		in, echo, pending := promptInput(line, staged, expander, func(string) {})
 
 		assert.Contains(t, in.Text, "@a.go")
 		assert.Equal(t, in.Text, echo) // a typed prompt echoes itself
 		assert.False(t, in.Injected)
-		require.NotEmpty(t, in.Before)
-		assert.Equal(t, staged[0], in.Before[0]) // staged results stay first
-		assert.Contains(t, callIDs(in.Before), "ref-a.go")
+		assert.Positive(t, pending) // the read is sized before it lands
+		// staged shell results ride ahead; the @ read lands behind the message
+		assert.Equal(t, staged, in.Before)
+		require.NotNil(t, in.After)
+		assert.Equal(t, []string{"ref-1-a.go"}, callIDs(in.After(t.Context())))
 	})
 
 	t.Run("expansion_notices_surface", func(t *testing.T) {
@@ -403,7 +406,7 @@ func TestPromptInput(t *testing.T) {
 
 		var warned []string
 		line := pumpLine{kind: command.KindPrompt, rest: "see @missing.go"}
-		_, _ = promptInput(line, nil, expander, func(n string) { warned = append(warned, n) })
+		_, _, _ = promptInput(line, nil, expander, func(n string) { warned = append(warned, n) })
 		require.Len(t, warned, 1)
 		assert.Contains(t, warned[0], "missing.go")
 	})
@@ -413,11 +416,14 @@ func TestSubmitEstimate(t *testing.T) {
 	t.Parallel()
 
 	text := agent.Input{Text: "a short prompt"}
-	textOnly := submitEstimate(text)
+	textOnly := submitEstimate(text, 0)
 	assert.Positive(t, textOnly)
 
 	withBefore := text
 	withBefore.Before = []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("payload ", 200))}
 	// injected pairs are the larger half of a survey; the bucket must count them
-	assert.Greater(t, submitEstimate(withBefore), textOnly)
+	assert.Greater(t, submitEstimate(withBefore, 0), textOnly)
+
+	// @ reads have not run yet, so their measured size is carried in separately
+	assert.Equal(t, textOnly+500, submitEstimate(text, 500))
 }

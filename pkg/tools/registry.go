@@ -207,10 +207,10 @@ func (r *Registry) Enabled() []agent.Tool {
 	return out
 }
 
-// expandGroupNames replaces any registered group name in want with its member tool
-// names, so /tools can toggle an entire group through one label. Callers that pass
-// physical names are unaffected.
-func (r *Registry) expandGroupNames(want map[string]struct{}) {
+// expandGroupNamesLocked replaces any registered group name in want with its
+// member tool names, so /tools can toggle an entire group through one label.
+// Callers that pass physical names are unaffected. Callers must hold r.mu.
+func (r *Registry) expandGroupNamesLocked(want map[string]struct{}) {
 	for i := range r.groups {
 		g := &r.groups[i]
 		if _, ok := want[g.Name]; !ok {
@@ -227,9 +227,10 @@ func (r *Registry) expandGroupNames(want map[string]struct{}) {
 // currently enabled tools not listed become disabled. Use Enable to widen the
 // set within a session instead.
 func (r *Registry) SetEnabled(names []string) {
-	want := bulk.SliceToSet(names)
-	r.expandGroupNames(want)
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	want := bulk.SliceToSet(names)
+	r.expandGroupNamesLocked(want)
 	for i := range r.tools {
 		if _, ok := want[r.tools[i].tool.Name()]; ok {
 			r.tools[i].state = StateEnabled
@@ -238,7 +239,6 @@ func (r *Registry) SetEnabled(names []string) {
 		}
 	}
 	r.schema = nil // the tool block in the prompt changed, so bust the cache
-	r.mu.Unlock()
 }
 
 // Enable additively enables the named tools from either state, leaving others
@@ -246,16 +246,16 @@ func (r *Registry) SetEnabled(names []string) {
 // session, so this is the /tools path after the first prompt; SetEnabled is the
 // free-selection path before it.
 func (r *Registry) Enable(names []string) {
-	want := bulk.SliceToSet(names)
-	r.expandGroupNames(want)
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	want := bulk.SliceToSet(names)
+	r.expandGroupNamesLocked(want)
 	for i := range r.tools {
 		if _, ok := want[r.tools[i].tool.Name()]; ok {
 			r.tools[i].state = StateEnabled
 		}
 	}
 	r.schema = nil
-	r.mu.Unlock()
 }
 
 // Get returns a guard-wrapped callable tool by name. Only enabled tools answer;

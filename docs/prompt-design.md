@@ -68,7 +68,7 @@ governs its assembly and use.
 |---|---|
 | System prompt composition | identity + guidelines + environment facts + project instructions (+ extension/sub-agent snippets) |
 | Tool descriptions & schemas | per-tool `Description` prose plus JSON Schema params, sent via the provider tool channel |
-| `@`-file reference injection | synthetic read call+result ahead of the user message |
+| `@`-file reference injection | synthetic read call+result behind the user message |
 | Project instruction layering | `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, layered with provenance markers |
 | Prompt templates / slash commands | markdown templates expanded into prompts |
 | `/init` project survey | the build and codebase sub-agent tasks, and the instruction that distils them into `AGENTS.md` |
@@ -235,8 +235,10 @@ not just a stop sign.
 ## `@`-file reference injection
 
 When a user message contains `@path`, ajent injects a synthetic `read` call +
-result pair ahead of that message, using the real tool. The literal `@path`
+result pair behind that message, using the real tool. The literal `@path`
 stays in the text; the injected read is what actually puts content in context.
+Behind, not ahead, so that rewinding onto the message drops its reads too and a
+re-send sees the file as it is now (`command-design.md`).
 
 Prompt implications:
 

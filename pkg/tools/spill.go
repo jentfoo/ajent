@@ -9,22 +9,28 @@ import (
 	"strconv"
 )
 
-// spiller lazily creates a per-session spill file in os.TempDir for bash output
+// spiller lazily creates a per-session spill file in os.TempDir for tool output
 // that exceeds the in-memory budget, so a normal command leaves nothing behind.
 type spiller struct {
 	sessionID string
+	prefix    string // names the file kind: "bash", "grep"
 	f         *os.File
 	path      string
 }
 
 // newSpiller returns a spiller writing into a session-named temp directory. It
 // is not created until Write first needs it.
-func newSpiller(sessionID string) *spiller { return &spiller{sessionID: sessionID} }
+func newSpiller(sessionID, prefix string) *spiller {
+	if prefix == "" {
+		prefix = "bash"
+	}
+	return &spiller{sessionID: sessionID, prefix: prefix}
+}
 
 // Write appends p to the spill file, creating both lazily on first use.
 func (s *spiller) Write(p []byte) (int, error) {
 	if s.f == nil {
-		f, path, err := createSpill(s.sessionID)
+		f, path, err := createSpill(s.sessionID, s.prefix)
 		if err != nil {
 			return 0, err
 		}
@@ -45,7 +51,7 @@ func (s *spiller) close() error {
 }
 
 // createSpill opens a fresh spill file under os.TempDir/ajent-<session>.
-func createSpill(sessionID string) (*os.File, string, error) {
+func createSpill(sessionID, prefix string) (*os.File, string, error) {
 	if sessionID == "" {
 		sessionID = "anon"
 	}
@@ -53,7 +59,7 @@ func createSpill(sessionID string) (*os.File, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", err
 	}
-	name := fmt.Sprintf("bash-%s.txt", randSuffix())
+	name := fmt.Sprintf("%s-%s.txt", prefix, randSuffix())
 	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, "", err

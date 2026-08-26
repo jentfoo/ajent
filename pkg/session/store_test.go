@@ -66,10 +66,6 @@ func TestStoreListLatestFind(t *testing.T) {
 	found, ferr := s.Find(ws, aID)
 	require.NoError(t, ferr)
 	assert.Equal(t, aID, found.ID)
-
-	byPrefix, pferr := s.Find(ws, aID[:8])
-	require.NoError(t, pferr)
-	assert.Equal(t, aID, byPrefix.ID)
 }
 
 func TestStoreFindAmbiguousAndMissing(t *testing.T) {

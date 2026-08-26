@@ -5,20 +5,24 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
-// Input is one user turn: free text, extra content blocks, and any synthetic
-// messages to append ahead of the user's own (staged shell results, @ reads).
+// Input is one user turn: free text, extra content blocks, and the synthetic
+// messages that frame it. Before is context that predates the message (staged
+// shell results, a project survey); After is context the message asked for, so
+// it is resolved when the message lands and a rewind past it drops both.
 type Input struct {
 	Text      string
-	Blocks    llm.BlockList // extra content, appended after Text when non-empty
-	Before    []llm.Message // appended ahead of this input, in transcript order
-	Delivered func()        // called once the steer lands in state; nil is the normal case
-	Injected  bool          // system-injected context (not a typed prompt); excluded from recall
+	Blocks    llm.BlockList                       // extra content, appended after Text when non-empty
+	Before    []llm.Message                       // appended ahead of this input, in transcript order
+	After     func(context.Context) []llm.Message // appended behind it once it lands; nil is the normal case
+	Delivered func()                              // called once the steer lands in state; nil is the normal case
+	Injected  bool                                // system-injected context (not a typed prompt); excluded from recall
 }
 
 // State is the in-memory projection of a session. It is owned by the loop

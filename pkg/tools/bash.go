@@ -118,7 +118,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		lim = BashLimit()
 	}
 	var head bytes.Buffer // bounded kept prefix, spilled beyond the output limit
-	spill := newSpiller(t.sessionID)
+	spill := newSpiller(t.sessionID, "bash")
 	defer func() { _ = spill.close() }()
 	w := Writer(&head, lim, spill).(*boundedWriter)
 
@@ -164,10 +164,19 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		statusText = agent.InterruptedText + "\n"
 	}
 
-	captured := head.String()
-	if spill.path != "" {
-		elided, _ := Elide(captured, lim)
-		captured = elided + fmt.Sprintf("\n... output truncated; full log in @%s\n", spill.path)
+	captured := normalizeToLF(head.String()) // model-visible text is LF-only
+	truncated := w.Truncated() || overlongLine(captured)
+	if truncated {
+		// cap every kept line at MaxLineRunes like read/grep; the spill holds the
+		// full stream, so capping is lossless.
+		captured = capText(captured)
+		if !w.Truncated() { // only an overlong line triggered this: no file yet,
+			// write the complete stream so read can recover the uncapped tail
+			_, _ = spill.Write(w.replay.Bytes())
+		}
+		lines, bytes := w.Total()
+		note := truncationNote(Bounded{Shown: countLines(captured), Lines: lines, Bytes: bytes}, spill.path)
+		captured += "\n" + note
 	}
 
 	return agent.ToolResult{Content: llmBlock(statusText + captured), IsError: interrupted}, nil

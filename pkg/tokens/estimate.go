@@ -37,16 +37,25 @@ const (
 	imageBytesPerToken = 512
 )
 
-// EstimateText estimates the token count of text under kind. ASCII bytes divide
-// by the ratio; each non-ASCII rune counts one token, plus one more for astral
-// (emoji) pairs above U+FFFF.
-func EstimateText(text string, kind Kind) int {
+// EstimateBytes estimates the token count of n bytes of ASCII content under
+// kind. Use it to size content that has been measured but not read.
+func EstimateBytes(n int64, kind Kind) int {
+	if n <= 0 {
+		return 0
+	}
 	ratio := bytesPerToken[kind]
 	if ratio <= 0 { // unknown kind: fall back to prose rather than divide by zero
 		ratio = bytesPerToken[KindProse]
 	}
-	var ascii int
-	tokens := 0
+	return int(float64(n) / ratio)
+}
+
+// EstimateText estimates the token count of text under kind. ASCII bytes divide
+// by the ratio; each non-ASCII rune counts one token, plus one more for astral
+// (emoji) pairs above U+FFFF.
+func EstimateText(text string, kind Kind) int {
+	var ascii int64
+	var tokens int
 	for _, r := range text {
 		if r < utf8.RuneSelf {
 			ascii++
@@ -57,7 +66,7 @@ func EstimateText(text string, kind Kind) int {
 			}
 		}
 	}
-	return tokens + int(float64(ascii)/ratio)
+	return tokens + EstimateBytes(ascii, kind)
 }
 
 // estimateBlocks returns the content tokens of blocks. Text inside a tool result

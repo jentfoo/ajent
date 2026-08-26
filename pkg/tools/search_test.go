@@ -2,7 +2,9 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -147,6 +149,27 @@ func TestGrepContentModeFindsLineNumbers(t *testing.T) {
 	assert.Contains(t, out, "a.txt") // content mode names the file
 }
 
+func TestGrepMinifiedLineCappedAndSpilled(t *testing.T) {
+	t.Parallel()
+
+	// one match line longer than MaxLineRunes is capped for the model and the
+	// full text spills to disk, both when rg answers and on the Go fallback
+	for _, forceGo := range []bool{false, true} {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "min.txt", "needle "+strings.Repeat("y", MaxLineRunes+500)+"\n")
+
+		res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"needle"}`)), nil)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		out := textOf(res)
+		for _, ln := range strings.Split(out, "\n") {
+			assert.LessOrEqual(t, len([]rune(ln)), MaxLineRunes+100) // footer carries the spill note
+		}
+		assert.Regexp(t, `full output in @\S+`, out)
+	}
+}
+
 func TestGrepCountModeReportsPerFile(t *testing.T) {
 	t.Parallel()
 
@@ -270,4 +293,93 @@ func TestGrepFallbackCountModeSorted(t *testing.T) {
 	out := textOf(res)
 	assert.Less(t, strings.Index(out, "alpha.txt"), strings.Index(out, "zeta.txt")) // deterministic order
 	assert.Contains(t, out, "alpha.txt:2")
+}
+
+// gitInit turns dir into a fresh repo with everything tracked.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+	init := exec.CommandContext(t.Context(), "git", "init", "-q")
+	init.Dir = dir
+	if err := init.Run(); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	add := exec.CommandContext(t.Context(), "git", "add", "-A")
+	add.Dir = dir
+	require.NoError(t, add.Run())
+}
+
+// TestFindGitRepoUsableNonAsciiPath exercises the git ls-files -z path: a
+// non-ASCII filename must come back as a usable relative path and .gitignore'd
+// files are excluded.
+func TestFindGitRepoUsableNonAsciiPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		pattern string
+	}{
+		{"non_ascii_filename", "caf*.go"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, policy := newSearchEnv(t)
+			mkfile(dir, "café.go", "x")
+			mkfile(dir, "ignored.log", "y") // .gitignore'd below
+			require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0o644))
+
+			gitInit(t, dir)
+
+			res, err := (&findTool{policy: policy}).Execute(t.Context(),
+				callWith([]byte(`{"pattern":`+strconv.Quote(tc.pattern)+`}`)), nil)
+			require.NoError(t, err)
+			out := textOf(res)
+
+			assert.Contains(t, out, "café.go") // usable relative path, not octal-escaped
+			assert.NotContains(t, out, "ignored.log")
+		})
+	}
+}
+
+// TestGrepFallbackSkipsGitIgnored asserts the Go fallback honours .gitignore via
+// git ls-files, matching what rg does.
+func TestGrepFallbackSkipsGitIgnored(t *testing.T) {
+	dir, policy := newSearchEnv(t)
+	mkfile(dir, "keep.go", "needle\n")
+	mkfile(dir, "dist/bundle.js", "needle\n") // .gitignore'd
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("dist/\n"), 0o644))
+
+	gitInit(t, dir)
+
+	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+		callWith([]byte(`{"pattern":"needle"}`)), nil)
+	require.NoError(t, err)
+	out := textOf(res)
+
+	assert.Contains(t, out, "keep.go")
+	assert.NotContains(t, out, "bundle.js") // ignored subtree pruned
+}
+
+// TestGrepFallbackCrlfStripsTrailingCarriage returns no trailing \r on either path.
+func TestGrepFallbackCrlfStripsTrailingCarriage(t *testing.T) {
+	dir, policy := newSearchEnv(t)
+	mkfile(dir, "a.txt", "match here\r\nother line\r\n")
+
+	for name, tool := range map[string]*grepTool{
+		"go-only": {policy: policy, forceGo: true},
+	} {
+		res, err := tool.Execute(t.Context(),
+			callWith([]byte(`{"pattern":"match"}`)), nil)
+		require.NoError(t, err, name)
+		assert.False(t, res.IsError, name)
+		out := textOf(res)
+		assert.NotContains(t, out, "\r", name) // LF-only model-visible output
+	}
+}
+
+// TestRelToDotPrefixedFilename treats a ..-prefixed filename as inside the root.
+func TestRelToDotPrefixedFilename(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "..hidden.go", relTo("/a", "/a/..hidden.go"))
+	assert.Equal(t, "/a/sibling", relTo("/a/b", "/a/sibling")) // true escape stays absolute
 }

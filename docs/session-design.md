@@ -67,8 +67,12 @@ can read files written by newer ones.
 IDs are 26-character Crockford ULIDs: a 48-bit millisecond timestamp plus 80
 random bits. They sort lexically by creation time (so `Store.List` can order
 sessions newest first), and the random tail makes them unique without a central
-counter. Within one process, IDs sharing a millisecond are made monotonic by
-incrementing the previous random suffix rather than re-rolling entropy.
+counter. The counter's timestamp only moves forward: on an advancing clock it is
+adopted fresh (re-seeding entropy so prefixes spread across real time); otherwise —
+same-millisecond bursts, tests pinning `clock`, an OS stepping back — the current
+timestamp is held and the random suffix incremented. IDs stay strictly increasing
+within a process even when the wall clock ticks backward, while remaining unique
+across processes.
 
 ## The writer
 
@@ -265,6 +269,13 @@ start of the new branch), rebuilds agent state from that head, redraws the UI,
 replays the restored context, and pre-fills the editor with the full original
 prompt — ready to edit or re-send. `HEAD` now points at the fork's tip; both it
 and every earlier branch remain in the file.
+
+Rewinding to the parent is why an `@` reference's injected read is appended
+*behind* its message rather than ahead of it (`agent-loop-design.md`,
+`Input.After`): the read is dropped along with the message that asked for it, so
+re-sending the refilled prompt re-reads the file instead of leaving a stale
+inclusion in context. The rebuild also tells the host its context changed, which
+is what resets read tracking and reseeds `@` call ids.
 
 ## Resume modes
 

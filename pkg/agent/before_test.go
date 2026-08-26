@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -40,6 +41,71 @@ func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	tb, ok := seen[2].Content[0].(llm.TextBlock)
 	require.True(t, ok)
 	assert.Equal(t, "what was that?", tb.Text)
+}
+
+// TestInputAfterAppendedBehindText asserts Input.After resolves once the user
+// message has landed and its pairs follow it, so a rewind onto that message
+// drops the context it asked for along with it.
+func TestInputAfterAppendedBehindText(t *testing.T) {
+	t.Parallel()
+
+	var seen []MessageInfo
+	var order []string
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info) }}
+
+	after := func(context.Context) []llm.Message {
+		order = append(order, "after")
+		return []llm.Message{
+			{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
+				ID: "ref-1-a.go", Name: "read", Input: json.RawMessage(`{"path":"a.go"}`),
+			}}},
+			{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
+				CallID: "ref-1-a.go", Content: llm.BlockList{llm.TextBlock{Text: "package a"}},
+			}}},
+		}
+	}
+	err := a.Prompt(t.Context(), Input{
+		Text:      "explain @a.go",
+		After:     after,
+		Delivered: func() { order = append(order, "delivered") },
+	})
+	require.NoError(t, err)
+
+	// the user text, then its reads, then the assistant reply
+	require.Len(t, seen, 4)
+	tb, ok := seen[0].Message.Content[0].(llm.TextBlock)
+	require.True(t, ok)
+	assert.Equal(t, "explain @a.go", tb.Text)
+	assert.False(t, seen[0].Injected)
+	assert.Equal(t, llm.RoleAssistant, seen[1].Message.Role)
+	assert.Equal(t, llm.RoleUser, seen[2].Message.Role)
+	assert.True(t, seen[1].Injected)
+	assert.True(t, seen[2].Injected)
+	// delivery clears the submit bucket before the reads are counted into pending
+	assert.Equal(t, []string{"delivered", "after"}, order)
+}
+
+// TestInputAfterOnlyStillLands asserts an input carrying only After is not
+// dropped as an empty steer.
+func TestInputAfterOnlyStillLands(t *testing.T) {
+	t.Parallel()
+
+	var seen []llm.Message
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info.Message) }}
+
+	err := a.Prompt(t.Context(), Input{After: func(context.Context) []llm.Message {
+		return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: "ctx"}}}}
+	}})
+	require.NoError(t, err)
+
+	require.Len(t, seen, 2)
+	tb, ok := seen[0].Content[0].(llm.TextBlock)
+	require.True(t, ok)
+	assert.Equal(t, "ctx", tb.Text)
 }
 
 // TestInputBeforeMarkedInjected asserts Input.Before messages are appended as

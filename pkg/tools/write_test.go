@@ -85,3 +85,33 @@ func TestWritePreservesExistingPerms(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm()) // owner-only mode kept
 }
+
+// TestWriteOverwriteCrlfKeepsLineEnding proves LF content written over a CRLF
+// file restores CRLF, so the document's convention survives.
+func TestWriteOverwriteCrlfKeepsLineEnding(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "a.txt")
+	require.NoError(t, os.WriteFile(p, []byte("old\r\n"), 0o644))
+
+	res := e.writeExec(t.Context(), `{"path":"a.txt","content":"new line here\n"}`)
+	assert.False(t, res.IsError)
+
+	data, err := os.ReadFile(p)
+	require.NoError(t, err)
+	assert.Equal(t, "new line here\r\n", string(data)) // CRLF restored on write
+}
+
+// TestWriteNewFileGetsLf proves a brand-new file defaults to LF.
+func TestWriteNewFileGetsLf(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	res := e.writeExec(t.Context(), `{"path":"fresh.txt","content":"one\ntwo\n"}`)
+	assert.False(t, res.IsError)
+
+	data, err := os.ReadFile(filepath.Join(e.cwd, "fresh.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "one\ntwo\n", string(data))
+}

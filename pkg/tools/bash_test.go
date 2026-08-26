@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -177,7 +178,46 @@ func TestBashElisionByLineBoundSpillsFileSuffix(t *testing.T) {
 	r := newBashWithLimit(t, Limit{Lines: 5}, `{"command":"seq 1 10000"}`)
 	assert.False(t, r.res.IsError)
 	out := textOf(r.res)
-	assert.Contains(t, out, "... [truncated]")
+	// head-only policy with a footer naming shown/total and the spill file
+	assert.Contains(t, out, "... truncated: 5/10000 lines shown")
+	assert.Regexp(t, `full output in @\S+`, out)
+}
+
+func TestBashTruncatedHeadCapsOverlongLines(t *testing.T) {
+	t.Parallel()
+
+	// one minified line within every bound must not reach the model whole when
+	// the result truncates; the spill file keeps the complete text
+	long := strings.Repeat("y", MaxLineRunes+200)
+	cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'; seq 1 20"}`, long)
+	r := newBashWithLimit(t, Limit{Lines: 2}, cmd)
+	assert.False(t, r.res.IsError)
+	for _, ln := range strings.Split(textOf(r.res), "\n") {
+		assert.LessOrEqual(t, len([]rune(ln)), MaxLineRunes)
+	}
+	assert.Regexp(t, `full output in @\S+`, textOf(r.res))
+}
+
+func TestBashOverlongLineWithinBoundsCappedAndSpilled(t *testing.T) {
+	t.Parallel()
+
+	// a single line longer than MaxLineRunes but under every bound must still be
+	// capped for the model and spill, exactly like grep: nothing lost, readable back.
+	long := strings.Repeat("y", 2000)
+	cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'"}`, long)
+	r := newBashWithLimit(t, Limit{Lines: 10}, cmd)
+	assert.False(t, r.res.IsError)
+	out := textOf(r.res)
+	for _, ln := range strings.Split(out, "\n") {
+		assert.LessOrEqual(t, len([]rune(ln)), MaxLineRunes+100) // footer carries the spill note
+	}
+	// an overlong line alone counts as truncated: full stream spilled with a size summary
+	assert.Regexp(t, `full output in @\S+`, out)
+	m := regexp.MustCompile(`@(\S+)`).FindStringSubmatch(out)
+	require.NotNil(t, m, "spill path must be named")
+	dat, err := os.ReadFile(m[1])
+	require.NoError(t, err) // the spilled file really holds the complete stream
+	assert.Contains(t, string(dat), strings.Repeat("y", 2000))
 }
 
 func TestBashStripsANSIFromCapturedOutput(t *testing.T) {

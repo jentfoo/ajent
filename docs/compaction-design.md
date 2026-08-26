@@ -281,12 +281,20 @@ which is reserved for exact tokenizer counts. The summariser call itself is
 recorded spend-only (`Accounting.Spend`), so a failed compaction cannot leave the
 bar at the summariser's (much larger) prompt size.
 
-**7. A model switch remeasures, never reads empty.** `SetModel` drops every context
+**7. A reduced context is reported to the host.** Reducing takes file content out
+of context — a cut drops reads outright, `truncate` elides their results — while
+`tools.Tracker` still records the process's reads. The compactor therefore calls
+the same rebuild hook `switchState` uses (`sessRec.onSwitch`), which resets read
+tracking so a later `@file` re-injects rather than deduping against content the
+model no longer has. Any future path that replaces `State.Messages` owes the same
+call.
+
+**8. A model switch remeasures, never reads empty.** `SetModel` drops every context
 term for the new window; it immediately reseeds from the actual in-memory messages,
 so switching to a smaller window reflects real occupancy and lets threshold
 auto-compaction fire on that model instead of waiting for an overflow.
 
-**8. At most one overflow retry per turn.** A second overflow fails the turn
+**9. At most one overflow retry per turn.** A second overflow fails the turn
 rather than compacting in a loop.
 
 ## Conventions

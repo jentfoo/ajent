@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
@@ -408,10 +409,7 @@ func classifySubject(call agent.ToolCall) Subject {
 		return Subject{Name: bashTool, Args: bashCommand(call.Input)}
 	}
 	s := strings.TrimSpace(string(call.Input))
-	if len(s) > maxClassifierArgs {
-		s = s[:maxClassifierArgs] + "…"
-	}
-	return Subject{Name: call.Name, Args: s}
+	return Subject{Name: call.Name, Args: strutil.Clip(s, maxClassifierArgs)}
 }
 
 // resolveNotice reports how an approved call was granted, replacing the dialog's

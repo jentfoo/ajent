@@ -48,7 +48,7 @@ type recordingTool struct {
 	done bool
 }
 
-func (t *recordingTool) Name() string { return "bash" }
+func (t *recordingTool) Name() string { return toolBash }
 func (t *recordingTool) Label(agent.ToolCall) string {
 	return "bash: ..."
 }

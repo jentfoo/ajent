@@ -37,8 +37,9 @@ type grepParams struct {
 // a bounded Go regexp walk. Content output is capped so one minified file stops
 // on bytes.
 type grepTool struct {
-	policy  PathPolicy
-	forceGo bool // skip rg even when present, so tests exercise the Go fallback
+	policy    PathPolicy
+	sessionID string // names the spill directory for long results
+	forceGo   bool   // skip rg even when present, so tests exercise the Go fallback
 }
 
 var _ agent.Tool = (*grepTool)(nil)
@@ -95,9 +96,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		if rgErr != nil {
 			return resultErr("grep: " + rgErr.Error()), nil
 		}
-		elided, _ := Elide(out, grepLimit)
-		// Display mirrors the model-visible text so history shows head+collapse.
-		return agent.ToolResult{Content: llmBlock(elided), Display: elided}, nil
+		return t.finalize(out), nil // Display mirrors the model-visible text
 	}
 
 	return t.goSearch(cwd, p, mode, re, max), nil
@@ -125,7 +124,7 @@ func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Re
 	counts := map[string]int{}
 	remaining := max
 
-	for _, path := range listAllFiles(cwd) {
+	for _, path := range repoFiles(cwd) { // .gitignore semantics on the fallback too
 		if p.Glob != "" && !matchGlob(p.Glob, relTo(cwd, path)) {
 			continue
 		}
@@ -134,7 +133,7 @@ func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Re
 			continue
 		}
 		rel := relTo(cwd, path)
-		hits, n := goGrep(string(data), re, p.Context, remaining)
+		hits, n := goGrep(normalizeToLF(string(data)), re, p.Context, remaining)
 		switch mode {
 		case grepCount:
 			if n > 0 {
@@ -167,9 +166,24 @@ func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Re
 			b.WriteString(m + "\n")
 		}
 	}
-	outStr, _ := Elide(b.String(), GrepResultLimit())
-	trimmed := strings.TrimRight(outStr, "\n")
-	return agent.ToolResult{Content: llmBlock(trimmed), Display: trimmed}
+
+	trimmed := strings.TrimRight(b.String(), "\n")
+	return t.finalize(trimmed)
+}
+
+// finalize bounds out to GrepResult, spilling the full text when truncated so
+// the model can read it back from disk.
+func (t *grepTool) finalize(out string) agent.ToolResult {
+	out = normalizeToLF(out) // rg and go paths both carry \r on CRLF files; LF-only to the model
+	b := Bound(out, GrepResultLimit())
+	text := strings.TrimRight(b.Text, "\n")
+	if b.Truncated {
+		spill := newSpiller(t.sessionID, "grep")
+		defer func() { _ = spill.close() }()
+		_, _ = spill.Write([]byte(out))
+		text += "\n" + truncationNote(b, spill.path)
+	}
+	return agent.ToolResult{Content: llmBlock(text), Display: text}
 }
 
 // rgOnPath reports whether ripgrep is available.
@@ -254,18 +268,6 @@ func goGrep(content string, re *regexp.Regexp, ctxLines, limit int) (hits []grep
 type grepHit struct {
 	line int
 	text string
-}
-
-// listAllFiles walks cwd returning every regular file path, skipping VCS and
-// dependency directories.
-func listAllFiles(cwd string) []string {
-	var out []string
-	for _, p := range allWalk(cwd) {
-		if !IsSkippedDir(p) {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // binary reports whether data looks like a binary file.

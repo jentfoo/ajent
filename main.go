@@ -516,6 +516,15 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 	watchControls(ui, ag, q, stager, ictl, quit, onModeCycle)
 	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: cwdOrDot()})
+	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
+	if rec != nil {
+		rec.onSwitch = func(msgs []llm.Message) {
+			if t := toolsReg.Tracker(); t != nil {
+				t.Reset() // reads the new context lacks must re-inject, not dedupe
+			}
+			expander.Seed(msgs)
+		}
+	}
 	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
 
@@ -698,10 +707,10 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			// in-flight command to finish first
 			before := stager.Flush(context.Background())
 
-			in, echo := promptInput(line, before, expander, func(n string) {
+			in, echo, pending := promptInput(line, before, expander, func(n string) {
 				console.Notify(n, tui.LevelWarn)
 			})
-			est := submitEstimate(in)
+			est := submitEstimate(in, pending)
 			if q.offer(in, echo, est) {
 				continue // queued as a dimmed row; the echo lands at delivery
 			}
@@ -709,7 +718,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			if hooks.beforePrompt != nil {
 				if wrapped, ok := hooks.beforePrompt(context.Background(), in); ok {
 					in = wrapped
-					est = submitEstimate(in)
+					est = submitEstimate(in, pending)
 				}
 			}
 			if echo != "" {
@@ -723,33 +732,35 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 	}
 }
 
-// promptInput turns one pump line into the input to send plus the text to echo.
-// An already-assembled input (the /init survey) keeps its own Before and uses
-// rest as a short label, since its instruction is far too long to echo.
-func promptInput(line pumpLine, before []llm.Message, expander *refs.Expander, warn func(string)) (agent.Input, string) {
+// promptInput turns one pump line into the input to send, the text to echo and
+// the estimated tokens its @ reads will add once they land. An already-assembled
+// input (the /init survey) keeps its own Before and uses rest as a short label,
+// since its instruction is far too long to echo.
+func promptInput(line pumpLine, before []llm.Message, expander *refs.Expander, warn func(string)) (agent.Input, string, int) {
 	if line.input != nil {
 		in := *line.input
 		in.Before = append(before, in.Before...)
 		if line.onTurn != nil {
 			line.onTurn() // this turn writes, not the one running when the sender finished
 		}
-		return in, line.rest
+		return in, line.rest, 0
 	}
-	res := expander.Expand(context.Background(), line.rest)
+	res := expander.Expand(line.rest)
 	for _, n := range res.Notices {
 		warn(n)
 	}
 	return agent.Input{
 		Text:     res.Text,
-		Before:   append(before, res.Before...),
+		Before:   before,
+		After:    res.Run,
 		Injected: line.injected,
-	}, submittedEcho(line.rest) // "" unless a real prompt; commands and shell lines are not echoed here
+	}, submittedEcho(line.rest), res.Est // "" unless a real prompt; commands and shell lines are not echoed here
 }
 
-// submitEstimate sizes what a submission adds to context: its text plus any
-// injected pairs riding ahead of it, which for a survey are the larger half.
-func submitEstimate(in agent.Input) int {
-	est := tokens.EstimateText(in.Text, tokens.KindProse)
+// submitEstimate sizes what a submission adds to context: its text, any staged
+// pairs riding ahead of it, and pending, the @ reads that land behind it.
+func submitEstimate(in agent.Input, pending int) int {
+	est := tokens.EstimateText(in.Text, tokens.KindProse) + pending
 	if len(in.Before) > 0 {
 		est += tokens.EstimateMessages(in.Before)
 	}
@@ -1017,6 +1028,10 @@ type sessRec struct {
 	store *session.Store
 	w     *session.Writer
 	rec   *session.Recorder
+	// onSwitch reports a rebuilt context — rewind, fork or compaction — so read
+	// tracking and @ reference ids stop describing what it replaced. Nil until
+	// main wires it.
+	onSwitch func([]llm.Message)
 }
 
 // extractResume scans argv for a --resume token and its optional trailing session
@@ -1335,6 +1350,9 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 		}
 	}
 	r.w.SetHead(head)
+	if r.onSwitch != nil {
+		r.onSwitch(rebuilt.Messages)
+	}
 
 	// mutate the live state in place so every holder (the console, this handler)
 	// sees the restored context.

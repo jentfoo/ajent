@@ -83,7 +83,7 @@ func hasImageSig(data []byte) bool {
 // highest line rendered) and truncatedAt (the next offset) when more lines remain
 // past what was emitted.
 func numberLines(data []byte, start, limit int) (out string, lastEmitted, truncatedAt int) {
-	lines := bytes.Split(bytes.ReplaceAll(data, []byte{'\r'}, nil), []byte{'\n'})
+	lines := bytes.Split([]byte(normalizeToLF(string(data))), []byte{'\n'})
 	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 { // drop the element a trailing newline leaves
 		lines = lines[:len(lines)-1]
 	}
@@ -94,10 +94,52 @@ func numberLines(data []byte, start, limit int) (out string, lastEmitted, trunca
 		return "", 0, 0
 	}
 	for i := start - 1; i < end; i++ {
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, capLine(string(lines[i])))
+		line := capLine(string(lines[i]))
+		if len(line) < len(lines[i]) { // capped: say so, offset cannot reach the rest
+			line += " ... [line truncated]"
+		}
+		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
 	}
 	if end < total { // more lines remain past what was emitted
 		return b.String(), end, end
 	}
 	return b.String(), end, 0
+}
+
+// detectLineEnding returns the majority line ending of data: "\r\n" when CRLF
+// pairs outnumber plain LF newlines, else "\n". A new or empty file gets LF.
+func detectLineEnding(data []byte) string {
+	var crlf, lf int
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\n' {
+			continue
+		}
+		if i > 0 && data[i-1] == '\r' {
+			crlf++
+		} else {
+			lf++
+		}
+	}
+	if crlf > lf {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+// normalizeToLF rewrites CRLF pairs to LF. A lone \r (legitimate mid-line in
+// shell output) is left alone.
+func normalizeToLF(s string) string {
+	if !strings.Contains(s, "\r\n") {
+		return s
+	}
+	return strings.ReplaceAll(s, "\r\n", "\n")
+}
+
+// restoreLineEndings rewrites LF to ending so a write matches the document's
+// existing line ending; ending is always "\r\n" or "\n".
+func restoreLineEndings(s, ending string) string {
+	if ending == "\r\n" && strings.Contains(s, "\n") {
+		return strings.ReplaceAll(s, "\n", "\r\n")
+	}
+	return s
 }

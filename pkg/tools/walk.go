@@ -38,6 +38,49 @@ func allWalk(root string) []string {
 	return out
 }
 
+// repoFiles lists files under root with .gitignore semantics inside a repo via
+// git ls-files -z (quoting disabled, so non-ASCII names stay usable), falling
+// back to allWalk otherwise or when git yields nothing. Entries that no longer
+// exist on disk are dropped.
+func repoFiles(root string) []string {
+	var entries []string
+	if IsGitRepo(root) {
+		out := runQuiet("git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z")
+		seen := make(map[string]struct{})
+		for _, f := range strings.Split(out, "\x00") {
+			if f == "" { // the trailing separator always yields one empty element
+				continue
+			}
+			p := filepath.Join(root, f)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() { // -c lists deleted-but-tracked files
+				if _, dup := seen[p]; dup { // unmerged entries repeat; git --deduplicate is 2.31+
+					continue
+				}
+				seen[p] = struct{}{}
+				entries = append(entries, p)
+			}
+		}
+		if len(entries) > 0 {
+			return entries
+		}
+	}
+	return allWalk(root)
+}
+
+// runQuiet runs a command with a short timeout and returns trimmed stdout or
+// empty on failure, so an unresponsive child cannot hang the tool.
+func runQuiet(args ...string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var out strings.Builder
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.Stdout = &out
+	if cmd.Run() != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.String())
+}
+
 // runCaptured runs a command with a short timeout, returning trimmed stdout.
 // Exit status 1 is "no matches" for search tools and yields empty output; any
 // higher exit status returns stderr as an error so the model sees the cause.

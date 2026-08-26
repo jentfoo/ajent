@@ -264,6 +264,32 @@ func TestRewindTarget(t *testing.T) {
 	}
 }
 
+// TestRewindTargetDropsReferenceReads pins the ordering @ expansion depends on:
+// an injected read follows the message that asked for it, so rewinding onto that
+// message leaves neither in the branch and a resubmit re-reads the file.
+func TestRewindTargetDropsReferenceReads(t *testing.T) {
+	t.Parallel()
+
+	entries := []Entry{
+		sessionOnly("root"),
+		pickAssistText("a0", "root", "earlier reply"),
+		pickMsg("u1", "a0", llm.Text(llm.RoleUser, "explain @main.go")),
+		pickToolCall("t1", "u1"),
+		pickToolResultMsg("r1", "t1"),
+		pickAssistText("a1", "r1", "it does X"),
+	}
+
+	head, fill, ok := RewindTarget(entries, "u1")
+	require.True(t, ok)
+	assert.Equal(t, "explain @main.go", fill)
+
+	ids := make([]string, 0, len(entries))
+	for _, e := range Branch(entries, head) {
+		ids = append(ids, e.ID)
+	}
+	assert.Equal(t, []string{"root", "a0"}, ids)
+}
+
 func TestPickerRowsIncludeCompaction(t *testing.T) {
 	t.Parallel()
 

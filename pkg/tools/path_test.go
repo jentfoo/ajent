@@ -106,37 +106,33 @@ func TestResolveTildeMidPathNotExpanded(t *testing.T) {
 	assert.Equal(t, filepath.Join(cwd, "a~b.txt"), abs) // ~ only special at the start
 }
 
-func TestResolveRelativeSubdirNotTildeExpanded(t *testing.T) {
-	t.Parallel()
-
-	// a path whose second char is `/` but first is not `~` must resolve from Cwd,
-	// never as a home expansion: ./ and multi-segment relatives both hit this.
-	cwd := t.TempDir()
+// TestResolveTildeNotExpanded pins the paths that must stay relative rather
+// than expand to home: relatives whose second char is `/`, and a leading ~ not
+// followed by / (~user, ~~). Not parallel: swaps the package-global userHome.
+func TestResolveTildeNotExpanded(t *testing.T) {
 	home := t.TempDir()
 	restore := setTestUserHome(home)
 	t.Cleanup(restore)
 
-	for _, rel := range []string{"./f.txt", "a/b/c.txt", "x/y"} {
-		abs, err := (PathPolicy{Cwd: cwd}).Resolve(rel)
-		require.NoError(t, err)
-		assert.Equal(t, filepath.Join(cwd, rel), abs, "relative %q must not become a ~ path", rel)
+	cwd := t.TempDir()
+	p := PathPolicy{Cwd: cwd}
+
+	cases := []struct {
+		name string
+		rel  string
+	}{
+		{"relative_dotted_subdir", "./f.txt"},
+		{"multi_segment_relative", "a/b/c.txt"},
+		{"subdir_relative", "x/y"},
+		{"user_prefixed_tilde", "~user/x"},
+		{"double_tilde", "~~/y"},
 	}
-}
-
-func TestResolveLeadingTildeNoSlashNotExpanded(t *testing.T) {
-	t.Parallel()
-
-	// a leading ~ not followed by / (~user, ~~) is left literal; only ~ or ~/
-	// expand to home.
-	cwd := t.TempDir()
-	home := t.TempDir()
-	restore := setTestUserHome(home)
-	t.Cleanup(restore)
-
-	for _, rel := range []string{"~user/x", "~~/y"} {
-		abs, err := (PathPolicy{Cwd: cwd}).Resolve(rel)
-		require.NoError(t, err)
-		assert.Equal(t, filepath.Join(cwd, rel), abs, "leading ~ without slash %q must stay literal", rel)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			abs, err := p.Resolve(tc.rel)
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(cwd, tc.rel), abs)
+		})
 	}
 }
 

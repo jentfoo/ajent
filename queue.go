@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -58,17 +59,21 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 }
 
 // join builds one agent.Input from every queued item (caller holds the lock):
-// texts joined by newline, Before blocks concatenated in submit order, Injected
-// OR-ed, and a Delivered hook that clears accounting and echoes the labels once
-// the batch actually lands.
+// texts joined by newline, Before blocks and After resolvers chained in submit
+// order, Injected OR-ed, and a Delivered hook that clears accounting and echoes
+// the labels once the batch actually lands.
 func (s *steerQueue) join() agent.Input {
 	texts := make([]string, 0, len(s.items))
 	before := make([]llm.Message, 0, len(s.items))
 	labels := make([]string, len(s.items))
-	injected := false
+	var afters []func(context.Context) []llm.Message
+	var injected bool
 	for i, it := range s.items {
 		texts = append(texts, it.input.Text)
 		before = append(before, it.input.Before...)
+		if it.input.After != nil {
+			afters = append(afters, it.input.After)
+		}
 		if it.input.Injected {
 			injected = true
 		}
@@ -76,13 +81,29 @@ func (s *steerQueue) join() agent.Input {
 	}
 	s.items = nil
 
-	out := agent.Input{Text: strings.Join(texts, "\n"), Before: before, Injected: injected}
+	out := agent.Input{Text: strings.Join(texts, "\n"), Before: before,
+		After: joinAfter(afters), Injected: injected}
 	if labelJoin := strings.Join(labels, "\n"); labelJoin != "" {
 		joined := labelJoin // captured for the closure; landed takes no lock
 		out.Delivered = func() { s.landed(joined) }
 	}
 	s.refreshLocked()
 	return out
+}
+
+// joinAfter chains every queued item's resolver into one, run in submit order.
+// It returns nil when the batch has none, keeping the common case unset.
+func joinAfter(afters []func(context.Context) []llm.Message) func(context.Context) []llm.Message {
+	if len(afters) == 0 {
+		return nil
+	}
+	return func(ctx context.Context) []llm.Message {
+		msgs := make([]llm.Message, 0, 2*len(afters))
+		for _, fn := range afters {
+			msgs = append(msgs, fn(ctx)...)
+		}
+		return msgs
+	}
 }
 
 // landed clears accounting and echoes the delivered labels on the loop goroutine.

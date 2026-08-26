@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -529,4 +530,41 @@ func TestGuardedToolPreviewSkipsNonPreviewers(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, inner.done)
 	assert.Empty(t, dc.calls)
+}
+
+// TestRegistryConcurrentRegisterAndSetEnabled exercises the group-name expansion
+// path under the lock, so -race catches a read of r.groups outside it.
+func TestRegistryConcurrentRegisterAndSetEnabled(t *testing.T) {
+	r := New()
+	for _, n := range []string{"read", "write"} {
+		r.Register(&fakeTool{name: n}, true)
+	}
+	r.RegisterGroup(ToolGroup{
+		Name:   "pair",
+		Source: SourceBuiltin,
+		Tools:  []string{"read", "write"},
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { // concurrent group registration mutates r.groups under the lock
+			defer wg.Done()
+			r.RegisterGroup(ToolGroup{
+				Name:   "pair",
+				Source: SourceBuiltin,
+				Tools:  []string{"read", "write"},
+			})
+		}()
+		wg.Add(1)
+		go func() { // concurrent SetEnabled reads r.groups via expansion
+			defer wg.Done()
+			r.SetEnabled([]string{"pair"})
+		}()
+	}
+	wg.Wait()
+
+	for _, n := range []string{"read", "write"} {
+		assert.True(t, r.enabled(n))
+	}
 }

@@ -48,6 +48,23 @@ func TestTrackerObserveThenModified(t *testing.T) {
 	assert.False(t, tr.Unchanged(path))
 }
 
+func TestTrackerReset(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "f.txt")
+	data := []byte("hello\nworld\n")
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+
+	tr := NewTracker()
+	info, _ := os.Stat(path)
+	tr.Observe(path, data, info)
+	require.True(t, tr.Unchanged(path))
+
+	tr.Reset()
+	assert.False(t, tr.Unchanged(path)) // a forgotten read must inject again
+	assert.Empty(t, tr.Records())
+}
+
 func TestTrackerRecordsSnapshotIsCopy(t *testing.T) {
 	t.Parallel()
 

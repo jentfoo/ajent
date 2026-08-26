@@ -36,6 +36,17 @@ func TestEstimateText(t *testing.T) {
 	}
 }
 
+func TestEstimateBytes(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 250, EstimateBytes(1000, KindProse))
+	assert.Equal(t, 312, EstimateBytes(1000, KindCode))
+	assert.Equal(t, 357, EstimateBytes(1000, KindJSON))
+	assert.Equal(t, 250, EstimateBytes(1000, Kind(99))) // unknown kind reads as prose
+	assert.Zero(t, EstimateBytes(0, KindCode))
+	assert.Zero(t, EstimateBytes(-5, KindCode))
+}
+
 func TestEstimateBlocksToolResultIsCode(t *testing.T) {
 	t.Parallel()
 

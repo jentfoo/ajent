@@ -111,6 +111,7 @@ path.
 drain follow-up queue -> for each turn:
     sink.TurnStart
     append the prompt and any pre-start steering as user messages
+      (Before, then the text, then Delivered, then After resolves)
     for step := 0; maxSteps <= 0 || step < maxSteps; step++ {
         drain push-steers, then OnBoundary inputs         (step boundary)
         req = request(state, env, tools)                 assemble()
@@ -258,14 +259,16 @@ had called it. `InjectPair(ctx, tool, sink, call, label)` is that one path: it
 executes the call through `NewOutput(sink, callID)` so output streams
 and renders exactly as an agent-run tool does, turns a Go error into an error
 `ToolResult` rather than losing it, and returns the assistant call and user result
-messages for `Input.Before` alongside the raw result (whose `Details` the caller
-may read). Having one implementation is what keeps truncation markers, read
-tracking and display order identical across all three callers.
+messages for `Input.Before` or `Input.After` alongside the raw result (whose
+`Details` the caller may read). Having one implementation is what keeps truncation
+markers, read tracking and display order identical across all three callers.
 
 The **call id is the caller's** and must be unique for the life of the session:
-`Before` messages are appended to `State` and persisted, and Anthropic rejects a
-request whose `tool_use` ids repeat — permanently, on every later turn. A caller
-that can run twice in one session (`/init`) therefore numbers its runs.
+the pair is appended to `State` and persisted, and Anthropic rejects a request
+whose `tool_use` ids repeat — permanently, on every later turn. A caller that can
+run twice in one session numbers its runs — `/init` from a per-`Runner` counter,
+`@` expansion from a per-`Expander` one that `refs.Expander.Seed` raises above
+every `ref-<n>-` id already in a resumed or rewound context.
 
 A staged `!` line is **not** an `InjectPair` caller: it stages a user-authored
 text message ("User Ran:" / "Output:") via `Input.Before`, not a synthetic tool-call
@@ -281,14 +284,24 @@ Two kinds of mid-turn input:
 - An `Input.Delivered` hook fires once its steer actually lands in `State`, so a
   sender that must confirm delivery (the sub-agent notifier) can clear pending
   ids only on real arrival; one dropped by an interrupt is re-offered. Nil is the
-  normal case.
+  normal case. It fires **before** `Input.After` resolves — the host clears its
+  submit bucket there, and running the reads first would leave them counted in
+  both that bucket and pending.
 - An `Input.Injected` flag marks system-provided context (sub-agent completion
   steers, permission-barrier notes) rather than a typed prompt. It rides onto the
   appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R / up
   arrow) can exclude it; injected messages still appear in assembled context.
-- Every `Input.Before` message is appended with the **injected** flag set: by
-definition Before carries system-staged context (`@` reads, `/init`'s survey,
-staged shell results), never a typed prompt, so recall excludes all of it.
+- **`Input.Before` and `Input.After`** frame one input. Before is context that
+  predates the message — staged `!` output, `/init`'s survey — and is a plain
+  message slice appended ahead of it. After is context the message *asked for*: a
+  `func(ctx) []llm.Message` resolved once the user message has landed, appended
+  behind it. The asymmetry is deliberate. `session.RewindTarget` rewinds a user
+  prompt to its parent, so anything ahead of the prompt survives a rewind onto it
+  and anything behind it does not — and an `@` reference must be dropped and
+  re-read when its message is re-sent, never left stale in context.
+- Every `Input.Before` and `Input.After` message is appended with the **injected**
+flag set: by definition they carry system-staged context (`@` reads, `/init`'s
+survey, staged shell results), never a typed prompt, so recall excludes all of it.
 - An injected steer with visible text is echoed to the sink (`UserPrompt`) when it
   lands — it has no submission echo, unlike typed prompts. Tool-result folds render
   through their own path.

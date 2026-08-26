@@ -37,12 +37,13 @@ func (t *writeTool) Preview(call agent.ToolCall) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	var existing string
+	after := normalizeToLF(p.Content) // preview in LF space so the diff stays clean
+	var before string
 	if _, statErr := os.Stat(full); statErr == nil { // show the delta when overwriting too
 		b, _ := os.ReadFile(full)
-		existing = string(b)
+		before = normalizeToLF(string(b))
 	}
-	return Change{Path: p.Path, Before: existing, After: p.Content}, nil
+	return Change{Path: p.Path, Before: before, After: after}, nil
 }
 
 func (t *writeTool) Name() string { return "write" }
@@ -70,7 +71,9 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 		return resultErr(err.Error()), nil
 	}
 
-	data := []byte(p.Content)
+	// an overwrite keeps the existing file's majority line ending; a new file gets LF
+	existing, _ := os.ReadFile(full)
+	data := []byte(restoreLineEndings(normalizeToLF(p.Content), detectLineEnding(existing)))
 	if err := config.WriteFileAtomic(full, data, writePerm(full)); err != nil {
 		return resultErr("write: " + err.Error()), nil
 	}

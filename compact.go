@@ -131,6 +131,11 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		// overflow runs on the turn goroutine, where WithState refuses
 		c.st.Messages = rebuilt.Messages
 	}
+	// a cut or an elided result takes file content out of context that read
+	// tracking still vouches for, so this rebuild reports like any other
+	if c.rec != nil && c.rec.onSwitch != nil {
+		c.rec.onSwitch(rebuilt.Messages)
+	}
 
 	if t := c.st.Tokens; t != nil {
 		// the reseed stays an estimate: pending carries the reduced messages only

@@ -45,7 +45,7 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 			input = a.follow[0]
 			a.follow = a.follow[1:]
 		}
-		empty := input.Text == "" && len(input.Blocks) == 0
+		empty := input.Text == "" && len(input.Blocks) == 0 && input.After == nil
 		idle := !a.running
 		a.mu.Unlock()
 
@@ -146,11 +146,11 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	for step := 1; ; step++ {
 		// the turn's own prompt lands once, before any stream
 		if len(promptInputs) > 0 {
-			a.appendSteer(promptInputs)
+			a.appendSteer(turnCtx, promptInputs)
 			promptInputs = nil
 		}
 		// steering submitted while running drains here at this step boundary
-		a.drainSteer()
+		a.drainSteer(turnCtx)
 
 		msg, usage, stop, err := a.stream(turnCtx, sink)
 		result.Usage.Add(usage)
@@ -239,7 +239,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 
 // drainSteer moves any new steering into the context as user messages, called
 // at each step boundary so mid-turn input lands before the next stream.
-func (a *Agent) drainSteer() {
+func (a *Agent) drainSteer(ctx context.Context) {
 	a.mu.Lock()
 	in := a.steer
 	a.steer = nil
@@ -251,14 +251,14 @@ func (a *Agent) drainSteer() {
 		in = append(in, a.opts.OnBoundary()...)
 	}
 	if len(in) > 0 {
-		a.appendSteer(in)
+		a.appendSteer(ctx, in)
 	}
 }
 
 // appendSteer adds queued steering inputs as user messages at a step boundary.
-// Input.Before is appended first, ahead of the user's text, so synthetic
-// tool-call + result pairs land in transcript order before what the user said.
-func (a *Agent) appendSteer(inputs []Input) {
+// Input.Before lands ahead of the user's text and Input.After behind it, so a
+// rewind onto that text drops the context it asked for along with it.
+func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 	for _, in := range inputs {
 		for _, m := range in.Before {
 			a.append(MessageInfo{Message: m, Injected: true})
@@ -269,16 +269,27 @@ func (a *Agent) appendSteer(inputs []Input) {
 		}
 		// extra content rides after the text when both are present (Input contract)
 		blocks = append(blocks, in.Blocks...)
-		if len(blocks) == 0 {
+		if len(blocks) == 0 && in.After == nil {
 			continue // an empty steer would inject a blank user turn
 		}
-		a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}, Injected: in.Injected})
-		// injected steers have no submission echo; surface them live like replay does
-		if in.Injected && !llm.OnlyToolResults(blocks) {
-			a.sink.UserPrompt(in.Text)
+		if len(blocks) > 0 {
+			a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}, Injected: in.Injected})
+			// injected steers have no submission echo; surface them live like replay does
+			if in.Injected && !llm.OnlyToolResults(blocks) {
+				a.sink.UserPrompt(in.Text)
+			}
 		}
+		// delivery is confirmed only when the message actually lands, and fires
+		// ahead of After because a queued batch echoes here — its reads must render
+		// under that echo, as replay draws them. The cost is the host's submit
+		// reserve clearing one repaint before those reads reach pending.
 		if in.Delivered != nil {
-			in.Delivered() // delivery is confirmed only when the message actually lands
+			in.Delivered()
+		}
+		if in.After != nil {
+			for _, m := range in.After(ctx) {
+				a.append(MessageInfo{Message: m, Injected: true})
+			}
 		}
 	}
 }

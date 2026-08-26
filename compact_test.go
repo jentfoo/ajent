@@ -100,6 +100,30 @@ func TestCompactorManualSingleTurn(t *testing.T) {
 	assert.Contains(t, textOfMain(st.Messages[0]), "lighthouse")
 }
 
+// A compaction cuts and elides tool results, taking file content out of context
+// that read tracking still vouches for, so it must report the rebuild like a
+// rewind does — or a later @ref would dedupe against content the model lost.
+func TestCompactorReportsRebuiltContext(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textStream("## Goal\nuser wanted a story")},
+	}}
+	c, st, w := testCompactor(t, model, sp)
+
+	var switched [][]llm.Message
+	c.rec.onSwitch = func(msgs []llm.Message) { switched = append(switched, msgs) }
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendText(t, w, llm.RoleAssistant, strings.Repeat("The Last Lighthouse. ", 200))
+
+	did, err := c.run(t.Context(), agent.CompactManual, "")
+	require.NoError(t, err)
+	require.True(t, did)
+
+	require.Len(t, switched, 1)
+	assert.Equal(t, st.Messages, switched[0]) // the reduced context, not the old one
+}
+
 // After a rewind the file tail sits on an abandoned branch; planning must use
 // the writer's live head or the recorded cut cannot be found on rebuild.
 func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {

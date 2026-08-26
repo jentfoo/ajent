@@ -64,6 +64,14 @@ func (t *Tracker) Unchanged(path string) bool {
 	return hex.EncodeToString(sum[:]) == rec.Hash && fi.ModTime().Equal(rec.ModTime) && fi.Size() == rec.Size
 }
 
+// Reset drops every observation. Call it when the context no longer reflects
+// what was read, so an @ reference re-injects instead of deduping against it.
+func (t *Tracker) Reset() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	clear(t.m)
+}
+
 // Records returns a snapshot of the observed paths and their records.
 func (t *Tracker) Records() map[string]Record {
 	t.mu.Lock()

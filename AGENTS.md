@@ -72,7 +72,7 @@ subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit 
 plan     -> agent, llm (never tools/tui/command/session — the driver supplies Host)
 projinit -> agent, llm, tools (never tui/command/session/subagent — /init drives the
             real read and agent_* tools through the registry)
-permit   -> agent, tools (never tui; prompter/classifier interfaces are supplied by main.go)
+permit   -> agent, tools, strutil (never tui; prompter/classifier interfaces are supplied by main.go)
 refs     -> agent, llm, tokens, tools, tui
 command  -> agent, config, llm, refs, tokens, tools, tui
 main.go  -> everything (the only wiring layer)

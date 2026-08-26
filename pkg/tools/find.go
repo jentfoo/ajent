@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -79,42 +78,42 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 // listFiles returns files under root matching pattern, bounded by max. It uses
 // git ls-files inside a repo for .gitignore semantics and walks otherwise.
 func listFiles(root, pattern string, max int) ([]string, bool) {
-	var entries []string
-	if IsGitRepo(root) {
-		out := runQuiet("git", "-C", root, "ls-files", "-co", "--exclude-standard")
-		for line := range strings.Lines(out) {
-			if trimmed := strings.TrimSpace(line); trimmed != "" {
-				entries = append(entries, filepath.Join(root, trimmed))
-			}
+	var out []fileEntry // stat once so mtime sort does not re-Stat per comparison
+	for _, p := range repoFiles(root) {
+		fi, err := os.Stat(p)
+		if err != nil {
+			continue
 		}
-	} else {
-		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() {
-				if IsSkippedDir(p) {
-					return filepath.SkipDir // never descend into VCS or dependency dirs
-				}
-				return nil
-			}
-			entries = append(entries, p)
-			return nil
-		})
-	}
-
-	var out []string
-	for _, e := range entries {
-		if matchGlob(pattern, relTo(root, e)) {
-			out = append(out, e)
+		if matchGlob(pattern, relTo(root, p)) {
+			out = append(out, fileEntry{path: p, mod: fi.ModTime()})
 		}
 	}
-	slices.SortStableFunc(out, func(a, b string) int { return mtimeCmp(b, a) }) // newest first
-	truncated := len(out) > max
+	slices.SortStableFunc(out, func(a, b fileEntry) int { // newest first
+		switch {
+		case a.mod.Equal(b.mod):
+			return strings.Compare(a.path, b.path)
+		case a.mod.Before(b.mod):
+			return 1
+		default:
+			return -1
+		}
+	})
+	paths := make([]string, len(out))
+	for i := range out {
+		paths[i] = out[i].path
+	}
+	truncated := len(paths) > max
 	if truncated {
-		out = out[:max]
+		paths = paths[:max]
 	}
-	return out, truncated
+	return paths, truncated
+}
+
+// fileEntry pairs a path with its modification time so listFiles sorts without
+// re-statting every comparison.
+type fileEntry struct {
+	path string
+	mod  time.Time
 }
 
 // IsGitRepo reports whether root is inside a git work tree.
@@ -172,44 +171,8 @@ func matchSegments(pat, name []string) bool {
 // relTo returns path relative to root when inside it.
 func relTo(root, path string) string {
 	rel, err := filepath.Rel(root, path)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return path
 	}
 	return rel
-}
-
-// mtimeCmp orders a before b by modification time (a newer => negative for desc).
-func mtimeCmp(a, b string) int {
-	ai, _ := os.Stat(a)
-	bi, _ := os.Stat(b)
-	switch {
-	case ai == nil && bi == nil:
-		return 0
-	case ai == nil:
-		return -1
-	case bi == nil:
-		return 1
-	default:
-		if ai.ModTime().Equal(bi.ModTime()) {
-			return strings.Compare(a, b)
-		}
-		if ai.ModTime().Before(bi.ModTime()) {
-			return -1
-		}
-		return 1
-	}
-}
-
-// runQuiet runs a command with a short timeout and returns trimmed stdout or
-// empty on failure, so an unresponsive child cannot hang the tool.
-func runQuiet(args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	var out strings.Builder
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.Stdout = &out
-	if cmd.Run() != nil {
-		return ""
-	}
-	return strings.TrimSpace(out.String())
 }

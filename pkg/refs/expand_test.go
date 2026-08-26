@@ -1,6 +1,7 @@
 package refs
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,9 +56,9 @@ func TestExpand(t *testing.T) {
 		t.Setenv("HOME", home)
 
 		x, sink := newExpander(t, root)
-		res := x.Expand(t.Context(), "see @~/notes.md")
+		res := x.Expand("see @~/notes.md")
 		assert.Equal(t, "see @~/notes.md", res.Text)
-		require.Len(t, res.Before, 2)
+		require.Len(t, injected(t, res), 2)
 		assert.Contains(t, sink.starts, "read ~/notes.md")
 	})
 
@@ -69,17 +70,17 @@ func TestExpand(t *testing.T) {
 		t.Setenv("HOME", home)
 
 		x, _ := newExpander(t, root)
-		res := x.Expand(t.Context(), "see @~/big.md")
+		res := x.Expand("see @~/big.md")
 		assert.Contains(t, res.Text, "@~/big.md (")
-		assert.Empty(t, res.Before)
+		assert.Empty(t, injected(t, res))
 	})
 
 	t.Run("no_refs", func(t *testing.T) {
 		dir := t.TempDir()
 		x, _ := newExpander(t, dir)
-		res := x.Expand(t.Context(), "just a message")
+		res := x.Expand("just a message")
 		assert.Equal(t, "just a message", res.Text)
-		assert.Empty(t, res.Before)
+		assert.Empty(t, injected(t, res))
 	})
 
 	t.Run("small_file_injects_read", func(t *testing.T) {
@@ -87,11 +88,13 @@ func TestExpand(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
 		x, sink := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "look at @a.go")
+		res := x.Expand("look at @a.go")
 		assert.Equal(t, "look at @a.go", res.Text)
-		require.Len(t, res.Before, 2)
-		assert.Equal(t, llm.RoleAssistant, res.Before[0].Role)
-		assert.Equal(t, llm.RoleUser, res.Before[1].Role)
+		assert.Positive(t, res.Est)
+		msgs := injected(t, res)
+		require.Len(t, msgs, 2)
+		assert.Equal(t, llm.RoleAssistant, msgs[0].Role)
+		assert.Equal(t, llm.RoleUser, msgs[1].Role)
 		assert.Contains(t, sink.starts, "read a.go")
 	})
 
@@ -102,9 +105,9 @@ func TestExpand(t *testing.T) {
 		}
 		x, sink := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "see @*.txt")
+		res := x.Expand("see @*.txt")
 		assert.Equal(t, "see @*.txt", res.Text) // the pattern stays literal in prose
-		require.Len(t, res.Before, 2)
+		require.Len(t, injected(t, res), 2)
 		assert.Contains(t, sink.starts, "ls *.txt")
 	})
 
@@ -113,9 +116,9 @@ func TestExpand(t *testing.T) {
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
 		x, sink := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "list @sub")
+		res := x.Expand("list @sub")
 		assert.Equal(t, "list @sub", res.Text)
-		require.Len(t, res.Before, 2)
+		require.Len(t, injected(t, res), 2)
 		assert.Contains(t, sink.starts, "ls sub")
 	})
 
@@ -125,8 +128,8 @@ func TestExpand(t *testing.T) {
 		x, _ := newExpander(t, dir)
 		x.reg.SetEnabled([]string{"read", "write", "edit"}) // ls disabled
 
-		res := x.Expand(t.Context(), "list @sub")
-		require.Len(t, res.Before, 2)
+		res := x.Expand("list @sub")
+		require.Len(t, injected(t, res), 2)
 	})
 
 	t.Run("large_file_annotates", func(t *testing.T) {
@@ -134,10 +137,10 @@ func TestExpand(t *testing.T) {
 		writeBigLines(t, dir, "big.go")
 		x, _ := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "see @big.go")
+		res := x.Expand("see @big.go")
 		assert.Contains(t, res.Text, "@big.go (")
 		assert.Contains(t, res.Text, "lines")
-		assert.Empty(t, res.Before)
+		assert.Empty(t, injected(t, res))
 	})
 
 	t.Run("binary_file_annotates", func(t *testing.T) {
@@ -145,20 +148,20 @@ func TestExpand(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "blob.bin"), []byte{0, 1, 2, 3, 4, 5}, 0o600))
 		x, _ := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "see @blob.bin")
+		res := x.Expand("see @blob.bin")
 		assert.Contains(t, res.Text, "@blob.bin (binary,")
-		assert.Empty(t, res.Before)
+		assert.Empty(t, injected(t, res))
 	})
 
 	t.Run("missing_path_stays_literal", func(t *testing.T) {
 		dir := t.TempDir()
 		x, _ := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "see @nope.go")
+		res := x.Expand("see @nope.go")
 		assert.Equal(t, "see @nope.go", res.Text)
 		require.Len(t, res.Notices, 1)
 		assert.Contains(t, res.Notices[0], "not found")
-		assert.Empty(t, res.Before)
+		assert.Empty(t, injected(t, res))
 	})
 
 	t.Run("dedupes_unchanged_file", func(t *testing.T) {
@@ -168,12 +171,12 @@ func TestExpand(t *testing.T) {
 		x, _ := newExpander(t, dir)
 
 		// first expand reads it (observes in the tracker)
-		res1 := x.Expand(t.Context(), "@a.go")
-		require.Len(t, res1.Before, 2)
+		res1 := x.Expand("@a.go")
+		require.Len(t, injected(t, res1), 2)
 
 		// second expand: file unchanged in the tracker, nothing injected
-		res2 := x.Expand(t.Context(), "@a.go")
-		assert.Empty(t, res2.Before)
+		res2 := x.Expand("@a.go")
+		assert.Empty(t, injected(t, res2))
 	})
 
 	t.Run("reinjects_when_file_changes", func(t *testing.T) {
@@ -183,21 +186,21 @@ func TestExpand(t *testing.T) {
 		x, _ := newExpander(t, dir)
 
 		// first inclusion reads the file and injects it
-		res1 := x.Expand(t.Context(), "@a.go")
-		require.Len(t, res1.Before, 2)
+		res1 := x.Expand("@a.go")
+		require.Len(t, injected(t, res1), 2)
 
 		// unchanged: not injected again
-		res2 := x.Expand(t.Context(), "@a.go")
-		assert.Empty(t, res2.Before)
+		res2 := x.Expand("@a.go")
+		assert.Empty(t, injected(t, res2))
 
 		// hash changed: must be read and injected again
 		require.NoError(t, os.WriteFile(p, []byte("package a\nvar X = 1\n"), 0o600))
-		res3 := x.Expand(t.Context(), "@a.go")
-		require.Len(t, res3.Before, 2)
+		res3 := x.Expand("@a.go")
+		require.Len(t, injected(t, res3), 2)
 
 		// unchanged again: deduped once more
-		res4 := x.Expand(t.Context(), "@a.go")
-		assert.Empty(t, res4.Before)
+		res4 := x.Expand("@a.go")
+		assert.Empty(t, injected(t, res4))
 	})
 
 	t.Run("replaces_existing_annotation", func(t *testing.T) {
@@ -207,7 +210,7 @@ func TestExpand(t *testing.T) {
 
 		// re-expand the already-annotated text: the measurement is replaced, not doubled
 		annotated := "see @big.go (999 lines, 9mb)"
-		res := x.Expand(t.Context(), annotated)
+		res := x.Expand(annotated)
 		assert.Contains(t, res.Text, "@big.go (")
 		assert.NotContains(t, res.Text, "(999", "old annotation replaced")
 		assert.False(t, strings.Contains(res.Text, "(600 lines") && strings.Contains(res.Text, "(999"),
@@ -221,9 +224,9 @@ func TestExpand(t *testing.T) {
 		}
 		x, _ := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "@a.go and @b.txt")
-		ids := toolCallIDs(res.Before)
-		assert.Equal(t, []string{"ref-a.go", "ref-b.txt"}, ids,
+		res := x.Expand("@a.go and @b.txt")
+		ids := toolCallIDs(injected(t, res))
+		assert.Equal(t, []string{"ref-1-a.go", "ref-1-b.txt"}, ids,
 			"reads must land in forward document order, not reversed")
 	})
 
@@ -233,10 +236,99 @@ func TestExpand(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("hi\n"), 0o600))
 		x, _ := newExpander(t, dir)
 
-		res := x.Expand(t.Context(), "@a.go then @sub")
-		assert.Equal(t, []string{"ref-a.go", "ref-ls-sub"}, toolCallIDs(res.Before),
+		res := x.Expand("@a.go then @sub")
+		assert.Equal(t, []string{"ref-1-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)),
 			"mixed read and ls references keep document order")
 	})
+
+	t.Run("nothing_to_inject_has_no_run", func(t *testing.T) {
+		dir := t.TempDir()
+		x, _ := newExpander(t, dir)
+
+		assert.Nil(t, x.Expand("plain message").Run)
+		assert.Nil(t, x.Expand("see @nope.go").Run)
+	})
+
+	t.Run("same_path_twice_injects_once", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("compare @a.go with @a.go, then @sub and @sub")
+		// a repeated path must not duplicate its content, and must never repeat a
+		// call id: Anthropic rejects a request whose tool_use ids collide
+		assert.Equal(t, []string{"ref-1-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
+	})
+
+	t.Run("same_path_twice_counts_once", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		once := x.Expand("see @a.go")
+		twice := x.Expand("see @a.go and @a.go")
+		assert.Equal(t, once.Est, twice.Est) // the running byte budget counts it once
+	})
+
+	t.Run("batch_reads_path_once", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		// two messages joined into one batch: both planned before either read
+		first := x.Expand("look at @a.go")
+		second := x.Expand("and @a.go again")
+		require.NotNil(t, first.Run)
+		require.NotNil(t, second.Run)
+
+		assert.Len(t, injected(t, first), 2)
+		assert.Empty(t, injected(t, second), "the first item's read already landed")
+	})
+
+	t.Run("cancelled_context_stops_the_batch", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, f := range []string{"a.go", "b.go"} {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, f), []byte("package a\n"), 0o600))
+		}
+		x, _ := newExpander(t, dir)
+		res := x.Expand("@a.go and @b.go")
+		require.NotNil(t, res.Run)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		assert.Empty(t, res.Run(ctx))
+	})
+
+	t.Run("repeat_reference_mints_new_id", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "a.go")
+		require.NoError(t, os.WriteFile(p, []byte("package a\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		first := toolCallIDs(injected(t, x.Expand("@a.go")))
+		require.NoError(t, os.WriteFile(p, []byte("package a\nvar X = 1\n"), 0o600))
+		second := toolCallIDs(injected(t, x.Expand("@a.go")))
+
+		require.Len(t, first, 1)
+		require.Len(t, second, 1)
+		assert.NotEqual(t, first[0], second[0], "a re-read of the same path needs a fresh call id")
+	})
+}
+
+func TestExpanderSeed(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+	x, _ := newExpander(t, dir)
+
+	x.Seed([]llm.Message{{Role: llm.RoleAssistant, Content: llm.BlockList{
+		llm.ToolCallBlock{ID: "ref-4-a.go", Name: "read"},
+		llm.ToolCallBlock{ID: "call_9", Name: "bash"}, // an unrelated id never seeds
+	}}})
+
+	assert.Equal(t, []string{"ref-5-a.go"}, toolCallIDs(injected(t, x.Expand("@a.go"))))
 }
 
 // writeBigLines writes name under dir with enough lines to exceed RefInject.
@@ -247,6 +339,15 @@ func writeBigLines(t *testing.T, dir string, name string) {
 		b.WriteString("line\n")
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o600))
+}
+
+// injected runs a result's planned reads and returns the messages they produce.
+func injected(t *testing.T, res Result) []llm.Message {
+	t.Helper()
+	if res.Run == nil {
+		return nil
+	}
+	return res.Run(t.Context())
 }
 
 // toolCallIDs returns the assistant tool-call ids in a message slice.

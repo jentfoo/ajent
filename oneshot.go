@@ -17,6 +17,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/mcp"
 	"github.com/jentfoo/ajent/pkg/permit"
+	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -200,7 +201,14 @@ func runHeadless(o headlessOptions) int {
 		}
 	}
 
-	err := ag.Prompt(ctx, agent.Input{Text: o.flags.prompt, Injected: true})
+	// expand @ references like the pump does, once the scope has settled
+	expander := refs.NewExpander(toolsReg, opts.Sinks[0], tools.PathPolicy{Cwd: cwdOrDot()})
+	expander.Seed(st.Messages) // --continue reopens a transcript that holds ref ids
+	expanded := expander.Expand(o.flags.prompt)
+	for _, n := range expanded.Notices {
+		notify(n, agent.LevelWarn)
+	}
+	err := ag.Prompt(ctx, agent.Input{Text: expanded.Text, After: expanded.Run, Injected: true})
 	answer := finalAnswer(st.Messages)
 	res := drain.result()
 	status, code := headlessOutcome(err, res, answer)

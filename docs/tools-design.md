@@ -172,8 +172,9 @@ and for configurations that run without `bash`.
 ### read (`read.go`)
 
 Line-numbered (`cat -n` style) output so `edit` and the model agree on
-positions. Defaults to 2000 lines with per-line truncation at 2000 chars; the
-truncation marker names the next `offset`. Binary files (NUL in the first 8 kB)
+positions. Defaults to 2000 lines with each line capped at `MaxLineRunes`
+(1024 runes) and a marker; the truncation marker names the next `offset`. Binary
+files (NUL in the first 8 kB)
 are refused with a useful message; images are refused for now. Every successful
 read is recorded in the tracker.
 
@@ -194,18 +195,19 @@ Exact-string replacement against an in-memory buffer, written once at the end:
 a multi-edit batch is all-or-nothing. The validation loop lives in a shared
 `applyEdits(buf string, ops []editOp) (string, error)` used by both `Execute`
 and `DryRun`, preceded by an order-independent `validateEdits` pass: an empty
-or duplicated `oldText`, two edits overlapping the same region and a no-op
-(`oldText == newText`) all fail before any write. Zero matches returns an
-actionable diagnostic naming each reliably-detected cause (whitespace or casing
-differences, genuinely-absent content) plus one closest-line hint — never a blanket
-"whitespace must match" claim; multiple matches without `replace_all` returns the
-occurrence count and locations. Messages tell the model it **must provide text
-exactly** rather than asking it to copy. All are reported through the per-op loop,
-designed to be actionable since they are the model's main feedback loop, so no
-pre-read gate is needed — a wrong assumption fails naturally against live content.
-Renders through `Previewer`, sharing `resolveApply` with `DryRun`. The edit tool implements `DryRunner`, so the
-permission barrier can skip prompting for a call that cannot succeed and let
-the real apply path surface its natural error.
+or duplicated `oldText`, and a no-op (`oldText == newText`) all fail before any
+write. Every op's span is resolved against the **original** buffer, never another
+edit's output, so edits cannot cascade; overlapping spans across ops are rejected.
+Zero matches returns an actionable diagnostic naming each reliably-detected cause
+(whitespace or casing differences, genuinely-absent content) plus one closest-line
+hint — and when an earlier edit's `newText` would create the missing text it says
+so explicitly. Multiple matches without `replace_all` returns the occurrence count
+and locations. Messages tell the model it **must provide text exactly** rather than
+asking it to copy, and always receive the original buffer so diagnostics stay
+actionable. Line endings follow one package-wide convention: model-visible output
+is always LF, while a write copies untouched regions verbatim and gives each
+replacement its neighbouring lines' ending — `write` overwrites with the existing
+file's majority ending, and a new file gets LF.
 
 ### bash (`bash.go`)
 
@@ -213,8 +215,14 @@ One non-login `bash -c` process per call (a login shell would reset PATH to the
 system default and hide user dirs like `~/.local/bin`, Homebrew or nvm) — no
 persistent shell, so `cd` and state cannot
 confuse later calls. Streams stdout and stderr interleaved to the UI while
-teeing a bounded copy for the model; output past the limit spills to a file
-under `os.TempDir()/ajent-<session>` and the model gets a pointer to it. ANSI
+teeing a bounded copy for the model; every kept line is capped at `MaxLineRunes`,
+and output past the limit (or carrying one overlong line) spills **the complete
+stream** (head + overflow) to a file under `os.TempDir()/ajent-<session>` and the
+model gets a pointer to it. Because that spill is an ordinary readable text file,
+the model can open it with `read` and page through it, exactly as it does for
+grep's spilled results — bash differs from read only in that its output has no
+pre-existing source file to re-read, so the footer names a written one instead of
+a next offset. ANSI
 escapes are stripped from captured output. The child runs in its own process
 group (`setpgid`); on timeout (default 120 s, max 600 s) or cancellation the
 whole group is killed so grandchildren cannot leak, and the model is told it
@@ -234,13 +242,14 @@ environment forces non-interactive settings (`PAGER=cat`,
 Off-by-default extras for no-shell agents.
 
 - `find`: glob matching with `**` support; a bare pattern (`*.go`) matches at
-  any depth. Uses `git ls-files` inside a repo for `.gitignore` semantics,
-  walks otherwise (skipping VCS/dependency subtrees). Results sorted by mtime,
-  newest first, capped by `limit`.
+  any depth. Uses `git ls-files -z` (quoting disabled, so non-ASCII filenames
+  stay usable) inside a repo for `.gitignore` semantics, walking otherwise.
+  Results sorted by mtime (stat once per file), newest first, capped by `limit`.
 - `grep`: shells out to `rg` when present (exit 1 = no matches, exit ≥ 2
-  surfaces stderr as an error), falling back to a bounded Go `regexp` walk.
-  Modes: `content` (line numbers, optional context lines), `files`, `count`.
-  Invalid patterns are actionable errors on both paths.
+  surfaces stderr as an error), falling back to a bounded Go `regexp` walk. Both
+  paths respect `.gitignore` — the fallback enumerates through the same
+  `repoFiles`. Modes: `content` (line numbers, optional context lines),
+  `files`, `count`. Invalid patterns are actionable errors on both paths.
 - `ls`: one directory's entries — or the files a wildcard pattern matches
   (via `filepath.Glob`) — sorted alphabetically, `/` suffix on directories,
   named truncation marker at the limit. A glob with no matches is an error so it
@@ -299,9 +308,9 @@ asker.go        Asker type and SetAsker registration
 guard.go        Guard, Decision, Allow/Deny helpers
 schema.go       SchemaOf[T] reflection helper
 path.go         PathPolicy — resolves relative paths against Cwd, folds symlinks
-track.go        Tracker — observed-file records for @ref dedupe
-limits.go       Limit, Elide, bounded Writer, per-tool budgets
-spill.go        lazy per-session spill file for oversized bash output
+track.go        Tracker — observed-file records for @ref dedupe; Reset on a context switch
+limits.go       Limit, Bound/Bounded truncation, bounded Writer, per-tool budgets
+spill.go        lazy per-session spill file for oversized tool output (bash/grep)
 fileutil.go     file probing (text/binary/image), line numbering
 walk.go         bounded file walk, runQuiet/runCaptured helpers
 internal.go     decode, result helpers, discard Output
@@ -319,17 +328,33 @@ containment check by default — extensions layer their own limits via guards.
 
 The tracker records `path → (mtime, size, sha256)` on every observation.
 `@ref` expansion uses those records (via `Unchanged`) to dedupe against an
-unchanged in-context read. It is shared by `read`/`write`/`edit`, which each
-observe the content they produce so a later `@file` reflects current state,
-and exported for reuse outside the package. Safe for concurrent use.
+unchanged in-context read — at plan time, and again as each injection runs, so a
+batch of messages naming one path reads it once. It is shared by
+`read`/`write`/`edit`, which each observe the content they produce so a later
+`@file` reflects current state, and exported for reuse outside the package. Safe
+for concurrent use.
+
+Records describe the *process*, not the context, so a rewind, fork or compaction
+can leave them claiming a file is in context when its read was dropped or elided.
+The host calls `Reset` from every rebuild path, which makes the next `@file`
+re-inject rather than dedupe against a read the model can no longer see.
 
 ### Output limits (`limits.go`, `spill.go`)
 
 Each tool has a line/byte budget (`BashOutput` ~30 kB for the model,
-`ReadFile` 2000 lines, `GrepResult`, `FindResult`, `LsResult`). `Elide` keeps
-head and tail with a marker for in-memory text; the bounded `Writer` forwards
-whole lines until a bound is hit, then diverts the remainder to a spill file
-created lazily on first overflow — a normal command leaves nothing behind.
+`ReadFile` 2000 lines, `GrepResult`, `FindResult`, `LsResult`). Truncation is
+**head-only at whole-line boundaries**: `Bound` keeps the leading lines that fit
+either bound, capping every kept line at `MaxLineRunes`, and cuts a single
+overlong first line at `MaxLineRunes` when no whole line fits. One overlong
+line alone still counts as truncated, so grep spills the full text and the
+footer can name it. The footer names shown/total lines and total bytes plus a
+spill path. The bounded `Writer` forwards whole lines until a bound is hit then
+diverts to a spill file created lazily on first overflow — writing the kept head
+there too (in stream order), so the spill file holds the **complete** stream;
+bash caps every kept line at `MaxLineRunes`, and treats an in-budget overlong
+line as truncation too, spilling the complete stream so nothing is lost. A normal command
+leaves nothing behind. (`Elide`, keeping rune-capped head and tail with a marker,
+survives for compaction's structural reduction only.)
 
 ## Agent integration
 

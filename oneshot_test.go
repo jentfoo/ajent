@@ -283,6 +283,43 @@ func TestRunHeadless(t *testing.T) {
 		assert.Contains(t, errw, "ajent: tool: ")        // progress never touches stdout
 	})
 
+	t.Run("expands_at_references", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		t.Setenv("AJENT_HOME", t.TempDir())
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+
+		set, _, err := config.Load(config.Options{Workspace: cwdOrDot()})
+		require.NoError(t, err)
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		sp := &llm.ScriptedProvider{ProviderName: "p",
+			Turns: []llm.ScriptedTurn{{Events: textTurn("package a")}}}
+
+		var out, errw bytes.Buffer
+		code := runHeadless(headlessOptions{
+			flags:  cliFlags{prompt: "explain @a.go", output: outputText},
+			set:    set,
+			reg:    reg,
+			active: llm.Model{Provider: "p", ID: "m", ContextWindow: 100000},
+			out:    &out, errw: &errw,
+			provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		})
+		require.Equal(t, exitOK, code)
+
+		reqs := sp.Requests()
+		require.Len(t, reqs, 1)
+		msgs := reqs[0].Messages
+		require.Len(t, msgs, 3)
+		assert.Equal(t, llm.TextBlock{Text: "explain @a.go"}, msgs[0].Content[0])
+		// the read follows the message that asked for it
+		call, ok := msgs[1].Content[0].(llm.ToolCallBlock)
+		require.True(t, ok)
+		assert.Equal(t, "read", call.Name)
+		res, ok := msgs[2].Content[0].(llm.ToolResultBlock)
+		require.True(t, ok)
+		assert.Equal(t, call.ID, res.CallID)
+	})
+
 	t.Run("continue_resumes_the_transcript", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv("AJENT_HOME", t.TempDir())

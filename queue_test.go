@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"slices"
 	"testing"
 
@@ -65,10 +66,43 @@ func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.Equal(t, "first\nsecond", out[0].Text)
 	assert.Len(t, out[0].Before, 2)
+	assert.Nil(t, out[0].After, "no queued item carried @ reads")
 
 	out[0].Delivered() // fires once the batch lands
 	assert.Contains(t, fake.echoed, "label one\nlabel two")
 	require.GreaterOrEqual(t, cleared, 1)
+}
+
+func TestJoinAfter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no_resolvers", func(t *testing.T) {
+		assert.Nil(t, joinAfter(nil))
+	})
+
+	t.Run("chains_in_submit_order", func(t *testing.T) {
+		fake := &fakeQueueUI{}
+		q := newSteerQueue(fake, func(int) {}, func() {})
+		after := func(text string) func(context.Context) []llm.Message {
+			return func(context.Context) []llm.Message {
+				return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: text}}}}
+			}
+		}
+
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+		require.True(t, q.offer(agent.Input{Text: "a", After: after("read a")}, "a", 1))
+		require.True(t, q.offer(agent.Input{Text: "b"}, "b", 1)) // no reads; must not break the chain
+		require.True(t, q.offer(agent.Input{Text: "c", After: after("read c")}, "c", 1))
+
+		out := q.pull()
+		require.Len(t, out, 1)
+		require.NotNil(t, out[0].After)
+
+		msgs := out[0].After(t.Context())
+		require.Len(t, msgs, 2)
+		assert.Equal(t, llm.TextBlock{Text: "read a"}, msgs[0].Content[0])
+		assert.Equal(t, llm.TextBlock{Text: "read c"}, msgs[1].Content[0])
+	})
 }
 
 func TestSteerQueueTake(t *testing.T) {

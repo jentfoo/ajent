@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -39,7 +40,7 @@ var _ DryRunner = (*editTool)(nil)
 var _ Previewer = (*editTool)(nil)
 
 // resolveApply resolves the path and returns the current file text with the edits
-// applied, so DryRun and Preview share one code path.
+// applied in LF space, so DryRun and Preview share one code path.
 func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
 	var p editParams
 	err := decode(call.Input, &p)
@@ -54,8 +55,9 @@ func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	after, err := applyEdits(p.Path, string(data), p.Edits)
-	return Change{Path: p.Path, Before: string(data), After: after}, err
+	before := normalizeToLF(string(data))
+	after, _, aerr := applyEdits(p.Path, string(data), p.Edits)
+	return Change{Path: p.Path, Before: before, After: after}, aerr
 }
 
 // DryRun reports whether an edit call would fail before it runs: the file is
@@ -84,7 +86,7 @@ func (t *editTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
-// Execute applies every edit against an in-memory buffer, then writes once so a
+// Execute applies every edit against the original buffer, then writes once so a
 // failure mid-list leaves the file byte-identical. The diff is rendered by the
 // guard wrapper before this runs.
 func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
@@ -105,14 +107,11 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	if err != nil {
 		return resultErr("edit: " + err.Error()), nil
 	}
-	buf := string(data)
-
-	applied, err := applyEdits(p.Path, buf, p.Edits)
+	_, final, err := applyEdits(p.Path, string(data), p.Edits)
 	if err != nil {
 		return resultErr(err.Error()), nil
 	}
 
-	final := []byte(applied)
 	if err := config.WriteFileAtomic(full, final, writePerm(full)); err != nil {
 		return resultErr("edit: " + err.Error()), nil
 	}
@@ -123,45 +122,138 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}, nil
 }
 
-// applyEdits validates ops against buf then applies them in order. It fails before
-// any change when an op's old text is empty, missing, ambiguous (more than one match
-// without replace_all), duplicated across edits, overlapping another edit, or a no-op.
-func applyEdits(path string, buf string, ops []editOp) (string, error) {
-	if err := validateEdits(buf, ops); err != nil {
-		return "", err
+// applyEdits validates ops, resolves every op's span on the LF-normalized
+// buffer (so edits never cascade onto each other), and applies them all at
+// once. It returns the LF-space result for diffs plus the final file bytes,
+// where untouched regions are copied verbatim and each replacement adopts the
+// line ending of its neighbouring lines. It fails before any change when an op
+// is empty, a no-op, duplicated, missing, ambiguous (more than one match
+// without replace_all), or overlaps another edit.
+func applyEdits(path string, orig string, ops []editOp) (after string, final []byte, err error) {
+	buf := normalizeToLF(orig)
+	for i := range ops { // match in LF space so CRLF oldText never needs a \r
+		ops[i].OldText = normalizeToLF(ops[i].OldText)
+		ops[i].NewText = normalizeToLF(ops[i].NewText)
 	}
+	if err := validateEdits(ops); err != nil {
+		return "", nil, err
+	}
+
+	var spans []matchSpan
 	for i := range ops {
 		op := &ops[i]
-		count := strings.Count(buf, op.OldText)
-		switch {
+		switch count := strings.Count(buf, op.OldText); {
 		case count == 0:
-			return "", errors.New(notFoundError(i+1, path, ops[i].OldText, buf))
+			return "", nil, errors.New(missingError(i+1, path, op.OldText, buf, ops))
 		case count > 1 && !op.ReplaceAll:
-			return "", errors.New(ambiguousError(i+1, path, op.OldText, buf))
+			return "", nil, errors.New(ambiguousError(i+1, path, op.OldText, buf))
 		default: // exactly one match, or replace_all with any positive count
 			if op.ReplaceAll {
-				buf = strings.ReplaceAll(buf, op.OldText, op.NewText)
+				for s := 0; ; {
+					j := strings.Index(buf[s:], op.OldText)
+					if j < 0 {
+						break
+					}
+					s += j
+					spans = append(spans, matchSpan{idx: i, s: s, e: s + len(op.OldText)})
+					s += len(op.OldText)
+				}
 			} else {
-				buf = strings.Replace(buf, op.OldText, op.NewText, 1)
+				s := strings.Index(buf, op.OldText)
+				spans = append(spans, matchSpan{idx: i, s: s, e: s + len(op.OldText)})
 			}
 		}
 	}
-	return buf, nil
+
+	// reject overlapping spans across ops before rebuilding the buffer
+	slices.SortStableFunc(spans, func(a, b matchSpan) int { return a.s - b.s })
+	for i := 1; i < len(spans); i++ {
+		if spans[i].s >= spans[i-1].e {
+			continue
+		}
+		a, bb := spans[i-1], spans[i]
+		return "", nil, fmt.Errorf("edits %d and %d target overlapping regions in %s; adjust their oldText so each targets a distinct region", a.idx+1, bb.idx+1, path)
+	}
+
+	var out strings.Builder // LF rebuild from the original buffer in span order
+	last := 0
+	for _, sp := range spans {
+		out.WriteString(buf[last:sp.s])
+		out.WriteString(ops[sp.idx].NewText)
+		last = sp.e
+	}
+	out.WriteString(buf[last:])
+	return out.String(), rebuild(orig, buf, spans, ops), nil
 }
 
-// matchSpan is one non-replace edit's byte range in the original buffer.
+// matchSpan is one replacement's byte range in the LF-normalized buffer.
 type matchSpan struct {
 	idx int // index of the owning op
 	s   int
 	e   int
 }
 
-// validateEdits runs the order-independent intent checks: empty or no-op edits,
-// duplicate old texts and overlapping non-replace regions. Missing/ambiguous text
-// is left to applyEdits' per-op loop, which sees the evolving buffer.
-func validateEdits(buf string, ops []editOp) error {
+// rebuild applies spans directly to the original bytes so untouched regions
+// keep their exact line endings, with each newText adopting the ending of the
+// line it starts on — a mixed-ending file keeps its mix outside the edits.
+func rebuild(orig, buf string, spans []matchSpan, ops []editOp) []byte {
+	// one walk records each line's start in both spaces plus its ending;
+	// normalizeToLF only deletes the \r of a CRLF pair, so bytes map one-to-one
+	// inside a line and line starts just shift by the pairs before them
+	var starts, nstarts []int
+	var crlfs []bool
+	o, n := 0, 0
+	for i := 0; i < len(orig); i++ {
+		if orig[i] != '\n' {
+			continue
+		}
+		crlf := i > 0 && orig[i-1] == '\r'
+		starts, nstarts, crlfs = append(starts, o), append(nstarts, n), append(crlfs, crlf)
+		if crlf {
+			n += i - o // the \r before this \n is dropped by normalization
+		} else {
+			n += i - o + 1
+		}
+		o = i + 1
+	}
+	terminated := strings.HasSuffix(orig, "\n")
+	if !terminated && len(orig) > 0 { // trailing line with no terminator
+		starts, nstarts, crlfs = append(starts, o), append(nstarts, n), append(crlfs, false)
+	}
+	toOrig := func(k int) int {
+		l := strings.Count(buf[:k], "\n")
+		if l >= len(starts) { // EOF on a newline boundary
+			return len(orig)
+		}
+		return starts[l] + (k - nstarts[l])
+	}
+
+	var out strings.Builder
+	last := 0
+	for _, sp := range spans {
+		out.WriteString(orig[last:toOrig(sp.s)])
+		// the replacement adopts the ending of the line it starts on; a
+		// terminator-less last line borrows the one before it
+		l := strings.Count(buf[:sp.s], "\n")
+		if l == len(crlfs)-1 && !terminated && l > 0 {
+			l--
+		}
+		ending := "\n"
+		if l >= 0 && l < len(crlfs) && crlfs[l] {
+			ending = "\r\n"
+		}
+		out.WriteString(restoreLineEndings(ops[sp.idx].NewText, ending))
+		last = toOrig(sp.e)
+	}
+	out.WriteString(orig[last:])
+	return []byte(out.String())
+}
+
+// validateEdits runs the order-independent intent checks: empty or no-op edits
+// and duplicate old texts. Missing/ambiguous/overlapping text is left to
+// applyEdits' span resolution on the original buffer.
+func validateEdits(ops []editOp) error {
 	seen := make(map[string]int)
-	var spans []matchSpan
 	for i := range ops {
 		op := &ops[i]
 		if op.OldText == "" {
@@ -174,37 +266,24 @@ func validateEdits(buf string, ops []editOp) error {
 			return fmt.Errorf("edits %d and %d repeat the same oldText; use replace_all or add context", j+1, i+1)
 		}
 		seen[op.OldText] = i
-		if op.ReplaceAll {
-			continue // many spans; overlap is only checked for single replacements
-		}
-		s := strings.Index(buf, op.OldText)
-		if s < 0 {
-			continue // missing is reported by the apply loop with full guidance
-		}
-		e := s + len(op.OldText)
-		for _, p := range spans {
-			if s < p.e && p.s < e { // regions share at least one byte in the original text
-				return fmt.Errorf("edits %d and %d target overlapping regions; adjust their oldText so each targets a distinct region", p.idx+1, i+1)
-			}
-		}
-		spans = append(spans, matchSpan{i, s, e})
 	}
 	return nil
 }
 
-// notFoundError diagnoses why a zero-match edit failed and guides a retry:
-// name the failure, report each reliably-detected cause (line endings,
-// indentation type/count), and offer one closest line for context.
-func notFoundError(idx int, path, old, buf string) string {
+// missingError diagnoses why a zero-match edit failed and guides a retry: name
+// the failure, call out an earlier edit whose newText would create it (a cascade),
+// report each reliably-detected cause, and offer one closest line for context.
+func missingError(idx int, path, old, buf string, ops []editOp) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, path)
-	issues := diagnoseNoMatch(old, buf)
-	if len(issues) == 0 {
-		b.WriteString("you must provide the oldText exactly as it appears in the file\n")
-	} else {
+	if c := cascadeIssue(idx, old, ops); c != "" {
+		b.WriteString("- " + c + "\n")
+	} else if issues := diagnoseNoMatch(old, buf); len(issues) > 0 {
 		for _, it := range issues {
 			fmt.Fprintf(&b, "- %s\n", it)
 		}
+	} else {
+		b.WriteString("you must provide the oldText exactly as it appears in the file\n")
 	}
 	if ctx := nearMatch(old, buf); ctx != "" && ctx != "(none)" {
 		b.WriteString("closest context:\n" + ctx + "\n")
@@ -212,54 +291,43 @@ func notFoundError(idx int, path, old, buf string) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// cascadeIssue reports when an earlier op's newText would create old, which is why
+// matching it against the original buffer fails.
+func cascadeIssue(idx int, old string, ops []editOp) string {
+	for j := 0; j < idx; j++ {
+		if strings.Contains(ops[j].NewText, old) {
+			return fmt.Sprintf("'%s' is not in the file, but edit %d's newText would create it. Every edit is matched against the original file, never against another edit's output; combine edits %d and %d into one edit",
+				old, j+1, j+1, idx+1)
+		}
+	}
+	return ""
+}
+
 // diagnoseNoMatch inspects why old is absent from buf and reports each reliably
-// detectable cause: line-ending style, then per-line indentation/spacing when the
-// words are all present (a pure-spacing mismatch). Returns nil when nothing
-// reliable can be said.
+// detectable cause: per-line indentation/spacing when the words are all present (a
+// pure-spacing mismatch), or casing. Returns nil when nothing reliable can be said.
 func diagnoseNoMatch(old, buf string) []string {
 	compact := stripSpace(old)
 	if compact == "" {
 		return nil // only-whitespace oldText: no anchor to reason about
 	}
-
-	nlIssue := newlineStyleIssue(old, buf)
-	var issues []string
-	if nlIssue != "" {
-		issues = append(issues, nlIssue)
-	}
-
 	switch {
-	case strings.Contains(stripSpace(buf), compact) && nlIssue == "":
+	case strings.Contains(stripSpace(buf), compact):
 		// every word present: a pure-spacing mismatch, name it per line when we can
-		specific := lineWhitespaceIssues(old, buf)
-		if len(specific) == 0 {
-			issues = append(issues, "your words are all in the file but separated by different whitespace; you must match it exactly")
-		} else {
-			issues = append(issues, specific...)
+		if specific := lineWhitespaceIssues(old, buf); len(specific) > 0 {
+			return specific
 		}
-	case strings.Contains(strings.ToLower(stripSpace(buf)), strings.ToLower(compact)) && nlIssue == "":
+		return []string{"your words are all in the file but separated by different whitespace; you must match it exactly"}
+	case strings.Contains(strings.ToLower(stripSpace(buf)), strings.ToLower(compact)):
 		// words and order present ignoring case: only letter casing differs
-		issues = append(issues, "the text matches the file only if you ignore letter case; your oldText's capitalization differs — copy it exactly")
-	case nlIssue == "":
-		// content genuinely absent, not just spacing
+		return []string{"the text matches the file only if you ignore letter case; your oldText's capitalization differs — copy it exactly"}
+	default:
 		if stripSpace(buf) == "" {
-			issues = append(issues, "the file appears empty or whitespace-only")
-		} else {
-			issues = append(issues, "the text is not in the file — its words differ; provide oldText exactly as shown below")
+			return []string{"the file appears empty or whitespace-only"}
 		}
+		// the words genuinely differ; a retry needs exact text, not an approximation
+		return []string{"your oldText is not in the file — its content differs from every region here; copy it exactly"}
 	}
-	return issues
-}
-
-// newlineStyleIssue reports when old and buf disagree on CRLF vs LF.
-func newlineStyleIssue(old, buf string) string {
-	switch {
-	case strings.Contains(buf, "\r\n") && !strings.Contains(old, "\r\n"):
-		return "the file uses CRLF (\\r\\n) line endings but your oldText has LF; you must include the \\r before each newline"
-	case !strings.Contains(buf, "\r\n") && strings.Contains(old, "\r\n"):
-		return "your oldText has \\r\\n newlines but the file is LF-only; you must use plain \\n"
-	}
-	return ""
 }
 
 // stripSpace removes all unicode whitespace.

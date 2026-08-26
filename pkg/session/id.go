@@ -15,26 +15,24 @@ var clock = func() time.Time { return time.Now().UTC() }
 var (
 	mu       sync.Mutex
 	lastMS   int64
-	lastRand [10]byte // monotonic within a millisecond by incrementing this
+	randTail [10]byte // re-seeded per advancing millisecond; incremented within one
 )
 
 // NewID returns a 26-char Crockford ULID: a 48-bit millisecond timestamp plus
 // 80 random bits, lexically sortable by creation time.
 func NewID() string {
 	var b [16]byte
-	ms := clock().UnixMilli()
-	for i := range 6 {
-		b[i] = byte(uint64(ms) >> uint((5-i)*8))
-	}
 
 	mu.Lock()
-	if ms == lastMS {
-		incrementRand(lastRand[:])
-	} else {
-		lastMS = ms
-		_, _ = rand.Read(lastRand[:]) // entropy failure leaves zero, still monotonic per process
+	if ms := clock().UnixMilli(); ms > lastMS {
+		lastMS = ms                   // fresh timestamp: re-seed entropy so prefixes spread across real time
+		_, _ = rand.Read(randTail[:]) // entropy failure leaves zero, still monotonic per process
 	}
-	copy(b[6:16], lastRand[:])
+	incrementRand(randTail[:]) // strictly increasing even when the clock is pinned or ticks backward
+	for i := range 6 {
+		b[i] = byte(uint64(lastMS) >> uint((5-i)*8))
+	}
+	copy(b[6:16], randTail[:])
 	out := encodeULID(b)
 	mu.Unlock()
 	return out

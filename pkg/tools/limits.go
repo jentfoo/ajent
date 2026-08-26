@@ -2,10 +2,13 @@ package tools
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
 	"unicode/utf8"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // Limit bounds one tool's output. A zero field means that dimension is
@@ -75,7 +78,7 @@ type Limits struct {
 }
 
 // ApplyLimits overwrites the package limits with l's non-zero fields. MeasureCeiling
-// and MaxLineChars stay compiled-in.
+// and MaxLineRunes stay compiled-in.
 func ApplyLimits(l Limits) {
 	limitsMu.Lock()
 	defer limitsMu.Unlock()
@@ -103,12 +106,96 @@ func applyLimit(dst *Limit, src Limit) {
 // itself bounded.
 const MeasureCeiling int64 = 512 << 10
 
-// MaxLineChars caps a single line before it is emitted.
-const MaxLineChars = 2000
+// MaxLineRunes caps a single line before it is emitted. Counted in runes so an
+// all-CJK minified file cannot eat the whole budget either.
+const MaxLineRunes = 1024
+
+// Bounded describes one truncation: the kept head plus totals for the footer.
+type Bounded struct {
+	Text      string // kept head, whole lines where possible
+	Truncated bool
+	Shown     int // lines emitted
+	Lines     int // total lines in the source
+	Bytes     int // total bytes in the source
+}
+
+// Bound returns s bounded by l: the leading whole lines that fit both bounds,
+// each capped at MaxLineRunes, or a single first line cut at MaxLineRunes when no
+// complete line fits. One overlong line alone also counts as truncated, so the
+// caller spills the full text and the footer names what was dropped.
+func Bound(s string, l Limit) Bounded {
+	b := Bounded{Bytes: len(s), Lines: countLines(s)}
+	if !overBudget(s, l) && !overlongLine(s) {
+		b.Text = s
+		b.Shown = b.Lines
+		return b
+	}
+
+	var kept []string
+	var byteCount int // bytes of kept text including each joining newline
+	for _, ln := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		if l.Lines > 0 && len(kept) >= l.Lines {
+			break
+		}
+		capped := capLine(ln)
+		nb := byteCount + len(capped)
+		if l.Bytes > 0 && nb > l.Bytes {
+			break // stop at the last whole line that fits
+		}
+		byteCount = nb + 1
+		kept = append(kept, capped)
+	}
+
+	b.Truncated = true
+	if len(kept) == 0 { // no complete line fit; cut the first alone on the rune
+		// budget alone — a byte-bound cut of one overlong line (a minified file)
+		// would leave the model a useless sliver, so MaxLineRunes is a floor here
+		kept = []string{capLine(strutil.FirstLine(s))}
+	}
+	b.Shown = len(kept)
+	b.Text = strings.Join(kept, "\n")
+	return b
+}
+
+// truncationNote names what Bound or a bounded writer dropped: shown/total lines,
+// total bytes, and where the rest lives when spilled to disk.
+func truncationNote(b Bounded, spillPath string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "... truncated: %d/%d lines shown (%d bytes total)", b.Shown, b.Lines, b.Bytes)
+	if spillPath != "" {
+		sb.WriteString("; full output in @" + spillPath)
+	}
+	return sb.String()
+}
+
+// overlongLine reports whether any line of s exceeds MaxLineRunes, so even an
+// in-budget result cannot carry one minified line whole.
+func overlongLine(s string) bool {
+	for ln := range strings.Lines(s) {
+		if utf8.RuneCountInString(strings.TrimSuffix(ln, "\n")) > MaxLineRunes {
+			return true
+		}
+	}
+	return false
+}
+
+// capText caps every line of s at MaxLineRunes, without markers: used on a
+// truncated head whose full stream is spilled, so the model can recover the rest.
+func capText(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = capLine(lines[i])
+	}
+	return strings.Join(lines, "\n")
+}
 
 // Elide returns s bounded by l and whether anything was dropped. When truncated,
-// content is kept from both ends with an ellipsis marker in the middle so the
-// model still sees the head (which usually carries errors) and the tail result.
+// content is kept from both ends with an ellipsis marker so the model still sees
+// the head (which usually carries errors) and the tail result. Text within the
+// bound is returned whole and uncapped; only retained lines of a truncated
+// result are capped at MaxLineRunes, so one minified line cannot eat the budget.
+// Head+tail survival is for compaction's structural reduction only — tool
+// output uses Bound.
 func Elide(s string, l Limit) (string, bool) {
 	if !overBudget(s, l) {
 		return s, false
@@ -131,23 +218,31 @@ type boundedWriter struct {
 	count int // bytes forwarded to w
 	nl    int // newlines forwarded to w
 	full  bool
+
+	replay bytes.Buffer // copy of everything forwarded, for the complete-spill claim
+	totB   int          // total input bytes seen across all writes
+	totNL  int          // total newlines seen across all writes
+	tail   bool         // input seen since the last newline (a partial final line)
 }
 
 func (b *boundedWriter) Write(p []byte) (int, error) {
 	total := len(p)
+	b.totB += total
 	for len(p) > 0 {
 		if i := bytes.IndexByte(p, '\n'); i >= 0 {
+			b.totNL++
+			b.tail = false
 			b.buf.Write(p[:i+1]) // the newline stays with its line
 			p = p[i+1:]
 			b.flushLine()
 			continue
 		}
 		// no newline yet: hold a partial line, or spill it once at the limit.
-		if b.atLimit() {
-			b.spillBytes(p)
-		} else if b.lim.Bytes > 0 && b.count+b.buf.Len()+len(p) > b.lim.Bytes {
-			// a single overlong partial would blow the byte bound; stop keeping it
-			b.full = true
+		b.tail = true
+		if b.atLimit() || b.lim.Bytes > 0 && b.count+b.buf.Len()+len(p) > b.lim.Bytes {
+			// already at a bound, or this partial would blow the byte bound: spill
+			// the held prefix first so the overflow file keeps stream order
+			b.beginSpill()
 			b.spillBytes(b.buf.Bytes())
 			b.buf.Reset()
 			b.spillBytes(p)
@@ -165,12 +260,13 @@ func (b *boundedWriter) flushLine() {
 	n := b.buf.Len()
 	if !b.full && fitsBytes(b, n) && fitsLines(b) {
 		_, _ = b.w.Write(b.buf.Bytes())
+		b.replay.Write(b.buf.Bytes()) // keep the complete-spill copy
 		b.count += n
 		if bytes.HasSuffix(b.buf.Bytes(), []byte{'\n'}) {
 			b.nl++
 		}
 	} else {
-		b.full = true
+		b.beginSpill()
 	}
 	b.clearBuf()
 }
@@ -182,6 +278,32 @@ func (b *boundedWriter) Flush() {
 		return
 	}
 	b.flushLine()
+}
+
+// Total returns the lines and bytes seen across all input, forwarded or spilled,
+// so a footer can name what was dropped without under-counting.
+func (b *boundedWriter) Total() (lines, bytes int) {
+	lines = b.totNL
+	if b.tail {
+		lines++ // a stream not ending in a newline has one partial line more
+	}
+	return lines, b.totB
+}
+
+// Truncated reports whether any input was diverted past the bounds.
+func (b *boundedWriter) Truncated() bool { return b.full }
+
+// beginSpill marks the writer full once and writes the kept head into over so
+// the spill file holds the complete stream, not just the overflow. Truncation
+// is reported even without an overflow writer, whose content is then dropped.
+func (b *boundedWriter) beginSpill() {
+	if b.full {
+		return
+	}
+	b.full = true
+	if b.over != nil && b.replay.Len() > 0 {
+		_, _ = b.over.Write(b.replay.Bytes())
+	}
 }
 
 // atLimit reports whether the writer is past any bound and should spill.
@@ -214,31 +336,22 @@ func (b *boundedWriter) spillBytes(p []byte) {
 	}
 }
 
-// overBudget reports whether s exceeds any bound of l or holds an overlong line.
+// overBudget reports whether s exceeds any bound of l.
 func overBudget(s string, l Limit) bool {
 	if l.Bytes > 0 && len(s) > l.Bytes {
 		return true
 	}
-	if l.Lines > 0 && strings.Count(s, "\n")+1 > l.Lines {
-		return true
-	}
-	for _, ln := range strings.Split(s, "\n") {
-		if utf8.RuneCountInString(ln) > MaxLineChars {
-			return true
-		}
-	}
-	return false
+	return l.Lines > 0 && countLines(s) > l.Lines
 }
 
 const elideMarker = "\n... [truncated]\n"
 
-// elidedText keeps the head and tail of s within l with a marker between. Each
-// retained line is capped at MaxLineChars, so one minified file cannot eat the
-// whole budget.
+// elidedText keeps the head and tail of s within l with a marker between; each
+// retained line is capped so one overlong line cannot consume a whole allowance.
 func elidedText(s string, l Limit) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	maxKeep := l.Lines
-	if maxKeep <= 0 {
+	if maxKeep <= 0 || maxKeep > len(lines) {
 		maxKeep = len(lines)
 	}
 	headAllow, tailAllow := splitBudget(l)
@@ -291,23 +404,33 @@ func halfLines(n int) int {
 	return h
 }
 
-// capLine truncates s to MaxLineChars on a rune boundary.
+// capLine truncates s to MaxLineRunes on a rune boundary.
 func capLine(s string) string {
 	n := utf8.RuneCountInString(s)
-	if n <= MaxLineChars {
+	if n <= MaxLineRunes {
 		return s
 	}
 	var out strings.Builder
-	for i, r := range s {
-		if i >= MaxLineChars {
+	count := 0
+	for _, r := range s {
+		if count >= MaxLineRunes {
 			break
 		}
 		out.WriteRune(r)
+		count++
 	}
 	return out.String()
 }
 
-// countLines returns the number of lines in s, counting a trailing partial line.
+// countLines returns the number of lines in s, not counting the empty string a
+// trailing newline leaves behind.
 func countLines(s string) int {
-	return strings.Count(s, "\n") + 1
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++ // a trailing partial line
+	}
+	return n
 }

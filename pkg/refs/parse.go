@@ -1,7 +1,8 @@
 // Package refs parses @file references in a message and expands them into real
-// tool-call + result pairs ahead of the user's text: a small file is injected
+// tool-call + result pairs behind the user's text: a small file is injected
 // via read, a directory via ls, and a large or non-text file is annotated in
-// place with its shape so the model can choose whether to read it.
+// place with its shape so the model can choose whether to read it. Behind, so
+// that rewinding onto the message drops the reads it asked for along with it.
 package refs
 
 import "strings"

@@ -102,3 +102,30 @@ func TestReadObservesTrackerForRefDedupe(t *testing.T) {
 	_, ok := e.tracker.Records()[filepath.Join(e.cwd, "a.txt")]
 	assert.True(t, ok) // read records the file so @ref expansion can dedupe
 }
+
+// TestReadCrlfReadsAsLf proves the model never sees a \r from a CRLF file.
+func TestReadCrlfReadsAsLf(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	require.NoError(t, os.WriteFile(filepath.Join(e.cwd, "crlf.txt"), []byte("alpha\r\nbeta\r\n"), 0o644))
+
+	res := e.readExec(t.Context(), `{"path":"crlf.txt"}`)
+	assert.False(t, res.IsError)
+	out := textOf(res)
+	assert.NotContains(t, out, "\r")
+	assert.Contains(t, out, "     1\talpha") // LF-only model-visible output
+}
+
+// TestReadLoneCarriageReturnSurvives proves a lone mid-line \r is not deleted.
+func TestReadLoneCarriageReturnSurvives(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	require.NoError(t, os.WriteFile(filepath.Join(e.cwd, "cr.txt"), []byte("a\rb\n"), 0o644))
+
+	res := e.readExec(t.Context(), `{"path":"cr.txt"}`)
+	assert.False(t, res.IsError)
+	out := textOf(res)
+	assert.Contains(t, out, "\r") // a lone \r is preserved, unlike CRLF
+}
