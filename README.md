@@ -31,11 +31,11 @@ Our agent simplifies the TUI in order to provide a terminal native output. Every
 
 Our CLI agent attempts to balance autonomy and safety. This is done through a variety of permission modes:
 
-* allow-read (default) - Will automatically allow any read only tools or MCP tools which are marked as ready only in their configuration. Any write or questionable bash operations will require user approval first.
-* auto - Still attempts to provide a read only experience by default, but will delegate to the agent to make decisions on bash commands which are not automatically allowed.
-* auto+mcp - In addition to the above MCP tools not marked as read only will be evaluated if the specific operation is read only.
-* allow-all - All operations allowed without human approval.
-* block-all - Nothing runs without explicit approval, reads included.
+* **allow-read** (default) - Will automatically allow any read only tools or MCP tools which are marked as read only in their configuration. Any write or questionable bash operations will require user approval first.
+* **auto** - Still attempts to provide a read only experience by default, but will delegate to the agent to make decisions on bash commands which are not automatically allowed.
+* **auto+mcp** - In addition to the above MCP tools not marked as read only will be evaluated if the specific operation is read only.
+* **allow-all** - All operations allowed without human approval.
+* **block-all** - Nothing runs without explicit approval, reads included.
 
 When a write operation does need approval, you're presented with a dialog that lets you steer, allow once, or allow for the session (or until the barrier mode is changed).
 
@@ -57,16 +57,9 @@ MCP and other tools are loaded on the first message (using `/tools`). Once a too
 
 ## Configuration
 
-### Models
+### Providers
 
-Models are declared in `~/.ajent/models.json`, using a format that is generally a superset of pi model configurations. Models come from exactly two places:
-
-* **`~/.ajent/models.json`** - the declarations you write by hand.
-* **provider discovery** - asking openrouter, lm-studio or llama.cpp for their model list.
-
-#### Providers
-
-A provider is one endpoint speaking one wire dialect. The two dialects are `anthropic-messages` and the OpenAI family (`openai-responses` or `openai-completions`). A gateway serving two dialects at once is simply two providers.
+Providers, and the models they serve, are configured in `~/.ajent/models.json`, a format that is generally a superset of pi model configurations. A provider is one endpoint speaking one wire dialect. The two dialects are `anthropic-messages` and the OpenAI family (`openai-responses` or `openai-completions`). A gateway serving two dialects at once is simply two providers.
 
 ```jsonc
 {
@@ -94,9 +87,14 @@ Per provider you can set:
 * `discover` - whether this provider's models are fetched from the server.
 * `models` - your declared list for this provider. When present, it *is* the whole list; discovery only fills gaps.
 
-#### Models
+### Models
 
-The minimal entry is just an id; everything else has a sane default.
+Models come from exactly two places, both under the provider they belong to:
+
+* **hand-written declarations** - your per-provider `models` list.
+* **provider discovery** - asking openrouter, lm-studio or llama.cpp for their model list. It fills any gaps in what you declared.
+
+The minimal entry (if not using discovery) is just an id. Everything else has a sane default, so you typically only add one to pin something discovery got wrong (a name or context window).
 
 ```jsonc
 {
