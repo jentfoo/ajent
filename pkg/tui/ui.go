@@ -122,8 +122,9 @@ type UI struct {
 	noticeText string
 
 	completer     Completer           // nil disables the completion overlay
-	completion    *completionOverlay  // active completion state, nil when closed
+	completion    *completionList     // candidates listed after an ambiguous Tab, nil when none
 	completionSeq int                 // generation guard for async path queries
+	ruleFlash     bool                // prompt rule drawn accented until the flash timer clears it
 	historySearch func() []SearchItem // nil disables Ctrl+R history search
 	search        *searchOverlay      // active search state, nil when closed
 
@@ -762,7 +763,11 @@ func (u *UI) repaint() {
 	// a narrow rule atop the prompt area sets it apart from committed and streamed
 	// output; row accounting stays exact because this is one more real row here.
 	if w > 0 {
-		rows = append(rows, u.theme.Dim.Wrap(strings.Repeat(ruleChar, w)))
+		style := u.theme.Dim
+		if u.ruleFlash {
+			style = u.theme.Accent
+		}
+		rows = append(rows, style.Wrap(strings.Repeat(ruleChar, w)))
 	}
 	offset := len(rows)
 
@@ -776,7 +781,7 @@ func (u *UI) repaint() {
 		offset += len(searchRows)
 	}
 
-	// the completion overlay rides above the editor, shifting the caret offset
+	// an ambiguous Tab's listing rides above the editor, shifting the caret offset
 	if u.completion != nil && u.act == nil {
 		compRows := u.completion.rows(u.theme, w, max(3, (h-2)/4))
 		rows = append(rows, compRows...)
@@ -1117,7 +1122,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.routeKey(k) // an active interaction sees every key before the editor
 		return nil, false, false
 	}
-	// an open history search consumes keys ahead of completion and the editor. Up
+	// an open history search consumes keys ahead of the editor. Up
 	// and Down select: they commit the highlighted prompt into the field, close the
 	// overlay, but do not scroll on this same press; subsequent arrows browse.
 	if u.search != nil {
@@ -1140,32 +1145,17 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			}
 		}
 	}
-	// the completion overlay consumes only Tab/↑/↓/Enter/Esc before the editor,
-	// and only per the accept rules; everything else falls through so typing
-	// still narrows the list.
-	if u.completion != nil && u.completion.accept(k) {
-		consume, doSubmit := u.completion.key(k, u)
-		if consume && k.typ == keyEscape {
-			u.completion = nil
-			u.cancelRewindLocked()
-			return nil, true, false
-		}
-		if consume && doSubmit {
-			// Enter on an unmoved list submits the line as typed
-			u.completion = nil
-			if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
-				e := u.expandPastes(v)
-				u.resetPromptNavLocked() // let a later ↑ pick up the freshly sent prompt
-				return &e, true, false
-			}
-			return nil, true, false
-		}
-		if consume {
-			u.queryCompleter() // re-query after the accept changed the text
-			return nil, true, false
-		}
+	// a listing left over from an ambiguous Tab is dismissed by Esc before the
+	// buffer is; every other key clears it on the way out below.
+	if u.completion != nil && k.typ == keyEscape {
+		u.completion = nil
+		u.cancelRewindLocked()
+		return nil, true, false
 	}
 	switch k.typ {
+	case keyTab:
+		u.startCompletion()
+		return nil, true, false
 	case keyReverseSearch:
 		u.openSearchLocked()
 	case keyRune:
@@ -1190,10 +1180,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.cancelRewindLocked()
 		u.editor.Insert("\n")
 	case keyEnter:
-		// an unmoved list merely offered: submit the line as typed and close it
-		if u.completion != nil {
-			u.completion = nil
-		}
+		u.completion = nil // a listing never holds a send hostage
 		if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
 			e := u.expandPastes(v)
 			u.resetPromptNavLocked() // let a later ↑ pick up the freshly sent prompt
@@ -1294,14 +1281,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			u.editor.DeleteForward()
 		}
 	}
-	// A key that reached the editor (rather than being consumed by ↑/↓) means the
-	// user is composing again: drop any prior selection so Enter submits as typed.
-	if u.completion != nil {
-		u.completion.moved = false
-	}
-	// re-query the completer after any editor mutation so the overlay narrows or
-	// closes as the text changes; a nil completer is a no-op.
-	u.queryCompleter()
+	u.completion = nil // any other key composes again; the listing is spent
 	return nil, true, false
 }
 

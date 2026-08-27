@@ -91,7 +91,9 @@ The rule is composed after streamed output but before overlays/activity/interact
 so in-progress replies read as output above the bar while search/completion/
 activity and the editor sit below. It costs one real row per repaint, which on a
 short terminal shrinks interaction/dialog height by one line; tests that pin
-dialogs to small screens are sized accordingly.
+dialogs to small screens are sized accordingly. The rule doubles as the only
+keypress acknowledgement: a Tab that can complete nothing accents it briefly
+(`flashRule`) instead of changing the buffer.
 
 Unlike activity rows the rule keeps the **full** composed width (one column
 short of the terminal, like everything `repaint` composes) with no extra slack
@@ -998,9 +1000,10 @@ The key table:
 
 | Key | Effect |
 |---|---|
-| Enter | submit (accepts an open completion or search selection) |
+| Enter | submit (accepts an open search selection) |
 | Alt+Enter, Ctrl+J | insert a newline |
-| `↑`/`↓` | move the caret through visual rows; only at the prompt's very start (↑) or end (↓) do they recall history. In overlays select |
+| `↑`/`↓` | move the caret through visual rows; only at the prompt's very start (↑) or end (↓) do they recall history. In the search overlay they select; completion never takes them |
+| Tab | complete: fill in the candidates' longest common prefix, or list what is left when they agree on nothing more (`complete.go`) |
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |

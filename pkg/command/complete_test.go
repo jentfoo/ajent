@@ -102,6 +102,21 @@ func TestCompleter(t *testing.T) {
 		require.Contains(t, labels, "é.go")
 	})
 
+	// a shell line routes to shell completion, so its @ stays literal.
+	t.Run("shell_line_routes_to_shell", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
+		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		comp := NewCompleter(NewRegistry(), newFakeConsole(t), idx)
+
+		start, items := comp.Complete("!cat mai", 8)
+		assert.Equal(t, 5, start)
+		assert.Equal(t, []string{"main.go"}, labelsOf(items))
+
+		_, items = comp.Complete("!cat @mai", 9)
+		assert.Empty(t, items)
+	})
+
 	// a command delegates argument completion to its own Complete.
 	t.Run("argument_delegates", func(t *testing.T) {
 		c := newFakeConsole(t)
@@ -116,6 +131,37 @@ func TestCompleter(t *testing.T) {
 		labels := labelsOf(items)
 		assert.Contains(t, labels, "medium")
 	})
+}
+
+func TestCompleterIsAsync(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	idx := refs.NewIndex(dir, tools.PathPolicy{})
+	comp := NewCompleter(NewRegistry(), newFakeConsole(t), idx)
+
+	cases := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"at_token", "@mai", true},
+		{"shell_line", "!cat mai", true},
+		{"excluded_shell_line", "!!cat mai", true},
+		{"slash_command", "/mo", false},
+		{"plain_text", "hello", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, comp.IsAsync(c.text, len(c.text)))
+		})
+	}
+
+	// path completion off leaves @ synchronous, but a shell line still runs off the
+	// key loop: its command-name lookup does not need the path index.
+	noPaths := NewCompleter(NewRegistry(), newFakeConsole(t), nil)
+	assert.False(t, noPaths.IsAsync("@mai", 4))
+	assert.True(t, noPaths.IsAsync("!ls", 3))
 }
 
 func labelsOf(items []tui.Completion) []string {

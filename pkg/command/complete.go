@@ -22,18 +22,25 @@ func NewCompleter(r *Registry, c Console, idx *refs.Index) *Completer {
 	return &Completer{commands: r, console: c, paths: idx}
 }
 
-// Complete returns candidates at the cursor. / at line start offers commands;
-// past the first space it delegates to the matched command's Complete. @
-// anywhere offers paths. text is a byte string but pos and the returned start
-// are grapheme-cell indexes, matching how the editor addresses its buffer.
+// Complete returns candidates at the cursor. A leading `!` completes the line as
+// a shell command; / at line start offers commands, past the first space
+// delegating to the matched command's Complete; @ anywhere offers paths. text is
+// a byte string but pos and the returned start are grapheme-cell indexes,
+// matching how the editor addresses its buffer.
 func (c *Completer) Complete(text string, pos int) (int, []tui.Completion) {
 	if pos <= 0 {
 		return 0, nil
 	}
 	cells := tui.GraphemeCells(text)
 	n := len(cells)
-	if n == 0 || pos > n {
-		pos = min(pos, n)
+	if n == 0 {
+		return 0, nil
+	}
+	pos = min(pos, n)
+
+	// a `!` line is a shell command: it completes as bash, never as a ref
+	if cells[0] == "!" {
+		return c.shellComplete(cells, pos)
 	}
 
 	// the first cell of the token under the cursor ("" when none: a break or end)
@@ -107,17 +114,24 @@ func (c *Completer) commandArgComplete(cells []string, pos, ls int) (int, []tui.
 	return argStart, out
 }
 
-// IsAsyncPath reports whether the token under pos is an @ path query. The TUI
-// runs such queries off the key loop so a slow directory listing never blocks
-// typing; command and argument completion stay synchronous.
-func (c *Completer) IsAsyncPath(text string, pos int) bool {
-	if c.paths == nil || pos <= 0 {
+// IsAsync reports whether the cursor sits in an @ path query or a `!` shell
+// line. The TUI runs those off the key loop so a slow directory listing or the
+// command-name lookup never blocks typing; command and argument completion stay
+// synchronous.
+func (c *Completer) IsAsync(text string, pos int) bool {
+	if pos <= 0 {
 		return false
 	}
 	cells := tui.GraphemeCells(text)
 	n := len(cells)
-	p := min(pos, n)
-	tokStart := p
+	if n == 0 {
+		return false
+	} else if cells[0] == "!" {
+		return true // a command-name lookup or a directory listing
+	} else if c.paths == nil {
+		return false
+	}
+	tokStart := min(pos, n)
 	for tokStart > 0 && !isTokenBreakCell(cells[tokStart-1]) {
 		tokStart--
 	}

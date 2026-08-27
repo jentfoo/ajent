@@ -34,14 +34,24 @@ func NewIndex(root string, policy tools.PathPolicy) *Index {
 	return &Index{root: root, policy: policy}
 }
 
-// Candidates returns paths matching query, ranked by (a) already in the
-// conversation, (b) recent mtime, (c) fuzzy score. Directories complete with a
-// trailing `/` so accepting one re-opens it deeper. Only the directory under
-// the cursor is listed: an empty or partial path lists the root's children, and
-// drilling through `dir/` descends one level per step. A `~`, `./` or absolute
-// `/…` query keeps its leading form in each candidate so accepting inserts a
-// usable path.
+// Candidates returns paths matching query for an @ reference, ranked by (a)
+// already in the conversation, (b) recent mtime, (c) fuzzy score. Directories
+// complete with a trailing `/` so accepting one re-opens it deeper. Only the
+// directory under the cursor is listed: an empty or partial path lists the
+// root's children, and drilling through `dir/` descends one level per step. A
+// `~`, `./` or absolute `/…` query keeps its leading form in each candidate so
+// accepting inserts a usable path. VCS and dependency directories are skipped.
 func (idx *Index) Candidates(query string, inConversation func(path string) bool) []tui.Completion {
+	return idx.candidates(query, inConversation, true)
+}
+
+// ShellCandidates returns path candidates for query like Candidates, but also
+// offers the VCS and dependency directories a `!` shell command may name.
+func (idx *Index) ShellCandidates(query string) []tui.Completion {
+	return idx.candidates(query, nil, false)
+}
+
+func (idx *Index) candidates(query string, inConversation func(path string) bool, skipVCS bool) []tui.Completion {
 	if inConversation == nil {
 		inConversation = func(string) bool { return false }
 	}
@@ -72,7 +82,7 @@ func (idx *Index) Candidates(query string, inConversation func(path string) bool
 	}
 
 	target := dirTarget(base, qrel)
-	entries, mtime := listDir(target)
+	entries, mtime := listDir(target, skipVCS)
 	if len(entries) == 0 {
 		return nil
 	}
@@ -100,9 +110,6 @@ func (idx *Index) Candidates(query string, inConversation func(path string) bool
 		out = append(out, rankCandidate(text, inConversation(e.path), mtime[e.path], query))
 	}
 	slices.SortStableFunc(out, func(a, b tui.Completion) int { return b.Score - a.Score })
-	if len(out) > 64 {
-		out = out[:64]
-	}
 	return out
 }
 
@@ -161,8 +168,9 @@ func homeDir() string {
 }
 
 // listDir lists only path's immediate children: one directory deep, never a
-// recursive walk. Every completion branch uses it so @ stays cheap however large the tree is.
-func listDir(path string) ([]entry, map[string]time.Time) {
+// recursive walk. Every completion branch uses it so @ stays cheap however large
+// the tree is. skipVCS drops VCS and dependency directories from the result.
+func listDir(path string, skipVCS bool) ([]entry, map[string]time.Time) {
 	des, err := os.ReadDir(path)
 	if err != nil {
 		return nil, make(map[string]time.Time)
@@ -171,8 +179,8 @@ func listDir(path string) ([]entry, map[string]time.Time) {
 	mtimes := make(map[string]time.Time, len(des))
 	for _, de := range des {
 		p := filepath.Join(path, de.Name())
-		if de.IsDir() && tools.IsSkippedDir(p) {
-			continue // never offer VCS/dependency dirs
+		if skipVCS && de.IsDir() && tools.IsSkippedDir(p) {
+			continue
 		}
 		entries = append(entries, entry{path: p, isDir: de.IsDir()})
 		mtimes[p] = statMod(p)

@@ -3,7 +3,7 @@
 How `pkg/command` and `pkg/refs` own everything the user does that is not "send
 a message to the model": slash commands through a registry, direct `!` shell
 execution with staged results (`!!` runs excluded from context), `@`-path
-expansion with auto-read, and the non-blocking completion overlay driving both. It
+expansion with auto-read, and the Tab completion driving both. It
 is the single dispatch path for submitted lines; extensions and MCP register into
 the same registry, so a built-in `/tools` and a third-party `/plan` are the same
 mechanism.
@@ -16,8 +16,8 @@ Three packages sit above the agent, tools and TUI:
   built-in commands, the shell `Stager`, and the aggregating `Completer`.
 - `pkg/refs` — `@` parsing, the inject-or-annotate expander, and the
   gitignore-aware path index for completion.
-- the completion overlay in `pkg/tui` — the live block state distinct from an
-  interaction, where the editor keeps focus.
+- Tab completion in `pkg/tui` — a query on Tab that either advances the buffer
+  or lists what is left; it owns no keys but Tab and Esc.
 
 `pkg/command` imports `pkg/tui`, `pkg/agent`, `pkg/llm`, `pkg/tools` and
 `pkg/session`; it never imports `pkg/refs` (the host wires the two together
@@ -331,45 +331,45 @@ interrupt path.
 > the process exits before that flush, the staged results are lost — they are
 > not part of the transcript until the model sees them.
 
-## Completion overlay
+## Tab completion
 
-Two triggers, one mechanism:
+Tab is the only trigger; nothing is raised while typing. Three contexts, one
+mechanism:
 
 - `/` at the start of an empty line → command completion.
 - `@` anywhere → path completion.
-
-The overlay is a distinct live-block state from `u.act` (an interaction): the
-editor keeps focus and keeps receiving characters. Only `Tab`/`↑`/`↓`/`Enter`/
-`Esc` are consumed before the editor; everything else falls through so typing
-still narrows the list. After every editor mutation the completer is re-queried.
+- `!` / `!!` at the start of the line → shell completion.
 
 The completion model pairs a replacement text with an optional label, detail and
 score; the `Completer` interface answers one query — given the buffer and cursor,
 it returns where accepted text should start replacing from plus the candidate
-items. It is called under the UI lock from the key goroutine, so it must not block
-or call back into the UI.
+items. It must not call back into the UI.
 
-A path source may take time (a slow directory listing), so `@` queries are
-routed off the key loop: a completer that implements `AsyncPathCompleter`
-(`IsAsyncPath`) has its path queries run in a goroutine and delivered when ready,
-so typing stays free while results are pending. A generation counter drops a
-result superseded by newer typing — if the user out-races a listing to type
-another directory, that stale result is discarded rather than shown; synchronous
-completion also bumps the generation so a slow listing returning after the cursor
-leaves `@` cannot reopen an overlay for dead text. Command and argument completion
-keep the synchronous contract; only path queries go async.
+A path or shell source may take time (a slow directory listing, a subprocess), so
+`@` and `!` queries are routed off the key loop: a completer that implements
+`AsyncCompleter` (`IsAsync`) has those queries run in a goroutine and applied
+when ready, so a Tab never stalls the editor. A result is dropped when a newer
+Tab superseded it or the buffer moved on while it ran, so a slow listing can
+never rewrite text the user has since edited. Command and argument completion
+keep the synchronous contract.
 
-### Accept rules
+### Tab rules
 
-- `↑`/`↓` cycle the highlight and mark the selection *moved*.
-- `Tab` accepts the highlighted candidate into the editor immediately; a
-  following `Enter` just submits the result (e.g. `/model` then Enter runs it).
-- `Enter` with a moved selection (`↑`/`↓`) accepts that candidate and submits;
-  with the list merely offered it submits the line as typed, so an open list
-  never swallows a send the user meant.
-- typing after a selection drops the *moved* state again — Enter then sends what
-  was typed rather than re-applying a stale highlight.
-- `Esc` dismisses the overlay without inserting anything.
+- `Tab` fills in the candidates' longest common prefix and stops there, so it
+  never guesses past an ambiguity — bash's behaviour. A lone candidate therefore
+  completes whole.
+- A `Tab` that cannot advance lists the remaining candidates as passive dim rows
+  above the prompt: no highlight, no selection, and every other key clears them.
+  Narrowing the list means typing more.
+- A `Tab` with nothing to add and nothing new to list (no candidates at all, or
+  the listing already on screen) leaves the buffer alone and flashes the rule
+  above the prompt.
+- A source free to return anything — a command's own `Complete` need not extend
+  the typed text — has no meaningful common prefix, so its best candidate is
+  taken whole.
+- `Esc` drops a listing before it clears the buffer. Everything else, `Enter`
+  included, reaches the editor untouched: **completion never owns the arrows**,
+  which stay cursor movement and history.
 
 ### `command.Completer`
 
@@ -377,6 +377,26 @@ The aggregating completer sources commands from the registry and paths from
 `refs.Index`. `/` at line start offers command names; past the first space it
 delegates to the matched command's `Complete`. `@` anywhere offers workspace
 paths. A nil path index disables path completion (plain mode).
+
+### Shell completion (`command/shellcomplete.go`)
+
+A leading `!` routes the whole line to shell completion, so an `@` inside it
+stays the literal text bash will receive rather than a workspace ref.
+
+- **Command names.** The first word of the line, and of each `|`, `||`, `&&`,
+  `;`, `(` or `{` segment, completes against `bash -c 'compgen -abck'` —
+  builtins, keywords and everything on `PATH`. `!` lines execute through
+  `bash -c` anyway, so compgen under the same non-interactive shell reports
+  exactly the names those runs can invoke. The list is resolved once per process
+  and filtered in Go; an unavailable bash simply yields no command names. A bare
+  `!` offers nothing: every command on the system is not a useful list.
+- **Paths.** Everything else, plus any first word containing `/`, completes
+  through `refs.Index.ShellCandidates` — the same one-`ReadDir`-per-step listing
+  `@` uses, except VCS and dependency directories are offered too (`!ls
+  node_modules/`).
+
+Quoting, escapes, `VAR=path` splitting and variable expansion are not handled:
+the token under the cursor completes as-is.
 
 ## `@` file references
 
@@ -472,8 +492,8 @@ home directory instead, offered back with the leading `~` kept in each candidate
 (so accepting a home path inserts one that expands); a `./` query keeps its prefix,
 and an absolute `/…` path completes anywhere on the filesystem — all three keep
 their leading form so accepting inserts a usable path. Because a listing may still
-take time on a slow mount, `@` queries run off the key loop (see Completion
-overlay): typing stays free and only the newest query's result is shown. Ranking
+take time on a slow mount, `@` queries run off the key loop (see Tab
+completion): a Tab never stalls the editor and a stale result is dropped. Ranking
 is (a) already in the conversation (`Tracker.Records()`), (b) recent mtime,
 (c) fuzzy score (reusing `tui.MatchScore` rather than a second implementation).
 Directories complete with a trailing `/` and keep completing.
@@ -521,6 +541,7 @@ agents.go       /agents — list and stop sub-agents via the narrow Agents inter
 settings.go     /settings menu and per-row editors (enumRow/modelRow/intRow)
 shell.go        Stager — staged ! execution and flush
 complete.go     Completer — command + path completion source
+shellcomplete.go  shell command-name (compgen) and path completion for ! lines
 ```
 
 `pkg/refs`:
@@ -528,14 +549,15 @@ complete.go     Completer — command + path completion source
 ```
 parse.go        Parse — @ references with annotation absorption
 expand.go       Expander — inject-or-annotate
-index.go        Index — gitignore-aware path index for completion
+index.go        Index — one-ReadDir-per-step path source (Candidates, ShellCandidates)
 ```
 
 `pkg/tui` additions:
 
 ```
-complete.go        Completion, Completer, MatchScore, SetCompleter
-complete_impl.go   completionOverlay — the live block state and accept rules
+complete.go        Completion, Completer, AsyncCompleter, MatchScore, SetCompleter,
+                   startCompletion/applyCompletion — the Tab rules
+complete_impl.go   completionList — the passive listing an ambiguous Tab draws
 prompt.go          MultiPick, multiPickState (grouped, Tab-toggle multi-select)
 input.go           keyTab / keyBackTab decoding
 ui.go              paste placeholders

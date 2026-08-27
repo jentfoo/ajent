@@ -1,122 +1,104 @@
 package tui
 
-// completionOverlay is the live completion list rendered above the editor. It
-// is distinct from u.act (an interaction): the editor keeps focus and keeps
-// receiving characters, and only keyTab/keyUp/keyDown/keyEnter/keyEscape are
-// consumed; everything else falls through to the editor, after which the
-// completer is re-queried.
-type completionOverlay struct {
-	items  []Completion
-	start  int  // grapheme index the accepted Text replaces, up to the cursor
-	cursor int  // highlighted index into items
-	moved  bool // selection navigated via ↑/↓; Enter accepts it and submits
+import (
+	"slices"
+	"strings"
+)
+
+// completionList is the passive candidate listing drawn above the editor after a
+// Tab that could not advance the buffer. It consumes no keys and holds no
+// selection: the next keystroke clears it, and narrowing it means typing more,
+// as in a shell.
+type completionList struct {
+	items []Completion
 }
 
-// open sets the candidates, keeping the cursor in range and dropping a stale
-// selection when the start index changes (a fresh query).
-func (o *completionOverlay) open(items []Completion, start int) {
-	if o.start != start {
-		o.moved = false
-		o.cursor = 0
-	}
-	o.items = items
-	o.start = start
-	if o.cursor >= len(items) {
-		o.cursor = 0
-	}
-}
+// completionGap separates packed candidate columns.
+const completionGap = 2
 
-// accept reports whether the overlay should consume a key rather than the editor.
-func (o *completionOverlay) accept(k key) bool {
-	switch k.typ {
-	case keyTab, keyUp, keyDown, keyEnter, keyEscape:
-		return true
-	}
-	return false
-}
-
-// key applies one overlay key, returning whether the editor should also
-// receive it and whether the line should submit now.
-func (o *completionOverlay) key(k key, u *UI) (consume, submit bool) {
-	switch k.typ {
-	case keyUp:
-		if len(o.items) > 0 {
-			o.cursor = wrapIndex(o.cursor-1, len(o.items))
-			o.moved = true
-		}
-		return true, false
-	case keyDown:
-		if len(o.items) > 0 {
-			o.cursor = wrapIndex(o.cursor+1, len(o.items))
-			o.moved = true
-		}
-		return true, false
-	case keyTab:
-		// accept now; a following Enter just submits
-		if len(o.items) > 0 {
-			o.applyCurrent(u)
-			o.moved = false
-		}
-		return true, false
-	case keyEnter:
-		// accept and submit when ↑/↓ moved the selection; otherwise submit as typed
-		if o.moved && len(o.items) > 0 {
-			o.applyCurrent(u)
-			return true, true
-		}
-		return false, true
-	case keyEscape:
-		return true, false // close, do not submit
-	}
-	return false, false
-}
-
-// applyCurrent replaces the text from start to the cursor with the selected
-// candidate's Text.
-func (o *completionOverlay) applyCurrent(u *UI) {
-	if len(o.items) == 0 {
-		return
-	}
-	c := o.items[o.cursor]
-	end := u.editor.pos
-	start := o.start
-	if start > end {
-		start = end
-	}
-	replace := graphemesOf(c.Text)
-	cells := u.editor.cells
-	out := make([]string, 0, len(cells)-(end-start)+len(replace))
-	out = append(out, cells[:start]...)
-	out = append(out, replace...)
-	out = append(out, cells[end:]...)
-	u.editor.cells = out
-	u.editor.pos = start + len(replace)
-}
-
-// rows renders the overlay, capped at maxRows.
-func (o *completionOverlay) rows(t Theme, width, maxRows int) []string {
-	if len(o.items) == 0 {
+// rows renders the candidates within maxRows: one per line when they carry
+// detail text, else packed into columns like a shell's listing.
+func (l *completionList) rows(t Theme, width, maxRows int) []string {
+	if len(l.items) == 0 || maxRows <= 0 || width <= 0 {
 		return nil
 	}
-	n := len(o.items)
-	if n > maxRows {
-		n = maxRows
+	if slices.ContainsFunc(l.items, func(c Completion) bool { return c.Detail != "" }) {
+		return l.detailRows(t, width, maxRows)
 	}
-	rows := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		c := o.items[i]
-		marker, style := selectIndent, t.Dim
-		if i == o.cursor {
-			marker, style = selectMarker, t.Accent
-		}
-		line := style.Wrap(marker + c.Label)
+	return l.columnRows(t, width, maxRows)
+}
+
+// detailRows renders one candidate per line with its dim trailing detail.
+func (l *completionList) detailRows(t Theme, width, maxRows int) []string {
+	n, more := fitRows(len(l.items), maxRows, 1)
+	rows := make([]string, 0, maxRows)
+	for _, c := range l.items[:n] {
+		line := t.Dim.Wrap(selectIndent + c.Label)
 		if c.Detail != "" {
 			line += t.Dim.Wrap("  " + c.Detail)
 		}
 		rows = append(rows, truncateDisplay(line, width))
 	}
-	if len(o.items) > n {
-		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(len(o.items)-n)))
+	if more > 0 {
+		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(more)))
 	}
 	return rows
+}
+
+// columnRows packs the labels into equal-width columns, filling row by row.
+func (l *completionList) columnRows(t Theme, width, maxRows int) []string {
+	colW := completionGap
+	for _, c := range l.items {
+		colW = max(colW, displayWidth(c.Label)+completionGap)
+	}
+	avail := width - displayWidth(selectIndent)
+	cols := max(1, avail/colW)
+	n, more := fitRows(len(l.items), maxRows, cols)
+
+	rows := make([]string, 0, maxRows)
+	for i := 0; i < n; i += cols {
+		var b strings.Builder
+		b.WriteString(selectIndent)
+		for _, c := range l.items[i:min(i+cols, n)] {
+			b.WriteString(c.Label)
+			b.WriteString(strings.Repeat(" ", colW-displayWidth(c.Label)))
+		}
+		rows = append(rows, truncateDisplay(t.Dim.Wrap(strings.TrimRight(b.String(), " ")), width))
+	}
+	if more > 0 {
+		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(more)))
+	}
+	return rows
+}
+
+// fitRows returns how many of total items fit in maxRows rows of perRow items,
+// reserving a whole row for the "N more" line when they do not all fit.
+func fitRows(total, maxRows, perRow int) (shown, more int) {
+	if total <= maxRows*perRow {
+		return total, 0
+	}
+	shown = max(maxRows-1, 0) * perRow
+	return shown, total - shown
+}
+
+// commonPrefix returns the longest prefix every candidate's Text shares,
+// truncated to whole grapheme cells.
+func commonPrefix(items []Completion) string {
+	if len(items) == 0 {
+		return ""
+	}
+	cells := graphemesOf(items[0].Text)
+	for _, it := range items[1:] {
+		other := graphemesOf(it.Text)
+		n := min(len(cells), len(other))
+		i := 0
+		for i < n && cells[i] == other[i] {
+			i++
+		}
+		cells = cells[:i]
+		if i == 0 {
+			break
+		}
+	}
+	return strings.Join(cells, "")
 }

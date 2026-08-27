@@ -42,6 +42,13 @@ func (u *UI) editorValue() string {
 	return u.editor.Value()
 }
 
+// editorPos reads the editor caret cell index under lock.
+func (u *UI) editorPos() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.editor.pos
+}
+
 // feedEscape writes one lone escape byte and waits until it has been decoded as
 // keyEscape (the input reader holds a bare Esc for escTimeout before reporting).
 func feedEscape(t *testing.T, w io.Writer) {

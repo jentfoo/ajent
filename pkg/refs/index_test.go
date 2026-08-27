@@ -1,6 +1,7 @@
 package refs
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -152,6 +153,39 @@ func TestCandidates(t *testing.T) {
 			bin := idx.Candidates("~/bin/", nil)
 			assert.Equal(t, []string{"~/bin/run.sh"}, labelsOf(bin))
 		})
+	})
+}
+
+func TestShellCandidates(t *testing.T) {
+	t.Parallel()
+
+	// a shell command may legitimately name a VCS or dependency directory that an
+	// @ reference hides.
+	t.Run("offers_skipped_dirs", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "main.go", "node_modules/pkg/index.js", ".git/config")
+		idx := NewIndex(dir, tools.PathPolicy{})
+
+		assert.Equal(t, []string{"main.go"}, labelsOf(idx.Candidates("", nil)))
+		shell := labelsOf(idx.ShellCandidates(""))
+		assert.ElementsMatch(t, []string{".git/", "main.go", "node_modules/"}, shell)
+
+		assert.Equal(t, []string{".git/config"}, labelsOf(idx.ShellCandidates(".git/")))
+	})
+
+	// every match is returned: a truncated set would yield a common prefix longer
+	// than the real one, so Tab would skip past a valid branch.
+	t.Run("returns_every_match", func(t *testing.T) {
+		dir := t.TempDir()
+		names := make([]string, 0, 100)
+		for i := range 100 {
+			names = append(names, fmt.Sprintf("file%03d.txt", i))
+		}
+		writeTree(t, dir, names...)
+		idx := NewIndex(dir, tools.PathPolicy{})
+
+		assert.Len(t, idx.ShellCandidates("file"), 100)
+		assert.Len(t, idx.Candidates("file", nil), 100)
 	})
 }
 
