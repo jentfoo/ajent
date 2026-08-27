@@ -177,6 +177,30 @@ func intRow(name, key string, min, max int) settingsRow {
 		edit:   edit}
 }
 
+// floatRow builds a row editing a fractional key within [min,max], the numeric
+// counterpart of intRow for settings stored as a fraction.
+func floatRow(name, key string, min, max float64) settingsRow {
+	edit := func(_ context.Context, c Console) ([]settingChange, error) {
+		current, _, _ := c.Settings().Explain(key)
+		var cur float64
+		_ = json.Unmarshal(current, &cur)
+		in, err := c.Input(context.Background(), name, strconv.FormatFloat(cur, 'g', -1, 64))
+		if err != nil {
+			return nil, err
+		}
+		f, perr := strconv.ParseFloat(strings.TrimSpace(in), 64)
+		if perr != nil || f < min || f > max {
+			c.Notify(fmt.Sprintf("%s must be between %g and %g", name, min, max), levelWarn)
+			return nil, nil
+		}
+		_ = c.SetSessionSetting(key, f)
+		return []settingChange{{key: key, value: f}}, nil
+	}
+	return settingsRow{name: name,
+		render: func(c Console) (string, string) { return name, detailOrDefault(c, key) },
+		edit:   edit}
+}
+
 // modelRow builds a row editing a model reference key through the model picker.
 func modelRow(name, key string) settingsRow {
 	render := func(c Console) (string, string) { return name, detailOrDefault(c, key) }
@@ -203,6 +227,8 @@ func allRows() []settingsRow {
 		{name: "Show thinking", render: rowThinking, edit: editThinking},
 		{name: "Tools", render: rowTools, edit: editTools},
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
+		intRow("Compaction verbatim steps", "compaction.minSteps", 1, 8),
+		floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5),
 		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+mcp", "block-all"}),
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
@@ -264,8 +290,12 @@ func rowCompaction(c Console) (string, string) {
 	pct, _, _ := c.Settings().Explain("compaction.threshold")
 	var f float64
 	_ = json.Unmarshal(pct, &f)
+	thr := fmt.Sprintf("%g tokens", f) // an absolute token count when >= 1
+	if f < 1 {
+		thr = fmt.Sprintf("%.0f%%", f*100)
+	}
 	return "Auto-compaction",
-		fmt.Sprintf("%s, %.0f%%  (%s)", boolWord(auto), f*100, orDefault(asrc))
+		fmt.Sprintf("%s, %s  (%s)", boolWord(auto), thr, orDefault(asrc))
 }
 
 // editModel delegates to the model picker.
@@ -352,41 +382,39 @@ func editTools(ctx context.Context, c Console) ([]settingChange, error) {
 	return []settingChange{{key: "tools.enabled", value: names}}, nil
 }
 
-// editCompaction toggles auto-compaction and sets its threshold.
+// editCompaction toggles auto-compaction and sets its threshold. The input is
+// gathered and validated before anything applies: valid values are a fraction in
+// (0,1) of the window or an absolute token count >= 1; anything else aborts the
+// whole edit with no session settings recorded.
 func editCompaction(_ context.Context, c Console) ([]settingChange, error) {
 	on, err := c.Confirm(context.Background(), "Enable automatic compaction?")
 	if err != nil {
 		return nil, err
 	}
-	newOn := on
 
 	threshold := 0.8
 	pct, _, _ := c.Settings().Explain("compaction.threshold")
 	_ = json.Unmarshal(pct, &threshold)
 
-	if newOn {
-		in, ierr := c.Input(context.Background(), "Threshold (fraction of window)", fmt.Sprintf("%.1f", threshold))
+	if on {
+		in, ierr := c.Input(context.Background(), "Threshold (fraction of window or absolute tokens)", fmt.Sprintf("%g", threshold))
 		if ierr != nil {
 			return nil, ierr
 		}
+		// Enter on the placeholder keeps the current threshold; anything else must be a positive number.
 		if in != "" {
 			f, perr := strconv.ParseFloat(strings.TrimSpace(in), 64)
-			switch {
-			case perr == nil && f > 0 && f < 1:
-				threshold = f
-			case perr == nil:
-				c.Notify("threshold must be between 0 and 1", levelWarn)
-			default:
-				// a non-number aborts the whole edit with visible feedback.
-				c.Notify("threshold must be a number between 0 and 1", levelWarn)
-				return nil, nil
+			if perr != nil || f <= 0 {
+				c.Notify("threshold must be a number greater than zero", levelWarn)
+				return nil, nil // abort the whole edit before any setting changes apply
 			}
+			threshold = f
 		}
 	}
 
-	_ = c.SetSessionSetting("compaction.auto", newOn)
-	changes := []settingChange{{key: "compaction.auto", value: newOn}}
-	if newOn {
+	_ = c.SetSessionSetting("compaction.auto", on)
+	changes := []settingChange{{key: "compaction.auto", value: on}}
+	if on {
 		// persist the threshold alongside the toggle so a save keeps both.
 		_ = c.SetSessionSetting("compaction.threshold", threshold)
 		changes = append(changes, settingChange{key: "compaction.threshold", value: threshold})

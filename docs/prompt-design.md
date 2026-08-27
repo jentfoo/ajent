@@ -72,7 +72,7 @@ governs its assembly and use.
 | Project instruction layering | `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, layered with provenance markers |
 | Prompt templates / slash commands | markdown templates expanded into prompts |
 | `/init` project survey | the build and codebase sub-agent tasks, and the instruction that distils them into `AGENTS.md` |
-| Compaction summarisation | staged free reductions + exact-format LLM summary |
+| Compaction summarisation | exact-format LLM summary over a marker-reduced transcript |
 | Sub-agent prompt | the child contract appended as a system snippet to every investigation, plus the empty-summary nudge |
 | Plan workflow kickoffs | the planning contract, the implementation kickoff, the review kickoff and the retry prompt |
 | Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
@@ -396,9 +396,9 @@ any other write rather than `/init` inventing a private path to disk.
 
 ## Compaction summarisation
 
-Compaction runs free structural reductions first (stages 1–3: drop failed/superseded/
-aborted tool calls, elide old output to shape summaries, strip retained thinking),
-and only when they are not enough does it spend an LLM call on a summary (stage 4).
+Compaction always cuts and always summarises. The newest steps are held back
+verbatim; everything before them is folded into one checkpoint. Free structural
+reduction still runs, but only over the transcript the summariser reads.
 
 ### The summariser system prompt
 
@@ -422,10 +422,15 @@ data, not a live thread), followed by an exact-format spec:
 The messages above are a conversation to summarize. Create a structured context
 checkpoint that another model will use to continue the work.
 
+The most recent steps are deliberately NOT shown above: they are kept verbatim
+and follow your summary. Summarise only what you were given; the reader can see
+newer activity than you can.
+
 Use this EXACT format:
 
 ## Goal
-[What is the user trying to accomplish? Can be multiple items.]
+[The objective as it now stands. If the user redirected the work, state the
+current objective and note what changed.]
 
 ## Constraints & Preferences
 - [Any constraints, preferences, or requirements]
@@ -448,12 +453,17 @@ Use this EXACT format:
 1. [Ordered list of what should happen next]
 
 ## Critical Context
-- [Data, examples, or references needed to continue]
+- [Everything needed to continue without re-reading the history: exact file paths
+  and what changed in each, error text, command lines and their outcomes, API and
+  type shapes the work relies on, values discovered by investigation, and
+  approaches already ruled out with the reason they were ruled out.]
 - [(none) if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.
-For content the assistant produced (code, prose, plans, answers), include a 2-3
-sentence synopsis of its substance — never just a title or name.
+Be brief in wording and complete in substance. Cut preamble, hedging and
+adjectives; never cut a fact. Preserve file paths, function names, error messages
+and command lines exactly as written. For content the assistant produced (code,
+prose, plans, answers), include a 2-3 sentence synopsis of its substance — never
+just a title or name.
 ```
 
 This is the heart of resumption: **Goal / Constraints / Progress / Decisions /
@@ -470,12 +480,18 @@ adding new context:
 The messages above are NEW conversation messages to incorporate into the existing
 summary provided in <previous-summary>.
 
-Update the structured summary with new information. RULES:
-- PRESERVE all existing information from the previous summary
-- ADD new progress, decisions, and context
-- UPDATE Progress: move items In Progress → Done when completed
-- UPDATE Next Steps based on what was accomplished
-- PRESERVE exact file paths, function names, error messages
+The most recent steps are deliberately NOT shown above: they are kept verbatim and
+follow your summary. Summarise only what you were given; the reader can see newer
+activity than you can.
+
+Produce ONE merged summary. RULES:
+- INTEGRATE the previous summary rather than appending to it; never state the same
+  fact twice
+- REPLACE the goal if the user redirected the work, noting what changed
+- UPDATE Progress: move items In Progress → Done as work completed
+- COMPRESS finished work to one line per item once nothing depends on its detail
+- NEVER drop a constraint, a decision, or outstanding work
+- PRESERVE exact file paths, function names, error messages and command lines
 
 Use this EXACT format:
 [the same six-section format]
@@ -484,13 +500,31 @@ Use this EXACT format:
 This is how summaries merge rather than nest — each compaction refines one
 checkpoint instead of piling summaries inside summaries.
 
-### User guidance and turn-prefix cases
+### What the summariser reads
+
+The verbatim band is excluded by construction — the span handed to the summariser
+stops where the band begins — so the checkpoint never re-describes work the reader
+can already see.
+
+- **Thinking is omitted.** Cheap to drop, and it removes any confusion about whose
+  reasoning is being read.
+- **Tool results carry self-describing markers** where the reduction pass replaced
+  them: `[identical to an earlier tool result]`,
+  `[superseded by a later read of the same file]`, and the failed-tool one-liner.
+  The wording is the instruction; the prompt says nothing about them.
+- **Output is clipped only when it must be.** The transcript is built whole first;
+  a clip is applied only if it would not fit alongside the reply, stepping down
+  8192 → 512 runes and finally dropping the oldest entries. Compaction fires near
+  the top of the window, so an unclipped span plus its summary can overflow, and an
+  oversized request would fail the session exactly when it most needs to shrink.
+  If nothing fits — even with the previous summary clipped down — compaction fails
+  with an error rather than sending a request the provider will reject or
+  summarising an empty transcript; an unknown window applies no bound.
+
+### User guidance
 
 - `/compact <instructions>` appends the user's focus as a short "Additional
   focus: ..." line so the summary leans toward what they care about.
-- When only a prefix of an oversized turn must be dropped, use a lighter format:
-  Original Request / Early Progress / Context for Suffix — enough to understand
-  the kept recent work without re-summarising everything.
 
 ### Re-injection
 

@@ -43,7 +43,7 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 	var msgs []llm.Message
 	var warns []string
 
-	keep := cutIndex(branch, cd)
+	keep := CutIndex(branch, cd)
 	if keep < 0 {
 		warns = append(warns, "compaction first-kept entry not found")
 		return nil, warns // a cut that cannot be located keeps nothing safe
@@ -118,11 +118,16 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 		if stripThinking && md.Message.Role == llm.RoleAssistant && len(reduced.Content) == 0 {
 			continue
 		}
-		if resolve != nil && reduced.Role == llm.RoleAssistant && current.ID != "" {
-			reduced.Origin = &llm.Origin{
-				Provider: current.Provider, Dialect: current.Caps.Dialect, Model: current.ID,
-			}
+		if reduced.Role == llm.RoleAssistant {
+			// the stop reason rides even without a resolver: Prepare drops errored
+			// turns, so a measurement that could not see StopError would count context
+			// the real request never sends.
 			reduced.Stop = md.Stop
+			if resolve != nil && current.ID != "" {
+				reduced.Origin = &llm.Origin{
+					Provider: current.Provider, Dialect: current.Caps.Dialect, Model: current.ID,
+				}
+			}
 		}
 		msgs = append(msgs, reduced)
 	}
@@ -130,9 +135,9 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 	return msgs, warns
 }
 
-// cutIndex returns the branch index where cd's kept tail starts, or -1 when a
+// CutIndex returns the branch index where cd's kept tail starts, or -1 when a
 // set FirstKeptEntryID is missing from the branch.
-func cutIndex(branch []Entry, cd CompactionData) int {
+func CutIndex(branch []Entry, cd CompactionData) int {
 	if cd.FirstKeptEntryID != "" {
 		for i := range branch {
 			if branch[i].ID == cd.FirstKeptEntryID {

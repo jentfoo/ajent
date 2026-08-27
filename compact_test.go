@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -51,6 +54,18 @@ func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*co
 	return c, st, w
 }
 
+// appendSteps records n assistant steps of roughly equal weight, so a session has
+// something to fold once the newest steps are held back verbatim.
+func appendSteps(t *testing.T, w *session.Writer, n int) session.Entry {
+	t.Helper()
+	var last session.Entry
+	for i := 0; i < n; i++ {
+		last = appendText(t, w, llm.RoleAssistant,
+			"step "+strconv.Itoa(i)+" "+strings.Repeat("The Last Lighthouse. ", 200))
+	}
+	return last
+}
+
 func appendText(t *testing.T, w *session.Writer, role llm.Role, text string) session.Entry {
 	t.Helper()
 	e, err := w.Append(session.TypeMessage, session.MessageData{Message: llm.Text(role, text)})
@@ -73,30 +88,31 @@ func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 }
 
 // A manual compact on a single-turn session folds the whole history into a
-// summary-only compaction: the branch root entry must not count as an older turn.
+// a real cut, not a summary-only one: the newest steps stay verbatim.
 func TestCompactorManualSingleTurn(t *testing.T) {
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 		{Events: textStream("## Goal\nuser wanted a story about a lighthouse")},
 	}}
 	c, st, w := testCompactor(t, model, sp)
 
 	appendText(t, w, llm.RoleUser, "read me a short story")
-	appendText(t, w, llm.RoleAssistant, strings.Repeat("The Last Lighthouse. ", 200))
+	appendSteps(t, w, 6)
 
 	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
-	require.True(t, did, "single-turn session must compact")
+	require.True(t, did, "a session with foldable steps must compact")
 
 	comps := compactionEntries(t, w)
 	require.Len(t, comps, 1)
 	var cd session.CompactionData
 	require.NoError(t, comps[0].Decode(&cd))
-	assert.Empty(t, cd.FirstKeptEntryID) // summary-only
+	assert.NotEmpty(t, cd.FirstKeptEntryID, "the newest steps stay verbatim")
 	assert.Contains(t, cd.Summary, "lighthouse")
 	assert.Less(t, cd.After, cd.Before)
+	assert.Empty(t, cd.Reduce.Stubs, "the cut already removed everything a stub could touch")
 
-	require.Len(t, st.Messages, 1) // only the summary survives
+	require.Len(t, st.Messages, 3) // the summary plus the two kept steps
 	assert.Contains(t, textOfMain(st.Messages[0]), "lighthouse")
 }
 
@@ -104,7 +120,7 @@ func TestCompactorManualSingleTurn(t *testing.T) {
 // that read tracking still vouches for, so it must report the rebuild like a
 // rewind does — or a later @ref would dedupe against content the model lost.
 func TestCompactorReportsRebuiltContext(t *testing.T) {
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 		{Events: textStream("## Goal\nuser wanted a story")},
 	}}
@@ -114,7 +130,7 @@ func TestCompactorReportsRebuiltContext(t *testing.T) {
 	c.rec.onSwitch = func(msgs []llm.Message) { switched = append(switched, msgs) }
 
 	appendText(t, w, llm.RoleUser, "read me a short story")
-	appendText(t, w, llm.RoleAssistant, strings.Repeat("The Last Lighthouse. ", 200))
+	appendSteps(t, w, 6)
 
 	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
@@ -127,17 +143,17 @@ func TestCompactorReportsRebuiltContext(t *testing.T) {
 // After a rewind the file tail sits on an abandoned branch; planning must use
 // the writer's live head or the recorded cut cannot be found on rebuild.
 func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 		{Events: textStream("## Goal\nuser wanted a story")},
 	}}
 	c, st, w := testCompactor(t, model, sp)
 
 	appendText(t, w, llm.RoleUser, "read me a short story")
-	kept := appendText(t, w, llm.RoleAssistant, strings.Repeat("The Last Lighthouse. ", 200))
+	kept := appendSteps(t, w, 6)
 	appendText(t, w, llm.RoleUser, "another")
 	appendText(t, w, llm.RoleAssistant, strings.Repeat("Vending Machine. ", 200))
-	w.SetHead(kept.ID) // rewind to a single-turn live branch; old tail stays in the file
+	w.SetHead(kept.ID) // rewind past the second turn; the old tail stays in the file
 
 	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
@@ -159,9 +175,7 @@ func TestCompactorOverflowRunsMidTurn(t *testing.T) {
 	c, st, w := testCompactor(t, model, sp)
 
 	appendText(t, w, llm.RoleUser, "read me a short story")
-	appendText(t, w, llm.RoleAssistant, strings.Repeat("The Last Lighthouse. ", 200))
-	appendText(t, w, llm.RoleUser, "another")
-	appendText(t, w, llm.RoleAssistant, strings.Repeat("Vending Machine. ", 200))
+	appendSteps(t, w, 6)
 	for _, e := range mustBranch(t, w) {
 		var md session.MessageData
 		if e.Decode(&md) == nil {
@@ -232,14 +246,17 @@ func (c *ctxSink) TurnEnd(agent.TurnResult)        {}
 // stays). The recorded Before/After include base, and the summariser's own call
 // must never snap the context terms.
 func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 		{Events: textStream("## Goal\nuser wanted a story about lighthouses")},
 	}}
 	c, st, w := testCompactor(t, model, sp)
 
-	longAssist := strings.Repeat("The Last Lighthouse. ", 3000)
-	msgs := []llm.Message{llm.Text(llm.RoleUser, "read me a short story"), llm.Text(llm.RoleAssistant, longAssist)}
+	msgs := []llm.Message{llm.Text(llm.RoleUser, "read me a short story")}
+	for i := 0; i < 6; i++ {
+		msgs = append(msgs, llm.Text(llm.RoleAssistant,
+			"step "+strconv.Itoa(i)+" "+strings.Repeat("The Last Lighthouse. ", 500)))
+	}
 	for _, m := range msgs {
 		st.Messages = append(st.Messages, m)
 		if _, err := w.Append(session.TypeMessage, session.MessageData{Message: m}); err != nil {
@@ -391,4 +408,114 @@ func TestRunSummaryCancelStopsDraining(t *testing.T) {
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
+}
+
+// The compaction.auto setting gates only the threshold trigger: a user turning
+// automatic reduction off must still be able to run /compact, and an overflow
+// must still recover rather than brick the session.
+func TestCompactorAutoSetting(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+
+	setup := func(t *testing.T, auto bool) (*compactor, *session.Writer) {
+		t.Helper()
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: textStream("## Goal\nthe lighthouse story")},
+		}}
+		c, st, w := testCompactor(t, model, sp)
+		// a tail of a tenth of the compaction point, so a non-forced run has an
+		// older turn to fold rather than declining
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: auto, MinSteps: 1, VerbatimFraction: 0.1}
+		}
+
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 6)
+		st.Tokens.Add(7000) // past the compaction point for this window
+		return c, w
+	}
+
+	t.Run("threshold_refused_when_off", func(t *testing.T) {
+		c, w := setup(t, false)
+
+		did, err := c.run(t.Context(), agent.CompactThreshold, "")
+		require.NoError(t, err)
+		assert.False(t, did)
+		assert.Empty(t, compactionEntries(t, w))
+	})
+
+	t.Run("threshold_runs_when_on", func(t *testing.T) {
+		c, w := setup(t, true)
+
+		did, err := c.run(t.Context(), agent.CompactThreshold, "")
+		require.NoError(t, err)
+		require.True(t, did)
+		assert.Len(t, compactionEntries(t, w), 1)
+	})
+
+	t.Run("manual_ignores_auto_off", func(t *testing.T) {
+		c, w := setup(t, false)
+
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		require.NoError(t, err)
+		require.True(t, did)
+		assert.Len(t, compactionEntries(t, w), 1)
+	})
+
+	t.Run("overflow_ignores_auto_off", func(t *testing.T) {
+		c, w := setup(t, false)
+
+		did, err := c.run(t.Context(), agent.CompactOverflow, "")
+		require.NoError(t, err)
+		require.True(t, did)
+		assert.Len(t, compactionEntries(t, w), 1)
+	})
+}
+
+// A compaction whose summariser provider cannot be resolved must report the
+// setup failure rather than masquerade as a successful "nothing to compact".
+func TestCompactorProviderError(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
+
+	sp := &llm.ScriptedProvider{}
+	c, _, w := testCompactor(t, model, sp)
+	var notices []string
+	c.notify = func(msg string, level agent.Level) { notices = append(notices, msg) }
+	// the summariser provider is gone: run must fail loudly.
+	c.providerFor = func(llm.Model) (llm.Provider, error) {
+		return nil, errors.New("no such model")
+	}
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+
+	did, err := c.run(t.Context(), agent.CompactManual, "")
+	require.Error(t, err)
+	assert.False(t, did)
+	joined := strings.Join(notices, "\n")
+	assert.Contains(t, joined, "unavailable", "a setup failure is not a successful no-op")
+	assert.NotContains(t, joined, "nothing to compact")
+	// nothing was appended for the failed run.
+	require.Empty(t, compactionEntries(t, w))
+}
+
+func TestVerbatimTokens(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000} // compacts at 160k
+
+	cases := []struct {
+		name     string
+		fraction float64
+		want     int
+	}{
+		{"tenth_of_the_compaction_point", 0.1, 16000},
+		{"zero_defers_to_compact", 0, 0},
+		{"negative_defers_to_compact", -0.5, 0},
+		{"whole_defers_to_compact", 1, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, verbatimTokens(model, tc.fraction))
+		})
+	}
 }

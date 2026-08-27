@@ -1,118 +1,128 @@
-// Package compact reduces a session's context before it overflows: cheap
-// structural reductions first (stages 1-3), then an LLM summary only when they
-// are not enough (stage 4). It computes a plan recorded on the compaction entry;
-// pkg/session replays that plan on every rebuild so what the model sees is always
-// exactly what was measured.
+// Package compact reduces a session's context before it overflows. It keeps the
+// most recent steps verbatim and folds everything older into one structured
+// checkpoint, recording the plan on a compaction entry; pkg/session replays that
+// plan on every rebuild so what the model sees is always exactly what was measured.
 package compact
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"slices"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
-)
-
-// Reason says why a compaction ran. It does not change the plan (every trigger
-// targets half the window) but lets callers phrase their notice differently.
-type Reason uint8
-
-const (
-	Manual    Reason = iota // /compact [instructions]
-	Threshold               // automatic at a turn boundary when Used crosses compactAt
-	Overflow                // defensive retry after llm.ErrContextOverflow
 )
 
 // Options configures one compaction pass over a branch.
 type Options struct {
 	Cwd          string           // canonical path base for superseded read/edit detection
 	Instructions string           // /compact <instructions>; appended to the summary prompt
-	TargetTokens int              // desired Used after compacting; 0 uses half the window budget
-	Retain       llm.RetainPolicy // session retention policy, for stage 3
-	Caps         llm.Capabilities // model caps, used to resolve that retention policy
-	Force        bool             // always summarise older turns even far below target (manual /compact)
+	Retain       llm.RetainPolicy // session retention policy, for measurement
 	Base         int              // fixed request overhead (system block + tool schemas), added to every measure
+	MinSteps     int              // recent steps kept verbatim however large; 0 uses defaultMinSteps
+	// VerbatimTokens caps the band past that floor; 0 uses a tenth of the
+	// compaction point.
+	VerbatimTokens int
 }
 
+const (
+	defaultMinSteps        = 2    // recent steps always kept verbatim; twin of defaultVerbatimDivisor
+	defaultVerbatimDivisor = 10   // band ceiling divisor on the compaction point; twin of defaultMinSteps
+	maxVerbatimSteps       = 8    // upper bound, matching the /settings minSteps row of 1..8
+	minVerbatimTokens      = 1024 // floor, so an unknown window still keeps a modest band
+	minSpanTokens          = 1024 // below this a summary cannot pay for itself
+)
+
 // Result is what one compaction produced: enough to write a session entry and
-// rebuild context. FirstKeptEntryID empty with a Summary set means a
-// summary-only compaction: everything before the compaction entry is folded.
+// rebuild context.
 type Result struct {
 	Summary          string
 	FirstKeptEntryID string
-	Before           int // estimated tokens before, via ContextMessages with no plan
-	After            int // estimated tokens after applying the whole plan + summary
+	Before           int // estimated tokens the next request carries now
+	After            int // estimated tokens it will carry once this plan is recorded
 	Reduce           session.Reduce
 }
 
 // RunPrompt performs one summarisation model call and returns its assistant text.
-// It is wired by the driver to a real provider stream; nil disables stage 4.
-type RunPrompt func(ctx context.Context, req llm.Request) (string, error)
+// It is wired by the driver to a real provider stream; nil disables compaction.
+type RunPrompt func(ctx context.Context, run llm.Request) (string, error)
 
-// Compact reduces branch toward opts.TargetTokens. Stages run in order and each
-// reduction is measured through ContextMessages so an early exit reports exactly
-// what the next request would send. A nil result means nothing worth doing changed.
+// Compact folds everything before the verbatim band into a checkpoint. Both ends
+// are measured through ContextMessages against the branch as a prior compaction
+// already left it, so the reported saving is the saving the next request gets. A
+// nil result means nothing worth doing changed.
 func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run RunPrompt, opts Options) (*Result, error) {
-	target := resolveTarget(model, opts.TargetTokens)
-	before := tokensFor(branch, session.CompactionData{}, model, opts.Retain, opts.Base)
-
-	r := &session.Reduce{}
-	var stats session.Stats
-
-	// stages 1-3 are free; run them all (even when stage 4 will be needed) so the
-	// summary has less to read.
-	if stubs, drops, s := structural(branch, opts.Cwd); len(stubs)+len(drops) > 0 {
-		r.Stubs = append(r.Stubs, stubs...)
-		r.Drop = append(r.Drop, drops...)
-		stats.Failed += s.Failed
-		stats.Superseded += s.Superseded
-		stats.Aborted += s.Aborted
-	}
-	if elided := truncate(branch, opts.Cwd, r); len(elided) > 0 {
-		r.Stubs = append(r.Stubs, elided...)
-		stats.Truncated += len(elided)
-	}
-	if resolveRetain(opts.Retain, opts.Caps) == llm.RetainAll {
-		r.StripThinking = true
-	}
-	r.Stats = stats // record what the stages did, for the notice
-
-	res := &Result{Before: before, Reduce: *r}
-	after123 := tokensFor(branch, session.CompactionData{Reduce: r}, model, opts.Retain, opts.Base)
-	// forced proceeds even under target so older turns can fold into a summary
-	if !opts.Force && (after123 <= target || len(branch) == 0) {
-		res.After = after123
-		return finish(res)
-	}
-
 	if run == nil {
-		// no summariser wired; report whatever stages 1-3 saved.
-		res.After = after123
-		return finish(res)
+		return nil, nil // no summariser wired; there is no other way to reduce
+	}
+	minSteps, verbatimTokens := resolveVerbatim(model, opts)
+
+	// the baseline is the effective current context, not the raw branch: a prior
+	// compaction already folded part of it away.
+	prior, priorIdx, has := session.NewestCompaction(branch)
+	if has {
+		prior = normalisePrior(branch, prior, priorIdx)
+	}
+	priorCut := session.CutIndex(branch, prior)
+	if priorCut < 0 { // an unlocatable prior cut degrades to the raw branch
+		priorCut, prior = 0, session.CompactionData{}
 	}
 
-	summary, firstKept, nsum, err := stage4(ctx, branch, model, run, opts)
+	band, ok := chooseCut(branch, priorCut, minSteps, verbatimTokens)
+	if !ok || spanTokens(branch, priorCut, band) < minSpanTokens {
+		return nil, nil
+	}
+	firstKept := firstKeptID(branch, band)
+	if firstKept == "" { // the band opens on an assistant message; providers reject otherwise
+		return nil, errors.New("compact: a cut needs a kept message entry")
+	}
+
+	before := tokensFor(branch, prior, model, opts.Retain, opts.Base)
+	// the stubs never reach context: everything they touch is replaced by the
+	// summary. They exist only so the summariser reads what is already known to be
+	// superseded as a marker rather than as bytes.
+	stubs := spanStubs(branch, priorCut, band, opts.Cwd)
+
+	summary, nsum, err := summarise(ctx, branch, priorCut, band, stubs, model, run, opts)
 	if err != nil {
 		return nil, fmt.Errorf("compact: summarise: %w", err)
 	}
-	r.Stats.Summarized = nsum
-	res.Reduce = *r
-	res.Summary = summary
-	res.FirstKeptEntryID = firstKept
 
-	cd := session.CompactionData{Summary: summary, FirstKeptEntryID: firstKept, Reduce: r}
-	res.After = tokensFor(measureBranch(branch, cd), cd, model, opts.Retain, opts.Base)
+	res := &Result{
+		Before: before, Summary: summary, FirstKeptEntryID: firstKept,
+		// the recorded plan is inert by construction, so it carries only what the
+		// notice needs; claiming stub work here would describe context that never changed
+		Reduce: session.Reduce{Stats: session.Stats{Summarized: nsum}},
+	}
+	cd := session.CompactionData{Summary: summary, FirstKeptEntryID: firstKept, Reduce: &res.Reduce}
+	res.After = tokensFor(branch, cd, model, opts.Retain, opts.Base)
 	return finish(res)
 }
 
-// measureBranch returns branch as it will look once cd is recorded: a
-// summary-only plan cuts at the compaction entry itself, which does not exist yet.
-func measureBranch(branch []session.Entry, cd session.CompactionData) []session.Entry {
+// normalisePrior resolves a summary-only prior compaction to an explicit
+// FirstKeptEntryID so carrying it into a new compaction entry cannot re-cut at the
+// new entry's own position, dropping everything between the two. It returns cd
+// unchanged when no message entry follows the compaction, where summary-only
+// semantics stay correct.
+func normalisePrior(branch []session.Entry, cd session.CompactionData, idx int) session.CompactionData {
 	if cd.Summary == "" || cd.FirstKeptEntryID != "" {
-		return branch
+		return cd
 	}
-	return append(slices.Clone(branch), session.Entry{Type: session.TypeCompaction})
+	for i := idx + 1; i < len(branch); i++ {
+		if branch[i].Type == session.TypeMessage {
+			cd.FirstKeptEntryID = branch[i].ID
+			return cd
+		}
+	}
+	return cd
+}
+
+// firstKeptID returns the entry id the band starts at.
+func firstKeptID(branch []session.Entry, band int) string {
+	if band < 0 || band >= len(branch) || branch[band].Type != session.TypeMessage {
+		return ""
+	}
+	return branch[band].ID
 }
 
 // finish returns res only when the plan measurably shrinks the next request.
@@ -123,20 +133,18 @@ func finish(res *Result) (*Result, error) {
 	return nil, nil // nothing saved, or it would grow context
 }
 
-// resolveTarget returns the after-compaction token target: opts' override when set,
-// else half of the usable window budget.
-func resolveTarget(model llm.Model, override int) int {
-	if override > 0 {
-		return override
+// resolveVerbatim returns the band bounds: opts' overrides when set, else two
+// steps and a tenth of the model's compaction point. Every trigger uses the same
+// band; a manual run is not an instruction to keep less recent work.
+func resolveVerbatim(model llm.Model, opts Options) (steps, tokens int) {
+	steps = min(opts.MinSteps, maxVerbatimSteps)
+	if steps <= 0 {
+		steps = defaultMinSteps
 	}
-	budget := model.ContextWindow - tokensReserve(model)
-	if budget <= 1 {
-		return 1024 // unknown or tiny window: fall back to a modest fixed target
+	tokens = opts.VerbatimTokens
+	if tokens <= 0 {
+		// CompactAt is 0 on an unknown window, which would leave the band unbounded
+		tokens = max(minVerbatimTokens, compactAt(model)/defaultVerbatimDivisor)
 	}
-	return max(2, budget/2)
-}
-
-// resolveRetain applies the caps adjustment to a retention policy.
-func resolveRetain(p llm.RetainPolicy, c llm.Capabilities) llm.RetainPolicy {
-	return llm.ResolveRetain(p, c)
+	return steps, tokens
 }

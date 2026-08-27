@@ -12,51 +12,115 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cut point ------------------------------------------------------------
+// the verbatim band ----------------------------------------------------
 
-func TestSelectCut(t *testing.T) {
+// stepBranch builds n steps, each an assistant reply of roughly equal weight, and
+// opens with one real user prompt. Steps are "a1".."aN", the prompt "u1".
+func stepBranch(t *testing.T, n, filler int) []session.Entry {
+	t.Helper()
+
+	branch := []session.Entry{userText("u1", "do the work")}
+	for i := 1; i <= n; i++ {
+		branch = append(branch, assistText("a"+strconv.Itoa(i), strings.Repeat("x ", filler)))
+	}
+	return branch
+}
+
+func TestVerbatimCut(t *testing.T) {
 	t.Parallel()
 
-	t.Run("whole_branch_fits", func(t *testing.T) {
-		branch := []session.Entry{userText("u1", "hi"), assistText("a1", "yo")}
-		assert.Equal(t, -1, selectCut(branch, 100000)) // nothing to cut
+	t.Run("empty_branch_has_no_band", func(t *testing.T) {
+		assert.Equal(t, 0, verbatimCut(nil, 0, 2, 1000))
 	})
 
-	t.Run("empty_branch_or_zero_budget", func(t *testing.T) {
-		assert.Equal(t, -1, selectCut(nil, 500))
-		branch := []session.Entry{userText("u1", "hi")}
-		assert.Equal(t, -1, selectCut(branch, 0)) // no budget: nothing to cut
+	t.Run("no_step_returns_the_end", func(t *testing.T) {
+		branch := []session.Entry{userText("u1", "only a prompt")}
+		assert.Equal(t, len(branch), verbatimCut(branch, 0, 2, 1000))
 	})
 
-	t.Run("prefers_a_turn_start_when_over_budget", func(t *testing.T) {
-		// an over-budget text-only branch still yields a real cut that lands on
-		// a turn start or assistant boundary, never mid-turn.
+	t.Run("fewer_steps_than_the_floor", func(t *testing.T) {
+		branch := stepBranch(t, 1, 5)
+		assert.Equal(t, 0, verbatimCut(branch, 0, 2, 0), "the prompt joins its only step")
+	})
+
+	t.Run("floor_keeps_exactly_two_steps", func(t *testing.T) {
+		branch := stepBranch(t, 6, 5)
+		assert.Equal(t, 5, verbatimCut(branch, 0, 2, 0), "no ceiling extension")
+	})
+
+	t.Run("extension_stops_at_the_ceiling", func(t *testing.T) {
+		branch := stepBranch(t, 6, 200)
+		one := spanTokens(branch, 6, len(branch))
+		cut := verbatimCut(branch, 0, 2, one*4+one/2) // room for four steps, not five
+		assert.Equal(t, 3, cut)
+		assert.LessOrEqual(t, spanTokens(branch, cut, len(branch)), one*4+one/2)
+	})
+
+	t.Run("oversized_floor_is_kept_anyway", func(t *testing.T) {
+		branch := stepBranch(t, 6, 400)
+		cut := verbatimCut(branch, 0, 2, 1) // ceiling below any single step
+		assert.Equal(t, 5, cut, "the floor outranks the ceiling")
+		assert.Greater(t, spanTokens(branch, cut, len(branch)), 1)
+	})
+
+	t.Run("never_reaches_past_the_prior_cut", func(t *testing.T) {
+		branch := stepBranch(t, 6, 5)
+		assert.Equal(t, 5, verbatimCut(branch, 5, 4, 1<<20))
+	})
+
+	t.Run("pulls_in_the_adjacent_prompt", func(t *testing.T) {
 		branch := []session.Entry{
-			userText("u1", strings.Repeat("a ", 400)),
-			assistText("a1", strings.Repeat("b ", 800)),
-			userText("u2", strings.Repeat("c ", 200)),
+			userText("u1", "first ask"),
+			assistText("a1", "first answer"),
+			userText("u2", "second ask"),
+			assistText("a2", "second answer"),
 		}
-		cut := selectCut(branch, 500) // keep roughly the last turn
-		require.NotEqual(t, -1, cut)
-		assert.True(t, isValidCut(branch[cut])) // never a tool-result boundary
+		assert.Equal(t, 2, verbatimCut(branch, 0, 1, 0),
+			"the question that opened the step rides with it")
 	})
 
-	t.Run("never_cuts_mid_turn", func(t *testing.T) {
-		// the budget line falls inside a turn; selectCut must snap off the
-		// tool-result-only user message so the call/result pair stays intact.
+	t.Run("leaves_an_injected_prompt_behind", func(t *testing.T) {
 		branch := []session.Entry{
-			userText("u1", strings.Repeat("q ", 300)),
-			callMsg("a1", "c1", "bash", ""),
-			resultMsg("r1", "c1", strings.Repeat("o ", 400), false),
+			userText("u1", "first ask"),
+			assistText("a1", "first answer"),
+			injectedText("i1", "Sub-agent sub-3 completed."),
+			assistText("a2", "second answer"),
 		}
-		for budget := 100; budget <= 2000; budget += 50 {
-			cut := selectCut(branch, budget)
-			if cut == -1 {
-				continue
-			}
-			assert.NotEqual(t, "r1", branch[cut].ID, "budget %d cuts on the tool result", budget)
-			assert.True(t, tailWellFormed(branch, cut), "budget %d orphans a tool call", budget)
+		assert.Equal(t, 3, verbatimCut(branch, 0, 1, 0),
+			"a system notice is not the user's question")
+	})
+}
+
+func TestChooseCut(t *testing.T) {
+	t.Parallel()
+
+	t.Run("advances_past_the_prior_cut", func(t *testing.T) {
+		branch := stepBranch(t, 8, 20)
+		cut, ok := chooseCut(branch, 0, 2, 0)
+		require.True(t, ok)
+		assert.Equal(t, 7, cut)
+	})
+
+	t.Run("declines_when_the_band_reaches_it", func(t *testing.T) {
+		branch := stepBranch(t, 8, 20)
+		_, ok := chooseCut(branch, 7, 2, 0)
+		assert.False(t, ok)
+	})
+
+	t.Run("declines_without_a_step", func(t *testing.T) {
+		branch := []session.Entry{userText("u1", "only a prompt")}
+		_, ok := chooseCut(branch, 0, 2, 1<<20)
+		assert.False(t, ok)
+	})
+
+	t.Run("declines_when_the_span_holds_no_message", func(t *testing.T) {
+		branch := []session.Entry{
+			{ID: "s0", Type: session.TypeSession, Data: []byte(`{"model":"test/m"}`)},
+			assistText("a1", "one"),
+			assistText("a2", "two"),
 		}
+		_, ok := chooseCut(branch, 0, 2, 1<<20)
+		assert.False(t, ok)
 	})
 }
 
@@ -86,30 +150,72 @@ func tailWellFormed(branch []session.Entry, cut int) bool {
 	return calls == 0
 }
 
-// TestSelectCutFuzzWellFormed generates branches with random tool interleavings
-// and asserts every cut keeps a well-formed tail: no orphaned tool_use, and the
-// cut never lands on a tool-result-only message.
-func TestSelectCutFuzzWellFormed(t *testing.T) {
+// countSteps reports how many steps a region holds.
+func countSteps(branch []session.Entry) int {
+	var n int
+	for i := range branch {
+		if isStepStart(branch[i]) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestVerbatimCutFuzz generates branches with random tool interleavings and
+// asserts the band is always well formed and always honours its bounds.
+func TestVerbatimCutFuzz(t *testing.T) {
 	t.Parallel()
 
 	for seed := int64(0); seed < 40; seed++ {
 		r := rand.New(rand.NewSource(seed))
 		branch := randomBranch(r)
-		for budget := 30; budget <= 3000; budget += 97 {
-			cut := selectCut(branch, budget)
-			if cut == -1 {
-				continue
+		for _, priorCut := range []int{0, len(branch) / 3} {
+			for minSteps := 1; minSteps <= 4; minSteps++ {
+				for budget := 30; budget <= 3000; budget += 97 {
+					cut := verbatimCut(branch, priorCut, minSteps, budget)
+					where := func() string {
+						return "seed " + strconv.FormatInt(seed, 10) + " prior " + strconv.Itoa(priorCut) +
+							" steps " + strconv.Itoa(minSteps) + " budget " + strconv.Itoa(budget)
+					}
+
+					assert.GreaterOrEqual(t, cut, priorCut, "%s reached past the prior cut", where())
+					steps := countSteps(branch[priorCut:])
+					if steps == 0 {
+						assert.Equal(t, len(branch), cut, "%s invented a band", where())
+						continue
+					}
+					require.Less(t, cut, len(branch), "%s dropped an existing band", where())
+
+					// the band opens on a step, or on the prompt that step answers
+					assert.True(t, isStepStart(branch[cut]) || isLivePrompt(branch[cut]),
+						"%s opened the band mid-result", where())
+					assert.True(t, tailWellFormed(branch, cut), "%s orphans a tool call", where())
+
+					kept := countSteps(branch[cut:])
+					assert.LessOrEqual(t, kept, steps, "%s kept more steps than exist", where())
+					assert.GreaterOrEqual(t, kept, min(minSteps, steps), "%s broke the floor", where())
+					if kept > minSteps {
+						// past the floor the ceiling binds, over the steps themselves: the
+						// prompt withLivePrompt adds in front of them is deliberate
+						firstStep := cut
+						for firstStep < len(branch) && !isStepStart(branch[firstStep]) {
+							firstStep++
+						}
+						assert.LessOrEqual(t, spanTokens(branch, firstStep, len(branch)), budget,
+							"%s busted the ceiling past the floor", where())
+					}
+
+					// a second pass over an unchanged branch never reopens folded history
+					assert.GreaterOrEqual(t, verbatimCut(branch, cut, minSteps, budget), cut,
+						"%s moved backwards on re-entry", where())
+				}
 			}
-			assert.True(t, isValidCut(branch[cut]),
-				"seed %d budget %d cut at a non-boundary", seed, budget)
-			assert.True(t, tailWellFormed(branch, cut),
-				"seed %d budget %d orphans a tool call", seed, budget)
 		}
 	}
 }
 
-// randomBranch builds a plausible branch mixing user prompts, assistant text and
-// tool call/result pairs in random order.
+// randomBranch builds a plausible branch mixing user prompts, injected notices,
+// assistant text and tool call/result pairs in random order.
 func randomBranch(r *rand.Rand) []session.Entry {
 	var branch []session.Entry
 	id := 0
@@ -117,79 +223,29 @@ func randomBranch(r *rand.Rand) []session.Entry {
 	turns := 2 + r.Intn(5)
 	for tn := 0; tn < turns; tn++ {
 		branch = append(branch, userText(next(), strings.Repeat("q ", 20+r.Intn(80))))
+		if r.Intn(3) == 0 {
+			branch = append(branch, injectedText(next(), "Sub-agent completed."))
+		}
 		steps := r.Intn(3)
 		for s := 0; s < steps; s++ {
-			cid := "c" + strconv.Itoa(id) + "_" + strconv.Itoa(s)
-			branch = append(branch, callMsg(next(), cid, "bash", ""))
-			branch = append(branch, resultMsg(next(), cid, strings.Repeat("o ", 10+r.Intn(120)), r.Intn(4) == 0))
+			calls := 1 + r.Intn(2) // multi-call steps must stay intact
+			var blocks llm.BlockList
+			for c := 0; c < calls; c++ {
+				blocks = append(blocks, llm.ToolCallBlock{
+					ID:   "c" + strconv.Itoa(id) + "_" + strconv.Itoa(s) + "_" + strconv.Itoa(c),
+					Name: "bash", Input: []byte(`{}`),
+				})
+			}
+			branch = append(branch, msg(next(), llm.Message{Role: llm.RoleAssistant, Content: blocks}))
+			for c := 0; c < calls; c++ {
+				blk := blocks[c].(llm.ToolCallBlock)
+				branch = append(branch, resultMsg(next(), blk.ID,
+					strings.Repeat("o ", 10+r.Intn(120)), r.Intn(4) == 0))
+			}
 		}
 		if r.Intn(2) == 0 {
 			branch = append(branch, assistText(next(), strings.Repeat("a ", 10+r.Intn(60))))
 		}
 	}
 	return branch
-}
-
-func TestPriorSpanStart(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		branch []session.Entry
-		want   int
-		ok     bool
-	}{
-		{
-			name: "no_prior_compaction",
-			branch: []session.Entry{
-				userText("u1", "q"),
-				assistText("a1", "r"),
-			},
-			want: 0, ok: false,
-		},
-		{
-			name: "summary_only_tail",
-			branch: []session.Entry{
-				userText("u1", "old ask"),
-				assistText("a1", "old answer"),
-				compactEntry("comp", "everything folded", ""),
-				userText("u2", "new ask"),
-			},
-			want: 3, ok: true,
-		},
-		{
-			name:   "reductions_only_restarts_root",
-			branch: []session.Entry{compactEntry("comp", "", "")}, // no summary, no first kept
-			want:   0, ok: true,
-		},
-		{
-			name: "first_kept_found",
-			branch: []session.Entry{
-				userText("u1", "q"),
-				compactEntry("comp", "s", "u2"),
-				userText("u2", "r"),
-			},
-			want: 2, ok: true,
-		},
-		{
-			name:   "first_kept_not_found",
-			branch: []session.Entry{compactEntry("comp", "s", "zzz")}, // id absent from branch
-			want:   0, ok: true,
-		},
-		{
-			name: "summary_only_empty_tail",
-			branch: []session.Entry{
-				userText("u1", "q"),
-				compactEntry("comp", "folded all", ""), // nothing recorded after it
-			},
-			want: 2, ok: false,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			start, ok := priorSpanStart(tc.branch)
-			assert.Equal(t, tc.want, start)
-			assert.Equal(t, tc.ok, ok)
-		})
-	}
 }

@@ -96,6 +96,25 @@ func TestSettingsCompactionRowSetsSessionKeys(t *testing.T) {
 	assert.InDelta(t, 0.6, set.Compaction.Threshold, 1e-09)
 }
 
+func TestEditCompactionGathersThenApplies(t *testing.T) {
+	t.Parallel()
+
+	row := settingsRow{name: "Auto-compaction", render: rowCompaction, edit: editCompaction}
+
+	t.Run("valid_fraction_records_toggle_and_threshold", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.confirms = []bool{true}
+		c.inputs = []string{"0.6"}
+
+		changes, err := row.edit(context.Background(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "compaction.auto", changes[0].key)
+		assert.Equal(t, true, changes[0].value)
+		assert.Equal(t, "compaction.threshold", changes[1].key)
+		assert.InDelta(t, 0.6, changes[1].value.(float64), 0) // exact; ParseFloat round-trips the literal
+	})
+}
+
 func TestSettingsMenuSavesToProjectLayer(t *testing.T) {
 	t.Parallel()
 
@@ -229,6 +248,44 @@ func TestIntRowRejectsOutOfRangeWithoutPersisting(t *testing.T) {
 	}
 }
 
+func TestFloatRowRecordsAndValidatesVerbatimFraction(t *testing.T) {
+	t.Parallel()
+
+	t.Run("edit_records_session_setting", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5)
+
+		c.inputs = []string{"0.25"}
+		changes, err := r.edit(context.Background(), c)
+		require.NoError(t, err)
+		require.Len(t, changes, 1)
+		assert.Equal(t, "compaction.verbatimFraction", changes[0].key)
+		assert.InDelta(t, 0.25, changes[0].value, 1e-09)
+
+		raw, srcName, ok := c.settings.Explain("compaction.verbatimFraction")
+		require.True(t, ok)
+		var got float64
+		_ = json.Unmarshal(raw, &got)
+		assert.InDelta(t, 0.25, got, 1e-09) // a number, not a string
+		assert.Equal(t, "session", srcName)
+	})
+
+	t.Run("rejects_out_of_range", func(t *testing.T) {
+		for _, bad := range []string{"0", "0.9", "nope"} {
+			c := newFakeConsole(t)
+			r := floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5)
+
+			c.inputs = []string{bad}
+			changes, err := r.edit(context.Background(), c)
+			require.NoError(t, err)
+			assert.Empty(t, changes)
+			assert.True(t, c.noticeContains("must be between"))
+			_, srcName, _ := c.settings.Explain("compaction.verbatimFraction")
+			assert.NotEqual(t, "session", srcName)
+		}
+	})
+}
+
 func TestSettingsPermissionRowInMenu(t *testing.T) {
 	t.Parallel()
 
@@ -237,7 +294,7 @@ func TestSettingsPermissionRowInMenu(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// open the Permissions mode row (6); Select picks allow-read (index 1).
+	// jump to the Permissions mode row by name; Select picks allow-read (index 1).
 	c.picks = []fakePick{{result: 0}}
 	c.selects = []int{1}
 
@@ -247,4 +304,66 @@ func TestSettingsPermissionRowInMenu(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, `"allow-read"`, string(raw))
 	assert.Equal(t, "session", srcName)
+}
+
+func TestEditCompactionAbsoluteAndAborts(t *testing.T) {
+	t.Parallel()
+
+	row := settingsRow{name: "Auto-compaction", render: rowCompaction, edit: editCompaction}
+
+	t.Run("valid_absolute_records_token_count", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.confirms = []bool{true}
+		c.inputs = []string{"120000"}
+
+		changes, err := row.edit(context.Background(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "compaction.auto", changes[0].key)
+		assert.InDelta(t, float64(120000), changes[1].value.(float64), 0) // exact; ParseFloat round-trips the literal
+	})
+
+	t.Run("non_number_aborts_with_zero_changes", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.confirms = []bool{true}
+		c.inputs = []string{"abc"}
+
+		changes, err := row.edit(context.Background(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("compaction.threshold")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	t.Run("out_of_range_aborts_with_zero_changes", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.confirms = []bool{true}
+		c.inputs = []string{"0"}
+
+		changes, err := row.edit(context.Background(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("compaction.threshold")
+		assert.NotEqual(t, "session", srcName)
+	})
+}
+
+func TestRowCompactionRendersFractionAndAbsolute(t *testing.T) {
+	t.Parallel()
+
+	row := settingsRow{name: "Auto-compaction", render: rowCompaction, edit: editCompaction}
+
+	c := newFakeConsole(t)
+	_, detailDefault := row.render(c)
+	assert.Contains(t, detailDefault, "%") // the default fraction renders as a percentage
+
+	c = newFakeConsole(t)
+	_ = c.SetSessionSetting("compaction.threshold", 0.6)
+	_, detailFraction := row.render(c)
+	assert.Contains(t, detailFraction, "60%")
+
+	c = newFakeConsole(t)
+	_ = c.SetSessionSetting("compaction.threshold", 120000)
+	_, detailAbsolute := row.render(c)
+	assert.Contains(t, detailAbsolute, "tokens")
+	assert.NotContains(t, detailAbsolute, "%") // an absolute count must not read as a percentage
 }

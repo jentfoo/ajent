@@ -215,7 +215,8 @@ Two consumers read the transcript back:
   computes the plan — see `compaction-design.md`). A compaction collapses
   everything before its first kept entry into one summary **user** message (wrapped in `<summary>` provenance
   framing — a user role reaches every provider, unlike a system message), while
-  later entries stay verbatim except where the plan stubs or drops them.
+  later entries stay verbatim; plans written by older builds may additionally stub
+  or drop them, and replay still honours those.
 - **Replay** (`session.Replay`) condenses the same branch onto a sink so a
   reopened session shows its history: user prompts open turns, assistant content
   and tool calls stream through, notices replay, and each turn closes with its

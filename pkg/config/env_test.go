@@ -23,6 +23,8 @@ func TestEnvLayerBindsScalarKinds(t *testing.T) {
 		{"bool", "AJENT_COMPACTION_AUTO", "true", true, func(s Settings) any { return s.Compaction.Auto }},
 		{"float", "AJENT_COMPACTION_THRESHOLD", "0.5", float64(0.5), func(s Settings) any { return s.Compaction.Threshold }},
 		{"int", "AJENT_SUBAGENT_MAXCONCURRENT", "2", 2, func(s Settings) any { return s.Subagent.MaxConcurrent }},
+		{"min_steps", "AJENT_COMPACTION_MINSTEPS", "3", 3, func(s Settings) any { return s.Compaction.MinSteps }},
+		{"verbatim_fraction", "AJENT_COMPACTION_VERBATIMFRACTION", "0.2", float64(0.2), func(s Settings) any { return s.Compaction.VerbatimFraction }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

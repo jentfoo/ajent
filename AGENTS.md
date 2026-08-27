@@ -44,7 +44,7 @@ flag added without its `--help` and README entry is unfinished.
 | `providers-design.md` | `pkg/llm` (+ `pkg/config` paths) | One streaming interface over five vendors; the content model, event stream, normalisation pass (`Prepare`), capabilities vs special cases, discovery, retry. Rules for wire structs and what must never leak upward. |
 | `tools-design.md` | `pkg/tools` (+ `pkg/agent.Tool`) | The `Tool` interface and registry, built-in tools, and shared infra: path policy, read tracking, output limits, the guard chain. |
 | `session-design.md` | `pkg/session`, `cmd/ajent` resume | Append-only JSONL transcript as source of truth; entry/parent tree, branching, rewind/fork, resume (`--resume`, `--continue`). Schema and replay rules. |
-| `compaction-design.md` | `pkg/compact` (+ session) | Staged context reduction: cheap structural cuts first (failed/superseded calls, elision), an LLM summary only when those are insufficient; the measured `Reduce` plan recorded on a compaction entry and replayed. Uses `prompt-design.md` summaries. |
+| `compaction-design.md` | `pkg/compact` (+ session) | Verbatim-band + checkpoint model: keep the most recent steps verbatim, fold everything older into one structured summary recorded on a compaction entry and replayed. Free structural reduction shapes only the summariser's transcript. Uses `prompt-design.md` summaries. |
 | `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager (`!!` runs excluded from context), `@`-path expansion with auto-read and gitignore-aware completion. |
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
@@ -121,12 +121,13 @@ naming its `ParentID` so the file is a **tree**, not a log. `Branch(entries, id)
 the only read path. Nothing is ever deleted — rewinding sets `HEAD` to an earlier
 entry's parent and forks.
 
-Because of that, compaction cannot just rewrite the in-memory message list — it records
-a `Reduce` plan (stubs, drops, strip-thinking) on the `compaction` entry, replayed on
-every rebuild. `pkg/session` owns the schema and replay; `pkg/compact` computes the
-plan and measures each stage through the same `session.ContextMessages`, so a measured
-saving is by construction the saving the next request gets. Only the newest compaction
-applies, so each run recomputes cumulatively over the whole branch.
+Because of that, compaction cannot just rewrite the in-memory message list — it cuts
+and summarises: everything before a verbatim band folds into one checkpoint recorded
+on the `compaction` entry and replayed on every rebuild. `pkg/session` owns the schema
+and replay; `pkg/compact` measures each run through the same `session.ContextMessages`, so
+a measured saving is by construction the saving the next request gets (stubs, drops,
+strip-thinking plans are legacy-replay only). Only the newest compaction applies, so
+each run recomputes cumulatively over the whole branch.
 
 ### Front end and dispatch
 

@@ -328,7 +328,7 @@ func TestCompactionDataRewritesHistory(t *testing.T) {
 		want bool
 	}{
 		{"cut_and_summary", CompactionData{Summary: "s", FirstKeptEntryID: "m3"}, true},
-		// cutIndex falls back to the compaction entry itself, so this still truncates
+		// CutIndex falls back to the compaction entry itself, so this still truncates
 		{"summary_only", CompactionData{Summary: "s"}, true},
 		{"stubs_only", CompactionData{Reduce: &Reduce{Stubs: []Stub{{CallID: "c1", Limit: 200}}}}, true},
 		{"drops_only", CompactionData{Reduce: &Reduce{Drop: []string{"m2"}}}, true},

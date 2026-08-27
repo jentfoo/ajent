@@ -66,3 +66,10 @@ func loadFixtureBranch(t *testing.T, name string) []session.Entry {
 	require.Empty(t, warns)
 	return session.Branch(entries, session.Head(entries))
 }
+
+// injectedText is a system-injected user message: context the agent added, not a
+// prompt the user typed.
+func injectedText(id, text string) session.Entry {
+	b, _ := json.Marshal(session.MessageData{Message: llm.Text(llm.RoleUser, text), Injected: true})
+	return session.Entry{ID: id, Type: session.TypeMessage, Data: b}
+}

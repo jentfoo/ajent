@@ -429,3 +429,61 @@ func TestRegistryRefresh(t *testing.T) {
 		assert.Equal(t, 800000, r.Models()[0].ContextWindow)
 	})
 }
+
+func TestRegistrySetCompactDefault(t *testing.T) {
+	t.Parallel()
+
+	build := func(t *testing.T) *Registry {
+		t.Helper()
+		f := File{Providers: map[string]ProviderConfig{
+			"anthropic": {Flavor: FlavorAnthropic, Models: []ModelConfig{
+				{ID: "declared", ContextWindow: ptr(200000), CompactThreshold: ptr(0.5)},
+				{ID: "bare", ContextWindow: ptr(200000)},
+			}},
+		}}
+		r, _ := NewRegistry(f, nil, RegistryOptions{})
+		return r
+	}
+
+	thresholdOf := func(t *testing.T, r *Registry, id string) float64 {
+		t.Helper()
+		m, err := r.Resolve("anthropic/" + id)
+		require.NoError(t, err)
+		return m.CompactThreshold
+	}
+
+	t.Run("applies_to_undeclared_models", func(t *testing.T) {
+		r := build(t)
+		r.SetCompactDefault(0.7)
+		assert.InDelta(t, 0.7, thresholdOf(t, r, "bare"), 1e-09)
+	})
+
+	t.Run("never_overrides_declared", func(t *testing.T) {
+		r := build(t)
+		r.SetCompactDefault(0.7)
+		assert.InDelta(t, 0.5, thresholdOf(t, r, "declared"), 1e-09)
+	})
+
+	t.Run("reapply_replaces_previous_default", func(t *testing.T) {
+		r := build(t)
+		r.SetCompactDefault(0.7)
+		r.SetCompactDefault(0.6) // must not mistake the previous default for a declaration
+		assert.InDelta(t, 0.6, thresholdOf(t, r, "bare"), 1e-09)
+		assert.InDelta(t, 0.5, thresholdOf(t, r, "declared"), 1e-09)
+	})
+
+	t.Run("zero_restores_builtin_default", func(t *testing.T) {
+		r := build(t)
+		r.SetCompactDefault(0.7)
+		r.SetCompactDefault(0)
+		assert.Zero(t, thresholdOf(t, r, "bare"))
+	})
+
+	t.Run("survives_rebuild", func(t *testing.T) {
+		r := build(t)
+		r.SetCompactDefault(0.7)
+		r.Refresh(t.Context(), DiscoverOptions{Env: func(string) string { return "" }})
+		assert.InDelta(t, 0.7, thresholdOf(t, r, "bare"), 1e-09)
+		assert.InDelta(t, 0.5, thresholdOf(t, r, "declared"), 1e-09)
+	})
+}

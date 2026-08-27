@@ -18,52 +18,21 @@ func entryTokens(e session.Entry) int {
 	return tokens.EstimateMessage(md.Message)
 }
 
-// selectCut picks the branch index to keep from (FirstKeptEntryID), leaving at
-// most tailBudget recent tokens in context. It walks backwards accumulating until
-// the budget is met, then snaps to the nearest valid turn boundary so the kept
-// tail stays well formed. Returns -1 when nothing needs cutting.
-func selectCut(branch []session.Entry, tailBudget int) int {
-	if len(branch) == 0 || tailBudget <= 0 {
-		return -1
-	}
-	var acc int
-	at := -1 // index where the budget was first met, walking backwards
-	for i := len(branch) - 1; i >= 0; i-- {
-		if branch[i].Type != session.TypeMessage {
-			continue
-		}
-		acc += entryTokens(branch[i])
-		if acc >= tailBudget {
-			at = i
-			break
+// spanTokens sums the estimated message tokens of branch[lo:hi).
+func spanTokens(branch []session.Entry, lo, hi int) int {
+	var n int
+	for i := max(lo, 0); i < hi && i < len(branch); i++ {
+		if branch[i].Type == session.TypeMessage {
+			n += entryTokens(branch[i])
 		}
 	}
-	if at == -1 {
-		return -1 // the whole branch already fits within tailBudget
-	}
-
-	// snap backward to the nearest valid cut at or before `at`: keeping from there
-	// retains the full budget (never less) and, when `at` is a tool result, picks up
-	// the assistant call that owns it so the pair is never split.
-	for j := at; j >= 0; j-- {
-		if isValidCut(branch[j]) {
-			return j
-		}
-	}
-	// nothing valid behind the line; fall forward to the first valid cut so the
-	// tail is still well formed, even if it keeps less than asked.
-	for j := at + 1; j < len(branch); j++ {
-		if isValidCut(branch[j]) {
-			return j
-		}
-	}
-	return -1 // no safe cut exists
+	return n
 }
 
-// isValidCut reports whether cutting at this entry keeps a well-formed tail: a
-// turn start (a real user prompt), or an assistant message whose tool calls and
-// results all live after it in [i:].
-func isValidCut(e session.Entry) bool {
+// isStepStart reports whether an entry opens a step. A step runs from an assistant
+// message to just before the next one, carrying its tool calls and their results,
+// which makes it the unit of recent work worth keeping whole.
+func isStepStart(e session.Entry) bool {
 	if e.Type != session.TypeMessage {
 		return false
 	}
@@ -71,41 +40,85 @@ func isValidCut(e session.Entry) bool {
 	if err := e.Decode(&md); err != nil {
 		return false
 	}
-	switch md.Message.Role {
-	case llm.RoleUser:
-		return !llm.OnlyToolResults(md.Message.Content) // a turn start, never mid-result
-	case llm.RoleAssistant:
-		return true // keeps its own tool_use and the results that follow in [i:]
-	default:
-		return false
-	}
+	return md.Message.Role == llm.RoleAssistant
 }
 
-// priorSpanStart returns the index where this compaction's summarisable span
-// begins: a previous compaction's FirstKeptEntryID when one exists (so summaries
-// merge rather than nest), else 0. It reports false when there is nothing new to
-// summarise.
-func priorSpanStart(branch []session.Entry) (int, bool) {
-	for i := len(branch) - 1; i >= 0; i-- {
-		if branch[i].Type != session.TypeCompaction {
+// isLivePrompt reports whether an entry is a real user prompt: typed by the user,
+// not a tool result and not system-injected context.
+func isLivePrompt(e session.Entry) bool {
+	if e.Type != session.TypeMessage {
+		return false
+	}
+	var md session.MessageData
+	if err := e.Decode(&md); err != nil || md.Injected {
+		return false
+	}
+	return md.Message.Role == llm.RoleUser && !llm.OnlyToolResults(md.Message.Content)
+}
+
+// verbatimCut returns the branch index the verbatim band starts at: the newest
+// minSteps steps, kept whole however large, extended backwards with older steps
+// while the band stays within maxTokens of message tokens. It never reaches
+// earlier than priorCut. len(branch) means the region holds no step at all.
+func verbatimCut(branch []session.Entry, priorCut, minSteps, maxTokens int) int {
+	priorCut, minSteps = max(priorCut, 0), max(minSteps, 1)
+
+	cut, seen, acc := len(branch), 0, 0
+	for i := len(branch) - 1; i >= priorCut; i-- {
+		if branch[i].Type != session.TypeMessage {
 			continue
 		}
-		var cd session.CompactionData
-		if err := branch[i].Decode(&cd); err != nil {
-			return 0, true
+		acc += entryTokens(branch[i]) // acc == spanTokens(branch, i, len(branch))
+		if !isStepStart(branch[i]) {
+			continue
 		}
-		if cd.FirstKeptEntryID == "" {
-			if cd.Summary != "" { // summary-only: only what follows it is new
-				return i + 1, i+1 < len(branch)
-			}
-			return 0, true // reductions only: restart from the root
+		seen++
+		if seen <= minSteps {
+			// the floor is kept whole even over the ceiling: a band that shrank below
+			// the live work would leave every turn compacting again immediately
+			cut = i
+			continue
 		}
-		for j := range branch {
-			if branch[j].ID == cd.FirstKeptEntryID {
-				return j, j < len(branch) // empty span (nothing after it) means no-op
-			}
+		if acc > maxTokens { // maxTokens is always > 0; resolveVerbatim floors it
+			break
 		}
-		return 0, true
+		cut = i
 	}
-	return 0, false // no prior compaction at all; the whole history is new
+	if cut >= len(branch) {
+		return cut // no step in the region; there is no band to widen
+	}
+	return withLivePrompt(branch, cut, priorCut)
+}
+
+// withLivePrompt extends a band back over the user prompt that opens it, when one
+// sits immediately before. Without it a mid-turn compaction folds the question the
+// user just asked into the summary while keeping the answer to it verbatim. The
+// prompt is added whatever it weighs — it is half of the live exchange — so the
+// ceiling bounds the steps, not the prompt in front of them.
+func withLivePrompt(branch []session.Entry, cut, priorCut int) int {
+	for i := cut - 1; i >= priorCut; i-- {
+		if branch[i].Type != session.TypeMessage {
+			continue // notices and setting changes sit between without breaking the pair
+		}
+		if isLivePrompt(branch[i]) {
+			return i
+		}
+		return cut
+	}
+	return cut
+}
+
+// chooseCut returns the index the verbatim band starts at and whether folding
+// everything before it into a summary is worth a model call. It never moves
+// earlier than priorCut, so a recompaction cannot reopen history a prior one
+// folded.
+func chooseCut(branch []session.Entry, priorCut, minSteps, maxTokens int) (int, bool) {
+	cut := verbatimCut(branch, priorCut, minSteps, maxTokens)
+	if cut <= priorCut || cut >= len(branch) {
+		return 0, false // the band already reaches the prior cut, or holds no step
+	}
+	if countMessages(branch[priorCut:cut]) == 0 {
+		return 0, false // an advance over non-message entries would summarise nothing
+	}
+	return cut, true
 }

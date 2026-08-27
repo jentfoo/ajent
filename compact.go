@@ -7,15 +7,16 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/compact"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
-// compactor runs staged compaction over the live session. It reads the current
-// branch, asks pkg/compact for a reduction plan, persists the compaction entry,
-// rebuilds state and reseeds the ledger, then reports what changed.
+// compactor runs compaction over the live session: it reads the current branch,
+// asks pkg/compact to cut-and-summarise, persists the compaction entry, rebuilds
+// state and reseeds the ledger, then reports what changed.
 type compactor struct {
 	rec  *sessRec
 	st   *agent.State
@@ -30,6 +31,17 @@ type compactor struct {
 	// focus supplies a caller's summariser instructions for automatic runs; an
 	// explicit /compact <instructions> still wins. nil leaves runs unguided.
 	focus func() string
+	// cfg supplies live compaction settings so a /settings edit takes effect on the
+	// next run; nil means the built-in defaults with automatic reduction on.
+	cfg func() config.Compaction
+}
+
+// compaction returns the live compaction settings, or the built-in defaults.
+func (c *compactor) compaction() config.Compaction {
+	if c.cfg == nil {
+		return config.Compaction{Auto: true}
+	}
+	return c.cfg()
 }
 
 // run performs one compaction for reason, returning whether anything changed. A
@@ -47,7 +59,11 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		defer done()
 	}
 	model := c.st.Model
+	cfg := c.compaction()
 	if reason == agent.CompactThreshold {
+		if !cfg.Auto {
+			return false, nil // automatic reduction disabled by config
+		}
 		t := c.st.Tokens
 		at := tokens.CompactAt(model)
 		if t == nil || at <= 0 || t.Context().Used < at {
@@ -63,22 +79,21 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	// plan against the live head, not the file tail; they differ after a rewind
 	branch := session.Branch(entries, c.rec.w.Head())
 
-	var run compact.RunPrompt
-	if provider, perr := c.providerFor(model); perr == nil {
-		run = func(ctx context.Context, req llm.Request) (string, error) {
-			text, usage, serr := runSummary(ctx, provider, req)
-			if t := c.st.Tokens; t != nil && serr == nil {
-				// spend-only: the summariser's prompt is not this session's context, so a
-				// failed compaction must not leave the bar at its (much larger) size
-				t.Spend(model.Key(), usage)
-			}
-			return text, serr
+	provider, perr := c.providerFor(model)
+	if perr != nil {
+		c.notify(fmt.Sprintf("compaction unavailable: no summariser provider for %s (%v)", model.Key(), perr), agent.LevelWarn)
+		return false, perr
+	}
+	run := func(ctx context.Context, req llm.Request) (string, error) {
+		text, usage, serr := runSummary(ctx, provider, req)
+		if t := c.st.Tokens; t != nil && serr == nil {
+			// spend-only: the summariser's prompt is not this session's context, so a
+			// failed compaction must not leave the bar at its (much larger) size
+			t.Spend(model.Key(), usage)
 		}
+		return text, serr
 	}
 
-	// A manual /compact is an explicit request to reduce context now, so it forces a
-	// summary+cut even when the session sits far below the automatic threshold.
-	force := reason == agent.CompactManual
 	// measure full usage (system + AGENTS.md + tool schemas), not just messages
 	var base int
 	if c.ag != nil && reason != agent.CompactOverflow {
@@ -88,12 +103,12 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		instructions = c.focus() // a plan phase keeps its own focus across auto-compaction
 	}
 	opts := compact.Options{
-		Cwd:          cwdOrDot(),
-		Instructions: instructions,
-		Retain:       c.st.Reasoning.Retain,
-		Caps:         model.Caps,
-		Force:        force,
-		Base:         base,
+		Cwd:            cwdOrDot(),
+		Instructions:   instructions,
+		Retain:         c.st.Reasoning.Retain,
+		Base:           base,
+		MinSteps:       cfg.MinSteps,
+		VerbatimTokens: verbatimTokens(model, cfg.VerbatimFraction),
 	}
 	res, cerr := compact.Compact(ctx, branch, model, run, opts)
 	if cerr != nil {
@@ -119,8 +134,13 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 
 	// rebuild from the persisted transcript and swap the context into the live
-	// state so every holder sees the reduced messages.
-	entries2, _, _ := session.Read(path)
+	// state so every holder sees the reduced messages. A failed re-read must not
+	// empty the live agent; the persisted entry applies on the next rebuild.
+	entries2, _, rerr := session.Read(path)
+	if rerr != nil {
+		c.notify("compaction recorded but the state rebuild failed", agent.LevelWarn)
+		return false, rerr
+	}
 	rebuilt, warns := session.State(session.Branch(entries2, session.Head(entries2)), c.reg.Resolve)
 	for _, wmsg := range warns {
 		c.notify("compact: "+wmsg, agent.LevelWarn)
@@ -148,6 +168,16 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 	c.sink.Notice(reportLine(res), agent.LevelInfo)
 	return true, nil
+}
+
+// verbatimTokens converts a configured fraction into a token ceiling against the
+// model's compaction point. A fraction outside (0,1) returns 0, leaving the bound
+// to pkg/compact's own default.
+func verbatimTokens(m llm.Model, fraction float64) int {
+	if fraction <= 0 || fraction >= 1 {
+		return 0
+	}
+	return int(float64(tokens.CompactAt(m)) * fraction)
 }
 
 // runSummary drives one summarisation model call through an accumulator and
@@ -187,29 +217,13 @@ func runSummary(ctx context.Context, p llm.Provider, req llm.Request) (string, l
 	return strings.Join(parts, ""), acc.Usage(), nil
 }
 
-// reportLine describes a compaction honestly: before/after tokens plus one clause
-// per stage that did something, so users know what was dropped and why.
+// reportLine describes a compaction honestly: before/after tokens plus how much
+// history was folded. It names nothing else, because nothing else changed — the
+// summariser reads a reduced transcript, but that reduction never reaches context.
 func reportLine(res *compact.Result) string {
-	s := res.Reduce.Stats
-	var clauses []string
-	if s.Failed > 0 {
-		clauses = append(clauses, fmt.Sprintf("dropped %d failed tool results", s.Failed))
-	}
-	if s.Superseded > 0 {
-		clauses = append(clauses, fmt.Sprintf("stubbed %d superseded reads/edits", s.Superseded))
-	}
-	if s.Truncated > 0 {
-		clauses = append(clauses, fmt.Sprintf("truncated %d outputs", s.Truncated))
-	}
-	if s.Aborted > 0 {
-		clauses = append(clauses, fmt.Sprintf("dropped %d aborted messages", s.Aborted))
-	}
-	if res.Summary != "" {
-		clauses = append(clauses, "summarised")
-	}
 	detail := ""
-	if len(clauses) > 0 {
-		detail = " (" + strings.Join(clauses, ", ") + ")"
+	if n := res.Reduce.Stats.Summarized; n > 0 {
+		detail = fmt.Sprintf(" (summarised %d messages)", n)
 	}
 	return fmt.Sprintf("compacted %s → %s%s",
 		strutil.FormatTokens(res.Before), strutil.FormatTokens(res.After), detail)

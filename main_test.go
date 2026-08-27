@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -428,6 +429,68 @@ func TestResumeSyncsActiveModel(t *testing.T) {
 
 	assert.Equal(t, "p/b", st.Model.Key())
 	assert.Equal(t, "p/b", reg.Active().Key()) // the /model preselect follows the resume
+}
+
+// A session-scoped compaction.threshold must survive --resume: it is stamped into
+// the registry before state resolution so the trigger, the context bar and the band
+// ceiling read one number. Before the fix the resumed ledger kept the global 0.8.
+func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
+	t.Parallel()
+
+	win := 200000
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{
+			"p": {Models: []llm.ModelConfig{{
+				ID:            "a",
+				ContextWindow: &win,
+			}}},
+		},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+
+	// a couple of messages so the branch is non-empty, then a threshold override.
+	_, _ = w.Append(session.TypeMessage, session.MessageData{
+		Message: llm.Text(llm.RoleUser, "do the work"),
+	})
+	raw := json.RawMessage(`0.5`)
+	_, err = w.Append(session.TypeSettingChange, session.SettingData{Key: "compaction.threshold", Value: raw})
+	require.NoError(t, err)
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	set, _, err := config.Load(config.Options{
+		Workspace: t.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(t, err)
+
+	st := &agent.State{Model: reg.Active()}
+	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+
+	// the session override 0.5 survives resume onto a model with no declared one,
+	// so the trigger and the bar read it rather than the global default.
+	require.NotNil(t, st.Tokens)
+	cs := st.Tokens.Context()
+	at := tokens.CompactAt(st.Model)
+	assert.InDelta(t, 0.5, st.Model.CompactThreshold, 1e-9)
+	assert.Equal(t, at, cs.Compact) // the ledger's compact term follows the resumed threshold
 }
 
 // TestExtractResume locks in how --resume and its optional id are parsed out of

@@ -17,7 +17,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	var warns []string
 	st.Tokens = tokens.New(llm.Model{})
 
-	cd := newestCompactionData(branch)
+	cd, _, _ := NewestCompaction(branch)
 	msgs, mwarns := ContextMessages(branch, cd, resolve)
 	warns = append(warns, mwarns...)
 	st.Messages = msgs
@@ -93,17 +93,17 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	return st, warns
 }
 
-// newestCompactionData decodes the last compaction entry on the branch. When none
-// exists it returns an empty value so assembly applies no cut and no reductions.
-func newestCompactionData(branch []Entry) CompactionData {
+// NewestCompaction decodes the last compaction entry on the branch, returning its
+// data and branch index. found is false when the branch carries none, where the
+// zero value applies no cut and no reductions.
+func NewestCompaction(branch []Entry) (cd CompactionData, idx int, found bool) {
 	for i := len(branch) - 1; i >= 0; i-- {
 		if branch[i].Type == TypeCompaction {
-			var cd CompactionData
 			_ = branch[i].Decode(&cd)
-			return cd
+			return cd, i, true
 		}
 	}
-	return CompactionData{}
+	return CompactionData{}, -1, false
 }
 
 // rebuildUsage folds one message's recorded usage into the ledger under key. A

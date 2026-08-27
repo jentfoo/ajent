@@ -1,38 +1,35 @@
 # Compaction design
 
-How `pkg/compact` keeps a long session inside the model's context window: cheap
-structural reductions first, an LLM summary only when they are not enough. It
-computes a reduction plan that `pkg/session` records and replays, so what the
-model sees is always exactly what was measured. It builds on the agent loop
-(`pkg/agent`), the ledger (`pkg/tokens`) and the transcript (`pkg/session`), and
-its summaries use the prompts in `prompt-design.md`.
+How `pkg/compact` keeps a long session inside the model's context window: it
+keeps the most recent steps verbatim and folds everything older into one structured
+checkpoint recorded on a compaction entry and replayed on rebuild. It builds on the
+agent loop (`pkg/agent`), the ledger (`pkg/tokens`) and the transcript
+(`pkg/session`), and its summaries use the prompts in `prompt-design.md`.
 
 ## What it is
 
 Left alone, a tool-heavy session grows until the next request exceeds the window
-and the provider refuses it. Compaction shrinks the context in stages, each
-measured, stopping as soon as a target is met. The ordering is deliberate:
-summarising costs a model call and loses detail, while a great deal of context is
-recoverable for free by throwing away what is known to be worthless.
+and the provider refuses it. Compaction keeps the most recent work exactly as it
+is and replaces everything older with one structured checkpoint:
 
 ```
-stage 1  failed / superseded / aborted   free, near-lossless
-stage 2  age-tiered output elision        free, lossy at the margins
-stage 3  thinking removal                 free, usually a no-op
-stage 4  summarisation                    one model call, lossy
+the verbatim band   the newest steps, byte-exact, never reduced
+the summary         everything before it, folded into a checkpoint
 ```
 
-Stages 1-3 run at every trigger even when stage 4 will be needed anyway — they
-shrink what stage 4 has to read, which makes the summary better and cheaper.
+There is one path. A compaction always cuts and always summarises; nothing else
+reduces context. Free structural reduction still happens, but only to the
+transcript the summariser reads — superseded reads, repeated output and failed
+results become self-describing markers so the checkpoint is built from what is
+worth reading rather than from raw bytes. None of that reaches the rebuilt
+context, because the cut already removed everything it touches.
 
-The target after any compaction is half the usable window budget (`Window` minus
-the response reserve). The point at which an automatic compaction fires is the
+The point at which an automatic compaction fires is the
 per-model `compactThreshold` — see "Triggers".
 
 Every before/after measure includes the fixed request overhead (system block +
 AGENTS.md + tool schemas), supplied as `Options.Base`. A message-only measure would
-under-report full usage and let stages 1-3 exit early while context still sits above
-the target, since the bar counts that overhead too.
+under-report full usage, since the bar counts that overhead too.
 
 The measure is also taken **after `llm.Prepare`** with the session's model and
 retain policy — the same normalisation pass every wire request goes through.
@@ -40,13 +37,15 @@ Without it the measure counts thinking blocks that retention would drop from
 completed turns (nor do they reach the wire on a non-`RetainAll` policy), so every
 number came out high and a "successful" compaction could still leave the estimate
 far above what the next request actually sends. What is measured is what is sent.
+An overflow run measures mid-turn with `Base` 0 — the reseed that follows is
+transient, replaced once the retried turn reports real usage.
 
 ## Where reductions live
 
 A load-bearing invariant is *everything the model sees is reconstructible from the
-transcript* (see `session-design.md`). So stages 1-3 cannot merely rewrite the
-in-memory message list — that would vanish on resume. Instead the reduction plan
-is recorded on the `compaction` entry and replayed on every context rebuild.
+transcript* (see `session-design.md`). So a compaction cannot merely rewrite the
+in-memory message list — that would vanish on resume. Instead the cut and summary
+are recorded on the `compaction` entry and replayed on every context rebuild.
 
 `pkg/session` owns the schema and the replay (it already owns assembly);
 `pkg/compact` computes the plan. No import cycle: `compact -> session -> agent`.
@@ -55,8 +54,12 @@ The reduction plan records, per tool result to replace or elide by call id, a
 **stub**: either `Text` swaps the content outright (e.g. "[read superseded by a
 later read...]") or `Limit` elides it to that many bytes — exactly one of the
 two is set. The plan as a whole carries those stubs, the message entry ids
-dropped outright, whether thinking is stripped from the kept tail, and per-stage
-stats for the notice.
+dropped outright, whether thinking is stripped from the kept region, and the
+message count for the notice. New entries record none of the first three — see
+"The recorded plan is inert" — but replay still honours them for transcripts
+written by older builds; `Stats.Failed/Superseded/Truncated/Aborted` are likewise
+legacy-replay-only (no producer writes them, and the notice reads only
+`Summarized`).
 
 A stub's limit rather than an inlined replacement string keeps the JSONL small:
 assembly re-elides from the original bytes with `tools.Elide`.
@@ -82,83 +85,99 @@ Two things it fixes by construction:
   ("The conversation history before this point was compacted...") inside
   `<summary>` tags, and emits it as `RoleUser`. The adapters skip `RoleSystem`
   messages outright (system is a top-level field), so a system-role summary would
-  never reach the model. A user message also makes a mid-turn cut legal — the kept
-  tail may start with an assistant message, and Anthropic requires the first
-  non-system message to be user.
+  never reach the model. A user message also makes the cut legal — the band opens on
+  an assistant message, and Anthropic requires the first non-system message to be
+  user, so the summary is load-bearing rather than decorative.
 - **An empty `FirstKeptEntryID` means "reductions only, no cut"** — unless a
   `Summary` is set: that is a summary-only compaction, where the compaction
   entry's own position is the boundary and every message before it folds into
   the summary. That is how a manual compact can shrink a session with no older
   turn to keep. A non-empty id missing from the branch warns and keeps nothing.
 
-## Stages 1-3 (free)
+## The reduction pass (free)
 
-Applied in order, each measured through `ContextMessages`, with early exit once
-the target is met.
+`spanStubs` runs over the region still in context and returns replacements for the
+summariser to read. Detection is wide and emission is narrow: rules look at the
+whole region, including the verbatim band, but a replacement is only emitted for a
+result *before* the band. Narrowing detection instead would blind the best rules —
+a read superseded by a later read inside the band would look like the newest copy
+of that file — while narrowing emission is what keeps the band exact.
 
-**Stage 1 — failed, superseded, aborted.**
-- Tool results marked `IsError` older than the last two turns become a one-line
-  stub keeping the first line: `[bash failed: no such file...]`. The model already
-  reacted to the failure; the bytes are dead weight. Barrier denial reasons
-  survive under the same rule because the first line is kept.
-- Superseded reads: the same canonical path read more than once keeps the newest
-  and stubs the rest. Detected from the transcript, not the read tracker — each
-  `read` call's `path` argument is canonicalised with `tools.PathPolicy.Resolve`
-  so keys match the file tools.
-- Superseded edits, position-aware: only an edit whose call precedes a *later*
-  wholesale `write` to that path is stubbed. Each write records its branch index,
-  so an edit that lands after the rewrite (building on it) is kept — ordering
-  matters, not just presence of any write.
-- Aborted assistant messages — no tool calls and no non-blank text — are dropped
-  by entry id. A message carrying a `ToolCallBlock` is never dropped.
+- **Failed results** become a one-line stub keeping the first line:
+  `[tool bash failed: no such file...]`. The model already reacted to the failure;
+  the bytes are dead weight, and a barrier denial reason survives in that line.
+  There is no age qualifier: the band already protects recent work.
+- **Superseded reads** — the same canonical path read more than once keeps the
+  newest and marks the rest. Detected from the transcript, not the read tracker;
+  each `read` call's `path` is canonicalised with `tools.PathPolicy.Resolve` so
+  keys match the file tools.
+- **Superseded edits**, position-aware: only an edit whose call precedes a *later*
+  wholesale `write` to that path is marked. Each write records its branch index, so
+  an edit that lands after the rewrite (building on it) is kept — ordering matters,
+  not just the presence of a write.
+- **Repeated output** keeps the first copy and marks the rest. The key includes the
+  producing call's name and canonical path as well as its text, so two distinct
+  results that happen to share bytes are not collapsed.
 
-**Stage 2 — age-tiered elision.** Successful results shrink with age; the current
-turn is live working set and is never touched.
+The markers are worded to explain themselves
+(`[identical to an earlier tool result in this transcript]`), so the summariser
+needs no instruction about what it is looking at.
 
-| turn distance | budget |
-|---|---|
-| current (0) | untouched |
-| 1 | 8 kB |
-| 2-3 | 1 kB |
-| 4+ | 512 B (collapses toward a shape line) |
+Thinking is not stubbed; it is simply left out of the transcript, which costs a few
+percent of the input and removes a whole class of confusion about whose reasoning
+is being read.
 
-Duplicate outputs keep the first and stub the rest. The duplicate key includes the
-producing call's name and canonical path as well as its text, so two distinct
-results that happen to share bytes (e.g. reading different files with identical
-content) are not collapsed.
+## The cut and the summary
 
-**Stage 3 — thinking removal.** Sets `StripThinking` so assembly drops thinking
-blocks from the kept tail. Request-build retention already strips completed-turn
-thinking unless the policy is `RetainAll`, so this stage only bites on `RetainAll`
-sessions; otherwise it measures honestly and reports zero.
+### The verbatim band
 
-## Stage 4 (a model call)
+The unit is a **step**: an assistant message through to just before the next one,
+carrying its tool calls and their results. Steps are stable whether a session has
+fifty user prompts or one — which matters, because an agentic session routinely has
+one prompt and hundreds of steps, and any rule keyed to turns is keyed to nothing
+there.
 
-When stages 1-3 do not reach the target, pick a cut point and summarise
-everything before it.
+The band is the newest `compaction.minSteps` steps (default 2), kept whole however
+large, extended backwards with older steps while it stays within
+`compaction.verbatimFraction` of the compaction point (default 0.1) in message
+tokens. The floor outranks the ceiling: a band that shrank below the live work
+would leave the agent re-reading what it just did, and every turn would compact
+again immediately. The ceiling counts only the kept steps' own messages — not the
+system block, tool schemas or the summary — because the cut is chosen before
+anything that depends on it.
 
-### Cut point
+When the entry immediately before the band is a real user prompt — typed, not
+system-injected — the band extends to include it. Otherwise a mid-turn compaction
+folds the question the user just asked into prose while keeping the answer to it
+verbatim. The prompt rides along whatever it weighs; it is half of the live
+exchange, so the ceiling bounds the steps, not the prompt in front of them.
 
-Walk the kept region backwards accumulating estimated tokens until the recent-tail
-budget is reached, then snap to the nearest valid turn boundary so the kept tail
-stays well formed. A valid cut is a turn start (a user message that is not only
-tool results) or an assistant message — keeping `[i:]` from an assistant keeps its
-`tool_use` and the results that follow, and the dropped prefix always ends after a
-complete result set. The snap prefers the boundary at-or-before the budget line so
-it never under-keeps, and never splits a tool call from its result.
+Opening the band on an assistant message keeps it well formed by construction. The
+one shape a provider rejects is a `tool_result` with no matching `tool_use`, and
+that cannot occur at a step boundary; the opposite direction — a `tool_use` whose
+results were cut away — is repaired by `repairTurns`, which fills each unanswered
+call with `No result provided`.
 
-Where a previous compaction exists, the summarisable span restarts at *its*
-`FirstKeptEntryID` rather than at the root — or just after the compaction entry
-itself for a summary-only one — so messages that survived last time are
-re-summarised and merged rather than nested, and folded-away messages never
-re-enter a later plan. If that span is empty there is nothing new to summarise
-and the cut alone is the plan.
+Where a previous compaction exists, the band never reaches earlier than *its* cut,
+and the summarised span starts there rather than at the root, so messages that
+survived last time are re-summarised and merged rather than nested, and folded-away
+messages never re-enter a later plan. When the band already reaches the prior cut
+there is nothing new to fold and the compaction declines.
 
-A manual `/compact` forces stage 4 even when the context sits far below the
-target: it keeps the current turn when there are older turns to fold, and cuts
-past the end — a summary-only compaction — when there are not. Automatic triggers
-never take the forced path: no usable cut means stages 1-3 alone are the plan and
-no summariser call is spent.
+Every trigger produces the same band. A manual `/compact` is a request to reduce
+*now*, not a request to keep less recent work, so it does not reduce further than
+an automatic run would; the plan is identical whether a compaction was asked for,
+crossed the threshold, or followed an overflow. The only thing a trigger decides is
+whether compaction runs at all.
+
+### The recorded plan is inert
+
+Everything before the cut is replaced by the summary and everything after it is
+verbatim, so no stub could apply to anything that survives. The compaction entry
+therefore records an empty reduction carrying only the count of messages folded.
+This is what makes replay trivially correct: there is no plan to re-derive, no
+marker that can outlive the content it referred to, and nothing for a later rebuild
+to reason about beyond the cut itself.
 
 ### Summarisation
 
@@ -170,20 +189,20 @@ either the user's `/compact <instructions>` or, on an automatic run, a
 caller-supplied default through `compactor.focus` — which is how a plan phase
 keeps its summary on implementation work or review findings. An explicit
 `/compact <instructions>` always wins. The exact wording lives in `prompt-design.md`.
-`MaxTokens` is capped below the span's own size, so a runaway summary comes out
-smaller than what it replaces; a blank response is a failure, not "nothing to
-compact".
+`MaxTokens` is sized as a quarter of the compaction point, floored at 4096 so a
+merged checkpoint is never amputated, and capped by what the model can emit and
+by the tokens the call replaces (the prior summary plus the new span); a blank
+response is a failure, not "nothing to compact".
 
 Serialising flattens history to text — `[User]:`, `[Assistant]:`,
 `[Assistant tool calls]: name(args)`, `[Tool result]:` — which is what makes "do
 NOT continue the conversation" hold and sidesteps tool-pairing validation on the
 summarisation request entirely.
 
-A single merged call covers `[priorSpanStart, cut)`. The two-call split-turn
-design in `prompt-design.md` is deliberately not implemented: the merged
-six-section format plus the `<summary>` user-message re-injection keeps a mid-turn
-cut valid, and one call degrades better on the small local models `ajent`
-supports.
+A single merged call covers the span from the prior cut to the band. One call
+degrades better on the small local models `ajent` supports than any split-turn
+scheme would, and the `<summary>` user-message re-injection is what keeps a cut
+that lands mid-turn valid.
 
 The summariser's own usage folds into the session ledger so `/usage` counts it.
 The stream is driven with `llm.Accumulator`, the same as the agent loop.
@@ -195,19 +214,27 @@ cut, no segment-aware entries, no summary that has to masquerade as a phase seed
 
 ## Triggers
 
-- **Manual.** `/compact` or `/compact <instructions>`, target 50%, refused while a
-  turn streams (press Esc first). Unlike the automatic triggers it always runs
-  stage 4, so a small or even single-turn session still compacts; a run whose
-  summary cannot shrink the context reports "nothing to compact".
+- **Manual.** `/compact` or `/compact <instructions>`, refused while a turn streams
+  (press Esc first). A session with nothing older than the band to fold, or one
+  whose summary cannot shrink the context, reports "nothing to compact".
 - **Automatic.** When `Used` crosses `tokens.CompactAt(model)` — the
   `compactThreshold` from `models.json`, a fraction of the window (default 0.8) or
   an absolute token count — the hook runs at the next turn boundary, never
   mid-turn and never between a tool call and its result. The hook decides whether
-  the threshold is crossed; the agent stays dumb.
+  the threshold is crossed; the agent stays dumb. `compaction.auto: false` gates
+  this trigger and only this one. Models that declare no `compactThreshold` of
+  their own take `compaction.threshold`, applied by the registry so discovered
+  models get it too, which keeps the trigger, the context bar and the band ceiling
+  reading one number.
 - **Emergency.** `llm.ErrContextOverflow` from a request compacts aggressively and
   retries the same step once. Nothing was appended for the failed call, so state
   and transcript stay in agreement. Without this, one oversized tool result bricks
   the session.
+
+Recovery from overflow relies on tool-layer output limits keeping any single
+result far below the window; when the bloat sits inside the verbatim band,
+compaction declines by design (the newest steps are never reduced) and the turn
+fails — a rewind or a model switch recovers.
 
 The agent cannot import `session` or `compact` (session already imports agent),
 so the trigger is a func field on `agent.Options`, matching `Provider` and
@@ -223,12 +250,13 @@ Every compaction reports real numbers and is persisted as a `notice` entry so it
 replays on resume and marks the boundary in the transcript view:
 
 ```
-compacted 142k -> 61k (dropped 18 failed tool results, truncated 6 outputs, summarised)
+compacted 142k → 61k (summarised 214 messages)
 ```
 
-Clauses whose count is zero are omitted. A run that met the target on stages 1-3
-says so and never mentions a summary. Silent compaction leaves users convinced the
-agent "forgot" for no reason.
+The notice names only what changed in context. The reduction pass also replaces
+superseded and repeated results, but only in the transcript the summariser reads,
+so reporting it would describe work the next request never sees. Silent compaction
+leaves users convinced the agent "forgot" for no reason.
 
 ## Recovery
 
@@ -255,16 +283,36 @@ in-memory list would vanish on resume.
 through the same `ContextMessages` the rebuild uses and the same `Prepare` pass the
 wire uses, never a separate estimate.
 
-**3. A cut never orphans a `tool_use`.** Cuts land only on a turn start or an
-assistant message; a tool call and its result always travel together. Fuzz-tested
-over random tool interleavings.
+**3. A cut never orphans a `tool_result`.** The band opens on an assistant message,
+or on the real user prompt immediately before one, so a tool call and its result
+always travel together. Fuzz-tested over random tool interleavings. The opposite
+direction is repaired on the wire by `repairTurns`.
 
 **4. The summary reaches the model.** Emitted as `RoleUser`, because adapters
 drop `RoleSystem` messages; this also makes a mid-turn cut legal (see "The one
 assembly function").
 
-**5. Only the newest compaction applies, and it is cumulative.** Each run
-recomputes every stage over the whole branch.
+**4a. The verbatim band is never reduced.** Nothing inside it is stubbed, elided,
+dropped or thinning-stripped, in any path. It is what the agent continues from, so
+a marker there would point at content it can no longer read.
+
+**4b. A recorded plan is inert.** The cut removes everything a stub could touch, so
+the entry carries no stubs, no drops and no thinking strip. A plan that recorded
+them would be dead weight that a later rebuild has to reason about, and stale
+markers outliving their content is exactly how the duplicate-stub bug happened.
+
+**5. Only the newest compaction applies, so it must carry the prior one forward.**
+Assembly reads a single compaction entry, so a new plan that recorded no summary
+and no cut would resurrect every message the prior one folded away. Each run seeds
+its result from the prior plan and recomputes the stages over the region that is
+actually in context; a summary-only prior is first resolved to an explicit
+`FirstKeptEntryID`, or carrying it into a newer entry would re-cut at the new
+entry's own position and drop everything between the two.
+
+**5a. Before and after describe the real request.** Both are measured with the
+prior compaction applied, never against the raw branch. Measuring against the raw
+branch made invariant 0 unenforceable: a plan that reopened folded history still
+compared favourably to a context the session had not sent in a long time.
 
 **6. On rebuild, context and spend come from different places.** A compaction
 rewrites what the branch sends, so the prompt sizes recorded against its surviving
@@ -294,8 +342,8 @@ recorded spend-only (`Accounting.Spend`), so a failed compaction cannot leave th
 bar at the summariser's (much larger) prompt size.
 
 **7. A reduced context is reported to the host.** Reducing takes file content out
-of context — a cut drops reads outright, `truncate` elides their results — while
-`tools.Tracker` still records the process's reads. The compactor therefore calls
+of context — a cut drops reads outright — while `tools.Tracker` still records the
+process's reads. The compactor therefore calls
 the same rebuild hook `switchState` uses (`sessRec.onSwitch`), which resets read
 tracking so a later `@file` re-injects rather than deduping against content the
 model no longer has. Any future path that replaces `State.Messages` owes the same
@@ -319,16 +367,28 @@ table-driven subtests, `require` for setup and `assert` for assertions, never
 
 ## Extending
 
-- **New reduction stage**: add a function that returns stubs/drops and a `Stats`
-  count, wire it into `Compact` between the existing stages, and measure it
-  through `ContextMessages` like the others.
+- **New reduction rule**: add it to `spanStubs`. Detect over the whole region and
+  emit only before the band, or the band stops being verbatim.
 - **A different summariser**: supply another `RunPrompt` (a cheaper model, a
   local one); nothing else changes.
 
 ## Known limits
 
-- Stage 4 uses one merged call, not the two-call split-turn design, so a mid-turn
-  cut's summary covers the partial turn with the same six-section format.
-- Age-tier budgets are fixed constants, not tuned per model or per tool.
+- The summary is one merged call, so a mid-turn cut's summary covers the partial
+  step with the same six-section format.
+- A session whose last `minSteps` steps alone exceed the ceiling cannot compact
+  below them. That is deliberate: the alternative is degrading the work the agent
+  is in the middle of. When overflow bloat sits inside that band, compaction also
+  declines by design and the turn fails — a rewind or a model switch recovers;
+  recovery otherwise relies on tool-layer output limits keeping any single result
+  far below the window.
+- Every compaction spends a summariser call. There is no cheap structural-only
+  path; it was unreachable in practice and left sessions half full.
 - The transcript keeps every pre-compaction entry; compaction shrinks the rebuilt
   context, never the file (see `session-design.md` "Known limits").
+- Transcripts written by older builds still carry stub plans and `Limit` elisions,
+  and drop/strip-thinking reductions. `pkg/session` replays them unchanged — but
+  only until the session's next compaction, whose inert plan replaces them (context
+  can step up again and a later run may then decline). Under `RetainAll`, thinking
+  inside the band is no longer stripped anywhere; older plans that did strip it are
+  honoured as written.

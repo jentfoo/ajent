@@ -130,6 +130,9 @@ func main() {
 	}
 	reg, regWarnings := llm.NewRegistry(file, llm.LoadUserCache(), llm.RegistryOptions{})
 	warnings = append(warnings, regWarnings...)
+	// models declaring no compactThreshold of their own follow the config setting,
+	// so the trigger, the context bar and the compaction tail all read one number.
+	reg.SetCompactDefault(set.Settings().Compaction.Threshold)
 
 	active := reg.Active()
 	if f.model != "" {
@@ -402,6 +405,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			notify:      func(msg string, level agent.Level) { ui.Notify(msg, tuiLevel(level)) },
 			busy:        ui.Busy,
 			providerFor: providers.ProviderFor,
+			cfg:         func() config.Compaction { return set.Settings().Compaction },
 		}
 	}
 
@@ -1314,6 +1318,14 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 		return nil, "", nil
 	}
 	head := resumeHead(r.w.Head(), entries)
+	// a session-scoped threshold must be stamped before state resolution so the
+	// trigger, the context bar and the band ceiling read one number after resume.
+	// The overrides come off the branch, not raw file order: a transcript with
+	// forks holds settings from siblings this head never saw.
+	set.SeedSession(session.SettingOverrides(session.Branch(entries, head)))
+	resumed := set.Settings()
+	reg.SetCompactDefault(resumed.Compaction.Threshold) // models declaring none pick up the session default
+
 	rebuilt, warns := r.stateFor(modelResolver(reg), entries, head)
 	if len(rebuilt.Messages) == 0 && rebuilt.Model.ID == "" {
 		return nil, "", warns // a brand-new transcript carries no history yet
@@ -1322,12 +1334,6 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	if rebuilt.Model.ID != "" {
 		st.Model = rebuilt.Model
 	}
-	// fold resumed setting overrides into the session config layer so Explain and
-	// Settings report (session) instead of reverting to defaults. They come off the
-	// branch, not raw file order: a transcript with forks holds settings from
-	// siblings this head never saw, and the tool set among them shapes the request.
-	set.SeedSession(session.SettingOverrides(session.Branch(entries, head)))
-	resumed := set.Settings()
 	if _, ok := llm.ParseLevel(resumed.Reasoning.Level); ok || resumed.Reasoning.Retain != "" {
 		st.Reasoning = reasoningFrom(config.Reasoning{
 			Level:  resumed.Reasoning.Level,

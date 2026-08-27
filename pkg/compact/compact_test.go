@@ -3,12 +3,12 @@ package compact
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
-	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,226 +21,332 @@ func mustMsgs(t *testing.T, branch []session.Entry, cd session.CompactionData) [
 	return msgs
 }
 
+// toolBranch builds n steps, each an assistant tool call plus its result, opened
+// by one real user prompt. Ids are "u1", then "aN"/"rN" per step.
+func toolBranch(t *testing.T, n, filler int) []session.Entry {
+	t.Helper()
+
+	branch := []session.Entry{userText("u1", "do the work")}
+	for i := 1; i <= n; i++ {
+		s := strconv.Itoa(i)
+		branch = append(branch,
+			callMsg("a"+s, "c"+s, "bash", ""),
+			resultMsg("r"+s, "c"+s, "output "+s+" "+strings.Repeat("x ", filler), false))
+	}
+	return branch
+}
+
+func summaryRun(text string) RunPrompt {
+	return func(_ context.Context, _ llm.Request) (string, error) { return text, nil }
+}
+
 func TestCompact(t *testing.T) {
 	t.Parallel()
 
-	// A manual /compact must fold older turns into a summary even when the whole
-	// session sits far below half the window, so it never reports "nothing to compact"
-	// on an ordinary short conversation. It keeps only the most recent user turn.
-	t.Run("force_summarises_small_session", func(t *testing.T) {
-		branch := []session.Entry{
-			userText("u1", strings.Repeat("first ask ", 40)),
-			assistText("a1", strings.Repeat("first answer ", 60)),
-			userText("u2", "second question"),
-			assistText("a2", strings.Repeat("current reply ", 10)),
-		}
-		called := false
-		run := func(_ context.Context, _ llm.Request) (string, error) {
-			called = true
-			return "## Goal\nrefactor auth", nil
-		}
-		// a huge window: without Force the whole branch fits and nothing would happen.
-		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000}
 
-		res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
+	t.Run("folds_everything_before_the_band", func(t *testing.T) {
+		branch := toolBranch(t, 8, 400)
+
+		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\nthe work"), Options{VerbatimTokens: 1})
 		require.NoError(t, err)
-		require.NotNil(t, res) // must reduce, not report "nothing to compact"
-		assert.True(t, called)
-		assert.Equal(t, "## Goal\nrefactor auth", res.Summary)
+		require.NotNil(t, res)
+		assert.Equal(t, "a7", res.FirstKeptEntryID, "the last two steps stay verbatim")
+		assert.Less(t, res.After, res.Before)
 
-		// the kept tail starts at u2 (the most recent real user prompt): only the final
-		// exchange survives verbatim; everything before it is summarised away.
-		require.NotEmpty(t, res.FirstKeptEntryID)
-		tail := []string{}
-		keep := false
-		for _, e := range branch {
-			if e.ID == res.FirstKeptEntryID {
-				keep = true
-			}
-			if keep && e.Type == session.TypeMessage {
-				tail = append(tail, e.ID)
-			}
-		}
-		assert.Equal(t, []string{"u2", "a2"}, tail)
-		// the summary plus one exchange must cost less than all four messages.
-		cd := session.CompactionData{Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID}
-		after := tokens.EstimateMessages(mustMsgs(t, branch, cd))
-		before := tokens.EstimateMessages(mustMsgs(t, branch, session.CompactionData{}))
-		assert.Less(t, after, before)
+		msgs := mustMsgs(t, branch, session.CompactionData{
+			Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID, Reduce: &res.Reduce,
+		})
+		require.Len(t, msgs, 5) // summary + two call/result pairs
+		assert.Contains(t, textOf(msgs[0]), "the work")
 	})
 
-	// A forced compact whose summary cannot shrink the conversation is refused, never
-	// recorded as a growth.
-	t.Run("force_refuses_when_summary_would_grow", func(t *testing.T) {
-		branch := []session.Entry{userText("u1", "hi"), assistText("a1", "yo")}
-		run := func(_ context.Context, _ llm.Request) (string, error) {
-			return "## Goal\n" + strings.Repeat("wordy ", 50), nil
-		}
-		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
+	t.Run("no_summariser_returns_nil", func(t *testing.T) {
+		branch := toolBranch(t, 8, 400)
 
-		res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
+		res, err := Compact(t.Context(), branch, model, nil, Options{})
 		require.NoError(t, err)
-		assert.Nil(t, res) // a summary that grows context is never recorded
+		assert.Nil(t, res)
 	})
 
-	// Regression: a cut that keeps nearly everything and adds a summary on top grows
-	// the context; it must never be recorded as a compaction ("compacted 500 -> 688").
+	t.Run("declines_when_the_band_is_everything", func(t *testing.T) {
+		branch := toolBranch(t, 2, 20)
+
+		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\nx"), Options{})
+		require.NoError(t, err)
+		assert.Nil(t, res)
+	})
+
 	t.Run("never_records_growth", func(t *testing.T) {
-		branch := []session.Entry{
-			userText("u1", "Read me a short sci-fi story"),
-			assistText("a1", strings.Repeat("Mira ran her hand along the spines. ", 100)),
-		}
-		run := func(_ context.Context, _ llm.Request) (string, error) {
-			return "## Goal\nplaceholder summary body that is not tiny", nil
-		}
-		// a small window so the automatic path reaches stage 4; the one large reply
-		// alone exceeds the target, so the natural cut keeps it and gains nothing.
-		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 900, MaxOutput: 1000}
+		branch := toolBranch(t, 4, 400)
+		huge := strings.Repeat("summary prose ", 4000)
 
-		res, err := Compact(t.Context(), branch, model, run, Options{})
+		res, err := Compact(t.Context(), branch, model, summaryRun(huge), Options{VerbatimTokens: 1})
 		require.NoError(t, err)
-		assert.Nil(t, res) // a cut that keeps nearly everything must never be recorded
-	})
-
-	t.Run("stages_meet_target_no_summary", func(t *testing.T) {
-		// a huge failed result far from the current turn is stubbed by stage 1 alone;
-		// with a generous target no summariser call is needed.
-		big := strings.Repeat("e", 64<<10)
-		branch := []session.Entry{
-			userText("u1", "q1"),
-			callMsg("a1", "c1", "bash", ""),
-			resultMsg("r1", "c1", big, true),
-			userText("u2", "q2"),
-			userText("u3", "q3"),
-			userText("u4", "q4"),
-		}
-		var called bool
-		run := func(_ context.Context, _ llm.Request) (string, error) {
-			called = true
-			return "", nil
-		}
-		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
-
-		res, err := Compact(t.Context(), branch, model, run, Options{})
-		require.NoError(t, err)
-		require.NotNil(t, res)
-		assert.False(t, called) // stages 1-3 met the target without a summary
-		assert.Empty(t, res.Summary)
-		assert.Less(t, res.After, res.Before)
-		assert.Equal(t, 1, res.Reduce.Stats.Failed)
-	})
-
-	t.Run("no_change_returns_nil", func(t *testing.T) {
-		branch := []session.Entry{userText("u1", "hi"), assistText("a1", "yo")}
-		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
-		res, err := Compact(t.Context(), branch, model, nil, Options{})
-		require.NoError(t, err)
-		assert.Nil(t, res) // nothing to reduce and no summariser wired
-	})
-
-	t.Run("no_duplicate_stubs", func(t *testing.T) {
-		// a failed result (stage 1) and a large old result (stage 2) must each be
-		// stubbed exactly once, never twice.
-		big := strings.Repeat("y", 16<<10)
-		branch := []session.Entry{
-			userText("u1", "q1"),
-			callMsg("a1", "c1", "bash", ""),
-			resultMsg("r1", "c1", "failed output", true), // stage 1: failed
-			callMsg("a2", "c2", "bash", ""),
-			resultMsg("r2", "c2", big, false), // stage 2: large old result
-			userText("u2", "q2"),
-			userText("u3", "q3"),
-			userText("u4", "q4"),
-		}
-		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
-		res, err := Compact(t.Context(), branch, model, nil, Options{})
-		require.NoError(t, err)
-		require.NotNil(t, res)
-
-		seen := make(map[string]int)
-		for _, s := range res.Reduce.Stubs {
-			seen[s.CallID]++
-		}
-		for id, n := range seen {
-			assert.Equal(t, 1, n, "call id %s stubbed more than once", id) // message carries the offending id
-		}
-	})
-}
-
-// A forced compact on a single exchange has no older turn to keep: the whole
-// history folds into a summary-only plan. The summariser's reply decides whether
-// that is recorded or surfaces as an error.
-func TestCompactForceSingleTurnSummaryOnly(t *testing.T) {
-	t.Parallel()
-
-	branch := []session.Entry{
-		userText("u1", "Read me a short sci-fi story"),
-		assistText("a1", strings.Repeat("Mira ran her hand along the spines. ", 100)),
-	}
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000}
-
-	t.Run("valid_summary_rebuilds_context", func(t *testing.T) {
-		run := func(_ context.Context, _ llm.Request) (string, error) {
-			return "## Goal\nwanted a story\n## Progress\n### Done\n- [x] told The Last Librarian", nil
-		}
-
-		res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
-		require.NoError(t, err)
-		require.NotNil(t, res)
-		assert.Empty(t, res.FirstKeptEntryID) // nothing survives verbatim
-		assert.NotEmpty(t, res.Summary)
-		assert.Less(t, res.After, res.Before)
-
-		// once recorded, the rebuilt context is the summary plus anything newer.
-		recorded := append(slices.Clone(branch), compactEntry("c1", res.Summary, ""), userText("u2", "another?"))
-		msgs, warns := session.ContextMessages(recorded, session.CompactionData{Summary: res.Summary}, nil)
-		require.Empty(t, warns)
-		require.Len(t, msgs, 2)
-		assert.Contains(t, textOf(msgs[0]), "The Last Librarian")
-		assert.Equal(t, "another?", textOf(msgs[1]))
+		assert.Nil(t, res, "a summary bigger than the span it replaces is not a saving")
 	})
 
 	t.Run("blank_summary_is_error", func(t *testing.T) {
-		run := func(_ context.Context, _ llm.Request) (string, error) { return "  \n", nil }
+		branch := toolBranch(t, 8, 400)
 
-		res, err := Compact(t.Context(), branch, model, run, Options{Force: true})
+		_, err := Compact(t.Context(), branch, model, summaryRun("   "), Options{VerbatimTokens: 1})
 		require.Error(t, err)
-		assert.Nil(t, res)
 		assert.Contains(t, err.Error(), "empty summary")
+	})
+
+	t.Run("plan_is_inert", func(t *testing.T) {
+		branch := toolBranch(t, 8, 400)
+
+		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\nx"), Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		// the cut already removes everything a stub could touch, so recording one
+		// would be dead weight that a later rebuild has to reason about
+		assert.Empty(t, res.Reduce.Stubs)
+		assert.Empty(t, res.Reduce.Drop)
+		assert.False(t, res.Reduce.StripThinking)
+		assert.Positive(t, res.Reduce.Stats.Summarized)
 	})
 }
 
-// The before/after measure must apply request-build retention: thinking a
-// non-RetainAll policy drops from completed turns is not context compaction saves,
-// so it never inflates Before.
+func TestCompactVerbatimBand(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000}
+	run := summaryRun("## Goal\nwork")
+
+	t.Run("floor_only_keeps_two_steps", func(t *testing.T) {
+		branch := toolBranch(t, 10, 400)
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, "a9", res.FirstKeptEntryID)
+	})
+
+	t.Run("ceiling_extends_the_band", func(t *testing.T) {
+		branch := toolBranch(t, 10, 400)
+		one := spanTokens(branch, 19, len(branch))
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: one * 4})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, "a7", res.FirstKeptEntryID, "four steps fit the ceiling")
+	})
+
+	t.Run("oversized_floor_is_kept_verbatim", func(t *testing.T) {
+		branch := toolBranch(t, 6, 500)
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, "a5", res.FirstKeptEntryID, "the floor outranks the ceiling")
+	})
+
+	t.Run("options_override_the_defaults", func(t *testing.T) {
+		branch := toolBranch(t, 10, 400)
+
+		res, err := Compact(t.Context(), branch, model, run, Options{MinSteps: 1, VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, "a10", res.FirstKeptEntryID)
+	})
+
+	t.Run("band_results_are_never_reduced", func(t *testing.T) {
+		// the same output twice, the duplicate landing inside the band
+		body := strings.Repeat("same bytes ", 400)
+		branch := []session.Entry{userText("u1", "read it twice")}
+		for i := 1; i <= 6; i++ {
+			s := strconv.Itoa(i)
+			branch = append(branch,
+				callMsg("a"+s, "c"+s, "read", "/w/f.go"),
+				resultMsg("r"+s, "c"+s, body, false))
+		}
+
+		res, err := Compact(t.Context(), branch, model, run, Options{Cwd: "/w", VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+
+		msgs := mustMsgs(t, branch, session.CompactionData{
+			Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID, Reduce: &res.Reduce,
+		})
+		for _, m := range msgs[1:] { // msgs[0] is the summary
+			for _, b := range m.Content {
+				if tr, ok := b.(llm.ToolResultBlock); ok {
+					assert.Equal(t, body, resultText(tr), "a band result was stubbed")
+				}
+			}
+		}
+	})
+}
+
 func TestCompactMeasuresRequestRetention(t *testing.T) {
 	t.Parallel()
 
-	big := strings.Repeat("ponder ", 4000)
-	branch := []session.Entry{
-		userText("u1", "q1"),
-		callMsg("a1", "c1", "bash", ""),
-		resultMsg("r1", "c1", strings.Repeat("detail ", 100), true), // old failure: stage-1 stub
-		msg("t1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ThinkingBlock{Text: big}}}),
-		userText("u2", "q2"),
-		userText("u3", "q3"), // r1 is older than the last two turns
+	branch := []session.Entry{userText("u1", "start")}
+	for i := 1; i <= 6; i++ {
+		s := strconv.Itoa(i)
+		branch = append(branch, msg("a"+s, llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+			llm.ThinkingBlock{Text: strings.Repeat("deliberating ", 300)},
+			llm.TextBlock{Text: "step " + s},
+		}}))
 	}
-	model := llm.Model{
-		Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 1000,
-		Caps: llm.Capabilities{Reasoning: true},
-	}
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000,
+		Caps: llm.Capabilities{Reasoning: true}}
+	run := summaryRun("## Goal\nx")
 
-	t.Run("whole_turn_drops_old_thinking_before_measure", func(t *testing.T) {
-		res, err := Compact(t.Context(), branch, model, nil, Options{Retain: llm.RetainWholeTurn})
+	measure := func(t *testing.T, retain llm.RetainPolicy) int {
+		t.Helper()
+		res, err := Compact(t.Context(), branch, model, run,
+			Options{Retain: retain, VerbatimTokens: 1})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		assert.Less(t, res.Before, 2000) // completed-turn thinking is never counted
+		return res.Before
+	}
+
+	t.Run("retain_none_drops_thinking_before_measure", func(t *testing.T) {
+		assert.Less(t, measure(t, llm.RetainNone), 2000)
 	})
 
 	t.Run("retain_all_counts_thinking_before_measure", func(t *testing.T) {
-		res, err := Compact(t.Context(), branch, model, nil, Options{Retain: llm.RetainAll})
+		assert.Greater(t, measure(t, llm.RetainAll), 2000)
+	})
+}
+
+// TestCompactRecompaction covers the second and later compactions of a session.
+// Every plan must measure against the context a prior compaction actually left and
+// carry its checkpoint forward; a plan that forgot either resurrected the whole
+// folded history on the next rebuild.
+func TestCompactRecompaction(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000}
+	run := summaryRun("## Goal\nfresh")
+
+	// priorBranch is eight folded steps, a compaction keeping from "a7", then ten
+	// new steps recorded after it.
+	priorBranch := func(t *testing.T) []session.Entry {
+		t.Helper()
+		branch := toolBranch(t, 8, 400)
+		branch = append(branch, compactEntry("comp", "an earlier checkpoint", "a7"))
+		for i := 1; i <= 10; i++ {
+			s := strconv.Itoa(i)
+			branch = append(branch,
+				callMsg("na"+s, "nc"+s, "bash", ""),
+				resultMsg("nr"+s, "nc"+s, "new output "+strings.Repeat("y ", 400), false))
+		}
+		return branch
+	}
+
+	t.Run("measures_against_effective_context", func(t *testing.T) {
+		branch := priorBranch(t)
+		prior := session.CompactionData{Summary: "an earlier checkpoint", FirstKeptEntryID: "a7"}
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		assert.Greater(t, res.Before, 2000) // with RetainAll the thinking is real context
+
+		effective := tokensFor(branch, prior, model, llm.RetainNone, 0)
+		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0)
+		assert.Equal(t, effective, res.Before)
+		assert.Less(t, res.Before, raw, "the raw branch is not what the next request sends")
+	})
+
+	t.Run("never_reopens_a_prior_cut", func(t *testing.T) {
+		branch := priorBranch(t)
+		priorCut := session.CutIndex(branch, session.CompactionData{Summary: "x", FirstKeptEntryID: "a7"})
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		cut := session.CutIndex(branch, session.CompactionData{
+			Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID,
+		})
+		assert.GreaterOrEqual(t, cut, priorCut)
+		assert.NotEmpty(t, res.Summary)
+	})
+
+	t.Run("declines_when_nothing_new_happened", func(t *testing.T) {
+		branch := toolBranch(t, 8, 400)
+		branch = append(branch, compactEntry("comp", "a checkpoint", "a7"))
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		assert.Nil(t, res)
+	})
+
+	t.Run("budget_carries_the_prior_checkpoint", func(t *testing.T) {
+		// a recompaction model with enough headroom that the emit cap does not bind
+		big := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 10000}
+		branch := priorBranch(t)
+
+		var got llm.Request
+		run := func(_ context.Context, req llm.Request) (string, error) {
+			got = req
+			return "## Goal\nfresh", nil
+		}
+		res, err := Compact(t.Context(), branch, big, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		// the prior summary must survive recompaction whole, never amputated by a
+		// budget sized from the short new span alone.
+		assert.GreaterOrEqual(t, got.MaxTokens, minSummaryTokens)
+	})
+
+	t.Run("normalises_summary_only_prior", func(t *testing.T) {
+		branch := []session.Entry{
+			userText("u0", "folded away"),
+			compactEntry("comp", "a summary-only checkpoint", ""),
+		}
+		for i := 1; i <= 6; i++ {
+			s := strconv.Itoa(i)
+			branch = append(branch,
+				callMsg("a"+s, "c"+s, "bash", ""),
+				resultMsg("r"+s, "c"+s, "output "+strings.Repeat("z ", 400), false))
+		}
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, "a5", res.FirstKeptEntryID)
+
+		// replay the way the driver does: the new entry becomes the newest, and the
+		// messages recorded between the two compactions must survive it
+		cd := session.CompactionData{
+			Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID, Reduce: &res.Reduce,
+		}
+		withNew := append(slices.Clone(branch), compactEntry("comp2", cd.Summary, cd.FirstKeptEntryID))
+		msgs := mustMsgs(t, withNew, cd)
+		require.Len(t, msgs, 5) // summary + the last two call/result pairs
+		assert.Contains(t, textOf(msgs[0]), "fresh")
+	})
+}
+
+func TestResolveVerbatim(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000} // compacts at 160k
+
+	t.Run("defaults_to_two_steps_and_a_tenth", func(t *testing.T) {
+		steps, tok := resolveVerbatim(model, Options{})
+		assert.Equal(t, 2, steps)
+		assert.Equal(t, 16000, tok)
+	})
+
+	t.Run("unknown_window_still_bounds", func(t *testing.T) {
+		_, tok := resolveVerbatim(llm.Model{Provider: "test", ID: "m"}, Options{})
+		assert.Equal(t, minVerbatimTokens, tok, "an unbounded band could never compact")
+	})
+
+	t.Run("options_win", func(t *testing.T) {
+		steps, tok := resolveVerbatim(model, Options{MinSteps: 5, VerbatimTokens: 99})
+		assert.Equal(t, 5, steps)
+		assert.Equal(t, 99, tok)
+	})
+
+	t.Run("min_steps_clamped_to_eight", func(t *testing.T) {
+		steps, _ := resolveVerbatim(model, Options{MinSteps: 100})
+		assert.Equal(t, maxVerbatimSteps, steps, "a hand-edited minSteps cannot swallow the branch")
 	})
 }

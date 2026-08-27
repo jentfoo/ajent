@@ -176,7 +176,7 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
     "safeCommands": ["git status", "npm test"],
     "deniedCommands": ["rm -rf"]
   },
-  "compaction": { "auto": true, "threshold": 0.8 },
+  "compaction": { "auto": true, "threshold": 0.8, "minSteps": 2, "verbatimFraction": 0.1 },
   "subagent": { "maxConcurrent": 4 },
   "ui": { "render": "auto", "theme": "dark-warm" }
 }
@@ -191,7 +191,8 @@ The top-level blocks:
 * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, refInject, refTotal).
 * `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+mcp`, `allow-all`, or `block-all`. See Tool Barriers above; a Shift+Tab cycle changes it for the session only.
 * `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).
-* `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8.
+* `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it; `threshold` is the default for the ones that do not.
+* `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.
 * `subagent.model` / `maxConcurrent` - a dedicated model for research sub-agents (empty inherits your session model) and how many may run at once (default 8).
 * `ui.render`, `ui.theme`, `showCost`, `showThinking` - paint mode (`auto`, `inline`, `alt`, `plain`), palette, and whether cost or thinking are shown.
 

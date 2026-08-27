@@ -206,6 +206,7 @@ func runHeadless(o headlessOptions) int {
 			sink:        opts.Sinks[0],
 			notify:      notify,
 			providerFor: providerFor,
+			cfg:         func() config.Compaction { return o.set.Settings().Compaction },
 		}
 	}
 

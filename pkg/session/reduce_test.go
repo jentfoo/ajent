@@ -235,3 +235,55 @@ func TestContextMessages(t *testing.T) {
 		assert.Nil(t, msgs[0].Origin)
 	})
 }
+
+func TestCutIndex(t *testing.T) {
+	t.Parallel()
+
+	compaction := func(id, parent string, cd CompactionData) Entry {
+		return Entry{ID: id, ParentID: parent, Type: TypeCompaction, Data: mustJSON(cd)}
+	}
+
+	t.Run("no_compaction_keeps_all", func(t *testing.T) {
+		branch := []Entry{pickMsg("m1", "", llm.Text(llm.RoleUser, "hi"))}
+		assert.Equal(t, 0, CutIndex(branch, CompactionData{}))
+	})
+
+	t.Run("reductions_only_keeps_all", func(t *testing.T) {
+		branch := []Entry{pickMsg("m1", "", llm.Text(llm.RoleUser, "hi"))}
+		cd := CompactionData{Reduce: &Reduce{StripThinking: true}}
+		assert.Equal(t, 0, CutIndex(branch, cd))
+	})
+
+	t.Run("first_kept_found", func(t *testing.T) {
+		branch := []Entry{
+			pickMsg("m1", "", llm.Text(llm.RoleUser, "old")),
+			pickAssistText("m2", "m1", "answer"),
+			pickMsg("m3", "m2", llm.Text(llm.RoleUser, "kept")),
+		}
+		assert.Equal(t, 2, CutIndex(branch, CompactionData{FirstKeptEntryID: "m3"}))
+	})
+
+	t.Run("first_kept_missing_returns_minus_one", func(t *testing.T) {
+		branch := []Entry{pickMsg("m1", "", llm.Text(llm.RoleUser, "hi"))}
+		assert.Equal(t, -1, CutIndex(branch, CompactionData{FirstKeptEntryID: "gone"}))
+	})
+
+	t.Run("summary_only_after_compaction", func(t *testing.T) {
+		cd := CompactionData{Summary: "s"}
+		branch := []Entry{
+			pickMsg("m1", "", llm.Text(llm.RoleUser, "old")),
+			compaction("c1", "m1", cd),
+			pickMsg("m2", "c1", llm.Text(llm.RoleUser, "new")),
+		}
+		assert.Equal(t, 2, CutIndex(branch, cd))
+	})
+
+	t.Run("summary_only_empty_tail", func(t *testing.T) {
+		cd := CompactionData{Summary: "s"}
+		branch := []Entry{
+			pickMsg("m1", "", llm.Text(llm.RoleUser, "old")),
+			compaction("c1", "m1", cd),
+		}
+		assert.Equal(t, 2, CutIndex(branch, cd))
+	})
+}

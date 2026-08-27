@@ -26,6 +26,11 @@ type Registry struct {
 	cache    map[string]CacheEntry
 	active   Model
 	hasModel bool
+	// compactDefault is the compaction threshold applied to models that declare
+	// none of their own; declaredCompact remembers which ones did, so re-applying a
+	// new default cannot mistake a previous default for a declaration.
+	compactDefault  float64
+	declaredCompact map[string]struct{}
 }
 
 // RegistryOptions configures a Registry.
@@ -125,6 +130,13 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	defer r.mu.Unlock()
 	r.entries, r.flavors = entries, flavors
 	r.models = models
+	r.declaredCompact = make(map[string]struct{})
+	for _, m := range models {
+		if m.CompactThreshold != 0 {
+			r.declaredCompact[m.Key()] = struct{}{}
+		}
+	}
+	r.applyCompactDefault()
 	r.byKey = make(map[string]int, len(models))
 	r.byAlias = make(map[string]int, len(models))
 	for i, m := range models {
@@ -134,6 +146,32 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 		}
 	}
 	return warnings
+}
+
+// SetCompactDefault sets the compaction threshold for models that declare none of
+// their own, as a fraction (<1) of the window or an absolute token count (>=1).
+// Zero restores the built-in default. It re-applies to the current catalogue and
+// to models a later discovery adds.
+func (r *Registry) SetCompactDefault(v float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.compactDefault = v
+	r.applyCompactDefault()
+}
+
+// applyCompactDefault stamps compactDefault onto every model that declared no
+// threshold of its own. Callers hold r.mu.
+func (r *Registry) applyCompactDefault() {
+	for i := range r.models {
+		if _, declared := r.declaredCompact[r.models[i].Key()]; !declared {
+			r.models[i].CompactThreshold = r.compactDefault
+		}
+	}
+	if r.hasModel {
+		if _, declared := r.declaredCompact[r.active.Key()]; !declared {
+			r.active.CompactThreshold = r.compactDefault
+		}
+	}
 }
 
 // zeroModelsWarning names the ways to populate a provider that resolved empty.

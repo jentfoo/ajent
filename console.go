@@ -119,6 +119,9 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 			showPermissionIndicator(c.ui, c.permit)
 		}
 	}
+	if key == "compaction.threshold" && c.reg != nil {
+		c.applyCompactThreshold(value)
+	}
 	if c.set != nil {
 		if err := c.set.SetSession(key, value); err != nil {
 			return err
@@ -128,6 +131,36 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 		return c.rec.SettingChange(key, value)
 	}
 	return nil
+}
+
+// applyCompactThreshold re-defaults the registry and refreshes the live model, so
+// a /settings edit moves the trigger, the context bar and the compaction tail
+// together instead of waiting for a restart.
+func (c *uiConsole) applyCompactThreshold(value any) {
+	f, ok := value.(float64)
+	if !ok {
+		return
+	}
+	c.reg.SetCompactDefault(f)
+	if c.st == nil {
+		return
+	}
+	m, err := c.reg.Resolve(c.st.Model.Key())
+	if err != nil {
+		return
+	}
+	c.st.Model = m // compactor.run reads the threshold from here
+	if t := c.st.Tokens; t != nil {
+		t.SetWindow(m) // keeps every context term; SetModel would blank the bar
+		cs := t.Context()
+		c.ui.SetContext(tui.ContextInfo{
+			Used:      cs.Used,
+			Window:    cs.Window,
+			Reserve:   cs.Reserve,
+			Compact:   cs.Compact,
+			Estimated: cs.Estimated,
+		})
+	}
 }
 
 func (c *uiConsole) SetModel(m llm.Model) {

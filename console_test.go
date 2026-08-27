@@ -256,3 +256,49 @@ func readFileString(t *testing.T, path string) string {
 	require.NoError(t, err)
 	return string(b)
 }
+
+// A /settings edit of compaction.threshold must move the trigger, the context bar
+// marker and the compaction tail together. It must not blank the ledger the way a
+// model switch does: only the window changed, not what occupies it.
+func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
+	t.Parallel()
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ui.Close()
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+
+	f := llm.File{Providers: map[string]llm.ProviderConfig{
+		"p": {Flavor: llm.FlavorAnthropic, Models: []llm.ModelConfig{
+			{ID: "big", ContextWindow: ptrTo(200000)},
+		}},
+	}}
+	reg, _ := llm.NewRegistry(f, nil, llm.RegistryOptions{})
+	model, err := reg.Resolve("p/big")
+	require.NoError(t, err)
+
+	st := &agent.State{Model: model, Tokens: tokens.New(model)}
+	st.Messages = []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("x ", 500))}
+	tk := st.Tokens
+	tk.Add(tokens.EstimateMessages(st.Messages))
+	used := tk.Context().Used
+	require.Greater(t, used, 1)
+
+	c := &uiConsole{ui: ui, reg: reg, st: st}
+	require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
+
+	assert.InDelta(t, 0.5, c.st.Model.CompactThreshold, 1e-09, "the live model carries the new threshold")
+	assert.Equal(t, 100000, tk.Context().Compact, "the bar fills against the new compaction point")
+	assert.Equal(t, used, tk.Context().Used, "a threshold edit must not blank the ledger")
+}
+
+func ptrTo[T any](v T) *T { return &v }

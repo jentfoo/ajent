@@ -9,6 +9,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/strutil"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // Summariser prompts, from docs/prompt-design.md. They are the exact-format spec
@@ -25,7 +26,8 @@ ONLY output the structured summary.`
 	sixSectionSpec = `Use this EXACT format:
 
 ## Goal
-[What is the user trying to accomplish? Can be multiple items.]
+[The objective as it now stands. If the user redirected the work, state the
+current objective and note what changed.]
 
 ## Constraints & Preferences
 - [Any constraints, preferences, or requirements]
@@ -48,114 +50,109 @@ ONLY output the structured summary.`
 1. [Ordered list of what should happen next]
 
 ## Critical Context
-- [Data, examples, or references needed to continue]
+- [Everything needed to continue without re-reading the history: exact file paths
+  and what changed in each, error text, command lines and their outcomes, API and
+  type shapes the work relies on, values discovered by investigation, and
+  approaches already ruled out with the reason they were ruled out.]
 - [(none) if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.
-For content the assistant produced (code, prose, plans, answers), include a 2-3
-sentence synopsis of its substance — never just a title or name.`
+Be brief in wording and complete in substance. Cut preamble, hedging and
+adjectives; never cut a fact. Preserve file paths, function names, error messages
+and command lines exactly as written. For content the assistant produced (code,
+prose, plans, answers), include a 2-3 sentence synopsis of its substance — never
+just a title or name.`
+
+	// excludedTail tells the summariser its span deliberately stops short of the
+	// present, so it stops writing Next Steps as though its last message were the
+	// latest thing that happened.
+	excludedTail = `The most recent steps are deliberately NOT shown above: they are kept verbatim
+and follow your summary. Summarise only what you were given; the reader can see
+newer activity than you can.`
 
 	initialInstruction = `The messages above are a conversation to summarize. Create a structured context
 checkpoint that another model will use to continue the work.
+
+` + excludedTail + `
 
 ` + sixSectionSpec
 
 	incrementalInstruction = `The messages above are NEW conversation messages to incorporate into the existing
 summary provided in <previous-summary>.
 
-Update the structured summary with new information. RULES:
-- PRESERVE all existing information from the previous summary
-- ADD new progress, decisions, and context
-- UPDATE Progress: move items In Progress → Done when completed
-- UPDATE Next Steps based on what was accomplished
-- PRESERVE exact file paths, function names, error messages
+` + excludedTail + `
+
+Produce ONE merged summary. RULES:
+- INTEGRATE the previous summary rather than appending to it; never state the same
+  fact twice
+- REPLACE the goal if the user redirected the work, noting what changed
+- UPDATE Progress: move items In Progress → Done as work completed
+- COMPRESS finished work to one line per item once nothing depends on its detail
+- NEVER drop a constraint, a decision, or outstanding work
+- PRESERVE exact file paths, function names, error messages and command lines
 
 ` + sixSectionSpec
 )
 
-// stage4 picks a cut point and summarises the span before it with run. It returns
-// the summary text, the entry id to keep from and how many messages the summary
-// covered; firstKept empty with a summary means a summary-only compaction. With
-// opts.Force a cut always lands (keeping the current turn, or past the end when
-// there is nothing older to fold); without it a missing cut skips the model call.
-func stage4(ctx context.Context, branch []session.Entry, model llm.Model, run RunPrompt, opts Options) (summary, firstKept string, summarized int, err error) {
-	target := resolveTarget(model, opts.TargetTokens)
-	spanStart, _ := priorSpanStart(branch)
+// minSummaryTokens floors a merged checkpoint's budget.
+const minSummaryTokens = 4096 // a merged checkpoint is never amputated by a hard cap
 
-	cutIdx := selectCut(branch, target)
-	if cutIdx < 0 || cutIdx <= spanStart {
-		if !opts.Force {
-			return "", "", 0, nil // no usable cut; stages 1-3 alone are the plan
-		}
-		// forced: keep the current turn when an older one can fold, else fold all
-		if cutIdx = lastUserTurn(branch); cutIdx <= spanStart || countMessages(branch[spanStart:cutIdx]) == 0 {
-			cutIdx = len(branch)
-		}
-	}
-	if cutIdx < 0 || cutIdx > len(branch) {
-		return "", "", 0, nil
-	}
-
-	end := cutIdx // summarise only what the cut drops, never the kept tail
-	if cutIdx < len(branch) {
-		if e := &branch[cutIdx]; e.Type == session.TypeMessage {
-			firstKept = e.ID
-		}
-	}
-	// cutIdx == len(branch): keep nothing; a summary-only compaction
-
-	summarisable := summarisableEntries(branch, spanStart, end)
-	if len(summarisable) == 0 {
-		return "", firstKept, 0, nil // nothing new to summarise; cut alone is the plan
-	}
-
-	var prev string
-	for i := range branch {
-		if branch[i].Type != session.TypeCompaction {
-			continue
-		}
-		var cd session.CompactionData
-		if err := branch[i].Decode(&cd); err == nil && cd.Summary != "" {
-			prev = cd.Summary // newest prior summary merges into this one
-		}
-	}
-
-	var spanTokens int
-	for _, e := range summarisable {
-		spanTokens += entryTokens(e)
-	}
-
-	prompt := buildPrompt(summarisable, prev, opts.Instructions)
-	req := llm.Request{
-		Model:     model,
-		System:    llm.BlockList{llm.TextBlock{Text: summarizerSystem}},
-		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: prompt}}}},
-		MaxTokens: summarizeBudget(model, spanTokens),
-	}
-	out, err := run(ctx, req)
-	if err != nil {
-		return "", firstKept, 0, err
-	}
-	summary = strings.TrimSpace(out)
-	if summary == "" {
-		return "", firstKept, 0, errors.New("summariser returned an empty summary")
-	}
-	return summary, firstKept, countMessages(summarisable), nil
-}
-
-// summarisableEntries returns the message entries in [spanStart, end) that a new
-// summary should cover.
-func summarisableEntries(branch []session.Entry, spanStart, end int) []session.Entry {
+// summarise folds the message entries in [spanStart, end) into a checkpoint with
+// run, merging any previous summary on the branch. It returns the summary text and
+// how many messages it covered; an empty summary with no error means there was
+// nothing new to fold. stubs are replacement markers for the span, applied so the
+// summariser reads what compaction already reduced rather than raw output.
+func summarise(ctx context.Context, branch []session.Entry, spanStart, end int, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (summary string, summarized int, err error) {
+	prev := priorSummary(branch)
 	if spanStart < 0 {
 		spanStart = 0
 	}
 	if end > len(branch) {
 		end = len(branch)
 	}
-	if spanStart >= end {
-		return nil
+	if spanStart >= end { // nothing new to fold
+		return "", 0, nil
 	}
-	return branch[spanStart:end]
+	entries := branch[spanStart:end]
+
+	var span int
+	for _, e := range entries {
+		span += entryTokens(e)
+	}
+
+	maxOut := summarizeBudget(model, span, tokens.EstimateText(prev, tokens.KindProse))
+	prompt, kept, err := fitPrompt(entries, prev, opts.Instructions, stubs, model, maxOut)
+	if err != nil {
+		return "", 0, err
+	}
+	req := llm.Request{
+		Model:     model,
+		System:    llm.BlockList{llm.TextBlock{Text: summarizerSystem}},
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: prompt}}}},
+		MaxTokens: maxOut,
+	}
+	out, err := run(ctx, req)
+	if err != nil {
+		return "", 0, err
+	}
+	summary = strings.TrimSpace(out)
+	if summary == "" {
+		return "", 0, errors.New("summariser returned an empty summary")
+	}
+	return summary, kept, nil
+}
+
+// priorSummary returns the newest summary recorded on the branch, for merging.
+func priorSummary(branch []session.Entry) string {
+	for i := len(branch) - 1; i >= 0; i-- {
+		if branch[i].Type != session.TypeCompaction {
+			continue
+		}
+		var cd session.CompactionData
+		if err := branch[i].Decode(&cd); err == nil && cd.Summary != "" {
+			return cd.Summary
+		}
+	}
+	return ""
 }
 
 // countMessages reports how many message entries a span holds, for the notice.
@@ -170,11 +167,19 @@ func countMessages(entries []session.Entry) int {
 }
 
 // buildPrompt assembles one user message for the summariser: conversation tags,
-// a previous summary when merging, and any /compact focus instruction.
-func buildPrompt(entries []session.Entry, prev, instructions string) string {
+// a previous summary when merging, and any /compact focus instruction. dropped
+// notes inside the tags that the transcript is missing its oldest entries.
+func buildPrompt(entries []session.Entry, prev, instructions string, stubs []session.Stub, clip int, dropped bool) string {
 	var b strings.Builder
 	b.WriteString("<conversation>\n")
-	serialise(&b, entries)
+	if dropped {
+		b.WriteString("[earlier messages omitted]\n")
+	}
+	byCall := make(map[string]session.Stub, len(stubs))
+	for _, s := range stubs {
+		byCall[s.CallID] = s
+	}
+	serialise(&b, entries, byCall, clip)
 	b.WriteString("</conversation>\n\n")
 
 	instr := initialInstruction
@@ -190,8 +195,10 @@ func buildPrompt(entries []session.Entry, prev, instructions string) string {
 }
 
 // serialise flattens message entries to a text transcript the summariser reads as
-// data rather than a live thread.
-func serialise(b *strings.Builder, entries []session.Entry) {
+// data rather than a live thread, substituting any stub for its result. Thinking
+// is left out entirely and tool output is clipped to clip runes (0 for no clip);
+// user and assistant prose is never clipped, being the semantic payload.
+func serialise(b *strings.Builder, entries []session.Entry, stubs map[string]session.Stub, clip int) {
 	for _, e := range entries {
 		if e.Type != session.TypeMessage {
 			continue
@@ -205,7 +212,7 @@ func serialise(b *strings.Builder, entries []session.Entry) {
 		case llm.RoleUser:
 			for _, blk := range m.Content {
 				if tr, ok := blk.(llm.ToolResultBlock); ok {
-					fmt.Fprintf(b, "[Tool result]: %s\n", strutil.Clip(resultText(tr), 2048))
+					fmt.Fprintf(b, "[Tool result]: %s\n", clipTo(stubbedText(tr, stubs), clip))
 				}
 			}
 			if t := userPlain(m); t != "" {
@@ -218,12 +225,8 @@ func serialise(b *strings.Builder, entries []session.Entry) {
 					if strings.TrimSpace(c.Text) != "" {
 						b.WriteString("[Assistant]: " + c.Text + "\n")
 					}
-				case llm.ThinkingBlock:
-					if strings.TrimSpace(c.Text) != "" {
-						b.WriteString("[Assistant thinking]: " + strutil.Clip(c.Text, 1024) + "\n")
-					}
 				case llm.ToolCallBlock:
-					fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, strutil.Clip(string(c.Input), 512))
+					fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, clipTo(string(c.Input), capCallInput(clip)))
 				}
 			}
 		default:
@@ -232,37 +235,106 @@ func serialise(b *strings.Builder, entries []session.Entry) {
 	}
 }
 
-// summarizeBudget sizes the summariser output for a span of spanTokens: a
-// fraction of the response reserve, capped below the span so a summary can
-// always come out smaller than what it replaces.
-func summarizeBudget(model llm.Model, spanTokens int) int {
-	reserve := tokensReserve(model)
-	maxOut := model.MaxOutput
-	if maxOut <= 0 {
-		maxOut = reserve
+// stubbedText returns what a tool result contributes to the transcript: its stub
+// replacement when the plan has one.
+func stubbedText(tr llm.ToolResultBlock, stubs map[string]session.Stub) string {
+	text := resultText(tr)
+	s, ok := stubs[tr.CallID]
+	if ok && s.Text != "" {
+		return s.Text
 	}
-	budget := min(reserve*8/10, maxOut)          // 80% of the response reservation
-	budget = min(budget, max(256, spanTokens/2)) // below the span it replaces
-	return max(budget, 256)
+	return text
 }
 
-// lastUserTurn returns the branch index of the most recent real user prompt, or
-// -1 when the branch has none.
-func lastUserTurn(branch []session.Entry) int {
-	for i := len(branch) - 1; i >= 0; i-- {
-		e := &branch[i]
-		if e.Type != session.TypeMessage {
-			continue
-		}
-		var md session.MessageData
-		if err := e.Decode(&md); err != nil || md.Message.Role != llm.RoleUser {
-			continue
-		}
-		if !llm.OnlyToolResults(md.Message.Content) {
-			return i
+// clipLadder is tried in order until the transcript fits the model window. Zero
+// keeps tool output whole, which is the normal outcome: serialisation already
+// compresses a branch several-fold before any clipping.
+var clipLadder = []int{0, 8192, 4096, 2048, 1024, 512}
+
+// clipTo truncates to n runes, or returns s whole when n is not positive.
+func clipTo(s string, n int) string {
+	if n <= 0 {
+		return s
+	}
+	return strutil.Clip(s, n)
+}
+
+// capCallInput bounds a tool call's JSON input, which is argument shape rather
+// than output and never needs the full allowance.
+func capCallInput(clip int) int {
+	if clip <= 0 || clip > 512 {
+		return 512
+	}
+	return clip
+}
+
+// fitPrompt builds the summariser prompt at the largest clip that leaves room for
+// a maxOut-token reply. Clipping is a safety valve, not a default: compaction
+// fires near the top of the window, so a span with no structural compressibility
+// plus its summary can overflow, and an oversized request would fail the session
+// exactly when it most needs to shrink.
+func fitPrompt(entries []session.Entry, prev, instructions string, stubs []session.Stub, model llm.Model, maxOut int) (prompt string, kept int, err error) {
+	avail := promptBudget(model, maxOut)
+	fits := func(p string) bool {
+		return avail <= 0 || tokens.EstimateText(p, tokens.KindCode) <= avail
+	}
+
+	tightest := clipLadder[len(clipLadder)-1]
+	for _, clip := range clipLadder { // the first rung keeps output whole
+		prompt = buildPrompt(entries, prev, instructions, stubs, clip, false)
+		if fits(prompt) {
+			return prompt, countMessages(entries), nil // the common case returns on the first build
 		}
 	}
-	return -1
+
+	// even the tightest clip busts: drop the oldest entries before giving up,
+	// rather than send a request the provider will reject. Dropping must never
+	// empty the transcript into a "summary of nothing" prompt.
+	for len(entries) > 0 {
+		entries = entries[len(entries)/4+1:]
+		if len(entries) == 0 { // exhausted; fall through to the clipped-prior tail
+			break
+		}
+		prompt = buildPrompt(entries, prev, instructions, stubs, tightest, true)
+		if fits(prompt) {
+			return prompt, countMessages(entries), nil
+		}
+	}
+	if prev != "" { // a clipped checkpoint still merges; a rejected request does not
+		prompt = buildPrompt(entries, strutil.Clip(prev, max(avail/2, 256)), instructions, stubs, tightest, true)
+		if fits(prompt) {
+			return prompt, countMessages(entries), nil
+		}
+	}
+	return "", 0, errors.New("compact: summariser prompt does not fit the model window")
+}
+
+// promptBudget reports how many tokens the summariser user message may occupy:
+// the window less the reply, the system block that rides beside it, and a margin
+// for estimator error. Only the system block is subtracted — the instruction and
+// any previous summary live inside the message being measured. Zero means the
+// window is unknown and no bound applies.
+func promptBudget(model llm.Model, maxOut int) int {
+	if model.ContextWindow <= 0 {
+		return 0
+	}
+	system := tokens.EstimateText(summarizerSystem, tokens.KindProse)
+	margin := max(512, model.ContextWindow/64)
+	return model.ContextWindow - maxOut - system - margin
+}
+
+// summarizeBudget sizes the summariser output for a span of span tokens plus prev:
+// capped by what the model can emit and by everything the call replaces (the prior
+// summary folded in), and at least minSummaryTokens so a merged checkpoint is never
+// amputated, floored against a quarter of the compaction point.
+func summarizeBudget(model llm.Model, span, prev int) int {
+	emitCap := model.MaxOutput
+	if emitCap <= 0 {
+		emitCap = tokensReserve(model)
+	}
+	return min(emitCap,
+		max(minSummaryTokens, compactAt(model)/4),
+		max(minSummaryTokens, span+prev))
 }
 
 // userPlain extracts the plain text blocks of a prompt message.

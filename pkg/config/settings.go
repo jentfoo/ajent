@@ -57,11 +57,16 @@ type Limit struct {
 	Bytes int `json:"bytes,omitempty"`
 }
 
-// Compaction tunes automatic context reduction. Threshold is the fraction of
-// the window (or an absolute token count) at which it fires.
+// Compaction tunes automatic context reduction. Threshold is the fraction of the
+// window (or an absolute token count) at which it fires. MinSteps and
+// VerbatimFraction bound the recent work a compaction keeps verbatim: at least
+// MinSteps steps whatever they weigh, extended with older steps while the kept
+// region stays within VerbatimFraction of the threshold.
 type Compaction struct {
-	Auto      bool    `json:"auto,omitzero"`
-	Threshold float64 `json:"threshold,omitzero"`
+	Auto             bool    `json:"auto,omitzero"`
+	Threshold        float64 `json:"threshold,omitzero"`
+	MinSteps         int     `json:"minSteps,omitzero"`
+	VerbatimFraction float64 `json:"verbatimFraction,omitzero"`
 }
 
 // Subagent configures research sub-agents.
@@ -88,6 +93,8 @@ type Permissions struct {
 // defaultsJSON is layer one, the compiled-in configuration. Keeping it a JSON
 // literal rather than struct zero values lets Explain report "(default)" as an
 // ordinary source and mirrors today's constants exactly.
+// Its compaction minSteps/verbatimFraction (2 / 0.1) twin pkg/compact's
+// defaultMinSteps/defaultVerbatimDivisor; the two must agree.
 const defaultsJSON = `{
   "reasoning": { "level": "medium", "retain": "wholeTurn", "show": true },
   "tools": {
@@ -103,7 +110,7 @@ const defaultsJSON = `{
     }
   },
   "permissions": { "mode": "allow-read" },
-  "compaction": { "auto": true, "threshold": 0.8 },
+  "compaction": { "auto": true, "threshold": 0.8, "minSteps": 2, "verbatimFraction": 0.1 },
   "subagent": { "maxConcurrent": 8 },
   "ui": { "render": "auto", "theme": "dark" }
 }`
