@@ -65,8 +65,12 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 					continue
 				}
 				// system-injected context (a staged `User Ran:` result or survey text) is not a
-				// typed prompt: it never opens or echoes as its own turn on replay.
+				// typed prompt: it never opens or echoes as its own turn on replay. The ones
+				// marked replayed still belong in restored scrollback, drawn as their own block.
 				if md.Injected {
+					if md.Replayed {
+						replayInjected(e.ID, userText(m), sink)
+					}
 					continue
 				}
 				endTurn() // close the previous turn with its accumulated state first
@@ -104,6 +108,18 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 		}
 	}
 	endTurn()
+}
+
+// replayInjected draws one replayed injected message as its own block: the first
+// line is its label and the remainder its body, so it commits through the same
+// head-and-collapse rules as a tool result rather than dumping in full.
+func replayInjected(id, text string, sink agent.Sink) {
+	label, body, _ := strings.Cut(text, "\n")
+	if strings.TrimSpace(label) == "" {
+		return
+	}
+	body = strings.TrimLeft(body, "\n") // the blank line separating label from body
+	sink.ToolStart(agent.ToolCall{ID: id}, label)(agent.ToolResult{Display: body})
 }
 
 // foldResults resolves every tool result in content against pending calls. Each

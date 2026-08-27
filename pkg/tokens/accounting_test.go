@@ -222,6 +222,60 @@ func TestAccountingSetSubmit(t *testing.T) {
 	})
 }
 
+func TestAccountingSetStaged(t *testing.T) {
+	t.Parallel()
+
+	a := New(llm.Model{ID: "m1", Provider: "p"})
+
+	t.Run("staged_counts_toward_context", func(t *testing.T) {
+		a.SetStaged(4000)
+		cs := a.Context()
+		assert.Equal(t, 4000, cs.Used)
+		assert.True(t, cs.Estimated)
+	})
+	t.Run("replaces_rather_than_accumulates", func(t *testing.T) {
+		a.SetStaged(4000)
+		a.SetStaged(900) // a second report supersedes the first
+		assert.Equal(t, 900, a.Context().Used)
+	})
+	t.Run("cleared_on_flush", func(t *testing.T) {
+		a.SetStaged(900)
+		a.SetSubmit(900) // the flush hands the same results to the submission
+		a.SetStaged(0)
+		assert.Equal(t, 900, a.Context().Used)
+	})
+}
+
+func TestAccountingPreservesStaged(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "m1", Provider: "p", ContextWindow: 32000}
+	other := llm.Model{ID: "m2", Provider: "p", ContextWindow: 64000}
+
+	// staged `!` output has not ridden any request yet, so a recount or a model
+	// switch has nothing to say about it and must not drop it from the bar
+	tests := []struct {
+		name string
+		op   func(a *Accounting)
+		want int
+	}{
+		{"rebase", func(a *Accounting) { a.Rebase(5000) }, 5700},
+		{"reseed", func(a *Accounting) { a.Reseed(5000) }, 5700},
+		{"set_model", func(a *Accounting) { a.SetModel(other) }, 700},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			a := New(m)
+			a.Add(2000)
+			a.SetStaged(700)
+			tc.op(a)
+			cs := a.Context()
+			assert.Equal(t, tc.want, cs.Used)
+			assert.True(t, cs.Estimated)
+		})
+	}
+}
+
 func TestAccountingReseedKeepsSpendResetsContext(t *testing.T) {
 	t.Parallel()
 

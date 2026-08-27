@@ -492,6 +492,18 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// the next prompt; prompts expand @ refs and steer the agent.
 	cmds := command.NewRegistry()
 	stager := command.NewStager(toolsReg, sink)
+	// `!` output is context the next prompt will carry, so the bar counts it from
+	// the moment the command finishes rather than waiting for a submission
+	stager.SetOnChange(func(est int) {
+		if st.Tokens == nil || len(editSinks) == 0 {
+			return
+		}
+		st.Tokens.SetStaged(est)
+		pushContext()
+	})
+	if rec != nil {
+		rec.discardStaged = stager.Discard
+	}
 	pump := make(chan pumpLine, 16)
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
@@ -767,7 +779,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 // the estimated tokens its @ reads will add once they land. An already-assembled
 // input (the /init survey) keeps its own Before and uses rest as a short label,
 // since its instruction is far too long to echo.
-func promptInput(line pumpLine, before []llm.Message, expander *refs.Expander, warn func(string)) (agent.Input, string, int) {
+func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expander, warn func(string)) (agent.Input, string, int) {
 	if line.input != nil {
 		in := *line.input
 		in.Before = append(before, in.Before...)
@@ -793,7 +805,7 @@ func promptInput(line pumpLine, before []llm.Message, expander *refs.Expander, w
 func submitEstimate(in agent.Input, pending int) int {
 	est := tokens.EstimateText(in.Text, tokens.KindProse) + pending
 	if len(in.Before) > 0 {
-		est += tokens.EstimateMessages(in.Before)
+		est += tokens.EstimateMessages(agent.BeforeMessages(in.Before))
 	}
 	return est
 }
@@ -1075,6 +1087,9 @@ type sessRec struct {
 	// started is the driver's tool-block-committed flag, shared so a rewind seeds
 	// its base with the same rule the pump uses. Nil until main wires it.
 	started *bool
+	// discardStaged drops shell results staged against the branch a rewind leaves,
+	// so they never ride the new branch's first prompt. Nil until main wires it.
+	discardStaged func()
 }
 
 // extractResume scans argv for a --resume token and its optional trailing session
@@ -1590,6 +1605,9 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	saveModel := r.liveModel(ag)
 	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
 		return
+	}
+	if r.discardStaged != nil {
+		r.discardStaged() // staged against the branch just left; not this one's to carry
 	}
 	r.restoreForkModel(ui, ag, reg, saveModel)
 

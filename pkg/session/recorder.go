@@ -25,6 +25,7 @@ func (r *Recorder) Message(info agent.MessageInfo) {
 		Stop:     info.Stop,
 		Usage:    info.Usage,
 		Injected: info.Injected,
+		Replayed: info.Replayed,
 	})
 }
 

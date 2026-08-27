@@ -94,8 +94,15 @@ Output:
 The body reuses the real `bash` tool's result text verbatim — status prefix,
 interruption marker, timeout note and truncation spill pointer all come from the
 tool path itself, so what the model sees is byte-for-byte honest about how the
-command ended. The user role plus the `User Ran:` voice *is* the provenance marker;
-no separate metadata rides along. A `!!` run sends nothing to the model.
+command ended. The user role plus the `User Ran:` voice *is* the provenance marker
+the model reads. A `!!` run sends nothing to the model.
+
+The `Input.Before` entry carrying it is an `agent.MessageInfo`, which is where the
+one piece of metadata does ride: `Replayed`. It marks the message as injected
+context that still belongs on screen, so a resume or rewind redraws the run above
+the prompt it fed instead of showing a prompt whose premise has vanished. Replay
+draws it as its own block — first line the label, remainder the body — collapsed
+through the normal output head rather than shown whole as the live run was.
 
 ---
 

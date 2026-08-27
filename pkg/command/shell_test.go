@@ -1,6 +1,7 @@
 package command
 
 import (
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -98,13 +99,13 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 	require.Len(t, msgs, 2, "one user message per run")
 
 	// each run lands as a single user text message in submission order
-	assert.Equal(t, llm.RoleUser, msgs[0].Role)
-	assert.Contains(t, resultText(msgs[0].Content), "User Ran: echo one")
-	assert.Contains(t, resultText(msgs[0].Content), "Output:")
-	assert.Contains(t, resultText(msgs[0].Content), "one")
-	assert.Equal(t, llm.RoleUser, msgs[1].Role)
-	assert.Contains(t, resultText(msgs[1].Content), "User Ran: echo two")
-	_, ok := msgs[0].Content[0].(llm.TextBlock)
+	assert.Equal(t, llm.RoleUser, msgs[0].Message.Role)
+	assert.Contains(t, resultText(msgs[0].Message.Content), "User Ran: echo one")
+	assert.Contains(t, resultText(msgs[0].Message.Content), "Output:")
+	assert.Contains(t, resultText(msgs[0].Message.Content), "one")
+	assert.Equal(t, llm.RoleUser, msgs[1].Message.Role)
+	assert.Contains(t, resultText(msgs[1].Message.Content), "User Ran: echo two")
+	_, ok := msgs[0].Message.Content[0].(llm.TextBlock)
 	require.True(t, ok, "the staged result is a plain text block, not a tool result")
 }
 
@@ -163,7 +164,7 @@ func TestStagerNonZeroExitStagesAsError(t *testing.T) {
 	require.Len(t, msgs, 1)
 	// a non-zero exit is an ordinary staged result: the model sees the exit code
 	// in the Output section, but it is not flagged as a turn failure
-	assert.Contains(t, resultText(msgs[0].Content), "exit status 3")
+	assert.Contains(t, resultText(msgs[0].Message.Content), "exit status 3")
 }
 
 func TestStagerCancelStagesPartial(t *testing.T) {
@@ -179,7 +180,7 @@ func TestStagerCancelStagesPartial(t *testing.T) {
 	require.Len(t, msgs, 1)
 
 	// a cancelled command stages an interrupted marker so the model sees it was cut off
-	assert.Contains(t, resultText(msgs[0].Content), "interrupted by user")
+	assert.Contains(t, resultText(msgs[0].Message.Content), "interrupted by user")
 }
 
 func TestStagerExcludedRunFlushesNothingAndDoesNotWait(t *testing.T) {
@@ -245,10 +246,89 @@ func TestShellUserMessage(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			msg := shellUserMessage(c.cmd, agent.ToolResult{Content: c.content})
-			assert.Equal(t, llm.RoleUser, msg.Role)
-			assert.Contains(t, resultText(msg.Content), c.want)
+			assert.Equal(t, llm.RoleUser, msg.Message.Role)
+			assert.Contains(t, resultText(msg.Message.Content), c.want)
 		})
 	}
+}
+
+// TestStagerStagedEstimate covers the token estimate the stager reports so the
+// context bar counts `!` output from the moment it lands, not at the next submit.
+func TestStagerStagedEstimate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reports_after_run", func(t *testing.T) {
+		s, _ := newShellStager(t)
+		var mu sync.Mutex
+		var got []int
+		s.SetOnChange(func(est int) { mu.Lock(); got = append(got, est); mu.Unlock() })
+
+		s.Run("echo "+strings.Repeat("payload ", 200), false)
+		require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
+
+		mu.Lock()
+		last := got[len(got)-1]
+		mu.Unlock()
+		assert.Positive(t, last)
+	})
+	t.Run("excluded_run_not_counted", func(t *testing.T) {
+		s, _ := newShellStager(t)
+		var last int
+		var mu sync.Mutex
+		s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
+
+		s.Run("echo "+strings.Repeat("secret ", 200), true) // `!!` never reaches context
+		require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
+
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Zero(t, last)
+	})
+	t.Run("flush_clears", func(t *testing.T) {
+		s, _ := newShellStager(t)
+		var last int
+		var mu sync.Mutex
+		s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
+
+		s.Run("echo hi", false)
+		require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
+		mu.Lock()
+		staged := last
+		mu.Unlock()
+		require.Positive(t, staged)
+
+		// the flushed results become the submission's to account for
+		require.Len(t, s.Flush(t.Context()), 1)
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Zero(t, last)
+	})
+}
+
+// TestStagerDiscard asserts a branch switch drops staged results rather than
+// letting them ride the new branch's first prompt.
+func TestStagerDiscard(t *testing.T) {
+	t.Parallel()
+
+	s, _ := newShellStager(t)
+	var last int
+	var mu sync.Mutex
+	s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
+
+	s.Run("echo hi", false)
+	s.Run("sleep 30", false)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return last > 0
+	}, 3*time.Second, time.Millisecond)
+
+	s.Discard()
+	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
+	assert.Empty(t, s.Flush(t.Context()))
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Zero(t, last)
 }
 
 // blockText builds a single-text-block list.

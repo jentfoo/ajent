@@ -12,6 +12,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
@@ -22,9 +23,10 @@ type Stager struct {
 	reg  *tools.Registry
 	sink agent.Sink
 
-	mu     sync.Mutex
-	runs   []*stageRun // submission order
-	nextID int
+	mu       sync.Mutex
+	runs     []*stageRun // submission order
+	nextID   int
+	onChange func(est int) // reports the staged token estimate as it moves; nil until wired
 }
 
 // stageRun is one staged shell command. Its finished result becomes one user
@@ -45,6 +47,32 @@ type stageRun struct {
 // streams output to sink like an agent-initiated bash call.
 func NewStager(reg *tools.Registry, sink agent.Sink) *Stager {
 	return &Stager{reg: reg, sink: sink}
+}
+
+// SetOnChange registers the hook told how many tokens the staged results now
+// carry, so the context bar counts `!` output while it waits for a prompt. It
+// fires as each run completes and again whenever the staged set is emptied.
+func (s *Stager) SetOnChange(fn func(est int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onChange = fn
+}
+
+// reportStaged recomputes the staged estimate and hands it to the change hook.
+func (s *Stager) reportStaged() {
+	s.mu.Lock()
+	fn := s.onChange
+	var msgs []llm.Message
+	for _, r := range s.runs {
+		// an excluded run never reaches context, and an unfinished one has no result yet
+		if !r.excluded && isDone(r.done) {
+			msgs = append(msgs, shellUserMessage(r.cmd, r.result).Message)
+		}
+	}
+	s.mu.Unlock()
+	if fn != nil {
+		fn(tokens.EstimateMessages(msgs))
+	}
 }
 
 // Run starts cmd executing immediately. A disabled bash tool is a refusal
@@ -88,19 +116,24 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	done := s.startTool(call, run.label)
 
 	go func() {
-		defer close(run.done)
-		res, err := tool.Execute(runCtx, call, out)
-		if res.Content == nil {
-			res.Content = llm.BlockList{}
-		}
-		if err != nil && !res.IsError {
-			res.IsError = true
-			if len(res.Content) == 0 {
-				res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
+		// the inner scope closes run.done before the report, so reportStaged already
+		// sees this run as finished and counts its output
+		func() {
+			defer close(run.done)
+			res, err := tool.Execute(runCtx, call, out)
+			if res.Content == nil {
+				res.Content = llm.BlockList{}
 			}
-		}
-		run.result = res
-		done(res)
+			if err != nil && !res.IsError {
+				res.IsError = true
+				if len(res.Content) == 0 {
+					res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
+				}
+			}
+			run.result = res
+			done(res)
+		}()
+		s.reportStaged() // the output is now context the next prompt will carry
 	}()
 }
 
@@ -118,6 +151,19 @@ func (s *Stager) startTool(call agent.ToolCall, label string) func(agent.ToolRes
 // tool history to its head; user-initiated `!`/`!!` shells show everything.
 type fullToolStarter interface {
 	ToolStartFull(call agent.ToolCall, label string) func(agent.ToolResult)
+}
+
+// Discard cancels every still-running staged command and drops all staged
+// results. A rewind or fork rebuilds context from a different branch point, so a
+// command staged against the abandoned one must not ride the next prompt.
+func (s *Stager) Discard() {
+	s.mu.Lock()
+	for _, r := range s.runs {
+		r.cancel()
+	}
+	s.runs = nil
+	s.mu.Unlock()
+	s.reportStaged()
 }
 
 // Pending reports whether any staged command is still running.
@@ -145,7 +191,7 @@ func (s *Stager) Cancel() {
 // message: finished ones are dropped outright and still-running ones stay in
 // s.runs so Pending/Cancel keep tracking them — their output goes nowhere, so
 // Flush must not hold the next prompt hostage waiting for them.
-func (s *Stager) Flush(ctx context.Context) []llm.Message {
+func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 	s.mu.Lock()
 	// included runs are taken out for flushing; excluded finished ones drop, and
 	// still-running excluded stay so Pending/Cancel keep tracking them.
@@ -153,7 +199,7 @@ func (s *Stager) Flush(ctx context.Context) []llm.Message {
 	s.runs = bulk.SliceFilterInPlace(func(r *stageRun) bool { return r.excluded && !isDone(r.done) }, s.runs)
 	s.mu.Unlock()
 
-	var out []llm.Message
+	var out []agent.MessageInfo
 	for i := range included {
 		r := included[i]
 		select {
@@ -164,15 +210,18 @@ func (s *Stager) Flush(ctx context.Context) []llm.Message {
 			s.mu.Lock()
 			s.runs = append(s.runs, included[i:]...)
 			s.mu.Unlock()
+			s.reportStaged()
 			return out
 		}
 		out = append(out, shellUserMessage(r.cmd, r.result))
 	}
+	s.reportStaged() // the flushed results are the submission's to account for now
 	return out
 }
 
 // shellUserMessage renders one completed run as the user message the model sees.
-func shellUserMessage(cmd string, res agent.ToolResult) llm.Message {
+// It is marked replayed so a resume or rewind redraws it above the prompt it fed.
+func shellUserMessage(cmd string, res agent.ToolResult) agent.MessageInfo {
 	var sb strings.Builder
 	sb.WriteString("User Ran: ")
 	sb.WriteString(cmd)
@@ -182,7 +231,10 @@ func shellUserMessage(cmd string, res agent.ToolResult) llm.Message {
 		text = "(no output)"
 	}
 	sb.WriteString(text)
-	return llm.Message{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: sb.String()}}}
+	return agent.MessageInfo{
+		Message:  llm.Message{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: sb.String()}}},
+		Replayed: true,
+	}
 }
 
 // resultText concatenates the non-empty TextBlocks in content. The bash tool

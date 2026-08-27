@@ -269,8 +269,19 @@ returns, cap marker included.
 
 **Staging onto context.** The command text and its result are *not* sent to the
 model immediately. They sit in the pending slot ahead of the next user message.
-Running `!` for exploration costs no tokens and never interrupts an in-flight
-turn — it only becomes visible when the user next speaks.
+Running `!` never interrupts an in-flight turn — it only becomes visible to the
+model when the user next speaks. It is not free, though, and the context bar says
+so: as each run finishes the stager reports the staged total through its
+`SetOnChange` hook, which main feeds to `Accounting.SetStaged`. That term behaves
+like the editor buffer (`composing`) — it survives a rebase or a model switch,
+because staged output has not ridden any request yet. Excluded (`!!`) runs and
+still-running ones count zero: the former never reaches context, the latter has no
+result to measure.
+
+**Discarding.** A rewind switches to a different branch point, so anything staged
+against the branch just left must not ride the new one's first prompt. `rewind`
+calls `Stager.Discard` after `switchState` succeeds: it cancels every in-flight run,
+drops the staged set and reports zero back to the bar.
 
 **Flush timing.** On the next normal submit the pump first `Flush`es the stager
 — which waits for every included staged command to finish, in submission order —
@@ -288,7 +299,12 @@ truncation marker already baked in by the tool itself — honest because it reus
 the same bytes the model would see from a real call. Empty output renders
 `(no output)`. The message is appended as **injected** context (see
 agent-loop-design), so prompt recall excludes it; dropping the synthetic pair also
-removes the Anthropic duplicate-`tool_use`-id hazard for staged runs.
+removes the Anthropic duplicate-`tool_use`-id hazard for staged runs. It is also
+marked **replayed**, the one kind of injected context that belongs in restored
+scrollback: a resume or rewind redraws it above the prompt it fed rather than
+leaving the model holding something the user can no longer see (see
+session-design). Once flushed, `Flush` reports the staged total back to zero — the
+submission's estimate owns those tokens from then on.
 
 **Excluded runs (`!!`).** `Run(cmd, true)` executes and displays exactly like a
 staged run — same bash path, same streaming sink, same barrier exemption — but its

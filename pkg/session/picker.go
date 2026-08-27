@@ -282,6 +282,10 @@ func rowFor(e Entry) *PickerRow {
 				return nil
 			}
 			return &PickerRow{ID: e.ID, Kind: RowTool, Label: lbl}
+		} else if md.Injected {
+			// system-injected context is not a typed prompt: rewinding onto it would
+			// pre-fill the editor with a staged shell result rather than a message
+			return nil
 		}
 		txt := strings.TrimSpace(userText(m))
 		if txt == "" {

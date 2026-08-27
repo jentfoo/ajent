@@ -117,9 +117,9 @@ func TestInitControllerStart(t *testing.T) {
 		second := h.awaitPump(t)
 
 		// Before stays in State, so a repeated tool_use id 400s every later request
-		ids := callIDs(first.input.Before)
+		ids := callIDs(agent.BeforeMessages(first.input.Before))
 		require.NotEmpty(t, ids)
-		for _, id := range callIDs(second.input.Before) {
+		for _, id := range callIDs(agent.BeforeMessages(second.input.Before)) {
 			assert.NotContains(t, ids, id)
 		}
 	})
@@ -346,8 +346,8 @@ func (t *initStub) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 func TestPromptInput(t *testing.T) {
 	t.Parallel()
 
-	staged := []llm.Message{llm.Text(llm.RoleUser, "staged shell result")}
-	surveyed := []llm.Message{llm.Text(llm.RoleUser, "survey pair")}
+	staged := []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "staged shell result"), Replayed: true}}
+	surveyed := []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "survey pair")}}
 
 	t.Run("assembled_input_skips_expansion", func(t *testing.T) {
 		var armed int
@@ -420,7 +420,7 @@ func TestSubmitEstimate(t *testing.T) {
 	assert.Positive(t, textOnly)
 
 	withBefore := text
-	withBefore.Before = []llm.Message{llm.Text(llm.RoleUser, strings.Repeat("payload ", 200))}
+	withBefore.Before = []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, strings.Repeat("payload ", 200))}}
 	// injected pairs are the larger half of a survey; the bucket must count them
 	assert.Greater(t, submitEstimate(withBefore, 0), textOnly)
 

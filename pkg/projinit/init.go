@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -87,7 +88,12 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 	if existing {
 		text = distillUpdate
 	}
-	return agent.Input{Text: text, Before: before, Injected: true}, nil
+	// the survey's tool pairs are machinery, not conversation: they carry no
+	// replay mark, so a resume shows the distilled result rather than the survey
+	infos := bulk.SliceTransform(func(m llm.Message) agent.MessageInfo {
+		return agent.MessageInfo{Message: m}
+	}, before)
+	return agent.Input{Text: text, Before: infos, Injected: true}, nil
 }
 
 // startError distinguishes spawns that were refused from tools that were never

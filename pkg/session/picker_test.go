@@ -44,6 +44,28 @@ func TestPickerRows(t *testing.T) {
 		assert.Contains(t, rows[1].Label, "[bash]")
 	})
 
+	t.Run("injected_user_message_not_a_row", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickInjected("i1", "root", "User Ran: git status\n\nOutput:\nOn branch main"),
+			pickMsg("u1", "i1", llm.Text(llm.RoleUser, "what changed?")),
+		}
+
+		// a staged `!` result is not a typed prompt: rewinding onto it would
+		// pre-fill the editor with its whole output rather than a message
+		rows := PickerRows(entries)
+		require.Len(t, rows, 1)
+		assert.Equal(t, "u1", rows[0].ID)
+		assert.Equal(t, RowUser, rows[0].Kind)
+
+		// rewinding onto the prompt still keeps the staged result in context: its
+		// entry is the prompt's parent, so it stays on the branch
+		head, fill, ok := RewindTarget(entries, "u1")
+		require.True(t, ok)
+		assert.Equal(t, "i1", head)
+		assert.Equal(t, "what changed?", fill)
+	})
+
 	t.Run("tool_result_collapses_to_one_line", func(t *testing.T) {
 		m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
 			llm.ToolResultBlock{CallID: "c1", IsError: false,
@@ -199,6 +221,11 @@ func sessionOnly(id string) Entry {
 func pickMsg(id, parent string, m llm.Message) Entry {
 	return Entry{ID: id, ParentID: parent, Type: TypeMessage,
 		Data: mustJSON(MessageData{Message: m})}
+}
+
+func pickInjected(id, parent, text string) Entry {
+	return Entry{ID: id, ParentID: parent, Type: TypeMessage,
+		Data: mustJSON(MessageData{Message: llm.Text(llm.RoleUser, text), Injected: true, Replayed: true})}
 }
 
 func pickAssistText(id, parent, text string) Entry {

@@ -169,6 +169,13 @@ reads render under its echo, and releasing the reserve there would drop those re
 for the repaint between the two. `Settled` fires once everything the input carries
 has been appended, so `pending` already owns it.
 
+A **staged** bucket (`SetStaged`) is its counterpart for `!` shell output waiting
+on a prompt that has not been typed yet. The stager reports its total as each run
+finishes and again at `Flush`, where it drops to zero and the submitted bucket
+takes over — so the same bytes are never counted twice. Like `composing`, it
+survives `Rebase`, `Reseed` and `SetModel`: staged output has not ridden any
+request, so nothing the provider reports has anything to say about it.
+
 ### Step limit
 
 A runaway tool loop is bounded by the context window and compaction, not an
@@ -298,10 +305,14 @@ Two kinds of mid-turn input:
 - An `Input.Injected` flag marks system-provided context (sub-agent completion
   steers, permission-barrier notes) rather than a typed prompt. It rides onto the
   appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R / up
-  arrow) can exclude it; injected messages still appear in assembled context.
+  arrow) can exclude it; injected messages still appear in assembled context. A
+  `MessageInfo.Replayed` mark opts one back into restored scrollback — staged `!`
+  runs set it, so a resume redraws what the model is still carrying.
 - **`Input.Before` and `Input.After`** frame one input. Before is context that
-  predates the message — staged `!` output, `/init`'s survey — and is a plain
-  message slice appended ahead of it. After is context the message *asked for*: a
+  predates the message — staged `!` output, `/init`'s survey — and is a
+  `[]MessageInfo` appended ahead of it, so each entry carries its own marks
+  (`appendSteer` stamps `Injected` and preserves `Replayed`). After is context the
+  message *asked for*: a
   `func(ctx) []llm.Message` resolved once the user message has landed, appended
   behind it. The asymmetry is deliberate. `session.RewindTarget` rewinds a user
   prompt to its parent, so anything ahead of the prompt survives a rewind onto it

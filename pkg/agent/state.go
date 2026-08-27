@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
@@ -19,7 +20,7 @@ import (
 type Input struct {
 	Text      string
 	Blocks    llm.BlockList                       // extra content, appended after Text when non-empty
-	Before    []llm.Message                       // appended ahead of this input, in transcript order
+	Before    []MessageInfo                       // appended ahead of this input, in transcript order
 	After     func(context.Context) []llm.Message // appended behind it once it lands; nil is the normal case
 	Delivered func()                              // called once the message lands, ahead of After; nil is the normal case
 	Settled   func()                              // called once After has landed too; nil is the normal case
@@ -60,6 +61,12 @@ type MessageInfo struct {
 	Stop     llm.StopReason // assistant messages only
 	Usage    llm.Usage
 	Injected bool // system-injected context, excluded from prompt recall
+	Replayed bool // injected context that still belongs in restored scrollback
+}
+
+// BeforeMessages returns the bare messages of infos, in order.
+func BeforeMessages(infos []MessageInfo) []llm.Message {
+	return bulk.SliceTransform(func(mi MessageInfo) llm.Message { return mi.Message }, infos)
 }
 
 // ToolCall is one model-requested invocation handed to a Tool.

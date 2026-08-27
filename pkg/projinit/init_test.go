@@ -27,7 +27,7 @@ func TestSurvey(t *testing.T) {
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
 
-		names := toolNames(in.Before)
+		names := toolNames(agent.BeforeMessages(in.Before))
 		require.NotEmpty(t, names)
 		assert.Equal(t, "read", names[0])
 
@@ -65,7 +65,7 @@ func TestSurvey(t *testing.T) {
 
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
-		assert.Contains(t, strings.Join(resultTexts(in.Before), "\n"), "summary of sub-1")
+		assert.Contains(t, strings.Join(resultTexts(agent.BeforeMessages(in.Before)), "\n"), "summary of sub-1")
 	})
 
 	t.Run("existing_file_corrects", func(t *testing.T) {
@@ -78,7 +78,7 @@ func TestSurvey(t *testing.T) {
 		assert.Equal(t, distillUpdate, in.Text)
 		assert.NotEqual(t, distillNew, in.Text)
 		// both files are read, the existing one last so it sits nearest the instruction
-		reads := resultTexts(in.Before)
+		reads := resultTexts(agent.BeforeMessages(in.Before))
 		require.GreaterOrEqual(t, len(reads), 2)
 	})
 
@@ -108,7 +108,7 @@ func TestSurvey(t *testing.T) {
 
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
-		texts := strings.Join(resultTexts(in.Before), "\n")
+		texts := strings.Join(resultTexts(agent.BeforeMessages(in.Before)), "\n")
 		assert.Contains(t, texts, "summary of sub-1")
 		assert.NotContains(t, texts, "still running") // only the terminal pair is kept
 	})
@@ -123,7 +123,7 @@ func TestSurvey(t *testing.T) {
 
 		in, err := r.Survey(t.Context()) // a missing status must not spin the poll loop
 		require.NoError(t, err)
-		assert.Contains(t, strings.Join(resultTexts(in.Before), "\n"), "who knows")
+		assert.Contains(t, strings.Join(resultTexts(agent.BeforeMessages(in.Before)), "\n"), "who knows")
 	})
 
 	t.Run("refused_starts_are_named", func(t *testing.T) {
@@ -155,8 +155,8 @@ func TestSurvey(t *testing.T) {
 		require.NoError(t, err)
 
 		// Before stays in State; a repeated tool_use id 400s every later request
-		seen := bulk.SliceToSet(callIDs(first.Before))
-		ids := callIDs(second.Before)
+		seen := bulk.SliceToSet(callIDs(agent.BeforeMessages(first.Before)))
+		ids := callIDs(agent.BeforeMessages(second.Before))
 		require.NotEmpty(t, ids)
 		for _, id := range ids {
 			_, dup := seen[id]

@@ -64,7 +64,7 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 // lands and a Settled hook that clears accounting once its reads have too.
 func (s *steerQueue) join() agent.Input {
 	texts := make([]string, 0, len(s.items))
-	before := make([]llm.Message, 0, len(s.items))
+	before := make([]agent.MessageInfo, 0, len(s.items))
 	labels := make([]string, len(s.items))
 	var afters []func(context.Context) []llm.Message
 	var injected bool

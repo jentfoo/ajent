@@ -56,8 +56,8 @@ func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 	var cleared int
 	q := newSteerQueue(fake, func(int) {}, func() { cleared++ })
 
-	inA := agent.Input{Text: "first", Before: []llm.Message{{Role: llm.RoleUser}}}
-	inB := agent.Input{Text: "second", Before: []llm.Message{{Role: llm.RoleAssistant}}}
+	inA := agent.Input{Text: "first", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleUser}}}}
+	inB := agent.Input{Text: "second", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleAssistant}}}}
 	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
 	require.True(t, q.offer(inA, "label one", 3))
 	require.True(t, q.offer(inB, "label two", 4))

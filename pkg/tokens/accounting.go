@@ -9,7 +9,7 @@ import (
 // Accounting is a session's token ledger: per-response usage, running totals,
 // and how full the next request will be (Context).
 //
-// Used = promptExact + outputExact + factor*(pending+live+composing+submitted),
+// Used = promptExact + outputExact + factor*(pending+live+composing+staged+submitted),
 // where the estimate terms are raw and scaled by the calibration factor at read
 // time; they reset on each Response.
 type Accounting struct {
@@ -23,6 +23,7 @@ type Accounting struct {
 	pending     float64 // raw estimate of messages appended since the last report
 	live        float64 // raw estimate of the response currently streaming
 	composing   float64 // raw estimate of text being typed but not yet sent
+	staged      float64 // raw estimate of `!` shell output waiting to ride the next prompt
 	submitted   float64 // sent text not yet appended to a message; cleared when it lands
 	base        float64 // constant request overhead: system prompt + tool schemas
 
@@ -48,7 +49,7 @@ func (a *Accounting) SetModel(m llm.Model) {
 	defer a.mu.Unlock()
 	a.model = m
 	a.promptExact, a.outputExact = 0, 0
-	a.pending, a.live = 0, 0 // composing stays; the editor buffer is not a context term
+	a.pending, a.live = 0, 0 // composing and staged stay; neither is a context term yet
 }
 
 // SetWindow rebases the ledger onto m's window and reserve, keeping every context
@@ -68,6 +69,16 @@ func (a *Accounting) SetCompose(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.composing = float64(est)
+}
+
+// SetStaged sets the estimate of `!` shell output staged for the next prompt. It
+// replaces any prior staged value rather than accumulating, so it reflects only
+// what is currently waiting. Pass zero to clear it (e.g. once a flush hands the
+// results to a submission).
+func (a *Accounting) SetStaged(est int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.staged = float64(est)
 }
 
 // SetSubmit sets the estimate of text handed to the agent but not yet appended as
@@ -162,7 +173,7 @@ func (a *Accounting) Rebase(used int) {
 		a.promptExact = used
 	}
 	a.outputExact, a.pending, a.live = 0, 0, 0
-	// composing and submitted are untouched: neither is in what was counted, and
+	// composing, staged and submitted are untouched: none is in what was counted, and
 	// clearing them would drop the editor buffer from the bar until the next keystroke
 }
 
@@ -173,7 +184,7 @@ func (a *Accounting) Reseed(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.promptExact, a.outputExact = 0, 0
-	a.live = 0 // composing stays: the editor buffer is not part of est
+	a.live = 0 // composing and staged stay: neither is part of est
 	a.pending = float64(est)
 }
 
@@ -214,7 +225,7 @@ func (a *Accounting) Context() ContextState {
 	// every estimate bucket scales by the same per-model factor so composing text
 	// is corrected exactly like pending and live are.
 	factor := a.cal.Factor(a.model.Key())
-	est := a.pending + a.live + a.composing + a.submitted
+	est := a.pending + a.live + a.composing + a.staged + a.submitted
 	if a.promptExact == 0 {
 		est += a.base // an exact prompt report already includes system and schemas
 	}

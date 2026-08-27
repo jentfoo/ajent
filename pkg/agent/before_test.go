@@ -23,13 +23,13 @@ func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	a := newTestAgent(nil, p, nil)
 	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info.Message) }}
 
-	before := []llm.Message{
-		{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
+	before := []MessageInfo{
+		{Message: llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
 			ID: "c1", Name: "bash", Input: json.RawMessage(`{"command":"echo hi"}`),
-		}}},
-		{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
+		}}}},
+		{Message: llm.Message{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
 			CallID: "c1", Content: llm.BlockList{llm.TextBlock{Text: "hi"}},
-		}}},
+		}}}},
 	}
 	err := a.Prompt(t.Context(), Input{Before: before, Text: "what was that?"})
 	require.NoError(t, err)
@@ -121,8 +121,9 @@ func TestInputBeforeMarkedInjected(t *testing.T) {
 	a := newTestAgent(nil, p, nil)
 	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { infos = append(infos, info) }}
 
-	before := []llm.Message{
-		{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: "User Ran: echo hi"}}},
+	before := []MessageInfo{
+		{Message: llm.Message{Role: llm.RoleUser,
+			Content: llm.BlockList{llm.TextBlock{Text: "User Ran: echo hi"}}}, Replayed: true},
 	}
 	err := a.Prompt(t.Context(), Input{Before: before, Text: "next?"})
 	require.NoError(t, err)
@@ -137,6 +138,7 @@ func TestInputBeforeMarkedInjected(t *testing.T) {
 	}
 	require.NotNil(t, gotInjected)
 	assert.True(t, gotInjected.Injected)
+	assert.True(t, gotInjected.Replayed) // the mark survives appendSteer stamping Injected
 }
 
 // TestNewOutputForwardsToSink asserts NewOutput streams writes and diffs to the

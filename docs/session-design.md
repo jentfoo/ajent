@@ -225,8 +225,11 @@ Two consumers read the transcript back:
   spinner) *and* a separate `UserPrompt(text)` event that carries its words, so a
   renderer can echo them into committed history (the TUI routes it to
   `ui.UserEcho`; see `tui-design.md` "Rewind and resume"). Injected user-role
-  text (a staged `User Ran:` result, survey text) is not a typed prompt: Replay skips it,
-  so it never opens or echoes as its own turn. Tool results replay their
+  text (a staged `User Ran:` result, survey text) is not a typed prompt: Replay never
+  opens or echoes it as its own turn. The subset marked `Replayed` — staged `!` runs —
+  still belongs on screen, so Replay draws each as its own block: the first line is
+  its label, the remainder its body, committed through the same head/collapse rules
+  as a tool result. Everything else injected is skipped outright. Tool results replay their
   bodies through each call's completion hook (`Display`), bounded by the same output-head
   / collapse rules live streaming uses.
 

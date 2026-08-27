@@ -12,7 +12,8 @@ import (
 
 // replaySink records every call as a short token, for sequence assertions.
 type replaySink struct {
-	calls []string
+	calls  []string
+	labels []string
 }
 
 func (s *replaySink) TurnStart(i agent.TurnInfo) { s.calls = append(s.calls, "start:"+i.Input.Text) }
@@ -22,8 +23,10 @@ func (s *replaySink) EndThinking()               { s.calls = append(s.calls, "en
 func (s *replaySink) Text(d string)              { s.calls = append(s.calls, "text:"+d) }
 func (s *replaySink) EndText()                   { s.calls = append(s.calls, "end_text") }
 
-// ToolStart records the call and captures its completion hook.
-func (s *replaySink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResult) {
+// ToolStart records the call and captures its completion hook. The label is kept
+// separately so an injected block, which carries no tool name, is still checkable.
+func (s *replaySink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
+	s.labels = append(s.labels, label)
 	s.calls = append(s.calls, "tool:"+call.Name)
 	return func(res agent.ToolResult) {
 		s.calls = append(s.calls, fmt.Sprintf("result:%v|%s", res.IsError, res.Display))
@@ -124,6 +127,15 @@ func injectedUser(id, text string) Entry {
 	return Entry{ID: id, Type: TypeMessage,
 		Data: mustJSON(MessageData{
 			Injected: true,
+			Message:  llm.Text(llm.RoleUser, text),
+		})}
+}
+
+func replayedUser(id, text string) Entry {
+	return Entry{ID: id, Type: TypeMessage,
+		Data: mustJSON(MessageData{
+			Injected: true,
+			Replayed: true,
 			Message:  llm.Text(llm.RoleUser, text),
 		})}
 }
@@ -236,11 +248,41 @@ func TestReplay(t *testing.T) {
 			{ID: "s", Type: TypeSession},
 			msgUser("m1", llm.Text(llm.RoleUser, "real prompt")),
 			assistantText("a1", "one"),
-			injectedUser("i1", "User Ran: echo hi\n\nOutput:\none"), // staged `!` result
+			injectedUser("i1", "survey context"), // machinery, carrying no replay mark
 		}
 		s := &replaySink{}
 		Replay(branch, s, ReplayOptions{})
-		// the injected Ran message neither opens a turn nor echoes as typed text
+		// unmarked injected context neither opens a turn nor draws anything
 		assert.Equal(t, []string{"start:real prompt", "user:real prompt", "text:one", "end_text", "turn_end"}, s.calls)
+	})
+
+	t.Run("replayed_injected_draws_block", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			replayedUser("i1", "User Ran: echo hi\n\nOutput:\none"), // staged `!` result
+			msgUser("m1", llm.Text(llm.RoleUser, "real prompt")),
+			assistantText("a1", "one"),
+		}
+		s := &replaySink{}
+		Replay(branch, s, ReplayOptions{})
+
+		// the staged run draws above the prompt it fed, as its own block rather
+		// than a turn of its own: first line labels it, the rest is its body
+		assert.Equal(t, []string{
+			"tool:", "result:false|Output:\none",
+			"start:real prompt", "user:real prompt", "text:one", "end_text", "turn_end",
+		}, s.calls)
+		assert.Equal(t, []string{"User Ran: echo hi"}, s.labels)
+	})
+
+	t.Run("replayed_injected_blank_label_skipped", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			replayedUser("i1", "   "),
+			msgUser("m1", llm.Text(llm.RoleUser, "real prompt")),
+		}
+		s := &replaySink{}
+		Replay(branch, s, ReplayOptions{})
+		assert.Equal(t, []string{"start:real prompt", "user:real prompt", "turn_end"}, s.calls)
 	})
 }

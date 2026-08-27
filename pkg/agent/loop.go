@@ -260,8 +260,9 @@ func (a *Agent) drainSteer(ctx context.Context) {
 // rewind onto that text drops the context it asked for along with it.
 func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 	for _, in := range inputs {
-		for _, m := range in.Before {
-			a.append(MessageInfo{Message: m, Injected: true})
+		for _, mi := range in.Before {
+			mi.Injected = true
+			a.append(mi)
 		}
 		var blocks llm.BlockList
 		if in.Text != "" {

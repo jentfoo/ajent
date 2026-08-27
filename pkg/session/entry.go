@@ -63,6 +63,7 @@ type MessageData struct {
 	Stop     llm.StopReason `json:"stop,omitempty"` // assistant messages only
 	Usage    llm.Usage      `json:"usage,omitzero"`
 	Injected bool           `json:"injected,omitempty"` // system context excluded from prompt recall
+	Replayed bool           `json:"replayed,omitempty"` // injected context that still belongs in restored scrollback
 }
 
 // CompactionData records a context reduction without deleting anything.
