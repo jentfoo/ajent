@@ -884,6 +884,20 @@ func TestClassifierAdapterUnknownMCPSafelyUnsure(t *testing.T) {
 	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "ghost", Args: `{}`}))
 }
 
+// A truncated verdict must never be guessed from partial text: it falls back to
+// the approval dialog as unsure, same philosophy as TestRunSummaryCancelStopsDraining.
+func TestClassifierAdapterTruncatedVerdictIsUnsure(t *testing.T) {
+	t.Parallel()
+
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: truncatedStream("readonly")}}}
+	adapter := classifierAdapter{
+		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		model:       func() llm.Model { return llm.Model{ID: "p/m", Provider: "scripted"} },
+	}
+
+	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
+}
+
 func newScripted(reply string) *llm.ScriptedProvider {
 	return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: []llm.Event{
 		{Type: llm.EventMessageStart},

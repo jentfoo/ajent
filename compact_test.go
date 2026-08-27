@@ -34,6 +34,17 @@ func textStream(parts ...string) []llm.Event {
 	return out
 }
 
+// truncatedStream is one scripted provider turn emitting a single text message
+// that stops at the output token cap: the final done event carries StopMaxTokens.
+func truncatedStream(text string) []llm.Event {
+	return []llm.Event{
+		{Type: llm.EventTextStart, Index: 0},
+		{Type: llm.EventTextDelta, Index: 0, Text: text},
+		{Type: llm.EventTextEnd, Index: 0, Block: llm.TextBlock{Text: text}},
+		{Type: llm.EventDone, StopReason: llm.StopMaxTokens},
+	}
+}
+
 // testCompactor wires a compactor over a real transcript with a scripted provider.
 func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*compactor, *agent.State, *session.Writer) {
 	t.Helper()
@@ -408,6 +419,62 @@ func TestRunSummaryCancelStopsDraining(t *testing.T) {
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
+}
+
+// A response the provider stopped at its output token cap is partial and must be
+// rejected; an end_turn stop returns its text unchanged.
+func TestRunSummaryRejectsTruncatedResponses(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		turn []llm.Event
+	}{
+		{"max_tokens_stop_is_an_error", truncatedStream("## Goal\npar")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: tc.turn}}}
+			text, usage, err := runSummary(t.Context(), sp, llm.Request{})
+			require.ErrorIs(t, err, errTruncated)
+			assert.Empty(t, text)
+			assert.Zero(t, usage.Input+usage.Output)
+		})
+	}
+
+	t.Run("end_turn_stop_returns_text", func(t *testing.T) {
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textStream("## Goal\nfull")}}}
+		text, _, err := runSummary(t.Context(), sp, llm.Request{})
+		require.NoError(t, err)
+		assert.Equal(t, "## Goal\nfull", text)
+	})
+}
+
+// A truncated summariser response must fail the compaction loudly and leave the
+// transcript untouched rather than persist a partial checkpoint.
+func TestCompactorRejectsTruncatedSummary(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: truncatedStream("## Goal\npartial sum")},
+	}}
+	c, st, w := testCompactor(t, model, sp)
+	c.cfg = func() config.Compaction { return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1} }
+	var notices []string
+	c.notify = func(msg string, level agent.Level) { notices = append(notices, msg) }
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+	before := len(st.Messages)
+
+	did, err := c.run(t.Context(), agent.CompactManual, "")
+	assert.False(t, did)
+	require.ErrorIs(t, err, errTruncated)
+	require.Empty(t, compactionEntries(t, w))
+	joined := strings.Join(notices, "\n")
+	assert.Contains(t, joined, "compaction failed")
+	assert.Len(t, st.Messages, before) // state untouched
 }
 
 // The compaction.auto setting gates only the threshold trigger: a user turning

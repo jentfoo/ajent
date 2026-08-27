@@ -94,7 +94,7 @@ Produce ONE merged summary. RULES:
 )
 
 // minSummaryTokens floors a merged checkpoint's budget.
-const minSummaryTokens = 4096 // a merged checkpoint is never amputated by a hard cap
+const minSummaryTokens = 8192 // a merged checkpoint is never amputated by a hard cap
 
 // summarise folds the message entries in [spanStart, end) into a checkpoint with
 // run, merging any previous summary on the branch. It returns the summary text and

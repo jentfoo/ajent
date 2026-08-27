@@ -189,10 +189,12 @@ either the user's `/compact <instructions>` or, on an automatic run, a
 caller-supplied default through `compactor.focus` — which is how a plan phase
 keeps its summary on implementation work or review findings. An explicit
 `/compact <instructions>` always wins. The exact wording lives in `prompt-design.md`.
-`MaxTokens` is sized as a quarter of the compaction point, floored at 4096 so a
+`MaxTokens` is sized as a quarter of the compaction point, floored at 8192 so a
 merged checkpoint is never amputated, and capped by what the model can emit and
 by the tokens the call replaces (the prior summary plus the new span); a blank
-response is a failure, not "nothing to compact".
+response is a failure, not "nothing to compact", and so is a truncated one: the
+drain rejects a max_tokens stop reason before any text escapes, so an incomplete
+checkpoint can never be recorded or replayed.
 
 Serialising flattens history to text — `[User]:`, `[Assistant]:`,
 `[Assistant tool calls]: name(args)`, `[Tool result]:` — which is what makes "do
@@ -205,7 +207,9 @@ scheme would, and the `<summary>` user-message re-injection is what keeps a cut
 that lands mid-turn valid.
 
 The summariser's own usage folds into the session ledger so `/usage` counts it.
-The stream is driven with `llm.Accumulator`, the same as the agent loop.
+The stream is driven with `llm.Accumulator`, the same as the agent loop; a
+`max_tokens` stop reason ends the run with an error — partial text is never
+returned.
 
 Nothing else is needed to make compaction phase-aware. It already plans against
 the live head's branch, and under the plan workflow that branch *is* the phase
@@ -356,6 +360,12 @@ auto-compaction fire on that model instead of waiting for an overflow.
 
 **9. At most one overflow retry per turn.** A second overflow fails the turn
 rather than compacting in a loop.
+
+**10. A truncated summary is never recorded.** The driver's drain turns a
+`max_tokens` stop reason into an error before any text is returned; a checkpoint
+cut mid-section silently drops history nothing else preserves, so the run fails
+loudly and the transcript is left untouched. Detection relies on the provider
+reporting the stop reason.
 
 ## Conventions
 

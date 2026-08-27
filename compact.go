@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -180,8 +181,13 @@ func verbatimTokens(m llm.Model, fraction float64) int {
 	return int(float64(tokens.CompactAt(m)) * fraction)
 }
 
+// errTruncated reports a response the provider stopped at its output token cap;
+// its text is partial and must never be persisted or acted on.
+var errTruncated = errors.New("generation stopped at the output token cap: the response is incomplete")
+
 // runSummary drives one summarisation model call through an accumulator and
-// returns its assistant text plus the usage the provider reported.
+// returns its assistant text plus the usage the provider reported. A response
+// the provider stopped at its output token cap is an error, never partial text.
 func runSummary(ctx context.Context, p llm.Provider, req llm.Request) (string, llm.Usage, error) {
 	st, err := p.Stream(ctx, req)
 	if err != nil {
@@ -206,6 +212,9 @@ func runSummary(ctx context.Context, p llm.Provider, req llm.Request) (string, l
 	}
 	if err := acc.Err(); err != nil {
 		return "", llm.Usage{}, err
+	}
+	if acc.StopReason() == llm.StopMaxTokens {
+		return "", llm.Usage{}, errTruncated
 	}
 
 	var parts []string
