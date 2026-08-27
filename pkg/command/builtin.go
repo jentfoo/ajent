@@ -76,6 +76,11 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Handler:     settingsCommand,
 	})
 	r.Register(Command{
+		Name:        "update",
+		Description: "reinstall ajent from the latest release",
+		Handler:     updateCommand,
+	})
+	r.Register(Command{
 		Name:        "exit",
 		Description: "quit",
 		Handler: func(_ context.Context, _ string, c Console) error {

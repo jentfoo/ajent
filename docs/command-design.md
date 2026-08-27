@@ -154,6 +154,7 @@ dispatched, never on a command or a `!`.
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (`see config-design.md`); generic `enumRow` (string key from a fixed set), `modelRow` (key through the model picker) and `intRow` (numeric key with min/max validation — sub-agent concurrency, since an enum stores a string that won't unmarshal into an int field) builders cover permission modes and sub-agent settings |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation as a markdown table (id, status, elapsed, task), or cancel one (`sub-2`, bare `2`) / all; unknown verbs warn. Esc never cancels jobs — this is the only stop path |
+| `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice. The result is UI-only — never written to the transcript nor sent to the model (see below) |
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
 | `/plan-stop` | end the workflow and restore the model and tool set `/plan` found |
 | `/plan-status` | report the phase, round and both models |
@@ -161,8 +162,8 @@ dispatched, never on a command or a `!`.
 | `/exit` | quit |
 
 `/help`, `/model`, `/reasoning`, `/usage`, `/compact`, `/tools`, `/mcp`,
-`/agents`, `/settings` and `/exit` are the built-ins; `/plan*` and `/init` are
-feature commands the driver adds on top.
+`/agents`, `/settings`, `/update` and `/exit` are the built-ins; `/plan*` and
+`/init` are feature commands the driver adds on top.
 
 Registration goes through one `registerCommands` helper in `main.go` that always
 calls `RegisterBuiltins` first and then any feature commands. A feature that
@@ -220,6 +221,33 @@ survey goroutine, whose arming a turn already running would consume — and repo
 the change once the file's mtime actually moves. It stays armed across turns that
 wrote nothing, so a survey queued behind a running turn still reports, and stays
 quiet when the write was denied.
+
+### `/update` — self-update
+
+`/update` reinstalls ajent from `github.com/jentfoo/ajent@latest`. The handler
+spawns one goroutine (`SelfUpdate`) and returns immediately so a slow network
+fetch never blocks the pump; `Notify` is safe from any goroutine, so the result
+lands as a notice when it finishes. A second `/update` while one runs simply starts another install — harmless because both resolve then reinstall the same latest version.
+
+The shared logic lives in `command/update.go`, factored into an injectable
+exec seam (`updateCmds`) so tests exercise every branch with fakes and never touch
+a real go toolchain or network:
+
+- resolve: `go list -m -f={{.Version}} github.com/jentfoo/ajent@latest` → the
+  latest published version string.
+- compare against `config.Version` (the running build, injected by ldflags). When
+  equal — or when resolution failed with a usable empty value — nothing is
+  installed and the notice reports *already up to date*.
+- otherwise: `go install github.com/jentfoo/ajent@latest`, capturing combined
+  output for error context. Success notifies updated-from → to; any failure
+  notifies the wrapped error.
+
+The `--update` flag is the opposite surface: it runs the same `SelfUpdate` in
+the **foreground** and exits immediately after printing the result, never opening
+a TUI or starting a session (`main.go`, alongside the `--version` early exit).
+`/update` stays fully in-session. Both surfaces report through
+`UpdateResult.Notice`; neither writes to the transcript nor reaches the model — an
+update is a build concern, not conversation content.
 
 ### `/tools` and the enabled set
 

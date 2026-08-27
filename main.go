@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"slices"
@@ -30,6 +31,11 @@ import (
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
+// printVersion writes the build version line to w.
+func printVersion(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "ajent version", config.Version)
+}
+
 // secretPrefix marks editor lines excluded from the workspace's persisted line
 // history, so a pasted secret never reaches disk.
 const secretPrefix = "secret:"
@@ -41,6 +47,22 @@ func main() {
 	} else if err != nil {
 		fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
 		os.Exit(exitUsage)
+	}
+	// --version short-circuits before validation and every setup so it works with a
+	// broken home dir, no network, and any flag combination.
+	if f.version {
+		printVersion(os.Stdout)
+		return
+	}
+	// --update reinstalls from @latest in the foreground then exits; it never opens
+	// the TUI or starts a session. /update is the in-session form.
+	if f.update {
+		res := command.SelfUpdate(context.Background())
+		fmt.Println(res.Notice())
+		if res.Err != nil {
+			os.Exit(exitUsage)
+		}
+		return
 	}
 	if verr := f.validate(); verr != nil {
 		fmt.Fprintf(os.Stderr, "ajent: %v\n", verr)
@@ -179,6 +201,7 @@ func main() {
 		ui.Notify(w, tui.LevelWarn)
 	}
 	go refreshModels(ui, reg)
+	go checkForUpdate(ui, set)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGHUP)
@@ -1688,6 +1711,10 @@ func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.S
 // endpoint cannot leave it running for the life of the session.
 const discoverTimeout = 30 * time.Second
 
+// updateCheckTimeout bounds the remote-version lookup; even though it runs in
+// the background, an unreachable GitHub must not linger.
+const updateCheckTimeout = 10 * time.Second
+
 // refreshModels updates the model list from the providers that can list their
 // own, in the background so startup never waits on the network. A failure is
 // only ever a notice: whatever was cached still works.
@@ -1705,5 +1732,26 @@ func refreshModels(ui *tui.UI, reg *llm.Registry) {
 	}
 	if added := len(reg.Models()) - before; added > 0 {
 		ui.NotifyKeyed("models", "discovered "+strconv.Itoa(added)+" more models", tui.LevelInfo)
+	}
+}
+
+// checkForUpdate refreshes the cached latest tag and, when a newer release is
+// out for this install, surfaces an update notice in the session scrollback.
+func checkForUpdate(ui *tui.UI, set *config.Set) {
+	if set.Settings().DisableUpdateCheck {
+		return // user opted out of the startup nag entirely
+	}
+	path, err := config.CachePath(config.UpdateCacheFileName)
+	if err != nil {
+		return // no home dir; nothing to cache or compare
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
+	defer cancel()
+	msg, cerr := config.CheckUpdateNotice(ctx, path, config.UpdateCheckOptions{})
+	if cerr != nil {
+		return // offline or no tags: best-effort only
+	}
+	if msg != "" {
+		ui.Notify(msg, tui.LevelInfo)
 	}
 }

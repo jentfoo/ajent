@@ -17,6 +17,9 @@ type Settings struct {
 	Compaction  Compaction      `json:"compaction,omitzero"`
 	Subagent    Subagent        `json:"subagent,omitzero"` // research sub-agents
 	UI          UI              `json:"ui,omitzero"`
+
+	// DisableUpdateCheck turns off the startup update-available notice.
+	DisableUpdateCheck bool `json:"disableUpdateCheck,omitzero"`
 }
 
 // Reasoning is the session reasoning choice. Level and Retain are text names.

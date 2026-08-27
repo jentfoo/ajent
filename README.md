@@ -176,7 +176,8 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
   },
   "compaction": { "auto": true, "threshold": 0.8, "minSteps": 2, "verbatimFraction": 0.1 },
   "subagent": { "maxConcurrent": 4 },
-  "ui": { "render": "auto", "theme": "dark-warm" }
+  "ui": { "render": "auto", "theme": "dark-warm" },
+  "disableUpdateCheck": true
 }
 ```
 
@@ -193,18 +194,21 @@ The top-level blocks:
 * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.
 * `subagent.model` / `maxConcurrent` - a dedicated model for research sub-agents (empty inherits your session model) and how many may run at once (default 8).
 * `ui.render`, `ui.theme`, `showCost`, `showThinking` - paint mode (`auto`, `inline`, `alt`, `plain`), palette, and whether cost or thinking are shown.
+* `disableUpdateCheck` - turn off the startup update-available notice. Off by default; a fork install or an offline machine that does not want to nag can set this once in the user layer.
 
 ### Command-line options
 
 The CLI is deliberately small. Run `ajent --help` for the full list; the important ones:
 
 ```
+-v, --version        print the build version and exit
 -m, --model <key>      initial model to use
     --render <mode>    paint mode: auto, inline (terminal scrollback),
                        alt (own scrollback), plain
     --continue         resume the most recent session automatically
     --resume [id]      list saved sessions and pick one; with an id,
                        resume that session directly
+    --update           reinstall ajent from @latest in the foreground, then exit
 -p, --prompt <text>    run one turn non-interactively, print the result and exit
 -o, --output <shape>   one-shot output: text (final answer) or json (one event per line)
     --allow-all        one-shot: offer every tool, bash included
@@ -214,6 +218,8 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
 ```
 
 The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. There is no dialog in headless mode, so the barrier runs at allow-all and the **offered tool set** carries the policy instead (the model is only ever handed tools it may call, which keeps it from wasting steps discovering a refusal). Scope flags (`--allow-all`, `--read-only`) are mutually exclusive; `--allow-tools` / `--deny-tools` refine either.
+
+Self-updates run `go install github.com/jentfoo/ajent@latest`. The `/update` command does it in the background inside a session, or the `--update` flag runs it in the foreground.
 
 Exit codes are stable enough to branch on in scripts: `0` the turn answered, `1` bad usage or setup failure before the turn, `2` the turn itself failed or produced nothing. They are identical for text and json output.
 

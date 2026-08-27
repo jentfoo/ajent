@@ -161,6 +161,35 @@ lost. Writes go through `WriteFileAtomic` with secret permissions.
   with one loud warning per removed key — those files get committed.
 - Any user file holding a literal apiKey triggers the `0600` check.
 
+## Build version
+
+`pkg/config` owns the exported `Version` var, a build-time value resolved by
+precedence: ldflags injection → `debug.ReadBuildInfo` module version (when not
+`(devel)`) → `dev`. It is deliberately **not** part of the layered config schema
+or `config.json`, so it never appears in settings or overrides.
+
+## Update check cache
+
+Disposable caches live under `~/.ajent/cache/` (`config.CachePath`), a sibling
+directory to the layered config files. The remote-version check reads and writes
+`remote-version.json` there:
+
+```jsonc
+{"version":"v0.1.5", "checkedAtUnix": 1720000000, "noticedAtUnix": 1719990000}
+```
+
+Two TTLs bound it (both seconds since epoch): the `Version` is reused within a
+12h window before GitHub's tags endpoint is hit again, and an update notice is
+shown at most once per 2h. The check only reports for real builds — never `dev`,
+which is always behind by design — and compares clean `vX.Y.Z` tags strictly.
+A failed fetch keeps the stale cached tag and returns an error; both writes are
+best-effort, so a broken cache directory cannot break startup.
+
+The notice can be switched off entirely with `disableUpdateCheck` (a top-level
+Settings bool, env `AJENT_DISABLEUPDATECHECK`). It is read once at startup in
+main.go and deliberately has no `/settings` row — like `agent.maxSteps`, a
+session override could never reach the already-running check.
+
 ## The rule
 
 `pkg/config ↛ pkg/llm`, always. Cross-schema folding happens in `pkg/llm`

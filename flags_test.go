@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -10,6 +13,22 @@ import (
 
 func TestParseFlags(t *testing.T) {
 	t.Parallel()
+
+	t.Run("version_flag", func(t *testing.T) {
+		f, err := parseFlags([]string{"--version"})
+		require.NoError(t, err)
+		assert.True(t, f.version)
+
+		f, err = parseFlags([]string{"-v"})
+		require.NoError(t, err)
+		assert.True(t, f.version)
+	})
+
+	t.Run("update_flag", func(t *testing.T) {
+		f, err := parseFlags([]string{"--update"})
+		require.NoError(t, err)
+		assert.True(t, f.update)
+	})
 
 	t.Run("long_and_short_prompt", func(t *testing.T) {
 		f, err := parseFlags([]string{"-p", "hello"})
@@ -70,6 +89,18 @@ func TestParseFlags(t *testing.T) {
 		_, err := parseFlags([]string{"-h"})
 		assert.ErrorIs(t, err, pflag.ErrHelp)
 	})
+}
+
+func TestWriteUsage(t *testing.T) {
+	t.Parallel()
+
+	fs := pflag.NewFlagSet("ajent", pflag.ContinueOnError)
+	var buf bytes.Buffer
+	writeUsage(&buf, fs.FlagUsages())
+	out := buf.String()
+	assert.Equal(t, "ajent version "+config.Version, strings.SplitN(out, "\n", 2)[0])
+	assert.Contains(t, out, "usage of ")
+	assert.Contains(t, out, "--resume")
 }
 
 func TestCliFlagsValidate(t *testing.T) {

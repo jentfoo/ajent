@@ -420,7 +420,7 @@ the model was *loaded* with, which is often smaller than its maximum and which
 nothing else can know.
 
 Refetch is conditional on `ETag` / `Last-Modified`; a `304` keeps the models and
-only bumps the check time. Results cache to `~/.ajent/models-cache.json` at
+only bumps the check time. Results cache to `~/.ajent/cache/models.json` at
 `0600`. Time to live is 24h for hosted catalogues and one minute for local
 servers, whose loaded model changes far more often.
 

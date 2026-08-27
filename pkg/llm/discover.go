@@ -15,7 +15,7 @@ import (
 
 const (
 	// CacheFileName holds discovery results between runs.
-	CacheFileName = "models-cache.json"
+	CacheFileName = "models.json"
 	cacheVersion  = 1
 	// hosted catalogues change rarely, a local server's loaded model does not
 	hostedTTL = 24 * time.Hour
@@ -31,7 +31,7 @@ type CacheEntry struct {
 	ETag         string        `json:"etag,omitempty"`
 }
 
-// Cache is the decoded models-cache.json.
+// Cache is the decoded discovery cache.
 type Cache struct {
 	Version   int                   `json:"version"`
 	Providers map[string]CacheEntry `json:"providers"`
@@ -53,7 +53,7 @@ func LoadCache(path string) map[string]CacheEntry {
 
 // LoadUserCache reads the discovery cache from the configuration directory.
 func LoadUserCache() map[string]CacheEntry {
-	path, err := config.UserPath(CacheFileName)
+	path, err := config.CachePath(CacheFileName)
 	if err != nil {
 		return nil
 	}
@@ -71,7 +71,7 @@ func SaveCache(path string, entries map[string]CacheEntry) error {
 
 // SaveUserCache writes the discovery cache to the configuration directory.
 func SaveUserCache(entries map[string]CacheEntry) error {
-	path, err := config.UserPath(CacheFileName)
+	path, err := config.CachePath(CacheFileName)
 	if err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
@@ -32,6 +33,8 @@ type cliFlags struct {
 	model    string
 	render   string
 	cont     bool
+	version  bool   // --version: print the build version and exit
+	update   bool   // --update: reinstall ajent from @latest in the foreground
 	resume   bool   // --resume was given, with or without an id
 	resumeID string // the id from --resume <id>
 
@@ -60,6 +63,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 		"paint mode: auto, inline (terminal scrollback, unsupported under tmux or screen), "+
 			"alt (own scrollback), plain")
 	fs.BoolVar(&f.cont, "continue", false, "resume the most recent session automatically")
+	fs.BoolVarP(&f.version, "version", "v", false, "print version and exit")
+	fs.BoolVar(&f.update, "update", false, "reinstall ajent from @latest then exit")
 	fs.StringVarP(&f.prompt, "prompt", "p", "",
 		"run one turn non-interactively from this prompt, print the result and exit")
 	fs.StringVarP(&f.output, "output", "o", outputText,
@@ -70,11 +75,7 @@ func parseFlags(argv []string) (cliFlags, error) {
 	fs.StringSliceVar(&f.denyTools, "deny-tools", nil, "one-shot: tool names to withhold")
 
 	fs.Usage = func() {
-		out := os.Stderr
-		_, _ = fmt.Fprintf(out, "usage of %s:\n", os.Args[0])
-		_, _ = fmt.Fprint(out, fs.FlagUsages())
-		_, _ = fmt.Fprintln(out, "      --resume [id]           "+
-			"list saved sessions and resume one; with an id, resume that session directly")
+		writeUsage(os.Stderr, fs.FlagUsages())
 	}
 
 	if err := fs.Parse(argv); err != nil {
@@ -87,6 +88,16 @@ func parseFlags(argv []string) (cliFlags, error) {
 		}
 	}
 	return f, nil
+}
+
+// writeUsage writes the help text: the build version first, then the usage line,
+// flag list and trailing --resume note.
+func writeUsage(out io.Writer, flagUsages string) {
+	printVersion(out)
+	_, _ = fmt.Fprintf(out, "usage of %s:\n", os.Args[0])
+	_, _ = fmt.Fprint(out, flagUsages)
+	_, _ = fmt.Fprintln(out, "      --resume [id]           "+
+		"list saved sessions and resume one; with an id, resume that session directly")
 }
 
 // validate reports the first usage error in the parsed command line.

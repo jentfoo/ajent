@@ -25,6 +25,7 @@ func TestEnvLayerBindsScalarKinds(t *testing.T) {
 		{"int", "AJENT_SUBAGENT_MAXCONCURRENT", "2", 2, func(s Settings) any { return s.Subagent.MaxConcurrent }},
 		{"min_steps", "AJENT_COMPACTION_MINSTEPS", "3", 3, func(s Settings) any { return s.Compaction.MinSteps }},
 		{"verbatim_fraction", "AJENT_COMPACTION_VERBATIMFRACTION", "0.2", float64(0.2), func(s Settings) any { return s.Compaction.VerbatimFraction }},
+		{"disable_update_check", "AJENT_DISABLEUPDATECHECK", "true", true, func(s Settings) any { return s.DisableUpdateCheck }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

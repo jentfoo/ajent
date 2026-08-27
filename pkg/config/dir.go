@@ -14,6 +14,8 @@ const (
 	DirName = ".ajent"
 	// EnvHome overrides the configuration directory entirely.
 	EnvHome = "AJENT_HOME"
+	// CacheDirName holds disposable caches under the configuration directory.
+	CacheDirName = "cache"
 
 	dirPerm = 0o700
 )
@@ -51,6 +53,20 @@ func UserPath(name string) (string, error) {
 // only probe for a file's existence use this to avoid an empty-dir side effect.
 func Home() (string, error) {
 	return resolveDir(osEnv, osHome)
+}
+
+// CachePath returns name resolved inside the configuration directory's cache
+// subdirectory, creating it when missing.
+func CachePath(name string) (string, error) {
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+	cd := filepath.Join(dir, CacheDirName)
+	if err = os.MkdirAll(cd, dirPerm); err != nil {
+		return "", err
+	}
+	return filepath.Join(cd, name), nil
 }
 
 // ProjectDir returns the configuration directory for a workspace.

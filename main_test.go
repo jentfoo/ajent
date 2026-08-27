@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,6 +27,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestPrintVersion checks the version line is exactly `ajent version <Version>`.
+func TestPrintVersion(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	printVersion(&buf)
+	assert.Equal(t, "ajent version "+config.Version+"\n", buf.String())
+}
 
 // TestRewindStateRebuild drives a transcript, rewinds onto an earlier message,
 // and verifies the rebuilt agent state carries exactly that branch's context —
