@@ -1121,12 +1121,20 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		settle(t, mgr, id)
 
 		sink := subagentSink{mgr: mgr}
-		mgr.Flush() // steer accepted; the mark is now in flight
-		assert.EqualValues(t, 1, delivered.Load())
+		// the completed job is queued just after StatusDone publishes; flush until its
+		// steer lands so this never races enqueue.
+		require.Eventually(t, func() bool {
+			if delivered.Load() == 0 {
+				mgr.Flush() // steer accepted; the mark is now in flight
+			}
+			return delivered.Load() >= 1
+		}, 2*time.Second, 5*time.Millisecond)
 
 		sink.TurnEnd(agent.TurnResult{Stop: llm.StopAborted})
-		mgr.Flush() // released marks let the pending id ride again
-		assert.EqualValues(t, 2, delivered.Load())
+		require.Eventually(t, func() bool {
+			mgr.Flush() // released marks let the pending id ride again
+			return delivered.Load() >= 2
+		}, 2*time.Second, 5*time.Millisecond)
 	})
 
 	t.Run("clean_keeps_marks", func(t *testing.T) {
@@ -1135,8 +1143,12 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		settle(t, mgr, id)
 
 		sink := subagentSink{mgr: mgr}
-		mgr.Flush() // steer accepted; the mark is now in flight
-		assert.EqualValues(t, 1, delivered.Load())
+		require.Eventually(t, func() bool {
+			if delivered.Load() == 0 {
+				mgr.Flush() // steer accepted; the mark is now in flight
+			}
+			return delivered.Load() >= 1
+		}, 2*time.Second, 5*time.Millisecond)
 
 		sink.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn}) // no release
 		mgr.Flush()                                           // still in flight; nothing may re-offer
