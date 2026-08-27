@@ -16,13 +16,11 @@ import (
 const shellNamesTimeout = 5 * time.Second
 
 // shellNames returns the sorted command names bash offers as a first word:
-// builtins, keywords and everything on PATH. It is empty when bash is
-// unavailable. Resolved once per process.
+// builtins, keywords and everything on PATH. Empty when bash is unavailable.
 var shellNames = sync.OnceValue(func() []string {
 	ctx, cancel := context.WithTimeout(context.Background(), shellNamesTimeout)
 	defer cancel()
-	// `!` runs through `bash -c`, so compgen under the same non-interactive shell
-	// reports exactly the names those runs can invoke
+	// the same non-interactive shell `!` runs through, so the names match
 	out, err := exec.CommandContext(ctx, "bash", "-c", "compgen -abck").Output()
 	if err != nil && len(out) == 0 {
 		return nil
@@ -35,52 +33,33 @@ var shellNames = sync.OnceValue(func() []string {
 })
 
 // shellComplete offers candidates inside a `!`/`!!` line: command names in a
-// command position, else paths listed one directory at a time. cells is the
-// whole buffer and pos the cursor cell; the returned start is where an accepted
-// Text begins.
-func (c *Completer) shellComplete(cells []string, pos int) (int, []tui.Completion) {
-	n := len(cells)
-	pos = min(pos, n)
-	cmdStart := shellCmdStart(cells)
-	if pos < cmdStart {
-		return pos, nil
+// command position, else paths.
+func (c *Completer) shellComplete(ctx completeCtx) (int, []tui.Completion) {
+	if ctx.pos < ctx.start {
+		return ctx.pos, nil
 	}
-	tokStart := pos
-	for tokStart > cmdStart && !isTokenBreakCell(cells[tokStart-1]) {
-		tokStart--
-	}
-	token := strings.Join(cells[tokStart:pos], "")
+	tokStart := tokenStart(ctx.cells, ctx.pos, ctx.start)
+	token := ctx.spanText(tokStart)
 
-	// a first word without a separator is a command name; with one it is a path,
-	// matching how bash completes `./script` or `bin/tool`
-	if !strings.Contains(token, "/") && isCmdPosition(cells, cmdStart, tokStart) {
+	// a first word holding `/` is a path, as bash treats `./script`
+	if !strings.Contains(token, "/") && isCmdPosition(ctx.cells, ctx.start, tokStart) {
 		if token == "" {
-			return pos, nil // every command on the system is not a useful list
+			return ctx.pos, nil // every command on the system is not a useful list
 		}
-		return tokStart, commandNameCandidates(token)
+		return offer(tokStart, ctx.pos, textCompletions(shellNameMatches(token)))
 	}
 	if c.paths == nil {
-		return pos, nil
+		return ctx.pos, nil
 	}
-	items := c.paths.ShellCandidates(token)
-	if len(items) == 0 {
-		return pos, nil
-	}
-	return tokStart, items
+	return offer(tokStart, ctx.pos, c.paths.ShellCandidates(token))
 }
 
-// commandNameCandidates returns the known command names starting with prefix.
-func commandNameCandidates(prefix string) []tui.Completion {
-	matches := bulk.SliceFilter(func(n string) bool { return strings.HasPrefix(n, prefix) }, shellNames())
-	out := make([]tui.Completion, 0, len(matches))
-	for _, n := range matches {
-		out = append(out, tui.Completion{Text: n, Label: n})
-	}
-	return out
+// shellNameMatches returns the known command names starting with prefix.
+func shellNameMatches(prefix string) []string {
+	return bulk.SliceFilter(func(n string) bool { return strings.HasPrefix(n, prefix) }, shellNames())
 }
 
-// shellCmdStart returns the cell index where a `!` line's shell text begins,
-// past the leading `!` or `!!`.
+// shellCmdStart returns the cell where a `!` line's shell text begins.
 func shellCmdStart(cells []string) int {
 	if len(cells) > 1 && cells[1] == "!" {
 		return 2
@@ -88,8 +67,8 @@ func shellCmdStart(cells []string) int {
 	return 1
 }
 
-// isCmdPosition reports whether the token at start begins a command: only
-// whitespace or a command separator lies between it and from.
+// isCmdPosition reports whether the token at start begins a command, i.e. only
+// whitespace or a separator lies between it and from.
 func isCmdPosition(cells []string, from, start int) bool {
 	i := start
 	for i > from && isTokenBreakCell(cells[i-1]) {
@@ -101,6 +80,5 @@ func isCmdPosition(cells []string, from, start int) bool {
 	return slices.Contains(cmdSeparators, cells[i-1])
 }
 
-// cmdSeparators are the trailing cells of a shell operator that starts a new
-// command (`|`, `||`, `&&`, `;`, and a subshell or group opener).
+// cmdSeparators are the last cells of an operator starting a new command.
 var cmdSeparators = []string{"|", "&", ";", "(", "{"}

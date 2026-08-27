@@ -159,8 +159,7 @@ func TestCandidates(t *testing.T) {
 func TestShellCandidates(t *testing.T) {
 	t.Parallel()
 
-	// a shell command may legitimately name a VCS or dependency directory that an
-	// @ reference hides.
+	// a shell command may name a VCS or dependency directory that @ hides
 	t.Run("offers_skipped_dirs", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "node_modules/pkg/index.js", ".git/config")
@@ -173,8 +172,7 @@ func TestShellCandidates(t *testing.T) {
 		assert.Equal(t, []string{".git/config"}, labelsOf(idx.ShellCandidates(".git/")))
 	})
 
-	// every match is returned: a truncated set would yield a common prefix longer
-	// than the real one, so Tab would skip past a valid branch.
+	// a truncated set would yield too long a common prefix, skipping a branch
 	t.Run("returns_every_match", func(t *testing.T) {
 		dir := t.TempDir()
 		names := make([]string, 0, 100)

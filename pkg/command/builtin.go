@@ -102,9 +102,9 @@ func helpCommand(_ context.Context, _ string, c Console) error {
 	b.WriteString("- `Ctrl+C` — interrupt a turn, or quit when idle\n")
 	b.WriteString("- `Ctrl+D` — quit on an empty editor\n")
 	b.WriteString("- `Esc` `Esc` — rewind onto an earlier message while idle\n")
-	b.WriteString("- `/` at line start — command completion\n")
-	b.WriteString("- `@` anywhere — path completion\n")
-	b.WriteString("- `!cmd` — run a shell command, staged ahead of your next message\n")
+	b.WriteString("- `/` at line start — a command; the menu opens as you type, `Tab` takes the highlight\n")
+	b.WriteString("- `@` anywhere — a file reference; `Tab` completes the path\n")
+	b.WriteString("- `!cmd` — run a shell command, staged ahead of your next message; `Tab` completes like bash\n")
 	b.WriteString("- `Shift+Tab` — cycle the permission mode (out-of-band control event)\n")
 	c.Print(b.String())
 	return nil

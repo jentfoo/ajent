@@ -35,18 +35,16 @@ func NewIndex(root string, policy tools.PathPolicy) *Index {
 }
 
 // Candidates returns paths matching query for an @ reference, ranked by (a)
-// already in the conversation, (b) recent mtime, (c) fuzzy score. Directories
-// complete with a trailing `/` so accepting one re-opens it deeper. Only the
-// directory under the cursor is listed: an empty or partial path lists the
-// root's children, and drilling through `dir/` descends one level per step. A
-// `~`, `./` or absolute `/…` query keeps its leading form in each candidate so
-// accepting inserts a usable path. VCS and dependency directories are skipped.
+// already in the conversation, (b) recent mtime, (c) fuzzy score. Only the
+// directory under the cursor is listed, so `dir/` descends one level per step;
+// directories come back with a trailing `/`, and a `~`, `./` or absolute query
+// keeps its leading form. VCS and dependency directories are skipped.
 func (idx *Index) Candidates(query string, inConversation func(path string) bool) []tui.Completion {
 	return idx.candidates(query, inConversation, true)
 }
 
-// ShellCandidates returns path candidates for query like Candidates, but also
-// offers the VCS and dependency directories a `!` shell command may name.
+// ShellCandidates returns path candidates for query like Candidates, plus the
+// VCS and dependency directories a `!` shell command may name.
 func (idx *Index) ShellCandidates(query string) []tui.Completion {
 	return idx.candidates(query, nil, false)
 }
@@ -59,7 +57,7 @@ func (idx *Index) candidates(query string, inConversation func(path string) bool
 	var qrel, base, displayPrefix string
 	switch {
 	case strings.HasPrefix(query, "~/") || query == "~":
-		// ~ completes within the user's home directory.
+		// ~ completes within the user's home directory
 		hdir := homeDir()
 		if hdir == "" {
 			return nil // no ~ completion without a resolvable home
@@ -167,9 +165,8 @@ func homeDir() string {
 	return home
 }
 
-// listDir lists only path's immediate children: one directory deep, never a
-// recursive walk. Every completion branch uses it so @ stays cheap however large
-// the tree is. skipVCS drops VCS and dependency directories from the result.
+// listDir returns path's immediate children and their mtimes: one directory
+// deep, never a recursive walk. skipVCS drops VCS and dependency directories.
 func listDir(path string, skipVCS bool) ([]entry, map[string]time.Time) {
 	des, err := os.ReadDir(path)
 	if err != nil {

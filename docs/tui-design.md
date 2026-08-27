@@ -92,7 +92,7 @@ so in-progress replies read as output above the bar while search/completion/
 activity and the editor sit below. It costs one real row per repaint, which on a
 short terminal shrinks interaction/dialog height by one line; tests that pin
 dialogs to small screens are sized accordingly. The rule doubles as the only
-keypress acknowledgement: a Tab that can complete nothing accents it briefly
+keypress acknowledgement: a path Tab that can complete nothing accents it briefly
 (`flashRule`) instead of changing the buffer.
 
 Unlike activity rows the rule keeps the **full** composed width (one column
@@ -1000,10 +1000,10 @@ The key table:
 
 | Key | Effect |
 |---|---|
-| Enter | submit (accepts an open search selection) |
+| Enter | submit (accepts an open menu or search selection) |
 | Alt+Enter, Ctrl+J | insert a newline |
-| `↑`/`↓` | move the caret through visual rows; only at the prompt's very start (↑) or end (↓) do they recall history. In the search overlay they select; completion never takes them |
-| Tab | complete: fill in the candidates' longest common prefix, or list what is left when they agree on nothing more (`complete.go`) |
+| `↑`/`↓` | move the caret through visual rows; only at the prompt's very start (↑) or end (↓) do they recall history. A search overlay or a command menu selects with them; path completion never takes them |
+| Tab | accept the highlighted command in a menu; for a path, fill in the candidates' longest common prefix, or list what is left (`complete.go`) |
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |

@@ -6,30 +6,35 @@ import (
 	"time"
 )
 
-// Completion is one Tab completion candidate. Text is what accepting the
-// candidate inserts; Label is what an ambiguous listing shows; Detail is
-// optional dim trailing text; Score ranks the list (higher first).
+// Completion is one Tab completion candidate.
 type Completion struct {
-	Text   string
-	Label  string
-	Detail string
-	Score  int
+	Text   string // inserted when the candidate is accepted
+	Label  string // shown in an ambiguous listing
+	Detail string // optional dim trailing text
+	Score  int    // ranks the listing, higher first
 }
 
-// Completer supplies candidates for Tab completion. Complete is called with the
-// buffer and cursor, returning where accepted text should start replacing from
-// plus the candidates. It must not call back into the UI.
+// Completer supplies candidates for Tab completion: given the buffer and
+// cursor, the cell an accepted Text replaces from plus the candidates. Complete
+// must not call back into the UI.
 type Completer interface {
 	Complete(text string, pos int) (start int, items []Completion)
 }
 
-// AsyncCompleter marks a completer whose queries may take time (a slow directory
-// listing, a subprocess). The UI runs those off the key loop so a Tab never
-// stalls typing; IsAsync reports whether the token under the cursor is such a
-// query, so the rest keeps its synchronous contract.
-type AsyncCompleter interface {
+// CompleteStyle is how a context's candidates are presented. Menu re-queries on
+// every keystroke under the UI lock, so a menu context's Complete must return
+// promptly and must not re-enter the UI; Async is the escape hatch for one that
+// cannot.
+type CompleteStyle struct {
+	Menu  bool // live list while typing; ↑/↓ select and Tab accepts
+	Async bool // query off the key loop, for a source that may block
+}
+
+// StyledCompleter reports how the cursor's context completes. A plain Completer
+// gets the zero style: Tab-driven and synchronous.
+type StyledCompleter interface {
 	Completer
-	IsAsync(text string, pos int) bool
+	Style(text string, pos int) CompleteStyle
 }
 
 // MatchScore rates how well query matches text as a subsequence, returning
@@ -38,32 +43,70 @@ type AsyncCompleter interface {
 // second implementation.
 func MatchScore(text, query string) (int, bool) { return matchScore(text, query) }
 
-// SetCompleter installs the Tab completion source. A nil source disables
-// completion. Completion is only active in inline and alt modes; plain mode has
-// no live block and ignores it.
+// SetCompleter installs the Tab completion source; nil disables completion.
+// Only inline and alt modes complete; plain mode has no live block.
 func (u *UI) SetCompleter(c Completer) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.completer = c
+	u.completionSeq++  // a query in flight for the old source must not land
 	u.completion = nil // drop any listing when the source changes
 	u.repaint()
 }
 
-// startCompletion answers a Tab: it asks the completer for candidates at the
-// cursor and applies them. A source that may block runs off the key loop, so a
-// slow listing never stalls the editor. Caller holds the lock.
+// style reports how the cursor's context presents. Caller holds the lock.
+func (u *UI) style(text string, pos int) CompleteStyle {
+	if sc, ok := u.completer.(StyledCompleter); ok {
+		return sc.Style(text, pos)
+	}
+	return CompleteStyle{}
+}
+
+// refreshMenu re-queries after an edit, keeping a live menu open for the
+// contexts that use one. A Tab-driven context drops any listing instead of
+// opening on its own. Caller holds the lock, so a menu query runs on the key
+// loop (see CompleteStyle).
+func (u *UI) refreshMenu() {
+	if u.completer == nil {
+		u.completion = nil
+		return
+	}
+	text, pos := u.editor.Value(), u.editor.pos
+	if !u.style(text, pos).Menu {
+		u.completion = nil
+		return
+	}
+	u.completionSeq++ // supersede any in-flight Tab query
+	start, items := u.completer.Complete(text, pos)
+	if len(items) == 0 {
+		u.completion = nil
+		return
+	}
+	if u.completion == nil || !u.completion.menu {
+		u.completion = &completionOverlay{menu: true}
+	}
+	u.completion.open(items, start)
+}
+
+// startCompletion answers a Tab, applying the candidates at the cursor. Caller
+// holds the lock.
 func (u *UI) startCompletion() {
 	if u.completer == nil {
 		return
 	}
 	text, pos := u.editor.Value(), u.editor.pos
+	st := u.style(text, pos)
+	if st.Menu {
+		u.refreshMenu() // an Esc-dismissed menu comes back
+		return
+	}
 	u.completionSeq++
 	seq := u.completionSeq
-	if ac, ok := u.completer.(AsyncCompleter); ok && ac.IsAsync(text, pos) {
-		// safeGo, not a bare goroutine: a source may shell out, and a panic there
-		// must still restore the terminal
+	if st.Async {
+		// safeGo: a source may shell out, and a panic must restore the terminal
+		c := u.completer
 		u.safeGo(func() {
-			start, items := ac.Complete(text, pos)
+			start, items := c.Complete(text, pos)
 			u.deliverCompletion(seq, start, items, text, pos)
 		})
 		return
@@ -83,8 +126,8 @@ func (u *UI) deliverCompletion(seq, start int, items []Completion, text string, 
 	u.repaint()
 }
 
-// applyCompletion inserts as much as the candidates unambiguously agree on, or
-// lists them when they agree on nothing more. Caller holds the lock.
+// applyCompletion inserts as much as the candidates agree on, or lists them
+// when they agree on nothing more. Caller holds the lock.
 func (u *UI) applyCompletion(start int, items []Completion) {
 	if len(items) == 0 {
 		u.completion = nil
@@ -95,13 +138,12 @@ func (u *UI) applyCompletion(start int, items []Completion) {
 	prefix := commonPrefix(items)
 	switch {
 	case !strings.HasPrefix(prefix, typed):
-		// a source free to return anything (a command's own Complete) has no
-		// meaningful common prefix; take its best candidate whole
+		// candidates that do not extend the typed text have no useful prefix
 		u.replaceSpan(start, items[0].Text)
 	case prefix != typed:
 		u.replaceSpan(start, prefix)
 	case len(items) > 1 && u.completion == nil:
-		u.completion = &completionList{items: items} // ambiguous: show what is left
+		u.completion = &completionOverlay{items: items} // ambiguous: show what is left
 		return
 	default:
 		u.flashRule() // nothing to add and nothing new to show
@@ -134,13 +176,11 @@ func (u *UI) replaceSpan(start int, text string) {
 	u.editor.pos = start + len(replace)
 }
 
-// ruleFlashDuration is how long the prompt rule stays accented after a Tab that
-// could not complete anything.
+// ruleFlashDuration is how long the prompt rule stays accented.
 const ruleFlashDuration = 120 * time.Millisecond
 
 // flashRule accents the rule above the prompt briefly, acknowledging a keypress
-// that changed nothing. Caller holds the lock and repaints; only the clearing
-// timer redraws on its own.
+// that changed nothing. Caller holds the lock and repaints.
 func (u *UI) flashRule() {
 	if u.ruleFlash || u.closed {
 		return

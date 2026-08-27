@@ -81,7 +81,7 @@ func TestCompletionTabAcceptsSingleCandidate(t *testing.T) {
 	require.Eventually(t, func() bool { return u.editorValue() == "/model" }, time.Second, testPoll,
 		"a lone candidate completes whole")
 
-	// Enter after a completion submits rather than re-applying.
+	// Enter after a completion submits rather than re-applying
 	press(t, pw, "\r")
 	select {
 	case msg := <-u.Messages():
@@ -91,9 +91,8 @@ func TestCompletionTabAcceptsSingleCandidate(t *testing.T) {
 	}
 }
 
-// TestCompletionTabTakesTopCandidate covers a source free to return anything: a
-// command's own Complete need not extend the typed text, so there is no
-// meaningful common prefix and the best candidate is taken whole.
+// TestCompletionTabTakesTopCandidate covers candidates that do not extend the
+// typed text, where no common prefix is meaningful.
 func TestCompletionTabTakesTopCandidate(t *testing.T) {
 	t.Parallel()
 
@@ -111,8 +110,91 @@ func TestCompletionTabTakesTopCandidate(t *testing.T) {
 	require.Eventually(t, func() bool { return u.editorValue() == "model" }, time.Second, testPoll)
 }
 
-// fakeAtCompleter mimics a path source: it replaces from just past the @ so the
-// trigger itself is preserved when a candidate is accepted.
+// fakeMenuCompleter is a fixed list presented as a live menu, like a /command.
+type fakeMenuCompleter struct{ items []Completion }
+
+func (f fakeMenuCompleter) Complete(_ string, _ int) (int, []Completion) { return 0, f.items }
+func (f fakeMenuCompleter) Style(string, int) CompleteStyle              { return CompleteStyle{Menu: true} }
+
+// TestCompletionMenu covers the live presentation /commands and their arguments
+// keep: it opens while typing, owns ↑/↓, and accepts on Tab or Enter.
+func TestCompletionMenu(t *testing.T) {
+	t.Parallel()
+
+	commands := []Completion{
+		{Text: "/model", Label: "/model", Detail: "switch model"},
+		{Text: "/memory", Label: "/memory"},
+	}
+	open := func(t *testing.T) (*UI, *vt, *io.PipeWriter) {
+		t.Helper()
+		v := newVT(80, 12)
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		u := newTestUI(t, v, pr)
+		u.SetCompleter(fakeMenuCompleter{items: commands})
+		press(t, pw, "/")
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /model") }, time.Second, testPoll,
+			"a menu opens while typing, without a Tab")
+		return u, v, pw
+	}
+
+	// no Tab needed: the candidates are listed as soon as the context is entered
+	t.Run("opens_while_typing", func(t *testing.T) {
+		u, v, _ := open(t)
+		assert.Contains(t, u.snapshot(v), "/memory")
+		assert.Contains(t, u.snapshot(v), "switch model")
+	})
+
+	t.Run("arrows_cycle_the_highlight", func(t *testing.T) {
+		u, v, pw := open(t)
+
+		press(t, pw, "\x1b[B")
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /memory") }, time.Second, testPoll)
+		press(t, pw, "\x1b[A")
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /model") }, time.Second, testPoll)
+	})
+
+	// Tab takes the highlight whole; a following Enter only submits
+	t.Run("tab_accepts_then_enter_submits", func(t *testing.T) {
+		u, _, pw := open(t)
+
+		press(t, pw, "\t")
+		require.Eventually(t, func() bool { return u.editorValue() == "/model" }, time.Second, testPoll)
+
+		press(t, pw, "\r")
+		select {
+		case msg := <-u.Messages():
+			assert.Equal(t, "/model", msg)
+		case <-time.After(time.Second):
+			t.Fatal("Enter after Tab must submit the accepted command")
+		}
+	})
+
+	// Enter on a moved selection accepts it and submits in one press
+	t.Run("enter_accepts_moved_selection", func(t *testing.T) {
+		u, v, pw := open(t)
+
+		press(t, pw, "\x1b[B")
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /memory") }, time.Second, testPoll)
+		press(t, pw, "\r")
+		select {
+		case msg := <-u.Messages():
+			assert.Equal(t, "/memory", msg)
+		case <-time.After(time.Second):
+			t.Fatal("Enter must accept the moved selection and submit")
+		}
+	})
+
+	t.Run("esc_dismisses", func(t *testing.T) {
+		u, v, pw := open(t)
+
+		press(t, pw, "\x1b")
+		require.Eventually(t, func() bool { return !strings.Contains(u.snapshot(v), "/memory") }, time.Second, testPoll)
+		assert.Equal(t, "/", u.editorValue())
+	})
+}
+
+// fakeAtCompleter mimics a path source, replacing from just past the @.
 type fakeAtCompleter struct{ items []Completion }
 
 func (f fakeAtCompleter) Complete(text string, pos int) (int, []Completion) {
@@ -122,24 +204,70 @@ func (f fakeAtCompleter) Complete(text string, pos int) (int, []Completion) {
 	return 1, f.items // start past @, like command.pathComplete
 }
 
-func TestCompletionTabKeepsAtTrigger(t *testing.T) {
+// TestCompletionAtReferences pins @ to the same rules as every other context.
+// Its candidates replace from past the trigger, so every outcome is covered
+// again on that shape.
+func TestCompletionAtReferences(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(80, 12)
-	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
-	u := newTestUI(t, v, pr)
-	u.SetCompleter(fakeAtCompleter{items: []Completion{{Text: "main.go", Label: "main.go"}}})
+	files := []Completion{
+		{Text: "main.go", Label: "main.go"},
+		{Text: "main_test.go", Label: "main_test.go"},
+	}
 
-	press(t, pw, "@")
-	press(t, pw, "\t")
-	require.Eventually(t, func() bool {
-		return u.editorValue() == "@main.go"
-	}, time.Second, testPoll, "completing after @ must keep the leading @")
+	// a lone candidate fills in whole, keeping the trigger
+	t.Run("fills_keeping_trigger", func(t *testing.T) {
+		v := newVT(80, 12)
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		u := newTestUI(t, v, pr)
+		u.SetCompleter(fakeAtCompleter{items: files[:1]})
+
+		press(t, pw, "@")
+		press(t, pw, "\t")
+		require.Eventually(t, func() bool { return u.editorValue() == "@main.go" }, time.Second, testPoll)
+	})
+
+	// ambiguity fills only the shared prefix, then lists on the next Tab
+	t.Run("stops_at_ambiguity", func(t *testing.T) {
+		v := newVT(80, 12)
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		u := newTestUI(t, v, pr)
+		u.SetCompleter(fakeAtCompleter{items: files})
+
+		press(t, pw, "@mai")
+		press(t, pw, "\t")
+		require.Eventually(t, func() bool { return u.editorValue() == "@main" }, time.Second, testPoll,
+			"@ must stop where the candidates stop agreeing")
+		assert.NotContains(t, u.snapshot(v), "main_test.go")
+
+		press(t, pw, "\t")
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "main_test.go") }, time.Second, testPoll)
+		assert.Equal(t, "@main", u.editorValue())
+	})
+
+	// the arrows stay the editor's even with an @ listing on screen
+	t.Run("arrows_reach_the_editor", func(t *testing.T) {
+		v := newVT(80, 12)
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		u := newTestUI(t, v, pr)
+		u.SetCompleter(fakeAtCompleter{items: files})
+
+		press(t, pw, "@main")
+		press(t, pw, "\t") // ambiguous: a listing appears
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "main_test.go") }, time.Second, testPoll)
+
+		press(t, pw, "\x1b[D\x1b[D") // ← ← walks back through the buffer
+		require.Eventually(t, func() bool { return u.editorPos() == 3 }, time.Second, testPoll,
+			"← must move the caret, not a candidate highlight")
+		assert.Equal(t, "@main", u.editorValue())
+	})
 }
 
-// TestCompletionArrowsReachTheEditor proves completion never owns the arrows:
-// they stay cursor movement, even with a listing on screen.
+// TestCompletionArrowsReachTheEditor proves the arrows stay cursor movement,
+// even with a listing on screen.
 func TestCompletionArrowsReachTheEditor(t *testing.T) {
 	t.Parallel()
 
@@ -197,8 +325,7 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 	t.Cleanup(func() { _ = pw.Close() })
 	u := newTestUI(t, v, pr)
 
-	// a path source that blocks each query until the test releases it: typing must
-	// stay responsive while a listing is pending.
+	// a source blocking until the test releases it; typing must stay responsive
 	g := &gatedAsync{queries: make(chan string), answers: make(chan []Completion)}
 	u.SetCompleter(g)
 
@@ -216,7 +343,7 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 	require.Eventually(t, func() bool { return u.editorValue() == "@a" }, time.Second, testPoll,
 		"typing while pending blocked the key loop")
 
-	// the result is for a buffer the user has already moved past: it is dropped
+	// the buffer has moved past this result, so it is dropped
 	g.answers <- []Completion{{Text: "stale", Label: "stale"}}
 	assert.Never(t, func() bool { return strings.Contains(u.editorValue(), "stale") }, 100*testPoll, testPoll)
 
@@ -226,22 +353,21 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 	require.Eventually(t, func() bool { return u.editorValue() == "@abc.go" }, time.Second, testPoll)
 }
 
-// gatedAsync is an AsyncCompleter whose Complete blocks until the test sends its
-// candidates on answers, after reporting the captured text on queries.
+// gatedAsync reports each query's text on queries, then blocks until the test
+// sends its candidates on answers.
 type gatedAsync struct {
 	queries chan string
 	answers chan []Completion
 }
 
-func (g *gatedAsync) IsAsync(string, int) bool { return true }
+func (g *gatedAsync) Style(string, int) CompleteStyle { return CompleteStyle{Async: true} }
 func (g *gatedAsync) Complete(text string, pos int) (int, []Completion) {
 	g.queries <- text
 	return 1, <-g.answers // start past @; the test drives delivery timing
 }
 
-// TestFlashRuleOnSpentTab drives the real key path: a Tab that can neither
-// advance the buffer nor show anything new must still light the rule, which
-// depends on the keypress repaint rather than one of flashRule's own.
+// TestFlashRuleOnSpentTab drives the real key path, where the flash depends on
+// the keypress repaint rather than one of flashRule's own.
 func TestFlashRuleOnSpentTab(t *testing.T) {
 	t.Parallel()
 

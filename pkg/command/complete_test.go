@@ -30,6 +30,31 @@ func TestCompleter(t *testing.T) {
 		assert.Contains(t, labels, "/model")
 	})
 
+	// argument completion resolves the name as dispatch does, so an upper-case
+	// command still reaches its own Complete
+	t.Run("arguments_ignore_case", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, nil)
+
+		_, items := comp.Complete("/REASONING me", 13)
+		assert.Contains(t, labelsOf(items), "medium")
+	})
+
+	// a command name is matched case-insensitively, as dispatch resolves it
+	t.Run("commands_ignore_case", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, nil)
+
+		_, items := comp.Complete("/MO", 3)
+		assert.Contains(t, labelsOf(items), "/model")
+	})
+
 	// a path after @ is completed.
 	t.Run("path_after_at", func(t *testing.T) {
 		dir := t.TempDir()
@@ -102,7 +127,7 @@ func TestCompleter(t *testing.T) {
 		require.Contains(t, labels, "é.go")
 	})
 
-	// a shell line routes to shell completion, so its @ stays literal.
+	// a shell line routes to shell completion, so its @ stays literal
 	t.Run("shell_line_routes_to_shell", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
@@ -133,35 +158,33 @@ func TestCompleter(t *testing.T) {
 	})
 }
 
-func TestCompleterIsAsync(t *testing.T) {
+func TestCompleterStyle(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	idx := refs.NewIndex(dir, tools.PathPolicy{})
-	comp := NewCompleter(NewRegistry(), newFakeConsole(t), idx)
+	comp := NewCompleter(NewRegistry(), newFakeConsole(t), refs.NewIndex(t.TempDir(), tools.PathPolicy{}))
 
 	cases := []struct {
 		name string
 		text string
-		want bool
+		want tui.CompleteStyle
 	}{
-		{"at_token", "@mai", true},
-		{"shell_line", "!cat mai", true},
-		{"excluded_shell_line", "!!cat mai", true},
-		{"slash_command", "/mo", false},
-		{"plain_text", "hello", false},
+		{"at_token", "@mai", tui.CompleteStyle{Async: true}},
+		{"shell_line", "!cat mai", tui.CompleteStyle{Async: true}},
+		{"excluded_shell_line", "!!cat mai", tui.CompleteStyle{Async: true}},
+		{"slash_command", "/mo", tui.CompleteStyle{Menu: true}},
+		{"command_argument", "/model be", tui.CompleteStyle{Menu: true}},
+		{"plain_text", "hello", tui.CompleteStyle{}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, comp.IsAsync(c.text, len(c.text)))
+			assert.Equal(t, c.want, comp.Style(c.text, len(c.text)))
 		})
 	}
 
-	// path completion off leaves @ synchronous, but a shell line still runs off the
-	// key loop: its command-name lookup does not need the path index.
+	// a shell line still runs off the key loop without a path index
 	noPaths := NewCompleter(NewRegistry(), newFakeConsole(t), nil)
-	assert.False(t, noPaths.IsAsync("@mai", 4))
-	assert.True(t, noPaths.IsAsync("!ls", 3))
+	assert.Equal(t, tui.CompleteStyle{}, noPaths.Style("@mai", 4))
+	assert.Equal(t, tui.CompleteStyle{Async: true}, noPaths.Style("!ls", 3))
 }
 
 func labelsOf(items []tui.Completion) []string {

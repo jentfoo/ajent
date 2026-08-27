@@ -122,7 +122,7 @@ type UI struct {
 	noticeText string
 
 	completer     Completer           // nil disables the completion overlay
-	completion    *completionList     // candidates listed after an ambiguous Tab, nil when none
+	completion    *completionOverlay  // live menu or an ambiguous Tab's listing, nil when none
 	completionSeq int                 // generation guard for async path queries
 	ruleFlash     bool                // prompt rule drawn accented until the flash timer clears it
 	historySearch func() []SearchItem // nil disables Ctrl+R history search
@@ -781,7 +781,7 @@ func (u *UI) repaint() {
 		offset += len(searchRows)
 	}
 
-	// an ambiguous Tab's listing rides above the editor, shifting the caret offset
+	// the completion list rides above the editor, shifting the caret offset
 	if u.completion != nil && u.act == nil {
 		compRows := u.completion.rows(u.theme, w, max(3, (h-2)/4))
 		rows = append(rows, compRows...)
@@ -1145,12 +1145,28 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			}
 		}
 	}
-	// a listing left over from an ambiguous Tab is dismissed by Esc before the
-	// buffer is; every other key clears it on the way out below.
-	if u.completion != nil && k.typ == keyEscape {
-		u.completion = nil
-		u.cancelRewindLocked()
-		return nil, true, false
+	// a menu consumes Tab/↑/↓/Enter/Esc before the editor; a Tab-driven listing
+	// only takes Esc, and every other key clears it on the way out below
+	if u.completion != nil && u.completion.accept(k) {
+		consume, doSubmit := u.completion.key(k, u)
+		if k.typ == keyEscape {
+			u.completion = nil
+			u.cancelRewindLocked()
+			return nil, true, false
+		}
+		if consume && doSubmit {
+			u.completion = nil
+			if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
+				e := u.expandPastes(v)
+				u.resetPromptNavLocked() // let a later ↑ pick up the freshly sent prompt
+				return &e, true, false
+			}
+			return nil, true, false
+		}
+		if consume {
+			u.refreshMenu() // narrow the menu against the text the accept changed
+			return nil, true, false
+		}
 	}
 	switch k.typ {
 	case keyTab:
@@ -1281,7 +1297,12 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			u.editor.DeleteForward()
 		}
 	}
-	u.completion = nil // any other key composes again; the listing is spent
+	// an edit means composing again: drop a stale selection, then re-query so a
+	// live menu narrows and a spent listing closes
+	if u.completion != nil {
+		u.completion.moved = false
+	}
+	u.refreshMenu()
 	return nil, true, false
 }
 

@@ -3,7 +3,7 @@
 How `pkg/command` and `pkg/refs` own everything the user does that is not "send
 a message to the model": slash commands through a registry, direct `!` shell
 execution with staged results (`!!` runs excluded from context), `@`-path
-expansion with auto-read, and the Tab completion driving both. It
+expansion with auto-read, and the completion driving both. It
 is the single dispatch path for submitted lines; extensions and MCP register into
 the same registry, so a built-in `/tools` and a third-party `/plan` are the same
 mechanism.
@@ -16,8 +16,8 @@ Three packages sit above the agent, tools and TUI:
   built-in commands, the shell `Stager`, and the aggregating `Completer`.
 - `pkg/refs` — `@` parsing, the inject-or-annotate expander, and the
   gitignore-aware path index for completion.
-- Tab completion in `pkg/tui` — a query on Tab that either advances the buffer
-  or lists what is left; it owns no keys but Tab and Esc.
+- completion in `pkg/tui` — a live menu for commands, and a Tab-driven fill for
+  paths that leaves the arrows to the editor.
 
 `pkg/command` imports `pkg/tui`, `pkg/agent`, `pkg/llm`, `pkg/tools` and
 `pkg/session`; it never imports `pkg/refs` (the host wires the two together
@@ -331,45 +331,69 @@ interrupt path.
 > the process exits before that flush, the staged results are lost — they are
 > not part of the transcript until the model sees them.
 
-## Tab completion
+## Completion
 
-Tab is the only trigger; nothing is raised while typing. Three contexts, one
-mechanism:
+Two presentations, one mechanism. `CompleteStyle` picks between them per cursor
+position, so a source decides how each of its contexts reads:
 
-- `/` at the start of an empty line → command completion.
-- `@` anywhere → path completion.
-- `!` / `!!` at the start of the line → shell completion.
+| Context | Presentation |
+|---|---|
+| `/` at a line start, and a command's arguments | **menu** — opens as you type, `↑`/`↓` pick, `Tab`/`Enter` accept |
+| `@` anywhere, and a `!` / `!!` line | **Tab-driven** — nothing until `Tab`, which fills the common prefix |
+
+The split is the size of the vocabulary. A command set is small, closed and worth
+advertising, so its menu is how you learn what exists. The filesystem is neither,
+and a directory that pops a list on every keystroke was what made the arrows
+unusable for editing.
 
 The completion model pairs a replacement text with an optional label, detail and
 score; the `Completer` interface answers one query — given the buffer and cursor,
 it returns where accepted text should start replacing from plus the candidate
 items. It must not call back into the UI.
 
-A path or shell source may take time (a slow directory listing, a subprocess), so
-`@` and `!` queries are routed off the key loop: a completer that implements
-`AsyncCompleter` (`IsAsync`) has those queries run in a goroutine and applied
-when ready, so a Tab never stalls the editor. A result is dropped when a newer
-Tab superseded it or the buffer moved on while it ran, so a slow listing can
-never rewrite text the user has since edited. Command and argument completion
-keep the synchronous contract.
+A path or shell query may take time (a slow directory listing, a subprocess), so
+`CompleteStyle.Async` routes it off the key loop and applies the result when it
+lands. A result is dropped when a newer Tab superseded it or the buffer moved on
+while it ran, so a slow listing can never rewrite text the user has since edited.
+Menu contexts are synchronous by contract.
+
+### Menu rules
+
+- The top candidate is highlighted from the moment the menu opens. **The marker
+  is Tab's target, not Enter's** — Tab always accepts it, Enter only does once
+  `↑`/`↓` have moved the selection.
+- `↑`/`↓` cycle the highlight and mark the selection *moved*.
+- `Tab` accepts the highlighted candidate; a following `Enter` just submits the
+  result (e.g. `/model` then Enter runs it).
+- `Enter` with a moved selection accepts it and submits; with the list merely
+  offered it submits the line as typed, so an open menu never swallows a send
+  the user meant. That is why the highlight cannot arm Enter on its own: the
+  menu opens unbidden while typing, and a send must not change meaning because
+  a list happened to appear.
+- Any key that reaches the editor — a character, Backspace, or a caret move —
+  drops the *moved* state, so Enter sends what was typed rather than re-applying
+  a stale highlight.
+- `Esc` dismisses without inserting.
+
+A menu is re-queried on every keystroke under the UI lock, so `Menu` is a
+promise that the source answers promptly and never re-enters the UI. A source
+that cannot must use `Async` instead.
 
 ### Tab rules
 
 - `Tab` fills in the candidates' longest common prefix and stops there, so it
   never guesses past an ambiguity — bash's behaviour. A lone candidate therefore
   completes whole.
-- A `Tab` that cannot advance lists the remaining candidates as passive dim rows
-  above the prompt: no highlight, no selection, and every other key clears them.
-  Narrowing the list means typing more.
-- A `Tab` with nothing to add and nothing new to list (no candidates at all, or
-  the listing already on screen) leaves the buffer alone and flashes the rule
-  above the prompt.
+- A `Tab` that cannot advance lists the remaining candidates as passive dim rows,
+  packed into columns: no highlight, no selection, and every other key clears
+  them. Narrowing the list means typing more.
+- A `Tab` with nothing to add and nothing new to list leaves the buffer alone and
+  flashes the rule above the prompt.
 - A source free to return anything — a command's own `Complete` need not extend
   the typed text — has no meaningful common prefix, so its best candidate is
   taken whole.
-- `Esc` drops a listing before it clears the buffer. Everything else, `Enter`
-  included, reaches the editor untouched: **completion never owns the arrows**,
-  which stay cursor movement and history.
+- `Esc` drops a listing before it clears the buffer. Everything else, `Enter` and
+  the arrows included, reaches the editor untouched.
 
 ### `command.Completer`
 
@@ -377,6 +401,12 @@ The aggregating completer sources commands from the registry and paths from
 `refs.Index`. `/` at line start offers command names; past the first space it
 delegates to the matched command's `Complete`. `@` anywhere offers workspace
 paths. A nil path index disables path completion (plain mode).
+
+One `classify` call decides which of those the cursor is in, and both `Complete`
+and `Style` dispatch on its result — so how a context presents can never disagree
+with the query that then runs. It returns a `completeCtx` carrying the grapheme
+cells, the clamped cursor and where the context begins, which every branch slices
+rather than rescanning the buffer.
 
 ### Shell completion (`command/shellcomplete.go`)
 
@@ -492,8 +522,8 @@ home directory instead, offered back with the leading `~` kept in each candidate
 (so accepting a home path inserts one that expands); a `./` query keeps its prefix,
 and an absolute `/…` path completes anywhere on the filesystem — all three keep
 their leading form so accepting inserts a usable path. Because a listing may still
-take time on a slow mount, `@` queries run off the key loop (see Tab
-completion): a Tab never stalls the editor and a stale result is dropped. Ranking
+take time on a slow mount, `@` queries run off the key loop (see Completion): a
+Tab never stalls the editor and a stale result is dropped. Ranking
 is (a) already in the conversation (`Tracker.Records()`), (b) recent mtime,
 (c) fuzzy score (reusing `tui.MatchScore` rather than a second implementation).
 Directories complete with a trailing `/` and keep completing.
@@ -555,9 +585,9 @@ index.go        Index — one-ReadDir-per-step path source (Candidates, ShellCan
 `pkg/tui` additions:
 
 ```
-complete.go        Completion, Completer, AsyncCompleter, MatchScore, SetCompleter,
-                   startCompletion/applyCompletion — the Tab rules
-complete_impl.go   completionList — the passive listing an ambiguous Tab draws
+complete.go        Completion, Completer, StyledCompleter, CompleteStyle,
+                   MatchScore, SetCompleter, refreshMenu/startCompletion
+complete_impl.go   completionOverlay — the menu and the Tab-driven listing
 prompt.go          MultiPick, multiPickState (grouped, Tab-toggle multi-select)
 input.go           keyTab / keyBackTab decoding
 ui.go              paste placeholders

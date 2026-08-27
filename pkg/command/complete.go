@@ -3,79 +3,116 @@ package command
 import (
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// Completer aggregates command and path completion for the editor overlay.
-// Commands complete at the start of an empty line; paths complete after @
-// anywhere. A nil path index means path completion is disabled (plain mode).
+// Completer aggregates command, path and shell completion for the editor: `/`
+// at a line start, `@` anywhere, and a leading `!` as bash.
 type Completer struct {
 	commands *Registry
 	console  Console
 	paths    *refs.Index
 }
 
-// NewCompleter returns a completer sourcing commands from r and paths from idx
-// (nil disables path completion). c supplies command argument completion.
+// NewCompleter returns a completer sourcing commands from r, argument
+// candidates from c, and paths from idx (nil disables path completion).
 func NewCompleter(r *Registry, c Console, idx *refs.Index) *Completer {
 	return &Completer{commands: r, console: c, paths: idx}
 }
 
-// Complete returns candidates at the cursor. A leading `!` completes the line as
-// a shell command; / at line start offers commands, past the first space
-// delegating to the matched command's Complete; @ anywhere offers paths. text is
-// a byte string but pos and the returned start are grapheme-cell indexes,
-// matching how the editor addresses its buffer.
-func (c *Completer) Complete(text string, pos int) (int, []tui.Completion) {
+// completeKind is what the cursor is completing.
+type completeKind uint8
+
+const (
+	completeNone completeKind = iota
+	completeCommand
+	completeArg
+	completePath
+	completeShell
+)
+
+// completeCtx is one classified cursor position.
+type completeCtx struct {
+	kind  completeKind
+	cells []string
+	pos   int // cursor cell, clamped to the buffer
+	start int // where the context begins: the token, past `!`/`!!`, or the `/` owning the arg
+}
+
+// classify reports what the cursor at pos is completing. Complete and Style
+// share it so their answers cannot disagree.
+func (c *Completer) classify(text string, pos int) completeCtx {
 	if pos <= 0 {
-		return 0, nil
+		return completeCtx{}
 	}
 	cells := tui.GraphemeCells(text)
 	n := len(cells)
 	if n == 0 {
-		return 0, nil
+		return completeCtx{}
 	}
-	pos = min(pos, n)
+	ctx := completeCtx{cells: cells, pos: min(pos, n)}
 
-	// a `!` line is a shell command: it completes as bash, never as a ref
+	// a `!` line completes as bash, never as a ref
 	if cells[0] == "!" {
-		return c.shellComplete(cells, pos)
+		ctx.kind, ctx.start = completeShell, shellCmdStart(cells)
+		return ctx
 	}
 
-	// the first cell of the token under the cursor ("" when none: a break or end)
-	tokStart := pos
-	for tokStart > 0 && !isTokenBreakCell(cells[tokStart-1]) {
-		tokStart--
+	ctx.start = tokenStart(cells, ctx.pos, 0)
+	var first string // "" when the cursor sits on a break or the end
+	if ctx.start < n {
+		first = cells[ctx.start]
 	}
-	var first string
-	if tokStart < n {
-		first = cells[tokStart]
-	}
-
 	switch {
-	case first == "/" && tokStart == 0:
-		return c.commandComplete(cells, pos, tokStart)
-	case first == "@":
-		return c.pathComplete(cells, pos, tokStart)
+	case first == "/" && ctx.start == 0:
+		ctx.kind = completeCommand
+	case first == "@" && c.paths != nil && ctx.start < ctx.pos:
+		ctx.kind = completePath
 	default:
-		// a /command with args before the cursor: delegate to its Complete
-		if ls := lineStartCell(cells, max(tokStart-1, 0)); ls < n && cells[ls] == "/" {
-			return c.commandArgComplete(cells, pos, ls)
+		// a /command with args before the cursor
+		if ls := lineStartCell(cells, max(ctx.start-1, 0)); ls < n && cells[ls] == "/" {
+			ctx.kind, ctx.start = completeArg, ls
 		}
 	}
-	return pos, nil
+	return ctx
 }
 
-// commandComplete offers command names while the cursor is in the first token,
-// or delegates to the matched command's Complete past the first space.
-func (c *Completer) commandComplete(cells []string, pos, start int) (int, []tui.Completion) {
-	token := strings.Join(cells[start:pos], "")
-	rest := strings.TrimPrefix(token, "/")
-	name, arg, _ := SplitCommand(rest)
-	if arg != "" || strings.Contains(rest, " ") {
-		return c.commandArgComplete(cells, pos, start)
+// Complete returns the cell an accepted Text replaces from, plus the candidates
+// at the cursor. pos and start are grapheme-cell indexes, not byte offsets.
+func (c *Completer) Complete(text string, pos int) (int, []tui.Completion) {
+	ctx := c.classify(text, pos)
+	switch ctx.kind {
+	case completeShell:
+		return c.shellComplete(ctx)
+	case completeCommand:
+		return c.commandComplete(ctx)
+	case completeArg:
+		return c.commandArgComplete(ctx)
+	case completePath:
+		return c.pathComplete(ctx)
 	}
+	return ctx.pos, nil
+}
+
+// Style reports how the cursor's context completes: a command or its argument
+// is a live menu, while an `@` path and a `!` shell line are Tab-driven and run
+// off the key loop.
+func (c *Completer) Style(text string, pos int) tui.CompleteStyle {
+	switch c.classify(text, pos).kind {
+	case completeCommand, completeArg:
+		return tui.CompleteStyle{Menu: true}
+	case completePath, completeShell:
+		return tui.CompleteStyle{Async: true}
+	}
+	return tui.CompleteStyle{}
+}
+
+// commandComplete offers the command names matching the typed token, matched
+// case-insensitively as dispatch resolves it.
+func (c *Completer) commandComplete(ctx completeCtx) (int, []tui.Completion) {
+	name := strings.ToLower(strings.TrimPrefix(ctx.spanText(ctx.start), "/"))
 	var out []tui.Completion
 	for _, cmd := range c.commands.List() {
 		if strings.HasPrefix(cmd.Name, name) {
@@ -86,75 +123,67 @@ func (c *Completer) commandComplete(cells []string, pos, start int) (int, []tui.
 			})
 		}
 	}
-	return start, out
+	return offer(ctx.start, ctx.pos, out)
 }
 
-// commandArgComplete delegates to the matched command's Complete for the arg
-// span from ls (the leading /) to the cursor. An empty or absent arg lists all
-// candidates.
-func (c *Completer) commandArgComplete(cells []string, pos, ls int) (int, []tui.Completion) {
-	nameEnd := ls + 1
-	for nameEnd < len(cells) && !isTokenBreakCell(cells[nameEnd]) {
-		nameEnd++
-	}
-	name := strings.Join(cells[ls+1:nameEnd], "")
+// commandArgComplete delegates to the matched command's Complete, resolving the
+// name as dispatch does. An empty or absent arg lists every candidate.
+func (c *Completer) commandArgComplete(ctx completeCtx) (int, []tui.Completion) {
+	nameEnd := tokenEnd(ctx.cells, ctx.start+1)
+	// Registry.Get is case sensitive on the lowercased name ParseLine produces
+	name := strings.ToLower(strings.Join(ctx.cells[ctx.start+1:nameEnd], ""))
 	cmd, ok := c.commands.Get(name)
 	if !ok || cmd.Complete == nil {
-		return pos, nil
+		return ctx.pos, nil
 	}
 	argStart := nameEnd + 1 // skip the space after the command name
-	items := cmd.Complete(strings.Join(cells[argStart:pos], ""))
-	if len(items) == 0 {
-		return pos, nil
-	}
-	out := make([]tui.Completion, len(items))
-	for i, s := range items {
-		out[i] = tui.Completion{Text: s, Label: s}
-	}
-	return argStart, out
-}
-
-// IsAsync reports whether the cursor sits in an @ path query or a `!` shell
-// line. The TUI runs those off the key loop so a slow directory listing or the
-// command-name lookup never blocks typing; command and argument completion stay
-// synchronous.
-func (c *Completer) IsAsync(text string, pos int) bool {
-	if pos <= 0 {
-		return false
-	}
-	cells := tui.GraphemeCells(text)
-	n := len(cells)
-	if n == 0 {
-		return false
-	} else if cells[0] == "!" {
-		return true // a command-name lookup or a directory listing
-	} else if c.paths == nil {
-		return false
-	}
-	tokStart := min(pos, n)
-	for tokStart > 0 && !isTokenBreakCell(cells[tokStart-1]) {
-		tokStart--
-	}
-	return tokStart < n && cells[tokStart] == "@"
+	return offer(argStart, ctx.pos, textCompletions(cmd.Complete(ctx.spanText(argStart))))
 }
 
 // pathComplete offers workspace paths after @.
-func (c *Completer) pathComplete(cells []string, pos, start int) (int, []tui.Completion) {
-	if c.paths == nil || start >= len(cells) {
-		return pos, nil
+func (c *Completer) pathComplete(ctx completeCtx) (int, []tui.Completion) {
+	// start after @ so accepting keeps the leading @
+	return offer(ctx.start+1, ctx.pos, c.paths.Candidates(ctx.spanText(ctx.start+1), nil))
+}
+
+// spanText returns the buffer from start up to the cursor.
+func (ctx completeCtx) spanText(start int) string {
+	if start >= ctx.pos {
+		return ""
 	}
-	// cursor on the @ with nothing typed after it yet: nothing to complete
-	end := min(pos, len(cells))
-	if end <= start {
-		return pos, nil
-	}
-	query := strings.Join(cells[start+1:end], "")
-	items := c.paths.Candidates(query, nil)
+	return strings.Join(ctx.cells[start:ctx.pos], "")
+}
+
+// offer returns start with items, or a no-completion result when items is empty.
+func offer(start, pos int, items []tui.Completion) (int, []tui.Completion) {
 	if len(items) == 0 {
 		return pos, nil
 	}
-	// start after @ so accepting keeps the leading @
-	return start + 1, items
+	return start, items
+}
+
+// textCompletions turns plain candidate strings into completions.
+func textCompletions(items []string) []tui.Completion {
+	return bulk.SliceTransform(func(s string) tui.Completion {
+		return tui.Completion{Text: s, Label: s}
+	}, items)
+}
+
+// tokenStart returns the first cell of the token ending at pos, never scanning
+// back past from.
+func tokenStart(cells []string, pos, from int) int {
+	for pos > from && !isTokenBreakCell(cells[pos-1]) {
+		pos--
+	}
+	return pos
+}
+
+// tokenEnd returns the cell past the token starting at pos.
+func tokenEnd(cells []string, pos int) int {
+	for pos < len(cells) && !isTokenBreakCell(cells[pos]) {
+		pos++
+	}
+	return pos
 }
 
 // isTokenBreakCell reports whether cell ends a completion token.

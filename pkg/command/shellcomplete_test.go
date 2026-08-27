@@ -17,7 +17,7 @@ import (
 func TestShellComplete(t *testing.T) {
 	t.Parallel()
 
-	// paths complete relative to the workspace root, one directory at a time.
+	// paths complete relative to the workspace root, one directory at a time
 	t.Run("path_argument", func(t *testing.T) {
 		comp := newShellCompleter(t, "pkg")
 
@@ -26,7 +26,7 @@ func TestShellComplete(t *testing.T) {
 		assert.Equal(t, []string{"pkg/"}, labelsOf(items))
 	})
 
-	// `!!` shifts the command text by one more cell.
+	// `!!` shifts the command text by one more cell
 	t.Run("excluded_run_offset", func(t *testing.T) {
 		comp := newShellCompleter(t, "pkg")
 
@@ -35,7 +35,7 @@ func TestShellComplete(t *testing.T) {
 		assert.Equal(t, []string{"pkg/"}, labelsOf(items))
 	})
 
-	// a first word holding a separator is a path, as bash treats ./script.
+	// a first word holding a separator is a path, as bash treats ./script
 	t.Run("first_word_with_slash", func(t *testing.T) {
 		comp := newShellCompleter(t, "pkg")
 
@@ -43,7 +43,7 @@ func TestShellComplete(t *testing.T) {
 		assert.Equal(t, []string{"./pkg/"}, labelsOf(items))
 	})
 
-	// an @ inside a shell line is literal text for bash, never a workspace ref.
+	// an @ inside a shell line is literal text for bash, never a workspace ref
 	t.Run("at_is_not_a_ref", func(t *testing.T) {
 		comp := newShellCompleter(t, "pkg")
 
@@ -51,7 +51,7 @@ func TestShellComplete(t *testing.T) {
 		assert.Empty(t, items)
 	})
 
-	// a bare ! offers nothing: every command on the system is not a useful list.
+	// a bare ! offers nothing; every command on the system is not a useful list
 	t.Run("empty_command_token", func(t *testing.T) {
 		comp := newShellCompleter(t, "pkg")
 
@@ -67,7 +67,7 @@ func TestShellComplete(t *testing.T) {
 		assert.Contains(t, labelsOf(items), "echo")
 	})
 
-	// a separator restarts the command position mid-line.
+	// a separator restarts the command position mid-line
 	t.Run("command_names_after_pipe", func(t *testing.T) {
 		requireBash(t)
 		comp := newShellCompleter(t, "pkg")
