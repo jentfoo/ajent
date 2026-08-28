@@ -22,8 +22,8 @@ activity-row sink. The parent registers three parallel-safe tools —
 ## Boundary rules
 
 The dependency edge is load-bearing: **`pkg/subagent ↛ pkg/tools`, `pkg/tui`,
-`pkg/command`, `pkg/session`, `pkg/permit`.** It imports only `agent`, `llm` and
-`tokens`.
+`pkg/command`, `pkg/session`, `pkg/permit`.** It imports only `agent`, `llm`,
+`strutil` and `tokens`.
 
 - The parent tool registry arrives as a narrow interface (`ToolSource`) declared
   here, so the package never imports `pkg/tools`.
@@ -113,8 +113,7 @@ Each job builds a fresh agent:
 
 The prompt is `agent.Input{Text: taskPrompt(task, instructions)}`. After it
 returns, the summary is read off the **last assistant message** in `State.Messages`,
-joining only `llm.TextBlock` content — thinking is excluded. This mirrors
-`compact.go`'s `runSummary`.
+joining only its non-empty `llm.TextBlock` content — thinking is excluded.
 
 **Empty-summary retry.** A reasoning model whose final message is thinking-only
 returns no text. When the summary is blank and the stop reason is neither error nor

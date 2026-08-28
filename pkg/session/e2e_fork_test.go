@@ -69,12 +69,7 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 	assert.Equal(t, llm.Text(llm.RoleUser, "fork prompt"), st.Messages[1])
 
 	// both chains remain as tips; switching to tip1 restores the old context exactly
-	tips := Tips(entries)
-	ids := make([]string, len(tips))
-	for i, tp := range tips {
-		ids[i] = tp.ID
-	}
-	assert.ElementsMatch(t, []string{tip1, tip2}, ids)
+	assert.ElementsMatch(t, []string{tip1, tip2}, tipIDs(entries))
 
 	stOld, _ := State(Branch(entries, tip1), resolve)
 	require.Len(t, stOld.Messages, len(mainLive))

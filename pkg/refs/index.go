@@ -24,14 +24,13 @@ type entry struct {
 // query is cheap (one ReadDir), so completion stays responsive however large or
 // slow the filesystem; callers may run it off the UI lock.
 type Index struct {
-	root   string
-	policy tools.PathPolicy // kept for parity with read/write/edit resolution
+	root string
 }
 
 // NewIndex returns an index rooted at root. The root is where relative @ paths
 // resolve, matching the keys read/write/edit use.
-func NewIndex(root string, policy tools.PathPolicy) *Index {
-	return &Index{root: root, policy: policy}
+func NewIndex(root string) *Index {
+	return &Index{root: root}
 }
 
 // Candidates returns paths matching query for an @ reference, ranked by (a)

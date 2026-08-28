@@ -1,7 +1,6 @@
 package session
 
 import (
-	"slices"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -17,32 +16,6 @@ const (
 	RowTool                      // tool header or result, collapsed to one label
 	RowCompaction                // a context reduction, labelled by before/after tokens
 )
-
-// PickerRow is one selectable prior message for rewinding onto.
-type PickerRow struct {
-	ID      string // entry id to SetHead onto
-	Ordinal int    // position from the root (1-based), so "continue from #12" reads naturally
-	Kind    RowKind
-	Label   string // condensed snippet or collapsed tool label
-}
-
-// PickerRows builds rewind rows over a branch, newest first. User and assistant
-// messages show their first text line; entries that only carry tool calls or
-// results collapse to one label each. Ordinals count pickable rows from the root,
-// so "continue from #12" reads as the twelfth listed message.
-func PickerRows(branch []Entry) []PickerRow {
-	var out []PickerRow
-	for _, e := range branch {
-		r := rowFor(e)
-		if r == nil {
-			continue
-		}
-		r.Ordinal = len(out) + 1
-		out = append(out, *r)
-	}
-	slices.Reverse(out) // the picker lists newest first
-	return out
-}
 
 // TreeRow is one node of the context tree shown in the rewind picker.
 type TreeRow struct {
@@ -253,7 +226,15 @@ func messageText(md MessageData) string {
 	return strings.Join(parts, "\n")
 }
 
-func rowFor(e Entry) *PickerRow {
+// treeRowInfo is rowFor's internal descriptor: what a pickable entry looks like
+// in the rewind tree, before depth/guide/active are filled in by TreeRows.
+type treeRowInfo struct {
+	ID    string
+	Kind  RowKind
+	Label string
+}
+
+func rowFor(e Entry) *treeRowInfo {
 	switch e.Type {
 	case TypeCompaction:
 		var cd CompactionData
@@ -264,7 +245,7 @@ func rowFor(e Entry) *PickerRow {
 		if cd.Summary != "" {
 			lbl += " · summarized"
 		}
-		return &PickerRow{ID: e.ID, Kind: RowCompaction, Label: lbl}
+		return &treeRowInfo{ID: e.ID, Kind: RowCompaction, Label: lbl}
 	case TypeMessage:
 	default:
 		return nil // session / notice / custom are not rewound onto
@@ -281,7 +262,7 @@ func rowFor(e Entry) *PickerRow {
 			if lbl == "" {
 				return nil
 			}
-			return &PickerRow{ID: e.ID, Kind: RowTool, Label: lbl}
+			return &treeRowInfo{ID: e.ID, Kind: RowTool, Label: lbl}
 		} else if md.Injected {
 			// system-injected context is not a typed prompt: rewinding onto it would
 			// pre-fill the editor with a staged shell result rather than a message
@@ -291,19 +272,19 @@ func rowFor(e Entry) *PickerRow {
 		if txt == "" {
 			return nil
 		}
-		return &PickerRow{ID: e.ID, Kind: RowUser,
+		return &treeRowInfo{ID: e.ID, Kind: RowUser,
 			Label: "user: " + truncate(strutil.FirstLine(txt))}
 	case llm.RoleAssistant:
 		txt := strings.TrimSpace(userText(m))
 		if txt != "" {
-			return &PickerRow{ID: e.ID, Kind: RowAssistant,
+			return &treeRowInfo{ID: e.ID, Kind: RowAssistant,
 				Label: "assistant: " + truncate(strutil.FirstLine(txt))}
 		}
 		lbl := toolCallLabel(m)
 		if lbl == "" {
 			return nil
 		}
-		return &PickerRow{ID: e.ID, Kind: RowTool, Label: lbl}
+		return &treeRowInfo{ID: e.ID, Kind: RowTool, Label: lbl}
 	default:
 		return nil // system and other roles are not shown in the picker
 	}

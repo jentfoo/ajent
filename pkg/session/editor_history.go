@@ -176,19 +176,6 @@ func encodeHistLine(l histLine) []byte {
 	return append(b, '\n')
 }
 
-// readMessages returns path's recallable message texts (hidden rows excluded), for
-// callers that only care about what Up/Down would offer.
-func readMessages(path string) []string {
-	lines := readHistLines(path)
-	out := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if !l.hidden {
-			out = append(out, l.msg)
-		}
-	}
-	return out
-}
-
 // readHistLines decodes every row of path back to its message and hidden flag.
 // A missing or unreadable file yields nil; blank rows are skipped.
 func readHistLines(path string) []histLine {

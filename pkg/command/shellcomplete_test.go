@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/refs"
-	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -134,7 +133,7 @@ func newShellCompleter(t *testing.T, dirs ...string) *Completer {
 	for _, d := range dirs {
 		require.NoError(t, os.Mkdir(filepath.Join(dir, d), 0o750))
 	}
-	return NewCompleter(NewRegistry(), newFakeConsole(t), refs.NewIndex(dir, tools.PathPolicy{Cwd: dir}))
+	return NewCompleter(NewRegistry(), newFakeConsole(t), refs.NewIndex(dir))
 }
 
 func requireBash(t *testing.T) {

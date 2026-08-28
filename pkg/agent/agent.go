@@ -162,22 +162,9 @@ func (a *Agent) WithState(fn func(*State)) bool {
 	return true
 }
 
-// Recount replaces the context estimate with an exact count from the provider's
-// tokenizer, or returns llm.ErrNoTokenizer when it has none. It refuses while a
-// turn is running, like ResetState.
-func (a *Agent) Recount(ctx context.Context) (int, error) {
-	a.mu.Lock()
-	if a.running {
-		a.mu.Unlock()
-		return 0, errTurnRunning
-	}
-	a.mu.Unlock()
-	return a.recount(ctx)
-}
-
 // recount replaces the ledger's estimate with the provider tokenizer's exact count
-// of what buildRequest would send. It is shared by Recount and the turn loop, which
-// calls it while running (so it must not take the agent lock).
+// of what buildRequest would send. The turn loop calls it while running (so it must
+// not take the agent lock).
 func (a *Agent) recount(ctx context.Context) (int, error) {
 	p, err := a.opts.Provider(a.state.Model)
 	if err != nil {

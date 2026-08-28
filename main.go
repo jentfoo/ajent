@@ -591,7 +591,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			expander.Seed(msgs)
 		}
 	}
-	idx := refs.NewIndex(cwdOrDot(), tools.PathPolicy{Cwd: cwdOrDot()})
+	idx := refs.NewIndex(cwdOrDot())
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
 
 	// Ctrl+R and ↑/↓ recall this workspace's typed lines merged with recorded

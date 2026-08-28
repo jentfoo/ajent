@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/refs"
-	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -60,7 +59,7 @@ func TestCompleter(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "read.go"), []byte("x"), 0o600))
-		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		idx := refs.NewIndex(dir)
 		c := newFakeConsole(t)
 		r := NewRegistry()
 		comp := NewCompleter(r, c, idx)
@@ -76,7 +75,7 @@ func TestCompleter(t *testing.T) {
 	t.Run("cursor_on_at_does_not_panic", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
-		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		idx := refs.NewIndex(dir)
 		c := newFakeConsole(t)
 		r := NewRegistry()
 		comp := NewCompleter(r, c, idx)
@@ -114,7 +113,7 @@ func TestCompleter(t *testing.T) {
 	t.Run("path_non_ascii_cell_indexes", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "é.go"), []byte("x"), 0o600))
-		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		idx := refs.NewIndex(dir)
 		c := newFakeConsole(t)
 		r := NewRegistry()
 		comp := NewCompleter(r, c, idx)
@@ -131,7 +130,7 @@ func TestCompleter(t *testing.T) {
 	t.Run("shell_line_routes_to_shell", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
-		idx := refs.NewIndex(dir, tools.PathPolicy{})
+		idx := refs.NewIndex(dir)
 		comp := NewCompleter(NewRegistry(), newFakeConsole(t), idx)
 
 		start, items := comp.Complete("!cat mai", 8)
@@ -161,7 +160,7 @@ func TestCompleter(t *testing.T) {
 func TestCompleterStyle(t *testing.T) {
 	t.Parallel()
 
-	comp := NewCompleter(NewRegistry(), newFakeConsole(t), refs.NewIndex(t.TempDir(), tools.PathPolicy{}))
+	comp := NewCompleter(NewRegistry(), newFakeConsole(t), refs.NewIndex(t.TempDir()))
 
 	cases := []struct {
 		name string

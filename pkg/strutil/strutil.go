@@ -17,15 +17,15 @@ func FirstLine(s string) string {
 	return s
 }
 
-// TrimZero strips a trailing ".0" from a formatted float so "68.2k", not "68.20k".
-func TrimZero(s string) string { return strings.TrimSuffix(s, ".0") }
+// trimZero strips a trailing ".0" from a formatted float so "68.2k", not "68.20k".
+func trimZero(s string) string { return strings.TrimSuffix(s, ".0") }
 
 func FormatTokens(n int) string {
 	switch {
 	case n >= 1_000_000:
-		return TrimZero(strconv.FormatFloat(float64(n)/1_000_000, 'f', 1, 64)) + "M"
+		return trimZero(strconv.FormatFloat(float64(n)/1_000_000, 'f', 1, 64)) + "M"
 	case n >= 1_000:
-		return TrimZero(strconv.FormatFloat(float64(n)/1_000, 'f', 1, 64)) + "k"
+		return trimZero(strconv.FormatFloat(float64(n)/1_000, 'f', 1, 64)) + "k"
 	default:
 		return strconv.Itoa(n)
 	}
@@ -49,9 +49,9 @@ func HumanSize(n int64) string {
 	)
 	switch {
 	case float64(n) >= mb:
-		return TrimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
+		return trimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
 	case float64(n) >= kb:
-		return TrimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
+		return trimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
 	default:
 		return strconv.FormatInt(n, 10) + "b"
 	}

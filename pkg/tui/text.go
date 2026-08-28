@@ -134,10 +134,6 @@ func paintCaret(row string, col, maxW int) string {
 	return renderCells(cs, "")
 }
 
-// TruncateDisplay returns s limited to max columns, keeping escape sequences
-// intact. Use it to size text by what the terminal shows rather than by bytes.
-func TruncateDisplay(s string, max int) string { return truncateDisplay(s, max) }
-
 // truncateDisplay returns s limited to max columns, keeping escape sequences intact.
 func truncateDisplay(s string, max int) string {
 	if max <= 0 {

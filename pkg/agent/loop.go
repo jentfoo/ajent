@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"runtime"
 	"slices"
 	"strconv"
@@ -19,9 +18,6 @@ const (
 	contextThrottle = 32
 	contextInterval = 80 * time.Millisecond
 )
-
-// errTurnRunning is returned by Recount while a turn owns the agent.
-var errTurnRunning = errors.New("agent: turn running; recount refused")
 
 // runTurns drains the follow-up queue, running one turn per queued input until
 // nothing is left. Prompt hands in a single initial input; steering and

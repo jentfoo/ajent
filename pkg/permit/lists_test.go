@@ -30,22 +30,6 @@ func TestNetworkNeverReadOnly(t *testing.T) {
 	}
 }
 
-func TestWriteCommandsContents(t *testing.T) {
-	t.Parallel()
-
-	want := []string{
-		"rm", "rmdir", "mv", "cp", "touch", "mkdir", "chmod", "chown",
-		"chgrp", "ln", "link", "rename", "dd", "truncate", "tee", "shred",
-		"unlink", "mkfifo", "mknod", "install", "mktemp", "split", "patch",
-		"setfacl", "setfattr", "chattr",
-	}
-	assert.Len(t, writeCommands, len(want))
-	for _, cmd := range want {
-		_, ok := writeCommands[cmd]
-		assert.True(t, ok, "%q missing", cmd)
-	}
-}
-
 func TestFindUnsafeFlags(t *testing.T) {
 	t.Parallel()
 

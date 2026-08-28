@@ -19,11 +19,11 @@ Three packages sit above the agent, tools and TUI:
 - completion in `pkg/tui` — a live menu for commands, and a Tab-driven fill for
   paths that leaves the arrows to the editor.
 
-`pkg/command` imports `pkg/tui`, `pkg/agent`, `pkg/llm`, `pkg/tools` and
-`pkg/session`; it never imports `pkg/refs` (the host wires the two together
-through the `Completer`). The UI does not import the command package — the host
-adapts `Console` onto `*tui.UI`, so headless mode and the sub-agent
-can drive the same commands with a different front end.
+`pkg/command` imports `pkg/tui`, `pkg/agent`, `pkg/llm`, `pkg/tools`, `pkg/session`
+and `pkg/refs` (the path-completion index lives in refs and is consumed by the
+`Completer`). The UI does not import the command package — the host adapts
+`Console` onto `*tui.UI`, so headless mode and the sub-agent can drive the same
+commands with a different front end.
 
 ## Dispatch
 

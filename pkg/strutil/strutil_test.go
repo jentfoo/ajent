@@ -39,7 +39,7 @@ func TestTrimZero(t *testing.T) {
 		{"12", "12"},
 	}
 	for _, tc := range cases {
-		assert.Equal(t, tc.want, TrimZero(tc.in))
+		assert.Equal(t, tc.want, trimZero(tc.in))
 	}
 }
 

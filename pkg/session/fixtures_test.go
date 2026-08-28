@@ -19,6 +19,25 @@ func fixtureModel(key string) (llm.Model, error) {
 	return llm.Model{Provider: "anthropic", ID: "claude-opus-4-5", ContextWindow: 200000}, nil
 }
 
+// tipIDs returns every chain-tip id in file order: entries whose id is not
+// another entry's parent. The persisted head and each fork appear exactly once.
+func tipIDs(entries []Entry) []string {
+	parented := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.ParentID != "" {
+			parented[e.ParentID] = true
+		}
+	}
+	var out []string
+	for _, e := range entries {
+		if e.ID == "" || parented[e.ID] {
+			continue
+		}
+		out = append(out, e.ID)
+	}
+	return out
+}
+
 // TestFixtureSchema pins the on-disk transcript format: the intricate part is
 // the compaction entry, whose reduce plan is replayed on every rebuild.
 func TestFixtureSchema(t *testing.T) {
@@ -148,12 +167,12 @@ func TestFixtureBranch(t *testing.T) {
 
 	entries := loadEntries(t, "fork.jsonl")
 
-	tips := Tips(entries)
-	require.Len(t, tips, 2, "the fork left two chain tips")
+	ids := tipIDs(entries)
+	require.Len(t, ids, 2, "the fork left two chain tips")
 
 	seen := map[string][]string{}
-	for _, tip := range tips {
-		branch := Branch(entries, tip.ID)
+	for _, id := range ids {
+		branch := Branch(entries, id)
 		msgs, warns := ContextMessages(branch, CompactionData{}, nil)
 		require.Empty(t, warns)
 		seen[digest(msgs)[len(msgs)-1]] = digest(msgs)

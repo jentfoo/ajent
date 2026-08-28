@@ -188,24 +188,6 @@ func setPath(o *object, parts []string, nv *val) {
 	setPath(child.obj, parts[1:], nv)
 }
 
-// GetKey returns the raw value at the dotted key.
-func GetKey(data []byte, key string) (json.RawMessage, bool) {
-	v := lookupNode(parseNodeOrNil(data), strings.Split(key, "."))
-	if v == nil {
-		return nil, false
-	}
-	return json.RawMessage(v.marshal()), true
-}
-
-// parseNodeOrNil returns the parsed root or nil when data is invalid.
-func parseNodeOrNil(data []byte) *val {
-	v, err := parseNode(data)
-	if err != nil {
-		return nil
-	}
-	return v
-}
-
 // lookupNode walks parts from cur, returning the node at the end or nil.
 func lookupNode(cur *val, parts []string) *val {
 	for _, seg := range parts {

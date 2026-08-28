@@ -21,8 +21,16 @@ func newTestHistory(t *testing.T, ws string) *EditorHistory {
 	return h
 }
 
-// storedMessages reads path back as the decoded recall entries currently on disk.
-func storedMessages(path string) []string { return readMessages(path) }
+// storedMessages reads path back as the visible recall entries currently on disk.
+func storedMessages(path string) []string {
+	var out []string
+	for _, l := range readHistLines(path) {
+		if !l.hidden {
+			out = append(out, l.msg)
+		}
+	}
+	return out
+}
 
 func TestEditorHistoryAppend(t *testing.T) {
 	t.Parallel()

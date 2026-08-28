@@ -116,22 +116,6 @@ type fileEntry struct {
 	mod  time.Time
 }
 
-// IsGitRepo reports whether root is inside a git work tree.
-func IsGitRepo(root string) bool {
-	return runQuiet("git", "-C", root, "rev-parse", "--is-inside-work-tree") == "true"
-}
-
-// IsSkippedDir reports whether path lies under a VCS or dependency directory.
-func IsSkippedDir(path string) bool {
-	for part := range strings.SplitSeq(filepath.Clean(path), string(filepath.Separator)) {
-		switch part {
-		case ".git", ".hg", ".svn", "node_modules", ".venv":
-			return true
-		}
-	}
-	return false
-}
-
 // matchGlob reports whether name matches pattern. A pattern with no path
 // separator matches the base name at any depth ("*.go" finds pkg/a.go); a
 // pattern with separators matches the whole relative path, with ** spanning

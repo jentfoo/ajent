@@ -207,9 +207,6 @@ func latestRound(rounds []string) string {
 	return rounds[len(rounds)-1]
 }
 
-// itoa is strconv.Itoa under a shorter name for prompt assembly.
-func itoa(n int) string { return strconv.Itoa(n) }
-
 // fork switches the workflow onto head with model m, reporting a failure rather
 // than continuing against stale state. Caller holds mu.
 func (c *Controller) fork(head string, m llm.Model) {

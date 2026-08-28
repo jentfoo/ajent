@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
@@ -128,12 +129,6 @@ func (s *Store) Find(workspace, id string) (Info, error) {
 	}
 }
 
-// OutputPath returns a side file path for large streamed tool output, scoped to
-// the session so it lives and dies with the transcript.
-func (s *Store) OutputPath(sessionPath, callID string) string {
-	return filepath.Join(filepath.Dir(sessionPath), "output-"+callID+".txt")
-}
-
 // Remove deletes one saved transcript and its head cursor when it points at this
 // file. Other sessions in the directory (and editor history) are untouched.
 func (s *Store) Remove(path string) error {
@@ -213,4 +208,23 @@ const maxFirstLen = 80
 // truncate caps s for Info.First display.
 func truncate(s string) string {
 	return strutil.Clip(s, maxFirstLen)
+}
+
+// firstUserOn returns the first user text on a branch, truncated for display.
+func firstUserOn(branch []Entry) string {
+	for _, e := range branch {
+		if e.Type != TypeMessage {
+			continue
+		}
+		var md MessageData
+		if err := e.Decode(&md); err != nil || md.Message.Role != llm.RoleUser {
+			continue
+		}
+		for _, b := range md.Message.Content {
+			if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
+				return truncate(strings.TrimSpace(tb.Text))
+			}
+		}
+	}
+	return ""
 }

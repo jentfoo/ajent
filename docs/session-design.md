@@ -251,12 +251,9 @@ user `message` carrying them), so replay can collapse each call to its result.
 
 ## Branches, tips and rewinding
 
-Because nothing is ever deleted, an abandoned fork stays reachable. Two views
-make that usable:
+Because nothing is ever deleted, an abandoned fork stays reachable. The rewind
+picker exposes that through one tree view:
 
-- **Tips** lists every chain tip in file order — entries whose id is not another
-  entry's parent. The persisted head and each fork appear exactly once, so no
-  branch becomes unreachable after switching away.
 - **TreeRows** walks the whole transcript as a tree for the rewind picker,
   indenting by depth with box-drawing guides (`├──`, `└──`). Every guide cell is
   four columns wide, continuations (`│   `) included, so a branch's children line
@@ -270,7 +267,7 @@ make that usable:
 after `SetHead("")` stamps an empty `ParentID` and starts a second, which
 `Branch` stops at: state rebuilt from that head contains only that root's own
 chain. The plan workflow uses this to give an implementation round a genuinely
-empty context (see `plan-design.md`), and `Tips`/`TreeRows` already render every
+empty context (see `plan-design.md`), and `TreeRows` already renders every
 root, so an extra one stays visible in the rewind picker. A new root must lead
 with a `model_change` entry, or `State` has no model to resolve for that branch.
 

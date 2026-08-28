@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +19,7 @@ func TestHomeOneLevel(t *testing.T) {
 	home := t.TempDir()
 	writeTree(t, home, "deep/one/two/three.txt", ".bashrc")
 	restoreHome(t, home)
-	idx := NewIndex(t.TempDir(), tools.PathPolicy{})
+	idx := NewIndex(t.TempDir())
 
 	top := labelsOf(idx.Candidates("~", nil))
 	assert.Equal(t, []string{"~/.bashrc", "~/deep/"}, top) // deep once, never its contents
@@ -30,7 +29,7 @@ func TestCandidates(t *testing.T) {
 	t.Run("list_top_level", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "src/main.go")
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		cands := idx.Candidates("", nil)
 		assert.Equal(t, []string{"main.go", "src/"}, labelsOf(cands))
@@ -41,7 +40,7 @@ func TestCandidates(t *testing.T) {
 		// surface until the user drills into their directory.
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "deep/one/two/three.txt")
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		assert.Equal(t, []string{"deep/", "main.go"}, labelsOf(idx.Candidates("", nil)))
 		// drilling one level at a time reaches the deep file.
@@ -52,7 +51,7 @@ func TestCandidates(t *testing.T) {
 	t.Run("directory_drills_deeper", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "src/main.go", "src/cmd/run.go")
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		cands := idx.Candidates("src/", nil)
 		assert.Equal(t, []string{"src/cmd/", "src/main.go"}, labelsOf(cands))
@@ -64,7 +63,7 @@ func TestCandidates(t *testing.T) {
 	t.Run("partial_dir_completes_slash", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/refs/index.go")
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		cands := idx.Candidates("pk", nil)
 		assert.Equal(t, []string{"pkg/"}, labelsOf(cands))
@@ -76,7 +75,7 @@ func TestCandidates(t *testing.T) {
 	t.Run("dot_prefix_keeps_slash", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "src/main.go", "src/cmd/run.go")
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		top := idx.Candidates("./", nil)
 		assert.Equal(t, []string{"./main.go", "./src/"}, labelsOf(top))
@@ -90,7 +89,7 @@ func TestCandidates(t *testing.T) {
 		writeTree(t, dir, "main.go")
 		parent := filepath.Dir(dir)
 		baseName := filepath.Base(dir)
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		drill := idx.Candidates(filepath.Join(dir, "ma"), nil)
 		assert.Equal(t, []string{filepath.Join(dir, "main.go")}, labelsOf(drill))
@@ -109,7 +108,7 @@ func TestCandidates(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go")
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "node_modules", "x"), 0o700))
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		for _, q := range []string{"", "no"} {
 			assert.NotContains(t, labelsOf(idx.Candidates(q, nil)), "node_modules/")
@@ -119,7 +118,7 @@ func TestCandidates(t *testing.T) {
 	t.Run("conversation_ranked_first", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "a.go", "b.go")
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		inConvo := func(path string) bool { return filepath.Base(path) == "b.go" }
 		cands := idx.Candidates("", inConvo)
@@ -134,7 +133,7 @@ func TestCandidates(t *testing.T) {
 		writeTree(t, root, "main.go")
 		writeTree(t, home, ".bashrc", "docs/a.txt", "pkg/main.go", "bin/run.sh")
 		restoreHome(t, home)
-		idx := NewIndex(root, tools.PathPolicy{})
+		idx := NewIndex(root)
 
 		t.Run("offers_home_top_level_only", func(t *testing.T) {
 			cands := idx.Candidates("~", nil)
@@ -163,7 +162,7 @@ func TestShellCandidates(t *testing.T) {
 	t.Run("offers_skipped_dirs", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "node_modules/pkg/index.js", ".git/config")
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		assert.Equal(t, []string{"main.go"}, labelsOf(idx.Candidates("", nil)))
 		shell := labelsOf(idx.ShellCandidates(""))
@@ -180,7 +179,7 @@ func TestShellCandidates(t *testing.T) {
 			names = append(names, fmt.Sprintf("file%03d.txt", i))
 		}
 		writeTree(t, dir, names...)
-		idx := NewIndex(dir, tools.PathPolicy{})
+		idx := NewIndex(dir)
 
 		assert.Len(t, idx.ShellCandidates("file"), 100)
 		assert.Len(t, idx.Candidates("file", nil), 100)

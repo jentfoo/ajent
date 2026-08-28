@@ -58,15 +58,12 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   `annotations.readOnlyHint` or config globs. The permission barrier uses this
   for non-built-in (MCP/extension) tools; core writers never consult it.
 
-### Sub-agent tool set (`toolset.go`)
+### Sub-agent tool set and preview seams
 
-A child agent's tools are a fixed structural subset of `Registry.All()` —
-unwrapped (no guards or dialogs), independent of the parent's enabled set — so
-`find`/`grep`/`ls`, registered *disabled* by default in the parent, still reach a
-child. The filter is owned and specified in `subagents-design.md`: read-only
-built-ins plus any tool for which `ReadOnly(name)` is true (MCP hints / config
-globs), with two structural exclusions (`agent_*` barred unconditionally; `bash`
-never included).
+The child agent's structural filter (which tools a sub-agent may call) is owned by
+the registry but specified in `subagents-design.md`; it lives in
+`pkg/subagent/toolset.go`. The two optional-tool seams the guard chain relies on are
+methods on `Registry`:
 - `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
   `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be detected
   before prompting; returns nil for tools that cannot predict.

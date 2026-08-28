@@ -60,28 +60,3 @@ func TestSetKey(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
-
-func TestGetKey(t *testing.T) {
-	t.Parallel()
-
-	data := []byte(`{"reasoning":{"level":"low"},"tools":{"enabled":["a","b"]}}`)
-	cases := []struct {
-		name  string
-		key   string
-		want  string
-		found bool
-	}{
-		{"scalar_value", "reasoning.level", `"low"`, true},
-		{"array_value", "tools.enabled", `["a","b"]`, true},
-		{"missing_deep_path", "nope.deep", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			v, ok := GetKey(data, tc.key)
-			assert.Equal(t, tc.found, ok)
-			if ok {
-				assert.JSONEq(t, tc.want, string(v))
-			}
-		})
-	}
-}

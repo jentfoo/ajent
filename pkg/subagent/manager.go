@@ -550,7 +550,7 @@ func (j *job) pollProgress() string {
 
 // shortLabel reduces task text to one rune-safe line.
 func shortLabel(text string) string {
-	line := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+	line := strings.TrimSpace(strutil.FirstLine(text))
 	if len([]rune(line)) <= maxLabelLen {
 		return line
 	}

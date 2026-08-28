@@ -51,11 +51,15 @@ pkg/llm/
   defaults.go       per flavor defaults and the capability merge
   registry.go       Model list, Resolve, Refresh, declared-wins merge
   discover.go       discovery cache, conditional refetch, orchestration
+  detect.go         auto-detected chat-completions quirks by name/base URL
+  overrides.go      config.json providers/models fold over models.json
+  providers.go      one Provider per endpoint cache
   factory.go        ProviderConfig -> Provider
 
   prepare.go        Prepare (message normalization)
   retention.go      retention policy helpers
-  think.go          inline <think> splitting
+  think.go          inline thinking splitting
+  thinking.go       reasoning on/off onto the wire shape
   toolacc.go        tool argument accumulation
   classify.go       per flavor error and overflow classification
 

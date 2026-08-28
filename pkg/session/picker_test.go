@@ -9,104 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPickerRows covers which rows appear, newest first, with correct kinds and ordinals.
-func TestPickerRows(t *testing.T) {
-	t.Parallel()
-
-	// a branch with user, assistant-text and tool-only entries interleaved.
-	t.Run("interleaved", func(t *testing.T) {
-		entries := []Entry{
-			sessionOnly("root"),
-			pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
-			pickAssistText("a1", "u1", "an answer"),
-			pickToolCall("t1", "a1"), // assistant turn ending in a tool call
-			pickToolResultMsg("r1", "t1"),
-		}
-
-		rows := PickerRows(entries)
-		assert.Len(t, rows, 4) // session entry is skipped
-
-		assert.Equal(t, RowTool, rows[0].Kind)
-		assert.Equal(t, "r1", rows[0].ID)
-
-		assert.Equal(t, RowTool, rows[1].Kind)
-		assert.Equal(t, "t1", rows[1].ID)
-
-		// newest-first means the assistant answer precedes its user prompt
-		assert.Equal(t, RowAssistant, rows[2].Kind)
-		assert.Equal(t, "a1", rows[2].ID)
-		assert.Equal(t, RowUser, rows[3].Kind)
-		assert.Equal(t, "u1", rows[3].ID)
-		assert.Equal(t, 4, rows[0].Ordinal, "ordinals count pickable rows from the root")
-		assert.Equal(t, 2, rows[2].Ordinal)
-
-		// the collapsed tool call shows [name] args
-		assert.Contains(t, rows[1].Label, "[bash]")
-	})
-
-	t.Run("injected_user_message_not_a_row", func(t *testing.T) {
-		entries := []Entry{
-			sessionOnly("root"),
-			pickInjected("i1", "root", "User Ran: git status\n\nOutput:\nOn branch main"),
-			pickMsg("u1", "i1", llm.Text(llm.RoleUser, "what changed?")),
-		}
-
-		// a staged `!` result is not a typed prompt: rewinding onto it would
-		// pre-fill the editor with its whole output rather than a message
-		rows := PickerRows(entries)
-		require.Len(t, rows, 1)
-		assert.Equal(t, "u1", rows[0].ID)
-		assert.Equal(t, RowUser, rows[0].Kind)
-
-		// rewinding onto the prompt still keeps the staged result in context: its
-		// entry is the prompt's parent, so it stays on the branch
-		head, fill, ok := RewindTarget(entries, "u1")
-		require.True(t, ok)
-		assert.Equal(t, "i1", head)
-		assert.Equal(t, "what changed?", fill)
-	})
-
-	t.Run("tool_result_collapses_to_one_line", func(t *testing.T) {
-		m := llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
-			llm.ToolResultBlock{CallID: "c1", IsError: false,
-				Content: llm.BlockList{llm.TextBlock{Text: "ok  0.4s"}}},
-		}}
-		e := pickMsg("r1", "", m)
-		rows := PickerRows([]Entry{e})
-		require.Len(t, rows, 1)
-		assert.Equal(t, RowTool, rows[0].Kind)
-		assert.Contains(t, rows[0].Label, "ok  0.4s")
-	})
-}
-
-func TestPickerRowLabelsAndKinds(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		in   Entry
-		want RowKind
-		sub  string // substring expected in Label; empty means row skipped
-	}{
-		{"user_text", pickMsg("a", "", llm.Text(llm.RoleUser, "hello world")), RowUser, "user: hello"},
-		{"assistant_text", pickAssistText("b", "", "the fix is here"), RowAssistant, "assistant: the fix"},
-		{"tool_call_only", pickToolCall("c", ""), RowTool, "[bash] read main.go"},
-		{"session_skipped", sessionOnly("s"), 0, ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			rows := PickerRows([]Entry{tc.in})
-			if tc.sub == "" {
-				assert.Empty(t, rows)
-				return
-			}
-			require.Len(t, rows, 1)
-			assert.Equal(t, tc.want, rows[0].Kind)
-			assert.Contains(t, rows[0].Label, tc.sub)
-		})
-	}
-}
-
 // TestTreeRows covers fork rendering in the tree view.
 func TestTreeRows(t *testing.T) {
 	t.Parallel()
@@ -134,6 +36,31 @@ func TestTreeRows(t *testing.T) {
 		for _, r := range tree {
 			assert.Truef(t, r.Active, "every node of a linear chat is on the head's path (id=%s)", r.ID)
 		}
+	})
+
+	// every pickable kind shows up in pre-order with a collapsed label; the session
+	// entry never does.
+	t.Run("mixed_entry_kinds", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "first question")),
+			pickAssistText("a1", "u1", "an answer"),
+			pickToolCall("t1", "a1"), // assistant turn ending in a tool call
+			pickToolResultMsg("r1", "t1"),
+			pickCompaction("c1", "r1"),
+		}
+
+		tree := TreeRows(entries, "c1")
+		require.Len(t, tree, 5) // session entry is skipped
+
+		assert.Equal(t, []string{"u1", "a1", "t1", "r1", "c1"}, idsOf(tree))
+		assert.Equal(t, RowUser, tree[0].Kind)
+		assert.Equal(t, RowAssistant, tree[1].Kind)
+		assert.Equal(t, RowTool, tree[2].Kind)
+		assert.Contains(t, tree[2].Label, "[bash]") // collapsed call shows [name] args
+		assert.Equal(t, RowTool, tree[3].Kind)
+		assert.Contains(t, tree[3].Label, "line one") // result collapses to its first line
+		assert.Equal(t, RowCompaction, tree[4].Kind)
 	})
 
 	// rewinding + resubmitting produces two branches at the SAME level: both children
@@ -212,6 +139,43 @@ func idsOf(rows []TreeRow) []string {
 	return out
 }
 
+// TestTreeRowLabelsAndKinds pins which entry kinds become picker rows and how each
+// label collapses; rowFor's branches are reachable only through TreeRows.
+func TestTreeRowLabelsAndKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   Entry
+		kind RowKind
+		sub  string // substring expected in Label; empty means no row
+	}{
+		{"user_text", pickMsg("a", "", llm.Text(llm.RoleUser, "hello world")), RowUser, "user: hello"},
+		{"assistant_text", pickAssistText("b", "", "the fix is here"), RowAssistant, "assistant: the fix"},
+		{"tool_call_only", pickToolCall("c", ""), RowTool, "[bash] read main.go"},
+		{"tool_result_only", pickToolResultMsg("d", ""), RowTool, "line one"},
+		// a staged `!` result is not a typed prompt: rewinding onto it would pre-fill
+		// the editor with its whole output rather than a message
+		{"injected_user_not_a_row", pickInjected("e", "", "User Ran: git status\n\nOutput:\nclean"), 0, ""},
+		{"compaction_summarized", pickCompaction("f", ""), RowCompaction, "· summarized"},
+		{"compaction_unmeasured", Entry{ID: "g", Type: TypeCompaction,
+			Data: mustJSON(CompactionData{Summary: "s"})}, 0, ""}, // nothing to label yet
+		{"session_skipped", sessionOnly("s"), 0, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := TreeRows([]Entry{tc.in}, "")
+			if tc.sub == "" {
+				assert.Empty(t, rows)
+				return
+			}
+			require.Len(t, rows, 1)
+			assert.Equal(t, tc.kind, rows[0].Kind)
+			assert.Contains(t, rows[0].Label, tc.sub)
+		})
+	}
+}
+
 // helpers ---------------------------------------------------------
 
 func sessionOnly(id string) Entry {
@@ -223,13 +187,14 @@ func pickMsg(id, parent string, m llm.Message) Entry {
 		Data: mustJSON(MessageData{Message: m})}
 }
 
+func pickAssistText(id, parent, text string) Entry {
+	return pickMsg(id, parent, llm.Text(llm.RoleAssistant, text))
+}
+
+// pickInjected is a system-injected user message: staged `!` output or an @ read.
 func pickInjected(id, parent, text string) Entry {
 	return Entry{ID: id, ParentID: parent, Type: TypeMessage,
 		Data: mustJSON(MessageData{Message: llm.Text(llm.RoleUser, text), Injected: true, Replayed: true})}
-}
-
-func pickAssistText(id, parent, text string) Entry {
-	return pickMsg(id, parent, llm.Text(llm.RoleAssistant, text))
 }
 
 // pickToolCall is an assistant message that only carries a bash tool call.
@@ -286,6 +251,9 @@ func TestRewindTarget(t *testing.T) {
 		pickToolCall("t1", "a1"),
 		pickToolResultMsg("r1", "t1"),
 		pickCompaction("c1", "r1"),
+		// staged `!` output precedes a later prompt on the same chain
+		pickInjected("i1", "c1", "User Ran: git status\n\nOutput:\nclean"),
+		pickMsg("u2", "i1", llm.Text(llm.RoleUser, "what changed?")),
 	}
 
 	cases := []struct {
@@ -300,6 +268,9 @@ func TestRewindTarget(t *testing.T) {
 		{"tool_call_keeps_own_message", "t1", "t1", "", true},
 		{"tool_result_keeps_own_message", "r1", "r1", "", true},
 		{"compaction_rewinds_before", "c1", "r1", "", true},
+		// the staged result stays in context: it is the prompt's parent, so it
+		// remains on the rewound branch as the new head
+		{"prompt_after_staged", "u2", "i1", "what changed?", true},
 		{"unknown_row_not_ok", "nope", "", "", false},
 	}
 	for _, tc := range cases {
@@ -336,18 +307,4 @@ func TestRewindTargetDropsReferenceReads(t *testing.T) {
 		ids = append(ids, e.ID)
 	}
 	assert.Equal(t, []string{"root", "a0"}, ids)
-}
-
-func TestPickerRowsIncludeCompaction(t *testing.T) {
-	t.Parallel()
-
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "q")),
-		pickCompaction("c1", "u1"),
-	}
-	rows := PickerRows(entries)
-	require.Len(t, rows, 2) // session skipped; user + compaction
-	assert.Equal(t, RowCompaction, rows[0].Kind)
-	assert.Contains(t, rows[0].Label, "compaction")
 }

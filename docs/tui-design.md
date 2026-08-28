@@ -8,7 +8,8 @@ when changing it.
 A terminal front end for a coding agent: a scrolling transcript of agent output
 with a live input field and status line beneath it. No external TUI framework.
 Dependencies are `x/term` (raw mode, size), `rivo/uniseg` (grapheme clusters and
-widths), `goldmark` (markdown parsing), `go-pretty` (tables), `go-udiff`
+widths), `goldmark` (markdown parsing, with GFM tables hand-laid by
+`layoutTable`), `go-udiff`
 (diffs) and `chroma` (syntax highlighting).
 
 Goals, in priority order:
@@ -62,7 +63,7 @@ separating it from committed output above (see "Prompt divider" below).
   per running investigation, showing its task or most recent output) and
   **tool-call progress** — a call the model is still composing, keyed `call:<id>`,
   showing its name, target and the argument lines/bytes accumulated so far. Sizes
-  go through `FormatBytes` (binary, explicit `b`/`kb`/`mb`), never
+  go through `strutil.HumanSize` (binary, explicit `b`/`kb`/`mb`), never
   `strutil.FormatTokens` (decimal, unsuffixed), so a stream size is never
   misread as a token count. The
   latter fills the silence while a large `write` streams; it clears when the call
@@ -160,7 +161,7 @@ ui.go            public API, state machine, key handling, locking
   renderer.go        mode selection, terminal ownership, renderer interface
     render_inline.go   main screen, terminal owns wrapping, reflow and scrollback
     render_alt.go      alternate screen, we own wrapping and scrollback
-  markdown.go      goldmark AST -> ANSI (+ go-pretty tables)
+  markdown.go      goldmark AST -> ANSI (+ hand-laid GFM tables)
   diff.go          go-udiff -> full file diff, shaded changes, intraline emphasis
   wrap.go          width aware wrapping, hanging indents
   editor.go        multi line input buffer, grapheme aware, plus its layout
@@ -547,7 +548,8 @@ The model still receives the full unmodified `Content`; only history is elided.
 
 `goldmark` parses (with the GFM extension); we walk the AST ourselves in
 `markdown.go` rather than registering a `NodeRenderer`, which gives control over
-indentation and lets table nodes be collected and handed to `go-pretty`.
+indentation and lets table nodes be collected into `mdTable` for
+`layoutTable`.
 
 Glamour was rejected deliberately: it pulls goldmark + chroma + lipgloss for
 about 20-30 modules, and it hard wraps to a fixed width, which fights the

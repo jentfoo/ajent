@@ -69,13 +69,8 @@ func TestWriterHeadCursor(t *testing.T) {
 		// and that fork is now a new tip alongside the abandoned one
 		entries, _, rerr := Read(p)
 		require.NoError(t, rerr)
-		tips := Tips(entries)
-		ids := make([]string, len(tips))
-		for i, tp := range tips {
-			ids[i] = tp.ID
-		}
 		// both the abandoned tip and the new fork stay reachable.
-		assert.Equal(t, []string{e2.ID, e3.ID}, ids)
+		assert.Equal(t, []string{e2.ID, e3.ID}, tipIDs(entries))
 	})
 
 	// a discard writer never writes HEAD.

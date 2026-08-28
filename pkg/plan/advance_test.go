@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -233,7 +234,7 @@ func TestControllerAdvance(t *testing.T) {
 		for i := 0; i < maxRevisions; i++ {
 			_, ok := c.Advance(t.Context(), done()) // implementation -> review
 			require.True(t, ok)
-			require.True(t, call(t, c, DevReviseTool, `{"instructions":"round `+itoa(i)+`"}`).EndTurn)
+			require.True(t, call(t, c, DevReviseTool, `{"instructions":"round `+strconv.Itoa(i)+`"}`).EndTurn)
 			if _, ok = c.Advance(t.Context(), done()); !ok {
 				break
 			}

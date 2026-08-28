@@ -262,14 +262,3 @@ func segmentIsReadOnly(seg, raw string) bool {
 		return ok
 	}
 }
-
-// clearWrite reports whether any segment's head names an unconditional write.
-func clearWrite(s Scan) bool {
-	for _, seg := range s.Segments {
-		tokens := segmentTokens(seg)
-		if _, ok := writeCommands[stripPath(firstToken(tokens))]; ok {
-			return true
-		}
-	}
-	return false
-}

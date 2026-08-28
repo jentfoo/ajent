@@ -18,6 +18,22 @@ func lookPath(name string) bool {
 	return err == nil
 }
 
+// IsGitRepo reports whether root is inside a git work tree.
+func IsGitRepo(root string) bool {
+	return runQuiet("git", "-C", root, "rev-parse", "--is-inside-work-tree") == "true"
+}
+
+// IsSkippedDir reports whether path lies under a VCS or dependency directory.
+func IsSkippedDir(path string) bool {
+	for part := range strings.SplitSeq(filepath.Clean(path), string(filepath.Separator)) {
+		switch part {
+		case ".git", ".hg", ".svn", "node_modules", ".venv":
+			return true
+		}
+	}
+	return false
+}
+
 // allWalk returns every regular file under root, skipping VCS and dependency
 // directory subtrees so a huge tree cannot hang a grep forever.
 func allWalk(root string) []string {

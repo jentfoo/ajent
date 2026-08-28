@@ -330,7 +330,7 @@ func promptBudget(model llm.Model, maxOut int) int {
 func summarizeBudget(model llm.Model, span, prev int) int {
 	emitCap := model.MaxOutput
 	if emitCap <= 0 {
-		emitCap = tokensReserve(model)
+		emitCap = model.Reserve()
 	}
 	return min(emitCap,
 		max(minSummaryTokens, compactAt(model)/4),

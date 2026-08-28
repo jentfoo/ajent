@@ -22,9 +22,6 @@ func tokensFor(branch []session.Entry, cd session.CompactionData, model llm.Mode
 	return base + tokens.EstimateFor(model, retain, msgs)
 }
 
-// tokensReserve reports how many tokens a model holds back for its response.
-func tokensReserve(m llm.Model) int { return m.Reserve() }
-
 // compactAt reports where an automatic compaction fires for m; 0 when its window
 // is unknown.
 func compactAt(m llm.Model) int { return tokens.CompactAt(m) }

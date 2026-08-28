@@ -174,23 +174,6 @@ func TestAllSegmentsReadOnly(t *testing.T) {
 	}
 }
 
-func TestClearWrite(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{"ls -la", false},
-		{"rm build && ls", true},
-		{"grep foo f | sort", false},
-		{"sed -i s/a/b/ f", false}, // sed handled by its own analyser, not the write list
-	}
-	for _, c := range cases {
-		assert.Equal(t, c.want, clearWrite(scanCommand(c.in)), c.in)
-	}
-}
-
 // corpusCase pins the scan-level facts a command must satisfy: whether it splits,
 // carries an unsafe op, and how many collapsed segments result.
 type corpusCase struct {

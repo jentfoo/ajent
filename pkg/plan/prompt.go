@@ -1,6 +1,9 @@
 package plan
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Compaction focus per phase, handed to the summariser so a phase keeps what it
 // still needs rather than a balanced digest of everything.
@@ -78,7 +81,7 @@ func execContinue() string {
 // capReport closes a workflow that ran out of revision rounds, naming what the
 // last review still wanted.
 func capReport(lastRound string) string {
-	msg := "reached the revision limit (" + itoa(maxRevisions) + "); ending the workflow"
+	msg := "reached the revision limit (" + strconv.Itoa(maxRevisions) + "); ending the workflow"
 	if lastRound != "" {
 		msg += ". The last review asked for: " + strings.TrimSpace(lastRound)
 	}
