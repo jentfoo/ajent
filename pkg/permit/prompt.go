@@ -268,8 +268,8 @@ Compound constructs — pipelines, command substitution $(...) or backticks, loo
 Use your general knowledge of Unix tools; the lists above are illustrative, NOT exhaustive. When a path is relative, assume it resolves inside %s. When you cannot tell where a command writes, or whether it is destructive, answer "unsure" rather than "allow". Respond with ONLY the one word.`, cwd, tmp, cwd)
 }
 
-// MCPClassifierSystem is auto+mcp's prompt: decide one tool call by whether it
-// changes any state. name, description and params are embedded so an unfamiliar
+// MCPClassifierSystem is the model classifier's prompt for a tool call: decide
+// whether it changes any state. name, description and params are embedded so an unfamiliar
 // server can be judged by what it declares.
 func MCPClassifierSystem(name, description, params string) string {
 	return fmt.Sprintf(`You decide whether a single tool invocation may run unattended in a coding session. Reply with exactly one word and nothing else.

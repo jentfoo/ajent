@@ -58,7 +58,7 @@ never a lost switch.
 
 The permission block defaults to `{"mode": "allow-read"}`, so
 `Explain("permissions.mode")` resolves and reports `(default)`. The mode name is
-one of the six in the barrier (`allow-all`, `allow-read`, `auto`, `auto+mcp`,
+one of the five in the barrier (`allow-all`, `allow-read`, `auto`,
 `auto+write`, `block-all`); `AJENT_PERMISSIONS_MODE` binds for free
 through EnvLayer. It seeds a session's live barrier at startup, so a resumed
 session restores its cycled mode (rebuild replays session overrides before this).
@@ -68,7 +68,7 @@ via `SetSessionSetting("permissions.mode", …)` — never rewriting the config 
 to user/project layer like any other enum row.
 
 `safeCommands` lists exact MCP/extension tool names or bash command lines that
-auto-allow as read-only in allow-read/auto (and auto+mcp). A single shell entry matches at a token
+auto-allow as read-only in allow-read/auto. A single shell entry matches at a token
 boundary, so `git` covers every git invocation and `git status` its subcommands; a
 compound line (`cd … && make lint | tail`) instead requires **every** component to be
 either a listed entry or verifiably read-only — wrapping in `cd`/pipe never defeats

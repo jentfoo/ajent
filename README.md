@@ -36,8 +36,7 @@ Tab support is available for file path completions, but our TUI favors a minimal
 Our CLI agent attempts to balance autonomy and safety. This is done through a variety of permission modes:
 
 * **allow-read** (default) - Will automatically allow any read only tools or MCP tools which are marked as read only in their configuration. Any write or questionable bash operations will require user approval first.
-* **auto** - Still attempts to provide a read only experience by default, but will delegate to the agent to make decisions on bash commands which are not automatically allowed.
-* **auto+mcp** - In addition to the above MCP tools not marked as read only will be evaluated if the specific operation is read only.
+* **auto** - Still attempts to provide a read only experience by default, but will delegate to the agent to make decisions on bash commands and MCP/extension tool calls which are not automatically allowed.
 * **auto+write** - Auto-approves `write`, `edit` and bash operations that stay safely inside the working directory or temp directory; anything touching files elsewhere, system changes, bulk deletion or network access still requires approval.
 * **allow-all** - All operations allowed without human approval.
 * **block-all** - Nothing runs without explicit approval, reads included.
@@ -193,7 +192,7 @@ The top-level blocks:
 * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
 * `providers` / `models` - the same overrides you can put in `~/.ajent/models.json`, folded over it. These let a project pin its own endpoint or widen a context window without duplicating the whole file.
 * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, refInject, refTotal).
-* `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+mcp`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; a Shift+Tab cycle changes it for the session only.
+* `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; a Shift+Tab cycle changes it for the session only.
 * `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).
 * `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it; `threshold` is the default for the ones that do not.
 * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.

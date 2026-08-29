@@ -777,28 +777,11 @@ func TestAskerAuto(t *testing.T) {
 		}, time.Second, 10*time.Millisecond)
 	})
 
-	// plain auto judges shell commands only; MCP calls are never classified.
-	t.Run("does_not_classify_non_bash_calls", func(t *testing.T) {
-		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto) // plain auto judges shell commands only
-		cl := &fakeClassifier{verdict: ClassAllow}
-		b.SetClassifier(cl)
-
-		// an MCP call is never sent to the classifier in auto mode; it just waits on the dialog.
-		done := make(chan struct{})
-		go func() { runAsk(b, t.Context(), "mcp__list", []byte(`{}`)); close(done) }()
-		waitDialog(t, p).answer(int(optAllow))
-		<-done
-
-		assert.Equal(t, 0, cl.calls)
-	})
-
-	// auto+mcp also classifies MCP/extension calls.
+	// auto also classifies MCP/extension calls.
 	t.Run("mcp_classifies_non_bash_calls", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
-		b.SetMode(ModeAutoMCP) // auto+mcp also classifies MCP/extension calls
+		b.SetMode(ModeAuto) // auto also classifies MCP/extension calls
 		cl := &fakeClassifier{verdict: ClassAllow}
 		b.SetClassifier(cl)
 
@@ -935,7 +918,7 @@ func TestGuardAutoWriteScope(t *testing.T) {
 	t.Run("mkdir_asks_in_other_modes", func(t *testing.T) {
 		b := newTestBarrier(newFakePrompter())
 		b.SetWriteRoots(cwd)
-		b.SetMode(ModeAutoMCP)
+		b.SetMode(ModeAuto)
 		d := b.Guard()(t.Context(), bashCall("mkdir build"))
 		assert.Equal(t, tools.ActionAsk, d.Action)
 	})
@@ -955,7 +938,7 @@ func TestGuardAutoWriteScope(t *testing.T) {
 	})
 
 	t.Run("other_modes_still_ask", func(t *testing.T) {
-		for _, m := range []Mode{ModeAllowRead, ModeAuto, ModeAutoMCP, ModeBlockAll} {
+		for _, m := range []Mode{ModeAllowRead, ModeAuto, ModeBlockAll} {
 			b := newTestBarrier(newFakePrompter())
 			b.SetWriteRoots(cwd)
 			b.SetMode(m)
@@ -978,7 +961,7 @@ func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 	}{
 		{"autowrite_out_of_scope_write", ModeAutoWrite, "write", `{"path":"/etc/hosts"}`},
 		{"autowrite_out_of_scope_edit", ModeAutoWrite, "edit", `{"path":"/etc/hosts"}`},
-		{"autompc_write", ModeAutoMCP, "write", `{"path":"/etc/hosts"}`},
+		{"auto_out_of_scope_write", ModeAuto, "write", `{"path":"/etc/hosts"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -999,7 +982,7 @@ func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 		b.SetClassifier(&fakeClassifier{verdict: ClassAllow})
-		b.SetMode(ModeAutoMCP)
+		b.SetMode(ModeAuto)
 
 		got := runAsk(b, t.Context(), "mcp__x", []byte(`{}`))
 		assert.Equal(t, tools.ActionAllow, got.Action) // resolved by the classifier, no answer given
@@ -1016,16 +999,15 @@ func TestClassifyCall(t *testing.T) {
 		want bool
 	}{
 		{"auto_shell", ModeAuto, bashTool, true},
-		{"auto_mcp_tool", ModeAuto, "mcp__x", false},
-		{"autompc_mcp_tool", ModeAutoMCP, "mcp__x", true},
+		{"auto_mcp_tool", ModeAuto, "mcp__x", true},
 		{"autowrite_shell", ModeAutoWrite, bashTool, true},
 		{"autowrite_mcp_tool", ModeAutoWrite, "mcp__x", true},
 		{"allow_read_never", ModeAllowRead, bashTool, false},
 		{"block_all_never", ModeBlockAll, bashTool, false},
 
 		// a core writer is decided statically; the model never gets to call one read-only
-		{"autompc_write", ModeAutoMCP, "write", false},
-		{"autompc_edit", ModeAutoMCP, "edit", false},
+		{"auto_write", ModeAuto, "write", false},
+		{"auto_edit", ModeAuto, "edit", false},
 		{"autowrite_write", ModeAutoWrite, "write", false},
 		{"autowrite_edit", ModeAutoWrite, "edit", false},
 	}
@@ -1064,7 +1046,7 @@ func TestCycleAdvancesModesInOrder(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBarrier(newFakePrompter())
-	want := []Mode{ModeAuto, ModeAutoMCP, ModeAutoWrite, ModeAllowAll, ModeBlockAll, ModeAllowRead}
+	want := []Mode{ModeAuto, ModeAutoWrite, ModeAllowAll, ModeBlockAll, ModeAllowRead}
 	for _, w := range want {
 		assert.Equal(t, w, b.Cycle())
 	}

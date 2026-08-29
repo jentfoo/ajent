@@ -17,7 +17,7 @@ const (
 	ClassUnsure              // garbled or failed response; never cached
 )
 
-// Subject is one call sent to the model classifier in auto/auto+mcp/auto+write
+// Subject is one call sent to the model classifier in auto/auto+write
 // mode: a shell command, or any other (MCP/extension) tool named with its elided
 // arguments.
 type Subject struct {

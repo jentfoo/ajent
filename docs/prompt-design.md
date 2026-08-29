@@ -601,7 +601,7 @@ review keeps files inspected, issues found and conclusions reached.
 
 ---
 
-## Tool-call classifier (`auto` / `auto+mcp` / `auto+write` modes)
+## Tool-call classifier (`auto` / `auto+write` modes)
 
 All three prompts live in **`pkg/permit`** (`ClassifierSystem`,
 `MCPClassifierSystem`, `WorkspaceClassifierSystem`), the package that owns the
@@ -625,10 +625,9 @@ error); confident verdicts are LRU-cached per subject identity — tool name plu
 exact payload.
 
 The modes differ in what they classify and by which rule set. **`auto`** judges
-shell commands; **`auto+mcp`** also classifies MCP/extension tool calls, sending the
-model the call's description and JSON-Schema parameters so it can judge
-functionality it has never seen before. In auto mode a non-shell call is never
-classified; in auto+mcp and auto+write MCP/extension calls are too.
+unverifiable bash commands plus MCP/extension tool calls, sending the model the
+call's description and JSON-Schema parameters so it can judge functionality it has
+never seen before; `auto+write` adds write confinement to that same classifier.
 
 A **core writer is never classified** in any mode. `write`/`edit` are decided
 statically — by `auto+write`'s path scope, otherwise by the dialog — so a stray

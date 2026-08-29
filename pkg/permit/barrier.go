@@ -224,7 +224,7 @@ func (b *Barrier) Asker() tools.Asker {
 		if prompter == nil {
 			return tools.Deny(noUIReason)
 		}
-		dlg, err := prompter.Open(promptText(m, call.Name, g.scope), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
+		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
 		if err != nil || dlg == nil {
 			return tools.Deny(noUIReason)
 		}
@@ -400,19 +400,17 @@ func (b *Barrier) noteDenied(call agent.ToolCall, reason string) {
 }
 
 // classifyCall reports whether mode sends this call type to the model classifier:
-// auto judges shell commands only, while auto+mcp and auto+write also classify
-// MCP/extension tool calls. A core writer never goes to the model — Classify
-// already decided it, and a stray allow verdict would auto-allow it. Every
-// other built-in is resolved by Classify and so never reaches this. A nil
-// classifier never starts one.
+// auto judges unverifiable bash commands plus MCP/extension tool calls (judged
+// with their metadata); auto+write adds write confinement. A core writer never
+// goes to the model — Classify already decided it, and a stray allow verdict would
+// auto-allow it. Every other built-in is resolved by Classify and so never reaches
+// this. A nil classifier never starts one.
 func (b *Barrier) classifyCall(m Mode, name string) bool {
 	if b.classifier == nil {
 		return false
 	}
 	switch m {
-	case ModeAuto:
-		return name == bashTool // shell commands only in auto
-	case ModeAutoMCP, ModeAutoWrite:
+	case ModeAuto, ModeAutoWrite:
 		if name == bashTool {
 			return true
 		}
@@ -423,7 +421,7 @@ func (b *Barrier) classifyCall(m Mode, name string) bool {
 	}
 }
 
-// classifySubject is what auto/auto+mcp/auto+write sends to classify call: the bash
+// classifySubject is what auto/auto+write sends to classify call: the bash
 // command, or the tool name plus its elided arguments for any other (MCP) tool.
 // AllowWrite selects the workspace rule set, and only ever for a shell command.
 func classifySubject(m Mode, call agent.ToolCall) Subject {
@@ -676,17 +674,12 @@ func deniedReason(call agent.ToolCall) string {
 	return "refused: " + call.Name
 }
 
-// promptText is the dialog's question line for a mode and tool. auto+write names
-// its roots, since there the only reason to be asked is a path outside them.
-func promptText(m Mode, name string, scope writeScope) string {
-	switch {
-	case m == ModeBlockAll:
+// promptText is the dialog's question line for a mode and tool.
+func promptText(m Mode, name string) string {
+	if m == ModeBlockAll { // block-all genuinely prompts everything
 		return "block-all permits nothing without approval — run this?"
-	case m == ModeAutoWrite && len(scope.roots) > 0:
-		return fmt.Sprintf("Allow `%s`? auto+write covers only %s", name, strings.Join(scope.roots, " and "))
-	default:
-		return fmt.Sprintf("Allow `%s` tool call?", name)
 	}
+	return fmt.Sprintf("Allow `%s` tool call?", name)
 }
 
 // allowDecision builds an allow decision (no reason needed).

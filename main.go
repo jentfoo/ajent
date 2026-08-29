@@ -952,7 +952,7 @@ func resolveSubAgentModel(set *config.Set, reg *llm.Registry, st *agent.State) l
 }
 
 // classifierAdapter classifies an unverifiable call with a one-shot call to the
-// parameters), used to judge MCP/extension calls in auto+mcp mode.
+// parameters), used to judge MCP/extension calls in auto mode.
 func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 	return func(name string) (llm.ToolSchema, bool) {
 		t, ok := reg.Get(name)

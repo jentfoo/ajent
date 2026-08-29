@@ -6,9 +6,8 @@ type Mode uint8
 const (
 	ModeAllowAll  Mode = iota // no gate; every call runs
 	ModeAllowRead             // verifiably read-only calls run, everything else prompts (default)
-	ModeAuto                  // allow-read plus model classification of unverifiable shell commands
-	ModeAutoMCP               // auto plus model classification of MCP/extension tool calls with their metadata
-	ModeAutoWrite             // auto+mcp plus writes confined to the workspace roots
+	ModeAuto                  // allow-read plus model classification of unverifiable shell and MCP/extension tool calls
+	ModeAutoWrite             // auto plus writes confined to the workspace roots
 	ModeBlockAll              // nothing writes or reads without a prompt; ! lines exempt
 )
 
@@ -19,10 +18,8 @@ func ParseMode(s string) (Mode, bool) {
 		return ModeAllowRead, true
 	case "allow-all":
 		return ModeAllowAll, true
-	case "auto":
+	case "auto", "auto+mcp": // auto+mcp is legacy for auto
 		return ModeAuto, true
-	case "auto+mcp":
-		return ModeAutoMCP, true
 	case "auto+write":
 		return ModeAutoWrite, true
 	case "block-all":
@@ -41,8 +38,6 @@ func (m Mode) String() string {
 		return "allow-read"
 	case ModeAuto:
 		return "auto"
-	case ModeAutoMCP:
-		return "auto+mcp"
 	case ModeAutoWrite:
 		return "auto+write"
 	case ModeBlockAll:
@@ -61,8 +56,6 @@ func (m Mode) Short() string {
 		return "read"
 	case ModeAuto:
 		return "auto"
-	case ModeAutoMCP:
-		return "auto+"
 	case ModeAutoWrite:
 		return "auto+w"
 	case ModeBlockAll:
@@ -78,8 +71,6 @@ func (m Mode) Next() Mode {
 	case ModeAllowRead:
 		return ModeAuto
 	case ModeAuto:
-		return ModeAutoMCP
-	case ModeAutoMCP:
 		return ModeAutoWrite
 	case ModeAutoWrite:
 		return ModeAllowAll

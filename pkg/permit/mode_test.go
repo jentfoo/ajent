@@ -18,7 +18,7 @@ func TestModeParse(t *testing.T) {
 		{"allow-read", ModeAllowRead, true},
 		{"allow-all", ModeAllowAll, true},
 		{"auto", ModeAuto, true},
-		{"auto+mcp", ModeAutoMCP, true},
+		{"auto+mcp", ModeAuto, true}, // legacy alias for auto
 		{"auto+write", ModeAutoWrite, true},
 		{"block-all", ModeBlockAll, true},
 		{"bogus", 0, false},
@@ -43,7 +43,6 @@ func TestModeStrings(t *testing.T) {
 		{ModeAllowAll, "allow-all", "all"},
 		{ModeAllowRead, "allow-read", "read"},
 		{ModeAuto, "auto", "auto"},
-		{ModeAutoMCP, "auto+mcp", "auto+"},
 		{ModeAutoWrite, "auto+write", "auto+w"},
 		{ModeBlockAll, "block-all", "block"},
 	}
@@ -56,7 +55,7 @@ func TestModeStrings(t *testing.T) {
 func TestModeNextCyclesInOrder(t *testing.T) {
 	t.Parallel()
 
-	want := []Mode{ModeAuto, ModeAutoMCP, ModeAutoWrite, ModeAllowAll, ModeBlockAll, ModeAllowRead}
+	want := []Mode{ModeAuto, ModeAutoWrite, ModeAllowAll, ModeBlockAll, ModeAllowRead}
 	m := ModeAllowRead
 	for _, w := range want {
 		assert.Equal(t, w, m.Next())
@@ -68,7 +67,7 @@ func TestModeStringRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	// String() must round-trip through ParseMode for every valid mode.
-	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoMCP, ModeAutoWrite, ModeBlockAll} {
+	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoWrite, ModeBlockAll} {
 		got, ok := ParseMode(m.String())
 		assert.True(t, ok)
 		assert.Equal(t, m, got)
