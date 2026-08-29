@@ -148,6 +148,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 		// nothing is registered before the first message; no process spawned yet
 		assert.Empty(t, fr.AllNames("mcp: fake"))
 		require.Nil(t, mgr.serverByName("fake").client())
+		t.Cleanup(mgr.Close)
 
 		mgr.LoadOnFirstMessage(t.Context())
 
@@ -169,6 +170,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: buildFakeServer(t)},
 		}, Options{Registrar: fr})
+		t.Cleanup(mgr.Close)
 
 		mgr.LoadOnFirstMessage(t.Context())
 		first, ok := fr.toolByName("fake__tool_00")
@@ -194,6 +196,7 @@ func TestConfigDisabledServer(t *testing.T) {
 			"fake": {Command: buildFakeServer(t), Enabled: &disabled},
 		}, Options{Registrar: fr})
 
+		t.Cleanup(mgr.Close)
 		mgr.LoadOnFirstMessage(t.Context())
 
 		srv := mgr.serverByName("fake")

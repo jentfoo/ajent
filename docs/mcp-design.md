@@ -145,7 +145,9 @@ package stays free of `pkg/tools`.
   marks each of them `StateDisabled` — known and unchecked, never callable by default.
   Loading here rather than at session start means any `/tools` or `/mcp` change made up
   to that point takes effect — nothing is registered (and no process spawned) before the
-  first message.
+  first message. Discovery during a connect is bounded by `discoverTimeout`, so an
+  unresponsive server surfaces as a connect error instead of hanging the first-message
+  load or `/mcp` reload that awaits it.
 - **On-demand load for `/tools` and `/mcp`** — because loading happens on the first
   prompt, a pre-first-prompt `LoadOnFirstMessage` would otherwise leave MCP tools out of
   the free-select `/tools` picker and show stale tool counts in `/mcp list`. The pump

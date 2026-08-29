@@ -174,17 +174,21 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 		}
 	}
 
-	defs, err := c.Tools(ctx)
+	// discovery is bounded so an unresponsive server surfaces as a connect error
+	// instead of hanging LoadOnFirstMessage / reload (mirrors rediscan).
+	dctx, dcancel := context.WithTimeout(ctx, discoverTimeout)
+	defer dcancel()
+	defs, err := c.Tools(dctx)
 	if err != nil {
 		s.note(err.Error(), true)
 		_ = c.Close()
 		return fmt.Errorf("mcp %s: discover: %w", name, err)
 	}
-	resources, rerr := c.Resources(ctx) // best effort; tools drive registration
+	resources, rerr := c.Resources(dctx) // best effort; tools drive registration
 	if rerr != nil {
 		s.diag("resources/list failed: " + rerr.Error())
 	}
-	prompts, perr := c.Prompts(ctx)
+	prompts, perr := c.Prompts(dctx)
 	if perr != nil {
 		s.diag("prompts/list failed: " + perr.Error())
 	}
@@ -522,6 +526,12 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 // rediscoveryTimeout bounds one tools/list_changed re-discovery so an unresponsive
 // server surfaces an error instead of leaking a goroutine or hanging the session.
 const rediscoveryTimeout = 45 * time.Second
+
+// discoverTimeout bounds one connect's capability discovery (tools/resources/prompts)
+// so an unresponsive server surfaces as a connect error instead of hanging the
+// first-message load or /mcp reload that awaits it. Same rationale and value as
+// rediscoveryTimeout.
+const discoverTimeout = 45 * time.Second
 
 // rediscan refreshes a server's tool list after notifications/tools/list_changed. It
 // runs in its own goroutine (notifications arrive asynchronously from the client) and
