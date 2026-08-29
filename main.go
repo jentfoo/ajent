@@ -125,6 +125,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ajent: unknown render mode %q\n", modeName)
 		os.Exit(exitUsage)
 	}
+	colorName := set.Settings().UI.Color
+	color, ok := tui.ParseColorProfile(colorName)
+	if !ok {
+		warnings = append(warnings, fmt.Sprintf("unknown ui.color %q, detecting instead", colorName))
+	}
 	themeName := set.Settings().UI.Theme
 	pal, known := tui.LookupPalette(themeName)
 	if !known {
@@ -186,6 +191,7 @@ func main() {
 
 	ui, err := tui.New(tui.Options{
 		Mode:       mode,
+		Color:      color,
 		Palette:    pal,
 		Model:      label,
 		ModelShort: short,

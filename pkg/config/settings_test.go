@@ -63,3 +63,45 @@ func TestAgentMaxStepsLayers(t *testing.T) {
 	require.NoError(t, json.Unmarshal(r.Bytes(), &st))
 	assert.Equal(t, 50, st.Agent.MaxSteps) // the user layer caps it
 }
+
+// TestUIColorLayers pins ui.color through the layers it has to survive: the
+// compiled-in default, the free AJENT_UI_COLOR binding, and a user override.
+func TestUIColorLayers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("defaults_to_auto", func(t *testing.T) {
+		var base Settings
+		require.NoError(t, json.Unmarshal(Defaults().Data, &base))
+		assert.Equal(t, "auto", base.UI.Color)
+	})
+
+	t.Run("env_binds_without_wiring", func(t *testing.T) {
+		env, warns := EnvLayer(func(k string) string {
+			if k == "AJENT_UI_COLOR" {
+				return "256"
+			}
+			return ""
+		})
+		assert.Empty(t, warns)
+		r, err := Merge(Defaults(), env)
+		require.NoError(t, err)
+
+		var st Settings
+		require.NoError(t, json.Unmarshal(r.Bytes(), &st))
+		assert.Equal(t, "256", st.UI.Color)
+		assert.Equal(t, "dark", st.UI.Theme) // siblings untouched
+	})
+
+	t.Run("user_layer_overrides", func(t *testing.T) {
+		r, err := Merge(Defaults(), Layer{Name: "user", Data: []byte(`{"ui":{"color":"none"}}`)})
+		require.NoError(t, err)
+
+		var st Settings
+		require.NoError(t, json.Unmarshal(r.Bytes(), &st))
+		assert.Equal(t, "none", st.UI.Color)
+
+		_, src, ok := r.Explain("ui.color")
+		require.True(t, ok)
+		assert.Equal(t, "user", src)
+	})
+}

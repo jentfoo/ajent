@@ -21,24 +21,77 @@ func TestDetectColorProfile(t *testing.T) {
 
 	tests := []struct {
 		name     string
+		want     ColorProfile
 		vars     map[string]string
 		isTTY    bool
 		expected ColorProfile
 	}{
-		{"not_a_tty", map[string]string{"TERM": "xterm-256color"}, false, ColorNone},
-		{"no_color_set", map[string]string{"TERM": "xterm-256color", "NO_COLOR": "1"}, true, ColorNone},
-		{"dumb_term", map[string]string{"TERM": "dumb"}, true, ColorNone},
-		{"empty_term", map[string]string{}, true, ColorNone},
-		{"truecolor", map[string]string{"TERM": "xterm", "COLORTERM": "truecolor"}, true, ColorTrue},
-		{"24bit", map[string]string{"TERM": "xterm", "COLORTERM": "24bit"}, true, ColorTrue},
-		{"term_256", map[string]string{"TERM": "screen-256color"}, true, Color256},
-		{"basic_only", map[string]string{"TERM": "xterm"}, true, ColorBasic},
+		// detection, pinned to what each input resolved to before ui.color existed
+		{"not_a_tty", ColorAuto, map[string]string{"TERM": "xterm-256color"}, false, ColorNone},
+		{"dumb_term", ColorAuto, map[string]string{"TERM": "dumb"}, true, ColorNone},
+		{"empty_term", ColorAuto, map[string]string{}, true, ColorNone},
+		{"truecolor", ColorAuto, map[string]string{"TERM": "xterm", "COLORTERM": "truecolor"}, true, ColorTrue},
+		{"24bit", ColorAuto, map[string]string{"TERM": "xterm", "COLORTERM": "24bit"}, true, ColorTrue},
+		{"term_256", ColorAuto, map[string]string{"TERM": "screen-256color"}, true, Color256},
+		{"basic_only", ColorAuto, map[string]string{"TERM": "xterm"}, true, ColorBasic},
+		{"no_color_honoured", ColorAuto, map[string]string{"TERM": "xterm-256color", "NO_COLOR": "1"}, true, ColorNone},
+		{"no_color_empty_ignored", ColorAuto, map[string]string{"TERM": "xterm-256color", "NO_COLOR": ""}, true, Color256},
+		// terminals naming their depth outright
+		{"colorterm_direct", ColorAuto, map[string]string{"TERM": "xterm", "COLORTERM": "direct"}, true, ColorTrue},
+		{"term_truecolor_suffix", ColorAuto, map[string]string{"TERM": "xterm-truecolor"}, true, ColorTrue},
+		{"term_direct_suffix", ColorAuto, map[string]string{"TERM": "xterm-direct"}, true, ColorTrue},
+		{"direct_infix_stays_256", ColorAuto, map[string]string{"TERM": "xterm-direct256"}, true, Color256},
+		// an explicit want short-circuits detection
+		{"want_none", ColorNone, map[string]string{"TERM": "xterm-256color"}, true, ColorNone},
+		{"want_basic", ColorBasic, map[string]string{"TERM": "xterm-256color"}, true, ColorBasic},
+		{"want_256_on_unknown", Color256, map[string]string{"TERM": "st"}, true, Color256},
+		{"want_true_over_basic", ColorTrue, map[string]string{"TERM": "xterm"}, true, ColorTrue},
+		{"want_beats_no_color", Color256, map[string]string{"TERM": "xterm", "NO_COLOR": "1"}, true, Color256},
+		// a terminal that cannot render escapes outranks want
+		{"want_loses_to_no_tty", ColorTrue, map[string]string{"TERM": "xterm-256color"}, false, ColorNone},
+		{"want_loses_to_dumb", ColorTrue, map[string]string{"TERM": "dumb"}, true, ColorNone},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, DetectColorProfile(env(tc.vars), tc.isTTY))
+			assert.Equal(t, tc.expected, DetectColorProfile(tc.want, env(tc.vars), tc.isTTY))
 		})
 	}
+}
+
+func TestParseColorProfile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		in       string
+		expected ColorProfile
+		ok       bool
+	}{
+		{"empty_is_auto", "", ColorAuto, true},
+		{"auto", "auto", ColorAuto, true},
+		{"none", "none", ColorNone, true},
+		{"basic", "basic", ColorBasic, true},
+		{"sixteen_alias", "16", ColorBasic, true},
+		{"two_fifty_six", "256", Color256, true},
+		{"true", "true", ColorTrue, true},
+		{"truecolor_alias", "truecolor", ColorTrue, true},
+		{"24bit_alias", "24bit", ColorTrue, true},
+		{"case_insensitive", "TrueColor", ColorTrue, true},
+		{"unknown", "magenta", ColorAuto, false},
+		{"off_is_not_a_value", "off", ColorAuto, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := ParseColorProfile(tc.in)
+			assert.Equal(t, tc.expected, got)
+			assert.Equal(t, tc.ok, ok)
+		})
+	}
+
+	t.Run("auto_is_the_zero_value", func(t *testing.T) {
+		var p ColorProfile
+		assert.Equal(t, ColorAuto, p) // an unset Options.Color must mean detect
+	})
 }
 
 func TestStyleWrap(t *testing.T) {

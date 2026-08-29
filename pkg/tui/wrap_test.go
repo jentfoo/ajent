@@ -44,6 +44,13 @@ func TestWrapLine(t *testing.T) {
 		rows := wrapLine("ＡＢＣ", 1)
 		require.Len(t, rows, 3, "a rune wider than the row still advances")
 	})
+	t.Run("zero_width_never_stalls", func(t *testing.T) {
+		// a lone combining mark is its own cluster measuring nothing; the loop has
+		// to advance on cell count, not on columns consumed
+		rows := wrapLine("\u0301\u0301\u0301abc", 1)
+		require.NotEmpty(t, rows)
+		assert.Equal(t, "\u0301\u0301\u0301abc", strings.Join(rows, ""))
+	})
 	t.Run("graphemes_never_split", func(t *testing.T) {
 		// a family emoji is one cluster of many runes, splitting it would corrupt it
 		line := "ok 👨‍👩‍👧‍👦 done"

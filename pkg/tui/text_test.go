@@ -47,6 +47,10 @@ func TestTruncateDisplay(t *testing.T) {
 	t.Run("does_not_split_wide_rune", func(t *testing.T) {
 		assert.Equal(t, "Ａ", truncateDisplay("ＡＢＣ", 3))
 	})
+	t.Run("zero_width_clusters_kept", func(t *testing.T) {
+		// lone combining marks cost no columns, so the budget is spent on the bases
+		assert.Equal(t, 3, displayWidth(truncateDisplay("\u0301abc\u0301def", 3)))
+	})
 }
 
 func TestGraphemesOf(t *testing.T) {
@@ -236,5 +240,10 @@ func TestPaintCaret(t *testing.T) {
 	})
 	t.Run("empty_row", func(t *testing.T) {
 		assert.Equal(t, 1, displayWidth(paintCaret("", 0, 10)))
+	})
+	t.Run("zero_width_row_terminates", func(t *testing.T) {
+		out := paintCaret("\u0301\u0301\u0301", 2, 10)
+		assert.Contains(t, out, caretReverse)
+		assert.LessOrEqual(t, displayWidth(out), 10)
 	})
 }

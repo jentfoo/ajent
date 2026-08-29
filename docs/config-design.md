@@ -137,6 +137,16 @@ from `/settings`, whose session overrides could never reach the running agent.
 `tui.New` — a `/settings` override could never reach the live renderer, so, like
 `agent.maxSteps`, it has no row.
 
+`ui.color` is a `tui.ColorProfile` name (`auto`, `none`, `basic`, `256`, `true`)
+defaulting to `"auto"`, read once beside `ui.render` and, like it, absent from
+`/settings`: the theme is built before `tui.New` returns. `auto` detects from `TERM`
+and `COLORTERM`; any other value names the depth outright, which is the escape hatch
+for a terminal we classify badly in either direction; `AJENT_UI_COLOR=none` is the
+per-invocation form. An unknown name warns and falls back to detection rather than
+exiting, since a bad colour name is not worth a failed startup (`ui.render` still
+exits, because there is no safe paint mode to guess). `NO_COLOR` is still honoured
+beneath it but deliberately undocumented — see tui-design.md, "Semantic styling".
+
 `ui.theme` is a `tui.Palette` name (`dark`, `light` and their `-cool`, `-warm`,
 `-muted` variants) defaulting to `"dark"`. `AJENT_UI_THEME` binds for free
 through EnvLayer. The default is what makes the first-run picker possible:

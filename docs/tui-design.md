@@ -664,12 +664,41 @@ followed by the denial summary or error notice.
 ### Semantic styling
 
 Meaning is carried by style, not by prefix characters, so it survives wrapping.
-`style.go` defines the roles. A `Theme` crosses two choices: the detected colour
-profile (truecolor / 256 / 16 / none, honouring `NO_COLOR` and `TERM=dumb`) and a
-**palette** — a named hue table built for a light or a dark terminal background.
-`NewTheme(profile, palette)` is the only constructor, and `ColorNone` returns the
-zero theme whatever the palette: a palette only ever changes *which* SGR bytes are
-produced, never *whether* any are.
+`style.go` defines the roles. A `Theme` crosses two choices: the colour profile
+(truecolor / 256 / 16 / none) and a **palette** — a named hue table built for a
+light or a dark terminal background. `NewTheme(profile, palette)` is the only
+constructor, and `ColorNone` returns the zero theme whatever the palette: a palette
+only ever changes *which* SGR bytes are produced, never *whether* any are.
+
+**Choosing a profile.** `DetectColorProfile(want, env, isTTY)` mirrors `ResolveMode`,
+and resolves in that order:
+
+1. Not a TTY, or `TERM` empty or `dumb`, gives `ColorNone`. A terminal that cannot
+   render escapes outranks whatever the user asked for, exactly as it does for the
+   paint mode.
+2. `want` when it is not `ColorAuto`. This is `ui.color`, so a user on a terminal we
+   classify badly can name the depth outright — `256` to get highlighting on an
+   unrecognised `TERM`, or `none` to turn colour off entirely. `ColorAuto` is the
+   zero value, so an unset `Options.Color` detects.
+3. A non-empty `NO_COLOR` gives `ColorNone`.
+4. Otherwise env: `COLORTERM` of `truecolor`, `24bit` or `direct`, or a `TERM`
+   ending `-truecolor`/`-direct`, gives truecolor; a `TERM` containing `256` or
+   `direct` gives 256; anything else gives 16.
+
+Unknown terminals stay at 16 deliberately — we never emit a depth the terminal has
+not claimed, and `ui.color` is the escape hatch for anyone that costs.
+
+**`NO_COLOR` is honoured but not documented**, and the ordering is the whole point.
+It is a community convention (no-color.org) rather than a standard, and
+implementations disagree on its edges — ripgrep treats any value as set, jq requires
+a non-empty one — so it is not a surface worth committing to in the README. But it is
+widely enough honoured that dropping it would silently re-colour the terminal of
+anyone who exports it globally, and `pkg/tools` relies on the same convention
+outbound: it sets `NO_COLOR=1` on every child tool process, which only works because
+`rg`, `jq` and the rest read it. Sitting it *below* `ui.color` is what makes the pair
+strictly more capable than either rule alone: a user with `NO_COLOR` exported can
+still turn colour back on for ajent alone, which the convention cannot express. Do
+not "clean up" the read as unexplained, and do not promote it to documented.
 
 Eight palettes ship — `dark`, `dark-cool`, `dark-warm`, `dark-muted` and the four
 `light` equivalents. `dark` is the historical palette byte-for-byte and a golden
@@ -679,7 +708,7 @@ light palettes can drop basic cyan, which is unreadable on white. Attributes
 (bold, dim, italic, reverse) are identical in every palette and live in `NewTheme`.
 A palette also names the chroma style its fenced code is highlighted with
 (`Theme.CodeStyle`), resolved by `highlight.go`. It is **empty below `Color256`**,
-which is the single rule disabling highlighting for `NO_COLOR`, `TERM=dumb` and
+which is the single rule disabling highlighting for `ui.color=none`, `TERM=dumb` and
 16-colour terminals alike: chroma snaps every token onto the 8 ANSI hues there,
 which reads worse than the one hue the palette picked for `Theme.Code`.
 
@@ -729,6 +758,23 @@ wide scripts, combining marks, emoji with skin tone modifiers and ZWJ sequences
 are each treated as one unit of the correct width. A family emoji is one cluster
 of width 2; both the precomposed and combining forms of `é` are width 1. Wrapping
 never splits a cluster, and `truncateDisplay` never cuts one in half.
+
+Every glyph we choose ourselves is pinned to the width its layout budgets for, because
+a per-glyph miss on a glyph repeated to fill a row becomes a whole row of disagreement
+that the one-column slack (rule 3) cannot absorb. The rule char, the markdown markers
+and table borders, the context bar cells, the history markers and every spinner frame
+have a width assertion in the test file beside their constant. Loops that advance by
+measured width — `wrapLine`, `wrapCellLine`, `truncateDisplay`, `paintCaret`,
+`editor.layout` — advance on cell count as well, so a cluster measuring zero columns
+cannot stall them.
+
+Two width exposures are known and deliberately **not** handled. `RUNEWIDTH_EASTASIAN`
+is a user setting rather than a property of the text, and nearly every glyph here
+(`─ ▏ ▓ ░ • · … ┌┬┐│` and the braille spinner) is East Asian Ambiguous, so honouring it
+would have to come with an ASCII fallback set — measuring correctly on its own only
+converts a mismeasured rule into one that genuinely wraps. The same fallback set is
+what a non-UTF-8 locale would need. Both are recorded in
+`docs/phases/18-handle-terminal-quirks.md` with the reasoning for deferring them.
 
 ## Life of a message
 

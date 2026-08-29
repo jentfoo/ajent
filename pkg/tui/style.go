@@ -26,26 +26,54 @@ const (
 type ColorProfile int
 
 const (
-	ColorNone ColorProfile = iota
+	// ColorAuto defers to detection; it is never the profile a Theme is built for.
+	ColorAuto ColorProfile = iota
+	ColorNone
 	ColorBasic
 	Color256
 	ColorTrue
 )
 
-// DetectColorProfile returns the profile implied by env lookups and whether output is a terminal.
-func DetectColorProfile(env func(string) string, isTTY bool) ColorProfile {
-	if !isTTY || env("NO_COLOR") != "" {
-		return ColorNone
+// ParseColorProfile maps a ui.color value to a ColorProfile, false when unknown.
+func ParseColorProfile(s string) (ColorProfile, bool) {
+	switch strings.ToLower(s) {
+	case "", "auto":
+		return ColorAuto, true
+	case "none":
+		return ColorNone, true
+	case "basic", "16":
+		return ColorBasic, true
+	case "256":
+		return Color256, true
+	case "true", "truecolor", "24bit":
+		return ColorTrue, true
+	default:
+		return ColorAuto, false
 	}
+}
+
+// DetectColorProfile returns the profile to build a Theme for: want when it is not
+// ColorAuto, otherwise the one implied by env lookups. A terminal that cannot render
+// escapes at all outranks want, as it does in ResolveMode.
+func DetectColorProfile(want ColorProfile, env func(string) string, isTTY bool) ColorProfile {
 	term := env("TERM")
-	if term == "" || term == "dumb" {
+	if !isTTY || term == "" || term == "dumb" {
+		return ColorNone
+	} else if want != ColorAuto {
+		return want
+	} else if env("NO_COLOR") != "" {
+		// honoured for the users who set it globally, but undocumented: ui.color is
+		// the supported control and the only one that can turn colour back on
 		return ColorNone
 	}
 	switch strings.ToLower(env("COLORTERM")) {
-	case "truecolor", "24bit":
+	case "truecolor", "24bit", "direct":
 		return ColorTrue
 	}
-	if strings.Contains(term, "256") || strings.Contains(term, "direct") {
+	// a TERM naming the depth outright is trusted over the substring match below
+	if strings.HasSuffix(term, "-truecolor") || strings.HasSuffix(term, "-direct") {
+		return ColorTrue
+	} else if strings.Contains(term, "256") || strings.Contains(term, "direct") {
 		return Color256
 	}
 	return ColorBasic

@@ -1646,3 +1646,27 @@ func TestSetTheme(t *testing.T) {
 	// committed history is not redrawn: it keeps the colors it was written with
 	assert.NotContains(t, out.String(), "hello")
 }
+
+// TestMarkerWidths pins the committed-history and status glyphs. The spinner
+// matters most: frames swap in place on a live row, so a frame measuring
+// differently from its neighbours would change the row's width mid-animation.
+func TestMarkerWidths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("history_markers", func(t *testing.T) {
+		assert.Equal(t, 1, displayWidth(thinkingMarker))
+		assert.Equal(t, 1, displayWidth(toolMarker))
+		assert.Equal(t, 2, displayWidth(userMarker))
+		assert.Equal(t, displayWidth(userMarker), displayWidth(userContinue))
+	})
+
+	t.Run("tab_expands_to_four", func(t *testing.T) {
+		assert.Equal(t, 4, displayWidth(tabSpaces))
+	})
+
+	t.Run("spinner_frames_are_one_column", func(t *testing.T) {
+		for _, f := range spinnerFrames {
+			assert.Equal(t, 1, displayWidth(f), f)
+		}
+	})
+}

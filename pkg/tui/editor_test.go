@@ -435,3 +435,31 @@ func TestEditorInputView(t *testing.T) {
 		assert.Equal(t, []string{"!echo a", promptCont + "echo b"}, rows)
 	})
 }
+
+// TestPrefixWidths pins the prompt glyphs the editor budgets against: layout
+// subtracts these widths from every row, so a glyph the terminal measures wider
+// than uniseg does costs the row a column it already spent.
+func TestPrefixWidths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("prompt_glyph_is_two_columns", func(t *testing.T) {
+		assert.Equal(t, 2, displayWidth(promptFirst))
+		assert.Equal(t, displayWidth(promptFirst), displayWidth(promptCont))
+	})
+
+	t.Run("prompt_and_continuation_align", func(t *testing.T) {
+		var e editor
+		e.SetValue("hello")
+		first, cont := e.prefixWidths()
+		assert.Equal(t, 2, first)
+		assert.Equal(t, 2, cont)
+	})
+
+	t.Run("shell_marker_drops_the_glyph", func(t *testing.T) {
+		var e editor
+		e.SetValue("!ls")
+		first, cont := e.prefixWidths()
+		assert.Equal(t, 0, first)
+		assert.Equal(t, 2, cont)
+	})
+}

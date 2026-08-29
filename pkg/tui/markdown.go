@@ -347,7 +347,7 @@ func hBorder(left, mid, right string, w []int) string {
 		if i > 0 {
 			b.WriteString(mid)
 		}
-		b.WriteString(strings.Repeat("─", cw+2))
+		b.WriteString(strings.Repeat(ruleChar, cw+2))
 	}
 	return b.String() + right
 }
@@ -414,7 +414,9 @@ func wrapCell(s string, w int) []string {
 // wrapCellLine word-wraps one cell line to width using the same grapheme cells as
 // wrapLine but with no indent or hanging marker.
 func wrapCellLine(line string, w int) []string {
-	if displayWidth(line) <= w {
+	if w <= 0 {
+		return nil
+	} else if displayWidth(line) <= w {
 		return []string{line}
 	}
 	cs := cells(line)

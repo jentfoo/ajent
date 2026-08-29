@@ -58,10 +58,11 @@ const (
 
 // Options configures a UI.
 type Options struct {
-	In         *os.File // defaults to os.Stdin
-	Out        *os.File // defaults to os.Stdout
-	Mode       Mode     // paint mode, ModeAuto detects multiplexers
-	Palette    Palette  // color set, the zero value uses DefaultPalette
+	In         *os.File     // defaults to os.Stdin
+	Out        *os.File     // defaults to os.Stdout
+	Mode       Mode         // paint mode, ModeAuto detects multiplexers
+	Color      ColorProfile // color depth, ColorAuto detects from TERM/COLORTERM
+	Palette    Palette      // color set, the zero value uses DefaultPalette
 	Model      string
 	ModelShort string // collapse target for Model on a narrow status row
 	MaxTokens  int
@@ -183,7 +184,7 @@ func New(opts Options) (*UI, error) {
 
 	isTTY := term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
 	mode := ResolveMode(opts.Mode, osEnv, isTTY)
-	theme := NewTheme(DetectColorProfile(osEnv, mode != ModePlain), opts.Palette)
+	theme := NewTheme(DetectColorProfile(opts.Color, osEnv, mode != ModePlain), opts.Palette)
 
 	u := &UI{
 		theme:    theme,

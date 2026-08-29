@@ -75,6 +75,23 @@ func TestUsageBar(t *testing.T) {
 			assert.Equal(t, tc.expected, usageBar(tc.pct))
 		})
 	}
+
+	// the status row budgets statusBarCells columns for the bar, so both glyphs
+	// have to measure one column at every fill or the row overruns its width
+	t.Run("bar_glyphs_are_one_column", func(t *testing.T) {
+		assert.Equal(t, 1, displayWidth(barFull))
+		assert.Equal(t, 1, displayWidth(barEmpty))
+	})
+
+	t.Run("bar_spans_its_cells", func(t *testing.T) {
+		for pct := -5; pct <= 140; pct += 5 {
+			assert.Equal(t, statusBarCells, displayWidth(usageBar(pct)))
+		}
+	})
+
+	t.Run("separator_is_three_columns", func(t *testing.T) {
+		assert.Equal(t, 3, displayWidth(statusSep))
+	})
 }
 
 // TestFormatBytesNotTokens pins the distinction: sizes are binary with an

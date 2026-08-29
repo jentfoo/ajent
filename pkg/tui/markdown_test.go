@@ -393,3 +393,55 @@ func TestRuleCharSingleColumn(t *testing.T) {
 
 	assert.Equal(t, 1, displayWidth(ruleChar))
 }
+
+// TestMarkdownGlyphWidths pins the rest of the markdown vocabulary the way
+// TestRuleCharSingleColumn pins the rule. Table geometry is arithmetic over these
+// widths, and a list or quote marker feeds hangWidth, so a glyph the terminal
+// measures differently misaligns every continuation row under it.
+func TestMarkdownGlyphWidths(t *testing.T) {
+	t.Parallel()
+
+	t.Run("markers_are_two_columns", func(t *testing.T) {
+		assert.Equal(t, 2, displayWidth(bulletMarker))
+		assert.Equal(t, 2, displayWidth(quotePrefix))
+		assert.Equal(t, 2, displayWidth(codeIndent))
+	})
+
+	t.Run("checkboxes_are_four_columns", func(t *testing.T) {
+		assert.Equal(t, 4, displayWidth(checkedBox))
+		assert.Equal(t, 4, displayWidth(uncheckedBox))
+	})
+
+	t.Run("table_borders_are_one_column", func(t *testing.T) {
+		for _, g := range []string{"┌", "┬", "┐", "└", "┴", "┘", "├", "┼", "┤", "│"} {
+			assert.Equal(t, 1, displayWidth(g), g)
+		}
+	})
+
+	t.Run("border_spans_its_columns", func(t *testing.T) {
+		w := []int{3, 5}
+		// left + right + one mid, each column padded a space either side
+		assert.Equal(t, 3+5+4+3, displayWidth(hBorder("┌", "┬", "┐", w)))
+	})
+}
+
+// TestWrapCellLine covers the guard the table path relies on; wrapCell screens
+// w <= 0 today, so this pins the behaviour if it is ever called directly.
+func TestWrapCellLine(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero_width_yields_nothing", func(t *testing.T) {
+		assert.Nil(t, wrapCellLine("some text", 0))
+		assert.Nil(t, wrapCellLine("some text", -1))
+	})
+
+	t.Run("wide_runes_never_stall", func(t *testing.T) {
+		rows := wrapCellLine("ＡＢＣＤ", 1)
+		assert.Len(t, rows, 4)
+	})
+
+	t.Run("zero_width_cluster_never_stalls", func(t *testing.T) {
+		rows := wrapCellLine("áb́ć", 1)
+		assert.Len(t, rows, 3) // each base carries its combining mark
+	})
+}
