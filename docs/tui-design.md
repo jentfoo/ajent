@@ -139,7 +139,7 @@ every repaint, a second row appearing and disappearing costs nothing structurall
 The front end publishes a `permissions` segment (`Key: "permissions"`) whenever
 the live mode differs from the `allow-read` default — mirroring the reasoning
 indicator. The non-default modes must always be visible so nobody forgets the gate
-is open; it carries a short form (e.g. `all`, `block`, `auto`) for narrow rows.
+is open; it carries a short form (e.g. `all`, `block`, `auto+w`) for narrow rows.
 
 The sub-agent manager publishes a `subagents` segment (`Key: "subagents"`) on
 every transition — full form `subagents: 2 running (oldest 41s), 1 done`, short

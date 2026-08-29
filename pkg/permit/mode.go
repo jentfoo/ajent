@@ -8,6 +8,7 @@ const (
 	ModeAllowRead             // verifiably read-only calls run, everything else prompts (default)
 	ModeAuto                  // allow-read plus model classification of unverifiable shell commands
 	ModeAutoMCP               // auto plus model classification of MCP/extension tool calls with their metadata
+	ModeAutoWrite             // auto+mcp plus writes confined to the workspace roots
 	ModeBlockAll              // nothing writes or reads without a prompt; ! lines exempt
 )
 
@@ -22,6 +23,8 @@ func ParseMode(s string) (Mode, bool) {
 		return ModeAuto, true
 	case "auto+mcp":
 		return ModeAutoMCP, true
+	case "auto+write":
+		return ModeAutoWrite, true
 	case "block-all":
 		return ModeBlockAll, true
 	default:
@@ -40,6 +43,8 @@ func (m Mode) String() string {
 		return "auto"
 	case ModeAutoMCP:
 		return "auto+mcp"
+	case ModeAutoWrite:
+		return "auto+write"
 	case ModeBlockAll:
 		return "block-all"
 	default:
@@ -58,6 +63,8 @@ func (m Mode) Short() string {
 		return "auto"
 	case ModeAutoMCP:
 		return "auto+"
+	case ModeAutoWrite:
+		return "auto+w"
 	case ModeBlockAll:
 		return "block"
 	default:
@@ -73,6 +80,8 @@ func (m Mode) Next() Mode {
 	case ModeAuto:
 		return ModeAutoMCP
 	case ModeAutoMCP:
+		return ModeAutoWrite
+	case ModeAutoWrite:
 		return ModeAllowAll
 	case ModeAllowAll:
 		return ModeBlockAll
@@ -85,3 +94,6 @@ func (m Mode) Next() Mode {
 
 // allowsEverything reports whether every call runs ungated.
 func (m Mode) allowsEverything() bool { return m == ModeAllowAll }
+
+// allowsWrites reports whether write/edit run ungated within the workspace roots.
+func (m Mode) allowsWrites() bool { return m == ModeAutoWrite }

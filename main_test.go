@@ -787,11 +787,11 @@ func TestClassifierAdapterClassifiesShellCommands(t *testing.T) {
 		}
 	}
 
-	t.Run("readonly_verdict", func(t *testing.T) {
-		assert.Equal(t, permit.ClassReadOnly, adapterFor("read-only").Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
+	t.Run("allow_verdict", func(t *testing.T) {
+		assert.Equal(t, permit.ClassAllow, adapterFor("allow").Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
 	})
-	t.Run("write_verdict_with_noise", func(t *testing.T) {
-		assert.Equal(t, permit.ClassWrite, adapterFor("WRITE: it modifies the file!").Classify(t.Context(), permit.Subject{Name: "bash", Args: "rm a"}))
+	t.Run("deny_verdict_with_noise", func(t *testing.T) {
+		assert.Equal(t, permit.ClassDeny, adapterFor("DENY: it modifies the file!").Classify(t.Context(), permit.Subject{Name: "bash", Args: "rm a"}))
 	})
 	t.Run("garbled_maps_to_unsure", func(t *testing.T) {
 		assert.Equal(t, permit.ClassUnsure, adapterFor("? maybe 42").Classify(t.Context(), permit.Subject{Name: "bash", Args: "weird cmd"}))
@@ -845,7 +845,7 @@ func TestClassifierAdapterRequestUsesFreshContextAndMinimalReasoning(t *testing.
 			sys.WriteString(tb.Text)
 		}
 	}
-	assert.Contains(t, sys.String(), "readonly")
+	assert.Contains(t, sys.String(), `"allow"`)
 	// a model that cannot reason clamps minimal to off; the field is always populated.
 	assert.Equal(t, llm.ClampLevel(model, llm.LevelMinimal), r.Reasoning.Level)
 }
@@ -854,7 +854,7 @@ func TestClassifierAdapterClassifiesMCPCallWithMetadata(t *testing.T) {
 	t.Parallel()
 
 	model := llm.Model{ID: "p/m", Provider: "scripted"}
-	sp := newScripted("readonly")
+	sp := newScripted("allow")
 	adapter := classifierAdapter{
 		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
 		model:       func() llm.Model { return model },
@@ -866,7 +866,7 @@ func TestClassifierAdapterClassifiesMCPCallWithMetadata(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, permit.ClassReadOnly, adapter.Classify(t.Context(), permit.Subject{Name: "srv__list", Args: `{}`}))
+	assert.Equal(t, permit.ClassAllow, adapter.Classify(t.Context(), permit.Subject{Name: "srv__list", Args: `{}`}))
 
 	reqs := sp.Requests()
 	require.Len(t, reqs, 1)
@@ -916,6 +916,63 @@ func newScripted(reply string) *llm.ScriptedProvider {
 		{Type: llm.EventTextEnd, Index: 0},
 		{Type: llm.EventDone, StopReason: llm.StopEndTurn},
 	}}}}
+}
+
+// TestClassifierAdapterSelectsPromptPerRuleSet covers auto+write's prompt and its
+// allow/deny vocabulary, and that MCP calls keep the strict read-only prompt.
+func TestClassifierAdapterSelectsPromptPerRuleSet(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{ID: "p/m", Provider: "scripted"}
+	adapterFor := func(reply string) (classifierAdapter, *llm.ScriptedProvider) {
+		sp := newScripted(reply)
+		return classifierAdapter{
+			providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
+			model:       func() llm.Model { return model },
+			schema: func(string) (llm.ToolSchema, bool) {
+				return llm.ToolSchema{Name: "mcp__x", Description: "d", Parameters: []byte(`{}`)}, true
+			},
+			cwd: "/work/proj",
+			tmp: "/tmp",
+		}, sp
+	}
+	systemOf := func(sp *llm.ScriptedProvider) string {
+		reqs := sp.Requests()
+		require.Len(t, reqs, 1)
+		require.Len(t, reqs[0].System, 1)
+		tb, ok := reqs[0].System[0].(llm.TextBlock)
+		require.True(t, ok)
+		return tb.Text
+	}
+
+	t.Run("allow_write_shell_uses_workspace_prompt", func(t *testing.T) {
+		a, sp := adapterFor("allow")
+		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "python3 -c x", AllowWrite: true})
+		assert.Equal(t, permit.ClassAllow, got)
+		assert.Equal(t, permit.WorkspaceClassifierSystem("/work/proj", "/tmp"), systemOf(sp))
+	})
+	t.Run("allow_write_shell_denies", func(t *testing.T) {
+		a, _ := adapterFor("deny")
+		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "curl x", AllowWrite: true})
+		assert.Equal(t, permit.ClassDeny, got)
+	})
+	t.Run("allow_write_rejects_readonly_word", func(t *testing.T) {
+		a, _ := adapterFor("readonly")
+		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "ls", AllowWrite: true})
+		assert.Equal(t, permit.ClassUnsure, got) // the retired vocabulary no longer approves
+	})
+	t.Run("plain_shell_keeps_strict_prompt", func(t *testing.T) {
+		a, sp := adapterFor("allow")
+		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "ls"})
+		assert.Equal(t, permit.ClassAllow, got)
+		assert.Equal(t, permit.ClassifierSystem, systemOf(sp))
+	})
+	t.Run("mcp_keeps_strict_prompt", func(t *testing.T) {
+		a, sp := adapterFor("allow")
+		got := a.Classify(t.Context(), permit.Subject{Name: "mcp__x", Args: `{}`, AllowWrite: true})
+		assert.Equal(t, permit.ClassAllow, got)
+		assert.Contains(t, systemOf(sp), "You decide whether a single tool invocation may run unattended")
+	})
 }
 
 // TestMCPConfigDisabledToolsEnableViaSlashTools wires a real tools.Registry to

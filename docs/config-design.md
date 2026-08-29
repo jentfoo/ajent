@@ -58,8 +58,8 @@ never a lost switch.
 
 The permission block defaults to `{"mode": "allow-read"}`, so
 `Explain("permissions.mode")` resolves and reports `(default)`. The mode name is
-one of the five in the barrier (`allow-all`, `allow-read`, `auto`, `auto+mcp`,
-`block-all`); `AJENT_PERMISSIONS_MODE` binds for free
+one of the six in the barrier (`allow-all`, `allow-read`, `auto`, `auto+mcp`,
+`auto+write`, `block-all`); `AJENT_PERMISSIONS_MODE` binds for free
 through EnvLayer. It seeds a session's live barrier at startup, so a resumed
 session restores its cycled mode (rebuild replays session overrides before this).
 A `Shift+Tab` cycle or `/settings` records the change as a **session** override
@@ -74,7 +74,8 @@ compound line (`cd … && make lint | tail`) instead requires **every** componen
 either a listed entry or verifiably read-only — wrapping in `cd`/pipe never defeats
 the match, and an appended write can't ride in on a listed prefix. It can never name
 a core writer (`write`, `edit`) or un-reject an in-place sed, so no config entry
-overrides a known mutation. It gates on the live call's tool name (exact) or bash
+overrides a known mutation. `auto+write` is the only mode that runs a core writer
+without a prompt, and it does so on its own path-scope check rather than this list. It gates on the live call's tool name (exact) or bash
 components (see permit), independent of registry metadata.
 
 `deniedCommands` is its hard inverse: exact tool names, whole MCP server namespaces,

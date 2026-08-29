@@ -485,11 +485,17 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		})
 		// auto mode classifies unverifiable shell commands with a fresh-context model
 		// call, cached per exact command; the verdict never enters the session.
+		// auto+write's writable roots: the gate path-scopes write/edit against them and
+		// the classifier prompt names the same two, so both judge by one rule.
+		wcwd, wtmp := cwdOrDot(), os.TempDir()
 		barrier.SetClassifier(permit.NewCachedClassifier(classifierAdapter{
 			providerFor: providers.ProviderFor,
 			model:       func() llm.Model { return st.Model }, // current model so /model applies
 			schema:      toolSchema(toolsReg),
+			cwd:         wcwd,
+			tmp:         wtmp,
 		}.Classify))
+		barrier.SetWriteRoots(wcwd, wtmp)
 		barrier.SetNotice(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 		// config-declared safe commands (exact MCP tool names or verbatim bash lines)
 		// auto-allow as read-only in allow-read/auto; write/edit can never be listed.
@@ -963,11 +969,14 @@ func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 // classifierAdapter classifies an unverifiable call with a one-shot call to the
 // session's current model in a fresh context; the verdict never enters the session.
 // providerFor resolves the active vendor, model yields the live state so /model
-// switches apply, schema fetches tool metadata for non-shell (MCP) calls.
+// switches apply, schema fetches tool metadata for non-shell (MCP) calls, and
+// cwd/tmp name the writable roots for auto+write's prompt.
 type classifierAdapter struct {
 	providerFor func(llm.Model) (llm.Provider, error)
 	model       func() llm.Model
 	schema      func(name string) (llm.ToolSchema, bool) // nil: no MCP metadata available
+	cwd         string
+	tmp         string
 }
 
 func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permit.Class {
@@ -982,15 +991,20 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 	if err != nil {
 		return permit.ClassUnsure
 	}
-	var sys = permit.ClassifierSystem
-	userMsg := s.Args
-	if !s.IsShell() { // an MCP/extension tool call is judged with its own framing and metadata
+	sys := permit.ClassifierSystem
+	switch {
+	case !s.IsShell(): // an MCP/extension tool call is judged with its own framing and metadata
 		sch, ok := a.schema(s.Name)
 		if !ok {
 			return permit.ClassUnsure // unknown tool cannot be evaluated safely
 		}
 		sys = permit.MCPClassifierSystem(sch.Name, sch.Description, string(sch.Parameters))
-		userMsg = s.Args
+	case s.AllowWrite: // auto+write permits writes confined to the workspace
+		sys = permit.WorkspaceClassifierSystem(a.cwd, a.tmp)
+	}
+	userMsg := s.Args
+	if s.Cwd != "" { // a shell cwd rebases every relative path in the command
+		userMsg = "working directory: " + s.Cwd + "\n" + userMsg
 	}
 	req := llm.Request{
 		Model:     m,

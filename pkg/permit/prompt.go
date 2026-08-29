@@ -221,35 +221,65 @@ func (b *Barrier) dialogSubject(call agent.ToolCall) string {
 	return elideSubject(subjectFor(call))
 }
 
-// ClassifierSystem is auto-mode's prompt: classify one shell command as exactly one
-// word by whether it changes any state.
-const ClassifierSystem = `You classify a single shell command by its effect on the system. Reply with exactly one word and nothing else.
+// ClassifierSystem is auto-mode's prompt: decide one shell command in exactly one
+// word, allowing only what changes no state at all.
+const ClassifierSystem = `You decide whether a single shell command may run unattended in a coding session. Reply with exactly one word and nothing else.
 
 Categories:
-- "readonly" — only reads or inspects data with no side effects: nothing is created, modified, or deleted, and no file, repo, process, network, or system state changes. Writing to stdout/stderr is fine.
-- "write" — has any side effect: creates/modifies/deletes files, changes permissions or ownership, alters repo/process/system state, downloads, installs or runs software, redirects output to a file (>, >>), or reads from the network.
+- "allow" — only reads or inspects data with no side effects: nothing is created, modified, or deleted, and no file, repo, process, network, or system state changes. Writing to stdout/stderr is fine.
+- "deny" — has any side effect: creates/modifies/deletes files, changes permissions or ownership, alters repo/process/system state, downloads, installs or runs software, redirects output to a file (>, >>), or reads from the network.
 - "unsure" — only when you do not recognize the command name or genuinely cannot determine its effect.
 
-Compound constructs — pipelines, command substitution $(...) or backticks, loops (for/while/until), and conditionals (if/case) — have no side effect of their own. Classify them by the commands they actually run: if every command inside only reads or inspects, the whole thing is "readonly"; if any one of them writes, it is "write". Examples: 'for f in *.md; do head -20 "$f"; done' and 'echo "=== $(basename "$f") ==="' are readonly; 'for f in *.tmp; do rm "$f"; done' and 'x=$(mktemp)' are write.
+Compound constructs — pipelines, command substitution $(...) or backticks, loops (for/while/until), and conditionals (if/case) — have no side effect of their own. Judge them by the commands they actually run: if every command inside only reads or inspects, the whole thing is "allow"; if any one of them writes, it is "deny". Examples: 'for f in *.md; do head -20 "$f"; done' and 'echo "=== $(basename "$f") ==="' are allow; 'for f in *.tmp; do rm "$f"; done' and 'x=$(mktemp)' are deny.
 
-Use your general knowledge of Unix tools. The examples below are illustrative, NOT exhaustive — classify any unlisted command by what it actually does, not by whether it appears here.
-- readonly examples: ls, cat, head, tail, grep, rg, find (no -exec/-delete), stat, file, df, du, wc, echo, printf, ps, env, uname, hostname, which, date, awk, jq, sed (without -i/--in-place and with no s///w or s///e flags in the script), tree, git status/log/diff/show.
-- write examples: rm, mv, cp, touch, mkdir, rmdir, chmod, chown, ln, dd, truncate, tee, sed -i or sed --in-place; find -exec/-delete; git add/commit/checkout/reset/restore/push/pull/rebase/merge/stash; package installs (npm/pnpm/yarn/pip/apt/brew/cargo/go install); docker run/rm/kill, systemctl, mount, kill; curl/wget reading from or saving to the network.
+Use your general knowledge of Unix tools. The examples below are illustrative, NOT exhaustive — judge any unlisted command by what it actually does, not by whether it appears here.
+- allow examples: ls, cat, head, tail, grep, rg, find (no -exec/-delete), stat, file, df, du, wc, echo, printf, ps, env, uname, hostname, which, date, awk, jq, sed (without -i/--in-place and with no s///w or s///e flags in the script), tree, git status/log/diff/show.
+- deny examples: rm, mv, cp, touch, mkdir, rmdir, chmod, chown, ln, dd, truncate, tee, sed -i or sed --in-place; find -exec/-delete; git add/commit/checkout/reset/restore/push/pull/rebase/merge/stash; package installs (npm/pnpm/yarn/pip/apt/brew/cargo/go install); docker run/rm/kill, systemctl, mount, kill; curl/wget reading from or saving to the network.
 
-Reserve "unsure" for unrecognized commands. Respond with ONLY the classification word.`
+Reserve "unsure" for unrecognized commands. Respond with ONLY the one word.`
 
-// MCPClassifierSystem is auto+mcp's prompt: classify one tool call by whether it
+// WorkspaceClassifierSystem is auto+write's prompt: judge one shell command by
+// whether it is permissible, given cwd and tmp as the only writable roots.
+func WorkspaceClassifierSystem(cwd, tmp string) string {
+	return fmt.Sprintf(`You decide whether a single shell command may run unattended in a coding session. Reply with exactly one word and nothing else.
+
+These two directories are the workspace, and are the ONLY places anything may be created, modified or deleted:
+- %s
+- %s
+
+Categories:
+- "allow" — the command only reads or inspects, or it only changes things inside the workspace. Reading and writing stdout/stderr is always fine.
+- "deny" — the command touches anything outside the workspace, changes the system, destroys work, reaches the network, or runs something you cannot account for.
+- "unsure" — only when you do not recognize the command name or genuinely cannot determine its effect.
+
+Allowed inside the workspace: creating and overwriting files; python, perl, ruby, awk or sed invocations that rewrite or generate files there; writing through cat/tee or the > and >> redirects; mkdir, rmdir, touch, mv and cp; removing individual named files; running the project's own build, test and lint commands; git add, commit, checkout, branch, stash and restore within the repository.
+
+Always deny, whatever else the command does:
+- any path outside the two roots above, including the rest of $HOME even when the workspace sits inside it — ~/.ssh, ~/.config, /etc, /usr, /var, /opt, another checkout, or a parent of the workspace
+- destroying work in bulk: rm -rf on a directory, rm with a broad wildcard, truncating or emptying many files, git clean -fdx, git reset --hard, git rebase, git push, or any history rewrite
+- changing the system or its software: sudo, su, apt, brew, yum, systemctl, service, mount, launchctl, chmod, chown, kill on anything you did not start, or a global/system package install (npm -g, pip install, go install, cargo install)
+- the network in either direction: curl, wget, nc, ssh, scp, rsync to a host, git remote operations against a server. Reading from the network is not safe on its own — it exfiltrates whatever it sends.
+- running software you cannot account for: an executable downloaded or generated by this same command line, a script piped into a shell (curl ... | sh, base64 -d | sh), eval of a constructed string, or anything deliberately obscured
+- reading or copying credentials, keys, tokens or environment secrets
+- writing inside a repository's metadata directory (.git, .hg, .svn), since a hook or config alias there runs on the next command
+
+Compound constructs — pipelines, command substitution $(...) or backticks, loops (for/while/until), and conditionals (if/case) — have no effect of their own. Judge them by the commands they actually run: every part must be allowed for the whole to be "allow"; a single denied part makes the whole "deny". A cd into the workspace does not make a later absolute path safe.
+
+Use your general knowledge of Unix tools; the lists above are illustrative, NOT exhaustive. When a path is relative, assume it resolves inside %s. When you cannot tell where a command writes, or whether it is destructive, answer "unsure" rather than "allow". Respond with ONLY the one word.`, cwd, tmp, cwd)
+}
+
+// MCPClassifierSystem is auto+mcp's prompt: decide one tool call by whether it
 // changes any state. name, description and params are embedded so an unfamiliar
 // server can be judged by what it declares.
 func MCPClassifierSystem(name, description, params string) string {
-	return fmt.Sprintf(`You classify a single tool invocation by its effect on the system. Reply with exactly one word and nothing else.
+	return fmt.Sprintf(`You decide whether a single tool invocation may run unattended in a coding session. Reply with exactly one word and nothing else.
 
 Categories:
-- "readonly" — the call only reads or inspects: it changes no files, repo, process, network, remote service, permissions, configs, caches, credentials or any other state anywhere.
-- "write" — has any side effect at all: mutates data, alters a remote system, sends commands with lasting effects, changes credentials or configuration.
+- "allow" — the call only reads or inspects: it changes no files, repo, process, network, remote service, permissions, configs, caches, credentials or any other state anywhere.
+- "deny" — has any side effect at all: mutates data, alters a remote system, sends commands with lasting effects, changes credentials or configuration.
 - "unsure" — only when you cannot determine the tool's effect from its description and arguments.
 
-A readonly verdict requires NO observable change to anything. Reading from the network is not readonly on its own (it can exfiltrate); it must also leave every system unchanged.
+An allow verdict requires NO observable change to anything. Reading from the network is not allowed on its own (it can exfiltrate); it must also leave every system unchanged.
 
 Tool under evaluation:
 Name: %s

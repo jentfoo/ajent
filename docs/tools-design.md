@@ -121,7 +121,19 @@ output — so the model treats it as operator intent (see `prompt-design.md`,
 provenance). Config's `permissions.safeCommands` lets a user declare extra
 tools, whole MCP server namespaces (`sectool` covers every `sectool__*` tool), or
 bash command lines to auto-allow as read-only; it can never name
-`write`/`edit`. Core never does. The `WithUserInitiated` marker rides the context
+`write`/`edit`. Core never does. `auto+write` is the one mode that runs
+`write`/`edit` without a prompt, and only when the call's path resolves under its
+roots (cwd and the temp dir); resolution goes through the tool's own `PathPolicy`,
+so a symlink pointing outside lands out of scope and still prompts. Three carve-outs
+are load-bearing. A bash call's own `cwd` argument rebases every relative path, so
+it is resolved and scope-checked before the command is. A `cd` segment does the
+same mid-line: its target is checked like any other path, and both the old and new
+directory stay candidates, because a control operator may skip the `cd` and a later
+path must be in scope either way — which is why `cd sub && mkdir ../x` is refused.
+VCS metadata (`.git`, `.hg`, `.svn`) is excluded from the roots — a hook or
+`core.hooksPath` written there is code that executes on the next git invocation.
+`rmdir -p` is permitted because it walks only the operand's own components, so its
+shallowest one is scope-checked and everything it can reach sits under that. The `WithUserInitiated` marker rides the context
 so a user's own staged `!` shell line is exempt in every permission mode — it is
 the human's shell, not the model's.
 

@@ -37,6 +37,7 @@ type Barrier struct {
 	ro         func(string) bool
 	safe       func(agent.ToolCall) bool // config-declared safe commands; nil = none
 	deny       func(agent.ToolCall) bool // config-declared denied commands; nil = none
+	scope      writeScope                // auto+write's writable roots; zero allows nothing
 
 	preview func(agent.ToolCall) string // enhanced dialog subject; nil = raw arguments
 
@@ -51,7 +52,7 @@ type pendingAsk struct {
 	call   agent.ToolCall
 	dlg    Dialog
 	cancel context.CancelFunc // stops the concurrent classifier, nil when none started
-	auto   bool               // a read-only verdict resolved this dialog (auto mode)
+	auto   bool               // an allow verdict resolved this dialog (auto mode)
 }
 
 // NewBarrier builds a barrier with read-only metadata lookup ro. It starts in
@@ -135,6 +136,16 @@ func (b *Barrier) SetDeniedCommands(cmds []string) {
 	b.deny = fn
 }
 
+// SetWriteRoots installs the directories auto+write may write to without a
+// prompt: cwd plus any extra roots (the temp dir). Unset means every write
+// prompts, as in every other mode.
+func (b *Barrier) SetWriteRoots(cwd string, extra ...string) {
+	s := newWriteScope(cwd, extra...)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.scope = s
+}
+
 // Mode returns the current live mode.
 func (b *Barrier) Mode() Mode {
 	b.mu.Lock()
@@ -157,8 +168,9 @@ func (b *Barrier) SetMode(m Mode) {
 	if old == m || len(opens) == 0 {
 		return
 	}
+	g := b.gateFor(m)
 	for _, pa := range opens {
-		if staticVerdict(m, context.Background(), pa.call, b.ro, b.dryRun, b.safe, b.deny).Action == tools.ActionAllow {
+		if g.staticVerdict(context.Background(), pa.call).Action == tools.ActionAllow {
 			pa.dlg.Resolve(int(optAllow))
 		}
 	}
@@ -173,8 +185,9 @@ func (b *Barrier) Cycle() Mode {
 	opens := slices.Clone(b.open)
 	b.mu.Unlock()
 
+	g := b.gateFor(m)
 	for _, pa := range opens {
-		if staticVerdict(m, context.Background(), pa.call, b.ro, b.dryRun, b.safe, b.deny).Action == tools.ActionAllow {
+		if g.staticVerdict(context.Background(), pa.call).Action == tools.ActionAllow {
 			pa.dlg.Resolve(int(optAllow))
 		}
 	}
@@ -192,7 +205,7 @@ func (b *Barrier) resetSessionAllowsLocked() {
 // rejections deny with guidance; block-all asks even for reads. Never blocks.
 func (b *Barrier) Guard() tools.Guard {
 	return func(ctx context.Context, call agent.ToolCall) tools.Decision {
-		return staticVerdict(b.Mode(), ctx, call, b.ro, b.dryRun, b.safe, b.deny)
+		return b.gateNow().staticVerdict(ctx, call)
 	}
 }
 
@@ -200,7 +213,8 @@ func (b *Barrier) Guard() tools.Guard {
 // opens an approval dialog, and in auto mode classifies bash concurrently.
 func (b *Barrier) Asker() tools.Asker {
 	return func(ctx context.Context, call agent.ToolCall, _ tools.Decision) tools.Decision {
-		m := b.Mode()
+		g := b.gateNow()
+		m := g.mode
 
 		if _, ok := b.sessionAllowed(call); ok {
 			return allowDecision()
@@ -210,13 +224,13 @@ func (b *Barrier) Asker() tools.Asker {
 		if prompter == nil {
 			return tools.Deny(noUIReason)
 		}
-		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
+		dlg, err := prompter.Open(promptText(m, call.Name, g.scope), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
 		if err != nil || dlg == nil {
 			return tools.Deny(noUIReason)
 		}
 
-		// auto/auto+mcp classifies every prompted call concurrently with the dialog; a
-		// readonly verdict resolves it open. A user answer cancels classification.
+		// the auto modes classify every prompted call concurrently with the dialog; an
+		// allow verdict resolves it open. A user answer cancels classification.
 		var classifierCtx context.Context
 		cancel := func() {}
 		if b.classifyCall(m, call.Name) {
@@ -234,16 +248,16 @@ func (b *Barrier) Asker() tools.Asker {
 		b.mu.Unlock()
 
 		// a Shift+Tab landed between Open and registration; re-evaluate under the new mode.
-		if mNow != m && staticVerdict(mNow, ctx, call, b.ro, b.dryRun, b.safe, b.deny).Action == tools.ActionAllow {
+		if mNow != m && b.gateFor(mNow).staticVerdict(ctx, call).Action == tools.ActionAllow {
 			dlg.Resolve(int(optAllow))
 		}
 
 		if classifierCtx != nil && classifierCtx.Err() == nil {
-			subject := classifySubject(call)
+			subject := classifySubject(m, call)
 			go func() {
 				// a user answer cancels the context; skip both the resolve and its
 				// auto-allowed report so a denial is never claimed as auto-allowed.
-				if b.classifier.Classify(classifierCtx, subject) != ClassReadOnly ||
+				if b.classifier.Classify(classifierCtx, subject) != ClassAllow ||
 					classifierCtx.Err() != nil { // user answered while classifying
 					return
 				}
@@ -386,8 +400,11 @@ func (b *Barrier) noteDenied(call agent.ToolCall, reason string) {
 }
 
 // classifyCall reports whether mode sends this call type to the model classifier:
-// auto judges shell commands only, while auto+mcp also classifies MCP/extension
-// tool calls. A nil classifier never starts one.
+// auto judges shell commands only, while auto+mcp and auto+write also classify
+// MCP/extension tool calls. A core writer never goes to the model — Classify
+// already decided it, and a stray allow verdict would auto-allow it. Every
+// other built-in is resolved by Classify and so never reaches this. A nil
+// classifier never starts one.
 func (b *Barrier) classifyCall(m Mode, name string) bool {
 	if b.classifier == nil {
 		return false
@@ -395,18 +412,29 @@ func (b *Barrier) classifyCall(m Mode, name string) bool {
 	switch m {
 	case ModeAuto:
 		return name == bashTool // shell commands only in auto
-	case ModeAutoMCP:
-		return true // MCP and other tools too, judged with their metadata
+	case ModeAutoMCP, ModeAutoWrite:
+		if name == bashTool {
+			return true
+		}
+		_, isWrite := coreWriteTools[name]
+		return !isWrite // MCP and other extension tools, judged with their metadata
 	default:
 		return false
 	}
 }
 
-// classifySubject is what auto/auto+mcp sends to classify call: the bash command,
-// or the tool name plus its elided arguments for any other (MCP) tool.
-func classifySubject(call agent.ToolCall) Subject {
+// classifySubject is what auto/auto+mcp/auto+write sends to classify call: the bash
+// command, or the tool name plus its elided arguments for any other (MCP) tool.
+// AllowWrite selects the workspace rule set, and only ever for a shell command.
+func classifySubject(m Mode, call agent.ToolCall) Subject {
 	if call.Name == bashTool {
-		return Subject{Name: bashTool, Args: bashCommand(call.Input)}
+		// the declared cwd rebases every relative path, so the model must see it
+		return Subject{
+			Name:       bashTool,
+			Args:       bashCommand(call.Input),
+			Cwd:        bashCwd(call.Input),
+			AllowWrite: m.allowsWrites(),
+		}
 	}
 	s := strings.TrimSpace(string(call.Input))
 	return Subject{Name: call.Name, Args: strutil.Clip(s, maxClassifierArgs)}
@@ -443,35 +471,66 @@ func (b *Barrier) noticeSnapshot() func(string) {
 	return b.notice
 }
 
+// gate is the barrier's decision state, snapshotted under the lock so a verdict
+// never races a Set* installer.
+type gate struct {
+	mode   Mode
+	ro     func(string) bool
+	dryRun func(agent.ToolCall) error
+	safe   func(agent.ToolCall) bool
+	deny   func(agent.ToolCall) bool
+	scope  writeScope
+}
+
+// gateFor snapshots the decision state alongside mode.
+func (b *Barrier) gateFor(m Mode) gate {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return gate{mode: m, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny, scope: b.scope}
+}
+
+// gateNow snapshots the decision state with the live mode.
+func (b *Barrier) gateNow() gate {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return gate{mode: b.mode, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny, scope: b.scope}
+}
+
 // staticVerdict computes the guard's verdict for call under mode without blocking.
 // Branch order is load-bearing: a configured denied command refuses first, before
-// even allow-all or user-initiation. block-all asks even verifiably read-only
+// even allow-all or user-initiation. auto+write's in-scope write runs next, so a
+// config denial still outranks it. block-all asks even verifiably read-only
 // calls, and a doomed edit runs so its natural error surfaces instead of prompting.
 // A configured safe command overrides a prompt but never a reject, and still
 // respects block-all (nothing auto-runs there).
-func staticVerdict(m Mode, ctx context.Context, call agent.ToolCall, ro func(string) bool, dryRun func(agent.ToolCall) error, safe func(agent.ToolCall) bool, deny func(agent.ToolCall) bool) tools.Decision {
+func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Decision {
+	m := g.mode
 	// a user-issued ! line runs regardless of config denial or mode
 	if tools.IsUserInitiated(ctx) {
 		return tools.Allow(call)
 	}
 	// a config-declared denied command is refused outright in every mode.
-	if deny != nil && deny(call) {
+	if g.deny != nil && g.deny(call) {
 		return tools.Deny(deniedReason(call))
 	}
 	if m.allowsEverything() {
 		return tools.Allow(call)
 	}
-	switch Classify(call, ro) {
+	// workspace-confined writes run before Classify, which always prompts a core writer
+	if m.allowsWrites() && g.scope.allows(call) {
+		return tools.Allow(call)
+	}
+	switch Classify(call, g.ro) {
 	case VerdictReject:
 		return tools.Deny(rejectionReason(call))
 	case VerdictPrompt:
 		// a doomed edit runs so its natural error surfaces instead of prompting.
-		if call.Name == "edit" && dryRun != nil && dryRun(call) != nil {
+		if call.Name == "edit" && g.dryRun != nil && g.dryRun(call) != nil {
 			return tools.Allow(call)
 		}
 		// a config-declared safe command skips the prompt; otherwise ask. A hard
 		// reject above is never overridable, so sed -i stays refused.
-		if safe == nil || !safe(call) {
+		if g.safe == nil || !g.safe(call) {
 			return askDecision()
 		}
 	}
@@ -617,12 +676,17 @@ func deniedReason(call agent.ToolCall) string {
 	return "refused: " + call.Name
 }
 
-// promptText is the dialog's question line for a mode and tool.
-func promptText(m Mode, name string) string {
-	if m == ModeBlockAll {
+// promptText is the dialog's question line for a mode and tool. auto+write names
+// its roots, since there the only reason to be asked is a path outside them.
+func promptText(m Mode, name string, scope writeScope) string {
+	switch {
+	case m == ModeBlockAll:
 		return "block-all permits nothing without approval — run this?"
+	case m == ModeAutoWrite && len(scope.roots) > 0:
+		return fmt.Sprintf("Allow `%s`? auto+write covers only %s", name, strings.Join(scope.roots, " and "))
+	default:
+		return fmt.Sprintf("Allow `%s` tool call?", name)
 	}
-	return fmt.Sprintf("Allow `%s` tool call?", name)
 }
 
 // allowDecision builds an allow decision (no reason needed).

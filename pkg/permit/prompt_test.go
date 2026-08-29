@@ -101,11 +101,11 @@ func TestElideSubject(t *testing.T) {
 // is deliberate and reviewed.
 func TestClassifierSystemVerbatim(t *testing.T) {
 	t.Parallel()
-	assert.Contains(t, ClassifierSystem, "You classify a single shell command")
-	assert.Contains(t, ClassifierSystem, `"readonly" — only reads or inspects data with no side effects`)
+	assert.Contains(t, ClassifierSystem, "You decide whether a single shell command may run unattended")
+	assert.Contains(t, ClassifierSystem, `"allow" — only reads or inspects data with no side effects`)
 	assert.Contains(t, ClassifierSystem, `downloads, installs or runs software, redirects output`)
 	assert.NotContains(t, ClassifierSystem, "with lasting effects")
-	assert.Contains(t, ClassifierSystem, `Reserve "unsure" for unrecognized commands. Respond with ONLY the classification word.`)
+	assert.Contains(t, ClassifierSystem, `Reserve "unsure" for unrecognized commands. Respond with ONLY the one word.`)
 }
 
 // TestMCPClassifierSystemVerbatim pins the MCP classifier prompt so a wording change
@@ -114,8 +114,8 @@ func TestMCPClassifierSystemVerbatim(t *testing.T) {
 	t.Parallel()
 	p := MCPClassifierSystem("mcp_tool", "  does a thing  ", `{"type":"object"}`)
 
-	assert.Contains(t, p, "You classify a single tool invocation")
-	assert.Contains(t, p, "A readonly verdict requires NO observable change to anything.")
+	assert.Contains(t, p, "You decide whether a single tool invocation may run unattended")
+	assert.Contains(t, p, "An allow verdict requires NO observable change to anything.")
 	assert.Contains(t, p, "sends commands with lasting effects")
 
 	// name/description/params embedded (description trimmed)
@@ -123,4 +123,26 @@ func TestMCPClassifierSystemVerbatim(t *testing.T) {
 	assert.Contains(t, p, "Description: does a thing")
 	assert.Contains(t, p, `Parameters (JSON Schema):
 {"type":"object"}`)
+}
+
+// TestWorkspaceClassifierSystemVerbatim pins the auto+write prompt so a wording
+// change is deliberate and reviewed.
+func TestWorkspaceClassifierSystemVerbatim(t *testing.T) {
+	t.Parallel()
+	p := WorkspaceClassifierSystem("/work/proj", "/tmp")
+
+	assert.Contains(t, p, "You decide whether a single shell command may run unattended")
+	assert.Contains(t, p, `"allow" — the command only reads or inspects, or it only changes things inside the workspace`)
+	assert.Contains(t, p, "Always deny, whatever else the command does:")
+	assert.Contains(t, p, "Reading from the network is not safe on its own")
+	assert.Contains(t, p, `answer "unsure" rather than "allow"`)
+
+	// both roots named, and cwd repeated as the base for relative paths
+	assert.Contains(t, p, "- /work/proj\n- /tmp")
+	assert.Contains(t, p, "assume it resolves inside /work/proj")
+
+	// every prompt answers allow/deny; the read-only vocabulary is gone
+	for _, sys := range []string{p, ClassifierSystem, MCPClassifierSystem("t", "d", "{}")} {
+		assert.NotContains(t, sys, "readonly")
+	}
 }

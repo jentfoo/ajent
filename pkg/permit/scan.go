@@ -227,12 +227,18 @@ func allSegmentsReadOnly(s Scan) bool {
 	if s.HasUnsafeOp || len(s.Segments) == 0 {
 		return false // unparseable fails safe to the prompt path
 	}
+	return forEachSegment(s, segmentIsReadOnly)
+}
+
+// forEachSegment reports whether ok holds for every segment paired with its
+// verbatim raw text, which Segments and Raw keep index-aligned from pushSegment.
+func forEachSegment(s Scan, ok func(seg, raw string) bool) bool {
 	for i, seg := range s.Segments {
 		raw := ""
-		if i < len(s.Raw) { // Segments and Raw stay index-aligned from pushSegment
+		if i < len(s.Raw) {
 			raw = s.Raw[i]
 		}
-		if !segmentIsReadOnly(seg, raw) {
+		if !ok(seg, raw) {
 			return false
 		}
 	}

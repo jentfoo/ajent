@@ -89,12 +89,44 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.playStep(wr, req, prompt)
 }
 
-// classify answers an auto-mode classifier request: no tools are advertised and a
-// single user message holds the raw shell command. It approves every command so
-// auto mode never blocks on a write the agent asked about.
+// classify answers a classifier request: no tools are advertised and a single user
+// message holds the call under evaluation. It approves everything, so no barrier
+// mode blocks on a call the agent asked about.
 func (s *Server) classify(wr *writer, model string, req chatRequest, prompt int) {
-	wr.textDelta(model, "readonly")
+	wr.textDelta(model, approveWord(systemText(req)))
 	wr.finish(model, "stop", prompt)
+}
+
+// approveWord returns the approving verdict a classifier prompt asks for. Each
+// prompt lists its categories most-permissive first, so the first word quoted
+// after a bullet is the answer; a caller whose prompt says nothing gets "allow".
+// Read rather than assumed, since any harness may drive this server.
+func approveWord(system string) string {
+	for _, line := range strings.Split(system, "\n") {
+		if !strings.HasPrefix(line, `- "`) {
+			continue
+		}
+		if end := strings.Index(line[3:], `"`); end > 0 {
+			return line[3 : 3+end]
+		}
+	}
+	return "allow"
+}
+
+// systemText joins the system messages of a request; a caps-driven client may
+// label them developer instead.
+func systemText(req chatRequest) string {
+	var b strings.Builder
+	for _, m := range req.Messages {
+		if m.Role != "system" && m.Role != "developer" {
+			continue
+		}
+		if s, ok := m.Content.(string); ok {
+			b.WriteString(s)
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 // playStep streams the script turn at req's current step index.

@@ -601,28 +601,57 @@ review keeps files inspected, issues found and conclusions reached.
 
 ---
 
-## Tool-call classifier (`auto` / `auto+mcp` modes)
+## Tool-call classifier (`auto` / `auto+mcp` / `auto+write` modes)
 
-Both prompts live in **`pkg/permit`** (`ClassifierSystem`, `MCPClassifierSystem`),
-the package that owns the `Classifier` interface — not in `main.go`. The shell
+All three prompts live in **`pkg/permit`** (`ClassifierSystem`,
+`MCPClassifierSystem`, `WorkspaceClassifierSystem`), the package that owns the
+`Classifier` interface — not in `main.go`. The shell
 prompt keeps its strict unconditional bar (running arbitrary software is always a
-write); the MCP variant states the no-observable-change and network-exfiltration
-rules. The permission barrier classifies an unverifiable tool call
+write, so never `allow`); the MCP variant states the no-observable-change and
+network-exfiltration rules. The permission barrier classifies an unverifiable tool call
 with a one-shot call to the session's current model — **fresh context**, never the
-session history, and its verdict never enters the session. It asks for exactly one word:
-`readonly`, `write` or `unsure`. Reasoning is clamped minimal; the output token
-budget leaves room for a thinking block. Verdicts normalise by lowercasing,
-dropping non-letters and prefix-matching, so `` `readonly` ``, `read-only` and
-`readonly.` all collapse to one word; anything else is `unsure`. The response is
+session history, and its verdict never enters the session. All three ask the same
+question — may this run unattended? — and take the same one-word answer: `allow`,
+`deny` or `unsure`. One vocabulary means one normaliser and no per-prompt parsing
+anywhere downstream. Reasoning is clamped minimal; the output token budget leaves
+room for a thinking block. Verdicts normalise by lowercasing and dropping
+non-letters, so `` `allow` `` and `Allowed.` both land on approval. An **approval
+must be the whole reply** — a hedged "allowing this would be unsafe" is not one,
+and the asymmetry is deliberate: `deny` and `unsure` are indistinguishable
+downstream (both leave the dialog open), so only the approving direction can fail
+open and only it is matched strictly. The response is
 never cached when unsure (usually transient: an abort, missing auth, an API
 error); confident verdicts are LRU-cached per subject identity — tool name plus
 exact payload.
 
-The two modes differ only in what they classify. **`auto`** judges shell commands;
-**`auto+mcp`** also classifies MCP/extension tool calls, sending the model the
-call's description and JSON-Schema parameters so it can judge functionality it has
-never seen before. In auto mode a non-shell call is never classified; in
-auto+mcp both are.
+The modes differ in what they classify and by which rule set. **`auto`** judges
+shell commands; **`auto+mcp`** also classifies MCP/extension tool calls, sending the
+model the call's description and JSON-Schema parameters so it can judge
+functionality it has never seen before. In auto mode a non-shell call is never
+classified; in auto+mcp and auto+write MCP/extension calls are too.
+
+A **core writer is never classified** in any mode. `write`/`edit` are decided
+statically — by `auto+write`'s path scope, otherwise by the dialog — so a stray
+`allow` verdict can never auto-allow one. Every other built-in is resolved by
+`Classify` before the asker runs, so only bash and non-built-in tools ever reach
+the model.
+
+**`auto+write`** keeps the strict MCP prompt for non-shell calls, but sends shell
+commands to `WorkspaceClassifierSystem`: there the question is not *does this
+write?* but *is this write permissible?*. The prompt names its two writable roots
+verbatim — cwd and the temp dir, the same two the barrier path-scopes `write`/`edit`
+against, so gate and model judge by one rule. Inside them it allows file creation,
+`python`/`perl` rewrites, redirects, `mv`/`cp`, removing individual files, build and
+test commands and in-repo git; it denies regardless any path outside the roots, bulk
+destruction, system or package changes, the network in either direction,
+unaccountable execution and credential access. An **in-scope** `mkdir`/`rmdir` never reaches it — the barrier
+resolves those path arguments itself; an out-of-scope one still goes to the model
+like any other command. Ambiguity resolves to `unsure`, never
+`allow`, and a `cd` into the workspace never launders a later absolute path.
+
+`Subject.AllowWrite` selects the rule set and is part of the **cache key** — the
+LRU survives a mode change, so without it one mode's verdict would answer for the
+other. The words are the same across prompts, but the rule they encode is not.
 
 The shell prompt keeps the reference's framing — compound constructs classify by
 the commands they actually run, examples are illustrative not exhaustive — with one
@@ -633,7 +662,7 @@ so explicitly rather than inheriting the reference's opposite claim. Network too
 classifier read-only.
 
 The MCP prompt applies the same no-change bar to a single tool invocation: a
-`readonly` verdict requires **no observable change anywhere** — files, repo,
+`allow` verdict requires **no observable change anywhere** — files, repo,
 process, network, remote service, permissions, configs, caches or credentials —
 and reading from the network alone is never enough. The tool's name, description
 and parameters are embedded verbatim so an unfamiliar MCP server can be judged by

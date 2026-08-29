@@ -3,6 +3,7 @@ package permit
 import (
 	"context"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -11,27 +12,33 @@ import (
 type Class uint8
 
 const (
-	ClassReadOnly Class = iota // verifiably read-only, safe to auto-allow
-	ClassWrite                 // writes or otherwise unsafe; keep the dialog open
-	ClassUnsure                // garbled or failed response; never cached
+	ClassAllow  Class = iota // safe to auto-allow under the rule set it was judged by
+	ClassDeny                // writes or otherwise unsafe; keep the dialog open
+	ClassUnsure              // garbled or failed response; never cached
 )
 
-// Subject is one call sent to the model classifier in auto/auto+mcp mode: a shell
-// command, or any other (MCP/extension) tool named with its elided arguments.
+// Subject is one call sent to the model classifier in auto/auto+mcp/auto+write
+// mode: a shell command, or any other (MCP/extension) tool named with its elided
+// arguments.
 type Subject struct {
-	Name string // tool name; bashTool for shell calls
-	Args string // bash command text, or elided JSON arguments for other tools
+	Name       string // tool name; bashTool for shell calls
+	Args       string // bash command text, or elided JSON arguments for other tools
+	Cwd        string // shell working directory when the call declares one
+	AllowWrite bool   // judge under auto+write's workspace rules rather than read-only
 }
 
-// key is the cache identity: a call is judged by tool and exact payload together,
-// so different args to one MCP tool are classified independently.
-func (s Subject) key() string { return s.Name + "\x00" + s.Args }
+// key is the cache identity: a call is judged by tool, exact payload, working
+// directory and the rule set it was judged under, so different args to one MCP tool
+// are classified independently and a mode change never reuses the other's verdict.
+func (s Subject) key() string {
+	return strconv.FormatBool(s.AllowWrite) + "\x00" + s.Name + "\x00" + s.Cwd + "\x00" + s.Args
+}
 
 // IsShell reports whether the subject is a shell command rather than an MCP/extension call.
 func (s Subject) IsShell() bool { return s.Name == bashTool }
 
-// Classifier decides whether an unverifiable tool call is read-only. main.go
-// supplies a fresh-context model adapter in auto/auto+mcp mode.
+// Classifier decides whether an unverifiable tool call may run unattended.
+// main.go supplies a fresh-context model adapter in the auto modes.
 type Classifier interface {
 	Classify(ctx context.Context, s Subject) Class
 }
@@ -105,10 +112,24 @@ func touch(order []string, key string) {
 	order[len(order)-1] = key
 }
 
-// NormalizeClass maps a model's raw reply to a verdict: lowercase, drop every
-// non-letter, then prefix-match so "read-only", `readonly.` and backticked answers
-// all collapse cleanly. Anything else is ClassUnsure.
+// NormalizeClass maps a classifier reply to a verdict. Every prompt answers
+// allow/deny. An approval must be the reply's first whole word, so "allow, it only
+// reads" approves but "allowing this would be unsafe" does not; the asymmetry with
+// deny is deliberate, since only the approving direction can fail open.
 func NormalizeClass(text string) Class {
+	switch first := firstWord(text); first {
+	case "allow", "allowed":
+		return ClassAllow
+	case "deny", "denied", "denies":
+		return ClassDeny
+	default:
+		return ClassUnsure // indistinguishable from deny downstream; the dialog stays open
+	}
+}
+
+// firstWord returns the leading run of letters, lowercased, so “ `Allow.` “ and
+// "read-only" both reduce to one comparable token.
+func firstWord(text string) string {
 	var b strings.Builder
 	for _, r := range text {
 		switch {
@@ -116,14 +137,11 @@ func NormalizeClass(text string) Class {
 			b.WriteRune(r)
 		case r >= 'A' && r <= 'Z':
 			b.WriteRune(r + ('a' - 'A'))
+		default:
+			if b.Len() > 0 {
+				return b.String()
+			}
 		}
 	}
-	cleaned := b.String()
-	if strings.HasPrefix(cleaned, "readonly") {
-		return ClassReadOnly
-	}
-	if strings.HasPrefix(cleaned, "write") {
-		return ClassWrite
-	}
-	return ClassUnsure
+	return b.String()
 }

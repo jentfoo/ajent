@@ -229,7 +229,7 @@ func allRows() []settingsRow {
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
 		intRow("Compaction verbatim steps", "compaction.minSteps", 1, 8),
 		floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5),
-		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+mcp", "block-all"}),
+		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+mcp", "auto+write", "block-all"}),
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
 		themeRow(),

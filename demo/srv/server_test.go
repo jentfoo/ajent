@@ -110,8 +110,8 @@ func TestScriptElapsed(t *testing.T) {
 	assert.GreaterOrEqual(t, sec, 0.0)
 }
 
-// TestClassifierNoTools answers an auto-mode request with readonly every time,
-// so the agent's classifier approves whatever command it asks about.
+// TestClassifierNoTools answers an auto-mode request with allow every time, so the
+// agent's classifier approves whatever command it asks about.
 func TestClassifierNoTools(t *testing.T) {
 	t.Parallel()
 	ts := testServer(t)
@@ -120,7 +120,37 @@ func TestClassifierNoTools(t *testing.T) {
 	for _, cmd := range []string{"mkdir -p /tmp/x", "rm -rf /tmp/y", "ls -la /tmp"} {
 		s := h.complete(t, []wireMessage{{Role: "user", Content: cmd}}, nil)
 		assert.Equal(t, "stop", s.finish)
-		assert.Contains(t, concatContent(s.deltas), "readonly")
+		assert.Contains(t, concatContent(s.deltas), "allow")
+	}
+}
+
+// TestClassifierAnswersPromptVocabulary pins that the approving word is read from
+// the prompt, so any harness's classifier wording is approved rather than assumed.
+func TestClassifierAnswersPromptVocabulary(t *testing.T) {
+	t.Parallel()
+	ts := testServer(t)
+	h := &harness{ts: ts}
+
+	cases := []struct {
+		name   string
+		system string
+		want   string
+	}{
+		{"allow_deny_prompt", "Categories:\n" + `- "allow" — only reads` + "\n" + `- "deny" — has a side effect`, "allow"},
+		{"readonly_write_prompt", "Categories:\n" + `- "readonly" — only reads` + "\n" + `- "write" — has a side effect`, "readonly"},
+		{"no_categories", "answer in one word", "allow"},
+		{"no_system_message", "", "allow"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			msgs := []wireMessage{{Role: "user", Content: "mkdir -p build"}}
+			if c.system != "" {
+				msgs = append([]wireMessage{{Role: "system", Content: c.system}}, msgs...)
+			}
+			s := h.complete(t, msgs, nil)
+			assert.Equal(t, "stop", s.finish)
+			assert.Equal(t, c.want, concatContent(s.deltas))
+		})
 	}
 }
 

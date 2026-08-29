@@ -158,11 +158,14 @@ only `pkg/agent` and `pkg/tools`, never `pkg/tui` — main.go supplies its narro
 to allow only what is **verifiably** read-only: built-ins (`read`/`grep`/`find`/`ls`) by
 name, non-built-in tools on declared `Registry.ReadOnly` metadata (MCP hint / config
 globs), bash through a quote-aware analyser. Network commands are never read-only.
-Four modes (`allow-all`, the default `allow-read`, `auto`, `block-all`) cycle with
-Shift+Tab; `!`/`!!` shell lines are exempt in every mode via `tools.WithUserInitiated`. A
-doomed edit is detected by a dry run of the real apply path so it never prompts. The
-model classifier (`auto`) runs concurrently with an already-open dialog and its verdict
-never enters the session.
+Six modes cycle with Shift+Tab: the default `allow-read` → `auto` → `auto+mcp` →
+`auto+write` → `allow-all` → `block-all`; `!`/`!!` shell lines are exempt in every mode
+via `tools.WithUserInitiated`. A doomed edit is detected by a dry run of the real apply
+path so it never prompts. The model classifier (`auto`, `auto+mcp`, `auto+write`) runs
+concurrently with an already-open dialog and its verdict never enters the session.
+`auto+write` is the one mode where a core writer auto-runs, and only inside its roots
+(cwd and the temp dir) — the same two its classifier prompt names, so gate and model
+judge by one rule.
 
 ## Code Style
 
