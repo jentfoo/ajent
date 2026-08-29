@@ -87,7 +87,9 @@ than failing the whole list.
 `Handle(method, h)` installs a handler for an incoming server→client method via the
 transport's `BidirectionalInterface`, replacing mcp-go's handlers after `Start` and
 re-implementing `ping` itself (we set no sampling/elicitation handlers, so nothing is
-lost).
+lost). Raw sends are bounded per attempt (`rawAttemptTimeout`) and the idempotent list
+calls resend on transport failures; a dropped stdio line must not fail discovery, but an
+unresponsive server still surfaces as an error, never a hang.
 
 ### Result mapping (`result.go`)
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -74,6 +75,12 @@ type Client struct {
 	nextID int64 // progress token source, one per call
 	output map[int64]agent.Output
 }
+
+// rawAttemptTimeout bounds one raw-seam request so a dropped or reset response cannot hang discovery.
+const rawAttemptTimeout = 15 * time.Second
+
+// rawRetries resends a single request after transport-level failures; mcp-go's stdio can drop a line under load.
+const rawRetries = 2
 
 // Connect dials cfg's server (stdio or Streamable HTTP / SSE), negotiates the
 // protocol and returns a ready client.
@@ -215,12 +222,7 @@ func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 	var out []ToolDef
 	cursor := ""
 	for {
-		resp, err := c.c.GetTransport().SendRequest(ctx, transport.JSONRPCRequest{
-			JSONRPC: mcp.JSONRPC_VERSION,
-			ID:      mcp.NewRequestId(c.rawSeq.Add(1)),
-			Method:  string(mcp.MethodToolsList),
-			Params:  listToolParams(cursor),
-		})
+		resp, err := c.sendRaw(ctx, string(mcp.MethodToolsList), listToolParams(cursor))
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: tools/list: %w", c.name, err)
 		}
@@ -273,16 +275,10 @@ type promptPage struct {
 // Resources lists the server's resources, following pagination. A failed or
 // unsupported listing returns an error; callers treat discovery as best effort.
 func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
-	t := c.c.GetTransport()
 	var out []Resource
 	cursor := ""
 	for {
-		resp, err := t.SendRequest(ctx, transport.JSONRPCRequest{
-			JSONRPC: mcp.JSONRPC_VERSION,
-			ID:      mcp.NewRequestId(c.rawSeq.Add(1)),
-			Method:  string(mcp.MethodResourcesList),
-			Params:  listToolParams(cursor),
-		})
+		resp, err := c.sendRaw(ctx, string(mcp.MethodResourcesList), listToolParams(cursor))
 		if err != nil {
 			return out, fmt.Errorf("mcp %s: resources/list: %w", c.name, err)
 		}
@@ -304,16 +300,10 @@ func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
 
 // Prompts lists the server's prompt templates, following pagination.
 func (c *Client) Prompts(ctx context.Context) ([]PromptDef, error) {
-	t := c.c.GetTransport()
 	var out []PromptDef
 	cursor := ""
 	for {
-		resp, err := t.SendRequest(ctx, transport.JSONRPCRequest{
-			JSONRPC: mcp.JSONRPC_VERSION,
-			ID:      mcp.NewRequestId(c.rawSeq.Add(1)),
-			Method:  string(mcp.MethodPromptsList),
-			Params:  listToolParams(cursor),
-		})
+		resp, err := c.sendRaw(ctx, string(mcp.MethodPromptsList), listToolParams(cursor))
 		if err != nil {
 			return out, fmt.Errorf("mcp %s: prompts/list: %w", c.name, err)
 		}
@@ -459,15 +449,40 @@ func (c *Client) Close() error {
 	return err
 }
 
+// sendRaw sends one raw-seam request, retrying transient transport failures so a
+// dropped or reset stdio response cannot fail discovery outright.
+func (c *Client) sendRaw(ctx context.Context, method string, params any) (*transport.JSONRPCResponse, error) {
+	return c.sendRawAttempts(ctx, method, params, rawRetries)
+}
+
+// sendRawAttempts sends one request up to retries resends. Each attempt is bounded by
+// rawAttemptTimeout; a fresh ID per attempt keeps late responses from misrouting.
+func (c *Client) sendRawAttempts(ctx context.Context, method string, params any, retries int) (*transport.JSONRPCResponse, error) {
+	var lastErr error
+	for range retries + 1 {
+		if err := ctx.Err(); err != nil { // caller budget exhausted; stop early
+			return nil, err
+		}
+		aCtx, cancel := context.WithTimeout(ctx, rawAttemptTimeout)
+		resp, err := c.c.GetTransport().SendRequest(aCtx, transport.JSONRPCRequest{
+			JSONRPC: mcp.JSONRPC_VERSION,
+			ID:      mcp.NewRequestId(c.rawSeq.Add(1)),
+			Method:  method,
+			Params:  params,
+		})
+		cancel()
+		if err == nil {
+			return resp, nil // a JSON-RPC error response is not a transport failure; no retry
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
 // Request sends an arbitrary JSON-RPC request to the server, the raw seam
-// extensions use for methods we do not type.
+// extensions use for methods we do not type. Bounded per attempt so it never hangs.
 func (c *Client) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	resp, err := c.c.GetTransport().SendRequest(ctx, transport.JSONRPCRequest{
-		JSONRPC: mcp.JSONRPC_VERSION,
-		ID:      mcp.NewRequestId(c.rawSeq.Add(1)),
-		Method:  method,
-		Params:  params,
-	})
+	resp, err := c.sendRawAttempts(ctx, method, params, 0)
 	if err != nil {
 		return nil, fmt.Errorf("mcp %s: request %q: %w", c.name, method, err)
 	}
