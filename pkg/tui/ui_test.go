@@ -271,6 +271,44 @@ func TestUIHistory(t *testing.T) {
 	})
 }
 
+func TestThinkingStreamsLive(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 20)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	// first delta: the marker commits; the partial stays as a live preview above input.
+	u.Thinking("reasoning so f")
+	assert.Equal(t, "✻ thinking", v.Line(0))
+	screen := u.snapshot(v)
+	assert.Contains(t, screen, "reasoning so f", "the partial renders dim+italic in the live block")
+	promptAt := strings.Index(screen, promptFirst)
+	previewAt := strings.Index(screen, "reasoning so f")
+	require.NotEqual(t, -1, previewAt)
+	assert.Less(t, previewAt, promptAt, "the partial renders above the input")
+
+	// a newline commits the completed line; only the pending tail stays in the preview.
+	u.Thinking("ar\nnext partial")
+	screen = u.snapshot(v)
+	assert.Contains(t, screen, "reasoning so far", "the completed line lands in history")
+	promptAt = strings.Index(screen, promptFirst)
+	tail := strings.Index(screen, "next partial")
+	require.NotEqual(t, -1, tail)
+	assert.Less(t, tail, promptAt, "only the pending tail stays live above the input")
+
+	// EndThinking commits the remainder and drops the preview.
+	u.EndThinking()
+	screen = u.snapshot(v)
+	promptAt = strings.Index(screen, promptFirst)
+	assert.Contains(t, screen, "next partial", "the remainder commits to history")
+	require.NotEqual(t, -1, promptAt)
+
+	// a second EndThinking is idempotent: the frame does not change.
+	before := u.snapshot(v)
+	u.EndThinking()
+	assert.Equal(t, before, u.snapshot(v))
+}
+
 func TestUIDiff(t *testing.T) {
 	t.Parallel()
 
@@ -1218,6 +1256,68 @@ func TestUIResizeGate(t *testing.T) {
 		u.Close() // a burst overlapping the end of a turn must not swallow output
 
 		assert.Contains(t, v.Screen(), "held at the end of the turn")
+	})
+}
+
+// TestThinkingResize covers the same burst gate as TestUIResizeGate while a
+// thinking preview is live: no duplicated divider or stranded rows across a
+// resize, and commits made during the held burst flush in order at settle.
+func TestThinkingResize(t *testing.T) {
+	t.Parallel()
+
+	setResizing := func(u *UI, on bool) {
+		u.mu.Lock()
+		u.resizing = on
+		u.mu.Unlock()
+	}
+	countDividers := func(screen string, width int) int {
+		n := 0
+		for line := range strings.Lines(screen) {
+			if strings.TrimRight(line, " \n") == strings.Repeat(ruleChar, width-1) {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("preview_survives_width_change", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		u.Thinking("a long reasoning tail that wraps across the forty column width here")
+		screen := u.snapshot(v)
+		assert.Contains(t, screen, "reasoning", "the partial is live before the resize")
+
+		v.setSize(20, 12) // reflows; then the settled signal arrives
+		u.resize()
+		screen = u.snapshot(v)
+		assert.Contains(t, screen, "reasoning", "history and preview survive at the new width")
+		assert.Equal(t, 1, countDividers(screen, 20), "exactly one live divider after reflow")
+
+		// further deltas still stream against the settled grid.
+		u.Thinking(" more")
+		screen = u.snapshot(v)
+		assert.Contains(t, screen, "more", "deltas keep streaming after resize")
+	})
+
+	t.Run("commits_during_burst_flush_in_order", func(t *testing.T) {
+		v := newVT(40, 10)
+		u := newTestUI(t, v, strings.NewReader(""))
+		setResizing(u, true)
+
+		// thinking deltas complete a line while the burst holds repaints/commits.
+		u.Thinking("first held reasoning\nsecond")
+		screen := u.snapshot(v)
+		assert.NotContains(t, screen, "first held reasoning", "held back during the burst")
+
+		u.resize() // settle flushes deferred commits in order and redraws the preview
+		screen = u.snapshot(v)
+		one := strings.Index(screen, "first held reasoning")
+		two := strings.Index(screen, "second")
+		require.NotEqual(t, -1, one)
+		require.NotEqual(t, -1, two)
+		assert.Less(t, one, two, "held thinking commits keep their order")
+		assert.Equal(t, 1, countDividers(screen, 40), "one divider after the settled redraw")
 	})
 }
 

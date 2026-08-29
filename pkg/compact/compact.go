@@ -7,7 +7,6 @@ package compact
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
@@ -85,7 +84,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 
 	summary, nsum, err := summarise(ctx, branch, priorCut, band, stubs, model, run, opts)
 	if err != nil {
-		return nil, fmt.Errorf("compact: summarise: %w", err)
+		return nil, err
 	}
 
 	res := &Result{

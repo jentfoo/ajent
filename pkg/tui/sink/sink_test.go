@@ -60,20 +60,6 @@ func (h *headlessUI) rendered() string {
 	return strings.Clone(h.out.String())
 }
 
-// eventuallyContains polls f until it contains want, since rendering lands on
-// the pipe asynchronously.
-func eventuallyContains(t *testing.T, f func() string, want string) bool {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(f(), want) {
-			return true
-		}
-		time.Sleep(time.Millisecond)
-	}
-	return false
-}
-
 func TestToolStartDisplay(t *testing.T) {
 	t.Parallel()
 
@@ -81,8 +67,8 @@ func TestToolStartDisplay(t *testing.T) {
 	t.Run("uses_label_in_header", func(t *testing.T) {
 		h := newHeadless(t)
 		_ = h.s.ToolStart(agent.ToolCall{Name: "bash"}, "bash: go test ./...")
-		assert.True(t, eventuallyContains(t, h.rendered, "bash: go test ./..."),
-			"the resolved label drives the header")
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "bash: go test ./...") },
+			2*time.Second, time.Millisecond)
 	})
 
 	// a successful completion commits its Display string to history.
@@ -91,8 +77,8 @@ func TestToolStartDisplay(t *testing.T) {
 		done := h.s.ToolStart(agent.ToolCall{Name: "edit"}, "")
 		res := agent.ToolResult{Content: llm.BlockList{}, Display: "applied 1 edit to main.go"}
 		assert.NotPanics(t, func() { done(res) })
-		assert.True(t, eventuallyContains(t, h.rendered, "applied 1 edit to main.go"),
-			"history shows the display string")
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "applied 1 edit to main.go") },
+			2*time.Second, time.Millisecond)
 	})
 
 	// an errored completion surfaces its message.
@@ -104,8 +90,8 @@ func TestToolStartDisplay(t *testing.T) {
 			IsError: true,
 		}
 		assert.NotPanics(t, func() { done(res) })
-		assert.True(t, eventuallyContains(t, h.rendered, "command not found"),
-			"the error message reaches the user")
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "command not found") },
+			2*time.Second, time.Millisecond)
 	})
 
 	// a completion with no Display commits nothing extra.
@@ -114,7 +100,38 @@ func TestToolStartDisplay(t *testing.T) {
 		done := h.s.ToolStart(agent.ToolCall{Name: "read"}, "")
 		res := agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "data"}}}
 		assert.NotPanics(t, func() { done(res) })
-		assert.False(t, eventuallyContains(t, h.rendered, "\n  data\n"),
-			"streamed content alone is not re-committed as a Display")
+
+		// sync on the async drain so `after` captures everything done wrote.
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "read") },
+			2*time.Second, time.Millisecond)
+		assert.NotContains(t, h.rendered(), "\n  data\n")
+	})
+}
+
+func TestTurnEndFlushesThinking(t *testing.T) {
+	t.Parallel()
+
+	// an interrupt mid-thinking never delivers EventThinkingEnd; TurnEnd must flush.
+	t.Run("flushes_unterminated_partial", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.Thinking("unterminated partial")
+		h.s.TurnEnd(agent.TurnResult{})
+
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "unterminated partial\n") },
+			2*time.Second, time.Millisecond)
+	})
+
+	// a clean turn already flushed via EndThinking: TurnEnd must not duplicate it.
+	t.Run("clean_end_thinking_is_not_duplicated", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.Thinking("reasoning line")
+		h.s.EndThinking()
+
+		// sync on the async drain so `before` captures everything EndThinking wrote.
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "reasoning line\n") },
+			2*time.Second, time.Millisecond)
+		before := h.rendered()
+		h.s.TurnEnd(agent.TurnResult{})
+		assert.Equal(t, before, h.rendered(), "TurnEnd adds nothing after a clean flush")
 	})
 }

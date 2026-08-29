@@ -30,3 +30,8 @@ func (b *lineBuffer) Flush() string {
 	}
 	return rest + "\n"
 }
+
+// Pending returns the buffered partial line without consuming it.
+func (b *lineBuffer) Pending() string {
+	return b.pending.String()
+}

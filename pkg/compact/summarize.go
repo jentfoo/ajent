@@ -136,7 +136,7 @@ func summarise(ctx context.Context, branch []session.Entry, spanStart, end int, 
 	}
 	summary = strings.TrimSpace(out)
 	if summary == "" {
-		return "", 0, errors.New("summariser returned an empty summary")
+		return "", 0, errors.New("summariser returned an empty summary; retry, or if context usage is low skip compaction")
 	}
 	return summary, kept, nil
 }
@@ -306,7 +306,7 @@ func fitPrompt(entries []session.Entry, prev, instructions string, stubs []sessi
 			return prompt, countMessages(entries), nil
 		}
 	}
-	return "", 0, errors.New("compact: summariser prompt does not fit the model window")
+	return "", 0, errors.New("summariser prompt does not fit the model window")
 }
 
 // promptBudget reports how many tokens the summariser user message may occupy:

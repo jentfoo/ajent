@@ -27,7 +27,7 @@ The originating brief, and what satisfies each item.
 
 | Requirement | Where |
 |---|---|
-| Thinking output, shaded so it clearly reads as thinking | `UI.Thinking`, `Theme.Thinking` (dim + italic) |
+| Thinking output, shaded so it clearly reads as thinking; the pending line streams live like reply text | `UI.Thinking`, `Theme.Thinking` (dim + italic) |
 | Markdown output | `UI.Text` -> `renderMarkdown` |
 | Status line under the text field, reporting context usage | `status.go`, composed by `UI.repaint` |
 | Text field accepting further user replies | `editor.go` + `input.go`, submitted over `UI.Messages()` |
@@ -295,7 +295,10 @@ completed block still sitting in `r.live` would otherwise be redrawn by
 the screen is full that oversized ghost overflows and prematurely scrolls the
 just-committed lines into terminal scrollback before they are read — output
 visibly jumps during streaming. So `Text`/`EndText` call `repaint()` (dropping
-the completed content from the preview) ahead of `writeMarkdown`, never after.
+the completed content from the preview) ahead of `writeMarkdown`, never after,
+and `Thinking`/`EndThinking` do the same ahead of `commit`: both previews must
+drop the content they are about to commit before `commit`/`writeMarkdown` runs, or
+the inline renderer redraws it as a stale ghost.
 
 **4. All public `UI` methods take `u.mu`.** Renderers are not independently
 thread safe. Input runs on its own goroutine, as does the spinner ticker, and
@@ -740,7 +743,7 @@ agent (or demo) -> UI.Text("...delta")
 ```
 
 The live block is rebuilt separately by `UI.repaint`, which composes
-`notice? + streaming* + search? + completion? + activity* + queued*
+`notice? + thinking* + streaming* + search? + completion? + activity* + queued*
 + (input | interaction) + status rows` and hands it to `renderer.setLive` with
 the caret position. Anything that changes the input, status, tool or activity
 state calls `repaint`. Queued pending-prompt rows (`SetQueued`) render after
@@ -750,6 +753,13 @@ When a markdown block completes mid-stream, `Text`/`EndText` repaint **first** s
 the just-committed rows leave the preview before `writeMarkdown` runs (invariant
 3) — otherwise the inline renderer's commit pass would redraw them as a stale
 ghost and push fresh output off screen.
+Thinking follows the same shape: completed logical lines still commit to history
+exactly as before, while the pending partial line renders live above the reply
+preview, re-wrapped at width (raw text, not markdown-rendered), bounded by the
+`thinkingPreviewRunes` cap and yielding by the same room rule that keeps only the
+tail rows. `UI.EndThinking` drops the preview before committing its remainder,
+and `TurnEnd` in `pkg/tui/sink/sink.go` flushes an unterminated block so an
+interrupt cannot strand a tail.
 Activity (and queued pending-prompt rows) render into whatever height remains
 after the status block and one line of editor, so on a short terminal they yield
 first. Status is computed before those budgets so row accounting stays exact.

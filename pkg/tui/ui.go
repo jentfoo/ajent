@@ -36,6 +36,9 @@ const (
 	resizeDrawGrace = 80 * time.Millisecond
 	spinnerInterval = 90 * time.Millisecond
 	maxInputRatio   = 2 // input may take at most this fraction of the screen
+	// cap on how much of a newline-free reasoning tail is laid out per repaint,
+	// so one enormous line cannot make every delta O(len) in wrapLine
+	thinkingPreviewRunes = 8192
 )
 
 // clockwise frames; ⠦ (bottom-left) leads so idle rests at bottom-left
@@ -438,6 +441,30 @@ func (u *UI) UserEcho(text string) {
 	u.commit(indentLines(u.theme.User.Wrap(text), u.theme.User.Wrap(userMarker), userContinue), flowReflow)
 }
 
+// streamDelta runs one buffered delta through a commit: completed units drop from
+// the live preview before they commit, so commit does not redraw them as a stale
+// ghost below history; an uncompleted tail grows in place instead.
+func (u *UI) streamDelta(committed, grew bool, commit func()) {
+	if committed {
+		u.repaint() // drop the just-committed rows from r.live before they redraw below history
+	}
+	commit()
+	if !committed && grew {
+		u.repaint() // extend the live tail as it grows
+	}
+}
+
+// endStream commits a stream's remainder and clears its preview. Caller has emptied
+// the buffer and cleared the flag; repaint drops the stale rows from r.live before
+// commit redraws them.
+func (u *UI) endStream(rest string, commit func(string)) {
+	if rest != "" {
+		u.repaint() // drop the preview before committing its content
+	}
+	commit(rest)
+	u.repaint() // clear any remaining preview rows
+}
+
 // Thinking streams reasoning output, shaded so it does not read as a reply.
 func (u *UI) Thinking(delta string) {
 	u.mu.Lock()
@@ -447,15 +474,21 @@ func (u *UI) Thinking(delta string) {
 		u.gap()
 		u.commit(u.theme.Accent.Wrap(thinkingMarker)+u.theme.Thinking.Wrap(thinkingLabel), flowReflow)
 	}
-	u.commit(styleLines(u.theme.Thinking, u.thinkBuf.Add(delta)), flowReflow)
+	whole := u.thinkBuf.Add(delta)
+	committed := whole != ""
+	grew := !committed && u.thinkBuf.Pending() != "" // a partial tail still streams
+	u.streamDelta(committed, grew,
+		func() { u.commit(styleLines(u.theme.Thinking, whole), flowReflow) })
 }
 
 // EndThinking flushes any partial reasoning line.
 func (u *UI) EndThinking() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.commit(styleLines(u.theme.Thinking, u.thinkBuf.Flush()), flowReflow)
+	rest := u.thinkBuf.Flush()
 	u.thinking = false
+	u.endStream(rest,
+		func(r string) { u.commit(styleLines(u.theme.Thinking, r), flowReflow) })
 }
 
 // Text streams assistant output. Complete markdown blocks commit to history;
@@ -468,16 +501,10 @@ func (u *UI) Text(delta string) {
 	u.streaming = true
 	done, rest := splitCompleteBlocks(u.textBuf)
 	u.textBuf = rest
-	if len(done) > 0 {
-		// A block completed: refresh the live preview to only what remains uncommitted
-		// before committing. Otherwise commit() redraws those just-committed rows as a
-		// stale ghost below history and prematurely scrolls fresh output out of view.
-		u.repaint()
-	}
-	u.writeMarkdown(done)
-	if len(rest) > 0 && len(done) == 0 {
-		u.repaint() // refresh the live preview as the partial block grows
-	}
+	committed := len(done) > 0
+	grew := !committed && len(rest) > 0 // a partial block still streams
+	u.streamDelta(committed, grew,
+		func() { u.writeMarkdown(done) })
 }
 
 // EndText renders whatever remains of the current message and drops the preview.
@@ -487,14 +514,8 @@ func (u *UI) EndText() {
 	rest := u.textBuf
 	u.textBuf = ""
 	u.streaming = false
-	if rest != "" {
-		// Drop the streaming preview before committing it, so commit() does not redraw
-		// the same rows as a stale ghost below the new history (see Text).
-		u.repaint()
-	}
-	u.writeMarkdown(rest)
+	u.endStream(rest, u.writeMarkdown)
 	u.textStart = false
-	u.repaint() // drop the live preview now that the message is committed
 }
 
 // Print renders a complete markdown document into history at once, the form
@@ -522,6 +543,24 @@ func (u *UI) streamingRows(w int) []string {
 		}
 	}
 	return out
+}
+
+// thinkingPreviewRows lays the pending partial reasoning line out into display
+// rows for the live block, re-wrapped at width like the finished line will be.
+func (u *UI) thinkingPreviewRows(w int) []string {
+	if !u.thinking || strings.TrimSpace(u.thinkBuf.Pending()) == "" {
+		return nil
+	}
+	tail := u.thinkBuf.Pending()
+	runes := []rune(tail)
+	if len(runes) > thinkingPreviewRunes {
+		tail = string(runes[len(runes)-thinkingPreviewRunes:])
+	}
+	rows := wrapLine(tail, w)
+	for i, r := range rows {
+		rows[i] = u.theme.Thinking.Wrap(r)
+	}
+	return rows
 }
 
 // Output streams raw tool output, committed a line at a time with no markdown
@@ -746,6 +785,15 @@ func (u *UI) repaint() {
 	var rows []string
 	if u.noticeText != "" {
 		rows = append(rows, u.noticeText)
+	}
+	// In-progress reasoning streams live above the input, above the reply preview;
+	// it yields by the same room rule — only the tail rows render.
+	if tr := u.thinkingPreviewRows(w); len(tr) > 0 {
+		room := h - len(rows) - 1 - len(statusRows) - 1 // divider, status, input
+		if room < len(tr) {
+			tr = tr[len(tr)-max(room, 0):]
+		}
+		rows = append(rows, tr...)
 	}
 	// In-progress markdown streams above the input so a reply appears live. It
 	// is the one part of the block whose height follows the content rather than

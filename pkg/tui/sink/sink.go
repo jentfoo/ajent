@@ -139,6 +139,7 @@ func (s *Sink) Notice(msg string, level agent.Level) {
 // was updated by Context events during the turn.
 func (s *Sink) TurnEnd(res agent.TurnResult) {
 	s.ui.EndOutput()
+	s.ui.EndThinking() // flush an unterminated reasoning line so no tail is stranded
 	if s.busy != nil {
 		s.busy()
 		s.busy = nil

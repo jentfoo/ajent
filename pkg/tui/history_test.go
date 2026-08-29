@@ -47,3 +47,26 @@ func TestLineBufferFlush(t *testing.T) {
 		assert.Empty(t, b.Flush())
 	})
 }
+
+func TestLineBufferPending(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reads_without_consuming", func(t *testing.T) {
+		var b lineBuffer
+		assert.Empty(t, b.Add("partial"))
+		assert.Equal(t, "partial", b.Pending())
+		// still buffered: a following add completes the earlier partial
+		assert.Equal(t, "partial more\n", b.Add(" more\nnext"))
+		assert.Equal(t, "next", b.Pending())
+	})
+	t.Run("flush_returns_the_pending_tail", func(t *testing.T) {
+		var b lineBuffer
+		b.Add("partial")
+		b.Add(" more\nnext")
+		assert.Equal(t, "next\n", b.Flush())
+	})
+	t.Run("fresh_buffer_is_empty", func(t *testing.T) {
+		var b lineBuffer
+		assert.Empty(t, b.Pending())
+	})
+}
