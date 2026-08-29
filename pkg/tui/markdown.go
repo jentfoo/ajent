@@ -565,7 +565,7 @@ func splitCompleteBlocks(buf string) (done, rest string) {
 		}
 		trimmed := strings.TrimSpace(ln)
 		if inFence {
-			if marker := fenceMarker(trimmed); marker == fence {
+			if fenceCloses(trimmed, fence) {
 				inFence, boundary = false, i+1
 			}
 		} else if marker := fenceMarker(trimmed); marker != "" {
@@ -580,12 +580,22 @@ func splitCompleteBlocks(buf string) (done, rest string) {
 	return strings.Join(lines[:boundary], ""), strings.Join(lines[boundary:], "")
 }
 
-// fenceMarker returns the fence characters opening or closing a code fence.
+// fenceMarker returns the run of fence characters a line opens a code fence
+// with, "" when it opens none.
 func fenceMarker(trimmed string) string {
-	for _, m := range []string{"```", "~~~"} {
-		if strings.HasPrefix(trimmed, m) {
-			return m
+	for _, c := range []string{"`", "~"} {
+		if n := len(trimmed) - len(strings.TrimLeft(trimmed, c)); n >= 3 {
+			return trimmed[:n]
 		}
 	}
 	return ""
+}
+
+// fenceCloses reports whether a line closes the fence opened by open. A closer
+// is the opener's character repeated at least as many times and nothing else, so
+// an info string line (```go) inside an open fence stays content.
+func fenceCloses(trimmed, open string) bool {
+	marker := fenceMarker(trimmed)
+	return marker != "" && len(marker) == len(trimmed) &&
+		marker[0] == open[0] && len(marker) >= len(open)
 }

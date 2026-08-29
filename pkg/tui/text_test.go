@@ -221,6 +221,8 @@ func TestPaintCaret(t *testing.T) {
 		out := paintCaret("ab", 4, 10)
 		assert.Equal(t, 5, displayWidth(out))
 		assert.Contains(t, out, caretReverse)
+		// the caret cell is the last one, not the first pad
+		assert.True(t, strings.HasSuffix(out, caretReverse+" "+sgrReset))
 	})
 	t.Run("never_past_the_bound", func(t *testing.T) {
 		assert.LessOrEqual(t, displayWidth(paintCaret("ab", 9, 5)), 5)

@@ -77,7 +77,7 @@ func hunkHeader(h *udiff.Hunk) string {
 
 func hunkRange(start, count int) string {
 	switch count {
-	case 0: // an empty side starts at 0, as diff -u reports it
+	case 0: // an empty side starts at 0, as git and diff -u both report it
 		return "0,0"
 	case 1:
 		return strconv.Itoa(start)
@@ -180,18 +180,24 @@ func renderDiffRun(t Theme, gw int, dels, adds []diffRow) []string {
 		return nil
 	}
 	out := make([]string, 0, len(dels)+len(adds))
-	paired := len(dels) == len(adds)
+	var delSpans, addSpans [][][2]int
+	if len(dels) == len(adds) { // one to one: word level emphasis, computed once per pair
+		delSpans, addSpans = make([][][2]int, len(dels)), make([][][2]int, len(adds))
+		for i := range dels {
+			delSpans[i], addSpans[i] = intralineSpans(dels[i].text, adds[i].text)
+		}
+	}
 	for i, d := range dels {
 		var spans [][2]int
-		if paired {
-			spans, _ = intralineSpans(d.text, adds[i].text)
+		if delSpans != nil {
+			spans = delSpans[i]
 		}
 		out = append(out, rowPrefix(gw, d.num)+applySpans("- ", d.text, spans, t.DiffDel, t.DiffDelWord))
 	}
 	for i, a := range adds {
 		var spans [][2]int
-		if paired {
-			_, spans = intralineSpans(dels[i].text, a.text)
+		if addSpans != nil {
+			spans = addSpans[i]
 		}
 		out = append(out, rowPrefix(gw, a.num)+applySpans("+ ", a.text, spans, t.DiffAdd, t.DiffAddWord))
 	}

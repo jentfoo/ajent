@@ -489,6 +489,30 @@ func TestInputReaderBounded(t *testing.T) {
 	})
 }
 
+// TestInputReaderPasteOverflow guards the 4 MiB cap: the body so far is
+// delivered, but the reader stays inside the paste, so a \r in the tail is
+// dropped rather than decoded as Enter and submitting mid-paste.
+func TestInputReaderPasteOverflow(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	r := newInputReader(pr)
+	go r.run()
+
+	go func() {
+		_, _ = io.WriteString(pw, pasteStart+strings.Repeat("a", maxPasteLen))
+		_, _ = io.WriteString(pw, "tail\rmore"+pasteEnd+"z")
+	}()
+
+	capped := <-r.keys
+	require.Equal(t, keyPaste, capped.typ)
+	assert.True(t, capped.partial, "the cap delivers a partial body")
+	assert.Len(t, capped.text, maxPasteLen)
+
+	// the next key is what followed the terminator, never the tail's Enter
+	assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+}
+
 func TestDecodeOSC(t *testing.T) {
 	t.Parallel()
 

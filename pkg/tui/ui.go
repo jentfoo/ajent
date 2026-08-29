@@ -25,6 +25,8 @@ const (
 	userMarker     = "❯ "
 	userContinue   = "  "
 	tabSpaces      = "    " // tabs are expanded so column math stays exact
+	// marks a streaming preview whose head was dropped to fit the screen
+	previewElided = "•••"
 	// resize events arrive in bursts while dragging, only rebuild once it settles
 	resizeSettle = 80 * time.Millisecond
 	// after a settled burst the redraw waits on the terminal's status reply;
@@ -95,13 +97,12 @@ type UI struct {
 
 	thinkBuf  lineBuffer
 	thinking  bool
-	out       outputHead
 	textBuf   string
 	streaming bool // a text block is partially buffered; show it live above input
 	textStart bool
 
-	tool      string
-	busy      bool // a turn is in flight; the status-bar glyph animates while set
+	runs      []*toolRun // in-flight tool calls, oldest first; the newest names the status bar
+	busy      bool       // a turn is in flight; the status-bar glyph animates while set
 	spinner   int
 	spinnerCh chan struct{}
 
@@ -138,7 +139,8 @@ type UI struct {
 	promptIdx int      // -1 at the live buffer, else index of the recalled prompt
 	stashP    string   // live draft held aside while browsing recorded prompts
 
-	pastes map[string]string // placeholder => pasted content, expanded at submit
+	pastes   []pasteEntry // large pastes in arrival order, expanded at submit
+	pasteSeq int          // numbers each placeholder so they stay unique
 
 	started   bool
 	lastBlank bool
@@ -294,6 +296,7 @@ func (u *UI) Close() {
 	u.stopSpinner()
 	u.cancelRewindLocked()
 	u.cancelInteractions()
+	u.pastes = nil // the session is over; nothing can expand them now
 	if u.editCh != nil {
 		ch := u.editCh
 		u.editCh = nil // handleKey's nil guard drops further edits instead of sending on a closed channel
@@ -321,7 +324,7 @@ func (u *UI) Reset() {
 	u.stopSpinner()
 	u.cancelRewindLocked()
 	u.thinkBuf.Flush()
-	u.out.reset()
+	u.runs = nil
 	u.textBuf = ""
 	u.streaming = false
 	u.textStart = false
@@ -329,7 +332,6 @@ func (u *UI) Reset() {
 	u.lastBlank = false
 	u.deferred = nil // held-back commits belong to the dropped state
 	u.thinking = false
-	u.tool = ""
 	u.busy = false
 	u.activity = nil // transient rows are live-block only; a reset drops them
 	u.noticeText = ""
@@ -564,50 +566,88 @@ func (u *UI) thinkingPreviewRows(w int) []string {
 	return rows
 }
 
-// Output streams raw tool output, committed a line at a time with no markdown
-// parsing, so log and test output keep their exact shape. Only the first few
-// lines reach history; past that an activity row counts the rest as it runs.
-func (u *UI) Output(delta string) {
+// Output streams raw tool output for call id, committed a line at a time with no
+// markdown parsing, so log and test output keep their exact shape. Only the first
+// few lines reach history; past that an activity row counts the rest as it runs.
+func (u *UI) Output(id, delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if head := styleLines(u.theme.Dim, u.out.add(delta)); head != "" {
+	r := u.runLocked(id)
+	if head := styleLines(u.theme.Dim, r.head.add(delta)); head != "" {
 		u.commit(head, flowWrap)
 	}
-	if u.out.hidden() > 0 {
-		u.setActivityLocked(outputKey, outputRow(&u.out))
+	if r.head.hidden() > 0 {
+		u.setActivityLocked(outputKey+id, outputRow(r))
 	}
 }
 
-// SetOutputFull marks the current call's streamed head to show every line,
-// bypassing the four-line collapse. The stager calls it for user-initiated
-// `!`/`!!` shells right after ToolStart; endOutputLocked clears it.
-func (u *UI) SetOutputFull() {
+// SetOutputFull marks call id's streamed head to show every line, bypassing the
+// four-line collapse. The stager calls it for user-initiated `!`/`!!` shells
+// ahead of ToolStart; ending the call clears it.
+func (u *UI) SetOutputFull(id string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.out.full = true
+	u.runLocked(id).head.full = true
 }
 
-// EndOutput flushes a partial output line and closes the head.
+// EndOutput flushes and closes the calls a turn owns, the turn-end safety net.
+// A full-mode call is left alone: those are the stager's user-initiated shells,
+// which legitimately outlive the turn and have no collapse row to clean up.
 func (u *UI) EndOutput() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.endOutputLocked()
+	for _, r := range slices.Clone(u.runs) {
+		if !r.head.full {
+			u.endRunLocked(r.id)
+		}
+	}
 }
 
-// endOutputLocked commits this call's streamed head, its collapse line and clears
-// the activity row. Caller holds the lock.
-func (u *UI) endOutputLocked() {
-	if tail := styleLines(u.theme.Dim, u.out.flush()); tail != "" {
+// runLocked returns call id's render state, starting one when output arrives
+// before (or without) its ToolStart. Caller holds the lock.
+func (u *UI) runLocked(id string) *toolRun {
+	if i := slices.IndexFunc(u.runs, func(r *toolRun) bool { return r.id == id }); i >= 0 {
+		return u.runs[i]
+	}
+	r := &toolRun{id: id}
+	u.runs = append(u.runs, r)
+	return r
+}
+
+// endRunLocked commits call id's streamed head, its collapse line, and drops the
+// call along with its activity row. Caller holds the lock.
+func (u *UI) endRunLocked(id string) {
+	i := slices.IndexFunc(u.runs, func(r *toolRun) bool { return r.id == id })
+	if i < 0 {
+		return
+	}
+	r := u.runs[i]
+	if tail := styleLines(u.theme.Dim, r.head.flush()); tail != "" {
 		u.commit(tail, flowWrap)
 	}
-	u.commitSummary(&u.out)
-	u.setActivityLocked(outputKey, "")
-	u.out.reset()
+	u.commitSummary(&r.head)
+	u.setActivityLocked(outputKey+id, "")
+	u.runs = slices.Delete(u.runs, i, i+1)
+}
+
+// toolLabel names the tool the status bar shows: the newest named call still
+// running, "" when none is. Caller holds the lock.
+func (u *UI) toolLabel() string {
+	for i := len(u.runs) - 1; i >= 0; i-- {
+		if u.runs[i].name != "" { // a run whose header has not landed yet names nothing
+			return u.runs[i].name
+		}
+	}
+	return ""
 }
 
 // outputRow renders the transient row a long-running tool shows past its head.
-func outputRow(h *outputHead) string {
-	return "bash · " + strconv.Itoa(h.hidden()) + " lines · " + strutil.HumanSize(int64(h.bytes))
+func outputRow(r *toolRun) string {
+	name := r.name
+	if name == "" {
+		name = "tool"
+	}
+	return name + " · " + strconv.Itoa(r.head.hidden()) + " lines · " + strutil.HumanSize(int64(r.head.bytes))
 }
 
 // commitSummary appends h's collapse line, indented and dim, when anything is hidden.
@@ -629,19 +669,17 @@ func (u *UI) Diff(path, before, after string) {
 	u.commit(out, flowWrap)
 }
 
-// ToolStart commits the tool header to history. While active, the running tool's
+// ToolStart commits call id's tool header to history. While active, the running tool's
 // short name rides in the status bar next to the working glyph (bottom-left
 // corner); no separate spinner row is drawn above the input. The returned
 // function clears it and commits result, which may be empty when output was
 // already streamed.
-func (u *UI) ToolStart(name, label string) func(result string) {
+func (u *UI) ToolStart(id, name, label string) func(result string) {
 	u.mu.Lock()
 	label = sanitizeRow(label) // feeds the committed header; name is short and trusted
-	// a new call owns the output head; it must never share with a prior one in this turn.
-	u.out.reset()
+	u.runLocked(id).name = name
 	u.gap()
 	u.commit(u.theme.Accent.Wrap(toolMarker)+" "+u.theme.Dim.Wrap(label), flowReflow)
-	u.tool = name
 	u.spinner = 0
 	u.syncSpinnerLocked()
 	u.repaint()
@@ -650,10 +688,9 @@ func (u *UI) ToolStart(name, label string) func(result string) {
 	return func(result string) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
-		// close this call's stream before showing its result, so two calls in one
-		// turn each get their own head and summary (EndOutput alone waits for TurnEnd).
-		u.endOutputLocked()
-		u.tool = ""
+		// close this call's stream before showing its result, so calls sharing a turn
+		// (an agent tool and a staged shell) each get their own head and summary.
+		u.endRunLocked(id)
 		if strings.TrimSpace(result) != "" {
 			// a non-streaming tool's Display gets the identical head-plus-summary treatment.
 			var h outputHead // add returns whole lines; flush picks up any trailing partial
@@ -776,11 +813,11 @@ func (u *UI) repaint() {
 	// the status block is composed first so every budget below it is exact
 	st := u.status
 	frame := spinnerFrames[u.spinner%len(spinnerFrames)]
-	if !u.busy && u.tool == "" {
+	if !u.busy && u.toolLabel() == "" {
 		frame = spinnerFrames[0] // static resting frame when idle; bottom-left of the cell
 	}
 	st.Spinner = u.spinnerStyleLocked().Wrap(frame)
-	st.Tool = u.tool
+	st.Tool = u.toolLabel()
 	statusRows := st.rows(u.theme, w)
 
 	var rows []string
@@ -805,7 +842,11 @@ func (u *UI) repaint() {
 	if sr := u.streamingRows(w); len(sr) > 0 {
 		room := h - len(rows) - 1 - len(statusRows) - 1 // divider, status, input
 		if room < len(sr) {
-			sr = sr[len(sr)-max(room, 0):]
+			// the marker costs a preview row, not a block row, so the total stays room
+			sr = sr[len(sr)-max(room-1, 0):]
+			if room > 0 {
+				sr = append([]string{u.theme.Dim.Wrap(previewElided)}, sr...)
+			}
 		}
 		rows = append(rows, sr...)
 	}
@@ -909,7 +950,7 @@ func (u *UI) startSpinner() {
 // syncSpinnerLocked keeps the frame ticker running exactly while some indicator
 // needs it. Caller holds the lock.
 func (u *UI) syncSpinnerLocked() {
-	if u.busy || u.tool != "" {
+	if u.busy || u.toolLabel() != "" {
 		u.startSpinner()
 	} else {
 		u.stopSpinner()
@@ -919,7 +960,7 @@ func (u *UI) syncSpinnerLocked() {
 // spinnerStyleLocked colors the glyph by what the turn is waiting on. Caller holds the lock.
 func (u *UI) spinnerStyleLocked() Style {
 	switch {
-	case u.tool != "":
+	case u.toolLabel() != "":
 		return u.theme.SpinnerTool
 	case u.streaming || u.thinking:
 		return u.theme.SpinnerStream
@@ -987,18 +1028,20 @@ func (u *UI) handleKey(k key) (submit *string, quit bool) {
 // called again to swap the callback; drainEdits reads it per iteration so the new
 // one takes effect immediately.
 func (u *UI) SetOnEdit(fn func(string)) {
-	if fn == nil || u.closed {
+	if fn == nil {
 		return
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.editCh != nil && u.onEdit != nil {
+	if u.closed {
+		return
+	} else if u.editCh != nil && u.onEdit != nil {
 		u.onEdit = fn // swap: keep the existing drain goroutine
 		return
 	}
 	u.editCh = make(chan string, 1)
 	u.onEdit = fn
-	go u.drainEdits()
+	u.safeGo(u.drainEdits) // safeGo: a panicking host callback must not leave the terminal raw
 }
 
 // notifyEditLocked hands the current editor text to OnEdit when it changed since
@@ -1051,7 +1094,7 @@ func (u *UI) openSearchLocked() {
 	u.completion = nil
 	u.cancelRewindLocked()
 	u.search = &searchOverlay{pending: true}
-	go func() { u.deliverSearch(fn()) }()
+	u.safeGo(func() { u.deliverSearch(fn()) }) // safeGo: a host source panic must not leave the terminal raw
 }
 
 // acceptSearchLocked fills the editor with the highlighted match (when there is
@@ -1232,11 +1275,9 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		if len(text) > pasteThreshold {
 			// large paste: store the content and insert a placeholder so the input
 			// block stays small; the placeholder is expanded before sending.
-			placeholder := pastePlaceholder(text)
-			if u.pastes == nil {
-				u.pastes = make(map[string]string)
-			}
-			u.pastes[placeholder] = text
+			u.pasteSeq++
+			placeholder := pastePlaceholder(text, u.pasteSeq)
+			u.pastes = append(u.pastes, pasteEntry{placeholder: placeholder, content: text})
 			u.editor.Insert(placeholder)
 		} else {
 			u.editor.Insert(text)

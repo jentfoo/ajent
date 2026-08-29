@@ -203,20 +203,25 @@ func (u *UI) flashRule() {
 // pasteThreshold is the byte size above which a paste becomes a placeholder.
 const pasteThreshold = 2048
 
-// pastePlaceholder returns the marker text inserted for a large paste.
-func pastePlaceholder(text string) string {
+// pasteEntry is one stored large paste, kept for the whole session so a
+// recalled prompt still expands.
+type pasteEntry struct {
+	placeholder string
+	content     string
+}
+
+// pastePlaceholder returns the marker text inserted for a large paste. seq makes
+// it unique, so two pastes of the same line count never share an entry.
+func pastePlaceholder(text string, seq int) string {
 	lines := strings.Count(text, "\n") + 1
-	return fmt.Sprintf("[pasted %d lines]", lines)
+	return fmt.Sprintf("[pasted %d lines #%d]", lines, seq)
 }
 
 // expandPastes replaces any paste placeholders in v with their stored content so
 // the model receives the whole text while the input block stayed small.
 func (u *UI) expandPastes(v string) string {
-	if len(u.pastes) == 0 {
-		return v
-	}
-	for ph, content := range u.pastes {
-		v = strings.ReplaceAll(v, ph, content)
+	for _, p := range u.pastes { // oldest first, so nesting is deterministic
+		v = strings.ReplaceAll(v, p.placeholder, p.content)
 	}
 	return v
 }

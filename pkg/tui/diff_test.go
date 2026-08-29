@@ -73,6 +73,7 @@ func TestRenderDiff(t *testing.T) {
 	t.Run("new_file_is_all_additions", func(t *testing.T) {
 		out := RenderDiff(plain, "x.go", "", "a\nb\n")
 		assert.True(t, strings.HasPrefix(out, "x.go +2 -0\n"))
+		assert.Contains(t, out, "@@ -0,0 +1,2 @@", "an empty side reads as git prints it")
 		assert.Contains(t, out, "\n 1 + a\n")
 		assert.Contains(t, out, "\n 2 + b\n")
 	})

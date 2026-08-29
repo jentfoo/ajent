@@ -41,11 +41,18 @@ func (r *altRenderer) resume(inFd int) error {
 	return nil
 }
 
-func (r *altRenderer) size() (int, int) { return r.t.width, r.t.height }
+// size reports the terminal's current size, re-reading it as inline does so a
+// repaint landing mid-burst lays out against the width it will paint at.
+func (r *altRenderer) size() (int, int) {
+	r.t.refreshSize()
+	return r.t.width, r.t.height
+}
 
-// viewHeight is the number of history rows visible above the live block.
+// viewHeight is the number of history rows visible above the live block. Zero
+// when the block fills the screen: the live rows must keep their own rows, and a
+// row pushed past the last one is clamped onto it, overwriting its neighbour.
 func (r *altRenderer) viewHeight() int {
-	return max(r.t.height-len(r.live), 1)
+	return max(r.t.height-len(r.live), 0)
 }
 
 // rows returns the whole session laid out at the current width, rebuilding the
@@ -82,6 +89,7 @@ func (r *altRenderer) clearHistory() {
 	r.wrapped = nil
 	r.wrapAt = 0
 	r.offset = 0
+	r.render() // the dropped rows leave the screen now, not at the next commit
 }
 
 func (r *altRenderer) setLive(rows []string, caretRow, caretCol int) {
@@ -139,6 +147,9 @@ func (r *altRenderer) render() {
 		}
 	}
 	for i, row := range r.live {
+		if view+1+i > r.t.height {
+			break // never address a row the screen does not have
+		}
 		row := row
 		if r.offset > 0 && i == len(r.live)-1 {
 			row = r.scrollNote() + row

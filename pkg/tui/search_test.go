@@ -138,6 +138,27 @@ func TestMatchSpans(t *testing.T) {
 	// case-insensitive across the whole text; non-overlapping occurrences in order
 	// second word starts at index 10 (r=10..y=14)
 	assert.Equal(t, [][2]int{{0, 5}, {6, 11}}, matchSpans("retry RETRY again", "RETRY"))
+	// lowering İ changes the byte length, so the spans no longer index the original
+	assert.Nil(t, matchSpans("İstanbul retry", "retry"))
+}
+
+func TestTrimLastCluster(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, in, want string
+	}{
+		{name: "empty_stays_empty"},
+		{name: "plain_rune", in: "abc", want: "ab"},
+		{name: "multibyte_rune", in: "aé", want: "a"},
+		{name: "emoji_with_modifier", in: "hi👍🏽", want: "hi"},
+		{name: "zwj_sequence", in: "x👨‍👩‍👧", want: "x"},
+		{name: "combining_mark", in: "ae\u0301", want: "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, trimLastCluster(tc.in))
+		})
+	}
 }
 
 // The search overlay wraps every matched occurrence of the query in the accent

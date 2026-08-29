@@ -79,10 +79,10 @@ func (u *UI) wait(ctx context.Context, p *pending) error {
 		return p.err
 	case <-ctx.Done():
 		u.abandon(p)
-		return ErrCancelled
+		return p.err // resolve keeps the first result, so an answer given in the same instant survives
 	case <-u.done:
 		p.resolve(ErrCancelled)
-		return ErrCancelled
+		return p.err
 	}
 }
 
@@ -130,7 +130,8 @@ func (u *UI) routeKey(k key) {
 	// double-committed or dequeued; only the winner writes history.
 	won := p.resolve(err)
 	if won {
-		if s := p.it.summary(u.theme); s != "" {
+		// a cancelled interaction records nothing; the never-made choice is not history
+		if s := p.it.summary(u.theme); err == nil && s != "" {
 			u.gap()
 			u.commit(s, flowWrap)
 		}

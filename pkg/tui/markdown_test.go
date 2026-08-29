@@ -343,6 +343,10 @@ func TestSplitCompleteBlocks(t *testing.T) {
 		{"tilde_fence", "~~~\nx\n~~~\n", "~~~\nx\n~~~\n", ""},
 		{"fence_then_partial", "```\nx\n```\nnext par", "```\nx\n```\n", "next par"},
 		{"partial_line_held", "a\n\nb", "a\n\n", "b"},
+		{"info_string_never_closes", "```\n```go\n\nstill code\n", "", "```\n```go\n\nstill code\n"},
+		{"longer_closer_accepted", "```\nx\n````\n", "```\nx\n````\n", ""},
+		{"shorter_closer_held", "````\nx\n```\n\ny\n", "", "````\nx\n```\n\ny\n"},
+		{"other_char_never_closes", "```\nx\n~~~\n\ny\n", "", "```\nx\n~~~\n\ny\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -378,9 +382,31 @@ func TestFenceMarker(t *testing.T) {
 		{name: "backtick_fence", line: "```go", want: "```"},
 		{name: "tilde_fence", line: "~~~", want: "~~~"},
 		{name: "not_a_fence", line: "nope"},
+		{name: "too_short", line: "``"},
+		{name: "longer_run_kept", line: "`````", want: "`````"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, fenceMarker(tc.line))
+		})
+	}
+}
+
+func TestFenceCloses(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, line, open string
+		want             bool
+	}{
+		{name: "exact_match", line: "```", open: "```", want: true},
+		{name: "longer_closes", line: "````", open: "```", want: true},
+		{name: "shorter_does_not", line: "```", open: "````"},
+		{name: "info_string_does_not", line: "```go", open: "```"},
+		{name: "other_char_does_not", line: "~~~", open: "```"},
+		{name: "plain_text_does_not", line: "nope", open: "```"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, fenceCloses(tc.line, tc.open))
 		})
 	}
 }

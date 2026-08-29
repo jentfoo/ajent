@@ -41,6 +41,39 @@ func TestPastePlaceholderStoredAndExpanded(t *testing.T) {
 	assert.Len(t, expanded, 2500, "the placeholder expanded to the full 500-line paste")
 }
 
+// TestPastePlaceholdersAreUnique guards two pastes of the same line count: a
+// shared placeholder used to overwrite the first paste's content, so both
+// expanded to the second.
+func TestPastePlaceholdersAreUnique(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+
+	first := strings.Repeat("aaaa\n", 500)
+	second := strings.Repeat("bbbb\n", 500)
+	go func() {
+		_, _ = io.WriteString(pw, "\x1b[200~"+first+"\x1b[201~")
+		_, _ = io.WriteString(pw, "\x1b[200~"+second+"\x1b[201~")
+	}()
+
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return len(u.pastes) == 2
+	}, time.Second, testPoll, "both pastes must be stored")
+
+	u.mu.Lock()
+	expanded := u.expandPastes(u.editor.Value())
+	placeholders := []string{u.pastes[0].placeholder, u.pastes[1].placeholder}
+	u.mu.Unlock()
+
+	assert.NotEqual(t, placeholders[0], placeholders[1])
+	assert.Equal(t, first+second, expanded, "each placeholder expands to its own paste")
+}
+
 func TestSmallPasteInsertedInline(t *testing.T) {
 	t.Parallel()
 

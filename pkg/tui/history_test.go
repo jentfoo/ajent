@@ -26,6 +26,13 @@ func TestLineBufferAdd(t *testing.T) {
 		var b lineBuffer
 		assert.Equal(t, "a\nb\n", b.Add("a\nb\nc"))
 	})
+	t.Run("accumulates_across_deltas", func(t *testing.T) {
+		var b lineBuffer
+		for _, d := range []string{"a", "b", "c"} {
+			assert.Empty(t, b.Add(d))
+		}
+		assert.Equal(t, "abcd\n", b.Add("d\n"))
+	})
 	t.Run("empty_add", func(t *testing.T) {
 		var b lineBuffer
 		assert.Empty(t, b.Add(""))

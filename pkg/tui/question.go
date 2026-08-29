@@ -36,7 +36,10 @@ type Answer struct {
 // waiting. A declined answer is a normal result, not an error; ErrNoUI means no
 // terminal can reach the user, so the caller must decide the policy itself.
 func (u *UI) Ask(ctx context.Context, q Question) (Answer, error) {
-	if u.closed { // never block when there is nobody to ask
+	u.mu.Lock()
+	closed := u.closed
+	u.mu.Unlock()
+	if closed { // never block when there is nobody to ask
 		return Answer{}, ErrNoUI
 	}
 	st := &questionState{text: q.Text, options: slices.Clone(q.Options), chatIndex: -1}
@@ -217,10 +220,7 @@ func (s *questionState) key(k key) (bool, error) {
 	case keyRune, keyPaste:
 		s.value += strings.ReplaceAll(k.text, "\n", " ")
 	case keyBackspace:
-		if s.value != "" {
-			_, size := lastRune(s.value)
-			s.value = s.value[:len(s.value)-size]
-		}
+		s.value = trimLastCluster(s.value)
 	case keyKillLine:
 		s.value = ""
 	case keyEnter:

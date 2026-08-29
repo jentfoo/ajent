@@ -13,8 +13,18 @@ import (
 const outputHeadLines = 4
 
 // outputKey namespaces a running tool's activity row against sub-agent rows, so
-// long streamed output shows movement past its committed head.
-const outputKey = "tool-output"
+// long streamed output shows movement past its committed head. The call id is
+// appended: two calls streaming at once each own a row.
+const outputKey = "tool-output:"
+
+// toolRun is one in-flight tool call's render state. The head belongs to the
+// call, not the UI: a staged `!` shell streams alongside an agent tool call, and
+// sharing one head let each reset or close the other's stream.
+type toolRun struct {
+	id   string
+	name string
+	head outputHead
+}
 
 // outputHead splits a tool's output into a short committed head and a count of
 // everything past it, so long output leaves one summary line instead of pages.
@@ -69,14 +79,4 @@ func (h *outputHead) summary() string {
 		return "… +" + strconv.Itoa(n) + " lines, " + strutil.FormatTokens(h.chars) + " chars"
 	}
 	return ""
-}
-
-// reset empties the head so a new tool call starts clean.
-func (h *outputHead) reset() {
-	h.buf.pending.Reset()
-	h.shown = 0
-	h.lines = 0
-	h.chars = 0
-	h.bytes = 0
-	h.full = false
 }

@@ -129,6 +129,7 @@ func paintCaret(row string, col, maxW int) string {
 			start++
 		}
 		cs = append(cs, cell{text: " ", width: 1})
+		i = len(cs) - 1 // the appended caret, not the first pad
 	}
 	cs[i].style += caretReverse
 	return renderCells(cs, "")

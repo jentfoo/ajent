@@ -39,6 +39,29 @@ func TestAltRendererRender(t *testing.T) {
 		assert.Equal(t, "❯", v.Line(4), "block sits at the bottom")
 		assert.Equal(t, "ctx", v.Line(5))
 	})
+	// repaint's final clamp yields a block exactly as tall as the screen, and a
+	// live row addressed past the last one is clamped onto it, overwriting its
+	// neighbour: a full-height block must simply take every row.
+	t.Run("full_height_block_keeps_every_row", func(t *testing.T) {
+		v := newVT(20, 4)
+		r := newTestAlt(v)
+		commitText(r, "old")
+		r.setLive([]string{"one", "two", "three", "four"}, 3, 1)
+
+		for i, want := range []string{"one", "two", "three", "four"} {
+			assert.Equal(t, want, v.Line(i))
+		}
+	})
+	t.Run("clear_history_repaints", func(t *testing.T) {
+		v := newVT(20, 4)
+		r := newTestAlt(v)
+		r.setLive([]string{"❯"}, 0, 1)
+		commitText(r, "gone")
+		require.Equal(t, "gone", v.Line(2))
+
+		r.clearHistory()
+		assert.Empty(t, v.Line(2), "the dropped line leaves the screen at once")
+	})
 	t.Run("older_output_falls_off_the_top", func(t *testing.T) {
 		v := newVT(20, 5)
 		r := newTestAlt(v)

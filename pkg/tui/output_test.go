@@ -40,17 +40,6 @@ func TestOutputHead(t *testing.T) {
 		out = h.flush()
 		assert.Equal(t, "ok  gith\n", out)
 	})
-	t.Run("reset_between_calls", func(t *testing.T) {
-		var h outputHead
-		for i := 1; i <= 8; i++ {
-			h.add("x\n")
-		}
-		assert.Equal(t, 4, h.hidden())
-		h.reset()
-		out := h.add("fresh\n")
-		assert.Equal(t, "fresh\n", out)
-		assert.Zero(t, h.hidden())
-	})
 	t.Run("single_write_whole_body", func(t *testing.T) {
 		var b []byte
 		for i := 1; i <= 6; i++ {

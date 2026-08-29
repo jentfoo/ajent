@@ -92,6 +92,23 @@ func TestUISelect(t *testing.T) {
 
 		assert.Equal(t, 2, <-result)
 	})
+	t.Run("cancel_commits_nothing", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		errCh := make(chan error, 1)
+		go func() {
+			_, err := u.Select("Enable compaction?", []Option{{Label: "Yes"}, {Label: "No"}})
+			errCh <- err
+		}()
+
+		waitFor(t, u, v, "Enable compaction?")
+		press(t, pw, "\x1b")
+		require.ErrorIs(t, <-errCh, ErrCancelled)
+
+		// the prompt is back and the never-made choice was not recorded
+		waitFor(t, u, v, userMarker)
+		assert.NotContains(t, u.snapshot(v), "Enable compaction? Yes")
+	})
 	t.Run("commits_one_summary_line", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -556,6 +573,35 @@ func TestInteractionQueue(t *testing.T) {
 
 		_, err := u.Select("Pick:", []Option{{Label: "A"}})
 		assert.ErrorIs(t, err, ErrCancelled)
+	})
+}
+
+func TestUIWait(t *testing.T) {
+	t.Parallel()
+
+	// a select whose ctx and answer are both ready picks at random, so the answer
+	// must survive whichever branch runs: repeat until every branch has been taken
+	t.Run("answer_beats_a_cancelled_ctx", func(t *testing.T) {
+		u, _, _ := interactionUI(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		for range 50 {
+			p := newPending(&selectState{options: []Option{{Label: "A"}}})
+			require.NoError(t, u.enqueue(p))
+			p.resolve(nil) // answered before wait looks at the ctx
+			require.NoError(t, u.wait(ctx, p))
+		}
+	})
+	t.Run("cancelled_ctx_reports_cancelled", func(t *testing.T) {
+		u, _, _ := interactionUI(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		p := newPending(&selectState{options: []Option{{Label: "A"}}})
+		require.NoError(t, u.enqueue(p))
+
+		assert.ErrorIs(t, u.wait(ctx, p), ErrCancelled)
 	})
 }
 

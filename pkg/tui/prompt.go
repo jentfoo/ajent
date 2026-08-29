@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/rivo/uniseg"
 )
 
 const (
@@ -207,10 +209,7 @@ func (s *inputState) key(k key) (bool, error) {
 	case keyRune, keyPaste:
 		s.value += strings.ReplaceAll(k.text, "\n", " ")
 	case keyBackspace:
-		if s.value != "" {
-			_, size := lastRune(s.value)
-			s.value = s.value[:len(s.value)-size]
-		}
+		s.value = trimLastCluster(s.value)
 	case keyKillLine:
 		s.value = ""
 	case keyEnter:
@@ -316,8 +315,7 @@ func (s *pickState) key(k key) (bool, error) {
 		s.refilter()
 	case keyBackspace:
 		if s.filter != "" {
-			_, size := lastRune(s.filter)
-			s.filter = s.filter[:len(s.filter)-size]
+			s.filter = trimLastCluster(s.filter)
 			s.refilter()
 		}
 	case keyKillLine:
@@ -488,14 +486,14 @@ func wrapIndex(i, n int) int {
 
 func moreLabel(n int) string { return "... " + strconv.Itoa(n) + " more" }
 
-// lastRune returns the final rune of s and its byte width.
-func lastRune(s string) (rune, int) {
-	runes := []rune(s)
-	if len(runes) == 0 {
-		return 0, 0
+// trimLastCluster returns s without its final grapheme cluster, matching the
+// editor's cell-based backspace so an emoji leaves in one keypress.
+func trimLastCluster(s string) string {
+	var cut int
+	for g := uniseg.NewGraphemes(s); g.Next(); {
+		cut, _ = g.Positions()
 	}
-	last := runes[len(runes)-1]
-	return last, len(string(last))
+	return s[:cut]
 }
 
 // pickRow is one navigable MultiPick row: a real item (item >= 0) or a synthetic
@@ -635,8 +633,7 @@ func (s *multiPickState) key(k key) (bool, error) {
 		s.refilter()
 	case keyBackspace:
 		if s.filter != "" {
-			_, size := lastRune(s.filter)
-			s.filter = s.filter[:len(s.filter)-size]
+			s.filter = trimLastCluster(s.filter)
 			s.refilter()
 		}
 	case keyKillLine:

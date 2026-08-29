@@ -10,15 +10,16 @@ type lineBuffer struct {
 
 // Add appends s and returns any complete lines, empty when none are ready.
 func (b *lineBuffer) Add(s string) string {
-	b.pending.WriteString(s)
-	buf := b.pending.String()
-	cut := strings.LastIndexByte(buf, '\n')
+	// pending never holds a newline, so only the delta needs scanning
+	cut := strings.LastIndexByte(s, '\n')
 	if cut < 0 {
+		b.pending.WriteString(s)
 		return ""
 	}
+	whole := b.pending.String() + s[:cut+1]
 	b.pending.Reset()
-	b.pending.WriteString(buf[cut+1:])
-	return buf[:cut+1]
+	b.pending.WriteString(s[cut+1:])
+	return whole
 }
 
 // Flush returns the buffered remainder as a terminated line and empties the buffer.

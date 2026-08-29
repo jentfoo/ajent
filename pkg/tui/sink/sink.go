@@ -18,8 +18,9 @@ import (
 // itself.
 //
 // Concurrency: ToolStart, ToolOutput, Diff and the done hook may be called from
-// parallel tool goroutines; *tui.UI serializes them. busy is only touched from
-// the loop goroutine (TurnStart/TurnEnd) and must stay that way.
+// parallel tool goroutines, and a staged `!` shell streams alongside an agent
+// turn; *tui.UI serializes them and keys each call's output by its ID. busy is
+// only touched from the loop goroutine (TurnStart/TurnEnd) and must stay that way.
 type Sink struct {
 	ui   *tui.UI
 	busy func() // clears the working spinner; nil while idle
@@ -58,7 +59,7 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResul
 	if strings.TrimSpace(label) == "" {
 		label = call.Name
 	}
-	done := s.ui.ToolStart(call.Name, label)
+	done := s.ui.ToolStart(call.ID, call.Name, label)
 	return func(res agent.ToolResult) {
 		var result string
 		if res.IsError {
@@ -76,13 +77,12 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResul
 // full rather than collapsed to its head. The stager uses it for user-initiated
 // `!`/`!!` shells so the human sees everything they ran.
 func (s *Sink) ToolStartFull(call agent.ToolCall, label string) func(agent.ToolResult) {
-	done := s.ToolStart(call, label)
-	s.ui.SetOutputFull()
-	return done
+	s.ui.SetOutputFull(call.ID) // set first: output racing the header must not be capped
+	return s.ToolStart(call, label)
 }
 
 // ToolOutput streams raw tool output a chunk at a time.
-func (s *Sink) ToolOutput(callID, delta string) { s.ui.Output(delta) }
+func (s *Sink) ToolOutput(callID, delta string) { s.ui.Output(callID, delta) }
 
 // ToolProgress shows a call the model is still composing as an activity row, so
 // a long set of arguments reports its size instead of sitting silent. The row

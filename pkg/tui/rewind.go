@@ -76,6 +76,6 @@ func (u *UI) flushLoneEscape() {
 // interaction from it can never block further input routing.
 func (u *UI) triggerRewind() {
 	if cb := u.onRewind; cb != nil {
-		go cb()
+		u.safeGo(cb) // a panicking host callback must not leave the terminal raw
 	}
 }

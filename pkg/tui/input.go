@@ -49,9 +49,10 @@ const (
 
 // key is one decoded input event.
 type key struct {
-	typ  keyType
-	text string // literal text for keyRune and keyPaste, payload for keyColorReport
-	row  int    // reported cursor row for keyCursorReport
+	typ     keyType
+	text    string // literal text for keyRune and keyPaste, payload for keyColorReport
+	row     int    // reported cursor row for keyCursorReport
+	partial bool   // keyPaste delivered at maxPasteLen; its tail is still arriving
 }
 
 const (
@@ -280,7 +281,8 @@ func decodeTilde(b []byte, params string, n int, pasteFrom int) (key, int, bool)
 		end := bytes.Index(b[n+pasteFrom:], pasteEndBytes)
 		if end < 0 {
 			if len(b)-n >= maxPasteLen {
-				return key{typ: keyPaste, text: string(b[n:])}, len(b), true // deliver the capped body
+				// deliver the capped body; partial tells the reader its tail is still in flight
+				return key{typ: keyPaste, text: string(b[n:]), partial: true}, len(b), true
 			}
 			return key{}, 0, false // wait for more of the body
 		}
@@ -390,6 +392,15 @@ func newInputReader(src io.Reader) *inputReader {
 	}
 }
 
+// dropPasteTail discards the remainder of a capped paste body, reporting whether
+// its terminator was reached. The bytes that could still begin one are kept.
+func dropPasteTail(buf []byte) ([]byte, bool) {
+	if i := bytes.Index(buf, pasteEndBytes); i >= 0 {
+		return buf[i+len(pasteEndBytes):], true
+	}
+	return buf[max(len(buf)-len(pasteEnd)+1, 0):], false
+}
+
 // readResult is one chunk from the source, or the failure that ended it.
 type readResult struct {
 	data []byte
@@ -423,17 +434,27 @@ func (r *inputReader) run() {
 	}()
 
 	var buf []byte
-	var pasteScanned int // bytes of an in-progress paste body already known to hold no terminator
+	var pasteScanned int   // bytes of an in-progress paste body already known to hold no terminator
+	var pasteOverflow bool // a capped paste was delivered; its tail is dropped up to the terminator
 	timer := r.newTimer()
 
 	for {
 		for {
+			if pasteOverflow {
+				var done bool
+				buf, done = dropPasteTail(buf)
+				if !done {
+					break // still inside the capped body; nothing here decodes as a key
+				}
+				pasteOverflow = false
+			}
 			k, n, ok := decodeKeyFrom(buf, pasteScanned)
 			if !ok {
 				break
 			}
 			buf = buf[n:]
 			pasteScanned = 0 // any in-progress paste resolved (or was delivered at cap)
+			pasteOverflow = k.partial
 			r.emit(k)
 		}
 		if len(buf) == 0 {
@@ -444,7 +465,8 @@ func (r *inputReader) run() {
 		}
 
 		var pendingEsc <-chan time.Time
-		if len(buf) > 0 && buf[0] == escByte && !bytes.HasPrefix(buf, pasteStartBytes) {
+		// not armed inside a capped paste either: the held bytes may be a split terminator
+		if len(buf) > 0 && buf[0] == escByte && !pasteOverflow && !bytes.HasPrefix(buf, pasteStartBytes) {
 			timer.Reset(r.escDelay)
 			pendingEsc = timer.C()
 		}

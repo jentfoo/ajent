@@ -336,7 +336,7 @@ func TestUIToolStart(t *testing.T) {
 	v := newVT(40, 10)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	done := u.ToolStart("bash", "bash: go test ./...")
+	done := u.ToolStart("c1", "bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0), "the header commits up front")
 	// no separate spinner row above the input; the tool rides in the status bar.
 	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
@@ -373,7 +373,7 @@ func TestUIBusy(t *testing.T) {
 	assert.Contains(t, u.snapshot(v), spinnerFrames[1%len(spinnerFrames)], "busy advances the frame")
 
 	// a running tool shares the bottom-left status line with the busy glyph.
-	doneTool := u.ToolStart("bash", "bash: go test ./...")
+	doneTool := u.ToolStart("c1", "bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
 	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1 (divider), input then status
 	assert.Contains(t, strutil.StripANSI(statusRow), "bash")
@@ -417,7 +417,7 @@ func TestUISpinnerPhaseColor(t *testing.T) {
 	frame()
 
 	// a running tool takes priority over any streamed output
-	doneTool := u.ToolStart("bash", "bash: go test ./...")
+	doneTool := u.ToolStart("c1", "bash", "bash: go test ./...")
 	u.Text("hello")
 	frame()
 
@@ -453,8 +453,8 @@ func TestUIOutput(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	t.Run("streams_under_the_tool_header", func(t *testing.T) {
-		done := u.ToolStart("bash", "bash: go test -v")
-		u.Output("=== RUN   TestRetry\n--- PASS: TestRetry (0.01s)\n")
+		done := u.ToolStart("c1", "bash", "bash: go test -v")
+		u.Output("c1", "=== RUN   TestRetry\n--- PASS: TestRetry (0.01s)\n")
 		u.EndOutput()
 		done("")
 
@@ -463,18 +463,18 @@ func TestUIOutput(t *testing.T) {
 		assert.Equal(t, "--- PASS: TestRetry (0.01s)", v.Line(2))
 	})
 	t.Run("holds_partial_lines", func(t *testing.T) {
-		u.Output("ok  gith")
+		u.Output("c1", "ok  gith")
 		assert.NotContains(t, u.snapshot(v), "ok  gith")
-		u.Output("ub.com/x\n")
+		u.Output("c1", "ub.com/x\n")
 		assert.Equal(t, "ok  github.com/x", v.Line(3))
 	})
 	t.Run("flushes_unterminated_line", func(t *testing.T) {
-		u.Output("no newline")
+		u.Output("c1", "no newline")
 		u.EndOutput()
 		assert.Equal(t, "no newline", v.Line(4))
 	})
 	t.Run("not_parsed_as_markdown", func(t *testing.T) {
-		u.Output("--- PASS: TestX (0.00s)\n")
+		u.Output("c1", "--- PASS: TestX (0.00s)\n")
 		u.EndOutput()
 		assert.Equal(t, "--- PASS: TestX (0.00s)", v.Line(5), "would be a thematic break as markdown")
 	})
@@ -489,12 +489,12 @@ func TestUIOutputHeadSummary(t *testing.T) {
 	v := newVT(40, 12)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	done := u.ToolStart("bash", "bash: long")
+	done := u.ToolStart("c1", "bash", "bash: long")
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
 		b.WriteString("line " + strconv.Itoa(i) + "\n")
 	}
-	u.Output(b.String())
+	u.Output("c1", b.String())
 	// the committed head is four lines under the header.
 	assert.Equal(t, "⏺ bash: long", v.Line(0))
 	for i := 1; i <= outputHeadLines; i++ {
@@ -505,7 +505,7 @@ func TestUIOutputHeadSummary(t *testing.T) {
 	act := slices.Clone(u.activity)
 	u.mu.Unlock()
 	require.Len(t, act, 1)
-	assert.Equal(t, outputKey, act[0].key)
+	assert.Equal(t, outputKey+"c1", act[0].key)
 
 	// closing the call commits one summary row and clears the activity row.
 	done("")
@@ -524,13 +524,13 @@ func TestUIOutputFull(t *testing.T) {
 	v := newVT(40, 50)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	done := u.ToolStart("bash", "! long")
-	u.SetOutputFull()
+	done := u.ToolStart("c1", "bash", "! long")
+	u.SetOutputFull("c1")
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
 		b.WriteString("line " + strconv.Itoa(i) + "\n")
 	}
-	u.Output(b.String())
+	u.Output("c1", b.String())
 	assert.Equal(t, "⏺ ! long", v.Line(0))
 	screen := u.snapshot(v)
 	// every line is shown, none collapsed into the head.
@@ -553,26 +553,104 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	// first call streams past the head.
-	doneA := u.ToolStart("bash", "bash: a")
+	doneA := u.ToolStart("a", "bash", "bash: a")
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
 		b.WriteString("a" + strconv.Itoa(i) + "\n")
 	}
-	u.Output(b.String())
+	u.Output("a", b.String())
 	doneA("")
 
 	// second call in the same turn streams its own output past the head.
-	doneB := u.ToolStart("bash", "bash: b")
+	doneB := u.ToolStart("b", "bash", "bash: b")
 	b.Reset()
 	for i := 1; i <= 30; i++ {
 		b.WriteString("b" + strconv.Itoa(i) + "\n")
 	}
-	u.Output(b.String())
+	u.Output("b", b.String())
 	doneB("")
 
 	// each call leaves exactly one summary row, so two appear in history.
 	screen := u.snapshot(v)
 	assert.Equal(t, 2, strings.Count(screen, "… +26 lines"), "one collapse per call")
+}
+
+// TestUIInterleavedCallsKeepTheirOwnHead guards the per-call output head: a
+// staged `!` shell streams alongside an agent tool call, and one shared head let
+// each call reset or close the other's stream.
+func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 20)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	doneA := u.ToolStart("a", "bash", "bash: a")
+	u.Output("a", lines("a", 10))
+
+	// a second call starts while the first is still streaming
+	doneB := u.ToolStart("b", "grep", "grep: b")
+	u.SetOutputFull("b")
+	u.Output("b", lines("b", 10))
+
+	// both stream their own rows, each naming its own tool
+	u.mu.Lock()
+	act := slices.Clone(u.activity)
+	u.mu.Unlock()
+	require.Len(t, act, 1, "only the collapsed call counts hidden lines")
+	assert.Contains(t, act[0].text, "bash · 6 lines")
+
+	doneA("") // closing one must not touch the other's stream
+	u.Output("b", lines("c", 5))
+	doneB("")
+
+	screen := u.snapshot(v)
+	assert.Equal(t, 1, strings.Count(screen, "… +6 lines"), "only the collapsed call summarizes")
+	assert.Contains(t, screen, "c5", "the full call kept streaming past the other's close")
+	u.mu.Lock()
+	act, open := slices.Clone(u.activity), slices.Clone(u.runs)
+	u.mu.Unlock()
+	assert.Empty(t, act)
+	assert.Empty(t, open)
+}
+
+// TestUIEndOutputKeepsStagedRuns guards a `!!` shell outliving its turn: Flush
+// never waits for an excluded run, so TurnEnd lands mid-stream. Closing it there
+// committed a summary and reopened a second, nameless, capped head for the tail.
+func TestUIEndOutputKeepsStagedRuns(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 20)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	u.SetOutputFull("shell") // as ToolStartFull does, ahead of the header
+	doneShell := u.ToolStart("shell", "bash", "! sleep")
+	doneAgent := u.ToolStart("agent", "grep", "grep: x")
+	u.Output("agent", lines("a", 10))
+	u.Output("shell", lines("s", 6))
+
+	u.EndOutput() // the turn ends while the staged shell still streams
+	u.mu.Lock()
+	open, label := slices.Clone(u.runs), u.toolLabel()
+	u.mu.Unlock()
+	require.Len(t, open, 1, "only the staged run survives the turn")
+	assert.Equal(t, "bash", label)
+
+	u.Output("shell", lines("t", 6)) // the tail stays in the same uncapped run
+	doneShell("")
+	doneAgent("")
+
+	screen := u.snapshot(v)
+	assert.Contains(t, screen, "t6", "every staged line reaches history")
+	assert.Equal(t, 1, strings.Count(screen, "… +6 lines"), "only the agent call collapses")
+}
+
+// lines returns n numbered output lines prefixed with tag.
+func lines(tag string, n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		b.WriteString(tag + strconv.Itoa(i) + "\n")
+	}
+	return b.String()
 }
 
 func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
@@ -586,7 +664,7 @@ func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 	for i := 1; i <= 30; i++ {
 		fmt.Fprintf(&b, "%6d\tline %d\n", i, i)
 	}
-	done := u.ToolStart("read", "read big.txt")
+	done := u.ToolStart("c1", "read", "read big.txt")
 	done(b.String())
 
 	screen := u.snapshot(v)
@@ -1131,8 +1209,8 @@ func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
 	// a large paste is stored under a placeholder; the editor holds the tiny marker.
 	big := strings.Repeat("a", 3000)
 	u.mu.Lock()
-	ph := pastePlaceholder(big)
-	u.pastes = map[string]string{ph: big}
+	ph := pastePlaceholder(big, 1)
+	u.pastes = []pasteEntry{{placeholder: ph, content: big}}
 	u.editor.Insert(ph) // what the buffer actually contains
 	u.notifyEditLocked(u.expandPastes(u.editor.Value()))
 	u.repaint()
@@ -1332,7 +1410,7 @@ func TestCommitSanitizesToolOutput(t *testing.T) {
 	v := newVT(40, 10)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	u.Output("\x1b[2Jwiping\x1b[5A up\r\n\x1b[31mred line\x1b[0m\r\n")
+	u.Output("c1", "\x1b[2Jwiping\x1b[5A up\r\n\x1b[31mred line\x1b[0m\r\n")
 	u.EndOutput()
 
 	screen := u.snapshot(v)
@@ -1378,7 +1456,7 @@ func TestUIResizeStorm(t *testing.T) {
 	for _, l := range history {
 		u.Print(l)
 	}
-	done := u.ToolStart("write", "write notes.go")
+	done := u.ToolStart("c1", "write", "write notes.go")
 	t.Cleanup(func() { done("") })
 
 	for _, w := range []int{20, 33, 15, 40, 26} {
@@ -1418,7 +1496,7 @@ func TestUIActivityNewlineKeepsRowCount(t *testing.T) {
 	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 
 	u.Print("committed reply line")
-	done := u.ToolStart("bash", "bash: go test ./...")
+	done := u.ToolStart("c1", "bash", "bash: go test ./...")
 	t.Cleanup(func() { done("") })
 	u.SetActivity("bash", "running tests\nPASS pkg/tui") // multi line command output
 
@@ -1472,6 +1550,69 @@ func TestUILiveBlockFitsTheScreen(t *testing.T) {
 			assert.Equal(t, 1, countRules(u.snapshot(v)), "width %d", w)
 			assert.Contains(t, u.snapshot(v), promptFirst, "width %d", w)
 		}
+	})
+}
+
+// TestStreamingPreviewMarksDroppedHead covers an open block taller than the
+// screen. Its head is cut so the live block still fits, and the cut is marked:
+// unmarked, the text slides silently under the last committed line and reads as
+// committed output being overwritten. The marker comes out of the preview's own
+// budget, so the block still never scrolls, and it is preview-only — closing the
+// block commits every line.
+func TestStreamingPreviewMarksDroppedHead(t *testing.T) {
+	t.Parallel()
+
+	const sentinel = "sentinel"
+
+	t.Run("preview_that_fits_keeps_head", func(t *testing.T) {
+		v := newVT(40, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+		u.Text("## A Blue Header\n\n")
+		u.Text(sentinel + " " + strings.Repeat("bravo charlie delta echo ", 2))
+		screen := u.snapshot(v)
+		assert.Contains(t, screen, sentinel)
+		assert.NotContains(t, screen, previewElided)
+	})
+
+	t.Run("dropped_head_is_marked", func(t *testing.T) {
+		v := newVT(40, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+		u.Text("## A Blue Header\n\n")
+		u.Text(sentinel + " " + strings.Repeat("bravo charlie delta echo ", 20))
+		screen := u.snapshot(v)
+		assert.NotContains(t, screen, sentinel)
+		assert.Contains(t, screen, previewElided)
+		assert.Equal(t, 1, countRules(screen))
+		assert.Contains(t, screen, promptFirst)
+	})
+
+	t.Run("marked_block_never_scrolls", func(t *testing.T) {
+		v := newVT(40, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+		for range 8 {
+			u.Text(strings.Repeat("bravo charlie delta echo ", 4))
+			require.Empty(t, v.scrollback)
+		}
+		assert.Contains(t, u.snapshot(v), previewElided)
+	})
+
+	t.Run("closing_commits_the_dropped_head", func(t *testing.T) {
+		v := newVT(40, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+		u.Text(sentinel + " " + strings.Repeat("bravo charlie delta echo ", 20))
+		require.Contains(t, u.snapshot(v), previewElided)
+
+		u.EndText()
+		assert.NotContains(t, u.snapshot(v), previewElided)
+		assert.Contains(t, strings.Join(v.scrollback, "\n"), sentinel)
 	})
 }
 
@@ -1662,6 +1803,10 @@ func TestMarkerWidths(t *testing.T) {
 
 	t.Run("tab_expands_to_four", func(t *testing.T) {
 		assert.Equal(t, 4, displayWidth(tabSpaces))
+	})
+
+	t.Run("preview_elision_is_three_columns", func(t *testing.T) {
+		assert.Equal(t, 3, displayWidth(previewElided))
 	})
 
 	t.Run("spinner_frames_are_one_column", func(t *testing.T) {

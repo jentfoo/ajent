@@ -53,8 +53,7 @@ func (s *searchOverlay) key(k key) searchAction {
 		return searchStay
 	case keyBackspace:
 		if s.query != "" {
-			_, size := lastRune(s.query)
-			s.query = s.query[:len(s.query)-size]
+			s.query = trimLastCluster(s.query)
 			s.refilter()
 		}
 		return searchStay
@@ -91,6 +90,9 @@ func matchSpans(text, q string) [][2]int {
 		return nil
 	}
 	lower := strings.ToLower(text)
+	if len(lower) != len(text) {
+		return nil // lowering moved the byte offsets; a shifted highlight is worse than none
+	}
 	var spans [][2]int
 	for i := 0; ; {
 		offset := strings.Index(lower[i:], lq)
