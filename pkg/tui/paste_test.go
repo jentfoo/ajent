@@ -41,9 +41,8 @@ func TestPastePlaceholderStoredAndExpanded(t *testing.T) {
 	assert.Len(t, expanded, 2500, "the placeholder expanded to the full 500-line paste")
 }
 
-// TestPastePlaceholdersAreUnique guards two pastes of the same line count: a
-// shared placeholder used to overwrite the first paste's content, so both
-// expanded to the second.
+// TestPastePlaceholdersAreUnique guards two pastes of the same line count,
+// which must not share a placeholder and overwrite each other's content.
 func TestPastePlaceholdersAreUnique(t *testing.T) {
 	t.Parallel()
 

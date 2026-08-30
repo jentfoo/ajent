@@ -11,16 +11,15 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// writeScope is where auto+write may write without a prompt: relative paths
-// resolve against cwd, and the result must land under one of roots.
+// writeScope is where auto+write may write without a prompt.
 type writeScope struct {
-	cwd   string
-	roots []string
+	cwd   string   // relative paths resolve against this directory
+	roots []string // canonicalized roots; a path must land under one
 }
 
 // newWriteScope canonicalises cwd and each extra root, dropping any that fail.
-// Roots resolve the same way call paths do, or /tmp never matches its symlinked
-// /private/tmp form. A zero scope allows nothing.
+// Roots resolve like call paths, so a root matches its symlinked form; a zero
+// scope allows nothing.
 func newWriteScope(cwd string, extra ...string) writeScope {
 	s := writeScope{cwd: cwd}
 	for _, r := range append([]string{cwd}, extra...) {
@@ -71,9 +70,8 @@ func (s writeScope) contains(full string) bool {
 }
 
 // allows reports whether call writes only inside the scope: a core writer on an
-// in-scope path, or a shell line that only reads and makes bounded directory
-// changes there. Paths resolve through the tool's own PathPolicy, so a symlink
-// pointing outside lands out of scope.
+// in-scope path, or a shell line that only reads or makes bounded directory
+// changes there.
 func (s writeScope) allows(call agent.ToolCall) bool {
 	if len(s.roots) == 0 {
 		return false
@@ -104,9 +102,9 @@ func (s writeScope) rebase(cwd string) (writeScope, bool) {
 	return writeScope{cwd: full, roots: s.roots}, true
 }
 
-// shellExpansion are characters the shell resolves after this check has run:
-// substitution, and brace expansion, which splits one token into several words
-// ({/etc/x,/tmp/y}) and so can name a path the gate never saw.
+// shellExpansion are characters the shell resolves after this check, so they
+// can name a path the gate never saw: $ and ` substitute, and {} split one
+// token into several words.
 const shellExpansion = "$`{}"
 
 // vcsDirs hold repository metadata that executes or rewrites history — a hook, a
@@ -142,11 +140,10 @@ func (s writeScope) inScope(p string) bool {
 // of possible working directories stops being worth tracking.
 const maxCdSegments = 4
 
-// allowsCommand reports whether a bash line only reads or makes bounded directory
-// changes inside the scope. Redirects and substitution fail closed. A cd moves the
-// baseline every later relative path resolves against, so its target is checked
-// like any other path and both the old and new directory stay candidates: a
-// control operator may skip the cd, and a path must be in scope either way.
+// allowsCommand reports whether a bash line only reads or makes bounded
+// directory changes inside the scope; redirects and substitution fail closed.
+// A cd moves the baseline later relative paths resolve against, so both the
+// old and new directory stay candidates.
 func (s writeScope) allowsCommand(cmd string) bool {
 	sc := scanCommand(cmd)
 	if sc.HasUnsafeOp || len(sc.Segments) == 0 {
@@ -171,9 +168,9 @@ func (s writeScope) allowsCommand(cmd string) bool {
 	})
 }
 
-// cdTargets returns the directories a cd segment may land in, resolved against every
-// baseline already possible. ok is false when any lands outside the scope or the
-// target cannot be named: a bare cd goes home and cd - is unknowable from here.
+// cdTargets returns the directories a cd segment may land in, resolved against
+// every baseline already possible; ok is false when any lands outside the scope
+// or the target cannot be named (a bare cd goes home, cd - is unknowable).
 func (s writeScope) cdTargets(bases []string, raw string) ([]string, bool) {
 	toks := tokenizeRaw(raw)
 	if len(toks) != 2 || toks[1] == "-" {
@@ -226,7 +223,6 @@ func topComponent(p string) string {
 
 // segmentWritesInScope reports whether one segment is a workspace write command
 // whose every path argument lands inside the scope from every possible baseline.
-// Unknown flags fail closed: one that consumes a value cannot be told from an operand.
 func (s writeScope) segmentWritesInScope(bases []string, seg, raw string) bool {
 	head, ok := headOf(seg)
 	if !ok {
@@ -257,9 +253,9 @@ func (s writeScope) segmentWritesInScope(bases []string, seg, raw string) bool {
 	return true
 }
 
-// parseFlags splits a command's arguments into operands, reporting whether any flag
-// makes it act on ancestors. ok is false on an unrecognised flag, since one that
-// consumes a value is indistinguishable from an operand. Flags may follow operands.
+// parseFlags splits a command's arguments into operands, reporting whether any
+// flag makes it act on ancestors. ok is false on an unrecognised flag — one
+// that consumes a value is indistinguishable from an operand.
 func (c workspaceWriteCommand) parseFlags(args []string) (operands []string, ancestors, ok bool) {
 	for i := 0; i < len(args); i++ {
 		tok := args[i]

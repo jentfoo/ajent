@@ -17,9 +17,8 @@ const outputHeadLines = 4
 // appended: two calls streaming at once each own a row.
 const outputKey = "tool-output:"
 
-// toolRun is one in-flight tool call's render state. The head belongs to the
-// call, not the UI: a staged `!` shell streams alongside an agent tool call, and
-// sharing one head let each reset or close the other's stream.
+// toolRun is one in-flight tool call's render state; the head belongs to the
+// call, since calls stream concurrently.
 type toolRun struct {
 	id   string
 	name string

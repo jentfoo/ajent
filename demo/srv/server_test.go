@@ -110,8 +110,9 @@ func TestScriptElapsed(t *testing.T) {
 	assert.GreaterOrEqual(t, sec, 0.0)
 }
 
-// TestClassifierNoTools answers an auto-mode request with allow every time, so the
-// agent's classifier approves whatever command it asks about.
+// TestClassifierNoTools pins that a tool-less request is answered with the
+// prompt's own approving word, so the agent's classifier approves whatever it
+// asks about.
 func TestClassifierNoTools(t *testing.T) {
 	t.Parallel()
 	ts := testServer(t)
@@ -124,8 +125,8 @@ func TestClassifierNoTools(t *testing.T) {
 	}
 }
 
-// TestClassifierAnswersPromptVocabulary pins that the approving word is read from
-// the prompt, so any harness's classifier wording is approved rather than assumed.
+// TestClassifierAnswersPromptVocabulary pins that the approving word is read
+// from the prompt rather than assumed, so any harness's wording is approved.
 func TestClassifierAnswersPromptVocabulary(t *testing.T) {
 	t.Parallel()
 	ts := testServer(t)

@@ -238,11 +238,8 @@ func (r *inlineRenderer) generation() uint64 {
 	return r.drawGen()
 }
 
-// stale reports whether a signal arrived that gen has not been settled for.
-// The baseline is the settled generation, never one captured as the frame
-// starts: composing a frame parses the open markdown block, so a signal landing
-// mid-compose would otherwise become the frame's own baseline and let it write
-// against a grid the emulator is still reflowing.
+// stale reports whether a signal arrived that gen has not been settled for:
+// the baseline is the settled generation, never one captured as the frame starts.
 func (r *inlineRenderer) stale(gen uint64) bool {
 	return r.sigGen != nil && r.sigGen() != gen
 }
@@ -317,25 +314,16 @@ func (r *inlineRenderer) clearHistory() {
 // however the emulator reflows them and are never re-rendered.
 func (r *inlineRenderer) resize() { r.t.refreshSize() }
 
-// probe asks the terminal where the cursor is and for a status reply, both
-// emitted after everything that preceded them, so the replies prove the
-// terminal processed the settled reflow. The status reply (keyStatusReport)
-// releases the barrier; the cursor reply (keyCursorReport) measures where the
-// reflow actually left the park.
+// probe asks the terminal where the cursor is and for a status reply; the
+// replies prove the terminal processed the settled reflow. The status reply
+// releases the barrier; the cursor reply measures where the reflow left the park.
 func (r *inlineRenderer) probe() { r.t.write(cursorQuery + statusQuery) }
 
-// reanchor takes the CPR-reported cursor row (1-based) and marks the next full
-// draw to pad the block back to the screen bottom when the block would end
-// above the last row on a started session: the reflow clamped or stranded the
-// park. A fresh session (started false) owns the top and is left alone, and a
-// row of zero means the caller has no usable evidence (see settleResizeLocked,
-// which decides which gestures deserve the repair).
-//
-// Every path sets the outcome, because a pad can outlive the frame that should
-// have consumed it: paint abandons a frame a resize signal raced, and the flag
-// survives with it. Measured later against a grid that has moved since, that
-// pad is exactly the overshoot the row is there to prevent — a rejected row
-// must therefore clear it, not leave it standing.
+// reanchor takes the CPR-reported cursor row (1-based) and arms the next full
+// draw to pad the block back to the screen bottom when the reflow left it
+// ending above the last row. A fresh session (started false) owns the top and
+// is left alone; a row of zero means no usable evidence. Every path clears the
+// pad, since one left pending would be measured against a grid that has moved.
 func (r *inlineRenderer) reanchor(row int, started bool) {
 	r.reanchored, r.anchorRow = false, 0
 	if !started || row <= 0 || len(r.live) == 0 {
@@ -349,21 +337,10 @@ func (r *inlineRenderer) reanchor(row int, started bool) {
 }
 
 // anchorPad drops the block to the screen bottom, in newlines so nothing is
-// addressed. Pure: paint may still abandon the frame.
-//
-// The rows are measured against the frame this pad lands on, not the one the
-// settle decided against — repaint recomposes the block in between, and only
-// the height being drawn now puts its last row on the last screen row. A frame
-// that outgrew the space below the park pads by nothing rather than by a
-// negative count.
-//
-// The pad is measured from the reported row, which is what keeps it from
-// scrolling: reanchor rejects any row where the block already reaches the
-// bottom, so the cursor lands on exactly height − live and the block fills the
-// rows below it. eraseLive has just cleared everything from the park down, so
-// the pad only ever writes into blank space — no committed row is pushed into
-// scrollback. The clamp keeps a garbage row bounded; it can only fail to mean
-// underfill, never pad past the screen.
+// addressed. The count is measured against the frame this pad lands on —
+// repaint recomposes the block in between — and from the reported park row, so
+// it only fills the rows eraseLive just cleared and never scrolls. Pure: paint
+// may still abandon the frame.
 func (r *inlineRenderer) anchorPad() string {
 	if !r.reanchored || len(r.live) == 0 {
 		return ""

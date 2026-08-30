@@ -137,8 +137,7 @@ func (b *Barrier) SetDeniedCommands(cmds []string) {
 }
 
 // SetWriteRoots installs the directories auto+write may write to without a
-// prompt: cwd plus any extra roots (the temp dir). Unset means every write
-// prompts, as in every other mode.
+// prompt; unset means every write prompts, as in every other mode.
 func (b *Barrier) SetWriteRoots(cwd string, extra ...string) {
 	s := newWriteScope(cwd, extra...)
 	b.mu.Lock()
@@ -399,12 +398,9 @@ func (b *Barrier) noteDenied(call agent.ToolCall, reason string) {
 	b.noter("Denied with note: " + strings.TrimSpace(reason))
 }
 
-// classifyCall reports whether mode sends this call type to the model classifier:
-// auto judges unverifiable bash commands plus MCP/extension tool calls (judged
-// with their metadata); auto+write adds write confinement. A core writer never
-// goes to the model — Classify already decided it, and a stray allow verdict would
-// auto-allow it. Every other built-in is resolved by Classify and so never reaches
-// this. A nil classifier never starts one.
+// classifyCall reports whether mode sends this call to the model classifier:
+// the auto modes judge bash and MCP/extension calls (with their metadata). A
+// core writer never goes to the model, and a nil classifier starts none.
 func (b *Barrier) classifyCall(m Mode, name string) bool {
 	if b.classifier == nil {
 		return false
@@ -421,9 +417,9 @@ func (b *Barrier) classifyCall(m Mode, name string) bool {
 	}
 }
 
-// classifySubject is what auto/auto+write sends to classify call: the bash
-// command, or the tool name plus its elided arguments for any other (MCP) tool.
-// AllowWrite selects the workspace rule set, and only ever for a shell command.
+// classifySubject builds the classifier's subject for call: the bash command,
+// or the tool name plus its elided arguments for any other (MCP) tool.
+// AllowWrite selects the workspace rule set, and only for a shell command.
 func classifySubject(m Mode, call agent.ToolCall) Subject {
 	if call.Name == bashTool {
 		// the declared cwd rebases every relative path, so the model must see it

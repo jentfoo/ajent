@@ -582,9 +582,9 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(screen, "… +26 lines"), "one collapse per call")
 }
 
-// TestUIInterleavedCallsKeepTheirOwnHead guards the per-call output head: a
-// staged `!` shell streams alongside an agent tool call, and one shared head let
-// each call reset or close the other's stream.
+// TestUIInterleavedCallsKeepTheirOwnHead guards the per-call output head: calls
+// streaming at once (a staged `!` shell alongside an agent tool) must not reset
+// or close each other's stream.
 func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 	t.Parallel()
 
@@ -620,9 +620,9 @@ func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 	assert.Empty(t, open)
 }
 
-// TestUIEndOutputKeepsStagedRuns guards a `!!` shell outliving its turn: Flush
-// never waits for an excluded run, so TurnEnd lands mid-stream. Closing it there
-// committed a summary and reopened a second, nameless, capped head for the tail.
+// TestUIEndOutputKeepsStagedRuns guards a `!!` shell outliving its turn: TurnEnd
+// lands mid-stream, and closing it there would commit a summary and reopen a
+// second, nameless head for the tail.
 func TestUIEndOutputKeepsStagedRuns(t *testing.T) {
 	t.Parallel()
 
@@ -1491,11 +1491,9 @@ func TestUIResizeStorm(t *testing.T) {
 	assert.Contains(t, screen, "writing \u4e16\u754c notes.go")
 }
 
-// TestUIHoldsDrawingFromTheSignal pins when the resize gate goes up. A
-// streaming Text owns u.mu across a goldmark parse, so holdForResize can sit
-// queued behind it for milliseconds; a gate raised only under the lock let that
-// call compose and land a whole frame on a grid the emulator was already
-// reflowing. Nothing may reach the terminal between the signal and the settle.
+// TestUIHoldsDrawingFromTheSignal pins when the resize gate goes up: nothing
+// may reach the terminal between the signal and the settle, so the gate is
+// raised before the lock, not under it.
 func TestUIHoldsDrawingFromTheSignal(t *testing.T) {
 	t.Parallel()
 
@@ -1591,11 +1589,9 @@ func TestUILiveBlockFitsTheScreen(t *testing.T) {
 }
 
 // TestStreamingPreviewMarksDroppedHead covers an open block taller than the
-// screen. Its head is cut so the live block still fits, and the cut is marked:
-// unmarked, the text slides silently under the last committed line and reads as
-// committed output being overwritten. The marker comes out of the preview's own
-// budget, so the block still never scrolls, and it is preview-only — closing the
-// block commits every line.
+// screen: its head is cut to fit, and the cut is marked so the preview does not
+// read as committed output being overwritten. The marker is preview-only —
+// closing the block commits every line.
 func TestStreamingPreviewMarksDroppedHead(t *testing.T) {
 	t.Parallel()
 
@@ -1828,11 +1824,9 @@ func settleProbe(u *UI, row int) {
 }
 
 // TestUIRestoreReanchorsTheBlock drives the reported gesture: a session with a
-// tall live block is maximized and then restored. Either half can leave the
-// block ending above the last row — the narrowing clamps the park, the
-// widening strands it above a dead band — and the settled redraw must pad the
-// block back to the screen bottom. The emulator answers nothing of its own, so
-// the tests inject the replies a real terminal would send.
+// tall live block is maximized and then restored, and either half can leave the
+// block ending above the last row. The emulator answers nothing of its own, so
+// the test injects the replies a real terminal would send.
 func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 	t.Parallel()
 
@@ -1890,10 +1884,7 @@ func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 
 // TestUIBlockEndsAtScreenBottom is the guard the re-anchor exists to keep:
 // after a narrowing whose reflow overflows the screen, the settled redraw
-// leaves the block's last row on the screen's last row. Every narrowing gets
-// the clamped cursor report a real terminal gives when the reflow clamps the
-// park, so a missing pad fails the last row rather than a blank band below
-// the prompt.
+// leaves the block's last row on the screen's last row.
 func TestUIBlockEndsAtScreenBottom(t *testing.T) {
 	t.Parallel()
 
@@ -1925,11 +1916,9 @@ func TestUIBlockEndsAtScreenBottom(t *testing.T) {
 	}
 }
 
-// TestUIReanchorKeepsHistoryOnScreen guards the pad's arithmetic. The pad is
+// TestUIReanchorKeepsHistoryOnScreen guards the pad's arithmetic: it is
 // measured from the reported park row, so it fills the rows the erase just
-// cleared and stops. Measured from the screen height alone it overshoots by the
-// park's own row and scrolls that many committed rows away — on a session whose
-// history does not yet fill the screen, all of them.
+// cleared and stops, never scrolling committed history away.
 func TestUIReanchorKeepsHistoryOnScreen(t *testing.T) {
 	t.Parallel()
 
@@ -1951,11 +1940,9 @@ func TestUIReanchorKeepsHistoryOnScreen(t *testing.T) {
 	assert.Equal(t, v.h-block, v.row)
 }
 
-// TestUIReanchorGestures pins which resizes are repaired. Only a shrink can
-// retire the park: a grow rewraps content into fewer rows and takes none away,
-// so its dead band is cosmetic while the pad would be a visible jump. A corner
-// drag that widens but shortens still shrinks, and an equal-size settle keeps
-// the repair because its burst may have narrowed and been dragged back.
+// TestUIReanchorGestures pins which resizes are repaired: only a shrink can
+// retire the park, so a grow's dead band stays, a corner drag that widens but
+// shortens still shrinks, and an equal-size settle keeps the repair.
 func TestUIReanchorGestures(t *testing.T) {
 	t.Parallel()
 
@@ -1998,9 +1985,8 @@ func TestUIReanchorGestures(t *testing.T) {
 }
 
 // TestUISettleIgnoresUnsolicitedReport pins that a settle acts only on a reply
-// its own probe asked for. SIGCONT and a direct resize settle without probing,
-// so a report left over from an earlier burst would otherwise re-anchor against
-// a row that is no longer true.
+// its own probe asked for: SIGCONT and a direct resize settle without probing,
+// so a report left over from an earlier burst must not re-anchor.
 func TestUISettleIgnoresUnsolicitedReport(t *testing.T) {
 	t.Parallel()
 
@@ -2025,10 +2011,9 @@ func TestUISettleIgnoresUnsolicitedReport(t *testing.T) {
 	assert.Equal(t, v.h-block, v.row)
 }
 
-// TestUISettleClearsPendingPad pins the other half of that lifetime: a pad
-// raised by one settle and left pending on a frame the gate abandoned must not
-// survive a settle that cannot re-anchor. The row it was measured from belongs
-// to a grid the next gesture has already moved.
+// TestUISettleClearsPendingPad pins the pad's lifetime: one left pending on a
+// frame the gate abandoned must not survive a settle that cannot re-anchor,
+// since its row belongs to a grid the next gesture has already moved.
 func TestUISettleClearsPendingPad(t *testing.T) {
 	t.Parallel()
 
@@ -2138,9 +2123,8 @@ func newResponsiveUI(tb testing.TB, v *vt) (*UI, *respVT) {
 }
 
 // TestUIResponsiveResize drives the gesture against a terminal that answers
-// the probes: history deep enough to overflow on restore, deltas landing both
-// in the signal-delivery window and inside the burst. The settle must leave
-// the block ending on the last row after both halves of the gesture.
+// the probes: deltas land both in the signal-delivery window and inside the
+// burst, and the settle must leave the block ending on the last row.
 func TestUIResponsiveResize(t *testing.T) {
 	t.Parallel()
 

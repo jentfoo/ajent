@@ -188,8 +188,8 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 	})
 }
 
-// TestWriteScopeAllowsBashCwd covers the cwd bash accepts alongside command: it
-// rebases every relative path, so the scope must judge the directory it runs in.
+// TestWriteScopeAllowsBashCwd covers the cwd bash accepts alongside command,
+// which rebases every relative path in the command.
 func TestWriteScopeAllowsBashCwd(t *testing.T) {
 	t.Parallel()
 

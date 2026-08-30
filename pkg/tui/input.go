@@ -519,11 +519,8 @@ func (r *inputReader) emit(k key) {
 
 // sendLatest leaves ch holding the newest value, dropping an older one to make
 // room: a cursor report is a position, and only the last one is true. Bounded
-// on purpose (one drain, one retry) so the reader never spins here.
-//
-// Single writer only. emit runs on run's goroutine alone, so nothing can fill
-// the slot between the drain and the retry; two senders racing here could drop
-// the newer value instead. A second writer would need a lock of its own.
+// (one drain, one retry) so the reader never spins. Single writer only; a
+// second would need its own lock.
 func sendLatest(ch chan int, v int) {
 	select {
 	case ch <- v:

@@ -527,10 +527,9 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 // server surfaces an error instead of leaking a goroutine or hanging the session.
 const rediscoveryTimeout = 45 * time.Second
 
-// discoverTimeout bounds one connect's capability discovery (tools/resources/prompts)
-// so an unresponsive server surfaces as a connect error instead of hanging the
-// first-message load or /mcp reload that awaits it. Same rationale and value as
-// rediscoveryTimeout.
+// discoverTimeout bounds one connect's capability discovery (tools/resources/
+// prompts) so an unresponsive server surfaces as a connect error instead of
+// hanging the first-message load or /mcp reload that awaits it.
 const discoverTimeout = 45 * time.Second
 
 // rediscan refreshes a server's tool list after notifications/tools/list_changed. It

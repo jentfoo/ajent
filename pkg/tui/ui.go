@@ -601,18 +601,16 @@ func (u *UI) Output(id, delta string) {
 	}
 }
 
-// SetOutputFull marks call id's streamed head to show every line, bypassing the
-// four-line collapse. The stager calls it for user-initiated `!`/`!!` shells
-// ahead of ToolStart; ending the call clears it.
+// SetOutputFull marks call id's streamed head to show every line, bypassing
+// the four-line collapse; ending the call clears it.
 func (u *UI) SetOutputFull(id string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.runLocked(id).head.full = true
 }
 
-// EndOutput flushes and closes the calls a turn owns, the turn-end safety net.
-// A full-mode call is left alone: those are the stager's user-initiated shells,
-// which legitimately outlive the turn and have no collapse row to clean up.
+// EndOutput flushes and closes the calls a turn owns, the turn-end safety net;
+// a full-mode call is left alone, since it outlives the turn.
 func (u *UI) EndOutput() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -1594,9 +1592,8 @@ func (u *UI) probeAnswered() {
 }
 
 // cursorRow drains the terminal's cursor reports, returning the newest row and
-// whether one arrived. The closed-channel branch is defensive: reports is never
-// closed today, and a drain loop that ignored a close would spin. Caller holds
-// the lock.
+// whether one arrived; the closed-channel branch is defensive, since a drain
+// that ignored a close would spin. Caller holds the lock.
 func (u *UI) cursorRow() (int, bool) {
 	if u.reader == nil {
 		return 0, false

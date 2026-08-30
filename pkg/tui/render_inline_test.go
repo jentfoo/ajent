@@ -310,10 +310,8 @@ func TestInlineDiff(t *testing.T) {
 }
 
 // TestInlineAbortsFrameOnResizeSignal pins the pre-write gate: while a signal
-// is unsettled the emulator is reflowing onto a different grid and the park's
-// row count was taken on the old one, so the frame is abandoned. The baseline
-// is the settled generation, not one captured as the frame starts — a signal
-// landing mid-compose would otherwise become that frame's own baseline.
+// is unsettled the frame is abandoned, and the baseline is the settled
+// generation, not one captured as the frame starts.
 func TestInlineAbortsFrameOnResizeSignal(t *testing.T) {
 	t.Parallel()
 

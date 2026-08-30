@@ -295,11 +295,9 @@ func TestPTYSignalResize(t *testing.T) {
 	assert.Equal(t, 34, u.Width(), "the renderer read the kernel's new size")
 }
 
-// TestPTYSignalResizeReanchors drives the re-anchor over a real pty: the
-// settled burst raises the cursor and status queries, the clamped cursor
-// reply pads the block back to the screen bottom, and the status reply
-// releases the settled redraw. The pty carries no terminal of its own, so the
-// test writes the replies a clamped terminal would send.
+// TestPTYSignalResizeReanchors drives the re-anchor over a real pty. The pty
+// carries no terminal of its own, so the test writes the replies a clamped
+// terminal would send.
 func TestPTYSignalResizeReanchors(t *testing.T) {
 	master, slave := openPTY(t)
 	setPTYSize(t, master, 80, 24)

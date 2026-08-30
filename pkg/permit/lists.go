@@ -13,20 +13,17 @@ var readOnlyCommands = bulk.SliceToSet([]string{
 	"date", "od",
 })
 
-// workspaceWriteCommand is the flag grammar of one bounded directory command.
-// Splitting the two kinds lets an unknown flag fail closed, since a flag that
-// consumes a value cannot be told from an operand.
+// workspaceWriteCommand is the flag grammar of one bounded directory command;
+// keeping the kinds separate lets an unknown flag fail closed.
 type workspaceWriteCommand struct {
 	boolFlags     []string // take no value
 	valueFlags    []string // consume the next token, or a joined --flag=value
 	ancestorFlags []string // also act on the operand's ancestors, so those need checking too
 }
 
-// workspaceWriteCommands are bounded directory changes auto+write runs without the
-// model, provided every path argument lands inside the scope. Both are recoverable:
-// mkdir only creates, rmdir only removes empty directories. mkdir -p needs no
-// ancestor check — it only creates what is missing, and an in-scope operand's
-// ancestors already exist down from the root — while rmdir -p removes them.
+// workspaceWriteCommands are the bounded directory changes auto+write runs
+// without the model when every path argument lands inside the scope: both are
+// recoverable (mkdir only creates, rmdir only removes empty directories).
 var workspaceWriteCommands = map[string]workspaceWriteCommand{
 	"mkdir": {
 		boolFlags:  []string{"-p", "--parents", "-v", "--verbose", "-Z"},

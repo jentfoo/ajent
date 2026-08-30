@@ -49,8 +49,7 @@ func (r *altRenderer) size() (int, int) {
 }
 
 // viewHeight is the number of history rows visible above the live block. Zero
-// when the block fills the screen: the live rows must keep their own rows, and a
-// row pushed past the last one is clamped onto it, overwriting its neighbour.
+// when the block fills the screen, since the live rows keep their own rows.
 func (r *altRenderer) viewHeight() int {
 	return max(r.t.height-len(r.live), 0)
 }

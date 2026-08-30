@@ -89,18 +89,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.playStep(wr, req, prompt)
 }
 
-// classify answers a classifier request: no tools are advertised and a single user
-// message holds the call under evaluation. It approves everything, so no barrier
-// mode blocks on a call the agent asked about.
+// classify answers a tool-less classifier request, approving the call so no
+// barrier mode blocks on one the agent asked about.
 func (s *Server) classify(wr *writer, model string, req chatRequest, prompt int) {
 	wr.textDelta(model, approveWord(systemText(req)))
 	wr.finish(model, "stop", prompt)
 }
 
-// approveWord returns the approving verdict a classifier prompt asks for. Each
-// prompt lists its categories most-permissive first, so the first word quoted
-// after a bullet is the answer; a caller whose prompt says nothing gets "allow".
-// Read rather than assumed, since any harness may drive this server.
+// approveWord returns the approving verdict a classifier prompt asks for: the
+// first word quoted after a bullet, since prompts list categories
+// most-permissive first. A prompt that names none gets "allow".
 func approveWord(system string) string {
 	for _, line := range strings.Split(system, "\n") {
 		if !strings.HasPrefix(line, `- "`) {

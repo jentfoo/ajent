@@ -139,8 +139,8 @@ func idsOf(rows []TreeRow) []string {
 	return out
 }
 
-// TestTreeRowLabelsAndKinds pins which entry kinds become picker rows and how each
-// label collapses; rowFor's branches are reachable only through TreeRows.
+// TestTreeRowLabelsAndKinds pins which entry kinds become picker rows and how
+// each label collapses.
 func TestTreeRowLabelsAndKinds(t *testing.T) {
 	t.Parallel()
 

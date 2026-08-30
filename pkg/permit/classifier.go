@@ -17,9 +17,7 @@ const (
 	ClassUnsure              // garbled or failed response; never cached
 )
 
-// Subject is one call sent to the model classifier in auto/auto+write
-// mode: a shell command, or any other (MCP/extension) tool named with its elided
-// arguments.
+// Subject is one call sent to the model classifier in the auto modes.
 type Subject struct {
 	Name       string // tool name; bashTool for shell calls
 	Args       string // bash command text, or elided JSON arguments for other tools
@@ -28,8 +26,7 @@ type Subject struct {
 }
 
 // key is the cache identity: a call is judged by tool, exact payload, working
-// directory and the rule set it was judged under, so different args to one MCP tool
-// are classified independently and a mode change never reuses the other's verdict.
+// directory and rule set, so a mode change never reuses the other's verdict.
 func (s Subject) key() string {
 	return strconv.FormatBool(s.AllowWrite) + "\x00" + s.Name + "\x00" + s.Cwd + "\x00" + s.Args
 }
@@ -112,10 +109,9 @@ func touch(order []string, key string) {
 	order[len(order)-1] = key
 }
 
-// NormalizeClass maps a classifier reply to a verdict. Every prompt answers
-// allow/deny. An approval must be the reply's first whole word, so "allow, it only
-// reads" approves but "allowing this would be unsafe" does not; the asymmetry with
-// deny is deliberate, since only the approving direction can fail open.
+// NormalizeClass maps a classifier reply to a verdict. An approval must be the
+// reply's first whole word, so "allow, it only reads" approves but "allowing
+// this would be unsafe" does not; only the approving direction can fail open.
 func NormalizeClass(text string) Class {
 	switch first := firstWord(text); first {
 	case "allow", "allowed":

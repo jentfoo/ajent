@@ -46,10 +46,8 @@ func TestStreamingCommitKeepsOutput(t *testing.T) {
 }
 
 // TestThinkingCommitKeepsOutput is the thinking mirror of the streaming guard:
-// committing a completed reasoning line mid-stream used to redraw the stale live
-// preview (still holding those just-committed rows) below the new history; on a
-// small terminal that ghost overflowed and pushed freshly committed lines into
-// scrollback before they had been read.
+// a committed reasoning line must not be redrawn from the stale live preview
+// below the new history, which overflowed on a small terminal.
 func TestThinkingCommitKeepsOutput(t *testing.T) {
 	t.Parallel()
 
