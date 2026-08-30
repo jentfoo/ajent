@@ -29,12 +29,15 @@ const (
 )
 
 // childSink publishes one activity row per running job: the current tool call or
-// a "thinking..." line, elided to a single line and cleared on turn end. Nothing it
-// emits ever reaches committed history; it feeds Options.Activity only.
+// a "thinking..." line, elided to a single line. The row lives as long as the job
+// does — Manager.spawn clears it on every terminal path — so a child that runs a
+// second turn never blinks out of the list. Nothing it emits ever reaches
+// committed history; it feeds Options.Activity only.
 type childSink struct {
 	agent.NopSink
-	id  string // row key, e.g. sub-2
-	pub func(key, text string)
+	id   string // row key, e.g. sub-2
+	rank int    // job number; the row's stable place in the activity list
+	pub  func(key, text string, rank int)
 
 	mu      sync.Mutex
 	timer   *time.Timer // pending coalesced flush; nil when none armed
@@ -42,10 +45,12 @@ type childSink struct {
 	text    string      // newest desired row (full line incl. id prefix); "" clears
 	buf     string      // accumulated deltas of the current in-progress line
 	src     stream      // which stream owns buf; switching resets it
+	calls   int         // child tool calls in flight; the row falls back at zero
+	idle    string      // row to restore once the last in-flight call ends
 }
 
-func newChildSink(id string, pub func(key, text string)) *childSink {
-	return &childSink{id: id, pub: pub}
+func newChildSink(id string, rank int, pub func(key, text string, rank int)) *childSink {
+	return &childSink{id: id, rank: rank, pub: pub}
 }
 
 // set records the newest desired row. force publishes immediately; otherwise it is
@@ -76,7 +81,7 @@ func (s *childSink) set(text string, force bool) {
 // flushLocked publishes the newest row and arms nothing further. Caller holds mu.
 func (s *childSink) flushLocked(now time.Time) {
 	if s.pub != nil {
-		s.pub(s.id, s.text)
+		s.pub(s.id, s.text, s.rank)
 	}
 	s.lastPub = now
 	if s.timer != nil {
@@ -86,18 +91,30 @@ func (s *childSink) flushLocked(now time.Time) {
 }
 
 // ToolStart shows the running call plus its first argument (built-in labels like
-// "read" are bare words); on completion it restores the prior line so a finished
-// call falls back to thinking/idle text.
+// "read" are bare words). Child tools run in parallel, so the fallback is counted
+// rather than captured per call: only the last call to finish restores the idle
+// line, otherwise an early finisher would erase a sibling still running.
 func (s *childSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
 	s.mu.Lock()
-	prev := s.text
-	if prev == "" { // no coalesced line yet; show the idle fallback after this call
-		prev = thinkingRow(s.id)
+	if s.calls == 0 { // first of a batch; remember what the row showed before it
+		s.idle = s.text
+		if s.idle == "" { // no coalesced line yet; fall back to the idle text
+			s.idle = thinkingRow(s.id)
+		}
 	}
+	s.calls++
 	s.mu.Unlock()
 	s.set(rowLine(s.id, toolLabel(call, label)), true)
 	return func(agent.ToolResult) {
-		s.set(prev, true)
+		s.mu.Lock()
+		if s.calls > 0 {
+			s.calls--
+		}
+		last, idle := s.calls == 0, s.idle
+		s.mu.Unlock()
+		if last {
+			s.set(idle, true)
+		}
 	}
 }
 
@@ -137,13 +154,17 @@ func (s *childSink) accumulate(delta string, src stream) {
 	s.set(display, false)
 }
 
-// TurnEnd clears the job's row; the activity cap and elision happen in tui.SetActivity.
+// TurnEnd resets the streamed line between a child's turns without dropping the
+// row: a job outlives its turns (run nudges a child that produced no summary), and
+// Manager.spawn owns the clear at every terminal path.
 func (s *childSink) TurnEnd(result agent.TurnResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.text = ""
-	s.buf = ""                // next turn starts a fresh output line
-	s.flushLocked(time.Now()) // drops any pending flush and publishes the clear
+	s.buf = "" // next turn starts a fresh output line
+	s.src = streamNone
+	s.calls = 0 // an interrupted dispatch must not strand the row on a tool label
+	s.text = thinkingRow(s.id)
+	s.flushLocked(time.Now()) // drops any pending flush and publishes the idle row
 }
 
 // toolLabel names the running call, preferring a rich provided label and falling

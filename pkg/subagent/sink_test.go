@@ -38,7 +38,7 @@ func TestToolStart(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newCapture()
-			s := newChildSink(tc.id, c.recordRow)
+			s := newChildSink(tc.id, numberOf(tc.id), c.recordRow)
 			done := s.ToolStart(tc.call, tc.label)
 			assert.Equal(t, tc.wantRow, c.rowText(tc.id))
 			done(agent.ToolResult{})
@@ -48,23 +48,48 @@ func TestToolStart(t *testing.T) {
 	}
 }
 
-// TestSinkTurnEndClearsRow verifies the row disappears on turn end.
-func TestSinkTurnEndClearsRow(t *testing.T) {
+// TestSinkTurnEndFallsBackToIdle verifies the row survives a turn ending: a job
+// outlives its turns, so only Manager.spawn may clear it.
+func TestSinkTurnEndFallsBackToIdle(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
-	s := newChildSink("sub-3", c.recordRow)
-	s.set(thinkingRow(s.id), true)
-	assert.Equal(t, "sub-3  thinking…", c.rowText("sub-3"))
+	s := newChildSink("sub-3", 3, c.recordRow)
+	s.set(rowLine(s.id, "read pkg/tui/ui.go"), true)
+	assert.Equal(t, "sub-3  read pkg/tui/ui.go", c.rowText("sub-3"))
 
 	s.TurnEnd(agent.TurnResult{})
-	require.Eventually(t, func() bool { return c.rowText("sub-3") == "" }, time.Second, 5*time.Millisecond)
+	assert.Equal(t, "sub-3  thinking…", c.rowText("sub-3"))
+	assert.NotContains(t, c.rows, "sub-3|", "a live job's row is never cleared by a turn ending")
+}
+
+// TestToolStartParallelCalls covers overlapping child tool calls: an early
+// finisher must not wipe a sibling's label off the row, and the idle line returns
+// only once the last call ends.
+func TestToolStartParallelCalls(t *testing.T) {
+	t.Parallel()
+	c := newCapture()
+	s := newChildSink("sub-2", 2, c.recordRow)
+	s.set(thinkingRow(s.id), true)
+
+	doneA := s.ToolStart(agent.ToolCall{ID: "c1", Name: "read",
+		Input: json.RawMessage(`{"path":"a.go"}`)}, "read")
+	assert.Equal(t, "sub-2  read a.go", c.rowText("sub-2"))
+
+	doneB := s.ToolStart(agent.ToolCall{ID: "c2", Name: "grep"}, `grep "New" pkg`)
+	assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
+
+	doneA(agent.ToolResult{}) // b still runs; its label stays on the row
+	assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
+
+	doneB(agent.ToolResult{}) // the last one out restores the idle line
+	assert.Equal(t, "sub-2  thinking…", c.rowText("sub-2"))
 }
 
 // TestSinkThinkingCoalesces verifies rapid deltas settle on a single publish.
 func TestSinkThinkingCoalesces(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
-	s := newChildSink("sub-4", c.recordRow)
+	s := newChildSink("sub-4", 4, c.recordRow)
 	for i := 0; i < 50; i++ { // all within the flush window -> one coalesced row
 		s.set(thinkingRow(s.id), false)
 	}
@@ -80,7 +105,7 @@ func TestSinkText(t *testing.T) {
 	// thinking placeholder: a multi-line delta scrolls past completed lines, showing only the current one.
 	t.Run("shows_latest_output", func(t *testing.T) {
 		c := newCapture()
-		s := newChildSink("sub-5", c.recordRow)
+		s := newChildSink("sub-5", 5, c.recordRow)
 
 		s.Text("inspecting\npkg/tui/ui.go")
 		assert.Equal(t, "sub-5  pkg/tui/ui.go", c.rowText("sub-5"))
@@ -89,7 +114,7 @@ func TestSinkText(t *testing.T) {
 	// streaming deltas show only the current in-progress line: completed lines scroll past and each newline starts fresh.
 	t.Run("scrolls_per_line", func(t *testing.T) {
 		c := newCapture()
-		s := newChildSink("sub-9", c.recordRow)
+		s := newChildSink("sub-9", 9, c.recordRow)
 
 		for _, d := range []string{"first line ", "scrolled\nsecond ", "line grows"} {
 			s.Text(d)
@@ -97,14 +122,14 @@ func TestSinkText(t *testing.T) {
 		// the first completed line is gone; only the active one remains on screen
 		require.Eventually(t, func() bool { return c.rowText("sub-9") == "sub-9  second line grows" }, time.Second, 5*time.Millisecond)
 
-		s.TurnEnd(agent.TurnResult{}) // next turn starts a fresh line
-		require.Eventually(t, func() bool { return c.rowText("sub-9") == "" }, time.Second, 5*time.Millisecond)
+		s.TurnEnd(agent.TurnResult{}) // next turn starts a fresh line, row stays live
+		require.Eventually(t, func() bool { return c.rowText("sub-9") == "sub-9  thinking…" }, time.Second, 5*time.Millisecond)
 	})
 
 	// a blank or whitespace-only current line never publishes a row, so empty streaming lines don't flash.
 	t.Run("ignores_whitespace_lines", func(t *testing.T) {
 		c := newCapture()
-		s := newChildSink("sub-10", c.recordRow)
+		s := newChildSink("sub-10", 10, c.recordRow)
 
 		s.Text("\n   \t\n")
 		assert.Empty(t, c.rowText("sub-10"))
@@ -119,7 +144,7 @@ func TestSinkText(t *testing.T) {
 func TestSinkThinkingShowsReasoning(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
-	s := newChildSink("sub-6", c.recordRow)
+	s := newChildSink("sub-6", 6, c.recordRow)
 
 	s.Thinking("look at pkg/tui\nthen decide")
 	assert.Equal(t, "sub-6  then decide", c.rowText("sub-6"))
@@ -130,7 +155,7 @@ func TestSinkThinkingShowsReasoning(t *testing.T) {
 func TestSinkStreamSwitchStartsFresh(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
-	s := newChildSink("sub-11", c.recordRow)
+	s := newChildSink("sub-11", 11, c.recordRow)
 
 	s.Thinking("reasoning here")
 	s.Text("the answer")

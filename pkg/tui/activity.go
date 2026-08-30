@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"cmp"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,22 +48,39 @@ const (
 	maxQueuedBudget = maxQueuedRows + 1 // includes the indicator row when capped
 )
 
-// activityRow is one transient, keyed status line above the input.
+// unranked is the rank of a row whose producer has no stable order of its own.
+// Every unranked row ties, so they keep insertion order among themselves and sit
+// after every ranked row.
+const unranked = math.MaxInt
+
+// activityRow is one transient, keyed status line above the input. rank orders
+// the row against its peers: lower first, ties in insertion order.
 type activityRow struct {
 	key  string
 	text string
+	rank int
 }
 
 // SetActivity adds, replaces or (with an empty text) removes a keyed activity
 // row above the input. Rows live in the live block only and never reach history.
+// The row sorts after every ranked one, in insertion order.
 func (u *UI) SetActivity(key, text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.setActivityLocked(key, text)
+	u.setActivityLocked(key, text, unranked)
+}
+
+// SetActivityRanked is SetActivity for a producer with a stable order of its own
+// (sub-agent jobs by job number). The row holds its place for as long as the key
+// lives, including across a clear and a later re-add.
+func (u *UI) SetActivityRanked(key, text string, rank int) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.setActivityLocked(key, text, rank)
 }
 
 // setActivityLocked adds/replaces/removes a keyed activity row. Caller holds the lock.
-func (u *UI) setActivityLocked(key, text string) {
+func (u *UI) setActivityLocked(key, text string, rank int) {
 	text = sanitizeRow(text)
 
 	for i := range u.activity {
@@ -71,13 +90,17 @@ func (u *UI) setActivityLocked(key, text string) {
 		if text == "" {
 			u.activity = slices.Delete(u.activity, i, i+1)
 		} else {
-			u.activity[i].text = text
+			u.activity[i].text, u.activity[i].rank = text, rank
 		}
 		u.repaint()
 		return
 	}
 	if text != "" {
-		u.activity = append(u.activity, activityRow{key: key, text: text})
+		u.activity = append(u.activity, activityRow{key: key, text: text, rank: rank})
+		// stable: rows sharing a rank (every unranked one) keep insertion order
+		slices.SortStableFunc(u.activity, func(a, b activityRow) int {
+			return cmp.Compare(a.rank, b.rank)
+		})
 	}
 	u.repaint()
 }

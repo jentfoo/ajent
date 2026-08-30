@@ -36,8 +36,10 @@ type Options struct {
 	Env                 agent.Environment
 	ProjectInstructions []agent.ProjectInstruction
 
-	Activity func(key, text string) // nil disables activity rows
-	Notice   func(msg string)       // keyed UI notice for completions
+	// Activity publishes one keyed row; an empty text removes it. rank is the
+	// job number, so rows hold a stable place regardless of publish order.
+	Activity func(key, text string, rank int) // nil disables activity rows
+	Notice   func(msg string)                 // keyed UI notice for completions
 	Status   func(text, short string)
 	Deliver  func(agent.Input) bool // steer into a running parent turn; false when idle
 
@@ -82,6 +84,7 @@ func (m *Manager) Start(task, instructions string) string {
 	ctx, cancel := context.WithCancel(context.Background())
 	j := &job{
 		id:           id,
+		num:          m.count,
 		task:         task,
 		label:        shortLabel(task),
 		instructions: instructions,
@@ -97,7 +100,7 @@ func (m *Manager) Start(task, instructions string) string {
 	// show the job immediately: rows render above the prompt even while queued,
 	// before the child's turn emits anything (childSink publishes only on output).
 	if fn := m.opts.Activity; fn != nil {
-		fn(j.id, rowLine(id, j.label))
+		fn(j.id, rowLine(id, j.label), j.num)
 	}
 	m.wg.Add(1) // before the goroutine so Close's Wait never races a pending Add
 	go m.spawn(j)
@@ -133,10 +136,10 @@ func (m *Manager) spawn(j *job) {
 			j.finish(StatusDone, sum, nil)
 		}
 	}
-	// every terminal path clears the row Start published. Running jobs already did
-	// via childSink.TurnEnd; this also covers a job that never acquired its slot.
+	// the row belongs to the job, not to a turn: this is the only place a running
+	// job's row is cleared, so a nudge turn never makes a live job disappear.
 	if fn := m.opts.Activity; fn != nil {
-		fn(j.id, "")
+		fn(j.id, "", j.num)
 	}
 	m.publishStatus()
 	close(j.done) // release waiting pollers before onComplete so their claim is visible
@@ -179,7 +182,13 @@ func (m *Manager) Poll(ctx context.Context, id string) (Job, bool) {
 	defer func() {
 		j.mu.Lock()
 		j.pollers--
+		// onComplete skips the enqueue while a poll is registered, so the last
+		// poller to leave empty-handed has to re-arm delivery itself.
+		orphan := j.pollers == 0 && !j.consumed
 		j.mu.Unlock()
+		if orphan {
+			m.onComplete(j)
+		}
 	}()
 
 	timer := time.NewTimer(timeout)
@@ -187,17 +196,27 @@ func (m *Manager) Poll(ctx context.Context, id string) (Job, bool) {
 
 	select {
 	case <-j.done:
-		// claim delivery so a later Flush/offer does not re-notify after this poll
-		j.mu.Lock()
-		j.consumed = true
-		j.mu.Unlock()
-		m.claim(j.id) // the poll response carries the result; no steer may repeat it
-		return j.snapshot(), true
+		return m.claimResult(j), true
 	case <-timer.C:
+		if j.finished() { // completed in the same instant; never report it as running
+			return m.claimResult(j), true
+		}
 		return j.snapshot(), false // still running; caller reads progress for the payload
 	case <-ctx.Done():
+		// an interrupted turn discards the tool result, so claiming here would lose
+		// the summary; the deferred orphan check re-arms delivery instead.
 		return Job{}, false
 	}
+}
+
+// claimResult marks a job's result as delivered by this poll and snapshots it, so
+// no later steer repeats it and no later notice re-names it.
+func (m *Manager) claimResult(j *job) Job {
+	j.mu.Lock()
+	j.consumed = true
+	j.mu.Unlock()
+	m.claim(j.id) // the poll response carries the result; no steer may repeat it
+	return j.snapshot()
 }
 
 // List returns a snapshot of every job, oldest id first.
@@ -273,17 +292,17 @@ func (m *Manager) Close() {
 	case <-timer.C: // jobs may be stuck on a slow provider; do not block shutdown
 	}
 	m.mu.Lock()
-	ids := make([]string, 0, len(m.jobs))
-	for k := range m.jobs {
-		ids = append(ids, k)
+	rows := make([]activityKey, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		rows = append(rows, activityKey{id: j.id, num: j.num})
 	}
 	m.pending = nil
 	m.inFlight = nil
 	m.noticeBatch = nil
 	m.mu.Unlock()
 	if fn := m.opts.Activity; fn != nil {
-		for _, id := range ids {
-			fn(id, "")
+		for _, r := range rows {
+			fn(r.id, "", r.num)
 		}
 	}
 	if fn := m.opts.Status; fn != nil {
@@ -300,6 +319,9 @@ func (m *Manager) Tools() []agent.Tool {
 // unless a poll is waiting or already consumed it. Aborts are silent. Delivery
 // is batched at the next step boundary (Boundary) or turn start (Flush).
 func (m *Manager) onComplete(j *job) {
+	if !j.finished() { // a poll left while the job is still running; nothing to deliver
+		return
+	}
 	j.mu.Lock()
 	status := j.status
 	pollers := j.pollers // a registered poller carries the result; a steer would waste tokens
@@ -321,8 +343,10 @@ func (m *Manager) enqueue(id string) {
 	if !slices.Contains(m.pending, id) {
 		m.pending = append(m.pending, id)
 	}
-	m.noticeBatch = append(m.noticeBatch, id)
-	slices.SortFunc(m.noticeBatch, byJobNumber)
+	if !slices.Contains(m.noticeBatch, id) { // a re-armed delivery must not double-name it
+		m.noticeBatch = append(m.noticeBatch, id)
+		slices.SortFunc(m.noticeBatch, byJobNumber)
+	}
 	batch := slices.Clone(m.noticeBatch)
 	m.mu.Unlock()
 	if fn := m.opts.Notice; fn != nil {
@@ -417,6 +441,13 @@ func byJobNumber(a, b string) int {
 func numberOf(id string) int {
 	n, _ := strconv.Atoi(strings.TrimPrefix(id, "sub-"))
 	return n
+}
+
+// activityKey pairs a job's row key with its rank, so Close can clear every row
+// without holding the manager lock across the UI hook.
+type activityKey struct {
+	id  string
+	num int
 }
 
 // dropIDs removes every named id from ids, in place.

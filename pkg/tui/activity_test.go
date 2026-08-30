@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// activityKeys returns the activity row keys in render order.
+func activityKeys(u *UI) []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	out := make([]string, 0, len(u.activity))
+	for _, r := range u.activity {
+		out = append(out, r.key)
+	}
+	return out
+}
 
 // TestShadeRow covers the padding, sanitization and no-op fallback of shadeRow.
 func TestShadeRow(t *testing.T) {
@@ -97,6 +109,40 @@ func TestUIActivity(t *testing.T) {
 		screen := u.snapshot(v)
 		assert.NotContains(t, screen, "one")
 		assert.Contains(t, screen, "two")
+	})
+	t.Run("ranked_rows_sort_by_rank", func(t *testing.T) {
+		u, _ := newUI(80, 12, strings.NewReader(""))
+
+		// publish order is not job order: parallel agent_start dispatch races
+		u.SetActivityRanked("sub-3", "sub-3  c", 3)
+		u.SetActivityRanked("sub-1", "sub-1  a", 1)
+		u.SetActivityRanked("sub-10", "sub-10  j", 10)
+		u.SetActivityRanked("sub-2", "sub-2  b", 2)
+
+		assert.Equal(t, []string{"sub-1", "sub-2", "sub-3", "sub-10"}, activityKeys(u))
+	})
+	t.Run("clear_and_readd_keeps_place", func(t *testing.T) {
+		u, _ := newUI(80, 12, strings.NewReader(""))
+
+		for i, text := range []string{"a", "b", "c"} {
+			u.SetActivityRanked("sub-"+strconv.Itoa(i+1), text, i+1)
+		}
+		// a job whose row is dropped and republished must not fall behind its peers
+		u.SetActivityRanked("sub-1", "", 1)
+		u.SetActivityRanked("sub-1", "a2", 1)
+
+		assert.Equal(t, []string{"sub-1", "sub-2", "sub-3"}, activityKeys(u))
+	})
+	t.Run("unranked_rows_follow_ranked", func(t *testing.T) {
+		u, _ := newUI(80, 12, strings.NewReader(""))
+
+		u.SetActivity(outputKey+"c9", "bash · 120 lines")
+		u.SetActivityRanked("sub-2", "sub-2  b", 2)
+		u.SetActivity("call:c10", "write notes.go · 4.1k")
+		u.SetActivityRanked("sub-1", "sub-1  a", 1)
+
+		// parent tool rows keep insertion order among themselves, after every job
+		assert.Equal(t, []string{"sub-1", "sub-2", outputKey + "c9", "call:c10"}, activityKeys(u))
 	})
 	t.Run("cap_shows_plus_n_more", func(t *testing.T) {
 		u, v := newUI(80, 12, strings.NewReader(""))

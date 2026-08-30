@@ -21,9 +21,9 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 	model := m.model() // resolved at spawn so /settings applies to the next job
 	ledger := j.tokens // child ledger created at Start, reused here and by poll payloads
 
-	sink := newChildSink(j.id, func(key, text string) {
+	sink := newChildSink(j.id, j.num, func(key, text string, rank int) {
 		if fn := m.opts.Activity; fn != nil {
-			fn(key, text)
+			fn(key, text, rank)
 		}
 	})
 

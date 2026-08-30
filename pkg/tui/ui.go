@@ -597,7 +597,7 @@ func (u *UI) Output(id, delta string) {
 		u.commit(head, flowWrap)
 	}
 	if r.head.hidden() > 0 {
-		u.setActivityLocked(outputKey+id, outputRow(r))
+		u.setActivityLocked(outputKey+id, outputRow(r), unranked)
 	}
 }
 
@@ -646,7 +646,7 @@ func (u *UI) endRunLocked(id string) {
 		u.commit(tail, flowWrap)
 	}
 	u.commitSummary(&r.head)
-	u.setActivityLocked(outputKey+id, "")
+	u.setActivityLocked(outputKey+id, "", unranked)
 	u.runs = slices.Delete(u.runs, i, i+1)
 }
 

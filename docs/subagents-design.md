@@ -45,7 +45,7 @@ job.go          Status enum, public Job snapshot, internal locked job per invest
 run.go          child agent construction + the summary contract / empty-summary retry
 tools.go        agent_start / agent_poll / agent_list (ModeParallel)
 toolset.go      ToolSource interface + the structural read-only filter and fixed view
-sink.go         childSink — one activity row per job, coalesced, cleared on turn end
+sink.go         childSink — one activity row per job, coalesced, lives as long as the job
 prompt.go       childContract / continueNudge verbatim constants, taskPrompt assembly
 ```
 
@@ -167,11 +167,22 @@ committed history:
   reasoning. A current line that is blank or whitespace-only after trim publishes
   nothing, so empty streaming never flashes. Deltas coalesce to one republish per
   `deltaFlush = 150ms` so streaming does not repaint per token.
-- `TurnEnd` clears the row, and every terminal path in `Manager.spawn` also clears
-  it — covering a job cancelled before it ever acquired its slot (no sink ran).
+- The row belongs to the **job**, not to a turn. `run` nudges a child that ended a
+  turn without summary text, so `TurnEnd` only resets the streamed line back to the
+  idle `thinking…` fallback; clearing it there would make a live, pollable job blink
+  out of the list and then reappear at the end of it. Every terminal path in
+  `Manager.spawn` is the single clear point — which also covers a job cancelled
+  before it ever acquired its slot (no sink ran).
+- Child tools are `ModeParallel`, so `ToolStart` counts calls in flight rather than
+  capturing the previous row per call: an early finisher would otherwise wipe a
+  sibling's label off the row. Only the last call out restores the idle line.
 
-Rows are single lines with no width maths — `tui.SetActivity` elides to width and
-never wraps, capped at `maxActivityRows = 3` plus a `+N more` indicator. They render
+Rows are single lines with no width maths — `tui.SetActivityRanked` elides to width
+and never wraps, capped at `maxActivityRows = 3` plus a `+N more` indicator. Each
+row is published with the job number as its rank, so the list reads sub-1, sub-2,
+sub-3 for the life of the jobs however the parallel `agent_start` calls raced to
+publish, and the `+N more` overflow always hides the newest rather than an
+arbitrary one. They render
 dim on a subtle background (`Theme.Activity`) so live work stands apart from the
 prompt area above which they sit.
 
@@ -217,6 +228,19 @@ gets head-plus-collapse treatment, and start/list render their rows.
 releases it at once. The count is what suppresses the completion steer: if a poller
 is already waiting, the result rides the poll response back and a duplicate context
 message would waste tokens.
+
+Two details keep that suppression from swallowing a result:
+
+- The wait selects over `j.done`, the timeout and the turn context, and Go picks
+  uniformly among ready cases. A job finishing in the same instant the timer fires
+  would otherwise be reported as still running with its summary already in hand, so
+  the timeout branch re-checks `j.finished()` and returns the result when it has one.
+- `pollers > 0` means *a poll will carry this*, not *a poll did*. A poll that leaves
+  empty-handed — its timer fired, or the turn was interrupted — may already have
+  caused `onComplete` to skip the enqueue. So the deferred decrement re-checks: the
+  last poller out with `consumed` still false calls `onComplete` again, which
+  no-ops unless the job actually finished (`job.finished`). `enqueue` is idempotent
+  on both `pending` and `noticeBatch` so the recovery can never double-name an id.
 
 ### A host as the poller
 
@@ -371,9 +395,15 @@ Per-file `_test.go`, table-driven, `llm.ScriptedProvider` throughout, no
   `Delivered` clears exactly the named ids. An idle parent never starts a turn.
   Batching: completions merge into one boundary input and one accumulating keyed
   notice; ids polled before the boundary are never named; an interrupt releases
-  the in-flight marks and the next `Flush` re-offers.
+  the in-flight marks and the next `Flush` re-offers. A poll that both times out
+  and finds the job finished returns the result; a poller that departs empty-handed
+  after the job completed re-arms delivery, and `onComplete` on a still-running job
+  queues nothing.
 - **Empty summary** — nudge → summary; two empty nudges → placeholder.
-- **Activity rows** — one per job, coalesced/cleared on completion, never in history.
+- **Activity rows** — one per job, coalesced, published with the job number as its
+  rank and cleared only at completion (a nudge turn must not drop it), never in
+  history. Overlapping child tool calls restore the idle line once, when the last
+  one ends.
 - **Accounting** — child spend appears in `ChildTotal()` and the parent's `Total()`;
   the parent's `Context()` is unchanged by a child.
 

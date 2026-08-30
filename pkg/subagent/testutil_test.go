@@ -168,17 +168,20 @@ func doneEvent() llm.Event { return llm.Event{Type: llm.EventDone, StopReason: l
 type capture struct {
 	mu       sync.Mutex
 	rows     []string // "key|text" pairs from Activity
+	ranks    []int    // rank published alongside each row, index-aligned with rows
 	notices  []string
 	delivers []agent.Input // inputs offered to Deliver; Delivered run by caller
 }
 
 func newCapture() *capture { return &capture{} }
 
-// recordRow appends an activity publish as key|text.
-func (c *capture) recordRow(key, text string) {
+// recordRow appends an activity publish as key|text, keeping the rank alongside
+// so ordering assertions can read it back.
+func (c *capture) recordRow(key, text string, rank int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rows = append(c.rows, key+"|"+text)
+	c.ranks = append(c.ranks, rank)
 }
 
 // rowText returns the last published text for a key, or "" when none/empty.

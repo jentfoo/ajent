@@ -354,9 +354,11 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			Env:                 env,
 			ProjectInstructions: proj,
 
-			Activity: func(key, text string) {
+			Activity: func(key, text string, rank int) {
 				if ui != nil {
-					ui.SetActivity(key, text)
+					// ranked by job number so rows hold their place, oldest first,
+					// however the parallel agent_start calls happen to publish
+					ui.SetActivityRanked(key, text, rank)
 				}
 			},
 			Notice: func(msg string) { ui.NotifyKeyed("subagent", msg, tui.LevelInfo) },

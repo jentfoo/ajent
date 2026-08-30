@@ -1,7 +1,9 @@
 package subagent
 
 import (
+	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -380,6 +382,88 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 	assert.Contains(t, j2.Summary, "slow but done")
 }
 
+// TestPollPrefersResultOverTimeout covers the select race: a job that completes in
+// the same instant the poll times out must return its summary, never a
+// still-running report the model would act on.
+func TestPollPrefersResultOverTimeout(t *testing.T) {
+	t.Parallel()
+	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("done in time", llm.Usage{})}})
+	m := New(Options{Provider: p, PollTimeout: time.Nanosecond}) // the timer is always ready
+	t.Cleanup(m.Close)
+
+	id := m.Start("x", "")
+	j, ok := m.lookup(id)
+	require.True(t, ok)
+	<-j.done // finished before the poll registers; both select cases are ready
+
+	got, complete := m.Poll(t.Context(), id)
+	require.True(t, complete)
+	assert.Equal(t, StatusDone, got.Status)
+	assert.Contains(t, got.Summary, "done in time")
+}
+
+// TestOrphanedCompletionRecovered covers a poll that departs empty-handed (its
+// timer fired, or the turn was interrupted) in the same instant the job finished:
+// onComplete saw pollers>0 and skipped the enqueue, so the last poller out has to
+// re-arm delivery or the summary reaches nobody.
+func TestOrphanedCompletionRecovered(t *testing.T) {
+	t.Parallel()
+	c := newCapture()
+	release := make(chan struct{})
+	m := New(Options{
+		Provider: func(llm.Model) (llm.Provider, error) {
+			return &delayedProvider{release: release, turn: summaryTurn("final", llm.Usage{})}, nil
+		},
+		Notice: func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
+	})
+	t.Cleanup(m.Close)
+
+	id := m.Start("x", "")
+	j, ok := m.lookup(id)
+	require.True(t, ok)
+
+	j.mu.Lock() // a poll registered and about to leave on its timeout
+	j.pollers++
+	j.mu.Unlock()
+
+	close(release)
+	<-j.done // completes while the poller is still counted; onComplete stays silent
+	assert.Zero(t, c.noticeCount())
+
+	j.mu.Lock() // the poll departs without the result, as Poll's defer does
+	j.pollers--
+	orphan := j.pollers == 0 && !j.consumed
+	j.mu.Unlock()
+	require.True(t, orphan)
+	m.onComplete(j)
+
+	require.Equal(t, 1, c.noticeCount())
+	assert.Equal(t, "Sub-agent "+id+" completed", c.lastNotice())
+	ins := m.Boundary()
+	require.Len(t, ins, 1)
+	assert.Contains(t, ins[0].Text, id)
+}
+
+// TestOnCompleteIgnoresRunningJob covers the guard the orphan recovery relies on:
+// a poll leaving a job that is still running must not queue a completion.
+func TestOnCompleteIgnoresRunningJob(t *testing.T) {
+	t.Parallel()
+	c := newCapture()
+	m := New(Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+		Notice:   func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
+	})
+	t.Cleanup(m.Close)
+
+	id := m.Start("x", "")
+	j, ok := m.lookup(id)
+	require.True(t, ok)
+
+	m.onComplete(j) // the job has not finished; nothing to deliver
+	assert.Zero(t, c.noticeCount())
+	assert.Empty(t, m.Boundary())
+}
+
 func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 	t.Parallel()
 	const total, max = 8, 4
@@ -447,6 +531,53 @@ func TestActivityRow(t *testing.T) {
 		g.releaseAll()
 		m.Poll(t.Context(), id)
 		require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
+	})
+
+	// a job's row belongs to the job, not to one turn: a child that produced no
+	// summary is nudged into another turn, and the row must not blink out between them.
+	t.Run("row_survives_nudge_turn", func(t *testing.T) {
+		toolTurn := []llm.Event{
+			{Type: llm.EventToolCallStart, Index: 0, ToolCallID: "c1", ToolName: "read"},
+			{Type: llm.EventToolCallEnd, Index: 0, Block: llm.ToolCallBlock{
+				ID: "c1", Name: "read", Input: json.RawMessage(`{"path":"x.go"}`)}},
+			{Type: llm.EventDone, StopReason: llm.StopToolUse},
+		}
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: thinkingOnlyTurn()}, // no text; the run nudges for a summary
+			{Events: toolTurn},
+			{Events: summaryTurn("final", llm.Usage{})},
+		})
+		c := newCapture()
+		m := New(Options{
+			Provider: p,
+			Tools: &fakeSource{tools: []agent.Tool{&fakeTool{name: "read", result: "ok"}},
+				readOnly: map[string]bool{"read": true}},
+			Activity: c.recordRow,
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("task", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		require.Equal(t, StatusDone, j.Status)
+
+		c.mu.Lock()
+		rows := slices.Clone(c.rows)
+		ranks := slices.Clone(c.ranks)
+		c.mu.Unlock()
+
+		// exactly one clear, and it is the last publish: spawn's terminal clear
+		var clears []int
+		for i, r := range rows {
+			if r == id+"|" {
+				clears = append(clears, i)
+			}
+		}
+		require.Len(t, clears, 1, "the row is cleared once, at completion: %q", rows)
+		assert.Equal(t, len(rows)-1, clears[0], "nothing republishes the row after the clear")
+		for _, rank := range ranks { // every publish carries the job number as its rank
+			assert.Equal(t, 1, rank)
+		}
 	})
 
 	// a job cancelled before acquiring its slot still clears the row Start published (no childSink ever ran).

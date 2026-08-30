@@ -50,6 +50,7 @@ type Job struct {
 // while the owning goroutine mutates them.
 type job struct {
 	id           string // sub-1, sub-2, ...
+	num          int    // id's number, the stable rank of the job's activity row
 	task         string // full task text for the prompt
 	label        string // shortened single-line label for rows and /agents
 	instructions string
@@ -121,4 +122,14 @@ func (j *job) statusOf() Status {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.status
+}
+
+// finished reports whether the owning goroutine has completed, without blocking.
+func (j *job) finished() bool {
+	select {
+	case <-j.done:
+		return true
+	default:
+		return false
+	}
 }
