@@ -30,6 +30,23 @@ func (e *editor) SetValue(s string) {
 	e.pos = len(e.cells)
 }
 
+// SetValueAt replaces the buffer and puts the cursor on the cell holding byte
+// offset off; a negative or past-the-end offset lands at the end.
+func (e *editor) SetValueAt(s string, off int) {
+	e.SetValue(s)
+	if off < 0 {
+		return
+	}
+	var b int
+	for i, c := range e.cells {
+		if off < b+len(c) { // an offset inside a cluster snaps to its start
+			e.pos = i
+			return
+		}
+		b += len(c)
+	}
+}
+
 // Insert adds text at the cursor.
 func (e *editor) Insert(s string) {
 	add := graphemesOf(s)

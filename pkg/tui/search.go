@@ -61,11 +61,8 @@ func (s *searchOverlay) key(k key) searchAction {
 		s.query = ""
 		s.refilter()
 		return searchStay
-	case keyReverseSearch, keyUp:
+	case keyReverseSearch:
 		s.cursor = wrapIndex(s.cursor+1, len(s.matches)) // older match
-		return searchStay
-	case keyDown:
-		s.cursor = wrapIndex(s.cursor-1, len(s.matches)) // newer match
 		return searchStay
 	// Enter and the first Escape both select the highlighted match; a second
 	// Escape (now that the overlay is closed) clears via the editor's own handler.
@@ -81,7 +78,6 @@ func (s *searchOverlay) key(k key) searchAction {
 	}
 }
 
-// current returns the highlighted candidate.
 // matchSpans returns byte ranges of every case-insensitive occurrence of q in
 // text. An empty query yields none.
 func matchSpans(text, q string) [][2]int {
@@ -106,11 +102,21 @@ func matchSpans(text, q string) [][2]int {
 	return spans
 }
 
+// current returns the highlighted candidate.
 func (s *searchOverlay) current() (SearchItem, bool) {
 	if len(s.matches) == 0 || s.cursor >= len(s.matches) {
 		return SearchItem{}, false
 	}
 	return s.matches[s.cursor], true
+}
+
+// matchOffset returns the byte offset of the first query occurrence in text, or
+// -1 when it cannot be located.
+func (s *searchOverlay) matchOffset(text string) int {
+	if spans := matchSpans(text, s.query); len(spans) > 0 {
+		return spans[0][0]
+	}
+	return -1
 }
 
 // rows renders the overlay above the editor: a query-echo header followed by

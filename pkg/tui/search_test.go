@@ -28,8 +28,8 @@ func TestSearchOverlayKey(t *testing.T) {
 			s.items = []SearchItem{{Text: "a"}, {Text: "b"}}
 			s.refilter()
 		}, key{typ: keyReverseSearch}, searchStay},
-		{"up_steps_older", nil, key{typ: keyUp}, searchStay},
-		{"down_steps_newer", nil, key{typ: keyDown}, searchStay},
+		{"up_passes_to_editor", nil, key{typ: keyUp}, searchPass},
+		{"down_passes_to_editor", nil, key{typ: keyDown}, searchPass},
 		{"enter_accepts_with_match", func(s *searchOverlay) {
 			s.query = "hi"
 			s.items = []SearchItem{{Text: "hit"}}
@@ -142,6 +142,26 @@ func TestMatchSpans(t *testing.T) {
 	assert.Nil(t, matchSpans("İstanbul retry", "retry"))
 }
 
+func TestSearchOverlayMatchOffset(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, query, text string
+		want              int
+	}{
+		{"first_occurrence", "retry", "fix the retry loop", 8},
+		{"case_insensitive", "RETRY", "fix the retry loop", 8},
+		{"no_match_is_negative", "zzz", "fix the retry loop", -1},
+		{"empty_query_is_negative", "", "fix the retry loop", -1},
+		{"shifted_lowering_negative", "retry", "\u0130stanbul retry", -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &searchOverlay{query: tc.query}
+			assert.Equal(t, tc.want, s.matchOffset(tc.text))
+		})
+	}
+}
+
 func TestTrimLastCluster(t *testing.T) {
 	t.Parallel()
 
@@ -221,6 +241,6 @@ func TestSearchOverlayCurrentAndCursorWrap(t *testing.T) {
 	assert.Equal(t, 0, s.cursor)
 
 	s.cursor = 2 // at the oldest match
-	s.key(key{typ: keyDown})
-	assert.Equal(t, 1, s.cursor)
+	s.key(key{typ: keyReverseSearch})
+	assert.Equal(t, 0, s.cursor) // wraps back to the newest
 }

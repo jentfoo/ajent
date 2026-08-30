@@ -868,6 +868,7 @@ func TestUISearchOverlay(t *testing.T) {
 		assert.Nil(t, submit)
 		require.Nil(t, u.search)
 		assert.Equal(t, "fix the retry loop", u.editor.Value(), "full prompt fills the editor")
+		assert.Equal(t, len("fix the "), u.editor.pos, "caret on the match, not the line end")
 	})
 }
 
@@ -908,6 +909,7 @@ func TestUISearchEscapeSelectsThenClears(t *testing.T) {
 	searchPress(u, key{typ: keyEscape})
 	require.Nil(t, u.search)
 	assert.Equal(t, "found prompt", u.editor.Value(), "first Esc fills the editor with the match")
+	assert.Equal(t, 0, u.editor.pos)
 
 	// second Escape clears the now-selected prompt
 	searchPress(u, key{typ: keyEscape})
@@ -925,8 +927,8 @@ func (u *UI) waitOpenSearch(t *testing.T) {
 }
 
 // An arrow in the search overlay selects the highlighted (newest) prompt into the
-// field and closes it without submitting; a Down press stops there, while Up then
-// scrolls back through older recalled prompts.
+// field, caret on the match, and closes it without submitting; a Down press stops
+// there, while Up then scrolls back through older recalled prompts.
 func TestUISearchArrowCommits(t *testing.T) {
 	t.Parallel()
 
@@ -936,8 +938,8 @@ func TestUISearchArrowCommits(t *testing.T) {
 		older       string // second history entry, recalled after Up scrolls past the newest
 		browseOlder bool   // whether subsequent Up presses walk back through older prompts
 	}{
-		{"down_commits", "newest prompt", "older prompt", false},
-		{"up_commits_then_browses", "newest recorded", "older recorded", true},
+		{"down_commits", "fix the newest prompt", "older prompt", false},
+		{"up_commits_then_browses", "fix the newest recorded", "older recorded", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := newVT(60, 10)
@@ -961,13 +963,14 @@ func TestUISearchArrowCommits(t *testing.T) {
 			assert.Nil(t, submit)
 			require.Nil(t, u.search)
 			assert.Equal(t, tc.prompt, u.editor.Value())
+			assert.Equal(t, len("fix the "), u.editor.pos) // caret on the match, not the line end
 
 			if !tc.browseOlder {
 				return // Down stops once the prompt is committed
 			}
 
-			// subsequent presses are cursor-first: the recalled single-line prompt with its
-			// caret at the end needs one Up to reach the start before history can scroll.
+			// subsequent presses are cursor-first: the caret must reach the prompt's start
+			// before history can scroll, so stepping older takes two presses.
 			submit = searchPress(u, key{typ: keyUp})
 			assert.Nil(t, submit)
 			assert.Equal(t, tc.prompt, u.editor.Value())

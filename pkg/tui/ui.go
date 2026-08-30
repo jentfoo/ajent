@@ -1116,12 +1116,12 @@ func (u *UI) openSearchLocked() {
 }
 
 // acceptSearchLocked fills the editor with the highlighted match (when there is
-// one) and closes the overlay. It does not submit; the caller decides whether to
-// fall through so a key like ↑/↓ can then browse history from that point.
-// Caller holds the lock.
+// one), caret on the matched text, and closes the overlay. It does not submit; the
+// caller decides whether to fall through so a key like ↑/↓ can then browse history
+// from that point. Caller holds the lock.
 func (u *UI) acceptSearchLocked() {
 	if it, ok := u.search.current(); ok {
-		u.editor.SetValue(it.Text)
+		u.editor.SetValueAt(it.Text, u.search.matchOffset(it.Text))
 	}
 	u.search = nil
 }

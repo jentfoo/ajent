@@ -16,6 +16,29 @@ func newEditorAt(value string, pos int) *editor {
 	return e
 }
 
+func TestEditorSetValueAt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, value string
+		off, want   int
+	}{
+		{"offset_at_start", "hello", 0, 0},
+		{"offset_mid_text", "fix the retry loop", 8, 8},
+		{"negative_lands_at_end", "hello", -1, 5},
+		{"offset_past_end", "hello", 99, 5},
+		{"offset_inside_cluster", "a\U0001F44D\U0001F3FDb", 5, 1}, // byte 5 sits inside the emoji
+		{"multibyte_prefix", "h\u00e9llo", 3, 2},                  // é is two bytes, one cell
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &editor{}
+			e.SetValueAt(tc.value, tc.off)
+			assert.Equal(t, tc.value, e.Value())
+			assert.Equal(t, tc.want, e.pos)
+		})
+	}
+}
+
 func TestEditorInsert(t *testing.T) {
 	t.Parallel()
 
