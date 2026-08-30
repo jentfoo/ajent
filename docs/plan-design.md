@@ -6,8 +6,8 @@ and the planner **reviews** the result. It exists because deciding what to build
 and doing it need different context, and sharing one ever-growing message list
 serves neither.
 
-The reference implementation (`~/.pi/agent/extensions/plan.ts`, ~1250 lines)
-spends most of its length compensating for a host with no notion of phases:
+The reference implementation spends most of its length compensating for a host
+with no notion of phases:
 synthetic messages tagged with a magic string and re-parsed out of the list, a
 hand-written context projector re-derived on every request, and compaction
 intercepted so the cut point stays inside a phase. **ajent needs none of that**,
@@ -30,7 +30,7 @@ root ─ prior chat ─ /plan ─ planning turns ─ dev_implement ─ P
   came before `/plan` by construction. `/plan` can be run at any point in a
   conversation.
 - **Implementing** appends with `ParentID == ""`, a **new root**. `Branch` stops
-  there, so the rebuilt state is that round's kickoff and its own work — nothing
+  there, so the rebuilt state is that round's kickoff and its own work. Nothing
   else exists to leak.
 - **Reviewing** forks from `P`, the hand-off tip, on round 1 and continues
   linearly from the previous review tip afterwards. The reviewer sees the goal,
@@ -50,7 +50,7 @@ projection transform would leave every one of them reporting the wrong list.
 2. **Only a successful control call ends a turn.** `dev_*` tools set
    `agent.ToolResult.EndTurn` on their success path only; a rejected call is an
    `IsError` result the model corrects inside the same turn. The loop enforces
-   this too — `runTool` reports `EndTurn && !IsError` — so a tool cannot silence
+   this too. `runTool` reports `EndTurn && !IsError`, so a tool cannot silence
    a model by erroring.
 3. **Every exit path restores scope.** Completion, `/plan-stop`, `Esc` and the
    revision cap all reach one `stopLocked`, which forks back to the live branch
@@ -65,7 +65,7 @@ projection transform would leave every one of them reporting the wrong list.
 
 ## The `Host` seam
 
-`pkg/plan` imports only `pkg/agent` and `pkg/llm` — never `session`, `tools`,
+`pkg/plan` imports only `pkg/agent` and `pkg/llm`, never `session`, `tools`,
 `tui` or `command`. Everything else arrives as func fields on `Host`, supplied by
 `main.go` (`plan.go`), the same shape `pkg/subagent` uses. A nil field disables
 that capability rather than panicking, and the whole workflow is unit-testable
@@ -87,7 +87,7 @@ model entry.
 | Planning | `dev_implement(plan)` | AwaitingPlan | record the plan tip, put the plan in the editor, **start no turn** |
 | AwaitingPlan | the user submits | Implementing | the submitted text is the plan of record; new root, implementor scope |
 | Implementing | the turn ends, `dev_review` or not | Reviewing | fork the review tip (else the plan tip), planner scope, git state |
-| Implementing | the turn errored or hit a token/step limit | Implementing | retry up to 3, then pause in place |
+| Implementing | the turn errored or hit a token/step limit | Implementing | retry a few times, then pause in place |
 | Reviewing | `dev_revise(instructions)` | Implementing | record the review tip, new root seeded with plan + instructions |
 | Reviewing | `dev_complete()` | Done | restore scope |
 | Reviewing | stopped with no verdict | — | ask the user: revise / accept / keep reviewing |
@@ -98,7 +98,7 @@ hands off to nobody. The plan lands in the editor to read, edit, rewrite or
 abandon, and the next submitted prompt is what the implementor receives.
 
 **The implementor's report always reaches the reviewer.** The reviewer sees none
-of the implementation branch, so `dev_review`'s `summary` is required — an empty
+of the implementation branch, so `dev_review`'s `summary` is required. An empty
 one is rejected like any other bad control call, in-turn. A round that ends
 *without* calling `dev_review` at all still has to be reported, so the
 implementor's closing assistant message stands in as the summary
@@ -106,11 +106,11 @@ implementor's closing assistant message stands in as the summary
 fallback a stopped implementor reaches review as silence, and the reviewer has
 only `git status` to go on.
 
-Constants: `maxRevisions = 4`, `maxExecRetries = 3`.
+Both the revision and the retry counts are bounded by small constants.
 
 An implementation turn that ends in a provider error **or** in `StopMaxTokens`
 (the step limit, or an output cut short) stopped before the work was done, so it
-is retried rather than reviewed — reviewing it would judge an implementation that
+is retried rather than reviewed. Reviewing it would judge an implementation that
 never finished. Only a clean stop advances to review.
 
 A failed `Fork` or `Persist` is reported, never swallowed: branching is what
@@ -127,10 +127,10 @@ guarantee the workflow exists to provide.
 
 The implementor gets the user's own working set plus exactly one tool to signal
 completion, all present from the first message of its context; an empty captured
-set falls back to `read write edit bash` rather than handing it `dev_review`
+set falls back to the core read/write tools rather than handing it `dev_review`
 alone.
 
-The reviewer has **no `write` or `edit`** — that much is structural rather than
+The reviewer has **no `write` or `edit`**, which is structural rather than
 instructed. It does keep `bash`, so "read-only" is a property of the tool set,
 not a guarantee: a shell command that writes is possible and is gated by the
 permission barrier exactly as it is anywhere else. The review kickoff also tells
@@ -139,7 +139,7 @@ it not to edit.
 The control tools are registered lazily on `/plan` under source `"plan"` as one
 `/tools` group and unregistered on every exit, so they never exist outside a
 workflow. They and `ask_user` are marked read-only, so the permission barrier
-runs them free without being widened for anything else — the barrier itself is
+runs them free without being widened for anything else. The barrier itself is
 unchanged, and `block-all` still prompts for them, which is what `block-all`
 means.
 
@@ -152,13 +152,13 @@ user-initiated and restored on every exit path, so it calls
 ## Display
 
 Phase transitions emit a divider plus a keyed notice naming phase, model and
-round, and update the `plan` status segment (`plan: reviewing (r2/4)`). A fork
-that does not move — `/plan` itself, which only records the planner on the
-current head — draws no divider, since nothing was divided. The
+round, and update the `plan` status segment with the phase and round. A fork
+that does not move (for example `/plan` itself, which only records the planner on the
+current head) draws no divider, since nothing was divided. The
 kickoff message itself is **not** echoed live: the user just read the plan in the
 editor, and the review kickoff's `git status` reads better in the reviewer's own
 output. It is recorded in the transcript, so `session.Replay` does show it after
-a resume — a deliberate asymmetry.
+a resume. That is a deliberate asymmetry.
 
 Prompts the user types while a workflow turn runs still reach that turn through
 `OnBoundary`/`q.pull`. User steering can therefore enter the implementor's
@@ -180,7 +180,7 @@ implementation entry, resume must prefer the live head over the tail
 
 ## Compaction
 
-Compaction already runs over the live head's branch, which *is* the phase — no
+Compaction already runs over the live head's branch, which *is* the phase. There is no
 minimum cut, no segment-aware entries, no summary masquerading as a phase seed.
 The only addition is a per-phase focus (`Controller.Focus`) fed to
 `compact.Options.Instructions` for automatic runs; an explicit

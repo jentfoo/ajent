@@ -28,7 +28,7 @@ Configuration resolves lowest to highest precedence:
 
 Merge is per-key: objects fold deeply, arrays and scalars replace wholesale.
 `Resolved.Explain(key)` returns the resolved value plus the layer that supplied
-it — the difference between a config system and a mystery.
+it. That is the difference between a config system and a mystery.
 
 ## The schema
 
@@ -39,8 +39,8 @@ per-model overrides (folded over `models.json` by `pkg/llm`, never typed here),
 and typed blocks for tools, permissions, compaction, sub-agent settings, and UI
 render/palette.
 
-Enum-valued keys are stored as their text names and parsed by the caller
-(`llm.ParseLevel`, `llm.ParseRetain`, `tui.ParseMode`, `permit.ParseMode`).
+Enum-valued keys are stored as their text names and parsed by the caller, each
+package parsing its own.
 
 ### Model
 
@@ -48,7 +48,7 @@ Enum-valued keys are stored as their text names and parsed by the caller
 precedence and handed to the registry before discovery runs. Every `/model`
 change (and the `/settings` Model row, which routes through the same command)
 writes the selection to the **user** layer in addition to the session override,
-so the next start keeps the most recent choice — there is no separate
+so the next start keeps the most recent choice. There is no separate
 last-used key. Because the write lands in the user layer, a `model` pinned in
 project/local config or an `-m` flag still outranks it, and a resumed session
 replays its own `model_change` entries instead. A failed save is a warning,
@@ -56,14 +56,13 @@ never a lost switch.
 
 ### Permissions
 
-The permission block defaults to `{"mode": "allow-read"}`, so
-`Explain("permissions.mode")` resolves and reports `(default)`. The mode name is
-one of the five in the barrier (`allow-all`, `allow-read`, `auto`,
-`auto+write`, `block-all`); `AJENT_PERMISSIONS_MODE` binds for free
+The permission block has a compiled-in default mode, so
+`Explain` on it resolves and reports `(default)`. The mode name is
+one of the barrier's modes (see `permit`); `AJENT_PERMISSIONS_MODE` binds for free
 through EnvLayer. It seeds a session's live barrier at startup, so a resumed
 session restores its cycled mode (rebuild replays session overrides before this).
 A `Shift+Tab` cycle or `/settings` records the change as a **session** override
-via `SetSessionSetting("permissions.mode", …)` — never rewriting the config file.
+via `SetSessionSetting("permissions.mode", …)`, never rewriting the config file.
 `/settings`'s Permissions row edits the persistent default instead, offering save
 to user/project layer like any other enum row.
 
@@ -71,7 +70,7 @@ to user/project layer like any other enum row.
 auto-allow as read-only in allow-read/auto. A single shell entry matches at a token
 boundary, so `git` covers every git invocation and `git status` its subcommands; a
 compound line (`cd … && make lint | tail`) instead requires **every** component to be
-either a listed entry or verifiably read-only — wrapping in `cd`/pipe never defeats
+either a listed entry or verifiably read-only. Wrapping in `cd`/pipe never defeats
 the match, and an appended write can't ride in on a listed prefix. It can never name
 a core writer (`write`, `edit`) or un-reject an in-place sed, so no config entry
 overrides a known mutation. `auto+write` is the only mode that runs a core writer
@@ -79,7 +78,7 @@ without a prompt, and it does so on its own path-scope check rather than this li
 components (see permit), independent of registry metadata.
 
 `deniedCommands` is its hard inverse: exact tool names, whole MCP server namespaces,
-or bash command lines that are always refused **without prompting** in every mode —
+or bash command lines that are always refused **without prompting** in every mode,
 including allow-all. Matching follows the same token-boundary rule as `safeCommands`;
 a compound line is refused when *any* component matches, so nesting a denied
 command behind `cd … &&` never escapes it. It may also name core writers, since
@@ -101,20 +100,20 @@ verdict (after user-initiation), and only an agent call hits it: a human's own s
 - overrides `tools.enabled` for built-in names, because the default set omits
   `grep`/`ls`/`find` and a scope flag is the more specific instruction.
 
-See `tools-design.md` for the rule and `phases/21-one-shot-noninteractive.md` for
-the flag surface.
+See `tools-design.md` "Headless: the tool set is the gate" for the rule. The flag
+surface itself lives in `flags.go`; per the README contract every scope flag
+also has its entry there.
 
 ### Subagent
 
-The `subagent` block ships a compiled-in `maxConcurrent` default (it lives in
-`defaultsJSON`, beside this package); `model` is deliberately
-left out so `Explain("subagent.model")` reports `(default)` and an empty value
+The `subagent` block ships a compiled-in `maxConcurrent` default; `model` is deliberately
+left out so `Explain` on it reports `(default)` and an empty value
 means inherit the session model. Both keys bind for free through EnvLayer's
 reflection (`AJENT_SUBAGENT_MODEL`, `AJENT_SUBAGENT_MAXCONCURRENT`) and are edited
 from `/settings`. Per `## The rule` below, `subagent.model` is a plain string key,
-resolved against the model registry by the caller — never an llm import here.
+resolved against the model registry by the caller, never an llm import here.
 
-`providers`/`models` stay raw because **`pkg/config` must never import `pkg/llm`** — `pkg/llm`
+`providers`/`models` stay raw because **`pkg/config` must never import `pkg/llm`**. `pkg/llm`
 imports it for paths, and a typed reference would cycle. `models.json` is decoded
 in `pkg/llm`, and config's provider/model blocks fold over it via
 `llm.ApplyOverrides`.
@@ -124,7 +123,7 @@ in `pkg/llm`, and config's provider/model blocks fold over it via
 The agent block holds `maxSteps`, an **optional** cap on one turn's tool-calling
 iterations. Like `subagent.model`, it is deliberately absent from the defaults
 layer, so `Explain("agent.maxSteps")` reports `(default)` and an empty value
-means **unlimited** — the zero value of `agent.Options.MaxSteps` (see
+means **unlimited**, the zero value of `agent.Options.MaxSteps` (see
 agent-loop-design.md). `AJENT_AGENT_MAXSTEPS` binds for free through EnvLayer;
 a positive value caps the turn, any non-positive value (or none) leaves it
 uncapped. It is startup-time configuration: main.go copies it into
@@ -134,10 +133,10 @@ from `/settings`, whose session overrides could never reach the running agent.
 ### UI
 
 `ui.render` is a `tui.Mode` name defaulting to `"auto"`, read once before
-`tui.New` — a `/settings` override could never reach the live renderer, so, like
+`tui.New`. A `/settings` override could never reach the live renderer, so, like
 `agent.maxSteps`, it has no row.
 
-`ui.color` is a `tui.ColorProfile` name (`auto`, `none`, `basic`, `256`, `true`)
+`ui.color` is a `tui.ColorProfile` name
 defaulting to `"auto"`, read once beside `ui.render` and, like it, absent from
 `/settings`: the theme is built before `tui.New` returns. `auto` detects from `TERM`
 and `COLORTERM`; any other value names the depth outright, which is the escape hatch
@@ -145,14 +144,14 @@ for a terminal we classify badly in either direction; `AJENT_UI_COLOR=none` is t
 per-invocation form. An unknown name warns and falls back to detection rather than
 exiting, since a bad colour name is not worth a failed startup (`ui.render` still
 exits, because there is no safe paint mode to guess). `NO_COLOR` is still honoured
-beneath it but deliberately undocumented — see tui-design.md, "Semantic styling".
+beneath it but deliberately undocumented. See tui-design.md, "Semantic styling".
 
-`ui.theme` is a `tui.Palette` name (`dark`, `light` and their `-cool`, `-warm`,
-`-muted` variants) defaulting to `"dark"`. `AJENT_UI_THEME` binds for free
+`ui.theme` is a `tui.Palette` name
+defaulting to `"dark"`. `AJENT_UI_THEME` binds for free
 through EnvLayer. The default is what makes the first-run picker possible:
 `command.ThemeSetup` opens only while `Source("ui.theme")` still reports
-`default`, so a value in any layer — env, project, local or a previous answer
-saved to user — suppresses it. Picking (or dismissing) writes the name to the
+`default`, so a value in any layer (env, project, local or a previous answer
+saved to user) suppresses it. Picking (or dismissing) writes the name to the
 **user** layer and records a session override, so a project pin still outranks
 it. Unlike `ui.render` the palette *can* change at runtime: `/settings → Theme`
 recolors the live UI, and a resumed session applies its override before the
@@ -160,8 +159,8 @@ transcript replays (see tui-design.md, "Semantic styling").
 
 ## The writer
 
-Saving re-marshals an order-preserving object tree at two-space indent: unknown
-keys and key order survive, formatting is normalized, comments are dropped. When
+Saving re-marshals an order-preserving object tree: unknown keys and key order
+survive, formatting is normalized, comments are dropped. When
 the target file already carries `//` comments the save warns that they will be
 lost. Writes go through `WriteFileAtomic` with secret permissions.
 
@@ -169,7 +168,7 @@ lost. Writes go through `WriteFileAtomic` with secret permissions.
 
 - API keys live in the environment or a literal `apiKey` in the **user** layer.
 - A project or local file with `providers.*.apiKey` is stripped before merging,
-  with one loud warning per removed key — those files get committed.
+  with one loud warning per removed key, because those files get committed.
 - Any user file holding a literal apiKey triggers the `0600` check.
 
 ## Build version
@@ -181,24 +180,21 @@ or `config.json`, so it never appears in settings or overrides.
 
 ## Update check cache
 
-Disposable caches live under `~/.ajent/cache/` (`config.CachePath`), a sibling
-directory to the layered config files. The remote-version check reads and writes
-`remote-version.json` there:
+Disposable caches live under a cache directory (`config.CachePath`), a sibling
+directory to the layered config files. The remote-version check reads and writes a
+small cache file there: the fetched version plus the time it was checked and the
+time a notice was last shown.
 
-```jsonc
-{"version":"v0.1.5", "checkedAtUnix": 1720000000, "noticedAtUnix": 1719990000}
-```
-
-Two TTLs bound it (both seconds since epoch): the `Version` is reused within a
-12h window before GitHub's tags endpoint is hit again, and an update notice is
-shown at most once per 2h. The check only reports for real builds — never `dev`,
-which is always behind by design — and compares clean `vX.Y.Z` tags strictly.
+Two TTLs bound it: the fetched version is reused for a while before the tags
+endpoint is hit again, and an update notice is
+shown at most once per interval. The check only reports for real builds, never `dev`,
+which is always behind by design, and compares clean `vX.Y.Z` tags strictly.
 A failed fetch keeps the stale cached tag and returns an error; both writes are
 best-effort, so a broken cache directory cannot break startup.
 
 The notice can be switched off entirely with `disableUpdateCheck` (a top-level
 Settings bool, env `AJENT_DISABLEUPDATECHECK`). It is read once at startup in
-main.go and deliberately has no `/settings` row — like `agent.maxSteps`, a
+main.go and deliberately has no `/settings` row, like `agent.maxSteps`. A
 session override could never reach the already-running check.
 
 ## The rule

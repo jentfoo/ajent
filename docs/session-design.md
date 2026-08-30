@@ -8,14 +8,14 @@ on the agent loop (`pkg/agent`) and feeds the TUI.
 
 ## What it is
 
-A session is one conversation, persisted as an append-only JSONL file — one
+A session is one conversation, persisted as an append-only JSONL file: one
 `Entry` per line, nothing ever deleted. The file lives in a per-workspace
 directory so sessions survive renames deterministically without an index, keyed
 by `<slug>-<hash>` of the absolute workspace path.
 
 A session belongs to one agent; nothing requires every agent to have one. A
-A sub-agent runs on an **in-memory session** — no transcript file, recorder,
-or resume/rewind — so its only lasting trace is child spend rolled into the parent
+sub-agent runs on an **in-memory session** (no transcript file, recorder,
+or resume/rewind), so its only lasting trace is child spend rolled into the parent
 ledger.
 
 Goals, in priority order:
@@ -25,21 +25,19 @@ Goals, in priority order:
    while keeping every prior one reachable.
 3. Resuming reconstructs agent state and replays history exactly as it was.
 
-Goal 2 is what drove most of the shape below — branches, the `HEAD` cursor, and
+Goal 2 is what drove most of the shape below: branches, the `HEAD` cursor, and
 the rewind picker all exist for it.
 
 ## The transcript format
 
-One line per entry:
-
-One line per entry. An entry names its own id and — except on the root — its
-parent's id, a type tag drawn from a small set (session | message | compaction |
+One line per entry. An entry names its own id and its parent's id (except on
+the root), a type tag drawn from a small set (session | message | compaction |
 model_change | setting_change | notice | custom), a unix-millisecond timestamp,
 and an opaque payload whose shape follows from the type.
 
 `ParentID` is what makes forking possible: every entry names the one it extends,
 so a transcript is not a linear log but a tree of branches. `Branch(entries, id)`
-walks that chain back to its root and returns it in order — it is the *only* read
+walks that chain back to its root and returns it in order; it is the *only* read
 path anything else uses, never raw file order.
 
 The first line of every file is always a `session` entry carrying
@@ -64,12 +62,11 @@ can read files written by newer ones.
 
 ### IDs
 
-IDs are 26-character Crockford ULIDs: a 48-bit millisecond timestamp plus 80
-random bits. They sort lexically by creation time (so `Store.List` can order
+IDs are Crockford ULIDs: a millisecond timestamp plus a random tail. They sort lexically by creation time (so `Store.List` can order
 sessions newest first), and the random tail makes them unique without a central
 counter. The counter's timestamp only moves forward: on an advancing clock it is
-adopted fresh (re-seeding entropy so prefixes spread across real time); otherwise —
-same-millisecond bursts, tests pinning `clock`, an OS stepping back — the current
+adopted fresh (re-seeding entropy so prefixes spread across real time); otherwise
+(same-millisecond bursts, tests pinning `clock`, an OS stepping back) the current
 timestamp is held and the random suffix incremented. IDs stay strictly increasing
 within a process even when the wall clock ticks backward, while remaining unique
 across processes.
@@ -81,7 +78,7 @@ mutex so concurrent appends form one linear chain.
 
 `Append(typ, data)` stamps `ParentID` from the current head and writes exactly
 one line under the mutex, so concurrent appends form one linear chain. The new
-id becomes the head only *after* a successful write — an append that fails to hit
+id becomes the head only *after* a successful write; an append that fails to hit
 disk never advances the cursor.
 
 - **Create** makes a fresh file and writes its `session` entry first.
@@ -90,7 +87,7 @@ disk never advances the cursor.
 - **Sync** flushes at a turn boundary *and* persists the current head; it is
   never called by `Append`.
 - **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
-  transcript keeps both histories — nothing is deleted — and the new tip becomes
+  transcript keeps both histories (nothing is deleted) and the new tip becomes
   the persisted `HEAD`.
 
 ## Durability
@@ -113,17 +110,13 @@ should degrade to "not recorded", not kill the agent.
 
 The one mutable piece of an otherwise append-only design is `HEAD`, persisted at
 `<session dir>/HEAD`. It points where work continues after a fork: which
-transcript file in the directory and which entry id inside it.
-
-The one mutable piece of an otherwise append-only design is `HEAD`, persisted at
-`<session dir>/HEAD`. It points where work continues after a fork: which
-transcript file in the directory and which entry id inside it. That pair — file
-base name plus active branch head id — is what a rewind updates.
+transcript file in the directory and which entry id inside it. That pair (file
+base name plus active branch head id) is what a rewind updates.
 
 `WriteHead` is atomic (temp-file rename) and runs on every `SetHead` and at turn
 boundaries. `headFor(path, entries)` resolves a transcript's effective head: the
 persisted `HEAD` when it points into this file *and* its id still exists,
-otherwise tail recovery. That fallback matters — if `HEAD` is ever lost or
+otherwise tail recovery. That fallback matters: if `HEAD` is ever lost or
 corrupt, resume degrades to "continue from the end" instead of losing the branch.
 
 ## The store
@@ -133,17 +126,17 @@ is one `<root>/<slug>-<hash>` directory, so renaming a project does not orphan i
 sessions (the slug is cosmetic; the hash pins it). The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
-- **List** returns every session for a workspace, newest first (`Info`: path,
-  id, started time, model, message count, first user prompt). It scans only
+- **List** returns every session for a workspace, newest first; each row carries
+  the summary a picker shows (model, length, first prompt). It scans only
   non-directory `*.jsonl` entries so side files never surface as phantom rows.
 - **Latest** is `--continue`'s target: the most recent session.
-- **Find** matches an exact id or a unique prefix — what makes `--resume <id>`
-  accept a few characters instead of the full ULID. An ambiguous prefix errors
-  rather than guessing.
+- **Find** matches an exact id or a unique prefix, which is what makes
+  `--resume <id>` accept a few characters instead of the full ULID. An ambiguous
+  prefix errors rather than guessing.
 - **Prompts** returns the workspace's recorded user prompts, newest first and
-  deduplicated to each distinct text's most recent occurrence. It scans up to
-  100 transcript files (500 prompts), walking each append-only file in reverse
-  so the newest prompt is read first.
+  deduplicated to each distinct text's most recent occurrence. It walks recent
+  append-only files in reverse, so the newest prompt is read first, and sweeps a
+  bounded number of files rather than the whole workspace.
 
 `PromptIndex` caches that list on a short TTL (`promptTTL`) behind a mutex, so
 Ctrl+R history search never rescans every transcript per keystroke. It is best
@@ -155,12 +148,12 @@ sees nothing and starts fresh (see "Resume modes").
 ## Editor history
 
 The sessions directory also holds each workspace's message record:
-`<slug>-<hash>/editor-history.lines`. It is JSONL — one submitted editor *message*
-per row, oldest first — the durable record of *messages typed*, distinct from the
+`<slug>-<hash>/editor-history.lines`. It is JSONL (one submitted editor *message*
+per row, oldest first), the durable record of *messages typed*, distinct from the
 transcripts that record *turns*. Each message is `json.Marshal`ed onto a single
 physical line, so a multi-line turn (a paste or wrapped prompt) round-trips whole:
 embedded newlines are escaped and never fragment one submission into several recall
-entries. `/cmd` lines never write a transcript entry, and neither do `!!` runs (excluded from context); both still land as recall rows for ↑/↓ + Ctrl+R. An included `!` run lands as one **injected** user-message entry when flushed — never a typed-prompt entry. Prompts appear in both.
+entries. `/cmd` lines never write a transcript entry, and neither do `!!` runs (excluded from context); both still land as recall rows for ↑/↓ + Ctrl+R. An included `!` run lands as one **injected** user-message entry when flushed, never a typed-prompt entry. Prompts appear in both.
 
 The store is append-only at submit time: `EditorHistory.Append` trims trailing CRs,
 drops blank and secret-prefixed messages (the pasted-secret invariant), then one
@@ -169,16 +162,16 @@ bytes, so concurrent agents on one workspace cannot corrupt it; different worksp
 are different files.
 
 Most rows are bare JSON strings (visible). Non-editor input that must still be
-durable — an `ajent "prompt"` argv bootstrap line — is written via `AppendHidden` as a
-JSON object (`{"msg":…,"hidden":true}`) so it survives restart and compaction yet
+durable (an `ajent "prompt"` argv bootstrap line) is written via `AppendHidden` as a
+marked hidden row so it survives restart and compaction yet
 never surfaces in ↑/↓ or Ctrl+R; the corresponding turn also carries `Input.Injected`
 so transcripts exclude it from prompt recall. Hidden rows are otherwise treated like
 any other line for dedup, cap and secret filtering.
 
 Recall (`EditorHistory.Recent`) reads the file plus this process's unflushed
-appends, dedups to each text's most recent occurrence, and caps at `maxHistoryLines`
-(1000), newest kept. When the raw file exceeds twice that it kicks a background
-compaction — self-healing after a crash off the recall path. Compaction
+appends, dedups to each text's most recent occurrence, and caps at a bounded line
+count, newest kept. When the raw file grows well past the cap it kicks a background
+compaction, self-healing after a crash off the recall path. Compaction
 (`EditorHistory.Compact`) rewrites via `config.WriteFileAtomic`: read-current,
 merge local appends, dedup + cap, replace. It takes **no lock**; last writer wins.
 Losing at most a few messages in the read→rename window is accepted over flocking the
@@ -201,32 +194,32 @@ Two consumers read the transcript back:
 
 - **State** (`session.State`) rebuilds `agent.State` from a branch: messages in
   order, model switches resolved through a resolver (a failure to resolve is a
-  warning, never an error — the caller falls back to its active model), and
+  warning, never an error; the caller falls back to its active model), and
   setting changes applied (`applySetting` accepts both `tools.enabled`, the dotted
   config key, and the legacy `tools` alias so old transcripts still replay).
   `session.SettingOverrides(branch)` returns the last value per setting_change
-  key for seeding a resumed session's config layer — over the **branch**, never raw
-  file order, or a transcript with forks restores a sibling's settings, the tool set
-  among them. How the rebuilt ledger splits context from spend is invariant 6 of
+  key for seeding a resumed session's config layer. It scans the **branch**,
+  never raw file order, or a transcript with forks restores a sibling's
+  settings, the tool set among them. How the rebuilt ledger splits context from spend is invariant 6 of
   `compaction-design.md`. Message assembly goes through
   one function,
   `session.ContextMessages`, which applies the newest compaction's cut and its
   structural reduction plan (the schema and replay live here; `pkg/compact`
-  computes the plan — see `compaction-design.md`). A compaction collapses
+  computes the plan, see `compaction-design.md`). A compaction collapses
   everything before its first kept entry into one summary **user** message (wrapped in `<summary>` provenance
-  framing — a user role reaches every provider, unlike a system message), while
+  framing; a user role reaches every provider, unlike a system message), while
   later entries stay verbatim; plans written by older builds may additionally stub
   or drop them, and replay still honours those.
 - **Replay** (`session.Replay`) condenses the same branch onto a sink so a
   reopened session shows its history: user prompts open turns, assistant content
   and tool calls stream through, notices replay, and each turn closes with its
-  stop reason and usage. Thinking is off by default — it reads as noise on resume.
+  stop reason and usage. Thinking is off by default: it reads as noise on resume.
   A prompt reaches the sink as both `TurnStart(Input.Text)` (which only lights the
   spinner) *and* a separate `UserPrompt(text)` event that carries its words, so a
   renderer can echo them into committed history (the TUI routes it to
   `ui.UserEcho`; see `tui-design.md` "Rewind and resume"). Injected user-role
   text (a staged `User Ran:` result, survey text) is not a typed prompt: Replay never
-  opens or echoes it as its own turn. The subset marked `Replayed` — staged `!` runs —
+  opens or echoes it as its own turn. The subset marked `Replayed` (staged `!` runs)
   still belongs on screen, so Replay draws each as its own block: the first line is
   its label, the remainder its body, committed through the same head/collapse rules
   as a tool result. Everything else injected is skipped outright. Tool results replay their
@@ -255,8 +248,8 @@ Because nothing is ever deleted, an abandoned fork stays reachable. The rewind
 picker exposes that through one tree view:
 
 - **TreeRows** walks the whole transcript as a tree for the rewind picker,
-  indenting by depth with box-drawing guides (`├──`, `└──`). Every guide cell is
-  four columns wide, continuations (`│   `) included, so a branch's children line
+  indenting by depth with box-drawing guides. Every guide cell is a fixed width,
+  continuations included, so a branch's children line
   up under the text of its own connector. Sibling branches align at one level;
   nodes on the current head's path are marked active, which is what the picker
   shades to separate the live chain from abandoned forks. Newest work sits at the
@@ -275,7 +268,7 @@ with a `model_change` entry, or `State` has no model to resolve for that branch.
 the writer's `SetHead` to that message's *parent* (so the picked text becomes the
 start of the new branch), rebuilds agent state from that head, redraws the UI,
 replays the restored context, and pre-fills the editor with the full original
-prompt — ready to edit or re-send. `HEAD` now points at the fork's tip; both it
+prompt, ready to edit or re-send. `HEAD` now points at the fork's tip; both it
 and every earlier branch remain in the file.
 
 Rewinding to the parent is why an `@` reference's injected read is appended
@@ -306,10 +299,10 @@ clear message instead of silently starting a fresh transcript.
 
 Every resume path reopens the file with `session.Open` (head recovery as
 above), rebuilds state and replays history. `(*sessRec).restoreState` is the
-UI-free half of that — rebuilt state and setting overrides, no replay — so a
+UI-free half of that (rebuilt state and setting overrides, no replay), so a
 headless run resumes the same way without a front end. A rebuilt model is
-pushed back out too (`syncModelUI`): the registry's active entry — which
-preselects in `/model` — and the status line must name the model the session
+pushed back out too (`syncModelUI`): the registry's active entry (which
+preselects in `/model`) and the status line must name the model the session
 runs, not the config default. Without that, `/model` on the resumed model hits
 `SetModel`'s unchanged-key no-op while the bar keeps labelling another model.
 
@@ -318,17 +311,13 @@ A one-shot run (`-p`) records its turn like any other, which is what makes
 `--continue` and `--resume <id>` both compose with `-p`; a bare `--resume` does
 not, because its picker needs a terminal, and the combination is a usage error
 rather than a hang.
-On exit, `cmd/ajent` prints:
+On exit, `cmd/ajent` prints the session's resume command (the id and the
+`--resume` flag that would reopen it), so a conversation is never more than one
+command away.
 
-```
-Run `ajent --resume <id>` to resume this session.
-```
-
-so a conversation is never more than one command away.
-
-An **empty session** — started but abandoned before its first prompt, so the
-transcript holds zero `message` entries — is deleted on exit instead of saved:
-it has nothing to resume and would only surface as an "(empty session)" row in
+An **empty session** (started but abandoned before its first prompt, so the
+transcript holds zero `message` entries) is deleted on exit instead of saved:
+it has nothing to resume and would only surface as a dead row in
 the picker. The deletion also drops its head cursor when it points at that
 file; sibling sessions in the workspace are untouched, so a resumed non-empty
 session is never removed even if no new prompt lands this run.
@@ -341,8 +330,8 @@ These are load bearing. Each exists because breaking it produced a real bug.
 and compaction only add entries and move `HEAD`. Deleting would orphan branches
 that other tips still point at.
 
-**2. Reads go through the branch, never raw file order.** Every consumer —
-state rebuild, replay, info counts — walks from a head id along `ParentID`.
+**2. Reads go through the branch, never raw file order.** Every consumer
+(state rebuild, replay, info counts) walks from a head id along `ParentID`.
 Raw-file-order reads break the moment two forks coexist in one file.
 
 History search is the deliberate exception: it scans every entry of each file in
@@ -368,22 +357,16 @@ invalid. This is checked on rebuild and warned about when violated.
 
 ## Conventions
 
-Repository style this package follows (shared with `pkg/tui` and `pkg/agent`):
+Package-specific rules beyond the house style in `AGENTS.md`:
 
-- Godocs describe inputs and outputs, not mechanism. Comments are short phrases,
-  one line, only where the context is non-obvious.
 - No em dashes and no non-ASCII in comments; ASCII-only throughout identifiers.
-- Prefer stdlib `slices`, `maps` and `strings` over hand written loops.
-- One `_test.go` per implementation file, table driven or `t.Run` subtests,
-  case names three to five words in lower snake case. `require` for setup,
-  `assert` for assertions; never `time.Sleep`.
 - Tests use a deterministic clock (`var clock = func() time.Time ...`) so IDs
   and timestamps are stable, plus an end-to-end fork test that rewinds onto an
   earlier message and asserts both branches survive.
 
 ## The frozen corpus
 
-`testdata/branches/` holds three transcripts — a long tool-heavy branch, a fork
+`testdata/branches/` holds three transcripts: a long tool-heavy branch, a fork
 with two tips, and one carrying a compaction entry with a full `Reduce` plan.
 They were written by an earlier build and are never regenerated.
 
@@ -399,8 +382,9 @@ rename.** If the corpus fails, the question is what happens to users' saved
 sessions, not how to update the fixture. Regenerating it to make a test pass
 throws away the only thing that was guarding the format.
 
-Assertions on assembled context use a `digest` helper — one line per message as
-`role|blockkinds|text-prefix` — compared against an inline `[]string`. Whole
+Assertions on assembled context use a `digest` helper, one line per message
+summarising role, block kinds and a text prefix, compared against an inline
+`[]string`. Whole
 shape, so a silently added or dropped message fails, but the expectation lives
 in the test where a reviewer can judge it. Deliberately not golden files: a
 rendered blob makes `-update` a rubber stamp, because nobody can tell a safe

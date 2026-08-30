@@ -1,13 +1,12 @@
 # Provider Design
 
 How `pkg/llm` works, why it is shaped this way, and the rules you must not break
-when changing it. `pkg/config` is covered here too, since it currently serves
-the path and byte handling this layer needs.
+when changing it.
 
 ## What it is
 
-One streaming interface over five vendors — anthropic, openai, openrouter,
-llama.cpp and lm-studio — so nothing above `pkg/llm` knows which one is
+One streaming interface over five vendors (anthropic, openai, openrouter,
+llama.cpp and lm-studio), so nothing above `pkg/llm` knows which one is
 answering. Differences that cannot be normalised (reasoning encoding, cache
 control, tokenizer availability) are declared as *capabilities* rather than
 leaking upward as special cases.
@@ -23,14 +22,6 @@ recorded response fixtures per provider.
 ## Layers
 
 ```
-pkg/config/       paths and bytes only, no domain types
-  dir.go            ~/.ajent resolution, AJENT_HOME override
-  file.go           0600 checks, atomic write
-  merge.go          generic deep JSON merge
-  unknown.go        reflective unknown-key detection for warnings
-  json.go           comment and trailing comma tolerance, located syntax errors,
-                    duplicate key detection
-
 pkg/llm/
   types.go          content model, BlockList and its type tagged JSON
   request.go        Request, Provider, Counter, Discoverer, Level, RetainPolicy
@@ -74,7 +65,7 @@ pkg/llm/
 
 Everything above the adapter files is vendor agnostic. Three of the five
 providers are a profile over `openaicompat.go` plus a discovery parser; adding a
-sixth of that shape is roughly a hundred lines.
+sixth of that shape is a small, self-contained amount of code.
 
 The rule `pkg/config ↛ pkg/llm` (see `config-design.md`) is why `models.json`
 decodes in `pkg/llm/config.go` rather than in `pkg/config`.
@@ -82,15 +73,15 @@ decodes in `pkg/llm/config.go` rather than in `pkg/config`.
 ## The content model
 
 A message pairs a role with its content; the content is an opaque tagged block
-list. The `Block` surface is sealed — only the five concrete kinds (`TextBlock`,
+list. The `Block` surface is sealed: only the five concrete kinds (`TextBlock`,
 `ThinkingBlock`, `ToolCallBlock`, `ToolResultBlock`, `ImageBlock`) exist, so
 every switch over blocks is exhaustive and a new kind is a deliberate change.
 
 Blocks are stored as **values, not pointers**, so a block is immutable once
 appended. That is what makes `Prepare` safe to write as a filter.
 
-`BlockList` carries the JSON round trip. A bare `[]Block` cannot be decoded — the
-concrete type is lost — so `BlockList.MarshalJSON` writes a `{type, data}`
+`BlockList` carries the JSON round trip. A bare `[]Block` cannot be decoded
+(the concrete type is lost), so `BlockList.MarshalJSON` writes a `{type, data}`
 envelope per block and `UnmarshalJSON` reads it back. `Message.Content` and
 `ToolResultBlock.Content` are both `BlockList`, so the session log can round-trip
 a transcript directly.
@@ -126,11 +117,11 @@ can be asserted in tests without a server.
 
 ### Normalization (`Prepare`)
 
-Every request path — each `build*Body`, the token estimator, and llamacpp's exact
-counter — passes through one entry point so what is counted is exactly what is sent:
+Every request path (each `build*Body`, the token estimator, and llamacpp's exact
+counter) passes through one entry point so what is counted is exactly what is sent:
 
 - **Image downgrade** when the model cannot read images: an image becomes a text
-  placeholder (`(image omitted: ...)`) instead of failing the request. Consecutive
+  placeholder instead of failing the request. Consecutive
   placeholders collapse to one; assistant content is untouched.
 - **Cross-model degradation** keyed on each message's `Origin` (provider + dialect +
   model, stamped at append and rebuild, never written to the transcript). A message whose
@@ -145,21 +136,21 @@ counter — passes through one entry point so what is counted is exactly what is
   and their tool results dropped with them. This makes well-formedness a request-build
   invariant rather than just an abort-time repair.
 
-A placeholder ladder gives empty or image-only tool results something to say: `(no tool
-output)`, or `(see attached image)` when an image survives. Some chat-completions providers
+A placeholder ladder gives empty or image-only tool results something to say
+(or, when an image survives, a pointer to it). Some chat-completions providers
 require the reasoning-as-text shape, a tool-result name, an assistant reply between result
-turns and the next user message, or explicit `strict: false` on tools — all driven by their
+turns and the next user message, or explicit non-strict tools, all driven by their
 capability gates.
 
 **Traps**: adapters never call the retention helpers directly; they go through `Prepare`,
 which must stay idempotent (the Responses fallback builds the same body twice in a session).
 A provider that genuinely never sends a chat-completions finish reason must declare
-`supportsFinishReason: false`, or an otherwise clean stream is reported as truncated.
+that it does not, or an otherwise clean stream is reported as truncated.
 
 ## The event stream
 
 `Event` is a struct with a type tag, not an interface. The repo already makes
-this call twice — `histLine` and `key` in `pkg/tui` are tagged structs — and
+this call twice (`histLine` and `key` in `pkg/tui` are tagged structs), and
 events are transient, share `(Index, Text)` in most cases, and go through a hot
 loop. An interface would force a heap allocation per event and a type switch
 with a binding per arm at every consumer.
@@ -212,16 +203,16 @@ flavorDefaults[flavor].caps
 
 Only the last layer is new in kind. Defaults run **last** so a discovered context
 window is never replaced by a guess, and they are applied before the thinking
-ladder is computed so a defaulted `maxTokens` caps it. They are pi's, exactly:
-`contextWindow` 128000, `maxTokens` 16384, `name` = `id`, `input` `["text"]`,
-`reasoning` false. That is what makes `{"id": "llama3.1:8b"}` a complete entry;
+ladder is computed so a defaulted `maxTokens` caps it. They are pi's defaults (a
+context window, a max completion size, a name derived from the id, text input and
+reasoning off), so a bare `"id"` is a complete entry;
 without them both values resolve to zero, and zero means the context bar has no
 denominator, auto-compaction never fires, and Anthropic gets `max_tokens: 0`.
 
 `api` and `baseUrl` are settable per model as well as per provider, so one
 gateway serving two dialects is one provider entry. Dialect and endpoint are
 therefore resolved at **model**-resolution time, and `Model.BaseURL` plus
-`Model.Caps.Dialect` are what the adapter is built from — it never re-derives
+`Model.Caps.Dialect` are what the adapter is built from; it never re-derives
 them. `Providers` caches on `provider + dialect + baseURL` for that reason; the
 vendor name alone would collapse two models onto whichever adapter was built
 first.
@@ -243,15 +234,15 @@ default, an explicit `"0s"` disables the bound. A plain zero cannot say
 The feature with the least agreement between vendors, so it gets the most
 machinery.
 
-**Levels** are the standard seven — `off, minimal, low, medium, high, xhigh,
-max` — so a `thinkingLevelMap` written against them maps every key. A model may
+**Levels** form a fixed standard set, so a `thinkingLevelMap` written against them
+maps every key. A model may
 translate them with `Capabilities.LevelMap`; a `null` entry omits the parameter
 entirely for that level.
 
 **Thinking formats** decide how reasoning is encoded and parsed, carried as
 `Capabilities.Thinking`. The canonical values are pi's eleven (`openai`,
 `openrouter`, `deepseek`, `together`, `baseten`, `zai`, `qwen`, `chat-template`,
-`qwen-chat-template`, `string-thinking`, `ant-ling`) plus `none`, and two ajent
+`qwen-chat-template`, `string-thinking`, `ant-ling`) plus `none`, with two ajent
 extensions: `anthropic` (the Messages budget shape) and `think-tags` (no request
 parameter; reasoning is parsed back out of content with inline tags). Response
 parsing for the tag formats uses `ThinkOpen` / `ThinkClose`. An unknown value in
@@ -263,14 +254,14 @@ the first non-empty of `reasoning_content` → `reasoning` → `reasoning_text` 
 delta name is recorded on the thinking block (`ThinkingBlock.Field`, inline-tag
 blocks leave it empty). On replay every surviving non-blank thinking block joins
 with `"\n"` (pi) and is written back under `Capabilities.ReasoningField` when
-set, else the first block's own `Field`. That resolves `ReasoningContentField` —
-which detection sets to `reasoning_content` for opencode-go, reproducing pi's
-hardcoded remap through configuration. A compat-dialect block with a non-empty
+set, else the first block's own `Field`. That resolves the reasoning replay field,
+which detection can remap per vendor, reproducing a hardcoded remap through
+configuration. A compat-dialect block with a non-empty
 `Field` is replayable regardless of policy.
 
 **Tool-result images split out on chat-completions.** When the model accepts
 images (`DialectOpenAICompletions && caps.Images`), `Prepare` moves image blocks
-after the placeholder ladder runs — so the result keeps a `(see attached image)`
+after the placeholder ladder runs, so the result keeps its pointer to the attached image
 text part and the following user message carries them as text + `image_url` parts,
 optionally preceded by an assistant bridge when
 `requiresAssistantAfterToolResult`. Anthropic and Responses keep images inside the
@@ -301,8 +292,8 @@ a `ToolResultBlock`. Anthropic delivers tool results as user-role messages, so a
 naive "last user message" makes every tool round trip look like a new turn and
 collapses `wholeTurn` into `lastTurn`.
 
-An assistant message emptied by stripping is dropped entirely — an empty
-assistant message is rejected by anthropic and confuses local chat templates —
+An assistant message emptied by stripping is dropped entirely (an empty
+assistant message is rejected by anthropic and confuses local chat templates)
 unless it still holds tool calls.
 
 ## Configuration
@@ -342,21 +333,19 @@ ports over with only the `cost` blocks removed:
 
 Deliberate choices in this loader:
 
-- **`api` and `flavor` are separate.** `api` is the wire dialect —
-  `anthropic-messages` (canonical; legacy `anthropic` still loads through an alias) |
-  `openai-responses` | `openai-completions`; `flavor` selects
+- **`api` and `flavor` are separate.** `api` names the wire protocol to speak;
+  `flavor` selects
   discovery and quirk defaults. `flavor` defaults to the provider key when that
-  names a known one, so `"lmstudio"` needs no `flavor` field, but an
-  OpenAI-compatible proxy in front of a known server can say
-  `{"flavor": "lmstudio"}` and still get the right defaults.
+  names a known one, so a bare provider key needs no `flavor` field, but an
+  OpenAI-compatible proxy in front of a known server can borrow that server's
+  flavor and still get the right defaults.
 - **Lenient syntax.** `//` line comments and trailing commas are accepted
   because a config you cannot paste in is not a config you can use. Comments
   and commas are blanked rather than deleted, so byte offsets
   still refer to the original file and a genuine syntax error reports the line,
   column and the text it is on.
 - **Duplicate keys warn.** `encoding/json` keeps the last silently, so a repeated
-  key is a setting that looks applied and is not. Hand-written configs do this:
-  `thinkingFormat` appears twice in one `compat` block.
+  key is a setting that looks applied and is not. Hand-written configs do this.
 - **`reasoning` is boolean-only** and matches pi: `true` enables reasoning with
   the model's resolved thinking format; there is no style-name form.
 - **Unrecognised keys warn rather than fail.** A typo silently ignored is worse
@@ -364,7 +353,7 @@ Deliberate choices in this loader:
 - **No `cost` block.** See "Deliberately not done".
 
 - **An unrecognised `api` or `flavor` disables one provider, not the file.** pi
-  ships apis ajent cannot speak (`google-generative-ai`), and decoding used to
+  ships protocols ajent cannot speak, and decoding used to
   return an error, which aborts `encoding/json` for the whole document and loads
   *zero* providers. Both now decode to `DialectUnknown` / `FlavorUnknown`. An
   unknown dialect disables its provider, because a wrong dialect is a wrong
@@ -404,28 +393,34 @@ entry should not cost a whole declaration. It is deliberately narrower than pi's
 which also targets built-in catalogue models: ajent has no catalogue, so the only
 models a user has not defined are discovered ones. A user who declares a model
 declares it with the configuration they want, so an override on a declared id is
-**inert and warns** — pi ignores it silently. By the merge rule above, a provider
+**inert and warns**; pi ignores it silently. By the merge rule above, a provider
 that declares any models has no undeclared ones, so its `modelOverrides` never
 apply at all. Unknown ids are ignored without a warning, because discovery is
 asynchronous and an id that has not arrived yet is not a mistake.
 
-Discovery endpoints and what each supplies — the rest must come from `models[]`,
-`modelOverrides`, or the schema defaults:
-
-| endpoint | supplies |
-|---|---|
-| openrouter `GET /models` | id, name, context window, max completion tokens, input modalities, reasoning support, tool support |
-| lm-studio `GET /api/v0/models` | id, context window (loaded or maximum), input modalities, tool support |
-| llama.cpp `GET /props` | one entry: id and context window |
-
-There is no generic OpenAI-style `/models` discovery: it returns ids only, which
-the schema defaults already cover. The local endpoints report the context length
+Discovery endpoints supply a subset of model metadata; the rest must come from
+`models[]`, `modelOverrides`, or the schema defaults. The hosted catalogue
+reports the most (identifiers, context window, completion size, modalities,
+reasoning and tool support); the local servers report less, and llama.cpp reports
+only the id and the context window. The local endpoints report the context length
 the model was *loaded* with, which is often smaller than its maximum and which
-nothing else can know.
+nothing else can know. A flavor's native endpoint is tried first;
+the standard chat-completions list (`/v1/models`) backs it up when that yields
+nothing usable. A llama.cpp router serves no single loaded model on `/props`, so
+discovery falls through to the OpenAI list. The generic flavor discovers only
+through that list, and only when `discover: true` opts in.
+
+The discovery path is resolved against the provider's base URL, collapsing a `/v1`
+prefix the base already carries: a server configured as `http://host/v1` serves its
+model list at `/models`, so asking for both would hit `.../v1/v1/models` and 404.
+
+The endpoints themselves are the touchpoints to extend when adding another server:
+the hosted catalogue's `/models`, lm-studio's `/api/v0/models`, llama.cpp's
+`/props`, and the standard `/v1/models` fallback.
 
 Refetch is conditional on `ETag` / `Last-Modified`; a `304` keeps the models and
-only bumps the check time. Results cache to `~/.ajent/cache/models.json` at
-`0600`. Time to live is 24h for hosted catalogues and one minute for local
+only bumps the check time. Results cache to a file under the config dir. Time to
+live is generous for hosted catalogues and short for local
 servers, whose loaded model changes far more often.
 
 Discovery **never blocks startup and is never fatal**: `NewRegistry` is cache
@@ -439,11 +434,12 @@ Transport and provider failures surface as a structured error carrying the
 provider name, HTTP status, an optional code and message, whether it is retryable,
 any `Retry-After` hint, and the (redacted) response body.
 
-Retry covers 408, 429, 425, 5xx and connection errors, plus 409 only when the
+Retry covers transient failures (rate limiting, request timeouts, server errors
+and connection errors) plus a conflict only when the
 server sent a `Retry-After` (some gateways use it for "model loading").
-Exponential backoff with jitter, honouring `Retry-After` but **capped at 60s** —
-beyond that the request fails immediately, because an agent that silently sleeps
-for an hour is indistinguishable from a hang.
+Exponential backoff with jitter, honouring `Retry-After` but **capped**:
+beyond the cap the request fails immediately, because an agent that silently sleeps
+is indistinguishable from a hang.
 
 Every provider signals "too many input tokens" differently, so each flavor has a
 phrase table in `classify.go` and maps its form to `ErrContextOverflow`, which
@@ -451,16 +447,12 @@ callers catch with `errors.Is`. Note llama.cpp reports it as a **500**, not a
 client error. Matching vendor prose is fragile by nature; treat the table as
 something that will need additions.
 
-Timeouts are five separate bounds because one `http.Client.Timeout` covers the
-body read, which is the one thing that must be allowed to take minutes:
-
-| Bound | Default | Why |
-|---|---|---|
-| connect | 10s (5s local) | |
-| TLS | 10s | |
-| header | 60s, **0 for lm-studio and llama.cpp** | a just-in-time model load holds the headers for minutes |
-| idle | 5m hosted, **0 local** | gap between reads, not total duration |
-| total | disabled | opt-in only |
+Timeouts are five separate bounds (connect, TLS, header, idle and total)
+because one `http.Client.Timeout` covers the body read, which is the one thing
+that must be allowed to take minutes. The header bound is disabled for
+lm-studio and llama.cpp (a just-in-time model load holds the headers for
+minutes), the idle bound is a gap-between-reads bound disabled for local
+servers, and the total is disabled and opt-in only.
 
 The idle bound wraps the response body rather than living in the SSE reader, so
 a `: ping` comment frame counts as progress even though it dispatches no event.
@@ -507,8 +499,8 @@ what people reach for first and it leaks on every early `Close`.
 
 **3. `Close` abandons whatever is still buffered, and is not an error.** `Next`
 checks the closed flag before draining pending events, and `Err` returns nil
-after a deliberate close. The caller-side pattern — watch ctx and Close so a
-blocked `Next` unblocks instead of draining on cancellation — is codified in
+after a deliberate close. The caller-side pattern (watch ctx and Close so a
+blocked `Next` unblocks instead of draining on cancellation) is codified in
 `llm.CloseOnDone`, used by the agent loop and every one-shot call (classifier,
 compaction summary), so cancellation is Close-not-drain everywhere.
 
@@ -519,8 +511,8 @@ are dropped.** See "The content model" and "Reasoning".
 disk; only what is sent shrinks.
 
 **6. A tool call completes at a structural boundary, not when its JSON parses.**
-Partial arguments parse successfully far more often than not — `{"a":1}` is
-valid long before `,"b":2` arrives — so completion is decided by a new index
+Partial arguments parse successfully far more often than not (`{"a":1}` is
+valid long before `,"b":2` arrives), so completion is decided by a new index
 appearing, a finish reason, or the stream ending. Validation happens there.
 
 **7. A malformed tool call fails the call, not the turn.** The end event is still
@@ -571,8 +563,8 @@ so the expiry is ordered against the read with no polling.
 per-dialect suites above each prove one adapter reads its own vendor correctly;
 none of them prove the three agree. The contract matrix does: `testdata/contract/`
 holds each dialect's encoding of the *same* logical exchange, and every scenario
-asserts the normalised outcome — accumulated text, thinking, tool name and
-decoded arguments, stop reason, input and output tokens — is identical across
+asserts the normalised outcome (accumulated text, thinking, tool name and
+decoded arguments, stop reason, input and output tokens) is identical across
 anthropic, responses and chat-completions.
 
 Two things are deliberately **not** compared, because they differ by design and
@@ -637,26 +629,24 @@ accumulator including arguments that parse early.
 Adding a provider that speaks chat-completions:
 
 1. Check whether detection (`pkg/llm/detect.go`) already covers the vendor by
-   name or base URL — most chat-completions families pi detects are handled
+   name or base URL; most chat-completions families pi detects are handled
    there and need no flavor at all.
 2. If it still needs its own defaults, add a `Flavor` and an entry in
-   `flavorDefaults` — base URL, dialect, key variable, capabilities. No models.
-4. If it needs request fields nobody else sends, write a `decorate` hook. If it
+   `flavorDefaults`: base URL, dialect, key variable, capabilities. No models.
+3. If it needs request fields nobody else sends, write a `decorate` hook. If it
    needs response fields nobody else reads, write an `extra` hook. Needing a
    third hook is the signal that the thing belongs in the shared layer.
-5. If it can list its own models, write a parser and add it to
+4. If it can list its own models, write a parser and add it to
    `discoverySpecs`.
-6. Add its overflow phrases to `overflowPhrases`.
-7. Record fixtures and run them through the same `collect` helper every other
+5. Add its overflow phrases to `overflowPhrases`.
+6. Record fixtures and run them through the same `collect` helper every other
    provider uses. That the assertions differ only in content, never in shape, is
    the real proof that normalisation worked.
 
-A genuinely new **dialect** also adds a row to `contractDialects` and a
-`testdata/contract/<dir>` beside the others. A dialect that is not in the parity
-matrix is not known to agree with the rest.
-
-A genuinely new dialect is a new `Dialect`, a `*_wire.go`, an adapter
-implementing `Provider`, and a case in `factory.go`.
+A genuinely new **dialect** is a new `Dialect`, a `*_wire.go`, an adapter
+implementing `Provider`, and a case in `factory.go`. It also adds a row to
+`contractDialects` and a `testdata/contract/<dir>` beside the others; a dialect
+that is not in the parity matrix is not known to agree with the rest.
 
 ## Deliberately not done
 

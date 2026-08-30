@@ -8,7 +8,7 @@ The core idea: **a good prompt makes the model cheap, predictable and
 self-aware of what it does not know.** Cheap means cache-stable
 and no wasted tokens. Predictable means structured output where a machine will
 consume it. Self-aware means provenance markers everywhere injected content came
-from — so the model can tell real instructions from compacted history, user
+from, so the model can tell real instructions from compacted history, user
 rules from its own assumptions.
 
 ## Principles
@@ -21,23 +21,23 @@ block must be byte-identical between requests except for explicit, deliberate
 changes: the day-granular date, tool-set changes (project instructions are fixed
 for the session).
 Anything sub-day (timestamps, token counts) busts the provider's whole prompt
-cache and costs real money on every subsequent turn. When a change does land —
-say `/tools` toggles a tool — it is announced with a one-line notice so users
+cache and costs real money on every subsequent turn. When a change does land
+(say `/tools` toggles a tool), it is announced with a one-line notice so users
 understand why caching resets.
 
 **2. Prompts are data plus instructions, kept separable.** The model should be
 able to tell "this is the conversation you must summarise" from "here is how to
 summarise". Injected content goes in explicit XML-ish tags (`<summary>`,
 `<plan>`, `<git_status>`, `<project_instructions path=...>`); instruction text
-stays outside them. This is what lets one model hand work to another — the plan
+stays outside them. This is what lets one model hand work to another: the plan
 workflow's kickoffs are read by a model with no other context at all.
 
 **3. Structured output beats prose wherever a machine or another model consumes
 the result.** Summaries use fixed headings with exact formats spelled out in the
 prompt. The format is part of the contract; tests assert it verbatim.
 
-**4. Preserve what resumption needs: file paths, line numbers, function names,
-error messages — verbatim.** Generic "summarise the conversation" prompts lose
+**4. Preserve what resumption needs, verbatim: file paths, line numbers,
+function names, error messages.** Generic "summarise the conversation" prompts lose
 exactly the details that let a later model pick up where one stopped. Every
 lossy prompt in this document carries an explicit instruction to keep those
 artefacts exact.
@@ -91,7 +91,7 @@ Output:
 <combined stdout+stderr, or "(no output)" when empty>
 ```
 
-The body reuses the real `bash` tool's result text verbatim — status prefix,
+The body reuses the real `bash` tool's result text verbatim: status prefix,
 interruption marker, timeout note and truncation spill pointer all come from the
 tool path itself, so what the model sees is byte-for-byte honest about how the
 command ended. The user role plus the `User Ran:` voice *is* the provenance marker
@@ -101,7 +101,7 @@ The `Input.Before` entry carrying it is an `agent.MessageInfo`, which is where t
 one piece of metadata does ride: `Replayed`. It marks the message as injected
 context that still belongs on screen, so a resume or rewind redraws the run above
 the prompt it fed instead of showing a prompt whose premise has vanished. Replay
-draws it as its own block — first line the label, remainder the body — collapsed
+draws it as its own block (first line the label, remainder the body), collapsed
 through the normal output head rather than shown whole as the live run was.
 
 ---
@@ -134,7 +134,7 @@ You help by following the user's instructions: research and review until you und
 ```
 
 It stays focused on the user's request and puts understanding before action. It claims no
-tool or capability beyond that — a model told "you are brilliant" costs more than one
+tool or capability beyond that: a model told "you are brilliant" costs more than one
 simply given accurate scope.
 
 ### Guidelines
@@ -174,7 +174,7 @@ Directory contents:
 ```
 
 The listing is captured at startup and fixed for the session. Only the date
-varies within a session — that is the cache-stability contract.
+varies within a session: that is the cache-stability contract.
 
 ### Composition invariants
 
@@ -194,7 +194,7 @@ varies within a session — that is the cache-stability contract.
 Tools reach the model through the provider's tool-schema channel, **not as text
 in the system block**. Each enabled tool contributes its name, a prose
 `Description()` and JSON Schema parameters (derived from struct tags) to the
-request's `Tools` list; only tools whose state is Enabled are sent — this is how
+request's `Tools` list; only tools whose state is Enabled are sent, which is how
 "only advertise what is real" is enforced.
 
 The description is full sentences, not a one-line snippet. It states plainly
@@ -204,31 +204,29 @@ anything that changes how the model should use the tool:
   offset/limit paging.
 - `bash`: runs in the session working directory; output is truncated with the
   full log spilled to a file, and timeout overrides the default. One shell process
-  per call — there is no persistent `cd`.
+  per call; there is no persistent `cd`.
 - `write`: creates or overwrites files, making parent directories.
 - `edit`: exact text replacement that applies atomically or not at all.
 
 The `agent_*` sub-agent tools carry their whole contract in the
 description because a model that learns them by trial burns a round trip each:
-no session context — pass file paths and key facts, not content; read-only
+no session context (pass file paths and key facts, not content); read-only
 (`read`, `grep`, `find`, `ls` plus read-only MCP tools); and the final message is
 the entire return value.
 
 There is deliberately **no "Available tools" list inside the system prompt**:
-the schema channel already tells the model exactly what it may call, and a second
-text copy would only cost tokens. For the same reason there is no `promptSnippet`-style
-one-line tool hint injected into a child's system block — the schema channel
-carries the tool list, so a second text copy is a token tax on every request:
+the schema channel already tells the model exactly what it may call, so a second
+text copy would only cost tokens. The same rule holds for a child's block:
 `childContract` carries only constraints and the output contract, never an enum of
-tools — those ride the schema channel like any other request.
+tools (those ride the schema channel like any other request).
 
 ### Split what the model sees from what the user sees
 
 The tool result has a model-facing form and a display form. `edit` shows the user
 a colourised diff but tells the model "applied"; `bash` streams full output to
 the screen while handing the model a truncated, ANSI-stripped version with an
-elision marker. The prompt contract is: **the model must know when it has been
-told less than the whole truth** — truncation markers are not optional.
+elision marker. The prompt contract is **the model must know when it has been
+told less than the whole truth**: truncation markers are not optional.
 
 ### Schema errors as feedback
 
@@ -250,7 +248,7 @@ re-send sees the file as it is now (`command-design.md`).
 Prompt implications:
 
 - Using the real tool means one code path for truncation markers, binary
-  refusal, line numbering and stale-read tracking — so the model sees exactly
+  refusal, line numbering and stale-read tracking, so the model sees exactly
   what it would see if it had called `read` itself.
 - Injected reads are visible to compaction's superseded-pass and countable by
   token accounting. No special "reference" block type is ever
@@ -263,7 +261,7 @@ Prompt implications:
 The user-global `~/.ajent/AGENTS.md` (honouring `AJENT_HOME`) and `<cwd>/AGENTS.md`,
 when they exist, are read once at startup in that order and injected into the
 system block ahead of the first turn. The format mirrors how other agents present
-project instructions early in context — a provenance-marked wrapper so the model
+project instructions early in context: a provenance-marked wrapper so the model
 can tell project rules from conversation:
 
 ```
@@ -283,7 +281,7 @@ Rules:
 - **Two sources, global then project.** The user-global `~/.ajent/AGENTS.md`
   (honouring `AJENT_HOME`) is read first and `<cwd>/AGENTS.md` second, so the
   more specific project file appears later in context. Absent or unresolvable
-  sources are skipped. Nested discovery beyond these two — no ancestor walk.
+  sources are skipped. Nested discovery beyond these two: no ancestor walk.
 - **Provenance marker carries the absolute path**, so the model can point at which
   instruction file told it something.
 - Loaded once at startup and kept for the session; a changed `AGENTS.md` applies on
@@ -328,7 +326,7 @@ Design rules:
 ## `/init` project survey (`pkg/projinit/prompt.go`)
 
 Three surfaces, shaped by one fact: **the survey is data the final pass has not
-seen produced.** Stages 1 and 2 spend no model tokens — they run the real `read`,
+seen produced.** Stages 1 and 2 spend no model tokens: they run the real `read`,
 `agent_start` and `agent_poll` tools and let their genuine call + result pairs
 carry the findings, so the distilling model reads them as its own tool output
 rather than as a pasted report. Structural design is in `command-design.md`.
@@ -363,8 +361,8 @@ Report what each package or module does, the dependency edges between them, the 
 ```
 
 **Distillation.** One prompt, one turn. Both variants share a header naming the
-survey as data and a closing rule set; only the middle differs — draft versus
-correct:
+survey as data and a closing rule set; only the middle differs (draft versus
+correct):
 
 ```text
 The messages above are a survey of this repository: the files read directly, plus one summary per read-only sub-agent that investigated the build and the code.
@@ -394,7 +392,7 @@ every turn, so a long one is a tax paid forever (principle 7 applied to the one
 prompt surface the user writes). **Nothing invented**: the structure may echo
 ajent's own `AGENTS.md` (overview → commands → architecture), but its code-style
 sections are project-specific and must never be copied into another repository's
-file — tests assert their absence.
+file; tests assert their absence.
 
 The write is the model's own `write` call, so the permission barrier gates it like
 any other write rather than `/init` inventing a private path to disk.
@@ -480,7 +478,7 @@ numbers verbatim.
 ### Incremental update
 
 When a prior summary exists it goes in `<previous-summary>` tags and the prompt
-becomes an *update*, not a rewrite — preserving old information, moving progress,
+becomes an *update*, not a rewrite: preserving old information, moving progress,
 adding new context:
 
 ```
@@ -504,13 +502,13 @@ Use this EXACT format:
 [the same six-section format]
 ```
 
-This is how summaries merge rather than nest — each compaction refines one
+This is how summaries merge rather than nest: each compaction refines one
 checkpoint instead of piling summaries inside summaries.
 
 ### What the summariser reads
 
-The verbatim band is excluded by construction — the span handed to the summariser
-stops where the band begins — so the checkpoint never re-describes work the reader
+The verbatim band is excluded by construction (the span handed to the summariser
+stops where the band begins), so the checkpoint never re-describes work the reader
 can already see.
 
 - **Thinking is omitted.** Cheap to drop, and it removes any confusion about whose
@@ -521,10 +519,10 @@ can already see.
   The wording is the instruction; the prompt says nothing about them.
 - **Output is clipped only when it must be.** The transcript is built whole first;
   a clip is applied only if it would not fit alongside the reply, stepping down
-  8192 → 512 runes and finally dropping the oldest entries. Compaction fires near
+  toward smaller sizes and finally dropping the oldest entries. Compaction fires near
   the top of the window, so an unclipped span plus its summary can overflow, and an
   oversized request would fail the session exactly when it most needs to shrink.
-  If nothing fits — even with the previous summary clipped down — compaction fails
+  If nothing fits (even with the previous summary clipped down), compaction fails
   with an error rather than sending a request the provider will reject or
   summarising an empty transcript; an unknown window applies no bound.
 
@@ -563,7 +561,7 @@ Four surfaces, all shaped by one fact: **the receiving model has no prior
 context**. Structural design is in `plan-design.md`; the wording contract is here.
 
 **Planning contract.** Appended to the user's first goal as its own content
-block, so `Input.Text` — and therefore the echoed line and the recall entry —
+block, so `Input.Text` (and therefore the echoed line and the recall entry)
 stays the user's own words. `appendSteer` emits `Text` before `Blocks`, so the
 model reads the goal and then the contract; that placement is deliberate, putting
 the no-prior-context rule closest to where the plan gets written. It sets the planning role, tells the model to ground
@@ -576,7 +574,7 @@ and no implementation beyond that, then: call `dev_implement` when the plan is
 complete, and edit nothing yourself.
 
 **Implementation kickoff.** The first and only message of a fresh root. It opens
-by saying so — "You have no prior context. Everything you need is below." — then
+by saying so ("You have no prior context. Everything you need is below."), then
 `<plan>`, and `<revision_instructions>` on later rounds, described as work still
 outstanding. It asks the model to verify the way the project does, and to call
 `dev_review` with a summary, warning that review starts anyway if it stops. The
@@ -591,9 +589,9 @@ the implementation conversation is deliberately absent and files must be re-read
 rather than assumed. Two exits, `dev_complete` or `dev_revise`, with the same
 no-prior-context warning attached to the instructions the latter produces.
 
-**Retry prompt.** Self-contained by necessity — it may follow a turn that died
-mid-edit: continue from where you stopped, do not repeat completed work, call
-`dev_review` when done.
+**Retry prompt.** Self-contained by necessity, since it may follow a turn that
+died mid-edit: continue from where you stopped, do not repeat completed work,
+call `dev_review` when done.
 
 The compaction focus strings live here too: implementation keeps files changed,
 approaches tried, decisions made and unfinished plan items (reproduced verbatim);
@@ -605,23 +603,23 @@ review keeps files inspected, issues found and conclusions reached.
 
 All three prompts live in **`pkg/permit`** (`ClassifierSystem`,
 `MCPClassifierSystem`, `WorkspaceClassifierSystem`), the package that owns the
-`Classifier` interface — not in `main.go`. The shell
+`Classifier` interface, not `main.go`. The shell
 prompt keeps its strict unconditional bar (running arbitrary software is always a
 write, so never `allow`); the MCP variant states the no-observable-change and
 network-exfiltration rules. The permission barrier classifies an unverifiable tool call
-with a one-shot call to the session's current model — **fresh context**, never the
-session history, and its verdict never enters the session. All three ask the same
-question — may this run unattended? — and take the same one-word answer: `allow`,
+with a one-shot call to the session's current model (**fresh context**, never the
+session history), and its verdict never enters the session. All three ask the same
+question (may this run unattended?) and take the same one-word answer: `allow`,
 `deny` or `unsure`. One vocabulary means one normaliser and no per-prompt parsing
 anywhere downstream. Reasoning is clamped minimal; the output token budget leaves
 room for a thinking block. Verdicts normalise by lowercasing and dropping
 non-letters, so `` `allow` `` and `Allowed.` both land on approval. An **approval
-must be the whole reply** — a hedged "allowing this would be unsafe" is not one,
-and the asymmetry is deliberate: `deny` and `unsure` are indistinguishable
+must be the whole reply**: a hedged "allowing this would be unsafe" is not one.
+The asymmetry is deliberate: `deny` and `unsure` are indistinguishable
 downstream (both leave the dialog open), so only the approving direction can fail
 open and only it is matched strictly. The response is
 never cached when unsure (usually transient: an abort, missing auth, an API
-error); confident verdicts are LRU-cached per subject identity — tool name plus
+error); confident verdicts are LRU-cached per subject identity: tool name plus
 exact payload.
 
 The modes differ in what they classify and by which rule set. **`auto`** judges
@@ -630,7 +628,7 @@ call's description and JSON-Schema parameters so it can judge functionality it h
 never seen before; `auto+write` adds write confinement to that same classifier.
 
 A **core writer is never classified** in any mode. `write`/`edit` are decided
-statically — by `auto+write`'s path scope, otherwise by the dialog — so a stray
+statically (by `auto+write`'s path scope, otherwise by the dialog), so a stray
 `allow` verdict can never auto-allow one. Every other built-in is resolved by
 `Classify` before the asker runs, so only bash and non-built-in tools ever reach
 the model.
@@ -638,22 +636,22 @@ the model.
 **`auto+write`** keeps the strict MCP prompt for non-shell calls, but sends shell
 commands to `WorkspaceClassifierSystem`: there the question is not *does this
 write?* but *is this write permissible?*. The prompt names its two writable roots
-verbatim — cwd and the temp dir, the same two the barrier path-scopes `write`/`edit`
+verbatim, cwd and the temp dir, the same two the barrier path-scopes `write`/`edit`
 against, so gate and model judge by one rule. Inside them it allows file creation,
 `python`/`perl` rewrites, redirects, `mv`/`cp`, removing individual files, build and
 test commands and in-repo git; it denies regardless any path outside the roots, bulk
 destruction, system or package changes, the network in either direction,
-unaccountable execution and credential access. An **in-scope** `mkdir`/`rmdir` never reaches it — the barrier
-resolves those path arguments itself; an out-of-scope one still goes to the model
-like any other command. Ambiguity resolves to `unsure`, never
+unaccountable execution and credential access. An **in-scope** `mkdir`/`rmdir`
+never reaches it: the barrier resolves those path arguments itself, and an
+out-of-scope one still goes to the model like any other command. Ambiguity resolves to `unsure`, never
 `allow`, and a `cd` into the workspace never launders a later absolute path.
 
-`Subject.AllowWrite` selects the rule set and is part of the **cache key** — the
+`Subject.AllowWrite` selects the rule set and is part of the **cache key**: the
 LRU survives a mode change, so without it one mode's verdict would answer for the
 other. The words are the same across prompts, but the rule they encode is not.
 
-The shell prompt keeps the reference's framing — compound constructs classify by
-the commands they actually run, examples are illustrative not exhaustive — with one
+The shell prompt keeps the reference's framing (compound constructs classify by
+the commands they actually run, examples are illustrative not exhaustive) with one
 deliberate change: **reading from the network is *not* read-only**. The exfiltration
 channel means "does not write locally" never equals safe; the classifier must say
 so explicitly rather than inheriting the reference's opposite claim. Network tools
@@ -661,8 +659,8 @@ so explicitly rather than inheriting the reference's opposite claim. Network too
 classifier read-only.
 
 The MCP prompt applies the same no-change bar to a single tool invocation: a
-`allow` verdict requires **no observable change anywhere** — files, repo,
-process, network, remote service, permissions, configs, caches or credentials —
+`allow` verdict requires **no observable change anywhere** (files, repo,
+process, network, remote service, permissions, configs, caches or credentials),
 and reading from the network alone is never enough. The tool's name, description
 and parameters are embedded verbatim so an unfamiliar MCP server can be judged by
 what it declares rather than guessed at.
@@ -673,7 +671,7 @@ what it declares rather than guessed at.
 
 Every investigation child gets a fresh system block built by the same
 `buildSystem` with one extra snippet appended after project instructions:
-`childContract`. It states the read-only constraints (structural, not advisory —
+`childContract`. It states the read-only constraints (structural, not advisory;
 the tool set is filtered before the model ever sees it) and the output contract: the
 final assistant message **is** the entire return value. Quoted verbatim from
 `pkg/subagent/prompt.go`, asserted by golden tests:
@@ -691,7 +689,7 @@ Your FINAL assistant message must be a single, self-contained summary of everyth
 ```
 
 A reasoning model whose final assistant message is thinking-only returns no text,
-so an empty summary triggers a bounded nudge (`maxContinueAttempts = 2`), then a
+so an empty summary triggers a bounded nudge, then a
 placeholder rather than looping:
 
 ```text
