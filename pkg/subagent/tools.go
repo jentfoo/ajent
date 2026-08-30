@@ -16,10 +16,13 @@ import (
 // contract up front instead of by trial.
 const sharedToolHint = "A sub-agent has no session context: pass file paths and key facts, not content (it can read files itself). It is read-only (read, grep, find, ls plus any MCP tool marked read-only); anything needing write, edit or shell must be done directly. Its final message is the entire return value."
 
+// startToolName is the tool a batch reserves ordered ids for; see Manager.Reserve.
+const startToolName = "agent_start"
+
 // startTool spawns a background investigation.
 type startTool struct{ m *Manager }
 
-func (t *startTool) Name() string { return "agent_start" }
+func (t *startTool) Name() string { return startToolName }
 
 // label shows which agent was spawned so the header identifies it, not just that
 // one was started. Falls back to the generic form when args do not parse.
@@ -60,7 +63,9 @@ func (t *startTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Ou
 	if p.Task == "" {
 		return resultErr("agent_start requires a task"), nil
 	}
-	id := t.m.Start(p.Task, p.Instructions)
+	// the call id claims this task's reserved number, so ids follow the order the
+	// model asked for the agents rather than the order the goroutines won the lock
+	id := t.m.start(p.Task, p.Instructions, call.ID)
 	return agent.ToolResult{
 		Content: llm.BlockList{llm.TextBlock{Text: "Sub-agent " + id + " started. Call agent_poll with id " + id + " to retrieve the summary."}},
 		Details: map[string]string{"id": id},
@@ -106,25 +111,39 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	if !ok {
 		return resultErr("unknown sub-agent id " + strings.TrimSpace(p.ID)), nil
 	}
-	snap, complete := t.m.Poll(ctx, j.id)
-	if ctx.Err() != nil { // the turn was interrupted; release promptly and let abort fill this call
-		res := agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "poll interrupted"}}}
-		return withJob(res, j.id, j.statusOf()), nil
-	}
+	snap, complete, batched := t.m.poll(ctx, j.id)
+
+	var res agent.ToolResult
+	status := j.statusOf()
 	switch {
+	case ctx.Err() != nil: // the turn was interrupted; release promptly and let abort fill this call
+		res = agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "poll interrupted"}}}
 	case !complete:
-		return withJob(result(j.pollProgress()), j.id, j.statusOf()), nil
+		res = result(j.pollProgress())
 	case snap.Status == StatusAborted:
-		return withJob(result("sub-agent "+j.id+" aborted"), j.id, snap.Status), nil
+		res, status = result("sub-agent "+j.id+" aborted"), snap.Status
 	case snap.Status == StatusError && snap.Err != nil:
-		return withJob(resultErr(snap.Err.Error()), j.id, snap.Status), nil
+		res, status = resultErr(snap.Err.Error()), snap.Status
 	default: // done with a summary, or an empty one fell back to the placeholder
 		out := strings.TrimSpace(snap.Summary)
 		if out == "" {
 			out = placeholder
 		}
-		return withJob(result(out), j.id, snap.Status), nil
+		res, status = result(out), snap.Status
 	}
+	return withJob(nameDisplay(res, j.id, batched), j.id, status), nil
+}
+
+// nameDisplay heads a batched poll's committed output with the sub-agent it came
+// from. Only the display copy is touched: the model asked for this id and reads
+// Content, while the human sees a payload that no longer sits under its own tool
+// header once parallel polls land together.
+func nameDisplay(r agent.ToolResult, id string, batched bool) agent.ToolResult {
+	if !batched || r.Display == "" {
+		return r
+	}
+	r.Display = id + " results:\n" + r.Display
+	return r
 }
 
 // withJob tags a poll result with the job it names and that job's status, so a

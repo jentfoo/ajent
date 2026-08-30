@@ -89,7 +89,18 @@ aborted — and the public snapshot callers read pairs that with an id (`sub-N`)
 shortened task label, start/end times, the summary paragraph and any terminal
 error.
 
-Ids are `sub-N` from a manager counter. The internal `job` carries the per-job
+Ids are `sub-N` from a manager counter, handed out **in the order the model asked
+for the agents**. `agent_start` is `ModeParallel`, so the dispatch goroutines would
+otherwise race for the counter and the task submitted last routinely became `sub-1`.
+`Manager.Reserve` runs from `agent.Options.OnToolBatch` — the loop calls it with one
+step's calls in message order, before any of them runs — and reserves a number per
+`agent_start` call id; `Execute` then claims its reservation by `ToolCall.ID`. A
+start with no reservation (host-driven, or a call the batch never named) takes the
+next number, and a new batch supersedes the previous one, so reservations left by an
+interrupted turn are dropped and their numbers skipped. Because the id is also the
+activity row's rank, the rows sort in submission order too.
+
+The internal `job` carries the per-job
 context/cancel/done channel, the child ledger (`*tokens.Accounting`, created at
 Start so it is visible to poll payloads), and a `pollers int`. A finished job's
 snapshot keeps its terminal state; jobs are never deleted from the map within a
@@ -219,6 +230,16 @@ All three set `ToolResult.Display` to the same text as `Content`, so history sho
 the payload through the shared output-head rule (`tui-design.md`) instead of a bare
 tool header: a poll timeout commits its elapsed/context line, a completed summary
 gets head-plus-collapse treatment, and start/list render their rows.
+
+One exception: `agent_poll` is `ModeParallel`, so a batch of polls commits every
+`⏺ sub-agent: poll sub-N` header at dispatch and each payload only as its own job
+finishes. The results then land in completion order, detached from the headers
+naming them. `Manager.poll` reports whether a call shared its window with another
+(`enterPoll`/`leavePoll` mark the whole overlapping group, and the mark clears once
+the group empties), and `nameDisplay` heads a batched payload with
+`sub-N results:`. Only the display copy is tagged — the model asked for that id and
+reads `Content` — and the header costs one of the four `outputHeadLines`, so a
+batched summary shows three lines before collapsing.
 
 ## Concurrency and notification
 
@@ -386,10 +407,17 @@ Per-file `_test.go`, table-driven, `llm.ScriptedProvider` throughout, no
 - **Concurrency** — eight starts against a semaphore of four; an atomic counter proves
   never more than four run at once and all complete. `Close` cancels running jobs and
   returns promptly.
+- **Id order** — three `agent_start` calls in one message, dispatched in parallel
+  through a real `agent.Agent`, number their jobs sub-1/sub-2/sub-3 in submission
+  order; reservations claim out of order, ignore other tools, fall back to the next
+  number when unreserved, and are dropped by the following batch.
 - **Tool-set enforcement** — `agent_start` is absent from a child's resolved tools even
   when the source reports it read-only; `bash`, `write`, `edit` are unreachable;
   `find`/`grep`/`ls` reach despite being disabled in the parent registry.
 - **Poll timeout payload** — elapsed and context usage against the child model window.
+- **Batched poll display** — two overlapping polls each head their display copy with
+  `sub-N results:` while `Content` stays bare; a lone poll is untagged; the group
+  mark does not leak into a later lone poll.
 - **Notification** — a poll in flight suppresses the steer; with no poller a steer is
   delivered; a false `Deliver` leaves ids pending and later `Flush` re-offers;
   `Delivered` clears exactly the named ids. An idle parent never starts a turn.

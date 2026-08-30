@@ -382,6 +382,79 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 	assert.Contains(t, j2.Summary, "slow but done")
 }
 
+// TestReserve covers id reservation around the ordered batch: a reserved call
+// claims its number whenever it runs, an unreserved start still gets one, and a
+// new batch supersedes reservations whose call never ran.
+func TestReserve(t *testing.T) {
+	t.Parallel()
+
+	t.Run("claims_in_batch_order", func(t *testing.T) {
+		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
+		t.Cleanup(m.Close)
+
+		m.Reserve([]agent.ToolCall{
+			{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}, {ID: "c3", Name: startToolName},
+		})
+		// claimed out of order, as the parallel goroutines would
+		assert.Equal(t, "sub-3", m.start("c", "", "c3"))
+		assert.Equal(t, "sub-1", m.start("a", "", "c1"))
+		assert.Equal(t, "sub-2", m.start("b", "", "c2"))
+	})
+
+	t.Run("ignores_other_tools", func(t *testing.T) {
+		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
+		t.Cleanup(m.Close)
+
+		m.Reserve([]agent.ToolCall{
+			{ID: "r1", Name: "read"}, {ID: "c1", Name: startToolName}, {ID: "g1", Name: "grep"},
+		})
+		assert.Equal(t, "sub-1", m.start("a", "", "c1"))
+	})
+
+	// a host-driven start, or a call id the batch never named, still gets a number
+	t.Run("unreserved_start_takes_next", func(t *testing.T) {
+		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
+		t.Cleanup(m.Close)
+
+		m.Reserve([]agent.ToolCall{{ID: "c1", Name: startToolName}})
+		assert.Equal(t, "sub-2", m.Start("host", ""), "the reservation is untouched")
+		assert.Equal(t, "sub-1", m.start("a", "", "c1"))
+		assert.Equal(t, "sub-3", m.start("stray", "", "unknown-call"))
+	})
+
+	// an interrupted turn leaves reservations nothing will claim; the next batch
+	// drops them and their numbers are simply skipped
+	t.Run("new_batch_supersedes", func(t *testing.T) {
+		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
+		t.Cleanup(m.Close)
+
+		m.Reserve([]agent.ToolCall{{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}})
+		m.Reserve([]agent.ToolCall{{ID: "c9", Name: startToolName}})
+		assert.Equal(t, "sub-3", m.start("later", "", "c9"))
+		assert.Equal(t, "sub-4", m.start("dropped", "", "c1"), "a superseded reservation is gone")
+	})
+}
+
+// TestPollBatchDetection covers how a simultaneous poll group is spotted: every
+// poll that overlapped another reports batched, including the one that arrived
+// first, and the mark clears once the group empties so a later lone poll is bare.
+func TestPollBatchDetection(t *testing.T) {
+	t.Parallel()
+	m := New(Options{})
+	t.Cleanup(m.Close)
+
+	m.enterPoll()
+	assert.False(t, m.leavePoll(), "a lone poll follows its own header")
+
+	m.enterPoll() // a arrives
+	m.enterPoll() // b overlaps it
+	assert.True(t, m.leavePoll(), "b overlapped a")
+	assert.True(t, m.leavePoll(), "a overlapped b, though it arrived first")
+
+	m.enterPoll() // the group emptied; the mark must not leak into the next poll
+	assert.False(t, m.leavePoll())
+}
+
 // TestPollPrefersResultOverTimeout covers the select race: a job that completes in
 // the same instant the poll times out must return its summary, never a
 // still-running report the model would act on.

@@ -119,7 +119,7 @@ drain follow-up queue -> for each turn:
         append msg to state.Messages
         if ctx cancelled -> StopAborted, end turn
         calls := toolCalls(msg); if none -> break (end_turn)
-        results := dispatch(calls)                       parallel or serial
+        results := dispatch(calls)                       OnToolBatch, then parallel or serial
         appendToolResults(msg, results)                  call order preserved
     }
     sink.TurnEnd
@@ -332,6 +332,12 @@ survey, staged shell results), never a typed prompt, so recall excludes all of i
   drop window (append follows synchronously). It must be cheap and never block;
   nil disables it. `Input.Delivered` still fires per returned input, exactly as
   for push-steers.
+- **`Options.OnToolBatch`**, when set, is called on the loop goroutine at the top
+  of `dispatch` with one step's calls in message order, before any of them runs.
+  The parallel path races the calls against each other, so this is the only ordered
+  view of a batch a host gets — it is where ordered identity is reserved, as the
+  sub-agent manager does to keep `sub-N` in submission order (`subagents-design.md`).
+  It must be cheap and never block; nil disables it.
 
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
 drops everything queued (including any host inputs already handed over at a

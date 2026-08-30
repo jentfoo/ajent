@@ -35,6 +35,12 @@ type Options struct {
 	// queued prompts with no extra step of latency. It must be cheap and never
 	// block; nil disables.
 	OnBoundary func() []Input
+	// OnToolBatch, when set, is called on the loop goroutine with one step's tool
+	// calls in message order, before any of them runs. Parallel dispatch races the
+	// calls against each other, so this is the only ordered view of a batch a host
+	// gets: it is where ordered identity (a sub-agent id) must be reserved. It must
+	// be cheap and never block; nil disables.
+	OnToolBatch func([]ToolCall)
 	// Compact reduces the live context at a turn boundary or after an overflow,
 	// reporting whether anything changed. It never runs mid-stream.
 	Compact func(ctx context.Context, r CompactReason) (bool, error)

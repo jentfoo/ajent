@@ -57,10 +57,13 @@ type Manager struct {
 
 	mu          sync.Mutex
 	jobs        map[string]*job
-	pending     []string // completed ids not yet delivered into the parent context
-	inFlight    []string // ids a queued steer names; cleared when it lands or is dropped
-	noticeBatch []string // completions since the last delivered steer, for the keyed notice
-	count       int      // id counter; ids are sub-N
+	pending     []string       // completed ids not yet delivered into the parent context
+	inFlight    []string       // ids a queued steer names; cleared when it lands or is dropped
+	noticeBatch []string       // completions since the last delivered steer, for the keyed notice
+	count       int            // id counter; ids are sub-N
+	reserved    map[string]int // agent_start call id -> its number, from the ordered batch
+	polling     int            // Poll calls in flight, for spotting a simultaneous batch
+	batched     bool           // two polls have overlapped since the group last emptied
 }
 
 // New returns a Manager with defaults resolved.
@@ -68,23 +71,54 @@ func New(opts Options) *Manager {
 	if opts.MaxConcurrent <= 0 {
 		opts.MaxConcurrent = defaultMaxConcurrent
 	}
-	return &Manager{opts: opts, sem: make(chan struct{}, opts.MaxConcurrent), jobs: map[string]*job{}}
+	return &Manager{opts: opts, sem: make(chan struct{}, opts.MaxConcurrent),
+		jobs: map[string]*job{}, reserved: map[string]int{}}
+}
+
+// Reserve hands out an id number for every agent_start in one tool batch, in the
+// order the model asked for them. agent_start is ModeParallel, so without this
+// the goroutines race for the counter and the task submitted last can become
+// sub-1. A batch supersedes the previous one, dropping reservations whose call
+// never ran (an interrupted turn); the ids they held are simply skipped.
+func (m *Manager) Reserve(calls []agent.ToolCall) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	clear(m.reserved) // a batch supersedes the last; a stale entry would misnumber
+	for _, c := range calls {
+		if c.Name != startToolName || c.ID == "" {
+			continue
+		}
+		m.count++
+		m.reserved[c.ID] = m.count
+	}
 }
 
 // Start launches one investigation and returns its id immediately. The job sits
 // StatusQueued until it takes a concurrency slot.
 func (m *Manager) Start(task, instructions string) string {
+	return m.start(task, instructions, "")
+}
+
+// start is Start for a job whose id may have been reserved by callID; an unknown
+// or empty callID takes the next number, so a host-driven start still works.
+func (m *Manager) start(task, instructions, callID string) string {
 	var ledger *tokens.Accounting
 	if p := m.opts.Parent; p != nil { // one child ledger per job, set before the id is visible to pollers
 		ledger = p().Child()
 	}
 	m.mu.Lock()
-	m.count++
-	id := "sub-" + strconv.Itoa(m.count)
+	num, ok := m.reserved[callID]
+	if ok {
+		delete(m.reserved, callID)
+	} else {
+		m.count++
+		num = m.count
+	}
+	id := "sub-" + strconv.Itoa(num)
 	ctx, cancel := context.WithCancel(context.Background())
 	j := &job{
 		id:           id,
-		num:          m.count,
+		num:          num,
 		task:         task,
 		label:        shortLabel(task),
 		instructions: instructions,
@@ -167,6 +201,45 @@ func (m *Manager) releaseSlot(j *job) {
 // Poll blocks until id completes, PollTimeout elapses, or ctx is cancelled. It
 // returns false when still running; an interrupted turn releases the poll at once.
 func (m *Manager) Poll(ctx context.Context, id string) (Job, bool) {
+	snap, complete, _ := m.poll(ctx, id)
+	return snap, complete
+}
+
+// poll is Poll plus whether this call shared its window with another. agent_poll
+// is ModeParallel, so a batch commits every tool header at dispatch and each
+// payload only as its own job finishes: a batched result lands detached from the
+// header naming it and has to say which sub-agent it came from.
+func (m *Manager) poll(ctx context.Context, id string) (Job, bool, bool) {
+	m.enterPoll()
+	snap, complete := m.wait(ctx, id)
+	return snap, complete, m.leavePoll()
+}
+
+// enterPoll registers a poll, marking the group batched once two overlap.
+func (m *Manager) enterPoll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.polling++
+	if m.polling > 1 { // every poll in an overlapping group needs its result named
+		m.batched = true
+	}
+}
+
+// leavePoll deregisters a poll and reports whether it overlapped another. The mark
+// clears once the group empties, so a later lone poll is named nothing.
+func (m *Manager) leavePoll() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.polling--
+	batched := m.batched
+	if m.polling == 0 {
+		m.batched = false
+	}
+	return batched
+}
+
+// wait blocks on one job for the poll timeout; see Poll.
+func (m *Manager) wait(ctx context.Context, id string) (Job, bool) {
 	j, ok := m.lookup(id)
 	if !ok {
 		return Job{ID: normalizeID(id)}, false

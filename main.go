@@ -402,6 +402,10 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// queued mid-turn prompts land at the next step boundary via this hook.
 	opts.OnBoundary = q.pull
 	if sag != nil {
+		// sub-agent ids are handed out here, from the batch in message order:
+		// agent_start runs in parallel, so the goroutines would otherwise race for
+		// the counter and number the agents in whatever order they won it.
+		opts.OnToolBatch = sag.Reserve
 		// completion steers join the same boundary: membership is decided at the
 		// moment the message lands, so ids a poll already claimed are never named.
 		queued := opts.OnBoundary

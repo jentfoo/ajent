@@ -2,7 +2,10 @@ package subagent
 
 import (
 	"encoding/json"
+	"errors"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,6 +92,57 @@ func TestAgentPoll(t *testing.T) {
 		res, err := exec(t, tools[1], map[string]any{"id": "1"})
 		require.NoError(t, err)
 		assert.False(t, res.IsError) // bare 1 resolves to sub-1
+	})
+
+	// a lone poll's payload lands directly under its own tool header, so naming it
+	// again would be noise.
+	t.Run("lone_poll_display_is_bare", func(t *testing.T) {
+		m, tools := toolsManager(t, nil, time.Second)
+		id := m.Start("x", "")
+		res, err := exec(t, tools[1], map[string]any{"id": id})
+		require.NoError(t, err)
+		assert.NotContains(t, res.Display, "results:")
+		assert.Equal(t, textOf(res), res.Display)
+	})
+
+	// agent_poll is ModeParallel: a batch commits every header at dispatch and each
+	// payload only as its job finishes, so a batched result has to name its agent.
+	t.Run("batched_poll_display_names_agent", func(t *testing.T) {
+		g := &gatedProvider{} // held open so both polls overlap
+		m := New(Options{
+			Provider:    func(llm.Model) (llm.Provider, error) { return g, nil },
+			PollTimeout: time.Second,
+		})
+		t.Cleanup(m.Close)
+		tools := m.Tools()
+
+		ids := []string{m.Start("a", ""), m.Start("b", "")}
+		results := make([]agent.ToolResult, len(ids))
+		errs := make([]error, len(ids)) // collected here; asserted on the test goroutine
+		var wg sync.WaitGroup
+		for i, id := range ids {
+			call := agent.ToolCall{ID: "c" + strconv.Itoa(i), Name: "agent_poll",
+				Input: json.RawMessage(`{"id":"` + id + `"}`)}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				results[i], errs[i] = tools[1].Execute(t.Context(), call, discardOutput{})
+			}()
+		}
+		require.Eventually(t, func() bool { // both polls registered before either result
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return m.polling == 2
+		}, 2*time.Second, 5*time.Millisecond)
+		g.releaseAll()
+		wg.Wait()
+
+		require.NoError(t, errors.Join(errs...))
+		for i, res := range results {
+			assert.Equal(t, ids[i]+" results:\n", res.Display[:len(ids[i])+len(" results:\n")])
+			// only the human-facing copy is tagged; the model asked for this id
+			assert.NotContains(t, textOf(res), "results:")
+		}
 	})
 
 	t.Run("unknown_id_is_error", func(t *testing.T) {
@@ -205,4 +259,58 @@ func containsAny(s string, subs ...string) bool {
 		}
 	}
 	return false
+}
+
+// startCall frames one agent_start tool-call block.
+func startCall(id, task string) []llm.Event {
+	return []llm.Event{
+		{Type: llm.EventToolCallStart, Index: 0, ToolCallID: id, ToolName: "agent_start"},
+		{Type: llm.EventToolCallEnd, Index: 0, Block: llm.ToolCallBlock{
+			ID: id, Name: "agent_start", Input: json.RawMessage(`{"task":"` + task + `"}`)}},
+	}
+}
+
+// TestStartIDOrder asserts ids follow the order the model asked for the agents.
+// agent_start is ModeParallel, so the dispatch goroutines race for the id counter:
+// without the batch reservation the task submitted last routinely became sub-1.
+func TestStartIDOrder(t *testing.T) {
+	t.Parallel()
+	g := &gatedProvider{}
+	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return g, nil }})
+	t.Cleanup(m.Close)
+
+	// one assistant message asking for three sub-agents, in order a, b, c
+	var turn []llm.Event
+	for i, task := range []string{"a", "b", "c"} {
+		for _, ev := range startCall("call_"+task, task) {
+			ev.Index = i
+			if ev.Type == llm.EventToolCallEnd {
+				ev.Block = llm.ToolCallBlock{ID: "call_" + task, Name: "agent_start",
+					Input: json.RawMessage(`{"task":"` + task + `"}`)}
+			}
+			turn = append(turn, ev)
+		}
+	}
+	turn = append(turn, llm.Event{Type: llm.EventDone, StopReason: llm.StopToolUse})
+
+	parent := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: turn},
+		{Events: summaryTurn("ok", llm.Usage{})},
+	}}
+	st := &agent.State{Model: llm.Model{ID: "parent", ContextWindow: 8000,
+		Caps: llm.Capabilities{ParallelTools: true}}}
+	a := agent.New(st, agent.Options{
+		Provider:    func(llm.Model) (llm.Provider, error) { return parent, nil },
+		Tools:       &toolSet{tools: m.Tools()},
+		OnToolBatch: m.Reserve,
+	})
+	require.NoError(t, a.Prompt(t.Context(), agent.Input{Text: "fan out"}))
+
+	jobs := m.List()
+	require.Len(t, jobs, 3)
+	got := make([]string, len(jobs))
+	for i, j := range jobs {
+		got[i] = j.ID + "=" + j.Task
+	}
+	assert.Equal(t, []string{"sub-1=a", "sub-2=b", "sub-3=c"}, got)
 }

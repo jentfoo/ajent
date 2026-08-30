@@ -440,6 +440,15 @@ func streamErr(st llm.Stream, acc *llm.Accumulator) error {
 // dispatch runs tool calls in parallel where every call is Parallel and the
 // model supports it, otherwise serially, appending results in call order.
 func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlock) ([]llm.ToolResultBlock, bool) {
+	if fn := a.opts.OnToolBatch; fn != nil {
+		// the last point the batch is still in message order; the parallel path below
+		// scrambles the order the calls reach any shared state in
+		ordered := make([]ToolCall, len(calls))
+		for i, c := range calls {
+			ordered[i] = callFrom(c)
+		}
+		fn(ordered)
+	}
 	parallel := a.state.Model.Caps.ParallelTools && allParallel(a.opts.Tools, calls)
 	out := make([]llm.ToolResultBlock, len(calls))
 	ends := make([]bool, len(calls)) // written by index, like out

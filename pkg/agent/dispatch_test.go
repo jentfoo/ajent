@@ -60,6 +60,42 @@ func TestDispatchParallelAppendsResultsInCallOrder(t *testing.T) {
 	assert.Equal(t, []string{"1", "2", "3"}, ids) // call order preserved
 }
 
+// TestOnToolBatchSeesCallsInMessageOrder asserts the hook gets one step's calls
+// in message order and runs before any of them: parallel dispatch races the calls
+// against each other, so this is the only ordered view of a batch a host gets.
+func TestOnToolBatchSeesCallsInMessageOrder(t *testing.T) {
+	t.Parallel()
+
+	stubs := map[string]*stubTool{
+		"a": {name: "a", result: "ra", parallel: true},
+		"b": {name: "b", result: "rb", parallel: true},
+		"c": {name: "c", result: "rc", parallel: true},
+	}
+	set := &mapSet{tools: map[string]Tool{"a": stubs["a"], "b": stubs["b"], "c": stubs["c"]}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: append(threeToolCalls(), doneEvent())},
+		{Events: textOnly("done")},
+	}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.Tools = set
+	a.state.Model.Caps.ParallelTools = true
+
+	var batches [][]string
+	a.opts.OnToolBatch = func(calls []ToolCall) {
+		for name, st := range stubs {
+			assert.Zero(t, st.callCount(), "%s ran before the hook saw the batch", name)
+		}
+		names := make([]string, len(calls))
+		for i, c := range calls {
+			names[i] = c.Name + ":" + c.ID
+		}
+		batches = append(batches, names)
+	}
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+	assert.Equal(t, [][]string{{"a:1", "b:2", "c:3"}}, batches)
+}
+
 // diffTool emits a Diff through its output so the wiring to the sink is tested.
 type diffTool struct{ stubTool }
 
