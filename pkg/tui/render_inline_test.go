@@ -422,14 +422,14 @@ func TestInlineReanchor(t *testing.T) {
 		r.reanchor(park+1, true)
 		r.setLive([]string{"❯ x", "ctx", "menu", "more"}, 0, 2)
 
-		assert.Equal(t, before, len(v.scrollback))
+		assert.Len(t, v.scrollback, before)
 		assert.Equal(t, v.h-4, v.row) // measured from the rows actually drawn
 
 		// a frame that outgrew the space below the park pads by nothing: the
 		// block scrolls on its own, exactly as it would with no pad pending
 		r.reanchor(park+1, true)
 		r.live = make([]string, r.t.height)
-		assert.Equal(t, "", r.anchorPad())
+		assert.Empty(t, r.anchorPad())
 	})
 	t.Run("no_pad_when_block_reaches_bottom", func(t *testing.T) {
 		var buf strings.Builder
@@ -462,7 +462,7 @@ func TestInlineReanchor(t *testing.T) {
 		// the stale pad would be measured from row 1 against a park at the
 		// bottom, scrolling a screenful of committed history away
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
-		assert.Equal(t, before, len(v.scrollback))
+		assert.Len(t, v.scrollback, before)
 		assert.Contains(t, v.Line(0), "hist")
 	})
 	t.Run("no_pad_on_fresh_session", func(t *testing.T) {
