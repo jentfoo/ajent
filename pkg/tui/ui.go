@@ -152,8 +152,11 @@ type UI struct {
 	// buffer in deferred until the burst settles (see resize). Even the settled
 	// redraw waits on a status-probe barrier (probeResize): the ioctl reports
 	// the new size before the emulator has finished reflowing to it, so a quiet
-	// signal stream alone cannot prove the grid is stable.
-	resizing bool
+	// signal stream alone cannot prove the grid is stable. resizing is atomic so
+	// the signal goroutine can raise it before contending for u.mu: a streaming
+	// Text holds the lock across a goldmark parse, and a gate taken only under
+	// the lock let a whole frame go out after the reflow had started.
+	resizing atomic.Bool
 	deferred []histLine
 	// resizeSeq counts SIGWINCHs; probeSeq is the burst generation the newest
 	// probe belongs to. A reply (or timeout) starts the draw grace only when
@@ -164,13 +167,28 @@ type UI struct {
 	resizeSeq int
 	probeSeq  int
 	probesOut int
+	// cprPending marks a probe whose cursor reply this settle may act on, so a
+	// settle that never probed (SIGCONT, resize) cannot re-anchor on a report
+	// left over from an earlier burst.
+	cprPending bool
+	// settledW and settledH are the size the last settle drew at. A settle that
+	// only grew never re-anchors: nothing can be lost by a grow, so the pad
+	// would be a visible jump for a repair nobody needs.
+	settledW int
+	settledH int
 
-	// sigGen is bumped the instant a resize signal arrives, before
-	// holdForResize contends for the lock, so a draw already composing can see
-	// it without waiting. The draw path compares it around the frame write and
-	// abandons a frame whose generation moved: landing it would park by a row
-	// count taken on the old grid, the classic stranding miss.
-	sigGen atomic.Uint64
+	// sigGen is bumped the instant a resize signal arrives, before holdForResize
+	// contends for the lock; drawGen is the generation the settled redraw last
+	// caught up with; holdGen is the last generation holdForResize sequenced
+	// under the lock. The draw path abandons any frame written while sigGen and
+	// drawGen differ: landing it would park by a row count taken on the old
+	// grid, the classic stranding miss. A settle only clears the gate while
+	// sigGen equals holdGen — otherwise a signal that bumped but has not
+	// reached holdForResize would be absorbed into drawGen and a frame could
+	// land mid-reflow with neither gate raised.
+	sigGen  atomic.Uint64
+	drawGen atomic.Uint64
+	holdGen atomic.Uint64
 }
 
 // New starts the UI, taking over the terminal until Close is called.
@@ -210,7 +228,9 @@ func New(opts Options) (*UI, error) {
 	u.onRewind = opts.OnRewind
 	u.afterDelay = time.AfterFunc
 	if inl, ok := u.render.(*inlineRenderer); ok {
-		inl.sigGen = u.sigGen.Load // only inline parks by row count
+		// only inline parks by row count
+		inl.sigGen, inl.drawGen = u.sigGen.Load, u.drawGen.Load
+		u.settledW, u.settledH = u.render.size() // the startup size: a first-settle grow must not pad
 	}
 
 	if err := u.render.start(u.inFd); err != nil {
@@ -776,7 +796,7 @@ func (u *UI) commitHist(lines []histLine) {
 	}
 	u.lastBlank = lines[len(lines)-1].text == ""
 	u.started = true
-	if u.resizing {
+	if u.resizing.Load() {
 		// commit erases the live block too, so it waits out the burst with
 		// repaints; resize flushes these in order once the size settles
 		u.deferred = append(u.deferred, lines...)
@@ -797,7 +817,7 @@ func (u *UI) gap() {
 func (u *UI) repaint() {
 	// While a resize burst is in flight no draw is safe: the erase could land
 	// mid-reflow and strand rows (see resize). The settled redraw repaints.
-	if u.closed || u.mode == ModePlain || u.resizing {
+	if u.closed || u.mode == ModePlain || u.resizing.Load() {
 		return
 	}
 	w, h := u.render.size()
@@ -1450,7 +1470,11 @@ func (u *UI) watchSignals() {
 				u.resume()
 				continue
 			}
-			u.sigGen.Add(1) // visible to an in-flight draw before it waits on the lock
+			// both gates go up before contending for the lock
+			u.sigGen.Add(1)
+			if u.mode == ModeInline {
+				u.resizing.Store(true)
+			}
 			u.holdForResize()
 			timer.Reset(resizeSettle)
 		case <-timer.C:
@@ -1485,7 +1509,8 @@ func (u *UI) watchSignals() {
 func (u *UI) holdForResize() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	u.resizing = u.mode == ModeInline
+	u.resizing.Store(u.mode == ModeInline)
+	u.holdGen.Store(u.sigGen.Load()) // every bump so far is sequenced; settles may clear
 	u.resizeSeq++
 }
 
@@ -1507,6 +1532,8 @@ func (u *UI) probeResize() {
 	u.probeSeq = u.resizeSeq
 	u.probesOut++
 	gen := u.probeSeq
+	u.cursorRow() // drop replies to superseded probes; what remains answers this one
+	u.cprPending = true
 	u.render.probe()
 	u.afterDelay(resizeProbeTimeout, func() { u.probeTimedOut(gen) })
 }
@@ -1566,6 +1593,29 @@ func (u *UI) probeAnswered() {
 	u.settleProbedLocked(u.probeSeq)
 }
 
+// cursorRow drains the terminal's cursor reports, returning the newest row and
+// whether one arrived. The closed-channel branch is defensive: reports is never
+// closed today, and a drain loop that ignored a close would spin. Caller holds
+// the lock.
+func (u *UI) cursorRow() (int, bool) {
+	if u.reader == nil {
+		return 0, false
+	}
+	var row int
+	var got bool
+	for {
+		select {
+		case r, open := <-u.reader.reports:
+			if !open {
+				return row, got
+			}
+			row, got = r, true
+		default:
+			return row, got
+		}
+	}
+}
+
 // watchStatus consumes terminal status replies until the input closes.
 func (u *UI) watchStatus() {
 	for range u.reader.status {
@@ -1590,8 +1640,34 @@ func (u *UI) resize() {
 // (which also drops any deferred rows from its preview, the Text/EndText ghost
 // invariant), then held-back commits flush above it. Caller holds the lock.
 func (u *UI) settleResizeLocked() {
-	u.resizing = false
+	gen := u.sigGen.Load() // one read: a bump between check and store must leave the gate up
+	if gen != u.holdGen.Load() {
+		return // a signal bumped mid-settle; its own burst redraws
+	}
+	u.resizing.Store(false)
+	u.drawGen.Store(gen) // drawing is caught up with every signal so far
+	w, h := u.render.size()
+	// a grow in one dimension with a shrink in neither cannot retire the park:
+	// only shrinking rewraps content into more rows or takes rows away. A corner
+	// drag that widens but shortens still re-anchors, and so does an equal-size
+	// settle, whose burst may have narrowed and dragged back.
+	known := u.settledW > 0 && u.settledH > 0
+	grew := known && w >= u.settledW && h >= u.settledH && (w > u.settledW || h > u.settledH)
+	u.settledW, u.settledH = w, h
 	u.render.resize()
+	// the reply may predate the reflow, so it is a best guess: the renderer
+	// decides against its own geometry whether the block lost the screen bottom.
+	// Draining is unconditional so a stale report never accumulates; acting on
+	// one needs a probe of our own behind it. Every settle re-decides, passing a
+	// row of zero when it has no usable evidence: a pad the last settle raised
+	// may still be pending on a frame the gate abandoned, and it can only be
+	// applied against the geometry it was measured on.
+	row, ok := u.cursorRow()
+	if !ok || !u.cprPending || grew {
+		row = 0
+	}
+	u.render.reanchor(row, u.started)
+	u.cprPending = false
 	u.repaint()
 	if len(u.deferred) > 0 {
 		lines := u.deferred

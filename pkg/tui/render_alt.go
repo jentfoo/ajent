@@ -108,6 +108,10 @@ func (r *altRenderer) resize() {
 // that raced a reflow is fully repaired by the next one; no barrier needed.
 func (r *altRenderer) probe() {}
 
+// reanchor is a no-op: alt bottom-aligns the block on every paint, so a lost
+// park costs it nothing.
+func (r *altRenderer) reanchor(int, bool) {}
+
 func (r *altRenderer) setTheme(t Theme) { r.theme = t }
 
 func (r *altRenderer) query(seq string) { r.t.write(seq) }

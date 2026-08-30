@@ -33,6 +33,11 @@ const (
 	// a barrier before drawing after a settled resize.
 	statusQuery = csi + "5n"
 
+	// cursorQuery asks the terminal where the cursor actually is (CSI row;col R).
+	// A reflow that overflowed the screen clamps the park to the top row, and
+	// only the terminal knows that happened.
+	cursorQuery = csi + "6n"
+
 	sgrReset = csi + "0m"
 	// the caret is drawn as a reversed cell rather than parked on with the
 	// terminal's own cursor, which stays hidden and out of the row maths

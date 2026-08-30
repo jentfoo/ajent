@@ -370,7 +370,7 @@ func arrowKey(final byte, params string) keyType {
 type inputReader struct {
 	src     io.Reader
 	keys    chan key
-	reports chan int
+	reports chan int      // never closed: cursorRow polls it, so it needs no end signal
 	status  chan struct{} // DSR replies answering the resize barrier probe
 	colors  chan string   // OSC 11 background answers
 	attrs   chan struct{} // DA1 replies, the fence behind an OSC 11 query
@@ -495,10 +495,7 @@ func (r *inputReader) run() {
 func (r *inputReader) emit(k key) {
 	switch k.typ {
 	case keyCursorReport:
-		select {
-		case r.reports <- k.row:
-		default:
-		}
+		sendLatest(r.reports, k.row)
 	case keyStatusReport:
 		select {
 		case r.status <- struct{}{}:
@@ -517,6 +514,29 @@ func (r *inputReader) emit(k key) {
 	case keyIgnore:
 	default:
 		r.keys <- k
+	}
+}
+
+// sendLatest leaves ch holding the newest value, dropping an older one to make
+// room: a cursor report is a position, and only the last one is true. Bounded
+// on purpose (one drain, one retry) so the reader never spins here.
+//
+// Single writer only. emit runs on run's goroutine alone, so nothing can fill
+// the slot between the drain and the retry; two senders racing here could drop
+// the newer value instead. A second writer would need a lock of its own.
+func sendLatest(ch chan int, v int) {
+	select {
+	case ch <- v:
+		return
+	default:
+	}
+	select {
+	case <-ch:
+	default:
+	}
+	select {
+	case ch <- v:
+	default:
 	}
 }
 

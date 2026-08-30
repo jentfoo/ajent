@@ -245,6 +245,16 @@ Selection rules:
 We can detect multiplexers with certainty. We cannot detect "does this emulator
 reflow" in general, which is why the flag exists.
 
+Alt paints absolute rows, so its geometry has two rules inline gets for free from
+the relative park. History is bottom aligned into `viewHeight` = height − live
+rows, which is **zero** when the block fills the screen (`repaint`'s final clamp
+produces exactly that): a live row addressed past the last screen row is clamped
+onto it by the terminal and silently overwrites its neighbour, so the block takes
+every row and history simply yields. And `size()` re-reads the terminal like
+inline does, so a frame composed mid-burst lays out at the width it paints at.
+`clearHistory` repaints immediately rather than leaving the dropped rows on
+screen until the next commit.
+
 ## Invariants
 
 These are load bearing. Each one exists because breaking it produced a real bug.
@@ -274,7 +284,12 @@ all and the cursor is parked where the next erase must begin.
 
 **3. Committed output is re-rendered only in alt mode; inline never rewrites a
 committed line after it lands.** Streaming markdown commits at block boundaries
-only (`splitCompleteBlocks`); an open block stays buffered until it closes.
+only (`splitCompleteBlocks`); an open block stays buffered until it closes. A
+fence closes only on a line that is the opener's character repeated at least as
+many times and nothing else (`fenceCloses`): an info-string line such as
+```` ```go ```` inside an open fence is content, and treating it as a closer let the
+rest of the block be scanned as top-level markdown — blank lines became commit
+boundaries and the real closer reopened a phantom fence.
 Re-rendering committed *scrollback* is what destroys history in tmux and VS Code — so inline never rewrites rows outside the viewport,
 even on resize; every committed row keeps whatever layout it was given (and, for
 prose, whatever the emulator's own reflow makes of it), which is exactly how `cat`
@@ -386,7 +401,14 @@ something and denying them for being simultaneous is the wrong default.
 on whichever arrived first — it reports whether this call won, and only the
 winner commits its summary or dequeues (see `routeKey`) — and `Close` resolves
 everything outstanding with `ErrCancelled` so no caller is left blocked
-(invariant 5). When more than one prompt waits, a dim `+N waiting` line sits
+(invariant 5). Only a resolution **with a nil error** commits: a cancelled
+interaction records nothing, because the row under the cursor is not a choice the
+user made (Esc on a `Confirm` would otherwise write `Yes` into history while the
+caller got `ErrCancelled`). `questionState` is the deliberate exception — Esc is a
+normal answer there, resolved with a nil error, so `question declined` is still
+recorded. For the same reason `wait` returns whatever `resolve` settled on rather
+than assuming its own branch won: a `select` whose ctx and answer are both ready
+picks at random, and the answer must survive. When more than one prompt waits, a dim `+N waiting` line sits
 below the active interaction, reserving its row from that interaction's height
 budget (caret position unchanged because it rides below).
 
@@ -461,6 +483,13 @@ since a paste body can legitimately stall mid-arrival; and when it does fire on 
 truncated sequence, the whole remaining buffer is dropped rather than re-decoded as
 runes — only a genuine lone `Esc` (buffer length 1) is reported.
 
+A paste that reaches `maxPasteLen` (4 MiB) without a terminator delivers the body
+it has (`key.partial`), and the reader then stays **inside** the paste: the tail is
+dropped up to and including `ESC[201~`, keeping the few bytes that could still
+begin one, and the escape timer stays disarmed so a split terminator survives.
+Decoding that tail as ordinary keys is what let a `\r` in a pasted file submit the
+prompt mid-paste.
+
 A closed input stream emits no editing keystroke. Only the literal Ctrl+D byte
 (`0x04`) decodes to `keyEOF`, so an external EOF never races with typed text or
 mutates the buffer; readers stop on the channel close alone.
@@ -527,21 +556,37 @@ is never split across the boundary.
 
 - **Streaming** (`UI.Output`) feeds the head incrementally; while more than the
   head is pending it also refreshes a transient keyed activity row
-  (`outputKey`: `bash · N lines · B`), so long output still shows movement.
+  (`outputKey`+call id: `bash · N lines · B`, naming the call's own tool), so long
+  output still shows movement.
 - **A finished tool** sets `ToolResult.Display`, which the `ToolStart` done hook
   runs through a throwaway `outputHead` for the identical head-plus-summary
   treatment. A tool must therefore either stream or set `Display`, never both.
-- The head is owned by one call, not one turn: `ToolStart` resets it on entry and
-  its done hook closes (flush + summary) before committing any result, so two
-  calls in a single turn each get their own collapse line. `EndOutput` at turn
-  end remains as a safety flush.
+- **The head belongs to one call, keyed by its id** (`UI.runs`, a `toolRun` per
+  in-flight call), not to the UI and not to a turn. Every entry point carries the
+  call id: `ToolStart(id, name, label)`, `Output(id, delta)`, `SetOutputFull(id)`,
+  and the done hook closes (flush + summary) only its own call before committing
+  its result. One shared head was wrong the moment two calls overlap, which is not
+  hypothetical: a staged `!`/`!!` shell streams from the `Stager`'s goroutine while
+  an agent turn runs, so each `ToolStart` reset the other's stream mid-flight and
+  the first done hook closed the survivor's head.
+- `EndOutput` at turn end is the safety flush for the calls a turn owns, and it
+  **skips full-mode runs**. `Flush` never waits for an excluded `!!` run, so one
+  can still be streaming at `TurnEnd`; closing it there would commit a collapse
+  row mid-stream and reopen the tail as a second, nameless, capped head. A full
+  run has no collapse row or activity row to clean up, its own done hook flushes
+  it, and leaving it open is what keeps its name in the status bar while it runs.
+- The status bar names the newest **named** running call (`UI.toolLabel`) and keeps
+  its glyph animated until every call has ended, so one finishing does not blank the
+  label of another still running, and a run created by output arriving ahead of its
+  header does not blank it either.
 - **Full mode**: user-initiated `!`/`!!` shells are the one exception to the
   head-plus-summary rule. The stager opens them through `Sink.ToolStartFull`
   (an optional capability it type-asserts on its sink), which calls `SetOutputFull`
-  right after `ToolStart`. With `outputHead.full` set, every line is committed to
-  history and no summary or activity row appears — the human sees everything they
-  ran. The flag lives for one call: `reset()` clears it, so an agent bash call in
-  the same turn truncates normally.
+  for the call id *before* `ToolStart`, so output racing the header is never capped;
+  the head is created on demand by whichever arrives first. With `outputHead.full`
+  set, every line is committed to history and no summary or activity row appears —
+  the human sees everything they ran. The flag lives for one call: ending it drops
+  the `toolRun`, so an agent bash call alongside it truncates normally.
 
 The model still receives the full unmodified `Content`; only history is elided.
 
@@ -835,7 +880,7 @@ time anyone could notice. A reflow keeps the cursor on the first cell of its
 logical line, and the first cell of the block's first row is exactly where we
 parked, so none of it matters any more.
 
-Five rules keep that true, and one bounds what the resize gate costs:
+The following rules keep that true:
 
 1. **The caret is painted, not parked on.** The terminal's own cursor is hidden
    for the whole session; `paintCaret` reverses the cell the caret sits on as the
@@ -870,11 +915,40 @@ Five rules keep that true, and one bounds what the resize gate costs:
    landed mid-frame is accounted for before the count is taken; a diff frame
    counts each skipped row as exactly its one newline boundary (it descended no
    further), which returns the cursor precisely to where the previous frame
-   parked. And the write itself is gated: `watchSignals` bumps an atomic the
-   instant a SIGWINCH arrives, before it contends for the lock; a draw captures
-   that generation before composing and abandons the frame if it moved by the
-   time of the syscall, leaving the old block until the burst's settled redraw.
-   This narrows the mid-reflow window from compose-duration to syscall-duration.
+   parked. And the write itself is gated, by two things that must **both** be
+   raised without waiting on `u.mu`. `watchSignals` raises them the instant a
+   SIGWINCH arrives, before it contends for the lock: `resizing` (an
+   `atomic.Bool`, so `repaint` returns and `commitHist` defers) and `sigGen`.
+   A frame is then judged against `drawGen`, the generation the settled redraw
+   last caught up with — **never** against a generation captured as the frame
+   starts. Both halves are load bearing, and each was wrong once:
+
+   - A gate taken under `u.mu` is not a gate. A streaming `Text` holds the lock
+     across a goldmark parse (and a chroma highlight on commit), so
+     `holdForResize` sits queued behind it for milliseconds while that call
+     composes and lands a whole frame on a grid the emulator is already
+     reflowing.
+   - A per-frame baseline is not a baseline. Composing parses the open markdown
+     block, so a signal landing mid-compose becomes that frame's own generation
+     and `stale` compares equal — the frame writes anyway. Comparing against
+     the settled generation makes any unsettled signal abandon the frame,
+     whenever it arrived.
+
+   Together these narrow the mid-reflow window to syscall duration. The gate
+   itself is generation-checked when the settle clears it: `sigGen` bumps
+   before `holdForResize` takes the lock, `holdGen` records the generations
+   sequenced under it, and a settle only clears while they match — otherwise a
+   signal that bumped but has not reached `holdForResize` would be absorbed
+   into `drawGen` and a frame could land mid-reflow with neither gate raised.
+
+   One window remains and is accepted: between the emulator finishing its
+   reflow and our SIGWINCH being processed, a streaming frame or commit can
+   still land, erasing from wherever the reflow moved the park. If the park
+   was clamped above visible history that erase destroys it — unrecoverable,
+   since inline never re-renders committed rows. Nothing can close this
+   without predicting signal delivery; the settle's CPR probe runs *after* the
+   damage, so the underfill test (rule 8) at least pads the block back to the
+   bottom instead of leaving it stranded mid-screen.
 5. **The live block never exceeds the screen.** All of the above assumes the
    block is erasable, and a block taller than the screen is not: drawing it
    scrolls, so the previous frame's top rows are pushed into scrollback where no
@@ -883,9 +957,18 @@ Five rules keep that true, and one bounds what the resize gate costs:
    budgets itself against the rows left, and the streaming preview yields
    hardest because it is the only one whose height follows the content rather
    than the terminal: it keeps its tail, which is what a reader is watching.
+   Dropping the head is **marked** — a dim `•••` on the preview's first row,
+   taken out of the preview's own budget so the total is unchanged. Unmarked,
+   an open block taller than the screen looks like the committed line above it
+   is eating text: the preview sits above the divider, so it reads as
+   transcript while it is in fact redrawn every delta. The marker is the same
+   admission `+N more` and `… +N lines` make elsewhere, and it is preview-only —
+   the block commits whole (head included) the moment it closes.
    `repaint` then clamps the total as a last line of defence, dropping from the
    top and carrying the caret with it, so a floor (search, completion) or an
-   unlucky width cannot overflow either (`TestUILiveBlockFitsTheScreen`).
+   unlucky width cannot overflow either (`TestUILiveBlockFitsTheScreen`). A block
+   clamped to exactly the screen height leaves alt no history rows at all, which
+   is what `full_height_block_keeps_every_row` pins.
 6. **The settled redraw waits on a terminal barrier.** A burst holds drawing
    back for as long as signals keep arriving — never redrawing mid-drag, no
    matter how long it runs: a frame emitted while the emulator is reflowing is
@@ -914,16 +997,99 @@ Five rules keep that true, and one bounds what the resize gate costs:
    reprinting the whole block; now unchanged rows are skipped, writing only the
    newlines that walk past them and an erase-to-end-of-line after each written
    row, so a tick emits no editor bytes. The diff falls back to today's full
-   erase-and-redraw on four guards: a width change (the one thing that reflows
+   erase-and-redraw on five guards: a width change (the one thing that reflows
    rows it did not write), a row-count change (what the single erase-below used
    to cover), nothing drawn yet or an invalidation set by `commit`/`suspend`/
-   `resume`/`clearHistory`, and every 64th frame as a cheap safety net. Comparing
+   `resume`/`clearHistory` (or by `reanchor`, whose pad needs the full path),
+   and every 64th frame as a cheap safety net. Comparing
    post-caret strings means a moved caret dirties both its old and new row.
 
    The severity asymmetry is why this is acceptable: a stale row inside the live
    block sits in erasable territory, healed by the next commit or full redraw,
    whereas a stranded row above the block is committed content nothing can reach.
    Diff staleness is self-healing; stranding is permanent.
+8. **The park is ground truth until a reflow moves it off the block's top.** Every
+   rule above assumes the parked cursor still marks the block's top. That holds
+   through any reflow *of the block itself*, because the cursor rides its cell.
+   A shrink breaks it: a narrowing rewraps history into more rows, a shorter
+   screen has fewer rows to hold it, and either way the block's top — the parked
+   cursor itself — can retire into scrollback, leaving the terminal to clamp the
+   cursor onto what is left. The block then ends mid-screen with space below it
+   that no erase reclaims. The terminal knows where the cursor really is, so the
+   settled redraw asks: `probeResize` writes a cursor position report query
+   (`CSI 6 n`) just ahead of the DSR status query that already releases the
+   barrier, and `settleResizeLocked` consumes the reply (`CSI row;col R`,
+   decoded as `keyCursorReport`) after `resize()` and before the repaint. When
+   the reported row plus the block's rows ends above the last screen row on a
+   started session, the renderer `reanchor`s and the next full draw pads the
+   block back to the screen bottom.
+
+   The pad respects the two invariants this section is built on. CPR is a
+   *read*, and invariant 1 forbids *addressing* rows we did not write: the
+   query addresses nothing, and the pad is newlines only. It is measured from
+   the reported row (`height − live − (row − 1)`), which is what keeps it from
+   scrolling — `reanchor` rejects any row whose block already reaches the
+   bottom, so the cursor lands on exactly `height − live` and the block fills
+   the rows below it, every one of which `eraseLive` has just cleared. **The pad
+   never displaces a committed row.** Measured from `height − live` alone it
+   overshoots by the park's own row and scrolls that many rows away — on a
+   session whose history does not fill the screen, all of it
+   (`TestUIReanchorKeepsHistoryOnScreen`, `pad_never_scrolls`). A garbage or
+   hostile row stays bounded: the underfill test rejects anything at or past the
+   bottom and the repeat is clamped to the screen, so a bad row can only fail to
+   mean underfill, never pad past one screenful. The probe is additive: the
+   status barrier (rule 6) is untouched, and a terminal that answers DSR but not
+   CPR degrades to the pre-CPR behaviour.
+
+   Only a shrink re-anchors. A settle that grew in one dimension and shrank in
+   neither cannot have retired the park — a grow rewraps into fewer rows and
+   takes none away — so its dead band is cosmetic, and bottom-anchoring a
+   maximized window would drop the block a screenful for a repair nobody needs.
+   Both dimensions count: a corner drag that widens but shortens is a shrink,
+   and an equal-size settle re-anchors too, because its burst may have narrowed
+   and been dragged back (`TestUIReanchorGestures`). The reply must also be one
+   this settle asked for (`cprPending`): SIGCONT and a direct `resize()` settle
+   without probing, and a report left over from an earlier burst is no longer
+   true. The flag proves a probe of ours was in flight, not that this reply is
+   the one answering it — replies carry no identity — so a superseded reply the
+   reader decodes after this probe's drain still passes for fresh. Reports are
+   drained on every settle either way and the newest wins the channel
+   (`sendLatest`), which leaves that residual bounded by the same rules as any
+   wrong row: one screenful at most, and nothing at all once the block reaches
+   the bottom.
+
+   A pad lives exactly one draw. `reanchor` sets its outcome on **every** path,
+   rejections included, and every settle calls it — passing a row of zero when it
+   has no usable evidence — because a pad can outlive the frame that should have
+   consumed it: `paint` abandons a frame a signal raced (rule 4), and the flag
+   survives with it. Applied a gesture later against a grid that has moved, that
+   pad is the overshoot the row exists to prevent: a park already at the bottom,
+   padded from row 1, scrolls a screenful of committed history away
+   (`reject_clears_a_pending_pad`, `TestUISettleClearsPendingPad`). `commit`,
+   `suspend` and `clearHistory` clear it for one reason between them: each moves
+   the block, or the screen under it, out from beneath the row the pad was
+   measured on. Dropping a pending repair costs a block left stranded until the
+   next probed settle — cosmetic, and output walks it back down — where keeping
+   one costs displaced history. The pad itself is measured against the frame it
+   lands on rather than the one the settle inspected, since `repaint` recomposes
+   the block in between and only the height being drawn now puts its last row on
+   the last screen row (`pad_follows_the_frame_it_lands_on`).
+
+   The underfill test trades a bounded false positive: a session whose
+   committed history is shorter than the screen also reports underfill, so a
+   shrink bottom-anchors it and leaves a blank band above the block until
+   output fills it. Counting history's real rows would mean predicting reflow,
+   which invariant 2 forbids; the band is blank rows only, displacing nothing,
+   and it scrolls away. Nor is a clamp distinguishable by the reported row
+   alone — a real overflowing narrow reports whatever row the surviving lines
+   left, not row 1. Because the probe follows every write that preceded it, the
+   same test repairs a frame or commit that slipped through the signal-delivery
+   window (below).
+
+   This fixes the on-screen anchor only. The rows the same reflow retired into
+   scrollback stay unreachable: inline mode cannot erase scrollback without
+   destroying the whole session, and that is the accepted price of native
+   scrollback (out of scope).
 
 ### Why inline does not re-render committed history on resize
 
@@ -1030,7 +1196,11 @@ action inside a dialog. The CSI arrow modifier is parsed as tcell's raw bitmask:
 Ctrl or Alt promotes to word movement (`;4 ;6 ;7 ;8` and sub-parameters included),
 Shift alone does not (the editor has no selection). A bare `CSI R` is CPR here
 while it is F3 elsewhere — there is no F-key type, so the parameterless branch
-stays ignored. It is a pure function
+stays ignored. The parameterized form (`CSI row;col R`) decodes to
+`keyCursorReport` on the `reports` channel, where the newest report supersedes
+any older one still queued; the resize re-anchor (rule 8 under Finding the live
+block again after a resize) is the only consumer, so a CPR reply can never leak
+into the editor as text. It is a pure function
 over a byte slice (`decodeKey`) plus a goroutine that feeds a channel, so it is
 testable without a terminal.
 
@@ -1069,6 +1239,14 @@ The key table:
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`) |
 | Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |
+
+A paste over `pasteThreshold` (2 KiB) does not land in the editor: its content is
+stored on the UI and a `[pasted N lines #K]` marker is inserted instead, expanded
+back to the full text at submit (`expandPastes`). `K` is a per-session counter, so
+two pastes of the same line count keep separate entries — sharing one key let the
+second overwrite the first and both markers expand to the second's text. Entries
+are kept for the whole session and expanded oldest first, so a recalled prompt
+still resolves and nesting is deterministic; only `Close` drops them.
 
 Keys that resolve to nothing are emitted on `Controls()` as `Control` events so
 the host decides their meaning. Shift+Tab is special: it reaches the control

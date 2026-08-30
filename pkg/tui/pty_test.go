@@ -295,6 +295,46 @@ func TestPTYSignalResize(t *testing.T) {
 	assert.Equal(t, 34, u.Width(), "the renderer read the kernel's new size")
 }
 
+// TestPTYSignalResizeReanchors drives the re-anchor over a real pty: the
+// settled burst raises the cursor and status queries, the clamped cursor
+// reply pads the block back to the screen bottom, and the status reply
+// releases the settled redraw. The pty carries no terminal of its own, so the
+// test writes the replies a clamped terminal would send.
+func TestPTYSignalResizeReanchors(t *testing.T) {
+	master, slave := openPTY(t)
+	setPTYSize(t, master, 80, 24)
+	v := newVT(80, 24)
+	u := newPTYUI(t, master, slave)
+	drainPTY(t, master, v)
+
+	words := testWords
+	u.Print(strings.Repeat(words, 4))
+	u.Text(strings.Repeat(words, 8)) // an unclosed block
+	drainPTY(t, master, v)
+	require.Equal(t, 1, countRules(v.Screen()))
+
+	setPTYSize(t, master, 48, 24)
+	v.setSize(48, 24)
+	require.NoError(t, syscall.Kill(syscall.Getpid(), syscall.SIGWINCH))
+
+	eventuallyPTY(t, master, v, func() bool {
+		return v.cprCount > 0
+	}, "the settled burst raises the cursor query")
+
+	// the reflow overflowed the screen and clamped the park onto the top row
+	_, err := master.WriteString("\x1b[1;1R\x1b[0n")
+	require.NoError(t, err)
+	eventuallyPTY(t, master, v, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return v.row == v.h-len(u.render.(*inlineRenderer).live) && v.col == 0
+	}, "the re-anchored block sits at the screen bottom")
+
+	assert.Equal(t, 1, countRules(v.Screen()))
+	assert.Contains(t, v.Line(v.h-1), "test")
+	assert.Equal(t, 48, u.Width())
+}
+
 // TestPTYTeardown asserts what a terminal is left holding after Close: the
 // cursor back, bracketed paste off, and a second Close changing nothing.
 func TestPTYTeardown(t *testing.T) {

@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -276,6 +277,32 @@ func TestInputReaderRun(t *testing.T) {
 			t.Fatal("no cursor report")
 		}
 		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+		require.NoError(t, pw.Close())
+	})
+	t.Run("newest_cursor_report_wins", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
+
+		// more reports than the channel holds, none of them drained: a report is
+		// a position, so the oldest must give way rather than the newest be lost
+		go func() {
+			for row := 1; row <= 6; row++ {
+				_, _ = io.WriteString(pw, "\x1b["+strconv.Itoa(row)+";1R")
+			}
+			_, _ = io.WriteString(pw, "z")
+		}()
+		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys) // every report emitted
+
+		var last int
+		for drained := true; drained; {
+			select {
+			case last = <-r.reports:
+			default:
+				drained = false
+			}
+		}
+		assert.Equal(t, 6, last)
 		require.NoError(t, pw.Close())
 	})
 	t.Run("color_report_separate_channel", func(t *testing.T) {

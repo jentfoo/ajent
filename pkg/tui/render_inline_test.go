@@ -309,31 +309,221 @@ func TestInlineDiff(t *testing.T) {
 	})
 }
 
-// TestInlineAbortsFrameOnResizeSignal pins the pre-write gate: a resize
-// signal arriving while a frame composed means the emulator is reflowing onto
-// a different grid, and the park's row count was taken on the old one. The
-// frame is abandoned; the burst's settled redraw repaints at its own size.
+// TestInlineAbortsFrameOnResizeSignal pins the pre-write gate: while a signal
+// is unsettled the emulator is reflowing onto a different grid and the park's
+// row count was taken on the old one, so the frame is abandoned. The baseline
+// is the settled generation, not one captured as the frame starts — a signal
+// landing mid-compose would otherwise become that frame's own baseline.
 func TestInlineAbortsFrameOnResizeSignal(t *testing.T) {
 	t.Parallel()
 
 	v := newVT(40, 8)
 	r := newTestInline(v)
+	var sig, draw atomic.Uint64
+	r.sigGen, r.drawGen = sig.Load, draw.Load
 	r.commit([]histLine{{text: "hist"}})
 	r.setLive([]string{"old row", "ctx"}, 0, 1)
 	before := v.Screen()
 	top := v.row
 
-	var gen atomic.Uint64
-	r.sigGen = func() uint64 { return gen.Add(1) } // moves between capture and check
+	sig.Add(1) // SIGWINCH: the burst is in flight
 	r.setLive([]string{"fresh row", "ctx"}, 0, 1)
-	assert.Equal(t, before, v.Screen(), "the frame never reached the terminal")
+	assert.Equal(t, before, v.Screen())
 	assertParked(t, v, top)
 	assert.NotContains(t, v.Screen(), "fresh row")
 
-	r.sigGen = gen.Load // stable now
+	// a frame that begins after the signal is abandoned too, not baselined on it
+	r.setLive([]string{"fresh row", "ctx"}, 0, 1)
+	assert.NotContains(t, v.Screen(), "fresh row")
+
+	draw.Store(sig.Load()) // the settled redraw catches up
 	r.setLive([]string{"fresh row", "ctx"}, 0, 1)
 	assert.Contains(t, v.Screen(), "fresh row")
 	assertParked(t, v, top)
+}
+
+// TestInlineReanchor covers the underfill recovery: a reflow that clamped or
+// stranded the parked cursor leaves the block ending above the last row, and
+// the next full draw pads it back to the screen bottom in newlines only.
+func TestInlineReanchor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("pads_to_the_bottom_in_newlines", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		buf.Reset()
+
+		r.reanchor(1, true)
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		out := buf.String()
+
+		assert.Contains(t, out, strings.Repeat("\r\n", 22))
+		assert.Contains(t, out, eraseBelow)
+		assert.False(t, hasCursorTo(out))
+		assert.False(t, r.reanchored)
+	})
+	t.Run("pads_when_stranded_mid_screen", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		buf.Reset()
+
+		r.reanchor(5, true) // not clamped, just short of the bottom
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+
+		// measured from the reported row: the park is on row 5, so 18 rows of
+		// pad put the block's last row on the last screen row and no further
+		out := buf.String()
+		assert.Contains(t, out, strings.Repeat("\r\n", 18))
+		assert.NotContains(t, out, strings.Repeat("\r\n", 19))
+	})
+	t.Run("pad_never_scrolls", func(t *testing.T) {
+		v := newVT(40, 12)
+		r := newTestInline(v)
+		for range 4 {
+			r.commit([]histLine{{text: "hist", flow: flowReflow}})
+		}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		require.Empty(t, v.scrollback)
+
+		r.reanchor(v.row+1, true) // the row a terminal would report, 1-based
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+
+		// measured from that row, the pad fills the blank rows the erase just
+		// cleared and stops: no committed row is pushed off the top
+		assert.Empty(t, v.scrollback)
+		assert.Contains(t, v.Line(0), "hist")
+		assert.Equal(t, v.h-2, v.row) // parked on the block's top, block at the bottom
+		assert.Contains(t, v.Line(v.h-1), "ctx")
+	})
+	t.Run("suspend_clears_the_flag", func(t *testing.T) {
+		v := newVT(40, 12)
+		r := newTestInline(v)
+		r.commit([]histLine{{text: "hist", flow: flowReflow}})
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		r.reanchor(2, true)
+
+		r.suspend(-1) // another program owns the screen and moves the cursor
+
+		assert.False(t, r.reanchored)
+	})
+	t.Run("pad_follows_the_frame_it_lands_on", func(t *testing.T) {
+		v := newVT(40, 12)
+		r := newTestInline(v)
+		for range 6 {
+			r.commit([]histLine{{text: "hist", flow: flowReflow}})
+		}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		park, before := v.row, len(v.scrollback)
+
+		// the settle decides against the block it can see, but repaint composes
+		// the next frame before the pad lands and it may be a different height
+		r.reanchor(park+1, true)
+		r.setLive([]string{"❯ x", "ctx", "menu", "more"}, 0, 2)
+
+		assert.Equal(t, before, len(v.scrollback))
+		assert.Equal(t, v.h-4, v.row) // measured from the rows actually drawn
+
+		// a frame that outgrew the space below the park pads by nothing: the
+		// block scrolls on its own, exactly as it would with no pad pending
+		r.reanchor(park+1, true)
+		r.live = make([]string, r.t.height)
+		assert.Equal(t, "", r.anchorPad())
+	})
+	t.Run("no_pad_when_block_reaches_bottom", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		buf.Reset()
+
+		r.reanchor(23, true) // park on the second-to-last row fills the screen
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+
+		assert.NotContains(t, buf.String(), strings.Repeat("\r\n", 2))
+		assert.False(t, r.reanchored)
+	})
+	t.Run("reject_clears_a_pending_pad", func(t *testing.T) {
+		v := newVT(40, 12)
+		r := newTestInline(v)
+		for range 10 { // enough history that the block sits on the last rows
+			r.commit([]histLine{{text: "hist", flow: flowReflow}})
+		}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		require.Equal(t, v.h-2, v.row)
+		before := len(v.scrollback)
+
+		// a pad left pending by a frame the resize gate abandoned, then the next
+		// settle's report: the block already reaches the bottom, so it rejects
+		r.reanchor(1, true)
+		r.reanchor(v.row+1, true)
+		assert.False(t, r.reanchored)
+
+		// the stale pad would be measured from row 1 against a park at the
+		// bottom, scrolling a screenful of committed history away
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		assert.Equal(t, before, len(v.scrollback))
+		assert.Contains(t, v.Line(0), "hist")
+	})
+	t.Run("no_pad_on_fresh_session", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		buf.Reset()
+
+		r.reanchor(1, false)
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+
+		assert.NotContains(t, buf.String(), "\r\n\r\n")
+	})
+	t.Run("no_pad_when_live_is_empty", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r.reanchor(1, true)
+
+		r.setLive(nil, 0, 0)
+
+		assert.NotContains(t, buf.String(), "\r\n")
+		assert.False(t, r.reanchored)
+	})
+	t.Run("abandoned_frame_keeps_the_flag", func(t *testing.T) {
+		v := newVT(20, 8)
+		r := newTestInline(v)
+		var sig, draw atomic.Uint64
+		r.sigGen, r.drawGen = sig.Load, draw.Load
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+
+		sig.Add(1) // a burst is in flight; the frame will be abandoned
+		r.reanchor(1, true)
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+
+		assert.True(t, r.reanchored)
+	})
+	t.Run("commit_clears_the_flag", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 20, height: 8}}
+		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
+		r.reanchor(1, true)
+		buf.Reset()
+
+		r.commit([]histLine{{text: "one"}})
+
+		assert.False(t, r.reanchored)
+		assert.NotContains(t, buf.String(), strings.Repeat("\r\n", 6))
+	})
+	t.Run("forces_a_full_draw", func(t *testing.T) {
+		var buf strings.Builder
+		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r.setLive([]string{"draft", "ctx"}, 0, 2)
+		buf.Reset()
+
+		r.t.height = 20 // a height-only change would otherwise take the diff path
+		r.reanchor(1, true)
+		r.setLive([]string{"draft", "ctx"}, 0, 2)
+
+		assert.Contains(t, buf.String(), eraseBelow)
+		assert.Contains(t, buf.String(), strings.Repeat("\r\n", 18))
+	})
 }
 
 func TestInlineRendererScrollsNaturally(t *testing.T) {

@@ -21,6 +21,9 @@ import (
 
 const testPoll = time.Millisecond
 
+// testWords is filler prose long enough to wrap at every width the tests use.
+const testWords = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo "
+
 // newTestUI drives a UI in inline mode against the emulator, with no real
 // terminal behind it.
 func newTestUI(tb testing.TB, v *vt, in io.Reader) *UI {
@@ -44,6 +47,10 @@ func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 		done:     make(chan struct{}),
 		// afterDelay is the probe-timeout seam; tests override it per case
 		afterDelay: time.AfterFunc,
+	}
+	if inl, ok := u.render.(*inlineRenderer); ok {
+		inl.sigGen, inl.drawGen = u.sigGen.Load, u.drawGen.Load // as New wires them
+		u.settledW, u.settledH = u.render.size()
 	}
 	u.reader = newInputReader(in)
 	go u.reader.run()
@@ -1234,7 +1241,7 @@ func TestUIResizeGate(t *testing.T) {
 
 	setResizing := func(u *UI, on bool) {
 		u.mu.Lock()
-		u.resizing = on
+		u.resizing.Store(on)
 		u.mu.Unlock()
 	}
 
@@ -1248,7 +1255,7 @@ func TestUIResizeGate(t *testing.T) {
 
 		u.resize()
 		assert.Contains(t, u.snapshot(v), "777")
-		assert.False(t, u.resizing)
+		assert.False(t, u.resizing.Load())
 	})
 
 	t.Run("commits_flush_in_order_at_settle", func(t *testing.T) {
@@ -1345,7 +1352,7 @@ func TestThinkingResize(t *testing.T) {
 
 	setResizing := func(u *UI, on bool) {
 		u.mu.Lock()
-		u.resizing = on
+		u.resizing.Store(on)
 		u.mu.Unlock()
 	}
 	countDividers := func(screen string, width int) int {
@@ -1462,7 +1469,7 @@ func TestUIResizeStorm(t *testing.T) {
 	for _, w := range []int{20, 33, 15, 40, 26} {
 		v.setSize(w, 12)
 		u.mu.Lock()
-		u.resizing = true // the SIGWINCH arrived; the burst is in flight
+		u.resizing.Store(true) // the SIGWINCH arrived; the burst is in flight
 		u.mu.Unlock()
 		u.SetActivity("write", "writing \u4e16\u754c notes.go \x1b[2B streaming") // gated: draws nothing
 		u.resize()                                                                // the debounce settled
@@ -1482,6 +1489,36 @@ func TestUIResizeStorm(t *testing.T) {
 	screen := u.snapshot(v)
 	assert.Contains(t, screen, "write notes.go")
 	assert.Contains(t, screen, "writing \u4e16\u754c notes.go")
+}
+
+// TestUIHoldsDrawingFromTheSignal pins when the resize gate goes up. A
+// streaming Text owns u.mu across a goldmark parse, so holdForResize can sit
+// queued behind it for milliseconds; a gate raised only under the lock let that
+// call compose and land a whole frame on a grid the emulator was already
+// reflowing. Nothing may reach the terminal between the signal and the settle.
+func TestUIHoldsDrawingFromTheSignal(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+
+	u.Text("alpha bravo charlie delta echo ")
+	before := u.snapshot(v)
+
+	u.sigGen.Add(1) // SIGWINCH seen; holdForResize still queued on u.mu
+	u.Text("foxtrot golf hotel india juliet ")
+	assert.Equal(t, before, u.snapshot(v))
+
+	// a frame beginning after the signal is gated too: the baseline is the
+	// settled generation, not whatever sigGen read when this frame started
+	u.Text("kilo lima mike november ")
+	assert.Equal(t, before, u.snapshot(v))
+
+	u.holdForResize() // the queued hold sequences the bump under the lock
+	u.resize()        // the burst settles
+	assert.NotEqual(t, before, u.snapshot(v))
+	assert.Contains(t, u.snapshot(v), "november")
 }
 
 // TestUIActivityNewlineKeepsRowCount guards invariant 2 against caller text: a
@@ -1764,6 +1801,420 @@ func TestUIResizeDrawGraceCancelledBySignal(t *testing.T) {
 	fire()            // the grace elapses
 
 	assert.Equal(t, 2, countRules(u.snapshot(v)), "the draw was abandoned")
+}
+
+// captureGrace replaces the real timers with a captured draw-grace callback,
+// so a test runs the settled redraw on demand.
+func captureGrace(u *UI) func() {
+	var fire func()
+	u.afterDelay = func(d time.Duration, fn func()) *time.Timer {
+		if d == resizeDrawGrace {
+			fire = fn
+		}
+		return time.NewTimer(time.Hour) // never fires inside the test
+	}
+	return func() { fire() }
+}
+
+// settleProbe raises the settled redraw for the in-flight burst: the probe
+// goes out, the terminal's cursor report (row, 0 for none) and status reply
+// arrive, and the draw grace is left armed for the captured fire.
+func settleProbe(u *UI, row int) {
+	u.probeResize()
+	if row > 0 {
+		u.reader.reports <- row
+	}
+	u.probeAnswered()
+}
+
+// TestUIRestoreReanchorsTheBlock drives the reported gesture: a session with a
+// tall live block is maximized and then restored. Either half can leave the
+// block ending above the last row — the narrowing clamps the park, the
+// widening strands it above a dead band — and the settled redraw must pad the
+// block back to the screen bottom. The emulator answers nothing of its own, so
+// the tests inject the replies a real terminal would send.
+func TestUIRestoreReanchorsTheBlock(t *testing.T) {
+	t.Parallel()
+
+	words := testWords
+
+	t.Run("maximize_then_restore", func(t *testing.T) {
+		v := newVT(80, 24)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		fire := captureGrace(u)
+
+		u.Print(strings.Repeat(words, 4))
+		u.Text(strings.Repeat(words, 8)) // an unclosed block; the preview takes the rest of the rows
+
+		// maximize: the block ends above the bottom, but widening never re-anchors —
+		// the dead band is cosmetic and the pad would be visible churn
+		v.setSize(200, 50)
+		u.holdForResize()
+		settleProbe(u, 3)
+		fire()
+		assert.Equal(t, 2, v.row)
+
+		// restore: the reflow overflows the screen and the terminal clamps the
+		// park onto the top row; the settled redraw pads the block back
+		v.setSize(80, 24)
+		u.holdForResize()
+		settleProbe(u, 1)
+		fire()
+
+		block := len(u.render.(*inlineRenderer).live)
+		assert.Equal(t, v.h-block, v.row)
+		assert.Equal(t, 0, v.col)
+		assert.Contains(t, v.Line(v.h-1), "test")
+		assert.Equal(t, 1, countRules(v.Screen()))
+	})
+	t.Run("fresh_session_no_reanchor", func(t *testing.T) {
+		v := newVT(80, 24)
+		u := newTestUI(t, v, strings.NewReader(""))
+		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+		fire := captureGrace(u)
+
+		// a live preview with no committed history: the block correctly sits at
+		// the top, so an underfilled answer must not pad it down
+		u.Text(strings.Repeat(words, 5)[:300])
+
+		v.setSize(28, 24)
+		u.holdForResize()
+		settleProbe(u, 1)
+		fire()
+
+		assert.Equal(t, 0, v.row)
+		assert.NotContains(t, v.Line(v.h-1), "test")
+	})
+}
+
+// TestUIBlockEndsAtScreenBottom is the guard the re-anchor exists to keep:
+// after a narrowing whose reflow overflows the screen, the settled redraw
+// leaves the block's last row on the screen's last row. Every narrowing gets
+// the clamped cursor report a real terminal gives when the reflow clamps the
+// park, so a missing pad fails the last row rather than a blank band below
+// the prompt.
+func TestUIBlockEndsAtScreenBottom(t *testing.T) {
+	t.Parallel()
+
+	words := testWords
+	history := strings.Repeat(words, 4)
+	preview := strings.Repeat(words, 8)
+
+	for _, width := range []int{60, 48, 36, 28} {
+		t.Run("narrow_to_"+strconv.Itoa(width), func(t *testing.T) {
+			v := newVT(80, 24)
+			u := newTestUI(t, v, strings.NewReader(""))
+			u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+			fire := captureGrace(u)
+
+			u.Print(history)
+			u.Text(preview)
+
+			v.setSize(width, 24)
+			u.holdForResize()
+			settleProbe(u, 1) // the reflow overflows the screen; the park is clamped
+			fire()
+
+			block := len(u.render.(*inlineRenderer).live)
+			assert.Equal(t, v.h-block, v.row)
+			assert.Equal(t, 0, v.col)
+			assert.Contains(t, v.Line(v.h-1), "test")
+			assert.Equal(t, 1, countRules(v.Screen()))
+		})
+	}
+}
+
+// TestUIReanchorKeepsHistoryOnScreen guards the pad's arithmetic. The pad is
+// measured from the reported park row, so it fills the rows the erase just
+// cleared and stops. Measured from the screen height alone it overshoots by the
+// park's own row and scrolls that many committed rows away — on a session whose
+// history does not yet fill the screen, all of them.
+func TestUIReanchorKeepsHistoryOnScreen(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 24)
+	u, _ := newResponsiveUI(t, v)
+
+	u.Print("history line one")
+	u.Print("history line two")
+	u.Print("history line three")
+
+	v.setSize(60, 24)
+	settleBurst(t, u)
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	assert.Empty(t, v.scrollback, "the pad never scrolls")
+	assert.Contains(t, v.Screen(), "history line one")
+	block := len(u.render.(*inlineRenderer).live)
+	assert.Equal(t, v.h-block, v.row)
+}
+
+// TestUIReanchorGestures pins which resizes are repaired. Only a shrink can
+// retire the park: a grow rewraps content into fewer rows and takes none away,
+// so its dead band is cosmetic while the pad would be a visible jump. A corner
+// drag that widens but shortens still shrinks, and an equal-size settle keeps
+// the repair because its burst may have narrowed and been dragged back.
+func TestUIReanchorGestures(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name      string
+		w, h      int
+		reanchors bool
+	}{
+		{name: "narrow", w: 60, h: 24, reanchors: true},
+		{name: "shorter", w: 80, h: 16, reanchors: true},
+		{name: "widen_and_shorter", w: 100, h: 16, reanchors: true},
+		{name: "same_size", w: 80, h: 24, reanchors: true},
+		{name: "widen", w: 100, h: 24},
+		{name: "taller", w: 80, h: 40},
+		{name: "widen_and_taller", w: 100, h: 40},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newVT(80, 24)
+			u, _ := newResponsiveUI(t, v)
+			u.Print("history line one")
+			u.Print("history line two")
+			u.Print("history line three")
+
+			v.setSize(tc.w, tc.h)
+			settleBurst(t, u)
+
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			block := len(u.render.(*inlineRenderer).live)
+			if tc.reanchors {
+				assert.Equal(t, v.h-block, v.row)
+				assert.Contains(t, v.Line(v.h-1), "test")
+			} else {
+				assert.Less(t, v.row, v.h-block, "the block was left where the reflow put it")
+			}
+			assert.Empty(t, v.scrollback)
+			assert.Contains(t, v.Screen(), "history line one")
+		})
+	}
+}
+
+// TestUISettleIgnoresUnsolicitedReport pins that a settle acts only on a reply
+// its own probe asked for. SIGCONT and a direct resize settle without probing,
+// so a report left over from an earlier burst would otherwise re-anchor against
+// a row that is no longer true.
+func TestUISettleIgnoresUnsolicitedReport(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 24)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	fire := captureGrace(u)
+
+	u.Print("history line one")
+	u.Print("history line two")
+
+	u.reader.reports <- 1 // a stale reply, with no probe of ours behind it
+	v.setSize(60, 24)
+	u.resize()
+
+	block := len(u.render.(*inlineRenderer).live)
+	require.Less(t, v.row, v.h-block, "the stale report must not move the block")
+
+	settleProbe(u, 1) // our own probe, answered
+	fire()
+
+	assert.Equal(t, v.h-block, v.row)
+}
+
+// TestUISettleClearsPendingPad pins the other half of that lifetime: a pad
+// raised by one settle and left pending on a frame the gate abandoned must not
+// survive a settle that cannot re-anchor. The row it was measured from belongs
+// to a grid the next gesture has already moved.
+func TestUISettleClearsPendingPad(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 24)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	fire := captureGrace(u)
+
+	u.Print("history line one")
+	u.Print("history line two")
+	inl := u.render.(*inlineRenderer)
+	inl.reanchor(1, true) // pending from an abandoned frame
+	require.True(t, inl.reanchored)
+
+	v.setSize(100, 40) // a grow: it cannot have lost the park, so it never re-anchors
+	settleProbe(u, 3)
+	fire()
+
+	assert.False(t, inl.reanchored)
+	// applied here the stale pad would be measured from row 1 against a park the
+	// grow left near the top, dropping the block to the bottom and scrolling
+	block := len(inl.live)
+	assert.Less(t, v.row, v.h-block)
+	assert.Empty(t, v.scrollback)
+	assert.Contains(t, v.Screen(), "history line one")
+}
+
+// settleBurst drives one resize burst end to end against a terminal that answers
+// the probes: the signal raises both gates before the lock, the probe goes out,
+// and the reply releases the settled redraw.
+func settleBurst(tb testing.TB, u *UI) {
+	tb.Helper()
+	u.sigGen.Add(1)
+	u.resizing.Store(true)
+	u.holdForResize()
+	u.probeResize()
+	require.Eventually(tb, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return !u.resizing.Load() && u.drawGen.Load() == u.sigGen.Load()
+	}, 2*time.Second, testPoll)
+}
+
+// respVT is a vt that answers the CPR and DSR queries itself, computing the
+// cursor row from its grid, so a resize gesture runs against replies a real
+// terminal would send instead of injected ones.
+type respVT struct {
+	v  *vt
+	pw *io.PipeWriter
+}
+
+func (r *respVT) Write(p []byte) (int, error) {
+	_, _ = r.v.Write(p)
+	s := string(p)
+	var replies strings.Builder
+	for {
+		i, j := strings.Index(s, cursorQuery), strings.Index(s, statusQuery)
+		if i < 0 && j < 0 {
+			break
+		}
+		if i >= 0 && (j < 0 || i < j) {
+			replies.WriteString(cprReply(r.v.row))
+			s = s[:i] + s[i+len(cursorQuery):]
+		} else {
+			replies.WriteString("\x1b[0n")
+			s = s[:j] + s[j+len(statusQuery):]
+		}
+	}
+	if replies.Len() > 0 && r.pw != nil {
+		_, _ = io.WriteString(r.pw, replies.String())
+	}
+	return len(p), nil
+}
+
+func cprReply(row int) string {
+	return "\x1b[" + strconv.Itoa(row+1) + ";1R"
+}
+
+// newResponsiveUI drives a UI whose terminal answers the probes from its grid.
+func newResponsiveUI(tb testing.TB, v *vt) (*UI, *respVT) {
+	tb.Helper()
+	pr, pw := io.Pipe()
+	term := &respVT{v: v, pw: pw}
+	u := &UI{
+		theme:      NewTheme(ColorNone, DefaultPalette()),
+		render:     &inlineRenderer{t: &termState{out: term, fd: -1, width: v.w, height: v.h}},
+		mode:       ModeInline,
+		status:     Status{Model: "test", MaxTokens: 1000},
+		in:         pr,
+		inFd:       -1,
+		msgs:       make(chan string),
+		controls:   make(chan Control, 4),
+		done:       make(chan struct{}),
+		afterDelay: time.AfterFunc,
+	}
+	inl := u.render.(*inlineRenderer)
+	inl.sigGen, inl.drawGen = u.sigGen.Load, u.drawGen.Load
+	inl.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+	u.settledW, u.settledH = u.render.size() // as New wires them
+	u.reader = newInputReader(pr)
+	go u.reader.run()
+	go u.readKeys()
+	go u.watchStatus()
+	tb.Cleanup(u.Close)
+	tb.Cleanup(func() { _ = pw.Close() })
+	return u, term
+}
+
+// TestUIResponsiveResize drives the gesture against a terminal that answers
+// the probes: history deep enough to overflow on restore, deltas landing both
+// in the signal-delivery window and inside the burst. The settle must leave
+// the block ending on the last row after both halves of the gesture.
+func TestUIResponsiveResize(t *testing.T) {
+	t.Parallel()
+
+	words := testWords
+
+	settle := func(u *UI) {
+		u.probeResize()
+		require.Eventually(t, func() bool {
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			return !u.resizing.Load() && u.drawGen.Load() == u.sigGen.Load()
+		}, 2*time.Second, testPoll)
+	}
+	assertBottomAnchored := func(t *testing.T, u *UI, v *vt) {
+		t.Helper()
+		// poll: the verify round's settle lands a grace after the first
+		require.Eventually(t, func() bool {
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			block := len(u.render.(*inlineRenderer).live)
+			return v.row == v.h-block && v.col == 0 && countRules(v.Screen()) == 1
+		}, 2*time.Second, testPoll)
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		block := len(u.render.(*inlineRenderer).live)
+		assert.Equal(t, v.h-block, v.row)
+		assert.Equal(t, 0, v.col)
+		assert.Contains(t, v.Line(v.h-1), "test")
+		assert.Equal(t, 1, countRules(v.Screen()))
+	}
+
+	t.Run("streaming_through_the_gesture", func(t *testing.T) {
+		v := newVT(80, 24)
+		u, _ := newResponsiveUI(t, v)
+
+		u.Print(strings.Repeat(words, 8))
+		u.Text(strings.Repeat(words, 10))
+
+		v.setSize(200, 50)
+		u.Text("mid window ") // lands before the signal is processed
+		u.sigGen.Add(1)
+		u.resizing.Store(true)
+		u.holdForResize()
+		u.Text("mid burst ") // gated; deferred with any commit
+		settle(u)
+
+		v.setSize(80, 24)
+		u.Text("mid window two ")
+		u.sigGen.Add(1)
+		u.resizing.Store(true)
+		u.holdForResize()
+		u.Text("mid burst two ")
+		settle(u)
+
+		assertBottomAnchored(t, u, v)
+	})
+	t.Run("no_reply_degrades_gracefully", func(t *testing.T) {
+		v := newVT(80, 24)
+		u, term := newResponsiveUI(t, v)
+		term.pw = nil // the terminal went quiet: no CPR, no DSR
+
+		u.Print(strings.Repeat(words, 8))
+		u.Text(strings.Repeat(words, 10))
+
+		v.setSize(60, 24)
+		u.sigGen.Add(1)
+		u.resizing.Store(true)
+		u.holdForResize()
+		settle(u) // released by the probe timeout instead of a reply
+
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		assert.False(t, u.resizing.Load())
+	})
 }
 
 func TestSetTheme(t *testing.T) {

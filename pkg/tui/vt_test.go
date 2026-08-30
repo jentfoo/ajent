@@ -25,6 +25,7 @@ type vt struct {
 	wrapDefer  bool
 	scrollback []string
 	dsrCount   int
+	cprCount   int // CSI 6 n cursor position queries, told apart from the DSR
 }
 
 // Sequences the package no longer emits, kept so the emulator stays a faithful
@@ -200,7 +201,12 @@ func (v *vt) apply(params string, final rune) {
 		v.bot = min(max(arg(1, v.h)-1, 0), v.h-1)
 		v.row, v.col, v.wrapDefer = 0, 0, false
 	case 'n':
-		v.dsrCount++
+		switch params {
+		case "5":
+			v.dsrCount++
+		case "6":
+			v.cprCount++
+		}
 	}
 }
 
@@ -530,6 +536,12 @@ func TestVT(t *testing.T) {
 		v.WriteString("a\u009b2Bb")
 		assert.Equal(t, "a", v.Line(0))
 		assert.Equal(t, " b", v.Line(2))
+	})
+	t.Run("cpr_and_dsr_counted_separately", func(t *testing.T) {
+		v := newVT(8, 2)
+		v.WriteString(cursorQuery + statusQuery)
+		assert.Equal(t, 1, v.cprCount)
+		assert.Equal(t, 1, v.dsrCount)
 	})
 	t.Run("del_and_c1_print_nothing", func(t *testing.T) {
 		v := newVT(8, 2)

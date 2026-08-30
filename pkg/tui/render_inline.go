@@ -38,8 +38,14 @@ type inlineRenderer struct {
 	// walk, and with it the park, stays byte-identical to a full redraw.
 	base baseline
 
-	// sigGen reads the UI's resize-signal generation. nil never aborts.
-	sigGen func() uint64
+	reanchored bool // a reflow lost the screen bottom; the next full draw pads back to it
+	anchorRow  int  // reported park row (1-based) the pad is measured from
+
+	// sigGen reads the UI's resize-signal generation, drawGen the generation the
+	// live block is settled at. A frame is safe only while they agree. Both nil
+	// never aborts.
+	sigGen  func() uint64
+	drawGen func() uint64
 }
 
 // baseline is the bookkeeping for row-diffing against the frame on screen.
@@ -52,7 +58,7 @@ type baseline struct {
 	frames    int      // monotonic paint count; forces a full draw via diffFullEvery
 	prev      []string // emitted rows (post-caret) of the last written frame
 	prevWidth int      // width that frame was drawn at
-	forceFull bool     // commit/suspend/clearHistory: the on-screen block is gone
+	forceFull bool     // commit/suspend/clearHistory: the on-screen block is gone; reanchor: the pad needs the full path
 }
 
 // invalidate marks the on-screen block as unknown so the next draw repaints it
@@ -137,6 +143,7 @@ func (r *inlineRenderer) paint() {
 	b.WriteString(hideCursor)
 	if !diff {
 		b.WriteString(r.eraseLive())
+		b.WriteString(r.anchorPad())
 	}
 	emitted := r.composeRows(&b, diff)
 	b.WriteString(endSync)
@@ -164,9 +171,13 @@ func (r *inlineRenderer) record(emitted []string, diff bool) {
 	b.frames++
 	if diff {
 		b.prev = emitted
-		return
+		return // a diff never follows a reanchor: it sets forceFull, which canDiff rejects
 	}
 	b.prev, b.prevWidth, b.forceFull = emitted, r.t.width, false
+	// the pad landed with this frame. On the commit path none was emitted, but
+	// the history that frame wrote moved the block, so the row it was measured
+	// from no longer describes where the block sits
+	r.reanchored = false
 }
 
 // composeRows writes the live rows into b and returns the emitted rows to
@@ -218,15 +229,20 @@ func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 	return emitted
 }
 
-// generation captures the resize-signal generation a frame starts at.
+// generation is the resize-signal generation drawing is settled at, the
+// baseline a frame is judged against.
 func (r *inlineRenderer) generation() uint64 {
-	if r.sigGen == nil {
+	if r.drawGen == nil {
 		return 0
 	}
-	return r.sigGen()
+	return r.drawGen()
 }
 
-// stale reports whether a resize signal arrived since gen was captured.
+// stale reports whether a signal arrived that gen has not been settled for.
+// The baseline is the settled generation, never one captured as the frame
+// starts: composing a frame parses the open markdown block, so a signal landing
+// mid-compose would otherwise become the frame's own baseline and let it write
+// against a grid the emulator is still reflowing.
 func (r *inlineRenderer) stale(gen uint64) bool {
 	return r.sigGen != nil && r.sigGen() != gen
 }
@@ -273,6 +289,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 		// so the next paint rebuilds the block from the current row.
 		b.WriteString(endSync)
 		r.t.write(b.String())
+		r.reanchored = false // this frame's history moved the block; the row is stale
 		r.base.invalidate()
 		return
 	}
@@ -290,6 +307,7 @@ func (r *inlineRenderer) clearHistory() {
 	r.t.write(r.eraseLive())
 	r.live = nil
 	r.base.invalidate()
+	r.reanchored = false // the block it was measured against is gone
 }
 
 // resize picks up the new terminal size; nothing needs redrawing here. The next
@@ -299,11 +317,60 @@ func (r *inlineRenderer) clearHistory() {
 // however the emulator reflows them and are never re-rendered.
 func (r *inlineRenderer) resize() { r.t.refreshSize() }
 
-// probe emits a status query whose reply (decoded as keyStatusReport) proves
-// the terminal has processed everything sent before it, including the resize
-// reflow a settled burst is about to draw behind. The gate narrows the
-// mid-reflow draw window; this closes it.
-func (r *inlineRenderer) probe() { r.t.write(statusQuery) }
+// probe asks the terminal where the cursor is and for a status reply, both
+// emitted after everything that preceded them, so the replies prove the
+// terminal processed the settled reflow. The status reply (keyStatusReport)
+// releases the barrier; the cursor reply (keyCursorReport) measures where the
+// reflow actually left the park.
+func (r *inlineRenderer) probe() { r.t.write(cursorQuery + statusQuery) }
+
+// reanchor takes the CPR-reported cursor row (1-based) and marks the next full
+// draw to pad the block back to the screen bottom when the block would end
+// above the last row on a started session: the reflow clamped or stranded the
+// park. A fresh session (started false) owns the top and is left alone, and a
+// row of zero means the caller has no usable evidence (see settleResizeLocked,
+// which decides which gestures deserve the repair).
+//
+// Every path sets the outcome, because a pad can outlive the frame that should
+// have consumed it: paint abandons a frame a resize signal raced, and the flag
+// survives with it. Measured later against a grid that has moved since, that
+// pad is exactly the overshoot the row is there to prevent — a rejected row
+// must therefore clear it, not leave it standing.
+func (r *inlineRenderer) reanchor(row int, started bool) {
+	r.reanchored, r.anchorRow = false, 0
+	if !started || row <= 0 || len(r.live) == 0 {
+		return
+	}
+	if row-1+len(r.live) >= r.t.height {
+		return // the block already reaches the bottom
+	}
+	r.reanchored, r.anchorRow = true, row
+	r.base.forceFull = true // a height-only change would otherwise take the diff path
+}
+
+// anchorPad drops the block to the screen bottom, in newlines so nothing is
+// addressed. Pure: paint may still abandon the frame.
+//
+// The rows are measured against the frame this pad lands on, not the one the
+// settle decided against — repaint recomposes the block in between, and only
+// the height being drawn now puts its last row on the last screen row. A frame
+// that outgrew the space below the park pads by nothing rather than by a
+// negative count.
+//
+// The pad is measured from the reported row, which is what keeps it from
+// scrolling: reanchor rejects any row where the block already reaches the
+// bottom, so the cursor lands on exactly height − live and the block fills the
+// rows below it. eraseLive has just cleared everything from the park down, so
+// the pad only ever writes into blank space — no committed row is pushed into
+// scrollback. The clamp keeps a garbage row bounded; it can only fail to mean
+// underfill, never pad past the screen.
+func (r *inlineRenderer) anchorPad() string {
+	if !r.reanchored || len(r.live) == 0 {
+		return ""
+	}
+	pad := r.t.height - len(r.live) - (r.anchorRow - 1)
+	return strings.Repeat("\r\n", min(max(pad, 0), r.t.height))
+}
 
 func (r *inlineRenderer) setTheme(Theme) {} // inline draws no styled chrome of its own
 
@@ -316,7 +383,8 @@ func (r *inlineRenderer) scroll(int) bool { return false }
 // or another program lands cleanly.
 func (r *inlineRenderer) suspend(inFd int) {
 	r.t.write(r.eraseLive() + bracketedPasteOff + showCursor)
-	r.base.invalidate() // another program owned the screen
+	r.base.invalidate()  // another program owned the screen
+	r.reanchored = false // and moved the cursor: the recorded row is stale evidence
 	r.t.restore(inFd)
 }
 
