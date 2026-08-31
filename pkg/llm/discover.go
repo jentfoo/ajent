@@ -6,8 +6,10 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/config"
@@ -99,18 +101,53 @@ func fresh(e CacheEntry, ttl time.Duration, now time.Time) bool {
 // modelParser turns a provider's discovery response into model entries.
 type modelParser func(body []byte) ([]ModelConfig, error)
 
-// discoverySpec is how one flavor lists its own models.
-type discoverySpec struct {
+// openAIModelsPath is the standard chat-completions list endpoint every server in
+// that family speaks. It backs up flavors whose own endpoint cannot describe what
+// is loaded.
+const openAIModelsPath = "/v1/models"
+
+// resolveDiscoveryPath joins a discovery endpoint onto a provider's base URL,
+// collapsing a /v1 prefix the base already carries. The OpenAI model list lives at
+// "/v1/models" on a bare host and at "/models" relative to a base that ends in
+// "/v1"; asking for both produces a 404.
+func resolveDiscoveryPath(basePath, path string) string {
+	if strings.HasPrefix(path, "/v1/") && hasV1Suffix(basePath) {
+		return strings.TrimPrefix(path, "/v1")
+	}
+	return path
+}
+
+// hasV1Suffix reports whether a URL path already ends in the /v1 API prefix.
+func hasV1Suffix(p string) bool {
+	p = strings.TrimRight(p, "/")
+	return p == "v1" || strings.HasSuffix(p, "/v1")
+}
+
+// discoveryCandidate is one endpoint a flavor can be asked for its model list.
+type discoveryCandidate struct {
 	path  string
 	parse modelParser
 }
 
+// discoverySpec lists a flavor's endpoints in order; the first that yields usable
+// models wins, so an unhelpful native response falls back to /v1/models.
+type discoverySpec struct {
+	candidates []discoveryCandidate
+}
+
 // discoverySpecs is the set of providers that can be asked what they serve.
-// Anything absent is configuration only.
+// Anything absent is configuration only. The generic flavor discovers through the
+// standard OpenAI list, opt-in via "discover": true like every other provider.
 var discoverySpecs = map[Flavor]discoverySpec{
-	FlavorOpenRouter: {path: "/models", parse: parseOpenRouterModels},
-	FlavorLMStudio:   {path: "/api/v0/models", parse: parseLMStudioModels},
-	FlavorLlamaCpp:   {path: "/props", parse: parseLlamaProps},
+	FlavorOpenRouter: {candidates: []discoveryCandidate{{path: "/models", parse: parseOpenRouterModels}}},
+	FlavorLMStudio:   {candidates: []discoveryCandidate{{path: "/api/v0/models", parse: parseLMStudioModels}}},
+	// llama.cpp reports one loaded model via /props; in router mode that is
+	// useless, so fall back to the OpenAI-compatible list.
+	FlavorLlamaCpp: {candidates: []discoveryCandidate{
+		{path: "/props", parse: parseLlamaProps},
+		{path: openAIModelsPath, parse: parseOpenAIModels},
+	}},
+	FlavorGeneric: {candidates: []discoveryCandidate{{path: openAIModelsPath, parse: parseOpenAIModels}}},
 }
 
 // DiscoverOptions configures a discovery pass.
@@ -166,7 +203,9 @@ func Discover(ctx context.Context, f File, cache map[string]CacheEntry, opts Dis
 	return out, warnings
 }
 
-// discoverOne builds a client for a provider and refreshes its entry.
+// discoverOne builds a client for a provider and refreshes its entry, trying each
+// candidate endpoint until one yields usable models. An unreachable server fails
+// fast rather than walking the rest of the list.
 func discoverOne(ctx context.Context, name string, cfg ProviderConfig, flavor Flavor,
 	spec discoverySpec, prev CacheEntry, now time.Time, opts DiscoverOptions,
 ) (CacheEntry, error) {
@@ -200,7 +239,36 @@ func discoverOne(ctx context.Context, name string, cfg ProviderConfig, flavor Fl
 	if err != nil {
 		return prev, err
 	}
-	return discoverProvider(ctx, client, spec.path, spec.parse, prev, now)
+	var lastErr error
+	for _, cand := range spec.candidates {
+		e, err := discoverProvider(ctx, client, resolveDiscoveryPath(client.base.Path, cand.path), cand.parse, prev, now)
+		if err == nil && len(e.Models) > 0 {
+			return e, nil
+		}
+		// an unreachable server fails every endpoint; do not double the retry ladder
+		if ctx.Err() != nil || (err != nil && serverDown(err)) {
+			return prev, err
+		}
+		if lastErr == nil {
+			lastErr = err // remember the first failure to report if none succeed
+		}
+	}
+	if lastErr != nil {
+		return prev, lastErr
+	}
+	return prev, errors.New("llm: discovery returned no models")
+}
+
+// serverDown reports whether a discovery failure means the endpoint is unreachable,
+// as opposed to merely unhelpful. Only a transport-level error qualifies, so an HTTP
+// or parse failure still falls through to the next candidate.
+func serverDown(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return false // the server answered; a sibling endpoint may behave differently
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr)
 }
 
 // discoverProvider performs a conditional GET and returns the refreshed entry.

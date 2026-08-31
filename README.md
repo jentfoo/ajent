@@ -88,7 +88,7 @@ Per provider you can set:
 * `headers` - extra request headers
 * `timeouts` - connect / TLS / header / idle / total bounds as Go durations; an explicit `"0s"` disables a bound. Split these because one client timeout would clamp the body read, which is exactly what must be allowed to take minutes.
 * `retry` - attempts and backoff (`base`, `max`, `jitter`); honors `Retry-After` but caps it at 60s.
-* `discover` - whether this provider's models are fetched from the server.
+* `discover` - whether this provider's models are fetched from the server. On by default for openrouter, lm-studio and llama.cpp; any other OpenAI-compatible endpoint can opt in with `"discover": true`, which asks its `/v1/models`.
 * `models` - your declared list for this provider. When present, it *is* the whole list; discovery only fills gaps.
 
 ### Models
@@ -96,7 +96,7 @@ Per provider you can set:
 Models come from exactly two places, both under the provider they belong to:
 
 * **hand-written declarations** - your per-provider `models` list.
-* **provider discovery** - asking openrouter, lm-studio or llama.cpp for their model list. It fills any gaps in what you declared.
+* **provider discovery** - asking openrouter, lm-studio or llama.cpp for their model list. It fills any gaps in what you declared. A llama.cpp multi-model router (which reports nothing useful on `/props`) falls back to its OpenAI-compatible `/v1/models`, and any other server speaking chat-completions can be discovered the same way with `"discover": true`.
 
 The minimal entry (if not using discovery) is just an id. Everything else has a sane default, so you typically only add one to pin something discovery got wrong (a name or context window).
 

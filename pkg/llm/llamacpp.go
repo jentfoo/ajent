@@ -34,16 +34,22 @@ type llamaProps struct {
 }
 
 // parseLlamaProps turns /props into a single model entry. Only the server knows
-// the real loaded context length, which is why discovery beats configuration
-// for this field.
+// the real loaded context length, which is why discovery beats configuration for
+// this field. A multi-model router reports no single loaded model, so it yields an
+// empty result and lets discovery fall back to /v1/models.
 func parseLlamaProps(body []byte) ([]ModelConfig, error) {
 	var p llamaProps
 	if err := json.Unmarshal(body, &p); err != nil {
 		return nil, err
 	}
+	// a router reports no loaded model path; nothing here is worth naming
+	if p.ModelPath == "" || p.ModelPath == "none" {
+		return nil, nil
+	}
 	name := path.Base(p.ModelPath)
-	if name == "" || name == "." || name == "/" {
-		name = "llamacpp"
+	// a degenerate base name has nothing to identify the model by either
+	if name == "." || name == "/" {
+		return nil, nil
 	}
 	ctx := p.DefaultGenerationSettings.NCtx
 	if ctx == 0 {
@@ -133,4 +139,65 @@ func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, err
 		return 0, err
 	}
 	return len(out.Tokens), nil
+}
+
+// openAIModels is the standard chat-completions /v1/models response. The status
+// and meta fields are optional extras llama.cpp routers attach; other servers omit
+// them, in which case every listed model stays available.
+type openAIModels struct {
+	Data []struct {
+		ID     string `json:"id"`
+		Object string `json:"object"`
+		Status struct {
+			Value string `json:"value"` // llama.cpp router: "loaded" or "unloaded"
+		} `json:"status"`
+		Meta struct {
+			NCtx int `json:"n_ctx"`
+		} `json:"meta"`
+		Architecture struct {
+			InputModalities []string `json:"input_modalities"`
+		} `json:"architecture"`
+	} `json:"data"`
+}
+
+// parseOpenAIModels turns the standard /v1/models list into model entries. It is
+// the common denominator every chat-completions server speaks, so it backs up a
+// flavor whose own endpoint cannot describe what is loaded (a llama.cpp router). A
+// router marks models it has not yet swapped in as unloaded; those are dropped so
+// only actually-available models surface. Its meta.n_ctx carries the real context
+// window, which beats configuration for that field.
+func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
+	var wire openAIModels
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]ModelConfig, 0, len(wire.Data))
+	for _, d := range wire.Data {
+		// a blank id names nothing usable
+		if d.ID == "" {
+			continue
+		}
+		// a plain OpenAI server reports no status; only an explicit unloaded drops it
+		if d.Status.Value == "unloaded" {
+			continue
+		}
+		m := ModelConfig{ID: d.ID, Name: d.ID}
+		var input []Modality
+		for _, mod := range d.Architecture.InputModalities {
+			switch Modality(mod) {
+			case ModalityText:
+				input = append(input, ModalityText)
+			case ModalityImage:
+				input = append(input, ModalityImage)
+			}
+		}
+		if len(input) > 0 {
+			m.Input = input
+		}
+		if d.Meta.NCtx > 0 {
+			m.ContextWindow = &d.Meta.NCtx
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }

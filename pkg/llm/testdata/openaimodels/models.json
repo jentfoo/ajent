@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "id": "unsloth/GLM-5.2-GGUF:IQ3_XXS",
+      "object": "model",
+      "owned_by": "llamacpp",
+      "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "unsloth/GLM-5.3-Flash-GGUF:Q6_K_XL",
+      "object": "model",
+      "owned_by": "llamacpp",
+      "architecture": { "input_modalities": ["text", "image"], "output_modalities": ["text"] }
+    },
+    {
+      "id": "unsloth/Qwen3.5-397B-A17B-GGUF:MXFP4_MOE",
+      "object": "model",
+      "owned_by": "llamacpp",
+      "architecture": { "input_modalities": ["text", "image"], "output_modalities": ["text"] }
+    }
+  ],
+  "object": "list"
+}

@@ -1,0 +1,9 @@
+{
+  "role": "router",
+  "max_instances": 4,
+  "models_autoload": true,
+  "model_alias": "llama-server",
+  "model_path": "none",
+  "default_generation_settings": { "params": null, "n_ctx": 0 },
+  "build_info": "b10700-d07e71ede"
+}

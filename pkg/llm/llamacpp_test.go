@@ -32,11 +32,20 @@ func TestParseLlamaProps(t *testing.T) {
 		require.NotNil(t, got[0].ContextWindow)
 		assert.Equal(t, 4096, *got[0].ContextWindow)
 	})
-	t.Run("missing_model_path_still_yields_an_entry", func(t *testing.T) {
+	t.Run("missing_model_path_is_a_router", func(t *testing.T) {
 		got, err := parseLlamaProps([]byte(`{"default_generation_settings":{"n_ctx":2048}}`))
 		require.NoError(t, err)
-		require.Len(t, got, 1)
-		assert.Equal(t, "llamacpp", got[0].ID)
+		assert.Empty(t, got) // nothing to name; discovery falls back to /v1/models
+	})
+	t.Run("none_model_path_is_a_router", func(t *testing.T) {
+		got, err := parseLlamaProps([]byte(`{"model_path":"none"}`))
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+	t.Run("degenerate_base_name_yields_nothing", func(t *testing.T) {
+		got, err := parseLlamaProps([]byte(`{"model_path":"/"}`))
+		require.NoError(t, err)
+		assert.Empty(t, got)
 	})
 	t.Run("unknown_context_is_left_unset", func(t *testing.T) {
 		got, err := parseLlamaProps([]byte(`{"model_path":"/m/x.gguf"}`))
@@ -45,6 +54,41 @@ func TestParseLlamaProps(t *testing.T) {
 	})
 	t.Run("malformed_body_errors", func(t *testing.T) {
 		_, err := parseLlamaProps([]byte("nope"))
+		assert.Error(t, err)
+	})
+}
+
+func TestParseOpenAIModels(t *testing.T) {
+	t.Parallel()
+
+	data, err := os.ReadFile(filepath.Join("testdata", "openaimodels", "models.json"))
+	require.NoError(t, err)
+
+	got, err := parseOpenAIModels(data)
+	require.NoError(t, err)
+	require.Len(t, got, 3) // no status field: every model stays available
+	assert.Equal(t, []Modality{ModalityText}, got[0].Input)
+	assert.Equal(t, []Modality{ModalityText, ModalityImage}, got[1].Input)
+
+	t.Run("router_drops_unloaded_keeps_context", func(t *testing.T) {
+		data, err := os.ReadFile(filepath.Join("testdata", "openaimodels", "models_router.json"))
+		require.NoError(t, err)
+
+		got, err := parseOpenAIModels(data)
+		require.NoError(t, err)
+		require.Len(t, got, 1) // only the loaded model survives
+		assert.Equal(t, "unsloth/GLM-5.3-Flash-GGUF:Q6_K_XL", got[0].ID)
+		require.NotNil(t, got[0].ContextWindow)
+		assert.Equal(t, 667392, *got[0].ContextWindow) // meta.n_ctx
+	})
+	t.Run("unloaded_without_meta_is_dropped", func(t *testing.T) {
+		body := []byte(`{"data":[{"id":"a","status":{"value":"unloaded"}}]}`)
+		got, err := parseOpenAIModels(body)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+	t.Run("malformed_body_errors", func(t *testing.T) {
+		_, err := parseOpenAIModels([]byte("not json"))
 		assert.Error(t, err)
 	})
 }

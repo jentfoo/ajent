@@ -1,12 +1,17 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +37,43 @@ func idParser(body []byte) ([]ModelConfig, error) {
 		out[i] = ModelConfig{ID: d.ID}
 	}
 	return out, nil
+}
+
+func TestServerDown(t *testing.T) {
+	t.Parallel()
+
+	serverErr := &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"transport_error_is_down", serverErr, true},
+		{"api_error_is_not_down", &APIError{Status: 404}, false},
+		{"context_cancel_is_not_net_error", context.Canceled, false},
+		{"nil_is_not_down", nil, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, serverDown(tc.err))
+		})
+	}
+}
+
+// roundTripperFunc adapts a function to http.RoundTripper for transport injection.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// statusResponse builds an HTTP response whose body carries the given message,
+// standing in for a real server that answered.
+func statusResponse(status int, msg string, r *http.Request) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(msg)),
+		Request:    r,
+	}
 }
 
 func TestDiscoverProvider(t *testing.T) {
@@ -284,6 +326,116 @@ func TestDiscover(t *testing.T) {
 				assert.Len(t, cache[tc.flavor].Models, tc.models)
 			})
 		}
+	})
+	t.Run("generic_provider_discovers_via_openai_list", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/v1/models", "openaimodels/models.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{
+			"lutra": {BaseURL: srv.URL, Discover: ptr(true)},
+		}}
+
+		cache, warnings := Discover(t.Context(), f, nil, opts())
+		assert.Empty(t, warnings)
+		require.Contains(t, cache, "lutra")
+		assert.Len(t, cache["lutra"].Models, 3)
+	})
+	t.Run("generic_base_ending_in_v1_drops_the_prefix", func(t *testing.T) {
+		// a base URL that already carries /v1 must not be asked for /v1/v1/models
+		var hits int
+		srv := discoveryServer(t, "/v1/models", "openaimodels/models.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{
+			"lutra": {BaseURL: srv.URL + "/v1", Discover: ptr(true)},
+		}}
+
+		cache, warnings := Discover(t.Context(), f, nil, opts())
+		assert.Empty(t, warnings)
+		require.Contains(t, cache, "lutra")
+		// a plain OpenAI server reports no status; every listed model stays available
+		assert.Len(t, cache["lutra"].Models, 3)
+		assert.Equal(t, 1, hits) // served at /v1/models once, not /v1/v1/models
+	})
+	t.Run("generic_without_opt_in_is_skipped", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"lutra": {BaseURL: "http://127.0.0.1:1"},
+		}}
+		cache, warnings := Discover(t.Context(), f, nil, opts())
+		assert.Empty(t, cache)
+		assert.Empty(t, warnings)
+	})
+	t.Run("llamacpp_router_falls_back_to_openai_list", func(t *testing.T) {
+		var propsHits, modelsHits int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.URL.Path {
+			case "/props":
+				propsHits++
+				data, _ := os.ReadFile(filepath.Join("testdata", "llamacpp", "props_router.json"))
+				_, _ = w.Write(data)
+			case "/v1/models":
+				modelsHits++
+				data, _ := os.ReadFile(filepath.Join("testdata", "openaimodels", "models_router.json"))
+				_, _ = w.Write(data)
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		t.Cleanup(srv.Close)
+
+		f := File{Providers: map[string]ProviderConfig{
+			"llamacpp": {BaseURL: srv.URL},
+		}}
+		cache, warnings := Discover(t.Context(), f, nil, opts())
+		assert.Empty(t, warnings)
+		require.Contains(t, cache, "llamacpp")
+		// only the loaded model surfaces; unloaded router entries are dropped
+		models := cache["llamacpp"].Models
+		require.Len(t, models, 1)
+		assert.Equal(t, "unsloth/GLM-5.3-Flash-GGUF:Q6_K_XL", models[0].ID)
+		require.NotNil(t, models[0].ContextWindow)
+		assert.Equal(t, 667392, *models[0].ContextWindow) // meta.n_ctx
+		assert.Equal(t, 1, propsHits)                     // consulted first
+		assert.Equal(t, 1, modelsHits)                    // then the fallback won
+	})
+	t.Run("unreachable_server_skips_the_fallback", func(t *testing.T) {
+		// a dead server fails every endpoint; only the primary is tried once its own
+		// retry ladder is spent, rather than doubling it on /v1/models
+		var trips atomic.Int32
+		tr := roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
+			trips.Add(1)
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}
+		})
+		o := opts()
+		o.Transport = tr
+		f := File{Providers: map[string]ProviderConfig{
+			"llamacpp": {BaseURL: "http://127.0.0.1:9"},
+		}}
+
+		_, warnings := Discover(t.Context(), f, nil, o)
+		require.Len(t, warnings, 1)
+		assert.Equal(t, defaultAttempts, int(trips.Load())) // the primary's full ladder, no fallback
+	})
+	t.Run("http_failure_retries_the_next_candidate", func(t *testing.T) {
+		// a reachable server that answers unhelpfully still falls through; the first
+		// failure is the one reported when neither candidate yields models
+		var trips atomic.Int32
+		tr := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			trips.Add(1)
+			if strings.HasSuffix(r.URL.Path, "/v1/models") {
+				return statusResponse(http.StatusForbidden, "forbidden models", r), nil
+			}
+			return statusResponse(http.StatusBadRequest, "bad props", r), nil
+		})
+		o := opts()
+		o.Transport = tr
+		f := File{Providers: map[string]ProviderConfig{
+			"llamacpp": {BaseURL: "http://127.0.0.1:9"},
+		}}
+		prev := map[string]CacheEntry{"llamacpp": {Models: []ModelConfig{{ID: "cached"}}}}
+
+		cache, warnings := Discover(t.Context(), f, prev, o)
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "bad props")              // the first failure is reported
+		assert.Equal(t, 2, int(trips.Load()))                     // both candidates tried once each
+		assert.Equal(t, "cached", cache["llamacpp"].Models[0].ID) // stale entry kept
 	})
 	t.Run("fresh_cache_skips_the_network", func(t *testing.T) {
 		var hits int
