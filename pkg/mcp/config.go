@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/config"
@@ -69,19 +68,12 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 		}
 	}
 
-	var validated []string
 	for name, cfg := range merged {
 		if err := validateServer(name, cfg); err != nil {
 			return nil, warnings, err
 		}
-		validated = append(validated, name)
 	}
-	slices.Sort(validated)
-	out := make(map[string]ServerConfig, len(merged))
-	for _, n := range validated { // deterministic iteration order
-		out[n] = merged[n]
-	}
-	return out, warnings, nil
+	return merged, warnings, nil
 }
 
 // mcpFiles returns the user then project config paths, in merge order.
@@ -194,14 +186,18 @@ func (c ServerConfig) NetworkKind() string {
 }
 
 // validateServer checks a single server's declaration: exactly one of command or
-// url, a known transport consistent with it, and an unknown startup name is an
-// error that names the offending value.
+// url, and a known transport consistent with it. Errors name the offending value.
 func validateServer(name string, cfg ServerConfig) error {
 	switch {
 	case cfg.Command != "" && cfg.URL != "":
 		return fmt.Errorf("server %q: declare either command or url, not both", name)
 	case cfg.Command == "" && cfg.URL == "":
 		return fmt.Errorf("server %q: need a command (stdio) or url (network)", name)
+	}
+	switch cfg.Transport { // an unrecognized value would be silently inferred otherwise
+	case "", TransportStdio, TransportHTTP, TransportSSE: // known
+	default:
+		return fmt.Errorf("server %q: unknown transport %q, want stdio, http or sse", name, cfg.Transport)
 	}
 	t := transportKind(cfg)
 	switch t { // stdio needs a command; http/sse need a url

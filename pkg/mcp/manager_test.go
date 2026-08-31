@@ -3,6 +3,8 @@ package mcp
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,11 +15,10 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 )
 
-// newTestServer builds a detached server not owned by any manager, for direct
-// register() unit checks that need no live connection.
+// newTestServer builds a server with no live connection, for direct register()
+// unit checks.
 func (m *Manager) newTestServer(name string) *server {
-	s := newServer(name, ServerConfig{})
-	return s
+	return m.newServer(name, ServerConfig{})
 }
 
 // fakeRegistrar records registrations so manager tests can inspect state without
@@ -218,13 +219,13 @@ func TestConfigDisabledServer(t *testing.T) {
 			Registrar: fr,
 			Restore:   []string{"fake__tool_01"}, // enabled via /tools in the prior session
 		})
-		s := newServer("fake", ServerConfig{Enabled: &disabled})
+		s := mgr.newServer("fake", ServerConfig{Enabled: &disabled})
 
 		defs := []ToolDef{
 			{Name: "tool_00", InputSchema: jsonRawObject},
 			{Name: "tool_01", InputSchema: jsonRawObject},
 		}
-		mgr.register(s, defs, nil)
+		mgr.register(s, nil, defs, nil)
 
 		st, ok := fr.state("fake__tool_00")
 		require.True(t, ok)
@@ -249,7 +250,7 @@ func TestRegisterMarksReadOnlyTools(t *testing.T) {
 		{Name: "read1", InputSchema: jsonRawObject, ReadOnly: true},
 		{Name: "write1", InputSchema: jsonRawObject},
 	}
-	mgr.register(s, defs, nil) // all enabled
+	mgr.register(s, nil, defs, nil) // all enabled
 
 	assert.Contains(t, fr.readonly(), "srv__read1")
 	assert.NotContains(t, fr.readonly(), "srv__write1") // not annotated read-only
@@ -321,3 +322,83 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 
 // jsonRawObject is a minimal valid tool schema.
 var jsonRawObject = []byte(`{"type":"object","properties":{}}`)
+
+// TestReload covers what a reloaded config does to an already connected server:
+// filter edits re-register in place, transport edits only report, and a server
+// dropped from the file is disconnected.
+func TestReload(t *testing.T) {
+	// reload reads mcp.json, so each case owns a workspace and AJENT_HOME; no t.Parallel.
+	setup := func(t *testing.T, initial string) (*Manager, *fakeRegistrar, string) {
+		t.Helper()
+		t.Setenv("AJENT_HOME", mkHome(t))
+		ws := t.TempDir()
+		mkFile(t, ws+"/.ajent/mcp.json", initial)
+		servers, _, err := LoadConfig(ws)
+		require.NoError(t, err)
+
+		fr := newFakeRegistrar()
+		mgr := New(servers, Options{Registrar: fr, Workspace: ws})
+		t.Cleanup(mgr.Close)
+		mgr.LoadOnFirstMessage(t.Context())
+		return mgr, fr, ws
+	}
+	cmd := buildFakeServer(t)
+	cfgJSON := func(extra string) string {
+		return `{"servers":{"fake":{"command":` + strconv.Quote(cmd) + extra + `}}}`
+	}
+
+	t.Run("filter_change_reregisters", func(t *testing.T) {
+		mgr, fr, ws := setup(t, cfgJSON(""))
+		require.NotEmpty(t, fr.AllNames("mcp: fake"))
+		before := mgr.serverByName("fake").client()
+		require.NotNil(t, before)
+
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(`,"excludeTools":["tool_01"]`))
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		require.Eventually(t, func() bool { // rediscan re-registers asynchronously
+			return !slices.Contains(fr.AllNames("mcp: fake"), "fake__tool_01")
+		}, 5*time.Second, 20*time.Millisecond)
+		assert.Contains(t, fr.AllNames("mcp: fake"), "fake__tool_00")
+		assert.Same(t, before, mgr.serverByName("fake").client()) // same process, no restart
+	})
+
+	t.Run("connection_change_notices", func(t *testing.T) {
+		mgr, _, ws := setup(t, cfgJSON(""))
+		before := mgr.serverByName("fake").client()
+		require.NotNil(t, before)
+
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(`,"args":["-tools","1"]`))
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		assert.Same(t, before, mgr.serverByName("fake").client()) // left running on purpose
+		assert.Contains(t, strings.Join(mgr.Logs("fake"), "\n"), "connection config changed")
+	})
+
+	t.Run("filter_applies_despite_connection_change", func(t *testing.T) {
+		mgr, fr, ws := setup(t, cfgJSON(""))
+		before := mgr.serverByName("fake").client()
+		require.NotNil(t, before)
+
+		// both halves change at once: the filter must not be held hostage by the transport
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(`,"args":["-tools","3"],"excludeTools":["tool_01"]`))
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		require.Eventually(t, func() bool {
+			return !slices.Contains(fr.AllNames("mcp: fake"), "fake__tool_01")
+		}, 5*time.Second, 20*time.Millisecond)
+		assert.Same(t, before, mgr.serverByName("fake").client())
+		assert.Contains(t, strings.Join(mgr.Logs("fake"), "\n"), "connection config changed")
+	})
+
+	t.Run("removed_server_disconnects", func(t *testing.T) {
+		mgr, fr, ws := setup(t, cfgJSON(""))
+		require.NotEmpty(t, fr.AllNames("mcp: fake"))
+
+		mkFile(t, ws+"/.ajent/mcp.json", `{"servers":{}}`)
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		assert.Empty(t, fr.AllNames("mcp: fake")) // tools go with the server
+		assert.Nil(t, mgr.serverByName("fake"))
+	})
+}

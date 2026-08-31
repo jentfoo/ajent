@@ -86,9 +86,15 @@ than failing the whole list.
 `Handle(method, h)` installs a handler for an incoming server→client method via the
 transport's `BidirectionalInterface`, replacing mcp-go's handlers after `Start` and
 re-implementing `ping` itself (we set no sampling/elicitation handlers, so nothing is
-lost). Raw sends are bounded per attempt (`rawAttemptTimeout`) and the idempotent list
-calls resend on transport failures; a dropped stdio line must not fail discovery, but an
-unresponsive server still surfaces as an error, never a hang.
+lost); handlers accumulate, so a second method never drops the first. Raw sends are
+bounded per attempt (`rawAttemptTimeout`) and the idempotent list calls resend on
+transport failures; a dropped stdio line must not fail discovery, but an unresponsive
+server still surfaces as an error, never a hang.
+
+Raw request ids are seeded at `rawSeqBase` rather than from one: both the raw seam and
+mcp-go's typed calls share the transport's single response map keyed by request id, so
+counting up from the same origin would collide mid-session and strand a waiter until its
+deadline. The offset keeps the two id spaces disjoint.
 
 ### Result mapping (`result.go`)
 
@@ -167,15 +173,39 @@ the current tool set anyway. Each pass is bounded with its own timeout so an
   paths are safe to do blocking I/O because notifications arrive asynchronously from the
   client (see *Notifications never block mcp-go's reader*).
 - **Disconnect / Reload.** `/mcp disconnect` closes and unregisters without removing the
-  config. `Reload` re-reads `mcp.json`, disconnects removed servers, connects newly added
-  ones eagerly, applies config changes in place.
+  config. `Reload` re-reads `mcp.json`, disconnects removed servers and connects newly
+  added ones eagerly; how much of a *changed* config a connected server takes splits in
+  two. Filter fields (`tools.allow/deny`, `excludeTools`, `readOnly`, `enabled`,
+  `timeout`) re-discover and re-register in place through the same path as
+  `tools/list_changed` — preserving the live enabled set, leaving the process running —
+  even when connection fields changed too, since it applies to what is actually running.
+  Connection fields (`command`, `args`, `env`, `url`, `headers`, `transport`) are stored
+  but only reported: restarting the transport would abort calls in flight. They take
+  effect on the server's **next connect**, whichever comes first — `/mcp disconnect` +
+  `/mcp connect`, or the reconnect loop after the old process dies, whose backoff path
+  re-reads the stored config so a death silently adopts the new endpoint. A disconnected
+  server picks up the whole new config on its next connect.
+
+**Lock ownership.** `server.mu` guards every mutable per-server field (client, failure
+counters, discovered defs/resources/prompts, config); `Manager.mu` only the `servers`
+map and first-load flag — one field, one lock. The notice sink is immutable: built with
+the server rather than installed on connect, so it needs no lock. An unreachable server
+is expected (offline or not yet started), so a dial failure stays in `/mcp logs` only
+rather than surfacing as a notice; the status ratio still reflects it.
+
+Network servers have no death supervision: `watchServer` only supervises a stdio child's
+stderr, so a dead HTTP or SSE server is noticed on the next call rather than proactively.
 
 ### Reconnection
 
 A server that dies mid-session must produce a clear error result on any call into it,
 never a hang, and be reconnected with capped backoff after repeated failures, at which
 point its tools are unregistered so the model does not call into nothing. A failure
-counter tracks consecutive connect failures for the notice/status path.
+counter tracks consecutive connect failures for the status path.
+
+A stdio child's stderr is streamed to `/mcp logs` one line per entry (`bufio.Reader`, no
+fixed cap), so a long or newline-less line is never dropped — only an actual EOF or read
+error marks the child as exited and triggers reconnection.
 
 
 ## Registry integration (`pkg/tools/registry.go`)

@@ -119,6 +119,7 @@ func TestValidateServer(t *testing.T) {
 		{"network_needs_a_url", ServerConfig{Transport: "http", Command: "x"}, "requires a url"},
 		{"command_and_url_both_rejected", ServerConfig{Command: "x", URL: "http://y"}, "not both"},
 		{"neither_command_nor_url", ServerConfig{}, "need a command"},
+		{"unknown_transport_value", ServerConfig{Transport: "websocket", URL: "http://x"}, `unknown transport "websocket"`},
 	}
 
 	for _, tc := range cases {

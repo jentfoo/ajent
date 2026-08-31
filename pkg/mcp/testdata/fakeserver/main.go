@@ -54,6 +54,7 @@ func main() {
 			})
 	}
 
+
 	// a resource and prompt so the client can discover capabilities beyond tools.
 	srv.AddResource(mcp.NewResource("fake://doc", "the doc",
 		mcp.WithResourceDescription("a sample read-only document")),

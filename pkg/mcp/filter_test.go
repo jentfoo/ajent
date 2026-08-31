@@ -63,8 +63,10 @@ func TestFilterToolsExclude(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := filterTools(slices.Clone(tc.in), tc.filter, tc.exclude)
+			in := slices.Clone(tc.in)
+			got := filterTools(in, tc.filter, tc.exclude)
 			assert.Equal(t, tc.want, namesOf(got))
+			assert.Equal(t, namesOf(tc.in), namesOf(in)) // the caller's slice is never rewritten
 		})
 	}
 }

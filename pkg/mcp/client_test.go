@@ -41,6 +41,40 @@ func TestConnectStdio(t *testing.T) {
 	})
 }
 
+// TestRawSeqBase verifies Connect seeds the raw-seam id counter into a space
+// mcp-go's own request ids never reach, so neither can steal the other's response.
+func TestRawSeqBase(t *testing.T) {
+	t.Parallel()
+
+	c, err := Connect(t.Context(), "fake", stdioConfig(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	assert.GreaterOrEqual(t, c.rawSeq.Load(), int64(rawSeqBase))
+	_, err = c.Tools(t.Context())
+	require.NoError(t, err)
+	assert.Greater(t, c.rawSeq.Load(), int64(rawSeqBase)) // list calls advance it, still disjoint
+}
+
+// TestHandle verifies handlers accumulate across calls rather than replacing.
+func TestHandle(t *testing.T) {
+	t.Parallel()
+
+	c, err := Connect(t.Context(), "fake", stdioConfig(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	h := func(context.Context, json.RawMessage) (any, error) { return nil, nil }
+	c.Handle("first/method", h)
+	c.Handle("second/method", h)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	assert.Contains(t, c.handlers, "first/method")
+	assert.Contains(t, c.handlers, "second/method")
+	assert.Contains(t, c.handlers, string(mcp.MethodPing)) // always re-implemented
+}
+
 // TestCallTimeoutCancelsSlowTool verifies a slow call is cancelled by context.
 func TestCallTimeoutCancelsSlowTool(t *testing.T) {
 	t.Parallel()

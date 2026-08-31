@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
@@ -69,11 +70,12 @@ type Client struct {
 
 	negotiated string // negotiated protocol version
 
-	rawSeq atomic.Int64 // raw-request id counter; must not collide with mcp-go's
+	rawSeq atomic.Int64 // raw-request id counter, seeded to rawSeqBase
 
-	mu     sync.Mutex
-	nextID int64 // progress token source, one per call
-	output map[int64]agent.Output
+	mu       sync.Mutex
+	nextID   int64 // progress token source, one per call
+	output   map[int64]agent.Output
+	handlers map[string]handlerFunc // incoming request methods, nil until the first Handle
 }
 
 // rawAttemptTimeout bounds one raw-seam request so a dropped or reset response cannot hang discovery.
@@ -81,6 +83,10 @@ const rawAttemptTimeout = 15 * time.Second
 
 // rawRetries resends a single request after transport-level failures; mcp-go's stdio can drop a line under load.
 const rawRetries = 2
+
+// rawSeqBase offsets raw-seam ids into a space mcp-go's own counter (from 1, +1 per
+// request) cannot reach, so the two never register under one transport response key.
+const rawSeqBase = 1 << 40
 
 // Connect dials cfg's server (stdio or Streamable HTTP / SSE), negotiates the
 // protocol and returns a ready client.
@@ -99,10 +105,7 @@ func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error
 			return nil, err
 		}
 	default:
-		hdr := map[string]string{}
-		for k, v := range cfg.Headers { // already env-expanded by LoadConfig
-			hdr[k] = v
-		}
+		hdr := maps.Clone(cfg.Headers) // already env-expanded by LoadConfig
 		var err error
 		if c.tran == "sse" {
 			cl, err = mcpclient.NewSSEMCPClient(cfg.URL, transport.WithHeaders(hdr))
@@ -116,6 +119,7 @@ func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error
 		c.c = cl
 	}
 
+	c.rawSeq.Store(rawSeqBase)
 	if err := c.init(ctx); err != nil {
 		_ = c.Close()
 		return nil, err
@@ -153,7 +157,7 @@ func transportKind(cfg ServerConfig) string {
 	return cfg.NetworkKind() // http or sse
 }
 
-// init negotiates protocol version, naming both versions on a mismatch.
+// init negotiates the protocol version, naming ours and the server's on a mismatch.
 func (c *Client) init(ctx context.Context) error {
 	if err := c.c.Start(ctx); err != nil {
 		return fmt.Errorf("mcp %s: start: %w", c.name, err)
@@ -162,7 +166,8 @@ func (c *Client) init(ctx context.Context) error {
 	if err != nil {
 		var unsup mcp.UnsupportedProtocolVersionError
 		if errors.As(err, &unsup) {
-			return fmt.Errorf("mcp %s: protocol version mismatch (server wants %s)", c.name, unsup.Version)
+			return fmt.Errorf("mcp %s: protocol version mismatch (we speak %s, server wants %s)",
+				c.name, mcp.LATEST_PROTOCOL_VERSION, unsup.Version)
 		}
 		return fmt.Errorf("mcp %s: initialize: %w", c.name, err)
 	}
@@ -492,21 +497,33 @@ func (c *Client) Request(ctx context.Context, method string, params any) (json.R
 	return slices.Clone(resp.Result), nil
 }
 
-// Handle installs a handler for an incoming server-to-client request method.
-// mcp-go's own handlers are replaced after Start; ping is re-implemented.
+// Handle installs a handler for an incoming server-to-client request method, or
+// removes it when h is nil. Handlers accumulate across calls. mcp-go's own
+// handlers are replaced after Start; ping is re-implemented.
 func (c *Client) Handle(method string, h func(ctx context.Context, params json.RawMessage) (any, error)) {
 	bidir, ok := c.c.GetTransport().(transport.BidirectionalInterface)
 	if !ok {
 		return
 	}
-	handlers := map[string]handlerFunc{
-		string(mcp.MethodPing): pingHandler,
+	c.mu.Lock()
+	first := c.handlers == nil
+	if first {
+		c.handlers = map[string]handlerFunc{string(mcp.MethodPing): pingHandler}
 	}
 	if h != nil {
-		handlers[method] = wrapIncoming(h)
+		c.handlers[method] = wrapIncoming(h)
+	} else {
+		delete(c.handlers, method)
+	}
+	c.mu.Unlock()
+	if !first { // the dispatcher below already reads the live map
+		return
 	}
 	bidir.SetRequestHandler(func(ctx context.Context, req transport.JSONRPCRequest) (*transport.JSONRPCResponse, error) {
-		if hf, ok := handlers[req.Method]; ok {
+		c.mu.Lock()
+		hf, ok := c.handlers[req.Method]
+		c.mu.Unlock()
+		if ok {
 			return hf(ctx, req)
 		}
 		return nil, fmt.Errorf("unsupported request method: %s", req.Method)

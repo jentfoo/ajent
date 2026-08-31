@@ -1,8 +1,10 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -56,9 +58,10 @@ type server struct {
 	down          bool                // a reconnect loop is active; suppresses the already-connected check
 	reopenKeep    map[string]struct{} // enabled set captured at death, restored on reconnect
 	rediscovering bool                // a list_changed re-discovery is in flight; coalesces bursts
-	notice        func(string, bool)  // notice sink set by the manager's Options
 
-	mu sync.Mutex // guards c/failures/down/reopenKeep/defs; separate so Connect can hold it briefly
+	notice func(string, bool) // notice sink over the manager's Options; immutable, so no lock
+
+	mu sync.Mutex // sole guard for every mutable field above; m.mu covers only the servers map
 }
 
 // Manager supervises every configured MCP server's lifecycle.
@@ -68,7 +71,7 @@ type Manager struct {
 	ctx    context.Context // long-lived for reconnect loops; canceled on Close
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
+	mu      sync.Mutex // guards servers and loaded only; per-server state lives under server.mu
 	servers map[string]*server
 	loaded  bool // first-message load has run (LoadOnFirstMessage)
 }
@@ -80,20 +83,23 @@ func New(cfg map[string]ServerConfig, opts Options) *Manager {
 	m := &Manager{opts: opts, servers: make(map[string]*server)}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	for name, sc := range cfg {
-		m.servers[name] = newServer(name, sc)
+		m.servers[name] = m.newServer(name, sc)
 	}
 	return m
 }
 
-func newServer(name string, cfg ServerConfig) *server {
-	s := &server{
+func (m *Manager) newServer(name string, cfg ServerConfig) *server {
+	return &server{
 		name:   name,
 		cfg:    cfg,
 		source: "mcp: " + name,
 		logs:   newRingLog(200),
+		notice: func(msg string, warn bool) {
+			if m.opts.Notice != nil {
+				m.opts.Notice("mcp "+name+": "+msg, warn)
+			}
+		},
 	}
-	s.notice = func(msg string, warn bool) {} // replaced by the manager on New
-	return s
 }
 
 // Source returns the grouping label for a server name.
@@ -150,29 +156,28 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	if s == nil {
 		return fmt.Errorf("no MCP server %q", name)
 	}
-	m.mu.Lock()
+	s.mu.Lock()
 	already := !s.down && s.c != nil && s.failures == 0
-	keepEnabled := toSet(m.opts.Registrar.EnabledNames(s.source))
-	for k := range s.reopenKeep { // restore the pre-death enabled set across a reconnect
-		keepEnabled[k] = struct{}{}
-	}
-	m.mu.Unlock()
+	s.mu.Unlock()
 	if already {
 		return nil
 	}
+	keepEnabled := toSet(m.opts.Registrar.EnabledNames(s.source)) // registrar call stays off s.mu
+	s.mu.Lock()
+	for k := range s.reopenKeep { // restore the pre-death enabled set across a reconnect
+		keepEnabled[k] = struct{}{}
+	}
+	s.mu.Unlock()
 
-	c, err := Connect(ctx, name, s.cfg)
+	c, err := Connect(ctx, name, s.config())
 	if err != nil {
-		s.note(err.Error(), true)
+		// an unreachable server is expected (offline or not yet started); keep the
+		// reason out of notices — visible in /mcp logs and the status ratio only.
+		s.diag("connect failed: " + err.Error())
 		m.updateStatus() // this server contributes nothing to the ratio until it connects
 		return err
 	}
 	c.SetNotice(func(msg string) { s.note(strings.TrimPrefix(msg, "mcp "+name+": "), true) })
-	s.notice = func(msg string, warn bool) {
-		if m.opts.Notice != nil {
-			m.opts.Notice("mcp "+name+": "+msg, warn)
-		}
-	}
 
 	// discovery is bounded so an unresponsive server surfaces as a connect error
 	// instead of hanging LoadOnFirstMessage / reload (mirrors rediscan).
@@ -192,41 +197,40 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	if perr != nil {
 		s.diag("prompts/list failed: " + perr.Error())
 	}
+	// drop anything registered under this source before bridging the fresh list
+	m.opts.Registrar.Unregister(s.source)
 	s.mu.Lock()
 	s.resources = resources
 	s.prompts = prompts
-	s.mu.Unlock()
-
-	// drop anything registered under this source before bridging the fresh list
-	m.opts.Registrar.Unregister(s.source)
-	m.mu.Lock()
 	s.c = c
 	s.down = false // a reconnect loop succeeded; clear its state so future connects short-circuit again
 	s.reopenKeep = nil
 	s.failures = 0
-	m.mu.Unlock()
-	m.register(s, defs, keepEnabled) // register never fails; it logs and continues
+	s.mu.Unlock()
+	m.register(s, c, defs, keepEnabled) // register never fails; it logs and continues
 	go m.watchServer(s)
-	c.OnNotification(func(n mcp.JSONRPCNotification) { m.onNotification(ctx, s, n) })
+	// m.ctx, not the caller's: notification refresh outlives whoever connected
+	c.OnNotification(func(n mcp.JSONRPCNotification) { m.onNotification(m.ctx, s, n) })
 	s.diag("connected (" + c.Transport() + ")")
 	return nil
 }
 
 // register bridges live defs into the registry under s.source. forceEnabled names
 // stay enabled regardless of restore, preserving live state across a re-register.
-func (m *Manager) register(s *server, defs []ToolDef, forceEnabled map[string]struct{}) {
-	defs = filterTools(defs, s.cfg.Tools, s.cfg.ExcludeTools)
-	dur := time.Duration(s.cfg.Timeout)
+func (m *Manager) register(s *server, c *Client, defs []ToolDef, forceEnabled map[string]struct{}) {
+	cfg := s.config()
+	defs = filterTools(defs, cfg.Tools, cfg.ExcludeTools)
+	dur := time.Duration(cfg.Timeout)
 
 	var restore map[string]struct{}
 	if len(m.opts.Restore) > 0 { // a resumed session's enabled set is authoritative
 		restore = toSet(m.opts.Restore)
 	}
-	disabledByCfg := s.cfg.Enabled != nil && !*s.cfg.Enabled // config-disabled stays inactive by default
+	disabledByCfg := disabledByConfig(cfg) // config-disabled stays inactive by default
 
 	for _, d := range defs {
 		n := s.name + "__" + d.Name
-		tool := Bridge(s.name, d, s.c, BridgeOptions{ReadOnly: d.ReadOnly, Timeout: dur})
+		tool := Bridge(s.name, d, c, BridgeOptions{ReadOnly: d.ReadOnly, Timeout: dur})
 		st := StateDisabled // known but inactive by default; config-off or a restored subset leaves the rest off
 		if !disabledByCfg && restore == nil {
 			st = StateEnabled // fully-enabled, fresh server exposes everything
@@ -293,16 +297,20 @@ func has(set map[string]struct{}, k string) bool {
 
 // Disconnect closes and unregisters a server without removing its config.
 func (m *Manager) Disconnect(name string) {
-	s := m.serverByName(name)
-	if s == nil {
-		return
+	if s := m.serverByName(name); s != nil {
+		m.disconnect(s)
 	}
-	m.mu.Lock()
+}
+
+// disconnect closes a server by pointer, so a config reload can still close one it
+// has already removed from the map.
+func (m *Manager) disconnect(s *server) {
+	s.mu.Lock()
 	c := s.c
 	s.c = nil
 	s.down = false // stop any in-flight reconnect loop for this server
 	s.reopenKeep = nil
-	m.mu.Unlock()
+	s.mu.Unlock()
 	if c != nil {
 		_ = c.Close()
 	}
@@ -311,7 +319,8 @@ func (m *Manager) Disconnect(name string) {
 }
 
 // Reload re-reads mcp.json and reconciles: removed servers disconnect, new ones
-// connect eagerly. Config changes apply in place.
+// connect eagerly, and an existing server's config is replaced. See applyConfig
+// for how much of a changed config a connected server can take on the spot.
 func (m *Manager) Reload(ctx context.Context) error {
 	servers, warns, err := LoadConfig(m.opts.Workspace)
 	if err != nil {
@@ -324,33 +333,78 @@ func (m *Manager) Reload(ctx context.Context) error {
 	}
 	cfg := servers // whole map replaces the previous view by name
 
+	var dropped []*server
+	existing := make(map[string]*server, len(cfg))
 	m.mu.Lock()
-	for name := range m.servers {
+	for name, s := range m.servers {
 		if _, ok := cfg[name]; !ok { // no longer configured
+			dropped = append(dropped, s)
 			delete(m.servers, name)
-			m.mu.Unlock()
-			m.Disconnect(name)
-			m.mu.Lock()
 		}
 	}
 	for name, sc := range cfg {
 		if s, ok := m.servers[name]; ok {
-			s.cfg = sc // config changed in place
+			existing[name] = s
 		} else {
-			m.servers[name] = newServer(name, sc)
+			m.servers[name] = m.newServer(name, sc)
 		}
 	}
 	m.mu.Unlock()
 
+	for _, s := range dropped { // by pointer: it is out of the map already
+		m.disconnect(s)
+	}
+	for name, s := range existing {
+		m.applyConfig(s, cfg[name])
+	}
+
 	for _, name := range m.ServerNames() { // every server connects eagerly on reload too
 		s := m.serverByName(name)
-		if s != nil && s.c == nil {
+		if s != nil && s.client() == nil {
 			_ = m.connect(ctx, name) // errors surface via notice/status
 		}
 	}
 	m.updateStatus() // reconcile changed which servers and tools are live
 	return nil
 }
+
+// applyConfig replaces a server's config. A disconnected server picks it up whole
+// on its next connect; a connected one re-registers any tool-filter change against
+// the running process, and is left running with a notice when the transport itself
+// changed, since restarting it would abort calls in flight.
+func (m *Manager) applyConfig(s *server, sc ServerConfig) {
+	s.mu.Lock()
+	old, c := s.cfg, s.c
+	s.cfg = sc
+	s.mu.Unlock()
+	if c == nil { // the next connect picks the new config up whole
+		return
+	}
+	if filterChanged(old, sc) { // independent of the transport: applies against the running process
+		m.rediscan(s)
+	}
+	if connectionChanged(old, sc) {
+		s.note("connection config changed; applies on the next connect, or now with /mcp disconnect then /mcp connect", true)
+	}
+}
+
+// connectionChanged reports whether a config edit can only take effect on a new
+// transport.
+func connectionChanged(a, b ServerConfig) bool {
+	return a.Command != b.Command || a.URL != b.URL || a.Transport != b.Transport ||
+		!slices.Equal(a.Args, b.Args) || !maps.Equal(a.Env, b.Env) || !maps.Equal(a.Headers, b.Headers)
+}
+
+// filterChanged reports whether a config edit changes which tools register or how
+// they are called, so the live registration is stale.
+func filterChanged(a, b ServerConfig) bool {
+	return a.Timeout != b.Timeout || disabledByConfig(a) != disabledByConfig(b) ||
+		!slices.Equal(a.Tools.Allow, b.Tools.Allow) || !slices.Equal(a.Tools.Deny, b.Tools.Deny) ||
+		!slices.Equal(a.ExcludeTools, b.ExcludeTools) || !slices.Equal(a.ReadOnly, b.ReadOnly)
+}
+
+// disabledByConfig reports whether a config explicitly turns its server's tools off.
+func disabledByConfig(cfg ServerConfig) bool { return cfg.Enabled != nil && !*cfg.Enabled }
 
 // ServerNames returns configured server names in sorted order.
 func (m *Manager) ServerNames() []string {
@@ -381,13 +435,13 @@ func (m *Manager) serverStatus(ctx context.Context, name string) ServerStatus {
 	}
 	st := ServerStatus{
 		Name:      name,
-		Transport: transportKind(s.cfg),
+		Transport: transportKind(s.config()),
 	}
-	m.mu.Lock()
+	s.mu.Lock()
 	c := s.c
 	failures := s.failures
 	down := s.down
-	m.mu.Unlock()
+	s.mu.Unlock()
 	st.ToolCount = len(s.defsSnapshot()) // last discovered (filtered) tool count
 	if c == nil {
 		if down { // a reconnect loop is running; report progress rather than disconnected
@@ -398,8 +452,10 @@ func (m *Manager) serverStatus(ctx context.Context, name string) ServerStatus {
 		return st
 	}
 	st.Connected = true
+	pctx, pcancel := context.WithTimeout(ctx, pingTimeout)
+	defer pcancel()
 	start := time.Now()
-	err := c.Ping(ctx)
+	err := c.Ping(pctx)
 	st.Latency = time.Since(start)
 	if err != nil {
 		st.State = "unresponsive"
@@ -515,9 +571,7 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 	case string(mcp.MethodNotificationResourcesListChanged), string(mcp.MethodNotificationPromptsListChanged):
 		m.refreshCapabilities(ctx, s) // re-discover resources and prompts
 	case string(mcp.MethodNotificationProgress):
-		if s.c != nil {
-			s.writeProgress(n.Params.AdditionalFields)
-		}
+		s.writeProgress(n.Params.AdditionalFields)
 	default:
 		s.diag("notification " + n.Method)
 	}
@@ -527,15 +581,19 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 // server surfaces an error instead of leaking a goroutine or hanging the session.
 const rediscoveryTimeout = 45 * time.Second
 
+// pingTimeout bounds the /mcp liveness probe so a wedged-but-alive server reports
+// unresponsive instead of hanging the command.
+const pingTimeout = 2 * time.Second
+
 // discoverTimeout bounds one connect's capability discovery (tools/resources/
 // prompts) so an unresponsive server surfaces as a connect error instead of
 // hanging the first-message load or /mcp reload that awaits it.
 const discoverTimeout = 45 * time.Second
 
-// rediscan refreshes a server's tool list after notifications/tools/list_changed. It
-// runs in its own goroutine (notifications arrive asynchronously from the client) and
-// is serialized per server: a second notification while one pass is running is coalesced,
-// since the in-flight pass reads the current tool set anyway.
+// rediscan re-discovers a connected server's tools and re-registers them, after a
+// tools/list_changed notification or a reloaded tool filter. It runs in its own
+// goroutine and is serialized per server: a second call while one pass is running is
+// coalesced, since the in-flight pass reads the current tool set anyway.
 func (m *Manager) rediscan(s *server) {
 	s.mu.Lock()
 	if s.rediscovering { // a refresh already in flight; it sees the latest state
@@ -544,8 +602,8 @@ func (m *Manager) rediscan(s *server) {
 	}
 	s.rediscovering = true
 	c := s.c
-	keepEnabled := toSet(m.opts.Registrar.EnabledNames(s.source))
 	s.mu.Unlock()
+	keepEnabled := toSet(m.opts.Registrar.EnabledNames(s.source))
 	if c == nil {
 		s.mu.Lock()
 		s.rediscovering = false
@@ -566,14 +624,14 @@ func (m *Manager) rediscan(s *server) {
 			s.note("re-discover failed: "+err.Error(), true)
 			return
 		}
-		m.mu.Lock() // same lock connect/Disconnect use for s.c: bail if replaced/disconnected mid-list
+		s.mu.Lock() // bail if the client was replaced or disconnected mid-list
 		live := s.c == c && !s.down
-		m.mu.Unlock()
+		s.mu.Unlock()
 		if !live {
 			return
 		}
 		m.opts.Registrar.Unregister(s.source)
-		m.register(s, defs, keepEnabled)
+		m.register(s, c, defs, keepEnabled)
 	}()
 }
 
@@ -607,6 +665,13 @@ func (s *server) client() *Client {
 	return s.c
 }
 
+// config returns the server's current declaration, which /mcp reload may replace.
+func (s *server) config() ServerConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cfg
+}
+
 // writeProgress routes a progress notification's fields to the matching call.
 func (s *server) writeProgress(fields map[string]any) {
 	token := fields["progressToken"]
@@ -618,9 +683,7 @@ func (s *server) writeProgress(fields map[string]any) {
 		return
 	}
 	value, _ := fields["progress"].(float64)
-	s.mu.Lock()
-	c := s.c
-	s.mu.Unlock()
+	c := s.client()
 	if c == nil {
 		return
 	}
@@ -631,9 +694,7 @@ func (s *server) writeProgress(fields map[string]any) {
 // process exits (stderr EOF), reconnects with capped backoff. Network servers have
 // no child to supervise and return immediately.
 func (m *Manager) watchServer(s *server) {
-	m.mu.Lock()
-	c := s.c
-	m.mu.Unlock()
+	c := s.client()
 	if c == nil {
 		return
 	}
@@ -641,17 +702,20 @@ func (m *Manager) watchServer(s *server) {
 	if r == nil { // network server: no process to watch for death
 		return
 	}
-	buf := make([]byte, 4096)
+	br := bufio.NewReader(r)
 	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			s.diag("stderr: " + strings.TrimRight(string(buf[:n]), "\r\n"))
+		line, err := br.ReadBytes('\n') // one log entry per line; unbounded so nothing is dropped
+		if len(line) > 0 {
+			text := strings.TrimRight(strings.TrimSuffix(string(line), "\n"), "\r")
+			if text != "" {
+				s.diag("stderr: " + text)
+			}
 		}
 		if err != nil { // EOF or read error means the child exited
-			m.reconnect(s)
-			return
+			break
 		}
 	}
+	m.reconnect(s)
 }
 
 // maxReconnectWait caps the exponential backoff between reconnection attempts.
@@ -663,20 +727,19 @@ const maxReconnectWait = 30 * time.Second
 // dead process; on success connect() re-registers them restoring the pre-death
 // enabled set.
 func (m *Manager) reconnect(s *server) {
-	m.mu.Lock()
+	keep := toSet(m.opts.Registrar.EnabledNames(s.source)) // registrar call stays off s.mu
+	s.mu.Lock()
 	c := s.c
 	if c == nil { // already disconnected by /mcp disconnect or another path
-		m.mu.Unlock()
+		s.mu.Unlock()
 		return
 	}
-	s.reopenKeep = toSet(m.opts.Registrar.EnabledNames(s.source))
+	s.reopenKeep = keep
 	s.down = true
 	s.failures = 1
 	s.c = nil
-	m.mu.Unlock()
-	if c != nil {
-		_ = c.Close() // sweep the dead child's process group
-	}
+	s.mu.Unlock()
+	_ = c.Close() // sweep the dead child's process group
 	m.opts.Registrar.Unregister(s.source)
 	m.updateStatus() // a dead server's tools drop out of the ratio while it is down
 	s.note("server exited; reconnecting", true)
@@ -690,9 +753,9 @@ func (m *Manager) reconnect(s *server) {
 		if m.settled(s) { // a manual /mcp connect or disconnect resolved it meanwhile
 			return
 		}
-		m.mu.Lock()
+		s.mu.Lock()
 		s.failures = attempt
-		m.mu.Unlock()
+		s.mu.Unlock()
 		if err := m.connect(m.ctx, s.name); err == nil {
 			return // connect re-registered tools and started a fresh watcher
 		}
@@ -702,13 +765,13 @@ func (m *Manager) reconnect(s *server) {
 // settled reports whether some other path (manual connect or disconnect) has taken
 // the server out of the reconnect loop.
 func (m *Manager) settled(s *server) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return !s.down || s.c != nil
 }
 
-// reconnectDelay is the capped exponential backoff before retry n (0-based):
-// 250ms, 500ms, 1s, ... up to maxReconnectWait.
+// reconnectDelay is the capped exponential backoff before retry n (0-based). The
+// loop starts at n=1, so the real sequence is 1s, 2s, 4s, ... up to maxReconnectWait.
 func reconnectDelay(n int) time.Duration {
 	d := 125 * time.Millisecond << uint(min(n+2, 9))
 	if d > maxReconnectWait {
