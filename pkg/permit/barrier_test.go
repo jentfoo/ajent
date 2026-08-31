@@ -1059,3 +1059,140 @@ func TestRejectionReasonNamesTheRefusal(t *testing.T) {
 	assert.Contains(t, r, "edit tool")
 	assert.NotContains(t, strings.ToLower(r), "allow")
 }
+
+// concurrentClassifier counts invocations atomically so parallel prefetch can be
+// asserted without a data race.
+type concurrentClassifier struct {
+	mu      sync.Mutex
+	n       int
+	verdict Class
+}
+
+func (c *concurrentClassifier) Classify(ctx context.Context, s Subject) Class {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return c.verdict
+}
+func (c *concurrentClassifier) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// blockingClassifier records how many classifications have started and finished,
+// holding each in-flight one open until its context is cancelled — the shape a
+// real model call takes when the turn aborts.
+type countingBlockingClassifier struct {
+	mu       sync.Mutex
+	started  int
+	finished int
+}
+
+func (c *countingBlockingClassifier) Classify(ctx context.Context, s Subject) Class {
+	c.mu.Lock()
+	c.started++
+	c.mu.Unlock()
+	<-ctx.Done() // a real provider call is cancelled here too
+	c.mu.Lock()
+	c.finished++
+	c.mu.Unlock()
+	return ClassUnsure
+}
+func (c *countingBlockingClassifier) startedN() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.started
+}
+func (c *countingBlockingClassifier) finishedN() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.finished
+}
+
+// TestPrefetch asserts a batch's prompt-classified bash calls are each sent to
+// the model ahead of their dialogs, that statically resolved (read-only) or
+// config-safe calls never reach it, and that identical commands share one call.
+func TestPrefetch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		mode Mode
+		in   []agent.ToolCall
+		safe []string // config safe commands, when set
+		want int      // model invocations expected from Prefetch
+	}{
+		// two unverifiable bash calls: both are classified.
+		{"two_prompt_bash", ModeAuto, []agent.ToolCall{bashCall("rm -rf build"), bashCall("git push origin main")}, nil, 2},
+		// built-in read-only tools resolve statically; the model is never asked.
+		{"read_only_skipped", ModeAuto, []agent.ToolCall{bashCall("ls -la"), bashCall("grep foo bar.c")}, nil, 0},
+		// make lint is Ask by default but listed safe; the two unlisted prompt
+		// commands still go. Only those two are sent.
+		{"safe_command_skipped", ModeAuto, []agent.ToolCall{bashCall("make lint"), bashCall("rm f"), bashCall("git push origin main")}, []string{"make lint"}, 2},
+		// a lone eligible call is prefetched too: serial predecessors may run for a
+		// while before its dialog opens.
+		{"single_call_prefetched", ModeAuto, []agent.ToolCall{bashCall("ls -la"), bashCall("rm f")}, nil, 1},
+		// identical commands are one subject: one request serves both dialogs.
+		{"identical_commands_share_call", ModeAuto, []agent.ToolCall{bashCall("rm -rf build"), bashCall("rm -rf build")}, nil, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTestBarrier(newFakePrompter())
+			cl := &concurrentClassifier{verdict: ClassAllow}
+			// the session's cached classifier, as main.go wires it: concurrent identical
+			// subjects join one request instead of duplicating it
+			b.SetClassifier(NewCachedClassifier(cl.Classify))
+			if c.mode == ModeAutoWrite {
+				b.SetMode(ModeAutoWrite)
+			} else {
+				b.SetMode(ModeAuto)
+			}
+			if len(c.safe) > 0 {
+				b.SetSafeCommands(c.safe)
+			}
+			b.Prefetch(t.Context(), c.in)
+			require.Eventually(t, func() bool { return cl.count() == c.want }, time.Second, 10*time.Millisecond)
+		})
+	}
+}
+
+// TestPrefetchCancellation asserts an aborted turn stops every in-flight batch
+// classification, so no orphaned model call lingers after the batch is abandoned.
+func TestPrefetchCancellation(t *testing.T) {
+	t.Parallel()
+
+	b := newTestBarrier(newFakePrompter())
+	b.SetMode(ModeAuto)
+	cl := &countingBlockingClassifier{}
+	b.SetClassifier(cl)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := []agent.ToolCall{bashCall("rm f"), bashCall("git push origin main")}
+	b.Prefetch(ctx, calls)
+	require.Eventually(t, func() bool { return cl.startedN() == 2 }, time.Second, 10*time.Millisecond)
+
+	cancel() // an abort cancels the batch's in-flight classifications
+	require.Eventually(t, func() bool { return cl.finishedN() == 2 }, time.Second, 100*time.Millisecond)
+}
+
+// TestPrefetchSkipsSessionAllowed asserts a call already granted for the session
+// is not re-sent to the model.
+func TestPrefetchSkipsSessionAllowed(t *testing.T) {
+	t.Parallel()
+
+	b := newTestBarrier(newFakePrompter())
+	b.SetMode(ModeAuto)
+	cl := &concurrentClassifier{verdict: ClassAllow}
+	b.SetClassifier(cl)
+
+	// grant "rm" for the session so a later rm call is covered by memory.
+	b.allows["bash:rm"] = true
+
+	calls := []agent.ToolCall{bashCall("rm -rf build"), bashCall("git push origin main")}
+	// only git push survives the session filter: rm's grant means no model request for
+	// it, so exactly one classification ever runs.
+	b.Prefetch(t.Context(), calls)
+	require.Eventually(t, func() bool { return cl.count() == 1 }, time.Second, 10*time.Millisecond)
+	assert.Never(t, func() bool { return cl.count() > 1 }, 100*time.Millisecond, 10*time.Millisecond)
+}

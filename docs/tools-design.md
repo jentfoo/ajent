@@ -61,7 +61,7 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
 
 The child agent's structural filter (which tools a sub-agent may call) is owned by
 the registry but specified in `subagents-design.md`; it lives in
-`pkg/subagent/toolset.go`. The two optional-tool seams the guard chain relies on are
+`pkg/subagent/toolset.go`. The optional-tool seams the guard chain relies on are
 methods on `Registry`:
 - `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
   `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be detected
@@ -69,6 +69,8 @@ methods on `Registry`:
 - `Preview(call)` → `(Change, ok)` — dispatches to a tool's optional `Previewer`
   (`editTool`, `writeTool`). `Change{Path, Before, After}` is what the call would
   do to the file; see "Rendering a change before it runs".
+- `MustSerialize(calls)` — reports whether any call would prompt, so dispatch
+  runs the batch serially and approval dialogs open in submission order.
 
 ### Guards (`guard.go`, `asker.go`)
 

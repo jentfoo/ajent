@@ -109,3 +109,62 @@ func TestGuardDeniedCallLeavesFileOnDiskUntouched(t *testing.T) {
 	require.NoError(t, rerr)
 	assert.Equal(t, "original", string(data)) // nothing on disk changed
 }
+
+// TestMustSerialize asserts the registry reports whether a batch would prompt: an
+// Ask with an asker forces serial execution, while allow-only guards and a Deny
+// (which resolves without prompting) do not. This is what keeps block-all's
+// read-only dialogs in submission order.
+func TestMustSerialize(t *testing.T) {
+	t.Parallel()
+
+	allow := func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) }
+	ask := func(context.Context, agent.ToolCall) Decision {
+		return Decision{Action: ActionAsk, Reason: "needs approval"}
+	}
+	deny := func(_ context.Context, _ agent.ToolCall) Decision { return Deny("refused") }
+
+	cases := []struct {
+		name   string
+		guards []Guard
+		asker  Asker // nil when not set
+		want   bool
+	}{
+		{"no guards", nil, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
+		{"allow only with asker", []Guard{allow}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
+		{"ask without asker refuses not prompts", []Guard{ask}, nil, false},
+		{"ask with asker serializes", []Guard{ask}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, true},
+		{"deny resolves without prompting", []Guard{deny}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			r := New()
+			r.Register(&recordingTool{}, true)
+			for _, g := range c.guards {
+				r.AddGuard(g)
+			}
+			if c.asker != nil {
+				r.SetAsker(c.asker)
+			}
+			assert.Equal(t, c.want, r.MustSerialize([]agent.ToolCall{callWith(json.RawMessage(`{}`))}))
+		})
+	}
+}
+
+// TestMustSerializeAnyPromptingCall asserts a single Ask anywhere in the batch
+// forces serial execution even when every other call is statically allowed.
+func TestMustSerializeAnyPromptingCall(t *testing.T) {
+	t.Parallel()
+
+	r := New()
+	r.Register(&recordingTool{}, true)
+	r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) })
+	r.SetAsker(func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) })
+
+	// a call whose guard asks must serialize the whole batch
+	prompting := []agent.ToolCall{callWith(json.RawMessage(`{}`)), callWith(json.RawMessage(`{}`))}
+	r.AddGuard(func(context.Context, agent.ToolCall) Decision {
+		return Decision{Action: ActionAsk, Reason: "needs approval"}
+	})
+	assert.True(t, r.MustSerialize(prompting))
+}

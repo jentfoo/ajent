@@ -81,7 +81,7 @@ func TestOnToolBatchSeesCallsInMessageOrder(t *testing.T) {
 	a.state.Model.Caps.ParallelTools = true
 
 	var batches [][]string
-	a.opts.OnToolBatch = func(calls []ToolCall) {
+	a.opts.OnToolBatch = func(_ context.Context, calls []ToolCall) {
 		for name, st := range stubs {
 			assert.Zero(t, st.callCount(), "%s ran before the hook saw the batch", name)
 		}

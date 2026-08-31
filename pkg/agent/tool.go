@@ -39,3 +39,11 @@ type ToolSet interface {
 	Schemas() []llm.ToolSchema
 	Names() []string // enabled names in declaration order
 }
+
+// Serializer optionally reports whether a batch must run one at a time because
+// one or more calls would open an approval dialog. Parallel dispatch races the
+// dialogs against each other, so prompt order could differ from submission
+// order; a ToolSet whose guard chain may ask implements this to keep them in lockstep.
+type Serializer interface {
+	MustSerialize(calls []ToolCall) bool
+}

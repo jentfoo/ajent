@@ -401,11 +401,20 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// queued mid-turn prompts land at the next step boundary via this hook.
 	opts.OnBoundary = q.pull
+	// OnToolBatch hands each step's calls (in message order) to sub-agent id
+	// reservation and permission prefetch. The barrier is built later, so it is
+	// reached through a forward reference assigned in its setup block below; nil
+	// until then means no classification to prefetch.
+	var batchPrefetch func(context.Context, []agent.ToolCall)
+	opts.OnToolBatch = func(ctx context.Context, calls []agent.ToolCall) {
+		if sag != nil {
+			sag.Reserve(calls)
+		}
+		if batchPrefetch != nil {
+			batchPrefetch(ctx, calls)
+		}
+	}
 	if sag != nil {
-		// sub-agent ids are handed out here, from the batch in message order:
-		// agent_start runs in parallel, so the goroutines would otherwise race for
-		// the counter and number the agents in whatever order they won it.
-		opts.OnToolBatch = sag.Reserve
 		// completion steers join the same boundary: membership is decided at the
 		// moment the message lands, so ids a poll already claimed are never named.
 		queued := opts.OnBoundary
@@ -526,6 +535,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		})
 		toolsReg.AddGuard(barrier.Guard())
 		toolsReg.SetAsker(barrier.Asker())
+		// a batch's prompt-classified calls are classified concurrently ahead of
+		// their dialogs, so later commands in the batch resolve fast; an abort cancels.
+		batchPrefetch = barrier.Prefetch
 	}
 
 	// the command registry, shell stager and @ expander own the single dispatch path
@@ -1024,7 +1036,7 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: userMsg}}}},
 		MaxTokens: classifyBudget(m),
 	}
-	req.Reasoning = llm.ReasoningConfig{Level: llm.ClampLevel(m, llm.LevelMinimal)}
+	req.Reasoning = llm.ReasoningConfig{Level: llm.ClampLevel(m, llm.LevelOff)}
 	out, _, serr := runSummary(ctx, p, req)
 	if serr != nil {
 		return permit.ClassUnsure
@@ -1032,8 +1044,8 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 	return permit.NormalizeClass(out)
 }
 
-// classifyBudget sizes the classifier's output cap generously so a reasoning model
-// still has room for its thinking block when minimal is clamped away.
+// classifyBudget caps the classifier's output generously: a verdict may be one
+// word or a short justification, and no thinking block needs room.
 func classifyBudget(m llm.Model) int {
 	budget := m.MaxOutput
 	if budget <= 0 {

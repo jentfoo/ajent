@@ -208,6 +208,37 @@ func (b *Barrier) Guard() tools.Guard {
 	}
 }
 
+// Prefetch starts classification for every call in a batch that will actually
+// reach the model classifier, warming the verdict cache so each dialog resolves
+// as soon as its verdict lands — a lone eligible call included, since serial
+// predecessors may run for a while before its dialog opens. It filters exactly
+// as the asker does: only auto-mode bash and non-write extension calls whose
+// static verdict is Ask and which are not already session-allowed go to the
+// model. Identical subjects share one request through the classifier's
+// in-flight join. Launched goroutines observe ctx (the turn's), so an abort
+// stops them. Never blocks.
+func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
+	if b.classifier == nil {
+		return
+	}
+	g := b.gateNow()
+	for _, call := range calls {
+		if !b.classifyCall(g.mode, call.Name) {
+			continue // core writer or non-auto mode: never classified at ask time either
+		}
+		if g.staticVerdict(ctx, call).Action != tools.ActionAsk {
+			continue // statically resolved (read-only, config safe/deny, write scope): no model
+		}
+		if _, ok := b.sessionAllowed(call); ok {
+			continue // an allow-for-session grant already covers it: no dialog, no model
+		}
+		s := classifySubject(g.mode, call)
+		go func() {
+			b.classifier.Classify(ctx, s) // warms the LRU; unsure is never cached
+		}()
+	}
+}
+
 // Asker resolves a guard's ask into allow or deny. It consults session allows,
 // opens an approval dialog, and in auto mode classifies bash concurrently.
 func (b *Barrier) Asker() tools.Asker {

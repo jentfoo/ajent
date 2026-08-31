@@ -601,26 +601,27 @@ review keeps files inspected, issues found and conclusions reached.
 
 ## Tool-call classifier (`auto` / `auto+write` modes)
 
-All three prompts live in **`pkg/permit`** (`ClassifierSystem`,
-`MCPClassifierSystem`, `WorkspaceClassifierSystem`), the package that owns the
-`Classifier` interface, not `main.go`. The shell
-prompt keeps its strict unconditional bar (running arbitrary software is always a
-write, so never `allow`); the MCP variant states the no-observable-change and
-network-exfiltration rules. The permission barrier classifies an unverifiable tool call
-with a one-shot call to the session's current model (**fresh context**, never the
-session history), and its verdict never enters the session. All three ask the same
-question (may this run unattended?) and take the same one-word answer: `allow`,
-`deny` or `unsure`. One vocabulary means one normaliser and no per-prompt parsing
-anywhere downstream. Reasoning is clamped minimal; the output token budget leaves
-room for a thinking block. Verdicts normalise by lowercasing and dropping
-non-letters, so `` `allow` `` and `Allowed.` both land on approval. An **approval
-must be the whole reply**: a hedged "allowing this would be unsafe" is not one.
-The asymmetry is deliberate: `deny` and `unsure` are indistinguishable
-downstream (both leave the dialog open), so only the approving direction can fail
-open and only it is matched strictly. The response is
-never cached when unsure (usually transient: an abort, missing auth, an API
-error); confident verdicts are LRU-cached per subject identity: tool name plus
-exact payload.
+All three prompts live in **`pkg/permit`** (`ClassifierSystem`, `MCPClassifierSystem`,
+`WorkspaceClassifierSystem`), the package that owns the `Classifier` interface, not
+`main.go`. The shell prompt keeps its strict unconditional bar (running arbitrary
+software is always a write); the MCP variant states the no-observable-change and
+network-exfiltration rules. A call is classified with one fresh-context request to
+the session's current model (never the session history), and the verdict never enters
+the session. All three ask the same question (may this run unattended?) for the same
+one-word answer: `allow`, `deny` or `unsure`. One vocabulary means one normaliser and no
+per-prompt parsing anywhere downstream. Reasoning is off, so a verdict costs no thinking
+tokens; in auto modes a batch's prompt-classified calls are classified concurrently so any
+dialog resolves as soon as its verdict lands (see agent-loop-design.md).
+Verdicts normalise by scanning for the verdict words anywhere in the reply: an
+`allow`/`allowed` token yields approval, `deny`/`denied`/`denies` denial, and **both present
+(or neither) is unsure**. The asymmetry is deliberate: `deny` and `unsure` are
+indistinguishable downstream (both leave the dialog open), so only an unambiguous
+single-direction reply can fail open; any conflict keeps the dialog open. A verdict
+word shadowed by a negator (`not`, `never`, `cannot`, `can't`, …) anywhere in the
+reply counts for nothing, so "I can't allow this" never fails open either. A response is never cached when unsure (usually transient: an abort,
+missing auth, an API error); confident verdicts are LRU-cached per subject
+identity (tool name plus exact payload), and concurrent identical subjects share one
+in-flight request.
 
 The modes differ in what they classify and by which rule set. **`auto`** judges
 unverifiable bash commands plus MCP/extension tool calls, sending the model the

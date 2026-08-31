@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 // Class is a model classifier's verdict on one tool call.
@@ -46,16 +47,26 @@ const classCacheMax = 500
 // ClassifierFn is one uncached classification; main.go supplies the model call.
 type ClassifierFn func(ctx context.Context, s Subject) Class
 
-// cachedClassifier wraps an uncached classifier with a session-scoped LRU keyed by
-// subject identity (tool + exact payload). unsure verdicts are never stored; they
-// are usually transient (an abort, missing auth, an API error).
+// cachedClassifier wraps an uncached classifier with a session-scoped LRU keyed
+// by subject identity (tool + exact payload). Concurrent identical subjects share
+// one in-flight request, so batch prefetch and the dialogs it fronts never issue
+// duplicate model calls. unsure verdicts are never stored; they are usually
+// transient (an abort, missing auth, an API error).
 type cachedClassifier struct {
 	fn ClassifierFn
 
-	mu    sync.Mutex
-	max   int              // cache cap, classCacheMax for production use
-	vals  map[string]Class // subject key -> verdict
-	order []string         // least-recently-used first; the tail is most recent
+	mu       sync.Mutex
+	max      int                       // cache cap, classCacheMax for production use
+	vals     map[string]Class          // subject key -> verdict
+	order    []string                  // least-recently-used first; the tail is most recent
+	inflight map[string]*inflightClass // subject key -> running call joiners wait on
+}
+
+// inflightClass is one running classification that identical concurrent callers
+// join instead of issuing their own model request. class is set before done closes.
+type inflightClass struct {
+	done  chan struct{}
+	class Class
 }
 
 // NewCachedClassifier returns a session-scoped, LRU-caching classifier over fn.
@@ -65,38 +76,70 @@ func NewCachedClassifier(fn ClassifierFn) *cachedClassifier {
 
 // newCachedClassifierMax builds a caching classifier with a custom cap for tests.
 func newCachedClassifierMax(fn ClassifierFn, max int) *cachedClassifier {
-	return &cachedClassifier{fn: fn, max: max, vals: make(map[string]Class)}
+	return &cachedClassifier{fn: fn, max: max,
+		vals: make(map[string]Class), inflight: make(map[string]*inflightClass)}
 }
 
-// Classify consults the cache and otherwise runs fn, storing non-unsure verdicts.
+// Classify serves a cached verdict, joins an identical in-flight call, or leads
+// it with fn. A joiner whose context ends takes unsure; one handed a failed
+// (cancelled) leader retries while its own context lives, so a cancelled
+// predecessor never decides for a caller still waiting.
 func (c *cachedClassifier) Classify(ctx context.Context, s Subject) Class {
 	key := s.key()
-	c.mu.Lock()
-	if v, ok := c.vals[key]; ok {
-		touch(c.order, key)
-		c.mu.Unlock()
-		return v
-	}
-	c.mu.Unlock()
-
-	v := c.fn(ctx, s)
-	if v == ClassUnsure { // unsure is usually transient; never cached
-		return v
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, ok := c.vals[key]; !ok {
-		if len(c.order) >= c.max {
-			delete(c.vals, c.order[0]) // evict the least-recently-used entry
-			c.order = slices.Delete(c.order, 0, 1)
+	for ctx.Err() == nil { // keep joining while predecessors fail on dead contexts
+		c.mu.Lock()
+		if v, ok := c.vals[key]; ok {
+			touch(c.order, key)
+			c.mu.Unlock()
+			return v
 		}
-		c.vals[key] = v
-		c.order = append(c.order, key)
-	} else {
-		touch(c.order, key) // another caller cached it meanwhile; refresh recency
+		fl, ok := c.inflight[key]
+		if !ok {
+			fl = &inflightClass{done: make(chan struct{})}
+			c.inflight[key] = fl
+		}
+		c.mu.Unlock()
+
+		if !ok { // leader: our verdict decides for everyone joining us
+			v := c.fn(ctx, s)
+			if v != ClassUnsure {
+				c.mu.Lock()
+				c.storeLocked(key, v)
+				c.mu.Unlock()
+			}
+			fl.class = v
+			c.mu.Lock()
+			delete(c.inflight, key)
+			c.mu.Unlock()
+			close(fl.done)
+			return v
+		}
+		select {
+		case <-fl.done:
+			if fl.class != ClassUnsure {
+				return fl.class
+			}
+			// the predecessor failed on a dead context; lead (or join) again ourselves
+		case <-ctx.Done():
+			return ClassUnsure
+		}
 	}
-	return v
+	return ClassUnsure
+}
+
+// storeLocked records v under key at the LRU tail, evicting at capacity. Caller
+// holds the lock; only the key's in-flight leader stores.
+func (c *cachedClassifier) storeLocked(key string, v Class) {
+	if _, ok := c.vals[key]; ok {
+		touch(c.order, key) // already present; refresh recency only
+		return
+	}
+	if len(c.order) >= c.max {
+		delete(c.vals, c.order[0]) // evict the least-recently-used entry
+		c.order = slices.Delete(c.order, 0, 1)
+	}
+	c.vals[key] = v
+	c.order = append(c.order, key)
 }
 
 // touch moves key to the tail (most-recently-used), keeping eviction at index 0.
@@ -109,35 +152,37 @@ func touch(order []string, key string) {
 	order[len(order)-1] = key
 }
 
-// NormalizeClass maps a classifier reply to a verdict. An approval must be the
-// reply's first whole word, so "allow, it only reads" approves but "allowing
-// this would be unsafe" does not; only the approving direction can fail open.
-func NormalizeClass(text string) Class {
-	switch first := firstWord(text); first {
-	case "allow", "allowed":
-		return ClassAllow
-	case "deny", "denied", "denies":
-		return ClassDeny
-	default:
-		return ClassUnsure // indistinguishable from deny downstream; the dialog stays open
-	}
+// classNegators shadow a following verdict word, so "I can't allow this" is never
+// read as an approval. Apostrophes stay inside words here, unlike the letter-only
+// splitter below, so contractions match whole.
+var classNegators = map[string]bool{
+	"not": true, "never": true, "cannot": true,
+	"can't": true, "cant": true, "don't": true, "dont": true,
+	"won't": true, "wont": true, "isn't": true, "isnt": true,
 }
 
-// firstWord returns the leading run of letters, lowercased, so “ `Allow.` “ and
-// "read-only" both reduce to one comparable token.
-func firstWord(text string) string {
-	var b strings.Builder
-	for _, r := range text {
-		switch {
-		case r >= 'a' && r <= 'z':
-			b.WriteRune(r)
-		case r >= 'A' && r <= 'Z':
-			b.WriteRune(r + ('a' - 'A'))
-		default:
-			if b.Len() > 0 {
-				return b.String()
-			}
+// NormalizeClass maps a classifier reply to a verdict by the marker words it
+// contains anywhere: one direction yields its class; both or neither is unsure.
+// Only an unambiguous approval can fail open, so any conflict keeps the dialog
+// open and a negator shadowing a verdict word ("can't allow") counts for nothing.
+func NormalizeClass(text string) Class {
+	var hasAllow, hasDeny, negated bool
+	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && r != '\'' }) {
+		switch w {
+		case "allow", "allowed", "approved":
+			hasAllow = true
+		case "deny", "denied", "denies", "disallowed":
+			hasDeny = true
+		}
+		if classNegators[w] {
+			negated = true // a negator anywhere shadows every verdict word: never fail open
 		}
 	}
-	return b.String()
+	if hasAllow != hasDeny && !negated {
+		if hasAllow {
+			return ClassAllow
+		}
+		return ClassDeny
+	}
+	return ClassUnsure // both, neither, or a shadowing negator: the dialog stays open
 }

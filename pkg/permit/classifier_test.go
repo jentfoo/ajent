@@ -4,8 +4,10 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeClass(t *testing.T) {
@@ -21,14 +23,25 @@ func TestNormalizeClass(t *testing.T) {
 		{"backticked", "`allow`", ClassAllow},
 		{"trailing dot", "allow.", ClassAllow},
 		{"approval with reason", "allow, it only lists files", ClassAllow},
-		{"allow as verb", "allowing this would be unsafe", ClassUnsure},
-		{"deny as verb", "this denies nothing", ClassUnsure},
+		{"verdict after prose", "the command only reads; allow it", ClassAllow},
 		{"deny plain", "deny", ClassDeny},
+		{"approved word", "this is approved for the session", ClassAllow},
+		{"disallowed word", "that command is disallowed here", ClassDeny},
 		{"deny phrase", "DENY: it modifies the file", ClassDeny},
-		{"denied", "denied - reaches the network", ClassDeny},
+		{"denied with reason", "denied - reaches the network", ClassDeny},
+		{"verdict after prose deny", "this would modify files, so deny", ClassDeny},
+		{"conflicting allow and deny", "allow if safe but deny otherwise", ClassUnsure},
+		{"hedged both words", "not sure; maybe allow, maybe deny", ClassUnsure},
+		{"verb form not verdict", "allowing this would be unsafe", ClassUnsure},
+		// a negator before an approval never fails open: the dialog stays.
+		{"negated cannot allow", "I can't allow this because it's unsafe", ClassUnsure},
+		{"negated do not allow", "do not allow this modification", ClassUnsure},
+		{"negated semicolon clause", "I cannot allow; it writes to the network", ClassUnsure},
+		{"negated never allowed", "never allowed: modifies files", ClassUnsure},
+		// a negator anywhere shadows every verdict word, even across a clause boundary.
+		{"negation does not reset", "I can't deny it reads; so allow it", ClassUnsure},
 		{"unsure literal", "unsure", ClassUnsure},
 		{"old readonly word", "readonly", ClassUnsure},
-		{"old write word", "write", ClassUnsure},
 		{"garbled", "maybe? 42!", ClassUnsure},
 		{"empty", "", ClassUnsure},
 	}
@@ -109,6 +122,131 @@ func TestCachedClassifierNeverStoresUnsure(t *testing.T) {
 	assert.Equal(t, ClassAllow, c.Classify(context.Background(), Subject{Name: "bash", Args: "stat b"}))
 	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "stat b"}) // cached from here on
 	assert.Equal(t, 3, fn.count())
+}
+
+// gatedFn holds each classification open until released or its context ends,
+// counting starts; the leading fails calls answer unsure, the rest verdict.
+type gatedFn struct {
+	release chan struct{}
+	verdict Class
+	fails   int
+
+	mu     sync.Mutex
+	starts int
+	ends   int
+}
+
+func (f *gatedFn) call(ctx context.Context, _ Subject) Class {
+	f.mu.Lock()
+	f.starts++
+	i := f.starts
+	f.mu.Unlock()
+	var v Class
+	select {
+	case <-f.release:
+		if i <= f.fails {
+			v = ClassUnsure
+		} else {
+			v = f.verdict
+		}
+	case <-ctx.Done():
+		v = ClassUnsure
+	}
+	f.mu.Lock()
+	f.ends++
+	f.mu.Unlock()
+	return v
+}
+func (f *gatedFn) startedN() int { f.mu.Lock(); defer f.mu.Unlock(); return f.starts }
+func (f *gatedFn) endedN() int   { f.mu.Lock(); defer f.mu.Unlock(); return f.ends }
+
+// collect gathers n classes from ch without sleeping.
+func collect(t *testing.T, ch <-chan Class, n int) []Class {
+	t.Helper()
+	var out []Class
+	require.Eventually(t, func() bool {
+		for {
+			select {
+			case v := <-ch:
+				out = append(out, v)
+				if len(out) == n {
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	}, time.Second, 5*time.Millisecond)
+	return out
+}
+
+// TestCachedClassifierInFlight covers the single-flight join: concurrent
+// identical subjects share one model request, a cancelled joiner takes unsure
+// without disturbing the leader's call, and a failed leader's unsure never
+// decides for a caller that still waits.
+func TestCachedClassifierInFlight(t *testing.T) {
+	t.Parallel()
+
+	t.Run("joins concurrent callers", func(t *testing.T) {
+		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow}
+		c := NewCachedClassifier(fn.call)
+
+		const callers = 4
+		res := make(chan Class, callers)
+		for range callers {
+			go func() { res <- c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f"}) }()
+		}
+		// one leader runs; the rest join it instead of issuing their own request
+		require.Eventually(t, func() bool { return fn.startedN() == 1 }, time.Second, 5*time.Millisecond)
+		close(fn.release)
+
+		for _, v := range collect(t, res, callers) {
+			assert.Equal(t, ClassAllow, v)
+		}
+		assert.Equal(t, 1, fn.startedN())
+		assert.Equal(t, 1, fn.endedN())
+	})
+
+	t.Run("cancelled joiner takes unsure", func(t *testing.T) {
+		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow}
+		c := NewCachedClassifier(fn.call)
+		subj := Subject{Name: "bash", Args: "rm f"}
+
+		go func() { c.Classify(t.Context(), subj) }() // the leader
+		require.Eventually(t, func() bool { return fn.startedN() == 1 }, time.Second, 5*time.Millisecond)
+
+		// a joiner mirrors an asker whose dialog the user answered: cancel its context
+		joinCtx, cancel := context.WithCancel(t.Context())
+		joined := make(chan Class, 1)
+		go func() { joined <- c.Classify(joinCtx, subj) }()
+		cancel()
+		assert.Equal(t, []Class{ClassUnsure}, collect(t, joined, 1))
+
+		close(fn.release) // the leader still finishes and caches its verdict
+		require.Eventually(t, func() bool { return fn.endedN() == 1 }, time.Second, 5*time.Millisecond)
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), subj)) // served from cache
+		assert.Equal(t, 1, fn.startedN())
+	})
+
+	t.Run("retries after failed leader", func(t *testing.T) {
+		// the first call answers unsure (a cancelled leader); the retry gets allow
+		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow, fails: 1}
+		c := NewCachedClassifier(fn.call)
+		subj := Subject{Name: "bash", Args: "rm f"}
+
+		res := make(chan Class, 2)
+		for range 2 {
+			go func() { res <- c.Classify(t.Context(), subj) }()
+		}
+		require.Eventually(t, func() bool { return fn.startedN() == 1 }, time.Second, 5*time.Millisecond)
+		close(fn.release)
+
+		// the failed leader's unsure never decides for the caller that still waits
+		assert.ElementsMatch(t, []Class{ClassUnsure, ClassAllow}, collect(t, res, 2))
+		assert.Equal(t, 2, fn.startedN())
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), subj)) // the retry cached its verdict
+		assert.Equal(t, 2, fn.startedN())
+	})
 }
 
 func TestCachedClassifierEvictsLeastRecentlyUsedAtCap(t *testing.T) {

@@ -248,6 +248,11 @@ Dispatch rules:
 
 - **Serial by default.** Parallel only when every call in the batch is a
   `Parallel()` tool and `state.Model.Caps.ParallelTools` is set.
+- **Prompts force serial.** A `ToolSet` may implement the optional `Serializer`
+  interface (`MustSerialize(calls)`); when it reports true for a batch, dispatch runs
+  serially even though every tool is parallel. block-all asks read-only tools too,
+  and their dialogs must open in submission order — racing them across goroutines
+  would scramble prompt order against the calls' message order.
 - **Bounded parallelism.** A semaphore channel and a `sync.WaitGroup` cap
   in-flight calls at the host's CPU count. An `errgroup` was considered but
   `golang.org/x/sync` is not in the module, and no new dependencies were
@@ -334,12 +339,12 @@ survey, staged shell results), never a typed prompt, so recall excludes all of i
   drop window (append follows synchronously). It must be cheap and never block;
   nil disables it. `Input.Delivered` still fires per returned input, exactly as
   for push-steers.
-- **`Options.OnToolBatch`**, when set, is called on the loop goroutine at the top
-  of `dispatch` with one step's calls in message order, before any of them runs.
-  The parallel path races the calls against each other, so this is the only ordered
-  view of a batch a host gets. It is where ordered identity is reserved, as the
-  sub-agent manager does to keep `sub-N` in submission order (`subagents-design.md`).
-  It must be cheap and never block; nil disables it.
+- **`Options.OnToolBatch`**, when set, runs on the loop goroutine at the top of
+  `dispatch`, before any call runs, with one step's calls in message order and the
+  turn's context (cancelled on abort). The parallel path races the calls against each
+  other, so this is a host's only ordered view of a batch: it reserves ordered identity
+  (`sub-N` numbering) and starts ahead-of-dialog work such as permission classification
+  (`permit.Prefetch`, `prompt-design.md`). It must be cheap and never block; nil disables.
 
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
 drops everything queued (including any host inputs already handed over at a

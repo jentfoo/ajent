@@ -824,7 +824,7 @@ func TestClassifierAdapterFailuresAreUnsure(t *testing.T) {
 	}
 }
 
-func TestClassifierAdapterRequestUsesFreshContextAndMinimalReasoning(t *testing.T) {
+func TestClassifierAdapterRequestUsesFreshContextNoReasoning(t *testing.T) {
 	t.Parallel()
 
 	model := llm.Model{ID: "p/m", Provider: "scripted", MaxOutput: 64000}
@@ -846,8 +846,8 @@ func TestClassifierAdapterRequestUsesFreshContextAndMinimalReasoning(t *testing.
 		}
 	}
 	assert.Contains(t, sys.String(), `"allow"`)
-	// a model that cannot reason clamps minimal to off; the field is always populated.
-	assert.Equal(t, llm.ClampLevel(model, llm.LevelMinimal), r.Reasoning.Level)
+	// the classifier never reasons; off stays off whatever the model supports.
+	assert.Equal(t, llm.ClampLevel(model, llm.LevelOff), r.Reasoning.Level)
 }
 
 func TestClassifierAdapterClassifiesMCPCallWithMetadata(t *testing.T) {

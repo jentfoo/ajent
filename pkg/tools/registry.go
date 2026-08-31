@@ -194,6 +194,30 @@ func (r *Registry) guardSnapshot() ([]Guard, Asker) {
 	return slices.Clone(r.guards), r.asker
 }
 
+// MustSerialize reports whether any call in batch would open an approval dialog
+// under the current guard chain, so dispatch runs them one at a time to keep
+// prompts in submission order. It mirrors Execute's first-non-allow-wins walk
+// (probed on a bare context: these are model calls, so the user-initiated
+// exemption never applies): a Deny resolves without prompting and an unguarded
+// Ask refuses, so only an Ask with an asker registered forces serial execution.
+func (r *Registry) MustSerialize(calls []agent.ToolCall) bool {
+	if len(r.guards) == 0 || r.asker == nil {
+		return false // no gate: nothing can prompt
+	}
+	guards, _ := r.guardSnapshot()
+	for _, call := range calls {
+		for _, guard := range guards {
+			switch d := guard(context.Background(), call); d.Action {
+			case ActionAllow:
+				continue
+			default: // first non-allow wins inside Execute; an Ask is what prompts
+				return d.Action == ActionAsk
+			}
+		}
+	}
+	return false
+}
+
 // Enabled returns every currently enabled tool in declaration order.
 func (r *Registry) Enabled() []agent.Tool {
 	r.mu.RLock()

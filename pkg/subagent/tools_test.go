@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -300,9 +301,11 @@ func TestStartIDOrder(t *testing.T) {
 	st := &agent.State{Model: llm.Model{ID: "parent", ContextWindow: 8000,
 		Caps: llm.Capabilities{ParallelTools: true}}}
 	a := agent.New(st, agent.Options{
-		Provider:    func(llm.Model) (llm.Provider, error) { return parent, nil },
-		Tools:       &toolSet{tools: m.Tools()},
-		OnToolBatch: m.Reserve,
+		Provider: func(llm.Model) (llm.Provider, error) { return parent, nil },
+		Tools:    &toolSet{tools: m.Tools()},
+		OnToolBatch: func(_ context.Context, calls []agent.ToolCall) {
+			m.Reserve(calls)
+		},
 	})
 	require.NoError(t, a.Prompt(t.Context(), agent.Input{Text: "fan out"}))
 
