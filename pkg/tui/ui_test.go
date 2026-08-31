@@ -1652,6 +1652,59 @@ func TestStreamingPreviewMarksDroppedHead(t *testing.T) {
 	})
 }
 
+// TestStreamingPreviewMatchesCommit pins the preview to the layout its block
+// lands in: the separator row is reserved and prose breaks where the terminal
+// will break it, so committing does not re-flow what was already on screen.
+func TestStreamingPreviewMatchesCommit(t *testing.T) {
+	t.Parallel()
+
+	const first = "First paragraph long enough that it wraps onto a second row here.\n\n"
+	const second = "Second paragraph, also long enough that it has to wrap across several rows here."
+	tests := []struct {
+		name  string
+		feed  func(u *UI)
+		final string
+	}{
+		// the preview composed after the first block committed
+		{"separate_deltas", func(u *UI) { u.Text(first); u.Text(second) }, "\n\n"},
+		// the same delta commits one block and opens the next, so the preview is
+		// composed before the commit that makes the separator necessary
+		{"one_delta", func(u *UI) { u.Text(first + second) }, "\n\n"},
+		// the last block never commits through writeMarkdown's separator branch
+		{"ends_the_message", func(u *UI) { u.Text(first); u.Text(second) }, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := newVT(40, 16)
+			u := newTestUI(t, v, strings.NewReader(""))
+			u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
+			find := func(prefix string) int {
+				for i := range v.h {
+					if strings.HasPrefix(u.line(v, i), prefix) {
+						return i
+					}
+				}
+				return -1
+			}
+
+			tc.feed(u)
+			row := find("Second")
+			require.GreaterOrEqual(t, row, 0)
+			preview := []string{u.line(v, row), u.line(v, row+1)}
+
+			u.Text(tc.final)
+			u.EndText()
+			assert.Equal(t, row, find("Second"), "the preview reserved the separator row, so nothing shifted")
+			assert.Equal(t, preview[0], u.line(v, row), "the preview broke where the terminal broke")
+			// the block is composed a column short of the terminal, so a continuation
+			// may gain the one character that column held back, never re-flow around it
+			next := u.line(v, row+1)
+			require.True(t, strings.HasPrefix(next, preview[1]), "%q is not the head of %q", preview[1], next)
+			assert.LessOrEqual(t, displayWidth(next)-displayWidth(preview[1]), 1, "at most the held-back column")
+		})
+	}
+}
+
 // TestStreamingRowsLaysOutStructuredLines pins that a table or rule still
 // buffered in textBuf previews as itself, not as a blank row: structured
 // histLines carry no text, so the preview must lay them out like commit does.

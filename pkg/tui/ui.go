@@ -472,8 +472,8 @@ func (u *UI) streamDelta(committed, grew bool, commit func()) {
 		u.repaint() // drop the just-committed rows from r.live before they redraw below history
 	}
 	commit()
-	if !committed && grew {
-		u.repaint() // extend the live tail as it grows
+	if grew {
+		u.repaint() // extend the live tail as it grows, against the state the commit left
 	}
 }
 
@@ -525,7 +525,9 @@ func (u *UI) Text(delta string) {
 	done, rest := splitCompleteBlocks(u.textBuf)
 	u.textBuf = rest
 	committed := len(done) > 0
-	grew := !committed && len(rest) > 0 // a partial block still streams
+	// a partial block still streams; it is recomposed after a commit too, so its
+	// preview reserves the separator that commit just made necessary
+	grew := len(rest) > 0
 	u.streamDelta(committed, grew,
 		func() { u.writeMarkdown(done) })
 }
@@ -549,27 +551,45 @@ func (u *UI) Print(markdown string) {
 }
 
 // streamingRows lays the in-progress markdown out into display rows for the live
-// block, re-wrapping prose at width so it reads like the finished message.
+// block, at the width and by the rule the block will be committed with.
 func (u *UI) streamingRows(w int) []string {
 	if !u.streaming || strings.TrimSpace(u.textBuf) == "" {
 		return nil
 	}
 	lines := renderPreview(u.theme, w, u.textBuf)
 	var out []string
+	if u.previewGap() {
+		out = append(out, "") // the separator writeMarkdown commits, or the block shifts down a row
+	}
 	for _, l := range lines {
 		if l.structured() {
 			// structured lines carry no text; lay them out or the preview
 			// shows a blank row until the block commits
 			out = append(out, l.rows(w)...)
 		} else {
-			out = append(out, wrapLine(l.text, w)...)
+			out = append(out, u.wrapPreview(l.text, w)...)
 		}
 	}
 	return out
 }
 
+// previewGap reports whether committing the buffered block opens with a blank
+// line. Mirrors writeMarkdown's separator, and gap() behind it.
+func (u *UI) previewGap() bool {
+	return u.textStart || (u.started && !u.lastBlank)
+}
+
+// wrapPreview breaks a preview line the way this renderer commits it: inline
+// hands the line to the terminal, alt wraps it itself.
+func (u *UI) wrapPreview(line string, w int) []string {
+	if u.mode == ModeInline {
+		return hardWrap(line, w)
+	}
+	return wrapLine(line, w)
+}
+
 // thinkingPreviewRows lays the pending partial reasoning line out into display
-// rows for the live block, re-wrapped at width like the finished line will be.
+// rows for the live block, broken the way the committed line will be.
 func (u *UI) thinkingPreviewRows(w int) []string {
 	if !u.thinking || strings.TrimSpace(u.thinkBuf.Pending()) == "" {
 		return nil
@@ -579,7 +599,7 @@ func (u *UI) thinkingPreviewRows(w int) []string {
 	if len(runes) > thinkingPreviewRunes {
 		tail = string(runes[len(runes)-thinkingPreviewRunes:])
 	}
-	rows := wrapLine(tail, w)
+	rows := u.wrapPreview(tail, w)
 	for i, r := range rows {
 		rows[i] = u.theme.Thinking.Wrap(r)
 	}

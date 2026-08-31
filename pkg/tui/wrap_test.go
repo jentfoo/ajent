@@ -123,6 +123,66 @@ func TestWrapLineStyled(t *testing.T) {
 	})
 }
 
+func TestHardWrap(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		width    int
+		expected []string
+	}{
+		{"fits", "hello", 10, []string{"hello"}},
+		{"exact_width", "0123456789", 10, []string{"0123456789"}},
+		{"breaks_mid_word", "hello world", 8, []string{"hello wo", "rld"}},
+		{"drops_boundary_space", "aaaaa bbbbb", 5, []string{"aaaaa", "bbbbb"}},
+		{"keeps_inner_spaces", "aa bb cc dd", 6, []string{"aa bb ", "cc dd"}},
+		{"no_hanging_indent", "• alpha beta gamma", 10, []string{"• alpha be", "ta gamma"}},
+		{"invalid_width", "hello", 0, []string{"hello"}},
+		{"empty", "", 10, []string{""}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, hardWrap(tc.input, tc.width))
+		})
+	}
+
+	t.Run("no_row_exceeds_width", func(t *testing.T) {
+		long := "the retry helper loops a fixed number of times with no backoff at all"
+		for _, w := range []int{5, 12, 40, 68} {
+			for _, row := range hardWrap(long, w) {
+				assert.LessOrEqual(t, displayWidth(row), w, "width %d", w)
+			}
+		}
+	})
+	t.Run("wide_runes_never_stall", func(t *testing.T) {
+		assert.Len(t, hardWrap("ＡＢＣ", 1), 3, "a rune wider than the row still advances")
+	})
+	t.Run("zero_width_never_stalls", func(t *testing.T) {
+		rows := hardWrap("́́́abc", 1)
+		require.NotEmpty(t, rows)
+		assert.Equal(t, "́́́abc", strings.Join(rows, ""))
+	})
+	t.Run("graphemes_never_split", func(t *testing.T) {
+		line := "ok 👨‍👩‍👧‍👦 done"
+		for _, w := range []int{3, 4, 5, 9} {
+			for _, row := range hardWrap(line, w) {
+				assert.LessOrEqual(t, displayWidth(row), w, "width %d", w)
+				if strings.Contains(row, "👨") {
+					assert.Contains(t, row, "👦", "the cluster stayed whole at width %d", w)
+				}
+			}
+		}
+	})
+	t.Run("style_reopened_on_each_row", func(t *testing.T) {
+		style := Style{open: sgr(attrDim)}
+		rows := hardWrap(style.Wrap("hello world"), 8)
+		require.Len(t, rows, 2)
+		assert.Equal(t, "\x1b[2mhello wo\x1b[0m", rows[0])
+		assert.Equal(t, "\x1b[2mrld\x1b[0m", rows[1])
+	})
+}
+
 func TestHangWidth(t *testing.T) {
 	t.Parallel()
 

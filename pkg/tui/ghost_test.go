@@ -28,8 +28,9 @@ func TestStreamingCommitKeepsOutput(t *testing.T) {
 	}
 	assert.Empty(t, v.scrollback)
 
-	// closing a block commits both paragraphs mid-stream
-	u.Text("\n\nthird paragraph follows")
+	// closing a block commits both paragraphs mid-stream; the tail is one row of
+	// preview, since its reserved separator takes the other (previewGap)
+	u.Text("\n\nthird para follows")
 
 	var lost []string
 	for _, l := range v.scrollback {

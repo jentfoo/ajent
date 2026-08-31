@@ -111,6 +111,32 @@ func wrapLine(line string, width int) []string {
 	return rows
 }
 
+// hardWrap breaks a line into rows at the column like a terminal does: no word
+// preference, no continuation indent.
+func hardWrap(line string, width int) []string {
+	if width <= 0 || displayWidth(line) <= width {
+		return []string{line}
+	}
+	cs := cells(line)
+	var rows []string
+	for start := 0; start < len(cs); {
+		end, w := start, 0
+		for end < len(cs) && w+cs[end].width <= width {
+			w += cs[end].width
+			end++
+		}
+		if end == start {
+			end = start + 1 // a single cell wider than the row, never stall
+		}
+		rows = append(rows, renderCells(cs[start:end], ""))
+		start = end
+		if start < len(cs) && cs[start].text == " " {
+			start++ // the held-back last column swallows this space, so drop it to stay in sync
+		}
+	}
+	return rows
+}
+
 // breakPoint returns the last word boundary at or before end, or end when none exists.
 func breakPoint(cs []cell, start, end int) int {
 	if end < len(cs) && cs[end].text == " " {

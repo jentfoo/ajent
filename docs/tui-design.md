@@ -315,8 +315,8 @@ completed block still sitting in `r.live` would otherwise be redrawn by
 the screen is full that oversized ghost overflows and prematurely scrolls the
 just-committed lines into terminal scrollback before they are read: output
 visibly jumps during streaming. So `Text`/`EndText` call `repaint()` (dropping
-the completed content from the preview) ahead of `writeMarkdown`, never after,
-and `Thinking`/`EndThinking` do the same ahead of `commit`: both previews must
+the completed content from the preview) ahead of `writeMarkdown`, never only
+after, and `Thinking`/`EndThinking` do the same ahead of `commit`: both previews must
 drop the content they are about to commit before `commit`/`writeMarkdown` runs, or
 the inline renderer redraws it as a stale ghost.
 
@@ -528,6 +528,18 @@ the exception: wrapping a table garbles it outright, so they keep the width
 they were laid out at until they scroll away (drawn one column short of the
 edge, the same deferred-wrap precaution as live rows). Alt mode keeps the
 hanging indents because it re-lays everything itself on every resize.
+
+A streaming preview (`streamingRows`, `thinkingPreviewRows`) must be wrapped by
+us, since a live row is exactly one terminal row, so it wraps by the rule its
+commit will use or the block visibly re-flows as it lands: `wrapPreview` picks
+`hardWrap` under inline, matching the terminal's break at the column with no word
+preference and no hanging indent, and keeps `wrapLine` under alt, which lays its
+own history out with it. It also reserves the blank separator the commit opens
+with (`previewGap`), which `splitCompleteBlocks` consumes into the committed
+chunk. Two differences survive: the block is composed a column short (rule 3), so
+a continuation may gain the character that column held back (`hardWrap` drops a
+space landing there, re-syncing the rows after it), and an open fence stays
+unhighlighted until it commits.
 
 The flow travels with the line because guessing it from the text was wrong:
 prose legitimately starting with `-`, `+`, `@` or a box drawing rune was
@@ -847,12 +859,14 @@ activity and yield like them on a short terminal; they are driver-owned, so
 When a markdown block completes mid-stream, `Text`/`EndText` repaint **first** so
 the just-committed rows leave the preview before `writeMarkdown` runs (invariant
 3); otherwise the inline renderer's commit pass would redraw them as a stale
-ghost and push fresh output off screen.
+ghost and push fresh output off screen. A tail still buffered repaints again
+afterwards, against the flags the commit left, so its preview reserves the
+separator that commit just made necessary.
 Thinking follows the same shape: completed logical lines still commit to history
 exactly as before, while the pending partial line renders live above the reply
-preview, re-wrapped at width (raw text, not markdown-rendered), bounded by a
-preview cap and yielding by the same room rule that keeps only the
-tail rows. `UI.EndThinking` drops the preview before committing its remainder,
+preview, wrapped by `wrapPreview` like the reply (raw text, not markdown-
+rendered), bounded by a preview cap and yielding by the same room rule that
+keeps only the tail rows. `UI.EndThinking` drops the preview before committing its remainder,
 and `TurnEnd` in `pkg/tui/sink/sink.go` flushes an unterminated block so an
 interrupt cannot strand a tail.
 Activity (and queued pending-prompt rows) render into whatever height remains
