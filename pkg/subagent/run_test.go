@@ -1,9 +1,12 @@
 package subagent
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,13 +32,28 @@ func TestEmptySummary(t *testing.T) {
 		assert.Contains(t, j.Summary, "the answer is 42")
 	})
 
-	// the bounded retry gives up and returns a placeholder rather than looping.
-	t.Run("after_two_nudges_is_placeholder", func(t *testing.T) {
-		// three thinking-only turns: initial + two nudges, then nothing useful
+	// a bounded retry gives up: short reasoning fails rather than reporting done.
+	t.Run("short_thinking_fails", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{
-			{Events: thinkingOnlyTurn()},
-			{Events: thinkingOnlyTurn()},
-			{Events: thinkingOnlyTurn()},
+			{Events: thinkingOnlyTurn()}, // no text; triggers a nudge
+			{Events: thinkingOnlyTurn()}, // still nothing usable after the one nudge
+		})
+		m := New(Options{Provider: p})
+		t.Cleanup(m.Close)
+
+		id := m.Start("q", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusError, j.Status)
+		require.ErrorIs(t, j.Err, errNoSummary)
+	})
+
+	// substantial reasoning after the nudge stands in for a missing summary.
+	t.Run("long_thinking_is_summary", func(t *testing.T) {
+		think := strings.Repeat("reasoning ", 30) // ~300 chars, past minThinkingSummary
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: thinkingOnlyTurn()},  // no text; triggers a nudge
+			{Events: thinkingTurn(think)}, // still no text, but sizable reasoning
 		})
 		m := New(Options{Provider: p})
 		t.Cleanup(m.Close)
@@ -44,7 +62,39 @@ func TestEmptySummary(t *testing.T) {
 		j, ok := m.Poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
-		assert.Contains(t, j.Summary, "no output")
+		assert.Contains(t, j.Summary, thinkingPreface)
+		assert.Contains(t, j.Summary, think)
+	})
+
+	// long mid-investigation reasoning is excluded by the tool-call boundary.
+	t.Run("tool_turn_thinking_ignored", func(t *testing.T) {
+		longThink := strings.Repeat("reasoning ", 30) // past minThinkingSummary, but pre-tool
+		toolTurn := []llm.Event{
+			{Type: llm.EventThinkingStart, Index: 0},
+			{Type: llm.EventThinkingDelta, Index: 0, Text: longThink},
+			{Type: llm.EventThinkingEnd, Index: 0, Block: llm.ThinkingBlock{Text: longThink}},
+			{Type: llm.EventToolCallStart, Index: 1, ToolCallID: "c1", ToolName: "read"},
+			{Type: llm.EventToolCallEnd, Index: 1, Block: llm.ToolCallBlock{
+				ID: "c1", Name: "read", Input: json.RawMessage(`{"path":"x.go"}`)}},
+			{Type: llm.EventDone, StopReason: llm.StopToolUse},
+		}
+		p, _ := scripted([]llm.ScriptedTurn{
+			{Events: toolTurn},           // long reasoning mid-investigation
+			{Events: thinkingOnlyTurn()}, // the turn after the tool call is empty
+			{Events: thinkingOnlyTurn()}, // nudge response still short and empty
+		})
+		m := New(Options{
+			Provider: p,
+			Tools: &fakeSource{tools: []agent.Tool{&fakeTool{name: "read", result: "ok"}},
+				readOnly: map[string]bool{"read": true}},
+		})
+		t.Cleanup(m.Close)
+
+		id := m.Start("q", "")
+		j, ok := m.Poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusError, j.Status)
+		require.ErrorIs(t, j.Err, errNoSummary)
 	})
 }
 

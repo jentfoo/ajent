@@ -152,15 +152,18 @@ func summaryTurn(text string, usage llm.Usage) []llm.Event {
 	return append(out, doneEvent())
 }
 
-// thinkingOnlyTurn frames an assistant turn whose only content is reasoning.
-func thinkingOnlyTurn() []llm.Event {
+// thinkingTurn frames an assistant turn whose only content is the given reasoning.
+func thinkingTurn(text string) []llm.Event {
 	return []llm.Event{
 		{Type: llm.EventThinkingStart, Index: 0},
-		{Type: llm.EventThinkingDelta, Index: 0, Text: "thinking…"},
-		{Type: llm.EventThinkingEnd, Index: 0, Block: llm.ThinkingBlock{Text: "thinking…"}},
+		{Type: llm.EventThinkingDelta, Index: 0, Text: text},
+		{Type: llm.EventThinkingEnd, Index: 0, Block: llm.ThinkingBlock{Text: text}},
 		doneEvent(),
 	}
 }
+
+// thinkingOnlyTurn frames an assistant turn whose only content is reasoning.
+func thinkingOnlyTurn() []llm.Event { return thinkingTurn("thinking…") }
 
 func doneEvent() llm.Event { return llm.Event{Type: llm.EventDone, StopReason: llm.StopEndTurn} }
 

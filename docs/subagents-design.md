@@ -42,7 +42,7 @@ last in the filter so no configuration can reach past it.
 ```
 manager.go      Options, Manager — lifecycle, concurrency, notification, status segment
 job.go          Status enum, public Job snapshot, internal locked job per investigation
-run.go          child agent construction + the summary contract / empty-summary retry
+run.go          child agent construction + the summary contract / recovery path
 tools.go        agent_start / agent_poll / agent_list (ModeParallel)
 toolset.go      ToolSource interface + the structural read-only filter and fixed view
 sink.go         childSink — one activity row per job, coalesced, lives as long as the job
@@ -128,8 +128,11 @@ joining only its non-empty `llm.TextBlock` content. Thinking is excluded.
 
 **Empty-summary retry.** A reasoning model whose final message is thinking-only
 returns no text. When the summary is blank and the stop reason is neither error nor
-aborted, re-`Prompt` with a nudge, bounded to a couple of attempts,
-then return a no-output placeholder rather than looping.
+aborted, re-`Prompt` with a nudge (one attempt), then recover what *does* exist:
+sizable trailing reasoning (`>= minThinkingSummary`, capped at `maxThinkingSummary`) becomes
+  the summary, prefaced so
+the parent knows it is not prose; otherwise the job fails with `errNoSummary` instead
+of reporting done with a placeholder.
 
 **Abort.** An aborted context yields `StatusAborted`, never a partial summary
 mistaken for a completed investigation, and never a completion notification. A job
@@ -412,7 +415,10 @@ The load-bearing contracts are asserted directly rather than left to prose:
 the structural tool filter (a child resolves no `bash`/`write`/`edit`, still gets
 disabled-in-parent `find`/`grep`/`ls`, and never sees `agent_start` even when reported
 read-only), the poll timeout payload, delivery confirmation with re-offer on interrupt,
-and child spend (visible in totals, never moving the parent's context bar).
+and child spend (visible in totals, never moving the parent's context bar). The empty-summary
+recovery is pinned: nudge -> summary; an empty nudge falls back to sizable thinking as
+the summary, else `StatusError` (`errNoSummary`) — and mid-investigation tool-turn reasoning
+is excluded by the tool-call boundary.
 
 ## Invariants
 

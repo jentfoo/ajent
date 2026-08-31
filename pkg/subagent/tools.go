@@ -12,6 +12,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
+// placeholder is a defensive fallback when a done job somehow reports no summary.
+const placeholder = "(sub-agent produced no output)"
+
 // sharedToolHint is appended to every agent_* description so a model learns the
 // contract up front instead of by trial.
 const sharedToolHint = "A sub-agent has no session context: pass file paths and key facts, not content (it can read files itself). It is read-only (read, grep, find, ls plus any MCP tool marked read-only); anything needing write, edit or shell must be done directly. Its final message is the entire return value."
@@ -124,7 +127,7 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		res, status = result("sub-agent "+j.id+" aborted"), snap.Status
 	case snap.Status == StatusError && snap.Err != nil:
 		res, status = resultErr(snap.Err.Error()), snap.Status
-	default: // done with a summary, or an empty one fell back to the placeholder
+	default: // done with a summary; the blank case is impossible, so this is belt-and-braces
 		out := strings.TrimSpace(snap.Summary)
 		if out == "" {
 			out = placeholder
