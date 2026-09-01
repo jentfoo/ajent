@@ -493,7 +493,7 @@ func TestUIOutput(t *testing.T) {
 func TestUIOutputHeadSummary(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(40, 12)
+	v := newVT(50, 24)
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	done := u.ToolStart("c1", "bash", "bash: long")
@@ -516,7 +516,7 @@ func TestUIOutputHeadSummary(t *testing.T) {
 
 	// closing the call commits one summary row and clears the activity row.
 	done("")
-	assert.Contains(t, u.snapshot(v), "… +26 lines")
+	assert.Contains(t, u.snapshot(v), "… +20 lines")
 	u.mu.Lock()
 	act = slices.Clone(u.activity)
 	u.mu.Unlock()
@@ -550,13 +550,13 @@ func TestUIOutputFull(t *testing.T) {
 	require.Empty(t, act, "no activity row when everything is shown")
 
 	done("")
-	assert.NotContains(t, u.snapshot(v), "… +26 lines", "full output leaves no summary")
+	assert.NotContains(t, u.snapshot(v), "… +20 lines", "full output leaves no summary")
 }
 
 func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(40, 14)
+	v := newVT(60, 40)
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	// first call streams past the head.
@@ -579,7 +579,7 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 
 	// each call leaves exactly one summary row, so two appear in history.
 	screen := u.snapshot(v)
-	assert.Equal(t, 2, strings.Count(screen, "… +26 lines"), "one collapse per call")
+	assert.Equal(t, 2, strings.Count(screen, "… +20 lines"), "one collapse per call")
 }
 
 // TestUIInterleavedCallsKeepTheirOwnHead guards the per-call output head: calls
@@ -588,11 +588,11 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(40, 20)
+	v := newVT(50, 40)
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	doneA := u.ToolStart("a", "bash", "bash: a")
-	u.Output("a", lines("a", 10))
+	u.Output("a", lines("a", 16))
 
 	// a second call starts while the first is still streaming
 	doneB := u.ToolStart("b", "grep", "grep: b")
@@ -626,13 +626,13 @@ func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 func TestUIEndOutputKeepsStagedRuns(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(40, 20)
+	v := newVT(50, 30)
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	u.SetOutputFull("shell") // as ToolStartFull does, ahead of the header
 	doneShell := u.ToolStart("shell", "bash", "! sleep")
 	doneAgent := u.ToolStart("agent", "grep", "grep: x")
-	u.Output("agent", lines("a", 10))
+	u.Output("agent", lines("a", 16))
 	u.Output("shell", lines("s", 6))
 
 	u.EndOutput() // the turn ends while the staged shell still streams
@@ -663,7 +663,7 @@ func lines(tag string, n int) string {
 func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(40, 14)
+	v := newVT(50, 30)
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	// a non-streaming tool (read) sets Display; the done hook elides it.
@@ -681,7 +681,7 @@ func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 		assert.Contains(t, screen, fmt.Sprintf("%6d    line %d", i, i)) // tab renders as spaces
 	}
 	// exactly one collapse row for the whole body (the remaining 26 lines).
-	assert.Equal(t, 1, strings.Count(screen, "… +26 lines"))
+	assert.Equal(t, 1, strings.Count(screen, "… +20 lines"))
 }
 
 func TestUICommit(t *testing.T) {

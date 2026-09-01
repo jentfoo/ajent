@@ -152,7 +152,37 @@ func TestUIActivity(t *testing.T) {
 		}
 
 		screen := u.snapshot(v)
-		assert.Contains(t, screen, "+5 more")
+		assert.Contains(t, screen, "+4 more")
+	})
+	t.Run("single_overflow_lists_instead_of_indicator", func(t *testing.T) {
+		u, v := newUI(80, 12, strings.NewReader(""))
+
+		for i := range 5 {
+			u.SetActivity(string(rune('a'+i)), "row "+string(rune('0'+i)))
+		}
+
+		screen := u.snapshot(v)
+		// all five rows listed, each on its own line; no "more" indicator
+		for i := range 5 {
+			assert.Contains(t, screen, "row "+string(rune('0'+i)))
+		}
+		assert.NotContains(t, screen, "more")
+	})
+	t.Run("two_overflow_shows_indicator", func(t *testing.T) {
+		u, v := newUI(80, 12, strings.NewReader(""))
+
+		for i := range 6 {
+			u.SetActivity(string(rune('a'+i)), "row "+string(rune('0'+i)))
+		}
+
+		screen := u.snapshot(v)
+		// four listed plus a dim +2 more; the last two are hidden
+		for i := range 4 {
+			assert.Contains(t, screen, "row "+string(rune('0'+i)))
+		}
+		assert.NotContains(t, screen, "row 5")
+		assert.NotContains(t, screen, "row 6")
+		assert.Contains(t, screen, "+2 more")
 	})
 	t.Run("elides_at_narrow_width", func(t *testing.T) {
 		u, v := newUI(30, 12, strings.NewReader(""))

@@ -24,10 +24,12 @@ func TestOutputHead(t *testing.T) {
 	t.Run("head_then_summary", func(t *testing.T) {
 		var h outputHead
 		var out strings.Builder
-		for i := 1; i <= 6; i++ {
+		for i := 1; i <= 12; i++ {
 			out.WriteString(h.add("0123456789\n")) // 10 ascii runes each past the head
 		}
-		assert.Equal(t, "0123456789\n0123456789\n0123456789\n0123456789\n", out.String())
+		assert.Equal(t, "0123456789\n0123456789\n0123456789\n0123456789\n"+
+			"0123456789\n0123456789\n0123456789\n0123456789\n"+
+			"0123456789\n0123456789\n", out.String())
 		assert.Equal(t, 2, h.hidden())
 		assert.Contains(t, h.summary(), "+2 lines")
 	})
@@ -41,14 +43,19 @@ func TestOutputHead(t *testing.T) {
 		assert.Equal(t, "ok  gith\n", out)
 	})
 	t.Run("single_write_whole_body", func(t *testing.T) {
+		const lines = outputHeadLines + 2
 		var b []byte
-		for i := 1; i <= 6; i++ {
-			b = append(b, "line "+string(rune('0'+i))+"\n"...)
+		for i := 1; i <= lines; i++ {
+			b = append(b, fmt.Sprintf("line %d\n", i)...)
 		}
 		var h outputHead // the Display path: one call carries the whole body
 		out := h.add(string(b))
-		assert.Equal(t, "line 1\nline 2\nline 3\nline 4\n", out)
-		assert.Equal(t, 2, h.hidden())
+		var expected strings.Builder
+		for i := 1; i <= outputHeadLines; i++ {
+			fmt.Fprintf(&expected, "line %d\n", i)
+		}
+		assert.Equal(t, expected.String(), out)
+		assert.Equal(t, lines-outputHeadLines, h.hidden())
 	})
 	t.Run("full_shows_every_line", func(t *testing.T) {
 		var h outputHead

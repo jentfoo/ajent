@@ -10,7 +10,7 @@ import (
 
 // outputHeadLines is how many lines of a tool's output reach history before the
 // remainder collapses into one summary line.
-const outputHeadLines = 4
+const outputHeadLines = 10
 
 // outputKey namespaces a running tool's activity row against sub-agent rows, so
 // long streamed output shows movement past its committed head. The call id is

@@ -78,9 +78,11 @@ separating it from committed output above (see "Prompt divider" below).
   row is padded inside its background shade to fill the full terminal width
   (`shadeRow`), so live work reads as an edge-to-edge band rather than text with a
   colour patch underneath; the dim overflow indicator stays unshaded.
-  The true cap is a few text rows **plus** a dim overflow indicator (see
-  `activity.go`). Activity is live-block only: it yields first on a short terminal
-  and never reaches committed history.
+  The true cap is four text rows, five lines total including the indicator; a
+  single overflow row takes the indicator's line and is listed instead, so the
+  indicator appears only for two or more hidden rows (see `activity.go`). Activity
+  is live-block only: it yields first on a short terminal and never reaches
+  committed history.
 - The input block grows with the buffer, capped at a fraction of the screen,
   after which it scrolls internally around the caret.
 

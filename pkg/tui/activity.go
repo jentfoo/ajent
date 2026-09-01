@@ -36,15 +36,16 @@ func shadeRow(st Style, text string, w int) string {
 
 // maxActivityRows caps how many activity text rows are shown; overflow becomes
 // a single dim "+N more" line, so the block never grows past maxActivityBudget.
+// A single hidden row takes the indicator's line and is listed instead.
 const (
-	maxActivityRows   = 3
+	maxActivityRows   = 4
 	maxActivityBudget = maxActivityRows + 1 // includes the indicator row when capped
 )
 
 // Queued pending-prompt rows mirror activity: up to maxQueuedRows text rows,
 // then a dim "+N more" line, so they never grow past maxQueuedBudget.
 const (
-	maxQueuedRows   = 3
+	maxQueuedRows   = 4
 	maxQueuedBudget = maxQueuedRows + 1 // includes the indicator row when capped
 )
 
@@ -106,13 +107,17 @@ func (u *UI) setActivityLocked(key, text string, rank int) {
 }
 
 // activityRows renders the ordered activity rows into at most budget rows, each
-// full-width shaded (never wrapped) and followed by a dim "+N more" line when the
-// cap is exceeded. Caller holds the lock.
+// full-width shaded (never wrapped) and followed by a dim "+N more" line when two
+// or more stay hidden. A single overflow row takes the indicator's line instead,
+// so it is listed rather than elided. Caller holds the lock.
 func (u *UI) activityRows(w, budget int) []string {
 	if len(u.activity) == 0 || budget <= 0 {
 		return nil
 	}
 	n := min(len(u.activity), maxActivityRows)
+	if len(u.activity)-n == 1 { // one hidden row takes the indicator's line: list it instead
+		n++
+	}
 	var rows []string
 	for i := range n {
 		if len(rows) >= budget {
@@ -130,13 +135,16 @@ func (u *UI) activityRows(w, budget int) []string {
 
 // queuedRows renders the ordered pending-prompt labels into at most budget dim
 // shaded rows (oldest first), each prefixed with the user marker and showing only
-// its first line, then a dim "+N more" overflow row when more remain. Caller holds
-// the lock.
+// its first line, then a dim "+N more" overflow row when two or more stay hidden.
+// A single overflow row takes the indicator's line instead. Caller holds the lock.
 func (u *UI) queuedRows(w, budget int) []string {
 	if len(u.queued) == 0 || budget <= 0 {
 		return nil
 	}
 	n := min(len(u.queued), maxQueuedRows)
+	if len(u.queued)-n == 1 { // one hidden row takes the indicator's line: list it instead
+		n++
+	}
 	var rows []string
 	for i := range n {
 		if len(rows) >= budget {

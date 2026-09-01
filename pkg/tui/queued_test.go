@@ -34,12 +34,34 @@ func TestUIQueued(t *testing.T) {
 		u, v := newUI(80, 12)
 
 		labels := make([]string, 0, 8)
-		for i := range 8 {
+		for i := range 6 {
 			labels = append(labels, "row "+strconv.Itoa(i))
 		}
 		u.SetQueued(labels)
 
-		assert.Contains(t, u.snapshot(v), "+5 more")
+		screen := u.snapshot(v)
+		// four listed plus a dim +2 more; the last two are hidden
+		for i := range 4 {
+			assert.Contains(t, screen, userMarker+"row "+strconv.Itoa(i))
+		}
+		assert.NotContains(t, screen, "row 5")
+		assert.Contains(t, screen, "+2 more")
+	})
+	t.Run("single_overflow_lists_instead_of_indicator", func(t *testing.T) {
+		u, v := newUI(80, 12)
+
+		labels := make([]string, 0, 5)
+		for i := range 5 {
+			labels = append(labels, "row "+strconv.Itoa(i))
+		}
+		u.SetQueued(labels)
+
+		screen := u.snapshot(v)
+		// all five rows listed; no "more" indicator — a single overflow takes the indicator's line
+		for i := range 5 {
+			assert.Contains(t, screen, userMarker+"row "+strconv.Itoa(i))
+		}
+		assert.NotContains(t, screen, "more")
 	})
 	t.Run("nil_clears", func(t *testing.T) {
 		u, v := newUI(80, 12)
