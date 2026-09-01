@@ -131,7 +131,7 @@ func TestOnSettled(t *testing.T) {
 			settled++
 			if !queued {
 				queued = true // queue exactly one follow-up via Steer so the run terminates
-				require.True(t, a.Steer(Input{Text: "next"}), "Steer must accept during OnSettled")
+				require.True(t, a.Steer(Input{Text: "next"}))
 			}
 		}}
 

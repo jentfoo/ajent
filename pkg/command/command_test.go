@@ -41,7 +41,7 @@ func TestRegistryReplaceKeepsOrder(t *testing.T) {
 	require.Len(t, r.List(), 2)
 	help, _ := r.Get("help")
 	assert.Equal(t, "v2", help.Description)
-	assert.Equal(t, []string{"help", "model"}, r.Names(), "order preserved on replace")
+	assert.Equal(t, []string{"help", "model"}, r.Names())
 }
 
 func TestRegistryHandlerInvoked(t *testing.T) {

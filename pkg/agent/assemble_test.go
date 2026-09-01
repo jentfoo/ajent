@@ -50,6 +50,6 @@ func TestAssemble(t *testing.T) {
 	t.Run("state_untouched_by_transform", func(t *testing.T) {
 		before := len(s.Messages)
 		assemble(s, []Transform{func(ms []llm.Message) []llm.Message { return nil }})
-		assert.Len(t, s.Messages, before, "assembly never mutates State")
+		assert.Len(t, s.Messages, before)
 	})
 }

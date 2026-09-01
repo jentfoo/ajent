@@ -137,7 +137,7 @@ func TestUIDecisionKeys(t *testing.T) {
 		press(t, pw, "3")
 
 		require.NoError(t, <-errCh)
-		assert.Equal(t, DecisionResult{Index: 2}, <-resCh, "a keystroke is not an external resolve")
+		assert.Equal(t, DecisionResult{Index: 2}, <-resCh)
 	})
 	t.Run("escape_cancels", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
@@ -239,7 +239,7 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 		go func() { _, _ = d2.Wait(ctx) }()
 
 		waitFor(t, u, v, "+1 waiting")
-		assert.NotContains(t, u.snapshot(v), "Second?", "the queued prompt is not drawn")
+		assert.NotContains(t, u.snapshot(v), "Second?")
 
 		d3 := u.OpenDecision(DecisionRequest{Prompt: "Third?", Context: "", Options: []Option{{Label: "C"}}})
 		t.Cleanup(d3.Close)
@@ -293,7 +293,7 @@ func TestUIDecisionHeightCap(t *testing.T) {
 	ctx := t.Context()
 	go func() { _, _ = d.Wait(ctx) }()
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Approve?") }, time.Second, testPoll)
-	assert.LessOrEqual(t, liveRowCount(u.snapshot(v)), 5, "the dialog fits a five row terminal")
+	assert.LessOrEqual(t, liveRowCount(u.snapshot(v)), 5)
 }
 
 func TestUIDecisionSummary(t *testing.T) {

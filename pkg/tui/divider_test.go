@@ -13,10 +13,10 @@ func TestDividerRow(t *testing.T) {
 	t.Run("solid_band_with_background", func(t *testing.T) {
 		st := NewTheme(Color256, DefaultPalette()).Divider
 		row := dividerRow(st, 40)
-		assert.True(t, strings.HasPrefix(row, st.Open()), "opens with the style")
-		assert.True(t, strings.HasSuffix(row, sgrReset), "resets after the fill")
+		assert.True(t, strings.HasPrefix(row, st.Open()))
+		assert.True(t, strings.HasSuffix(row, sgrReset))
 		body := strings.TrimSuffix(strings.TrimPrefix(row, st.Open()), sgrReset)
-		assert.Len(t, body, max(40-1, 0), "one short of width, all spaces carrying the background")
+		assert.Len(t, body, max(40-1, 0))
 		for _, r := range body {
 			assert.Equal(t, ' ', r)
 		}
@@ -39,6 +39,5 @@ func TestUIDividerCommitsBand(t *testing.T) {
 	var buf strings.Builder
 	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), render: &plainRenderer{out: &buf}, mode: ModePlain}
 	u.Divider()
-	assert.Equal(t, strings.Repeat(ruleChar, max(defaultWidth-1, 1))+"\n", buf.String(),
-		"a divider commits a near-full-width line even without color")
+	assert.Equal(t, strings.Repeat(ruleChar, max(defaultWidth-1, 1))+"\n", buf.String())
 }

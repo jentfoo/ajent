@@ -443,7 +443,7 @@ func TestVT(t *testing.T) {
 		v := newVT(4, 3)
 		v.WriteString("abcd") // fills the row, wrap deferred
 		v.WriteString(sgr(attrBold) + "x")
-		assert.Equal(t, "abcd", v.Line(0), "styling does not cancel the pending wrap")
+		assert.Equal(t, "abcd", v.Line(0))
 		assert.Equal(t, "x", v.Line(1))
 	})
 	t.Run("tab_advances_to_next_stop", func(t *testing.T) {
@@ -455,7 +455,7 @@ func TestVT(t *testing.T) {
 		v := newVT(9, 2)
 		v.WriteString("abcdefgh\t") // already at the last column
 		assert.Equal(t, "abcdefgh", v.Line(0))
-		assert.Empty(t, v.Line(1), "a tab at the margin neither wraps nor scrolls")
+		assert.Empty(t, v.Line(1))
 	})
 	t.Run("vertical_tab_and_form_feed_feed", func(t *testing.T) {
 		v := newVT(8, 4)
@@ -482,7 +482,7 @@ func TestVT(t *testing.T) {
 		v.WriteString(cursorTo(1, 1) + "\x1bMz")
 		assert.Equal(t, "z", v.Line(0))
 		assert.Equal(t, "a", v.Line(1))
-		assert.Equal(t, "b", v.Line(2), "the bottom line retires")
+		assert.Equal(t, "b", v.Line(2))
 	})
 	t.Run("reverse_index_moves_up_below_top", func(t *testing.T) {
 		v := newVT(8, 3)
@@ -506,7 +506,7 @@ func TestVT(t *testing.T) {
 		v.WriteString(cursorTo(1, 1) + csi + "1L")
 		assert.Empty(t, v.Line(0))
 		assert.Equal(t, "a", v.Line(1))
-		assert.Equal(t, "c", v.Line(3), "the bottom line is lost")
+		assert.Equal(t, "c", v.Line(3))
 	})
 	t.Run("delete_lines", func(t *testing.T) {
 		v := newVT(8, 4)
@@ -514,7 +514,7 @@ func TestVT(t *testing.T) {
 		v.WriteString(cursorTo(1, 1) + csi + "1M")
 		assert.Equal(t, "b", v.Line(0))
 		assert.Equal(t, "c", v.Line(1))
-		assert.Empty(t, v.Line(3), "a blank appears at the bottom")
+		assert.Empty(t, v.Line(3))
 	})
 	t.Run("scroll_up", func(t *testing.T) {
 		v := newVT(8, 3)

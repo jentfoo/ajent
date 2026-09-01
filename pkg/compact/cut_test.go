@@ -40,12 +40,12 @@ func TestVerbatimCut(t *testing.T) {
 
 	t.Run("fewer_steps_than_the_floor", func(t *testing.T) {
 		branch := stepBranch(t, 1, 5)
-		assert.Equal(t, 0, verbatimCut(branch, 0, 2, 0), "the prompt joins its only step")
+		assert.Equal(t, 0, verbatimCut(branch, 0, 2, 0))
 	})
 
 	t.Run("floor_keeps_exactly_two_steps", func(t *testing.T) {
 		branch := stepBranch(t, 6, 5)
-		assert.Equal(t, 5, verbatimCut(branch, 0, 2, 0), "no ceiling extension")
+		assert.Equal(t, 5, verbatimCut(branch, 0, 2, 0))
 	})
 
 	t.Run("extension_stops_at_the_ceiling", func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestVerbatimCut(t *testing.T) {
 	t.Run("oversized_floor_is_kept_anyway", func(t *testing.T) {
 		branch := stepBranch(t, 6, 400)
 		cut := verbatimCut(branch, 0, 2, 1) // ceiling below any single step
-		assert.Equal(t, 5, cut, "the floor outranks the ceiling")
+		assert.Equal(t, 5, cut)
 		assert.Greater(t, spanTokens(branch, cut, len(branch)), 1)
 	})
 
@@ -75,8 +75,7 @@ func TestVerbatimCut(t *testing.T) {
 			userText("u2", "second ask"),
 			assistText("a2", "second answer"),
 		}
-		assert.Equal(t, 2, verbatimCut(branch, 0, 1, 0),
-			"the question that opened the step rides with it")
+		assert.Equal(t, 2, verbatimCut(branch, 0, 1, 0))
 	})
 
 	t.Run("leaves_an_injected_prompt_behind", func(t *testing.T) {
@@ -86,8 +85,7 @@ func TestVerbatimCut(t *testing.T) {
 			injectedText("i1", "Sub-agent sub-3 completed."),
 			assistText("a2", "second answer"),
 		}
-		assert.Equal(t, 3, verbatimCut(branch, 0, 1, 0),
-			"a system notice is not the user's question")
+		assert.Equal(t, 3, verbatimCut(branch, 0, 1, 0))
 	})
 }
 

@@ -74,7 +74,7 @@ func TestDispatchHonorsSerializer(t *testing.T) {
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
 
 	<-aStarted // the first call is in flight and blocked
-	require.Equal(t, 0, bStub.callCount(), "second call started before the first finished")
+	require.Equal(t, 0, bStub.callCount())
 	close(release)
 
 	require.NoError(t, <-errCh)

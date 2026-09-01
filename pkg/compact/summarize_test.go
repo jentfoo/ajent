@@ -141,7 +141,7 @@ func TestFitPrompt(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 5000, MaxOutput: 10000}
 		prompt, kept, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.Contains(t, prompt, strings.Repeat("x ", 400), "no clip was needed")
+		assert.Contains(t, prompt, strings.Repeat("x ", 400))
 		assert.Equal(t, countMessages(entries), kept)
 	})
 
@@ -158,10 +158,8 @@ func TestFitPrompt(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 3000, MaxOutput: 256}
 		prompt, _, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.Contains(t, prompt, "[earlier messages omitted]",
-			"the transcript says so inside its own tags")
-		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode), promptBudget(model, maxOutOf(model)),
-			"dropping entries has to actually reach the budget")
+		assert.Contains(t, prompt, "[earlier messages omitted]")
+		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode), promptBudget(model, maxOutOf(model)))
 	})
 
 	t.Run("clips_a_previous_summary_as_a_last_resort", func(t *testing.T) {
@@ -173,7 +171,7 @@ func TestFitPrompt(t *testing.T) {
 		require.NoError(t, err)
 		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode), promptBudget(model, maxOutOf(model)))
 		assert.NotContains(t, prompt, prev, "the checkpoint was clipped, not sent whole")
-		assert.Contains(t, prompt, "prior checkpoint detail", "but what fits still merges")
+		assert.Contains(t, prompt, "prior checkpoint detail")
 	})
 
 	t.Run("unknown_window_applies_no_bound", func(t *testing.T) {
@@ -207,7 +205,7 @@ func TestFitPrompt(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 3000, MaxOutput: 256}
 		_, kept, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.Less(t, kept, countMessages(entries), "the notice must not over-report")
+		assert.Less(t, kept, countMessages(entries))
 	})
 
 	t.Run("empty_transcript_is_never_returned", func(t *testing.T) {

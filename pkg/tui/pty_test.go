@@ -37,11 +37,11 @@ func openPTY(t *testing.T) (*os.File, *os.File) {
 
 	var unlock int32 // TIOCSPTLCK: zero unlocks the slave
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, master.Fd(), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock)))
-	require.Zero(t, errno, "unlock pty slave")
+	require.Zero(t, errno)
 
 	var ptyNo int32
 	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, master.Fd(), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&ptyNo)))
-	require.Zero(t, errno, "pty number")
+	require.Zero(t, errno)
 
 	slave, err := os.OpenFile("/dev/pts/"+strconv.Itoa(int(ptyNo)), os.O_RDWR, 0)
 	require.NoError(t, err)
@@ -58,7 +58,7 @@ func setPTYSize(t *testing.T, f *os.File, w, h int) {
 	t.Helper()
 	ws := ptyWinsize{Row: uint16(h), Col: uint16(w)}
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
-	require.Zero(t, errno, "set pty size")
+	require.Zero(t, errno)
 }
 
 // pumpPTY moves everything readable on the master into the emulator, if one is
@@ -94,7 +94,7 @@ func pumpPTY(master *os.File, v *vt, wait time.Duration) (string, error) {
 func drainPTY(t *testing.T, master *os.File, v *vt) {
 	t.Helper()
 	_, err := pumpPTY(master, v, 100*time.Millisecond)
-	require.NoError(t, err, "read the pty master")
+	require.NoError(t, err)
 }
 
 // readPTY returns the raw bytes waiting on the master, for asserting on the
@@ -102,7 +102,7 @@ func drainPTY(t *testing.T, master *os.File, v *vt) {
 func readPTY(t *testing.T, master *os.File) string {
 	t.Helper()
 	raw, err := pumpPTY(master, nil, 100*time.Millisecond)
-	require.NoError(t, err, "read the pty master")
+	require.NoError(t, err)
 	return raw
 }
 
@@ -123,7 +123,7 @@ func eventuallyPTY(t *testing.T, master *os.File, v *vt, cond func() bool, msg s
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		_, err := pumpPTY(master, v, 2*time.Millisecond)
-		require.NoError(t, err, "read the pty master")
+		require.NoError(t, err)
 		if cond() {
 			return
 		}
@@ -136,7 +136,7 @@ func termiosOf(t *testing.T, f *os.File) syscall.Termios {
 	t.Helper()
 	var tio syscall.Termios
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&tio)))
-	require.Zero(t, errno, "read termios")
+	require.Zero(t, errno)
 	return tio
 }
 
@@ -167,7 +167,7 @@ func TestPTYResizeStrandsNoRow(t *testing.T) {
 	u.Print("alpha bravo")
 	u.Print("charlie delta")
 	drainPTY(t, master, v)
-	require.Equal(t, 1, countRules(v.Screen()), "one divider before any resize")
+	require.Equal(t, 1, countRules(v.Screen()))
 
 	for _, w := range []int{34, 80, 21} {
 		setPTYSize(t, master, w, 20)
@@ -209,7 +209,7 @@ func TestPTYContaminatedRowParks(t *testing.T) {
 	screen := v.Screen()
 	assert.Equal(t, 1, countRules(screen))
 	assert.Contains(t, screen, "write notes.go")
-	assert.Equal(t, strings.Repeat(ruleChar, 29), v.Line(v.row), "parked on the divider row")
+	assert.Equal(t, strings.Repeat(ruleChar, 29), v.Line(v.row))
 }
 
 // TestPTYKeystrokes types through the kernel's line discipline: the bytes reach
@@ -226,7 +226,7 @@ func TestPTYKeystrokes(t *testing.T) {
 	eventuallyPTY(t, master, v, func() bool {
 		return strings.Contains(v.Screen(), "hello")
 	}, "typed text reaches the editor row")
-	assert.Equal(t, 1, strings.Count(v.Screen(), "hello"), "ECHO is off, so nothing echoed it back")
+	assert.Equal(t, 1, strings.Count(v.Screen(), "hello"))
 
 	sendPTY(t, master, v, "\r")
 	select {
@@ -255,7 +255,7 @@ func TestPTYRawMode(t *testing.T) {
 	assert.Zero(t, live.Lflag&syscall.ICANON)
 
 	u.Close()
-	assert.Equal(t, cooked.Lflag, termiosOf(t, slave).Lflag, "Close restores what it found")
+	assert.Equal(t, cooked.Lflag, termiosOf(t, slave).Lflag)
 }
 
 // TestPTYSignalResize drives the real signal path end to end: watchSignals
@@ -272,7 +272,7 @@ func TestPTYSignalResize(t *testing.T) {
 	u.Print("alpha bravo")
 	u.Print("charlie delta")
 	drainPTY(t, master, v)
-	require.Equal(t, 1, countRules(v.Screen()), "one divider before any resize")
+	require.Equal(t, 1, countRules(v.Screen()))
 
 	probes := v.dsrCount
 	setPTYSize(t, master, 34, 20)
@@ -290,9 +290,9 @@ func TestPTYSignalResize(t *testing.T) {
 
 	screen := v.Screen()
 	assert.Equal(t, 1, countRules(screen))
-	assert.Equal(t, 1, strings.Count(screen, "charlie"), "history never doubled")
+	assert.Equal(t, 1, strings.Count(screen, "charlie"))
 	assert.Equal(t, 0, v.col)
-	assert.Equal(t, 34, u.Width(), "the renderer read the kernel's new size")
+	assert.Equal(t, 34, u.Width())
 }
 
 // TestPTYSignalResizeReanchors drives the re-anchor over a real pty. The pty
@@ -349,5 +349,5 @@ func TestPTYTeardown(t *testing.T) {
 	assert.Contains(t, restore, bracketedPasteOff)
 
 	u.Close()
-	assert.Empty(t, readPTY(t, master), "the second Close writes nothing")
+	assert.Empty(t, readPTY(t, master))
 }

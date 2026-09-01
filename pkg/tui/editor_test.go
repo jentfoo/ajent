@@ -186,7 +186,7 @@ func TestEditorKill(t *testing.T) {
 		assert.Equal(t, "hello foo", e.Value())
 		assert.Equal(t, 6, e.pos)
 		starts, _ := e.layout(9)
-		assert.Contains(t, starts, e.pos, "caret on a visual row start")
+		assert.Contains(t, starts, e.pos)
 	})
 	t.Run("wrapped_far_left_follows_content_up", func(t *testing.T) {
 		// "ab cdefg hi" at width 9 wraps to [ab][cdefg][hi]; clearing the middle row
@@ -194,7 +194,7 @@ func TestEditorKill(t *testing.T) {
 		e := newEditorAt("ab cdefg hi", 3)
 		e.KillToLineEnd(9)
 		assert.Equal(t, "ab hi", e.Value())
-		assert.Equal(t, 3, e.pos, "caret before the content that moved up")
+		assert.Equal(t, 3, e.pos)
 	})
 	t.Run("wrapped_far_left_hard_split_keeps_space", func(t *testing.T) {
 		// the row below is joined by a hard split rather than a dropped space, so the
@@ -222,7 +222,7 @@ func TestEditorKill(t *testing.T) {
 		e := newEditorAt("ab\n\ncd", 3)
 		e.KillToLineEnd(wide)
 		assert.Equal(t, "ab\ncd", e.Value())
-		assert.Equal(t, 3, e.pos, "cursor at the start of the joined line below")
+		assert.Equal(t, 3, e.pos)
 	})
 	t.Run("empty_first_line_joins_below", func(t *testing.T) {
 		e := newEditorAt("\nabc", 0)
@@ -243,7 +243,7 @@ func TestEditorKill(t *testing.T) {
 		e.KillToLineEnd(wide)
 		assert.Empty(t, e.Value())
 		e.KillToLineEnd(wide)
-		assert.Empty(t, e.Value(), "nothing left to remove")
+		assert.Empty(t, e.Value())
 	})
 	t.Run("nonempty_line_tail_is_noop", func(t *testing.T) {
 		e := newEditorAt("hello\nworld", 5)
@@ -381,7 +381,7 @@ func TestEditorInputView(t *testing.T) {
 		assert.Contains(t, rows[0], promptFirst)
 		assert.Contains(t, rows[0], inputHint)
 		assert.Equal(t, 0, curRow)
-		assert.Equal(t, 2, curCol, "cursor sits at the start of the hint")
+		assert.Equal(t, 2, curCol)
 	})
 	t.Run("single_line", func(t *testing.T) {
 		e := newEditorAt("hi", 2)
@@ -423,7 +423,7 @@ func TestEditorInputView(t *testing.T) {
 		e := newEditorAt("a\nb\nc\nd", 7)
 		rows, curRow, _ := e.inputView(th, 60, 2)
 		assert.Equal(t, []string{promptCont + "c", promptCont + "d"}, rows)
-		assert.Equal(t, 1, curRow, "the cursor row stays visible")
+		assert.Equal(t, 1, curRow)
 	})
 	t.Run("wide_runes_measured", func(t *testing.T) {
 		e := newEditorAt("ＡＢ", 2)
@@ -437,7 +437,7 @@ func TestEditorInputView(t *testing.T) {
 		// the literal `!` replaces ❯ as the marker: exactly one bang on screen
 		assert.Equal(t, []string{"!ls -la"}, rows)
 		assert.NotContains(t, rows[0], promptFirst)
-		assert.Equal(t, 1, strings.Count(rows[0], "!"), "no duplicate ! marker")
+		assert.Equal(t, 1, strings.Count(rows[0], "!"))
 		// cursor is after the `l`, so col = width of `!` + one cell
 		assert.Equal(t, 2, curCol)
 	})

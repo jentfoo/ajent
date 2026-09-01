@@ -180,7 +180,7 @@ func TestCompletionNotification(t *testing.T) {
 		mu.Unlock()
 		in.Delivered() // simulate the steer landing in context
 
-		assert.Equal(t, []string{"sub-9"}, m.pending, "only the named id is cleared")
+		assert.Equal(t, []string{"sub-9"}, m.pending)
 	})
 
 	t.Run("idle_completion_never_starts_turn", func(t *testing.T) {
@@ -327,7 +327,7 @@ func TestCompletionBatching(t *testing.T) {
 		id2 := m.Start("b", "")
 		g.releaseAll()
 		require.Eventually(t, func() bool { return c.noticeCount() == 2 }, 2*time.Second, 5*time.Millisecond)
-		assert.Equal(t, "Sub-agent "+id2+" completed", c.lastNotice(), "a polled id must never be re-named")
+		assert.Equal(t, "Sub-agent "+id2+" completed", c.lastNotice())
 	})
 
 	// a leaked in-flight mark for an id that no longer exists must not stall the
@@ -364,7 +364,7 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 
 	id := m.Start("slow", "")
 	j1, ok := m.Poll(t.Context(), id)
-	assert.False(t, ok, "should report still running on timeout")
+	assert.False(t, ok)
 	assert.Equal(t, StatusRunning, j1.Status)
 
 	m.mu.Lock()
@@ -417,7 +417,7 @@ func TestReserve(t *testing.T) {
 		t.Cleanup(m.Close)
 
 		m.Reserve([]agent.ToolCall{{ID: "c1", Name: startToolName}})
-		assert.Equal(t, "sub-2", m.Start("host", ""), "the reservation is untouched")
+		assert.Equal(t, "sub-2", m.Start("host", ""))
 		assert.Equal(t, "sub-1", m.start("a", "", "c1"))
 		assert.Equal(t, "sub-3", m.start("stray", "", "unknown-call"))
 	})
@@ -431,7 +431,7 @@ func TestReserve(t *testing.T) {
 		m.Reserve([]agent.ToolCall{{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}})
 		m.Reserve([]agent.ToolCall{{ID: "c9", Name: startToolName}})
 		assert.Equal(t, "sub-3", m.start("later", "", "c9"))
-		assert.Equal(t, "sub-4", m.start("dropped", "", "c1"), "a superseded reservation is gone")
+		assert.Equal(t, "sub-4", m.start("dropped", "", "c1"))
 	})
 }
 
@@ -444,12 +444,12 @@ func TestPollBatchDetection(t *testing.T) {
 	t.Cleanup(m.Close)
 
 	m.enterPoll()
-	assert.False(t, m.leavePoll(), "a lone poll follows its own header")
+	assert.False(t, m.leavePoll())
 
 	m.enterPoll() // a arrives
 	m.enterPoll() // b overlaps it
-	assert.True(t, m.leavePoll(), "b overlapped a")
-	assert.True(t, m.leavePoll(), "a overlapped b, though it arrived first")
+	assert.True(t, m.leavePoll())
+	assert.True(t, m.leavePoll())
 
 	m.enterPoll() // the group emptied; the mark must not leak into the next poll
 	assert.False(t, m.leavePoll())
@@ -560,7 +560,7 @@ func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
 	}
-	assert.LessOrEqual(t, g.peak.Load(), int32(max), "never more than max run at once")
+	assert.LessOrEqual(t, g.peak.Load(), int32(max))
 }
 
 func TestShutdownCancelsRunningJobs(t *testing.T) {
@@ -647,7 +647,7 @@ func TestActivityRow(t *testing.T) {
 			}
 		}
 		require.Len(t, clears, 1, "the row is cleared once, at completion: %q", rows)
-		assert.Equal(t, len(rows)-1, clears[0], "nothing republishes the row after the clear")
+		assert.Equal(t, len(rows)-1, clears[0])
 		for _, rank := range ranks { // every publish carries the job number as its rank
 			assert.Equal(t, 1, rank)
 		}
@@ -777,7 +777,7 @@ func TestParentContextUnchangedByChild(t *testing.T) {
 	g.releaseAll()
 	_, ok := m.Poll(t.Context(), id)
 	require.True(t, ok)
-	assert.Equal(t, before, parent.Context().Used, "a child's run must not move the parent context bar")
+	assert.Equal(t, before, parent.Context().Used)
 }
 
 // jobStatus returns id's live status, with ok=false when unknown.

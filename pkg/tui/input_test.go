@@ -186,8 +186,7 @@ func TestEscapeTimeout(t *testing.T) {
 
 		_, err := io.WriteString(pw, "\x1b")
 		require.NoError(t, err)
-		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll,
-			"the escape byte must arm the timer")
+		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
 
 		esc.fire(t)
 		assert.Equal(t, key{typ: keyEscape}, <-r.keys)
@@ -199,8 +198,7 @@ func TestEscapeTimeout(t *testing.T) {
 
 		_, err := io.WriteString(pw, "\x1b")
 		require.NoError(t, err)
-		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll,
-			"the escape byte must arm the timer before [A arrives")
+		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
 
 		_, err = io.WriteString(pw, "[A")
 		require.NoError(t, err)
@@ -223,7 +221,7 @@ func TestEscapeTimeout(t *testing.T) {
 		_, err := io.WriteString(pw, "z")
 		require.NoError(t, err)
 		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
-		assert.Zero(t, esc.resetCount(), "no escape byte means no timer arming")
+		assert.Zero(t, esc.resetCount())
 
 		_, err = io.WriteString(pw, "\x1b[A")
 		require.NoError(t, err)
@@ -421,7 +419,7 @@ func TestDecodeKeyResync(t *testing.T) {
 			}
 			b = b[n:]
 		}
-		assert.True(t, enter, "an unterminated CSI must not swallow Enter")
+		assert.True(t, enter)
 	})
 	t.Run("short_csi_still_waits", func(t *testing.T) {
 		// the cap must not turn a split read into a drop.
@@ -473,7 +471,7 @@ func TestInputReaderPasteStall(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, key{typ: keyPaste, text: "partial"}, <-r.keys) // blocks until decoded
-		assert.Zero(t, esc.resetCount(), "a confirmed paste must never arm the escape timer")
+		assert.Zero(t, esc.resetCount())
 	})
 }
 
@@ -487,15 +485,13 @@ func TestInputReaderStalledSequenceDropped(t *testing.T) {
 
 		_, err := io.WriteString(pw, "\x1b[1;5")
 		require.NoError(t, err)
-		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll,
-			"a truncated CSI must arm the escape timer")
+		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
 
 		esc.fire(t) // the stall elapses: nothing may be emitted for it
 
 		_, err = io.WriteString(pw, "z")
 		require.NoError(t, err)
-		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys,
-			"no spurious Escape or [ 1 ; 5 runes may leak before the next keystroke")
+		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
 	})
 }
 
@@ -533,7 +529,7 @@ func TestInputReaderPasteOverflow(t *testing.T) {
 
 	capped := <-r.keys
 	require.Equal(t, keyPaste, capped.typ)
-	assert.True(t, capped.partial, "the cap delivers a partial body")
+	assert.True(t, capped.partial)
 	assert.Len(t, capped.text, maxPasteLen)
 
 	// the next key is what followed the terminator, never the tail's Enter

@@ -42,7 +42,7 @@ func TestFixtureCompact(t *testing.T) {
 		assert.Contains(t, texts, supersededEditMarker)
 		assert.True(t, slices.ContainsFunc(texts, func(s string) bool {
 			return strings.Contains(s, "exit 1: undefined: Foo")
-		}), "the failed stub keeps its first line")
+		}))
 
 		// the fixture closes with seven byte-identical grep results
 		var dups int
@@ -61,14 +61,13 @@ func TestFixtureCompact(t *testing.T) {
 		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\ntidy the parser"), opts)
 		require.NoError(t, err)
 		require.NotNil(t, res, "the fixture has measurable slack")
-		assert.Less(t, res.After, res.Before, "compaction has to shrink the context")
+		assert.Less(t, res.After, res.Before)
 
 		// the recorded plan, replayed through assembly, must measure what was promised
 		cd := session.CompactionData{
 			Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID, Reduce: &res.Reduce,
 		}
-		assert.Equal(t, res.After, tokensFor(branch, cd, model, opts.Retain, 0),
-			"a measured saving is the saving the next request gets")
+		assert.Equal(t, res.After, tokensFor(branch, cd, model, opts.Retain, 0))
 	})
 
 	t.Run("summary_leads_the_rebuilt_context", func(t *testing.T) {
@@ -82,14 +81,14 @@ func TestFixtureCompact(t *testing.T) {
 		res, err := Compact(t.Context(), branch, model, run, Options{Cwd: "/w"})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		require.True(t, prompted, "the summariser ran")
+		require.True(t, prompted)
 
 		msgs := mustMsgs(t, branch, session.CompactionData{
 			Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID, Reduce: &res.Reduce,
 		})
 		require.NotEmpty(t, msgs)
 		assert.Contains(t, textOf(msgs[0]), "tidy the parser")
-		assert.Less(t, len(msgs), 33, "the branch assembles to fewer messages than uncompacted")
+		assert.Less(t, len(msgs), 33)
 	})
 
 	t.Run("recompaction_keeps_the_prior_cut", func(t *testing.T) {
@@ -129,7 +128,7 @@ func TestFixtureRecompaction(t *testing.T) {
 	branch := loadFixtureBranch(t, "compacted.jsonl")
 
 	prior, _, found := session.NewestCompaction(branch)
-	require.True(t, found, "the fixture carries a compaction entry")
+	require.True(t, found)
 	require.NotEmpty(t, prior.FirstKeptEntryID)
 	priorCut := session.CutIndex(branch, prior)
 	require.GreaterOrEqual(t, priorCut, 0)
@@ -153,14 +152,13 @@ func TestFixtureRecompaction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 
-	assert.Equal(t, tokensFor(branch, prior, model, opts.Retain, 0), res.Before,
-		"before is what the next request carries, not the raw branch")
+	assert.Equal(t, tokensFor(branch, prior, model, opts.Retain, 0), res.Before)
 	assert.Less(t, res.Before, tokensFor(branch, session.CompactionData{}, model, opts.Retain, 0))
 
 	newCut := session.CutIndex(branch, session.CompactionData{
 		Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID,
 	})
-	assert.GreaterOrEqual(t, newCut, priorCut, "a recompaction never reopens folded history")
+	assert.GreaterOrEqual(t, newCut, priorCut)
 
 	require.Len(t, got.Messages, 1)
 	assert.Contains(t, textOf(got.Messages[0]), "<previous-summary>")

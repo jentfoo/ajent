@@ -132,6 +132,6 @@ func TestTurnEndFlushesThinking(t *testing.T) {
 			2*time.Second, time.Millisecond)
 		before := h.rendered()
 		h.s.TurnEnd(agent.TurnResult{})
-		assert.Equal(t, before, h.rendered(), "TurnEnd adds nothing after a clean flush")
+		assert.Equal(t, before, h.rendered())
 	})
 }

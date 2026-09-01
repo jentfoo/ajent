@@ -87,7 +87,7 @@ func TestSpanStubs(t *testing.T) {
 		}
 		stubs := all(branch)
 		require.Len(t, stubs, 1)
-		assert.Equal(t, "c2", stubs[0].CallID, "the first copy is the keeper")
+		assert.Equal(t, "c2", stubs[0].CallID)
 		assert.Contains(t, stubs[0].Text, "identical")
 	})
 
@@ -99,7 +99,7 @@ func TestSpanStubs(t *testing.T) {
 			callMsg("a2", "c2", "read", "/tmp/two.go"),
 			resultMsg("r2", "c2", body, false),
 		}
-		assert.Empty(t, all(branch), "two files that share bytes are still two files")
+		assert.Empty(t, all(branch))
 	})
 
 	t.Run("system_role_message_skipped", func(t *testing.T) {
@@ -136,9 +136,8 @@ func TestSpanStubsBandScope(t *testing.T) {
 	t.Run("detects_across_the_band", func(t *testing.T) {
 		stubs := spanStubs(branch, 0, 2, "/tmp")
 		require.Len(t, stubs, 1)
-		assert.Equal(t, "c1", stubs[0].CallID, "the band read still supersedes the span read")
-		assert.Equal(t, supersededReadMarker, stubs[0].Text,
-			"a marker must not claim a later read is shown above when it sits in the band")
+		assert.Equal(t, "c1", stubs[0].CallID)
+		assert.Equal(t, supersededReadMarker, stubs[0].Text)
 	})
 
 	t.Run("duplicate_keeper_survives_the_cut", func(t *testing.T) {

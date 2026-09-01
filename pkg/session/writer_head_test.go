@@ -61,7 +61,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		// the file tail is e2, but HEAD points at e1; a reopen must resume from e1.
 		w2, oerr := Open(p)
 		require.NoError(t, oerr)
-		assert.Equal(t, e1.ID, w2.Head(), "reopen resumes the persisted branch")
+		assert.Equal(t, e1.ID, w2.Head())
 		e3, err := w2.Append(TypeMessage, MessageData{Message: llmText("three")})
 		require.NoError(t, err)
 		assert.Equal(t, e1.ID, e3.ParentID)
@@ -79,7 +79,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		e, err := w.Append(TypeMessage, MessageData{Message: llmText("x")})
 		require.NoError(t, err)
 		w.SetHead(e.ID)
-		assert.False(t, fileExists(headPath(filepath.Dir(w.path))), "a discard writer never writes HEAD")
+		assert.False(t, fileExists(headPath(filepath.Dir(w.path))))
 	})
 }
 

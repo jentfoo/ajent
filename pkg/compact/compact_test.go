@@ -51,7 +51,7 @@ func TestCompact(t *testing.T) {
 		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\nthe work"), Options{VerbatimTokens: 1})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		assert.Equal(t, "a7", res.FirstKeptEntryID, "the last two steps stay verbatim")
+		assert.Equal(t, "a7", res.FirstKeptEntryID)
 		assert.Less(t, res.After, res.Before)
 
 		msgs := mustMsgs(t, branch, session.CompactionData{
@@ -83,7 +83,7 @@ func TestCompact(t *testing.T) {
 
 		res, err := Compact(t.Context(), branch, model, summaryRun(huge), Options{VerbatimTokens: 1})
 		require.NoError(t, err)
-		assert.Nil(t, res, "a summary bigger than the span it replaces is not a saving")
+		assert.Nil(t, res)
 	})
 
 	t.Run("blank_summary_is_error", func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestCompactVerbatimBand(t *testing.T) {
 		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: one * 4})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		assert.Equal(t, "a7", res.FirstKeptEntryID, "four steps fit the ceiling")
+		assert.Equal(t, "a7", res.FirstKeptEntryID)
 	})
 
 	t.Run("oversized_floor_is_kept_verbatim", func(t *testing.T) {
@@ -141,7 +141,7 @@ func TestCompactVerbatimBand(t *testing.T) {
 		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		assert.Equal(t, "a5", res.FirstKeptEntryID, "the floor outranks the ceiling")
+		assert.Equal(t, "a5", res.FirstKeptEntryID)
 	})
 
 	t.Run("options_override_the_defaults", func(t *testing.T) {
@@ -174,7 +174,7 @@ func TestCompactVerbatimBand(t *testing.T) {
 		for _, m := range msgs[1:] { // msgs[0] is the summary
 			for _, b := range m.Content {
 				if tr, ok := b.(llm.ToolResultBlock); ok {
-					assert.Equal(t, body, resultText(tr), "a band result was stubbed")
+					assert.Equal(t, body, resultText(tr))
 				}
 			}
 		}
@@ -250,7 +250,7 @@ func TestCompactRecompaction(t *testing.T) {
 		effective := tokensFor(branch, prior, model, llm.RetainNone, 0)
 		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0)
 		assert.Equal(t, effective, res.Before)
-		assert.Less(t, res.Before, raw, "the raw branch is not what the next request sends")
+		assert.Less(t, res.Before, raw)
 	})
 
 	t.Run("never_reopens_a_prior_cut", func(t *testing.T) {
@@ -336,7 +336,7 @@ func TestResolveVerbatim(t *testing.T) {
 
 	t.Run("unknown_window_still_bounds", func(t *testing.T) {
 		_, tok := resolveVerbatim(llm.Model{Provider: "test", ID: "m"}, Options{})
-		assert.Equal(t, minVerbatimTokens, tok, "an unbounded band could never compact")
+		assert.Equal(t, minVerbatimTokens, tok)
 	})
 
 	t.Run("options_win", func(t *testing.T) {
@@ -347,6 +347,6 @@ func TestResolveVerbatim(t *testing.T) {
 
 	t.Run("min_steps_clamped_to_eight", func(t *testing.T) {
 		steps, _ := resolveVerbatim(model, Options{MinSteps: 100})
-		assert.Equal(t, maxVerbatimSteps, steps, "a hand-edited minSteps cannot swallow the branch")
+		assert.Equal(t, maxVerbatimSteps, steps)
 	})
 }

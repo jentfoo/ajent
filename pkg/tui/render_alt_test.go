@@ -36,7 +36,7 @@ func TestAltRendererRender(t *testing.T) {
 
 		assert.Equal(t, "one", v.Line(2))
 		assert.Equal(t, "two", v.Line(3))
-		assert.Equal(t, "❯", v.Line(4), "block sits at the bottom")
+		assert.Equal(t, "❯", v.Line(4))
 		assert.Equal(t, "ctx", v.Line(5))
 	})
 	// repaint's final clamp yields a block exactly as tall as the screen, and a
@@ -60,7 +60,7 @@ func TestAltRendererRender(t *testing.T) {
 		require.Equal(t, "gone", v.Line(2))
 
 		r.clearHistory()
-		assert.Empty(t, v.Line(2), "the dropped line leaves the screen at once")
+		assert.Empty(t, v.Line(2))
 	})
 	t.Run("older_output_falls_off_the_top", func(t *testing.T) {
 		v := newVT(20, 5)
@@ -89,13 +89,13 @@ func TestAltRendererResizeReflows(t *testing.T) {
 	r.resize()
 
 	assert.Equal(t, "the retry helper loops a", narrow.Line(2))
-	assert.Equal(t, "fixed number of times", narrow.Line(3), "the whole session re-wraps")
+	assert.Equal(t, "fixed number of times", narrow.Line(3))
 
 	t.Run("and_back_again", func(t *testing.T) {
 		wide := newVT(60, 6)
 		r.t.out, r.t.width, r.t.height = wide, wide.w, wide.h
 		r.resize()
-		assert.Equal(t, long, wide.Line(3), "widening restores the single row")
+		assert.Equal(t, long, wide.Line(3))
 	})
 }
 
@@ -107,7 +107,7 @@ func TestAltRendererScroll(t *testing.T) {
 	r.setLive([]string{"❯", "ctx"}, 0, 1)
 	commitText(r, "a", "b", "c", "d", "e", "f")
 
-	require.Equal(t, "f", v.Line(2), "following the tail")
+	require.Equal(t, "f", v.Line(2))
 
 	t.Run("scrolls_back", func(t *testing.T) {
 		require.True(t, r.scroll(2))
@@ -123,7 +123,7 @@ func TestAltRendererScroll(t *testing.T) {
 	})
 	t.Run("new_output_holds_the_position", func(t *testing.T) {
 		commitText(r, "g")
-		assert.Equal(t, "a", v.Line(0), "reader is not yanked to the tail")
+		assert.Equal(t, "a", v.Line(0))
 	})
 	t.Run("scrolls_forward_to_the_tail", func(t *testing.T) {
 		r.scroll(-100)
@@ -144,7 +144,7 @@ func TestAltRendererScrollHoldsWrappedOutput(t *testing.T) {
 
 	// one logical line, three rows: the offset moves by rows, not by lines
 	commitText(r, "gg hh ii jj kk ll")
-	assert.Equal(t, "a", v.Line(0), "reader stays on the same row")
+	assert.Equal(t, "a", v.Line(0))
 }
 
 func TestAltRendererLineFlow(t *testing.T) {
@@ -183,15 +183,15 @@ func TestAltRendererTableReflows(t *testing.T) {
 	r.resize()
 
 	narrowRows := layoutTable(hl.table, r.t.width)
-	require.Greater(t, len(narrowRows), len(wideRows), "narrowing should wrap the long cell")
+	require.Greater(t, len(narrowRows), len(wideRows))
 	// content is not truncated: the table bottom border and the last wrapped cell
 	// line are both on screen with their left borders intact.
-	assert.Equal(t, narrowRows[len(narrowRows)-1], narrow.Line(v.h-3), "bottom border re-laid")
+	assert.Equal(t, narrowRows[len(narrowRows)-1], narrow.Line(v.h-3))
 	var visible strings.Builder
 	for i := 0; i < v.h; i++ {
 		visible.WriteString(narrow.Line(i))
 	}
-	assert.Contains(t, visible.String(), "narrows", "long cell text survives the narrower width")
+	assert.Contains(t, visible.String(), "narrows")
 }
 
 func TestAltRendererClose(t *testing.T) {
@@ -206,7 +206,7 @@ func TestAltRendererClose(t *testing.T) {
 	r.t.out = main
 	r.close(-1)
 
-	assert.Equal(t, "kept one", main.Line(0), "transcript replayed onto the main screen")
+	assert.Equal(t, "kept one", main.Line(0))
 	assert.Equal(t, "kept two", main.Line(1))
 }
 
@@ -233,6 +233,6 @@ func TestAltRendererSuspend(t *testing.T) {
 		back := newVT(20, 6)
 		r.t.out = back
 		r.setLive([]string{"❯", "ctx"}, 0, 1)
-		assert.Equal(t, "before", back.Line(3), "history survives the round trip")
+		assert.Equal(t, "before", back.Line(3))
 	})
 }

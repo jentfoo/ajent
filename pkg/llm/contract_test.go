@@ -174,7 +174,7 @@ func TestContractErrorParity(t *testing.T) {
 			got, err := runContract(t, d, "error_midstream", 0)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "upstream exploded")
-			assert.Equal(t, "partial", got.Text, "the partial answer is not discarded")
+			assert.Equal(t, "partial", got.Text)
 		})
 	}
 }
@@ -299,15 +299,15 @@ func TestContractRequestParity(t *testing.T) {
 			text := string(body)
 
 			for _, want := range []string{"system rules", "read main.go", "Checking", "package main", "thanks"} {
-				assert.Contains(t, text, want, "every dialect carries the same content")
+				assert.Contains(t, text, want)
 			}
-			assert.Contains(t, text, `"read"`, "the tool schema is offered")
+			assert.Contains(t, text, `"read"`)
 
 			calls, results := callsAndResults(t, body)
 			require.Len(t, calls, 1)
 			require.Len(t, results, 1)
 			require.NotEmpty(t, calls[0])
-			assert.Equal(t, calls[0], results[0], "the result answers the call as this dialect names it")
+			assert.Equal(t, calls[0], results[0])
 		})
 	}
 }

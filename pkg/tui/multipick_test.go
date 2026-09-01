@@ -72,12 +72,10 @@ func TestMultiPickSpaceTogglesSelection(t *testing.T) {
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Tools") }, time.Second, testPoll)
 
 	press(t, pw, " ") // no groups here: the cursor is already on read; space selects it
-	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll,
-		"space selects the highlighted tool without entering the filter")
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll)
 	// a typed letter still narrows the filter (space does not become part of it)
 	press(t, pw, "ls")
-	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> [ ] ls") }, time.Second, testPoll,
-		"typing narrows the list and space never polluted the filter")
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> [ ] ls") }, time.Second, testPoll)
 
 	press(t, pw, "\r")
 	select {
@@ -132,18 +130,15 @@ func TestMultiPickHeaderTogglesGroup(t *testing.T) {
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "builtin") }, time.Second, testPoll)
 	// the cursor starts on the builtin header; space selects the whole group
 	press(t, pw, "\t")
-	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll,
-		"toggling a header selects every member of its group")
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll)
 
 	// toggle again on the header deselects all
 	press(t, pw, "\t")
-	require.Eventually(t, func() bool { return !strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll,
-		"a fully selected group toggles back off as a whole")
+	require.Eventually(t, func() bool { return !strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll)
 
 	// select one member leaves the header partial ([~])
 	press(t, pw, "\x1b[B\t")
-	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[~] builtin") }, time.Second, testPoll,
-		"a partially selected group renders a tri-state checkbox")
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[~] builtin") }, time.Second, testPoll)
 
 	press(t, pw, "\r")
 	select {

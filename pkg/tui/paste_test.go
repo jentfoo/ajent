@@ -29,7 +29,7 @@ func TestPastePlaceholderStoredAndExpanded(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(u.snapshot(v), "pasted")
-	}, time.Second, testPoll, "placeholder must appear")
+	}, time.Second, testPoll)
 	val := u.editorValue()
 	assert.Contains(t, val, "pasted")
 
@@ -38,7 +38,7 @@ func TestPastePlaceholderStoredAndExpanded(t *testing.T) {
 	expanded := u.expandPastes(val)
 	u.mu.Unlock()
 	assert.Contains(t, expanded, "line\nline")
-	assert.Len(t, expanded, 2500, "the placeholder expanded to the full 500-line paste")
+	assert.Len(t, expanded, 2500)
 }
 
 // TestPastePlaceholdersAreUnique guards two pastes of the same line count,
@@ -62,7 +62,7 @@ func TestPastePlaceholdersAreUnique(t *testing.T) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		return len(u.pastes) == 2
-	}, time.Second, testPoll, "both pastes must be stored")
+	}, time.Second, testPoll)
 
 	u.mu.Lock()
 	expanded := u.expandPastes(u.editor.Value())
@@ -70,7 +70,7 @@ func TestPastePlaceholdersAreUnique(t *testing.T) {
 	u.mu.Unlock()
 
 	assert.NotEqual(t, placeholders[0], placeholders[1])
-	assert.Equal(t, first+second, expanded, "each placeholder expands to its own paste")
+	assert.Equal(t, first+second, expanded)
 }
 
 func TestSmallPasteInsertedInline(t *testing.T) {
@@ -88,6 +88,6 @@ func TestSmallPasteInsertedInline(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(u.editorValue(), "short paste")
-	}, time.Second, testPoll, "a small paste lands inline")
+	}, time.Second, testPoll)
 	assert.NotContains(t, u.editorValue(), "pasted")
 }

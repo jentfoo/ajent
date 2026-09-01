@@ -151,7 +151,7 @@ func TestSanitizeRow(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			out := sanitizeRow(tc.in)
 			assert.Equal(t, tc.want, out)
-			assert.Equal(t, out, sanitizeRow(out), "idempotent")
+			assert.Equal(t, out, sanitizeRow(out))
 		})
 	}
 }
@@ -197,7 +197,7 @@ func FuzzSanitizeRow(f *testing.F) {
 	f.Add("\x1bD\x1bE\x1bM\x7f\x00")
 	f.Fuzz(func(t *testing.T, s string) {
 		san := sanitizeRow(s)
-		assert.Equal(t, san, sanitizeRow(san), "idempotent")
+		assert.Equal(t, san, sanitizeRow(san))
 		for w := 1; w <= 24; w++ {
 			v := newVT(w, 8)
 			v.WriteString("x\r\ny\r\nz") // park mid-screen

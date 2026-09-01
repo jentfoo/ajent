@@ -96,7 +96,7 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond,
 		"quick commands finish")
 	msgs := s.Flush(t.Context())
-	require.Len(t, msgs, 2, "one user message per run")
+	require.Len(t, msgs, 2)
 
 	// each run lands as a single user text message in submission order
 	assert.Equal(t, llm.RoleUser, msgs[0].Message.Role)
@@ -106,7 +106,7 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 	assert.Equal(t, llm.RoleUser, msgs[1].Message.Role)
 	assert.Contains(t, resultText(msgs[1].Message.Content), "User Ran: echo two")
 	_, ok := msgs[0].Message.Content[0].(llm.TextBlock)
-	require.True(t, ok, "the staged result is a plain text block, not a tool result")
+	require.True(t, ok)
 }
 
 func TestStagerFlushWaitsForInFlight(t *testing.T) {
@@ -115,7 +115,7 @@ func TestStagerFlushWaitsForInFlight(t *testing.T) {
 	s, _ := newShellStager(t)
 	s.Run("sleep 0.3; echo done", false)
 
-	require.True(t, s.Pending(), "the sleep is still running")
+	require.True(t, s.Pending())
 	start := time.Now()
 	msgs := s.Flush(t.Context())
 	elapsed := time.Since(start)
@@ -188,13 +188,13 @@ func TestStagerExcludedRunFlushesNothingAndDoesNotWait(t *testing.T) {
 
 	s, _ := newShellStager(t)
 	s.Run("sleep 1; echo late", true)
-	require.True(t, s.Pending(), "the excluded run is still in flight")
+	require.True(t, s.Pending())
 
 	// Flush returns immediately empty while the run keeps running: an excluded
 	// result goes nowhere, so it must not hold the next prompt hostage.
 	msgs := s.Flush(t.Context())
 	assert.Empty(t, msgs)
-	require.True(t, s.Pending(), "the excluded run is still tracked after Flush")
+	require.True(t, s.Pending())
 
 	s.Cancel() // stop waiting on the sleep so the test ends promptly
 	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)

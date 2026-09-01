@@ -70,7 +70,7 @@ func TestFixtureSchema(t *testing.T) {
 				found = true
 			}
 		}
-		require.True(t, found, "the fixture carries a compaction entry")
+		require.True(t, found)
 
 		assert.Equal(t, 4200, cd.Before)
 		assert.Equal(t, 900, cd.After)
@@ -87,7 +87,7 @@ func TestFixtureSchema(t *testing.T) {
 		require.Len(t, cd.Reduce.Drop, 1)
 		assert.True(t, slices.ContainsFunc(branch, func(e Entry) bool {
 			return e.ID == cd.Reduce.Drop[0]
-		}), "the dropped entry is on the branch")
+		}))
 	})
 
 	t.Run("message_blocks_keep_their_types", func(t *testing.T) {
@@ -111,7 +111,7 @@ func TestFixtureContextMessages(t *testing.T) {
 		require.Empty(t, warns)
 
 		lines := digest(msgs)
-		require.Len(t, lines, 33, "session, model_change, setting_change and notice carry no message")
+		require.Len(t, lines, 33)
 
 		assert.Equal(t, []string{
 			"user|text|review the parser and tidy it up",
@@ -168,7 +168,7 @@ func TestFixtureBranch(t *testing.T) {
 	entries := loadEntries(t, "fork.jsonl")
 
 	ids := tipIDs(entries)
-	require.Len(t, ids, 2, "the fork left two chain tips")
+	require.Len(t, ids, 2)
 
 	seen := map[string][]string{}
 	for _, id := range ids {
@@ -203,10 +203,10 @@ func TestFixtureState(t *testing.T) {
 
 	branch := loadBranch(t, "tools.jsonl")
 	st, warns := State(branch, fixtureModel)
-	require.Empty(t, warns, "no tool call is left unanswered")
+	require.Empty(t, warns)
 
 	assert.Len(t, st.Messages, 33)
 	assert.Equal(t, "claude-opus-4-5", st.Model.ID)
 	assert.Equal(t, llm.ReasoningConfig{Level: llm.LevelMedium, Retain: llm.RetainLastTurn, Show: true},
-		st.Reasoning, "the setting_change entry is replayed whole")
+		st.Reasoning)
 }

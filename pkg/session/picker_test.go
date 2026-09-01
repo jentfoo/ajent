@@ -92,15 +92,15 @@ func TestTreeRows(t *testing.T) {
 		}
 		// both siblings of the fork sit at depth 1 together; the shared root stays flat.
 		assert.Equal(t, 0, depth["u1"])
-		assert.Equal(t, 1, depth["a1"], "older branch indented one level")
-		assert.Equal(t, 1, depth["u2"], "newer branch at the SAME level as its sibling")
+		assert.Equal(t, 1, depth["a1"])
+		assert.Equal(t, 1, depth["u2"])
 		assert.Equal(t, 1, depth["a2"])
 
 		// drawn with connectors: older child listed first (├──), newer closes the fork (└──).
 		assert.Empty(t, guide["u1"])
-		assert.Equal(t, "├── ", guide["a1"], "older sibling is the first listed branch")
-		assert.Equal(t, "└── ", guide["u2"], "newer sibling closes the fork at the bottom")
-		assert.Equal(t, "    ", guide["a2"], "continuation blank because its parent u2 is last (newest at bottom)")
+		assert.Equal(t, "├── ", guide["a1"])
+		assert.Equal(t, "└── ", guide["u2"])
+		assert.Equal(t, "    ", guide["a2"])
 
 		// u2 is the last/newest sibling -> └──; a1 is not live.
 		assert.True(t, active["u1"] && active["u2"] && active["a2"])

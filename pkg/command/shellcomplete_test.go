@@ -121,7 +121,7 @@ func TestShellNames(t *testing.T) {
 
 	names := shellNames()
 	require.NotEmpty(t, names)
-	assert.Contains(t, names, "cd", "bash builtins belong in the list")
+	assert.Contains(t, names, "cd")
 	assert.True(t, slices.IsSorted(names))
 	assert.NotContains(t, names, "")
 }

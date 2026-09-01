@@ -42,7 +42,7 @@ func TestWrapLine(t *testing.T) {
 	})
 	t.Run("wide_runes_never_stall", func(t *testing.T) {
 		rows := wrapLine("ＡＢＣ", 1)
-		require.Len(t, rows, 3, "a rune wider than the row still advances")
+		require.Len(t, rows, 3)
 	})
 	t.Run("zero_width_never_stalls", func(t *testing.T) {
 		// a lone combining mark is its own cluster measuring nothing; the loop has
@@ -104,7 +104,7 @@ func TestWrapLineStyled(t *testing.T) {
 		rows := wrapLine(style.Wrap("hello world"), 8)
 		require.Len(t, rows, 2)
 		assert.Equal(t, "\x1b[2mhello\x1b[0m", rows[0])
-		assert.Equal(t, "\x1b[2mworld\x1b[0m", rows[1], "continuation carries the style, prose has no hang")
+		assert.Equal(t, "\x1b[2mworld\x1b[0m", rows[1])
 	})
 	t.Run("escapes_not_counted_as_width", func(t *testing.T) {
 		styled := Style{open: sgr(attrBold)}.Wrap("0123456789")
@@ -156,7 +156,7 @@ func TestHardWrap(t *testing.T) {
 		}
 	})
 	t.Run("wide_runes_never_stall", func(t *testing.T) {
-		assert.Len(t, hardWrap("ＡＢＣ", 1), 3, "a rune wider than the row still advances")
+		assert.Len(t, hardWrap("ＡＢＣ", 1), 3)
 	})
 	t.Run("zero_width_never_stalls", func(t *testing.T) {
 		rows := hardWrap("́́́abc", 1)
@@ -219,7 +219,7 @@ func TestCells(t *testing.T) {
 		require.Len(t, cs, 3)
 		assert.Empty(t, cs[0].style)
 		assert.Equal(t, "\x1b[1m", cs[1].style)
-		assert.Empty(t, cs[2].style, "reset clears the active style")
+		assert.Empty(t, cs[2].style)
 	})
 	t.Run("measures_width", func(t *testing.T) {
 		cs := cells("ＡB")

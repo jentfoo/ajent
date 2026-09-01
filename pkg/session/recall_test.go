@@ -53,8 +53,7 @@ func TestRecallIndexLines(t *testing.T) {
 		h.Append("shared line") // typed recently
 		recordPrompt(t, s, ws, "old prompt")
 		recordPrompt(t, s, ws, "shared line")
-		assert.Equal(t, []string{"shared line", "old prompt"}, recallTexts(idx.Lines()),
-			"a typed-then-recorded line appears once")
+		assert.Equal(t, []string{"shared line", "old prompt"}, recallTexts(idx.Lines()))
 	})
 
 	t.Run("empty_sources_is_empty", func(t *testing.T) {
@@ -77,7 +76,7 @@ func TestRecallIndexTimestampFromPrompt(t *testing.T) {
 
 	for _, p := range idx.Lines() {
 		if p.Text == "shared line" {
-			assert.False(t, p.At.IsZero(), "a typed line that was also recorded keeps its timestamp")
+			assert.False(t, p.At.IsZero())
 		}
 	}
 }

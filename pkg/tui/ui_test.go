@@ -177,7 +177,7 @@ func TestUIInputEditing(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
 		require.NoError(t, err)
 		waitLine(1, promptFirst+inputHint)
-		assert.Empty(t, u.line(v, 3), "the extra input row is gone")
+		assert.Empty(t, u.line(v, 3))
 	})
 	t.Run("ctrl_c_on_empty_emits_interrupt", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
@@ -268,8 +268,8 @@ func TestUIHistory(t *testing.T) {
 		assert.Equal(t, "first para", v2.Line(0))
 
 		u2.EndText()
-		assert.Equal(t, "first para", v2.Line(0), "the preview commits to history")
-		assert.Contains(t, v2.Line(2), promptFirst, "preview row is released after commit")
+		assert.Equal(t, "first para", v2.Line(0))
+		assert.Contains(t, v2.Line(2), promptFirst)
 	})
 	t.Run("block_follows_the_last_line", func(t *testing.T) {
 		// the committed transcript ends at row 11; divider on 12, input then status
@@ -288,26 +288,26 @@ func TestThinkingStreamsLive(t *testing.T) {
 	u.Thinking("reasoning so f")
 	assert.Equal(t, "✻ thinking", v.Line(0))
 	screen := u.snapshot(v)
-	assert.Contains(t, screen, "reasoning so f", "the partial renders dim+italic in the live block")
+	assert.Contains(t, screen, "reasoning so f")
 	promptAt := strings.Index(screen, promptFirst)
 	previewAt := strings.Index(screen, "reasoning so f")
 	require.NotEqual(t, -1, previewAt)
-	assert.Less(t, previewAt, promptAt, "the partial renders above the input")
+	assert.Less(t, previewAt, promptAt)
 
 	// a newline commits the completed line; only the pending tail stays in the preview.
 	u.Thinking("ar\nnext partial")
 	screen = u.snapshot(v)
-	assert.Contains(t, screen, "reasoning so far", "the completed line lands in history")
+	assert.Contains(t, screen, "reasoning so far")
 	promptAt = strings.Index(screen, promptFirst)
 	tail := strings.Index(screen, "next partial")
 	require.NotEqual(t, -1, tail)
-	assert.Less(t, tail, promptAt, "only the pending tail stays live above the input")
+	assert.Less(t, tail, promptAt)
 
 	// EndThinking commits the remainder and drops the preview.
 	u.EndThinking()
 	screen = u.snapshot(v)
 	promptAt = strings.Index(screen, promptFirst)
-	assert.Contains(t, screen, "next partial", "the remainder commits to history")
+	assert.Contains(t, screen, "next partial")
 	require.NotEqual(t, -1, promptAt)
 
 	// a second EndThinking is idempotent: the frame does not change.
@@ -344,11 +344,10 @@ func TestUIToolStart(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	done := u.ToolStart("c1", "bash", "bash: go test ./...")
-	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0), "the header commits up front")
+	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
 	// no separate spinner row above the input; a running tool keeps the glyph animated.
 	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
-	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]),
-		"spinner still leads the bottom-left status line while a tool runs")
+	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]))
 	// the running tool name and command stay out of the status bar; only the header carries them
 	assert.NotContains(t, strutil.StripANSI(statusRow), "bash")
 	assert.NotContains(t, strutil.StripANSI(statusRow), "go test ./...")
@@ -357,7 +356,7 @@ func TestUIToolStart(t *testing.T) {
 
 	// the result is a short Display; it commits as-is (no indent) under its header.
 	assert.Equal(t, "ok  0.4s", v.Line(1))
-	assert.Contains(t, v.Line(3), promptFirst, "no spinner row is left behind")
+	assert.Contains(t, v.Line(3), promptFirst)
 }
 
 func TestUIBusy(t *testing.T) {
@@ -448,8 +447,7 @@ func TestUIStatusSpinnerLeftmost(t *testing.T) {
 
 	// the spinner is the first element of the status line, before model and tokens.
 	statusRow := u.line(v, 2) // live block: divider on row 0, input on row 1, status on row 2
-	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]),
-		"spinner occupies the leftmost column of the status bar")
+	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]))
 }
 
 func TestUIOutput(t *testing.T) {
@@ -465,7 +463,7 @@ func TestUIOutput(t *testing.T) {
 		done("")
 
 		assert.Equal(t, "⏺ bash: go test -v", v.Line(0))
-		assert.Equal(t, "=== RUN   TestRetry", v.Line(1), "no blank line splits the output")
+		assert.Equal(t, "=== RUN   TestRetry", v.Line(1))
 		assert.Equal(t, "--- PASS: TestRetry (0.01s)", v.Line(2))
 	})
 	t.Run("holds_partial_lines", func(t *testing.T) {
@@ -482,7 +480,7 @@ func TestUIOutput(t *testing.T) {
 	t.Run("not_parsed_as_markdown", func(t *testing.T) {
 		u.Output("c1", "--- PASS: TestX (0.00s)\n")
 		u.EndOutput()
-		assert.Equal(t, "--- PASS: TestX (0.00s)", v.Line(5), "would be a thematic break as markdown")
+		assert.Equal(t, "--- PASS: TestX (0.00s)", v.Line(5))
 	})
 }
 
@@ -546,10 +544,10 @@ func TestUIOutputFull(t *testing.T) {
 	u.mu.Lock()
 	act := slices.Clone(u.activity)
 	u.mu.Unlock()
-	require.Empty(t, act, "no activity row when everything is shown")
+	require.Empty(t, act)
 
 	done("")
-	assert.NotContains(t, u.snapshot(v), "… +20 lines", "full output leaves no summary")
+	assert.NotContains(t, u.snapshot(v), "… +20 lines")
 }
 
 func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
@@ -578,7 +576,7 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 
 	// each call leaves exactly one summary row, so two appear in history.
 	screen := u.snapshot(v)
-	assert.Equal(t, 2, strings.Count(screen, "… +20 lines"), "one collapse per call")
+	assert.Equal(t, 2, strings.Count(screen, "… +20 lines"))
 }
 
 // TestUIInterleavedCallsKeepTheirOwnHead guards the per-call output head: calls
@@ -602,7 +600,7 @@ func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 	u.mu.Lock()
 	act := slices.Clone(u.activity)
 	u.mu.Unlock()
-	require.Len(t, act, 1, "only the collapsed call counts hidden lines")
+	require.Len(t, act, 1)
 	assert.Contains(t, act[0].text, "bash · 6 lines")
 
 	doneA("") // closing one must not touch the other's stream
@@ -610,8 +608,8 @@ func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 	doneB("")
 
 	screen := u.snapshot(v)
-	assert.Equal(t, 1, strings.Count(screen, "… +6 lines"), "only the collapsed call summarizes")
-	assert.Contains(t, screen, "c5", "the full call kept streaming past the other's close")
+	assert.Equal(t, 1, strings.Count(screen, "… +6 lines"))
+	assert.Contains(t, screen, "c5")
 	u.mu.Lock()
 	act, open := slices.Clone(u.activity), slices.Clone(u.runs)
 	u.mu.Unlock()
@@ -638,7 +636,7 @@ func TestUIEndOutputKeepsStagedRuns(t *testing.T) {
 	u.mu.Lock()
 	open, label := slices.Clone(u.runs), u.toolLabel()
 	u.mu.Unlock()
-	require.Len(t, open, 1, "only the staged run survives the turn")
+	require.Len(t, open, 1)
 	assert.Equal(t, "bash", label)
 
 	u.Output("shell", lines("t", 6)) // the tail stays in the same uncapped run
@@ -646,8 +644,8 @@ func TestUIEndOutputKeepsStagedRuns(t *testing.T) {
 	doneAgent("")
 
 	screen := u.snapshot(v)
-	assert.Contains(t, screen, "t6", "every staged line reaches history")
-	assert.Equal(t, 1, strings.Count(screen, "… +6 lines"), "only the agent call collapses")
+	assert.Contains(t, screen, "t6")
+	assert.Equal(t, 1, strings.Count(screen, "… +6 lines"))
 }
 
 // lines returns n numbered output lines prefixed with tag.
@@ -779,11 +777,11 @@ func TestUIResume(t *testing.T) {
 	u.mu.Lock()
 	u.render.suspend(u.inFd)
 	u.mu.Unlock()
-	require.Empty(t, u.line(v, 1), "the live block is handed back")
+	require.Empty(t, u.line(v, 1))
 
 	u.resume()
-	assert.Equal(t, "❯ kept", u.line(v, 0), "history is untouched")
-	assert.Contains(t, u.snapshot(v), "/1k · test", "the live status bar is repainted")
+	assert.Equal(t, "❯ kept", u.line(v, 0))
+	assert.Contains(t, u.snapshot(v), "/1k · test")
 }
 
 // TestUISafeGo checks the recover path in a subprocess, since it re-panics by
@@ -807,9 +805,9 @@ func TestUISafeGo(t *testing.T) {
 	cmd.Env = append(os.Environ(), "TUI_PANIC_CHILD=1")
 	out, err := cmd.CombinedOutput()
 
-	require.Error(t, err, "the child must die from the panic")
+	require.Error(t, err)
 	assert.Contains(t, string(out), "boom")
-	assert.NotContains(t, string(out), "test timed out", "Close must not deadlock")
+	assert.NotContains(t, string(out), "test timed out")
 }
 
 func TestUIReadLines(t *testing.T) {
@@ -866,8 +864,8 @@ func TestUISearchOverlay(t *testing.T) {
 		submit := searchPress(u, key{typ: keyEnter})
 		assert.Nil(t, submit)
 		require.Nil(t, u.search)
-		assert.Equal(t, "fix the retry loop", u.editor.Value(), "full prompt fills the editor")
-		assert.Equal(t, len("fix the "), u.editor.pos, "caret on the match, not the line end")
+		assert.Equal(t, "fix the retry loop", u.editor.Value())
+		assert.Equal(t, len("fix the "), u.editor.pos)
 	})
 }
 
@@ -887,7 +885,7 @@ func TestUISearchOverlayEscapeLeavesBuffer(t *testing.T) {
 	searchPress(u, key{typ: keyEscape})
 
 	assert.Nil(t, u.search)
-	assert.Equal(t, "keep me", u.editor.Value(), "Esc leaves whatever was typed untouched")
+	assert.Equal(t, "keep me", u.editor.Value())
 }
 
 func TestUISearchEscapeSelectsThenClears(t *testing.T) {
@@ -907,12 +905,12 @@ func TestUISearchEscapeSelectsThenClears(t *testing.T) {
 	// first Escape selects the highlighted prompt and closes the overlay
 	searchPress(u, key{typ: keyEscape})
 	require.Nil(t, u.search)
-	assert.Equal(t, "found prompt", u.editor.Value(), "first Esc fills the editor with the match")
+	assert.Equal(t, "found prompt", u.editor.Value())
 	assert.Equal(t, 0, u.editor.pos)
 
 	// second Escape clears the now-selected prompt
 	searchPress(u, key{typ: keyEscape})
-	assert.Empty(t, u.editor.Value(), "second Esc clears the buffer")
+	assert.Empty(t, u.editor.Value())
 }
 
 // openSearch waits until the Ctrl+R overlay is up and its provider delivered.
@@ -1006,24 +1004,24 @@ func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
 	// recalled line (moving nothing else), a second recalls the next entry.
 	submit := searchPress(u, key{typ: keyUp})
 	assert.Nil(t, submit)
-	assert.Equal(t, "third", u.editor.Value(), "first up on an empty field recalls the newest prompt")
+	assert.Equal(t, "third", u.editor.Value())
 
 	searchPress(u, key{typ: keyUp}) // caret to start of "third"
 	assert.Equal(t, "third", u.editor.Value())
 	assert.Equal(t, 0, u.editor.pos)
 	searchPress(u, key{typ: keyUp})
-	assert.Equal(t, "second", u.editor.Value(), "at the start up steps older")
+	assert.Equal(t, "second", u.editor.Value())
 
 	searchPress(u, key{typ: keyUp}) // caret to start of "second"
 	searchPress(u, key{typ: keyUp})
-	assert.Equal(t, "first", u.editor.Value(), "reaches the oldest prompt")
+	assert.Equal(t, "first", u.editor.Value())
 
 	// at the oldest there is nothing more to recall; Up just moves within it.
 	searchPress(u, key{typ: keyUp}) // caret to start of "first"
 	assert.Equal(t, "first", u.editor.Value())
 	assert.Equal(t, 0, u.editor.pos)
 	searchPress(u, key{typ: keyUp})
-	assert.Equal(t, "first", u.editor.Value(), "no older entry; it stays put")
+	assert.Equal(t, "first", u.editor.Value())
 
 	// ↓ is cursor-first too: the caret sits at the start of "first"; one Down moves
 	// it back to the end before further Downs return newer toward the live draft.
@@ -1031,11 +1029,11 @@ func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
 	assert.Equal(t, "first", u.editor.Value())
 	assert.Equal(t, len("first"), u.editor.pos)
 	searchPress(u, key{typ: keyDown})
-	assert.Equal(t, "second", u.editor.Value(), "at the end down returns newer")
+	assert.Equal(t, "second", u.editor.Value())
 	searchPress(u, key{typ: keyDown})
 	assert.Equal(t, "third", u.editor.Value())
 	searchPress(u, key{typ: keyDown})
-	assert.Empty(t, u.editor.Value(), "down restores the live buffer")
+	assert.Empty(t, u.editor.Value())
 }
 
 func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
@@ -1277,7 +1275,7 @@ func TestUIResizeGate(t *testing.T) {
 		two := strings.Index(screen, "second held line")
 		require.NotEqual(t, -1, one)
 		require.NotEqual(t, -1, two)
-		assert.Less(t, one, two, "held commits keep their order")
+		assert.Less(t, one, two)
 	})
 
 	t.Run("stream_commit_during_burst_leaves_one_divider", func(t *testing.T) {
@@ -1298,7 +1296,7 @@ func TestUIResizeGate(t *testing.T) {
 				dividers++
 			}
 		}
-		assert.Equal(t, 1, dividers, "exactly one live divider after the settled redraw")
+		assert.Equal(t, 1, dividers)
 	})
 
 	t.Run("width_change_repaints_our_rows", func(t *testing.T) {
@@ -1311,15 +1309,15 @@ func TestUIResizeGate(t *testing.T) {
 		u.resize()
 
 		screen := u.snapshot(v)
-		assert.Contains(t, screen, "committed before", "history survives, re-wrapped at the new width")
-		assert.Equal(t, 1, strings.Count(screen, "resize"), "re-laid once, never doubled")
+		assert.Contains(t, screen, "committed before")
+		assert.Equal(t, 1, strings.Count(screen, "resize"))
 		var dividers int
 		for line := range strings.Lines(screen) {
 			if strings.TrimRight(line, " \n") == strings.Repeat(ruleChar, 19) {
 				dividers++
 			}
 		}
-		assert.Equal(t, 1, dividers, "the repaint rewrites the old divider row")
+		assert.Equal(t, 1, dividers)
 	})
 
 	t.Run("reset_drops_held_commits", func(t *testing.T) {
@@ -1373,18 +1371,18 @@ func TestThinkingResize(t *testing.T) {
 		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 		u.Thinking("a long reasoning tail that wraps across the forty column width here")
 		screen := u.snapshot(v)
-		assert.Contains(t, screen, "reasoning", "the partial is live before the resize")
+		assert.Contains(t, screen, "reasoning")
 
 		v.setSize(20, 12) // reflows; then the settled signal arrives
 		u.resize()
 		screen = u.snapshot(v)
-		assert.Contains(t, screen, "reasoning", "history and preview survive at the new width")
-		assert.Equal(t, 1, countDividers(screen, 20), "exactly one live divider after reflow")
+		assert.Contains(t, screen, "reasoning")
+		assert.Equal(t, 1, countDividers(screen, 20))
 
 		// further deltas still stream against the settled grid.
 		u.Thinking(" more")
 		screen = u.snapshot(v)
-		assert.Contains(t, screen, "more", "deltas keep streaming after resize")
+		assert.Contains(t, screen, "more")
 	})
 
 	t.Run("commits_during_burst_flush_in_order", func(t *testing.T) {
@@ -1395,7 +1393,7 @@ func TestThinkingResize(t *testing.T) {
 		// thinking deltas complete a line while the burst holds repaints/commits.
 		u.Thinking("first held reasoning\nsecond")
 		screen := u.snapshot(v)
-		assert.NotContains(t, screen, "first held reasoning", "held back during the burst")
+		assert.NotContains(t, screen, "first held reasoning")
 
 		u.resize() // settle flushes deferred commits in order and redraws the preview
 		screen = u.snapshot(v)
@@ -1403,8 +1401,8 @@ func TestThinkingResize(t *testing.T) {
 		two := strings.Index(screen, "second")
 		require.NotEqual(t, -1, one)
 		require.NotEqual(t, -1, two)
-		assert.Less(t, one, two, "held thinking commits keep their order")
-		assert.Equal(t, 1, countDividers(screen, 40), "one divider after the settled redraw")
+		assert.Less(t, one, two)
+		assert.Equal(t, 1, countDividers(screen, 40))
 	})
 }
 
@@ -1432,7 +1430,7 @@ func TestCommitSanitizesToolOutput(t *testing.T) {
 	}
 	row, col := u.cursor(v)
 	assert.Equal(t, 0, col)
-	assert.Equal(t, strings.Repeat(ruleChar, 39), v.Line(row), "the park sits on the divider row")
+	assert.Equal(t, strings.Repeat(ruleChar, 39), v.Line(row))
 }
 
 // countRules counts rows made up entirely of the divider glyph, at any width:
@@ -1538,15 +1536,15 @@ func TestUIActivityNewlineKeepsRowCount(t *testing.T) {
 	u.SetActivity("bash", "running tests\nPASS pkg/tui") // multi line command output
 
 	screen := u.snapshot(v)
-	require.Equal(t, 1, countRules(screen), "the row folded onto one line")
+	require.Equal(t, 1, countRules(screen))
 	assert.Contains(t, screen, "running tests PASS pkg/tui")
 
 	v.setSize(30, 12)
 	u.resize()
 
 	screen = u.snapshot(v)
-	assert.Equal(t, 1, countRules(screen), "and the erase still finds the block's top")
-	assert.Contains(t, screen, "committed reply line", "history is untouched")
+	assert.Equal(t, 1, countRules(screen))
+	assert.Contains(t, screen, "committed reply line")
 }
 
 // TestUILiveBlockFitsTheScreen guards the block's height. The streaming preview
@@ -1565,12 +1563,12 @@ func TestUILiveBlockFitsTheScreen(t *testing.T) {
 
 		for range 6 {
 			u.Text("word " + strings.Repeat("filler ", 6) + "\n")
-			require.Empty(t, v.scrollback, "the live block must never scroll")
+			require.Empty(t, v.scrollback)
 			require.Equal(t, 1, countRules(u.snapshot(v)))
 		}
 		screen := u.snapshot(v)
-		assert.Contains(t, screen, promptFirst, "the input survives the trim")
-		assert.Contains(t, screen, "0/1k · test", "and so does the status row")
+		assert.Contains(t, screen, promptFirst)
+		assert.Contains(t, screen, "0/1k · test")
 	})
 
 	t.Run("narrowing_mid_stream_keeps_it_in", func(t *testing.T) {
@@ -1693,13 +1691,13 @@ func TestStreamingPreviewMatchesCommit(t *testing.T) {
 
 			u.Text(tc.final)
 			u.EndText()
-			assert.Equal(t, row, find("Second"), "the preview reserved the separator row, so nothing shifted")
-			assert.Equal(t, preview[0], u.line(v, row), "the preview broke where the terminal broke")
+			assert.Equal(t, row, find("Second"))
+			assert.Equal(t, preview[0], u.line(v, row))
 			// the block is composed a column short of the terminal, so a continuation
 			// may gain the one character that column held back, never re-flow around it
 			next := u.line(v, row+1)
 			require.True(t, strings.HasPrefix(next, preview[1]), "%q is not the head of %q", preview[1], next)
-			assert.LessOrEqual(t, displayWidth(next)-displayWidth(preview[1]), 1, "at most the held-back column")
+			assert.LessOrEqual(t, displayWidth(next)-displayWidth(preview[1]), 1)
 		})
 	}
 }
@@ -1714,13 +1712,13 @@ func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 		u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "| A | B |\n|---|---|\n| 1 | 2 |"}
 		rows := u.streamingRows(40)
 		require.NotEmpty(t, rows)
-		assert.Contains(t, strings.Join(rows, "\n"), "│ A │ B │", "the preview shows the table, not a blank")
+		assert.Contains(t, strings.Join(rows, "\n"), "│ A │ B │")
 	})
 	t.Run("rule", func(t *testing.T) {
 		u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"}
 		rows := u.streamingRows(40)
 		require.NotEmpty(t, rows)
-		assert.Equal(t, strings.Repeat(ruleChar, 40), rows[0], "the preview shows the rule, not a blank")
+		assert.Equal(t, strings.Repeat(ruleChar, 40), rows[0])
 	})
 }
 
@@ -1741,15 +1739,14 @@ func TestUIResizeProbeGatesTheRedraw(t *testing.T) {
 	u.holdForResize() // the SIGWINCH arrived
 	u.probeResize()   // the burst settled; the redraw waits on the terminal
 
-	assert.Equal(t, 1, v.dsrCount, "the barrier probe was emitted")
-	assert.Equal(t, 2, countRules(u.snapshot(v)),
-		"nothing redraws until the terminal proves it caught up: the old divider stays reflowed in two rows")
+	assert.Equal(t, 1, v.dsrCount)
+	assert.Equal(t, 2, countRules(u.snapshot(v)))
 
 	_, err := pw.Write([]byte("\x1b[0n"))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		return countRules(u.snapshot(v)) == 1
-	}, time.Second, 5*time.Millisecond, "the reply releases the redraw")
+	}, time.Second, 5*time.Millisecond)
 }
 
 // TestUIResizeProbeTimeoutSettles covers terminals that never answer the
@@ -1771,12 +1768,12 @@ func TestUIResizeProbeTimeoutSettles(t *testing.T) {
 	u.holdForResize()
 	u.probeResize()
 	require.NotNil(t, fire)
-	assert.Equal(t, 2, countRules(u.snapshot(v)), "no redraw before the grace expires")
+	assert.Equal(t, 2, countRules(u.snapshot(v)))
 
 	fire() // the terminal never answered; the grace expired
-	assert.Equal(t, 2, countRules(u.snapshot(v)), "the draw still waits out its quiet grace")
+	assert.Equal(t, 2, countRules(u.snapshot(v)))
 	fire() // the quiet grace elapsed
-	assert.Equal(t, 1, countRules(u.snapshot(v)), "the timeout releases the redraw")
+	assert.Equal(t, 1, countRules(u.snapshot(v)))
 }
 
 // TestUIResizeProbeStaleReplyIgnored covers a reply answering a superseded
@@ -1796,13 +1793,13 @@ func TestUIResizeProbeStaleReplyIgnored(t *testing.T) {
 		u.probeResize()
 		u.holdForResize() // a newer SIGWINCH arrived before the reply
 		u.probeAnswered() // the reply covers only the older probe
-		assert.Equal(t, 2, countRules(u.snapshot(v)), "a stale reply proves nothing")
+		assert.Equal(t, 2, countRules(u.snapshot(v)))
 
 		u.probeResize() // the newer burst settles with its own probe
 		u.probeAnswered()
 		require.Eventually(t, func() bool {
 			return countRules(u.snapshot(v)) == 1
-		}, time.Second, testPoll, "and its fresh reply releases the redraw after the grace")
+		}, time.Second, testPoll)
 	})
 
 	t.Run("reply_after_newer_probe", func(t *testing.T) {
@@ -1851,7 +1848,7 @@ func TestUIResizeDrawGraceCancelledBySignal(t *testing.T) {
 	u.holdForResize() // but a new resize begins before the draw goes out
 	fire()            // the grace elapses
 
-	assert.Equal(t, 2, countRules(u.snapshot(v)), "the draw was abandoned")
+	assert.Equal(t, 2, countRules(u.snapshot(v)))
 }
 
 // captureGrace replaces the real timers with a captured draw-grace callback,
@@ -1989,7 +1986,7 @@ func TestUIReanchorKeepsHistoryOnScreen(t *testing.T) {
 
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	assert.Empty(t, v.scrollback, "the pad never scrolls")
+	assert.Empty(t, v.scrollback)
 	assert.Contains(t, v.Screen(), "history line one")
 	block := len(u.render.(*inlineRenderer).live)
 	assert.Equal(t, v.h-block, v.row)
@@ -2031,7 +2028,7 @@ func TestUIReanchorGestures(t *testing.T) {
 				assert.Equal(t, v.h-block, v.row)
 				assert.Contains(t, v.Line(v.h-1), "test")
 			} else {
-				assert.Less(t, v.row, v.h-block, "the block was left where the reflow put it")
+				assert.Less(t, v.row, v.h-block)
 			}
 			assert.Empty(t, v.scrollback)
 			assert.Contains(t, v.Screen(), "history line one")
@@ -2058,7 +2055,7 @@ func TestUISettleIgnoresUnsolicitedReport(t *testing.T) {
 	u.resize()
 
 	block := len(u.render.(*inlineRenderer).live)
-	require.Less(t, v.row, v.h-block, "the stale report must not move the block")
+	require.Less(t, v.row, v.h-block)
 
 	settleProbe(u, 1) // our own probe, answered
 	fire()

@@ -181,8 +181,7 @@ func TestStateLedger(t *testing.T) {
 
 		// skipping summarized-away entries must lower Used below what the full (uncut)
 		// ledger reports; without the fix both would carry a0's 4000+1000 exact terms.
-		assert.Less(t, stCompact.Tokens.Context().Used, stFull.Tokens.Context().Used,
-			"a cut that summarizes away a reported turn must shrink Used")
+		assert.Less(t, stCompact.Tokens.Context().Used, stFull.Tokens.Context().Used)
 	})
 
 	// rewinding onto a mid-branch point yields a ledger covering only the messages before it.

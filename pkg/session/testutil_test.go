@@ -46,7 +46,7 @@ func loadEntries(t *testing.T, name string) []Entry {
 
 	entries, warns, err := Read(filepath.Join("testdata", "branches", name))
 	require.NoError(t, err)
-	require.Empty(t, warns, "the committed transcript must still parse cleanly")
+	require.Empty(t, warns)
 	require.NotEmpty(t, entries)
 	return entries
 }

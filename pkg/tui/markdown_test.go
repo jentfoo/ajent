@@ -79,7 +79,7 @@ func TestRenderMarkdown(t *testing.T) {
 			assert.True(t, lines[0].rule)
 			rows := lines[0].rows(12)
 			require.Len(t, rows, 1)
-			assert.Equal(t, strings.Repeat(ruleChar, 12), strutil.StripANSI(rows[0]), "a rule draws to the width it is laid at")
+			assert.Equal(t, strings.Repeat(ruleChar, 12), strutil.StripANSI(rows[0]))
 		}
 	})
 	t.Run("table_rendered", func(t *testing.T) {
@@ -128,7 +128,7 @@ func TestRenderMarkdownFlow(t *testing.T) {
 		require.Len(t, lines, 3)
 		assert.Equal(t, flowReflow, lines[0].flow)
 		assert.Empty(t, lines[1].text) // separator
-		assert.True(t, lines[2].rule, "a break is a rule, not clip text")
+		assert.True(t, lines[2].rule)
 	})
 }
 
@@ -165,7 +165,7 @@ func TestRenderMarkdownTable(t *testing.T) {
 		wide := layoutTable(lines[0].table, 80)
 		narrow := layoutTable(lines[0].table, 30)
 
-		require.Greater(t, len(narrow), len(wide), "a narrower terminal should wrap more")
+		require.Greater(t, len(narrow), len(wide))
 	})
 }
 
@@ -249,8 +249,8 @@ func TestRenderMarkdownDocument(t *testing.T) {
 	require.Contains(t, strutil.StripANSI(out), code)
 	for _, line := range strings.Split(out, "\n") {
 		if strutil.StripANSI(line) == code {
-			assert.Contains(t, line, esc, "fenced code is not highlighted")
-			assert.NotContains(t, line, th.Code.Open(), "highlighted code should not use the flat code style")
+			assert.Contains(t, line, esc)
+			assert.NotContains(t, line, th.Code.Open())
 		}
 	}
 }

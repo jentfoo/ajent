@@ -138,8 +138,7 @@ func TestBuildSystem(t *testing.T) {
 		// provenance block comes after the environment facts, not before them
 		assert.Less(t,
 			strings.Index(tb.Text, "Working directory: /repo\n"),
-			strings.Index(tb.Text, "<project_context>"),
-			"project instructions must follow environment facts")
+			strings.Index(tb.Text, "<project_context>"))
 	})
 }
 
@@ -206,8 +205,7 @@ func TestBuildSystemProjectInstructions(t *testing.T) {
 	// provenance block comes after the environment facts, not before them
 	assert.Less(t,
 		strings.Index(tb.Text, "Working directory: /repo\n"),
-		strings.Index(tb.Text, "<project_context>"),
-		"project instructions must follow environment facts")
+		strings.Index(tb.Text, "<project_context>"))
 }
 
 func TestLoadProjectInstructions(t *testing.T) {

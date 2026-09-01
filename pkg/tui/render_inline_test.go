@@ -116,7 +116,7 @@ func TestInlineRendererCommit(t *testing.T) {
 
 		assert.Equal(t, "one", v.Line(0))
 		assert.Equal(t, "two", v.Line(1))
-		assert.Equal(t, "❯", v.Line(2), "the block follows the output")
+		assert.Equal(t, "❯", v.Line(2))
 		assert.Equal(t, "ctx 0%", v.Line(3))
 	})
 	t.Run("block_is_erased_not_duplicated", func(t *testing.T) {
@@ -128,7 +128,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		assert.Equal(t, "out", v.Line(0))
 		assert.Equal(t, "❯ hi", v.Line(1))
 		assert.Equal(t, "ctx 0%", v.Line(2))
-		assert.Empty(t, v.Line(3), "no leftover copy of the old block")
+		assert.Empty(t, v.Line(3))
 	})
 	t.Run("prose_left_for_the_terminal_to_wrap", func(t *testing.T) {
 		v := newVT(10, 8)
@@ -157,7 +157,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		// a committed row that fills the last column enters the deferred-wrap
 		// state, which emulators reflow inconsistently (same precaution as
 		// live_rows_never_fill_the_last_column
-		assert.Equal(t, 19, displayWidth(v.Line(0)), "a committed rule stays off the last column")
+		assert.Equal(t, 19, displayWidth(v.Line(0)))
 	})
 	t.Run("cursor_parks_on_the_block_not_the_caret", func(t *testing.T) {
 		v := newVT(20, 8)
@@ -167,8 +167,8 @@ func TestInlineRendererCommit(t *testing.T) {
 
 		// the caret is painted into its row (paintCaret), which frees the
 		// terminal's cursor to sit where the next erase needs to start
-		assert.Equal(t, "❯ ab", v.Line(1), "the caret does not alter the text")
-		assert.Equal(t, 1, v.row, "parked on the block's first row")
+		assert.Equal(t, "❯ ab", v.Line(1))
+		assert.Equal(t, 1, v.row)
 		assert.Equal(t, 0, v.col)
 	})
 	t.Run("multi_row_block", func(t *testing.T) {
@@ -179,9 +179,9 @@ func TestInlineRendererCommit(t *testing.T) {
 
 		assert.Equal(t, "hist", v.Line(0))
 		assert.Equal(t, "⠋ tool", v.Line(1))
-		assert.Equal(t, "  b", v.Line(3), "the caret row keeps its text")
+		assert.Equal(t, "  b", v.Line(3))
 		assert.Equal(t, "ctx", v.Line(4))
-		assert.Equal(t, 1, v.row, "the cursor parks on the block's first row")
+		assert.Equal(t, 1, v.row)
 	})
 }
 
@@ -193,7 +193,7 @@ func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 	t.Parallel()
 
 	line := "146 + Level 148: Drifting mist curled around bridge arches where moss grew thick and deep green now"
-	require.Zero(t, hangWidth(line), "a diff line has nothing to align")
+	require.Zero(t, hangWidth(line))
 
 	v := newVT(40, 10)
 	r := newTestInline(v)
@@ -202,8 +202,7 @@ func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 
 	// narrow: the emulator wrapped it into more than one row; nothing was hard-broken by us
 	assert.True(t, strings.HasPrefix(v.Line(0), "146 + Level 148:"), v.Line(0))
-	require.NotEmpty(t, strings.TrimSpace(v.Line(1)),
-		"the long line must wrap into several terminal rows at w=40")
+	require.NotEmpty(t, strings.TrimSpace(v.Line(1)))
 
 	// widen: the emulator rejoins that one logical line into its full form. We only
 	// resize; never redraw committed history, so whatever is on screen is exactly
@@ -217,8 +216,7 @@ func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 			rejoined = append(rejoined, s)
 		}
 	}
-	assert.Equal(t, []string{line}, rejoined,
-		"widening restores the committed line in full form on one row")
+	assert.Equal(t, []string{line}, rejoined)
 }
 
 // TestInlineAlignedFlowReflowsOnWiden pins that even flowWrap content whose
@@ -230,7 +228,7 @@ func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 	t.Parallel()
 
 	line := "    return fmt.Sprintf(\"a fairly long code line that overflows\", x)"
-	require.Positive(t, hangWidth(line), "a code line leads with spaces")
+	require.Positive(t, hangWidth(line))
 
 	v := newVT(30, 10)
 	r := newTestInline(v)
@@ -250,8 +248,7 @@ func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 			rejoined = append(rejoined, s)
 		}
 	}
-	assert.Equal(t, []string{line}, rejoined,
-		"widening restores an indented line in full form, indent intact")
+	assert.Equal(t, []string{line}, rejoined)
 }
 
 // TestInlineDiff covers the live-block diffing and its full-erase fallbacks.
@@ -272,11 +269,11 @@ func TestInlineDiff(t *testing.T) {
 		r.setLive(tick, 1, 2)
 		out := buf.String()
 		assert.Contains(t, out, "status tick")
-		assert.Contains(t, out, cursorUp(3), "the park still climbs the whole block")
-		assert.NotContains(t, out, "draft", "the first row emits no bytes")
-		assert.NotContains(t, out, "third row", "nor any unchanged row")
-		assert.NotContains(t, out, eraseBelow, "no full erase when nothing moved rows")
-		assert.Contains(t, out, eraseTail, "a rewritten row clears its own tail")
+		assert.Contains(t, out, cursorUp(3))
+		assert.NotContains(t, out, "draft")
+		assert.NotContains(t, out, "third row")
+		assert.NotContains(t, out, eraseBelow)
+		assert.Contains(t, out, eraseTail)
 	})
 
 	// only the width can reflow rows the diff did not write, so a width change redraws the whole block.
@@ -289,7 +286,7 @@ func TestInlineDiff(t *testing.T) {
 		r.t.width = 30
 		r.setLive([]string{"draft text", "ctx"}, 1, 1)
 		out := buf.String()
-		assert.Contains(t, out, eraseBelow, "the whole block is erased and redrawn")
+		assert.Contains(t, out, eraseBelow)
 		assert.Contains(t, out, "draft text")
 	})
 
@@ -534,7 +531,7 @@ func TestInlineRendererScrollsNaturally(t *testing.T) {
 		r.commit([]histLine{{text: s}})
 	}
 
-	assert.NotEmpty(t, v.scrollback, "overflow reaches the terminal's own scrollback")
+	assert.NotEmpty(t, v.scrollback)
 	assert.Equal(t, "d", v.Line(1))
 	assert.Equal(t, "❯", v.Line(2))
 	assert.Equal(t, "ctx", v.Line(3))
@@ -551,7 +548,7 @@ func TestInlineRendererResize(t *testing.T) {
 
 		// the erase depends on this and nothing else: not on the width, not on
 		// how many rows the block turned out to occupy
-		assert.Equal(t, 1, v.row, "parked on the divider row, below the history line")
+		assert.Equal(t, 1, v.row)
 		assert.Equal(t, 0, v.col)
 	})
 	t.Run("resize_alone_draws_nothing", func(t *testing.T) {
@@ -564,7 +561,7 @@ func TestInlineRendererResize(t *testing.T) {
 		r.t.sizeFn = func() (int, int, error) { return 10, 8, nil }
 		r.resize()
 
-		assert.Equal(t, before, v.Screen(), "resize only picks the size up")
+		assert.Equal(t, before, v.Screen())
 		assert.Equal(t, 10, r.t.width)
 	})
 	t.Run("erase_lands_on_the_reflowed_block", func(t *testing.T) {
@@ -580,7 +577,7 @@ func TestInlineRendererResize(t *testing.T) {
 		r.resize()
 		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
 
-		assert.Equal(t, 1, countRules(v.Screen()), "exactly one divider")
+		assert.Equal(t, 1, countRules(v.Screen()))
 		assert.Equal(t, "committed output", v.Line(0))
 	})
 	t.Run("committed_rows_are_never_re_rendered", func(t *testing.T) {
@@ -603,7 +600,7 @@ func TestInlineRendererResize(t *testing.T) {
 
 		assert.Equal(t, []string{
 			v.Line(0), v.Line(1), v.Line(2), v.Line(3), v.Line(4), v.Line(5),
-		}, reflowed, "committed rows belong to the terminal, exactly like cat output")
+		}, reflowed)
 	})
 	t.Run("leaves_content_above_the_session", func(t *testing.T) {
 		v := newVT(40, 12)
@@ -619,7 +616,7 @@ func TestInlineRendererResize(t *testing.T) {
 		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
 
 		screen := v.Screen()
-		assert.Contains(t, screen, "README.md", "the shell's own output is untouchable")
+		assert.Contains(t, screen, "README.md")
 		assert.Contains(t, screen, "$ ajent")
 		assert.Equal(t, 1, strings.Count(screen, "session line one"))
 	})
@@ -634,8 +631,8 @@ func TestInlineRendererResize(t *testing.T) {
 		v.setSize(6, 10)
 		r.setLive([]string{strings.Repeat(ruleChar, 5), "❯ x", "ctx"}, 1, 2)
 
-		assert.Equal(t, 1, countRules(v.Screen()), "the whole reflowed block went")
-		assert.Equal(t, "kept", v.Line(0), "and history was left alone")
+		assert.Equal(t, 1, countRules(v.Screen()))
+		assert.Equal(t, "kept", v.Line(0))
 	})
 	t.Run("repeated_draws_never_accumulate", func(t *testing.T) {
 		v := newVT(40, 10)
@@ -665,7 +662,7 @@ func TestInlineRendererResize(t *testing.T) {
 		r.commit([]histLine{{text: "kept"}})
 		r.setLive([]string{"❯", "ctx"}, 0, 1)
 		r.resize()
-		assert.Equal(t, "kept", v.Line(0), "resize must not rewrite history")
+		assert.Equal(t, "kept", v.Line(0))
 	})
 }
 
@@ -679,8 +676,8 @@ func TestInlineRendererSuspend(t *testing.T) {
 	require.Equal(t, "❯ hi", v.Line(1))
 
 	r.suspend(-1)
-	assert.Equal(t, "kept", v.Line(0), "history stays on the main screen")
-	assert.Empty(t, v.Line(1), "the live block is cleared for the shell")
+	assert.Equal(t, "kept", v.Line(0))
+	assert.Empty(t, v.Line(1))
 
 	t.Run("resume_redraws_the_block", func(t *testing.T) {
 		require.NoError(t, r.resume(-1))
@@ -723,8 +720,8 @@ func TestInlineRendererResizeRace(t *testing.T) {
 	r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 	r.setLive([]string{strings.Repeat(ruleChar, 19), "\u276f x", "ctx"}, 1, 2)
 
-	assert.Equal(t, 1, countRules(v.Screen()), "the whole reflowed block was erased")
-	assert.Equal(t, "committed history", v.Line(0), "and history was left alone")
+	assert.Equal(t, 1, countRules(v.Screen()))
+	assert.Equal(t, "committed history", v.Line(0))
 }
 
 // relayout lays histLine values out at width w via their own rows() method; that is

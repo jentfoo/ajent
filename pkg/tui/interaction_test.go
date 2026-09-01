@@ -251,7 +251,7 @@ func TestPickItemRowAlignment(t *testing.T) {
 		{Label: "an untagged row"},
 	}
 	col := tagColumn(items)
-	assert.Equal(t, 7, col, "the widest tag sets the column")
+	assert.Equal(t, 7, col)
 
 	want := -1
 	for _, it := range items {
@@ -404,7 +404,7 @@ func TestUIPick(t *testing.T) {
 		waitFor(t, u, v, "Model")
 		require.Eventually(t, func() bool {
 			return liveRowCount(u.snapshot(v)) <= 5
-		}, time.Second, testPoll, "live block overflowed a 5 row screen")
+		}, time.Second, testPoll)
 
 		press(t, pw, "\r")
 		assert.Equal(t, 0, <-result)

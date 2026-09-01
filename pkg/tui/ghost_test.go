@@ -80,7 +80,7 @@ func TestThinkingCommitKeepsOutput(t *testing.T) {
 	} {
 		u.Thinking(c)
 	}
-	assert.Contains(t, u.snapshot(v), "second para", "the committed second line is on screen")
+	assert.Contains(t, u.snapshot(v), "second para")
 
 	// completing another line commits mid-stream while the preview still holds rows.
 	// Only retired committed history may scroll; a leaked ghost/divider row would
@@ -96,5 +96,5 @@ func TestThinkingCommitKeepsOutput(t *testing.T) {
 	screen := u.snapshot(v)
 	assert.Empty(t, lost,
 		"nothing but retired committed history may scroll\nscreen:\n%s", screen)
-	assert.Contains(t, screen, "second para", "the recently committed line remains on screen")
+	assert.Contains(t, screen, "second para")
 }

@@ -59,8 +59,7 @@ func TestCompletionTabCompletesCommonPrefix(t *testing.T) {
 
 	press(t, pw, "doc")
 	press(t, pw, "\t") // only the unambiguous portion is filled in
-	require.Eventually(t, func() bool { return u.editorValue() == "docs" }, time.Second, testPoll,
-		"Tab completes to the common prefix, not the first candidate")
+	require.Eventually(t, func() bool { return u.editorValue() == "docs" }, time.Second, testPoll)
 
 	press(t, pw, "\t") // a second Tab lists rather than guessing
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "docs2/") }, time.Second, testPoll)
@@ -78,8 +77,7 @@ func TestCompletionTabAcceptsSingleCandidate(t *testing.T) {
 
 	press(t, pw, "/mo")
 	press(t, pw, "\t")
-	require.Eventually(t, func() bool { return u.editorValue() == "/model" }, time.Second, testPoll,
-		"a lone candidate completes whole")
+	require.Eventually(t, func() bool { return u.editorValue() == "/model" }, time.Second, testPoll)
 
 	// Enter after a completion submits rather than re-applying
 	press(t, pw, "\r")
@@ -133,8 +131,7 @@ func TestCompletionMenu(t *testing.T) {
 		u := newTestUI(t, v, pr)
 		u.SetCompleter(fakeMenuCompleter{items: commands})
 		press(t, pw, "/")
-		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /model") }, time.Second, testPoll,
-			"a menu opens while typing, without a Tab")
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /model") }, time.Second, testPoll)
 		return u, v, pw
 	}
 
@@ -238,8 +235,7 @@ func TestCompletionAtReferences(t *testing.T) {
 
 		press(t, pw, "@mai")
 		press(t, pw, "\t")
-		require.Eventually(t, func() bool { return u.editorValue() == "@main" }, time.Second, testPoll,
-			"@ must stop where the candidates stop agreeing")
+		require.Eventually(t, func() bool { return u.editorValue() == "@main" }, time.Second, testPoll)
 		assert.NotContains(t, u.snapshot(v), "main_test.go")
 
 		press(t, pw, "\t")
@@ -260,8 +256,7 @@ func TestCompletionAtReferences(t *testing.T) {
 		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "main_test.go") }, time.Second, testPoll)
 
 		press(t, pw, "\x1b[D\x1b[D") // ← ← walks back through the buffer
-		require.Eventually(t, func() bool { return u.editorPos() == 3 }, time.Second, testPoll,
-			"← must move the caret, not a candidate highlight")
+		require.Eventually(t, func() bool { return u.editorPos() == 3 }, time.Second, testPoll)
 		assert.Equal(t, "@main", u.editorValue())
 	})
 }
@@ -285,12 +280,10 @@ func TestCompletionArrowsReachTheEditor(t *testing.T) {
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "docs2/") }, time.Second, testPoll)
 
 	press(t, pw, "\x1b[D\x1b[D") // ← ← walks back through the buffer
-	require.Eventually(t, func() bool { return u.editorPos() == 2 }, time.Second, testPoll,
-		"← must move the caret, not a candidate highlight")
+	require.Eventually(t, func() bool { return u.editorPos() == 2 }, time.Second, testPoll)
 
 	press(t, pw, "\x1b[A") // ↑ on the first row jumps to the prompt start
-	require.Eventually(t, func() bool { return u.editorPos() == 0 }, time.Second, testPoll,
-		"↑ must reach the editor rather than a candidate list")
+	require.Eventually(t, func() bool { return u.editorPos() == 0 }, time.Second, testPoll)
 	assert.Equal(t, "docs", u.editorValue())
 }
 
@@ -340,8 +333,7 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 
 	// typing while the listing is pending must be accepted immediately
 	press(t, pw, "a")
-	require.Eventually(t, func() bool { return u.editorValue() == "@a" }, time.Second, testPoll,
-		"typing while pending blocked the key loop")
+	require.Eventually(t, func() bool { return u.editorValue() == "@a" }, time.Second, testPoll)
 
 	// the buffer has moved past this result, so it is dropped
 	g.answers <- []Completion{{Text: "stale", Label: "stale"}}
@@ -417,7 +409,7 @@ func TestFlashRule(t *testing.T) {
 	u.mu.Unlock()
 
 	clear := <-fired
-	assert.Empty(t, fired, "a flash in progress must not arm a second timer")
+	assert.Empty(t, fired)
 	clear()
 	u.mu.Lock()
 	assert.False(t, u.ruleFlash)

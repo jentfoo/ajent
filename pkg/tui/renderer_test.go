@@ -74,14 +74,14 @@ func TestSplitHistLines(t *testing.T) {
 			{text: "one", flow: flowWrap},
 			{text: "two", flow: flowWrap},
 			{text: "three"},
-		}, splitHistLines(lines), "each piece becomes its own row, keeping the flow")
+		}, splitHistLines(lines))
 	})
 	t.Run("keeps_structured_lines", func(t *testing.T) {
 		table := histLine{table: &mdTable{}}
 		lines := []histLine{{text: "x\ny"}, table, {rule: true}}
 		out := splitHistLines(lines)
 		require.Len(t, out, 4)
-		assert.Equal(t, table, out[2], "a structured line is never rewritten")
+		assert.Equal(t, table, out[2])
 		assert.True(t, out[3].rule)
 	})
 }
@@ -120,8 +120,7 @@ func TestPlainRenderer(t *testing.T) {
 	p.commit([]histLine{{text: "one"}, {text: "two"}, {rule: true}})
 	p.setLive([]string{"❯ ignored"}, 0, 0)
 
-	assert.Equal(t, "one\ntwo\n"+strings.Repeat(ruleChar, defaultWidth)+"\n", buf.String(),
-		"a rule renders as text, not a blank line; a zero style keeps it SGR-free")
+	assert.Equal(t, "one\ntwo\n"+strings.Repeat(ruleChar, defaultWidth)+"\n", buf.String())
 	assert.False(t, p.scroll(1))
 }
 

@@ -234,10 +234,10 @@ func TestUIActivityTabKeepsPark(t *testing.T) {
 	u.SetActivity("k", "a\t"+strings.Repeat("x", 15))
 
 	row, col := u.cursor(v)
-	assert.Equal(t, top, row, "the tabbed row stays one terminal row")
+	assert.Equal(t, top, row)
 	assert.Equal(t, 0, col)
 	assert.Equal(t, 1, countRules(v.Screen()))
-	assert.Contains(t, v.Screen(), "a "+strings.Repeat("x", 15), "the tab folded, nothing truncated")
+	assert.Contains(t, v.Screen(), "a "+strings.Repeat("x", 15))
 }
 
 // TestUIActivityEscapeKeepsRowCount drives a cursor-motion escape through the
@@ -260,8 +260,8 @@ func TestUIActivityEscapeKeepsRowCount(t *testing.T) {
 
 	v.setSize(24, 10)
 	u.resize()
-	assert.Equal(t, 1, countRules(v.Screen()), "the erase still finds the block's top")
-	assert.Contains(t, v.Screen(), "committed reply", "history is untouched")
+	assert.Equal(t, 1, countRules(v.Screen()))
+	assert.Contains(t, v.Screen(), "committed reply")
 }
 
 // TestUIPastedEscapeKeepsRowCount pins the boundary split: the editor buffer
@@ -279,12 +279,12 @@ func TestUIPastedEscapeKeepsRowCount(t *testing.T) {
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		return u.line(v, 1) == promptFirst+"sub  boom"
-	}, time.Second, testPoll, "the pasted escape is neutralized on screen")
+	}, time.Second, testPoll)
 
 	u.mu.Lock()
 	value := u.editor.Value()
 	u.mu.Unlock()
-	assert.Equal(t, "sub \x1b[2B boom", value, "the buffer keeps the paste byte-exact")
+	assert.Equal(t, "sub \x1b[2B boom", value)
 
 	row, _ := u.cursor(v)
 	assert.Equal(t, top, row)

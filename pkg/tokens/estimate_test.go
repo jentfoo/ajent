@@ -138,8 +138,7 @@ func TestEstimateRequest(t *testing.T) {
 		for _, msg := range prepared {
 			manual += messageOverhead + estimateBlocks(msg.Content)
 		}
-		assert.Equal(t, manual, estimated,
-			"the estimator must count exactly the messages Prepare will send")
+		assert.Equal(t, manual, estimated)
 	})
 }
 
@@ -170,7 +169,7 @@ func TestEstimateBlocksCoversEveryType(t *testing.T) {
 	for _, bt := range llm.BlockTypes {
 		t.Run(string(bt), func(t *testing.T) {
 			pair, ok := samples[bt]
-			require.True(t, ok, "add a sample pair for this type, and an estimateBlocks arm")
+			require.True(t, ok)
 			assert.Greater(t, estimateBlocks(llm.BlockList{pair[1]}),
 				estimateBlocks(llm.BlockList{pair[0]}))
 		})

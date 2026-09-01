@@ -45,8 +45,7 @@ func TestEditorHistoryAppend(t *testing.T) {
 	t.Run("multiline_message_stays_one_entry", func(t *testing.T) {
 		h := newTestHistory(t, t.TempDir())
 		h.Append("line one\nline two") // one turn with embedded newlines
-		assert.Equal(t, []string{"line one\nline two"}, storedMessages(h.path),
-			"a multi-line message is one physical row and recalls whole")
+		assert.Equal(t, []string{"line one\nline two"}, storedMessages(h.path))
 	})
 
 	t.Run("drops_secret_prefix", func(t *testing.T) {
@@ -82,7 +81,7 @@ func TestEditorHistoryAppend(t *testing.T) {
 		got := storedMessages(h.path)
 		assert.Len(t, got, n)
 		for i := 0; i < n; i++ {
-			assert.Contains(t, got, fmt.Sprintf("line-%d", i), "no concurrent message may be lost")
+			assert.Contains(t, got, fmt.Sprintf("line-%d", i))
 		}
 	})
 
@@ -130,7 +129,7 @@ func TestEditorHistoryRecent(t *testing.T) {
 		h := newTestHistory(t, t.TempDir())
 		h.AppendHidden("/tools") // a slash command: durable yet never recalled
 		h.Append("a real prompt")
-		assert.Equal(t, []string{"a real prompt"}, h.Recent(), "hidden rows are absent from recall")
+		assert.Equal(t, []string{"a real prompt"}, h.Recent())
 		raw := readHistLines(h.path) // hidden rows still land on disk and round-trip
 		require.Len(t, raw, 2)
 		assert.Equal(t, histLine{msg: "/tools", hidden: true}, raw[0])
@@ -167,7 +166,7 @@ func TestEditorHistoryRecentKeepsDuplicateAcrossCap(t *testing.T) {
 	require.NoError(t, os.WriteFile(h.path, b, 0o600))
 	recent := h.Recent()
 	assert.Len(t, recent, maxHistoryLines)
-	assert.Equal(t, "line-0", recent[0], "the most recently re-typed line is newest and survives the cap")
+	assert.Equal(t, "line-0", recent[0])
 }
 
 // TestEditorHistoryCompact verifies compaction rewrites the file to a merged,
@@ -193,8 +192,7 @@ func TestEditorHistoryCompact(t *testing.T) {
 		}
 		h.Append("secret:hidden-value")
 		h.Compact()
-		assert.Contains(t, storedMessages(h.path), "first line\nsecond line",
-			"a multi-line turn is not fragmented by compaction")
+		assert.Contains(t, storedMessages(h.path), "first line\nsecond line")
 		assert.NotContains(t, string(mustReadFile(t, h.path)), "hidden-value")
 	})
 

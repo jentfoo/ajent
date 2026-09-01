@@ -73,10 +73,10 @@ func TestHeadFor(t *testing.T) {
 			{ID: "a", ParentID: "root", Type: TypeMessage, Data: msgData("m1")},
 			{ID: "b", ParentID: "a", Type: TypeMessage, Data: msgData("m2")}, // tail
 		}
-		assert.Equal(t, "b", headFor(p, entries), "no cursor falls back to the file tail")
+		assert.Equal(t, "b", headFor(p, entries))
 
 		require.NoError(t, WriteHead(p, "a"))
-		assert.Equal(t, "a", headFor(p, entries), "the persisted branch wins over tail")
+		assert.Equal(t, "a", headFor(p, entries))
 	})
 
 	// a cursor for another session must not steer this one.
@@ -87,7 +87,6 @@ func TestHeadFor(t *testing.T) {
 		e2 := []Entry{{ID: "y", Type: TypeSession}}
 
 		require.NoError(t, WriteHead(p1, "x"))
-		assert.Equal(t, Head(e2), headFor(p2, e2),
-			"a cursor for another session must not steer this one")
+		assert.Equal(t, Head(e2), headFor(p2, e2))
 	})
 }

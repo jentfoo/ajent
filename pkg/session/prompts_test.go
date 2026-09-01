@@ -47,8 +47,7 @@ func TestStorePrompts(t *testing.T) {
 		for _, p := range prompts {
 			texts = append(texts, p.Text)
 		}
-		assert.Equal(t, []string{"forked prompt", "third", "second", "first"}, texts,
-			"newest first with the abandoned fork included")
+		assert.Equal(t, []string{"forked prompt", "third", "second", "first"}, texts)
 	})
 
 	t.Run("dedupe_keeps_newest", func(t *testing.T) {
@@ -70,7 +69,7 @@ func TestStorePrompts(t *testing.T) {
 
 		prompts, perr := s.Prompts(ws)
 		require.NoError(t, perr)
-		assert.Equal(t, []string{"other", "dup"}, promptTexts(prompts), "duplicate keeps only its newest occurrence")
+		assert.Equal(t, []string{"other", "dup"}, promptTexts(prompts))
 	})
 
 	t.Run("multi_line_joins_blocks", func(t *testing.T) {
@@ -113,8 +112,7 @@ func TestStorePrompts(t *testing.T) {
 
 		prompts, perr := s.Prompts(ws)
 		require.NoError(t, perr)
-		assert.Equal(t, []string{"a real prompt"}, promptTexts(prompts),
-			"injected context is not a recallable prompt")
+		assert.Equal(t, []string{"a real prompt"}, promptTexts(prompts))
 	})
 
 	t.Run("limit", func(t *testing.T) {
@@ -185,7 +183,7 @@ func TestPromptIndexPrompts(t *testing.T) {
 		require.NoError(t, err)
 		_, aerr = w2.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "two")})
 		require.NoError(t, aerr)
-		assert.Equal(t, []string{"one"}, promptTexts(pIdx.Prompts()), "cached within the TTL")
+		assert.Equal(t, []string{"one"}, promptTexts(pIdx.Prompts()))
 
 		// past the TTL a scan refreshes
 		setClock(time.UnixMilli(1_010_000).UTC()) // well beyond expires (1006002)
@@ -214,7 +212,7 @@ func TestPromptIndexPrompts(t *testing.T) {
 		require.NoError(t, aerr)
 
 		t.Cleanup(setPromptNow(time.UnixMilli(9_900_000_000_003).UTC())) // ~year 2300, past the first scan's real-time expiry
-		assert.Equal(t, []string{"two", "one"}, promptTexts(pIdx.Prompts()), "a now bump refreshes")
+		assert.Equal(t, []string{"two", "one"}, promptTexts(pIdx.Prompts()))
 	})
 }
 
