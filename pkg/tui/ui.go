@@ -101,7 +101,7 @@ type UI struct {
 	streaming bool // a text block is partially buffered; show it live above input
 	textStart bool
 
-	runs      []*toolRun // in-flight tool calls, oldest first; the newest names the status bar
+	runs      []*toolRun // in-flight tool calls, oldest first; the newest drives the spinner color
 	busy      bool       // a turn is in flight; the status-bar glyph animates while set
 	spinner   int
 	spinnerCh chan struct{}
@@ -668,8 +668,9 @@ func (u *UI) endRunLocked(id string) {
 	u.runs = slices.Delete(u.runs, i, i+1)
 }
 
-// toolLabel names the tool the status bar shows: the newest named call still
-// running, "" when none is. Caller holds the lock.
+// toolLabel reports whether any named call is still running (the newest one),
+// "" when none is. It drives spinner color and animation, not status text.
+// Caller holds the lock.
 func (u *UI) toolLabel() string {
 	for i := len(u.runs) - 1; i >= 0; i-- {
 		if u.runs[i].name != "" { // a run whose header has not landed yet names nothing
@@ -707,11 +708,11 @@ func (u *UI) Diff(path, before, after string) {
 	u.commit(out, flowWrap)
 }
 
-// ToolStart commits call id's tool header to history. While active, the running tool's
-// short name rides in the status bar next to the working glyph (bottom-left
-// corner); no separate spinner row is drawn above the input. The returned
-// function clears it and commits result, which may be empty when output was
-// already streamed.
+// ToolStart commits call id's tool header to history. The running tool keeps the
+// status-bar glyph animated and colored (SpinnerTool) while it runs; no separate
+// spinner row is drawn above the input, and the tool name rides only on the
+// committed header. The returned function clears it and commits result, which may
+// be empty when output was already streamed.
 func (u *UI) ToolStart(id, name, label string) func(result string) {
 	u.mu.Lock()
 	label = sanitizeRow(label) // feeds the committed header; name is short and trusted
@@ -739,7 +740,7 @@ func (u *UI) ToolStart(id, name, label string) func(result string) {
 			}
 			u.commitSummary(&h)
 		}
-		// the tool label leaves the status bar; a busy turn keeps its glyph animated
+		// a busy turn keeps its glyph animated; tool color comes from syncSpinnerLocked
 		u.syncSpinnerLocked()
 		u.repaint()
 	}
@@ -855,7 +856,6 @@ func (u *UI) repaint() {
 		frame = spinnerFrames[0] // static resting frame when idle; bottom-left of the cell
 	}
 	st.Spinner = u.spinnerStyleLocked().Wrap(frame)
-	st.Tool = u.toolLabel()
 	statusRows := st.rows(u.theme, w)
 
 	var rows []string

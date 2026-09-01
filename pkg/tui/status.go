@@ -27,7 +27,6 @@ type Segment struct {
 // Status is the state rendered on the line below the input field.
 type Status struct {
 	Spinner    string // the working glyph, first element (bottom-left corner); static at rest
-	Tool       string // a running tool's label, shown right after the spinner while active
 	Model      string // full model label; the first thing to collapse when its row overflows
 	ModelShort string // short model label, collapsing Model before anything else changes
 	Tokens     int    // context usage count; drives the bar against Budget()
@@ -88,16 +87,13 @@ func (s Status) rows(t Theme, width int) []string {
 	}
 }
 
-// fixedParts returns the always-present pieces: spinner, tool, context bar and
-// token totals. The model is not among them; it collapses first when its row
-// would overflow (see rows).
+// fixedParts returns the always-present pieces: spinner, context bar and token
+// totals. The model is not among them; it collapses first when its row would
+// overflow (see rows).
 func (s Status) fixedParts(t Theme) []string {
 	var parts []string
 	if s.Spinner != "" {
 		parts = append(parts, s.Spinner)
-	}
-	if s.Tool != "" {
-		parts = append(parts, t.Dim.Wrap(s.Tool))
 	}
 	if s.MaxTokens > 0 {
 		// bar fills to where an auto-compact would fire when that is known, else to

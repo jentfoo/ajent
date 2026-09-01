@@ -345,14 +345,13 @@ func TestUIToolStart(t *testing.T) {
 
 	done := u.ToolStart("c1", "bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0), "the header commits up front")
-	// no separate spinner row above the input; the tool rides in the status bar.
+	// no separate spinner row above the input; a running tool keeps the glyph animated.
 	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
 	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]),
 		"spinner still leads the bottom-left status line while a tool runs")
-	assert.Contains(t, strutil.StripANSI(statusRow), "bash",
-		"short tool name sits next to the working glyph in the status bar")
-	assert.NotContains(t, strutil.StripANSI(statusRow), "go test ./...",
-		"the command stays out of the status bar; only the header carries it")
+	// the running tool name and command stay out of the status bar; only the header carries them
+	assert.NotContains(t, strutil.StripANSI(statusRow), "bash")
+	assert.NotContains(t, strutil.StripANSI(statusRow), "go test ./...")
 
 	done("ok  0.4s")
 
@@ -368,8 +367,8 @@ func TestUIBusy(t *testing.T) {
 	u := newTestUI(t, v, strings.NewReader(""))
 
 	// a bare glyph sits at the left of the status line even when idle; no label.
-	assert.NotContains(t, u.snapshot(v), "working", "no working label is ever shown")
-	assert.Contains(t, u.snapshot(v), spinnerFrames[0], "a resting frame is always visible")
+	assert.NotContains(t, u.snapshot(v), "working")
+	assert.Contains(t, u.snapshot(v), spinnerFrames[0])
 
 	stop := u.Busy()
 	// advancing the frame while busy repaints a different glyph: it animates.
@@ -377,13 +376,13 @@ func TestUIBusy(t *testing.T) {
 	u.spinner++
 	u.repaint()
 	u.mu.Unlock()
-	assert.Contains(t, u.snapshot(v), spinnerFrames[1%len(spinnerFrames)], "busy advances the frame")
+	assert.Contains(t, u.snapshot(v), spinnerFrames[1%len(spinnerFrames)])
 
-	// a running tool shares the bottom-left status line with the busy glyph.
+	// a running tool keeps the busy glyph animated but adds no label to the line.
 	doneTool := u.ToolStart("c1", "bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
-	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1 (divider), input then status
-	assert.Contains(t, strutil.StripANSI(statusRow), "bash")
+	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1: divider, then input and status
+	assert.NotContains(t, strutil.StripANSI(statusRow), "bash")
 	doneTool("ok  0.4s")
 
 	stop()

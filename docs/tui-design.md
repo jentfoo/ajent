@@ -113,8 +113,8 @@ gap in a rule reads as a defect.
 
 The status block (`status.go`) is the fixed chrome beneath the input: a fixed-width
 context bar, used/total tokens, the model, then keyed `Segment`s in insertion
-order. A running tool shows only its short name next to the spinner; the full
-tool label (e.g. the bash command) lives on the committed header alone. The bar fills against the compaction budget (`window - reserve`) so a full
+order. A running tool keeps the status-bar glyph animated and colored
+(`SpinnerTool`); it adds no label to the bar. The bar fills against the compaction budget (`window - reserve`) so a full
 bar means "compaction fires now" rather than at raw capacity; the count shows
 used against the real window. A `~` prefixes the count while it is an estimate
 (mid-stream or between provider reports). The colour escalates as it nears the
@@ -131,7 +131,7 @@ terminal shortens them in that order before anything splits. Packing
 3. Then segments shorten on the same row, in drop order (lowest `Priority`
    first, ties the later insertion).
 4. Only when even all-short segments overflow does the block split in two. Row
-   one is the fixed part (spinner, tool, bar/tokens) plus the model, shortening
+   one is the fixed part (spinner, bar/tokens) plus the model, shortening
    then clipping it. Row two packs the segments full-then-short, dropping in
    drop order only once every survivor is already short; survivors re-expand
    into freed width.
@@ -592,11 +592,10 @@ is never split across the boundary.
   can still be streaming at `TurnEnd`; closing it there would commit a collapse
   row mid-stream and reopen the tail as a second, nameless, capped head. A full
   run has no collapse row or activity row to clean up, its own done hook flushes
-  it, and leaving it open is what keeps its name in the status bar while it runs.
-- The status bar names the newest **named** running call (`UI.toolLabel`) and keeps
-  its glyph animated until every call has ended, so one finishing does not blank the
-  label of another still running, and a run created by output arriving ahead of its
-  header does not blank it either.
+  it, and leaving it open is what keeps its glyph animated while it runs.
+- The newest **named** running call (`UI.toolLabel`) drives the spinner colour
+  (`SpinnerTool`); a run created by output arriving ahead of its header does not
+  alter it.
 - **Full mode**: user-initiated `!`/`!!` shells are the one exception to the
   head-plus-summary rule. The stager opens them through `Sink.ToolStartFull`
   (an optional capability it type-asserts on its sink), which calls `SetOutputFull`
