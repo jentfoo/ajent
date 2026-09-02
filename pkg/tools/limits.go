@@ -406,20 +406,11 @@ func halfLines(n int) int {
 
 // capLine truncates s to MaxLineRunes on a rune boundary.
 func capLine(s string) string {
-	n := utf8.RuneCountInString(s)
-	if n <= MaxLineRunes {
+	rs := []rune(s)
+	if len(rs) <= MaxLineRunes {
 		return s
 	}
-	var out strings.Builder
-	count := 0
-	for _, r := range s {
-		if count >= MaxLineRunes {
-			break
-		}
-		out.WriteRune(r)
-		count++
-	}
-	return out.String()
+	return string(rs[:MaxLineRunes])
 }
 
 // countLines returns the number of lines in s, not counting the empty string a

@@ -208,7 +208,14 @@ any write. Every op's span is resolved against the **original** buffer, never an
 edit's output, so edits cannot cascade; overlapping spans across ops are rejected.
 Zero matches returns an actionable diagnostic naming the reliably-detected cause
 (whitespace or casing, genuinely-absent content, or an earlier edit in the same
-batch that would create the match) plus a closest-line hint. Multiple matches without `replace_all` returns the occurrence count
+batch that would create the match) plus a closest-line hint. A whitespace mismatch
+names the exact tabs/spaces counts of both the file line and the edit's text (a
+mixed run renders via `describeRun`, e.g. "2 tabs and 1 space"). After a successful
+apply, the tool scans each replacement region for adjacent identical non-blank lines
+(1- or 2-line blocks) and appends a non-error `WARN` block to the result naming the
+edit, the identical line ranges, and ±5 numbered context lines — so a replacement
+that re-emits text the file already retains is caught in the same round trip.
+Duplication the edit never touched, and blank lines, never warn. Multiple matches without `replace_all` returns the occurrence count
 and locations. Messages tell the model it **must provide text exactly** rather than
 asking it to copy, and always receive the original buffer so diagnostics stay
 actionable. Line endings follow one package-wide convention: model-visible output

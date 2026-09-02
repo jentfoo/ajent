@@ -13,6 +13,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // editOp is one exact-string replacement.
@@ -56,7 +57,7 @@ func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
 		return Change{}, err
 	}
 	before := normalizeToLF(string(data))
-	after, _, aerr := applyEdits(p.Path, string(data), p.Edits)
+	after, _, _, aerr := applyEdits(p.Path, string(data), p.Edits)
 	return Change{Path: p.Path, Before: before, After: after}, aerr
 }
 
@@ -79,7 +80,7 @@ func (t *editTool) Label(agent.ToolCall) string {
 	return "edit"
 }
 func (t *editTool) Description() string {
-	return "Edit a single file using exact text replacement. Every edits[].oldText must match a unique region of the file, or set replace_all. All edits apply atomically or none do."
+	return "Edit a single file using exact text replacement. Every edits[].oldText must match a unique region of the file, or set replace_all. All edits apply atomically or none do. Built-in safeguards make this safe for agent use; prefer `edit` over bash tools to modify files."
 }
 func (t *editTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: SchemaOf[editParams]()} }
 func (t *editTool) Mode() agent.ExecutionMode {
@@ -107,7 +108,7 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	if err != nil {
 		return resultErr("edit: " + err.Error()), nil
 	}
-	_, final, err := applyEdits(p.Path, string(data), p.Edits)
+	_, final, warns, err := applyEdits(p.Path, string(data), p.Edits)
 	if err != nil {
 		return resultErr(err.Error()), nil
 	}
@@ -117,26 +118,31 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}
 	t.tracker.Observe(full, final, fileInfo(full))
 
+	msg := fmt.Sprintf("applied %d edits to %s", len(p.Edits), p.Path)
+	if len(warns) > 0 {
+		msg += "\n\n" + strings.Join(warns, "\n\n")
+	}
 	return agent.ToolResult{
-		Content: llmBlock(fmt.Sprintf("applied %d edits to %s", len(p.Edits), p.Path)),
+		Content: llmBlock(msg),
 	}, nil
 }
 
 // applyEdits validates ops, resolves every op's span on the LF-normalized
 // buffer (so edits never cascade onto each other), and applies them all at
-// once. It returns the LF-space result for diffs plus the final file bytes,
-// where untouched regions are copied verbatim and each replacement adopts the
-// line ending of its neighbouring lines. It fails before any change when an op
-// is empty, a no-op, duplicated, missing, ambiguous (more than one match
-// without replace_all), or overlaps another edit.
-func applyEdits(path string, orig string, ops []editOp) (after string, final []byte, err error) {
+// once. It returns the LF-space result for diffs, the final file bytes (where
+// untouched regions are copied verbatim and each replacement adopts the line
+// ending of its neighbouring lines), and post-apply duplication warnings. It
+// fails before any change when an op is empty, a no-op, duplicated, missing,
+// ambiguous (more than one match without replace_all), or overlaps another
+// edit.
+func applyEdits(path string, orig string, ops []editOp) (after string, final []byte, warns []string, err error) {
 	buf := normalizeToLF(orig)
 	for i := range ops { // match in LF space so CRLF oldText never needs a \r
 		ops[i].OldText = normalizeToLF(ops[i].OldText)
 		ops[i].NewText = normalizeToLF(ops[i].NewText)
 	}
 	if err := validateEdits(ops); err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 
 	var spans []matchSpan
@@ -144,9 +150,9 @@ func applyEdits(path string, orig string, ops []editOp) (after string, final []b
 		op := &ops[i]
 		switch count := strings.Count(buf, op.OldText); {
 		case count == 0:
-			return "", nil, errors.New(missingError(i+1, path, op.OldText, buf, ops))
+			return "", nil, nil, errors.New(missingError(i+1, path, op.OldText, buf, ops))
 		case count > 1 && !op.ReplaceAll:
-			return "", nil, errors.New(ambiguousError(i+1, path, op.OldText, buf))
+			return "", nil, nil, errors.New(ambiguousError(i+1, path, op.OldText, buf))
 		default: // exactly one match, or replace_all with any positive count
 			if op.ReplaceAll {
 				for s := 0; ; {
@@ -172,23 +178,34 @@ func applyEdits(path string, orig string, ops []editOp) (after string, final []b
 			continue
 		}
 		a, bb := spans[i-1], spans[i]
-		return "", nil, fmt.Errorf("edits %d and %d target overlapping regions in %s; adjust their oldText so each targets a distinct region", a.idx+1, bb.idx+1, path)
+		return "", nil, nil, fmt.Errorf("edits %d and %d target overlapping regions in %s; adjust their oldText so each targets a distinct region", a.idx+1, bb.idx+1, path)
 	}
 
 	var out strings.Builder // LF rebuild from the original buffer in span order
 	last := 0
+	var replaced []afterSpan
 	for _, sp := range spans {
 		out.WriteString(buf[last:sp.s])
+		s := out.Len()
 		out.WriteString(ops[sp.idx].NewText)
+		replaced = append(replaced, afterSpan{idx: sp.idx, s: s, e: out.Len()})
 		last = sp.e
 	}
 	out.WriteString(buf[last:])
-	return out.String(), rebuild(orig, buf, spans, ops), nil
+	after = out.String()
+	return after, rebuild(orig, buf, spans, ops), duplicationWarnings(after, replaced), nil
 }
 
 // matchSpan is one replacement's byte range in the LF-normalized buffer.
 type matchSpan struct {
 	idx int // index of the owning op
+	s   int
+	e   int
+}
+
+// afterSpan is one newText's byte range in the after (LF) buffer, for warning attribution.
+type afterSpan struct {
+	idx int // owning op index
 	s   int
 	e   int
 }
@@ -492,7 +509,7 @@ func indentIssue(want, have string) string {
 	case wTabs == 0 && hTabs == 0 && wSpaces != hSpaces:
 		return fmt.Sprintf("indentation count differs: your text has %d leading spaces, the file line has %d; you must provide that exact count", wSpaces, hSpaces)
 	case wTabs > 0 && hTabs > 0 && len(want) != len(have):
-		return "tab indentation depth differs; match the file's exact number of tabs"
+		return fmt.Sprintf("tab indentation depth differs: the file line has %s but your text has %s; match the file's exact indentation", describeRun(have), describeRun(want))
 	}
 	return "" // indistinguishable or already covered
 }
@@ -567,6 +584,181 @@ func plural(n int, unit string) string {
 	return strconv.Itoa(n) + " " + unit + "s"
 }
 
+// dupFinding is one adjacent duplicate region introduced by a replacement:
+// contiguous lines [start..end] (inclusive, 0-based) that contain repeated text,
+// plus every edit whose replaced span intersects the region.
+type dupFinding struct {
+	start, end int   // inclusive line indexes of the duplicated region
+	opIdx      []int // edits intersecting this region, ascending and unique
+}
+
+func nonBlank(s string) bool { return stripSpace(s) != "" }
+
+// allNonBlank reports whether every line is non-blank.
+func allNonBlank(ls []string) bool {
+	for _, l := range ls {
+		if !nonBlank(l) {
+			return false
+		}
+	}
+	return true
+}
+
+// duplicationWarnings reports adjacent identical lines (1- or 2-line blocks)
+// that an edit introduced, so a replacement that re-emits text the file already
+// retains is caught in the same round trip. Only duplications whose lines
+// intersect a replacement region are reported; pre-existing duplication the
+// edit never touched is out of scope. Blank lines never count.
+func duplicationWarnings(after string, replaced []afterSpan) []string {
+	lines := dropTrailingEmpty(strings.Split(after, "\n"))
+	n := len(lines)
+	if n == 0 {
+		return nil
+	}
+	lineStart := make([]int, n)
+	off := 0
+	for i := range lines {
+		lineStart[i] = off
+		off += len(lines[i]) + 1 // +1 for the newline separator (LF-normalized)
+	}
+
+	// find every adjacent equal-sequence occurrence for block sizes 1 and 2, then
+	// merge overlapping ones so a contiguous duplicate run reports exactly once.
+	type dupOcc struct{ start, end int } // inclusive line indexes
+	var occs []dupOcc
+	for _, bs := range [2]int{1, 2} {
+		for i := 0; i+2*bs <= n; i++ {
+			if !allNonBlank(lines[i : i+2*bs]) {
+				continue
+			}
+			if slices.Equal(lines[i:i+bs], lines[i+bs:i+2*bs]) {
+				occs = append(occs, dupOcc{i, i + 2*bs - 1})
+			}
+		}
+	}
+	slices.SortStableFunc(occs, func(x, y dupOcc) int {
+		if x.start != y.start {
+			return x.start - y.start
+		}
+		return x.end - y.end
+	})
+
+	type lineSpan struct{ start, end int }
+	var spans []lineSpan
+	for _, o := range occs {
+		if len(spans) == 0 || o.start > spans[len(spans)-1].end {
+			spans = append(spans, lineSpan(o))
+			continue
+		}
+		if o.end > spans[len(spans)-1].end {
+			spans[len(spans)-1].end = o.end
+		}
+	}
+
+	// opsOverlap returns every distinct edit whose replaced span intersects [a,b).
+	opsOverlap := func(a, b int) []int {
+		var ops []int
+		for i := range replaced {
+			if a < replaced[i].e && b > replaced[i].s {
+				ops = append(ops, replaced[i].idx)
+			}
+		}
+		slices.SortFunc(ops, func(x, y int) int { return x - y })
+		return slices.Compact(ops)
+	}
+
+	var findings []dupFinding
+	for _, sp := range spans {
+		a := lineStart[sp.start]
+		b := lineStart[sp.end] + len(lines[sp.end])
+		if ops := opsOverlap(a, b); len(ops) > 0 {
+			findings = append(findings, dupFinding{start: sp.start, end: sp.end, opIdx: ops})
+		}
+	}
+
+	var warns []string
+	shownTo := -1 // highest context line index already rendered by an earlier warning
+	for i := range findings {
+		if i >= 3 {
+			warns = append(warns, "... more duplications omitted")
+			break
+		}
+		f := findings[i]
+		warns = append(warns, renderDupWarning(lines, f, shownTo))
+		if end := min(len(lines)-1, f.end+5); end > shownTo {
+			shownTo = end
+		}
+	}
+
+	return warns
+}
+
+// editRef renders an op-index list as "edit N", "edits A and B", or "edits A, B and C".
+func editRef(idxs []int) string {
+	names := make([]string, len(idxs))
+	for i, x := range idxs {
+		names[i] = strconv.Itoa(x + 1)
+	}
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return "edit " + names[0]
+	case 2:
+		return "edits " + strings.Join(names, " and ")
+	default:
+		last := len(names) - 1
+		return "edits " + strings.Join(names[:last], ", ") + " and " + names[last]
+	}
+}
+
+// lineRange renders a 1-based inclusive [a,b] as "X" or "X-Y".
+func lineRange(a, b int) string {
+	if a == b {
+		return strconv.Itoa(a + 1)
+	}
+	return fmt.Sprintf("%d-%d", a+1, b+1)
+}
+
+// dropTrailingEmpty removes the empty element a newline-terminated split leaves,
+// so it never renders as a numbered blank row at file end.
+func dropTrailingEmpty(ls []string) []string {
+	if n := len(ls); n > 0 && ls[n-1] == "" {
+		return ls[:n-1]
+	}
+	return ls
+}
+
+// renderDupWarning renders one duplication warning with a header and numbered context.
+func renderDupWarning(lines []string, f dupFinding, shownTo int) string {
+	var b strings.Builder
+	// name both halves when the region splits evenly, else state the whole span.
+	desc := fmt.Sprintf("lines %s contain duplicated content", lineRange(f.start, f.end))
+	if half := (f.end - f.start + 1); half%2 == 0 {
+		m := f.start + half/2 - 1
+		if slices.Equal(lines[f.start:m+1], lines[m+1:f.end+1]) {
+			desc = fmt.Sprintf("lines %s and %s are identical", lineRange(f.start, m), lineRange(m+1, f.end))
+		}
+	}
+	fmt.Fprintf(&b, "WARN: Duplicate text detected after edit (%s: %s), ensure the following is correct:\n",
+		editRef(f.opIdx), desc)
+	start := max(0, f.start-5)        // clamp to file bounds
+	end := min(len(lines)-1, f.end+5) // inclusive last line shown
+
+	for j := start; j <= end; j++ {
+		if j <= shownTo && (j < f.start || j > f.end) {
+			continue // context already rendered by an earlier finding's window
+		}
+		prefix := ""
+		if j >= f.start && j <= f.end {
+			prefix = ">> "
+		}
+		fmt.Fprintf(&b, "%6d\t%s%s\n", j+1, prefix, strutil.Clip(lines[j], MaxLineRunes))
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // nearMatch finds the closest matching line of buf to old, as read-only context.
 func nearMatch(old, buf string) string {
 	tokens := strings.Fields(old)
@@ -578,7 +770,7 @@ func nearMatch(old, buf string) string {
 		score := overlap(line, tokens)
 		if score > bestScore {
 			bestScore = score
-			bestLine = fmt.Sprintf("line %d: %s", i+1, capLine(strings.TrimSpace(line)))
+			bestLine = fmt.Sprintf("line %d: %s", i+1, strutil.Clip(strings.TrimSpace(line), MaxLineRunes))
 		}
 	}
 	return bestLine
@@ -605,7 +797,7 @@ func ambiguousError(idx int, path string, old, buf string) string {
 		if !strings.Contains(line, old) {
 			continue
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", i+1, capLine(strings.TrimSpace(line)))
+		fmt.Fprintf(&b, "%6d\t%s\n", i+1, strutil.Clip(strings.TrimSpace(line), MaxLineRunes))
 		if b.Len() > 800 {
 			b.WriteString("... more matches omitted; add unique context or set replace_all:true\n")
 			break
