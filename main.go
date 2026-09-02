@@ -1685,7 +1685,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 
 // doublePressWindow is how long a second Ctrl+C on an idle editor must arrive
 // within to quit, so a single stray interrupt never kills the app.
-const doublePressWindow = 2 * time.Second
+const doublePressWindow = 10 * time.Second
 
 // watchControls interprets out-of-band keys: Esc and Ctrl+C interrupt a running
 // turn, while Ctrl+D or a double Ctrl+C on an idle empty editor quits. Closing
@@ -1693,52 +1693,63 @@ const doublePressWindow = 2 * time.Second
 // terminal. onModeCycle runs when Shift+Tab is pressed; the front end wires it.
 func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
 	go func() {
-		var lastInt time.Time
-		for c := range ui.Controls() {
-			switch c {
-			case tui.ControlEscape:
-				switch {
-				case ag.Running():
-					q.abort() // queued messages return to the editor, joined with newlines
-					ag.Interrupt()
-				case initCtl.abort(): // a minutes-long /init survey is escapable too
-				case stager.Pending():
-					stager.Cancel() // Esc cancels an in-flight staged shell command
+		// non-nil while a second Ctrl+C quits; it fires to retire the hint that says
+		// so, keeping the advertised gesture and the live window the same length
+		var quitHint <-chan time.Time
+		controls := ui.Controls()
+		for {
+			select {
+			case <-quitHint:
+				quitHint = nil
+				ui.SetStatusSegment(tui.Segment{Key: "hint"}) // empty Text removes it
+			case c, ok := <-controls:
+				if !ok {
+					return // the UI went away
 				}
-			case tui.ControlInterrupt:
-				if ag.Running() {
-					q.abort()
-					ag.Interrupt()
-					continue
-				}
-				if initCtl.abort() {
-					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled project survey"})
-					continue
-				}
-				// a running `!` cancels on the first Ctrl+C instead of quitting
-				if stager.Pending() {
-					stager.Cancel()
-					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled shell command"})
-					continue
-				}
-				now := time.Now()
-				if now.Sub(lastInt) < doublePressWindow {
+				switch c {
+				case tui.ControlEscape:
+					switch {
+					case ag.Running():
+						q.abort() // queued messages return to the editor, joined with newlines
+						ag.Interrupt()
+					case initCtl.abort(): // a minutes-long /init survey is escapable too
+					case stager.Pending():
+						stager.Cancel() // Esc cancels an in-flight staged shell command
+					}
+				case tui.ControlInterrupt:
+					if ag.Running() {
+						q.abort()
+						ag.Interrupt()
+						continue
+					}
+					if initCtl.abort() {
+						ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled project survey"})
+						continue
+					}
+					// a running `!` cancels on the first Ctrl+C instead of quitting
+					if stager.Pending() {
+						stager.Cancel()
+						ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled shell command"})
+						continue
+					}
+					if quitHint != nil { // still inside the window this hint promised
+						close(quit)
+						return
+					}
+					quitHint = time.After(doublePressWindow)
+					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "ctrl+c again to quit"})
+				case tui.ControlEOF:
+					if ag.Running() {
+						continue // ignored while a turn streams, per the key table
+					}
 					close(quit)
 					return
-				}
-				lastInt = now
-				ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "ctrl+c again to quit"})
-			case tui.ControlEOF:
-				if ag.Running() {
-					continue // ignored while a turn streams, per the key table
-				}
-				close(quit)
-				return
-			case tui.ControlRecallQueued:
-				q.recall() // Alt+Up: pop the newest queued message back into the editor
-			case tui.ControlModeCycle:
-				if onModeCycle != nil {
-					onModeCycle()
+				case tui.ControlRecallQueued:
+					q.recall() // Alt+Up: pop the newest queued message back into the editor
+				case tui.ControlModeCycle:
+					if onModeCycle != nil {
+						onModeCycle()
+					}
 				}
 			}
 		}
