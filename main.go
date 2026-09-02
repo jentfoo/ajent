@@ -1037,7 +1037,7 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 		MaxTokens: classifyBudget(m),
 	}
 	req.Reasoning = llm.ReasoningConfig{Level: llm.ClampLevel(m, llm.LevelOff)}
-	out, _, serr := runSummary(ctx, p, req)
+	out, _, serr := llm.RunSummary(ctx, p, req)
 	if serr != nil {
 		return permit.ClassUnsure
 	}

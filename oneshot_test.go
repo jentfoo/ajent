@@ -133,7 +133,7 @@ func TestFinalAnswer(t *testing.T) {
 			llm.Text(llm.RoleUser, "again"),
 			llm.Text(llm.RoleAssistant, "second"),
 		}
-		assert.Equal(t, "second", finalAnswer(msgs))
+		assert.Equal(t, "second", llm.FinalAnswer(msgs))
 	})
 
 	t.Run("joins_text_blocks", func(t *testing.T) {
@@ -143,12 +143,12 @@ func TestFinalAnswer(t *testing.T) {
 			llm.TextBlock{Text: " "},
 			llm.TextBlock{Text: "two"},
 		}}}
-		assert.Equal(t, "one\ntwo", finalAnswer(msgs))
+		assert.Equal(t, "one\ntwo", llm.FinalAnswer(msgs))
 	})
 
 	t.Run("no_assistant_message", func(t *testing.T) {
-		assert.Empty(t, finalAnswer(nil))
-		assert.Empty(t, finalAnswer([]llm.Message{llm.Text(llm.RoleUser, "hi")}))
+		assert.Empty(t, llm.FinalAnswer(nil))
+		assert.Empty(t, llm.FinalAnswer([]llm.Message{llm.Text(llm.RoleUser, "hi")}))
 	})
 }
 

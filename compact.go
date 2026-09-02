@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/compact"
@@ -86,7 +84,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		return false, perr
 	}
 	run := func(ctx context.Context, req llm.Request) (string, error) {
-		text, usage, serr := runSummary(ctx, provider, req)
+		text, usage, serr := llm.RunSummary(ctx, provider, req)
 		if t := c.st.Tokens; t != nil && serr == nil {
 			// spend-only: the summariser's prompt is not this session's context, so a
 			// failed compaction must not leave the bar at its (much larger) size
@@ -179,51 +177,6 @@ func verbatimTokens(m llm.Model, fraction float64) int {
 		return 0
 	}
 	return int(float64(tokens.CompactAt(m)) * fraction)
-}
-
-// errTruncated reports a response the provider stopped at its output token cap;
-// its text is partial and must never be persisted or acted on.
-var errTruncated = errors.New("generation stopped at the output token cap: the response is incomplete")
-
-// runSummary drives one summarisation model call through an accumulator and
-// returns its assistant text plus the usage the provider reported. A response
-// the provider stopped at its output token cap is an error, never partial text.
-func runSummary(ctx context.Context, p llm.Provider, req llm.Request) (string, llm.Usage, error) {
-	st, err := p.Stream(ctx, req)
-	if err != nil {
-		return "", llm.Usage{}, err
-	}
-	defer func() { _ = st.Close() }()
-	stop := llm.CloseOnDone(ctx, st)
-	defer stop()
-
-	var acc llm.Accumulator
-	for ev, ok := st.Next(); ok; ev, ok = st.Next() {
-		acc.Add(ev)
-		if ctx.Err() != nil {
-			return "", llm.Usage{}, ctx.Err() // cancelled: stop consuming the response
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return "", llm.Usage{}, err // deliberate close leaves st.Err nil; never return partial text
-	}
-	if err := st.Err(); err != nil {
-		return "", llm.Usage{}, err
-	}
-	if err := acc.Err(); err != nil {
-		return "", llm.Usage{}, err
-	}
-	if acc.StopReason() == llm.StopMaxTokens {
-		return "", llm.Usage{}, errTruncated
-	}
-
-	var parts []string
-	for _, b := range acc.Message().Content {
-		if tb, ok := b.(llm.TextBlock); ok {
-			parts = append(parts, tb.Text)
-		}
-	}
-	return strings.Join(parts, ""), acc.Usage(), nil
 }
 
 // reportLine describes a compaction honestly: before/after tokens plus how much

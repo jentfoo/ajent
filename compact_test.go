@@ -395,7 +395,7 @@ func TestRunSummaryCancelStopsDraining(t *testing.T) {
 	}
 	resCh := make(chan res, 1)
 	go func() {
-		text, _, err := runSummary(ctx, p, llm.Request{})
+		text, _, err := llm.RunSummary(ctx, p, llm.Request{})
 		resCh <- res{text, err}
 	}()
 
@@ -435,8 +435,8 @@ func TestRunSummaryRejectsTruncatedResponses(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: tc.turn}}}
-			text, usage, err := runSummary(t.Context(), sp, llm.Request{})
-			require.ErrorIs(t, err, errTruncated)
+			text, usage, err := llm.RunSummary(t.Context(), sp, llm.Request{})
+			require.ErrorIs(t, err, llm.ErrTruncated)
 			assert.Empty(t, text)
 			assert.Zero(t, usage.Input+usage.Output)
 		})
@@ -444,7 +444,7 @@ func TestRunSummaryRejectsTruncatedResponses(t *testing.T) {
 
 	t.Run("end_turn_stop_returns_text", func(t *testing.T) {
 		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textStream("## Goal\nfull")}}}
-		text, _, err := runSummary(t.Context(), sp, llm.Request{})
+		text, _, err := llm.RunSummary(t.Context(), sp, llm.Request{})
 		require.NoError(t, err)
 		assert.Equal(t, "## Goal\nfull", text)
 	})
@@ -470,7 +470,7 @@ func TestCompactorRejectsTruncatedSummary(t *testing.T) {
 
 	did, err := c.run(t.Context(), agent.CompactManual, "")
 	assert.False(t, did)
-	require.ErrorIs(t, err, errTruncated)
+	require.ErrorIs(t, err, llm.ErrTruncated)
 	require.Empty(t, compactionEntries(t, w))
 	joined := strings.Join(notices, "\n")
 	assert.Contains(t, joined, "compaction failed")

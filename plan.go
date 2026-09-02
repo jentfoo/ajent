@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"os/exec"
 	"slices"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
@@ -17,11 +14,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
-
-// gitTimeout bounds the working-tree capture handed to a review round. The two
-// commands run concurrently, so this is the whole wait the drain goroutine takes
-// between the implementation turn and the review turn.
-const gitTimeout = 5 * time.Second
 
 // planDeps is what the plan Host is assembled from, gathered so driver's wiring
 // block stays one call.
@@ -100,7 +92,7 @@ func newPlanController(d planDeps) *plan.Controller {
 			return m, err == nil
 		},
 
-		LastText: func() string { return lastAssistantText(d.st.Messages) },
+		LastText: func() string { return llm.LastAssistantText(d.st.Messages) },
 
 		SetInput: d.ui.SetInput,
 		Ask: func(ctx context.Context, q string, opts []string) (int, error) {
@@ -114,7 +106,7 @@ func newPlanController(d planDeps) *plan.Controller {
 		Status: func(text, short string) {
 			d.ui.SetStatusSegment(tui.Segment{Key: "plan", Text: text, Short: short})
 		},
-		Git: gitState,
+		Git: plan.GitState,
 	})
 }
 
@@ -217,29 +209,6 @@ func plannerExtras(reg *tools.Registry) []string {
 	return out
 }
 
-// gitState captures the working tree for a review round. Failures are reported
-// in place rather than blocking the review.
-func gitState(ctx context.Context) (status, diffStat string) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); status = runGit(ctx, "status", "--porcelain") }()
-	go func() { defer wg.Done(); diffStat = runGit(ctx, "diff", "--stat") }()
-	wg.Wait()
-	return status, diffStat
-}
-
-// runGit returns the trimmed stdout of one git invocation, or a parenthesised
-// note when it could not run.
-func runGit(ctx context.Context, args ...string) string {
-	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", args...).Output()
-	if err != nil {
-		return "(git " + args[0] + " unavailable: " + err.Error() + ")"
-	}
-	return strings.TrimRight(string(out), "\n")
-}
-
 // tuiLevel maps an agent notice level onto the UI's.
 func tuiLevel(l agent.Level) tui.Level {
 	switch l {
@@ -271,24 +240,4 @@ func askUser(ui *tui.UI) tools.AskFunc {
 		}
 		return ans.Index, ans.Text, ans.Declined, nil
 	}
-}
-
-// lastAssistantText returns the text of the newest assistant message, empty when
-// the context holds none.
-func lastAssistantText(msgs []llm.Message) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != llm.RoleAssistant {
-			continue
-		}
-		var b strings.Builder
-		for _, blk := range msgs[i].Content {
-			if tb, ok := blk.(llm.TextBlock); ok {
-				b.WriteString(tb.Text)
-			}
-		}
-		if text := strings.TrimSpace(b.String()); text != "" {
-			return text
-		}
-	}
-	return ""
 }

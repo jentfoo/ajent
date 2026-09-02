@@ -144,7 +144,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 			return llm.Model{}, false
 		},
 
-		LastText: func() string { return lastAssistantText(st.Messages) },
+		LastText: func() string { return llm.LastAssistantText(st.Messages) },
 		SetInput: func(s string) { h.editor = append(h.editor, s) },
 		Git:      func(context.Context) (string, string) { return " M main.go", " main.go | 2 +-" },
 	})

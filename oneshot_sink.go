@@ -136,7 +136,7 @@ func (s *textSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolR
 		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		reason := strings.TrimSpace(firstBlockText(res.Content))
+		reason := strings.TrimSpace(llm.FirstBlockText(res.Content))
 		if reason == "" {
 			reason = "failed"
 		}
@@ -258,7 +258,7 @@ func (s *jsonSink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResul
 			out = s.output[call.ID]
 		}
 		if strings.TrimSpace(out) == "" {
-			out = firstBlockText(res.Content)
+			out = llm.FirstBlockText(res.Content)
 		}
 		delete(s.output, call.ID)
 		s.emit(jsonEvent{
@@ -298,15 +298,4 @@ func (s *jsonSink) finish(status string, code int, answer string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emit(jsonResult{Type: "result", Status: status, Exit: code, Text: answer})
-}
-
-// firstBlockText returns the first non-blank text block, the fallback for a tool
-// that neither streamed output nor set a display string.
-func firstBlockText(blocks llm.BlockList) string {
-	for _, b := range blocks {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			return tb.Text
-		}
-	}
-	return ""
 }

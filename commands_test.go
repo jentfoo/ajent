@@ -75,22 +75,22 @@ func TestLastAssistantText(t *testing.T) {
 			llm.Text(llm.RoleUser, "more"),
 			assistant("second"),
 		}
-		assert.Equal(t, "second", lastAssistantText(msgs))
+		assert.Equal(t, "second", llm.LastAssistantText(msgs))
 	})
 
 	t.Run("skips_empty_replies", func(t *testing.T) {
 		msgs := []llm.Message{assistant("real answer"), assistant("   ")}
-		assert.Equal(t, "real answer", lastAssistantText(msgs))
+		assert.Equal(t, "real answer", llm.LastAssistantText(msgs))
 	})
 
 	t.Run("joins_text_blocks", func(t *testing.T) {
 		msgs := []llm.Message{{Role: llm.RoleAssistant, Content: llm.BlockList{
 			llm.TextBlock{Text: "one "}, llm.TextBlock{Text: "two"}}}}
-		assert.Equal(t, "one two", lastAssistantText(msgs))
+		assert.Equal(t, "one two", llm.LastAssistantText(msgs))
 	})
 
 	t.Run("no_assistant_is_empty", func(t *testing.T) {
-		assert.Empty(t, lastAssistantText([]llm.Message{llm.Text(llm.RoleUser, "hi")}))
-		assert.Empty(t, lastAssistantText(nil))
+		assert.Empty(t, llm.LastAssistantText([]llm.Message{llm.Text(llm.RoleUser, "hi")}))
+		assert.Empty(t, llm.LastAssistantText(nil))
 	})
 }

@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"slices"
-	"strings"
 	"syscall"
 
 	"github.com/go-analyze/bulk"
@@ -218,7 +217,7 @@ func runHeadless(o headlessOptions) int {
 		notify(n, agent.LevelWarn)
 	}
 	err := ag.Prompt(ctx, agent.Input{Text: expanded.Text, After: expanded.Run, Injected: true})
-	answer := finalAnswer(st.Messages)
+	answer := llm.FinalAnswer(st.Messages)
 	res := drain.result()
 	status, code := headlessOutcome(err, res, answer)
 	if status != statusOK {
@@ -255,24 +254,6 @@ func headlessOutcome(err error, res agent.TurnResult, answer string) (string, in
 	default:
 		return statusOK, exitOK
 	}
-}
-
-// finalAnswer returns the joined text of the last assistant message, or "" when
-// the turn produced none.
-func finalAnswer(msgs []llm.Message) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != llm.RoleAssistant {
-			continue
-		}
-		var parts []string
-		for _, b := range msgs[i].Content {
-			if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-				parts = append(parts, tb.Text)
-			}
-		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
-	}
-	return ""
 }
 
 // headlessTools returns the tool names to enable for scope, then applies the
