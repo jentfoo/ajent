@@ -55,6 +55,54 @@ func TestMatchScore(t *testing.T) {
 	})
 }
 
+func TestVerbatimScore(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		text    string
+		query   string
+		matches bool
+	}{
+		{"empty_query_matches", "anything", "", true},
+		{"exact", "opus", "opus", true},
+		{"case_insensitive", "Claude Opus", "opus", true},
+		{"mid_word", "reasoning", "son", true},
+		{"after_separator", "aperture/moonshotai/kimi-k3", "kimi", true},
+		{"scattered_fails", "aperture/moonshotai/kimi-k3", "pro", false},
+		{"separator_omitted_fails", "openai/gpt-5", "gpt5", false},
+		{"out_of_order_fails", "opus", "supo", false},
+		{"longer_than_text", "ab", "abc", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ok := verbatimScore(tc.text, tc.query)
+			assert.Equal(t, tc.matches, ok)
+		})
+	}
+
+	t.Run("word_boundary_beats_mid_word", func(t *testing.T) {
+		boundary, ok := verbatimScore("lmstudio/qwen", "qwen")
+		require.True(t, ok)
+		mid, ok := verbatimScore("xxqwen", "qwen")
+		require.True(t, ok)
+		assert.Greater(t, boundary, mid)
+	})
+	t.Run("earlier_match_beats_later", func(t *testing.T) {
+		early, ok := verbatimScore("opus-model", "opus")
+		require.True(t, ok)
+		late, ok := verbatimScore("a-very-long-prefix-opus", "opus")
+		require.True(t, ok)
+		assert.Greater(t, early, late)
+	})
+	t.Run("best_of_repeated_hits", func(t *testing.T) {
+		// the mid-word hit comes first; the boundary hit later still wins
+		best, ok := verbatimScore("xopus/opus", "opus")
+		require.True(t, ok)
+		assert.Equal(t, boundaryBonus-6, best)
+	})
+}
+
 func TestIsBoundary(t *testing.T) {
 	t.Parallel()
 

@@ -242,18 +242,25 @@ func (s *pickState) refilter() {
 	s.cursor = 0
 }
 
-// refilterMatches returns item indexes matching filter, best first. The order is
-// kept stable for equal scores so a list does not jump around.
+// refilterMatches returns item indexes matching filter, best first, listing
+// fuzzy hits only when nothing carries filter verbatim. The order is kept stable
+// for equal scores so a list does not jump around.
 func refilterMatches(items []PickItem, filter string) (matches []int) {
 	type scored struct {
 		index int
 		score int
 	}
-	var hits []scored
+	var verbatim, fuzzy []scored
 	for i, it := range items {
-		if score, ok := bestScore(it, filter); ok {
-			hits = append(hits, scored{index: i, score: score})
+		if score, ok := bestScore(it, filter, verbatimScore); ok {
+			verbatim = append(verbatim, scored{index: i, score: score})
+		} else if score, ok := bestScore(it, filter, matchScore); ok {
+			fuzzy = append(fuzzy, scored{index: i, score: score})
 		}
+	}
+	hits := verbatim
+	if len(hits) == 0 {
+		hits = fuzzy
 	}
 	slices.SortStableFunc(hits, func(a, b scored) int { return b.score - a.score })
 
@@ -265,11 +272,11 @@ func refilterMatches(items []PickItem, filter string) (matches []int) {
 }
 
 // bestScore returns the best score across an item's matchable strings.
-func bestScore(it PickItem, filter string) (int, bool) {
+func bestScore(it PickItem, filter string, score func(text, query string) (int, bool)) (int, bool) {
 	best, found := 0, false
 	for _, field := range append([]string{it.Label, it.Detail, it.Tag}, it.Terms...) {
-		if score, ok := matchScore(field, filter); ok && (!found || score > best) {
-			best, found = score, true
+		if s, ok := score(field, filter); ok && (!found || s > best) {
+			best, found = s, true
 		}
 	}
 	return best, found

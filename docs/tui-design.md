@@ -185,7 +185,7 @@ ui.go            public API, state machine, key handling, locking
   history.go       line buffering for streaming input
   interaction.go   interaction queue, key routing, result channels
   prompt.go        Select, Confirm, Input, Pick and their live block rendering
-  filter.go        subsequence matching and scoring for Pick
+  filter.go        Pick filter scoring: verbatim hits, else fuzzy subsequence
   notify.go        notices, level styles, safe collapse
   plain.go         interaction fallback for the mode with no live block
   errors.go        ErrCancelled, ErrBusy, ErrNoUI
@@ -357,7 +357,10 @@ enough for a progress notice that updates in place.
 Anything above the TUI can ask the user a question: `Select`, `Confirm`, `Input`,
 `Pick` and grouped `MultiPick`, each with a `Context` variant, plus an approval
 `OpenDecision` dialog, all blocking and all callable from a goroutine that is
-not the input goroutine.
+not the input goroutine. A pick filter lists the items carrying it verbatim and
+falls back to the fuzzy subsequence match only when none do: a subsequence hit is
+scored but never thresholded, so mixing the two buries what was typed under rows
+that merely lend their letters in order.
 
 An interaction **grows the live block** rather than overlaying history, because
 invariant 1 forbids inline mode from addressing committed lines. It takes the
