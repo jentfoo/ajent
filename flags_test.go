@@ -146,3 +146,19 @@ func TestCliFlagsScope(t *testing.T) {
 	assert.Equal(t, scopeAllowAll, cliFlags{allowAll: true}.scope())
 	assert.Equal(t, scopeReadOnly, cliFlags{readOnly: true}.scope())
 }
+
+func TestStatsFlagIsHeadlessOnly(t *testing.T) {
+	t.Parallel()
+
+	f, err := parseFlags([]string{"--stats"})
+	require.NoError(t, err)
+
+	err = f.validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--stats only applies with --prompt")
+
+	f, err = parseFlags([]string{"-p", "hi", "--stats"})
+	require.NoError(t, err)
+	assert.NoError(t, f.validate())
+	assert.True(t, f.stats)
+}

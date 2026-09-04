@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"slices"
 	"syscall"
+	"time"
 
 	"github.com/go-analyze/bulk"
 
@@ -50,6 +51,7 @@ type headlessOptions struct {
 
 // runHeadless drives one turn with no terminal and returns the process exit code.
 func runHeadless(o headlessOptions) int {
+	started := time.Now()
 	out, errw := o.out, o.errw
 	if out == nil {
 		out = os.Stdout
@@ -110,6 +112,11 @@ func runHeadless(o headlessOptions) int {
 		notify("could not read AGENTS.md: "+perr.Error(), agent.LevelWarn)
 	}
 
+	var stats *statsSink
+	if o.flags.stats {
+		stats = newStatsSink()
+	}
+
 	var comp *compactor
 	opts := agent.Options{
 		Sinks:               []agent.Sink{drain},
@@ -158,6 +165,9 @@ func runHeadless(o headlessOptions) int {
 		toolsReg.RegisterFrom(tools.SourceBuiltin, t, true)
 	}
 	toolsReg.MarkReadOnly([]string{"agent_start", "agent_poll", "agent_list"})
+	if stats != nil { // appended after the recorder settles the drain list
+		opts.Sinks = append(opts.Sinks, stats)
+	}
 	opts.Sinks = append(opts.Sinks, subagentSink{mgr: sag})
 	// headless runs have no queued prompts; the boundary hook serves completions
 	// alone, deciding membership when the message lands so polls are never duplicated
@@ -223,6 +233,9 @@ func runHeadless(o headlessOptions) int {
 	if status != statusOK {
 		// text output prints nothing without an answer, so say why on stderr
 		_, _ = fmt.Fprintln(errw, "ajent:", outcomeReason(err, res))
+	}
+	if stats != nil {
+		drain.summary(stats.collect(st.Tokens, time.Since(started)))
 	}
 	drain.finish(status, code, answer)
 	return code

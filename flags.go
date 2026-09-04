@@ -25,7 +25,7 @@ const (
 )
 
 // headlessFlagNames are the flags that only mean something alongside --prompt.
-var headlessFlagNames = []string{"output", "allow-all", "read-only", "allow-tools", "deny-tools"}
+var headlessFlagNames = []string{"output", "allow-all", "read-only", "allow-tools", "deny-tools", "stats"}
 
 // cliFlags is one parsed command line. The headless fields apply only when
 // prompt is set.
@@ -40,6 +40,7 @@ type cliFlags struct {
 
 	prompt     string
 	output     string
+	stats      bool
 	allowAll   bool
 	readOnly   bool
 	allowTools []string
@@ -73,6 +74,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 	fs.BoolVar(&f.readOnly, "read-only", false, "one-shot: offer only read-only tools")
 	fs.StringSliceVar(&f.allowTools, "allow-tools", nil, "one-shot: extra tool names to offer")
 	fs.StringSliceVar(&f.denyTools, "deny-tools", nil, "one-shot: tool names to withhold")
+	fs.BoolVar(&f.stats, "stats", false,
+		"one-shot: print a tool and token summary to stderr (or a json summary line) when the run ends")
 
 	fs.Usage = func() {
 		writeUsage(os.Stderr, fs.FlagUsages())

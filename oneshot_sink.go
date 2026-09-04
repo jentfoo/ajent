@@ -24,6 +24,8 @@ const (
 type headSink interface {
 	agent.Sink
 	result() agent.TurnResult
+	// summary reports the run's tool and token totals, before finish.
+	summary(sessionStats)
 	finish(status string, code int, answer string)
 }
 
@@ -162,6 +164,14 @@ func (s *textSink) result() agent.TurnResult {
 	return s.res
 }
 
+// summary writes the totals to stderr, keeping stdout the answer alone.
+func (s *textSink) summary(st sessionStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.endLineLocked()
+	writeStats(s.errw, "ajent: ", st)
+}
+
 // finish only closes a partial line, for a turn that ended mid-block: the answer
 // already streamed through Text.
 func (s *textSink) finish(_ string, _ int, _ string) {
@@ -186,6 +196,13 @@ type jsonEvent struct {
 	Stop   string          `json:"stop,omitempty"`
 	Steps  int             `json:"steps,omitempty"`
 	Usage  *llm.Usage      `json:"usage,omitempty"`
+}
+
+// jsonSummary is the optional summary line of --output json, emitted before the
+// result line so that line's contract is unchanged.
+type jsonSummary struct {
+	Type string `json:"type"`
+	sessionStats
 }
 
 // jsonResult is the last line of --output json: how the run ended, the code the
@@ -292,6 +309,12 @@ func (s *jsonSink) result() agent.TurnResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.res
+}
+
+func (s *jsonSink) summary(st sessionStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emit(jsonSummary{Type: "summary", sessionStats: st})
 }
 
 func (s *jsonSink) finish(status string, code int, answer string) {

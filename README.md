@@ -220,9 +220,12 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
     --read-only        one-shot: offer only read-only tools
     --allow-tools      one-shot: extra tool names to offer
     --deny-tools       one-shot: tool names to withhold
+    --stats            one-shot: print a tool and token summary when the run ends
 ```
 
 The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. There is no dialog in headless mode, so the barrier runs at allow-all and the **offered tool set** carries the policy instead (the model is only ever handed tools it may call, which keeps it from wasting steps discovering a refusal). Scope flags (`--allow-all`, `--read-only`) are mutually exclusive; `--allow-tools` / `--deny-tools` refine either.
+
+`--stats` prints per-tool call/failure counts, token totals by model, turn count and wall time when a run ends — to stderr under `--output text`, as a `type:"summary"` event before the result under `--output json`.
 
 Self-updates run `go install github.com/jentfoo/ajent@latest`. The `/update` command does it in the background inside a session, or the `--update` flag runs it in the foreground.
 
