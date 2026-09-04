@@ -402,3 +402,63 @@ func TestReload(t *testing.T) {
 		assert.Nil(t, mgr.serverByName("fake"))
 	})
 }
+
+// blockingRegistrar stalls every Unregister, standing in for a server whose
+// disconnect will not finish. It records each entry so a test can see how many
+// disconnects were in flight at once.
+type blockingRegistrar struct {
+	*fakeRegistrar
+	entered chan string
+	release chan struct{}
+}
+
+func (b *blockingRegistrar) Unregister(source string) {
+	b.entered <- source
+	<-b.release
+}
+
+func TestManagerClose(t *testing.T) {
+	t.Parallel()
+
+	// a connected server closes well inside the bound, leaving nothing registered
+	t.Run("disconnects_servers", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: buildFakeServer(t)},
+		}, Options{Registrar: fr})
+		mgr.LoadOnFirstMessage(t.Context())
+		require.NotEmpty(t, fr.AllNames("mcp: fake"))
+
+		start := time.Now()
+		mgr.Close()
+
+		assert.Less(t, time.Since(start), closeTimeout)
+		assert.Nil(t, mgr.serverByName("fake").client())
+		assert.Empty(t, fr.AllNames("mcp: fake"))
+	})
+
+	// a stalled disconnect neither blocks the others nor holds shutdown open past
+	// the bound: the user pressed Ctrl+C and the app has to go.
+	t.Run("bounded_when_stalled", func(t *testing.T) {
+		names := []string{"a", "b", "c"}
+		br := &blockingRegistrar{
+			fakeRegistrar: newFakeRegistrar(),
+			entered:       make(chan string, len(names)),
+			release:       make(chan struct{}),
+		}
+		t.Cleanup(func() { close(br.release) })
+		servers := make(map[string]ServerConfig, len(names))
+		for _, n := range names {
+			servers[n] = ServerConfig{Command: buildFakeServer(t)}
+		}
+		mgr := New(servers, Options{Registrar: br})
+
+		start := time.Now()
+		mgr.Close()
+		elapsed := time.Since(start)
+
+		assert.GreaterOrEqual(t, elapsed, closeTimeout) // the bound, not a hang
+		assert.Less(t, elapsed, 5*time.Second)
+		assert.Len(t, br.entered, len(names)) // all disconnected at once, not one after another
+	})
+}

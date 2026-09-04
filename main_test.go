@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/mcp"
@@ -1220,5 +1222,77 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		sink.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn}) // no release
 		mgr.Flush()                                           // still in flight; nothing may re-offer
 		assert.EqualValues(t, 1, delivered.Load())
+	})
+}
+
+// TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
+// window and only a second inside it quits, while Ctrl+D quits outright.
+func TestControlLoop(t *testing.T) {
+	t.Parallel()
+
+	// start runs the loop over a control channel the caller drives. cycled fires
+	// per Shift+Tab, giving a test a signal ordered behind earlier controls.
+	start := func(t *testing.T) (controls chan tui.Control, quit chan struct{}, cycled chan struct{}) {
+		t.Helper()
+		inR, inW, err := os.Pipe()
+		require.NoError(t, err)
+		outR, outW, err := os.Pipe()
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = inR.Close()
+			_ = inW.Close()
+			_ = outR.Close()
+			_ = outW.Close()
+		})
+		go func() { _, _ = io.Copy(io.Discard, outR) }() // status writes must not fill the pipe
+		ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+		require.NoError(t, err)
+		t.Cleanup(ui.Close)
+
+		controls = make(chan tui.Control, 4)
+		quit = make(chan struct{})
+		cycled = make(chan struct{}, 4)
+		ag := agent.New(&agent.State{}, agent.Options{})
+		go controlLoop(controls, ui, ag, &steerQueue{}, command.NewStager(nil, nil), nil, quit,
+			func() { cycled <- struct{}{} })
+		return controls, quit, cycled
+	}
+	quitted := func(t *testing.T, quit chan struct{}) bool {
+		t.Helper()
+		select {
+		case <-quit:
+			return true
+		case <-time.After(2 * time.Second):
+			return false
+		}
+	}
+
+	t.Run("double_press_quits", func(t *testing.T) {
+		controls, quit, _ := start(t)
+		controls <- tui.ControlInterrupt
+		controls <- tui.ControlInterrupt
+		assert.True(t, quitted(t, quit))
+	})
+
+	// one press only arms the window: the app stays up until the second arrives
+	t.Run("single_press_holds", func(t *testing.T) {
+		controls, quit, cycled := start(t)
+		controls <- tui.ControlInterrupt
+		controls <- tui.ControlModeCycle // ordered behind the press: it has been handled
+		<-cycled
+
+		select {
+		case <-quit:
+			assert.Fail(t, "quit on a single Ctrl+C")
+		default:
+		}
+		controls <- tui.ControlInterrupt
+		assert.True(t, quitted(t, quit))
+	})
+
+	t.Run("ctrl_d_quits", func(t *testing.T) {
+		controls, quit, _ := start(t)
+		controls <- tui.ControlEOF
+		assert.True(t, quitted(t, quit))
 	})
 }

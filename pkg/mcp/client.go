@@ -88,6 +88,9 @@ const rawRetries = 2
 // request) cannot reach, so the two never register under one transport response key.
 const rawSeqBase = 1 << 40
 
+// closeGrace bounds a polite transport shutdown before Close stops waiting on it.
+const closeGrace = 500 * time.Millisecond
+
 // Connect dials cfg's server (stdio or Streamable HTTP / SSE), negotiates the
 // protocol and returns a ready client.
 func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error) {
@@ -442,11 +445,21 @@ func (c *Client) Ping(ctx context.Context) error {
 }
 
 // Close shuts down the client and sweeps a stdio child's whole process group so
-// grandchildren do not linger.
+// grandchildren do not linger. The transport's own close is bounded by
+// closeGrace: mcp-go waits seconds for a child to exit on its closed stdin and
+// for a remote to acknowledge the session delete, neither of which is worth
+// stalling a session teardown (or the app's exit) for.
 func (c *Client) Close() error {
 	var err error
 	if c.c != nil {
-		err = c.c.Close()
+		done := make(chan error, 1)
+		go func() { done <- c.c.Close() }()
+		timer := time.NewTimer(closeGrace)
+		defer timer.Stop()
+		select {
+		case err = <-done:
+		case <-timer.C: // wedged server: the group kill below unblocks its cmd.Wait
+		}
 	}
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)

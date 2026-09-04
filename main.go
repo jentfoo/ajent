@@ -662,13 +662,26 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		pump <- pumpLine{kind: command.KindPrompt, rest: initial, injected: true}
 	}
 
+	// teardown runs on the way out of a quit the user just asked for, so the two
+	// independent shutdowns overlap rather than adding up between the keypress and
+	// the restored terminal. Each is internally bounded.
 	defer func() {
+		var wg sync.WaitGroup
 		if sag != nil {
-			sag.Close() // cancel every running investigation and wait briefly
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sag.Close() // cancel every running investigation and wait briefly
+			}()
 		}
 		if mgr != nil {
-			mgr.Close()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				mgr.Close()
+			}()
 		}
+		wg.Wait()
 	}()
 
 	// an abandoned session with no conversation is worthless to resume; drop it and
@@ -1692,68 +1705,79 @@ const doublePressWindow = 10 * time.Second
 // quit signals driver to return, which lets main's deferred ui.Close restore the
 // terminal. onModeCycle runs when Shift+Tab is pressed; the front end wires it.
 func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
-	go func() {
-		// non-nil while a second Ctrl+C quits; it fires to retire the hint that says
-		// so, keeping the advertised gesture and the live window the same length
-		var quitHint <-chan time.Time
-		controls := ui.Controls()
-		for {
-			select {
-			case <-quitHint:
-				quitHint = nil
-				ui.SetStatusSegment(tui.Segment{Key: "hint"}) // empty Text removes it
-			case c, ok := <-controls:
-				if !ok {
-					return // the UI went away
+	go controlLoop(ui.Controls(), ui, ag, q, stager, initCtl, quit, onModeCycle)
+}
+
+// controlLoop is watchControls' body, over the control channel it was handed so
+// a test can drive it directly. It returns once it has closed quit or the UI
+// closed its channel.
+func controlLoop(controls <-chan tui.Control, ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
+	// armed is when the first Ctrl+C landed; quitHint fires to retire the hint
+	// that advertises the window, keeping the gesture and the hint the same
+	// length. The window is measured from armed, not from the timer, so a press
+	// arriving as the timer fires cannot lose the arm to select's coin flip.
+	var armed time.Time
+	var quitHint <-chan time.Time
+	for {
+		select {
+		case <-quitHint:
+			quitHint = nil
+			ui.SetStatusSegment(tui.Segment{Key: "hint"}) // empty Text removes it
+		case c, ok := <-controls:
+			if !ok {
+				return // the UI went away
+			}
+			switch c {
+			case tui.ControlEscape:
+				switch {
+				case ag.Running():
+					q.abort() // queued messages return to the editor, joined with newlines
+					ag.Interrupt()
+				case initCtl.abort(): // a minutes-long /init survey is escapable too
+				case stager.Pending():
+					stager.Cancel() // Esc cancels an in-flight staged shell command
 				}
-				switch c {
-				case tui.ControlEscape:
-					switch {
-					case ag.Running():
-						q.abort() // queued messages return to the editor, joined with newlines
-						ag.Interrupt()
-					case initCtl.abort(): // a minutes-long /init survey is escapable too
-					case stager.Pending():
-						stager.Cancel() // Esc cancels an in-flight staged shell command
-					}
-				case tui.ControlInterrupt:
-					if ag.Running() {
-						q.abort()
-						ag.Interrupt()
-						continue
-					}
-					if initCtl.abort() {
-						ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled project survey"})
-						continue
-					}
-					// a running `!` cancels on the first Ctrl+C instead of quitting
-					if stager.Pending() {
-						stager.Cancel()
-						ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled shell command"})
-						continue
-					}
-					if quitHint != nil { // still inside the window this hint promised
-						close(quit)
-						return
-					}
-					quitHint = time.After(doublePressWindow)
-					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "ctrl+c again to quit"})
-				case tui.ControlEOF:
-					if ag.Running() {
-						continue // ignored while a turn streams, per the key table
-					}
+			case tui.ControlInterrupt:
+				if ag.Running() {
+					q.abort()
+					ag.Interrupt()
+					continue
+				}
+				if initCtl.abort() {
+					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled project survey"})
+					continue
+				}
+				// a running `!` cancels on the first Ctrl+C instead of quitting
+				if stager.Pending() {
+					stager.Cancel()
+					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled shell command"})
+					continue
+				}
+				if !armed.IsZero() && time.Since(armed) < doublePressWindow { // inside the promised window
+					// teardown still has to run; say so rather than leaving the
+					// "again to quit" hint up, which reads as a press that missed
+					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "quitting…"})
 					close(quit)
 					return
-				case tui.ControlRecallQueued:
-					q.recall() // Alt+Up: pop the newest queued message back into the editor
-				case tui.ControlModeCycle:
-					if onModeCycle != nil {
-						onModeCycle()
-					}
+				}
+				armed = time.Now()
+				quitHint = time.After(doublePressWindow)
+				ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "ctrl+c again to quit"})
+			case tui.ControlEOF:
+				if ag.Running() {
+					continue // ignored while a turn streams, per the key table
+				}
+				close(quit)
+				return
+			case tui.ControlRecallQueued:
+				q.recall() // Alt+Up: pop the newest queued message back into the editor
+			case tui.ControlModeCycle:
+				if onModeCycle != nil {
+					onModeCycle()
 				}
 			}
 		}
-	}()
+	}
 }
 
 // discoverTimeout bounds a background model discovery pass, so an unreachable

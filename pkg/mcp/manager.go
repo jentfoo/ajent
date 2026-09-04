@@ -548,13 +548,33 @@ func (m *Manager) ServerPrompts(name string) []PromptDef {
 	return slices.Clone(s.promptsSnapshot())
 }
 
-// Close stops reconnect loops and disconnects every connected server.
+// closeTimeout bounds the whole shutdown sweep. Each disconnect is already
+// bounded by the client's own close grace; this is the backstop that keeps a
+// stalled one from holding the app open after the user asked to quit.
+const closeTimeout = time.Second
+
+// Close stops reconnect loops and disconnects every connected server. Servers
+// disconnect concurrently and the sweep is bounded, so exit does not pay one
+// unresponsive server's timeout after another.
 func (m *Manager) Close() {
 	if m.cancel != nil { // stop in-flight reconnect backoff on shutdown
 		m.cancel()
 	}
+	var wg sync.WaitGroup
 	for _, name := range m.ServerNames() {
-		m.Disconnect(name)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m.Disconnect(name)
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	timer := time.NewTimer(closeTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C: // a wedged server must not hold up shutdown
 	}
 }
 
