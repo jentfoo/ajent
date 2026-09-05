@@ -36,13 +36,13 @@ const (
 // headlessOptions is everything main resolved before deciding not to open a UI.
 // out, errw and provider default to stdout, stderr and the registry.
 type headlessOptions struct {
-	flags    cliFlags
-	set      *config.Set
-	reg      *llm.Registry
-	active   llm.Model
-	sessMode resumeMode
-	resumeID string
-	warnings []string
+	flags      cliFlags
+	set        *config.Set
+	reg        *llm.Registry
+	active     llm.Model
+	sessMode   resumeMode
+	sessTarget string
+	warnings   []string
 
 	out      io.Writer
 	errw     io.Writer
@@ -92,7 +92,7 @@ func runHeadless(o headlessOptions) int {
 	}
 
 	// recording keeps -p composable: a follow-up --continue rejoins this transcript.
-	rec := newSession(nil, o.sessMode, o.resumeID, o.active.Key())
+	rec := newSession(nil, o.sessMode, o.sessTarget, o.active.Key())
 	if rec == nil {
 		notify("session recording disabled", agent.LevelWarn)
 	}

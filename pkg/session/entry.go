@@ -16,6 +16,7 @@ type Type string
 
 const (
 	TypeSession       Type = "session"
+	TypeSessionName   Type = "session_name"
 	TypeMessage       Type = "message"
 	TypeCompaction    Type = "compaction"
 	TypeModelChange   Type = "model_change"
@@ -55,6 +56,7 @@ type SessionData struct {
 	Model     string `json:"model,omitempty"` // llm.Model.Key()
 	Branch    string `json:"branch,omitempty"`
 	Commit    string `json:"commit,omitempty"`
+	Name      string `json:"name,omitempty"` // optional human-readable id, workspace scoped
 }
 
 // MessageData is one appended message and what the stream reported with it.
@@ -87,6 +89,11 @@ func (c CompactionData) rewritesHistory() bool {
 	}
 	r := c.Reduce
 	return r != nil && (len(r.Stubs) > 0 || len(r.Drop) > 0 || r.StripThinking)
+}
+
+// NameData records a session name set or changed after creation.
+type NameData struct {
+	Name string `json:"name"`
 }
 
 // ModelData records a model switch.

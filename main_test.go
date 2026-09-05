@@ -351,6 +351,45 @@ func TestOpenSessionModes(t *testing.T) {
 	assert.NotEqual(t, firstPath, wCancel.Path())
 }
 
+// TestOpenSessionByName locks in --session: an unknown name creates a transcript
+// carrying it, and the same name reopens that transcript rather than a new one.
+func TestOpenSessionByName(t *testing.T) {
+	t.Parallel()
+	ws := t.TempDir() + "/workspace"
+	require.NoError(t, os.MkdirAll(ws, 0o700))
+	store := session.StoreAt(filepath.Join(t.TempDir(), "root"))
+
+	created, err := openSession(store, modeSessionName, ws, "fix-parser", "p/a", nil)
+	require.NoError(t, err)
+	require.NoError(t, created.Close())
+
+	entries, _, rerr := session.Read(created.Path())
+	require.NoError(t, rerr)
+	assert.Equal(t, "fix-parser", session.NameOf(entries))
+
+	// the same name reopens it; a different one starts its own transcript
+	resumed, err := openSession(store, modeSessionName, ws, "fix-parser", "p/a", nil)
+	require.NoError(t, err)
+	assert.Equal(t, created.Path(), resumed.Path())
+
+	other, err := openSession(store, modeSessionName, ws, "other", "p/a", nil)
+	require.NoError(t, err)
+	assert.NotEqual(t, created.Path(), other.Path())
+
+	// a name is reachable through --resume too
+	byResume, err := openSession(store, modeResumeID, ws, "fix-parser", "", nil)
+	require.NoError(t, err)
+	assert.Equal(t, created.Path(), byResume.Path())
+
+	// a name that only reaches a session by id is refused rather than resuming one
+	// the user never named; the guard lives in openSession, not just its caller
+	list, lerr := store.List(ws)
+	require.NoError(t, lerr)
+	require.NotEmpty(t, list)
+	_, err = openSession(store, modeSessionName, ws, list[0].ID, "p/a", nil)
+	assert.ErrorContains(t, err, "matches session id")
+}
+
 // TestResumeByID verifies --resume <id> reopens exactly that saved transcript by
 // its root id (not the picker), and that an unknown id is reported as not found.
 func TestResumeByID(t *testing.T) {
@@ -574,6 +613,44 @@ func TestSessionHint(t *testing.T) {
 	assert.Empty(t, sessionHint(nil))
 }
 
+// TestSessionLabel verifies the exit hint prefers the session name over the id,
+// so a named session tells the user the name to pass back.
+func TestSessionLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unnamed_returns_id", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+
+		assert.Equal(t, sessionHint(&sessRec{w: w}), sessionLabel(&sessRec{w: w}))
+	})
+
+	t.Run("named_returns_name", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p,
+			session.SessionData{Version: session.Version(), Name: "fix-parser"})
+		require.NoError(t, err)
+
+		assert.Equal(t, "fix-parser", sessionLabel(&sessRec{w: w}))
+	})
+
+	t.Run("rename_wins", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p,
+			session.SessionData{Version: session.Version(), Name: "before"})
+		require.NoError(t, err)
+		_, aerr := w.Append(session.TypeSessionName, session.NameData{Name: "after"})
+		require.NoError(t, aerr)
+
+		assert.Equal(t, "after", sessionLabel(&sessRec{w: w}))
+	})
+
+	t.Run("nil_rec_returns_empty", func(t *testing.T) {
+		assert.Empty(t, sessionLabel(nil))
+	})
+}
+
 // TestEmptyReportsNoConversation verifies a fresh transcript with zero message
 // entries is detected as empty so it can be dropped on exit, while any recorded
 // turn (or an unrecorded run) keeps the session.
@@ -596,6 +673,12 @@ func TestEmptyReportsNoConversation(t *testing.T) {
 
 	// an unrecorded run (nil store) is never dropped.
 	assert.False(t, (&sessRec{w: w}).empty())
+
+	// a named session is kept even with no conversation: --session resumes by name.
+	named := filepath.Join(t.TempDir(), "named.jsonl")
+	nw, nerr := session.Create(named, session.SessionData{Version: session.Version(), Name: "keep-me"})
+	require.NoError(t, nerr)
+	assert.False(t, (&sessRec{w: nw, store: session.StoreAt(filepath.Dir(named))}).empty())
 }
 
 func TestSearchItems(t *testing.T) {
@@ -1294,5 +1377,45 @@ func TestControlLoop(t *testing.T) {
 		controls, quit, _ := start(t)
 		controls <- tui.ControlEOF
 		assert.True(t, quitted(t, quit))
+	})
+}
+
+// TestCheckSessionTarget covers the pre-TUI resolution: a bad --resume target
+// and a --session name that would resume a session by id must fail fast, while a
+// merely new name is fine because --session creates it.
+func TestCheckSessionTarget(t *testing.T) {
+	ws := t.TempDir()
+	t.Chdir(ws)
+	t.Setenv("AJENT_HOME", t.TempDir())
+
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	w, cerr := store.Create(ws, session.SessionData{Version: session.Version(), Name: "fix-parser"})
+	require.NoError(t, cerr)
+	id := w.Head()
+	require.NoError(t, w.Close())
+
+	t.Run("resume_by_name", func(t *testing.T) {
+		assert.NoError(t, checkSessionTarget(modeResumeID, "fix-parser"))
+	})
+
+	t.Run("resume_by_id", func(t *testing.T) {
+		assert.NoError(t, checkSessionTarget(modeResumeID, id))
+	})
+
+	t.Run("resume_unknown_fails", func(t *testing.T) {
+		assert.Error(t, checkSessionTarget(modeResumeID, "no-such-session"))
+	})
+
+	t.Run("new_name_is_allowed", func(t *testing.T) {
+		assert.NoError(t, checkSessionTarget(modeSessionName, "brand-new"))
+	})
+
+	t.Run("existing_name_is_allowed", func(t *testing.T) {
+		assert.NoError(t, checkSessionTarget(modeSessionName, "fix-parser"))
+	})
+
+	t.Run("name_matching_id_fails", func(t *testing.T) {
+		assert.Error(t, checkSessionTarget(modeSessionName, id))
 	})
 }

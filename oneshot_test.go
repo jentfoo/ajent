@@ -14,6 +14,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
@@ -357,6 +358,52 @@ func TestRunHeadless(t *testing.T) {
 		assert.Contains(t, seen, "first question")
 		assert.Contains(t, seen, "first answer")
 		assert.Contains(t, seen, "second question")
+	})
+
+	t.Run("session_name_resumes_the_transcript", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("AJENT_HOME", t.TempDir())
+		set, _, err := config.Load(config.Options{Workspace: cwdOrDot()})
+		require.NoError(t, err)
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+
+		run := func(prompt string, turns []llm.ScriptedTurn) *llm.ScriptedProvider {
+			sp := &llm.ScriptedProvider{ProviderName: "p", Turns: turns}
+			var out, errw bytes.Buffer
+			code := runHeadless(headlessOptions{
+				flags: cliFlags{prompt: prompt, output: outputText}, set: set, reg: reg,
+				active: model, sessMode: modeSessionName, sessTarget: "nightly",
+				out: &out, errw: &errw,
+				provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+			})
+			require.Equal(t, exitOK, code, errw.String())
+			return sp
+		}
+
+		run("first question", []llm.ScriptedTurn{{Events: textTurn("first answer")}})
+		sp := run("second question", []llm.ScriptedTurn{{Events: textTurn("second answer")}})
+
+		// the second run resumed the named transcript, so the first turn is in context
+		reqs := sp.Requests()
+		require.NotEmpty(t, reqs)
+		var seen []string
+		for _, m := range reqs[0].Messages {
+			for _, b := range m.Content {
+				if tb, ok := b.(llm.TextBlock); ok {
+					seen = append(seen, tb.Text)
+				}
+			}
+		}
+		assert.Contains(t, seen, "first question")
+		assert.Contains(t, seen, "first answer")
+
+		store, serr := session.NewStore()
+		require.NoError(t, serr)
+		list, lerr := store.List(cwdOrDot())
+		require.NoError(t, lerr)
+		require.Len(t, list, 1) // one transcript, reused by name
+		assert.Equal(t, "nightly", list[0].Name)
 	})
 
 	t.Run("no_model_exits_one", func(t *testing.T) {

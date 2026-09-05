@@ -150,6 +150,7 @@ dispatched, never on a command or a `!`.
 | `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice, records a model-change entry and saves the key to the user config; a no-op when the key is unchanged, and its picker runs silent so only that one line lands (see `tui-design.md`) |
 | `/reasoning [level]` | report, or set/clear the level for capable models |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
+| `/session [name]` | report the session's name, or set it; an invalid or conflicting name is a notice (see `session-design.md`) |
 | `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (see `config-design.md`); rows come in three kinds, an enum (a string from a fixed set), a model picker, and an integer with min/max validation (sub-agent concurrency, since an enum stores a string that won't unmarshal into an int field), covering permission modes and sub-agent settings |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all; unknown verbs warn. Esc never cancels jobs; this is the only stop path |
 | `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice. The result is UI-only, never written to the transcript nor sent to the model (see below) |
@@ -159,8 +160,8 @@ dispatched, never on a command or a `!`.
 | `/init` | survey the project and write `AGENTS.md` (see below) |
 | `/exit` | quit |
 
-`/help`, `/model`, `/reasoning`, `/usage`, `/compact`, `/tools`, `/mcp`,
-`/agents`, `/settings`, `/update` and `/exit` are the built-ins; `/plan*` and
+`/help`, `/model`, `/reasoning`, `/usage`, `/compact`, `/tools`, `/session`,
+`/mcp`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins; `/plan*` and
 `/init` are feature commands the driver adds on top.
 
 Registration goes through one `registerCommands` helper in `main.go` that always
@@ -591,6 +592,7 @@ console.go      Console interface (+ Select/Confirm/Input/Settings/SaveSetting)
 builtin.go      /help, /model, /reasoning, /tools, /agents, /settings, /exit + RegisterBuiltins
 model.go        /model, /reasoning (moved from main.go)
 tools.go        /tools — free-select before, widen-only after first prompt
+session.go      /session — report or set the session name
 agents.go       /agents — list and stop sub-agents via the narrow Agents interface
 settings.go     /settings menu and per-row editors (enumRow/modelRow/intRow)
 shell.go        Stager — staged ! execution and flush

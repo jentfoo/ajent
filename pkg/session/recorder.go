@@ -41,6 +41,12 @@ func (r *Recorder) ModelChange(m llm.Model, reason string) {
 	_, _ = r.w.Append(TypeModelChange, ModelData{Model: m.Key(), Reason: reason})
 }
 
+// Rename persists a new session name, which NameOf then reads back.
+func (r *Recorder) Rename(name string) error {
+	_, err := r.w.Append(TypeSessionName, NameData{Name: name})
+	return err
+}
+
 // SettingChange persists one setting value; the caller owns any in-memory update.
 func (r *Recorder) SettingChange(key string, value any) error {
 	raw, err := json.Marshal(value)

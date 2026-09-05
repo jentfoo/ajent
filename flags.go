@@ -6,9 +6,12 @@ import (
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/pflag"
+
+	"github.com/jentfoo/ajent/pkg/session"
 )
 
 // Exit codes a script can branch on. They are the same for text and json output.
@@ -30,13 +33,20 @@ var headlessFlagNames = []string{"output", "allow-all", "read-only", "allow-tool
 // cliFlags is one parsed command line. The headless fields apply only when
 // prompt is set.
 type cliFlags struct {
-	model    string
-	render   string
-	cont     bool
-	version  bool   // --version: print the build version and exit
-	update   bool   // --update: reinstall ajent from @latest in the foreground
-	resume   bool   // --resume was given, with or without an id
-	resumeID string // the id from --resume <id>
+	model        string
+	render       string
+	cont         bool
+	version      bool   // --version: print the build version and exit
+	update       bool   // --update: reinstall ajent from @latest in the foreground
+	resume       bool   // --resume was given, with or without an id
+	resumeID     string // the id or name from --resume <id|name>
+	sessionName  string // --session <name>: resume that name, creating it when new
+	sessionGiven bool   // --session was given, so an empty name is a usage error
+
+	deleteTarget  string // --delete <name|id>: the session to remove from disk
+	deleteGiven   bool   // --delete was given, so an empty target is a usage error
+	deleteOld     bool   // --delete-old: sweep unnamed sessions unused past the cutoff
+	deleteOldDays int    // days from --delete-old <days>, 0 when the default applies
 
 	prompt     string
 	output     string
@@ -54,9 +64,21 @@ type cliFlags struct {
 // reports pflag.ErrHelp when usage was requested and printed.
 func parseFlags(argv []string) (cliFlags, error) {
 	var f cliFlags
-	// --resume takes an optional id, which no flag package can express, so it is
-	// lifted out of argv before parsing.
+	// --resume and --delete-old take an optional value, which no flag package can
+	// express, so they are lifted out of argv before parsing.
 	f.resume, f.resumeID, argv = extractResume(argv)
+	var days string
+	f.deleteOld, days, argv = extractDeleteOld(argv)
+	if f.deleteOld {
+		f.deleteOldDays = defaultStaleDays // a bare --delete-old means the default window
+	}
+	if days != "" {
+		n, cerr := strconv.Atoi(days)
+		if cerr != nil {
+			return f, fmt.Errorf("--delete-old takes a number of days, not %q", days)
+		}
+		f.deleteOldDays = n
+	}
 
 	fs := pflag.NewFlagSet("ajent", pflag.ContinueOnError)
 	fs.StringVarP(&f.model, "model", "m", "", "initial model to use")
@@ -64,6 +86,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 		"paint mode: auto, inline (terminal scrollback, unsupported under tmux or screen), "+
 			"alt (own scrollback), plain")
 	fs.BoolVar(&f.cont, "continue", false, "resume the most recent session automatically")
+	fs.StringVar(&f.sessionName, "session", "", "resume the session with this name, creating it if it does not exist")
+	fs.StringVar(&f.deleteTarget, "delete", "", "delete the saved session with this name or id, then exit")
 	fs.BoolVarP(&f.version, "version", "v", false, "print version and exit")
 	fs.BoolVar(&f.update, "update", false, "reinstall ajent from @latest then exit")
 	fs.StringVarP(&f.prompt, "prompt", "p", "",
@@ -85,6 +109,10 @@ func parseFlags(argv []string) (cliFlags, error) {
 		return f, err
 	}
 	f.args = fs.Args()
+	f.sessionGiven = fs.Changed("session")
+	f.sessionName = strings.TrimSpace(f.sessionName)
+	f.deleteGiven = fs.Changed("delete")
+	f.deleteTarget = strings.TrimSpace(f.deleteTarget)
 	for _, name := range headlessFlagNames {
 		if fs.Changed(name) {
 			f.headless = append(f.headless, "--"+name)
@@ -99,12 +127,42 @@ func writeUsage(out io.Writer, flagUsages string) {
 	printVersion(out)
 	_, _ = fmt.Fprintf(out, "usage of %s:\n", os.Args[0])
 	_, _ = fmt.Fprint(out, flagUsages)
-	_, _ = fmt.Fprintln(out, "      --resume [id]           "+
-		"list saved sessions and resume one; with an id, resume that session directly")
+	_, _ = fmt.Fprintln(out, "      --resume [id|name]      "+
+		"list saved sessions and resume one; with an id or name, resume that session directly")
+	_, _ = fmt.Fprintf(out, "      --delete-old [days]     "+
+		"delete unnamed sessions unused for %d days, or the given number of days\n", defaultStaleDays)
 }
 
 // validate reports the first usage error in the parsed command line.
 func (f cliFlags) validate() error {
+	// the delete flags remove sessions and exit, so nothing that configures a run
+	// belongs beside them
+	if f.deleteGiven || f.deleteOld {
+		switch {
+		case f.deleteGiven && f.deleteOld:
+			return errors.New("--delete and --delete-old are mutually exclusive")
+		case f.deleteGiven && f.deleteTarget == "":
+			return errors.New("--delete needs a session name or id")
+		case f.deleteOld && f.deleteOldDays < 1:
+			// a cutoff at or past now would sweep every unnamed session
+			return errors.New("--delete-old needs a positive number of days")
+		case f.deleteOld && len(f.args) > 0:
+			// only a day count follows --delete-old, so a leftover positional is one
+			// that did not parse as digits
+			return fmt.Errorf("--delete-old takes a number of days, not %q", f.args[0])
+		case f.resume || f.cont || f.sessionGiven || f.prompt != "" || len(f.args) > 0:
+			return errors.New("--delete and --delete-old cannot be combined with a session or prompt flag")
+		}
+		return nil
+	}
+	// --session already means create-or-resume, so another resume mode contradicts it
+	if f.sessionGiven {
+		if f.resume || f.cont {
+			return errors.New("--session cannot be combined with --resume or --continue")
+		} else if _, err := session.ValidateName(f.sessionName); err != nil {
+			return err
+		}
+	}
 	if f.prompt == "" {
 		if len(f.headless) > 0 {
 			return fmt.Errorf("%s only applies with --prompt", strings.Join(f.headless, ", "))
@@ -115,7 +173,7 @@ func (f cliFlags) validate() error {
 	case f.allowAll && f.readOnly:
 		return errors.New("--allow-all and --read-only are mutually exclusive")
 	case f.resume && f.resumeID == "":
-		return errors.New("--prompt needs --resume <id>; the bare session picker requires a terminal")
+		return errors.New("--prompt needs --resume <id|name>; the bare session picker requires a terminal")
 	case len(f.args) > 0:
 		return errors.New("--prompt takes the whole prompt; remove the trailing arguments")
 	case !slices.Contains([]string{outputText, outputJSON}, f.output):

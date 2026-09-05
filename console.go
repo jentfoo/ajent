@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ type uiConsole struct {
 	tools    *tools.Registry
 	commands *command.Registry
 	rec      *session.Recorder
+	sess     *sessRec        // the open transcript, nil when recording is off
 	comp     *compactor      // nil when session recording is off
 	mcp      mcpAdapter      // the MCP server manager adapter, or nil
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
@@ -106,6 +108,22 @@ func (c *uiConsole) SaveSetting(layer, key string, value any) error {
 	}
 	_ = layer // Save already updated the in-memory Set for future resolution
 	return nil
+}
+
+func (c *uiConsole) SessionName() string { return c.sess.name() }
+
+func (c *uiConsole) SetSessionName(name string) error {
+	if c.sess == nil || c.rec == nil {
+		return errors.New("session recording is off; this session cannot be named")
+	}
+	canonical, err := session.ValidateName(name)
+	if err != nil {
+		return err
+	}
+	if err := c.sess.store.NameConflict(cwdOrDot(), canonical, c.sess.w.Path()); err != nil {
+		return err
+	}
+	return c.rec.Rename(canonical)
 }
 
 // SetSessionSetting applies a dotted key as a session override and records it so

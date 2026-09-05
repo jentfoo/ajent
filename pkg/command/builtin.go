@@ -9,8 +9,8 @@ import (
 )
 
 // RegisterBuiltins installs /help, /model, /reasoning, /usage, /compact, /tools,
-// /mcp, /agents, /settings and /exit into r against c. The driver adds its
-// feature commands (/plan*, /init) to the same registry on top.
+// /session, /mcp, /agents, /settings and /exit into r against c. The driver adds
+// its feature commands (/plan*, /init) to the same registry on top.
 func RegisterBuiltins(r *Registry, c Console) {
 	r.Register(Command{
 		Name:        "help",
@@ -53,6 +53,12 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Name:        "tools",
 		Description: "enable tools for this session",
 		Handler:     toolsCommand,
+	})
+	r.Register(Command{
+		Name:        "session",
+		Description: "show or set this session's name",
+		Args:        "[name]",
+		Handler:     sessionCommand,
 	})
 	r.Register(Command{
 		Name:        "mcp",

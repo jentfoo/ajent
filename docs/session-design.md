@@ -1,8 +1,9 @@
 # Session design
 
 How `pkg/session` persists an agent turn stream as an append-only JSONL
-transcript, and how `cmd/ajent` resumes it with `--resume`, `--resume <id>` and
-`--continue`. The transcript is the source of truth: every state rebuild,
+transcript, how `cmd/ajent` resumes it with `--resume`, `--resume <id|name>`,
+`--session <name>` and `--continue`, and how it retires one with `--delete` and
+`--delete-old`. The transcript is the source of truth: every state rebuild,
 replay and rewind reads it back through a branch rooted at a head id. It builds
 on the agent loop (`pkg/agent`) and feeds the TUI.
 
@@ -49,7 +50,8 @@ than this build understands; older or equal files are fine.
 
 | Type | Payload | Meaning |
 |---|---|---|
-| `session` | `SessionData` | first line of the file: version, workspace, starting model, git state |
+| `session` | `SessionData` | first line of the file: version, workspace, starting model, git state, optional name |
+| `session_name` | `NameData` | a name set or changed after creation (`/session <name>`); the newest one wins |
 | `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only); an `injected` flag marks system-provided user text that must not surface as a recallable prompt |
 | `compaction` | `CompactionData` | a context reduction recorded without deleting anything (see `compaction-design.md`) |
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
@@ -130,9 +132,30 @@ sessions (the slug is cosmetic; the hash pins it). The store:
   the summary a picker shows (model, length, first prompt). It scans only
   non-directory `*.jsonl` entries so side files never surface as phantom rows.
 - **Latest** is `--continue`'s target: the most recent session.
-- **Find** matches an exact id or a unique prefix, which is what makes
-  `--resume <id>` accept a few characters instead of the full ULID. An ambiguous
-  prefix errors rather than guessing.
+- **Find** resolves one target in order: exact name (case insensitive), then
+  exact id, then unique id prefix. Names match exactly only; ambiguity at any
+  step errors rather than guessing.
+- **NameConflict** is naming's one rule: a name is usable iff `Find` reaches
+  nothing, or reaches the session being named. Collisions and prior ambiguity
+  fall out of it, so `--resume <name>` lands where the user expects.
+- **NameOf** resolves the current name: the newest `session_name` entry, else
+  `SessionData.Name`. See invariant 2 for why it reads raw file order.
+- **ValidateName** limits a name to letters, digits, `-`, `_`, `.` and `/`, no
+  leading dash. Narrower than printable so the exit hint's resume command never
+  needs quoting: anything a shell would interpret (a space, `;`, `$(`, backtick)
+  is refused at the door.
+- **Stale** is `--delete-old`'s selection: the *unnamed* sessions last used
+  before a caller-supplied cutoff, most recently used first. The cutoff is
+  policy and stays in `cmd/ajent`, so the package holds no retention rule of its
+  own. It re-sorts rather than inheriting `List`'s start-time order, so the
+  confirmation list reads in the same key it is selected and displayed by.
+- **Remove** is the one deletion primitive: it drops a transcript plus the head
+  cursor when that cursor names it, leaving siblings and editor history alone.
+  Empty-session cleanup, `--delete` and `--delete-old` all go through it.
+- **Info.Updated** is what `Stale` judges: the newest entry's timestamp, or the
+  file mtime when that is later. Taking the later of the two is the conservative
+  direction, so a restored backup is not mistaken for abandoned work. Raw file
+  order, like `NameOf`: work on an abandoned fork was still work.
 - **Prompts** returns the workspace's recorded user prompts, newest first and
   deduplicated to each distinct text's most recent occurrence. It walks recent
   append-only files in reverse, so the newest prompt is read first, and sweeps a
@@ -280,22 +303,28 @@ is what resets read tracking and reseeds `@` call ids.
 
 ## Resume modes
 
-How a run decides which transcript to write is one of four modes: always a
+How a run decides which transcript to write is one of five modes: always a
 brand-new transcript, auto-resume the most recent one (`--continue`), pick from
-the session roots then resume its leaf (bare `--resume`), or reopen an exact saved
-transcript by id (`--resume <id>`).
+the session roots then resume its leaf (bare `--resume`), reopen an exact saved
+transcript by name or id (`--resume <id|name>`), or create-or-resume by name
+(`--session <name>`).
 
 | Invocation | Behaviour |
 |---|---|
 | *(no flag)* | always a brand-new transcript; the previous one is untouched and stays resumable by id or picker |
 | `--continue` | auto-resumes the most recent session's leaf, no prompt; starts fresh if none exists. The "just get back to work" path |
 | `--resume` | lists saved sessions (newest first) in a picker — first user prompt, started time, model, message count — and resumes the chosen root's leaf; cancelling or an empty list falls back to fresh |
-| `--resume <id>` | reopens that exact saved transcript directly by full id or unique prefix; fails fast with a clear error if nothing matches |
+| `--resume <id\|name>` | reopens that exact saved transcript directly by name, full id or unique id prefix; fails fast with a clear error if nothing matches |
+| `--session <name>` | resumes the session with that name, or creates one carrying it when the name is new. The repeatable path: the same command starts the work and returns to it |
 
 `--resume` overrides `--continue`. It is parsed out of `argv` before the standard
 flag parser so its optional trailing id is not greedily consumed as a positional
-argument. A requested id resolves *before* the TUI opens, so a bad id fails with a
-clear message instead of silently starting a fresh transcript.
+argument. `--session` is an ordinary flag by contrast: combining it with either
+`--resume` or `--continue` is a usage error, since it already means
+create-or-resume. A requested id or name resolves *before* the TUI opens, so a bad
+one fails with a clear message instead of silently starting fresh; for
+`--session` that check also rejects a name reaching a session by *id*, which would
+resume one the user never named.
 
 Every resume path reopens the file with `session.Open` (head recovery as
 above), rebuilds state and replays history. `(*sessRec).restoreState` is the
@@ -311,16 +340,37 @@ A one-shot run (`-p`) records its turn like any other, which is what makes
 `--continue` and `--resume <id>` both compose with `-p`; a bare `--resume` does
 not, because its picker needs a terminal, and the combination is a usage error
 rather than a hang.
-On exit, `cmd/ajent` prints the session's resume command (the id and the
-`--resume` flag that would reopen it), so a conversation is never more than one
+On exit, `cmd/ajent` prints the session's resume command (the `--resume` flag
+plus its name, or its id when unnamed), so a conversation is never more than one
 command away.
 
-An **empty session** (started but abandoned before its first prompt, so the
-transcript holds zero `message` entries) is deleted on exit instead of saved:
-it has nothing to resume and would only surface as a dead row in
-the picker. The deletion also drops its head cursor when it points at that
-file; sibling sessions in the workspace are untouched, so a resumed non-empty
-session is never removed even if no new prompt lands this run.
+An **empty session** (abandoned before its first prompt) is deleted on exit: it
+has nothing to resume and would only be a dead picker row. A **named** session is
+exempt, since `--session` resumes by name; deleting it would make the same command
+start over instead of returning to the work, and the picker labels it rather than
+showing an empty row. The deletion drops its head cursor too; siblings are left
+untouched.
+
+## Deleting sessions
+
+Two flags retire a saved session, both terminal actions: they run before the TUI
+opens and exit, like `--version` and `--update`.
+
+| Invocation | Behaviour |
+|---|---|
+| `--delete <id\|name>` | removes that one transcript, resolved through the same `Find` as `--resume` (exact name, full id, unique id prefix). No prompt: the user named one session |
+| `--delete-old [days]` | lists every unnamed session unused for 28 days (or the given window), asks to confirm, then removes them |
+
+A name is the signal that a session is worth keeping, so `--delete-old` never
+sweeps one. That is the same argument that exempts a named session from the
+empty-session cleanup above: `--session <name>` resumes by that name, and a swept
+session would silently become a new one. Unnamed sessions are the tail nothing
+resumes by hand, which is exactly what the sweep is for.
+
+Only the sweep confirms. `--delete` names one session explicitly and stays
+scriptable; `--delete-old` can remove many at once, so it prints the list first
+and reads a `y/N` answer. An unreadable answer (no terminal, closed stdin)
+declines rather than deleting blind.
 
 ## Invariants
 
@@ -330,13 +380,24 @@ These are load bearing. Each exists because breaking it produced a real bug.
 and compaction only add entries and move `HEAD`. Deleting would orphan branches
 that other tips still point at.
 
+This governs entries *within* a transcript. Retiring a whole session (empty-session
+cleanup, `--delete`, `--delete-old`) is a separate lifecycle operation: `Remove`
+takes the file and its head cursor together, so no branch is ever left half
+present.
+
 **2. Reads go through the branch, never raw file order.** Every consumer
 (state rebuild, replay, info counts) walks from a head id along `ParentID`.
 Raw-file-order reads break the moment two forks coexist in one file.
 
-History search is the deliberate exception: it scans every entry of each file in
+History search is one deliberate exception: it scans every entry of each file in
 raw append order (newest first) rather than only the persisted head branch, so
 a prompt on an abandoned rewind fork stays findable.
+
+`NameOf` is the other: a name identifies the transcript *file* that
+`--resume` opens, not a branch inside it, so it reads raw file order.
+Branch-scoped resolution would let a rewind past a rename silently un-name
+the session while its entry stays on disk, freeing the old name to create a
+duplicate.
 
 **3. The live head wins over the file tail.** They agree only until the first
 fork. After a rewind, or a plan workflow that leaves `HEAD` on the review branch
@@ -418,3 +479,8 @@ built from, so a plan recorded differently from how it was measured fails.
 - Replay intentionally drops thinking (off by default) and collapses tool
   results to one-line summaries, so a resumed session is condensed history, not
   a pixel-perfect restore of scrollback.
+- A transcript `Read` cannot parse never reaches `List`, so `--delete-old` will
+  not sweep it. A corrupt file has to be removed by hand.
+- Nothing locks a transcript across processes, so deleting one another `ajent`
+  has open loses that process's later appends. `--delete-old` cannot hit a live
+  session (it is recent by definition); `--delete` is the user naming one.

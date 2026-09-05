@@ -156,3 +156,20 @@ func TestRecorderTypedRoundTrip(t *testing.T) {
 		assert.Equal(t, "anthropic/claude", md.Model)
 	})
 }
+
+func TestRecorderRename(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion, Name: "before"})
+	require.NoError(t, err)
+	r := NewRecorder(w)
+
+	require.NoError(t, r.Rename("after"))
+
+	entries, _, err := Read(p)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, TypeSessionName, entries[1].Type)
+	assert.Equal(t, "after", NameOf(entries))
+}

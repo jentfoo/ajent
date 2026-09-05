@@ -211,8 +211,13 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
     --render <mode>    paint mode: auto, inline (terminal scrollback),
                        alt (own scrollback), plain
     --continue         resume the most recent session automatically
-    --resume [id]      list saved sessions and pick one; with an id,
-                       resume that session directly
+    --session <name>   create a session under this name; if that
+                       name already exists, resume it instead
+    --resume [id|name] list saved sessions and pick one; with an id or
+                       name, resume that session directly
+    --delete <id|name> delete that saved session from disk, then exit
+    --delete-old [days] delete every unnamed session unused for 28 days,
+                       or the given number of days, after confirmation
     --update           reinstall ajent from @latest in the foreground, then exit
 -p, --prompt <text>    run one turn non-interactively, print the result and exit
 -o, --output <shape>   one-shot output: text (final answer) or json (one event per line)
@@ -222,6 +227,10 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
     --deny-tools       one-shot: tool names to withhold
     --stats            one-shot: print a tool and token summary when the run ends
 ```
+
+Sessions are normally identified by an opaque id; `--resume` takes the full id or any unique prefix of it. `--session <name>` adds a human-readable name instead: the first run creates that session and every later one resumes it, so `--resume <name>` reaches it too. `/session <name>` names or renames the running session; `/session` alone reports its name. When a named session ends, the exit hint prints `ajent --resume <name>` rather than its id.
+
+`--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one; delete those by name when you are done with them. Both flags act on the current workspace only, and both exit without starting a session.
 
 The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. There is no dialog in headless mode, so the barrier runs at allow-all and the **offered tool set** carries the policy instead (the model is only ever handed tools it may call, which keeps it from wasting steps discovering a refusal). Scope flags (`--allow-all`, `--read-only`) are mutually exclusive; `--allow-tools` / `--deny-tools` refine either.
 

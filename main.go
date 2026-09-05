@@ -68,30 +68,32 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ajent: %v\n", verr)
 		os.Exit(exitUsage)
 	}
+	// --delete and --delete-old remove saved sessions then exit; they never open the
+	// TUI or start one.
+	if f.deleteGiven || f.deleteOld {
+		os.Exit(runDelete(os.Stdout, os.Stdin, f))
+	}
 
-	// --resume overrides --continue; neither means a brand-new session.
-	sessMode := modeNewSession
+	// --resume overrides --continue; neither means a brand-new session. --session
+	// cannot reach here alongside either, validate() rejects that combination.
+	sessMode, sessTarget := modeNewSession, ""
 	if f.cont {
 		sessMode = modeContinue
 	}
 	switch {
+	case f.sessionName != "":
+		sessMode, sessTarget = modeSessionName, f.sessionName
 	case f.resume && f.resumeID != "":
-		sessMode = modeResumeID // reopen that exact saved transcript by id
+		sessMode, sessTarget = modeResumeID, f.resumeID // reopen that exact saved transcript
 	case f.resume:
 		sessMode = modeResumePick // pick among saved roots, then resume its leaf
 	}
 
-	// A requested session id must resolve before the TUI opens; otherwise fail fast
+	// A requested session must resolve before the TUI opens; otherwise fail fast
 	// with a clear message instead of silently starting a fresh transcript.
-	if sessMode == modeResumeID {
-		sid := cwdOrDot()
-		store, serr := session.NewStore()
-		if serr != nil {
-			fmt.Fprintf(os.Stderr, "ajent: %v\n", serr)
-			os.Exit(exitUsage)
-		}
-		if _, ferr := store.Find(sid, f.resumeID); ferr != nil {
-			fmt.Fprintf(os.Stderr, "ajent: no session matches id %q\n", f.resumeID)
+	if sessMode == modeResumeID || sessMode == modeSessionName {
+		if err := checkSessionTarget(sessMode, sessTarget); err != nil {
+			fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
 			os.Exit(exitUsage)
 		}
 	}
@@ -175,7 +177,7 @@ func main() {
 	if f.prompt != "" {
 		code := runHeadless(headlessOptions{
 			flags: f, set: set, reg: reg, active: active,
-			sessMode: sessMode, resumeID: f.resumeID, warnings: warnings,
+			sessMode: sessMode, sessTarget: sessTarget, warnings: warnings,
 		})
 		stop() // os.Exit skips the deferred demo teardown
 		os.Exit(code)
@@ -217,23 +219,23 @@ func main() {
 		os.Exit(0)
 	}()
 
-	sess := driver(ui, set, reg, active, sessMode, f.resumeID, f.args)
+	sess := driver(ui, set, reg, active, sessMode, sessTarget, f.args)
 
 	// Restore the terminal before printing so the hint is visible after a Ctrl+C /
 	// Ctrl+D quit, then tell the user how to get back to this conversation.
 	ui.Close()
-	if id := sessionHint(sess); id != "" {
-		fmt.Printf("\nRun `ajent --resume %s` to resume this session.\n", id)
+	if label := sessionLabel(sess); label != "" {
+		fmt.Printf("\nRun `ajent --resume %s` to resume this session.\n", label)
 	}
 }
 
 // driver runs the real agent loop: it builds an Agent over the registry and
 // drives turns from submitted messages, steering mid-turn input into the running
 // turn rather than starting a second one. sessMode decides whether this run starts
-// fresh or resumes a saved transcript; resumeID is the id for modeResumeID. It
+// fresh or resumes a saved transcript; sessTarget names it for the id and name modes. It
 // returns the open session record (nil when recording could not be set up) so main
 // can print its resume hint on exit.
-func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode resumeMode, resumeID string, args []string) *sessRec {
+func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode resumeMode, sessTarget string, args []string) *sessRec {
 	providers := llm.NewProviders(reg)
 	rc := reasoningFrom(set.Settings().Reasoning, active)
 	st := &agent.State{
@@ -244,7 +246,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// every turn is recorded into the workspace transcript so double-Esc while idle
 	// can open the context-tree picker and rewind onto an earlier point.
-	rec := newSession(ui, sessMode, resumeID, active.Key())
+	rec := newSession(ui, sessMode, sessTarget, active.Key())
 	if rec == nil {
 		ui.Notify("session recording disabled; Esc will not rewind", tui.LevelWarn)
 	}
@@ -578,6 +580,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 	if rec != nil {
 		console.rec = rec.rec
+		console.sess = rec
 		console.comp = comp
 	}
 	// the plan workflow needs a transcript to branch and a registry to scope;
@@ -1166,28 +1169,36 @@ type sessRec struct {
 	discardStaged func()
 }
 
-// extractResume scans argv for a --resume token and its optional trailing session
-// id, removing those tokens from the returned args so flag.Parse sees only the
-// other flags. A bare `--resume` means "pick among saved roots"; `--resume <id>`
-// reopens that exact transcript directly.
-func extractResume(argv []string) (given bool, id string, rest []string) {
+// extractOptional scans argv for a flag carrying an optional trailing value,
+// which no flag package can express, removing those tokens from the returned args
+// so flag.Parse sees only the other flags. takes decides whether the next token is
+// that value rather than an unrelated argument.
+func extractOptional(argv []string, name string, takes func(string) bool) (given bool, val string, rest []string) {
 	rest = make([]string, 0, len(argv))
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		switch {
-		case a == "--resume" || a == "-resume":
+		case a == "--"+name || a == "-"+name:
 			given = true
-			if i+1 < len(argv) && !strings.HasPrefix(argv[i+1], "-") {
-				id, i = strings.TrimSpace(argv[i+1]), i+1 // consume the id token
+			if i+1 < len(argv) && takes(argv[i+1]) {
+				val, i = strings.TrimSpace(argv[i+1]), i+1 // consume the value token
 			}
-		case strings.HasPrefix(a, "--resume="):
+		case strings.HasPrefix(a, "--"+name+"="):
 			given = true
-			id = a[len("--resume="):]
+			val = a[len("--"+name+"="):]
 		default:
 			rest = append(rest, a)
 		}
 	}
-	return given, id, rest
+	return given, val, rest
+}
+
+// extractResume lifts --resume and its optional trailing session id out of argv. A
+// bare `--resume` means "pick among saved roots"; `--resume <id>` reopens that
+// exact transcript directly.
+func extractResume(argv []string) (given bool, id string, rest []string) {
+	// an id or name is opaque, so any non-flag token is it
+	return extractOptional(argv, "resume", func(s string) bool { return !strings.HasPrefix(s, "-") })
 }
 
 // cwdOrDot returns the current working directory, or "." when it is unavailable.
@@ -1199,17 +1210,52 @@ func cwdOrDot() string {
 	return cwd
 }
 
-// sessionHint returns the active transcript's root id — the value to pass back via
-// `ajent --resume <id>` to rejoin this conversation. Empty when recording is off or
-// nothing can be read from disk.
+// sessionHint returns the active transcript's root id — the stable identifier for
+// this conversation. Empty when recording is off or nothing can be read from disk.
 func sessionHint(r *sessRec) string {
-	if r == nil || r.w == nil {
+	entries, ok := sessionEntries(r)
+	if !ok {
 		return ""
+	}
+	return rootID(entries)
+}
+
+// sessionLabel returns the value --resume takes back: the session name, or its
+// root id when unnamed. Empty when recording is off.
+func sessionLabel(r *sessRec) string {
+	entries, ok := sessionEntries(r)
+	if !ok {
+		return ""
+	}
+	if name := session.NameOf(entries); name != "" {
+		return name
+	}
+	return rootID(entries)
+}
+
+// name returns the session's name, empty when unnamed or unreadable.
+func (r *sessRec) name() string {
+	entries, ok := sessionEntries(r)
+	if !ok {
+		return ""
+	}
+	return session.NameOf(entries)
+}
+
+// sessionEntries reads the open transcript, reporting false when there is none.
+func sessionEntries(r *sessRec) ([]session.Entry, bool) {
+	if r == nil || r.w == nil {
+		return nil, false
 	}
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil {
-		return ""
+		return nil, false
 	}
+	return entries, true
+}
+
+// rootID returns the id of the transcript's session entry.
+func rootID(entries []session.Entry) string {
 	for _, e := range entries {
 		if e.Type == session.TypeSession {
 			return e.ID
@@ -1218,9 +1264,8 @@ func sessionHint(r *sessRec) string {
 	return ""
 }
 
-// empty reports whether this run recorded no conversation: the transcript holds
-// zero message entries. A resumed non-empty session stays, so only a brand-new
-// session abandoned before its first prompt is dropped.
+// empty reports whether this run recorded no conversation and carries no name,
+// so nothing would be lost by dropping it.
 func (r *sessRec) empty() bool {
 	if r == nil || r.w == nil || r.store == nil {
 		return false
@@ -1228,6 +1273,9 @@ func (r *sessRec) empty() bool {
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil {
 		return false
+	}
+	if session.NameOf(entries) != "" {
+		return false // --session resumes by name, so a named session is worth keeping
 	}
 	for _, e := range entries {
 		if e.Type == session.TypeMessage {
@@ -1241,17 +1289,50 @@ func (r *sessRec) empty() bool {
 type resumeMode int
 
 const (
-	modeNewSession resumeMode = iota // no flag: always a brand-new transcript
-	modeContinue                     // --continue: auto-resume the most recent one
-	modeResumePick                   // --resume: picker over session roots, then resume its leaf
-	modeResumeID                     // --resume <id>: reopen that exact saved transcript directly
+	modeNewSession  resumeMode = iota // no flag: always a brand-new transcript
+	modeContinue                      // --continue: auto-resume the most recent one
+	modeResumePick                    // --resume: picker over session roots, then resume its leaf
+	modeResumeID                      // --resume <id|name>: reopen that exact saved transcript directly
+	modeSessionName                   // --session <name>: resume that name, creating it when new
 )
+
+// findNamed resolves a --session name: the session carrying it, or ok false when
+// the name is free. A name that reaches a session by id is an error rather than a
+// hit, or --session would resume one the user never named.
+func findNamed(store *session.Store, cwd, target string) (session.Info, bool, error) {
+	info, err := store.Find(cwd, target)
+	if errors.Is(err, session.ErrNotFound) {
+		return session.Info{}, false, nil
+	} else if err != nil {
+		return session.Info{}, false, err
+	} else if !strings.EqualFold(info.Name, target) {
+		return session.Info{}, false,
+			fmt.Errorf("session name %q matches session id %s", target, info.ID)
+	}
+	return info, true, nil
+}
+
+// checkSessionTarget reports why target cannot be opened under mode, nil when it
+// can. A --session name that matches nothing is fine: that mode creates it.
+func checkSessionTarget(mode resumeMode, target string) error {
+	store, err := session.NewStore()
+	if err != nil {
+		return err
+	}
+	cwd := cwdOrDot()
+	if mode == modeSessionName {
+		_, _, ferr := findNamed(store, cwd, target)
+		return ferr
+	}
+	if _, ferr := store.Find(cwd, target); ferr != nil {
+		return fmt.Errorf("no session matches %q", target)
+	}
+	return nil
+}
 
 // newSession opens (or resumes) the workspace's current transcript per mode, or
 // nil when recording cannot be set up so the app keeps running without a rewind tree.
-// newSession opens (or resumes) the workspace's current transcript per mode, or
-// nil when recording cannot be set up so the app keeps running without a rewind tree.
-func newSession(ui *tui.UI, mode resumeMode, resumeID, modelKey string) *sessRec {
+func newSession(ui *tui.UI, mode resumeMode, target, modelKey string) *sessRec {
 	store, err := session.NewStore()
 	if err != nil {
 		return nil
@@ -1261,24 +1342,23 @@ func newSession(ui *tui.UI, mode resumeMode, resumeID, modelKey string) *sessRec
 	if ui != nil && mode == modeResumePick {
 		pick = func(list []session.Info) (int, error) { return pickSessionRoot(ui, list) }
 	}
-	w, err := openSession(store, mode, cwd, resumeID, modelKey, pick)
+	w, err := openSession(store, mode, cwd, target, modelKey, pick)
 	if err != nil {
 		return nil
 	}
 	return &sessRec{store: store, w: w, rec: session.NewRecorder(w)}
 }
 
-// openSession picks the transcript to write per resumeMode. pick is called for
+// openSession picks the transcript to write per resumeMode. target names the
+// session for modeResumeID and modeSessionName. pick is called for
 // modeResumePick to choose among saved roots; pass nil when no UI is available.
-// openSession picks the transcript to write per resumeMode. id is used by
-// modeResumeID to reopen one saved session directly. pick is called for
-// modeResumePick to choose among saved roots; pass nil when no UI is available.
-func openSession(store *session.Store, mode resumeMode, cwd string, id, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, error) {
-	fresh := func() (*session.Writer, error) {
+func openSession(store *session.Store, mode resumeMode, cwd string, target, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, error) {
+	fresh := func(name string) (*session.Writer, error) {
 		return store.Create(cwd, session.SessionData{
 			Version:   session.Version(),
 			Workspace: cwd,
 			Model:     modelKey, // provenance so a resume can stamp assistant origins
+			Name:      name,
 		})
 	}
 
@@ -1288,19 +1368,27 @@ func openSession(store *session.Store, mode resumeMode, cwd string, id, modelKey
 		if lerr == nil {
 			return session.Open(info.Path) // resume the most recent transcript's leaf
 		} else if errors.Is(lerr, session.ErrNoSessions) {
-			return fresh()
+			return fresh("")
 		}
 		return nil, lerr
 	case modeResumeID:
-		info, ferr := store.Find(cwd, id)
+		info, ferr := store.Find(cwd, target)
 		if ferr != nil {
 			return nil, ferr
 		}
 		return session.Open(info.Path) // resume that exact transcript's leaf
+	case modeSessionName:
+		info, found, ferr := findNamed(store, cwd, target)
+		if ferr != nil {
+			return nil, ferr
+		} else if !found {
+			return fresh(target) // first run under this name
+		}
+		return session.Open(info.Path)
 	case modeResumePick:
 		list, lerr := store.List(cwd)
 		if len(list) == 0 || errors.Is(lerr, session.ErrNoSessions) {
-			return fresh() // nothing saved yet; start one
+			return fresh("") // nothing saved yet; start one
 		} else if lerr != nil {
 			return nil, lerr
 		}
@@ -1309,13 +1397,13 @@ func openSession(store *session.Store, mode resumeMode, cwd string, id, modelKey
 			picked, perr = pick(list)
 		}
 		if errors.Is(perr, tui.ErrCancelled) || picked < 0 {
-			return fresh() // cancelled the resume; start new rather than stall
+			return fresh("") // cancelled the resume; start new rather than stall
 		} else if perr != nil {
 			return nil, perr
 		}
 		return session.Open(list[picked].Path) // resume that root's leaf
 	default: // modeNewSession and anything unexpected: always fresh
-		return fresh()
+		return fresh("")
 	}
 }
 
@@ -1382,6 +1470,9 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 	for i, in := range list {
 		label := in.First
 		if label == "" {
+			label = in.Name // a named session with no prompt yet still identifies itself
+		}
+		if label == "" {
 			label = "(empty session)"
 		}
 		detail := in.Started.UTC().Format("2006-01-02 15:04 UTC") // sessions are stored as UTC
@@ -1391,7 +1482,8 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		if in.Messages > 0 {
 			detail += fmt.Sprintf(" · %d msgs", in.Messages)
 		}
-		items[i] = tui.PickItem{Label: label, Detail: detail}
+		// the name renders as the tag and both it and the id stay filterable
+		items[i] = tui.PickItem{Label: label, Detail: detail, Tag: in.Name, Terms: []string{in.ID}}
 	}
 	return ui.PickContext(context.Background(), "Resume session", items,
 		tui.PickOptions{Placeholder: "filter"})

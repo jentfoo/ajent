@@ -44,6 +44,9 @@ type fakeConsole struct {
 	toolsChanged int
 	exited       bool
 
+	sessionName    string // reported by SessionName, updated by SetSessionName
+	setSessionName error  // returned by SetSessionName when non-nil
+
 	profile tui.ColorProfile // reported by ColorProfile
 	tone    tui.Tone         // reported by DetectTone
 	palette tui.Palette      // last palette handed to SetTheme
@@ -191,6 +194,14 @@ func (f *fakeConsole) SaveSetting(layer, key string, value any) error {
 }
 func (f *fakeConsole) SetSessionSetting(key string, value any) error {
 	return f.settings.SetSession(key, value)
+}
+func (f *fakeConsole) SessionName() string { return f.sessionName }
+func (f *fakeConsole) SetSessionName(name string) error {
+	if f.setSessionName != nil {
+		return f.setSessionName
+	}
+	f.sessionName = name
+	return nil
 }
 func (f *fakeConsole) SetModel(m llm.Model)               { f.models.SetActive(m); f.state.Model = m; f.setModel = m }
 func (f *fakeConsole) SetReasoning(c llm.ReasoningConfig) { f.state.Reasoning = c }

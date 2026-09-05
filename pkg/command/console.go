@@ -80,6 +80,13 @@ type Console interface {
 	// resume restores it. The caller owns the in-memory update.
 	SetSessionSetting(key string, value any) error
 
+	// SessionName returns this session's name, empty when it has none.
+	SessionName() string
+	// SetSessionName names the running session so --resume and --session reach it
+	// by name. It errors when the name is malformed or already reaches another
+	// session in this workspace.
+	SetSessionName(name string) error
+
 	// SetModel makes m active, reflects it in the status line and agent state,
 	// records a model-change entry in the session, and persists the selection
 	// to the user config so the next start keeps it.
