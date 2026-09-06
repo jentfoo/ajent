@@ -69,7 +69,8 @@ tools, calls one with raw JSON arguments and an output writer, pings, and closes
   not outlive a server torn down mid-session.
 - **network** — Streamable HTTP (POST + SSE), or legacy SSE keyed off `transport: sse`.
 - `Initialize` errors wrap the library's version-mismatch error naming both versions,
-  rather than failing obscurely.
+  rather than failing obscurely. mcp-go 1.0 probes `server/discover` first and falls
+  back to the initialize handshake for older servers, so both protocol eras connect.
 
 ### Schema fidelity
 
@@ -89,7 +90,11 @@ re-implementing `ping` itself (we set no sampling/elicitation handlers, so nothi
 lost); handlers accumulate, so a second method never drops the first. Raw sends are
 bounded per attempt (`rawAttemptTimeout`) and the idempotent list calls resend on
 transport failures; a dropped stdio line must not fail discovery, but an unresponsive
-server still surfaces as an error, never a hang.
+server still surfaces as an error, never a hang. The raw seam sits below mcp-go's own
+request stamping, so it must carry the era itself: on a connection negotiated to
+protocol 2026-07-28 every request needs per-request `_meta` and mirrored `Mcp-*` headers
+(added by `applyEra`; legacy connections stay unstamped, matching the pre-1.0 wire), and
+`Ping` no-ops there since the RPC was removed.
 
 Raw request ids are seeded at `rawSeqBase` rather than from one: both the raw seam and
 mcp-go's typed calls share the transport's single response map keyed by request id, so

@@ -111,9 +111,39 @@ func TestConnectHTTPListsTools(t *testing.T) {
 	c, err := Connect(t.Context(), "fakehttp", ServerConfig{URL: url})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
+	assert.Equal(t, mcp.LATEST_PROTOCOL_VERSION, c.negotiated) // modern server, modern era
 	defs, err := c.Tools(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, defs, 3)
+}
+
+// TestLegacyServerCompat verifies a server refusing protocol 2026-07-28 falls
+// back to the classic initialize handshake with an unstamped wire contract.
+func TestLegacyServerCompat(t *testing.T) {
+	t.Parallel()
+
+	url := startHTTP(t, "-legacy")
+	c, err := Connect(t.Context(), "legacyhttp", ServerConfig{URL: url})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	assert.Equal(t, mcp.LATEST_LEGACY_PROTOCOL_VERSION, c.negotiated)
+
+	// raw-seam requests stay byte-identical to the pre-1.0 wire: no _meta, no headers
+	params, header := c.applyEra(string(mcp.MethodToolsList), map[string]any{"cursor": "x"})
+	assert.Equal(t, map[string]any{"cursor": "x"}, params)
+	assert.Nil(t, header)
+
+	defs, err := c.Tools(t.Context())
+	require.NoError(t, err)
+	assert.Len(t, defs, 3)
+
+	res, err := c.Call(t.Context(), "tool_01", json.RawMessage(`{}`), nil)
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+	assert.Equal(t, "tool_01: ok", res.Content[0])
+
+	// legacy servers still answer the ping RPC for real
+	require.NoError(t, c.Ping(t.Context()))
 }
 
 // TestHTTPAgainstHTTPServer exercises the Streamable HTTP transport against an
@@ -152,14 +182,15 @@ func TestPing(t *testing.T) {
 	assert.NoError(t, c.Ping(t.Context()))
 }
 
-// TestRequestRawSeam sends a custom method through the MCP raw-request seam.
+// TestRequestRawSeam sends a method through the MCP raw-request seam.
+// tools/list rather than ping: the ping RPC was removed in protocol 2026-07-28.
 func TestRequestRawSeam(t *testing.T) {
 	t.Parallel()
 
 	c, err := Connect(t.Context(), "fake", stdioConfig(t))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = c.Close() })
-	resp, err := c.Request(t.Context(), "ping", nil)
+	resp, err := c.Request(t.Context(), string(mcp.MethodToolsList), nil)
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp)
 }

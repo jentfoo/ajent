@@ -21,10 +21,12 @@ func main() {
 	var slow bool              // block every tool call until the client cancels
 	var tools int              // number of generated echo tools to expose
 	var notifyListChanged bool // emit a notifications/tools/list_changed on each trigger_listchanged call
+	var legacyOnly bool        // serve only legacy protocol versions, for client fallback tests
 	flag.StringVar(&httpAddr, "http", "", "serve over Streamable HTTP on this address")
 	flag.BoolVar(&slow, "slow", false, "block each tool call until cancelled")
 	flag.IntVar(&tools, "tools", 3, "number of generated echo tools to expose")
 	flag.BoolVar(&notifyListChanged, "notify-list-changed", false, "emit list_changed via trigger_listchanged")
+	flag.BoolVar(&legacyOnly, "legacy", false, "refuse protocol versions after 2025-11-25")
 	flag.Parse()
 
 	srv := mcpserver.NewMCPServer("fakeserver", "1.0")
@@ -54,7 +56,6 @@ func main() {
 			})
 	}
 
-
 	// a resource and prompt so the client can discover capabilities beyond tools.
 	srv.AddResource(mcp.NewResource("fake://doc", "the doc",
 		mcp.WithResourceDescription("a sample read-only document")),
@@ -72,6 +73,11 @@ func main() {
 
 	if httpAddr != "" {
 		h := mcpserver.NewStreamableHTTPServer(srv)
+		if legacyOnly {
+			// drop modern versions from discover so clients must fall back to initialize
+			h = mcpserver.NewStreamableHTTPServer(srv,
+				mcpserver.WithStreamableHTTPProtocolVersions(mcp.ProtocolVersion20251125))
+		}
 		fmt.Fprintln(os.Stderr, "listening on", httpAddr)
 		if err := http.ListenAndServe(httpAddr, h); err != nil {
 			fmt.Fprintln(os.Stderr, err)

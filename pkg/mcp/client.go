@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net/http"
 	"os"
 	"os/exec"
 	"slices"
@@ -21,6 +22,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 )
 
 // ToolDef is one tool a server exposes, in our own shape so mcp-go's wire types
@@ -68,7 +70,8 @@ type Client struct {
 
 	onWarn func(string)
 
-	negotiated string // negotiated protocol version
+	negotiated string             // negotiated protocol version; ""-era values gate applyEra
+	clientInfo mcp.Implementation // repeated in every modern request's _meta
 
 	rawSeq atomic.Int64 // raw-request id counter, seeded to rawSeqBase
 
@@ -165,7 +168,10 @@ func (c *Client) init(ctx context.Context) error {
 	if err := c.c.Start(ctx); err != nil {
 		return fmt.Errorf("mcp %s: start: %w", c.name, err)
 	}
-	res, err := c.c.Initialize(ctx, mcp.InitializeRequest{})
+	c.clientInfo = mcp.Implementation{Name: "ajent", Version: config.Version}
+	res, err := c.c.Initialize(ctx, mcp.InitializeRequest{
+		Params: mcp.InitializeParams{ClientInfo: c.clientInfo},
+	})
 	if err != nil {
 		var unsup mcp.UnsupportedProtocolVersionError
 		if errors.As(err, &unsup) {
@@ -436,9 +442,14 @@ func (c *Client) writeProgress(key int64, text string) {
 	}
 }
 
-// Ping verifies the server is responsive.
+// Ping verifies the server is responsive. The ping RPC was removed in protocol
+// version 2026-07-28, where liveness is a transport concern, so a modern
+// connection is considered responsive without sending anything.
 func (c *Client) Ping(ctx context.Context) error {
-	if err := c.c.Ping(ctx); err != nil {
+	if mcp.IsModernProtocol(c.negotiated) {
+		return nil
+	}
+	if _, err := c.Request(ctx, string(mcp.MethodPing), nil); err != nil {
 		return fmt.Errorf("mcp %s: ping: %w", c.name, err)
 	}
 	return nil
@@ -481,12 +492,14 @@ func (c *Client) sendRawAttempts(ctx context.Context, method string, params any,
 		if err := ctx.Err(); err != nil { // caller budget exhausted; stop early
 			return nil, err
 		}
+		params, header := c.applyEra(method, params)
 		aCtx, cancel := context.WithTimeout(ctx, rawAttemptTimeout)
 		resp, err := c.c.GetTransport().SendRequest(aCtx, transport.JSONRPCRequest{
 			JSONRPC: mcp.JSONRPC_VERSION,
 			ID:      mcp.NewRequestId(c.rawSeq.Add(1)),
 			Method:  method,
 			Params:  params,
+			Header:  header,
 		})
 		cancel()
 		if err == nil {
@@ -495,6 +508,51 @@ func (c *Client) sendRawAttempts(ctx context.Context, method string, params any,
 		lastErr = err
 	}
 	return nil, lastErr
+}
+
+// applyEra returns params and headers carrying the metadata protocol 2026-07-28
+// requires on every request. Legacy connections are returned unchanged.
+func (c *Client) applyEra(method string, params any) (any, http.Header) {
+	if !mcp.IsModernProtocol(c.negotiated) {
+		return params, nil
+	}
+	fields := map[string]json.RawMessage{}
+	if params != nil {
+		if b, err := json.Marshal(params); err == nil {
+			_ = json.Unmarshal(b, &fields) // params are plain maps; failures below leave them unstamped
+		}
+	}
+	meta := map[string]any{}
+	if raw, ok := fields["_meta"]; ok {
+		_ = json.Unmarshal(raw, &meta) // preserve a caller-supplied _meta, e.g. Call's progress token
+	}
+	meta[mcp.MetaKeyProtocolVersion] = c.negotiated
+	meta[mcp.MetaKeyClientInfo] = c.clientInfo
+	meta[mcp.MetaKeyClientCapabilities] = mcp.ClientCapabilities{} // required on every modern request; we declare none
+	if _, ok := meta["progressToken"]; !ok {
+		meta["progressToken"] = c.rawSeq.Load() // ties notifications to the request that caused them
+	}
+	if b, err := json.Marshal(meta); err == nil {
+		fields["_meta"] = b
+		if len(fields) == 0 {
+			params = map[string]any{"_meta": meta}
+		} else {
+			params = fields
+		}
+	}
+	header := http.Header{}
+	for k, v := range mcp.StandardHeaders(c.negotiated, mcp.MCPMethod(method), mustJSON(params)) {
+		header.Set(k, v)
+	}
+	return params, header
+}
+
+func mustJSON(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // Request sends an arbitrary JSON-RPC request to the server, the raw seam
