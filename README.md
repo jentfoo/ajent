@@ -162,11 +162,11 @@ The host defaults to `localhost:8080`; discovery fills in the model's name and c
 ```
 ### ~/.ajent/config.json
 
-This file holds everything else: which model starts a session, how the agent behaves, what the barrier allows, and how the UI looks. It is one of several layers resolved lowest-to-highest (default → `~/.ajent/config.json` (user) → `<workspace>/.ajent/config.json` (project) → `<workspace>/.ajent/config.local.json` (local) → `AJENT_*` env vars → command-line flags → live session changes). Objects fold deeply; arrays and scalars replace wholesale.
+This file holds everything else: which model starts a session, how the agent behaves, what the barrier allows, and how the UI looks. It is one of several layers resolved lowest-to-highest (default → `~/.ajent/config.json` (user) → `<workspace>/.ajent/config.json` (project) → `<workspace>/.ajent/config.local.json` (local) → `AJENT_*` env vars → command-line flags).
 
-A literal API key should only be used in the **user** layer, where a group- or world-readable file triggers a warning. Prefer an env var (`apiKeyEnv`) for anything shared.
+A literal API key should only be used in the **user** layer, where a group- or world-readable file triggers a warning. Prefer an env var for anything shared.
 
-Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P_Q_R`, so `permissions.mode` is `AJENT_PERMISSIONS_MODE`. `AJENT_HOME` overrides the whole config directory.
+Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P_Q_R`, so `permissions.mode` is `AJENT_PERMISSIONS_MODE`.
 
 ```jsonc
 {
