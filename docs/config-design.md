@@ -11,13 +11,11 @@ Configuration resolves lowest to highest precedence:
 
 1. **default** — compiled in (`config.Defaults()`), kept as a JSON literal so it
    reports `(default)` like any other source.
-2. **user** — `~/.ajent/config.json`. May hold a literal `apiKey` under
-   `providers`, with a loud warning if the file is group- or world-readable.
+2. **user** — `~/.ajent/config.json`.
 3. **project** — `<workspace>/.ajent/config.json`, committed at the team's
-   discretion. The loader refuses a literal `providers.*.apiKey` here and warns,
-   because this file gets checked in.
-4. **local** — `<workspace>/.ajent/config.local.json`. Same apiKey refusal; it is
-   gitignored but still shared by convention, so the same rule applies.
+   discretion.
+4. **local** — `<workspace>/.ajent/config.local.json`, gitignored per-workspace
+   overrides.
 5. **env** — `AJENT_*` variables, derived by reflection from the schema: a scalar
    key at dotted path `p.q.r` binds to `AJENT_P_Q_R`. An unparseable number or
    bool is a warning, never fatal.
@@ -34,10 +32,8 @@ it. That is the difference between a config system and a mystery.
 
 The schema is a single typed settings root whose fields mirror the config blocks:
 the default model key, reasoning level/retain as text names, the agent turn-loop
-options (an optional per-turn step cap), raw JSON passthroughs for providers and
-per-model overrides (folded over `models.json` by `pkg/llm`, never typed here),
-and typed blocks for tools, permissions, compaction, sub-agent settings, and UI
-render/palette.
+options (an optional per-turn step cap), and typed blocks for tools, permissions,
+compaction, sub-agent settings, and UI render/palette.
 
 Enum-valued keys are stored as their text names and parsed by the caller, each
 package parsing its own.
@@ -113,11 +109,6 @@ reflection (`AJENT_SUBAGENT_MODEL`, `AJENT_SUBAGENT_MAXCONCURRENT`) and are edit
 from `/settings`. Per `## The rule` below, `subagent.model` is a plain string key,
 resolved against the model registry by the caller, never an llm import here.
 
-`providers`/`models` stay raw because **`pkg/config` must never import `pkg/llm`**. `pkg/llm`
-imports it for paths, and a typed reference would cycle. `models.json` is decoded
-in `pkg/llm`, and config's provider/model blocks fold over it via
-`llm.ApplyOverrides`.
-
 ### Agent
 
 The agent block holds `maxSteps`, an **optional** cap on one turn's tool-calling
@@ -163,13 +154,6 @@ Saving re-marshals an order-preserving object tree: unknown keys and key order
 survive, formatting is normalized, comments are dropped. When
 the target file already carries `//` comments the save warns that they will be
 lost. Writes go through `WriteFileAtomic` with secret permissions.
-
-## Secrets
-
-- API keys live in the environment or a literal `apiKey` in the **user** layer.
-- A project or local file with `providers.*.apiKey` is stripped before merging,
-  with one loud warning per removed key, because those files get committed.
-- Any user file holding a literal apiKey triggers the `0600` check.
 
 ## Build version
 

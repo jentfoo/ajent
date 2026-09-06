@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // ConfigFileName is the user and project preferences file.
@@ -68,11 +67,6 @@ func Load(opts Options) (*Set, []string, error) {
 		return nil, warns, err
 	}
 	if data != nil {
-		if hasAPIKey(data) {
-			if permWarn := CheckSecretPerms(userPath); permWarn != "" {
-				warns = append(warns, permWarn)
-			}
-		}
 		s.user = Layer{Name: "user", Path: userPath, Data: data}
 	}
 
@@ -84,11 +78,7 @@ func Load(opts Options) (*Set, []string, error) {
 		return nil, warns, err
 	}
 	if data != nil {
-		stripped, keys := stripKeys(data, "providers.*.apiKey")
-		for _, k := range keys {
-			warns = append(warns, fmt.Sprintf("%s: ignored apiKey at %q; project files get committed", s.projPath, k))
-		}
-		s.project = Layer{Name: "project", Path: s.projPath, Data: stripped}
+		s.project = Layer{Name: "project", Path: s.projPath, Data: data}
 	}
 
 	s.localPath = filepath.Join(projDir, LocalConfigFileName)
@@ -98,11 +88,7 @@ func Load(opts Options) (*Set, []string, error) {
 		return nil, warns, err
 	}
 	if data != nil {
-		stripped, keys := stripKeys(data, "providers.*.apiKey")
-		for _, k := range keys {
-			warns = append(warns, fmt.Sprintf("%s: ignored apiKey at %q; local files are shared", s.localPath, k))
-		}
-		s.local = Layer{Name: "local", Path: s.localPath, Data: stripped}
+		s.local = Layer{Name: "local", Path: s.localPath, Data: data}
 	}
 
 	eLayer, eWarns := EnvLayer(env)
@@ -249,106 +235,4 @@ func mustUnknownKeys(data []byte) []string {
 		return nil // malformed JSON is reported by the unmarshal check above
 	}
 	return unknown
-}
-
-// hasAPIKey reports whether any non-empty literal apiKey exists in data.
-func hasAPIKey(data []byte) bool {
-	v, err := parseNode(data)
-	if err != nil || !v.isObject() {
-		return false
-	}
-	found := false
-	var scan func(o *object, path string)
-	scan = func(o *object, path string) {
-		for _, k := range o.keys {
-			cv := o.m[k]
-			p := join(path, k)
-			if cv.isObject() {
-				scan(cv.obj, p)
-				continue
-			}
-			var s string
-			if lastSeg(p) == "apiKey" && json.Unmarshal(cv.raw, &s) == nil && s != "" {
-				found = true
-			}
-		}
-	}
-	scan(v.obj, "")
-	return found
-}
-
-// stripKeys removes every value matching pattern and returns the stripped data
-// plus the removed dotted paths. A "*" segment matches any single key.
-func stripKeys(data []byte, patterns ...string) ([]byte, []string) {
-	v, err := parseNode(data)
-	if err != nil || !v.isObject() {
-		return data, nil
-	}
-	var removed []string
-	for _, pat := range patterns {
-		stripMatch(v.obj, splitPath(pat), nil, &removed)
-	}
-	out, _ := indentJSON(v.marshal())
-	return out, removed
-}
-
-// stripMatch removes matching leaves from o; path tracks the current dotted prefix.
-func stripMatch(o *object, parts []string, path []string, removed *[]string) {
-	if len(parts) == 0 {
-		return
-	}
-	for _, key := range o.keys {
-		cv := o.m[key]
-		if !matchSeg(parts[0], key) {
-			continue
-		}
-		p := append(append([]string{}, path...), key)
-		switch {
-		case len(parts) == 1:
-			if cv.isObject() { // a whole subtree matches the final segment
-				var leaves []string
-				collectKeys(cv.obj, p, &leaves)
-				*removed = append(*removed, leaves...)
-			} else {
-				*removed = append(*removed, stringsJoin(p))
-			}
-			removeKey(o, key)
-		case cv.isObject():
-			stripMatch(cv.obj, parts[1:], p, removed)
-		}
-	}
-}
-
-// collectKeys returns every dotted path of o's leaves for a removal message.
-func collectKeys(o *object, prefix []string, out *[]string) {
-	for _, k := range o.keys {
-		p := append(append([]string{}, prefix...), k)
-		if o.m[k].isObject() {
-			collectKeys(o.m[k].obj, p, out)
-		} else {
-			*out = append(*out, stringsJoin(p))
-		}
-	}
-}
-
-func matchSeg(pattern, key string) bool { return pattern == "*" || pattern == key }
-
-// lastSeg returns the final dotted segment of path.
-func lastSeg(path string) string {
-	if i := strings.LastIndexByte(path, '.'); i >= 0 {
-		return path[i+1:]
-	}
-	return path
-}
-
-// stringsJoin joins a leaf's segments into a dotted path.
-func stringsJoin(parts []string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	path := ""
-	for _, p := range parts[:len(parts)-1] {
-		path = join(path, p)
-	}
-	return join(path, parts[len(parts)-1])
 }

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,42 +60,6 @@ func TestLoad(t *testing.T) {
 		st := s.Settings()
 		assert.Equal(t, "flag-model", st.Model) // flag beats env-less model
 		assert.Equal(t, "high", st.Reasoning.Level)
-	})
-
-	t.Run("project_api_key_stripped_and_warned", func(t *testing.T) {
-		home := t.TempDir()
-		t.Setenv("AJENT_HOME", home)
-		ws := filepath.Join(home, "proj")
-		require.NoError(t, os.MkdirAll(ws, 0o755))
-
-		writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName),
-			`{"providers":{"anthropic":{"apiKey":"SECRET","baseUrl":"x"}}}`)
-
-		s, warns, err := Load(Options{Workspace: ws})
-		require.NoError(t, err)
-		assert.NotEmpty(t, warns)
-		assert.Contains(t, strings.ToLower(strings.Join(warns, " ")), "ignored apikey")
-		// the literal secret never reaches settings; unrelated provider fields survive
-		st := s.Settings()
-		require.NotEmpty(t, st.Providers)
-		assert.NotContains(t, string(st.Providers), "SECRET")
-	})
-
-	t.Run("user_secret_perm_warning", func(t *testing.T) {
-		if runtime.GOOS == "windows" {
-			t.Skip("mode bits are not meaningful on windows")
-		}
-
-		home := t.TempDir()
-		t.Setenv("AJENT_HOME", home)
-		p := userPathFor(t)
-		writeConfig(t, p, `{"providers":{"a":{"apiKey":"x"}}}`)
-		require.NoError(t, os.Chmod(p, 0o644))
-
-		s, warns, err := Load(Options{Workspace: "."})
-		require.NoError(t, err)
-		assert.NotNil(t, s)
-		assert.Contains(t, strings.ToLower(strings.Join(warns, " ")), "readable by other users")
 	})
 
 	t.Run("missing_files_are_not_errors", func(t *testing.T) {

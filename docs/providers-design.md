@@ -43,7 +43,6 @@ pkg/llm/
   registry.go       Model list, Resolve, Refresh, declared-wins merge
   discover.go       discovery cache, conditional refetch, orchestration
   detect.go         auto-detected chat-completions quirks by name/base URL
-  overrides.go      config.json providers/models fold over models.json
   providers.go      one Provider per endpoint cache
   factory.go        ProviderConfig -> Provider
 

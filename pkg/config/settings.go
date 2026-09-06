@@ -1,22 +1,17 @@
 package config
 
-import "encoding/json"
-
 // Settings is the typed surface of every configuration layer. Enum valued keys
 // are stored as their text names and parsed by the caller (llm.ParseLevel,
-// llm.ParseRetain, tui.ParseMode); providers and models stay raw so pkg/llm can
-// fold them over its own schema without a config->llm import.
+// llm.ParseRetain, tui.ParseMode).
 type Settings struct {
-	Model       string          `json:"model,omitempty"`
-	Reasoning   Reasoning       `json:"reasoning,omitzero"`
-	Agent       Agent           `json:"agent,omitzero"`      // turn loop (pkg/agent)
-	Providers   json.RawMessage `json:"providers,omitempty"` // llm.ProviderConfig map
-	Models      json.RawMessage `json:"models,omitempty"`    // llm.ModelConfig by "provider/id"
-	Tools       Tools           `json:"tools,omitzero"`
-	Permissions Permissions     `json:"permissions,omitzero"` // enforced by the tool guard chain
-	Compaction  Compaction      `json:"compaction,omitzero"`
-	Subagent    Subagent        `json:"subagent,omitzero"` // research sub-agents
-	UI          UI              `json:"ui,omitzero"`
+	Model       string      `json:"model,omitempty"`
+	Reasoning   Reasoning   `json:"reasoning,omitzero"`
+	Agent       Agent       `json:"agent,omitzero"` // turn loop (pkg/agent)
+	Tools       Tools       `json:"tools,omitzero"`
+	Permissions Permissions `json:"permissions,omitzero"` // enforced by the tool guard chain
+	Compaction  Compaction  `json:"compaction,omitzero"`
+	Subagent    Subagent    `json:"subagent,omitzero"` // research sub-agents
+	UI          UI          `json:"ui,omitzero"`
 
 	// DisableUpdateCheck turns off the startup update-available notice.
 	DisableUpdateCheck bool `json:"disableUpdateCheck,omitzero"`

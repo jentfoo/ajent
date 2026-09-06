@@ -146,13 +146,6 @@ func main() {
 		os.Exit(exitUsage)
 	}
 	warnings = append(warnings, w...)
-	overridden, owarns, oerr := llm.ApplyOverrides(file, set.Settings().Providers, set.Settings().Models)
-	if oerr != nil {
-		fmt.Fprintln(os.Stderr, "ajent:", oerr)
-		os.Exit(exitUsage)
-	}
-	warnings = append(warnings, owarns...)
-	file = overridden
 	// a config.json model choice becomes the default before discovery runs.
 	if m := set.Settings().Model; m != "" {
 		file.DefaultModel = m

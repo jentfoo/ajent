@@ -63,7 +63,7 @@ MCP and other tools are loaded on the first message (using `/tools`). Once a too
 
 ### Providers
 
-Providers, and the models they serve, are configured in `~/.ajent/models.json`, a format that is generally a superset of pi model configurations. A provider is one endpoint speaking one wire dialect. The two dialects are `anthropic-messages` and the OpenAI family (`openai-responses` or `openai-completions`). A gateway serving two dialects at once is simply two providers.
+Providers, and the models they serve, are configured in `~/.ajent/models.json`, not in `config.json`. A provider is one endpoint speaking one wire dialect. The two dialects are `anthropic-messages` and the OpenAI family (`openai-responses` or `openai-completions`). A gateway serving both at once is simply two providers.
 
 ```jsonc
 {
@@ -164,8 +164,6 @@ The host defaults to `localhost:8080`; discovery fills in the model's name and c
 
 This file holds everything else: which model starts a session, how the agent behaves, what the barrier allows, and how the UI looks. It is one of several layers resolved lowest-to-highest (default → `~/.ajent/config.json` (user) → `<workspace>/.ajent/config.json` (project) → `<workspace>/.ajent/config.local.json` (local) → `AJENT_*` env vars → command-line flags).
 
-A literal API key should only be used in the **user** layer, where a group- or world-readable file triggers a warning. Prefer an env var for anything shared.
-
 Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P_Q_R`, so `permissions.mode` is `AJENT_PERMISSIONS_MODE`.
 
 ```jsonc
@@ -190,7 +188,6 @@ The top-level blocks:
 * `model` - the model a fresh session starts with. A `/model` change writes your most recent choice here, so it is remembered across restarts.
 * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is shown (`show`).
 * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
-* `providers` / `models` - the same overrides you can put in `~/.ajent/models.json`, folded over it. These let a project pin its own endpoint or widen a context window without duplicating the whole file.
 * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, refInject, refTotal).
 * `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; a Shift+Tab cycle changes it for the session only.
 * `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).

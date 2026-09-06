@@ -202,14 +202,3 @@ func lookupNode(cur *val, parts []string) *val {
 	}
 	return cur
 }
-
-// removeKey drops key from o preserving the order of remaining keys.
-func removeKey(o *object, key string) {
-	for i, k := range o.keys {
-		if k == key {
-			o.keys = append(o.keys[:i], o.keys[i+1:]...)
-			break
-		}
-	}
-	delete(o.m, key)
-}
