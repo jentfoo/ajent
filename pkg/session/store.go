@@ -20,8 +20,10 @@ import (
 
 const (
 	sessionDirPerm = 0o700
-	maxSlugLen     = 40
+	maxSlugLen     = 64
 )
+
+var userHome = os.UserHomeDir // injectable for tests
 
 // ErrNoSessions is returned when a workspace has no saved sessions.
 var ErrNoSessions = errors.New("no sessions for this workspace")
@@ -33,7 +35,8 @@ var ErrNotFound = errors.New("session not found")
 var ErrNameConflict = errors.New("session name already in use")
 
 // Store resolves and lists per-workspace session directories. Directories are
-// <root>/<slug>-<hash> so they survive renames deterministically without an index.
+// <root>/<slug>-<hash>, the slug encoding the whole workspace path so the
+// directory is recognisable, the hash pinning it so a rename never collides.
 type Store struct {
 	root string
 }
@@ -56,7 +59,11 @@ func (s *Store) Dir(workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	d := filepath.Join(s.root, slug(abs)+"-"+hash8(abs))
+	home, herr := userHome()
+	if herr != nil {
+		home = "" // no home to anchor against, so the path encodes absolute
+	}
+	d := filepath.Join(s.root, dirName(abs, home))
 	if err := os.MkdirAll(d, sessionDirPerm); err != nil {
 		return "", err
 	}
@@ -317,27 +324,70 @@ func nameRune(r rune) bool {
 		r == '-' || r == '_' || r == '.' || r == '/'
 }
 
-// slug folds a workspace base name into a stable lowercase directory fragment.
-func slug(p string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(filepath.Base(p)) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else if b.Len() > 0 && b.String()[b.Len()-1] != '-' {
-			b.WriteByte('-')
-		}
+// dirName returns the session directory name for the absolute workspace path
+// abs, anchored on the user home directory home (empty when there is none).
+func dirName(abs, home string) string {
+	s := slug(abs, home)
+	if s == "" {
+		return hash4(abs) // the home directory itself has nothing to encode
 	}
-	s := strings.Trim(b.String(), "-")
+	return s + "-" + hash4(abs)
+}
+
+// slug encodes abs as a flat lowercase name: path segments joined with "_",
+// with anything outside [a-z0-9] dropped. A path outside home keeps its leading
+// separator as a "_" prefix. An over-long name keeps its tail, where the
+// project name is.
+func slug(abs, home string) string {
+	rel, under := relHome(abs, home)
+	var b strings.Builder
+	if !under {
+		b.WriteByte('_') // the leading separator of an absolute path
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+		clean := keepAlnum(seg)
+		if clean == "" {
+			continue
+		}
+		if b.Len() > 0 && b.String()[b.Len()-1] != '_' {
+			b.WriteByte('_')
+		}
+		b.WriteString(clean)
+	}
+	s := b.String()
 	if len(s) > maxSlugLen {
-		s = s[:maxSlugLen]
+		s = strings.TrimLeft(s[len(s)-maxSlugLen:], "_")
 	}
 	return s
 }
 
-// hash8 returns the first 32 bits of sha256 over p, as hex.
-func hash8(p string) string {
+// relHome returns abs relative to home, and whether it is under it.
+func relHome(abs, home string) (string, bool) {
+	if home == "" {
+		return abs, false
+	}
+	rel, err := filepath.Rel(home, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return abs, false
+	}
+	return rel, true
+}
+
+// keepAlnum lowercases s and drops everything outside [a-z0-9].
+func keepAlnum(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// hash4 returns the first 16 bits of sha256 over p, as hex.
+func hash4(p string) string {
 	sum := sha256.Sum256([]byte(p))
-	return hex.EncodeToString(sum[:4])
+	return hex.EncodeToString(sum[:2])
 }
 
 const maxFirstLen = 80

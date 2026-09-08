@@ -12,7 +12,8 @@ on the agent loop (`pkg/agent`) and feeds the TUI.
 A session is one conversation, persisted as an append-only JSONL file: one
 `Entry` per line, nothing ever deleted. The file lives in a per-workspace
 directory so sessions survive renames deterministically without an index, keyed
-by `<slug>-<hash>` of the absolute workspace path.
+by `<slug>-<hash>` of the absolute workspace path (the slug encodes the whole
+path, the hash pins it).
 
 A session belongs to one agent; nothing requires every agent to have one. A
 sub-agent runs on an **in-memory session** (no transcript file, recorder,
@@ -125,7 +126,10 @@ corrupt, resume degrades to "continue from the end" instead of losing the branch
 
 The store maps workspaces to directories under `<config dir>/sessions`: a workspace
 is one `<root>/<slug>-<hash>` directory, so renaming a project does not orphan its
-sessions (the slug is cosmetic; the hash pins it). The store:
+sessions. The slug flattens the whole workspace path (`~/code/goland/ajent` is
+`code_goland_ajent-2cac`, `/var/log` is `_var_log-9a6a`) so a directory is
+recognisable at a glance; it is lossy, so the hash is what pins the identity.
+Names are never parsed back into a workspace. The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
 - **List** returns every session for a workspace, newest first; each row carries
