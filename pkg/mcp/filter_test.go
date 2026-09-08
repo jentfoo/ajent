@@ -15,8 +15,6 @@ func defs(names ...string) []ToolDef {
 	return out
 }
 
-// TestFilterToolsExclude verifies exact-name exclusions drop tools regardless of
-// allow/deny globs.
 func TestFilterToolsExclude(t *testing.T) {
 	t.Parallel()
 

@@ -114,9 +114,6 @@ func TestResolve(t *testing.T) {
 	})
 }
 
-// TestResolveTildeNotExpanded pins the paths that must stay relative rather
-// than expand to home: relatives whose second char is `/`, and a leading ~ not
-// followed by / (~user, ~~). Not parallel: swaps the package-global userHome.
 func TestResolveTildeNotExpanded(t *testing.T) {
 	home := t.TempDir()
 	restore := setTestUserHome(home)

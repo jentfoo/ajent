@@ -12,9 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGuardVerdict drives the guard chain over each decision: a denial returns an
-// error result carrying its reason and never reaches the tool, a pass lets it run,
-// and an Ask with no asker refuses like a denial.
 func TestGuardVerdict(t *testing.T) {
 	t.Parallel()
 
@@ -110,10 +107,6 @@ func TestGuardDeniedCallLeavesFileOnDiskUntouched(t *testing.T) {
 	assert.Equal(t, "original", string(data)) // nothing on disk changed
 }
 
-// TestMustSerialize asserts the registry reports whether a batch would prompt: an
-// Ask with an asker forces serial execution, while allow-only guards and a Deny
-// (which resolves without prompting) do not. This is what keeps block-all's
-// read-only dialogs in submission order.
 func TestMustSerialize(t *testing.T) {
 	t.Parallel()
 
@@ -151,8 +144,6 @@ func TestMustSerialize(t *testing.T) {
 	}
 }
 
-// TestMustSerializeAnyPromptingCall asserts a single Ask anywhere in the batch
-// forces serial execution even when every other call is statically allowed.
 func TestMustSerializeAnyPromptingCall(t *testing.T) {
 	t.Parallel()
 

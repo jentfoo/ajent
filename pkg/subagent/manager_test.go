@@ -382,9 +382,6 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 	assert.Contains(t, j2.Summary, "slow but done")
 }
 
-// TestReserve covers id reservation around the ordered batch: a reserved call
-// claims its number whenever it runs, an unreserved start still gets one, and a
-// new batch supersedes reservations whose call never ran.
 func TestReserve(t *testing.T) {
 	t.Parallel()
 
@@ -435,9 +432,6 @@ func TestReserve(t *testing.T) {
 	})
 }
 
-// TestPollBatchDetection covers how a simultaneous poll group is spotted: every
-// poll that overlapped another reports batched, including the one that arrived
-// first, and the mark clears once the group empties so a later lone poll is bare.
 func TestPollBatchDetection(t *testing.T) {
 	t.Parallel()
 	m := New(Options{})
@@ -517,8 +511,6 @@ func TestOrphanedCompletionRecovered(t *testing.T) {
 	assert.Contains(t, ins[0].Text, id)
 }
 
-// TestOnCompleteIgnoresRunningJob covers the guard the orphan recovery relies on:
-// a poll leaving a job that is still running must not queue a completion.
 func TestOnCompleteIgnoresRunningJob(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
@@ -704,7 +696,7 @@ func TestStatusSegmentAndList(t *testing.T) {
 	assert.Contains(t, jobs[0].ID, "sub-")
 	// a status was published with the running count
 	mu.Lock()
-	found := false
+	var found bool
 	for _, s := range statuses {
 		if strings.Contains(s, "running") {
 			found = true
@@ -732,8 +724,6 @@ func TestStopAllCancelsEverything(t *testing.T) {
 	}
 }
 
-// TestChildSpendRollsIntoParentLedger verifies a child's usage appears as child
-// spend on the parent ledger without moving its context.
 func TestChildSpendRollsIntoParentLedger(t *testing.T) {
 	t.Parallel()
 	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})
@@ -758,8 +748,6 @@ func TestChildSpendRollsIntoParentLedger(t *testing.T) {
 	assert.GreaterOrEqual(t, total.Input, child.Input)
 }
 
-// TestParentContextUnchangedByChild verifies a running child does not move the
-// parent's context bar.
 func TestParentContextUnchangedByChild(t *testing.T) {
 	t.Parallel()
 	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})

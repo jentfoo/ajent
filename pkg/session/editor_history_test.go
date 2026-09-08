@@ -151,8 +151,6 @@ func TestEditorHistoryRecent(t *testing.T) {
 	})
 }
 
-// TestEditorHistoryRecentKeepsDuplicateAcrossCap guards a re-typed message surviving
-// the cap: dedup keeps each text's most recent occurrence before capping.
 func TestEditorHistoryRecentKeepsDuplicateAcrossCap(t *testing.T) {
 	t.Parallel()
 
@@ -169,8 +167,6 @@ func TestEditorHistoryRecentKeepsDuplicateAcrossCap(t *testing.T) {
 	assert.Equal(t, "line-0", recent[0])
 }
 
-// TestEditorHistoryCompact verifies compaction rewrites the file to a merged,
-// deduplicated, capped form and keeps secrets out.
 func TestEditorHistoryCompact(t *testing.T) {
 	t.Parallel()
 

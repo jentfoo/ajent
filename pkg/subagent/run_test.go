@@ -98,8 +98,6 @@ func TestEmptySummary(t *testing.T) {
 	})
 }
 
-// TestRunAbortedContextIsNotACompletion verifies an interrupted run yields aborted,
-// never a partial summary mistaken for done.
 func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 	t.Parallel()
 	b := &blockingProvider{}
@@ -113,7 +111,6 @@ func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 	assert.Equal(t, StatusAborted, j.Status)
 }
 
-// TestRunInheritsModel verifies the child picks up config at spawn.
 func TestRunInheritsModel(t *testing.T) {
 	t.Parallel()
 	_, sp := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})

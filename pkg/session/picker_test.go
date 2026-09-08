@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestTreeRows covers fork rendering in the tree view.
 func TestTreeRows(t *testing.T) {
 	t.Parallel()
 
@@ -139,8 +138,6 @@ func idsOf(rows []TreeRow) []string {
 	return out
 }
 
-// TestTreeRowLabelsAndKinds pins which entry kinds become picker rows and how
-// each label collapses.
 func TestTreeRowLabelsAndKinds(t *testing.T) {
 	t.Parallel()
 
@@ -215,8 +212,6 @@ func pickToolResultMsg(id, parent string) Entry {
 	return pickMsg(id, parent, m)
 }
 
-// TestEntryMessageText verifies the untruncated, newline-preserving prompt text
-// returned for pre-filling the editor on rewind.
 func TestEntryMessageText(t *testing.T) {
 	t.Parallel()
 

@@ -108,7 +108,6 @@ func TestLoadConfig(t *testing.T) {
 	})
 }
 
-// TestValidateServer checks each declaration's transport/command/url contract.
 func TestValidateServer(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -131,8 +130,6 @@ func TestValidateServer(t *testing.T) {
 	}
 }
 
-// TestExpandVar covers the substitution branches LoadConfig does not reach
-// directly: multiple references in one value and an unterminated reference.
 func TestExpandVar(t *testing.T) {
 	cases := []struct {
 		name        string

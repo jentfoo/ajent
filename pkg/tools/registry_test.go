@@ -106,8 +106,6 @@ func TestRegistrySchemaCacheInvalidatedBySetEnabled(t *testing.T) {
 	assert.Equal(t, "write", schemas2[0].Name)
 }
 
-// TestRegistryEnablePromotesDisabled verifies Enable widens a disabled MCP tool to
-// enabled so its schema reaches the prompt (the post-first-prompt /tools path).
 func TestRegistryEnablePromotesDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -127,8 +125,6 @@ func TestRegistryEnablePromotesDisabled(t *testing.T) {
 	assert.Len(t, r.Schemas(), 1) // promoted schema now reaches the prompt
 }
 
-// TestRegistryMarkReadOnlyMetadata verifies read-only marking is queryable by
-// name and dropped with the tool it belongs to.
 func TestRegistryMarkReadOnlyMetadata(t *testing.T) {
 	t.Parallel()
 
@@ -147,7 +143,6 @@ func TestRegistryMarkReadOnlyMetadata(t *testing.T) {
 	assert.False(t, r.ReadOnly("srv__b"))
 }
 
-// TestRegistryEnabledNamesBySource verifies EnabledNames scopes to a source.
 func TestRegistryEnabledNamesBySource(t *testing.T) {
 	t.Parallel()
 
@@ -160,9 +155,6 @@ func TestRegistryEnabledNamesBySource(t *testing.T) {
 	assert.Equal(t, []string{"x__1"}, names) // only the enabled one from that source
 }
 
-// TestRegistryLookupIgnoresEnabled asserts Lookup returns a tool regardless of
-// enabled state, while Get respects it; the silent bug picking the wrong one
-// causes is what separate methods prevent.
 func TestRegistryLookupIgnoresEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -180,8 +172,6 @@ func TestRegistryLookupIgnoresEnabled(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// TestRegistryDisabledListsDisabledOnly asserts Disabled returns the disabled
-// tools in declaration order, mirroring Enabled's contract.
 func TestRegistryDisabledListsDisabledOnly(t *testing.T) {
 	t.Parallel()
 
@@ -198,8 +188,6 @@ func TestRegistryDisabledListsDisabledOnly(t *testing.T) {
 	assert.Equal(t, []string{"ls", "find"}, got)
 }
 
-// TestRegistryEnableIsAdditive asserts Enable only widens the set, leaving
-// already-enabled tools on, unlike SetEnabled which replaces wholesale.
 func TestRegistryEnableIsAdditive(t *testing.T) {
 	t.Parallel()
 
@@ -215,8 +203,6 @@ func TestRegistryEnableIsAdditive(t *testing.T) {
 	assert.True(t, r.enabled("ls"))
 }
 
-// TestRegistrySourceLabelsGroups asserts RegisterFrom records a source label and
-// Source returns it, while Register defaults to builtin.
 func TestRegistrySourceLabelsGroups(t *testing.T) {
 	t.Parallel()
 
@@ -229,8 +215,6 @@ func TestRegistrySourceLabelsGroups(t *testing.T) {
 	assert.Empty(t, r.Source("ghost"))
 }
 
-// TestRegistryTrackerExposedByBuiltins asserts Builtins wires the shared tracker
-// so @-expansion can dedupe through it.
 func TestRegistryTrackerExposedByBuiltins(t *testing.T) {
 	t.Parallel()
 
@@ -277,8 +261,6 @@ func TestRegistryDryRun(t *testing.T) {
 	})
 }
 
-// TestLsRegisteredDisabledInBuiltins asserts the off-by-default extras are not
-// offered until enabled.
 func TestLsRegisteredDisabledInBuiltins(t *testing.T) {
 	t.Parallel()
 
@@ -292,8 +274,6 @@ func TestLsRegisteredDisabledInBuiltins(t *testing.T) {
 	assert.Contains(t, reg.Names(), "ls")
 }
 
-// TestRegistryUnitsCollapsesGroup verifies a registered group collapses its
-// members into one row carrying every member name, sorted with builtins.
 func TestRegistryUnitsCollapsesGroup(t *testing.T) {
 	t.Parallel()
 
@@ -325,8 +305,6 @@ func TestRegistryUnitsCollapsesGroup(t *testing.T) {
 	assert.Len(t, plain, 2) // read and write remain their own rows
 }
 
-// TestRegistryUnitsPartialGroupFallsBack verifies a group with only some members
-// offered (widen mode after a non-atomic change) falls back to per-member rows.
 func TestRegistryUnitsPartialGroupFallsBack(t *testing.T) {
 	t.Parallel()
 
@@ -353,8 +331,6 @@ func TestRegistryUnitsPartialGroupFallsBack(t *testing.T) {
 	assert.True(t, sawPoll)
 }
 
-// TestRegistryGroupTogglesTogether verifies enabling or replacing the enabled set
-// through a group name flips every member at once.
 func TestRegistryGroupTogglesTogether(t *testing.T) {
 	t.Parallel()
 
@@ -391,8 +367,6 @@ func TestRegistryGroupTogglesTogether(t *testing.T) {
 	}
 }
 
-// TestRegistryUnitsRowNamesAndSource verifies a fully-enabled group row collapses
-// to one row carrying the source and member names.
 func TestRegistryUnitsRowNamesAndSource(t *testing.T) {
 	t.Parallel()
 
@@ -514,8 +488,6 @@ func TestGuardedToolPreviewOrdering(t *testing.T) {
 	})
 }
 
-// TestGuardedToolPreviewSkipsNonPreviewers asserts a tool without a Preview runs
-// untouched and renders nothing.
 func TestGuardedToolPreviewSkipsNonPreviewers(t *testing.T) {
 	t.Parallel()
 

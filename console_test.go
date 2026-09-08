@@ -18,8 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestUIConsoleExitSignalsQuit verifies Exit closes the quit channel the
-// driver watches.
 func TestUIConsoleExitSignalsQuit(t *testing.T) {
 	// not parallel: uses a shared channel
 	c := &uiConsole{quit: make(chan struct{}, 1)}
@@ -31,7 +29,6 @@ func TestUIConsoleExitSignalsQuit(t *testing.T) {
 	}
 }
 
-// TestUIConsoleStartedFlag verifies Started reads the shared flag the pump owns.
 func TestUIConsoleStartedFlag(t *testing.T) {
 	// not parallel: mutates a shared bool
 	started := false

@@ -204,8 +204,6 @@ func TestAgentToolsAreParallelAndLabeled(t *testing.T) {
 	assert.Contains(t, tools[0].Label(agent.ToolCall{}), "start")
 }
 
-// TestSubagentLabelsNameTheirTarget verifies the tool headers identify which agent
-// was started or polled, not just the verb.
 func TestSubagentLabelsNameTheirTarget(t *testing.T) {
 	t.Parallel()
 	_, tools := toolsManager(t, nil, time.Second)

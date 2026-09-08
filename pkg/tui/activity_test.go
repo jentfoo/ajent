@@ -22,7 +22,6 @@ func activityKeys(u *UI) []string {
 	return out
 }
 
-// TestShadeRow covers the padding, sanitization and no-op fallback of shadeRow.
 func TestShadeRow(t *testing.T) {
 	t.Parallel()
 

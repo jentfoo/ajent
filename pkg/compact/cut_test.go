@@ -159,8 +159,6 @@ func countSteps(branch []session.Entry) int {
 	return n
 }
 
-// TestVerbatimCutFuzz generates branches with random tool interleavings and
-// asserts the band is always well formed and always honours its bounds.
 func TestVerbatimCutFuzz(t *testing.T) {
 	t.Parallel()
 

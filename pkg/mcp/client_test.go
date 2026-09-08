@@ -41,8 +41,6 @@ func TestConnectStdio(t *testing.T) {
 	})
 }
 
-// TestRawSeqBase verifies Connect seeds the raw-seam id counter into a space
-// mcp-go's own request ids never reach, so neither can steal the other's response.
 func TestRawSeqBase(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +54,6 @@ func TestRawSeqBase(t *testing.T) {
 	assert.Greater(t, c.rawSeq.Load(), int64(rawSeqBase)) // list calls advance it, still disjoint
 }
 
-// TestHandle verifies handlers accumulate across calls rather than replacing.
 func TestHandle(t *testing.T) {
 	t.Parallel()
 
@@ -75,7 +72,6 @@ func TestHandle(t *testing.T) {
 	assert.Contains(t, c.handlers, string(mcp.MethodPing)) // always re-implemented
 }
 
-// TestCallTimeoutCancelsSlowTool verifies a slow call is cancelled by context.
 func TestCallTimeoutCancelsSlowTool(t *testing.T) {
 	t.Parallel()
 
@@ -172,7 +168,6 @@ func TestHTTPAgainstHTTPServer(t *testing.T) {
 	assert.Equal(t, "hi", res.Content[0])
 }
 
-// TestPing verifies the health check round-trips.
 func TestPing(t *testing.T) {
 	t.Parallel()
 
@@ -182,8 +177,6 @@ func TestPing(t *testing.T) {
 	assert.NoError(t, c.Ping(t.Context()))
 }
 
-// TestRequestRawSeam sends a method through the MCP raw-request seam.
-// tools/list rather than ping: the ping RPC was removed in protocol 2026-07-28.
 func TestRequestRawSeam(t *testing.T) {
 	t.Parallel()
 

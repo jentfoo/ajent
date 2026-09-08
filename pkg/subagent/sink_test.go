@@ -10,9 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestToolStart covers how a running tool call is shown: built-in labels are
-// bare words that get their first argument appended, while a rich provided label
-// is kept whole; the done hook restores the idle fallback.
 func TestToolStart(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -48,8 +45,6 @@ func TestToolStart(t *testing.T) {
 	}
 }
 
-// TestSinkTurnEndFallsBackToIdle verifies the row survives a turn ending: a job
-// outlives its turns, so only Manager.spawn may clear it.
 func TestSinkTurnEndFallsBackToIdle(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
@@ -62,9 +57,6 @@ func TestSinkTurnEndFallsBackToIdle(t *testing.T) {
 	assert.NotContains(t, c.rows, "sub-3|", "a live job's row is never cleared by a turn ending")
 }
 
-// TestToolStartParallelCalls covers overlapping child tool calls: an early
-// finisher must not wipe a sibling's label off the row, and the idle line returns
-// only once the last call ends.
 func TestToolStartParallelCalls(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
@@ -85,7 +77,6 @@ func TestToolStartParallelCalls(t *testing.T) {
 	assert.Equal(t, "sub-2  thinking…", c.rowText("sub-2"))
 }
 
-// TestSinkThinkingCoalesces verifies rapid deltas settle on a single publish.
 func TestSinkThinkingCoalesces(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
@@ -96,8 +87,6 @@ func TestSinkThinkingCoalesces(t *testing.T) {
 	assert.Equal(t, "sub-4  thinking…", c.rowText("sub-4"))
 }
 
-// TestSinkText covers how streaming text is rendered: only the current in-progress
-// line shows, completed lines scroll past, and whitespace-only deltas never publish.
 func TestSinkText(t *testing.T) {
 	t.Parallel()
 
@@ -139,8 +128,6 @@ func TestSinkText(t *testing.T) {
 	})
 }
 
-// TestSinkThinkingShowsReasoning verifies the child's chain-of-thought is surfaced
-// rather than collapsed to a placeholder.
 func TestSinkThinkingShowsReasoning(t *testing.T) {
 	t.Parallel()
 	c := newCapture()
@@ -150,8 +137,6 @@ func TestSinkThinkingShowsReasoning(t *testing.T) {
 	assert.Equal(t, "sub-6  then decide", c.rowText("sub-6"))
 }
 
-// TestSinkStreamSwitchStartsFresh verifies moving from thinking to text resets the
-// row so prose does not append onto leftover reasoning.
 func TestSinkStreamSwitchStartsFresh(t *testing.T) {
 	t.Parallel()
 	c := newCapture()

@@ -411,19 +411,12 @@ func TestFenceCloses(t *testing.T) {
 	}
 }
 
-// TestRuleCharSingleColumn guards the one glyph repeated to fill an entire
-// row: the live-block erase counts the divider as one terminal row, so uniseg's
-// measured width for the rule glyph must be exactly one column.
 func TestRuleCharSingleColumn(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, 1, displayWidth(ruleChar))
 }
 
-// TestMarkdownGlyphWidths pins the rest of the markdown vocabulary the way
-// TestRuleCharSingleColumn pins the rule. Table geometry is arithmetic over these
-// widths, and a list or quote marker feeds hangWidth, so a glyph the terminal
-// measures differently misaligns every continuation row under it.
 func TestMarkdownGlyphWidths(t *testing.T) {
 	t.Parallel()
 
@@ -451,8 +444,6 @@ func TestMarkdownGlyphWidths(t *testing.T) {
 	})
 }
 
-// TestWrapCellLine covers the guard the table path relies on; wrapCell screens
-// w <= 0 today, so this pins the behaviour if it is ever called directly.
 func TestWrapCellLine(t *testing.T) {
 	t.Parallel()
 

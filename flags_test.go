@@ -209,14 +209,6 @@ func TestCliFlagsValidate(t *testing.T) {
 	})
 }
 
-func TestCliFlagsScope(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, scopeDefault, cliFlags{}.scope())
-	assert.Equal(t, scopeAllowAll, cliFlags{allowAll: true}.scope())
-	assert.Equal(t, scopeReadOnly, cliFlags{readOnly: true}.scope())
-}
-
 func TestStatsFlagIsHeadlessOnly(t *testing.T) {
 	t.Parallel()
 

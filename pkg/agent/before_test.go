@@ -141,8 +141,6 @@ func TestInputBeforeMarkedInjected(t *testing.T) {
 	assert.True(t, gotInjected.Replayed) // the mark survives appendSteer stamping Injected
 }
 
-// TestNewOutputForwardsToSink asserts NewOutput streams writes and diffs to the
-// sink under the call id, so a host-run tool displays like an agent-run one.
 func TestNewOutputForwardsToSink(t *testing.T) {
 	t.Parallel()
 

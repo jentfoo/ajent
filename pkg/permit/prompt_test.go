@@ -97,8 +97,6 @@ func TestElideSubject(t *testing.T) {
 	})
 }
 
-// TestClassifierSystemVerbatim pins the shell classifier prompt so a wording change
-// is deliberate and reviewed.
 func TestClassifierSystemVerbatim(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, ClassifierSystem, "You decide whether a single shell command may run unattended")
@@ -108,8 +106,6 @@ func TestClassifierSystemVerbatim(t *testing.T) {
 	assert.Contains(t, ClassifierSystem, `Reserve "unsure" for unrecognized commands. Respond with ONLY the one word.`)
 }
 
-// TestMCPClassifierSystemVerbatim pins the MCP classifier prompt so a wording change
-// is deliberate and reviewed.
 func TestMCPClassifierSystemVerbatim(t *testing.T) {
 	t.Parallel()
 	p := MCPClassifierSystem("mcp_tool", "  does a thing  ", `{"type":"object"}`)
@@ -125,8 +121,6 @@ func TestMCPClassifierSystemVerbatim(t *testing.T) {
 {"type":"object"}`)
 }
 
-// TestWorkspaceClassifierSystemVerbatim pins the auto+write prompt so a wording
-// change is deliberate and reviewed.
 func TestWorkspaceClassifierSystemVerbatim(t *testing.T) {
 	t.Parallel()
 	p := WorkspaceClassifierSystem("/work/proj", "/tmp")

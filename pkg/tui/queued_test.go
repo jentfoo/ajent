@@ -89,8 +89,6 @@ func TestUIQueued(t *testing.T) {
 	})
 }
 
-// TestUIPrependInput covers inserting text at the top of the editor buffer,
-// both on an empty buffer and ahead of a draft.
 func TestUIPrependInput(t *testing.T) {
 	t.Parallel()
 
@@ -118,8 +116,6 @@ func TestUIPrependInput(t *testing.T) {
 	})
 }
 
-// TestUIAltUpEmitsRecallQueued pins Alt+↑ as an out-of-band Control so the front
-// end can pop a queued prompt back into the editor.
 func TestUIAltUpEmitsRecallQueued(t *testing.T) {
 	t.Parallel()
 

@@ -66,8 +66,6 @@ func TestRecallIndexLines(t *testing.T) {
 	})
 }
 
-// TestRecallIndexTimestampFromPrompt pins the clock so a typed-and-recorded line
-// proves it keeps the prompt's timestamp. Sequential: setClock mutates a package globals.
 func TestRecallIndexTimestampFromPrompt(t *testing.T) {
 	s, ws, h, idx := newRecallIndex(t)
 	h.Append("shared line") // no timestamp of its own

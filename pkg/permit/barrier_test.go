@@ -1110,9 +1110,6 @@ func (c *countingBlockingClassifier) finishedN() int {
 	return c.finished
 }
 
-// TestPrefetch asserts a batch's prompt-classified bash calls are each sent to
-// the model ahead of their dialogs, that statically resolved (read-only) or
-// config-safe calls never reach it, and that identical commands share one call.
 func TestPrefetch(t *testing.T) {
 	t.Parallel()
 
@@ -1157,8 +1154,6 @@ func TestPrefetch(t *testing.T) {
 	}
 }
 
-// TestPrefetchCancellation asserts an aborted turn stops every in-flight batch
-// classification, so no orphaned model call lingers after the batch is abandoned.
 func TestPrefetchCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -1176,8 +1171,6 @@ func TestPrefetchCancellation(t *testing.T) {
 	require.Eventually(t, func() bool { return cl.finishedN() == 2 }, time.Second, 100*time.Millisecond)
 }
 
-// TestPrefetchSkipsSessionAllowed asserts a call already granted for the session
-// is not re-sent to the model.
 func TestPrefetchSkipsSessionAllowed(t *testing.T) {
 	t.Parallel()
 

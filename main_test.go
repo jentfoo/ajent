@@ -30,7 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPrintVersion checks the version line is exactly `ajent version <Version>`.
 func TestPrintVersion(t *testing.T) {
 	t.Parallel()
 
@@ -88,9 +87,9 @@ func TestRewindStateRebuild(t *testing.T) {
 	// off the old reply, so TreeRows must show both chains as branches.
 	tipOld := branch[len(branch)-1].ID // assistant "reply one" stays an abandoned tip
 	w.SetHead(branch[1].ID)
-	forkA, _ := w.Append(session.TypeMessage,
+	forkA, err := w.Append(session.TypeMessage,
 		session.MessageData{Message: llm.Text(llm.RoleUser, "rewind + resubmit")})
-	require.NoError(t, w.Sync())
+	require.NoError(t, err)
 
 	entries = readEntriesRewind(t, p)
 	tree := session.TreeRows(entries, forkA.ID) // active head is the new submission
@@ -113,9 +112,6 @@ func TestRewindStateRebuild(t *testing.T) {
 	assert.False(t, oldActive)
 }
 
-// TestInitialRow verifies the rewind picker opens where the context currently
-// ends rather than at the bottom of the newest branch, so reopening it after a
-// rewind lands back at the same place in the tree.
 func TestInitialRow(t *testing.T) {
 	t.Parallel()
 
@@ -145,9 +141,6 @@ func TestInitialRow(t *testing.T) {
 	})
 }
 
-// TestRewindRowLabels verifies each tree row kind carries a tag, so the picker's
-// role column is never blank and the tree guides stay aligned, and that the kind
-// word is not repeated in the row body.
 func TestRewindRowLabels(t *testing.T) {
 	t.Parallel()
 
@@ -224,20 +217,18 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	assert.NotEqual(t, "a", got.ID)
 }
 
-// TestRewindToPrior verifies picking a message maps to rewinding *before* it:
-// the head becomes that message's parent and its full text is returned for the
-// editor, so re-sending starts the new branch. A user prompt rewinds to its
-// parent and pre-fills; an assistant reply stays as its own head with no text.
 func TestRewindTarget(t *testing.T) {
 	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
 
-	u1, _ := w.Append(session.TypeMessage,
+	u1, err := w.Append(session.TypeMessage,
 		session.MessageData{Message: llm.Text(llm.RoleUser, "hello world")})
-	a2, _ := w.Append(session.TypeMessage,
+	require.NoError(t, err)
+	a2, err := w.Append(session.TypeMessage,
 		session.MessageData{Message: llm.Text(llm.RoleAssistant, "hi there")})
+	require.NoError(t, err)
 
 	entries := readEntriesRewind(t, p)
 
@@ -401,8 +392,10 @@ func TestResumeByID(t *testing.T) {
 	// two distinct saved sessions; resume the older one by id.
 	_, err := store.Create(ws, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
-	older, _ := store.Create(ws, session.SessionData{Version: session.Version()})
-	list, _ := store.List(ws)
+	older, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	list, err := store.List(ws)
+	require.NoError(t, err)
 	require.Len(t, list, 2)
 
 	// resolve the saved info for that older file so we can address it by id.
@@ -544,11 +537,6 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	assert.Equal(t, at, cs.Compact) // the ledger's compact term follows the resumed threshold
 }
 
-// TestExtractResume locks in how --resume and its optional id are parsed out of
-// argv: bare means pick, a following token or = form carries the id, and unrelated
-// args pass through untouched for flag.Parse.
-// TestSubmittedEcho asserts a submitted KindPrompt echoes above the line, while
-// commands and shell lines do not — matching TurnStart's old behaviour.
 func TestSubmittedEcho(t *testing.T) {
 	t.Parallel()
 
@@ -598,7 +586,6 @@ func TestExtractResume(t *testing.T) {
 	assert.Equal(t, []string{"seed"}, rest)
 }
 
-// TestSessionHint verifies the resume hint resolves to the transcript's root id.
 func TestSessionHint(t *testing.T) {
 	t.Parallel()
 	p := filepath.Join(t.TempDir(), "s.jsonl")
@@ -613,8 +600,6 @@ func TestSessionHint(t *testing.T) {
 	assert.Empty(t, sessionHint(nil))
 }
 
-// TestSessionLabel verifies the exit hint prefers the session name over the id,
-// so a named session tells the user the name to pass back.
 func TestSessionLabel(t *testing.T) {
 	t.Parallel()
 
@@ -651,9 +636,6 @@ func TestSessionLabel(t *testing.T) {
 	})
 }
 
-// TestEmptyReportsNoConversation verifies a fresh transcript with zero message
-// entries is detected as empty so it can be dropped on exit, while any recorded
-// turn (or an unrecorded run) keeps the session.
 func TestEmptyReportsNoConversation(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
@@ -797,10 +779,11 @@ func TestSetSessionSettingAppliesModeAndPublishesSegment(t *testing.T) {
 		_ = outW.Close()
 	})
 
-	set, _, _ := config.Load(config.Options{
+	set, _, err := config.Load(config.Options{
 		Workspace: t.TempDir(),
 		Env:       func(string) string { return "" },
 	})
+	require.NoError(t, err)
 	b := permit.NewBarrier(func(string) bool { return false })
 	c := &uiConsole{ui: ui, set: set, permit: b}
 
@@ -824,19 +807,18 @@ func TestSetSessionSettingAppliesModeAndPublishesSegment(t *testing.T) {
 // TestSetSessionSettingOtherKeysLeaveBarrierAlone asserts non-permission keys do
 // not disturb the barrier's mode.
 func TestSetSessionSettingOtherKeysLeaveBarrierAlone(t *testing.T) {
-	set, _, _ := config.Load(config.Options{
+	set, _, err := config.Load(config.Options{
 		Workspace: t.TempDir(),
 		Env:       func(string) string { return "" },
 	})
+	require.NoError(t, err)
 	b := permit.NewBarrier(func(string) bool { return false })
 	c := &uiConsole{set: set, permit: b}
-	err := c.SetSessionSetting("model", "p/m")
+	err = c.SetSessionSetting("model", "p/m")
 	require.NoError(t, err)
 	assert.Equal(t, permit.ModeAllowRead, b.Mode())
 }
 
-// TestPromptAdapterPlainModeReportsNoUI asserts the prompter refuses in headless
-// mode so a call that would prompt is denied rather than silently allowed.
 func TestPromptAdapterPlainModeReportsNoUI(t *testing.T) {
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
@@ -858,8 +840,6 @@ func TestPromptAdapterPlainModeReportsNoUI(t *testing.T) {
 	assert.ErrorIs(t, err, tui.ErrNoUI)
 }
 
-// TestClassifierAdapterClassifiesShellCommands drives a fresh-context model call
-// against a scripted provider, covering readonly/write/garbled verdicts.
 func TestClassifierAdapterClassifiesShellCommands(t *testing.T) {
 	t.Parallel()
 
@@ -1068,7 +1048,7 @@ func TestMCPConfigDisabledToolsEnableViaSlashTools(t *testing.T) {
 	reg := tools.New()
 	reg.RegisterState("builtin", &stubTool{name: "read"}, tools.StateEnabled)
 
-	disabled := false
+	var disabled bool
 	mgr := mcp.New(map[string]mcp.ServerConfig{
 		"fake": {Command: buildFakeMCPServer(t), Enabled: &disabled},
 	}, mcp.Options{Registrar: registryAdapter{reg}})
@@ -1085,7 +1065,7 @@ func TestMCPConfigDisabledToolsEnableViaSlashTools(t *testing.T) {
 	// it must now be in the agent context (Schemas/Names) and active for status
 	assert.Contains(t, reg.Names(), "fake__tool_00")
 	assert.NotEmpty(t, reg.Schemas())
-	hasSchema := false
+	var hasSchema bool
 	for _, s := range reg.Schemas() {
 		if s.Name == "fake__tool_00" {
 			hasSchema = true
@@ -1103,7 +1083,7 @@ func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
 	reg := tools.New()
 	reg.RegisterState("builtin", &stubTool{name: "read"}, tools.StateEnabled)
 
-	disabled := false
+	var disabled bool
 	mgr := mcp.New(map[string]mcp.ServerConfig{
 		"fake": {Command: buildFakeMCPServer(t), Enabled: &disabled},
 	}, mcp.Options{
@@ -1225,7 +1205,7 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 		},
 		Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
-	committed := false
+	var committed bool
 	r := &sessRec{w: w, rec: session.NewRecorder(w), started: &committed}
 	r.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hello there")})
 

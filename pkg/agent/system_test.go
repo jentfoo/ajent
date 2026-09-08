@@ -142,14 +142,11 @@ func TestBuildSystem(t *testing.T) {
 	})
 }
 
-// TestIdentityLine pins the domain-neutral opening sentence so a wording change is
-// deliberate and reviewed.
 func TestIdentityLine(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "You help by following the user's instructions: research and review until you understand them, then focus on what is asked.\n\n", identityLine())
 }
 
-// TestDetectEnvironment exercises the real machine-fact probes.
 func TestDetectEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -177,8 +174,6 @@ func TestListCwd(t *testing.T) {
 	})
 }
 
-// TestBuildSystemProjectInstructions asserts the provenance-marked <project_context>
-// block is appended after environment facts when instructions are present.
 func TestBuildSystemProjectInstructions(t *testing.T) {
 	t.Parallel()
 

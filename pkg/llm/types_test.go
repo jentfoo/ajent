@@ -65,8 +65,6 @@ func TestBlockListMarshalJSON(t *testing.T) {
 	})
 }
 
-// TestMessageRebuildFieldsAreNotSerialized pins that the rebuild-only fields
-// (Origin, Stop) never reach the transcript while additive block fields survive it.
 func TestMessageRebuildFieldsRoundTrip(t *testing.T) {
 	t.Parallel()
 

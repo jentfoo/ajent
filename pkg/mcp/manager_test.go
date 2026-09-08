@@ -192,7 +192,7 @@ func TestConfigDisabledServer(t *testing.T) {
 	// registers each tool as StateDisabled: known and toggleable, never callable by default.
 	t.Run("loads_but_stays_inactive", func(t *testing.T) {
 		fr := newFakeRegistrar()
-		disabled := false
+		var disabled bool
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: buildFakeServer(t), Enabled: &disabled},
 		}, Options{Registrar: fr})
@@ -214,7 +214,7 @@ func TestConfigDisabledServer(t *testing.T) {
 	// server is config-disabled. The config flag is only a default, never a veto.
 	t.Run("honours_restored_enablement", func(t *testing.T) {
 		fr := newFakeRegistrar()
-		disabled := false
+		var disabled bool
 		mgr := New(nil, Options{
 			Registrar: fr,
 			Restore:   []string{"fake__tool_01"}, // enabled via /tools in the prior session
@@ -237,8 +237,6 @@ func TestConfigDisabledServer(t *testing.T) {
 	})
 }
 
-// TestRegisterMarksReadOnlyTools verifies bridged read-only tools are recorded on
-// the registrar as publication metadata.
 func TestRegisterMarksReadOnlyTools(t *testing.T) {
 	t.Parallel()
 

@@ -293,8 +293,6 @@ func TestNormalizeCallID(t *testing.T) {
 	})
 }
 
-// TestPrepareToolCallIDRewrite checks the rename map rewrites a foreign piped id
-// on both the call and its matching result in one pass.
 func TestPrepareToolCallIDRewrite(t *testing.T) {
 	t.Parallel()
 
@@ -316,9 +314,6 @@ func TestPrepareToolCallIDRewrite(t *testing.T) {
 	assert.Equal(t, nid, out[1].Content[0].(ToolResultBlock).CallID)
 }
 
-// TestPrepareSameOriginResultFollowsRename pins A3: a tool result whose own
-// origin matches the target still follows the call id its foreign caller was
-// renamed to earlier in the same pass.
 func TestPrepareSameOriginResultFollowsRename(t *testing.T) {
 	t.Parallel()
 
@@ -340,8 +335,6 @@ func TestPrepareSameOriginResultFollowsRename(t *testing.T) {
 	assert.Equal(t, nid, out[1].Content[0].(ToolResultBlock).CallID)
 }
 
-// TestPrepareDoesNotMutateInputBlocks pins A4: the placeholder ladder must not
-// write into the caller's backing array.
 func TestPrepareDoesNotMutateInputBlocks(t *testing.T) {
 	t.Parallel()
 

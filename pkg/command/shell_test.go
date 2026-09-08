@@ -252,8 +252,6 @@ func TestShellUserMessage(t *testing.T) {
 	}
 }
 
-// TestStagerStagedEstimate covers the token estimate the stager reports so the
-// context bar counts `!` output from the moment it lands, not at the next submit.
 func TestStagerStagedEstimate(t *testing.T) {
 	t.Parallel()
 
@@ -305,8 +303,6 @@ func TestStagerStagedEstimate(t *testing.T) {
 	})
 }
 
-// TestStagerDiscard asserts a branch switch drops staged results rather than
-// letting them ride the new branch's first prompt.
 func TestStagerDiscard(t *testing.T) {
 	t.Parallel()
 

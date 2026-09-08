@@ -459,9 +459,6 @@ func TestEditorInputView(t *testing.T) {
 	})
 }
 
-// TestPrefixWidths pins the prompt glyphs the editor budgets against: layout
-// subtracts these widths from every row, so a glyph the terminal measures wider
-// than uniseg does costs the row a column it already spent.
 func TestPrefixWidths(t *testing.T) {
 	t.Parallel()
 

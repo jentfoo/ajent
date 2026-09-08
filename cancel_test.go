@@ -136,8 +136,6 @@ func TestInterruptCancelsRunningBashEndToEnd(t *testing.T) {
 	assert.True(t, found, "the bash call must have an interrupted error result")
 }
 
-// TestClassifierAdapterCancelClosesStream verifies a cancelled classifier model
-// call stops reading immediately and maps to ClassUnsure (never cached).
 func TestClassifierAdapterCancelClosesStream(t *testing.T) {
 	t.Parallel()
 

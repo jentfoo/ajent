@@ -2275,9 +2275,6 @@ func TestSetTheme(t *testing.T) {
 	assert.NotContains(t, out.String(), "hello")
 }
 
-// TestMarkerWidths pins the committed-history and status glyphs. The spinner
-// matters most: frames swap in place on a live row, so a frame measuring
-// differently from its neighbours would change the row's width mid-animation.
 func TestMarkerWidths(t *testing.T) {
 	t.Parallel()
 

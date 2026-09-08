@@ -62,7 +62,7 @@ func TestEditReport(t *testing.T) {
 		assert.Contains(t, out, "+y")
 	})
 
-	t.Run("duplicated_newText_is_flagged", func(t *testing.T) {
+	t.Run("duplicated_new_text_is_flagged", func(t *testing.T) {
 		const block = "func helper() error { return nil }"
 		o := applied(t, "package p\n\n"+block+"\n\nfunc other() {}\n",
 			editOp{OldText: "func other() {}", NewText: block})

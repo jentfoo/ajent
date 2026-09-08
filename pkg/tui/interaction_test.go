@@ -204,9 +204,6 @@ func TestUIInputPrompt(t *testing.T) {
 	})
 }
 
-// TestPickItemRowRoleTags verifies the rewind tree colors its role word
-// independently of selection so the row kind reads at a glance, and that rows
-// off the active branch recede to the faint variant of the same hue.
 func TestPickItemRowRoleTags(t *testing.T) {
 	t.Parallel()
 	th := NewTheme(Color256, DefaultPalette())
@@ -237,8 +234,6 @@ func TestPickItemRowRoleTags(t *testing.T) {
 	})
 }
 
-// TestPickItemRowAlignment verifies every row reserves the same tag column, so
-// the tree guides in a rewind list start at one column whatever the row kind.
 func TestPickItemRowAlignment(t *testing.T) {
 	t.Parallel()
 	th := NewTheme(Color256, DefaultPalette())
@@ -265,8 +260,6 @@ func TestPickItemRowAlignment(t *testing.T) {
 	}
 }
 
-// TestPickItemRowNoColorMarksActive verifies the active chain stays identifiable
-// where shade cannot carry it: without color the row falls back to a "*" gutter.
 func TestPickItemRowNoColorMarksActive(t *testing.T) {
 	t.Parallel()
 	th := NewTheme(ColorNone, DefaultPalette())

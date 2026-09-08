@@ -12,10 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRegisterCommands guards the built-in set against being displaced by a
-// feature that registers its own commands: an earlier plan-workflow attempt
-// replaced the RegisterBuiltins call and silently lost /help, /model and the
-// rest.
 func TestRegisterCommands(t *testing.T) {
 	t.Parallel()
 

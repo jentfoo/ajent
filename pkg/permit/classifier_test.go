@@ -180,10 +180,6 @@ func collect(t *testing.T, ch <-chan Class, n int) []Class {
 	return out
 }
 
-// TestCachedClassifierInFlight covers the single-flight join: concurrent
-// identical subjects share one model request, a cancelled joiner takes unsure
-// without disturbing the leader's call, and a failed leader's unsure never
-// decides for a caller that still waits.
 func TestCachedClassifierInFlight(t *testing.T) {
 	t.Parallel()
 

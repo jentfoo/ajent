@@ -377,8 +377,6 @@ func (p *blockingProvider) Stream(_ context.Context, _ llm.Request) (llm.Stream,
 	return s, nil
 }
 
-// TestRunSummaryCancelStopsDraining cancels mid-drain and asserts runSummary stops
-// promptly with context.Canceled instead of returning partial text.
 func TestRunSummaryCancelStopsDraining(t *testing.T) {
 	t.Parallel()
 

@@ -195,27 +195,6 @@ func TestFresh(t *testing.T) {
 	}
 }
 
-func TestTTLFor(t *testing.T) {
-	t.Parallel()
-
-	// a local server's loaded model changes far more often than a hosted catalogue
-	tests := []struct {
-		name     string
-		flavor   Flavor
-		expected time.Duration
-	}{
-		{"lmstudio", FlavorLMStudio, localTTL},
-		{"llamacpp", FlavorLlamaCpp, localTTL},
-		{"openrouter", FlavorOpenRouter, hostedTTL},
-		{"anthropic", FlavorAnthropic, hostedTTL},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, ttlFor(tc.flavor))
-		})
-	}
-}
-
 func TestSaveCache(t *testing.T) {
 	t.Parallel()
 

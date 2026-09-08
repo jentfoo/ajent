@@ -106,9 +106,6 @@ func TestInterrupt(t *testing.T) {
 	})
 }
 
-// TestAbortResults covers the pure mapping that keeps an interrupted transcript
-// well formed: real results pass through in call order, missing calls get a
-// synthetic error, empty-call-id results are ignored.
 func TestAbortResults(t *testing.T) {
 	t.Parallel()
 

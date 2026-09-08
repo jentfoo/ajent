@@ -214,10 +214,6 @@ func TestCompactMeasuresRequestRetention(t *testing.T) {
 	})
 }
 
-// TestCompactRecompaction covers the second and later compactions of a session.
-// Every plan must measure against the context a prior compaction actually left and
-// carry its checkpoint forward; a plan that forgot either resurrected the whole
-// folded history on the next rebuild.
 func TestCompactRecompaction(t *testing.T) {
 	t.Parallel()
 

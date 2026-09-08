@@ -137,8 +137,6 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	assert.Equal(t, idB, found.ID)
 }
 
-// TestStoreRemoveDeletesOneSession verifies Remove drops the transcript and its
-// head cursor without touching a sibling session in the same workspace.
 func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()
@@ -175,8 +173,6 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	assert.False(t, ok) // cursor for the removed file is gone
 }
 
-// TestStoreStale verifies the --delete-old selection: unnamed sessions past the
-// cutoff only, judged on both halves of Info.Updated.
 func TestStoreStale(t *testing.T) {
 	now := time.UnixMilli(1_900_000_000_000).UTC()
 	cutoff := now.AddDate(0, 0, -28)

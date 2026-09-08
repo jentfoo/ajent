@@ -10,9 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGuardedToolExecuteWithAsker drives the ask path of Execute: an asker that
-// allows lets the tool run, one that denies refuses with its reason, and one
-// that re-asks is treated as a denial carrying the guard's original reason.
 func TestGuardedToolExecuteWithAsker(t *testing.T) {
 	t.Parallel()
 
@@ -70,8 +67,6 @@ func TestGuardedToolExecuteWithAsker(t *testing.T) {
 	}
 }
 
-// TestAskerReceivesGuardDecision asserts the asker sees the call and the guard's
-// Decision it is resolving.
 func TestAskerReceivesGuardDecision(t *testing.T) {
 	t.Parallel()
 
@@ -100,8 +95,6 @@ func TestAskerReceivesGuardDecision(t *testing.T) {
 	assert.Equal(t, "approval", gotDec.Reason)
 }
 
-// TestSetAskerNilRestoresDenial asserts clearing the asker makes an Ask refuse
-// again exactly as when none was ever registered.
 func TestSetAskerNilRestoresDenial(t *testing.T) {
 	t.Parallel()
 

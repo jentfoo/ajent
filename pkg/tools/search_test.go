@@ -347,7 +347,6 @@ func TestGrepFallbackSkipsGitIgnored(t *testing.T) {
 	assert.NotContains(t, out, "bundle.js") // ignored subtree pruned
 }
 
-// TestGrepFallbackCrlfStripsTrailingCarriage returns no trailing \r on either path.
 func TestGrepFallbackCrlfStripsTrailingCarriage(t *testing.T) {
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.txt", "match here\r\nother line\r\n")
@@ -364,7 +363,6 @@ func TestGrepFallbackCrlfStripsTrailingCarriage(t *testing.T) {
 	}
 }
 
-// TestRelToDotPrefixedFilename treats a ..-prefixed filename as inside the root.
 func TestRelToDotPrefixedFilename(t *testing.T) {
 	t.Parallel()
 

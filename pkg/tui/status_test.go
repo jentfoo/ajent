@@ -94,8 +94,6 @@ func TestUsageBar(t *testing.T) {
 	})
 }
 
-// TestFormatBytesNotTokens pins the distinction: sizes are binary with an
-// explicit unit, token counts are decimal with none.
 func TestFormatBytesNotTokens(t *testing.T) {
 	t.Parallel()
 
