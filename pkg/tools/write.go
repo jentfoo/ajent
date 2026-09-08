@@ -72,14 +72,20 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	}
 
 	// an overwrite keeps the existing file's majority line ending; a new file gets LF
-	existing, _ := os.ReadFile(full)
+	existing, readErr := os.ReadFile(full)
 	data := []byte(restoreLineEndings(normalizeToLF(p.Content), detectLineEnding(existing)))
 	if err := config.WriteFileAtomic(full, data, writePerm(full)); err != nil {
 		return resultErr("write: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, data, fileInfo(full))
 
-	return agent.ToolResult{
-		Content: llmBlock(fmt.Sprintf("wrote %s (%d lines)", p.Path, countLines(string(data)))),
-	}, nil
+	msg := fmt.Sprintf("wrote %s (%d lines)", p.Path, countLines(string(data)))
+	// an overwrite displaced content the model never saw, since it supplied the
+	// whole new file; a new file has nothing to report beyond its size
+	if readErr == nil {
+		if d := unifiedDiff(p.Path, normalizeToLF(string(existing)), normalizeToLF(p.Content)); d != "" {
+			msg += "\n\n" + d
+		}
+	}
+	return agent.ToolResult{Content: llmBlock(msg)}, nil
 }

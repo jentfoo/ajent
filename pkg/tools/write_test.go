@@ -14,7 +14,7 @@ import (
 func TestWrite(t *testing.T) {
 	t.Parallel()
 
-	// a new file creates parent dirs and writes content.
+	// a new file creates parent dirs and writes content
 	t.Run("new_file_creates_parents_and_diffs", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		res := e.writeExec(t.Context(), `{"path":"sub/out.txt","content":"hi\n"}`)
@@ -24,7 +24,7 @@ func TestWrite(t *testing.T) {
 		assert.Equal(t, "hi\n", string(data))
 	})
 
-	// an unread file may still be overwritten (content may come from grep/sed).
+	// an unread file may still be overwritten (content may come from grep/sed)
 	t.Run("allows_unread_overwrite", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		e.writeFile("a.txt", "original")
@@ -79,7 +79,7 @@ func TestWrite(t *testing.T) {
 		assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm()) // owner-only mode kept
 	})
 
-	// LF content written over a CRLF file restores CRLF so the document's convention survives.
+	// LF content written over a CRLF file restores CRLF so the document's convention survives
 	t.Run("overwrite_crlf_keeps_line_ending", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		p := filepath.Join(e.cwd, "a.txt")
@@ -102,5 +102,40 @@ func TestWrite(t *testing.T) {
 		data, err := os.ReadFile(filepath.Join(e.cwd, "fresh.txt"))
 		require.NoError(t, err)
 		assert.Equal(t, "one\ntwo\n", string(data))
+	})
+}
+
+func TestWriteReportsDisplacedContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("overwrite_shows_diff", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "keep\nold line\ntail\n")
+
+		res := e.writeExec(t.Context(), `{"path":"a.txt","content":"keep\nnew line\ntail\n"}`)
+		require.False(t, res.IsError)
+
+		out := textOf(res)
+		assert.Contains(t, out, "wrote a.txt")
+		assert.Contains(t, out, "-old line")
+		assert.Contains(t, out, "+new line")
+	})
+
+	t.Run("new_file_has_no_diff", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		res := e.writeExec(t.Context(), `{"path":"fresh.txt","content":"only\n"}`)
+		require.False(t, res.IsError)
+
+		out := textOf(res)
+		assert.Contains(t, out, "wrote fresh.txt")
+		assert.NotContains(t, out, "@@") // nothing was displaced
+	})
+
+	t.Run("identical_overwrite_has_no_diff", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "same\n")
+		res := e.writeExec(t.Context(), `{"path":"a.txt","content":"same\n"}`)
+		require.False(t, res.IsError)
+		assert.NotContains(t, textOf(res), "@@")
 	})
 }

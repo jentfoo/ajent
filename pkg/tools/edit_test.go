@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -15,6 +14,67 @@ import (
 func (e *toolEnv) editDryRun(args string) error {
 	c := agent.ToolCall{ID: "c", Name: "edit", Input: json.RawMessage(args)}
 	return (&editTool{policy: e.policy, tracker: e.tracker}).DryRun(c)
+}
+
+func TestDecodeEditParams(t *testing.T) {
+	t.Parallel()
+
+	want := editParams{Path: "a.txt", Edits: []editOp{{OldText: "a", NewText: "b"}}}
+
+	cases := []struct {
+		name string
+		args string
+	}{
+		{"declared_shape", `{"path":"a.txt","edits":[{"oldText":"a","newText":"b"}]}`},
+		{"edits_as_json_string", `{"path":"a.txt","edits":"[{\"oldText\":\"a\",\"newText\":\"b\"}]"}`},
+		{"single_edit_object", `{"path":"a.txt","edits":{"oldText":"a","newText":"b"}}`},
+		{"single_edit_as_string", `{"path":"a.txt","edits":"{\"oldText\":\"a\",\"newText\":\"b\"}"}`},
+		{"double_encoded_arguments", `"{\"path\":\"a.txt\",\"edits\":[{\"oldText\":\"a\",\"newText\":\"b\"}]}"`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := decodeEditParams(json.RawMessage(tc.args))
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+		})
+	}
+
+	t.Run("replace_all_survives", func(t *testing.T) {
+		got, err := decodeEditParams(json.RawMessage(
+			`{"path":"a.txt","edits":{"oldText":"a","newText":"b","replace_all":true}}`))
+		require.NoError(t, err)
+		assert.True(t, got.Edits[0].ReplaceAll)
+	})
+
+	t.Run("missing_edits_tolerated", func(t *testing.T) {
+		got, err := decodeEditParams(json.RawMessage(`{"path":"a.txt"}`))
+		require.NoError(t, err) // the empty-edits check reports it with a better message
+		assert.Empty(t, got.Edits)
+	})
+
+	t.Run("malformed_still_rejected", func(t *testing.T) {
+		_, err := decodeEditParams(json.RawMessage(`{"path":"a.txt","edits":[{`))
+		assert.Error(t, err)
+	})
+}
+
+func TestEditToleratesArgumentShape(t *testing.T) {
+	t.Parallel()
+
+	for _, args := range []string{
+		`{"path":"a.txt","edits":{"oldText":"world","newText":"ajent"}}`,
+		`{"path":"a.txt","edits":"[{\"oldText\":\"world\",\"newText\":\"ajent\"}]"}`,
+	} {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "hello world\n")
+		res := e.editExec(t.Context(), args)
+		require.False(t, res.IsError, textOf(res))
+
+		data, err := os.ReadFile(filepath.Join(e.cwd, "a.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "hello ajent\n", string(data))
+	}
 }
 
 func TestEditPreview(t *testing.T) {
@@ -41,6 +101,7 @@ func TestApplyEditsValidation(t *testing.T) {
 		args        string
 		errContains string // empty means the edit is accepted
 	}{
+		{"rejects_empty_edits_list", "x\n", `[]`, "at least one entry"}, // doomed, so never prompts
 		{"rejects_empty_old_text", "x\n", `[{"oldText":"","newText":"y"}]`, "empty oldText"},
 		{"rejects_noop_edit", "x\n", `[{"oldText":"same","newText":"same"}]`, "no-op edit"}, // changes nothing
 		{"rejects_duplicate_old_text", "one two\n", `[{"oldText":"one","newText":"1"},{"oldText":"one","newText":"2"}]`, "repeat the same oldText"},
@@ -66,14 +127,14 @@ func TestApplyEditsValidation(t *testing.T) {
 func TestEditDryRun(t *testing.T) {
 	t.Parallel()
 
-	// a missing file counts as doomed so the prompt is skipped.
+	// a missing file counts as doomed so the prompt is skipped
 	t.Run("missing_file_is_will_fail", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		err := e.editDryRun(`{"path":"nope.txt","edits":[{"oldText":"a","newText":"b"}]}`)
 		assert.Error(t, err) // missing file counts as doomed; skip the prompt
 	})
 
-	// a dry run never writes to disk.
+	// a dry run never writes to disk
 	t.Run("mutates_nothing_on_disk", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		orig := "one two three\n"
@@ -112,41 +173,38 @@ func TestEditFailure(t *testing.T) {
 		wantNot      []string // substrings that must not appear (no false blame)
 	}{
 		{"tab_vs_space_text_uses_spaces", "if x {\n foo()\n}\n", "if x {\n\tfoo()\n}\n",
-			[]string{"must match it exactly"}, nil},
+			[]string{"the file line uses 1 tab", "your text has 1 space"}, nil},
 		{"file_tab_text_more_spaces", "if x {\n    foo()\n}\n", "if x {\n\tfoo()\n}\n",
-			[]string{"1 tab(s)", "4 space(s)"}, nil},
+			[]string{"the file line uses 1 tab", "your text has 4 spaces"}, nil},
 		{"indent_count_differs", "if x {\n  foo()\n}\n", "if x {\n    foo()\n}\n", // text 2, file 4
-			[]string{"indentation count differs"}, nil},
+			[]string{"indentation differs", "the file line uses 4 spaces", "your text has 2 spaces"}, nil},
 		{"no_file_indent", "\tfoo()", "foo()",
-			[]string{"file line is not indented"}, []string{"use spaces"}}, // no false prescription
+			[]string{"the file line uses no indentation", "your text has 1 tab"},
+			[]string{"use spaces"}}, // no false prescription
 		{"content_differs", "no such function here", "the quick brown fox",
-			[]string{"not in the file"}, []string{"whitespace"}},
+			[]string{"appears nowhere in this file"}, []string{"whitespace"}},
 		{"inter_word_spacing", "var  a = 1\n", "var a = 1\n",
 			[]string{"the file has 1 space, your text has 2 spaces"}, nil},
 		{"letter_case_differs", "Foo Bar", "foo bar",
 			[]string{"letter case"}, []string{"whitespace"}},
-		{"file_trailing_ws_omitted", "\nfoo", "foo \t",
-			[]string{"the file line ends with mixed 1 tab and 1 space your text omits"}, nil},
-		{"text_only_trailing_ws", "x = 1 \ny=2", "x = 1\ny=2",
-			[]string{"your line ends with 1 space that is not in the file; remove it"}, nil},
 		{"extra_blank_lines_in_text", "func foo() {\n\n\n  bar()\n}", "func foo() {\n\n  bar()\n}",
 			[]string{"2 blank lines after line 1", "file has only 1 blank line there"}, nil},
 		{"missing_blank_lines_in_text", "func foo() {\n  bar()\n}", "func foo() {\n\n  bar()\n}",
 			[]string{"1 blank line after line 1 that your oldText omits"}, nil},
 		{"tab_depth_differs", "if x {\n\t\tfoo()\n}\n", "if x {\n\t\t\tfoo()\n}\n",
-			[]string{"the file line has 3 tabs", "your text has 2 tabs"}, nil},
+			[]string{"the file line uses 3 tabs", "your text has 2 tabs"}, nil},
 	}
 
 	for _, tc := range cases {
 		t.Run("zero_match_"+tc.name, func(t *testing.T) {
-			issues := diagnoseNoMatch(tc.old, tc.buf)
-			require.NotEmpty(t, issues)
-			joined := strings.Join(issues, "\n")
+			// drive the production path: it canonicalizes first, so a diagnostic
+			// reachable only from raw text cannot pass here
+			msg := missingError(1, editTarget{Path: "a.go"}, tc.old, tc.buf, nil)
 			for _, w := range tc.wantContains {
-				assert.Contains(t, joined, w)
+				assert.Contains(t, msg, w)
 			}
 			for _, nw := range tc.wantNot {
-				assert.NotContains(t, joined, nw) // no blanket claim on the wrong axis
+				assert.NotContains(t, msg, nw) // no blanket claim on the wrong axis
 			}
 		})
 	}
@@ -322,165 +380,44 @@ func TestEditPiNonCascadeCase(t *testing.T) {
 	assert.Equal(t, "foo bar\nBAR\nbaz\n", string(data))
 }
 
-// dupSpan maps 0-based inclusive line indexes [first,last] of after (LF) to a
-// byte range covering exactly those lines, for building replaced spans in tests.
-func dupSpan(after string, first int, last int) afterSpan {
-	lines := strings.Split(after, "\n")
-	var s int // byte offset of the start of line `first`
-	for i := 0; i < first && i < len(lines); i++ {
-		s += len(lines[i]) + 1 // newline separator between lines
-	}
-	e := s
-	for i := first; i <= last && i < len(lines); i++ {
-		if i > first {
-			e++
-		}
-		e += len(lines[i])
-	}
-	return afterSpan{idx: 0, s: s, e: e}
-}
-
-func TestDuplicationWarnings(t *testing.T) {
+// TestEditGuardsEarlierEditsAfterLinesMove covers the fuzzy guard's line ranges
+// surviving an edit that moved them. Unremapped they name unrelated lines, and a
+// heal then silently reverts work this session already did.
+func TestEditGuardsEarlierEditsAfterLinesMove(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name     string
-		after    string
-		replaced []afterSpan
-		wantLen  int // -1 means assert no warnings at all
-		contains []string
-	}{
-		{
-			name:     "two_line_block_in_region",
-			after:    "x\ny\nA\nB\nA\nB\nz\n",
-			replaced: []afterSpan{dupSpan("x\ny\nA\nB\nA\nB\nz\n", 0, 6)},
-			wantLen:  1,
-			contains: []string{
-				"WARN: Duplicate text detected after edit",
-				"lines 3-4 and 5-6 are identical",
-				">> A",
-				"\n     7\tz", // context below the region, no stray padding
-			},
-		},
-	}
+	const src = "package p\n\nconst (\n\tqueueDepth      = 1024\n\tbatchSize       = 512\n)\n"
+	const bump = `{"path":"c.go","edits":[{"oldText":"queueDepth      = 1024","newText":"queueDepth      = 4096"}]}`
+	const heal = `{"path":"c.go","edits":[{"oldText":"queueDepth      = 256","newText":"queueDepth      = 8192"}]}`
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			warns := duplicationWarnings(tc.after, tc.replaced)
-			if tc.wantLen < 0 {
-				assert.Empty(t, warns)
-				return
-			}
-			require.Len(t, warns, tc.wantLen)
-			for _, w := range tc.contains {
-				assert.Contains(t, strings.Join(warns, "\n"), w)
-			}
-		})
-	}
-
-	t.Run("single_line_pair_in_region", func(t *testing.T) {
-		after := "one\none\ntwo\n"
-		warns := duplicationWarnings(after, []afterSpan{dupSpan(after, 0, 3)})
-		assert.Len(t, warns, 1)
-	})
-
-	t.Run("outside_region_not_flagged", func(t *testing.T) {
-		after := "one\none\ntwo\n"
-		warns := duplicationWarnings(after, []afterSpan{dupSpan(after, 2, 3)})
-		assert.Empty(t, warns)
-	})
-
-	t.Run("blank_lines_ignored", func(t *testing.T) {
-		after := "text\n\ntext\n"
-		warns := duplicationWarnings(after, []afterSpan{dupSpan(after, 1, 2)})
-		assert.Empty(t, warns)
-	})
-
-	t.Run("largest_block_wins", func(t *testing.T) {
-		after := "a\na\na\na\n"
-		warns := duplicationWarnings(after, []afterSpan{dupSpan(after, 0, 4)})
-		assert.Len(t, warns, 1)
-	})
-
-	t.Run("seam_duplication_flagged", func(t *testing.T) {
-		after := "x\ny\ny\nz\n"
-		warns := duplicationWarnings(after, []afterSpan{dupSpan(after, 0, 3)})
-		assert.Len(t, warns, 1)
-	})
-	t.Run("odd_run_consolidated", func(t *testing.T) {
-		// three identical lines must report once, not as overlapping pairs.
-		after := "a\na\na\nb\n"
-		warns := duplicationWarnings(after, []afterSpan{dupSpan(after, 0, 2)})
-		assert.Len(t, warns, 1)
-	})
-
-	t.Run("multi_edit_overlap_lists_all", func(t *testing.T) {
-		// two edits intersect the same duplicate region; both are named.
-		after := "x\ny\nA\nB\nA\nB\nz\n"
-		warns := duplicationWarnings(after, []afterSpan{
-			{idx: 0, s: dupSpan(after, 2, 5).s, e: dupSpan(after, 3, 6).e},
-			{idx: 1, s: dupSpan(after, 4, 7).s, e: dupSpan(after, 8, 9).e},
-		})
-		assert.Len(t, warns, 1)
-	})
-}
-
-func TestEditDuplicateWarningResult(t *testing.T) {
-	t.Parallel()
-
-	t.Run("reemit_existing_line_warns", func(t *testing.T) {
+	t.Run("refuses_after_an_insert_above", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
-		e.writeFile("a.txt", "A\nB\nC\nD\n")
-		_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
+		e.writeFile("c.go", src)
+		require.False(t, e.editExec(t.Context(), bump).IsError)
 
-		res := e.editExec(t.Context(),
-			`{"path":"a.txt","edits":[{"oldText":"C","newText":"B\nC"}]}`)
-		assert.False(t, res.IsError) // edit applies; the warning is advisory
-		out := textOf(res)
-		assert.Contains(t, out, "WARN: Duplicate text detected after edit")
-		assert.Contains(t, out, "ensure the following is correct")
+		res := e.editExec(t.Context(), `{"path":"c.go","edits":[{"oldText":"package p\n",`+
+			`"newText":"package p\n\nimport \"x\"\nimport \"y\"\nimport \"z\"\n"}]}`)
+		require.False(t, res.IsError, textOf(res))
 
-		data, err := os.ReadFile(filepath.Join(e.cwd, "a.txt"))
+		res = e.editExec(t.Context(), heal)
+		assert.True(t, res.IsError) // moved, but still a line this session wrote
+
+		data, err := os.ReadFile(filepath.Join(e.cwd, "c.go"))
 		require.NoError(t, err)
-		assert.Equal(t, "A\nB\nB\nC\nD\n", string(data))
+		assert.Contains(t, string(data), "queueDepth      = 4096") // the first edit stands
 	})
 
-	t.Run("clean_edit_has_no_warning", func(t *testing.T) {
+	t.Run("a_write_drops_the_ranges", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
-		e.writeFile("a.txt", "hello world\n")
-		_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
+		e.writeFile("c.go", src)
+		require.False(t, e.editExec(t.Context(), bump).IsError)
 
-		res := e.editExec(t.Context(),
-			`{"path":"a.txt","edits":[{"oldText":"world","newText":"ajent"}]}`)
-		assert.False(t, res.IsError)
-		assert.NotContains(t, textOf(res), "WARN")
-	})
+		// the model supplied the whole file, so nothing left is work to protect
+		res := e.writeExec(t.Context(),
+			`{"path":"c.go","content":"package p\n\nconst (\n\tqueueDepth      = 4096\n)\n"}`)
+		require.False(t, res.IsError, textOf(res))
 
-	t.Run("preexisting_duplicate_not_flagged", func(t *testing.T) {
-		e := newToolEnv(t.TempDir())
-		e.writeFile("a.txt", "dupe\ndupe\nkeep\n")
-		_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
-
-		res := e.editExec(t.Context(),
-			`{"path":"a.txt","edits":[{"oldText":"keep","newText":"kept"}]}`)
-		assert.False(t, res.IsError)
-		assert.NotContains(t, textOf(res), "WARN")
-	})
-
-	t.Run("newline_join_duplication_warns", func(t *testing.T) {
-		e := newToolEnv(t.TempDir())
-		e.writeFile("a.txt", "x\ny\n")
-		_ = e.readExec(t.Context(), `{"path":"a.txt"}`)
-
-		res := e.editExec(t.Context(),
-			`{"path":"a.txt","edits":[{"oldText":"y","newText":"one\none"}]}`)
-		assert.False(t, res.IsError) // edit applies
-		out := textOf(res)
-		assert.Contains(t, out, "WARN: Duplicate text detected after edit")
-		assert.Contains(t, out, ">> one")
-
-		data, err := os.ReadFile(filepath.Join(e.cwd, "a.txt"))
-		require.NoError(t, err)
-		assert.Equal(t, "x\none\none\n", string(data))
+		res = e.editExec(t.Context(), heal)
+		assert.False(t, res.IsError, textOf(res))
 	})
 }

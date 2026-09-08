@@ -197,31 +197,97 @@ header that `ToolStart` commits, so no bespoke summary string is produced here.
 Writes a whole file atomically (temp file + rename) and creates parent
 directories. Emits a `Change` (empty → content for new files) through
 `Previewer`, rendered before the call is vetted rather than after it applies.
+Overwriting an existing file returns a unified diff of what was displaced, the
+one part of the change the model did not itself supply. A new file reports its
+line count alone.
 
 ### edit (`edit.go`)
 
-Exact-string replacement against an in-memory buffer, written once at the end:
-a multi-edit batch is all-or-nothing. The validation loop lives in one shared
-apply path used by both `Execute` and `DryRun`, preceded by an order-independent
-validation pass: an empty or duplicated old text, and a no-op edit, all fail before
-any write. Every op's span is resolved against the **original** buffer, never another
-edit's output, so edits cannot cascade; overlapping spans across ops are rejected.
-Zero matches returns an actionable diagnostic naming the reliably-detected cause
-(whitespace or casing, genuinely-absent content, or an earlier edit in the same
-batch that would create the match) plus a closest-line hint. A whitespace mismatch
-names the exact tabs/spaces counts of both the file line and the edit's text (a
-mixed run renders via `describeRun`, e.g. "2 tabs and 1 space"). After a successful
-apply, the tool scans each replacement region for adjacent identical non-blank lines
-(1- or 2-line blocks) and appends a non-error `WARN` block to the result naming the
-edit, the identical line ranges, and ±5 numbered context lines — so a replacement
-that re-emits text the file already retains is caught in the same round trip.
-Duplication the edit never touched, and blank lines, never warn. Multiple matches without `replace_all` returns the occurrence count
-and locations. Messages tell the model it **must provide text exactly** rather than
-asking it to copy, and always receive the original buffer so diagnostics stay
-actionable. Line endings follow one package-wide convention: model-visible output
-is always LF, while a write copies untouched regions verbatim and gives each
-replacement its neighbouring lines' ending. `write` overwrites with the existing
-file's majority ending, and a new file gets LF.
+String replacement against an in-memory buffer, written once at the end so a multi-edit
+batch is all-or-nothing. One shared apply path serves both `Execute` and `DryRun`, preceded
+by an order-independent validation pass (empty or duplicated old text, no-op edits) so nothing
+fails after any write. Every op's span resolves against the **original** buffer, never another
+edit's output — edits cannot cascade, and overlapping spans across ops are rejected.
+
+A match ladder resolves each `oldText` through four tiers: exact byte-for-byte, then canonical
+(unicode lookalikes folded to ASCII), a whole-block indent shift, then a fuzzy per-line match. Escalation
+happens only on *zero* matches; a tier that finds several leaves the ambiguity for the caller to reject rather than
+guessing which was meant. Canon and indent prove their span equal to the `oldText` it claims before
+writing, so a mapping bug degrades into a no-match error instead of corrupting the file; fuzzy
+cannot, and earns its span through its own guards below. An `oldText` that folds to bare newlines is
+refused above exact, since it would match every line boundary. The indent tier applies only to a
+uniform whole-block shift, where both texts' non-blank lines share one base indent, in either
+direction including onto a block the file holds flush left; a mixed or nested tab/space conversion
+matches nothing and falls through rather than being applied wrongly. Any match above exact reports in
+one line what differed, so the next edit is written correctly. Each differing run is widened to whole
+identifier and number tokens before it is quoted, since a value and the file's often share an edge
+digit (`4096` against `65536`) and a byte-level cut would quote back halves of a number; a non-exact
+match names every line that drifted, capped at `maxDriftQuotes`. The canon tier tells a trailing-whitespace
+difference from a lookalike by trailing-trim equality rather than by stripping all whitespace, which
+folds an nbsp away and misreports it, and names the characters that differed.
+
+The canon tier is skipped when `oldText` and `newText` canonicalize to the same text: there the
+edit's purpose is changing a character the folding ignores, so matching would rewrite already-correct
+text with itself. The edit fails instead. Indent still gets its chance, since a block quoted at the
+wrong depth remains provable.
+
+That principle also governs what a non-exact match writes. Only the run between the site's and the
+replacement's common affixes comes from `newText`; text the edit merely quoted keeps the file's own
+bytes, so a lookalike the model flattened survives outside the change. A site that folds to the
+replacement is written whole, since there the fold is the edit.
+
+The fuzzy tier heals a mis-transcribed value — `queueDepth = 256` where the file says `1024`. It
+works line by line: a line the region differs on must be one `newText` rewrites, and must differ
+only inside the part of that line `newText` rewrites. That is what makes writing `newText` the
+requested edit. A line the edit only quotes is refused, because applying would rewrite text the
+model was not changing and nothing in the call says whether it meant to; the same holds for a
+drift outside the rewritten part of a line it is changing. Healing needs `oldText` and `newText`
+to hold the same number of lines, since only then does each line pair up and the drift stay
+checkable; an edit that adds or removes lines applies through the tiers above or not at all. Five
+further guards apply: at most eight lines of one edit may differ, each differing line by one run
+of at most four characters with four characters of exact context anchoring it; the region must be
+the clear best match, where a second region under the limit is a guess outright and one just past
+it separates a match already thin; no line may overlap one an earlier edit wrote, since healing
+there could revert that edit; and the punctuation ending a matched line must survive into the
+replacement, since every other guard is measured on `oldText` while the apply writes over the
+file's line. Those line numbers hang off the tracker's observation of the file, so
+a later edit remaps them past its own insertions and any change the tool did not make drops them
+rather than leaving them pointing at unrelated lines; a re-read of unchanged content keeps them,
+since the numbers still name that text. A line differing only in indentation is left to the indent tier,
+which proves a uniform shift or refuses; healing it here would reformat the file.
+
+Diagnostics run only after every tier failed and reason in canonical space, so with each lookalike
+difference already rejected they name the real cause (whitespace or casing, genuinely-absent
+content, an earlier edit in the same batch) rather than blaming a stray smart quote. A spacing
+mismatch is one comparison of the two lines' whitespace runs, reported once per distinct difference
+with the lines it covers.
+The message ends with the closest text verbatim for copying: chosen by whole-block agreement over
+per-line token overlap (which previously landed hints outside the intended block), rendered untrimmed
+without a line gutter since position lives in the header and it must be reproduced byte for byte. Below
+a similarity floor nothing is offered at all — admitting no close match beats naming a decoy.
+
+One further signal rides on that message: when the closest text differs in one quotable run, it is
+named rather than left as two strings to be compared by eye, under the same token widening.
+
+Multiple matches without `replace_all` return the occurrence count and each match's line; messages
+tell the model it **must provide text exactly** rather than asking it to copy. Argument decoding
+tolerates what models emit in place of the declared schema (a double-encoded object, a
+JSON-stringified `edits`, a single edit where an array is declared), since rejecting those costs a round
+trip without saying anything new.
+
+Feedback returns a unified diff via `go-udiff` directly (`pkg/tools` never imports `pkg/tui`), bounded
+by `Elide`. The added side is the model's own text and the removed side names what the file actually
+held, so it makes a non-exact match explain itself. It rides only when there is reason to check the
+result: a match tier fired, one edit landed on several sites, or the apply duplicated text — its
+written text (as reindented, when a tier shifted it) now occurring elsewhere in the file, or a
+written line repeating its neighbour. An edit matched byte-exactly and landed where aimed returns
+the summary alone: the diff would only restate arguments the model just sent, and extra tokens become
+text for the next `oldText` to be modelled on.
+
+Line endings follow one package-wide convention: model-visible output is always LF,
+while a write copies untouched regions verbatim and gives each replacement its
+neighbouring lines' ending. `write` overwrites with the existing file's majority
+ending, and a new file gets LF.
 
 ### bash (`bash.go`)
 

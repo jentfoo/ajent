@@ -187,6 +187,7 @@ judge by one rule.
 
 Structure and conventions:
 - One `_test.go` file per implementation file that requires testing.
+- Test functions have no godocs.
 - One `func Test<FunctionName>` per target function, using table-driven tests or `t.Run` cases.
 - Test case names are at most 3–5 words, lower case with underscores.
 - `t.Parallel()` at test-function start when there's no shared state, but not in the individual cases.

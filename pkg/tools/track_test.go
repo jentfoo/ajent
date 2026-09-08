@@ -13,7 +13,7 @@ import (
 func TestTracker(t *testing.T) {
 	t.Parallel()
 
-	// no baseline means a path is never reported unchanged.
+	// no baseline means a path is never reported unchanged
 	t.Run("never_read_is_unchanged_false", func(t *testing.T) {
 		tr := NewTracker()
 		assert.False(t, tr.Unchanged("/nonexistent")) // no baseline for dedupe
@@ -31,7 +31,7 @@ func TestTracker(t *testing.T) {
 		assert.True(t, tr.Unchanged(path))
 	})
 
-	// modifying the file in place reports unchanged=false.
+	// modifying the file in place reports unchanged=false
 	t.Run("observe_then_modified", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "f.txt")
 		data := []byte("hello\nworld\n")
@@ -101,5 +101,45 @@ func TestTracker(t *testing.T) {
 		}
 		wg.Wait()
 		assert.Len(t, tr.Records(), 10) // -race validates the map is safe
+	})
+}
+
+func TestTrackerEditedRanges(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returned_for_the_observed_content", func(t *testing.T) {
+		tr := NewTracker()
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil)
+		tr.markEdited("a.go", []lineRange{{from: 1, to: 2}})
+		assert.Equal(t, []lineRange{{from: 1, to: 2}}, tr.editedFor("a.go", []byte("one\ntwo\n")))
+	})
+
+	t.Run("dropped_after_move", func(t *testing.T) {
+		tr := NewTracker()
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil)
+		tr.markEdited("a.go", []lineRange{{from: 1, to: 2}})
+		assert.Empty(t, tr.editedFor("a.go", []byte("something else\n")))
+	})
+
+	t.Run("a_later_observe_clears_them", func(t *testing.T) {
+		tr := NewTracker()
+		tr.Observe("a.go", []byte("one\n"), nil)
+		tr.markEdited("a.go", []lineRange{{from: 0, to: 1}})
+		tr.Observe("a.go", []byte("two\n"), nil) // what an overwriting write does
+		assert.Empty(t, tr.editedFor("a.go", []byte("two\n")))
+	})
+
+	t.Run("reread_of_same_content_keeps", func(t *testing.T) {
+		tr := NewTracker()
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil)
+		tr.markEdited("a.go", []lineRange{{from: 1, to: 2}})
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil) // what a read of the edited file does
+		assert.Equal(t, []lineRange{{from: 1, to: 2}}, tr.editedFor("a.go", []byte("one\ntwo\n")))
+	})
+
+	t.Run("unobserved_path_records_nothing", func(t *testing.T) {
+		tr := NewTracker()
+		tr.markEdited("a.go", []lineRange{{from: 0, to: 1}})
+		assert.Empty(t, tr.editedFor("a.go", []byte("x")))
 	})
 }

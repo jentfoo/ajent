@@ -205,8 +205,10 @@ anything that changes how the model should use the tool:
 - `bash`: runs in the session working directory; output is truncated with the
   full log spilled to a file, and timeout overrides the default. One shell process
   per call; there is no persistent `cd`.
-- `write`: creates or overwrites files, making parent directories.
-- `edit`: exact text replacement that applies atomically or not at all.
+- `write`: creates or overwrites files, making parent directories; an overwrite
+  reports what it displaced as a diff.
+- `edit`: text replacement that applies atomically or not at all; non-exact
+  text may still resolve through guarded match tiers, which the result names.
 
 The `agent_*` sub-agent tools carry their whole contract in the
 description because a model that learns them by trial burns a round trip each:
@@ -223,10 +225,12 @@ tools (those ride the schema channel like any other request).
 ### Split what the model sees from what the user sees
 
 The tool result has a model-facing form and a display form. `edit` shows the user
-a colourised diff but tells the model "applied"; `bash` streams full output to
-the screen while handing the model a truncated, ANSI-stripped version with an
-elision marker. The prompt contract is **the model must know when it has been
-told less than the whole truth**: truncation markers are not optional.
+a colourised diff while the model gets the summary plus a diff only when
+something needs checking (a non-exact match, several sites, possible duplication);
+`bash` streams full output to the screen while handing the model a truncated,
+ANSI-stripped version with an elision marker. The prompt contract is **the model
+must know when it has been told less than the whole truth**: truncation markers
+are not optional.
 
 ### Schema errors as feedback
 
