@@ -1504,7 +1504,7 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		if label == "" {
 			label = "(empty session)"
 		}
-		detail := in.Started.UTC().Format("2006-01-02 15:04 UTC") // sessions are stored as UTC
+		detail := in.Updated.UTC().Format("2006-01-02 15:04 UTC") // sessions are stored as UTC
 		if in.Model != "" {
 			detail += " · " + in.Model
 		}

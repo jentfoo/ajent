@@ -80,7 +80,7 @@ func (s *Store) Create(workspace string, d SessionData) (*Writer, error) {
 	return Create(filepath.Join(dir, name), d)
 }
 
-// List returns every session for workspace, newest first.
+// List returns every session for workspace, most recently used first.
 func (s *Store) List(workspace string) ([]Info, error) {
 	dir, err := s.Dir(workspace)
 	if err != nil {
@@ -105,11 +105,14 @@ func (s *Store) List(workspace string) ([]Info, error) {
 			out = append(out, info)
 		}
 	}
-	slices.SortFunc(out, func(a, b Info) int { return b.Started.Compare(a.Started) })
+	// ordered on last use, with start time only as a tie break
+	slices.SortFunc(out, func(a, b Info) int {
+		return cmp.Or(b.Updated.Compare(a.Updated), b.Started.Compare(a.Started))
+	})
 	return out, nil
 }
 
-// Latest returns the most recent session for workspace.
+// Latest returns the most recently used session for workspace.
 func (s *Store) Latest(workspace string) (Info, error) {
 	list, err := s.List(workspace)
 	if err != nil {
@@ -178,29 +181,19 @@ func (s *Store) Stale(workspace string, cutoff time.Time) ([]Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := bulk.SliceFilterInPlace(func(in Info) bool {
+	// List already orders on last use, the field the sweep selects by
+	return bulk.SliceFilterInPlace(func(in Info) bool {
 		return in.Name == "" && in.Updated.Before(cutoff)
-	}, list)
-	// List orders by start time; a sweep is judged on last use, so order on the
-	// same field it is selected and displayed by.
-	slices.SortFunc(out, func(a, b Info) int { return b.Updated.Compare(a.Updated) })
-	return out, nil
+	}, list), nil
 }
 
-// Remove deletes one saved transcript and its head cursor when it points at this
-// file. Other sessions in the directory (and editor history) are untouched.
+// Remove deletes one saved transcript and its branch cursor. Other sessions in
+// the directory (and editor history) are untouched.
 func (s *Store) Remove(path string) error {
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	if err := os.Remove(filepath.Join(dir, base)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	// clear the cursor only when it named this transcript; a dangling HEAD for an
-	// unrelated file would otherwise fall back to tail recovery.
-	if cur, ok := ReadHead(dir); ok && cur.File == base {
-		_ = os.Remove(headPath(dir))
-	}
-	return nil
+	return removeHead(path)
 }
 
 // Info describes one saved session for the resume picker.

@@ -102,33 +102,36 @@ func (w *Writer) Head() string {
 }
 
 // SetHead rewinds to id so later appends branch from it. The transcript keeps
-// both histories; nothing is deleted, and the new tip becomes the persisted HEAD.
+// both histories; nothing is deleted, and the new tip becomes the persisted
+// cursor. An empty id starts a new root and drops the cursor instead.
 func (w *Writer) SetHead(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.head = id
-	w.persistHeadLocked()
+	// a failure here resurfaces from the next Sync, which rewrites the same cursor
+	_ = w.persistHeadLocked()
 }
 
-// persistHeadLocked writes the HEAD cursor so resume continues from this branch.
-// Best-effort: a failed cursor write never fails an append or sync. Caller holds
-// the lock; no-op on Discard writers whose path is empty.
-func (w *Writer) persistHeadLocked() {
-	if w.path == "" || w.head == "" {
-		return
+// persistHeadLocked records the branch cursor so resume continues from here.
+// Caller holds the lock; no-op on Discard writers whose path is empty.
+func (w *Writer) persistHeadLocked() error {
+	if w.path == "" {
+		return nil
+	} else if w.head == "" {
+		return removeHead(w.path) // a new root has no branch to point at
 	}
-	_ = WriteHead(w.path, w.head)
+	return writeHead(w.path, w.head)
 }
 
-// Sync flushes the file at a turn boundary and records the current head.
+// Sync flushes the file at a turn boundary and records the current head,
+// returning any cursor and fsync failure together.
 func (w *Writer) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed || w.f == nil {
 		return nil
 	}
-	w.persistHeadLocked()
-	return w.f.Sync()
+	return errors.Join(w.persistHeadLocked(), w.f.Sync())
 }
 
 // Close releases the underlying file. Idempotent; safe on Discard writers.

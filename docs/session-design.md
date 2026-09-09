@@ -27,7 +27,7 @@ Goals, in priority order:
    while keeping every prior one reachable.
 3. Resuming reconstructs agent state and replays history exactly as it was.
 
-Goal 2 is what drove most of the shape below: branches, the `HEAD` cursor, and
+Goal 2 is what drove most of the shape below: branches, the branch cursor, and
 the rewind picker all exist for it.
 
 ## The transcript format
@@ -88,10 +88,11 @@ disk never advances the cursor.
 - **Open** reopens an existing file for append and recovers the head from its tail.
 - **Discard** returns a writer with no backing file, so callers stay branch-free.
 - **Sync** flushes at a turn boundary *and* persists the current head; it is
-  never called by `Append`.
+  never called by `Append`. A cursor that could not be written returns alongside
+  the fsync failure.
 - **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
   transcript keeps both histories (nothing is deleted) and the new tip becomes
-  the persisted `HEAD`.
+  the persisted cursor; an empty id starts a new root and drops the cursor.
 
 ## Durability
 
@@ -109,18 +110,22 @@ Write failures never end a conversation: persistence errors surface as an
 error-level notice through the sink rather than failing the turn. A broken disk
 should degrade to "not recorded", not kill the agent.
 
-## The HEAD cursor
+## The branch cursor
 
-The one mutable piece of an otherwise append-only design is `HEAD`, persisted at
-`<session dir>/HEAD`. It points where work continues after a fork: which
-transcript file in the directory and which entry id inside it. That pair (file
-base name plus active branch head id) is what a rewind updates.
+The one mutable piece of an otherwise append-only design is the branch cursor: the
+entry id where work continues after a fork, which is what a rewind updates. It is
+persisted beside its transcript at `<transcript>.head`, written atomically on every
+`SetHead` and at turn boundaries.
 
-`WriteHead` is atomic (temp-file rename) and runs on every `SetHead` and at turn
-boundaries. `headFor(path, entries)` resolves a transcript's effective head: the
-persisted `HEAD` when it points into this file *and* its id still exists,
-otherwise tail recovery. That fallback matters: if `HEAD` is ever lost or
-corrupt, resume degrades to "continue from the end" instead of losing the branch.
+**One cursor per transcript, never per directory.** A directory holds every session
+for a workspace, so a shared cursor can only remember one of them — and two ajent
+instances in one workspace overwrite each other's. A sidecar cannot be claimed by a
+sibling, so no session and no concurrent process can steer another.
+
+Forking onto a new root removes the cursor rather than writing one, so it can never
+point back at the branch just abandoned. `headFor` falls back to tail recovery when
+a cursor is missing, corrupt, or names an id the file no longer holds, so a lost
+cursor degrades to "continue from the end" instead of losing the branch.
 
 ## The store
 
@@ -132,10 +137,12 @@ recognisable at a glance; it is lossy, so the hash is what pins the identity.
 Names are never parsed back into a workspace. The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
-- **List** returns every session for a workspace, newest first; each row carries
-  the summary a picker shows (model, length, first prompt). It scans only
-  non-directory `*.jsonl` entries so side files never surface as phantom rows.
-- **Latest** is `--continue`'s target: the most recent session.
+- **List** returns every session for a workspace, most recently used first (start
+  time only breaks ties); each row carries the summary a picker shows (model,
+  length, first prompt). It scans only non-directory `*.jsonl` entries so side
+  files never surface as phantom rows.
+- **Latest** is `--continue`'s target: the most recent session. Last use rather
+  than start time is what makes it land on the work actually left in progress.
 - **Find** resolves one target in order: exact name (case insensitive), then
   exact id, then unique id prefix. Names match exactly only; ambiguity at any
   step errors rather than guessing.
@@ -151,11 +158,10 @@ Names are never parsed back into a workspace. The store:
 - **Stale** is `--delete-old`'s selection: the *unnamed* sessions last used
   before a caller-supplied cutoff, most recently used first. The cutoff is
   policy and stays in `cmd/ajent`, so the package holds no retention rule of its
-  own. It re-sorts rather than inheriting `List`'s start-time order, so the
-  confirmation list reads in the same key it is selected and displayed by.
-- **Remove** is the one deletion primitive: it drops a transcript plus the head
-  cursor when that cursor names it, leaving siblings and editor history alone.
-  Empty-session cleanup, `--delete` and `--delete-old` all go through it.
+  own. It inherits `List`'s order, which is already the key it selects by.
+- **Remove** is the one deletion primitive: it drops a transcript plus its branch
+  cursor, leaving siblings and editor history alone. Empty-session cleanup,
+  `--delete` and `--delete-old` all go through it.
 - **Info.Updated** is what `Stale` judges: the newest entry's timestamp, or the
   file mtime when that is later. Taking the later of the two is the conservative
   direction, so a restored backup is not mistaken for abandoned work. Raw file
@@ -295,7 +301,7 @@ with a `model_change` entry, or `State` has no model to resolve for that branch.
 the writer's `SetHead` to that message's *parent* (so the picked text becomes the
 start of the new branch), rebuilds agent state from that head, redraws the UI,
 replays the restored context, and pre-fills the editor with the full original
-prompt, ready to edit or re-send. `HEAD` now points at the fork's tip; both it
+prompt, ready to edit or re-send. The cursor now points at the fork's tip; both it
 and every earlier branch remain in the file.
 
 Rewinding to the parent is why an `@` reference's injected read is appended
@@ -381,7 +387,7 @@ declines rather than deleting blind.
 These are load bearing. Each exists because breaking it produced a real bug.
 
 **1. The transcript is append-only; nothing is ever deleted.** Forks, rewinds
-and compaction only add entries and move `HEAD`. Deleting would orphan branches
+and compaction only add entries and move the cursor. Deleting would orphan branches
 that other tips still point at.
 
 This governs entries *within* a transcript. Retiring a whole session (empty-session
@@ -404,14 +410,15 @@ the session while its entry stays on disk, freeing the old name to create a
 duplicate.
 
 **3. The live head wins over the file tail.** They agree only until the first
-fork. After a rewind, or a plan workflow that leaves `HEAD` on the review branch
-while the tail is an implementation entry, the tail belongs to a different
+fork. After a rewind, or a plan workflow that leaves the cursor on the review
+branch while the tail is an implementation entry, the tail belongs to a different
 branch. Resume and rebuild prefer the writer's head and fall back to the tail
-only when it no longer resolves.
+only when it no longer resolves. The cursor is per transcript, so a sibling
+session can never answer this question for another.
 
 **4. The head advances only on success.** An append updates the cursor after a
 successful write; an fsync records it at turn boundaries. A lost or corrupt
-`HEAD` falls back to tail recovery rather than losing the branch entirely.
+cursor falls back to tail recovery rather than losing the branch entirely.
 
 **5. Rebuilt context stays well formed.** Every `ToolCallBlock` is matched by a
 `ToolResultBlock`, exactly as in the agent loop, or the next request would be

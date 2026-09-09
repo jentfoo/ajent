@@ -13,6 +13,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// writeAt creates a session holding one message whose entry timestamps and file
+// mtime both sit at at, so Info.Updated (the later of the two) lands there.
+func writeAt(t *testing.T, s *Store, ws string, at time.Time, d SessionData, text string) *Writer {
+	t.Helper()
+	restore := setClock(at)
+	w, err := s.Create(ws, d)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	restore()
+	appendAt(t, w, at, text)
+	return w
+}
+
+// appendAt adds one message to w at at, moving its last-used time with it.
+func appendAt(t *testing.T, w *Writer, at time.Time, text string) {
+	t.Helper()
+	restore := setClock(at)
+	_, err := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, text)})
+	require.NoError(t, err)
+	restore()
+	require.NoError(t, os.Chtimes(w.Path(), at, at))
+}
+
 func TestStoreDirDeterministic(t *testing.T) {
 	t.Parallel()
 
@@ -88,11 +111,35 @@ func TestStoreList(t *testing.T) {
 		hh, hherr := NewEditorHistory(s, ws, "")
 		require.NoError(t, hherr)
 		hh.Append("/model")
+		require.NoError(t, writeHead(w.Path(), txID)) // the branch cursor sidecar
 
 		list, lerr := s.List(ws)
 		require.NoError(t, lerr)
 		assert.Len(t, list, 1)
 		assert.Equal(t, txID, list[0].ID)
+	})
+
+	// --continue means the session last worked in, not the one started last.
+	t.Run("orders_by_last_use", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		base := time.UnixMilli(1_800_000_000_000).UTC()
+		t.Cleanup(setClock(base))
+
+		// old starts first, new second, then old is worked in again
+		old := writeAt(t, s, ws, base, SessionData{Version: sessionVersion}, "old")
+		newer := writeAt(t, s, ws, base.Add(time.Hour), SessionData{Version: sessionVersion}, "new")
+		appendAt(t, old, base.Add(2*time.Hour), "back to old")
+
+		list, lerr := s.List(ws)
+		require.NoError(t, lerr)
+		require.Len(t, list, 2)
+		assert.Equal(t, old.Path(), list[0].Path)
+		assert.Equal(t, newer.Path(), list[1].Path)
+
+		latest, lerr := s.Latest(ws)
+		require.NoError(t, lerr)
+		assert.Equal(t, old.Path(), latest.Path)
 	})
 
 	t.Run("empty_when_missing_dir", func(t *testing.T) {
@@ -145,21 +192,19 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	require.NoError(t, err)
 	_, aerr := w1.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "keep me")})
 	require.NoError(t, aerr)
-	require.NoError(t, w1.Sync()) // persist HEAD for w1
+	require.NoError(t, w1.Sync())
 	require.NoError(t, w1.Close())
 
 	w2, err := s.Create(ws, SessionData{Version: sessionVersion})
 	require.NoError(t, err)
 	removedID := w2.Head()
-	require.NoError(t, w2.Sync()) // HEAD now names w2
+	require.NoError(t, w2.Sync())
 	require.NoError(t, w2.Close())
 
-	dir, derr := s.Dir(ws)
-	require.NoError(t, derr)
-	_, herr := ReadHead(dir)
-	require.True(t, herr) // cursor points at the removed session before cleanup
+	_, ok := readHead(w2.Path())
+	require.True(t, ok) // each session carries its own cursor
 
-	// removing the empty w2 leaves only its own file and clears HEAD for it.
+	// removing the empty w2 takes its file and cursor, leaving w1 whole.
 	rerr := s.Remove(w2.Path())
 	require.NoError(t, rerr)
 
@@ -168,28 +213,19 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	assert.Len(t, list, 1)
 	assert.NotEqual(t, removedID, list[0].ID)
 
-	dir2, _ := s.Dir(ws)
-	_, ok := ReadHead(dir2)
-	assert.False(t, ok) // cursor for the removed file is gone
+	_, ok = readHead(w2.Path())
+	assert.False(t, ok)
+	_, ok = readHead(w1.Path())
+	assert.True(t, ok) // the sibling's cursor is untouched
 }
 
 func TestStoreStale(t *testing.T) {
 	now := time.UnixMilli(1_900_000_000_000).UTC()
 	cutoff := now.AddDate(0, 0, -28)
 
-	// aged writes a session whose entry timestamps and file mtime both sit at at,
-	// so Updated (the later of the two) lands there.
 	aged := func(t *testing.T, s *Store, ws string, at time.Time, d SessionData) string {
 		t.Helper()
-		restore := setClock(at)
-		w, err := s.Create(ws, d)
-		require.NoError(t, err)
-		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello")})
-		require.NoError(t, aerr)
-		require.NoError(t, w.Close())
-		restore()
-		require.NoError(t, os.Chtimes(w.Path(), at, at))
-		return w.Path()
+		return writeAt(t, s, ws, at, d, "hello").Path()
 	}
 
 	t.Run("old_unnamed_is_stale", func(t *testing.T) {

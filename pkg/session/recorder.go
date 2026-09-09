@@ -100,8 +100,11 @@ func (s *recordingSink) Notice(msg string, level agent.Level) {
 	s.next.Notice(msg, level)
 }
 
-// TurnEnd fsyncs the transcript at a turn boundary.
+// TurnEnd fsyncs the transcript at a turn boundary; a failure surfaces as an
+// error-level notice rather than ending the turn.
 func (s *recordingSink) TurnEnd(r agent.TurnResult) {
-	_ = s.rec.w.Sync()
+	if err := s.rec.w.Sync(); err != nil {
+		s.next.Notice("failed to persist session: "+err.Error(), agent.LevelError)
+	}
 	s.next.TurnEnd(r)
 }

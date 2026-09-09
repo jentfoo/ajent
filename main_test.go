@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -341,6 +342,53 @@ func TestOpenSessionModes(t *testing.T) {
 		func([]session.Info) (int, error) { return 0, tui.ErrCancelled })
 	require.NoError(t, err)
 	assert.NotEqual(t, firstPath, wCancel.Path())
+}
+
+func TestOpenSessionContinueRewound(t *testing.T) {
+	t.Parallel()
+	ws := t.TempDir() + "/workspace"
+	require.NoError(t, os.MkdirAll(ws, 0o700))
+	store := session.StoreAt(filepath.Join(t.TempDir(), "root"))
+
+	// session A ends on a rewind, so its branch head is a1 while its file tail is a3
+	wa, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	a1, err := wa.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+	require.NoError(t, err)
+	_, err = wa.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "two")})
+	require.NoError(t, err)
+	a3, err := wa.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "three")})
+	require.NoError(t, err)
+	wa.SetHead(a1.ID)
+	require.NoError(t, wa.Close())
+
+	// session B is started later and synced, which must not disturb A's cursor
+	wb, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	_, err = wb.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "other")})
+	require.NoError(t, err)
+	require.NoError(t, wb.Sync())
+	require.NoError(t, wb.Close())
+
+	// A was worked in most recently even though B was started later
+	used := time.Now().Add(time.Hour)
+	require.NoError(t, os.Chtimes(wa.Path(), used, used))
+
+	w, err := openSession(store, modeContinue, ws, "", "", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	assert.Equal(t, wa.Path(), w.Path())
+	assert.Equal(t, a1.ID, w.Head())
+
+	// the abandoned tail stays on disk but off the resumed branch
+	entries, _, rerr := session.Read(w.Path())
+	require.NoError(t, rerr)
+	branch := session.Branch(entries, w.Head())
+	assert.False(t, slices.ContainsFunc(branch, func(e session.Entry) bool { return e.ID == a3.ID }))
 }
 
 // TestOpenSessionByName locks in --session: an unknown name creates a transcript

@@ -2,59 +2,62 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
-	"path/filepath"
+	"slices"
 
 	"github.com/jentfoo/ajent/pkg/config"
 )
 
-// HeadCursor is the mutable pointer to where work continues after a fork. It is
-// persisted as <session dir>/HEAD, the one mutable piece of an otherwise append-only design.
-type HeadCursor struct {
-	File string `json:"file"` // base name of one .jsonl session in the directory
-	ID   string `json:"id"`   // active branch head inside that file
+// headSuffix names a transcript's cursor sidecar, the one mutable piece of an
+// otherwise append-only design.
+const headSuffix = ".head"
+
+// headCursor is the active branch head of the transcript it sits beside.
+type headCursor struct {
+	ID string `json:"id"`
 }
 
-const headName = "HEAD"
+// headPath returns the cursor sidecar beside the transcript at sessionPath.
+func headPath(sessionPath string) string { return sessionPath + headSuffix }
 
-func headPath(dir string) string { return filepath.Join(dir, headName) }
-
-// WriteHead persists the active branch pointer for one session so resume
-// continues from a fork rather than the transcript tail. It is overwritten on
-// every SetHead and at turn boundaries.
-func WriteHead(sessionPath, id string) error {
-	cur := HeadCursor{File: filepath.Base(sessionPath), ID: id}
-	b, err := json.Marshal(cur)
+// writeHead persists the active branch head for the transcript at sessionPath.
+func writeHead(sessionPath, id string) error {
+	b, err := json.Marshal(headCursor{ID: id})
 	if err != nil {
 		return err
 	}
-	return config.WriteFileAtomic(headPath(filepath.Dir(sessionPath)), b, config.SecretPerm)
+	return config.WriteFileAtomic(headPath(sessionPath), b, config.SecretPerm)
 }
 
-// ReadHead returns the persisted branch pointer for a session directory. ok is
-// false when it is missing or corrupt; callers fall back to tail recovery.
-func ReadHead(dir string) (HeadCursor, bool) {
-	b, err := os.ReadFile(headPath(dir))
+// removeHead drops one transcript's cursor. A missing sidecar is not an error.
+func removeHead(sessionPath string) error {
+	if err := os.Remove(headPath(sessionPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// readHead returns the persisted branch head for the transcript at sessionPath.
+// ok is false when it is missing, empty or corrupt.
+func readHead(sessionPath string) (string, bool) {
+	b, err := os.ReadFile(headPath(sessionPath))
 	if err != nil || len(b) == 0 {
-		return HeadCursor{}, false
+		return "", false
 	}
-	var cur HeadCursor
-	if json.Unmarshal(b, &cur) != nil || cur.File == "" || cur.ID == "" {
-		return HeadCursor{}, false
+	var cur headCursor
+	if json.Unmarshal(b, &cur) != nil || cur.ID == "" {
+		return "", false
 	}
-	return cur, true
+	return cur.ID, true
 }
 
-// headFor resolves the branch head for one transcript file: the persisted HEAD
-// when it points into this file and its id exists, else tail recovery.
+// headFor resolves the branch head for one transcript: its persisted cursor when
+// the id still exists, else tail recovery.
 func headFor(path string, entries []Entry) string {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if cur, ok := ReadHead(dir); ok && cur.File == filepath.Base(path) {
-			for _, e := range entries {
-				if e.ID == cur.ID {
-					return cur.ID
-				}
-			}
+	if id, ok := readHead(path); ok {
+		if slices.ContainsFunc(entries, func(e Entry) bool { return e.ID == id }) {
+			return id
 		}
 	}
 	return Head(entries)
