@@ -21,50 +21,9 @@ recorded response fixtures per provider.
 
 ## Layers
 
-```
-pkg/llm/
-  types.go          content model, BlockList and its type tagged JSON
-  request.go        Request, Provider, Counter, Discoverer, Level, RetainPolicy
-  caps.go           Capabilities, TokenizerKind
-  event.go          Event, EventType, StopReason, Usage
-  stream.go         Stream, Accumulator, Accumulate, SliceStream
-  fake.go           ScriptedProvider, for callers that need a provider in tests
-  model.go          Model
-  errors.go         APIError, sentinels
-  enum.go           text encoding shared by every enum
-  duration.go       Duration, the config duration form
-
-  sse.go            dialect free frame parser, shared with any SSE consumer
-  httpclient.go     provider request layer over pkg/httputil, key resolution
-  retry.go          RetryPolicy, the models.json retry form
-
-  config.go         models.json schema and loading
-  defaults.go       per flavor defaults and the capability merge
-  registry.go       Model list, Resolve, Refresh, declared-wins merge
-  discover.go       discovery cache, conditional refetch, orchestration
-  detect.go         auto-detected chat-completions quirks by name/base URL
-  providers.go      one Provider per endpoint cache
-  factory.go        ProviderConfig -> Provider
-
-  prepare.go        Prepare (message normalization)
-  retention.go      retention policy helpers
-  think.go          inline thinking splitting
-  thinking.go       reasoning on/off onto the wire shape
-  toolacc.go        tool argument accumulation
-  classify.go       per flavor error and overflow classification
-
-  anthropic.go      Messages API
-  openai.go         Responses API, chat-completions fallback
-  openaicompat.go   the shared chat-completions dialect
-  openrouter.go     profile over openaicompat
-  llamacpp.go       profile over openaicompat, /props, /tokenize
-  lmstudio.go       profile over openaicompat, /api/v0/models
-  *_wire.go         JSON structs only, no logic
-```
-
-Everything above the adapter files is vendor agnostic. Three of the five
-providers are a profile over `openaicompat.go` plus a discovery parser; adding a
-sixth of that shape is a small, self-contained amount of code.
+The package keeps a shared chat-completions dialect: three of the five providers are
+a thin profile over `openaicompat.go` plus a discovery parser, so adding a sixth of
+that shape is small and self-contained.
 
 The rule `pkg/config ↛ pkg/llm` (see `config-design.md`) is why `models.json`
 decodes in `pkg/llm/config.go` rather than in `pkg/config`.
@@ -542,23 +501,14 @@ ignores it.
 ## Testing
 
 Fixtures are **raw wire bytes**, byte-identical to what the vendor sends, under
-`pkg/llm/testdata/<provider>/`. No invented fixture dialect, so a recorded
-response can be dropped in.
-
-Two replay servers. `sseServer` writes one frame at a time; `sseServerChunked`
-writes fixed-size chunks so a write boundary lands inside a JSON escape and
-proves the SSE reader reassembles before the decoder sees anything. The chunk
-size in those tests is coprime with the frame lengths on purpose.
-
-Golden expectations are Go literals, not files: a field rename becomes a compile
-error instead of a silent mismatch, and there is no `-update` flag to fight CI's
-`git diff --exit-code`. Request bodies compare with `assert.JSONEq`, since key
-order is not part of the contract.
+`pkg/llm/testdata/<provider>/`. No invented fixture dialect. Two replay servers
+prove the SSE reader reassembles a frame split at any write boundary; golden
+expectations are Go literals so a field rename becomes a compile error rather than
+a silent mismatch.
 
 **No test touches the network, and no test sleeps.** Retry asserts the durations
-handed to an injected `sleep`; the idle timeout fires through an injected
-`afterFunc` whose armed timer is handed to the firing goroutine over a channel,
-so the expiry is ordered against the read with no polling.
+handed to an injected `sleep`; timeout paths fire through injected timers ordered
+against the read with no polling.
 
 **Cross-dialect parity** is pinned separately, in `contract_test.go`. The
 per-dialect suites above each prove one adapter reads its own vendor correctly;
@@ -584,23 +534,13 @@ The contract fixtures are separate from the per-dialect ones on purpose: those
 are shared by many call sites with their own assertions, so editing them to make
 payloads line up would leak one test's needs into unrelated tests.
 
-Scenarios covered per dialect: text only, thinking plus text, single tool call,
-parallel tool calls, arguments split mid-token, usage-only final frame,
-mid-stream error, close mid-stream, and overflow classification. Plus the
-retention matrix (four policies against five capability sets), the `<think>`
-splitter table including a tag split across three deltas, and the tool
-accumulator including arguments that parse early.
-
 ## Traps
 
 - **Do not add a model to `flavorDefaults`.** A stale context window silently
   corrupts the context bar, which is worse than not knowing it. A test asserts
   the table ships no models.
 - **Do not mutate `httpClient.headers` for a per-call header.** Discovery runs in
-  the background; use `httpReq.headers`, which merges over the client's.
-  `anthropicHeaders` is the real caller: it merges the `anthropic-beta` value
-  (interleaved thinking, fine-grained tool streaming) over `req.Model.Headers`
-  per request without touching either shared map.
+  the background; use the request's own headers, which merge over the client's.
 - **Anthropic always sends a thinking shape.** Reasoning models emit
   `thinking:{"type":"disabled"}` when the level resolves to off (suppressed only
   by an explicit `off:null` in the level map), the budget shape when on, and the
@@ -611,13 +551,12 @@ accumulator including arguments that parse early.
 - **`deferredToolsMode` is accepted and not yet honoured.** It resolves onto
   `Caps.DeferredTools` and nothing reads it; pi's only value is `"kimi"`.
 - **Do not cache a provider adapter by vendor name.** `api` and `baseUrl` are
-  per model, so two models on one provider entry can need two adapters.
-  `Providers` keys on provider, dialect and base URL together.
+  per model, so two models on one provider entry can need two adapters; keying is
+  on provider, dialect and base URL together.
 - **A `Compat` bool must stay a pointer** and a `Timeouts` duration must stay a
-  pointer. Both need the unset/explicit distinction.
-- **Enums encode as text, not JSON.** `encoding/json` uses `TextUnmarshaler` for
-  map keys, and `thinkingLevelMap` is keyed by `Level`. Implementing only
-  `UnmarshalJSON` compiles and then fails at runtime on that map.
+  pointer. Both need the unset/explicit distinction (a plain zero cannot say
+  "disabled").
+- **Enums encode as text, not JSON.** The thinking level map is keyed by `Level`, so implementing only `UnmarshalJSON` compiles and fails at runtime.
 - **Anthropic rejects a temperature alongside thinking.** It is dropped silently
   rather than erroring, because erroring would make a `/settings` temperature
   change fail confusingly on exactly the models people reason with.

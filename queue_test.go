@@ -49,6 +49,25 @@ func TestSteerQueueOffer(t *testing.T) {
 	assert.Equal(t, []int{7}, subs)
 }
 
+func TestSteerQueuePending(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeQueueUI{}
+	q := newSteerQueue(fake, nil, nil)
+
+	assert.Equal(t, 0, q.pending())
+	q.offer(agent.Input{Text: "seed"}, "one", 1) // starts the drain; not queued
+	assert.Equal(t, 0, q.pending(), "the running turn's input is not pending")
+
+	require.True(t, q.offer(agent.Input{Text: "a"}, "alpha", 2))
+	assert.Equal(t, 1, q.pending())
+	require.True(t, q.offer(agent.Input{Text: "b"}, "beta", 3))
+	assert.Equal(t, 2, q.pending())
+
+	q.take()
+	assert.Equal(t, 0, q.pending(), "pulling the batch empties it")
+}
+
 func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 	t.Parallel()
 

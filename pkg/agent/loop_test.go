@@ -341,8 +341,6 @@ func TestLoopMaxSteps(t *testing.T) {
 	})
 }
 
-// TestLoopProviderErrorPropagates asserts a provider error returns from Prompt
-// and lands in TurnResult, whether mid-stream or before any events.
 func TestLoopProviderErrorPropagates(t *testing.T) {
 	t.Parallel()
 
@@ -373,7 +371,6 @@ func TestLoopProviderErrorPropagates(t *testing.T) {
 	}
 }
 
-// TestSinkOrder asserts the exact sink call sequence for a thinking+text turn.
 func TestSinkOrderThinkingPrecedesText(t *testing.T) {
 	t.Parallel()
 
@@ -503,8 +500,81 @@ const (
 	pollInterval   = time.Millisecond
 )
 
-// TestInterruptDuringOverflowCompaction interrupts while an overflow compaction's
-// model call is running; the retry runs under the turn context so Interrupt stops it.
+func TestLoopAwaitInput(t *testing.T) {
+	t.Parallel()
+
+	newAgent := func(p *llm.ScriptedProvider, hold bool, release <-chan struct{}) (*Agent, chan error, <-chan struct{}) {
+		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok"}}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+		var entered <-chan struct{}
+		if hold {
+			started := make(chan struct{})
+			entered = started
+			// block only at the boundary between the two model calls (after turn one)
+			a.opts.AwaitInput = func(ctx context.Context) {
+				if len(p.Requests()) != 1 { // step one has no second call to wait behind
+					return
+				}
+				close(started)
+				select {
+				case <-release:
+				case <-ctx.Done():
+				}
+			}
+		}
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "start"}) }()
+		return a, errCh, entered
+	}
+
+	t.Run("holds_between_calls", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "bash")},
+			{Events: textOnly("after hold")},
+		}}
+		release := make(chan struct{})
+		_, errCh, entered := newAgent(p, true, release)
+
+		// the second model call must not be sent while AwaitInput is held
+		select {
+		case <-entered:
+		case <-time.After(defaultTimeout):
+			t.Fatal("AwaitInput never engaged at the boundary")
+		}
+		assert.Len(t, p.Requests(), 1, "no request may leave while AwaitInput holds the boundary")
+
+		close(release)
+		require.NoError(t, <-errCh)
+		require.Len(t, p.Requests(), 2)
+	})
+
+	t.Run("cancel_releases", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "bash")},
+			{Events: textOnly("after hold")},
+		}}
+		release := make(chan struct{})
+		a, errCh, entered := newAgent(p, true, release)
+
+		select {
+		case <-entered:
+		case <-time.After(defaultTimeout):
+			t.Fatal("AwaitInput never engaged at the boundary")
+		}
+		assert.Len(t, p.Requests(), 1)
+
+		a.Interrupt() // cancels the turn context; a held wait releases via ctx.Done
+		select {
+		case err := <-errCh:
+			require.NoError(t, err) // an interrupted hold is a clean abort, not a failure
+		case <-time.After(defaultTimeout):
+			t.Fatal("Prompt did not return after the interrupt")
+		}
+		assert.Len(t, p.Requests(), 1, "cancelling during AwaitInput must send no further request")
+	})
+}
+
 func TestInterruptDuringOverflowCompaction(t *testing.T) {
 	t.Parallel()
 
@@ -550,8 +620,6 @@ func TestInterruptDuringOverflowCompaction(t *testing.T) {
 	assert.Equal(t, llm.StopAborted, catch.result.Stop)
 }
 
-// TestInterruptDuringStepCompaction interrupts while a step-boundary compaction's
-// model call is running; it runs under the turn context, so Esc stops it.
 func TestInterruptDuringStepCompaction(t *testing.T) {
 	t.Parallel()
 
@@ -634,8 +702,6 @@ func TestBuildRequest(t *testing.T) {
 	})
 }
 
-// TestLoopToolProgressReachesSink asserts a call's streamed arguments are
-// reported before it runs, and that the row is closed when the call completes.
 func TestLoopToolProgressReachesSink(t *testing.T) {
 	t.Parallel()
 

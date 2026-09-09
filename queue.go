@@ -125,6 +125,13 @@ func (s *steerQueue) settled() {
 	}
 }
 
+// pending reports how many prompts are queued for the next boundary.
+func (s *steerQueue) pending() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.items)
+}
+
 // pull is the OnBoundary callback: hand over every queued item joined into one
 // input at this step boundary. Returns nil when empty.
 func (s *steerQueue) pull() []agent.Input {

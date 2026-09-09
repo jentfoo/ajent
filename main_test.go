@@ -249,17 +249,17 @@ func TestRewindTarget(t *testing.T) {
 
 type singleToolSet struct{ tool agent.Tool }
 
-func (s singleToolSet) Get(name string) (agent.Tool, bool) { return s.tool, name == "bash" }
+func (s singleToolSet) Get(name string) (agent.Tool, bool) { return s.tool, name == toolBash }
 func (s singleToolSet) Schemas() []llm.ToolSchema          { return []llm.ToolSchema{s.tool.Schema()} }
-func (s singleToolSet) Names() []string                    { return []string{"bash"} }
+func (s singleToolSet) Names() []string                    { return []string{toolBash} }
 
 // noopRewindTool executes instantly so the loop never blocks.
 type noopRewindTool struct{}
 
-func (noopRewindTool) Name() string                { return "bash" }
+func (noopRewindTool) Name() string                { return toolBash }
 func (noopRewindTool) Label(agent.ToolCall) string { return "bash: ..." }
 func (noopRewindTool) Description() string         { return "test tool" }
-func (noopRewindTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: "bash"} }
+func (noopRewindTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: toolBash} }
 func (noopRewindTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
@@ -1399,4 +1399,150 @@ func TestCheckSessionTarget(t *testing.T) {
 	t.Run("name_matching_id_fails", func(t *testing.T) {
 		assert.Error(t, checkSessionTarget(modeSessionName, id))
 	})
+}
+
+// holdBash blocks in Execute until released or cancelled, pinning a turn mid-dispatch.
+type holdBash struct {
+	release chan struct{}
+	entered chan struct{}
+}
+
+func (holdBash) Name() string                { return toolBash }
+func (holdBash) Label(agent.ToolCall) string { return "bash: ..." }
+func (holdBash) Description() string         { return "test tool" }
+func (holdBash) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: toolBash} }
+func (holdBash) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+
+func (t holdBash) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
+	if t.entered != nil {
+		close(t.entered)
+	}
+	select {
+	case <-t.release:
+	case <-ctx.Done():
+		return agent.ToolResult{}, ctx.Err()
+	}
+	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "ok"}}}, nil
+}
+
+// mainToolTurn frames one assistant turn that ends in a single bash tool call.
+func mainToolTurn() []llm.Event {
+	out := make([]llm.Event, 0, 5)
+
+	var start llm.Event
+	start.Type = llm.EventMessageStart
+
+	var call llm.Event
+	call.Type = llm.EventToolCallStart
+	call.ToolCallID = "c1"
+	call.ToolName = toolBash
+
+	var delta llm.Event
+	delta.Type = llm.EventToolCallDelta
+	delta.Text = `{"a":1}`
+
+	var end llm.Event
+	end.Type = llm.EventToolCallEnd
+	end.Block = llm.ToolCallBlock{ID: "c1", Name: toolBash, Input: json.RawMessage(`{"a":1}`)}
+
+	var done llm.Event
+	done.Type = llm.EventDone
+	done.StopReason = llm.StopEndTurn
+
+	return append(out, start, call, delta, end, done)
+}
+
+// TestTypingGateDeliversIntoHeldBoundary wires the real gate, steer queue and agent:
+// a prompt submitted while AwaitInput holds a boundary lands in that same step, with no
+// intervening model request.
+func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	set := singleToolSet{tool: holdBash{release: release, entered: entered}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: mainToolTurn()},
+		{Events: textTurnRewind("after steer")},
+	}}
+
+	fakeUI := &fakeQueueUI{}
+	q := newSteerQueue(fakeUI, nil, nil)
+
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+	held := make(chan struct{}, 1)
+	gate := &typingGate{
+		idle:    time.Hour,
+		handoff: 30 * time.Millisecond,
+		poll:    5 * time.Millisecond,
+		pending: q.pending,
+	}
+	// status is the only place a held boundary signals; non-empty text means engaged
+	gate.status = func(text, short string) {
+		if text == "" {
+			return
+		}
+		select {
+		case held <- struct{}{}:
+		default:
+		}
+	}
+
+	a := agent.New(st, agent.Options{
+		Provider:   func(llm.Model) (llm.Provider, error) { return p, nil },
+		Sinks:      []agent.Sink{agent.NopSink{}},
+		Tools:      set,
+		Env:        agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+		OnBoundary: q.pull,
+		AwaitInput: gate.hold,
+	})
+
+	in := agent.Input{Text: "start"}
+	q.offer(in, "start", 0) // starts the drain; not queued
+	gate.taken()            // runPump clears any handoff before spawning a turn
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), in) }()
+
+	// pin step one inside its tool call, then begin typing mid-turn
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("the turn never reached its tool call")
+	}
+	gate.edit("draft") // the user is composing a message
+
+	close(release) // step one finishes; AwaitInput at step two holds on the draft
+	select {
+	case <-held:
+	case <-time.After(time.Second):
+		t.Fatal("AwaitInput never held the boundary while typing")
+	}
+	assert.Len(t, p.Requests(), 1, "no second request may leave while the hold is engaged")
+
+	// a prompt submitted during the hold queues and must land at this same step
+	require.True(t, q.offer(agent.Input{Text: "steered"}, "steered", 3))
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("the turn never finished after the held boundary delivered")
+	}
+	reqs := p.Requests()
+	assert.Len(t, reqs, 2, "the steer must ride into step two with no third model call")
+
+	foundSteer := false
+	for _, m := range reqs[len(reqs)-1].Messages {
+		if m.Role != llm.RoleUser || len(m.Content) == 0 {
+			continue
+		}
+		tb, ok := m.Content[0].(llm.TextBlock)
+		if !ok {
+			continue
+		}
+		if strings.Contains(tb.Text, "steered") {
+			foundSteer = true
+		}
+	}
+	assert.True(t, foundSteer, "step two's request must carry the queued steer")
 }

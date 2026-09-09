@@ -41,6 +41,9 @@ func printVersion(w io.Writer) {
 // history, so a pasted secret never reaches disk.
 const secretPrefix = "secret:"
 
+// toolBash is the builtin shell tool's name; shared with the test helpers.
+const toolBash = "bash"
+
 func main() {
 	f, err := parseFlags(os.Args[1:])
 	if errors.Is(err, pflag.ErrHelp) {
@@ -299,8 +302,8 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		toolsReg.SetEnabled(st.Tools)
 	}
 
-	// feed the editor's in-progress text into accounting so the context bar grows
-	// as you type or paste, then clears it once submitted (the buffer empties).
+	// the editor's in-progress text feeds accounting (SetOnEdit below) and clears on
+	// submission via settled. editSinks may be empty before a session is set up.
 	editSinks := opts.Sinks // may be empty before a session is set up
 	pushContext := func() {
 		if st.Tokens == nil || len(editSinks) == 0 {
@@ -311,13 +314,6 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			s.Context(c)
 		}
 	}
-	ui.SetOnEdit(func(text string) {
-		if st.Tokens == nil || len(editSinks) == 0 {
-			return
-		}
-		st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
-		pushContext()
-	})
 	// once a submitted prompt and everything behind it lands in state, pending owns
 	// its tokens; the submit bucket must clear so they are never counted twice.
 	settled := func() {
@@ -333,6 +329,29 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
 		settled,
 	)
+	// typingGate holds the next step boundary while the user is mid-message, so a
+	// prompt they are still typing lands in this step instead of behind it.
+	gate := &typingGate{
+		idle:    typingIdle,
+		handoff: typingHandoff,
+		poll:    typingPoll,
+		pending: q.pending,
+	}
+	// the hold publishes a keyed status segment while it waits on a visible draft.
+	gate.status = func(text, short string) {
+		ui.SetStatusSegment(tui.Segment{Key: "typing", Text: text, Short: short})
+	}
+	// the editor's in-progress text feeds accounting so the context bar grows as you
+	// type or paste, then clears once submitted (the buffer empties); it is also the
+	// typing signal the boundary hold reads.
+	ui.SetOnEdit(func(text string) {
+		gate.edit(text)
+		if st.Tokens == nil || len(editSinks) == 0 {
+			return
+		}
+		st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
+		pushContext()
+	})
 	var ag *agent.Agent
 
 	// sub-agent investigations fan read-only work into throwaway child agents,
@@ -397,6 +416,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// queued mid-turn prompts land at the next step boundary via this hook.
 	opts.OnBoundary = q.pull
+	// AwaitInput may hold that boundary while the user finishes a message, so a
+	// prompt typed during it lands in this same step rather than behind another call.
+	opts.AwaitInput = gate.hold
 	// OnToolBatch hands each step's calls (in message order) to sub-agent id
 	// reservation and permission prefetch. The barrier is built later, so it is
 	// reached through a forward reference assigned in its setup block below; nil
@@ -651,7 +673,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started,
-		settled, q, st, editSinks, &seedToolsOnce, pushContext, hooks)
+		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
 		initial := strings.Join(args, " ")
@@ -711,6 +733,9 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			case command.KindCommand:
 				pump <- pumpLine{kind: command.KindCommand, rest: line.Rest}
 			default:
+				// arm the handoff here, where the line certainly left the editor: the
+				// async edit notification cannot re-arm after the pump resolves it
+				gate.submitted()
 				pump <- pumpLine{kind: command.KindPrompt, rest: line.Rest}
 			}
 		case <-quit:
@@ -781,7 +806,7 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 // runPump owns ordering for commands and prompts. Commands run inline (pickers
 // block only the pump); prompts flush staged shell results, expand @ refs then
 // queue-or-start a turn. Submissions stay in order and the UI never stalls.
-func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
+func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
 	for line := range pump {
 		switch line.kind {
 		case command.KindCommand:
@@ -819,6 +844,9 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			})
 			est := submitEstimate(in, pending)
 			if q.offer(in, echo, est) {
+				if gate != nil {
+					gate.taken() // queued: pending() releases the hold; no handoff left to wait for
+				}
 				continue // queued as a dimmed row; the echo lands at delivery
 			}
 			// only reached with no drain running, so a workflow may branch here
@@ -834,6 +862,9 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
 			submitPrompt(st, editSinks, est, pushContext)
 			in.Settled = settled
+			if gate != nil {
+				gate.taken() // the submitted line starts its own turn; no handoff to wait for
+			}
 			startDrain(ui, recording, ag, q, in, started, hooks)
 		}
 	}

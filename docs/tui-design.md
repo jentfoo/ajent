@@ -160,40 +160,22 @@ resets the screen: a phase switch changes what the *model* sees, not what the
 user sees, so the whole run reads top to bottom with a divider per phase and the
 segment is what makes the divergence inspectable.
 
+The typing hold (`agent-loop-design.md`) publishes a `typing` segment while it
+waits on a visible draft: the remaining seconds (ceiling, never 0), republished
+only as that second changes and cleared when the hold releases. It carries default
+priority, so being inserted last it drops before `permissions`, `subagents` and
+`plan` on narrow rows; an unheld boundary publishes nothing.
+
 ## Layers
 
-```
-ui.go            public API, state machine, key handling, locking
-  renderer.go        mode selection, terminal ownership, renderer interface
-    render_inline.go   main screen, terminal owns wrapping, reflow and scrollback
-    render_alt.go      alternate screen, we own wrapping and scrollback
-  markdown.go      goldmark AST -> ANSI (+ hand-laid GFM tables)
-  diff.go          go-udiff -> full file diff, shaded changes, intraline emphasis
-  wrap.go          width aware wrapping, hanging indents
-  editor.go        multi line input buffer, grapheme aware, plus its layout
-  input.go         byte stream -> key events (escape sequences, paste)
-  decision.go      approval dialog: context elision, numbered options, handle
-  question.go      agent-initiated Ask: free-text or offered-option answer row
-  activity.go      transient keyed rows above the input, and queued pending-prompt
-                   rows (driver-owned), each capped with an overflow indicator
-  status.go        status block model, two-row packing, keyed segments
-  style.go         color profile detection, the palettes, the role table
-  highlight.go     chroma -> per-line SGR for fenced code, keyed by the palette
-  detect.go        terminal background classification (COLORFGBG, OSC 11)
-  text.go          ANSI aware width, truncation, escape splitting
-  ansi.go          escape sequence constants and builders
-  history.go       line buffering for streaming input
-  interaction.go   interaction queue, key routing, result channels
-  prompt.go        Select, Confirm, Input, Pick and their live block rendering
-  filter.go        Pick filter scoring: verbatim hits, else fuzzy subsequence
-  notify.go        notices, level styles, safe collapse
-  plain.go         interaction fallback for the mode with no live block
-  errors.go        ErrCancelled, ErrBusy, ErrNoUI
-```
-
-Everything above the renderer layer is shared by all modes. If you are adding a
-new kind of output, you almost certainly work in `ui.go` plus one renderer-
-agnostic file, and touch no renderer at all.
+The package separates the public API, state machine and key handling (`ui.go`)
+from two renderers behind one interface: inline (the terminal owns wrapping,
+reflow and scrollback) and alt (we own them). Everything above that layer is
+shared by all modes, so a new kind of output is almost always work in `ui.go`
+plus one renderer-agnostic file and touches no renderer. The rest — markdown
+and diff rendering, width-aware text/wrap/ansi primitives, the editor buffer,
+key decoding, palettes, status and activity rows, dialogs — are behaviour this
+document specifies, not a layout to memorise.
 
 The demo driving this is not part of this package: `ajent-demo` (the root module
 built with the `demo` tag) spawns a standalone OpenAI-compatible model server in
@@ -394,45 +376,33 @@ Queued pending-prompt rows (`SetQueued`) sit above an active interaction like an
 other live-block content: they yield first on a short terminal (activity-style)
 and are driver-owned, so `Reset()` does not clear them: the steer queue re-renders.
 
-Concurrency follows invariant 4. A blocking `Select` cannot hold `u.mu`, so the
-caller registers a `pending` under the lock, requests a repaint, releases, then
-waits on a result channel. The input goroutine checks for an active interaction
-before the editor sees a key. Resolution promotes the queue head and repaints.
-`Select` and `Pick` commit a one-line summary of the chosen row; approval
-dialogs (`OpenDecision`) and answered questions (`Ask`) echo nothing, because
-permit's barrier logs its own descriptive outcome notice (see below):
-echoing the prompt plus label here would duplicate it. The same duplication rule lets a
-`Pick` opt out via `PickOptions.Silent`: `/model` sets it so the picker does not
-commit its own summary when `SetModel` immediately announces the chosen key.
-Interactions **queue in arrival order**
-rather than being refused, because parallel tool calls will each want to ask
-something and denying them for being simultaneous is the wrong default.
-`pending.resolve` is a `sync.Once`, so a cancellation racing a keystroke settles
-on whichever arrived first (it reports whether this call won, and only the
-winner commits its summary or dequeues; see `routeKey`), and `Close` resolves
-everything outstanding with `ErrCancelled` so no caller is left blocked
-(invariant 5). Only a resolution **with a nil error** commits: a cancelled
-interaction records nothing, because the row under the cursor is not a choice the
-user made (Esc on a `Confirm` would otherwise write `Yes` into history while the
-caller got `ErrCancelled`). `questionState` is the deliberate exception: Esc is a
-normal answer there, resolved with a nil error, so `question declined` is still
-recorded. For the same reason `wait` returns whatever `resolve` settled on rather
-than assuming its own branch won: a `select` whose ctx and answer are both ready
-picks at random, and the answer must survive. When more than one prompt waits, a dim `+N waiting` line sits
-below the active interaction, reserving its row from that interaction's height
-budget (caret position unchanged because it rides below).
+Concurrency follows invariant 4: a blocking `Select` cannot hold the lock, so the
+caller registers its intent under the lock, requests a repaint, releases, then
+waits on a result channel; the input goroutine checks for an active interaction
+before the editor sees a key. `Select` and `Pick` commit a one-line summary of
+the chosen row; approval dialogs (`OpenDecision`) and answered questions (`Ask`)
+echo nothing, because permit's barrier logs its own descriptive outcome notice —
+echoing the prompt plus label would duplicate it. The same rule lets a `Pick` opt
+out via `Silent`, which `/model` sets so the picker does not commit its own summary.
+Interactions **queue in arrival order** rather than being refused, because parallel
+tool calls will each want to ask something and denying them for being simultaneous is
+the wrong default. Resolution is race-safe: a cancellation racing a keystroke settles
+on whichever arrived first (only the winner commits its summary or dequeues), and `Close`
+resolves everything outstanding with `ErrCancelled`. A caller must trust that settle rather
+than assume its own branch won, because when ctx and answer are both ready Go selects at
+random — an answer given in the same instant survives. Only a resolution **with nil error**
+commits — a cancelled interaction records nothing, because the row under the cursor is not
+a choice the user made. An agent-initiated question is the deliberate exception: Esc is
+*declined to answer*, resolved normally, so the decline is recorded.
 
 An **approval dialog** (`OpenDecision`) is an interaction with a caller-held
 handle: `Wait` blocks for the answer, `Resolve(index)` settles it from the
-caller, and `Close` abandons it so `defer d.Close()` is always safe. The first
-to resolve wins (whether that is a keystroke or an external resolver, the
-permission classifier or a mode cycle) by writing the result into `decisionState`
-under `u.mu` before calling `resolve`, then committing only if it won; the loser
-reads nothing. The subject is shown above numbered options, elided to a bounded
-number of lines and characters, except the first line, which always survives
-however long it is, so a single long command is never dropped whole. Subject
-lines **wrap** to the width rather than being clipped: what is approved has to be
-readable in full. Whatever still does not fit the height budget is reported by a
+caller, and `Close` abandons it. The first to resolve wins (whether that is a
+keystroke or an external resolver — the permission classifier or a mode cycle), and
+the loser reads nothing. The subject is shown above numbered options, elided to a
+bounded number of lines except the first line, which always survives however long it
+is, so a single long command is never dropped whole; subject lines **wrap** rather than
+clip so what is approved can be read in full. Whatever still does not fit the height budget is reported by a
 dim overflow marker, which takes a row from the subject when there is no
 spare one, since an incomplete subject must never look complete. The subject is
 **never** passed through `renderMarkdown`: tool output belongs in the trap-free
@@ -484,24 +454,15 @@ of the grant (this call, this session, or auto). That
 keeps one source of truth for what happened and avoids duplicating the dialog's
 prompt-and-label echo.
 
-A lone `Esc` is indistinguishable from the start of a longer escape sequence
-until more bytes arrive or enough time passes, so `inputReader.run` holds it for
-`escTimeout` before reporting `keyEscape`. Without that there is no cancel key
-at all. The timer is **not armed** while an in-progress paste sits in the buffer,
-since a paste body can legitimately stall mid-arrival; and when it does fire on a
-truncated sequence, the whole remaining buffer is dropped rather than re-decoded as
-runes: only a genuine lone `Esc` (buffer length 1) is reported.
+A lone `Esc` is indistinguishable from the start of a longer escape sequence until
+more bytes arrive or enough time passes, so it is held for a short timeout before being
+reported — without that there is no cancel key at all. The timer is not armed while an
+in-progress paste sits in the buffer (a paste body can legitimately stall mid-arrival);
+when it does fire on a truncated sequence the whole remaining buffer is dropped rather
+than re-decoded as runes, so only a genuine lone `Esc` is reported.
 
-A paste that reaches the paste-length cap without a terminator delivers the body
-it has (`key.partial`), and the reader then stays **inside** the paste: the tail is
-dropped up to and including `ESC[201~`, keeping the few bytes that could still
-begin one, and the escape timer stays disarmed so a split terminator survives.
-Decoding that tail as ordinary keys is what let a `\r` in a pasted file submit the
-prompt mid-paste.
-
-A closed input stream emits no editing keystroke. Only the literal Ctrl+D byte
-(`0x04`) decodes to `keyEOF`, so an external EOF never races with typed text or
-mutates the buffer; readers stop on the channel close alone.
+A closed input stream emits no editing keystroke; only the literal EOF byte decodes to
+an end-of-file key, so an external EOF never races with typed text or mutates the buffer.
 
 ## Wrapping policy
 
@@ -534,17 +495,13 @@ they were laid out at until they scroll away (drawn one column short of the
 edge, the same deferred-wrap precaution as live rows). Alt mode keeps the
 hanging indents because it re-lays everything itself on every resize.
 
-A streaming preview (`streamingRows`, `thinkingPreviewRows`) must be wrapped by
-us, since a live row is exactly one terminal row, so it wraps by the rule its
-commit will use or the block visibly re-flows as it lands: `wrapPreview` picks
-`hardWrap` under inline, matching the terminal's break at the column with no word
-preference and no hanging indent, and keeps `wrapLine` under alt, which lays its
-own history out with it. It also reserves the blank separator the commit opens
-with (`previewGap`), which `splitCompleteBlocks` consumes into the committed
-chunk. Two differences survive: the block is composed a column short (rule 3), so
-a continuation may gain the character that column held back (`hardWrap` drops a
-space landing there, re-syncing the rows after it), and an open fence stays
-unhighlighted until it commits.
+A streaming preview must be wrapped by us, since a live row is exactly one terminal
+row, so it wraps by the rule its commit will use or the block visibly re-flows as it
+lands: hard-wrap under inline (matching the terminal's break at the column with no
+word preference and no hanging indent) and `wrapLine` under alt. It also reserves the
+blank separator the commit opens with, which is consumed into the committed chunk.
+Two differences survive: the block is composed a column short (rule 3), so a continuation
+may gain the character that column held back, and an open fence stays unhighlighted until it commits.
 
 The flow travels with the line because guessing it from the text was wrong:
 prose legitimately starting with `-`, `+`, `@` or a box drawing rune was
@@ -777,11 +734,10 @@ which is the single rule disabling highlighting for `ui.color=none`, `TERM=dumb`
 16-colour terminals alike: chroma snaps every token onto the 8 ANSI hues there,
 which reads worse than the one hue the palette picked for `Theme.Code`.
 
-Adding a role means a field on `roleHues`, a value in each palette, and a line in
-`NewTheme`. A missing value would zero-fill into `38;5;0`, or a bare `0` which
-*resets* instead of coloring, so `TestPaletteInvariants` walks `roleHues` by
-reflection and fails on any hue outside 16–255 / 31–36. New roles are covered by
-it automatically; do not replace it with a hand-listed set.
+Adding a role means a field on the hue table, a value in each palette, and a line
+in `NewTheme`; an invariant test walks that table by reflection and fails on any hue
+outside the valid range, so new roles are covered automatically. Do not replace it
+with a hand-listed set.
 
 | Role | Look | Used for |
 |---|---|---|
@@ -795,18 +751,16 @@ it automatically; do not replace it with a hand-listed set.
 | `Heading`, `Bold`, `Italic`, `Strike`, `Code`, `Link`, `Quote` | markdown inline roles |
 | `DiffAdd/Del/Hunk/File` + `*Word` | diff lines and intraline spans |
 
-**Choosing a palette.** `ui.theme` holds the name. `UI.DetectTone` classifies the
-terminal background: `COLORFGBG` when the terminal sets it, otherwise an OSC 11
-query with a DA1 (`CSI c`) fence behind it and a short timeout. Its only consumer
-is the first-run picker (`command.ThemeSetup`), which runs when no layer has chosen
-a palette yet and offers the palettes matching the detected background. Tone is not
-a stored mode: after the first answer the palette is a plain name in the user config
-and the terminal is never queried again. Detection failure offers every palette
-rather than guessing.
+**Choosing a palette.** `ui.theme` holds the name; background detection classifies
+`COLORFGBG` when set, otherwise an OSC 11 query with a short timeout. Its only consumer
+is the first-run picker, which runs when no layer has chosen a palette yet and offers
+the palettes matching the detected background. Tone is not a stored mode: after the
+first answer the palette is a plain name in user config and the terminal is never queried
+again. Detection failure offers every palette rather than guessing.
 
-The OSC 11 answer and the DA1 fence are decoded into their own channels like the
-DSR resize barrier. Decoding them is a correctness fix as much as a feature: an
-unsolicited OSC reply used to leak its body into the editor as literal runes.
+The OSC-11 answer is decoded into its own channel like the DSR resize barrier;
+decoding it is a correctness fix as much as a feature, since an unsolicited reply used
+to leak its body into the editor as literal runes.
 
 **Restyling is forward-only.** `UI.SetTheme` recolours the live block and everything
 committed after it, but `renderMarkdown` bakes SGR into a `histLine`'s text bytes, so
@@ -853,26 +807,26 @@ agent (or demo) -> UI.Text("...delta")
        alt:    append to buffer, re-render the frame
 ```
 
-The live block is rebuilt separately by `UI.repaint`, which composes
+The live block is rebuilt separately by repaint, which composes
 `notice? + thinking* + streaming* + search? + completion? + activity* + queued*
-+ (input | interaction) + status rows` and hands it to `renderer.setLive` with
-the caret position. Anything that changes the input, status, tool or activity
-state calls `repaint`. Queued pending-prompt rows (`SetQueued`) render after
-activity and yield like them on a short terminal; they are driver-owned, so
-`Reset()` deliberately leaves them in place for the steer queue to re-render.
-When a markdown block completes mid-stream, `Text`/`EndText` repaint **first** so
-the just-committed rows leave the preview before `writeMarkdown` runs (invariant
-3); otherwise the inline renderer's commit pass would redraw them as a stale
-ghost and push fresh output off screen. A tail still buffered repaints again
-afterwards, against the flags the commit left, so its preview reserves the
-separator that commit just made necessary.
-Thinking follows the same shape: completed logical lines still commit to history
-exactly as before, while the pending partial line renders live above the reply
-preview, wrapped by `wrapPreview` like the reply (raw text, not markdown-
-rendered), bounded by a preview cap and yielding by the same room rule that
-keeps only the tail rows. `UI.EndThinking` drops the preview before committing its remainder,
-and `TurnEnd` in `pkg/tui/sink/sink.go` flushes an unterminated block so an
-interrupt cannot strand a tail.
++ (input | interaction) + status rows`. Anything that changes the input, status,
+tool or activity state calls repaint. Queued pending-prompt rows render after
+activity and yield like them on a short terminal; they are driver-owned, so reset
+deliberately leaves them for the steer queue to re-render.
+
+The ordering constraint worth recording: **repaint before commit.** When a block
+completes mid-stream it must leave the preview *before* the commit runs (invariant
+3); otherwise the inline renderer's commit pass redraws it as a stale ghost below
+the new history, and when the screen is full that oversized ghost scrolls just-
+committed lines away before they are read. A tail still buffered repaints again
+afterwards so its preview reserves the separator the commit made necessary.
+
+Thinking follows the same shape: completed logical lines commit to history while
+the pending partial line renders live above the reply preview (raw text, not
+markdown-rendered), bounded by a preview cap and yielding by the room rule that
+keeps only tail rows. `TurnEnd` flushes an unterminated block so an interrupt
+cannot strand a tail.
+
 Activity (and queued pending-prompt rows) render into whatever height remains
 after the status block and one line of editor, so on a short terminal they yield
 first. Status is computed before those budgets so row accounting stays exact.
@@ -911,246 +865,118 @@ The following rules keep that true:
    position-free. Both renderers do it, so the caret looks the same in either.
 2. **Every live row is exactly one terminal row.** Row text arrives from callers
    (`SetActivity`, `NotifyKeyed`, a tool label), and tool progress in particular
-   is arbitrary text that may carry newlines, tabs or escape sequences.
-   `sanitizeRow` folds line breaks and tabs to single spaces, drops the
-   remaining C0/DEL/C1 controls, and keeps only complete non-private SGR from
-   the escapes: a cursor-motion or screen sequence moves the cursor in ways no
-   row count predicted (the park lands inside the block) and a truncated escape
-   would swallow the park sequence as parameters. Keeping SGR is why styled tool
-   output still reads, and it runs at every boundary: `composeRows` folds each
-   live row, `commitHist` sanitizes committed lines once, and the public setters
-   (`SetActivity`, `NotifyKeyed`, `ToolStart`, status) do too. Zero-width escapes
-   are exactly why this is row accounting rather than cosmetics.
-3. **The live block never fills the last column.** `repaint` composes every row
-   one column short, and activity rows carry an extra spare column of slack on
-   top (`shadeRow` pads to `w-1`, reserving measurement room). A row ending in
-   the last column leaves the cursor in the deferred-wrap state, and emulators
-   disagree on whether the next byte lands on the same row or the next one,
+   is arbitrary text that may carry newlines, tabs or escape sequences. Every
+   boundary sanitizes it: folds line breaks and tabs to single spaces, drops the
+   remaining C0/DEL/C1 controls, and keeps only complete non-private SGR from the
+   escapes — a cursor-motion sequence would move the park inside the block, and a
+   truncated escape could swallow the park as parameters. Keeping SGR is why styled
+   tool output still reads; zero-width escapes are exactly why this is row
+   accounting rather than cosmetics.
+3. **The live block never fills the last column.** Repaint composes every row one
+   column short, and activity rows carry an extra spare column of slack on top.
+   A row ending in the last column leaves the cursor in deferred-wrap state and
+   emulators disagree on whether the next byte lands on the same row or the next,
    which would put the park a row out. Composing narrow rather than truncating at
    draw time means nothing is cut off the editor or a dialog; the spare column
-   converts the most likely width disagreement (`uniseg` vs the terminal) from
+   converts the most likely width disagreement (uniseg vs the terminal) from
    corrupting to reflow-ambiguous.
 4. **The park counts only what it is writing, at the width in force now.**
-   Parking still has to move up over the rows just written, so `composeRows` sums
-   them, but only rows it is emitting itself, never rows the emulator may have
-   reflowed since. It re-reads the size after composing them, so a resize that
-   landed mid-frame is accounted for before the count is taken; a diff frame
-   counts each skipped row as exactly its one newline boundary (it descended no
-   further), which returns the cursor precisely to where the previous frame
-   parked. And the write itself is gated, by two things that must **both** be
-   raised without waiting on `u.mu`. `watchSignals` raises them the instant a
-   SIGWINCH arrives, before it contends for the lock: `resizing` (an
-   `atomic.Bool`, so `repaint` returns and `commitHist` defers) and `sigGen`.
-   A frame is then judged against `drawGen`, the generation the settled redraw
-   last caught up with, **never** against a generation captured as the frame
-   starts. Both halves are load bearing, and each was wrong once:
+   Parking sums rows but only ones it emits itself, never rows the emulator may
+   have reflowed since; it re-reads size after composing so a resize landed
+   mid-frame is accounted for before the count. The write is gated on two flags
+   raised without waiting for the lock (an atomic resize flag plus a generation
+   counter): a gate taken under `u.mu` is not a gate, since streaming holds that lock
+   across parse/highlight; and a per-frame baseline is not a baseline, so a signal
+   landing mid-compose would become its own frame's settled generation. A
+   frame is judged against the generation the last *settled* redraw caught up with,
+   never one captured as it starts.
 
-   - A gate taken under `u.mu` is not a gate. A streaming `Text` holds the lock
-     across a goldmark parse (and a chroma highlight on commit), so
-     `holdForResize` sits queued behind it for milliseconds while that call
-     composes and lands a whole frame on a grid the emulator is already
-     reflowing.
-   - A per-frame baseline is not a baseline. Composing parses the open markdown
-     block, so a signal landing mid-compose becomes that frame's own generation
-     and `stale` compares equal; the frame writes anyway. Comparing against
-     the settled generation makes any unsettled signal abandon the frame,
-     whenever it arrived.
-
-   Together these narrow the mid-reflow window to syscall duration. The gate
-   itself is generation-checked when the settle clears it: `sigGen` bumps
-   before `holdForResize` takes the lock, `holdGen` records the generations
-   sequenced under it, and a settle only clears while they match; otherwise a
-   signal that bumped but has not reached `holdForResize` would be absorbed
-   into `drawGen` and a frame could land mid-reflow with neither gate raised.
-
-   One window remains and is accepted: between the emulator finishing its
-   reflow and our SIGWINCH being processed, a streaming frame or commit can
-   still land, erasing from wherever the reflow moved the park. If the park
-   was clamped above visible history that erase destroys it, unrecoverable
-   since inline never re-renders committed rows. Nothing can close this
-   without predicting signal delivery; the settle's CPR probe runs *after* the
-   damage, so the underfill test (rule 8) at least pads the block back to the
-   bottom instead of leaving it stranded mid-screen.
-5. **The live block never exceeds the screen.** All of the above assumes the
-   block is erasable, and a block taller than the screen is not: drawing it
-   scrolls, so the previous frame's top rows are pushed into scrollback where no
-   erase can reach them: one stranded copy per redraw, compounding, which is
-   what a long reply streaming into a short terminal used to do. Every producer
-   budgets itself against the rows left, and the streaming preview yields
-   hardest because it is the only one whose height follows the content rather
-   than the terminal: it keeps its tail, which is what a reader is watching.
-   Dropping the head is **marked**: a dim marker on the preview's first row,
-   taken out of the preview's own budget so the total is unchanged. Unmarked,
-   an open block taller than the screen looks like the committed line above it
-   is eating text: the preview sits above the divider, so it reads as
-   transcript while it is in fact redrawn every delta. The marker is the same
-   admission the overflow rows make elsewhere, and it is preview-only:
-   the block commits whole (head included) the moment it closes.
-   `repaint` then clamps the total as a last line of defence, dropping from the
-   top and carrying the caret with it, so a floor (search, completion) or an
-   unlucky width cannot overflow either. A block
-   clamped to exactly the screen height leaves alt no history rows at all.
-6. **The settled redraw waits on a terminal barrier.** A burst holds drawing
-   back for as long as signals keep arriving, never redrawing mid-drag, no
-   matter how long it runs: a frame emitted while the emulator is reflowing is
-   exactly the frame that strands a row, and a frozen live block during a drag
-   is cheap because the emulator is busy mangling the screen anyway. But even a
-   quiet signal stream is not proof the grid is stable: the ioctl reports the
-   new size before the emulator has finished reflowing to it. So the settled
-   redraw clears two barriers before a byte goes out:
-
-   - `probeResize` emits a DSR status query (`CSI 5 n`) and waits for the
-     reply (`CSI 0 n`, decoded as `keyStatusReport`): the terminal processes
-     input strictly after the resize that preceded it, so the reply proves the
-     reflow finished. A `resizeProbeTimeout` grace releases the barrier on
-     terminals that never answer.
-   - `drawSettled` then waits one more quiet grace (`resizeDrawGrace`): the
-     reply cannot cover a resize that starts *after* it was sent, and a
-     SIGWINCH can reach a busy goroutine late, so a frame only goes out when
-     no new signal arrived during the grace. During continuous fast resizing
-     every grace is invalidated, so no frame is emitted until a genuine pause.
-
-   Both barriers re-check the `resizeSeq`/`probeSeq` generations, so a reply
-   or timer belonging to an older burst never releases a draw. `Close` flushes
-   whatever is still in `UI.deferred`, so a burst overlapping the end of a
+   One window remains and is accepted: between the emulator finishing its reflow
+   and our SIGWINCH being processed, a streaming frame or commit can still land,
+   erasing from wherever the reflow moved the park. If that clamp was above visible
+   history the erase destroys it, unrecoverable since inline never re-renders
+   committed rows; nothing closes this without predicting signal delivery.
+5. **The live block never exceeds the screen.** A block taller than the screen is
+   not erasable: drawing it scrolls, pushing its top rows into scrollback where no
+   erase can reach them — one stranded copy per redraw, compounding (what a long
+   reply streaming into a short terminal used to do). Every producer budgets itself
+   against remaining rows; the streaming preview yields hardest since only its
+   height follows content rather than the terminal, keeping its tail and **marking**
+   a dropped head so an open block taller than the screen does not look like the
+   committed line above is eating text. `repaint` then clamps as a last line of
+   defence; a block clamped to exactly the screen height leaves alt no history rows.
+6. **The settled redraw waits on a terminal barrier.** A frame emitted while the
+   emulator reflows is exactly the one that strands a row, and even a quiet signal
+   stream proves nothing (the ioctl reports size before the reflow finishes). So after
+   a burst it holds drawing until two barriers clear: a DSR status reply proving the
+   reflow finished (with a grace for terminals that never answer), then one more
+   quiet grace so no new signal arrived during it — during continuous fast resizing
+   every grace is invalidated and nothing emits until a genuine pause. Both are
+   generation-checked, so an older burst's reply or timer can never release a draw.
+   `Close` flushes whatever is still deferred, so a burst overlapping the end of a
    turn cannot swallow committed output.
-7. **The live block diffs against its previous frame.** A spinner tick was
-   reprinting the whole block; now unchanged rows are skipped, writing only the
-   newlines that walk past them and an erase-to-end-of-line after each written
-   row, so a tick emits no editor bytes. The diff falls back to today's full
-   erase-and-redraw on five guards: a width change (the one thing that reflows
-   rows it did not write), a row-count change (what the single erase-below used
-   to cover), nothing drawn yet or an invalidation set by `commit`/`suspend`/
-   `resume`/`clearHistory` (or by `reanchor`, whose pad needs the full path),
-   and periodically as a cheap safety net. Comparing
-   post-caret strings means a moved caret dirties both its old and new row.
+7. **The live block diffs against its previous frame.** A spinner tick used to
+   reprint the whole block; now unchanged rows are skipped, emitting only the newlines
+   that walk past them and an erase after each written row. It falls back to full
+   redraw on five guards: a width change (the one thing that reflows rows it did not
+   write), a row-count change, nothing drawn yet or an invalidation set by commit/
+   suspend/resume/clearHistory, and periodically as a safety net. The severity
+   asymmetry is why this is acceptable: a stale row inside the live block sits in
+   erasable territory (healed next redraw) whereas a stranded row above it is
+   committed content nothing can reach — diff staleness self-heals; stranding does not.
+8. **The park is ground truth until a shrink retires it.** Every rule above assumes
+   the parked cursor still marks the block's top, which holds through any reflow of
+   the block itself (the cursor rides its cell). A *shrink* breaks it: narrowing
+   rewraps history into more rows or a shorter screen holds fewer, and either way the
+   park can retire into scrollback, leaving the terminal to clamp the cursor onto what
+   is left — the block ends mid-screen with space no erase reclaims. So the settled
+   redraw queries a cursor-position report ahead of its status barrier; when the
+   reported row plus the block's height ends above the last screen row it re-anchors,
+   padding with newlines (a read, not an address — invariant 1) measured from the
+   reported row so the pad never displaces committed output. Only a *shrink*
+   re-anchors: a grow rewraps into fewer rows and takes none away.
 
-   The severity asymmetry is why this is acceptable: a stale row inside the live
-   block sits in erasable territory, healed by the next commit or full redraw,
-   whereas a stranded row above the block is committed content nothing can reach.
-   Diff staleness is self-healing; stranding is permanent.
-8. **The park is ground truth until a reflow moves it off the block's top.** Every
-   rule above assumes the parked cursor still marks the block's top. That holds
-   through any reflow *of the block itself*, because the cursor rides its cell.
-   A shrink breaks it: a narrowing rewraps history into more rows, a shorter
-   screen has fewer rows to hold it, and either way the block's top (the parked
-   cursor itself) can retire into scrollback, leaving the terminal to clamp the
-   cursor onto what is left. The block then ends mid-screen with space below it
-   that no erase reclaims. The terminal knows where the cursor really is, so the
-   settled redraw asks: `probeResize` writes a cursor position report query
-   (`CSI 6 n`) just ahead of the DSR status query that already releases the
-   barrier, and `settleResizeLocked` consumes the reply (`CSI row;col R`,
-   decoded as `keyCursorReport`) after `resize()` and before the repaint. When
-   the reported row plus the block's rows ends above the last screen row on a
-   started session, the renderer `reanchor`s and the next full draw pads the
-   block back to the screen bottom.
+   Three guards keep that correct. Both dimensions count, so a corner drag that widens
+   but shortens is still a shrink, and an equal-size settle re-anchors too since its
+   burst may have narrowed then dragged back. The reply must be one this settle asked
+   for: a report left over from an earlier burst is no longer true (replies carry no
+   identity, so a superseded reply the reader decodes after this probe's drain still
+   passes). And a pad lives exactly one draw — every settle re-decides, passing a row
+   of zero when it has no usable evidence, because a pad raised by an abandoned frame
+   applied against moved geometry is the overshoot that scrolls committed history away;
+   commit/suspend/clearHistory clear it for the same reason each moves the block or the
+   screen out from under its row. The probe itself is additive: the status barrier
+   (rule 6) is untouched, so a terminal answering DSR but not CPR degrades to pre-CPR.
+   The underfill test trades a bounded false positive (history shorter than the screen
+   also reports underfill, leaving a blank band that scrolls away) for not predicting
+   reflow, which invariant 2 forbids.
 
-   The pad respects the two invariants this section is built on. CPR is a
-   *read*, and invariant 1 forbids *addressing* rows we did not write: the
-   query addresses nothing, and the pad is newlines only. It is measured from
-   the reported row (`height − live − (row − 1)`), which is what keeps it from
-   scrolling: `reanchor` rejects any row whose block already reaches the
-   bottom, so the cursor lands on exactly `height − live` and the block fills
-   the rows below it, every one of which `eraseLive` has just cleared. **The pad
-   never displaces a committed row.** Measured from `height − live` alone it
-   overshoots by the park's own row and scrolls that many rows away: on a
-   session whose history does not fill the screen, all of it. A garbage or
-   hostile row stays bounded: the underfill test rejects anything at or past the
-   bottom and the repeat is clamped to the screen, so a bad row can only fail to
-   mean underfill, never pad past one screenful. The probe is additive: the
-   status barrier (rule 6) is untouched, and a terminal that answers DSR but not
-   CPR degrades to the pre-CPR behaviour.
-
-   Only a shrink re-anchors. A settle that grew in one dimension and shrank in
-   neither cannot have retired the park (a grow rewraps into fewer rows and
-   takes none away), so its dead band is cosmetic, and bottom-anchoring a
-   maximized window would drop the block a screenful for a repair nobody needs.
-   Both dimensions count: a corner drag that widens but shortens is a shrink,
-   and an equal-size settle re-anchors too, because its burst may have narrowed
-   and been dragged back. The reply must also be one
-   this settle asked for (`cprPending`): SIGCONT and a direct `resize()` settle
-   without probing, and a report left over from an earlier burst is no longer
-   true. The flag proves a probe of ours was in flight, not that this reply is
-   the one answering it (replies carry no identity), so a superseded reply the
-   reader decodes after this probe's drain still passes for fresh. Reports are
-   drained on every settle either way and the newest wins the channel
-   (`sendLatest`), which leaves that residual bounded by the same rules as any
-   wrong row: one screenful at most, and nothing at all once the block reaches
-   the bottom.
-
-   A pad lives exactly one draw. `reanchor` sets its outcome on **every** path,
-   rejections included, and every settle calls it (passing a row of zero when it
-   has no usable evidence), because a pad can outlive the frame that should have
-   consumed it: `paint` abandons a frame a signal raced (rule 4), and the flag
-   survives with it. Applied a gesture later against a grid that has moved, that
-   pad is the overshoot the row exists to prevent: a park already at the bottom,
-   padded from row 1, scrolls a screenful of committed history away. `commit`,
-   `suspend` and `clearHistory` clear it for one reason between them: each moves
-   the block, or the screen under it, out from beneath the row the pad was
-   measured on. Dropping a pending repair costs a block left stranded until the
-   next probed settle (cosmetic, and output walks it back down), where keeping
-   one costs displaced history. The pad itself is measured against the frame it
-   lands on rather than the one the settle inspected, since `repaint` recomposes
-   the block in between and only the height being drawn now puts its last row on
-   the last screen row.
-
-   The underfill test trades a bounded false positive: a session whose
-   committed history is shorter than the screen also reports underfill, so a
-   shrink bottom-anchors it and leaves a blank band above the block until
-   output fills it. Counting history's real rows would mean predicting reflow,
-   which invariant 2 forbids; the band is blank rows only, displacing nothing,
-   and it scrolls away. Nor is a clamp distinguishable by the reported row
-   alone: a real overflowing narrow reports whatever row the surviving lines
-   left, not row 1. Because the probe follows every write that preceded it, the
-   same test repairs a frame or commit that slipped through the signal-delivery
-   window (below).
-
-   This fixes the on-screen anchor only. The rows the same reflow retired into
-   scrollback stay unreachable: inline mode cannot erase scrollback without
-   destroying the whole session, and that is the accepted price of native
-   scrollback (out of scope).
+   This fixes the on-screen anchor only; rows retired into scrollback stay
+   unreachable — inline cannot erase scrollback without destroying the session,
+   which is the accepted price of native scrollback.
 
 ### Why inline does not re-render committed history on resize
 
 The relative erase keeps every rule above true: on a settled size change,
-`resize()` just picks up the new size (`refreshSize`) and the next ordinary frame
-erases from the parked cursor and redraws the live block at it. That is all inline
-does, and it is enough for everything interactive (input, status, dialogs,
-tool progress), because those all live in the live block whose top is the parked
-cursor.
-
-It deliberately does **not** re-lay committed history (code, lists, quotes, diffs,
-tables, rules) at the new width. Three designs tried to, and each corrupted a real
-terminal:
-
-1. A full viewport redraw from `cursorTo(1,1)` destroyed whatever was above the
-   session.
-2. An absolute `repaintScreen` that rewrote visible rows with `cursorTo(row,col)`
-   worked at the bottom of the screen but corrupted scrollback as soon as the
-   terminal was scrolled up: an absolute write lands on whichever rows are
-   currently displayed, which may not be ours.
-3. A relative climb from the parked cursor bounded by a count of emitted rows fixed
-   the scrolled case but broke on **widening**: real emulators pull scrolled-off
-   rows back onto screen when content shrinks (soft prose rejoins), while our own
-   hard-broken structural rows do not rejoin, so a row-count computed from the new
-   layout never equals how many physical rows separate the parked cursor from our
-   content top. The rewrite overlapped surviving old rows and duplicated them.
+`resize()` just picks up the new size and the next ordinary frame erases from
+the parked cursor. It deliberately does **not** re-lay committed history (code,
+lists, quotes, diffs, tables, rules) at the new width — three designs tried to
+and each corrupted a real terminal: a full viewport redraw destroyed whatever
+was above the session; an absolute repaint of visible rows worked at screen
+bottom but corrupted scrollback once scrolled up (an absolute write lands on
+whichever rows are currently displayed); and a relative climb bounded by emitted
+rows fixed the scrolled case but broke on **widening**, when real emulators pull
+scrolled-off rows back while our hard-broken structural rows do not rejoin, so
+a row-count computed from the new layout never equals physical separation.
 
 The lesson is load-bearing: **we cannot know where committed rows sit after an
-emulator reflow.** Only the live block's top (the parked cursor, which the terminal
-tracks through reflow) is ground truth we can rely on. So inline leaves every
-committed line exactly as it landed (invariant 3) and never rewrites one.
-
-The way structural content still gets full-form fidelity is to hand the wrapping to
-the emulator in the first place: **every** text line (prose, code, lists, quotes,
-diffs, tool output) is emitted as a single logical line, so it reflows on resize
-like `cat` output and comes back whole when widened (and copies as one line).
-Only genuinely two-dimensional content (tables, rules) keeps our hard layout
-and keeps its committed width until it scrolls away (the seam). That is the
-price of never corrupting: we touch only what the emulator can reflow for us.
-Alt mode exists for full resize fidelity: it owns a viewport and re-lays everything from
-retained lines (`histLine.rows`), including thematic breaks now that `markdown.go`
-retains rule intent rather than baking width in.
+emulator reflow.** Only the live block's top (the parked cursor) is ground truth,
+so inline leaves every committed line exactly as it landed and never rewrites one.
+The way structural content still gets full-form fidelity is to hand wrapping to
+the emulator in the first place — every text line goes out as a single logical
+line, so it reflows like `cat` output — while genuinely two-dimensional content
+(tables, rules) keeps its hard layout and committed width until it scrolls away.
+Alt mode exists for full resize fidelity: it owns a viewport and re-lays everything.
 
 ### Rewind and resume replay the branch, not erase scrollback
 
@@ -1207,45 +1033,30 @@ is accepted as noise on a restore.
 ## Input
 
 `input.go` turns bytes into `key` values: printable runes, control keys, arrows,
-Home/End/Delete, PgUp/PgDn, Ctrl+Z and bracketed paste. SS3 (`ESC O <x>`) maps a
-safe subset only: the four arrows plus Home (`H`), End (`F`) and keypad Enter
-(`M`); `p`-`y` are deliberately absent because tcell reads them as PC-keypad
-*navigation*, not digits, so mapping them could turn an inert key into a wrong
-action inside a dialog. The CSI arrow modifier is parsed as tcell's raw bitmask:
-Ctrl or Alt promotes to word movement (`;4 ;6 ;7 ;8` and sub-parameters included),
-Shift alone does not (the editor has no selection). A bare `CSI R` is CPR here
-while it is F3 elsewhere: there is no F-key type, so the parameterless branch
-stays ignored. The parameterized form (`CSI row;col R`) decodes to
-`keyCursorReport` on the `reports` channel, where the newest report supersedes
-any older one still queued; the resize re-anchor (rule 8 under Finding the live
-block again after a resize) is the only consumer, so a CPR reply can never leak
-into the editor as text. It is a pure function
-over a byte slice (`decodeKey`) plus a goroutine that feeds a channel, so it is
-testable without a terminal.
+Home/End/Delete, PgUp/PgDn, Ctrl+Z and bracketed paste. The editor change callback
+fires with the current text on every edit; main.go feeds it to token accounting and
+as the typing signal for the boundary hold, so an unfinished draft keeps that
+boundary open. Escape-sequence decoding is a pure function over a byte slice plus
+a goroutine feeding a channel, so it is testable without a terminal.
 
-Mouse reporting is deliberately not enabled. It would buy wheel events at the
-cost of the terminal's own text selection for the whole session, so PgUp/PgDn
-are the way to scroll in alt mode.
+SS3 (`ESC O <x>`) maps only a safe subset: the four arrows plus Home, End and keypad
+Enter; `p`-`y` are deliberately absent because tcell reads them as PC-keypad
+navigation rather than digits. A bare `CSI R` is a cursor report here while it is F3
+elsewhere — there is no F-key type, so the parameterless branch stays ignored.
 
-`editor.go` is the buffer. Positions are grapheme cluster indexes, not bytes or
+Mouse reporting is deliberately not enabled: it would buy wheel events at the cost
+of the terminal's own text selection for the whole session, so PgUp/PgDn scroll in alt mode.
+
+`editor.go` is the buffer. Positions are grapheme-cluster indexes, not bytes or
 runes, so the cursor moves over emoji and combining marks as a unit. Every
-programmatic fill parks the caret at the end (`SetValue`, and so every recall
-path); `SetValueAt` is the one exception, translating a byte offset into the cell
-holding it so a caller with a byte-indexed position (the Ctrl+R match below)
-can place the caret on it. It also owns its own layout (`inputView`), wrapping
-the buffer into display rows on word
-boundaries (a word moves whole to the next line rather than being split across
-lines; only an unbroken token wider than a full row hard-splits) and reporting
-the caret's row and column within them. Wrapping is purely visual: `Value()` is
-untouched, so submitted input never gains newlines. Movement and editing keys
-respect the same rows: Home and End bound the current wrapped row rather than
-the logical line, matching `↑`/`↓`. Ctrl+K kills only to the end of that row
-(no newline is inserted where the remainder joins), and on an already-empty row
-removes it like Delete: the caret stays put as content after it joins at the cursor, or
-as an empty row is removed (the row below joins, or the row above when nothing
-is below). Clearing a whole wrapped row would leave the spaces both wrap breaks
-dropped, so the leading one is consumed and no double space remains where the
-rows join.
+programmatic fill parks the caret at the end (all recall paths), one variant
+translating a byte offset for callers with byte-indexed positions (the Ctrl+R
+match). It owns its own layout: wrapping the buffer into display rows on word
+boundaries and reporting the caret's row/column within them. Wrapping is purely
+visual — `Value()` is untouched, so submitted input never gains newlines.
+Movement and editing keys respect those same visual rows: Home/End bound the
+current wrapped row rather than the logical line, matching ↑/↓; Ctrl+K kills only
+to that row's end.
 
 The key table:
 
@@ -1263,23 +1074,24 @@ The key table:
 | Ctrl+R | reverse history search overlay (`search.go`) |
 | Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |
 
-A paste over a size threshold does not land in the editor: its content is
-stored on the UI and a marker naming the paste is inserted instead, expanded
-back to the full text at submit (`expandPastes`). The marker carries a per-session
-counter, so two pastes of the same size keep separate entries: sharing one key let
-the second overwrite the first and both markers expand to the second's text. Entries
-are kept for the whole session and expanded oldest first, so a recalled prompt
-still resolves and nesting is deterministic; only `Close` drops them.
+A paste over a size threshold does not land in the editor: its content is stored
+on the UI and a marker naming the paste is inserted instead, expanded back to the
+full text at submit. The marker carries a per-session counter so two pastes of
+the same size keep separate entries (sharing one key let the second overwrite the
+first). Entries are kept for the whole session and expanded oldest first, so a
+recalled prompt still resolves and nesting is deterministic.
 
-Keys that resolve to nothing are emitted on `Controls()` as `Control` events so
-the host decides their meaning. Shift+Tab is special: it reaches the control
-channel even while an interaction or overlay owns the keyboard, because changing
-a permission mode with a prompt already on screen must work. Alt+↑ emits
-`ControlRecallQueued`, which the front end maps to popping the newest queued
-prompt back into the editor; like every non-Shift+Tab key it is swallowed while an
-interaction or overlay owns the keyboard. The front end maps
-it to `Barrier.Cycle()`, which re-evaluates any open approval dialog under the new
-mode: moving to `allow-all` resolves one as allow without a keystroke.
+When a capped paste delivers its body (`key.partial`), the reader stays inside
+the paste: the tail is dropped up to and including the terminator, keeping only
+the bytes that could still begin one, and the escape timer stays disarmed since
+those held bytes may be a split terminator. Decoding that tail as ordinary keys
+is what let a `\r` in a pasted file submit the prompt mid-paste.
+
+Keys that resolve to nothing are emitted as control events so the host decides
+their meaning. Shift+Tab is special: it reaches the control channel even while an
+interaction or overlay owns the keyboard, because changing a permission mode with
+a prompt already on screen must work — and the front end maps it to cycling the
+barrier, which re-evaluates any open approval dialog under the new mode.
 
 **Ctrl+R opens a reverse history search** over one merged recall source (every
 line typed this workspace, `/cmd` and `!shell`, plus recorded prompts, newest
@@ -1300,34 +1112,19 @@ caret and emphasis agree on which one "the match" is; when it cannot be located
 the end of the text, the same degradation the highlight already takes.
 
 Plain ↑/↓ are **cursor-first** for multi-line prompts rather than always recalling
-history. They move the caret across *visual* rows (the same word-wrapped layout
-the editor renders) keeping roughly the same column, clamping to a shorter line.
-Only at the buffer's edges do they touch history: on the first display row an Up
-moves mid-text back to the prompt's start and only a press already sitting on the
-very first character recalls older; symmetrically a Down on the last display row
-jumps mid-text to the prompt's end and only a press at the very end moves toward
-the live buffer. So scrolling history from an edited line takes two presses: one
-to reach the start/end, one to scroll.
-
-Recall state never short-circuits this: browsing recorded prompts is tracked by
-`promptIdx`, but ↑/↓ apply cursor movement first and only fall through to
-`promptPrev`/`promptNext` at a boundary. That keeps an edited or recalled multi-
-line prompt fully navigable with the arrows: pressing Up after recalling fills
-the caret back toward the start before it steps to the next older entry, and Down
-returns newer from the end. It holds straight after a search accept too: the
-caret sits mid-text on the match, so the first Up walks it to the prompt's start.
-The held-draft restore (`stashP`) still works because `promptNext` guards on
-`browsingPrompts()` internally.
+history: they move the caret across visual rows keeping roughly the same column,
+clamping to a shorter line. Only at the buffer's edges do they touch history — on
+the first display row an Up moves mid-text back to the prompt's start and only a
+press already sitting on the very first character recalls older, symmetrically for
+Down on the last row. So scrolling history from an edited line takes two presses:
+one to reach the boundary, one to scroll.
 
 The recall source is shared: plain ↑/↓ (no Ctrl+R) walk the same newest-first set as
-the search overlay: first ↑ recalls your most recent sent line, further ↑ steps
-older and ↓ returns to the live draft. The editor's in-memory `e.history` fallback
-(`HistoryPrev`/`HistoryNext`) applies only when no recall source is installed (no
-session store). Like completion it is an in-place live-block overlay rather than an
-interaction: the provider (`SetHistorySearch`, backed by `RecallIndex`) runs off the
-key loop so a slow scan never blocks input. The overlay's pure logic lives in
-`search.go` with no dependency on the UI, and the two overlays are mutually
-exclusive by construction.
+the search overlay; first ↑ recalls your most recent sent line, further ↑ steps
+older and ↓ returns to the live draft. The editor's in-memory history applies only
+when no recall source is installed (no session store). Like completion it is an
+in-place live-block overlay rather than an interaction, so a slow scan never blocks
+input; its pure logic lives separate from the UI.
 
 ## The demo
 
@@ -1363,38 +1160,26 @@ spans since raw strings cannot contain backticks.
 The two distinctive harnesses are what make the renderer and resize paths assertable
 without a real terminal or `time.Sleep`.
 
-**The VT emulator (`vt_test.go`).** There is no real terminal in CI, so it implements
-a rune grid, cursor, scroll region, correct **deferred wrap** semantics (a rune at the
-right margin does not wrap until the next printable byte), and **soft-wrap reflow**:
-`setSize` joins continuation rows into logical lines and re-wraps them at the new width,
-the way a real emulator does on resize. Renderer tests assert on the rendered screen
-rather than raw escape bytes, which is what makes layout bugs visible. The emulator
-models every sequence this package emits *and* caller text may carry (cursor motion,
-IND/NEL/RI, IL/DL/SU/SD, C1 CSI, tabs to 8-column stops). That fidelity is load bearing:
-a sequence the emulator silently ignores cannot be told apart from one that was stripped.
-SGR deliberately does **not** clear a pending deferred wrap (only cursor motion does),
-which keeps exact-width tests honest. `newTestUI` drives a full `UI` in inline mode
-against it with an `io.Pipe` for keystrokes; the park is asserted geometrically rather
-than by screen content.
+**The VT emulator.** There is no real terminal in CI, so it implements a rune grid,
+cursor and scroll region with correct **deferred wrap** semantics (a rune at the right
+margin does not wrap until the next printable byte) and **soft-wrap reflow**: resize joins
+continuation rows into logical lines and re-wraps them at the new width, the way a real
+emulator does. Renderer tests assert on the rendered screen rather than raw escape bytes,
+which is what makes layout bugs visible; it models every sequence this package emits *and*
+caller text may carry (cursor motion, IND/NEL/RI, IL/DL/SU/SD, tabs), because a sequence
+silently ignored cannot be told apart from one stripped. The corruption regressions pin that
+inline never emits an absolute cursor address.
 
-The corruption regressions are built on this harness: renderer tests pin a draw that
-raced the reflow by pointing `sizeFn` at a width the emulator no longer has, and
-because a scrolled viewport is not representable in `vt`, the mechanism that sank three
-earlier designs (absolute addressing into committed rows) is pinned as an emitted-stream
-property: inline tests assert no cursor-address sequence ever appears.
+The pty harness is for end-to-end checks: Linux opens `/dev/ptmx`, runs the UI
+against the slave and drives a real emulator from the master. Almost everything is
+real (raw mode, keystrokes crossing the kernel, termios restore); only the origin of
+SIGWINCH is synthetic — the slave is not a controlling terminal so nothing is
+delivered and the test raises it on itself. The resize path needs no sleep: the
+emulator counts outgoing DSR probes, the test writes the status reply into the
+master, then waits for the settled redraw.
 
-**The pty harness (`pty_test.go`).** For end to end checks, Linux opens `/dev/ptmx`,
-runs the UI against the slave and drives a real emulator from the master. Almost
-everything is real (raw mode, keystrokes crossing the kernel, `TIOCGWINSZ`, termios
-restore); only the origin of SIGWINCH is synthetic, because the slave is not a
-controlling terminal so nothing is delivered and the test raises it on itself with
-`syscall.Kill`. That drives the whole real `watchSignals` chain. The resize path needs
-no sleep: the emulator counts outgoing DSR probes (`vt.dsrCount`), the test writes the
-status reply into the master, then waits for the settled redraw.
-
-**No pty test may call `t.Parallel()`**: `signal.Notify` is process wide, so two live
-UIs would answer each other's SIGWINCH. Only a UI built through `New` runs
-`watchSignals`, and every such test lives in that file.
+**No pty test may call `t.Parallel()`**: signal delivery is process wide, so two live
+UIs would answer each other's SIGWINCH.
 
 ## Traps
 

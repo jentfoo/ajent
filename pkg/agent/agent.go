@@ -42,6 +42,10 @@ type Options struct {
 	// queued prompts with no extra step of latency. It must be cheap and never
 	// block; nil disables.
 	OnBoundary func() []Input
+	// AwaitInput, when set, is called on the loop goroutine at the top of each step,
+	// before any input drains, and may block while the user finishes a message. ctx is
+	// the turn's, so an interrupt releases it; nil disables.
+	AwaitInput func(ctx context.Context)
 	// OnToolBatch, when set, is called on the loop goroutine with one step's tool
 	// calls in message order, before any of them runs. Parallel dispatch races the
 	// calls against each other, so this is the only ordered view of a batch a host

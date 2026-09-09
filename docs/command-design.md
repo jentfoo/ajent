@@ -72,6 +72,15 @@ drained by `startDrain`. Esc/Ctrl+C during a turn recovers every queued item bac
 into the editor (collapsed with newlines) before interrupting; Alt+Up recalls the
 newest queued message. See `agent-loop-design.md` for the boundary contract.
 
+The pump also wires the **typing hold** (`Options.AwaitInput`, see
+`agent-loop-design.md`): at each step boundary, if a draft is being composed in
+the editor the loop waits until it clears (Esc or backspace to empty), sits
+unchanged for 10s since the last edit, or Enter submits. A mid-turn submit
+therefore delivers into the **current** step rather than behind another model call,
+within a bounded handoff grace so a just-submitted line still lands there; queued
+items release the hold at once. An idle submission is consumed before its own turn
+spawns, so step one never waits on that already-delivered line.
+
 A workflow that needs to act on a submission before it becomes a turn hooks the
 pump through `planHooks.beforePrompt`, consulted **after** `q.offer` returns
 false, so mid-turn typing still steers normally and the hook only ever fires
@@ -198,10 +207,10 @@ level collapse into one named unit rather than a scatter of singletons.
 genuine call + result pairs: the same `agent.InjectPair` mechanism `@` references
 use. What comes back is an `agent.Input` whose `Before` is that survey and whose
 `Text` is the distillation instruction (`prompt-design.md` owns the wording). The
-controller hands it to the pump as `pumpLine{input: &in}`; `promptInput` takes that
-branch, skipping `@` expansion and using `rest` as a short echo label, and
+controller hands it to the pump as a pre-assembled input, which skips `@`
+expansion and uses its rest field as a short echo label, and
 everything after is the ordinary prompt path: steer queue, plan hooks, ledger
-seeding, `startDrain`. The model then writes `AGENTS.md` with the `write` tool, so
+seeding, turn start. The model then writes `AGENTS.md` with the `write` tool, so
 the permission barrier gates it exactly as it gates any other write; no
 `tools.WithUserInitiated`, which would bypass the gate. A survey that cannot run
 reports *why*: a missing `read`, missing `agent_*`, or spawns that were refused
@@ -580,43 +589,4 @@ persists whether or not a transcript/recorder is active. Recall (↑/↓ and Ctr
 walks that same store (`session.RecallIndex`). The storage format, secret-marker
 exclusion and compaction are documented in "Editor history" under
 `session-design.md`.
-
-## File map
-
-`pkg/command`:
-
-```
-parse.go        ParseLine, SplitCommand — line classification
-command.go      Command, Registry, Register/Get/List/Names
-console.go      Console interface (+ Select/Confirm/Input/Settings/SaveSetting)
-builtin.go      /help, /model, /reasoning, /tools, /agents, /settings, /exit + RegisterBuiltins
-model.go        /model, /reasoning (moved from main.go)
-tools.go        /tools — free-select before, widen-only after first prompt
-session.go      /session — report or set the session name
-agents.go       /agents — list and stop sub-agents via the narrow Agents interface
-settings.go     /settings menu and per-row editors (enumRow/modelRow/intRow)
-shell.go        Stager — staged ! execution and flush
-complete.go     Completer — command + path completion source
-shellcomplete.go  shell command-name (compgen) and path completion for ! lines
-```
-
-`pkg/refs`:
-
-```
-parse.go        Parse — @ references with annotation absorption
-expand.go       Expander — inject-or-annotate
-index.go        Index — one-ReadDir-per-step path source (Candidates, ShellCandidates)
-```
-
-`pkg/tui` additions:
-
-```
-complete.go        Completion, Completer, StyledCompleter, CompleteStyle,
-                   MatchScore, SetCompleter, refreshMenu/startCompletion
-complete_impl.go   completionOverlay — the menu and the Tab-driven listing
-prompt.go          MultiPick, multiPickState (grouped, Tab-toggle multi-select)
-input.go           keyTab / keyBackTab decoding
-ui.go              paste placeholders
-```
-
 

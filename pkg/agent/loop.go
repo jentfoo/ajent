@@ -140,6 +140,11 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	sink.TurnStart(TurnInfo{Model: a.state.Model, Input: input})
 
 	for step := 1; ; step++ {
+		// AwaitInput may hold this boundary while the user finishes a message; input
+		// arriving during the wait lands at this same step.
+		if a.opts.AwaitInput != nil {
+			a.opts.AwaitInput(turnCtx)
+		}
 		// the turn's own prompt lands once, before any stream
 		if len(promptInputs) > 0 {
 			a.appendSteer(turnCtx, promptInputs)

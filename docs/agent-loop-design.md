@@ -113,6 +113,7 @@ drain follow-up queue -> for each turn:
     append the prompt and any pre-start steering as user messages
       (Before, the text, Delivered, After resolves, then Settled)
     for step := 0; maxSteps <= 0 || step < maxSteps; step++ {
+        AwaitInput(ctx)                              may hold the boundary
         drain push-steers, then OnBoundary inputs         (step boundary)
         Compact(CompactStep)                             hook decides
         req = request(state, env, tools)                 assemble()
@@ -341,6 +342,11 @@ survey, staged shell results), never a typed prompt, so recall excludes all of i
   drop window (append follows synchronously). It must be cheap and never block;
   nil disables it. `Input.Delivered` still fires per returned input, exactly as
   for push-steers.
+- **`Options.AwaitInput`**, when set, runs on the loop goroutine at the top of each
+  step before any input drains and may block while the user finishes a message. It
+  takes the turn's context, so `Interrupt` releases it; draining happens after it
+  returns, so anything arriving during the hold lands in this same boundary. The
+  host typing hold is `main.go`. nil disables.
 - **`Options.OnToolBatch`**, when set, runs on the loop goroutine at the top of
   `dispatch`, before any call runs, with one step's calls in message order and the
   turn's context (cancelled on abort). The parallel path races the calls against each
@@ -381,6 +387,9 @@ forever, exactly like a self-queueing follow-up does today.
   under `a.mu`.
 - All control methods (`Steer`, `FollowUp`, `Interrupt`, `Running`) take
   `a.mu`. They never block on a stream; they only mutate the queue or cancel.
+- At a boundary only `Options.Compact` (its summariser call) and
+  `Options.AwaitInput` may block the loop goroutine; every other hook must be cheap
+  and non-blocking.
 - `Options.SystemSnippets` are extra system blocks appended after project
   instructions, an explicit input to `buildSystem` so sub-agents can inject their
   contract without touching cache-stable composition. Empty keeps the block

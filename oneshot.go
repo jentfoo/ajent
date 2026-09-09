@@ -284,7 +284,7 @@ func headlessTools(reg *tools.Registry, scope toolScope, allow, deny []string) [
 		case scopeReadOnly:
 			return slices.Contains(tools.ReadOnlyBuiltins, name) || reg.ReadOnly(name)
 		default:
-			return name != "bash"
+			return name != toolBash
 		}
 	}
 
