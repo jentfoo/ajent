@@ -266,6 +266,20 @@ func TestFindMatchesRefusesToFoldTheEdit(t *testing.T) {
 		assert.Equal(t, tierCanon, tier)
 	})
 
+	t.Run("self_replace_refuses_indent", func(t *testing.T) {
+		// the site's trailing whitespace makes the indent tier's replacement
+		// byte-different, so it would apply as a success while asking for nothing
+		ms, _ := findMatches("\tfoo bar  \n", "  foo bar", "  foo bar", nil)
+		assert.Empty(t, ms)
+	})
+
+	t.Run("self_replace_refuses_fuzzy", func(t *testing.T) {
+		// healing here cannot tell a duplicated newText from a mis-transcribed oldText
+		ms, _ := findMatches("timeout := 30 * time.Second\n",
+			"timeout := 60 * time.Second", "timeout := 60 * time.Second", nil)
+		assert.Empty(t, ms)
+	})
+
 	t.Run("indent_tier_stays_reachable", func(t *testing.T) {
 		// the guard skips the canon tier, but a block quoted one level out is
 		// still a provable match and must not be lost with it

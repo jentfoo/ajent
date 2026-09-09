@@ -41,6 +41,9 @@ func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, t.Path)
+	if self := selfReplaceIssue(idx, ops); self != "" {
+		b.WriteString("- " + self + "\n") // orthogonal to the causes below, so never displaces one
+	}
 	// diagnose in canonical space: the tiers already tried every lookalike
 	// difference, so reasoning here names the real cause instead of a stray quote.
 	cold, _ := canonical(old)
@@ -79,6 +82,15 @@ func soleDifference(old, text string) string {
 		return ""
 	}
 	return fmt.Sprintf("you wrote %q where the file has %q; everything else matches", a, b)
+}
+
+// selfReplaceIssue reports when an op repeats its oldText as its newText, leaving
+// the text it wants to write as the text it searched for.
+func selfReplaceIssue(idx int, ops []editOp) string {
+	if idx < 1 || idx > len(ops) || ops[idx-1].OldText != ops[idx-1].NewText {
+		return ""
+	}
+	return "oldText equals newText, so nothing changes; put what the file currently holds in oldText and your intended change in newText"
 }
 
 // cascadeIssue reports when an earlier op's newText would create old, which is why

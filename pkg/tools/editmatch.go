@@ -83,6 +83,11 @@ func findMatches(buf, old, replacement string, edited []lineRange) ([]match, mat
 	if ms := exactMatches(buf, old, replacement); len(ms) > 0 {
 		return ms, tierExact
 	}
+	if old == replacement {
+		// no tier can heal a self-replacement: without a rewritten span there is
+		// nothing to prove the drift was the intended change rather than a typo
+		return nil, tierExact
+	}
 	if !nonBlank(old) {
 		return nil, tierExact // folds to bare newlines, which match every line boundary
 	}

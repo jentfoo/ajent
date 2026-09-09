@@ -205,7 +205,7 @@ line count alone.
 
 String replacement against an in-memory buffer, written once at the end so a multi-edit
 batch is all-or-nothing. One shared apply path serves both `Execute` and `DryRun`, preceded
-by an order-independent validation pass (empty or duplicated old text, no-op edits) so nothing
+by an order-independent validation pass (empty or duplicated old text) so nothing
 fails after any write. Every op's span resolves against the **original** buffer, never another
 edit's output — edits cannot cascade, and overlapping spans across ops are rejected.
 
@@ -226,10 +226,10 @@ match names every line that drifted, capped at `maxDriftQuotes`. The canon tier 
 difference from a lookalike by trailing-trim equality rather than by stripping all whitespace, which
 folds an nbsp away and misreports it, and names the characters that differed.
 
-The canon tier is skipped when `oldText` and `newText` canonicalize to the same text: there the
-edit's purpose is changing a character the folding ignores, so matching would rewrite already-correct
-text with itself. The edit fails instead. Indent still gets its chance, since a block quoted at the
-wrong depth remains provable.
+The canon tier is skipped when `oldText` and `newText` canonicalize to the same text, since matching
+would rewrite already-correct text with itself. Indent still runs, as a block quoted at the wrong
+depth remains provable. A byte-identical pair is refused above exact, since with no rewritten span a
+duplicated `newText` and a mis-transcribed `oldText` are the same bytes with opposite intent.
 
 That principle also governs what a non-exact match writes. Only the run between the site's and the
 replacement's common affixes comes from `newText`; text the edit merely quoted keeps the file's own

@@ -103,7 +103,9 @@ func TestApplyEditsValidation(t *testing.T) {
 	}{
 		{"rejects_empty_edits_list", "x\n", `[]`, "at least one entry"}, // doomed, so never prompts
 		{"rejects_empty_old_text", "x\n", `[{"oldText":"","newText":"y"}]`, "empty oldText"},
-		{"rejects_noop_edit", "x\n", `[{"oldText":"same","newText":"same"}]`, "no-op edit"}, // changes nothing
+		{"rejects_noop_when_present", "same\n", `[{"oldText":"same","newText":"same"}]`, "identical"}, // changes nothing
+		// absent oldText is a match failure, not a no-op; the model needs the file's text
+		{"noop_absent_reports_no_match", "x\n", `[{"oldText":"same","newText":"same"}]`, "no match for edit 1"},
 		{"rejects_duplicate_old_text", "one two\n", `[{"oldText":"one","newText":"1"},{"oldText":"one","newText":"2"}]`, "repeat the same oldText"},
 		{"rejects_overlapping_regions", "abcdef\n", `[{"oldText":"bcd","newText":"X"},{"oldText":"cde","newText":"Y"}]`, "target overlapping regions in a.txt"},
 		{"allows_adjacent_non_overlap", "abcdef\n", `[{"oldText":"ab","newText":"1"},{"oldText":"cd","newText":"2"}]`, ""},
@@ -218,6 +220,30 @@ func TestEditFailure(t *testing.T) {
 			`{"path":"a.txt","edits":[{"oldText":"quick brwn fx","newText":"slow"}]}`)
 		assert.True(t, res.IsError)
 		assert.Contains(t, textOf(res), "no match") // names the failure
+	})
+
+	// the model sent its newText in both fields: the message must name the
+	// duplication and hand back the file's text, since no tier will heal it
+	t.Run("duplicated_new_text_is_actionable", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.go", "func f() {\n\ttimeout := 30 * time.Second\n}\n")
+		_ = e.readExec(t.Context(), `{"path":"a.go"}`)
+
+		want := `\ttimeout := 60 * time.Second`
+		res := e.editExec(t.Context(),
+			`{"path":"a.go","edits":[{"oldText":"`+want+`","newText":"`+want+`"}]}`)
+		require.True(t, res.IsError)
+		out := textOf(res)
+		assert.Contains(t, out, "nothing changes")
+		assert.Contains(t, out, `you wrote "60" where the file has "30"`)
+		assert.Contains(t, out, "\ttimeout := 30 * time.Second") // verbatim, copyable
+
+		res = e.editExec(t.Context(), // the retry the message asks for
+			`{"path":"a.go","edits":[{"oldText":"\ttimeout := 30 * time.Second","newText":"`+want+`"}]}`)
+		assert.False(t, res.IsError)
+		data, err := os.ReadFile(filepath.Join(e.cwd, "a.go"))
+		require.NoError(t, err)
+		assert.Equal(t, "func f() {\n\ttimeout := 60 * time.Second\n}\n", string(data))
 	})
 
 	t.Run("ambiguous_requires_replace_all", func(t *testing.T) {

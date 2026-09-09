@@ -104,6 +104,17 @@ func TestMissingErrorHint(t *testing.T) {
 	})
 }
 
+func TestSelfReplaceIssue(t *testing.T) {
+	t.Parallel()
+
+	ops := []editOp{{OldText: "a", NewText: "b"}, {OldText: "same", NewText: "same"}}
+
+	assert.Empty(t, selfReplaceIssue(1, ops))
+	assert.Contains(t, selfReplaceIssue(2, ops), "nothing changes")
+	assert.Empty(t, selfReplaceIssue(1, nil)) // a short op list must not panic
+	assert.Empty(t, selfReplaceIssue(0, ops))
+}
+
 func TestCascadeIssue(t *testing.T) {
 	t.Parallel()
 

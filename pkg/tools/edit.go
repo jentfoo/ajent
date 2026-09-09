@@ -203,8 +203,8 @@ func firstByte(raw json.RawMessage) byte {
 // buffer (so edits never cascade onto each other), and applies them all at
 // once. Untouched regions are copied verbatim and each replacement adopts the
 // line ending of its neighbouring lines. It fails before any change when an op
-// is empty, a no-op, duplicated, missing, ambiguous (more than one match without
-// replace_all), or overlaps another edit.
+// is empty, duplicated, missing, ambiguous (more than one match without
+// replace_all), a no-op, or overlaps another edit.
 func applyEdits(t editTarget, orig string, ops []editOp) (editOutcome, error) {
 	buf := normalizeToLF(orig)
 	for i := range ops { // match in LF space so CRLF oldText never needs a \r
@@ -228,9 +228,13 @@ func applyEdits(t editTarget, orig string, ops []editOp) (editOutcome, error) {
 		case len(ms) > 1 && !op.ReplaceAll:
 			return editOutcome{}, errors.New(ambiguousError(i+1, t.Path, op.OldText, buf, ms))
 		}
-		// a tier can match oldText onto text newText already holds, so the
-		// edit writes nothing while reporting success; the no-op check misses this.
+		// an edit that writes nothing: newText repeated as oldText, or a tier that
+		// matched oldText onto text newText already holds
 		if !slices.ContainsFunc(ms, func(m match) bool { return m.repl != buf[m.s:m.e] }) {
+			if op.OldText == op.NewText {
+				return editOutcome{}, fmt.Errorf("edit %d: oldText and newText are identical, so this edit would change nothing; oldText must be the text the file holds now, newText the text you want",
+					i+1)
+			}
 			return editOutcome{}, fmt.Errorf("edit %d: newText is already what %s holds at that region, so this edit would change nothing; read it again to see the current text",
 				i+1, t.Path)
 		}
@@ -394,9 +398,9 @@ func rebuild(orig, buf string, spans []matchSpan) []byte {
 	return []byte(out.String())
 }
 
-// validateEdits runs the order-independent intent checks: an empty list, empty or
-// no-op edits, and duplicate old texts. Missing/ambiguous/overlapping text is left
-// to applyEdits' span resolution on the original buffer.
+// validateEdits runs the order-independent intent checks: an empty list, empty
+// oldText, and duplicate old texts. Missing/ambiguous/overlapping text and no-op
+// edits are left to applyEdits' span resolution on the original buffer.
 func validateEdits(ops []editOp) error {
 	if len(ops) == 0 {
 		return errors.New("edit requires at least one entry in edits")
@@ -406,9 +410,6 @@ func validateEdits(ops []editOp) error {
 		op := &ops[i]
 		if op.OldText == "" {
 			return fmt.Errorf("edit %d: empty oldText; provide the exact text you want replaced", i+1)
-		}
-		if op.OldText == op.NewText {
-			return fmt.Errorf("edit %d: no-op edit, newText equals oldText", i+1)
 		}
 		if j, dup := seen[op.OldText]; dup {
 			return fmt.Errorf("edits %d and %d repeat the same oldText; use replace_all or add context", j+1, i+1)
