@@ -1,4 +1,4 @@
-package config
+package version
 
 import (
 	"context"
@@ -11,6 +11,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/httputil"
 )
 
 const (
@@ -106,7 +109,7 @@ func saveUpdateCache(path string, c UpdateCache) error {
 	if err != nil {
 		return err
 	}
-	return WriteFileAtomic(path, data, SecretPerm)
+	return config.WriteFileAtomic(path, data, config.SecretPerm)
 }
 
 type ghTag struct {
@@ -117,24 +120,23 @@ type ghTag struct {
 func fetchLatestVersion(ctx context.Context) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, githubTagsURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("new request: %w", err)
-	}
-	resp, err := http.DefaultClient.Do(req)
+
+	resp, err := httputil.Do(cctx, httputil.New(httputil.Options{}), httputil.Request{
+		Method:    http.MethodGet,
+		URL:       githubTagsURL,
+		Name:      "update-check",
+		UserAgent: UserAgent(),
+	})
 	if err != nil {
 		return "", fmt.Errorf("github get: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode/100 != 2 {
-		return "", fmt.Errorf("github status %d", resp.StatusCode)
-	}
 
 	var tags []ghTag
 	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
 		return "", fmt.Errorf("decode: %w", err)
 	}
-	max, ok := version{}, false
+	max, ok := semver{}, false
 	for _, t := range tags {
 		v, vok := parseVersion(t.Name)
 		if !vok {
@@ -153,13 +155,13 @@ func fetchLatestVersion(ctx context.Context) (string, error) {
 // cleanTag matches a strict release tag with no pre-release suffix.
 var cleanTag = regexp.MustCompile(`^v(\d+)\.(\d+)\.(\d+)$`)
 
-type version struct{ major, minor, patch int }
+type semver struct{ major, minor, patch int }
 
-func (v version) String() string {
+func (v semver) String() string {
 	return fmt.Sprintf("v%d.%d.%d", v.major, v.minor, v.patch)
 }
 
-func (v version) less(o version) bool {
+func (v semver) less(o semver) bool {
 	if v.major != o.major {
 		return v.major < o.major
 	}
@@ -170,13 +172,13 @@ func (v version) less(o version) bool {
 }
 
 // parseVersion parses a strict clean tag, rejecting any pre-release suffix.
-func parseVersion(s string) (version, bool) {
+func parseVersion(s string) (semver, bool) {
 	m := cleanTag.FindStringSubmatch(strings.TrimSpace(s))
 	if m == nil {
-		return version{}, false
+		return semver{}, false
 	}
 	major, _ := strconv.Atoi(m[1])
 	minor, _ := strconv.Atoi(m[2])
 	patch, _ := strconv.Atoi(m[3])
-	return version{major: major, minor: minor, patch: patch}, true
+	return semver{major: major, minor: minor, patch: patch}, true
 }

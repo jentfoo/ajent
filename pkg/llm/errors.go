@@ -14,8 +14,6 @@ var (
 	// ErrStreamAborted is returned when a stream failed after emitting content,
 	// which is never retried because that would duplicate deltas.
 	ErrStreamAborted = errors.New("llm: stream aborted after partial content")
-	// ErrIdleTimeout is returned when a response stalled past the idle timeout.
-	ErrIdleTimeout = errors.New("llm: stream idle timeout")
 	// ErrMalformedToolArgs is reported on a tool call whose accumulated
 	// arguments are not valid JSON. It fails the call, not the turn.
 	ErrMalformedToolArgs = errors.New("llm: malformed tool arguments")

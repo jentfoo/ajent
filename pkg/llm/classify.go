@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+
+	"github.com/jentfoo/ajent/pkg/httputil"
 )
 
 // overflowPhrases are the substrings each vendor uses to say the input did not
@@ -38,7 +40,7 @@ func compatClassifier(provider string, flavor Flavor) func(int, []byte) error {
 
 		err := &APIError{
 			Provider: provider, Status: status, Code: code, Message: msg, Body: body,
-			Retryable: shouldRetryStatus(status, false),
+			Retryable: httputil.ShouldRetryStatus(status, false),
 		}
 		if isOverflowStatus(status, flavor) && matchesOverflow(msg+" "+code, flavor) {
 			return err.Overflow()

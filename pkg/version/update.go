@@ -1,12 +1,10 @@
-package command
+package version
 
 import (
 	"context"
 	"fmt"
 	"os/exec"
 	"strings"
-
-	"github.com/jentfoo/ajent/pkg/config"
 )
 
 // modulePath is the ajent module, reinstalled from @latest on update.
@@ -16,7 +14,7 @@ const modulePath = "github.com/jentfoo/ajent@latest"
 // Latest or Err being set distinguishes the three outcomes: up to date,
 // installed a newer version, or failed.
 type UpdateResult struct {
-	Current   string // build version before the attempt (config.Version)
+	Current   string // build version before the attempt (Version)
 	Latest    string // resolved @latest version; "" when resolution failed
 	Installed bool   // true only after go install succeeded with a newer version
 	Err       error  // non-nil on any resolve or install failure
@@ -24,9 +22,9 @@ type UpdateResult struct {
 
 // SelfUpdate resolves the latest published ajent and, when it differs from the
 // running build, reinstalls via `go install`. It never panics; failures come back
-// in Err. The current version is config.Version.
+// in Err. The current version is Version.
 func SelfUpdate(ctx context.Context) UpdateResult {
-	return selfUpdateWith(ctx, config.Version, updateCmds{})
+	return selfUpdateWith(ctx, Version, updateCmds{})
 }
 
 // updateCmds are the two external commands a self-update runs; zero values use
@@ -63,7 +61,7 @@ func (u updateCmds) installLatest(ctx context.Context) error {
 // injectable so tests exercise every branch without a real go toolchain.
 func selfUpdateWith(ctx context.Context, current string, cmds updateCmds) UpdateResult {
 	if current == "" {
-		current = config.Version
+		current = Version
 	}
 	latest, err := cmds.resolveLatest(ctx)
 	if err != nil {
@@ -76,6 +74,27 @@ func selfUpdateWith(ctx context.Context, current string, cmds updateCmds) Update
 		return UpdateResult{Current: current, Latest: latest, Err: err}
 	}
 	return UpdateResult{Current: current, Latest: latest, Installed: true}
+}
+
+// Notice renders one self-update result as a human line for the UI.
+func (r UpdateResult) Notice() string {
+	switch {
+	case r.Err != nil:
+		return "update failed: " + r.Err.Error()
+	case !r.Installed:
+		return "ajent is already up to date (" + versionLabel(r.Current) + ")"
+	default:
+		return "updated ajent from " + versionLabel(r.Current) +
+			" to " + versionLabel(r.Latest)
+	}
+}
+
+// versionLabel keeps a bare "dev" readable while leaving real versions as-is.
+func versionLabel(v string) string {
+	if v == "" || v == "dev" {
+		return "v0.0.0-dev"
+	}
+	return v
 }
 
 // note returns a short suffix of command output for error context.

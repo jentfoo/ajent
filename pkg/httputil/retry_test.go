@@ -1,4 +1,4 @@
-package llm
+package httputil
 
 import (
 	"errors"
@@ -13,8 +13,8 @@ import (
 func TestBackoffDelay(t *testing.T) {
 	t.Parallel()
 
-	// no jitter keeps the arithmetic readable
-	plain := RetryPolicy{Attempts: 5, Base: Duration(time.Second), Max: Duration(8 * time.Second), Jitter: 1}
+	// jitter 1 with an explicit rnd keeps the arithmetic readable
+	plain := RetryPolicy{Attempts: 5, Base: time.Second, Max: 8 * time.Second, Jitter: 1}
 
 	tests := []struct {
 		name       string
@@ -72,7 +72,7 @@ func TestShouldRetryStatus(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, shouldRetryStatus(tc.status, tc.hasRetryAfter))
+			assert.Equal(t, tc.expected, ShouldRetryStatus(tc.status, tc.hasRetryAfter))
 		})
 	}
 }

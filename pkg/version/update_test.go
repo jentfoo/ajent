@@ -1,4 +1,4 @@
-package command
+package version
 
 import (
 	"context"
@@ -27,30 +27,32 @@ func TestSelfUpdate(t *testing.T) {
 	t.Parallel()
 
 	t.Run("newer_version_installs", func(t *testing.T) {
-		res := selfUpdateWith(context.Background(), "v1.0.0",
-			fakeUpdateCmds("v1.2.3", nil))
+		latest := "v3.4.5"
+		res := selfUpdateWith(context.Background(), "v1.0.2",
+			fakeUpdateCmds(latest, nil))
 		require.NoError(t, res.Err)
 		assert.True(t, res.Installed)
-		assert.Equal(t, "v1.2.3", res.Latest)
+		assert.Equal(t, latest, res.Latest)
 	})
 
 	t.Run("already_up_to_date", func(t *testing.T) {
-		res := selfUpdateWith(context.Background(), "v1.2.3",
-			fakeUpdateCmds("v1.2.3", nil))
+		current := "v1.2.3"
+		res := selfUpdateWith(context.Background(), current,
+			fakeUpdateCmds(current, nil))
 		require.NoError(t, res.Err)
 		assert.False(t, res.Installed)
 	})
 
 	t.Run("resolve_error_reported", func(t *testing.T) {
-		res := selfUpdateWith(context.Background(), "v1.0.0",
+		res := selfUpdateWith(context.Background(), "v1.0.2",
 			fakeUpdateCmds("", errors.New("offline")))
 		require.Error(t, res.Err)
 		assert.False(t, res.Installed)
 	})
 
 	t.Run("install_error_reported", func(t *testing.T) {
-		res := selfUpdateWith(context.Background(), "v1.0.0",
-			fakeUpdateCmds("v2.0.0", errors.New("offline")))
+		res := selfUpdateWith(context.Background(), "v1.0.3",
+			fakeUpdateCmds("v2.5.6", errors.New("offline")))
 		require.Error(t, res.Err)
 		assert.False(t, res.Installed)
 	})
@@ -66,13 +68,18 @@ func TestUpdateResultNotice(t *testing.T) {
 	}{
 		{
 			"updated_from_to",
-			UpdateResult{Current: "v1.0.0", Latest: "v1.2.3", Installed: true},
-			"updated ajent from v1.0.0 to v1.2.3",
+			UpdateResult{Current: "v1.0.4", Latest: "v2.3.7", Installed: true},
+			"updated ajent from v1.0.4 to v2.3.7",
 		},
 		{
 			"already_up_to_date",
 			UpdateResult{Current: "v1.2.3", Latest: "v1.2.3"},
 			"ajent is already up to date (v1.2.3)",
+		},
+		{
+			"dev_build_is_labelled",
+			UpdateResult{Current: "dev", Latest: "dev"},
+			"ajent is already up to date (v0.0.0-dev)",
 		},
 		{
 			"error_printed",
@@ -91,7 +98,7 @@ func TestVersionLabel(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct{ in, want string }{
-		{"v1.2.3", "v1.2.3"},
+		{"v6.7.8", "v6.7.8"},
 		{"dev", "v0.0.0-dev"},
 		{"", "v0.0.0-dev"},
 	}

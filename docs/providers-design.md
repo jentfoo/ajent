@@ -35,8 +35,8 @@ pkg/llm/
   duration.go       Duration, the config duration form
 
   sse.go            dialect free frame parser, shared with any SSE consumer
-  httpclient.go     timeouts, retry loop, idle reader, redaction, key resolution
-  retry.go          backoff, Retry-After, retryable classification
+  httpclient.go     provider request layer over pkg/httputil, key resolution
+  retry.go          RetryPolicy, the models.json retry form
 
   config.go         models.json schema and loading
   defaults.go       per flavor defaults and the capability merge
@@ -105,7 +105,7 @@ tolerates a redacted block's absence but not its corruption.
 Request
   -> Prepare(req)                                one normalization pass (see below)
   -> build<Dialect>Body(req)                     pure, no network; calls Prepare itself
-  -> httpClient.do(ctx, httpReq{...})            all retries happen here
+  -> httpClient.do(ctx, httpReq{...})            httputil.Do; all retries happen here
   -> <dialect>Stream over SSEReader              synchronous pull
   -> Event...                                    normalised, same for every vendor
   -> Accumulator                                 rebuilds the assistant Message
@@ -431,7 +431,9 @@ offline with no cache still resolves declared models.
 
 Transport and provider failures surface as a structured error carrying the
 provider name, HTTP status, an optional code and message, whether it is retryable,
-any `Retry-After` hint, and the (redacted) response body.
+any `Retry-After` hint, and the (redacted) response body. `pkg/httputil` owns the
+retry ladder and calls back into `httpClient.apiError` to build it, so the shape
+stays llm's while the mechanism is shared.
 
 Retry covers transient failures (rate limiting, request timeouts, server errors
 and connection errors) plus a conflict only when the
@@ -446,9 +448,9 @@ callers catch with `errors.Is`. Note llama.cpp reports it as a **500**, not a
 client error. Matching vendor prose is fragile by nature; treat the table as
 something that will need additions.
 
-Timeouts are five separate bounds (connect, TLS, header, idle and total)
-because one `http.Client.Timeout` covers the body read, which is the one thing
-that must be allowed to take minutes. The header bound is disabled for
+Timeouts are five separate bounds (connect, TLS, header, idle and total),
+enforced by `pkg/httputil`, because one `http.Client.Timeout` covers the body
+read, which is the one thing that must be allowed to take minutes. The header bound is disabled for
 lm-studio and llama.cpp (a just-in-time model load holds the headers for
 minutes), the idle bound is a gap-between-reads bound disabled for local
 servers, and the total is disabled and opt-in only.
@@ -484,7 +486,7 @@ sent, beyond llama.cpp's `cache_prompt`.
 These are load bearing. Each exists because breaking it produced, or would
 produce, a real bug.
 
-**1. Retry happens only before the first body byte.** `httpClient.do` performs
+**1. Retry happens only before the first body byte.** `httputil.Do` performs
 every attempt and returns only once the status is 2xx and headers are read. The
 stream then reads with no retry underneath it. There is no code path that *can*
 re-emit deltas, which is what would duplicate them in the transcript. A
@@ -525,8 +527,8 @@ enriches, never adds or removes.
 
 **9. Discovery never blocks startup and never fails the run.**
 
-**10. Credentials never reach a log or an error.** Redaction happens inside the
-client before the hook is called, so a hook cannot leak by forgetting. Masked:
+**10. Credentials never reach a log or an error.** Redaction happens inside
+`pkg/httputil` before the hook is called, so a hook cannot leak by forgetting. Masked:
 `Authorization`, `X-Api-Key`, `Api-Key`, `Proxy-Authorization`, `Cookie`,
 `Set-Cookie`, `X-Goog-Api-Key`, `Openai-Organization`, the `key`, `api_key` and
 `access_token` query parameters, and the truncated error body, which some

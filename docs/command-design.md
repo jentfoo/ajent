@@ -229,12 +229,12 @@ lands as a notice when it finishes. A second `/update` while one runs simply
 starts another install, harmless because both resolve then reinstall the same
 latest version.
 
-The shared logic lives in `command/update.go`, factored into an injectable
-exec seam (`updateCmds`) so tests exercise every branch with fakes and never touch
-a real go toolchain or network:
+The shared logic lives in `pkg/version/update.go`, next to the build version it
+compares against, factored into an injectable exec seam (`updateCmds`) so tests
+exercise every branch with fakes and never touch a real go toolchain or network:
 
 - resolve: query the module proxy for the latest published version string.
-- compare against `config.Version` (the running build, injected by ldflags). When
+- compare against `version.Version` (the running build, injected by ldflags). When
   equal (or when resolution failed with a usable empty value), nothing is
   installed and the notice reports *already up to date*.
 - otherwise: install the latest release, capturing combined

@@ -1,7 +1,7 @@
 export GO111MODULE = on
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-LDFLAGS := -ldflags "-s -w -X github.com/jentfoo/ajent/pkg/config.Version=$(VERSION)"
+LDFLAGS := -ldflags "-s -w -X github.com/jentfoo/ajent/pkg/version.Version=$(VERSION)"
 
 ifneq ($(shell command -v bash),)
 test test-all: SHELL := bash

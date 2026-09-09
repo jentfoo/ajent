@@ -1,9 +1,12 @@
-package config
+package version
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setVersionForTest overrides config.Version for a subtest and restores it on
+// setVersionForTest overrides Version for a subtest and restores it on
 // cleanup.
 func setVersionForTest(t *testing.T, v string) {
 	t.Helper()
@@ -110,15 +113,15 @@ func TestParseVersion(t *testing.T) {
 
 	cases := []struct {
 		in   string
-		want version
+		want semver
 		ok   bool
 	}{
-		{"v1.2.3", version{1, 2, 3}, true},
-		{"v0.10.20", version{0, 10, 20}, true},
-		{"dev", version{}, false},
-		{"v1.2", version{}, false},
-		{"v1.2.3-rc1", version{}, false},
-		{" v1.2.3 ", version{1, 2, 3}, true},
+		{"v1.2.3", semver{1, 2, 3}, true},
+		{"v0.10.20", semver{0, 10, 20}, true},
+		{"dev", semver{}, false},
+		{"v1.2", semver{}, false},
+		{"v1.2.3-rc1", semver{}, false},
+		{" v1.2.3 ", semver{1, 2, 3}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -143,4 +146,51 @@ func TestLoadUpdateCacheMissingFile(t *testing.T) {
 	var got UpdateCache
 	loadUpdateCache("", &got) // ignored path: no-op
 	assert.Empty(t, got.Version)
+}
+
+func TestFetchLatestVersion(t *testing.T) {
+	t.Parallel()
+
+	// swapURL points the fetch at srv for one subtest.
+	swapURL := func(t *testing.T, url string) {
+		t.Helper()
+		prev := githubTagsURL
+		githubTagsURL = url
+		t.Cleanup(func() { githubTagsURL = prev })
+	}
+
+	t.Run("returns_the_highest_clean_tag", func(t *testing.T) {
+		var ua string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ua = r.Header.Get("User-Agent")
+			_, _ = io.WriteString(w, `[{"name":"v0.2.0"},{"name":"v1.4.9"},{"name":"v1.4.10-rc1"},{"name":"nightly"}]`)
+		}))
+		t.Cleanup(srv.Close)
+		swapURL(t, srv.URL)
+
+		got, err := fetchLatestVersion(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "v1.4.9", got)
+		assert.Equal(t, UserAgent(), ua)
+	})
+	t.Run("http_error_is_reported", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+		swapURL(t, srv.URL)
+
+		_, err := fetchLatestVersion(t.Context())
+		require.Error(t, err)
+	})
+	t.Run("no_clean_tags_is_an_error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = io.WriteString(w, `[{"name":"nightly"}]`)
+		}))
+		t.Cleanup(srv.Close)
+		swapURL(t, srv.URL)
+
+		_, err := fetchLatestVersion(t.Context())
+		require.Error(t, err)
+	})
 }

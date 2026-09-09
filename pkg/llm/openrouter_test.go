@@ -192,7 +192,7 @@ func TestOpenRouterDiscovery(t *testing.T) {
 	t.Parallel()
 
 	srv, req := jsonServer(t, "openrouter/models.json")
-	c, _, _ := testClient(t, srv.URL)
+	c := testClient(t, srv.URL)
 
 	got, err := discoverProvider(t.Context(), c, "/models", parseOpenRouterModels, CacheEntry{}, testNow)
 	require.NoError(t, err)

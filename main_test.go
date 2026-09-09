@@ -26,6 +26,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
+	"github.com/jentfoo/ajent/pkg/version"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +36,7 @@ func TestPrintVersion(t *testing.T) {
 
 	var buf bytes.Buffer
 	printVersion(&buf)
-	assert.Equal(t, "ajent version "+config.Version+"\n", buf.String())
+	assert.Equal(t, "ajent version "+version.Version+"\n", buf.String())
 }
 
 // TestRewindStateRebuild drives a transcript, rewinds onto an earlier message,

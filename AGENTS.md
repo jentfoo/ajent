@@ -60,23 +60,50 @@ Dependency direction is load-bearing. Actual internal edges:
 ```
 config   (no internal deps — paths, JSON merge, layered settings)
 strutil  (no internal deps — tiny shared string helpers)
-llm      -> config, strutil
+httputil (no internal deps — the hardened outbound HTTP client)
+version  -> config, httputil
+llm      -> config, strutil, httputil, version
 tokens   -> llm
 agent    -> llm, tokens
 tools    -> agent, config, llm, strutil
 session  -> agent, config, llm, strutil, tokens, tools
 compact  -> llm, session, strutil, tokens, tools
 tui      -> strutil (+ goldmark, uniseg, go-udiff, chroma)
-mcp      -> agent, config, llm, strutil (+ mcp-go; never tools/tui/command — adapters live in main.go)
+mcp      -> agent, config, llm, strutil, version (+ mcp-go; never tools/tui/command — adapters live in main.go)
 subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by main.go)
 plan     -> agent, llm (never tools/tui/command/session — the driver supplies Host)
 projinit -> agent, llm, tools (never tui/command/session/subagent — /init drives the
             real read and agent_* tools through the registry)
 permit   -> agent, tools, strutil (never tui; prompter/classifier interfaces are supplied by main.go)
 refs     -> agent, llm, tokens, tools, tui
-command  -> agent, config, llm, refs, tokens, tools, tui
+command  -> agent, config, llm, refs, tokens, tools, tui, version
 main.go  -> everything (the only wiring layer)
 ```
+
+### Outbound HTTP (`pkg/httputil`, `pkg/version`)
+
+Every request ajent makes goes through `httputil.Do(ctx, hc, Request)` on a client
+from `httputil.New`. The package is a leaf and knows nothing about providers: the
+caller supplies the URL, headers, User-Agent, timeouts, retry policy and an
+`ErrorFunc` that turns a non-2xx status into its own error type. Hardening lives
+here once — no redirects, `http.ProxyFromEnvironment`, explicit pool bounds, and
+credential redaction before any log hook sees the event. `New` shares one
+`*http.Client` per distinct connect/TLS/header triple, so the default callers share
+a connection pool.
+
+**Never set `http.Client.Timeout`** — it covers the body read and would kill a long
+stream. All five bounds stay per-stage: connect, TLS and response-header on the
+transport, idle as a gap-between-reads wrapper on the body, and total as a context
+whose cancel hangs off the response body so it outlives `Do`.
+
+`pkg/version` owns the build version (the ldflags target), the `ajent/<version>`
+User-Agent, and both update paths (`SelfUpdate` for `/update`, `CheckUpdateNotice`
+for the startup notice). It sits above `httputil` because the GitHub tag fetch runs
+on the shared client; that is why the version does not live in `httputil` itself,
+and why `pkg/config` stays a leaf.
+
+MCP traffic is **not** on this client: mcp-go owns its own SSE and streamable-HTTP
+transports, and is only handed headers.
 
 ### The turn loop (`pkg/agent`)
 

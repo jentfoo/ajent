@@ -1,4 +1,4 @@
-package config
+package version
 
 import (
 	"runtime/debug"
@@ -27,4 +27,10 @@ func TestResolveVersion(t *testing.T) {
 			assert.Equal(t, tc.want, resolveVersion(tc.injected, tc.bi))
 		})
 	}
+}
+
+func TestUserAgent(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, UserAgent(), "ajent/")
 }

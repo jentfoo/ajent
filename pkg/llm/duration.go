@@ -29,17 +29,18 @@ func (d *Duration) UnmarshalText(data []byte) error {
 	return nil
 }
 
-// durOr returns d as a time.Duration, or alt when d is unset. An explicit zero
-// is honoured, so a caller can disable a bound the default would enable.
-func durOr(d *Duration, alt time.Duration) time.Duration {
-	if d == nil {
-		return alt
-	}
-	return time.Duration(*d)
-}
-
 // dur returns a pointer to d, for building a Timeouts literal.
 func dur(d time.Duration) *Duration {
 	v := Duration(d)
+	return &v
+}
+
+// stdDur returns the stdlib form of an optional duration. nil stays nil, so the
+// unset and explicit zero distinction survives into the transport.
+func stdDur(d *Duration) *time.Duration {
+	if d == nil {
+		return nil
+	}
+	v := time.Duration(*d)
 	return &v
 }

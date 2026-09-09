@@ -20,6 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// retryAttempts mirrors the default httputil retry ladder length.
+const retryAttempts = 4
+
 var testNow = time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 
 // idParser reads a bare {"data":[{"id":...}]} list, standing in for a real one.
@@ -87,7 +90,7 @@ func TestDiscoverProvider(t *testing.T) {
 		}))
 		t.Cleanup(srv.Close)
 
-		c, _, _ := testClient(t, srv.URL)
+		c := testClient(t, srv.URL)
 		got, err := discoverProvider(t.Context(), c, "/models", idParser, CacheEntry{}, testNow)
 		require.NoError(t, err)
 
@@ -111,7 +114,7 @@ func TestDiscoverProvider(t *testing.T) {
 			LastModified: "Sat, 09 Aug 2026 11:00:00 GMT",
 			CheckedAt:    testNow.Add(-time.Hour).UnixMilli(),
 		}
-		c, _, _ := testClient(t, srv.URL)
+		c := testClient(t, srv.URL)
 		got, err := discoverProvider(t.Context(), c, "/models", idParser, prev, testNow)
 		require.NoError(t, err)
 
@@ -127,7 +130,7 @@ func TestDiscoverProvider(t *testing.T) {
 		t.Cleanup(srv.Close)
 
 		prev := CacheEntry{Models: []ModelConfig{{ID: "cached"}}, CheckedAt: 42}
-		c, _, _ := testClient(t, srv.URL)
+		c := testClient(t, srv.URL)
 		got, err := discoverProvider(t.Context(), c, "/models", idParser, prev, testNow)
 
 		require.Error(t, err)
@@ -140,7 +143,7 @@ func TestDiscoverProvider(t *testing.T) {
 		t.Cleanup(srv.Close)
 
 		prev := CacheEntry{Models: []ModelConfig{{ID: "cached"}}, CheckedAt: 42}
-		c, _, _ := testClient(t, srv.URL)
+		c := testClient(t, srv.URL)
 		got, err := discoverProvider(t.Context(), c, "/models", idParser, prev, testNow)
 
 		require.Error(t, err)
@@ -153,7 +156,7 @@ func TestDiscoverProvider(t *testing.T) {
 		t.Cleanup(srv.Close)
 
 		prev := CacheEntry{Models: []ModelConfig{{ID: "cached"}}}
-		c, _, _ := testClient(t, srv.URL)
+		c := testClient(t, srv.URL)
 		_, err := discoverProvider(t.Context(), c, "/models", idParser, prev, testNow)
 		assert.Error(t, err)
 	})
@@ -164,7 +167,7 @@ func TestDiscoverProvider(t *testing.T) {
 		t.Cleanup(srv.Close)
 
 		want := errors.New("bad shape")
-		c, _, _ := testClient(t, srv.URL)
+		c := testClient(t, srv.URL)
 		_, err := discoverProvider(t.Context(), c, "/models",
 			func([]byte) ([]ModelConfig, error) { return nil, want }, CacheEntry{}, testNow)
 		assert.ErrorIs(t, err, want)
@@ -390,7 +393,7 @@ func TestDiscover(t *testing.T) {
 
 		_, warnings := Discover(t.Context(), f, nil, o)
 		require.Len(t, warnings, 1)
-		assert.Equal(t, defaultAttempts, int(trips.Load())) // the primary's full ladder, no fallback
+		assert.Equal(t, retryAttempts, int(trips.Load())) // the primary's full ladder, no fallback
 	})
 	t.Run("http_failure_retries_the_next_candidate", func(t *testing.T) {
 		// a reachable server that answers unhelpfully still falls through; the first

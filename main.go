@@ -29,11 +29,12 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
+	"github.com/jentfoo/ajent/pkg/version"
 )
 
 // printVersion writes the build version line to w.
 func printVersion(w io.Writer) {
-	_, _ = fmt.Fprintln(w, "ajent version", config.Version)
+	_, _ = fmt.Fprintln(w, "ajent version", version.Version)
 }
 
 // secretPrefix marks editor lines excluded from the workspace's persisted line
@@ -57,7 +58,7 @@ func main() {
 	// --update reinstalls from @latest in the foreground then exits; it never opens
 	// the TUI or starts a session. /update is the in-session form.
 	if f.update {
-		res := command.SelfUpdate(context.Background())
+		res := version.SelfUpdate(context.Background())
 		fmt.Println(res.Notice())
 		if res.Err != nil {
 			os.Exit(exitUsage)
@@ -1899,13 +1900,13 @@ func checkForUpdate(ui *tui.UI, set *config.Set) {
 	if set.Settings().DisableUpdateCheck {
 		return // user opted out of the startup nag entirely
 	}
-	path, err := config.CachePath(config.UpdateCacheFileName)
+	path, err := config.CachePath(version.UpdateCacheFileName)
 	if err != nil {
 		return // no home dir; nothing to cache or compare
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), updateCheckTimeout)
 	defer cancel()
-	msg, cerr := config.CheckUpdateNotice(ctx, path, config.UpdateCheckOptions{})
+	msg, cerr := version.CheckUpdateNotice(ctx, path, version.UpdateCheckOptions{})
 	if cerr != nil {
 		return // offline or no tags: best-effort only
 	}

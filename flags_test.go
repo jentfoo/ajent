@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/version"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -137,7 +137,7 @@ func TestWriteUsage(t *testing.T) {
 	var buf bytes.Buffer
 	writeUsage(&buf, fs.FlagUsages())
 	out := buf.String()
-	assert.Equal(t, "ajent version "+config.Version, strings.SplitN(out, "\n", 2)[0])
+	assert.Equal(t, "ajent version "+version.Version, strings.SplitN(out, "\n", 2)[0])
 	assert.Contains(t, out, "usage of ")
 	assert.Contains(t, out, "--resume")
 	assert.Contains(t, out, "--delete-old")

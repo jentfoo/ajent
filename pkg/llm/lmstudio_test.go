@@ -57,7 +57,7 @@ func TestLMStudioDiscovery(t *testing.T) {
 	t.Parallel()
 
 	srv, req := jsonServer(t, "lmstudio/models.json")
-	c, _, _ := testClient(t, srv.URL)
+	c := testClient(t, srv.URL)
 
 	got, err := discoverProvider(t.Context(), c, "/api/v0/models", parseLMStudioModels, CacheEntry{}, testNow)
 	require.NoError(t, err)

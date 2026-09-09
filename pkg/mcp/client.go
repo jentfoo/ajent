@@ -22,7 +22,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/version"
 )
 
 // ToolDef is one tool a server exposes, in our own shape so mcp-go's wire types
@@ -168,7 +168,7 @@ func (c *Client) init(ctx context.Context) error {
 	if err := c.c.Start(ctx); err != nil {
 		return fmt.Errorf("mcp %s: start: %w", c.name, err)
 	}
-	c.clientInfo = mcp.Implementation{Name: "ajent", Version: config.Version}
+	c.clientInfo = mcp.Implementation{Name: "ajent", Version: version.Version}
 	res, err := c.c.Initialize(ctx, mcp.InitializeRequest{
 		Params: mcp.InitializeParams{ClientInfo: c.clientInfo},
 	})

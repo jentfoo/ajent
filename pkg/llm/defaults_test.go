@@ -290,14 +290,14 @@ func TestFlavorDefaults(t *testing.T) {
 		for _, f := range []Flavor{FlavorLMStudio, FlavorLlamaCpp} {
 			d := flavorDefaults[f]
 			require.NotNil(t, d.timeouts.Idle, f.String())
-			assert.Zero(t, durOr(d.timeouts.Idle, defaultIdleTimeout), f.String())
+			assert.Zero(t, *d.timeouts.Idle, f.String()) // explicit zero, not merely unset
 		}
 	})
 	t.Run("lmstudio_disables_the_header_timeout", func(t *testing.T) {
 		// a just in time model load holds the headers for minutes
 		d := flavorDefaults[FlavorLMStudio]
 		require.NotNil(t, d.timeouts.Header)
-		assert.Zero(t, durOr(d.timeouts.Header, defaultHeaderTimeout))
+		assert.Zero(t, *d.timeouts.Header)
 	})
 	t.Run("anthropic_requires_reasoning_replay", func(t *testing.T) {
 		assert.True(t, flavorDefaults[FlavorAnthropic].caps.ReasoningReplay)
