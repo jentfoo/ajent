@@ -98,6 +98,13 @@ func (a *Accounting) SetBase(est int) {
 	a.base = float64(est)
 }
 
+// Base returns the current estimate of the constant request overhead.
+func (a *Accounting) Base() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return int(a.base)
+}
+
 // Response records one completed response: snaps exact terms to u, folds spend
 // into totals/per-model split, and feeds the calibration factor. predicted is what
 // EstimateRequest reported before streaming. keepThink reports whether retention

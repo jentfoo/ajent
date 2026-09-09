@@ -213,6 +213,295 @@ func TestCompactorOverflowRunsMidTurn(t *testing.T) {
 	assert.Contains(t, sb.String(), "recovered")
 }
 
+// The summariser call is the only slow part, so the start notice must fire there
+// and nowhere else: a decline that never reaches it must stay silent.
+func TestCompactorAnnouncesStart(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+
+	t.Run("announces_before_summarising", func(t *testing.T) {
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: textStream("## Goal\nthe lighthouse story")},
+		}}
+		c, st, w := testCompactor(t, model, sp)
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
+		}
+		var notices []string
+		c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 6)
+		st.Tokens.Add(7000)
+
+		did, err := c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		require.True(t, did)
+		require.NotEmpty(t, notices)
+		assert.Contains(t, notices[0], "compacting ", "it announces before the model call")
+	})
+
+	t.Run("silent_when_it_declines_early", func(t *testing.T) {
+		sp := &llm.ScriptedProvider{}
+		c, st, w := testCompactor(t, model, sp)
+		// a band wide enough to swallow the branch: chooseCut declines with no call
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 8, VerbatimFraction: 0.9}
+		}
+		var notices []string
+		c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 2)
+		st.Tokens.Add(7000)
+
+		did, err := c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		require.False(t, did)
+		assert.NotContains(t, strings.Join(notices, "\n"), "compacting ")
+	})
+}
+
+// A compaction that succeeds without clearing the point must not re-run at every
+// following step: each one would fold a single step for a whole summariser call.
+func TestCompactorStallsWhenStillOverPoint(t *testing.T) {
+	// a roomy window with a low compaction point, so the verbatim band alone
+	// outweighs the point while the summariser prompt still fits
+	model := llm.Model{Provider: "test", ID: "m",
+		ContextWindow: 40000, MaxOutput: 1000, CompactThreshold: 3000}
+	turns := make([]llm.ScriptedTurn, 4)
+	for i := range turns {
+		turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+	}
+	c, st, w := testCompactor(t, model, &llm.ScriptedProvider{Turns: turns})
+	c.cfg = func() config.Compaction {
+		return config.Compaction{Auto: true, MinSteps: 6, VerbatimFraction: 0.9}
+	}
+	var notices []string
+	c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 12)
+	st.Tokens.Add(7000)
+
+	did, err := c.run(t.Context(), agent.CompactStep, "")
+	require.NoError(t, err)
+	require.True(t, did)
+	require.True(t, c.overPoint(model), "the cut did not clear the point")
+	require.True(t, c.stalled.Load())
+
+	// the rest of the turn asks and is held, spending nothing
+	summarised := strings.Count(strings.Join(notices, "\n"), "compacting ")
+	for range 3 {
+		did, err = c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		assert.False(t, did)
+	}
+	assert.Equal(t, summarised, strings.Count(strings.Join(notices, "\n"), "compacting "))
+
+	// the turn boundary re-arms it: a fresh turn gets a fresh attempt
+	_, err = c.run(t.Context(), agent.CompactThreshold, "")
+	require.NoError(t, err)
+	assert.False(t, c.stalled.Load())
+}
+
+// A step compaction fires mid-turn from the turn's own goroutine, so it must not
+// be refused for running, and it writes State.Messages rather than via WithState.
+func TestCompactorStepRunsMidTurn(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textStream("## Goal\nthe lighthouse story")}, // summariser
+		{Events: textStream("carried on")},                    // the turn resumes after it
+	}}
+	c, st, w := testCompactor(t, model, sp)
+	c.cfg = func() config.Compaction {
+		return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
+	}
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+	st.Tokens.Add(7000) // past the compaction point for this window
+
+	blocked := make(chan struct{})
+	ag := agent.New(st, agent.Options{
+		Sinks:    []agent.Sink{agent.NopSink{}},
+		Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		Env:      agent.DetectEnvironment(),
+		Compact:  func(context.Context, agent.CompactReason) (bool, error) { <-blocked; return false, nil },
+	})
+	c.ag = ag
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "x"}) }()
+	require.Eventually(t, ag.Running, 5*time.Second, 10*time.Millisecond)
+
+	did, err := c.run(t.Context(), agent.CompactStep, "")
+	require.NoError(t, err)
+	assert.True(t, did, "a step run is not refused while a turn is running")
+	assert.Len(t, compactionEntries(t, w), 1)
+
+	close(blocked)
+	require.NoError(t, <-errCh)
+}
+
+// An automatic run that cannot reduce latches the automatic triggers off and tells
+// the user to compact themselves, rather than re-attempting at every step boundary.
+func TestCompactorDeclineLatchesAuto(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+
+	// the summariser returns a checkpoint bigger than the span it replaces, so the
+	// fold is really attempted and finish rejects it for saving nothing
+	setup := func(t *testing.T) (*compactor, *[]string) {
+		t.Helper()
+		bloated := "## Goal\n" + strings.Repeat("the lighthouse keeper wrote it all down. ", 1000)
+		turns := make([]llm.ScriptedTurn, 4)
+		for i := range turns {
+			turns[i] = llm.ScriptedTurn{Events: textStream(bloated)}
+		}
+		c, st, w := testCompactor(t, model, &llm.ScriptedProvider{Turns: turns})
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
+		}
+		var notices []string
+		c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 6)
+		st.Tokens.Add(7000) // past the compaction point
+		return c, &notices
+	}
+
+	// a session with nothing worth folding yet is not a session that cannot reduce:
+	// latching there would disable automatic compaction as history was still arriving.
+	t.Run("nothing_to_fold_yet_never_latches", func(t *testing.T) {
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: textStream("## Goal\nthe lighthouse story")},
+		}}
+		c, st, w := testCompactor(t, model, sp)
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 8, VerbatimFraction: 0.9}
+		}
+		var notices []string
+		c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 2) // the band swallows the branch; chooseCut declines for free
+		st.Tokens.Add(7000)
+
+		did, err := c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		require.False(t, did)
+		require.False(t, c.autoDisabled.Load(), "no fold was attempted, so nothing was learned")
+		assert.NotContains(t, strings.Join(notices, "\n"), "could not reduce")
+
+		// once enough history has accrued the very next step boundary compacts
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
+		}
+		appendSteps(t, w, 6)
+		did, err = c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		assert.True(t, did)
+	})
+
+	t.Run("second_attempt_is_skipped", func(t *testing.T) {
+		c, notices := setup(t)
+
+		did, err := c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		require.False(t, did)
+		require.True(t, c.autoDisabled.Load())
+		assert.Contains(t, strings.Join(*notices, "\n"), "could not reduce this session")
+
+		// the latch short-circuits before the transcript is even read
+		c.rec = nil // a re-attempt would nil-panic on rec.w
+		did, err = c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		assert.False(t, did)
+	})
+
+	t.Run("one_reminder_per_turn", func(t *testing.T) {
+		c, notices := setup(t)
+
+		require.NoError(t, warmLatch(t, c))
+		*notices = nil
+		c.rec = nil // prove nothing re-attempts
+
+		for range 3 { // three step boundaries inside one turn
+			_, err := c.run(t.Context(), agent.CompactStep, "")
+			require.NoError(t, err)
+		}
+		assert.Empty(t, *notices, "the decline notice was the first turn's reminder")
+
+		_, err := c.run(t.Context(), agent.CompactThreshold, "") // turn boundary re-arms it
+		require.NoError(t, err)
+		for range 3 {
+			_, err := c.run(t.Context(), agent.CompactStep, "")
+			require.NoError(t, err)
+		}
+		require.Len(t, *notices, 1)
+		assert.Contains(t, (*notices)[0], "over the compaction point")
+	})
+
+	// below the bar run never reaches pkg/compact, so it is not a decline: latching
+	// there would disable automatic compaction on a session that never tried.
+	t.Run("below_threshold_never_latches", func(t *testing.T) {
+		sp := &llm.ScriptedProvider{}
+		c, _, w := testCompactor(t, model, sp)
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 8, VerbatimFraction: 0.9}
+		}
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 2) // no Tokens.Add: still under the compaction point
+
+		did, err := c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		assert.False(t, did)
+		assert.False(t, c.autoDisabled.Load())
+	})
+
+	t.Run("manual_never_latches", func(t *testing.T) {
+		c, _ := setup(t)
+
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		require.NoError(t, err)
+		require.False(t, did)
+		assert.False(t, c.autoDisabled.Load())
+	})
+
+	t.Run("success_clears_the_latch", func(t *testing.T) {
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: textStream("## Goal\nthe lighthouse story")},
+		}}
+		c, st, w := testCompactor(t, model, sp)
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
+		}
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 6)
+		st.Tokens.Add(7000)
+		c.autoDisabled.Store(true)
+		c.warned.Store(true)
+
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		require.NoError(t, err)
+		require.True(t, did)
+		assert.False(t, c.autoDisabled.Load(), "this session still reduces")
+	})
+
+	t.Run("resume_auto_re_arms", func(t *testing.T) {
+		c, _ := setup(t)
+		c.autoDisabled.Store(true)
+		c.warned.Store(true)
+
+		c.resumeAuto()
+		assert.False(t, c.autoDisabled.Load())
+		assert.False(t, c.warned.Load())
+	})
+}
+
+// warmLatch runs one declining automatic compaction so the latch is set.
+func warmLatch(t *testing.T, c *compactor) error {
+	t.Helper()
+	did, err := c.run(t.Context(), agent.CompactStep, "")
+	require.False(t, did)
+	require.True(t, c.autoDisabled.Load())
+	return err
+}
+
 func mustBranch(t *testing.T, w *session.Writer) []session.Entry {
 	t.Helper()
 	entries, _, err := session.Read(w.Path())

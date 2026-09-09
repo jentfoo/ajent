@@ -31,9 +31,11 @@ func TestOverflowRetry(t *testing.T) {
 
 		err := a.Prompt(t.Context(), Input{Text: "big"})
 		require.NoError(t, err)
-		// the overflow retry fires mid-turn, then the threshold hook fires at the
-		// turn boundary once the retried turn completes.
-		assert.Equal(t, []CompactReason{CompactOverflow, CompactThreshold}, reasons)
+		// each step boundary asks first, then the overflow retry fires mid-turn, then
+		// the threshold hook fires at the turn boundary once the retried turn completes.
+		assert.Equal(t, []CompactReason{
+			CompactStep, CompactOverflow, CompactStep, CompactThreshold,
+		}, reasons)
 
 		// the retried response landed as the assistant reply
 		var sb strings.Builder
@@ -60,15 +62,17 @@ func TestOverflowRetry(t *testing.T) {
 		a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 			Env:      testEnv,
-			Compact: func(_ context.Context, _ CompactReason) (bool, error) {
-				calls++
+			Compact: func(_ context.Context, r CompactReason) (bool, error) {
+				if r == CompactOverflow {
+					calls++
+				}
 				return true, nil
 			},
 		})
 
 		err := a.Prompt(t.Context(), Input{Text: "big"})
 		require.ErrorIs(t, err, llm.ErrContextOverflow)
-		assert.Equal(t, 1, calls) // one compaction attempt per turn, then it fails
+		assert.Equal(t, 1, calls) // one overflow retry per turn, then it fails
 	})
 
 	// with no compact hook wired the overflow fails the turn outright.
@@ -98,7 +102,79 @@ func TestThresholdHookAtTurnBoundary(t *testing.T) {
 	})
 
 	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
-	assert.Equal(t, []CompactReason{CompactThreshold}, reasons)
+	assert.Equal(t, []CompactReason{CompactStep, CompactThreshold}, reasons)
+}
+
+// the hook is asked before every stream, not only once per turn, so a tool result
+// cannot leave the turn running past the compaction point.
+func TestStepHookAtEveryStepBoundary(t *testing.T) {
+	t.Parallel()
+
+	var reasons []CompactReason
+	set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok"}}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: toolCallEvents("c1", "bash")},
+		{Events: toolCallEvents("c2", "bash")},
+		{Events: textOnly("done")},
+	}}
+	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Env:      testEnv,
+		Tools:    set,
+		Compact: func(_ context.Context, r CompactReason) (bool, error) {
+			reasons = append(reasons, r)
+			return false, nil
+		},
+	})
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+	assert.Equal(t, []CompactReason{
+		CompactStep, CompactStep, CompactStep, CompactThreshold,
+	}, reasons)
+}
+
+// a step compaction swaps State.Messages from the turn goroutine, and the next
+// stream must assemble from what it left rather than the pre-compaction list.
+func TestStepHookReducesContextMidTurn(t *testing.T) {
+	t.Parallel()
+
+	var a *Agent
+	set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok"}}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: toolCallEvents("c1", "bash")},
+		{Events: textOnly("done")},
+	}}
+	var swapped bool
+	a = New(&State{Model: llm.Model{ID: "test"}}, Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Env:      testEnv,
+		Tools:    set,
+		Compact: func(_ context.Context, r CompactReason) (bool, error) {
+			if r != CompactStep || swapped || len(a.state.Messages) == 0 {
+				return false, nil
+			}
+			// WithState refuses on the turn goroutine; the compactor writes directly
+			assert.False(t, a.WithState(func(*State) {}))
+			a.state.Messages = []llm.Message{llm.Text(llm.RoleUser, "<summary>")}
+			swapped = true
+			return true, nil
+		},
+	})
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+	require.True(t, swapped)
+	require.NotEmpty(t, a.state.Messages)
+	assert.Equal(t, "<summary>", firstText(a.state.Messages[0]))
+}
+
+// firstText returns m's first text block, or "" when it carries none.
+func firstText(m llm.Message) string {
+	for _, b := range m.Content {
+		if tb, ok := b.(llm.TextBlock); ok {
+			return tb.Text
+		}
+	}
+	return ""
 }
 
 func TestWithStateMutatesLiveState(t *testing.T) {

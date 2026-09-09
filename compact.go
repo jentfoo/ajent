@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/compact"
@@ -33,6 +34,42 @@ type compactor struct {
 	// cfg supplies live compaction settings so a /settings edit takes effect on the
 	// next run; nil means the built-in defaults with automatic reduction on.
 	cfg func() config.Compaction
+	// autoDisabled latches the automatic triggers off once a real fold attempt could
+	// not reduce; only a summariser call or a hard failure sets it, never "nothing
+	// worth folding yet". Atomic because automatic runs land on the turn goroutine
+	// and /compact on the console's.
+	autoDisabled atomic.Bool
+	// stalled holds the step trigger for the rest of a turn whose compaction
+	// succeeded without clearing the point; the turn boundary re-arms it.
+	stalled atomic.Bool
+	warned  atomic.Bool // one reminder per turn, reset at the turn boundary
+}
+
+// autoReason reports whether r is an automatic trigger, sharing the config gate,
+// the compaction point and the decline latch.
+func autoReason(r agent.CompactReason) bool {
+	return r == agent.CompactThreshold || r == agent.CompactStep
+}
+
+// used returns the ledger's current context occupancy, or 0 when there is none.
+func (c *compactor) used() int {
+	if t := c.st.Tokens; t != nil {
+		return t.Context().Used
+	}
+	return 0
+}
+
+// overPoint reports whether context has crossed m's compaction point.
+func (c *compactor) overPoint(m llm.Model) bool {
+	at := tokens.CompactAt(m)
+	return at > 0 && c.used() >= at
+}
+
+// resumeAuto re-arms the automatic triggers, for a model switch or a context-tree jump.
+func (c *compactor) resumeAuto() {
+	c.autoDisabled.Store(false)
+	c.stalled.Store(false)
+	c.warned.Store(false)
 }
 
 // compaction returns the live compaction settings, or the built-in defaults.
@@ -44,11 +81,11 @@ func (c *compactor) compaction() config.Compaction {
 }
 
 // run performs one compaction for reason, returning whether anything changed. A
-// manual run refuses while a turn streams; a threshold run only acts when Used has
-// crossed the model's compaction point; an overflow run fires mid-turn from the
-// turn's own goroutine.
+// manual run refuses while a turn streams; an automatic run only acts when Used has
+// crossed the model's compaction point; step and overflow runs fire mid-turn from
+// the turn's own goroutine.
 func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instructions string) (bool, error) {
-	if reason != agent.CompactOverflow && c.ag != nil && c.ag.Running() {
+	if !reason.MidTurn() && c.ag != nil && c.ag.Running() {
 		c.notify("compaction refused: press Esc to stop the turn first", agent.LevelWarn)
 		return false, nil
 	}
@@ -59,14 +96,26 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 	model := c.st.Model
 	cfg := c.compaction()
-	if reason == agent.CompactThreshold {
+	if autoReason(reason) {
 		if !cfg.Auto {
 			return false, nil // automatic reduction disabled by config
 		}
-		t := c.st.Tokens
-		at := tokens.CompactAt(model)
-		if t == nil || at <= 0 || t.Context().Used < at {
+		if reason == agent.CompactThreshold { // a real turn boundary re-arms both
+			c.stalled.Store(false)
+			c.warned.Store(false)
+		}
+		if !c.overPoint(model) {
 			return false, nil // not at the compaction point yet
+		}
+		if c.stalled.Load() {
+			return false, nil // this turn already cut as far as it can; retry at its boundary
+		}
+		if c.autoDisabled.Load() {
+			if !c.warned.Swap(true) {
+				c.notify("over the compaction point and automatic compaction cannot reduce "+
+					"this session; run /compact, switch models, or rewind", agent.LevelWarn)
+			}
+			return false, nil
 		}
 	}
 
@@ -83,7 +132,14 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		c.notify(fmt.Sprintf("compaction unavailable: no summariser provider for %s (%v)", model.Key(), perr), agent.LevelWarn)
 		return false, perr
 	}
+	// a decline is only evidence this session cannot reduce once a fold was really
+	// attempted; declining before this ran means there is nothing worth folding yet
+	var attempted bool
 	run := func(ctx context.Context, req llm.Request) (string, error) {
+		attempted = true
+		// the summariser call is the slow part, and a step run stalls a turn the user
+		// is watching; a free decline never reaches here, so this cannot cry wolf
+		c.notify("compacting "+strutil.FormatTokens(c.used())+"…", agent.LevelInfo)
 		text, usage, serr := llm.RunSummary(ctx, provider, req)
 		if t := c.st.Tokens; t != nil && serr == nil {
 			// spend-only: the summariser's prompt is not this session's context, so a
@@ -95,8 +151,13 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 
 	// measure full usage (system + AGENTS.md + tool schemas), not just messages
 	var base int
-	if c.ag != nil && reason != agent.CompactOverflow {
-		base = c.ag.BaseEstimate(true) // 0 only mid-turn, where the reseed is transient anyway
+	if c.ag != nil {
+		base = c.ag.BaseEstimate(true)
+	}
+	if base == 0 {
+		if t := c.st.Tokens; t != nil {
+			base = t.Base() // mid-turn BaseEstimate reports 0; the ledger holds the real value
+		}
 	}
 	if instructions == "" && c.focus != nil {
 		instructions = c.focus() // a plan phase keeps its own focus across auto-compaction
@@ -111,12 +172,18 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 	res, cerr := compact.Compact(ctx, branch, model, run, opts)
 	if cerr != nil {
-		c.notify("compaction failed: "+cerr.Error(), agent.LevelWarn)
+		if ctx.Err() == nil { // an interrupt is not a failure of this session to reduce
+			c.notify("compaction failed: "+cerr.Error(), agent.LevelWarn)
+			c.declineAuto(reason)
+		}
 		return false, cerr
 	}
 	if res == nil {
 		if reason == agent.CompactManual {
 			c.notify("nothing to compact", agent.LevelInfo)
+		}
+		if attempted { // a plan that did not pay for itself, not a thin session
+			c.declineAuto(reason)
 		}
 		return false, nil
 	}
@@ -144,10 +211,10 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	for _, wmsg := range warns {
 		c.notify("compact: "+wmsg, agent.LevelWarn)
 	}
-	if c.ag != nil && reason != agent.CompactOverflow {
+	if c.ag != nil && !reason.MidTurn() {
 		c.ag.WithState(func(s *agent.State) { s.Messages = rebuilt.Messages })
 	} else {
-		// overflow runs on the turn goroutine, where WithState refuses
+		// step and overflow runs are on the turn goroutine, where WithState refuses
 		c.st.Messages = rebuilt.Messages
 	}
 	// a cut or an elided result takes file content out of context that read
@@ -166,7 +233,24 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		c.sink.Context(t.Context())
 	}
 	c.sink.Notice(reportLine(res), agent.LevelInfo)
+	c.resumeAuto() // this session still reduces
+	if autoReason(reason) && c.overPoint(model) {
+		// the best cut available did not clear the point, so the next step would fold
+		// one more step for another whole summariser call; wait for the turn boundary
+		c.stalled.Store(true)
+	}
 	return true, nil
+}
+
+// declineAuto latches the automatic triggers off when an attempted fold could not
+// reduce, telling the user to compact themselves. A manual run reports its own.
+func (c *compactor) declineAuto(reason agent.CompactReason) {
+	if !autoReason(reason) || c.autoDisabled.Swap(true) {
+		return
+	}
+	c.warned.Store(true) // this notice is the turn's reminder
+	c.notify("automatic compaction could not reduce this session; run /compact with "+
+		"instructions, switch models, or rewind", agent.LevelWarn)
 }
 
 // verbatimTokens converts a configured fraction into a token ceiling against the

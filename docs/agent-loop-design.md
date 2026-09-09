@@ -114,6 +114,7 @@ drain follow-up queue -> for each turn:
       (Before, the text, Delivered, After resolves, then Settled)
     for step := 0; maxSteps <= 0 || step < maxSteps; step++ {
         drain push-steers, then OnBoundary inputs         (step boundary)
+        Compact(CompactStep)                             hook decides
         req = request(state, env, tools)                 assemble()
         msg, usage = a.stream(ctx, req)                  forwards deltas to sink
         append msg to state.Messages
@@ -218,10 +219,8 @@ Interruption is cancellation, not draining:
   `bash`) records its partial output as an **error result** marked
   `interrupted by user`, appended in call order. `abortResults` keeps those real
 results over the synthetic ones it fills in for calls that never returned.
-- An overflow-compaction retry runs under the turn's own context, so an interrupt
-  stops its model call and the turn ends `StopAborted` rather than surfacing
-  `context canceled` as a failure. (Threshold-boundary compaction keeps the outer
-  context and is not interruptible by decision.)
+- Step- and overflow-boundary compaction runs under the turn's own context, so an
+  interrupt aborts it. Turn-boundary compaction keeps the outer context.
 - On abort the partial assistant message from the Accumulator is still appended,
   then every unanswered `ToolCallBlock` gets a synthetic error result carrying the
   same `interrupted by user` marker. Without this, a cancelled turn leaves a dangling
@@ -331,6 +330,9 @@ survey, staged shell results), never a typed prompt, so recall excludes all of i
 - An injected steer with visible text is echoed to the sink (`UserPrompt`) when it
   lands. It has no submission echo, unlike typed prompts. Tool-result folds render
   through their own path.
+- **`Options.Compact`** is polled at every step boundary as well as on turn end,
+  so one large tool result cannot push the rest of the turn past the compaction
+  point. See `compaction-design.md` "Triggers".
 - **`FollowUp`** queues input as a separate turn once the current one settles.
 - **`Options.OnBoundary`**, when set, is called on the loop goroutine at each
   step boundary just before the next model call, after push-steers have been

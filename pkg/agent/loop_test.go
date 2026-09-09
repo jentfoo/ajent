@@ -520,7 +520,7 @@ func TestInterruptDuringOverflowCompaction(t *testing.T) {
 		Env:      testEnv,
 		Compact: func(ctx context.Context, r CompactReason) (bool, error) {
 			if r != CompactOverflow {
-				return false, nil // threshold boundary compaction is uninterruptible by design
+				return false, nil // the step boundary asks first; only the retry blocks here
 			}
 			entered <- struct{}{}
 			<-ctx.Done() // the summariser call blocks until the interrupt
@@ -544,6 +544,51 @@ func TestInterruptDuringOverflowCompaction(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.NoError(t, err) // an interrupted retry is a clean abort, not a failure
+	case <-time.After(defaultTimeout):
+		t.Fatal("Prompt did not return after the interrupt")
+	}
+	assert.Equal(t, llm.StopAborted, catch.result.Stop)
+}
+
+// TestInterruptDuringStepCompaction interrupts while a step-boundary compaction's
+// model call is running; it runs under the turn context, so Esc stops it.
+func TestInterruptDuringStepCompaction(t *testing.T) {
+	t.Parallel()
+
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
+	catch := &resultCatcher{}
+
+	entered := make(chan struct{}, 1)
+	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Sinks:    []Sink{catch},
+		Env:      testEnv,
+		Compact: func(ctx context.Context, r CompactReason) (bool, error) {
+			if r != CompactStep {
+				return false, nil
+			}
+			entered <- struct{}{}
+			<-ctx.Done() // the summariser call blocks until the interrupt
+			return false, ctx.Err()
+		},
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+	require.Eventually(t, func() bool {
+		select {
+		case <-entered:
+			return true
+		default:
+			return false
+		}
+	}, defaultTimeout, pollInterval, "the step compaction must start before the interrupt")
+
+	a.Interrupt()
+
+	select {
+	case err := <-errCh:
+		require.NoError(t, err) // a clean abort, not a failure
 	case <-time.After(defaultTimeout):
 		t.Fatal("Prompt did not return after the interrupt")
 	}

@@ -52,8 +52,8 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 			continue
 		}
 		err := a.runTurn(ctx, input)
-		// a real turn boundary: the hook decides whether an automatic compact fires.
-		// It must not run mid-stream or between a tool call and its result.
+		// a real turn boundary: the hook decides whether an automatic compact fires,
+		// and resets its per-turn state. Step boundaries fire it too, mid-turn.
 		if err == nil && a.opts.Compact != nil {
 			a.mu.Lock()
 			idle := !a.running
@@ -147,6 +147,11 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		}
 		// steering submitted while running drains here at this step boundary
 		a.drainSteer(turnCtx)
+
+		// the turn's own context, so an interrupt stops the summariser call
+		if a.opts.Compact != nil {
+			_, _ = a.opts.Compact(turnCtx, CompactStep)
+		}
 
 		msg, usage, stop, err := a.stream(turnCtx, sink)
 		result.Usage.Add(usage)

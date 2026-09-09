@@ -16,7 +16,14 @@ const (
 	CompactManual    CompactReason = iota // /compact; the caller asks directly, not via the hook
 	CompactThreshold                      // a turn boundary; the hook decides whether to act
 	CompactOverflow                       // a request exceeded the window and must shrink before retry
+	CompactStep                           // a step boundary inside a running turn; the hook decides whether to act
 )
+
+// MidTurn reports whether r fires from the turn goroutine, where the loop owns
+// State and WithState refuses.
+func (r CompactReason) MidTurn() bool {
+	return r == CompactOverflow || r == CompactStep
+}
 
 // Options configures an Agent.
 type Options struct {
@@ -43,8 +50,8 @@ type Options struct {
 	// The context is the turn's; it cancels on abort, so anything launched here
 	// must observe it. It must be cheap and never block; nil disables.
 	OnToolBatch func(context.Context, []ToolCall)
-	// Compact reduces the live context at a turn boundary or after an overflow,
-	// reporting whether anything changed. It never runs mid-stream.
+	// Compact reduces the live context at a turn or step boundary, or after an
+	// overflow, reporting whether anything changed. It never runs mid-stream.
 	Compact func(ctx context.Context, r CompactReason) (bool, error)
 	// MaxSteps caps one turn's tool-calling iterations; <= 0 (the zero value)
 	// means unlimited, leaving compaction and the context window as the bounds.

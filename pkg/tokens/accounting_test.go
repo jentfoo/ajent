@@ -197,6 +197,17 @@ func TestAccountingSetBase(t *testing.T) {
 		a.Reseed(resAfter)
 		assert.Equal(t, resAfter+900, a.Context().Used) // base persists across reseed
 	})
+	t.Run("base_readable", func(t *testing.T) {
+		a := New(llm.Model{ID: "m1", Provider: "p"})
+		assert.Zero(t, a.Base())
+		a.SetBase(base)
+		// mid-turn compaction reads this rather than Agent.BaseEstimate, which
+		// reports 0 while the loop owns State
+		assert.Equal(t, base, a.Base())
+		a.Partial(llm.Usage{Input: 4000})
+		a.Reseed(2000)
+		assert.Equal(t, base, a.Base()) // untouched by exact reports and reseeds
+	})
 }
 
 func TestAccountingSetSubmit(t *testing.T) {

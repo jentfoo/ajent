@@ -37,8 +37,8 @@ Without it the measure counts thinking blocks that retention would drop from
 completed turns (nor do they reach the wire on a non-`RetainAll` policy), so every
 number came out high and a "successful" compaction could still leave the estimate
 far above what the next request actually sends. What is measured is what is sent.
-An overflow run measures mid-turn with `Base` 0. The reseed that follows is
-transient, replaced once the retried turn reports real usage.
+A mid-turn run cannot call `Agent.BaseEstimate`, which reports 0 while the loop
+owns `State`, so it reads the ledger's own base instead.
 
 ## Where reductions live
 
@@ -222,8 +222,12 @@ a phase seed.
   whose summary cannot shrink the context, reports that there is nothing to compact.
 - **Automatic.** When `Used` crosses `tokens.CompactAt(model)`, which is the
   `compactThreshold` from `models.json`, a fraction of the window or an absolute
-token count. The hook runs at the next turn boundary, never
-  mid-turn and never between a tool call and its result. The hook decides whether
+token count. The hook runs at the next **turn or step** boundary, never
+  mid-stream and never between a tool call and its result. A turn is unbounded,
+  so the step boundary catches large tool results before they ship an oversized
+  prefix on every remaining step; it cuts only on an assistant message whose
+  `tool_use`s are all answered, takes the same mid-turn paths as an overflow run,
+  and needs no state resumed (assembly is pure). The hook decides whether
   the threshold is crossed; the agent stays dumb. `compaction.auto: false` gates
   this trigger and only this one. Models that declare no `compactThreshold` of
   their own take `compaction.threshold`, applied by the registry so discovered
@@ -239,6 +243,18 @@ result far below the window; when the bloat sits inside the verbatim band,
 compaction declines by design (the newest steps are never reduced) and the turn
 fails. A rewind or a model switch recovers.
 
+Two guards keep the per-step trigger affordable:
+
+- **A fold attempt that reduces nothing latches automatic triggers off for the
+  session**, cleared by `/compact`, a successful run, a model switch or a
+  context-tree jump; an interrupt never sets it. It is session state, not a write
+  to `compaction.auto`. Only a summariser call that bought nothing or a hard
+  failure latches it — never "nothing worth folding yet".
+- **A compaction that succeeds without clearing the point holds the step trigger
+  until the turn boundary.** It cut as far as the band allows, so the next step
+  would fold one more step for another summariser call; a run that clears the
+  point holds nothing.
+
 The agent cannot import `session` or `compact` (session already imports agent),
 so the trigger is a func field on `agent.Options`, matching `Provider` and
 `OnMessage`: it receives a small reason enum (manual, threshold-crossed or
@@ -252,6 +268,10 @@ exactly when an automatic compact would fire.
 Every compaction reports real numbers and is persisted as a `notice` entry so it
 replays on resume and marks the boundary in the transcript view: the before and
 after context sizes and how many messages were folded into the summary.
+
+A compaction announces itself when the summariser call starts — progress on the
+front end, not history: persisting it would replay a "compacting…" line beside
+the result it produced.
 
 The notice names only what changed in context. The reduction pass also replaces
 superseded and repeated results, but only in the transcript the summariser reads,
@@ -387,6 +407,9 @@ recorded size; see "The frozen corpus" below.
   declines by design and the turn fails. A rewind or a model switch recovers;
   recovery otherwise relies on tool-layer output limits keeping any single result
   far below the window.
+- Compaction targets the compaction point, not the window: it does not guarantee
+  the next request fits. A band that alone exceeds the budget still overflows,
+  recovered by the emergency trigger; the step boundary only makes that rarer.
 - Every compaction spends a summariser call. There is no cheap structural-only
   path; it was unreachable in practice and left sessions half full.
 - The transcript keeps every pre-compaction entry; compaction shrinks the rebuilt

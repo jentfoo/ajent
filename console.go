@@ -189,6 +189,9 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	}
 	c.reg.SetActive(m)
 	c.st.Model = m
+	if c.comp != nil {
+		c.comp.resumeAuto() // a different window may reduce where the last one could not
+	}
 
 	// keep the stored reasoning override untouched so a temporary switch does not lose
 	// the user's choice; recompute only the live effective level for display (buildRequest

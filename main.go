@@ -447,6 +447,7 @@ func driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			providerFor: providers.ProviderFor,
 			cfg:         func() config.Compaction { return set.Settings().Compaction },
 		}
+		rec.resumeAuto = comp.resumeAuto
 	}
 
 	// the prompt is at rest until a turn starts; double-Esc rewinds from here.
@@ -1161,6 +1162,9 @@ type sessRec struct {
 	// discardStaged drops shell results staged against the branch a rewind leaves,
 	// so they never ride the new branch's first prompt. Nil until main wires it.
 	discardStaged func()
+	// resumeAuto re-arms automatic compaction: a shorter branch may reduce where
+	// the one it left could not. Nil until main wires it.
+	resumeAuto func()
 }
 
 // extractOptional scans argv for a flag carrying an optional trailing value,
@@ -1585,6 +1589,9 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 	r.w.SetHead(head)
 	if r.onSwitch != nil {
 		r.onSwitch(rebuilt.Messages)
+	}
+	if r.resumeAuto != nil {
+		r.resumeAuto()
 	}
 
 	live := r.liveModel(ag) // captured before the swap, for a branch that names no model
