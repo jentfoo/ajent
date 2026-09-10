@@ -304,6 +304,11 @@ replays the restored context, and pre-fills the editor with the full original
 prompt, ready to edit or re-send. The cursor now points at the fork's tip; both it
 and every earlier branch remain in the file.
 
+For a **large session** (at least `rewindDeferThreshold` tree rows), navigating
+the picker does not repaint committed history: alt mode keeps the retained lines
+on screen while only the live block moves. The restored context still replays once,
+when a message is chosen (`tui-design.md`, "Rewind and resume").
+
 Rewinding to the parent is why an `@` reference's injected read is appended
 *behind* its message rather than ahead of it (`agent-loop-design.md`,
 `Input.After`): the read is dropped along with the message that asked for it, so

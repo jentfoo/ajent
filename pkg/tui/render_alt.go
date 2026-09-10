@@ -27,6 +27,11 @@ type altRenderer struct {
 	caretCol int
 
 	offset int // rows scrolled back from the tail, zero follows new output
+
+	// deferHistory leaves committed rows on screen while only live rows change.
+	deferHistory bool
+	historyDirty bool // commit/resize/clear set it; the next full render clears it
+	lastLiveRows int  // live-row count of the last frame, to detect a shift
 }
 
 func (r *altRenderer) start(inFd int) error { return r.resume(inFd) }
@@ -78,6 +83,7 @@ func (r *altRenderer) commit(lines []histLine) {
 		r.offset += len(r.wrapped) - before
 		r.clampOffset()
 	}
+	r.historyDirty = true
 	r.render()
 }
 
@@ -88,6 +94,7 @@ func (r *altRenderer) clearHistory() {
 	r.wrapped = nil
 	r.wrapAt = 0
 	r.offset = 0
+	r.historyDirty = true
 	r.render() // the dropped rows leave the screen now, not at the next commit
 }
 
@@ -99,6 +106,7 @@ func (r *altRenderer) setLive(rows []string, caretRow, caretCol int) {
 func (r *altRenderer) resize() {
 	r.t.refreshSize()
 	r.wrapAt = 0 // force a re-wrap at the new width
+	r.historyDirty = true
 	r.clampOffset()
 	r.render()
 }
@@ -121,6 +129,7 @@ func (r *altRenderer) scroll(lines int) bool {
 	r.offset += lines
 	r.clampOffset()
 	if r.offset != before {
+		r.historyDirty = true // the visible window moved
 		r.render()
 	}
 	return true
@@ -131,24 +140,41 @@ func (r *altRenderer) clampOffset() {
 }
 
 // render paints a whole frame: the visible slice of history, then the live block.
+// When deferHistory is set and neither committed lines nor the live-row count has
+// changed since the last frame, only the live block repaints so navigation over a
+// large session does not re-emit every retained row.
 func (r *altRenderer) render() {
 	all := r.rows()
 	view := r.viewHeight()
 	end := max(len(all)-r.offset, 0)
 	start := max(end-view, 0)
-	visible := all[start:end]
 
 	var b strings.Builder
 	b.WriteString(beginSync)
 	b.WriteString(hideCursor)
-	// history is bottom aligned so new output appears just above the input
-	blank := view - len(visible)
-	for i := range view {
-		b.WriteString(cursorTo(1+i, 1) + eraseLine)
-		if i >= blank {
-			b.WriteString(truncateDisplay(visible[i-blank], r.t.width))
+
+	liveOnly := r.deferHistory && !r.historyDirty && len(r.live) == r.lastLiveRows
+	if !liveOnly {
+		visible := all[start:end]
+		// history is bottom aligned so new output appears just above the input
+		blank := view - len(visible)
+		for i := range view {
+			b.WriteString(cursorTo(1+i, 1) + eraseLine)
+			if i >= blank {
+				b.WriteString(truncateDisplay(visible[i-blank], r.t.width))
+			}
 		}
 	}
+	r.paintLive(&b, view)
+
+	b.WriteString(endSync)
+	r.t.write(b.String())
+	r.historyDirty = false // the screen now matches state
+	r.lastLiveRows = len(r.live)
+}
+
+// paintLive writes just the live rows, bottom-aligned below history at view.
+func (r *altRenderer) paintLive(b *strings.Builder, view int) {
 	for i, row := range r.live {
 		if view+1+i > r.t.height {
 			break // never address a row the screen does not have
@@ -163,8 +189,6 @@ func (r *altRenderer) render() {
 		}
 		b.WriteString(cursorTo(view+1+i, 1) + eraseLine + row)
 	}
-	b.WriteString(endSync)
-	r.t.write(b.String())
 }
 
 // scrollNote marks the status line while the viewport is held back.

@@ -1003,6 +1003,14 @@ so there is nothing above the replay to mark off; a rewind lands below already-c
 where the boundary must be visible. The divider is a `histLine.divider`, drawn to the width
 in force like a thematic break; with color disabled it falls back to a thin rule.
 
+For a **large session** (`rewindDeferThreshold` tree rows in `cmd/ajent`) the rewind picker
+opens alt mode with history repainting deferred: while the cursor moves, only the live block is
+redrawn and committed rows stay exactly as they were. This keeps arrow-key navigation over many
+messages from re-emitting every retained line per keystroke; the restored context still replays
+once on selection (the full `Reset` + `Replay` below). Any change to history itself — a commit,
+a resize, or a live-row count shift that would move it — falls back to a full paint, so deferral
+only ever skips frames where committed content is genuinely unchanged.
+
 The result is that scrolling up reads continuously (because nothing was deleted) while
 the live area shows a fresh copy of the branch. This is why a restore can look both
 "unchanged above" (native scrollback) and "rebuilt below" (the replay). The two layers are

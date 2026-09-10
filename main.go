@@ -1756,6 +1756,10 @@ func initialRow(tree []session.TreeRow, head string) int {
 	return len(tree) - 1
 }
 
+// rewindDeferThreshold is the tree-row count above which a large session defers
+// history repaints while navigating, in alt mode.
+const rewindDeferThreshold = 300
+
 // rewind reads the transcript back off disk and offers a picker over its whole
 // context tree, indented by depth so forks read as branches. Picking one of your
 // messages rewinds *before* it — head moves to that message's parent — and pre-
@@ -1785,6 +1789,12 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 			Mark:  mark,
 			Off:   !row.Active,
 		}
+	}
+	// a large session would repaint every retained line on each arrow press in alt
+	// mode; defer that until the message is chosen.
+	if len(tree) >= rewindDeferThreshold {
+		ui.SetDeferHistory(true)
+		defer ui.SetDeferHistory(false)
 	}
 	picked, err := ui.PickContext(context.Background(), "Rewind to", items,
 		tui.PickOptions{Placeholder: "filter", Initial: initialRow(tree, head)})

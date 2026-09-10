@@ -194,6 +194,67 @@ func TestAltRendererTableReflows(t *testing.T) {
 	assert.Contains(t, visible.String(), "narrows")
 }
 
+// screenAll returns every visible row of a vt grid joined, so assertions on
+// history placement need not pin an absolute line index.
+func screenAll(v *vt) string {
+	var b strings.Builder
+	for i := 0; i < v.h; i++ {
+		b.WriteString(v.Line(i))
+	}
+	return b.String()
+}
+
+func TestAltRendererDeferHistory(t *testing.T) {
+	t.Parallel()
+
+	// With deferHistory set, a live-only change (picker cursor move) must not
+	// rewrite committed rows. Capture the emitted bytes to prove it.
+	t.Run("navigation_skips_committed_rows", func(t *testing.T) {
+		v := newVT(20, 6)
+		r := newTestAlt(v)
+		r.setLive([]string{"❯ ", "ctx"}, 0, 2)
+		commitText(r, "one", "two")
+		assert.Contains(t, screenAll(v), "one")
+
+		r.deferHistory = true
+		var seq strings.Builder
+		r.t.out = &seq // capture the next frame's bytes
+		r.setLive([]string{"❯ ", "ctx"}, 0, 2)
+
+		// committed rows are not re-addressed: a deferred frame rewrites only live.
+		assert.Contains(t, screenAll(v), "one")
+		assert.NotContains(t, seq.String(), cursorTo(3, 1)) // no absolute write into history
+	})
+
+	t.Run("commit_repaints_history", func(t *testing.T) {
+		v := newVT(20, 6)
+		r := newTestAlt(v)
+		r.setLive([]string{"❯ ", "ctx"}, 0, 2)
+		r.deferHistory = true
+		commitText(r, "one", "two")
+		assert.Contains(t, screenAll(v), "one")
+
+		// a commit while deferring still shows the added line
+		commitText(r, "three")
+		assert.Contains(t, screenAll(v), "three")
+	})
+
+	t.Run("live_count_change_repaints_history", func(t *testing.T) {
+		v := newVT(20, 6)
+		r := newTestAlt(v)
+		r.deferHistory = true
+		r.setLive([]string{"❯ ", "ctx"}, 0, 2)
+		commitText(r, "one", "two")
+		assert.Contains(t, screenAll(v), "one")
+
+		// live shrinks by one row; history re-anchors bottom-aligned.
+		r.setLive([]string{"❯ "}, 5, 1)
+		s := screenAll(v)
+		assert.Contains(t, s, "one")
+		assert.Contains(t, s, "two")
+	})
+}
+
 func TestAltRendererClose(t *testing.T) {
 	t.Parallel()
 
@@ -202,7 +263,7 @@ func TestAltRendererClose(t *testing.T) {
 	r.setLive([]string{"❯", "ctx"}, 0, 1)
 	commitText(r, "kept one", "kept two")
 
-	main := newVT(20, 6)
+	main := newVT(10, 3)
 	r.t.out = main
 	r.close(-1)
 

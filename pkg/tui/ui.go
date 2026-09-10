@@ -331,6 +331,15 @@ func (u *UI) Close() {
 	u.render.close(u.inFd)
 }
 
+// SetDeferHistory makes alt mode keep committed rows while only live rows change.
+func (u *UI) SetDeferHistory(v bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if r, ok := u.render.(*altRenderer); ok {
+		r.deferHistory = v
+	}
+}
+
 // Reset drops rendered state so a rewind can redraw just the current session.
 // Where the renderer owns scrollback (alt mode) committed lines go too; inline
 // keeps the terminal's own scrollback but our buffers and live block reset. The
