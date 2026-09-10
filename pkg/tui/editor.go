@@ -195,6 +195,53 @@ func (e *editor) Down(width int) bool {
 	return true
 }
 
+// PageUp moves the caret up step visual rows, snapping onto the first display
+// row (the buffer's start) once reached; on that row it settles at the row's
+// start. It reports false only when already there.
+func (e *editor) PageUp(width, step int) bool {
+	starts, ends := e.layout(width)
+	r := e.displayRow(starts, ends)
+	if r == 0 {
+		if e.pos == starts[0] {
+			return false
+		}
+		e.pos = starts[0] // already on the top row: settle at its start
+		return true
+	}
+	step = max(step, 1)
+	if r <= step { // within one page of the head: snap to the buffer start
+		e.pos = starts[0]
+	} else {
+		target := r - step
+		e.pos = min(starts[target]+(e.pos-starts[r]), ends[target])
+	}
+	return true
+}
+
+// PageDown moves the caret down step visual rows, snapping onto the last display
+// row (the buffer's end) once reached; on that row it settles at the row's end.
+// It reports false only when already there.
+func (e *editor) PageDown(width, step int) bool {
+	starts, ends := e.layout(width)
+	r := e.displayRow(starts, ends)
+	if r == len(ends)-1 {
+		last := ends[len(ends)-1]
+		if e.pos == last {
+			return false
+		}
+		e.pos = last // already on the bottom row: settle at its end
+		return true
+	}
+	step = max(step, 1)
+	if len(ends)-1-r <= step { // within one page of the tail: snap to its end
+		e.pos = ends[len(ends)-1]
+	} else {
+		target := r + step
+		e.pos = min(starts[target]+(e.pos-starts[r]), ends[target])
+	}
+	return true
+}
+
 // HistoryPrev recalls an older entry, holding the live buffer aside.
 func (e *editor) HistoryPrev() {
 	if e.histIdx == 0 || len(e.history) == 0 {

@@ -715,6 +715,24 @@ func TestUIScrollKeys(t *testing.T) {
 	assert.Positive(t, u.page())
 }
 
+// TestUIInlinePageKeys routes PageUp/PageDown to the editor in inline mode,
+// where there is no viewport to scroll.
+func TestUIInlinePageKeys(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+	u.SetInput("one\ntwo\nthree")
+
+	// caret at the end (after "three"): a page up should reach the head
+	pressKey(u, key{typ: keyPageUp})
+	assert.Equal(t, 0, u.editor.pos)
+
+	// a page down from there reaches the end of text
+	pressKey(u, key{typ: keyPageDown})
+	assert.Equal(t, len("one\ntwo\nthree"), u.editor.pos)
+}
+
 // TestNew covers the wiring from Options through to a live renderer. Pipes are
 // not terminals, so the mode resolves to plain without needing a pty.
 func TestNew(t *testing.T) {

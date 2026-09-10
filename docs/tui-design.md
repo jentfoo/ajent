@@ -1054,7 +1054,7 @@ navigation rather than digits. A bare `CSI R` is a cursor report here while it i
 elsewhere — there is no F-key type, so the parameterless branch stays ignored.
 
 Mouse reporting is deliberately not enabled: it would buy wheel events at the cost
-of the terminal's own text selection for the whole session, so PgUp/PgDn scroll in alt mode.
+of the terminal's own text selection for the whole session, so PgUp/PgDn scroll in alt mode (and page the multi-line buffer in inline).
 
 `editor.go` is the buffer. Positions are grapheme-cluster indexes, not bytes or
 runes, so the cursor moves over emoji and combining marks as a unit. Every
@@ -1082,6 +1082,7 @@ The key table:
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`) |
 | Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |
+| PgUp / PgDn (inline) | page the multi-line buffer: PgUp moves toward the head, PgDn toward the tail, each snapping onto the boundary when within one page or already on its row. In alt they scroll committed output (`render.scroll`) |
 
 A paste over a size threshold does not land in the editor: its content is stored
 on the UI and a marker naming the paste is inserted instead, expanded back to the

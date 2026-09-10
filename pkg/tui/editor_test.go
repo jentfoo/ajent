@@ -146,6 +146,52 @@ func TestEditorMovement(t *testing.T) {
 	})
 }
 
+func TestEditorPageMovement(t *testing.T) {
+	t.Parallel()
+
+	const wide = 60 // no wrapping; each logical line is its own visual row
+
+	// "one\ntwo\nthree": rows start at [0,4,8], end boundaries at [3,7,13].
+	t.Run("page_up_clamps_to_head", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 12)
+		assert.True(t, e.PageUp(wide, 2))
+		assert.Equal(t, 0, e.pos) // snapped to the buffer start
+	})
+	t.Run("page_down_clamps_to_end", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 3)
+		assert.True(t, e.PageDown(wide, 2))
+		assert.Equal(t, 13, e.pos) // snapped to the end of text
+	})
+	t.Run("page_up_step_moves_rows", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 12)
+		assert.True(t, e.PageUp(wide, 1))
+		assert.Equal(t, 7, e.pos) // clamped to the prior row's end
+	})
+	t.Run("page_down_step_moves_rows", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 3)
+		assert.True(t, e.PageDown(wide, 1))
+		assert.Equal(t, 7, e.pos) // clamped to the second row
+	})
+	t.Run("page_up_on_top_row_settles_to_start", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 2)
+		assert.True(t, e.PageUp(wide, 2))
+		assert.Equal(t, 0, e.pos)
+	})
+	t.Run("page_down_on_last_row_settles_to_end", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 10)
+		assert.True(t, e.PageDown(wide, 2))
+		assert.Equal(t, 13, e.pos)
+	})
+	t.Run("page_up_at_head_no_move", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 0)
+		assert.False(t, e.PageUp(wide, 2))
+	})
+	t.Run("page_down_at_tail_no_move", func(t *testing.T) {
+		e := newEditorAt("one\ntwo\nthree", 13)
+		assert.False(t, e.PageDown(wide, 3))
+	})
+}
+
 func TestEditorKill(t *testing.T) {
 	t.Parallel()
 
@@ -185,7 +231,7 @@ func TestEditorKill(t *testing.T) {
 		e.KillToLineEnd(9)
 		assert.Equal(t, "hello foo", e.Value())
 		assert.Equal(t, 6, e.pos)
-		starts, _ := e.layout(9)
+		starts, _ := e.layout(10)
 		assert.Contains(t, starts, e.pos)
 	})
 	t.Run("wrapped_far_left_follows_content_up", func(t *testing.T) {

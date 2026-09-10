@@ -953,7 +953,7 @@ func (u *UI) repaint() {
 		iRows, curRow, curCol = u.interactionRows(w, h-len(rows))
 		rows = append(rows, iRows...)
 	} else {
-		maxRows := max(1, (h-1)/maxInputRatio)
+		maxRows := u.inputRows()
 		var inputRows []string
 		inputRows, curRow, curCol = u.editor.inputView(u.theme, w, maxRows)
 		rows = append(rows, inputRows...)
@@ -1248,6 +1248,12 @@ func (u *UI) editorWidth() int {
 	return w
 }
 
+// inputRows is the editor's visible-row budget: at most a fraction of the screen.
+func (u *UI) inputRows() int {
+	_, h := u.render.size()
+	return max(1, (h-1)/maxInputRatio)
+}
+
 // applyKey mutates the editor for one key and reports whether it changed any
 // rendered state. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
@@ -1396,9 +1402,19 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		// terminal's and stay exactly as they are
 		u.render.resize()
 	case keyPageUp:
-		u.render.scroll(u.page())
+		if u.mode == ModeInline {
+			// inline has no viewport, so page the editor toward its head
+			u.editor.PageUp(u.editorWidth(), u.inputRows())
+		} else {
+			u.render.scroll(u.page())
+		}
 	case keyPageDown:
-		u.render.scroll(-u.page())
+		if u.mode == ModeInline {
+			// page the editor toward its tail
+			u.editor.PageDown(u.editorWidth(), u.inputRows())
+		} else {
+			u.render.scroll(-u.page())
+		}
 	case keyEscape:
 		if u.editor.Value() != "" {
 			// Esc clears the buffer rather than rewinding; drop any half-armed
