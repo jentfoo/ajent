@@ -84,7 +84,7 @@ func applyPlainAnswer(it interactor, line string) error {
 			}
 			s.chatting = true // anything else is a reply in the user's own words
 		}
-		s.value = line // free text is the answer verbatim
+		s.answer.SetValue(line) // free text is the answer verbatim
 		return nil
 	default:
 		return ErrNoUI

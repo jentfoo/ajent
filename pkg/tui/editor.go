@@ -262,6 +262,11 @@ func (e *editor) prefixWidths() (firstW, contW int) {
 // shell marker occupies row 0 without a glyph, so it wraps differently.
 func (e *editor) layout(width int) (starts, ends []int) {
 	firstW, contW := e.prefixWidths()
+	return e.layoutAt(width, firstW, contW)
+}
+
+// layoutAt is layout under explicit prefix widths.
+func (e *editor) layoutAt(width, firstW, contW int) (starts, ends []int) {
 	cells := e.cells
 
 	// Rows as cell ranges: row k renders cells[starts[k]:ends[k]]. Breaks fall on
@@ -338,28 +343,41 @@ func (e *editor) displayRow(starts, ends []int) int {
 // cursor offset within those rows. Wrapping is purely visual: Value() is
 // untouched, so submitted input gains no newlines.
 func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, curCol int) {
-	firstW, contW := e.prefixWidths()
-	shell := len(e.cells) > 0 && e.cells[0] == "!"
-	starts, ends := e.layout(width)
+	return e.view(t, width, maxRows, t.Prompt.Wrap(promptFirst), promptCont, inputHint, true)
+}
 
-	// Render each range: the first row carries the prompt glyph (or nothing for a
-	// leading `!`), continuations are indented by two raw spaces.
+// view lays the editor into display rows of at most width columns: marker on
+// the first row, cont indenting continuations, hint filling an empty buffer.
+// shell drops the glyph when cells[0] is "!" (the prompt editor). It returns the
+// zero based cursor offset within those rows; wrapping is purely visual and
+// Value() gains no newlines.
+func (e *editor) view(t Theme, width, maxRows int, marker, cont, hint string, shell bool) (rows []string, curRow, curCol int) {
+	leadBang := shell && len(e.cells) > 0 && e.cells[0] == "!" // the literal `!` serves as the marker
+	firstW := displayWidth(marker)
+	if leadBang {
+		firstW = 0
+	}
+	contW := displayWidth(cont)
+	starts, ends := e.layoutAt(width, firstW, contW)
+
+	// Render each range: the first row carries marker (or nothing for a leading
+	// `!` under shell), continuations are indented by cont.
 	for k := 0; k < len(ends); k++ {
 		s, en := starts[k], ends[k]
 		var line strings.Builder
 		switch {
-		case k == 0 && shell:
+		case k == 0 && leadBang:
 			// the literal `!` in cells[0] is already content; no glyph needed
 		case k == 0:
-			line.WriteString(t.Prompt.Wrap(promptFirst))
+			line.WriteString(marker)
 		default:
-			line.WriteString(promptCont)
+			line.WriteString(cont)
 		}
 		for j := s; j < en; j++ {
 			line.WriteString(e.cells[j])
 		}
 		if len(e.cells) == 0 && k == 0 { // empty buffer: dim hint on the first row
-			line.WriteString(t.Dim.Wrap(truncateDisplay(inputHint, width-firstW)))
+			line.WriteString(t.Dim.Wrap(truncateDisplay(hint, width-firstW)))
 		}
 		rows = append(rows, line.String())
 	}

@@ -210,6 +210,54 @@ func TestUIAsk(t *testing.T) {
 		press(t, pw, "yes\r")
 		assert.Equal(t, "yes", (<-result).Text)
 	})
+	t.Run("free_text_arrow_keys_edit", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+		ctx := t.Context()
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, err := u.Ask(ctx, Question{Text: "Note:"})
+			assert.NoError(t, err)
+			result <- a
+		}()
+
+		waitFor(t, u, v, "Note:")
+		press(t, pw, "abcdef")
+		waitFor(t, u, v, "abcdef")
+		press(t, pw, "\x1b[D\x1b[D") // left twice: caret after 'd'
+		press(t, pw, "XY")
+		waitFor(t, u, v, "abcdXYef")
+		// home then type to confirm the caret truly moves
+		press(t, pw, "\x1b[H")
+		press(t, pw, "!")
+		waitFor(t, u, v, "!abcdXYef")
+		press(t, pw, "\r")
+
+		a := <-result
+		assert.False(t, a.Declined)
+		assert.Equal(t, "!abcdXYef", a.Text)
+	})
+	t.Run("free_text_backspace_mid_buffer", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+		ctx := t.Context()
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, err := u.Ask(ctx, Question{Text: "Note:"})
+			assert.NoError(t, err)
+			result <- a
+		}()
+
+		waitFor(t, u, v, "Note:")
+		press(t, pw, "abcdef")
+		press(t, pw, "\x1b[D\x1b[D") // caret after 'd'
+		press(t, pw, "\x7f")         // backspace removes the char before it
+		waitFor(t, u, v, "abcef")
+		press(t, pw, "\r")
+
+		a := <-result
+		assert.Equal(t, "abcef", a.Text)
+	})
 }
 
 func TestQuestionStateRows(t *testing.T) {
@@ -269,8 +317,8 @@ func TestQuestionStateRows(t *testing.T) {
 			options:   []Option{{Label: "A"}},
 			chatIndex: 1,
 			chatting:  true,
-			value:     "split it in two so the retry budget stays per provider",
 		}
+		s.answer.SetValue("split it in two so the retry budget stays per provider")
 
 		rows, caret, col := s.rows(th, 20, 8)
 
@@ -279,6 +327,49 @@ func TestQuestionStateRows(t *testing.T) {
 		assert.Equal(t, len(rows)-1, caret) // the caret sits at the end of the last row
 		assert.Equal(t, displayWidth(rows[len(rows)-1]), col)
 		assert.NotContains(t, strings.Join(rows, "\n"), "A") // the option list gave way to the reply
+	})
+}
+
+func TestQuestionStateArrowKeys(t *testing.T) {
+	t.Parallel()
+
+	// key presses a single decoded key into s, failing the test on error.
+	press := func(s *questionState, k key) {
+		t.Helper()
+		_, err := s.key(k)
+		require.NoError(t, err)
+	}
+
+	t.Run("up_down_move_across_wrapped_rows", func(t *testing.T) {
+		s := &questionState{text: "Note:", width: 8}
+		s.answer.SetValue("abcdefghij")
+		s.answer.pos = len(s.answer.cells) // caret at the very end
+
+		// Up climbs from the second row to the first, keeping roughly the same column.
+		press(s, key{typ: keyUp})
+		assert.Less(t, s.answer.pos, 6)
+
+		// Down drops back onto the last visual row.
+		press(s, key{typ: keyDown})
+		require.GreaterOrEqual(t, s.answer.pos, 4) // column preserved from the up move
+	})
+
+	t.Run("up_on_first_row_jumps_to_start", func(t *testing.T) {
+		s := &questionState{text: "Note:", width: 8}
+		s.answer.SetValue("abcdef")
+		s.answer.pos = 3
+
+		press(s, key{typ: keyUp})
+		assert.Equal(t, 0, s.answer.pos)
+	})
+
+	t.Run("down_on_last_row_jumps_to_end", func(t *testing.T) {
+		s := &questionState{text: "Note:", width: 8}
+		s.answer.SetValue("abcdef")
+		s.answer.pos = 2
+
+		press(s, key{typ: keyDown})
+		assert.Equal(t, len(s.answer.cells), s.answer.pos)
 	})
 }
 

@@ -55,9 +55,9 @@ func (u *UI) Ask(ctx context.Context, q Question) (Answer, error) {
 	case st.declined:
 		return Answer{Declined: true}, nil
 	case st.chatting:
-		return Answer{Text: st.value, Chat: true}, nil
+		return Answer{Text: st.answer.Value(), Chat: true}, nil
 	case len(st.options) == 0:
-		return Answer{Text: st.value}, nil
+		return Answer{Text: st.answer.Value()}, nil
 	}
 	return Answer{Index: st.cursor}, nil
 }
@@ -70,7 +70,8 @@ type questionState struct {
 	chatIndex int  // position of the chat row in options, -1 when there is none
 	chatting  bool // typing a reply instead of choosing an option
 	cursor    int  // option cursor when options are offered
-	value     string
+	answer    editor
+	width     int  // last render width; line navigation needs it
 	declined  bool // Esc: declined to answer, a normal result
 }
 
@@ -92,27 +93,14 @@ func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	}
 	// free-text answer, reusing the input row's editing view
 	marker := t.User.Wrap(userMarker)
-	if s.value == "" {
-		placeholder := answerPlaceholder
-		if s.chatting {
-			placeholder = chatPlaceholder
-		}
-		out = append(out, truncateDisplay(marker+t.Dim.Wrap(placeholder), width))
-		return out, len(out) - 1, displayWidth(marker)
+	s.width = width
+	placeholder := answerPlaceholder
+	if s.chatting {
+		placeholder = chatPlaceholder
 	}
-	typed := wrapLine(s.value, max(1, width-displayWidth(marker)))
-	for i := range typed { // continuations align under the reply, as the input row does
-		if i == 0 {
-			typed[i] = marker + typed[i]
-		} else {
-			typed[i] = userContinue + typed[i]
-		}
-	}
-	if avail := max(1, maxRows-len(out)); len(typed) > avail {
-		typed = typed[len(typed)-avail:] // keep the tail, where the caret sits
-	}
-	out = append(out, typed...)
-	return out, len(out) - 1, displayWidth(typed[len(typed)-1])
+	answerRows, caretRow, curCol := s.answer.view(t, max(1, width), maxRows-len(out), marker, userContinue, placeholder, false)
+	out = append(out, answerRows...)
+	return out, len(out) - len(answerRows) + caretRow, curCol
 }
 
 // promptRows renders the question wrapped to width, filling at most budget rows.
@@ -192,7 +180,8 @@ func (s *questionState) key(k key) (bool, error) {
 	switch k.typ {
 	case keyEscape:
 		if s.chatting { // step back to the options rather than abandon the question
-			s.chatting, s.value = false, ""
+			s.chatting = false
+			s.answer.Clear()
 			return false, nil
 		}
 		s.declined = true // a declined answer is normal, never an aborting error
@@ -216,13 +205,37 @@ func (s *questionState) key(k key) (bool, error) {
 		}
 		return false, nil
 	}
-	switch k.typ { // the free-text half mirrors inputState's editing keys
+	switch k.typ { // free text, mirrored from the input row's editing keys
 	case keyRune, keyPaste:
-		s.value += strings.ReplaceAll(k.text, "\n", " ")
+		s.answer.Insert(strings.ReplaceAll(k.text, "\n", " "))
 	case keyBackspace:
-		s.value = trimLastCluster(s.value)
+		s.answer.Backspace()
+	case keyDelete:
+		s.answer.DeleteForward()
+	case keyLeft:
+		s.answer.Left()
+	case keyRight:
+		s.answer.Right()
+	case keyWordLeft:
+		s.answer.WordLeft()
+	case keyWordRight:
+		s.answer.WordRight()
+	case keyUp:
+		// move up a visual row; already on the first, jump to the buffer start
+		if !s.answer.Up(s.width) && s.answer.pos > 0 {
+			s.answer.pos = 0
+		}
+	case keyDown:
+		// move down a visual row; already on the last, jump to the buffer end
+		if !s.answer.Down(s.width) && s.answer.pos < len(s.answer.cells) {
+			s.answer.pos = len(s.answer.cells)
+		}
+	case keyHome:
+		s.answer.LineStart(s.width)
+	case keyEnd:
+		s.answer.LineEnd(s.width)
 	case keyKillLine:
-		s.value = ""
+		s.answer.KillLine()
 	case keyEnter:
 		return true, nil
 	}

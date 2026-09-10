@@ -420,8 +420,8 @@ waits. Registering a side channel instead loses the race whenever input is piped
 rather than typed.
 
 An **agent-initiated question** (`Ask`) reuses the same interaction layer with a
-different payload: multi-line prompt text and either free-text entry (reusing
-`inputState`'s editing keys) or a small set of offered options (mirroring
+different payload: multi-line prompt text and either free-text entry (the editor
+buffer, with caret movement across wrapped rows) or a small set of offered options (mirroring
 `selectState`). It queues behind other interactions in arrival order rather than
 pre-empting them. `Esc` is *declined to answer*: reported as an ordinary result
 (`Answer{Declined: true}`), never an error that would abort a turn. In plain mode
