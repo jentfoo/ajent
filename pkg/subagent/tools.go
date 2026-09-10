@@ -59,7 +59,7 @@ type startParams struct {
 
 func (t *startTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p startParams
-	if err := json.Unmarshal(call.Input, &p); err != nil {
+	if err := strutil.DecodeArgs(call.Input, &p); err != nil {
 		return resultErr("bad args: " + err.Error()), nil
 	}
 	p.Task = strings.TrimSpace(p.Task)
@@ -107,7 +107,7 @@ type pollParams struct {
 
 func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p pollParams
-	if err := json.Unmarshal(call.Input, &p); err != nil {
+	if err := strutil.DecodeArgs(call.Input, &p); err != nil {
 		return resultErr("bad args: " + err.Error()), nil
 	}
 	j, ok := t.m.lookup(p.ID)

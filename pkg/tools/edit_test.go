@@ -57,6 +57,12 @@ func TestDecodeEditParams(t *testing.T) {
 		_, err := decodeEditParams(json.RawMessage(`{"path":"a.txt","edits":[{`))
 		assert.Error(t, err)
 	})
+
+	t.Run("array_into_object_names_field", func(t *testing.T) {
+		// the message names the shape instead of leaking a Go type.
+		_, err := decodeEditParams(json.RawMessage(`[1]`))
+		assert.EqualError(t, err, "arguments must be a JSON object, but was given a JSON array")
+	})
 }
 
 func TestEditToleratesArgumentShape(t *testing.T) {

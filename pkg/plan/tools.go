@@ -8,6 +8,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // Control tool names. AskUserTool is a built-in the planning and reviewing
@@ -151,7 +152,7 @@ func controlTools(c *Controller) []agent.Tool {
 // recordPlan captures the drafted plan and parks the workflow for user approval.
 func recordPlan(c *Controller, raw json.RawMessage) (string, error) {
 	var p implementParams
-	if err := json.Unmarshal(raw, &p); err != nil {
+	if err := strutil.DecodeArgs(raw, &p); err != nil {
 		return "", errBadArgs(err)
 	}
 	if strings.TrimSpace(p.Plan) == "" {
@@ -164,7 +165,7 @@ func recordPlan(c *Controller, raw json.RawMessage) (string, error) {
 // recordSummary captures the implementor's self-summary and hands off to review.
 func recordSummary(c *Controller, raw json.RawMessage) (string, error) {
 	var p reviewParams
-	if err := json.Unmarshal(raw, &p); err != nil {
+	if err := strutil.DecodeArgs(raw, &p); err != nil {
 		return "", errBadArgs(err)
 	}
 	if strings.TrimSpace(p.Summary) == "" {
@@ -177,7 +178,7 @@ func recordSummary(c *Controller, raw json.RawMessage) (string, error) {
 // recordRevision captures review instructions for another implementation round.
 func recordRevision(c *Controller, raw json.RawMessage) (string, error) {
 	var p reviseParams
-	if err := json.Unmarshal(raw, &p); err != nil {
+	if err := strutil.DecodeArgs(raw, &p); err != nil {
 		return "", errBadArgs(err)
 	}
 	if strings.TrimSpace(p.Instructions) == "" {

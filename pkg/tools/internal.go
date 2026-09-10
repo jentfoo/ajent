@@ -2,20 +2,17 @@ package tools
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
-// decode unmarshals raw into v, returning an error on malformed input so a tool
-// degrades to an error result rather than panicking.
+// decode unmarshals raw tool arguments into v, with model-facing errors from
+// strutil.DecodeArgs.
 func decode(raw json.RawMessage, v any) error {
-	if err := json.Unmarshal(raw, v); err != nil {
-		return fmt.Errorf("malformed arguments: %w", err)
-	}
-	return nil
+	return strutil.DecodeArgs(raw, v)
 }
 
 // llmBlock wraps text as a single model-visible block.

@@ -273,7 +273,10 @@ Multiple matches without `replace_all` return the occurrence count and each matc
 tell the model it **must provide text exactly** rather than asking it to copy. Argument decoding
 tolerates what models emit in place of the declared schema (a double-encoded object, a
 JSON-stringified `edits`, a single edit where an array is declared), since rejecting those costs a round
-trip without saying anything new.
+trip without saying anything new. Singleton wrapping now lives in `strutil.DecodeArgs` for every tool:
+a lone value whose shape fits a declared array field heals into a one-element array; leaf values are
+never reinterpreted. Decode errors surface via `DecodeArgs` in model-facing shape (field plus
+expected/actual JSON kind), never leaking Go type names.
 
 Feedback returns a unified diff via `go-udiff` directly (`pkg/tools` never imports `pkg/tui`), bounded
 by `Elide`. The added side is the model's own text and the removed side names what the file actually
