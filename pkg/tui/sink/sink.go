@@ -134,12 +134,13 @@ func (s *Sink) Notice(msg string, level agent.Level) {
 	s.ui.Notify(msg, tui.Level(level))
 }
 
-// TurnEnd flushes any open tool output line and clears the working spinner.
-// Failures and aborts already landed as notices from the loop; the context bar
-// was updated by Context events during the turn.
+// TurnEnd flushes open tool output, unterminated thinking and text (an
+// interrupt delivers no block-end events), and clears the working spinner.
+// Failures and aborts already landed as notices from the loop.
 func (s *Sink) TurnEnd(res agent.TurnResult) {
 	s.ui.EndOutput()
 	s.ui.EndThinking() // flush an unterminated reasoning line so no tail is stranded
+	s.ui.EndText()     // same for a reply: its partial tail commits, the preview drops
 	if s.busy != nil {
 		s.busy()
 		s.busy = nil

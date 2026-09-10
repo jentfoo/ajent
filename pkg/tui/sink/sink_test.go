@@ -135,3 +135,34 @@ func TestTurnEndFlushesThinking(t *testing.T) {
 		assert.Equal(t, before, h.rendered())
 	})
 }
+
+func TestTurnEndFlushesText(t *testing.T) {
+	t.Parallel()
+
+	// an interrupt mid-reply never delivers EventTextEnd; TurnEnd must commit
+	// the tail so the preview cannot linger into the next turn.
+	t.Run("flushes_unterminated_tail", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.TurnStart(agent.TurnInfo{})
+		h.s.Text("an answer cut short")
+		h.s.TurnEnd(agent.TurnResult{Stop: llm.StopAborted})
+
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "short\n") },
+			2*time.Second, time.Millisecond)
+	})
+
+	// a clean turn already flushed via EndText: TurnEnd must not duplicate it
+	t.Run("clean_end_text_is_not_duplicated", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.TurnStart(agent.TurnInfo{})
+		h.s.Text("full answer")
+		h.s.EndText()
+
+		// sync on the async drain so `before` captures everything EndText wrote
+		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "full answer\n") },
+			2*time.Second, time.Millisecond)
+		before := h.rendered()
+		h.s.TurnEnd(agent.TurnResult{})
+		assert.Equal(t, before, h.rendered())
+	})
+}

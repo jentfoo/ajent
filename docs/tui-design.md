@@ -824,8 +824,9 @@ afterwards so its preview reserves the separator the commit made necessary.
 Thinking follows the same shape: completed logical lines commit to history while
 the pending partial line renders live above the reply preview (raw text, not
 markdown-rendered), bounded by a preview cap and yielding by the room rule that
-keeps only tail rows. `TurnEnd` flushes an unterminated block so an interrupt
-cannot strand a tail.
+keeps only tail rows. `TurnEnd` flushes unterminated thinking and reply text: an
+interrupt delivers no block-end events, and an unflushed tail would linger in the
+preview and merge into the next turn's first delta.
 
 Activity (and queued pending-prompt rows) render into whatever height remains
 after the status block and one line of editor, so on a short terminal they yield
