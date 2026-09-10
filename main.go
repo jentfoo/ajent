@@ -1456,7 +1456,7 @@ func searchItems(prompts []session.Prompt) []tui.SearchItem {
 	for _, p := range prompts {
 		var detail string
 		if !p.At.IsZero() { // typed-only lines have no transcript timestamp
-			detail = p.At.UTC().Format("2006-01-02 15:04 UTC") // sessions are stored as UTC
+			detail = p.At.Local().Format("2006-01-02 15:04") // recorded in UTC, rendered in the system local time zone
 		}
 		out = append(out, tui.SearchItem{Text: p.Text, Detail: detail})
 	}
@@ -1504,7 +1504,7 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		if label == "" {
 			label = "(empty session)"
 		}
-		detail := in.Updated.UTC().Format("2006-01-02 15:04 UTC") // sessions are stored as UTC
+		detail := in.Updated.Local().Format("2006-01-02 15:04") // recorded in UTC, rendered in the system local time zone
 		if in.Model != "" {
 			detail += " · " + in.Model
 		}

@@ -1157,18 +1157,52 @@ func TestPrefetch(t *testing.T) {
 func TestPrefetchCancellation(t *testing.T) {
 	t.Parallel()
 
-	b := newTestBarrier(newFakePrompter())
-	b.SetMode(ModeAuto)
-	cl := &countingBlockingClassifier{}
-	b.SetClassifier(cl)
+	// the turn's abort cancels every in-flight prefetched classification.
+	t.Run("abort_cancels_batch", func(t *testing.T) {
+		b := newTestBarrier(newFakePrompter())
+		b.SetMode(ModeAuto)
+		cl := &countingBlockingClassifier{}
+		b.SetClassifier(cl)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	calls := []agent.ToolCall{bashCall("rm f"), bashCall("git push origin main")}
-	b.Prefetch(ctx, calls)
-	require.Eventually(t, func() bool { return cl.startedN() == 2 }, time.Second, 10*time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := []agent.ToolCall{bashCall("rm f"), bashCall("git push origin main")}
+		b.Prefetch(ctx, calls)
+		require.Eventually(t, func() bool { return cl.startedN() == 2 }, time.Second, 10*time.Millisecond)
 
-	cancel() // an abort cancels the batch's in-flight classifications
-	require.Eventually(t, func() bool { return cl.finishedN() == 2 }, time.Second, 100*time.Millisecond)
+		cancel() // an abort cancels the batch's in-flight classifications
+		require.Eventually(t, func() bool { return cl.finishedN() == 2 }, time.Second, 100*time.Millisecond)
+	})
+
+	// answering the dialog a prefetched request fronts stops it, abort or not.
+	t.Run("answer_cancels_warm", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrier(p)
+		b.SetMode(ModeAuto)
+		stopped := make(chan struct{})
+		b.SetClassifier(NewCachedClassifier((&blockingClassifier{cancel: stopped}).Classify))
+
+		// the turn stays live past the answer; only the answer may stop the request
+		turnCtx, turnCancel := context.WithCancel(context.Background())
+		t.Cleanup(turnCancel)
+		b.Prefetch(turnCtx, []agent.ToolCall{bashCall("rm build")})
+
+		var got tools.Decision
+		done := make(chan struct{})
+		go func() { got = runAsk(b, turnCtx, "bash", []byte(`{"command":"rm build"}`)); close(done) }()
+		waitDialog(t, p).answer(int(optDeny))
+		<-done
+
+		assert.Equal(t, tools.ActionDeny, got.Action)
+		require.Eventually(t, func() bool {
+			select {
+			case <-stopped:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond)
+		assert.NoError(t, turnCtx.Err()) // the turn never aborted; the answer stopped it
+	})
 }
 
 func TestPrefetchSkipsSessionAllowed(t *testing.T) {

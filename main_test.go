@@ -714,15 +714,16 @@ func TestEmptyReportsNoConversation(t *testing.T) {
 
 func TestSearchItems(t *testing.T) {
 	t.Parallel()
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	got := searchItems([]session.Prompt{
-		{Text: "fix retry", At: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+		{Text: "fix retry", At: at},
 		{Text: "line one\nline two"},
 	})
 
 	require.Len(t, got, 2)
 	assert.Equal(t, "fix retry", got[0].Text)
-	// sessions are stored as UTC and rendered with the same format as the resume picker
-	assert.Equal(t, "2026-01-02 03:04 UTC", got[0].Detail)
+	// recorded in UTC, rendered in the system local time zone
+	assert.Equal(t, at.Local().Format("2006-01-02 15:04"), got[0].Detail)
 	assert.Equal(t, "line one\nline two", got[1].Text) // multi-line prompts arrive intact
 }
 

@@ -352,7 +352,9 @@ survey, staged shell results), never a typed prompt, so recall excludes all of i
   turn's context (cancelled on abort). The parallel path races the calls against each
   other, so this is a host's only ordered view of a batch: it reserves ordered identity
   (`sub-N` numbering) and starts ahead-of-dialog work such as permission classification
-  (`permit.Prefetch`, `prompt-design.md`). It must be cheap and never block; nil disables.
+  (`permit.Prefetch`, `prompt-design.md`); a prefetched classification also stops when
+  the dialog it fronts is answered, so its request is never paid for twice. It must be
+  cheap and never block; nil disables.
 
 Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
 drops everything queued (including any host inputs already handed over at a

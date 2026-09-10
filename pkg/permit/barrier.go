@@ -41,18 +41,17 @@ type Barrier struct {
 
 	preview func(agent.ToolCall) string // enhanced dialog subject; nil = raw arguments
 
-	allows          map[string]bool // session allows by allowSessionKey
-	compoundAllowed bool            // broad grant covering any compound command
-	open            []*pendingAsk   // live dialogs, re-evaluated on mode change
+	allows          map[string]bool               // session allows by allowSessionKey
+	compoundAllowed bool                          // broad grant covering any compound command
+	open            []*pendingAsk                 // live dialogs, re-evaluated on mode change
+	warm            map[string]context.CancelFunc // prefetched classifications by subject key
 }
 
-// pendingAsk tracks one open approval dialog so a mode change can resolve it and
-// an answer can cancel its in-flight classification.
+// pendingAsk tracks one open approval dialog so a mode change can resolve it.
 type pendingAsk struct {
-	call   agent.ToolCall
-	dlg    Dialog
-	cancel context.CancelFunc // stops the concurrent classifier, nil when none started
-	auto   bool               // an allow verdict resolved this dialog (auto mode)
+	call agent.ToolCall
+	dlg  Dialog
+	auto bool // an allow verdict resolved this dialog (auto mode)
 }
 
 // NewBarrier builds a barrier with read-only metadata lookup ro. It starts in
@@ -61,6 +60,7 @@ func NewBarrier(ro func(string) bool) *Barrier {
 	return &Barrier{
 		mode:   ModeAllowRead,
 		allows: make(map[string]bool),
+		warm:   make(map[string]context.CancelFunc),
 		ro:     ro,
 	}
 }
@@ -214,9 +214,9 @@ func (b *Barrier) Guard() tools.Guard {
 // predecessors may run for a while before its dialog opens. It filters exactly
 // as the asker does: only auto-mode bash and non-write extension calls whose
 // static verdict is Ask and which are not already session-allowed go to the
-// model. Identical subjects share one request through the classifier's
-// in-flight join. Launched goroutines observe ctx (the turn's), so an abort
-// stops them. Never blocks.
+// model. Identical subjects launch one request. Launched goroutines observe ctx
+// (the turn's), so an abort stops them, and answering the dialog a request
+// fronts cancels it. Never blocks.
 func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 	if b.classifier == nil {
 		return
@@ -232,10 +232,37 @@ func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 		if _, ok := b.sessionAllowed(call); ok {
 			continue // an allow-for-session grant already covers it: no dialog, no model
 		}
-		s := classifySubject(g.mode, call)
-		go func() {
-			b.classifier.Classify(ctx, s) // warms the LRU; unsure is never cached
-		}()
+		b.startWarm(ctx, classifySubject(g.mode, call))
+	}
+}
+
+// startWarm launches one prefetched classification for s, deduped by subject.
+func (b *Barrier) startWarm(ctx context.Context, s Subject) {
+	key := s.key()
+	wctx, cancel := context.WithCancel(ctx)
+	b.mu.Lock()
+	if _, ok := b.warm[key]; ok {
+		b.mu.Unlock()
+		cancel() // one request serves every dialog with this subject
+		return
+	}
+	b.warm[key] = cancel
+	b.mu.Unlock()
+	go func() {
+		defer cancel()
+		b.classifier.Classify(wctx, s) // warms the LRU; unsure is never cached
+		b.mu.Lock()
+		delete(b.warm, key) // only the owner removes; startWarm never overwrites
+		b.mu.Unlock()
+	}()
+}
+
+// cancelWarm stops the prefetched classification for s, if one still runs.
+func (b *Barrier) cancelWarm(s Subject) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if cancel, ok := b.warm[s.key()]; ok {
+		cancel()
 	}
 }
 
@@ -263,16 +290,14 @@ func (b *Barrier) Asker() tools.Asker {
 		// allow verdict resolves it open. A user answer cancels classification.
 		var classifierCtx context.Context
 		cancel := func() {}
+		var subject Subject
 		if b.classifyCall(m, call.Name) {
 			classifierCtx, cancel = context.WithCancel(ctx)
+			subject = classifySubject(m, call)
 		}
 
 		b.mu.Lock()
-		var cf context.CancelFunc
-		if classifierCtx != nil {
-			cf = cancel
-		}
-		pa := &pendingAsk{call: call, dlg: dlg, cancel: cf}
+		pa := &pendingAsk{call: call, dlg: dlg}
 		b.open = append(b.open, pa)
 		mNow := b.mode // same-lock capture so a concurrent SetMode/Cycle is ordered against registration
 		b.mu.Unlock()
@@ -283,7 +308,6 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 
 		if classifierCtx != nil && classifierCtx.Err() == nil {
-			subject := classifySubject(m, call)
 			go func() {
 				// a user answer cancels the context; skip both the resolve and its
 				// auto-allowed report so a denial is never claimed as auto-allowed.
@@ -299,7 +323,8 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 
 		idx, werr := dlg.Wait(ctx)
-		cancel() // the user answered or gave up; stop any in-flight classification
+		cancel()              // the user answered or gave up; stop any in-flight classification
+		b.cancelWarm(subject) // and the prefetched request behind the same subject
 
 		b.mu.Lock()
 		auto := pa.auto

@@ -137,6 +137,7 @@ recognisable at a glance; it is lossy, so the hash is what pins the identity.
 Names are never parsed back into a workspace. The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
+- Timestamps are stored in UTC and rendered with `.Local()`.
 - **List** returns every session for a workspace, most recently used first (start
   time only breaks ties); each row carries the summary a picker shows (model,
   length, first prompt). It scans only non-directory `*.jsonl` entries so side

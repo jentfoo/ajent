@@ -125,5 +125,5 @@ func infoLabel(info session.Info) string {
 // describeInfo summarises a saved session for the delete output.
 func describeInfo(info session.Info) string {
 	return fmt.Sprintf("%s, last used %s",
-		plural(info.Messages, "message"), info.Updated.Format("2006-01-02")) // sessions are stored as UTC
+		plural(info.Messages, "message"), info.Updated.Local().Format("2006-01-02")) // recorded in UTC, rendered in the system local time zone
 }
