@@ -42,6 +42,8 @@ linters:
       # enum shape, not a mistake
       exclusions:
         - "*.String"
+    gosmopolitan:
+      allow-time-local: true
 
 formatters:
   enable:
