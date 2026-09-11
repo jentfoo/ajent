@@ -1,9 +1,11 @@
-package main
+package app
 
 import (
 	"context"
-	"slices"
 	"strings"
+	"sync"
+
+	"github.com/go-analyze/bulk"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
@@ -14,6 +16,39 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
+
+// planHooks are the workflow seams the pump and drain loop consult. A zero
+// value disables both, leaving dispatch exactly as it is with no workflow running.
+type planHooks struct {
+	// beforePrompt may rewrite a submitted input before it starts a turn. It runs
+	// on the pump goroutine with the agent idle, so it may switch branches.
+	beforePrompt func(context.Context, agent.Input) (agent.Input, bool)
+	// advance runs at every turn boundary on the drain goroutine, errored turns
+	// included. A returned input continues the same drain loop as the next turn.
+	advance func(context.Context) (agent.Input, bool)
+}
+
+// turnRecorder keeps the last turn's result so a turn-boundary hook can tell a
+// clean stop from an abort or a provider error. Prompt only returns an error, and
+// an aborted turn is not one.
+type turnRecorder struct {
+	agent.NopSink
+
+	mu     sync.Mutex
+	result agent.TurnResult
+}
+
+func (t *turnRecorder) TurnEnd(r agent.TurnResult) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.result = r
+}
+
+func (t *turnRecorder) last() agent.TurnResult {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.result
+}
 
 // planDeps is what the plan Host is assembled from, gathered so driver's wiring
 // block stays one call.
@@ -102,7 +137,7 @@ func newPlanController(d planDeps) *plan.Controller {
 			}
 			return d.ui.SelectContext(ctx, q, options)
 		},
-		Notify: func(msg string, level agent.Level) { d.ui.Notify("plan: "+msg, tuiLevel(level)) },
+		Notify: func(msg string, level agent.Level) { d.ui.Notify("plan: "+msg, tui.Level(level)) },
 		Status: func(text, short string) {
 			d.ui.SetStatusSegment(tui.Segment{Key: "plan", Text: text, Short: short})
 		},
@@ -199,26 +234,9 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 // plannerExtras returns the enabled sub-agent tools a planner may delegate
 // read-only research to, empty when none are registered.
 func plannerExtras(reg *tools.Registry) []string {
-	all := reg.AllNames(tools.SourceBuiltin)
-	var out []string
-	for _, n := range []string{"agent_start", "agent_poll", "agent_list"} {
-		if slices.Contains(all, n) {
-			out = append(out, n)
-		}
-	}
-	return out
-}
-
-// tuiLevel maps an agent notice level onto the UI's.
-func tuiLevel(l agent.Level) tui.Level {
-	switch l {
-	case agent.LevelWarn:
-		return tui.LevelWarn
-	case agent.LevelError:
-		return tui.LevelError
-	default:
-		return tui.LevelInfo
-	}
+	candidates := []string{"agent_start", "agent_poll", "agent_list"}
+	all := bulk.SliceToSet(reg.AllNames(tools.SourceBuiltin))
+	return bulk.SliceFilterInPlace(func(n string) bool { _, ok := all[n]; return ok }, candidates)
 }
 
 // askUser adapts the TUI onto the ask_user tool's asker. It reports declined on

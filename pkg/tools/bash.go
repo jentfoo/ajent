@@ -30,7 +30,9 @@ const (
 	maxBashTimeout     = 10 * time.Minute
 )
 
-const toolBash = "bash"
+// ToolBash is the built-in shell tool's name; its command feeds the permission
+// classifier.
+const ToolBash = "bash"
 
 // bashTool runs one non-login bash -c process per call. A fresh shell each time
 // keeps cd and state from confusing later calls.
@@ -42,7 +44,7 @@ type bashTool struct {
 
 var _ agent.Tool = (*bashTool)(nil)
 
-func (t *bashTool) Name() string { return toolBash }
+func (t *bashTool) Name() string { return ToolBash }
 
 // Label returns a one-line summary of the command, bounded so a pathological
 // one-liner cannot flood the header. The header wraps it; the status bar, which

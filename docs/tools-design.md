@@ -352,7 +352,7 @@ same reason.
 Also off by default. `ask_user(question, options?)` puts a decision back to the
 user and waits: a closed choice when `options` are given, free text otherwise.
 `pkg/tools` must not import `pkg/tui`, so it takes an injected `Options.Ask`;
-`main.go` supplies an adapter over `(*tui.UI).Ask`, which already queues behind
+`pkg/app` supplies an adapter over `(*tui.UI).Ask`, which already queues behind
 permission dialogs, reports Esc as declined, and reports `ErrNoUI` in plain mode.
 
 No option list is closed: the TUI offers a free-text row and returns the typed
@@ -441,7 +441,7 @@ survives for compaction's structural reduction only.)
 
 ## Agent integration
 
-`main.go` builds the set with `tools.Builtins(Options{Cwd, SessionID})` and
+`pkg/app` builds the set with `tools.Builtins(Options{Cwd, SessionID})` and
 hands the registry to the agent loop as its `ToolSet`. Per turn the loop:
 
 1. Mirrors the enabled names into state (the system prompt derives its search

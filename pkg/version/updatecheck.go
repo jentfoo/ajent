@@ -44,6 +44,28 @@ type UpdateCheckOptions struct {
 	Fetch func(ctx context.Context) (string, error) // latest remote tag; nil uses GitHub API
 }
 
+// checkTimeout bounds the whole startup notice lookup; the fetch inside it is
+// bounded separately by fetchTimeout.
+const checkTimeout = 10 * time.Second
+
+// CheckForUpdate runs one bounded update-notice lookup and hands any notice to
+// notify. Best effort: a failed or suppressed check reports nothing.
+func CheckForUpdate(notify func(string)) {
+	path, err := config.CachePath(UpdateCacheFileName)
+	if err != nil {
+		return // no home dir; nothing to cache or compare
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
+	defer cancel()
+	msg, cerr := CheckUpdateNotice(ctx, path, UpdateCheckOptions{})
+	if cerr != nil {
+		return // offline or no tags: best-effort only
+	}
+	if msg != "" {
+		notify(msg)
+	}
+}
+
 // CheckUpdateNotice returns an update-available notice line or "" when none
 // applies. It refreshes the cached latest tag at most once per 12h — fetching
 // from GitHub otherwise — and only reports when the running build is not dev,

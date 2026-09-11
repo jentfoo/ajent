@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/app"
 	"github.com/jentfoo/ajent/pkg/version"
 	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
@@ -45,7 +46,7 @@ func TestParseFlags(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "json", f.output)
 		assert.True(t, f.readOnly)
-		assert.Equal(t, scopeReadOnly, f.scope())
+		assert.Equal(t, app.ToolScopeReadOnly, f.scope())
 	})
 
 	t.Run("tool_lists_split", func(t *testing.T) {
@@ -223,4 +224,66 @@ func TestStatsFlagIsHeadlessOnly(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, f.validate())
 	assert.True(t, f.stats)
+}
+
+func TestPrintVersion(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	printVersion(&buf)
+	assert.Equal(t, "ajent version "+version.Version+"\n", buf.String())
+}
+
+func TestExtractResume(t *testing.T) {
+	t.Parallel()
+	given, id, rest := extractResume([]string{"--resume", "01JXYZ"})
+	assert.True(t, given)
+	assert.Equal(t, "01JXYZ", id)
+	assert.Empty(t, rest)
+
+	given, id, rest = extractResume([]string{"--resume"})
+	assert.True(t, given)
+	assert.Empty(t, id)
+	assert.Empty(t, rest)
+
+	_, id, _ = extractResume([]string{"--resume=01ABC", "--continue"})
+	assert.Equal(t, "01ABC", id)
+
+	given, _, rest = extractResume([]string{"-m", "p/m", "hello", "world"})
+	assert.False(t, given)
+	assert.Equal(t, []string{"-m", "p/m", "hello", "world"}, rest)
+
+	given, id, rest = extractResume([]string{"--resume", "01ZZZ", "seed"})
+	assert.True(t, given)
+	assert.Equal(t, "01ZZZ", id)
+	assert.Equal(t, []string{"seed"}, rest)
+}
+
+func TestExtractDeleteOld(t *testing.T) {
+	t.Parallel()
+
+	given, days, rest := extractDeleteOld([]string{"--delete-old", "14"})
+	assert.True(t, given)
+	assert.Equal(t, "14", days)
+	assert.Empty(t, rest)
+
+	// bare --delete-old (no trailing token) -> the default window.
+	given, days, rest = extractDeleteOld([]string{"--delete-old"})
+	assert.True(t, given)
+	assert.Empty(t, days)
+	assert.Empty(t, rest)
+
+	// only a day count is the value; anything else stays a positional the flag
+	// parser can reject.
+	given, days, rest = extractDeleteOld([]string{"--delete-old", "soon"})
+	assert.True(t, given)
+	assert.Empty(t, days)
+	assert.Equal(t, []string{"soon"}, rest)
+
+	// the = form carries the count too.
+	_, days, _ = extractDeleteOld([]string{"--delete-old=7", "-m", "p/m"})
+	assert.Equal(t, "7", days)
+
+	given, _, rest = extractDeleteOld([]string{"-m", "p/m"})
+	assert.False(t, given)
+	assert.Equal(t, []string{"-m", "p/m"}, rest)
 }

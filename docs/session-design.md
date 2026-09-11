@@ -1,7 +1,7 @@
 # Session design
 
 How `pkg/session` persists an agent turn stream as an append-only JSONL
-transcript, how `cmd/ajent` resumes it with `--resume`, `--resume <id|name>`,
+transcript, resume and retirement: `--resume`, `--resume <id|name>`,
 `--session <name>` and `--continue`, and how it retires one with `--delete` and
 `--delete-old`. The transcript is the source of truth: every state rebuild,
 replay and rewind reads it back through a branch rooted at a head id. It builds
@@ -158,8 +158,8 @@ Names are never parsed back into a workspace. The store:
   is refused at the door.
 - **Stale** is `--delete-old`'s selection: the *unnamed* sessions last used
   before a caller-supplied cutoff, most recently used first. The cutoff is
-  policy and stays in `cmd/ajent`, so the package holds no retention rule of its
-  own. It inherits `List`'s order, which is already the key it selects by.
+  caller policy, so the package holds no retention rule of its own. It inherits
+  `List`'s order, which is already the key it selects by.
 - **Remove** is the one deletion primitive: it drops a transcript plus its branch
   cursor, leaving siblings and editor history alone. Empty-session cleanup,
   `--delete` and `--delete-old` all go through it.
@@ -356,9 +356,9 @@ A one-shot run (`-p`) records its turn like any other, which is what makes
 `--continue` and `--resume <id>` both compose with `-p`; a bare `--resume` does
 not, because its picker needs a terminal, and the combination is a usage error
 rather than a hang.
-On exit, `cmd/ajent` prints the session's resume command (the `--resume` flag
-plus its name, or its id when unnamed), so a conversation is never more than one
-command away.
+On exit the matching resume command (`--resume` plus the session's name, or its
+id when unnamed) is printed, so a conversation is never more than one command
+away.
 
 An **empty session** (abandoned before its first prompt) is deleted on exit: it
 has nothing to resume and would only be a dead picker row. A **named** session is
@@ -481,7 +481,7 @@ built from, so a plan recorded differently from how it was measured fails.
   picker). Unknown types already round-trip safely.
 - **Persist more of a session**: add a method on `Recorder` that appends an
   entry; keep writes best-effort so recording failure cannot break a turn.
-- **New resume mode**: extend the `resumeMode` enum in `cmd/ajent`, wire it into
+- **New resume mode**: extend the `ResumeMode` enum, wire it into
   `openSession`, and document it here.
 
 ## Known limits

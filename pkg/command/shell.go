@@ -85,7 +85,7 @@ func (s *Stager) Run(cmd string, excluded bool) {
 		s.sink.Notice("empty shell command", agent.LevelWarn)
 		return
 	}
-	tool, ok := s.reg.Get(toolBash)
+	tool, ok := s.reg.Get(tools.ToolBash)
 	if !ok {
 		s.sink.Notice("shell mode needs the bash tool enabled; use /tools", agent.LevelWarn)
 		return
@@ -111,7 +111,7 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	s.mu.Unlock()
 
 	input, _ := json.Marshal(map[string]any{"command": cmd})
-	call := agent.ToolCall{ID: id, Name: toolBash, Input: input}
+	call := agent.ToolCall{ID: id, Name: tools.ToolBash, Input: input}
 	out := agent.NewOutput(s.sink, id)
 	done := s.startTool(call, run.label)
 
@@ -258,5 +258,3 @@ func isDone(done chan struct{}) bool {
 		return false
 	}
 }
-
-const toolBash = "bash"

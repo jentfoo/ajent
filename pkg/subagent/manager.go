@@ -25,8 +25,8 @@ const (
 	maxLabelLen          = 72              // single-line label truncation, in runes
 )
 
-// Options configures a sub-agent Manager. The func-typed fields are supplied by
-// main.go so this package never imports pkg/tui or pkg/tools.
+// Options configures a sub-agent Manager. The func-typed fields are supplied
+// at wiring time, so this package never imports pkg/tui or pkg/tools.
 type Options struct {
 	Provider            func(llm.Model) (llm.Provider, error)
 	Model               func() llm.Model           // configured child model, else the session's

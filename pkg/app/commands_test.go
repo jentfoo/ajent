@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -23,17 +23,20 @@ func TestRegisterCommands(t *testing.T) {
 
 	t.Run("builtins_only", func(t *testing.T) {
 		cmds := command.NewRegistry()
-		registerCommands(cmds, console)
+		command.RegisterBuiltins(cmds, console)
 		assert.Equal(t, baseline.Names(), cmds.Names())
 	})
 
 	t.Run("builtins_survive_extras", func(t *testing.T) {
 		cmds := command.NewRegistry()
-		registerCommands(cmds, console,
-			command.Command{Name: "plan", Handler: noopHandler},
-			command.Command{Name: "plan-stop", Handler: noopHandler},
-			command.Command{Name: "plan-status", Handler: noopHandler},
-		)
+		command.RegisterBuiltins(cmds, console)
+		for _, c := range []command.Command{
+			{Name: "plan", Handler: noopHandler},
+			{Name: "plan-stop", Handler: noopHandler},
+			{Name: "plan-status", Handler: noopHandler},
+		} {
+			cmds.Register(c)
+		}
 		names := cmds.Names()
 		assert.Subset(t, names, baseline.Names())
 		assert.Subset(t, names, []string{"plan", "plan-stop", "plan-status"})

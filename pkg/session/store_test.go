@@ -531,6 +531,49 @@ func TestStoreFindByName(t *testing.T) {
 	})
 }
 
+// FindNamed resolves a target by its session name alone: it finds only when
+// the target reaches an entry whose name matches, not one reached purely by id.
+func TestStoreFindNamed(t *testing.T) {
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	t.Cleanup(setClock(time.UnixMilli(2_150_000_001).UTC()))
+
+	named, err := s.Create(ws, SessionData{Version: sessionVersion, Name: "fix-parser"})
+	require.NoError(t, err)
+	namedID := named.Head()
+	require.NoError(t, named.Close())
+
+	plain, err := s.Create(ws, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	plainID := plain.Head()
+	require.NoError(t, plain.Close())
+
+	t.Run("named_session_found", func(t *testing.T) {
+		info, found, ferr := s.FindNamed(ws, "fix-parser")
+		require.NoError(t, ferr)
+		assert.True(t, found)
+		assert.Equal(t, namedID, info.ID)
+	})
+
+	t.Run("name_match_is_case_insensitive", func(t *testing.T) {
+		info, found, ferr := s.FindNamed(ws, "FIX-PARSER")
+		require.NoError(t, ferr)
+		assert.True(t, found)
+		assert.Equal(t, namedID, info.ID)
+	})
+
+	t.Run("id_match_is_not_a_name", func(t *testing.T) {
+		_, _, ferr := s.FindNamed(ws, plainID)
+		assert.ErrorContains(t, ferr, "matches session id")
+	})
+
+	t.Run("unknown_target_not_found", func(t *testing.T) {
+		_, found, ferr := s.FindNamed(ws, "no-such-name")
+		require.NoError(t, ferr)
+		assert.False(t, found)
+	})
+}
+
 func TestStoreNameConflict(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()

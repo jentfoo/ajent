@@ -21,9 +21,6 @@ const noUIReason = "permission required (no UI available)"
 // so a large write body never inflates the model request.
 const maxClassifierArgs = 500
 
-// bashTool is the built-in shell tool's name; its command feeds the classifier.
-const bashTool = "bash"
-
 // Barrier gates every tool call through static classification plus an optional
 // approval dialog, holding the live mode and any open dialogs.
 type Barrier struct {
@@ -87,7 +84,7 @@ func (b *Barrier) SetClassifier(c Classifier) {
 }
 
 // SetNotice installs a callback for transient status notices such as an
-// auto-allowed classification. main.go wires it to ui.Notify; nil silences them.
+// auto-allowed classification; typically the UI's Notify. nil silences them.
 func (b *Barrier) SetNotice(n func(string)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -396,7 +393,7 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 // or one "bash:<name>" per identifiable non-readonly command. (nil,false) when only
 // the broad grant applies.
 func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
-	if call.Name != bashTool {
+	if call.Name != tools.ToolBash {
 		return []string{call.Name}, true // tool name for non-bash
 	}
 	names, ok := sessionNames(bashCommand(call.Input))
@@ -416,7 +413,7 @@ func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
 // only a complex (unidentifiable) compound falls back to the broad grant.
 func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	cmd := bashCommand(call.Input)
-	if call.Name != bashTool || !compound(cmd) { // plain command or non-bash tool
+	if call.Name != tools.ToolBash || !compound(cmd) { // plain command or non-bash tool
 		key := allowSessionKey(call)
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -463,7 +460,7 @@ func (b *Barrier) classifyCall(m Mode, name string) bool {
 	}
 	switch m {
 	case ModeAuto, ModeAutoWrite:
-		if name == bashTool {
+		if name == tools.ToolBash {
 			return true
 		}
 		_, isWrite := coreWriteTools[name]
@@ -477,10 +474,10 @@ func (b *Barrier) classifyCall(m Mode, name string) bool {
 // or the tool name plus its elided arguments for any other (MCP) tool.
 // AllowWrite selects the workspace rule set, and only for a shell command.
 func classifySubject(m Mode, call agent.ToolCall) Subject {
-	if call.Name == bashTool {
+	if call.Name == tools.ToolBash {
 		// the declared cwd rebases every relative path, so the model must see it
 		return Subject{
-			Name:       bashTool,
+			Name:       tools.ToolBash,
 			Args:       bashCommand(call.Input),
 			Cwd:        bashCwd(call.Input),
 			AllowWrite: m.allowsWrites(),
@@ -604,11 +601,11 @@ func DenyMatches(call agent.ToolCall, cmds []string) bool {
 		if e == "" {
 			continue
 		}
-		if call.Name != bashTool && toolNameCovered(call.Name, e) {
+		if call.Name != tools.ToolBash && toolNameCovered(call.Name, e) {
 			return true
 		}
 	}
-	if call.Name == bashTool {
+	if call.Name == tools.ToolBash {
 		for _, seg := range scanCommand(bashCommand(call.Input)).Segments {
 			if entryCovered(seg, cmds) {
 				return true
@@ -634,11 +631,11 @@ func SafeMatches(call agent.ToolCall, cmds []string) bool {
 		if e == "" {
 			continue
 		}
-		if call.Name != bashTool && toolNameCovered(call.Name, e) {
+		if call.Name != tools.ToolBash && toolNameCovered(call.Name, e) {
 			return true
 		}
 	}
-	if call.Name == bashTool {
+	if call.Name == tools.ToolBash {
 		return safeBashLine(bashCommand(call.Input), cmds)
 	}
 	return false
@@ -712,7 +709,7 @@ func commandHasPrefix(cmd, prefix string) bool {
 
 // rejectionReason names what was refused and why, guiding the model.
 func rejectionReason(call agent.ToolCall) string {
-	if call.Name == bashTool {
+	if call.Name == tools.ToolBash {
 		return "refused: in-place write (sed -i); use the edit tool instead"
 	}
 	return "refused: " + call.Name
@@ -720,7 +717,7 @@ func rejectionReason(call agent.ToolCall) string {
 
 // deniedReason names a config-denied command and why, guiding the model.
 func deniedReason(call agent.ToolCall) string {
-	if call.Name == bashTool {
+	if call.Name == tools.ToolBash {
 		return "denied by configuration, ask user to run if necessary"
 	}
 	return "refused: " + call.Name

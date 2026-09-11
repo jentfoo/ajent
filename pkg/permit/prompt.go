@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 // ErrDenied marks a dialog answer that explicitly refused (Esc) rather than the
-// session having no UI, so the barrier reports a real user denial. main.go maps
-// tui.ErrCancelled onto it.
+// session having no UI, so the barrier reports a real user denial.
 var ErrDenied = errors.New("denied by user")
 
 // Elision bounds for the dialog subject, matching tui's decision context budget
@@ -22,7 +22,7 @@ const (
 	decisionContextChars = 480
 )
 
-// Prompter opens approval dialogs and asks for free-text reasons. main.go
+// Prompter opens approval dialogs and asks for free-text reasons. The host
 // supplies a tui-backed implementation; nil means headless (no UI available).
 type Prompter interface {
 	Open(prompt, subject string, options []string) (Dialog, error)
@@ -167,12 +167,12 @@ func compoundGoverningHeads(command string) ([]string, bool) {
 // (bash:<head>) for shell commands, the tool name otherwise. Compound calls are
 // never keyed this way; they take the broad grant instead.
 func allowSessionKey(call agent.ToolCall) string {
-	if call.Name != bashTool {
+	if call.Name != tools.ToolBash {
 		return call.Name
 	}
 	s := scanCommand(bashCommand(call.Input))
 	if len(s.Segments) == 0 {
-		return bashTool
+		return tools.ToolBash
 	}
 	h, ok := headOf(s.Segments[0])
 	if !ok || h == "" { // env-prefixed/unnameable: never matches a grant
@@ -204,7 +204,7 @@ func elideSubject(s string) string {
 // subjectFor renders what an approval dialog shows for a call: the shell command
 // or the tool's raw arguments.
 func subjectFor(call agent.ToolCall) string {
-	if call.Name == "bash" {
+	if call.Name == tools.ToolBash {
 		return bashCommand(call.Input)
 	}
 	return string(call.Input)

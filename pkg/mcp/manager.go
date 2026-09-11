@@ -24,8 +24,8 @@ const (
 	StateEnabled               // in the prompt and callable
 )
 
-// Registrar is what a server registers its bridged tools into. main.go passes
-// the tool registry; declaring it here keeps pkg/mcp free of pkg/tools.
+// Registrar is what a server registers its bridged tools into; declaring it
+// here keeps pkg/mcp free of pkg/tools.
 type Registrar interface {
 	RegisterState(source string, t agent.Tool, s State)
 	Unregister(source string)

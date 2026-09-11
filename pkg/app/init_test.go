@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -34,7 +34,10 @@ func TestInitCommands(t *testing.T) {
 
 		baseline := command.NewRegistry()
 		command.RegisterBuiltins(baseline, console)
-		registerCommands(cmds, console, initCommands(h.ctl)...)
+		command.RegisterBuiltins(cmds, console)
+		for _, c := range initCommands(h.ctl) {
+			cmds.Register(c)
+		}
 
 		assert.Subset(t, cmds.Names(), baseline.Names())
 		assert.Contains(t, cmds.Names(), "init")

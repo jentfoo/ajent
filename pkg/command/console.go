@@ -11,7 +11,7 @@ import (
 )
 
 // MCPServers is the MCP manager's view /mcp needs, declared here so pkg/command
-// does not import pkg/mcp. main.go's uiConsole returns the real manager.
+// does not import pkg/mcp. The host's uiConsole returns the real manager.
 type MCPServers interface {
 	ServerNames() []string
 	// LoadOnFirstMessage connects and registers every server in full, exactly once;

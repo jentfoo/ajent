@@ -24,7 +24,7 @@ package before working in it, treat its stated constraints as tests to satisfy, 
 **update the document in the same change whenever you alter one of those behaviours**,
 so the spec never drifts from the code.
 
-The documents build on each other: `agent-loop-design.md` is the core (tools,
+The docs build on each other: `agent-loop-design.md` is the core (tools,
 sessions and compaction all depend on it), and several reference the prompt surfaces
 collected in `prompt-design.md`. When a change crosses boundaries, read — and if
 needed update — every document that names the affected package.
@@ -43,13 +43,13 @@ flag added without its `--help` and README entry is unfinished.
 | `agent-loop-design.md` | `pkg/agent` | The turn loop (prompt → stream → tool-call → repeat), single-owner `State`, the event sink front ends adapt onto, interruption as a first-class operation. Reference for how tools, sessions and compaction build on it. |
 | `providers-design.md` | `pkg/llm` (+ `pkg/config` paths) | One streaming interface over five vendors; the content model, event stream, normalisation pass (`Prepare`), capabilities vs special cases, discovery, retry. Rules for wire structs and what must never leak upward. |
 | `tools-design.md` | `pkg/tools` (+ `pkg/agent.Tool`) | The `Tool` interface and registry, built-in tools, and shared infra: path policy, read tracking, output limits, the guard chain. |
-| `session-design.md` | `pkg/session`, `cmd/ajent` resume | Append-only JSONL transcript as source of truth; entry/parent tree, branching, rewind/fork, resume (`--resume`, `--continue`, `--session <name>`) and named sessions. Schema and replay rules. |
+| `session-design.md` | `pkg/session`, CLI resume | Append-only JSONL transcript as source of truth; entry/parent tree, branching, rewind/fork, resume (`--resume`, `--continue`, `--session <name>`) and named sessions, deletion (`--delete`, `--delete-old` via `DeleteSession`/`DeleteOldSessions`). Schema and replay rules. |
 | `compaction-design.md` | `pkg/compact` (+ session) | Verbatim-band + checkpoint model: keep the most recent steps verbatim, fold everything older into one structured summary recorded on a compaction entry and replayed. Free structural reduction shapes only the summariser's transcript. Uses `prompt-design.md` summaries. |
 | `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager (`!!` runs excluded from context), `@`-path expansion with auto-read and gitignore-aware completion. |
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
-| `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by main.go. |
+| `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by pkg/app. |
 | `plan-design.md` | `pkg/plan` (+ seams in `pkg/agent`, `pkg/session`, `pkg/tools`) | The two-model `/plan` workflow: phases as branches of the session tree rather than projections of one message list, the `Host` boundary, the user gate on the drafted plan, per-phase model and tool scope with guaranteed restore, `dev_*` control tools and `ToolResult.EndTurn`, persistence and resume. |
 | `prompt-design.md` | every string sent to a model | Each prompt surface ajent sends; the principles enforced by tests: cache-stability of the system block, cheap/stable/honest prompts, provenance markers on all injected content. The single reference for prompting. |
 
@@ -69,15 +69,17 @@ tools    -> agent, config, llm, strutil
 session  -> agent, config, llm, strutil, tokens, tools
 compact  -> llm, session, strutil, tokens, tools
 tui      -> strutil (+ goldmark, uniseg, go-udiff, chroma)
-mcp      -> agent, config, llm, strutil, version (+ mcp-go; never tools/tui/command — adapters live in main.go)
-subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by main.go)
-plan     -> agent, llm (never tools/tui/command/session — the driver supplies Host)
+mcp      -> agent, config, llm, strutil, version (+ mcp-go; never tools/tui/command — adapters live in pkg/app)
+subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by pkg/app)
+plan     -> agent, llm, strutil (never tools/tui/command/session — the driver supplies Host)
 projinit -> agent, llm, tools (never tui/command/session/subagent — /init drives the
             real read and agent_* tools through the registry)
-permit   -> agent, tools, strutil (never tui; prompter/classifier interfaces are supplied by main.go)
+permit   -> agent, tools, strutil (never tui; prompter/classifier interfaces are supplied by pkg/app)
 refs     -> agent, llm, tokens, tools, tui
 command  -> agent, config, llm, refs, tokens, tools, tui, version
-main.go  -> everything (the only wiring layer)
+app      -> everything except httputil; nothing imports it (the only wiring layer); root
+            main() parses flags, short-circuits --version/--update/--delete/--delete-old,
+            and calls app.Run / app.RunDelete / app.CheckSessionTarget
 ```
 
 ### Outbound HTTP (`pkg/httputil`, `pkg/version`)
@@ -158,18 +160,27 @@ each run recomputes cumulatively over the whole branch.
 
 ### Front end and dispatch
 
-`main.go` classifies each submitted line with `command.ParseLine` (prompt / `/command`
+`pkg/app` classifies each submitted line with `command.ParseLine` (prompt / `/command`
 / `!shell`) and feeds commands and prompts to a single **prompt pump** goroutine that
 owns ordering; shell lines (`!cmd`, excluded `!!cmd`) go straight to the non-blocking
 `Stager`. Prompts flush the stage, expand `@` refs, then steer or start a turn.
+The package holds small files used to connect main to the rest of the application,
+one concern each: `run.go` (`Run`, config and model resolution), `driver.go`
+(`Driver`, the interactive loop and its wiring), `session.go` (open/resume/rewind/fork), `pump.go` (`runPump`), `queue.go` (`steerQueue`),
+`typing.go`, `console.go` (the `command.Console`), `compact.go`, `plan.go`, `init.go`,
+`permit.go` (gate adapters), `oneshot.go`+`oneshot_sink.go`, `delete.go`, `stats.go`,
+`api.go` (exit codes, options types).
 
-A one-shot run takes the other path: `-p/--prompt` branches in `main.go` before
-`tui.New` into `runHeadless` (`oneshot.go`), which wires the same loop, session,
+A one-shot run takes the other path: `Run` (`run.go`) branches on `-p/--prompt` before
+`tui.New` into `RunHeadless` (`oneshot.go`), which wires the same loop, session,
 MCP, compaction and sub-agents onto a stdout drain (`oneshot_sink.go`) instead of
 the TUI. Its safety model is the tool set, not the barrier: the gate runs at
 `allow-all` and the scope flags decide what the model is offered, so a headless
-turn never meets a tool it cannot call. Flags are parsed with `spf13/pflag` in
-`flags.go`; exit codes are 0 answer, 1 usage/setup, 2 failed turn.
+turn never meets a tool it cannot call. `--delete <name|id>` and `--delete-old [days]`
+remove saved sessions and exit via `app.RunDelete` (`delete.go`), which wraps
+`session.DeleteSession`/`DeleteOldSessions` (`pkg/session/delete.go`). Flags are parsed
+with `spf13/pflag` in root `flags.go` (package main), which calls `app.Run`; exit codes
+are `app.ExitOK`/`ExitUsage`/`ExitTurn` (0 answer, 1 usage/setup, 2 failed turn).
 
 The demo lives in `demo/`, its own stdlib-only module: `ajent-demosrv` is a
 standalone OpenAI-compatible chat server that plays a fixed script of real tool
@@ -180,7 +191,7 @@ at a temp dir, so config, models and transcripts stay hermetic.
 ### Permission barrier (`pkg/permit`)
 
 The tool gate: static classification of every call plus approval dialogs. It imports
-only `pkg/agent` and `pkg/tools`, never `pkg/tui` — main.go supplies its narrow
+only `pkg/agent` and `pkg/tools`, never `pkg/tui` — pkg/app supplies its narrow
 `Prompter`/`Classifier`/`Noter` interfaces, so headless mode stays free. The rule is
 to allow only what is **verifiably** read-only: built-ins (`read`/`grep`/`find`/`ls`) by
 name, non-built-in tools on declared `Registry.ReadOnly` metadata (MCP hint / config

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -175,4 +176,20 @@ func TestLevelsAreSortedAscending(t *testing.T) {
 	caps := Capabilities{Reasoning: true}
 	got := levelsFor(caps)
 	assert.True(t, slices.IsSorted(got))
+}
+
+func TestReasoningFrom(t *testing.T) {
+	t.Parallel()
+
+	m := Model{Provider: "p", ID: "m"}
+	m.Caps.Reasoning = true
+	rc := ReasoningFrom(config.Reasoning{Level: "high", Retain: "none", Show: false}, m)
+	assert.Equal(t, LevelHigh, rc.Level)
+	assert.Equal(t, RetainNone, rc.Retain)
+	assert.False(t, rc.Show)
+
+	// an empty block falls back to the compiled-in defaults
+	d := ReasoningFrom(config.Reasoning{}, m)
+	assert.Equal(t, LevelMedium, d.Level)
+	assert.Equal(t, RetainWholeTurn, d.Retain)
 }

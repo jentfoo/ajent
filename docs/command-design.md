@@ -49,7 +49,7 @@ prompt lines go to a single **prompt pump** goroutine that owns ordering.
 
 ### The prompt pump
 
-`main.go`'s loop is a thin classifier feeding one pump channel:
+`pkg/app`'s loop is a thin classifier feeding one pump channel:
 
 - loop: `ParseLine` → shell to `Stager.Run` (non-blocking); command and prompt
   lines to the pump; the `quit` case is unchanged. The echo of a submitted
@@ -92,7 +92,7 @@ runs in `startDrain` after every turn; both are documented in
 Submissions therefore stay in order, the UI never stalls, and "the turn is held
 until the pending command finishes" falls out of `Flush` blocking the pump. Only
 prompts flush: `!ls` followed by `/model` leaves the stage pending for the next
-real message. The CLI seed (`ajent "explain @main.go"`) goes through the pump
+real message. The CLI seed (`ajent "explain @pkg/app"`) goes through the pump
 too, so its references expand like any other prompt; the headless one
 (`ajent -p …`) expands in `runHeadless` instead, once the tool scope has settled.
 
@@ -129,7 +129,7 @@ layer, record a session override), and mutators that apply and persist a model o
 reasoning change, announce tool-set changes, report whether any prompt has been
 sent this session, and exit.
 
-`main.go` implements it once (`uiConsole`) over the objects the driver already
+`pkg/app` implements it once (`uiConsole`) over the objects the driver already
 holds. `SetModel` records a `model_change` entry the old bespoke switch never
 did, persists the selection to the user config so a fresh start keeps it (see
 config-design.md's Model section), and recomputes only the live effective reasoning
@@ -173,11 +173,11 @@ dispatched, never on a command or a `!`.
 `/mcp`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins; `/plan*` and
 `/init` are feature commands the driver adds on top.
 
-Registration goes through one `registerCommands` helper in `main.go` that always
+Registration goes through one `registerCommands` helper in `pkg/app` that always
 calls `RegisterBuiltins` first and then any feature commands. A feature that
 registers its own must not be written where the built-in call lives: an earlier
 plan-workflow attempt replaced that line and silently lost every built-in
-command. A root-package test asserts the built-in set survives with and without
+command. A `pkg/app` test asserts the built-in set survives with and without
 workflow commands.
 
 `command.PickModel(ctx, console, title, current, opts)` is the shared picker
@@ -252,7 +252,7 @@ exercise every branch with fakes and never touch a real go toolchain or network:
 
 The `--update` flag is the opposite surface: it runs the same `SelfUpdate` in
 the **foreground** and exits immediately after printing the result, never opening
-a TUI or starting a session (`main.go`, alongside the `--version` early exit).
+a TUI or starting a session (`pkg/app`, alongside the `--version` early exit).
 `/update` stays fully in-session. Both surfaces report through
 `UpdateResult.Notice`; neither writes to the transcript nor reaches the model: an
 update is a build concern, not conversation content.

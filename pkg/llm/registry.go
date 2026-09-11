@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-analyze/bulk"
 )
@@ -364,6 +365,27 @@ func (r *Registry) Refresh(ctx context.Context, opts DiscoverOptions) (map[strin
 		}
 	}
 	return cache, warnings
+}
+
+// DiscoverTimeout bounds a background discovery pass, so an unreachable
+// endpoint cannot leave it running for the life of the process.
+const DiscoverTimeout = 30 * time.Second
+
+// RefreshModels runs one discovery pass bounded by DiscoverTimeout, saves the
+// resulting cache, and reports pass warnings and cache-write failures through
+// notify. It returns how many models the pass added.
+func (r *Registry) RefreshModels(notify func(msg string, warn bool)) int {
+	ctx, cancel := context.WithTimeout(context.Background(), DiscoverTimeout)
+	defer cancel()
+	before := len(r.Models())
+	cache, warnings := r.Refresh(ctx, DiscoverOptions{})
+	for _, w := range warnings {
+		notify(w, true)
+	}
+	if err := SaveUserCache(cache); err != nil {
+		notify("could not save the model cache: "+err.Error(), true)
+	}
+	return len(r.Models()) - before
 }
 
 // Models returns every known model, sorted by provider then id.

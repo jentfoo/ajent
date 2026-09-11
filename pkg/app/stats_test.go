@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -75,7 +75,7 @@ func TestJSONSinkSummaryPrecedesResult(t *testing.T) {
 	var b bytes.Buffer
 	s := newJSONSink(&b)
 	s.summary(sessionStats{Turns: 2, Calls: map[string]int{"edit": 1}})
-	s.finish(statusOK, exitOK, "done")
+	s.finish(statusOK, ExitOK, "done")
 
 	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
 	require.Len(t, lines, 2)
@@ -143,7 +143,7 @@ func TestStatsBenchmarkDataPath(t *testing.T) {
 		args := fmt.Sprintf(`{"path":%q,"edits":[{"oldText":"world","newText":"ajent"}]}`, path)
 
 		_, out, _ := headlessHarness(t,
-			cliFlags{prompt: "go", output: outputJSON, allowAll: true, stats: true}, "",
+			HeadlessOptions{Prompt: "go", Output: OutputJSON, Scope: ToolScopeAllowAll, Stats: true}, "",
 			[]llm.ScriptedTurn{
 				{Events: usageCallTurn(1200, 40, "c1", "edit", args)},
 				{Events: usageTextTurn(1500, 25, "done")},
@@ -187,7 +187,7 @@ func TestStatsBenchmarkDataPath(t *testing.T) {
 		args := fmt.Sprintf(`{"path":%q,"edits":[{"oldText":"absent text","newText":"x"}]}`, path)
 
 		_, out, _ := headlessHarness(t,
-			cliFlags{prompt: "go", output: outputJSON, allowAll: true, stats: true}, "",
+			HeadlessOptions{Prompt: "go", Output: OutputJSON, Scope: ToolScopeAllowAll, Stats: true}, "",
 			[]llm.ScriptedTurn{
 				{Events: usageCallTurn(900, 30, "c1", "edit", args)},
 				{Events: usageTextTurn(1000, 20, "gave up")},

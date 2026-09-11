@@ -273,12 +273,12 @@ func rowFor(e Entry) *treeRowInfo {
 			return nil
 		}
 		return &treeRowInfo{ID: e.ID, Kind: RowUser,
-			Label: "user: " + truncate(strutil.FirstLine(txt))}
+			Label: "user: " + strutil.Clip(strutil.FirstLine(txt), maxFirstLen)}
 	case llm.RoleAssistant:
 		txt := strings.TrimSpace(userText(m))
 		if txt != "" {
 			return &treeRowInfo{ID: e.ID, Kind: RowAssistant,
-				Label: "assistant: " + truncate(strutil.FirstLine(txt))}
+				Label: "assistant: " + strutil.Clip(strutil.FirstLine(txt), maxFirstLen)}
 		}
 		lbl := toolCallLabel(m)
 		if lbl == "" {
@@ -300,7 +300,7 @@ func toolResultLabel(m llm.Message) string {
 			}
 		}
 	}
-	return truncate(strings.Join(parts, " "))
+	return strutil.Clip(strings.Join(parts, " "), maxFirstLen)
 }
 
 // summarize collapses a tool result into one display line for the picker.
@@ -312,7 +312,7 @@ func summarize(tr llm.ToolResultBlock) string {
 		}
 	}
 	s := strings.Join(parts, " ")
-	return truncate(s)
+	return strutil.Clip(s, maxFirstLen)
 }
 
 // toolCallLabel renders assistant tool calls as [name] args collapsed labels.
@@ -322,7 +322,7 @@ func toolCallLabel(m llm.Message) string {
 		if tc, ok := b.(llm.ToolCallBlock); ok {
 			lbl := "[" + tc.Name + "]"
 			if s := strings.TrimSpace(strutil.FirstArgText(tc.Input)); s != "" {
-				lbl += " " + truncate(strutil.FirstLine(s))
+				lbl += " " + strutil.Clip(strutil.FirstLine(s), maxFirstLen)
 			}
 			parts = append(parts, lbl)
 		}

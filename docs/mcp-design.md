@@ -24,7 +24,7 @@ version negotiation, OAuth) is delegated to mcp-go; what ajent owns is the bound
 
 - **`pkg/mcp ↛ pkg/tools`, `pkg/tui`, `pkg/command`, `pkg/refs`.** It imports only
   `agent`, `config`, `llm` and mcp-go. Everything it needs from the registry or front
-  end arrives as an interface declared here (`Registrar`) or is adapted in `main.go`
+  end arrives as an interface declared here (`Registrar`) or is adapted in `pkg/app`
   / `console.go`. This keeps the dependency isolated so the library can be replaced
   without touching the registry, TUI or session.
 - **mcp-go wire types never escape `pkg/mcp`.** The bridge emits our own `agent.Tool`;
@@ -139,7 +139,7 @@ permissions, token accounting and the sub-agent treat it like any built-in.
 
 ## Server manager (`manager.go`)
 
-One supervisor owns every configured server's lifecycle; `main.go` passes a registry
+One supervisor owns every configured server's lifecycle; `pkg/app` passes a registry
 adapter and notice/status callbacks. The adapter registers a source's tool under an
 explicit state, unregisters a whole source, lists a source's enabled, disabled or all
 names (so live enable state survives re-registration), and marks extra tools read-only.
@@ -236,7 +236,7 @@ these two.
   shows recent logs from a per-server bounded buffer (stdio stderr plus protocol
   lines), and reloads config.
 - `pkg/command` declares its own small interfaces (`MCPServers`, `MCPGroup`,
-  `MCPServerStatus`) so it never imports `pkg/mcp`; `main.go`'s adapters back them with
+  `MCPServerStatus`) so it never imports `pkg/mcp`; `pkg/app`'s adapters back them with
   the real manager.
 - `/tools` groups MCP tools under a per-server header carrying tool count and
   connection state.

@@ -1004,7 +1004,7 @@ so there is nothing above the replay to mark off; a rewind lands below already-c
 where the boundary must be visible. The divider is a `histLine.divider`, drawn to the width
 in force like a thematic break; with color disabled it falls back to a thin rule.
 
-For a **large session** (`rewindDeferThreshold` tree rows in `cmd/ajent`) the rewind picker
+For a **large session** (`rewindDeferThreshold` tree rows) the rewind picker
 opens alt mode with history repainting deferred: while the cursor moves, only the live block is
 redrawn and committed rows stay exactly as they were. This keeps arrow-key navigation over many
 messages from re-emitting every retained line per keystroke; the restored context still replays
@@ -1043,7 +1043,7 @@ is accepted as noise on a restore.
 
 `input.go` turns bytes into `key` values: printable runes, control keys, arrows,
 Home/End/Delete, PgUp/PgDn, Ctrl+Z and bracketed paste. The editor change callback
-fires with the current text on every edit; main.go feeds it to token accounting and
+fires with the current text on every edit; pkg/app feeds it to token accounting and
 as the typing signal for the boundary hold, so an unfinished draft keeps that
 boundary open. Escape-sequence decoding is a pure function over a byte slice plus
 a goroutine feeding a channel, so it is testable without a terminal.

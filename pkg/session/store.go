@@ -156,6 +156,21 @@ func (s *Store) Find(workspace, target string) (Info, error) {
 	}
 }
 
+// FindNamed resolves a name the way --resume does, returning whether it exists.
+// It errors when the target reaches a session by id rather than by that name,
+// so a name typed with intent is never silently matched to an unrelated id.
+func (s *Store) FindNamed(workspace, target string) (Info, bool, error) {
+	info, err := s.Find(workspace, target)
+	if errors.Is(err, ErrNotFound) {
+		return Info{}, false, nil
+	} else if err != nil {
+		return Info{}, false, err
+	} else if !strings.EqualFold(info.Name, target) {
+		return Info{}, false, fmt.Errorf("session name %q matches session id %s", target, info.ID)
+	}
+	return info, true, nil
+}
+
 // NameConflict reports why name cannot identify the session at selfPath: it is
 // usable when it reaches nothing, or reaches that same session. Pass an empty
 // selfPath for a session that does not exist yet.
@@ -383,12 +398,7 @@ func hash4(p string) string {
 	return hex.EncodeToString(sum[:2])
 }
 
-const maxFirstLen = 80
-
-// truncate caps s for Info.First display.
-func truncate(s string) string {
-	return strutil.Clip(s, maxFirstLen)
-}
+const maxFirstLen = 80 // display cap shared by Info.First and the picker labels
 
 // firstUserOn returns the first user text on a branch, truncated for display.
 func firstUserOn(branch []Entry) string {
@@ -402,7 +412,7 @@ func firstUserOn(branch []Entry) string {
 		}
 		for _, b := range md.Message.Content {
 			if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-				return truncate(strings.TrimSpace(tb.Text))
+				return strutil.Clip(strings.TrimSpace(tb.Text), maxFirstLen)
 			}
 		}
 	}

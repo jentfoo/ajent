@@ -1,9 +1,8 @@
-package main
+package app
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"slices"
@@ -23,52 +22,27 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// toolScope is which tools a headless run offers the model. The scope is the
-// gate: the barrier runs at allow-all, so nothing the model can see is refused.
-type toolScope uint8
-
-const (
-	scopeDefault  toolScope = iota // every built-in but bash
-	scopeAllowAll                  // every built-in, bash included
-	scopeReadOnly                  // verifiably read-only tools only
-)
-
-// headlessOptions is everything main resolved before deciding not to open a UI.
-// out, errw and provider default to stdout, stderr and the registry.
-type headlessOptions struct {
-	flags      cliFlags
-	set        *config.Set
-	reg        *llm.Registry
-	active     llm.Model
-	sessMode   resumeMode
-	sessTarget string
-	warnings   []string
-
-	out      io.Writer
-	errw     io.Writer
-	provider func(llm.Model) (llm.Provider, error)
-}
-
-// runHeadless drives one turn with no terminal and returns the process exit code.
-func runHeadless(o headlessOptions) int {
+// RunHeadless drives one turn with no terminal and returns the process exit
+// code. Out, Errw and Provider default to stdout, stderr and the registry.
+func RunHeadless(o HeadlessOptions) int {
 	started := time.Now()
-	out, errw := o.out, o.errw
+	out, errw := o.Out, o.Errw
 	if out == nil {
 		out = os.Stdout
 	}
 	if errw == nil {
 		errw = os.Stderr
 	}
-	for _, w := range o.warnings {
+	for _, w := range o.Warnings {
 		_, _ = fmt.Fprintln(errw, "ajent:", w)
 	}
-	if o.active.ID == "" {
+	if o.Active.ID == "" {
 		_, _ = fmt.Fprintln(errw, "ajent: no model configured; set one with -m or in config.json")
-		return exitUsage
+		return ExitUsage
 	}
 
 	var drain headSink
-	if o.flags.output == outputJSON {
+	if o.Output == OutputJSON {
 		drain = newJSONSink(out)
 	} else {
 		drain = newTextSink(out, errw)
@@ -81,28 +55,28 @@ func runHeadless(o headlessOptions) int {
 		os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
-	providerFor := o.provider
+	providerFor := o.Provider
 	if providerFor == nil {
-		providerFor = llm.NewProviders(o.reg).ProviderFor
+		providerFor = llm.NewProviders(o.Reg).ProviderFor
 	}
 	st := &agent.State{
-		Model:     o.active,
-		Reasoning: reasoningFrom(o.set.Settings().Reasoning, o.active),
-		Tokens:    tokens.New(o.active),
+		Model:     o.Active,
+		Reasoning: llm.ReasoningFrom(o.Set.Settings().Reasoning, o.Active),
+		Tokens:    tokens.New(o.Active),
 	}
 
 	// recording keeps -p composable: a follow-up --continue rejoins this transcript.
-	rec := newSession(nil, o.sessMode, o.sessTarget, o.active.Key())
+	rec := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key())
 	if rec == nil {
 		notify("session recording disabled", agent.LevelWarn)
 	}
 
 	// ask_user has nobody to ask, so it is left without an Ask func and excluded
 	// from every scope below.
-	toolsReg, terr := tools.Builtins(tools.Options{SessionID: cwdOrDot()})
+	toolsReg, terr := tools.Builtins(tools.Options{SessionID: config.Cwd()})
 	if terr != nil {
 		_, _ = fmt.Fprintln(errw, "ajent:", terr)
-		return exitUsage
+		return ExitUsage
 	}
 
 	env := agent.DetectEnvironment()
@@ -113,7 +87,7 @@ func runHeadless(o headlessOptions) int {
 	}
 
 	var stats *statsSink
-	if o.flags.stats {
+	if o.Stats {
 		stats = newStatsSink()
 	}
 
@@ -130,13 +104,13 @@ func runHeadless(o headlessOptions) int {
 			}
 			return comp.run(ctx, reason, "")
 		},
-		MaxSteps:  o.set.Settings().Agent.MaxSteps,
+		MaxSteps:  o.Set.Settings().Agent.MaxSteps,
 		SessionID: sessionHint(rec),
 	}
 	if rec != nil {
 		opts.Sinks = []agent.Sink{rec.rec.Sink(drain)}
 		opts.OnMessage = []func(agent.MessageInfo){rec.rec.Message}
-		_, _, warns := rec.restoreState(o.set, o.reg, st, toolsReg)
+		_, _, warns := rec.restoreState(o.Set, o.Reg, st, toolsReg)
 		for _, w := range warns {
 			notify("resume: "+w, agent.LevelWarn)
 		}
@@ -145,7 +119,7 @@ func runHeadless(o headlessOptions) int {
 	var ag *agent.Agent
 	sag := subagent.New(subagent.Options{
 		Provider:            providerFor,
-		Model:               func() llm.Model { return resolveSubAgentModel(o.set, o.reg, st) },
+		Model:               func() llm.Model { return resolveSubAgentModel(o.Set, o.Reg, st) },
 		Reasoning:           func() llm.ReasoningConfig { return st.Reasoning },
 		Parent:              func() *tokens.Accounting { return st.Tokens },
 		Tools:               toolsReg,
@@ -158,7 +132,7 @@ func runHeadless(o headlessOptions) int {
 			}
 			return ag.Steer(in)
 		},
-		MaxConcurrent: o.set.Settings().Subagent.MaxConcurrent,
+		MaxConcurrent: o.Set.Settings().Subagent.MaxConcurrent,
 	})
 	defer sag.Close()
 	for _, t := range sag.Tools() {
@@ -173,7 +147,7 @@ func runHeadless(o headlessOptions) int {
 	// alone, deciding membership when the message lands so polls are never duplicated
 	opts.OnBoundary = sag.Boundary
 
-	servers, mwarns, merr := mcp.LoadConfig(cwdOrDot())
+	servers, mwarns, merr := mcp.LoadConfig(config.Cwd())
 	if merr != nil {
 		notify("mcp: "+merr.Error(), agent.LevelWarn)
 	}
@@ -183,7 +157,7 @@ func runHeadless(o headlessOptions) int {
 	if merr == nil {
 		mgr := mcp.New(servers, mcp.Options{
 			Registrar: registryAdapter{toolsReg},
-			Workspace: cwdOrDot(),
+			Workspace: config.Cwd(),
 			Restore:   st.Tools,
 			Notice:    func(msg string, warn bool) { notify("mcp: "+msg, agentLevelOf(warn)) },
 		})
@@ -192,13 +166,13 @@ func runHeadless(o headlessOptions) int {
 	}
 
 	// the scope is applied last, once every tool the run could offer is registered
-	toolsReg.SetEnabled(headlessTools(toolsReg, o.flags.scope(), o.flags.allowTools, o.flags.denyTools))
+	toolsReg.SetEnabled(headlessTools(toolsReg, o.Scope, o.AllowTools, o.DenyTools))
 
 	// allow-all with the configured deny list: an operator's explicit gate still
 	// holds, and nothing else can prompt a human who is not there.
 	barrier := permit.NewBarrier(toolsReg.ReadOnly)
 	barrier.SetMode(permit.ModeAllowAll)
-	barrier.SetDeniedCommands(o.set.Settings().Permissions.DeniedCommands)
+	barrier.SetDeniedCommands(o.Set.Settings().Permissions.DeniedCommands)
 	barrier.SetNotice(func(msg string) { notify(msg, agent.LevelInfo) })
 	toolsReg.AddGuard(barrier.Guard())
 	toolsReg.SetAsker(barrier.Asker())
@@ -211,18 +185,18 @@ func runHeadless(o headlessOptions) int {
 
 	if rec != nil {
 		comp = &compactor{
-			rec: rec, st: st, ag: ag, reg: o.reg,
+			rec: rec, st: st, ag: ag, reg: o.Reg,
 			sink:        opts.Sinks[0],
 			notify:      notify,
 			providerFor: providerFor,
-			cfg:         func() config.Compaction { return o.set.Settings().Compaction },
+			cfg:         func() config.Compaction { return o.Set.Settings().Compaction },
 		}
 	}
 
 	// expand @ references like the pump does, once the scope has settled
-	expander := refs.NewExpander(toolsReg, opts.Sinks[0], tools.PathPolicy{Cwd: cwdOrDot()})
+	expander := refs.NewExpander(toolsReg, opts.Sinks[0], tools.PathPolicy{Cwd: config.Cwd()})
 	expander.Seed(st.Messages) // --continue reopens a transcript that holds ref ids
-	expanded := expander.Expand(o.flags.prompt)
+	expanded := expander.Expand(o.Prompt)
 	for _, n := range expanded.Notices {
 		notify(n, agent.LevelWarn)
 	}
@@ -259,13 +233,13 @@ func outcomeReason(err error, res agent.TurnResult) string {
 func headlessOutcome(err error, res agent.TurnResult, answer string) (string, int) {
 	switch {
 	case err != nil || res.Err != nil || res.Stop == llm.StopError:
-		return statusError, exitTurn
+		return statusError, ExitTurn
 	case res.Stop == llm.StopAborted:
-		return statusEmpty, exitTurn
+		return statusEmpty, ExitTurn
 	case answer == "":
-		return statusEmpty, exitTurn
+		return statusEmpty, ExitTurn
 	default:
-		return statusOK, exitOK
+		return statusOK, ExitOK
 	}
 }
 
@@ -273,34 +247,32 @@ func headlessOutcome(err error, res agent.TurnResult, answer string) (string, in
 // allow and deny adjustments. Built-in names follow the scope regardless of
 // tools.enabled; every other source keeps its registered state, so a server
 // disabled in mcp.json stays off.
-func headlessTools(reg *tools.Registry, scope toolScope, allow, deny []string) []string {
+func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) []string {
 	inScope := func(name string) bool {
-		if name == "ask_user" { // no human to answer a question headless
+		if name == tools.ToolAskUser { // no human to answer a question headless
 			return false
 		}
 		switch scope {
-		case scopeAllowAll:
+		case ToolScopeAllowAll:
 			return true
-		case scopeReadOnly:
+		case ToolScopeReadOnly:
 			return slices.Contains(tools.ReadOnlyBuiltins, name) || reg.ReadOnly(name)
 		default:
-			return name != toolBash
+			return name != tools.ToolBash
 		}
 	}
 
 	builtins := reg.AllNames(tools.SourceBuiltin)
-	names := bulk.SliceFilter(inScope, builtins)
+	builtinSet := bulk.SliceToSet(builtins)
+	names := bulk.SliceFilterInPlace(inScope, builtins)
 
 	// enabled non-builtins keep their state, narrowed to read-only under that scope
-	builtinSet := bulk.SliceToSet(builtins)
-	for _, name := range reg.Names() {
+	names = append(names, bulk.SliceFilter(func(name string) bool {
 		if _, ok := builtinSet[name]; ok {
-			continue
-		} else if scope == scopeReadOnly && !reg.ReadOnly(name) {
-			continue
+			return false
 		}
-		names = append(names, name)
-	}
+		return scope != ToolScopeReadOnly || reg.ReadOnly(name)
+	}, reg.Names())...)
 
 	names = append(names, allow...)
 	denied := bulk.SliceToSet(deny)
@@ -309,12 +281,4 @@ func headlessTools(reg *tools.Registry, scope toolScope, allow, deny []string) [
 		return !ok
 	}, names)
 	return slices.Compact(slices.Sorted(slices.Values(names)))
-}
-
-// agentLevelOf maps a warn flag onto a notice level.
-func agentLevelOf(warn bool) agent.Level {
-	if warn {
-		return agent.LevelWarn
-	}
-	return agent.LevelInfo
 }

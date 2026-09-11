@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 // Class is a model classifier's verdict on one tool call.
@@ -20,7 +22,7 @@ const (
 
 // Subject is one call sent to the model classifier in the auto modes.
 type Subject struct {
-	Name       string // tool name; bashTool for shell calls
+	Name       string // tool name; the shell tool for shell calls
 	Args       string // bash command text, or elided JSON arguments for other tools
 	Cwd        string // shell working directory when the call declares one
 	AllowWrite bool   // judge under auto+write's workspace rules rather than read-only
@@ -33,10 +35,10 @@ func (s Subject) key() string {
 }
 
 // IsShell reports whether the subject is a shell command rather than an MCP/extension call.
-func (s Subject) IsShell() bool { return s.Name == bashTool }
+func (s Subject) IsShell() bool { return s.Name == tools.ToolBash }
 
 // Classifier decides whether an unverifiable tool call may run unattended.
-// main.go supplies a fresh-context model adapter in the auto modes.
+// The host supplies a fresh-context model adapter in the auto modes.
 type Classifier interface {
 	Classify(ctx context.Context, s Subject) Class
 }
@@ -44,7 +46,7 @@ type Classifier interface {
 // classCacheMax bounds the session LRU so it stays cheap and forgets old commands.
 const classCacheMax = 500
 
-// ClassifierFn is one uncached classification; main.go supplies the model call.
+// ClassifierFn is one uncached classification; the host supplies the model call.
 type ClassifierFn func(ctx context.Context, s Subject) Class
 
 // cachedClassifier wraps an uncached classifier with a session-scoped LRU keyed

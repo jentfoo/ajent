@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -56,7 +56,7 @@ func newInitController(deps initDeps) *initController {
 		Cwd:      deps.cwd,
 		Registry: deps.toolsReg,
 		Sink:     deps.sink,
-		Notify:   func(msg string, level agent.Level) { deps.notify(msg, tuiLevel(level)) },
+		Notify:   func(msg string, level agent.Level) { deps.notify(msg, tui.Level(level)) },
 		Started:  c.track,
 	})
 	return c

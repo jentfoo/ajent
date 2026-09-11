@@ -67,11 +67,11 @@ projection transform would leave every one of them reporting the wrong list.
 
 `pkg/plan` imports only `pkg/agent` and `pkg/llm`, never `session`, `tools`,
 `tui` or `command`. Everything else arrives as func fields on `Host`, supplied by
-`main.go` (`plan.go`), the same shape `pkg/subagent` uses. A nil field disables
+`pkg/app` (`plan.go`), the same shape `pkg/subagent` uses. A nil field disables
 that capability rather than panicking, and the whole workflow is unit-testable
 against a fake `Host` with no UI, transcript or registry in scope.
 
-`Fork(head string, m llm.Model) error` is the interesting one. `main.go`
+`Fork(head string, m llm.Model) error` is the interesting one. `pkg/app`
 implements it as `(*sessRec).forkTo`, built on the branch-switch half of `rewind`
 (`switchState`) **without** rewind's `ui.Reset()` + `Replay`: the screen is never
 reset, because a phase switch changes what the *model* sees, not what the user

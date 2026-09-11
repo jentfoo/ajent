@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 // Verdict is the static outcome of classifying one tool call.
@@ -49,7 +50,7 @@ func Classify(call agent.ToolCall, ro func(string) bool) Verdict {
 	if !isWrite && ro != nil && ro(call.Name) {
 		return VerdictAllow // MCP readOnlyHint or config globs
 	}
-	if call.Name == bashTool {
+	if call.Name == tools.ToolBash {
 		command := bashCommand(call.Input)
 		if sedWrite(command) {
 			return VerdictReject // in-place write; guidance to use the edit tool

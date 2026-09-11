@@ -28,7 +28,7 @@ The dependency edge is load-bearing: **`pkg/subagent ↛ pkg/tools`, `pkg/tui`,
 - The parent tool registry arrives as a narrow interface (`ToolSource`) declared
   here, so the package never imports `pkg/tools`.
 - Every UI surface (activity rows, notices, status segment) arrives as func-typed
-  `Options` fields supplied by `main.go`, exactly like `permit.Barrier`. Headless
+  `Options` fields supplied by `pkg/app`, exactly like `permit.Barrier`. Headless
   mode therefore stays free and no TUI import is needed.
 - There is **no permission guard on a child**: nothing to permit. That is why the
   read-only tool filtering must be structural (see `toolset.go`) rather than
@@ -51,7 +51,7 @@ prompt.go       childContract / continueNudge verbatim constants, taskPrompt ass
 
 ### `manager.go` — lifecycle
 
-The manager is configured by func fields supplied by `main.go`, mirroring
+The manager is configured by func fields supplied by `pkg/app`, mirroring
 `permit.Barrier`: how to build a provider and resolve the child model/reasoning,
 the parent ledger (for per-job `Child()` spend), the read-only tool source, env
 and project instructions; UI callbacks for activity rows, keyed notices and the
@@ -201,7 +201,7 @@ dim on a subtle background (`Theme.Activity`) so live work stands apart from the
 prompt area above which they sit.
 
 The completion steer is marked `Input.Injected`, and the permission-barrier note
-steer in main.go is too, so neither surfaces as a recallable prompt via Ctrl+R or
+steer in pkg/app is too, so neither surfaces as a recallable prompt via Ctrl+R or
 the up-arrow history. Only messages the user actually typed do.
 
 ### `tools.go` — the three tools
@@ -357,7 +357,7 @@ session model) and `maxConcurrent` (compiled-in default from `pkg/config`), both
 bound for free through env
 reflection. Here it sizes the manager's semaphore; `/settings` edits it.
 
-## Front-end wiring (`main.go` / `console.go`)
+## Front-end wiring (`pkg/app` / `console.go`)
 
 The only wiring layer. The manager is built in `driver` after the tool registry and
 barrier exist, with adapters:

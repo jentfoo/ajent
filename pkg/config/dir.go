@@ -69,6 +69,15 @@ func CachePath(name string) (string, error) {
 	return filepath.Join(cd, name), nil
 }
 
+// Cwd returns the current working directory, or "." when it is unavailable.
+func Cwd() string {
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		return "."
+	}
+	return cwd
+}
+
 // ProjectDir returns the configuration directory for a workspace.
 func ProjectDir(workspace string) string {
 	return filepath.Join(workspace, DirName)

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -22,9 +22,7 @@ import (
 )
 
 // uiConsole implements command.Console over the objects the driver already
-// holds: the UI, model registry, agent state, tool registry and session
-// recorder. Keeping it here means main.go's bespoke /model and /reasoning
-// switch move into pkg/command without a cycle.
+// holds: the UI, model registry, agent state, tool registry and session recorder.
 type uiConsole struct {
 	ui       *tui.UI
 	set      *config.Set
@@ -120,7 +118,7 @@ func (c *uiConsole) SetSessionName(name string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.sess.store.NameConflict(cwdOrDot(), canonical, c.sess.w.Path()); err != nil {
+	if err := c.sess.store.NameConflict(config.Cwd(), canonical, c.sess.w.Path()); err != nil {
 		return err
 	}
 	return c.rec.Rename(canonical)
@@ -400,4 +398,19 @@ func levelOrEmpty(rc llm.ReasoningConfig) string {
 		return ""
 	}
 	return rc.Level.String()
+}
+
+// showReasoningIndicator shows the reasoning level in the status bar when it
+// differs from the resolved default, clearing it otherwise.
+func showReasoningIndicator(ui *tui.UI, set *config.Set, st *agent.State) {
+	if ui == nil || st == nil {
+		return
+	}
+	var text string
+	if d, _, ok := set.Explain("reasoning.level"); ok && string(d) != `"medium"` {
+		text = st.Reasoning.Level.String() // an explicit config choice stays visible even when clamped
+	} else {
+		text = levelOrEmpty(st.Reasoning)
+	}
+	ui.SetStatusSegment(tui.Segment{Key: "reasoning", Text: text})
 }

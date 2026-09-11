@@ -8,6 +8,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
@@ -89,6 +90,24 @@ func ApplyLimits(l Limits) {
 	applyLimit(&lsResult, l.Ls)
 	applyLimit(&refInject, l.RefInject)
 	applyLimit(&refTotal, l.RefTotal)
+}
+
+// LimitsFrom maps a typed config limits block onto Limits.
+func LimitsFrom(l config.ToolLimits) Limits {
+	return Limits{
+		Bash:      limitFrom(l.Bash),
+		Read:      limitFrom(l.Read),
+		Find:      limitFrom(l.Find),
+		Grep:      limitFrom(l.Grep),
+		Ls:        limitFrom(l.Ls),
+		RefInject: limitFrom(l.RefInject),
+		RefTotal:  limitFrom(l.RefTotal),
+	}
+}
+
+// limitFrom copies one configured bound.
+func limitFrom(l config.Limit) Limit {
+	return Limit{Lines: l.Lines, Bytes: l.Bytes}
 }
 
 // applyLimit folds a configured bound over its package default dimension by dimension.

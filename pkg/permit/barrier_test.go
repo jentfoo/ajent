@@ -998,12 +998,12 @@ func TestClassifyCall(t *testing.T) {
 		tool string
 		want bool
 	}{
-		{"auto_shell", ModeAuto, bashTool, true},
+		{"auto_shell", ModeAuto, tools.ToolBash, true},
 		{"auto_mcp_tool", ModeAuto, "mcp__x", true},
-		{"autowrite_shell", ModeAutoWrite, bashTool, true},
+		{"autowrite_shell", ModeAutoWrite, tools.ToolBash, true},
 		{"autowrite_mcp_tool", ModeAutoWrite, "mcp__x", true},
-		{"allow_read_never", ModeAllowRead, bashTool, false},
-		{"block_all_never", ModeBlockAll, bashTool, false},
+		{"allow_read_never", ModeAllowRead, tools.ToolBash, false},
+		{"block_all_never", ModeBlockAll, tools.ToolBash, false},
 
 		// a core writer is decided statically; the model never gets to call one read-only
 		{"auto_write", ModeAuto, "write", false},
@@ -1020,7 +1020,7 @@ func TestClassifyCall(t *testing.T) {
 	}
 
 	t.Run("nil_classifier_never", func(t *testing.T) {
-		assert.False(t, newTestBarrier(nil).classifyCall(ModeAutoWrite, bashTool))
+		assert.False(t, newTestBarrier(nil).classifyCall(ModeAutoWrite, tools.ToolBash))
 	})
 }
 
@@ -1029,7 +1029,7 @@ func TestClassifySubject(t *testing.T) {
 
 	t.Run("shell_under_autowrite", func(t *testing.T) {
 		s := classifySubject(ModeAutoWrite, bashCall("rm f"))
-		assert.Equal(t, Subject{Name: bashTool, Args: "rm f", AllowWrite: true}, s)
+		assert.Equal(t, Subject{Name: tools.ToolBash, Args: "rm f", AllowWrite: true}, s)
 	})
 	t.Run("shell_under_auto", func(t *testing.T) {
 		s := classifySubject(ModeAuto, bashCall("rm f"))

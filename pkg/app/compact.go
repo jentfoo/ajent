@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -163,7 +163,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		instructions = c.focus() // a plan phase keeps its own focus across auto-compaction
 	}
 	opts := compact.Options{
-		Cwd:            cwdOrDot(),
+		Cwd:            config.Cwd(),
 		Instructions:   instructions,
 		Retain:         c.st.Reasoning.Retain,
 		Base:           base,

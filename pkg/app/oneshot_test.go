@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -43,38 +43,38 @@ func TestHeadlessTools(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		scope       toolScope
+		scope       ToolScope
 		allow, deny []string
 		want        []string
 	}{
 		{
 			name:  "default_drops_bash",
-			scope: scopeDefault,
+			scope: ToolScopeDefault,
 			want: []string{"agent_list", "agent_poll", "agent_start", "edit", "find",
 				"grep", "ls", "read", "srv__deploy", "srv__search", "write"},
 		},
 		{
 			name:  "allow_all_adds_bash",
-			scope: scopeAllowAll,
+			scope: ToolScopeAllowAll,
 			want: []string{"agent_list", "agent_poll", "agent_start", "bash", "edit",
 				"find", "grep", "ls", "read", "srv__deploy", "srv__search", "write"},
 		},
 		{
 			name:  "read_only_keeps_readers",
-			scope: scopeReadOnly,
+			scope: ToolScopeReadOnly,
 			want: []string{"agent_list", "agent_poll", "agent_start", "find", "grep",
 				"ls", "read", "srv__search"},
 		},
 		{
 			name:  "allow_tools_adds_bash",
-			scope: scopeDefault,
+			scope: ToolScopeDefault,
 			allow: []string{"bash"},
 			want: []string{"agent_list", "agent_poll", "agent_start", "bash", "edit",
 				"find", "grep", "ls", "read", "srv__deploy", "srv__search", "write"},
 		},
 		{
 			name:  "deny_tools_wins",
-			scope: scopeAllowAll,
+			scope: ToolScopeAllowAll,
 			allow: []string{"write"},
 			deny:  []string{"write", "edit", "bash"},
 			want: []string{"agent_list", "agent_poll", "agent_start", "find", "grep",
@@ -90,7 +90,7 @@ func TestHeadlessTools(t *testing.T) {
 
 	t.Run("applies_to_the_registry", func(t *testing.T) {
 		reg := scopeRegistry(t)
-		reg.SetEnabled(headlessTools(reg, scopeReadOnly, nil, nil))
+		reg.SetEnabled(headlessTools(reg, ToolScopeReadOnly, nil, nil))
 		_, ok := reg.Get("write")
 		assert.False(t, ok) // Get only returns enabled tools
 		_, ok = reg.Get("grep")
@@ -109,12 +109,12 @@ func TestHeadlessOutcome(t *testing.T) {
 		status string
 		code   int
 	}{
-		{"clean_answer", nil, agent.TurnResult{Stop: llm.StopEndTurn}, "hi", statusOK, exitOK},
-		{"prompt_error", errors.New("boom"), agent.TurnResult{}, "hi", statusError, exitTurn},
-		{"turn_error", nil, agent.TurnResult{Err: errors.New("boom")}, "hi", statusError, exitTurn},
-		{"stop_error", nil, agent.TurnResult{Stop: llm.StopError}, "hi", statusError, exitTurn},
-		{"aborted", nil, agent.TurnResult{Stop: llm.StopAborted}, "hi", statusEmpty, exitTurn},
-		{"no_answer", nil, agent.TurnResult{Stop: llm.StopEndTurn}, "", statusEmpty, exitTurn},
+		{"clean_answer", nil, agent.TurnResult{Stop: llm.StopEndTurn}, "hi", statusOK, ExitOK},
+		{"prompt_error", errors.New("boom"), agent.TurnResult{}, "hi", statusError, ExitTurn},
+		{"turn_error", nil, agent.TurnResult{Err: errors.New("boom")}, "hi", statusError, ExitTurn},
+		{"stop_error", nil, agent.TurnResult{Stop: llm.StopError}, "hi", statusError, ExitTurn},
+		{"aborted", nil, agent.TurnResult{Stop: llm.StopAborted}, "hi", statusEmpty, ExitTurn},
+		{"no_answer", nil, agent.TurnResult{Stop: llm.StopEndTurn}, "", statusEmpty, ExitTurn},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,7 +171,7 @@ func textAndCallTurn(text, id, name, args string) []llm.Event {
 // headlessHarness isolates a run: its own workspace, AJENT_HOME and scripted
 // provider, so nothing reaches the developer's real config or transcripts. A
 // non-empty projectCfg is written as the workspace's .ajent/config.json.
-func headlessHarness(t *testing.T, f cliFlags, projectCfg string, turns []llm.ScriptedTurn) (int, string, string) {
+func headlessHarness(t *testing.T, o HeadlessOptions, projectCfg string, turns []llm.ScriptedTurn) (int, string, string) {
 	t.Helper()
 	t.Chdir(t.TempDir())
 	t.Setenv("AJENT_HOME", t.TempDir())
@@ -180,33 +180,40 @@ func headlessHarness(t *testing.T, f cliFlags, projectCfg string, turns []llm.Sc
 		require.NoError(t, os.WriteFile(filepath.Join(".ajent", "config.json"), []byte(projectCfg), 0o600))
 	}
 
-	set, _, err := config.Load(config.Options{Workspace: cwdOrDot()})
-	require.NoError(t, err)
-	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+	o.Set = loadTestConfig(t)
+	o.Reg, _ = llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	if o.Active.ID == "" {
+		o.Active = llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+	}
 	sp := &llm.ScriptedProvider{ProviderName: "p", Turns: turns}
-
 	var out, errw bytes.Buffer
-	code := runHeadless(headlessOptions{
-		flags: f, set: set, reg: reg, active: model, sessMode: modeNewSession,
-		out: &out, errw: &errw,
-		provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
-	})
+	o.Out, o.Errw = &out, &errw
+	o.Provider = func(llm.Model) (llm.Provider, error) { return sp, nil }
+
+	code := RunHeadless(o)
 	return code, out.String(), errw.String()
+}
+
+// loadTestConfig loads config for the harness's isolated workspace.
+func loadTestConfig(t *testing.T) *config.Set {
+	t.Helper()
+	set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
+	require.NoError(t, err)
+	return set
 }
 
 func TestRunHeadless(t *testing.T) {
 	t.Run("text_answer_exits_zero", func(t *testing.T) {
-		code, out, _ := headlessHarness(t, cliFlags{prompt: "hi", output: outputText}, "",
+		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("all done")}})
-		assert.Equal(t, exitOK, code)
+		assert.Equal(t, ExitOK, code)
 		assert.Equal(t, "all done\n", out)
 	})
 
 	t.Run("json_stream_ends_in_result", func(t *testing.T) {
-		code, out, _ := headlessHarness(t, cliFlags{prompt: "hi", output: outputJSON}, "",
+		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputJSON}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("all done")}})
-		assert.Equal(t, exitOK, code)
+		assert.Equal(t, ExitOK, code)
 
 		lines := decodeLines(t, out)
 		require.NotEmpty(t, lines)
@@ -217,26 +224,25 @@ func TestRunHeadless(t *testing.T) {
 	})
 
 	t.Run("empty_answer_exits_two", func(t *testing.T) {
-		code, out, _ := headlessHarness(t, cliFlags{prompt: "hi", output: outputText}, "",
+		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("")}})
-		assert.Equal(t, exitTurn, code)
+		assert.Equal(t, ExitTurn, code)
 		assert.Empty(t, out)
 	})
 
 	t.Run("provider_error_exits_two", func(t *testing.T) {
-		code, _, _ := headlessHarness(t, cliFlags{prompt: "hi", output: outputText}, "",
+		code, _, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText}, "",
 			[]llm.ScriptedTurn{{Err: errors.New("no credentials")}})
-		assert.Equal(t, exitTurn, code)
+		assert.Equal(t, ExitTurn, code)
 	})
 
 	t.Run("tool_call_runs_at_allow_all", func(t *testing.T) {
-		code, out, _ := headlessHarness(t,
-			cliFlags{prompt: "hi", output: outputJSON, allowAll: true}, "",
+		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputJSON, Scope: ToolScopeAllowAll}, "",
 			[]llm.ScriptedTurn{
 				{Events: devCallTurn("c1", "bash", `{"command":"echo hello"}`)},
 				{Events: textTurn("it said hello")},
 			})
-		assert.Equal(t, exitOK, code)
+		assert.Equal(t, ExitOK, code)
 
 		lines := decodeLines(t, out)
 		var result map[string]any
@@ -251,14 +257,13 @@ func TestRunHeadless(t *testing.T) {
 	})
 
 	t.Run("denied_command_still_completes", func(t *testing.T) {
-		code, out, _ := headlessHarness(t,
-			cliFlags{prompt: "hi", output: outputJSON, allowAll: true},
+		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputJSON, Scope: ToolScopeAllowAll},
 			`{"permissions":{"deniedCommands":["echo"]}}`,
 			[]llm.ScriptedTurn{
 				{Events: devCallTurn("c1", "bash", `{"command":"echo hello"}`)},
 				{Events: textTurn("that was refused")},
 			})
-		assert.Equal(t, exitOK, code) // a denial is a tool result; the turn adapts
+		assert.Equal(t, ExitOK, code) // a denial is a tool result; the turn adapts
 
 		lines := decodeLines(t, out)
 		var result map[string]any
@@ -273,13 +278,12 @@ func TestRunHeadless(t *testing.T) {
 	})
 
 	t.Run("text_streams_every_step", func(t *testing.T) {
-		code, out, errw := headlessHarness(t,
-			cliFlags{prompt: "hi", output: outputText, allowAll: true}, "",
+		code, out, errw := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAllowAll}, "",
 			[]llm.ScriptedTurn{
 				{Events: textAndCallTurn("let me check", "c1", "bash", `{"command":"echo hello"}`)},
 				{Events: textTurn("all done")},
 			})
-		assert.Equal(t, exitOK, code)
+		assert.Equal(t, ExitOK, code)
 		assert.Equal(t, "let me check\nall done\n", out) // prose from both steps, in order
 		assert.Contains(t, errw, "ajent: tool: ")        // progress never touches stdout
 	})
@@ -290,22 +294,22 @@ func TestRunHeadless(t *testing.T) {
 		t.Setenv("AJENT_HOME", t.TempDir())
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
 
-		set, _, err := config.Load(config.Options{Workspace: cwdOrDot()})
+		set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
 		require.NoError(t, err)
 		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 		sp := &llm.ScriptedProvider{ProviderName: "p",
 			Turns: []llm.ScriptedTurn{{Events: textTurn("package a")}}}
 
 		var out, errw bytes.Buffer
-		code := runHeadless(headlessOptions{
-			flags:  cliFlags{prompt: "explain @a.go", output: outputText},
-			set:    set,
-			reg:    reg,
-			active: llm.Model{Provider: "p", ID: "m", ContextWindow: 100000},
-			out:    &out, errw: &errw,
-			provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		code := RunHeadless(HeadlessOptions{
+			Prompt: "explain @a.go", Output: OutputText,
+			Set:    set,
+			Reg:    reg,
+			Active: llm.Model{Provider: "p", ID: "m", ContextWindow: 100000},
+			Out:    &out, Errw: &errw,
+			Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
 		})
-		require.Equal(t, exitOK, code)
+		require.Equal(t, ExitOK, code)
 
 		reqs := sp.Requests()
 		require.Len(t, reqs, 1)
@@ -324,25 +328,25 @@ func TestRunHeadless(t *testing.T) {
 	t.Run("continue_resumes_the_transcript", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv("AJENT_HOME", t.TempDir())
-		set, _, err := config.Load(config.Options{Workspace: cwdOrDot()})
+		set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
 		require.NoError(t, err)
 		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 		model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
 
-		run := func(prompt string, mode resumeMode, turns []llm.ScriptedTurn) *llm.ScriptedProvider {
+		run := func(prompt string, mode ResumeMode, turns []llm.ScriptedTurn) *llm.ScriptedProvider {
 			sp := &llm.ScriptedProvider{ProviderName: "p", Turns: turns}
 			var out, errw bytes.Buffer
-			code := runHeadless(headlessOptions{
-				flags: cliFlags{prompt: prompt, output: outputText}, set: set, reg: reg,
-				active: model, sessMode: mode, out: &out, errw: &errw,
-				provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+			code := RunHeadless(HeadlessOptions{
+				Prompt: prompt, Output: OutputText, Set: set, Reg: reg,
+				Active: model, SessMode: mode, Out: &out, Errw: &errw,
+				Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
 			})
-			require.Equal(t, exitOK, code, errw.String())
+			require.Equal(t, ExitOK, code, errw.String())
 			return sp
 		}
 
-		run("first question", modeNewSession, []llm.ScriptedTurn{{Events: textTurn("first answer")}})
-		sp := run("second question", modeContinue, []llm.ScriptedTurn{{Events: textTurn("second answer")}})
+		run("first question", ResumeNewSession, []llm.ScriptedTurn{{Events: textTurn("first answer")}})
+		sp := run("second question", ResumeContinue, []llm.ScriptedTurn{{Events: textTurn("second answer")}})
 
 		// the resumed branch reaches the provider, so the model sees the prior turn
 		reqs := sp.Requests()
@@ -363,7 +367,7 @@ func TestRunHeadless(t *testing.T) {
 	t.Run("session_name_resumes_the_transcript", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv("AJENT_HOME", t.TempDir())
-		set, _, err := config.Load(config.Options{Workspace: cwdOrDot()})
+		set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
 		require.NoError(t, err)
 		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 		model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
@@ -371,13 +375,13 @@ func TestRunHeadless(t *testing.T) {
 		run := func(prompt string, turns []llm.ScriptedTurn) *llm.ScriptedProvider {
 			sp := &llm.ScriptedProvider{ProviderName: "p", Turns: turns}
 			var out, errw bytes.Buffer
-			code := runHeadless(headlessOptions{
-				flags: cliFlags{prompt: prompt, output: outputText}, set: set, reg: reg,
-				active: model, sessMode: modeSessionName, sessTarget: "nightly",
-				out: &out, errw: &errw,
-				provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+			code := RunHeadless(HeadlessOptions{
+				Prompt: prompt, Output: OutputText, Set: set, Reg: reg,
+				Active: model, SessMode: ResumeSessionName, SessTarget: "nightly",
+				Out: &out, Errw: &errw,
+				Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
 			})
-			require.Equal(t, exitOK, code, errw.String())
+			require.Equal(t, ExitOK, code, errw.String())
 			return sp
 		}
 
@@ -400,7 +404,7 @@ func TestRunHeadless(t *testing.T) {
 
 		store, serr := session.NewStore()
 		require.NoError(t, serr)
-		list, lerr := store.List(cwdOrDot())
+		list, lerr := store.List(config.Cwd())
 		require.NoError(t, lerr)
 		require.Len(t, list, 1) // one transcript, reused by name
 		assert.Equal(t, "nightly", list[0].Name)
@@ -409,16 +413,16 @@ func TestRunHeadless(t *testing.T) {
 	t.Run("no_model_exits_one", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv("AJENT_HOME", t.TempDir())
-		set, _, err := config.Load(config.Options{Workspace: cwdOrDot()})
+		set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
 		require.NoError(t, err)
 		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
 		var out, errw bytes.Buffer
-		code := runHeadless(headlessOptions{
-			flags: cliFlags{prompt: "hi"}, set: set, reg: reg,
-			sessMode: modeNewSession, out: &out, errw: &errw,
+		code := RunHeadless(HeadlessOptions{
+			Prompt: "hi", Set: set, Reg: reg,
+			SessMode: ResumeNewSession, Out: &out, Errw: &errw,
 		})
-		assert.Equal(t, exitUsage, code)
+		assert.Equal(t, ExitUsage, code)
 		assert.Contains(t, errw.String(), "no model configured")
 	})
 }

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"encoding/json"
@@ -39,6 +39,14 @@ func levelName(l agent.Level) string {
 	default:
 		return "info"
 	}
+}
+
+// agentLevelOf maps a warn flag onto a notice level.
+func agentLevelOf(warn bool) agent.Level {
+	if warn {
+		return agent.LevelWarn
+	}
+	return agent.LevelInfo
 }
 
 // textSink streams the model's prose to stdout as it arrives and reports

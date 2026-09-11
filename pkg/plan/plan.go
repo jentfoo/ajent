@@ -57,7 +57,7 @@ func (p Phase) String() string {
 // active reports whether a workflow is running in this phase.
 func (p Phase) active() bool { return p != PhaseIdle && p != PhaseDone }
 
-// Host is the driver-supplied surface a workflow drives. main.go wires each
+// Host is the driver-supplied surface a workflow drives. The host wires each
 // field; a nil field disables that capability rather than panicking.
 type Host struct {
 	PickModel   func(ctx context.Context, title string) (llm.Model, bool)

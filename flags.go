@@ -11,24 +11,15 @@ import (
 
 	"github.com/spf13/pflag"
 
+	"github.com/jentfoo/ajent/pkg/app"
 	"github.com/jentfoo/ajent/pkg/session"
-)
-
-// Exit codes a script can branch on. They are the same for text and json output.
-const (
-	exitOK    = 0 // the turn completed and produced a final answer
-	exitUsage = 1 // bad flags, unknown model, or any setup failure before the turn
-	exitTurn  = 2 // the turn itself failed, was interrupted, or produced nothing
-)
-
-// Output shapes for a one-shot run.
-const (
-	outputText = "text"
-	outputJSON = "json"
 )
 
 // headlessFlagNames are the flags that only mean something alongside --prompt.
 var headlessFlagNames = []string{"output", "allow-all", "read-only", "allow-tools", "deny-tools", "stats"}
+
+// defaultStaleDays is the --delete-old window when no day count is given.
+const defaultStaleDays = 28
 
 // cliFlags is one parsed command line. The headless fields apply only when
 // prompt is set.
@@ -92,7 +83,7 @@ func parseFlags(argv []string) (cliFlags, error) {
 	fs.BoolVar(&f.update, "update", false, "reinstall ajent from @latest then exit")
 	fs.StringVarP(&f.prompt, "prompt", "p", "",
 		"run one turn non-interactively from this prompt, print the result and exit")
-	fs.StringVarP(&f.output, "output", "o", outputText,
+	fs.StringVarP(&f.output, "output", "o", app.OutputText,
 		"one-shot output shape: text (the final answer) or json (one event per line)")
 	fs.BoolVar(&f.allowAll, "allow-all", false, "one-shot: offer every tool, bash included")
 	fs.BoolVar(&f.readOnly, "read-only", false, "one-shot: offer only read-only tools")
@@ -176,20 +167,57 @@ func (f cliFlags) validate() error {
 		return errors.New("--prompt needs --resume <id|name>; the bare session picker requires a terminal")
 	case len(f.args) > 0:
 		return errors.New("--prompt takes the whole prompt; remove the trailing arguments")
-	case !slices.Contains([]string{outputText, outputJSON}, f.output):
+	case !slices.Contains([]string{app.OutputText, app.OutputJSON}, f.output):
 		return fmt.Errorf("unknown --output %q, want text or json", f.output)
 	}
 	return nil
 }
 
 // scope returns the tool scope this command line asks for.
-func (f cliFlags) scope() toolScope {
+func (f cliFlags) scope() app.ToolScope {
 	switch {
 	case f.allowAll:
-		return scopeAllowAll
+		return app.ToolScopeAllowAll
 	case f.readOnly:
-		return scopeReadOnly
+		return app.ToolScopeReadOnly
 	default:
-		return scopeDefault
+		return app.ToolScopeDefault
 	}
+}
+
+// extractOptional lifts a flag with an optional trailing value out of argv.
+func extractOptional(argv []string, name string, takes func(string) bool) (given bool, val string, rest []string) {
+	rest = make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--"+name || a == "-"+name:
+			given = true
+			if i+1 < len(argv) && takes(argv[i+1]) {
+				val, i = strings.TrimSpace(argv[i+1]), i+1 // consume the value token
+			}
+		case strings.HasPrefix(a, "--"+name+"="):
+			given = true
+			val = a[len("--"+name+"="):]
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return given, val, rest
+}
+
+// extractResume lifts --resume and its optional session id out of argv.
+func extractResume(argv []string) (given bool, id string, rest []string) {
+	// an id or name is opaque, so any non-flag token is it
+	return extractOptional(argv, "resume", func(s string) bool { return !strings.HasPrefix(s, "-") })
+}
+
+// extractDeleteOld lifts --delete-old and its optional trailing day count out
+// of argv. A bare `--delete-old` means the default window.
+func extractDeleteOld(argv []string) (given bool, days string, rest []string) {
+	// only a day count is the value, so a stray token stays a positional validate
+	// can name as a bad day count
+	return extractOptional(argv, "delete-old", func(s string) bool {
+		return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+	})
 }

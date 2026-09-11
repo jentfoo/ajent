@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/go-analyze/bulk"
+	"github.com/jentfoo/ajent/pkg/config"
 )
 
 // Request is one model call.
@@ -257,3 +258,17 @@ func (p *RetainPolicy) UnmarshalText(data []byte) error {
 
 // ParseRetain returns the retention policy named by s.
 func ParseRetain(s string) (RetainPolicy, bool) { return retainNames.lookup(s) }
+
+// ReasoningFrom resolves a config reasoning block against m, falling back to
+// the compiled-in defaults when a name is absent or unparsable.
+func ReasoningFrom(r config.Reasoning, m Model) ReasoningConfig {
+	lvl := LevelMedium
+	if l, ok := ParseLevel(r.Level); ok && r.Level != "" {
+		lvl = ClampLevel(m, l)
+	}
+	retain := RetainWholeTurn
+	if p, ok := ParseRetain(r.Retain); ok && r.Retain != "" {
+		retain = p
+	}
+	return ReasoningConfig{Level: lvl, Retain: retain, Show: r.Show}
+}

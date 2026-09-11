@@ -607,7 +607,7 @@ review keeps files inspected, issues found and conclusions reached.
 
 All three prompts live in **`pkg/permit`** (`ClassifierSystem`, `MCPClassifierSystem`,
 `WorkspaceClassifierSystem`), the package that owns the `Classifier` interface, not
-`main.go`. The shell prompt keeps its strict unconditional bar (running arbitrary
+`pkg/app`. The shell prompt keeps its strict unconditional bar (running arbitrary
 software is always a write); the MCP variant states the no-observable-change and
 network-exfiltration rules. A call is classified with one fresh-context request to
 the session's current model (never the session history), and the verdict never enters

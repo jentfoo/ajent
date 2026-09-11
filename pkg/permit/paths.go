@@ -76,7 +76,7 @@ func (s writeScope) allows(call agent.ToolCall) bool {
 	if len(s.roots) == 0 {
 		return false
 	}
-	if call.Name == bashTool {
+	if call.Name == tools.ToolBash {
 		rebased, ok := s.rebase(bashCwd(call.Input))
 		if !ok {
 			return false // the shell would run somewhere the scope does not cover

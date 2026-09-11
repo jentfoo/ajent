@@ -11,6 +11,9 @@ import (
 // its own copy (readOnlyBuiltins) because it may not import this package.
 var ReadOnlyBuiltins = []string{"read", "grep", "find", "ls"}
 
+// ToolAskUser is the built-in question tool's name.
+const ToolAskUser = "ask_user"
+
 // Options configures the built-in tool set.
 type Options struct {
 	Cwd       string // base for relative paths; empty uses os.Getwd
@@ -45,7 +48,7 @@ func Builtins(opts Options) (*Registry, error) {
 	reg.Register(&lsTool{policy: policy}, false)
 	reg.Register(&askUserTool{ask: opts.Ask}, false)
 	// a question changes nothing on disk, so it never needs approval
-	reg.MarkReadOnly([]string{"ask_user"})
+	reg.MarkReadOnly([]string{ToolAskUser})
 	return reg, nil
 }
 

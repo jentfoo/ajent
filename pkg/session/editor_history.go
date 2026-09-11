@@ -61,7 +61,7 @@ func (h *EditorHistory) AppendHidden(msg string) { h.append(msg, true) }
 // Messages prefixed by the secret marker and blank messages never reach disk; errors
 // are dropped because history is best effort. A nil receiver is a no-op.
 func (h *EditorHistory) append(msg string, hidden bool) {
-	if h == nil || msg == "" { // nil receiver keeps main.go free of guards
+	if h == nil || msg == "" { // nil receiver keeps callers free of guards
 		return
 	}
 	msg = strings.TrimRight(msg, "\r")

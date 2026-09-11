@@ -1,4 +1,4 @@
-package main
+package session
 
 import (
 	"bytes"
@@ -7,61 +7,30 @@ import (
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestExtractDeleteOld(t *testing.T) {
-	t.Parallel()
-
-	given, days, rest := extractDeleteOld([]string{"--delete-old", "14"})
-	assert.True(t, given)
-	assert.Equal(t, "14", days)
-	assert.Empty(t, rest)
-
-	// bare --delete-old (no trailing token) -> the default window.
-	given, days, rest = extractDeleteOld([]string{"--delete-old"})
-	assert.True(t, given)
-	assert.Empty(t, days)
-	assert.Empty(t, rest)
-
-	// only a day count is the value; anything else stays a positional the flag
-	// parser can reject.
-	given, days, rest = extractDeleteOld([]string{"--delete-old", "soon"})
-	assert.True(t, given)
-	assert.Empty(t, days)
-	assert.Equal(t, []string{"soon"}, rest)
-
-	// the = form carries the count too.
-	_, days, _ = extractDeleteOld([]string{"--delete-old=7", "-m", "p/m"})
-	assert.Equal(t, "7", days)
-
-	given, _, rest = extractDeleteOld([]string{"-m", "p/m"})
-	assert.False(t, given)
-	assert.Equal(t, []string{"-m", "p/m"}, rest)
-}
-
 // deleteWorkspace points the cwd and AJENT_HOME at fresh temp dirs so a case sees
 // only the sessions it writes.
-func deleteWorkspace(t *testing.T) (*session.Store, string) {
+func deleteWorkspace(t *testing.T) (*Store, string) {
 	t.Helper()
 	ws := t.TempDir()
 	t.Chdir(ws)
 	t.Setenv("AJENT_HOME", t.TempDir())
-	store, err := session.NewStore()
+	store, err := NewStore()
 	require.NoError(t, err)
 	return store, ws
 }
 
 // writeDeletableSession saves a one-message session, named when name is set, and
 // returns its root id.
-func writeDeletableSession(t *testing.T, store *session.Store, ws, name string) string {
+func writeDeletableSession(t *testing.T, store *Store, ws, name string) string {
 	t.Helper()
-	w, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: name})
+	w, err := store.Create(ws, SessionData{Version: Version(), Name: name})
 	require.NoError(t, err)
 	id := w.Head() // the session entry, before any message advances the cursor
-	_, aerr := w.Append(session.TypeMessage, session.MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+	_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello")})
 	require.NoError(t, aerr)
 	require.NoError(t, w.Close())
 	return id
@@ -73,7 +42,7 @@ func TestDeleteSession(t *testing.T) {
 		writeDeletableSession(t, store, ws, "fix-parser")
 
 		var buf bytes.Buffer
-		require.NoError(t, deleteSession(&buf, store, ws, "fix-parser"))
+		require.NoError(t, DeleteSession(&buf, store, ws, "fix-parser"))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -86,7 +55,7 @@ func TestDeleteSession(t *testing.T) {
 		id := writeDeletableSession(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, deleteSession(&buf, store, ws, id[:10]))
+		require.NoError(t, DeleteSession(&buf, store, ws, id[:10]))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -99,7 +68,7 @@ func TestDeleteSession(t *testing.T) {
 		keep := writeDeletableSession(t, store, ws, "keep-me")
 
 		var buf bytes.Buffer
-		require.NoError(t, deleteSession(&buf, store, ws, "drop-me"))
+		require.NoError(t, DeleteSession(&buf, store, ws, "drop-me"))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -111,7 +80,7 @@ func TestDeleteSession(t *testing.T) {
 		store, ws := deleteWorkspace(t)
 
 		var buf bytes.Buffer
-		err := deleteSession(&buf, store, ws, "no-such-session")
+		err := DeleteSession(&buf, store, ws, "no-such-session")
 		assert.ErrorContains(t, err, "no session matches")
 	})
 }
@@ -128,7 +97,7 @@ func TestDeleteOldSessions(t *testing.T) {
 		keep := writeDeletableSession(t, store, ws, "keep-me")
 
 		var buf bytes.Buffer
-		require.NoError(t, deleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, future))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, future))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -142,7 +111,7 @@ func TestDeleteOldSessions(t *testing.T) {
 		writeDeletableSession(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, deleteOldSessions(&buf, strings.NewReader("n\n"), store, ws, future))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("n\n"), store, ws, future))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -150,13 +119,12 @@ func TestDeleteOldSessions(t *testing.T) {
 		assert.Contains(t, buf.String(), "Cancelled")
 	})
 
-	// no terminal to answer the prompt declines rather than deleting blind
 	t.Run("eof_declines", func(t *testing.T) {
 		store, ws := deleteWorkspace(t)
 		writeDeletableSession(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, deleteOldSessions(&buf, strings.NewReader(""), store, ws, future))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader(""), store, ws, future))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -170,48 +138,11 @@ func TestDeleteOldSessions(t *testing.T) {
 
 		var buf bytes.Buffer
 		past := time.Now().UTC().AddDate(0, 0, -28)
-		require.NoError(t, deleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, past))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, past))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
 		assert.Len(t, list, 1)
-		assert.Contains(t, buf.String(), "No unnamed sessions")
-	})
-}
-
-func TestRunDelete(t *testing.T) {
-	t.Run("delete_reports_ok", func(t *testing.T) {
-		store, ws := deleteWorkspace(t)
-		writeDeletableSession(t, store, ws, "fix-parser")
-
-		var buf bytes.Buffer
-		code := runDelete(&buf, strings.NewReader(""), cliFlags{deleteGiven: true, deleteTarget: "fix-parser"})
-		assert.Equal(t, exitOK, code)
-
-		list, err := store.List(ws)
-		require.NoError(t, err)
-		assert.Empty(t, list)
-	})
-
-	t.Run("unknown_target_reports_usage", func(t *testing.T) {
-		deleteWorkspace(t)
-
-		var buf bytes.Buffer
-		code := runDelete(&buf, strings.NewReader(""), cliFlags{deleteGiven: true, deleteTarget: "no-such"})
-		assert.Equal(t, exitUsage, code)
-	})
-
-	t.Run("delete_old_uses_the_window", func(t *testing.T) {
-		store, ws := deleteWorkspace(t)
-		writeDeletableSession(t, store, ws, "")
-
-		var buf bytes.Buffer
-		code := runDelete(&buf, strings.NewReader("y\n"), cliFlags{deleteOld: true, deleteOldDays: defaultStaleDays})
-		assert.Equal(t, exitOK, code)
-
-		list, err := store.List(ws)
-		require.NoError(t, err)
-		assert.Len(t, list, 1) // a session written just now is not stale
 		assert.Contains(t, buf.String(), "No unnamed sessions")
 	})
 }

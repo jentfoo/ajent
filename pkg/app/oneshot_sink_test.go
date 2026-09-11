@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -47,7 +47,7 @@ func TestTextSink(t *testing.T) {
 		s.Text("answer")
 		s.EndText()
 		s.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn, Steps: 2})
-		s.finish(statusOK, exitOK, "the answer")
+		s.finish(statusOK, ExitOK, "the answer")
 
 		assert.Equal(t, "the answer\n", out.String()) // not printed twice by finish
 		assert.Empty(t, errw.String())
@@ -62,7 +62,7 @@ func TestTextSink(t *testing.T) {
 		s.EndText()
 		s.Text("second\n") // already terminated, no extra newline
 		s.EndText()
-		s.finish(statusOK, exitOK, "")
+		s.finish(statusOK, ExitOK, "")
 
 		assert.Equal(t, "first\nsecond\n", out.String())
 	})
@@ -77,7 +77,7 @@ func TestTextSink(t *testing.T) {
 		s.EndText()
 		s.Text("done")
 		s.EndText()
-		s.finish(statusOK, exitOK, "")
+		s.finish(statusOK, ExitOK, "")
 
 		assert.Equal(t, "done\n", out.String())
 	})
@@ -89,7 +89,7 @@ func TestTextSink(t *testing.T) {
 		s.Text("\n") // interior break, kept once content follows
 		s.Text("para two\n\n\n")
 		s.EndText()
-		s.finish(statusOK, exitOK, "")
+		s.finish(statusOK, ExitOK, "")
 
 		assert.Equal(t, "para one\n\npara two\n", out.String())
 	})
@@ -116,7 +116,7 @@ func TestTextSink(t *testing.T) {
 		var out, errw bytes.Buffer
 		s := newTextSink(&out, &errw)
 		s.Notice("careful", agent.LevelWarn)
-		s.finish(statusEmpty, exitTurn, "")
+		s.finish(statusEmpty, ExitTurn, "")
 
 		assert.Empty(t, out.String()) // no prose, nothing printed
 		assert.Equal(t, "ajent: warn: careful\n", errw.String())
@@ -139,7 +139,7 @@ func TestJSONSink(t *testing.T) {
 		s.Text("answer")
 		s.EndText()
 		s.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn, Steps: 2, Usage: llm.Usage{Input: 10, Output: 3}})
-		s.finish(statusOK, exitOK, "the answer")
+		s.finish(statusOK, ExitOK, "the answer")
 
 		lines := decodeLines(t, out.String())
 		kinds := make([]string, 0, len(lines))
@@ -159,7 +159,7 @@ func TestJSONSink(t *testing.T) {
 
 		last := lines[len(lines)-1]
 		assert.Equal(t, statusOK, last["status"])
-		assert.Equal(t, exitOK, jsonInt(t, last, "exit"))
+		assert.Equal(t, ExitOK, jsonInt(t, last, "exit"))
 		assert.Equal(t, "the answer", last["text"])
 	})
 
@@ -170,7 +170,7 @@ func TestJSONSink(t *testing.T) {
 		done := s.ToolStart(agent.ToolCall{ID: "c1", Name: "bash"}, "bash")
 		done(agent.ToolResult{IsError: true, Content: llm.BlockList{llm.TextBlock{Text: "refused"}}})
 		s.Notice("heads up", agent.LevelWarn)
-		s.finish(statusEmpty, exitTurn, "")
+		s.finish(statusEmpty, ExitTurn, "")
 
 		lines := decodeLines(t, out.String())
 		require.Len(t, lines, 4)
@@ -178,7 +178,7 @@ func TestJSONSink(t *testing.T) {
 		assert.Equal(t, "refused", lines[1]["output"]) // falls back to the first text block
 		assert.Equal(t, "notice", lines[2]["type"])
 		assert.Equal(t, "warn", lines[2]["level"])
-		assert.Equal(t, exitTurn, jsonInt(t, lines[3], "exit"))
+		assert.Equal(t, ExitTurn, jsonInt(t, lines[3], "exit"))
 		assert.NotContains(t, lines[3], "text") // no answer, no text field
 	})
 
@@ -187,7 +187,7 @@ func TestJSONSink(t *testing.T) {
 		s := newJSONSink(&out)
 		s.Text("   ")
 		s.EndText()
-		s.finish(statusEmpty, exitTurn, "")
+		s.finish(statusEmpty, ExitTurn, "")
 
 		lines := decodeLines(t, out.String())
 		require.Len(t, lines, 1)

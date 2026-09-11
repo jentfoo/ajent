@@ -29,12 +29,12 @@ type askUserTool struct {
 
 var _ agent.Tool = (*askUserTool)(nil)
 
-func (t *askUserTool) Name() string { return "ask_user" }
+func (t *askUserTool) Name() string { return ToolAskUser }
 
 func (t *askUserTool) Label(call agent.ToolCall) string {
 	var p askParams
 	if err := decode(call.Input, &p); err != nil || strings.TrimSpace(p.Question) == "" {
-		return "ask_user"
+		return ToolAskUser
 	}
 	return "ask: " + strings.TrimSpace(strutil.FirstLine(p.Question))
 }

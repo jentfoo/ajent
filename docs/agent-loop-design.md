@@ -20,8 +20,8 @@ same lock.
 
 `Prompt(ctx, input)` runs `input` to completion including any follow-up queued
 while it ran, and returns when both queues are empty or the context ends. It is
-single-owner: only one goroutine drives turns at a time (in `cmd/ajent`, that is
-the main message loop). Mid-turn input goes through `Steer` / `FollowUp`, never
+single-owner: only one goroutine drives turns at a time (the interactive
+message loop drives them). Mid-turn input goes through `Steer` / `FollowUp`, never
 a concurrent second `Prompt`.
 
 ## The sink, not the UI
@@ -36,7 +36,7 @@ marker), tool starts plus their incremental output and progress while a call is
 still being composed, rendered diffs, usage and context-state reports, notices,
 and the final `TurnEnd` outcome.
 
-`cmd/ajent` provides a `tuisink` that maps these almost 1:1 onto `tui.UI`.
+`pkg/tui/sink` maps these almost 1:1 onto `tui.UI`.
 `NopSink` discards everything; a headless child agent uses it as an embedded
 base and overrides only the events that feed its activity row.
 
@@ -210,7 +210,7 @@ thinking block.
 Interruption is cancellation, not draining:
 
 - `Prompt` derives a cancellable context and stores its cancel func under the
-  agent mutex; `Agent.Interrupt()` calls it. Key handling in `cmd/ajent` never
+  agent mutex; `Agent.Interrupt()` calls it. Key handling never
   touches the agent's internals.
 - `a.stream` starts one watcher goroutine that calls `stream.Close()` on
   `ctx.Done()`, via the shared `llm.CloseOnDone` helper. Close abandons buffered
@@ -346,7 +346,7 @@ survey, staged shell results), never a typed prompt, so recall excludes all of i
   step before any input drains and may block while the user finishes a message. It
   takes the turn's context, so `Interrupt` releases it; draining happens after it
   returns, so anything arriving during the hold lands in this same boundary. The
-  host typing hold is `main.go`. nil disables.
+  interactive driver's typing hold supplies it. nil disables.
 - **`Options.OnToolBatch`**, when set, runs on the loop goroutine at the top of
   `dispatch`, before any call runs, with one step's calls in message order and the
   turn's context (cancelled on abort). The parallel path races the calls against each
@@ -370,7 +370,7 @@ fan-out makes that event available to a second consumer.
 
 A front end that also needs the boundary reached on **errored** turns, as the plan
 workflow's implementor-retry rule does, hooks the driver's own drain loop rather
-than the agent: `main.go` consults its `planHooks.advance` after every
+than the agent: the driver consults its `planHooks.advance` after every
 `ag.Prompt` return, reading the last `TurnResult` from a `turnRecorder` sink
 (an `agent.NopSink` embed overriding `TurnEnd`). The agent is idle at that point,
 so `WithState` is legal and a returned input continues the same drain loop with

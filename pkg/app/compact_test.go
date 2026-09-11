@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -559,9 +559,8 @@ func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 	}
 	for _, m := range msgs {
 		st.Messages = append(st.Messages, m)
-		if _, err := w.Append(session.TypeMessage, session.MessageData{Message: m}); err != nil {
-			t.Fatal(err)
-		}
+		_, err := w.Append(session.TypeMessage, session.MessageData{Message: m})
+		require.NoError(t, err)
 	}
 	// a settled calibrator overestimates raw estimates and a large ledger base sits
 	// on top; both must apply to the reseed exactly as they do to every estimate.

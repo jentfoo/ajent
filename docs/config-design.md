@@ -117,7 +117,7 @@ layer, so `Explain("agent.maxSteps")` reports `(default)` and an empty value
 means **unlimited**, the zero value of `agent.Options.MaxSteps` (see
 agent-loop-design.md). `AJENT_AGENT_MAXSTEPS` binds for free through EnvLayer;
 a positive value caps the turn, any non-positive value (or none) leaves it
-uncapped. It is startup-time configuration: main.go copies it into
+uncapped. It is startup-time configuration: pkg/app copies it into
 `agent.Options.MaxSteps` once at process start, so it is deliberately absent
 from `/settings`, whose session overrides could never reach the running agent.
 
@@ -178,7 +178,7 @@ best-effort, so a broken cache directory cannot break startup.
 
 The notice can be switched off entirely with `disableUpdateCheck` (a top-level
 Settings bool, env `AJENT_DISABLEUPDATECHECK`). It is read once at startup in
-main.go and deliberately has no `/settings` row, like `agent.maxSteps`. A
+pkg/app and deliberately has no `/settings` row, like `agent.maxSteps`. A
 session override could never reach the already-running check.
 
 ## The rule
