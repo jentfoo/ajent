@@ -133,8 +133,8 @@ permissions, token accounting and the sub-agent treat it like any built-in.
   goroutine at this boundary, so no current or future ajent handler can ever stall mcp-go.
 - **Progress** — mcp-go's progress notifications are written to the tool's output
   stream, so a call's progress shows up where its output does.
-- Output volume is bounded with head/tail elision so one bridged call cannot flood the
-  model.
+- Output volume is bounded by the registry's generic output limit, so one
+  bridged call cannot flood the model. See `tools-design.md`.
 
 
 ## Server manager (`manager.go`)

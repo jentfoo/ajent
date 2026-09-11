@@ -82,7 +82,36 @@ func TestRead(t *testing.T) {
 		out := textOf(res)
 		// the Display header names exactly what was shown, even when cut short
 		assert.Contains(t, res.Display, "big.txt:1-200\n")
-		assert.Contains(t, out, "... truncated at line 200, read again with offset=201")
+		assert.Contains(t, out, "... truncated at line 200 of 3000 (2800 more); read again with offset=201")
+	})
+
+	// a range wider than the limit is refused rather than silently paged
+	t.Run("range_over_limit_is_error", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		var b strings.Builder
+		for i := 1; i <= 3000; i++ {
+			fmt.Fprintf(&b, "line %d\n", i)
+		}
+		e.writeFile("big.txt", b.String())
+
+		res := e.readExec(t.Context(), `{"path":"big.txt","limit":1500}`)
+		assert.True(t, res.IsError)
+		assert.Contains(t, textOf(res), "exceeds the maximum of 1000 lines")
+		assert.Contains(t, textOf(res), "page with offset")
+	})
+
+	// a window at the limit succeeds; the limit itself is not an error
+	t.Run("range_at_limit_ok", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		var b strings.Builder
+		for i := 1; i <= 1200; i++ {
+			fmt.Fprintf(&b, "line %d\n", i)
+		}
+		e.writeFile("big.txt", b.String())
+
+		res := e.readExec(t.Context(), `{"path":"big.txt","limit":1000}`)
+		assert.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "truncated at line 1000 of 1200")
 	})
 
 	t.Run("observes_tracker_for_ref_dedupe", func(t *testing.T) {

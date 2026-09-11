@@ -53,6 +53,10 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
 - `All() []agent.Tool` — every declared tool **unwrapped** (no guard chain). A
   sub-agent's tool set is built from this via a narrow `ToolSource`, so a child
   runs no parent guards or approval dialogs.
+- Generic output bound — every tool that does not bound its own output
+  (`SelfBounding`) is wrapped at registration to keep model-visible content
+  under `OtherLimit`, so no registered tool can flood the context. The built-ins
+  bound themselves, and read pages with offset rather than spilling.
 - `ReadOnly(name)` — whether a tool may auto-run as read-only, derived from MCP
   `annotations.readOnlyHint` or config globs. The permission barrier uses this
   for non-built-in (MCP/extension) tools; core writers never consult it.
@@ -182,10 +186,11 @@ and for configurations that run without `bash`.
 ### read (`read.go`)
 
 Line-numbered (`cat -n` style) output so `edit` and the model agree on
-positions. Output is bounded by a line count and a per-line rune cap, each with a
-marker; the truncation marker names the next `offset`. Binary
-files are refused with a useful message; images are refused for now. Every successful
-read is recorded in the tracker.
+positions. Output is bounded by lines, bytes (each at whole lines) and a
+per-line rune cap. read never spills: the source file is its recovery, so the
+footer pages with `offset`. A range wider than the line limit is refused.
+Binary files are refused and images are refused for now. Every successful read
+is recorded in the tracker.
 
 The model always sees the full line-numbered content (`Content`); `Display` is
 that same block, which the TUI elides to a head plus a collapse count via the
@@ -326,16 +331,21 @@ Off-by-default extras for no-shell agents.
 - `find`: glob matching with `**` support; a bare pattern (`*.go`) matches at
   any depth. Uses `git ls-files -z` (quoting disabled, so non-ASCII filenames
   stay usable) inside a repo for `.gitignore` semantics, walking otherwise.
-  Results sorted by mtime (stat once per file), newest first, capped by `limit`.
+  Results sorted by mtime (stat once per file), newest first. The complete
+  match set spills when the bound cuts it, so an explicit small `limit` still
+  leaves the rest recoverable.
 - `grep`: shells out to `rg` when present (exit 1 = no matches, exit ≥ 2
   surfaces stderr as an error), falling back to a bounded Go `regexp` walk. Both
   paths respect `.gitignore`. The fallback enumerates through the same
   `repoFiles`. Modes: `content` (line numbers, optional context lines),
   `files`, `count`. Invalid patterns are actionable errors on both paths.
+  Enumeration stops at the default match cap with a named note, never silently,
+  and spills like every other tool.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via
-  `filepath.Glob`), sorted alphabetically, `/` suffix on directories,
-  named truncation marker at the limit. A glob with no matches is an error so it
-  is never mistaken for an empty dir.
+  `filepath.Glob`), sorted alphabetically, `/` suffix on directories. A listing
+  past the bound keeps its head and spills the complete set to a file the footer
+  names. A glob with no matches is an error so it is never mistaken for an empty
+  dir.
 
 Like `read`, each sets `ToolResult.Display` to the same text as its model-visible
 `Content`, so history renders it through the shared output-head rule instead of a
@@ -391,8 +401,8 @@ guard.go        Guard, Decision, Allow/Deny helpers
 schema.go       SchemaOf[T] reflection helper
 path.go         PathPolicy — resolves relative paths against Cwd, folds symlinks
 track.go        Tracker — observed-file records for @ref dedupe; Reset on a context switch
-limits.go       Limit, Bound/Bounded truncation, bounded Writer, per-tool budgets
-spill.go        lazy per-session spill file for oversized tool output (bash/grep)
+limits.go       Limit, Bound/Bounded truncation, bounded Writer, per-tool budgets, truncateOutput
+spill.go        lazy per-session spill file for oversized tool output (bash/grep/find/ls/generic)
 fileutil.go     file probing (text/binary/image), line numbering
 walk.go         bounded file walk, runQuiet/runCaptured helpers
 internal.go     decode, result helpers, discard Output
@@ -424,20 +434,23 @@ re-inject rather than dedupe against a read the model can no longer see.
 
 ### Output limits (`limits.go`, `spill.go`)
 
-Each tool has a line/byte budget (`BashOutput` for the model, `ReadFile`,
-`GrepResult`, `FindResult`, `LsResult`). Truncation is
-**head-only at whole-line boundaries**: `Bound` keeps the leading lines that fit
-either bound, capping every kept line, and cuts a single
-overlong first line when no whole line fits. One overlong
-line alone still counts as truncated, so grep spills the full text and the
-footer can name it. The footer names shown/total lines and total bytes plus a
-spill path. The bounded `Writer` forwards whole lines until a bound is hit then
-diverts to a spill file created lazily on first overflow. It writes the kept head
-there too (in stream order), so the spill file holds the **complete** stream;
-bash caps every kept line, and treats an in-budget overlong
-line as truncation too, spilling the complete stream so nothing is lost. A normal command
-leaves nothing behind. (`Elide`, keeping rune-capped head and tail with a marker,
-survives for compaction's structural reduction only.)
+Each tool has a line/byte budget: bash and other tools 200 lines/64 kB, read
+1000 lines/128 kB, grep/find/ls 100 lines/16 kB. Whichever bound is reached
+first truncates.
+
+Recovery is one shared path with a single exception:
+
+- **Spill** (bash, grep, find, ls and the generic registry bound). Truncation is
+  head-only at whole-line boundaries: keep the leading lines that fit either
+  bound, capping every kept line. The footer names shown/total lines and bytes
+  plus a spill file under `os.TempDir()/ajent-<session>` holding the complete
+  output, so the model can page it. A normal command leaves nothing behind.
+- **Native paging** (read). The source file is the recovery: the footer names
+  the next offset and nothing is written to disk. A range wider than the limit
+  is an error result, keeping read out of the spill path entirely.
+
+`Elide`, rune-capped head and tail with a marker, survives for compaction's
+structural reduction and edit feedback only.
 
 ## Agent integration
 

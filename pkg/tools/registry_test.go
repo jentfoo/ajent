@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -539,4 +542,140 @@ func TestRegistryConcurrentRegisterAndSetEnabled(t *testing.T) {
 	for _, n := range []string{"read", "write"} {
 		assert.True(t, r.enabled(n))
 	}
+}
+
+// stubTool returns a fixed result, so tests can drive the generic output bound.
+type stubTool struct {
+	name string
+	res  agent.ToolResult
+}
+
+func (s *stubTool) Name() string { return s.name }
+func (s *stubTool) Label(agent.ToolCall) string {
+	return s.name
+}
+func (s *stubTool) Description() string    { return "test tool" }
+func (s *stubTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: s.name} }
+func (s *stubTool) Mode() agent.ExecutionMode {
+	return agent.ModeParallel
+}
+func (s *stubTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
+	return s.res, nil
+}
+
+func TestRegistryGenericOutputBound(t *testing.T) {
+	t.Parallel()
+
+	exec := func(res agent.ToolResult) agent.ToolResult {
+		t.Helper()
+		r := New()
+		r.sessionID = "bound-test"
+		r.Register(&stubTool{name: "srv__dump", res: res}, true)
+		tool, ok := r.Get("srv__dump")
+		require.True(t, ok)
+		out, err := tool.Execute(t.Context(), callWith([]byte(`{}`)), nil)
+		require.NoError(t, err)
+		return out
+	}
+
+	// oversized text spills and the footer names the file; fields survive.
+	t.Run("oversized_result_spills", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < OtherLimit().Lines+50; i++ {
+			b.WriteString("row\n")
+		}
+		res := exec(agent.ToolResult{
+			Content: llmBlock(b.String()),
+			Display: "display",
+			Details: "details",
+		})
+		out := textOf(res)
+		assert.Contains(t, out, "truncated: 200/250 lines shown")
+		m := regexp.MustCompile(`@([^;\s]+)`).FindStringSubmatch(out)
+		require.NotNil(t, m)
+		dat, err := os.ReadFile(m[1])
+		require.NoError(t, err)
+		assert.Equal(t, b.String(), string(dat)) // spill holds the complete text
+		assert.Equal(t, "display", res.Display)  // the bound rewrites content only
+		assert.Equal(t, "details", res.Details)
+	})
+
+	// within the bound the original blocks pass through byte-identical.
+	t.Run("in_bound_result_unchanged", func(t *testing.T) {
+		res := exec(agent.ToolResult{
+			Content: llm.BlockList{llm.TextBlock{Text: "one"}, llm.TextBlock{Text: "two"}},
+		})
+		require.Len(t, res.Content, 2)
+		joined, ok := res.Content.AsText()
+		require.True(t, ok)
+		assert.Equal(t, "one\ntwo", joined)
+	})
+
+	// non-text content cannot be rebuilt faithfully, so it stays whole.
+	t.Run("non_text_content_untouched", func(t *testing.T) {
+		res := exec(agent.ToolResult{
+			Content: llm.BlockList{llm.ImageBlock{Data: []byte{1}}},
+		})
+		_, ok := res.Content.AsText()
+		assert.False(t, ok)
+		require.Len(t, res.Content, 1)
+		assert.IsType(t, llm.ImageBlock{}, res.Content[0]) // image block preserved, not rewritten
+	})
+
+	// a self-bounding tool is never double-bounded by the registry.
+	t.Run("self_bounding_tool_unwrapped", func(t *testing.T) {
+		r := New()
+		r.Register(&readTool{policy: PathPolicy{Cwd: t.TempDir()}, tracker: NewTracker()}, true)
+		for _, rt := range r.tools {
+			_, wrapped := rt.tool.(*boundTool)
+			assert.False(t, wrapped, rt.tool.Name())
+		}
+	})
+}
+
+// probeStub implements Previewer and DryRunner without self-bounding, so the
+// registry wraps it: the capability probes must still reach the inner tool.
+type probeStub struct {
+	stubTool
+}
+
+func (p *probeStub) Preview(agent.ToolCall) (Change, error) {
+	return Change{Path: "/tmp/probe", Before: "a", After: "b"}, nil
+}
+
+func (p *probeStub) DryRun(agent.ToolCall) error { return nil }
+
+func TestRegistryWrappedToolProbes(t *testing.T) {
+	t.Parallel()
+
+	r := New()
+	r.Register(&probeStub{stubTool{name: "pv"}}, true)
+
+	// the registry wrapped it: the precondition of this whole test
+	var wrapped bool
+	for _, rt := range r.tools {
+		_, wrapped = rt.tool.(*boundTool)
+	}
+	require.True(t, wrapped, "probeStub must be wrapped for this test to mean anything")
+
+	t.Run("preview_reaches_inner", func(t *testing.T) {
+		ch, ok := r.Preview(agent.ToolCall{Name: "pv"})
+		require.True(t, ok)
+		assert.Equal(t, "/tmp/probe", ch.Path)
+	})
+
+	t.Run("dry_run_reaches_inner", func(t *testing.T) {
+		assert.NoError(t, r.DryRun(agent.ToolCall{Name: "pv"}))
+	})
+
+	// the guarded wrapper's inline preview render must unwrap too
+	t.Run("guarded_execute_renders_preview", func(t *testing.T) {
+		tool, ok := r.Get("pv")
+		require.True(t, ok)
+		var d diffCatcher
+		_, err := tool.Execute(t.Context(), agent.ToolCall{ID: "c", Name: "pv"}, &d)
+		require.NoError(t, err)
+		require.Len(t, d.calls, 1)
+		assert.Equal(t, "/tmp/probe", d.last().Path)
+	})
 }

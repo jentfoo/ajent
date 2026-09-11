@@ -45,6 +45,7 @@ type ToolLimits struct {
 	Find      Limit `json:"find,omitzero"`
 	Grep      Limit `json:"grep,omitzero"`
 	Ls        Limit `json:"ls,omitzero"`
+	Other     Limit `json:"other,omitzero"` // tools without their own bound (MCP, extensions)
 	RefInject Limit `json:"refInject,omitzero"`
 	RefTotal  Limit `json:"refTotal,omitzero"`
 }

@@ -39,13 +39,14 @@ func Builtins(opts Options) (*Registry, error) {
 
 	reg := New()
 	reg.tracker = tracker
+	reg.sessionID = opts.SessionID
 	reg.Register(&readTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&writeTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&editTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&bashTool{policy: policy, sessionID: opts.SessionID}, true)
-	reg.Register(&findTool{policy: policy}, false)
+	reg.Register(&findTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&grepTool{policy: policy, sessionID: opts.SessionID}, false)
-	reg.Register(&lsTool{policy: policy}, false)
+	reg.Register(&lsTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&askUserTool{ask: opts.Ask}, false)
 	// a question changes nothing on disk, so it never needs approval
 	reg.MarkReadOnly([]string{ToolAskUser})

@@ -22,12 +22,13 @@ type Limit struct {
 // Package-level output limits are set once by ApplyLimits at startup, but tests
 // run tools concurrently with a reconfiguration, so reads and writes share a lock.
 var (
-	limitsMu   sync.RWMutex                           // guards every bound below together
-	bashOutput = Limit{Lines: 4000, Bytes: 32 << 10}  // ~30 kB for the model; the rest spills to disk
-	readFile   = Limit{Lines: 2000, Bytes: 512 << 20} // bytes effectively unbounded
-	findResult = Limit{Lines: 500}
-	grepResult = Limit{Lines: 1000, Bytes: 128 << 10}
-	lsResult   = Limit{Lines: 500}
+	limitsMu    sync.RWMutex                           // guards every bound below together
+	bashOutput  = Limit{Lines: 200, Bytes: 64 << 10}   // rest of the stream spills to disk
+	readFile    = Limit{Lines: 1000, Bytes: 128 << 10} // native paging via offset; never spills
+	findResult  = Limit{Lines: 100, Bytes: 16 << 10}
+	grepResult  = Limit{Lines: 100, Bytes: 16 << 10}
+	lsResult    = Limit{Lines: 100, Bytes: 16 << 10}
+	otherOutput = Limit{Lines: 200, Bytes: 64 << 10} // MCP and any tool without its own bound
 	// refInject bounds a single @file injected in full; above either axis the
 	// reference is annotated with its shape instead so the model reads it explicitly.
 	refInject = Limit{Lines: 500, Bytes: 128 << 10}
@@ -50,6 +51,10 @@ func GrepResultLimit() Limit { return limitRead(&grepResult) }
 
 // LsResultLimit returns the ls result bound.
 func LsResultLimit() Limit { return limitRead(&lsResult) }
+
+// OtherLimit returns the bound applied to tools without their own: MCP servers,
+// the sub-agent trio, plan tools and any extension.
+func OtherLimit() Limit { return limitRead(&otherOutput) }
 
 // RefInjectLimit bounds a single @file injected in full; above either axis the
 // reference is annotated with its shape instead.
@@ -74,6 +79,7 @@ type Limits struct {
 	Find      Limit `json:"find,omitzero"`
 	Grep      Limit `json:"grep,omitzero"`
 	Ls        Limit `json:"ls,omitzero"`
+	Other     Limit `json:"other,omitzero"` // tools without their own bound
 	RefInject Limit `json:"refInject,omitzero"`
 	RefTotal  Limit `json:"refTotal,omitzero"`
 }
@@ -88,6 +94,7 @@ func ApplyLimits(l Limits) {
 	applyLimit(&findResult, l.Find)
 	applyLimit(&grepResult, l.Grep)
 	applyLimit(&lsResult, l.Ls)
+	applyLimit(&otherOutput, l.Other)
 	applyLimit(&refInject, l.RefInject)
 	applyLimit(&refTotal, l.RefTotal)
 }
@@ -100,6 +107,7 @@ func LimitsFrom(l config.ToolLimits) Limits {
 		Find:      limitFrom(l.Find),
 		Grep:      limitFrom(l.Grep),
 		Ls:        limitFrom(l.Ls),
+		Other:     limitFrom(l.Other),
 		RefInject: limitFrom(l.RefInject),
 		RefTotal:  limitFrom(l.RefTotal),
 	}
@@ -176,15 +184,34 @@ func Bound(s string, l Limit) Bounded {
 	return b
 }
 
-// truncationNote names what Bound or a bounded writer dropped: shown/total lines,
-// total bytes, and where the rest lives when spilled to disk.
-func truncationNote(b Bounded, spillPath string) string {
+// truncationNote names what Bound or a bounded writer dropped: shown/total
+// lines, total bytes, the spill path when the full output lives on disk, and
+// paging when the tool offers its own way to continue.
+func truncationNote(b Bounded, spillPath, paging string) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "... truncated: %d/%d lines shown (%d bytes total)", b.Shown, b.Lines, b.Bytes)
 	if spillPath != "" {
 		sb.WriteString("; full output in @" + spillPath)
 	}
+	if paging != "" {
+		sb.WriteString("; " + paging)
+	}
 	return sb.String()
+}
+
+// truncateOutput bounds out to lim, returning the kept text with a footer
+// naming the spill file holding the complete output. The bool reports whether
+// anything was cut. kind names the spill file; paging, when non-empty, names
+// the tool's own way to continue.
+func truncateOutput(sessionID, kind, out string, lim Limit, paging string) (string, bool) {
+	b := Bound(out, lim)
+	if !b.Truncated {
+		return strings.TrimRight(out, "\n"), false
+	}
+	spill := newSpiller(sessionID, kind)
+	defer func() { _ = spill.close() }()
+	_, _ = spill.Write([]byte(out))
+	return strings.TrimRight(b.Text, "\n") + "\n" + truncationNote(b, spill.path, paging), true
 }
 
 // overlongLine reports whether any line of s exceeds MaxLineRunes, so even an

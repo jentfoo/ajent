@@ -5,6 +5,7 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Role is who produced a message.
@@ -115,6 +116,20 @@ func (ImageBlock) blockType() BlockType      { return BlockImage }
 // Text returns a message holding a single text block.
 func Text(role Role, text string) Message {
 	return Message{Role: role, Content: BlockList{TextBlock{Text: text}}}
+}
+
+// AsText returns every block's text joined with newlines when all blocks are
+// text, reporting false when any block is another kind.
+func (l BlockList) AsText() (string, bool) {
+	parts := make([]string, 0, len(l))
+	for _, b := range l {
+		tb, ok := b.(TextBlock)
+		if !ok {
+			return "", false
+		}
+		parts = append(parts, tb.Text)
+	}
+	return strings.Join(parts, "\n"), true
 }
 
 // blockEnvelope pairs a block with its discriminator on the wire.

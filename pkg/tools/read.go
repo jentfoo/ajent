@@ -39,8 +39,12 @@ func (t *readTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: S
 
 func (t *readTool) Mode() agent.ExecutionMode { return agent.ModeParallel }
 
+// selfBounding: read bounds its own window and pages with offset; no spill.
+func (*readTool) selfBounding() {}
+
 // Execute reads path, observing it in the tracker and returning line-numbered
-// content bounded by ReadFile.
+// content bounded by ReadFile. Oversized output never spills: the footer pages
+// with offset instead. A range wider than the limit is an error result.
 func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p readParams
 	if err := decode(call.Input, &p); err != nil {
@@ -62,21 +66,28 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		return resultErr("image files are not supported by the read tool yet"), nil
 	}
 
-	t.tracker.Observe(full, data, info)
-	n := p.Limit
-	if n <= 0 {
-		n = ReadFileLimit().Lines
-	}
+	lim := ReadFileLimit()
 	start := p.Offset
 	if start < 1 {
 		start = 1
 	}
-	out, lastEmitted, truncatedAt := numberLines(data, start, n)
+	n := p.Limit
+	if n <= 0 {
+		n = lim.Lines
+	}
+	if n > lim.Lines {
+		return resultErr(fmt.Sprintf(
+			"read: limit %d exceeds the maximum of %d lines; narrow the range and page with offset", n, lim.Lines)), nil
+	}
+
+	t.tracker.Observe(full, data, info)
+	out, lastEmitted, truncatedAt, total := numberLines(data, start, n, lim.Bytes)
 
 	var b strings.Builder
 	b.WriteString(out)
 	if truncatedAt > 0 {
-		fmt.Fprintf(&b, "\n... truncated at line %d, read again with offset=%d\n", truncatedAt, start+n)
+		fmt.Fprintf(&b, "\n... truncated at line %d of %d (%d more); read again with offset=%d\n",
+			truncatedAt, total, total-truncatedAt, truncatedAt+1)
 	}
 	content := b.String()
 

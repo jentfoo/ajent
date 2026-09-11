@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -37,19 +39,24 @@ func TestLs(t *testing.T) {
 		assert.Contains(t, textOf(res), ".hidden")
 	})
 
-	// a limit truncates with an explicit marker.
-	t.Run("limit_truncates_with_marker", func(t *testing.T) {
+	// a limit truncates with the shared footer naming the spill file.
+	t.Run("limit_truncates_with_footer", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		for i := 0; i < 5; i++ {
 			mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 		}
 
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
+		res, err := (&lsTool{policy: policy, sessionID: "ls-test"}).Execute(t.Context(),
 			callWith([]byte(`{"limit":2}`)), nil)
 		require.NoError(t, err)
 		out := textOf(res)
-		assert.Equal(t, 2, strings.Count(out, ".txt"))
-		assert.Contains(t, out, "3 more entries") // truncation is named, not silent
+		assert.Contains(t, out, "2/5 lines shown")
+		assert.Contains(t, out, "narrow the path or raise limit")
+		m := regexp.MustCompile(`@([^;\s]+)`).FindStringSubmatch(out)
+		require.NotNil(t, m)
+		dat, err := os.ReadFile(m[1])
+		require.NoError(t, err)
+		assert.Equal(t, 5, strings.Count(string(dat), ".txt")) // spill holds every entry
 	})
 
 	// a wildcard lists matching files sorted.
@@ -79,12 +86,12 @@ func TestLs(t *testing.T) {
 			mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 		}
 
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
+		res, err := (&lsTool{policy: policy, sessionID: "ls-test"}).Execute(t.Context(),
 			callWith([]byte(`{"path":"*.txt","limit":2}`)), nil)
 		require.NoError(t, err)
 		out := textOf(res)
-		assert.Equal(t, 2, strings.Count(out, ".txt"))
-		assert.Contains(t, out, "more files matched") // truncation is named, not silent
+		assert.Contains(t, out, "2/5 lines shown") // the whole match set is counted
+		assert.Contains(t, out, "narrow the path or raise limit")
 	})
 
 	t.Run("missing_dir_is_error", func(t *testing.T) {

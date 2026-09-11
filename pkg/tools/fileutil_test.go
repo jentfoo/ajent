@@ -18,7 +18,7 @@ func TestReadBytes(t *testing.T) {
 
 	t.Run("matches_numbered_output", func(t *testing.T) {
 		data := []byte(strings.Repeat("fmt.Println(\"hi\")\n", 300))
-		out, _, truncated := numberLines(data, 1, ReadFileLimit().Lines)
+		out, _, truncated, _ := numberLines(data, 1, ReadFileLimit().Lines, 0)
 		require.Zero(t, truncated)
 		assert.Equal(t, int64(len(out)), ReadBytes(Measurement{
 			Kind: KindText, Bytes: int64(len(data)), Lines: 300,

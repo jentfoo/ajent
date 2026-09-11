@@ -15,13 +15,14 @@ import (
 // so the loop reads tools straight off it. MCP notification goroutines mutate it
 // while the loop reads, so every method takes the mutex.
 type Registry struct {
-	mu      sync.RWMutex
-	tools   []registeredTool // declaration order drives Names/Schemas
-	groups  []ToolGroup      // ordered; /tools collapses each onto one row
-	schema  []llm.ToolSchema // cached, invalidated by any state change
-	guards  []Guard          // ordered; first non-allow wins inside Execute
-	asker   Asker            // consulted on ActionAsk, nil denies
-	tracker *Tracker         // the read tracker shared by read/write/edit, nil when none
+	mu        sync.RWMutex
+	tools     []registeredTool // declaration order drives Names/Schemas
+	groups    []ToolGroup      // ordered; /tools collapses each onto one row
+	schema    []llm.ToolSchema // cached, invalidated by any state change
+	guards    []Guard          // ordered; first non-allow wins inside Execute
+	asker     Asker            // consulted on ActionAsk, nil denies
+	tracker   *Tracker         // the read tracker shared by read/write/edit, nil when none
+	sessionID string           // names the spill directory for the generic output bound
 }
 
 // SourceBuiltin is the source label for tools registered by the core. MCP
@@ -86,10 +87,14 @@ func (r *Registry) RegisterFrom(source string, t agent.Tool, defaultEnabled bool
 }
 
 // RegisterState adds t under source with the given state. MCP servers register
-// their bridged tools through this.
+// their bridged tools through this. A tool that does not bound its own output is
+// wrapped with the generic bound, so no registered tool can flood the context.
 func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, ok := t.(SelfBounding); !ok {
+		t = &boundTool{t: t, sessionID: r.sessionID}
+	}
 	r.tools = append(r.tools, registeredTool{tool: t, source: source, state: s})
 	r.schema = nil // schema cache is stale until rebuilt
 }
@@ -154,7 +159,7 @@ func (r *Registry) Preview(call agent.ToolCall) (Change, bool) {
 		if rt.tool.Name() != call.Name {
 			continue
 		}
-		pv, ok := rt.tool.(Previewer)
+		pv, ok := unwrap(rt.tool).(Previewer)
 		if !ok {
 			return Change{}, false
 		}
@@ -177,7 +182,7 @@ func (r *Registry) DryRun(call agent.ToolCall) error {
 		if rt.tool.Name() != call.Name {
 			continue
 		}
-		d, ok := rt.tool.(DryRunner)
+		d, ok := unwrap(rt.tool).(DryRunner)
 		if !ok {
 			return nil // cannot predict; do not skip the prompt on uncertainty
 		}
@@ -559,7 +564,7 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 	// the change is rendered before the call is vetted, so an approval dialog sits
 	// below the full diff rather than repeating a truncated copy of it. Once, not
 	// per guard, and in every mode including the ones that never prompt.
-	if pv, ok := g.t.(Previewer); ok {
+	if pv, ok := unwrap(g.t).(Previewer); ok {
 		if ch, err := pv.Preview(c); err == nil {
 			ensureOutput(out).Diff(ch.Path, ch.Before, ch.After)
 		}
@@ -598,4 +603,62 @@ func denied(reason string) (agent.ToolResult, error) {
 		Content: llm.BlockList{llm.TextBlock{Text: reason}},
 		IsError: true,
 	}, nil
+}
+
+// SelfBounding marks a tool that bounds its own model-visible output (the
+// built-ins do; read pages with offset instead of spilling). The registry
+// wraps every other registered tool with the generic bound; the unexported
+// method keeps the marker pkg-local.
+type SelfBounding interface {
+	agent.Tool
+	selfBounding()
+}
+
+// boundTool bounds a non-self-bounding tool's model-visible output through the
+// shared recovery path: past OtherLimit the complete text spills to a per-session
+// file and the footer names it, so one runaway tool cannot flood the context.
+type boundTool struct {
+	t         agent.Tool
+	sessionID string
+}
+
+func (b *boundTool) Name() string { return b.t.Name() }
+func (b *boundTool) Label(c agent.ToolCall) string {
+	return b.t.Label(c)
+}
+func (b *boundTool) Description() string    { return b.t.Description() }
+func (b *boundTool) Schema() llm.ToolSchema { return b.t.Schema() }
+func (b *boundTool) Mode() agent.ExecutionMode {
+	return b.t.Mode()
+}
+
+// Execute delegates and then bounds the result's text content. Content that is
+// not plain text (images, empty) passes through untouched; Display, Details,
+// IsError and EndTurn are preserved as the inner tool set them.
+func (b *boundTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
+	res, err := b.t.Execute(ctx, c, out)
+	if err != nil || len(res.Content) == 0 {
+		return res, err
+	}
+	joined, ok := res.Content.AsText()
+	if !ok {
+		return res, nil // not boundable without rewriting meaning; leave it whole
+	}
+	bounded, truncated := truncateOutput(b.sessionID, b.t.Name(), joined, OtherLimit(), "")
+	if !truncated {
+		return res, nil // within the bound: original blocks stay byte-identical
+	}
+	res.Content = llm.BlockList{llm.TextBlock{Text: bounded}}
+	return res, nil
+}
+
+// unwrap returns the tool beneath any generic-bound wrappers.
+func unwrap(t agent.Tool) agent.Tool {
+	for {
+		bt, ok := t.(*boundTool)
+		if !ok {
+			return t
+		}
+		t = bt.t
+	}
 }

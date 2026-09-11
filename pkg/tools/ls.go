@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,7 +21,8 @@ type lsParams struct {
 // on directories. Registered off by default: it exists for the sub-agent, which
 // has no shell.
 type lsTool struct {
-	policy PathPolicy
+	policy    PathPolicy
+	sessionID string // names the spill directory for long results
 }
 
 var _ agent.Tool = (*lsTool)(nil)
@@ -41,7 +41,11 @@ func (t *lsTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
 
-// Execute lists the directory bounded by the limit.
+// selfBounding: ls bounds and spills its own results.
+func (*lsTool) selfBounding() {}
+
+// Execute lists the directory bounded by the limit. The complete listing spills
+// to disk when the bound cuts it, so the model can page the file.
 func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p lsParams
 	if err := decode(call.Input, &p); err != nil {
@@ -52,14 +56,9 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 		return resultErr(err.Error()), nil
 	}
 
-	max := p.Limit
-	if max <= 0 {
-		max = LsResultLimit().Lines
-	}
-
 	// a wildcard pattern is not a real directory: list the files it matches.
 	if HasGlob(full) {
-		return t.listMatches(full, max), nil
+		return t.listMatches(full, p.Limit), nil
 	}
 
 	entries, err := os.ReadDir(full) // ReadDir returns entries sorted by name
@@ -68,27 +67,21 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 	}
 
 	var b strings.Builder
-	for i, e := range entries {
-		if i >= max {
-			fmt.Fprintf(&b, "... %d more entries; raise limit or narrow the path\n", len(entries)-max)
-			break
-		}
+	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() {
 			name += "/"
 		}
 		b.WriteString(name + "\n")
 	}
-
-	trimmed := strings.TrimRight(b.String(), "\n")
-	// Display mirrors the model-visible text so history shows head+collapse.
-	return agent.ToolResult{Content: llmBlock(trimmed), Display: trimmed}, nil
+	text, _ := truncateOutput(t.sessionID, "ls", b.String(), lsLimit(p.Limit), lsPaging(p.Limit))
+	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil
 }
 
 // listMatches lists the files a wildcard pattern matches, sorted with relative
 // paths when under Cwd. An empty match set reports an error so a mistyped glob
 // is never mistaken for an empty directory.
-func (t *lsTool) listMatches(pattern string, max int) agent.ToolResult {
+func (t *lsTool) listMatches(pattern string, limit int) agent.ToolResult {
 	matches, err := filepath.Glob(pattern)
 	if err != nil || len(matches) == 0 {
 		return resultErr("ls: nothing matches " + relTo(t.policy.Cwd, pattern))
@@ -96,18 +89,31 @@ func (t *lsTool) listMatches(pattern string, max int) agent.ToolResult {
 	slices.Sort(matches)
 
 	var b strings.Builder
-	for i, m := range matches {
-		if i >= max {
-			fmt.Fprintf(&b, "... %d more files matched; narrow the pattern\n", len(matches)-max)
-			break
-		}
+	for _, m := range matches {
 		name := relTo(t.policy.Cwd, m)
 		if fi, err := os.Stat(m); err == nil && fi.IsDir() {
 			name += "/"
 		}
 		b.WriteString(name + "\n")
 	}
+	text, _ := truncateOutput(t.sessionID, "ls", b.String(), lsLimit(limit), lsPaging(limit))
+	return agent.ToolResult{Content: llmBlock(text), Display: text}
+}
 
-	trimmed := strings.TrimRight(b.String(), "\n")
-	return agent.ToolResult{Content: llmBlock(trimmed), Display: trimmed}
+// lsLimit narrows the bound's line axis to an explicit limit; the tool bound
+// stays the hard cap either way.
+func lsLimit(limit int) Limit {
+	lim := LsResultLimit()
+	if limit > 0 && limit < lim.Lines {
+		lim.Lines = limit
+	}
+	return lim
+}
+
+// lsPaging names how to see more: raising limit only helps below the bound.
+func lsPaging(limit int) string {
+	if limit > 0 && limit < LsResultLimit().Lines {
+		return "narrow the path or raise limit"
+	}
+	return "narrow the path"
 }

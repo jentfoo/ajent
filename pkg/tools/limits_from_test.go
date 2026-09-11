@@ -10,9 +10,14 @@ import (
 func TestLimitsFrom(t *testing.T) {
 	t.Parallel()
 
-	l := LimitsFrom(config.ToolLimits{Bash: config.Limit{Lines: 10}, Read: config.Limit{Bytes: 4096}})
+	l := LimitsFrom(config.ToolLimits{
+		Bash:  config.Limit{Lines: 10},
+		Read:  config.Limit{Bytes: 4096},
+		Other: config.Limit{Lines: 50},
+	})
 	// each configured axis copies straight through; unset axes stay zero here,
 	// and ApplyLimits fills them from the package defaults at startup.
 	assert.Equal(t, Limit{Lines: 10}, l.Bash)
 	assert.Equal(t, Limit{Bytes: 4096}, l.Read)
+	assert.Equal(t, Limit{Lines: 50}, l.Other)
 }

@@ -39,9 +39,10 @@ linters:
       min-occurrences: 4
     recvcheck:
       # value String/MarshalJSON alongside pointer UnmarshalJSON is the standard
-      # enum shape, not a mistake
+      # enum shape, not a mistake; read-only helpers like AsText follow the same rule
       exclusions:
         - "*.String"
+        - "*.AsText"
     gosmopolitan:
       allow-time-local: true
 

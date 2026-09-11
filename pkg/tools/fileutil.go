@@ -95,32 +95,36 @@ func ReadBytes(m Measurement) int64 {
 	return m.Bytes + lines*numberedLinePrefix
 }
 
-// numberLines renders data as line-numbered text starting at the given 1-based
-// offset, capping each line and the total to limit. It reports lastEmitted (the
-// highest line rendered) and truncatedAt (the next offset) when more lines remain
-// past what was emitted.
-func numberLines(data []byte, start, limit int) (out string, lastEmitted, truncatedAt int) {
+// numberLines renders data as line-numbered text from the 1-based start line,
+// stopping at limit lines or maxBytes of rendered output (when positive); at
+// least one line is always emitted. It reports lastEmitted (the highest line
+// rendered), truncatedAt (the last line rendered when a bound cut the window,
+// zero when everything fit), and the file's total line count.
+func numberLines(data []byte, start, limit, maxBytes int) (out string, lastEmitted, truncatedAt, total int) {
 	lines := bytes.Split([]byte(normalizeToLF(string(data))), []byte{'\n'})
 	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 { // drop the element a trailing newline leaves
 		lines = lines[:len(lines)-1]
 	}
-	total := len(lines)
+	total = len(lines)
 	var b strings.Builder
 	end := min(start+limit-1, total)
-	if end < start { // offset past EOF
-		return "", 0, 0
-	}
 	for i := start - 1; i < end; i++ {
 		line := capLine(string(lines[i]))
 		if len(line) < len(lines[i]) { // capped: say so, offset cannot reach the rest
 			line += " ... [line truncated]"
 		}
+		if b.Len() > 0 && maxBytes > 0 && b.Len()+len(line)+1 > maxBytes {
+			return b.String(), i, i, total // byte bound: whole lines only
+		}
 		fmt.Fprintf(&b, "%6d\t%s\n", i+1, line)
 	}
-	if end < total { // more lines remain past what was emitted
-		return b.String(), end, end
+	if start > total {
+		return "", 0, 0, total // offset past EOF
 	}
-	return b.String(), end, 0
+	if end < total { // more lines remain past what was emitted
+		return b.String(), end, end, total
+	}
+	return b.String(), end, 0, total
 }
 
 // detectLineEnding returns the majority line ending of data: "\r\n" when CRLF

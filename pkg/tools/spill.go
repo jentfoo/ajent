@@ -59,7 +59,7 @@ func createSpill(sessionID, prefix string) (*os.File, string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, "", err
 	}
-	name := fmt.Sprintf("%s-%s.txt", prefix, randSuffix())
+	name := fmt.Sprintf("%s-%s.txt", sanitize(prefix), randSuffix())
 	f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, "", err

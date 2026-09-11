@@ -74,6 +74,9 @@ func (t *bashTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
+// selfBounding: bash bounds and spills its own stream.
+func (*bashTool) selfBounding() {}
+
 // Execute streams command output to out while teeing a bounded head/tail copy,
 // spilling the excess to disk so the model can read it back.
 func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
@@ -177,7 +180,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 			_, _ = spill.Write(w.replay.Bytes())
 		}
 		lines, bytes := w.Total()
-		note := truncationNote(Bounded{Shown: countLines(captured), Lines: lines, Bytes: bytes}, spill.path)
+		note := truncationNote(Bounded{Shown: countLines(captured), Lines: lines, Bytes: bytes}, spill.path, "")
 		captured += "\n" + note
 	}
 

@@ -23,7 +23,8 @@ type findParams struct {
 // findTool enumerates files under a git repo with .gitignore semantics via
 // git ls-files, or walks otherwise. Sorted by mtime descending.
 type findTool struct {
-	policy PathPolicy
+	policy    PathPolicy
+	sessionID string // names the spill directory for long results
 }
 
 var _ agent.Tool = (*findTool)(nil)
@@ -42,7 +43,11 @@ func (t *findTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
 
-// Execute lists matching files bounded by the limit, newest first.
+// selfBounding: find bounds and spills its own results.
+func (*findTool) selfBounding() {}
+
+// Execute lists matching files bounded by the limit, newest first. The complete
+// result spills to disk when the bound cuts it, so the model can page the file.
 func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p findParams
 	if err := decode(call.Input, &p); err != nil {
@@ -56,28 +61,29 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		return resultErr(err.Error()), nil
 	}
 
-	max := p.Limit
-	if max <= 0 {
-		max = FindResultLimit().Lines
-	}
-	matches, truncated := listFiles(root, p.Pattern, max)
-
+	matches := listFiles(root, p.Pattern)
 	var b strings.Builder
 	for _, m := range matches {
 		fmt.Fprintln(&b, relTo(root, m))
 	}
-	if truncated {
-		b.WriteString("... more results; narrow your pattern or raise limit\n")
-	}
 
-	trimmed := strings.TrimRight(b.String(), "\n")
+	// an explicit limit narrows the shown head; the bound stays the hard cap and
+	// the spill always holds every match
+	lim := FindResultLimit()
+	paging := "narrow the pattern"
+	if p.Limit > 0 && p.Limit < lim.Lines {
+		lim.Lines = p.Limit
+		paging = "narrow the pattern or raise limit"
+	}
+	text, _ := truncateOutput(t.sessionID, "find", b.String(), lim, paging)
+
 	// Display mirrors the model-visible text so history shows head+collapse.
-	return agent.ToolResult{Content: llmBlock(trimmed), Display: trimmed}, nil
+	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil
 }
 
-// listFiles returns files under root matching pattern, bounded by max. It uses
+// listFiles returns files under root matching pattern, newest first. It uses
 // git ls-files inside a repo for .gitignore semantics and walks otherwise.
-func listFiles(root, pattern string, max int) ([]string, bool) {
+func listFiles(root, pattern string) []string {
 	var out []fileEntry // stat once so mtime sort does not re-Stat per comparison
 	for _, p := range repoFiles(root) {
 		fi, err := os.Stat(p)
@@ -102,11 +108,7 @@ func listFiles(root, pattern string, max int) ([]string, bool) {
 	for i := range out {
 		paths[i] = out[i].path
 	}
-	truncated := len(paths) > max
-	if truncated {
-		paths = paths[:max]
-	}
-	return paths, truncated
+	return paths
 }
 
 // fileEntry pairs a path with its modification time so listFiles sorts without

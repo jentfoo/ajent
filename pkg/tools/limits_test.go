@@ -2,6 +2,8 @@ package tools
 
 import (
 	"bytes"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -89,9 +91,42 @@ func TestBound(t *testing.T) {
 
 	t.Run("truncation_note_names_totals", func(t *testing.T) {
 		b := Bound(longLines(50), Limit{Lines: 5})
-		note := truncationNote(b, "/tmp/spill.txt")
+		note := truncationNote(b, "/tmp/spill.txt", "")
 		assert.Contains(t, note, "5/50 lines shown")
 		assert.Contains(t, note, "/tmp/spill.txt") // names the spill path
+	})
+
+	t.Run("truncation_note_carries_paging", func(t *testing.T) {
+		b := Bound(longLines(50), Limit{Lines: 5})
+		note := truncationNote(b, "", "narrow the pattern")
+		assert.Contains(t, note, "narrow the pattern")
+		assert.NotContains(t, note, "@") // no spill path, paging alone
+	})
+}
+
+func TestTruncateOutput(t *testing.T) {
+	t.Parallel()
+
+	// the under-budget text is returned trimmed of its trailing newline; the
+	// bool stays false so a byte-identical caller can branch on it
+	t.Run("under_bound_unchanged", func(t *testing.T) {
+		in := strings.Repeat("line\n", 5)
+		out, cut := truncateOutput("sess", "t", in, Limit{Lines: 10}, "")
+		assert.False(t, cut)
+		assert.Equal(t, strings.TrimRight(in, "\n"), out)
+	})
+
+	t.Run("truncated_spills_complete_text", func(t *testing.T) {
+		in := strings.Repeat("line\n", 50)
+		out, cut := truncateOutput("truncate-output-test", "t", in, Limit{Lines: 5}, "raise limit")
+		assert.True(t, cut)
+		assert.Contains(t, out, "5/50 lines shown")
+		assert.Contains(t, out, "; raise limit") // paging hint rides along
+		m := regexp.MustCompile(`@([^;\s]+)`).FindStringSubmatch(out)
+		require.NotNil(t, m)
+		dat, err := os.ReadFile(m[1])
+		require.NoError(t, err)
+		assert.Equal(t, in, string(dat)) // spill holds the complete stream
 	})
 }
 
@@ -280,7 +315,8 @@ func TestApplyLimitsNonZeroFields(t *testing.T) {
 
 	orig := Limits{
 		Bash: BashLimit(), Read: ReadFileLimit(), Find: FindResultLimit(),
-		Grep: GrepResultLimit(), Ls: LsResultLimit(), RefInject: RefInjectLimit(), RefTotal: RefTotalLimit(),
+		Grep: GrepResultLimit(), Ls: LsResultLimit(), Other: OtherLimit(),
+		RefInject: RefInjectLimit(), RefTotal: RefTotalLimit(),
 	}
 	t.Cleanup(func() { ApplyLimits(orig) })
 
@@ -290,8 +326,11 @@ func TestApplyLimitsNonZeroFields(t *testing.T) {
 	ApplyLimits(Limits{Bash: Limit{Lines: bashLines}, Read: Limit{Bytes: readBytes}})
 	b := BashLimit()
 	assert.Equal(t, bashLines, b.Lines) // bash line bound overridden
-	assert.Equal(t, 32<<10, b.Bytes)    // bash byte bound untouched (default)
+	assert.Equal(t, 64<<10, b.Bytes)    // bash byte bound untouched (default)
 	r := ReadFileLimit()
-	assert.Equal(t, 2000, r.Lines)      // read line bound untouched (default)
+	assert.Equal(t, 1000, r.Lines)      // read line bound untouched (default)
 	assert.Equal(t, readBytes, r.Bytes) // read bytes overridden
+	o := OtherLimit()
+	assert.Equal(t, 200, o.Lines) // generic bound default
+	assert.Equal(t, 64<<10, o.Bytes)
 }

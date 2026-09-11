@@ -105,6 +105,9 @@ func (t *editTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
+// selfBounding: edit feedback is bounded by its own Elide pass.
+func (*editTool) selfBounding() {}
+
 // Execute applies every edit against the original buffer, then writes once so a
 // failure mid-list leaves the file byte-identical. The diff is rendered by the
 // guard wrapper before this runs.

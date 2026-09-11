@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,18 +74,24 @@ func TestFind(t *testing.T) {
 		assert.NotContains(t, out, "skip.txt")
 	})
 
-	// a limit truncates with an explicit marker.
+	// a limit truncates with the shared footer naming the spill file.
 	t.Run("limit_param_truncates", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		for i := 0; i < 5; i++ {
 			mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 		}
-		res, err := (&findTool{policy: policy}).Execute(t.Context(),
+		res, err := (&findTool{policy: policy, sessionID: "find-test"}).Execute(t.Context(),
 			callWith([]byte(`{"pattern":"*.txt","limit":2}`)), nil)
 		require.NoError(t, err)
 		out := textOf(res)
-		assert.Equal(t, 2, strings.Count(out, ".txt"))
-		assert.Contains(t, out, "more results") // truncation is named, not silent
+		assert.Equal(t, 3, strings.Count(out, ".txt")) // head + footer's spill name
+		assert.Contains(t, out, "2/5 lines shown")     // truncation is named, not silent
+		assert.Contains(t, out, "raise limit")
+		m := regexp.MustCompile(`@([^;\s]+)`).FindStringSubmatch(out)
+		require.NotNil(t, m)
+		dat, err := os.ReadFile(m[1])
+		require.NoError(t, err)
+		assert.Equal(t, 5, strings.Count(string(dat), ".txt")) // spill holds every match
 	})
 
 	t.Run("empty_pattern_rejected", func(t *testing.T) {
@@ -247,6 +254,26 @@ func TestGrepFallbackHonoursShapeParams(t *testing.T) {
 	// limit caps the match count
 	out = textOf(assertGrepResult(`{"pattern":"hello","ignoreCase":true,"limit":1}`))
 	assert.Equal(t, 1, strings.Count(out, "hello")+strings.Count(out, "Hello"))
+	assert.NotContains(t, out, "result cap") // an explicit limit is the model's choice, not a cut
+}
+
+func TestGrepDefaultCapNamed(t *testing.T) {
+	t.Parallel()
+
+	// reaching the default cap without an explicit limit is named, never silent
+	orig := GrepResultLimit()
+	t.Cleanup(func() { ApplyLimits(Limits{Grep: orig}) })
+	ApplyLimits(Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
+
+	for name, tool := range map[string]*grepTool{
+		"rg-or-go": {policy: PathPolicy{Cwd: "."}, forceGo: false},
+		"go-only":  {policy: PathPolicy{Cwd: "."}, forceGo: true},
+	} {
+		res, err := tool.Execute(t.Context(),
+			callWith([]byte(`{"pattern":"func ","glob":"*.go","mode":"files"}`)), nil)
+		require.NoError(t, err, name)
+		assert.Contains(t, textOf(res), "result cap of 3 matches reached", name)
+	}
 }
 
 func TestGrepFallback(t *testing.T) {

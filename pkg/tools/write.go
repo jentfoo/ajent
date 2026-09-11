@@ -60,6 +60,9 @@ func (t *writeTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
+// selfBounding: write's feedback is bounded by its own Elide pass.
+func (*writeTool) selfBounding() {}
+
 // Execute writes the file, then observes it so @ref dedupe sees current content.
 func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	var p writeParams

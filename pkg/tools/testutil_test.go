@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"strings"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -16,13 +15,8 @@ func callWith(raw json.RawMessage) agent.ToolCall {
 
 // textOf returns the concatenated plain text of a result's content blocks.
 func textOf(res agent.ToolResult) string {
-	var b strings.Builder
-	for _, blk := range res.Content {
-		if tb, ok := blk.(llm.TextBlock); ok {
-			b.WriteString(tb.Text)
-		}
-	}
-	return b.String()
+	text, _ := res.Content.AsText()
+	return text
 }
 
 // fakeTool is a minimal agent.Tool for registry and guard tests.

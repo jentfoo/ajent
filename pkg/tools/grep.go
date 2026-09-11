@@ -58,6 +58,9 @@ func (t *grepTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
 
+// selfBounding: grep bounds and spills its own results.
+func (*grepTool) selfBounding() {}
+
 // Execute runs the search, bounded by the limit and GrepResult.
 func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p grepParams
@@ -96,10 +99,20 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		if rgErr != nil {
 			return resultErr("grep: " + rgErr.Error()), nil
 		}
-		return t.finalize(out), nil // Display mirrors the model-visible text
+		// Display mirrors the model-visible text
+		return t.finalize(out, capNote(out, p.Limit, max, mode)), nil
 	}
 
 	return t.goSearch(cwd, p, mode, re, max), nil
+}
+
+// capNote names the default match cap when enumeration reached it without an
+// explicit limit, so a stopped search is never mistaken for complete.
+func capNote(out string, explicit, max int, mode string) string {
+	if explicit > 0 || mode == grepCount || countLines(out) < max {
+		return ""
+	}
+	return fmt.Sprintf("... result cap of %d matches reached; narrow the pattern or raise limit", max)
 }
 
 // compile builds the matcher, honouring literal and ignoreCase.
@@ -168,20 +181,17 @@ func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Re
 	}
 
 	trimmed := strings.TrimRight(b.String(), "\n")
-	return t.finalize(trimmed)
+	return t.finalize(trimmed, capNote(trimmed, p.Limit, max, mode))
 }
 
-// finalize bounds out to GrepResult, spilling the full text when truncated so
-// the model can read it back from disk.
-func (t *grepTool) finalize(out string) agent.ToolResult {
+// finalize bounds out to GrepResult, spilling the complete text when cut.
+// note, when non-empty, rides after the bounded text and its footer, so the
+// bound never cuts it.
+func (t *grepTool) finalize(out, note string) agent.ToolResult {
 	out = normalizeToLF(out) // rg and go paths both carry \r on CRLF files; LF-only to the model
-	b := Bound(out, GrepResultLimit())
-	text := strings.TrimRight(b.Text, "\n")
-	if b.Truncated {
-		spill := newSpiller(t.sessionID, "grep")
-		defer func() { _ = spill.close() }()
-		_, _ = spill.Write([]byte(out))
-		text += "\n" + truncationNote(b, spill.path)
+	text, _ := truncateOutput(t.sessionID, "grep", out, GrepResultLimit(), "")
+	if note != "" {
+		text += "\n" + note
 	}
 	return agent.ToolResult{Content: llmBlock(text), Display: text}
 }
