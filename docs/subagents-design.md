@@ -39,16 +39,6 @@ last in the filter so no configuration can reach past it.
 
 ## The package
 
-```
-manager.go      Options, Manager — lifecycle, concurrency, notification, status segment
-job.go          Status enum, public Job snapshot, internal locked job per investigation
-run.go          child agent construction + the summary contract / recovery path
-tools.go        agent_start / agent_poll / agent_list (ModeParallel)
-toolset.go      ToolSource interface + the structural read-only filter and fixed view
-sink.go         childSink — one activity row per job, coalesced, lives as long as the job
-prompt.go       childContract / continueNudge verbatim constants, taskPrompt assembly
-```
-
 ### `manager.go` — lifecycle
 
 The manager is configured by func fields supplied by `pkg/app`, mirroring

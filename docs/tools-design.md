@@ -393,21 +393,6 @@ second `/plan` re-registers cleanly.
 
 ## Shared infrastructure
 
-```
-builtins.go     Builtins(Options) — wires the shared tracker/policy into all tools
-registry.go     Registry, guardedTool wrapper, denied result helper
-asker.go        Asker type and SetAsker registration
-guard.go        Guard, Decision, Allow/Deny helpers
-schema.go       SchemaOf[T] reflection helper
-path.go         PathPolicy — resolves relative paths against Cwd, folds symlinks
-track.go        Tracker — observed-file records for @ref dedupe; Reset on a context switch
-limits.go       Limit, Bound/Bounded truncation, bounded Writer, per-tool budgets, truncateOutput
-spill.go        lazy per-session spill file for oversized tool output (bash/grep/find/ls/generic)
-fileutil.go     file probing (text/binary/image), line numbering
-walk.go         bounded file walk, runQuiet/runCaptured helpers
-internal.go     decode, result helpers, discard Output
-```
-
 ### Path policy (`path.go`)
 
 All file tools resolve arguments through one `PathPolicy`: a leading `~` or
