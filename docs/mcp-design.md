@@ -251,8 +251,7 @@ startup modes have been removed: every configured server is connected in full on
 prompt-bloat trade-off or eager/manual distinction to maintain.
 Stdio notification handling is deadlock-safe: `Client.OnNotification` dispatches handlers
 off mcp-go's reader goroutine and `list_changed` re-discovery runs serialized with a
-bounded context (see *Notifications never block mcp-go's reader*). The reconnection path
-described above is partially wired, since a call into a dead server already returns an error
-result rather than hanging, but the backoff loop that unregisters tools on repeated
-failure was still being completed at this writing; treat "Reconnection" as the invariant
-to satisfy.
+bounded context (see *Notifications never block mcp-go's reader*). Reconnection is
+complete: a stdio child that exits has its tools unregistered while down, then is
+reconnected with capped exponential backoff (`maxReconnectWait`) and its pre-death
+enabled set restored on the next successful connect.

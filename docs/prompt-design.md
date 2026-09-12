@@ -70,7 +70,6 @@ governs its assembly and use.
 | Tool descriptions & schemas | per-tool `Description` prose plus JSON Schema params, sent via the provider tool channel |
 | `@`-file reference injection | synthetic read call+result behind the user message |
 | Project instruction layering | `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, layered with provenance markers |
-| Prompt templates / slash commands | markdown templates expanded into prompts |
 | `/init` project survey | the build and codebase sub-agent tasks, and the instruction that distils them into `AGENTS.md` |
 | Compaction summarisation | exact-format LLM summary over a marker-reduced transcript |
 | Sub-agent prompt | the child contract appended as a system snippet to every investigation, plus the empty-summary nudge |
@@ -291,39 +290,6 @@ Rules:
 - Loaded once at startup and kept for the session; a changed `AGENTS.md` applies on
   next launch. There is no mid-session reload or file watching, keeping the system
   block cache-stable per principle 1.
-
----
-
-## Prompt templates & slash commands
-
-Reusable prompts live as **markdown files** discovered from config dirs; the
-filename becomes the command name (`review.md` → `/review`). Frontmatter carries a
-description and an optional argument hint:
-
-```markdown
----
-description: Review PRs from URLs with structured issue and code analysis
-argument-hint: "<PR-URL>"
----
-You are given one or more GitHub PR URLs: $@
-
-For each URL, do the following in order:
-1. Read the page in full — description, comments, commits, changed files.
-2. ...
-```
-
-Argument substitution supports `$1`, `$@`/`$ARGUMENTS`, and `${N:-default}` /
-slicing for optional or repeated arguments.
-
-Design rules:
-
-- **A template is a self-contained prompt.** It assumes nothing about prior
-  context; it states the process, the output format (often with headings to fill
-  in), and what not to do. The `/wr`-style finish prompt is a good model: numbered
-  steps, explicit constraints ("never `git add .`"), and an exact closing line.
-
-- The command registry (`/help`, `/model`, `/tools`, ...) is where templates are
-  surfaced; unknown commands error rather than costing tokens.
 
 ---
 
@@ -720,7 +686,7 @@ Prompts are code. The bar is golden/verbatim tests over exact strings:
   instructions and the previous summary are included, and (with a scripted fake
   provider) that the model received history in `<conversation>` tags treated as data.
 
-Where a prompt is user-configurable (project instructions, templates) the tests
+Where a prompt is user-configurable (project instructions) the tests
 cover presence/absence of `<cwd>/AGENTS.md`, the provenance marker carrying its
 absolute path, byte-stability across calls with equal inputs, and that project
 instructions are appended after environment facts.
