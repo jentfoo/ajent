@@ -139,11 +139,14 @@ func sourceOf(name string) string {
 func TestLoadOnFirstMessage(t *testing.T) {
 	t.Parallel()
 
+	// build once at the test level; every case reuses the same binary
+	srv := buildFakeServer(t)
+
 	// a first-message load connects every server and registers all of its tools as enabled.
 	t.Run("connects", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
-			"fake": {Command: buildFakeServer(t)},
+			"fake": {Command: srv},
 		}, Options{Registrar: fr})
 
 		// nothing is registered before the first message; no process spawned yet
@@ -169,7 +172,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 	t.Run("runs_once", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
-			"fake": {Command: buildFakeServer(t)},
+			"fake": {Command: srv},
 		}, Options{Registrar: fr})
 		t.Cleanup(mgr.Close)
 
@@ -188,13 +191,16 @@ func TestLoadOnFirstMessage(t *testing.T) {
 func TestConfigDisabledServer(t *testing.T) {
 	t.Parallel()
 
+	// built at the test level; reused by the live-connection case below
+	srv := buildFakeServer(t)
+
 	// a config-disabled server still connects so its tools appear in /tools, but
 	// registers each tool as StateDisabled: known and toggleable, never callable by default.
 	t.Run("loads_but_stays_inactive", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		var disabled bool
 		mgr := New(map[string]ServerConfig{
-			"fake": {Command: buildFakeServer(t), Enabled: &disabled},
+			"fake": {Command: srv, Enabled: &disabled},
 		}, Options{Registrar: fr})
 
 		t.Cleanup(mgr.Close)
@@ -415,14 +421,56 @@ func (b *blockingRegistrar) Unregister(source string) {
 	<-b.release
 }
 
+func TestReconnectAfterDeath(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: buildFakeServer(t), Args: []string{"-die"}},
+	}, Options{Registrar: fr})
+	t.Cleanup(mgr.Close)
+
+	// disable one tool so the restored enabled set is a strict subset, not everything
+	mgr.LoadOnFirstMessage(t.Context())
+	die := mgr.serverByName("fake")
+	require.NotNil(t, die.client())
+
+	// kill the child through its own trigger_die tool; Execute returns an error
+	// result (transport failure) rather than a Go error.
+	tool, ok := fr.toolByName("fake__trigger_die")
+	require.True(t, ok)
+	_, err := tool.Execute(t.Context(), agent.ToolCall{ID: "die", Name: tool.Name()}, nil)
+	require.NoError(t, err) // a dead transport is a result, never an abort
+
+	// the server's tools drop out while it reconnects
+	require.Eventually(t, func() bool {
+		return len(fr.AllNames("mcp: fake")) == 0
+	}, 5*time.Second, 20*time.Millisecond)
+
+	// and come back enabled once the child respawns (the reconnect loop re-registers).
+	require.Eventually(t, func() bool {
+		for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+			st, ok := fr.state("fake__" + n)
+			if !ok || st != StateEnabled {
+				return false
+			}
+		}
+		return true
+	}, 10*time.Second, 50*time.Millisecond)
+	assert.NotNil(t, mgr.serverByName("fake").client())
+}
+
 func TestManagerClose(t *testing.T) {
 	t.Parallel()
+
+	// built once at the test level; reused by both cases below
+	srv := buildFakeServer(t)
 
 	// a connected server closes well inside the bound, leaving nothing registered
 	t.Run("disconnects_servers", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
-			"fake": {Command: buildFakeServer(t)},
+			"fake": {Command: srv},
 		}, Options{Registrar: fr})
 		mgr.LoadOnFirstMessage(t.Context())
 		require.NotEmpty(t, fr.AllNames("mcp: fake"))
@@ -447,7 +495,7 @@ func TestManagerClose(t *testing.T) {
 		t.Cleanup(func() { close(br.release) })
 		servers := make(map[string]ServerConfig, len(names))
 		for _, n := range names {
-			servers[n] = ServerConfig{Command: buildFakeServer(t)}
+			servers[n] = ServerConfig{Command: srv}
 		}
 		mgr := New(servers, Options{Registrar: br})
 

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -465,9 +464,8 @@ func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
 // buildFakeMCPServer builds the pkg/mcp fakeserver binary and returns its path.
 func buildFakeMCPServer(t *testing.T) string {
 	t.Helper()
-	out := filepath.Join(os.TempDir(), fmt.Sprintf("ajent-driver-fakeserver-%d", os.Getpid()))
-	ctx := context.Background() // build is not tied to a test's lifetime
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", out, "../../pkg/mcp/testdata/fakeserver")
+	out := filepath.Join(t.TempDir(), "fakeserver")
+	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "../../pkg/mcp/testdata/fakeserver")
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build fakeserver: %v\n%s", err, b)
 	}

@@ -4,40 +4,25 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// fakeserver binary, built once per test run from ./testdata/fakeserver with the
-// same module so mcp-go wire types match what our client expects.
-var (
-	fakeSrvOnce sync.Once
-	fakeSrvPath string
-	fakeSrvErr  error
-)
-
+// buildFakeServer builds the pkg/mcp fakeserver binary from ./testdata/fakeserver
+// with the same module so mcp-go wire types match what our client expects. The
+// binary lands in the calling test's temp dir and is removed when that test ends.
 func buildFakeServer(t *testing.T) string {
 	t.Helper()
-	fakeSrvOnce.Do(func() {
-		out := filepath.Join(os.TempDir(), fmt.Sprintf("ajent-fakeserver-%d", os.Getpid()))
-		ctx := context.Background() // build is not tied to a test's lifetime
-		cmd := exec.CommandContext(ctx, "go", "build", "-o", out, "./testdata/fakeserver")
-		if b, err := cmd.CombinedOutput(); err != nil {
-			fakeSrvErr = fmt.Errorf("build fakeserver: %w\n%s", err, b)
-			return
-		}
-		fakeSrvPath = out
-	})
-	if fakeSrvErr != nil {
-		t.Fatal(fakeSrvErr)
+	out := filepath.Join(t.TempDir(), "fakeserver")
+	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "./testdata/fakeserver")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fakeserver: %v\n%s", err, b)
 	}
-	return fakeSrvPath
+	return out
 }
 
 // freePort reserves a TCP port for the HTTP fakeserver.

@@ -27,6 +27,8 @@ func main() {
 	flag.IntVar(&tools, "tools", 3, "number of generated echo tools to expose")
 	flag.BoolVar(&notifyListChanged, "notify-list-changed", false, "emit list_changed via trigger_listchanged")
 	flag.BoolVar(&legacyOnly, "legacy", false, "refuse protocol versions after 2025-11-25")
+	var die bool // expose a trigger_die tool that exits the process, for reconnect tests
+	flag.BoolVar(&die, "die", false, "expose a trigger_die tool that exits the server")
 	flag.Parse()
 
 	srv := mcpserver.NewMCPServer("fakeserver", "1.0")
@@ -53,6 +55,15 @@ func main() {
 					return &mcp.CallToolResult{}, fmt.Errorf("send list_changed: %w", err)
 				}
 				return okText("sent"), nil
+			})
+	}
+
+	if die { // a tool that exits the process, for the reconnection test.
+		srv.AddTool(mcp.NewToolWithRawSchema("trigger_die", "exits the server process",
+			json.RawMessage(`{"type":"object","properties":{}}`)),
+			func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				os.Exit(1)
+				return nil, nil
 			})
 	}
 
