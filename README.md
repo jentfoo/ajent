@@ -170,7 +170,7 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
 {
   "model": "anthropic/claude-opus-4",
   "reasoning": { "level": "high", "retain": "wholeTurn" },
-  "agent": { "maxSteps": 40 },
+  "agent": { "maxSteps": 40, "turnRetries": 3 },
   "permissions": {
     "mode": "auto",
     "safeCommands": ["git status", "npm test"],
@@ -188,6 +188,7 @@ The top-level blocks:
 * `model` - the model a fresh session starts with. A `/model` change writes your most recent choice here, so it is remembered across restarts.
 * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is shown (`show`).
 * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
+* `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff; permanent errors (bad request, no credentials) never retry.
 * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, other, refInject, refTotal).
 * `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; a Shift+Tab cycle changes it for the session only.
 * `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).

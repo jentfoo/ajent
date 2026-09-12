@@ -117,7 +117,8 @@ drain follow-up queue -> for each turn:
         drain push-steers, then OnBoundary inputs         (step boundary)
         Compact(CompactStep)                             hook decides
         req = request(state, env, tools)                 assemble()
-        msg, usage = a.stream(ctx, req)                  forwards deltas to sink
+        msg, usage = a.stream(ctx, req)                  forwards deltas to sink,
+                                                          retries recoverable failures
         append msg to state.Messages
         if ctx cancelled -> StopAborted, end turn
         calls := toolCalls(msg); if none -> break (end_turn)
@@ -204,6 +205,20 @@ and assembly share one pass over the events:
 Block boundaries come from the end events; deltas stream through. This keeps
 `EndThinking` before the first `Text`, which is what lets the TUI render a clean
 thinking block.
+
+### Stream recovery
+
+A recoverable model call failure (dropped connection, truncated stream,
+overloaded provider) is re-requested within the step, up to
+`Options.TurnRetries` times (default 4) with transport-shaped backoff honouring
+`Retry-After`. Recovery never consumes a step; an interrupt releases the
+backoff wait. A failed attempt appended nothing to state, so the retry sends
+the identical request; any block it left open is closed first so the
+replacement renders into a fresh region, while a terminal failure leaves
+closing to `TurnEnd`'s flush, the same contract an interrupt uses. Permanent
+failures are never retried. Each retry re-enters the transport's own ladder
+deliberately: that ladder covers sub-second blips, and the loop adds recovery
+for outages that outlast it, under a notice that names the wait.
 
 ### Interrupt
 

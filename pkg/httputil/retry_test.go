@@ -38,7 +38,7 @@ func TestBackoffDelay(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := backoffDelay(tc.policy, tc.attempt, tc.retryAfter, tc.rnd)
+			got, ok := BackoffDelay(tc.policy, tc.attempt, tc.retryAfter, tc.rnd)
 			assert.Equal(t, tc.ok, ok)
 			assert.Equal(t, tc.expected, got)
 		})

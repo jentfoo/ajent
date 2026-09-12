@@ -104,8 +104,9 @@ func RunHeadless(o HeadlessOptions) int {
 			}
 			return comp.run(ctx, reason, "")
 		},
-		MaxSteps:  o.Set.Settings().Agent.MaxSteps,
-		SessionID: sessionHint(rec),
+		MaxSteps:    o.Set.Settings().Agent.MaxSteps,
+		TurnRetries: o.Set.Settings().Agent.TurnRetries,
+		SessionID:   sessionHint(rec),
 	}
 	if rec != nil {
 		opts.Sinks = []agent.Sink{rec.rec.Sink(drain)}

@@ -1,11 +1,15 @@
 package llm
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"testing"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/httputil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -58,27 +62,6 @@ func TestAPIErrorUnwrap(t *testing.T) {
 	})
 }
 
-func TestIsRetryable(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		err      error
-		expected bool
-	}{
-		{"retryable_api_error", &APIError{Retryable: true}, true},
-		{"non_retryable_api_error", &APIError{}, false},
-		{"wrapped_retryable", fmt.Errorf("x: %w", &APIError{Retryable: true}), true},
-		{"plain_error", errors.New("boom"), false},
-		{"nil", nil, false},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, IsRetryable(tc.err))
-		})
-	}
-}
-
 func TestErrNoAPIKeyError(t *testing.T) {
 	t.Parallel()
 
@@ -96,4 +79,36 @@ func TestErrAmbiguousModelError(t *testing.T) {
 
 	err := &ErrAmbiguousModel{Name: "sonnet", Candidates: []string{"anthropic/a", "openrouter/b"}}
 	assert.Equal(t, `llm: "sonnet" matches anthropic/a, openrouter/b`, err.Error())
+}
+
+func TestRecoverable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		err   error
+		want  bool
+		after time.Duration
+	}{
+		{"nil", nil, false, 0},
+		{"canceled", context.Canceled, false, 0},
+		{"deadline", context.DeadlineExceeded, false, 0},
+		{"retryable_api_error", &APIError{Retryable: true}, true, 0},
+		{"retryable_with_after", &APIError{Retryable: true, RetryAfter: 5 * time.Second}, true, 5 * time.Second},
+		{"non_retryable_api_error", &APIError{}, false, 0},
+		{"overflow", (&APIError{}).Overflow(), false, 0},
+		{"wrapped_retryable", fmt.Errorf("x: %w", &APIError{Retryable: true}), true, 0},
+		{"truncated_stream", ErrStreamTruncated, true, 0},
+		{"idle_timeout", httputil.ErrIdleTimeout, true, 0},
+		{"unexpected_eof", io.ErrUnexpectedEOF, true, 0},
+		{"net_error", &net.OpError{Op: "read", Err: errors.New("reset")}, true, 0},
+		{"plain_error", errors.New("boom"), false, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ok, after := Recoverable(tc.err)
+			assert.Equal(t, tc.want, ok)
+			assert.Equal(t, tc.after, after)
+		})
+	}
 }

@@ -2,12 +2,15 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"math/rand/v2"
 	"runtime"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/httputil"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
@@ -306,8 +309,11 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 	}
 }
 
-// stream runs one model call and forwards every delta to the sink. It folds
-// events into an Accumulator so rendering and assembly share a loop.
+// defaultTurnRetries bounds a step's re-requests of a failed model call.
+const defaultTurnRetries = 4
+
+// stream runs one model call, re-requesting a failed call up to
+// Options.TurnRetries times.
 func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, llm.StopReason, error) {
 	provider, err := a.opts.Provider(a.state.Model)
 	if err != nil {
@@ -320,13 +326,63 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	if t := a.state.Tokens; t != nil {
 		t.SetBase(tokens.EstimateFixed(req)) // replaced, so it self-corrects any seeded floor
 	}
-
-	// thinking deltas move the bar only when retention keeps them in the next request
 	keepThink := llm.ResolveRetain(a.state.Reasoning.Retain, a.state.Model.Caps) != llm.RetainNone
+	// report the ledger only for the outcome the caller sees; a retried attempt's
+	// partial usage never lands, its streamed output already moved the bar
+	report := func(usage llm.Usage) {
+		if t := a.state.Tokens; t != nil && !needsRecount(a.state.Model.Caps, usage) {
+			t.Response(a.state.Model.Key(), usage, predicted, keepThink)
+		}
+	}
+	retries := a.opts.TurnRetries
+	if retries <= 0 {
+		retries = defaultTurnRetries
+	}
 
+	for retry := 0; ; retry++ {
+		msg, usage, stop, open, serr := a.streamOnce(ctx, sink, provider, req, keepThink)
+		var retrying bool
+		var delay time.Duration
+		if serr != nil && ctx.Err() == nil && retry < retries {
+			if ok, after := llm.Recoverable(serr); ok {
+				delay, retrying = httputil.BackoffDelay(
+					httputil.RetryPolicy{Attempts: retries + 1}, retry+1, after, rand.Float64())
+			}
+		}
+		if !retrying {
+			report(usage)
+			return msg, usage, stop, serr
+		}
+		open.close(sink)
+		sink.Notice(fmt.Sprintf("stream failed, retrying in %s: %s",
+			delay.Round(100*time.Millisecond), serr), LevelWarn)
+		if waitErr := a.retrySleep(ctx, delay); waitErr != nil {
+			report(usage)
+			return msg, usage, stop, serr
+		}
+	}
+}
+
+// openBlocks records the content blocks a failed stream left unterminated.
+type openBlocks struct{ thinking, text bool }
+
+// close ends the open blocks so a retry streams into a fresh region.
+func (o openBlocks) close(sink Sink) {
+	if o.thinking {
+		sink.EndThinking()
+	}
+	if o.text {
+		sink.EndText()
+	}
+}
+
+// streamOnce runs a single model call and forwards every delta to the sink. It
+// folds events into an Accumulator so rendering and assembly share a loop.
+func (a *Agent) streamOnce(ctx context.Context, sink Sink, provider llm.Provider, req llm.Request, keepThink bool) (llm.Message, llm.Usage, llm.StopReason, openBlocks, error) {
+	var open openBlocks
 	st, err := provider.Stream(ctx, req)
 	if err != nil {
-		return llm.Message{}, llm.Usage{}, 0, err
+		return llm.Message{}, llm.Usage{}, 0, open, err
 	}
 	defer func() { _ = st.Close() }()
 
@@ -339,6 +395,16 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	var acc llm.Accumulator
 	var prog toolProgress
 	for ev, ok := st.Next(); ok; ev, ok = st.Next() {
+		switch ev.Type {
+		case llm.EventThinkingStart:
+			open.thinking = true
+		case llm.EventThinkingEnd:
+			open.thinking = false
+		case llm.EventTextStart:
+			open.text = true
+		case llm.EventTextEnd:
+			open.text = false
+		}
 		a.forward(sink, keepThink, &prog, ev)
 		acc.Add(ev)
 		if ctx.Err() != nil {
@@ -356,12 +422,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 		// interrupted mid-stream: the partial message records its real reason
 		stop = llm.StopAborted
 	}
-	// snap the exact terms to this response's report, unless a provider that
-	// reported nothing needs the local tokenizer recount instead (done after append).
-	if t := a.state.Tokens; t != nil && !needsRecount(a.state.Model.Caps, usage) {
-		t.Response(a.state.Model.Key(), usage, predicted, keepThink)
-	}
-	return msg, usage, stop, streamErr(st, &acc)
+	return msg, usage, stop, open, streamErr(st, &acc)
 }
 
 // buildRequest assembles the llm.Request the next provider call will receive,

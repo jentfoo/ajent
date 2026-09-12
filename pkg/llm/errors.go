@@ -1,22 +1,27 @@
 package llm
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jentfoo/ajent/pkg/httputil"
 )
 
 var (
 	// ErrContextOverflow is the normalized "too many input tokens" signal every
 	// adapter maps its vendor specific form to.
 	ErrContextOverflow = errors.New("llm: context overflow")
-	// ErrStreamAborted is returned when a stream failed after emitting content,
-	// which is never retried because that would duplicate deltas.
-	ErrStreamAborted = errors.New("llm: stream aborted after partial content")
 	// ErrMalformedToolArgs is reported on a tool call whose accumulated
 	// arguments are not valid JSON. It fails the call, not the turn.
 	ErrMalformedToolArgs = errors.New("llm: malformed tool arguments")
+	// ErrStreamTruncated is returned when a stream ended without a finish
+	// reason, so a caller can classify it as retryable.
+	ErrStreamTruncated = errors.New("llm: stream ended without finish_reason")
 	// ErrUnknownModel is returned when no model matches a name.
 	ErrUnknownModel = errors.New("llm: unknown model")
 	// ErrNoTokenizer is returned by CountTokens when the provider has no exact
@@ -106,8 +111,23 @@ func (e *APIError) Overflow() *APIError {
 // IsOverflow reports whether err is or wraps a context overflow.
 func IsOverflow(err error) bool { return errors.Is(err, ErrContextOverflow) }
 
-// IsRetryable reports whether err is a provider error worth retrying.
-func IsRetryable(err error) bool {
+// Recoverable reports whether a failed model call is worth re-requesting, and
+// any server-directed wait.
+func Recoverable(err error) (bool, time.Duration) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false, 0
+	}
+	if errors.Is(err, ErrStreamTruncated) || errors.Is(err, httputil.ErrIdleTimeout) ||
+		errors.Is(err, io.ErrUnexpectedEOF) {
+		return true, 0
+	}
 	var ae *APIError
-	return errors.As(err, &ae) && ae.Retryable
+	if errors.As(err, &ae) {
+		return ae.Retryable, ae.RetryAfter
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true, 0
+	}
+	return false, 0
 }

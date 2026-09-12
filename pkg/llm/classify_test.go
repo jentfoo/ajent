@@ -39,7 +39,8 @@ func TestCompatClassifier(t *testing.T) {
 
 	t.Run("retryable_status_is_marked", func(t *testing.T) {
 		err := compatClassifier("p", FlavorOpenRouter)(503, []byte(`{"error":{"message":"down"}}`))
-		assert.True(t, IsRetryable(err))
+		ok, _ := Recoverable(err)
+		assert.True(t, ok)
 	})
 	t.Run("message_extracted_from_the_envelope", func(t *testing.T) {
 		err := compatClassifier("p", FlavorOpenAI)(400, []byte(`{"error":{"message":"bad thing"}}`))

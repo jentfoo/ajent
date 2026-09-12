@@ -110,7 +110,7 @@ func Do(ctx context.Context, hc *http.Client, r Request) (*http.Response, error)
 			cancel()
 			return nil, unwrapAttempt(err)
 		}
-		delay, ok := backoffDelay(r.Retry, attemptNum, retryAfter, h.rand())
+		delay, ok := BackoffDelay(r.Retry, attemptNum, retryAfter, h.rand())
 		if !ok {
 			cancel()
 			return nil, unwrapAttempt(err)

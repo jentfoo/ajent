@@ -112,14 +112,14 @@ resolved against the model registry by the caller, never an llm import here.
 ### Agent
 
 The agent block holds `maxSteps`, an **optional** cap on one turn's tool-calling
-iterations. Like `subagent.model`, it is deliberately absent from the defaults
-layer, so `Explain("agent.maxSteps")` reports `(default)` and an empty value
-means **unlimited**, the zero value of `agent.Options.MaxSteps` (see
-agent-loop-design.md). `AJENT_AGENT_MAXSTEPS` binds for free through EnvLayer;
-a positive value caps the turn, any non-positive value (or none) leaves it
-uncapped. It is startup-time configuration: pkg/app copies it into
-`agent.Options.MaxSteps` once at process start, so it is deliberately absent
-from `/settings`, whose session overrides could never reach the running agent.
+iterations, and `turnRetries`, how often a failed model call is re-requested
+within a step (default 4; a permanent failure never retries, and `0` keeps the
+default rather than disabling). Both are deliberately absent from the defaults
+layer, so `Explain` reports `(default)`; `AJENT_AGENT_MAXSTEPS` and
+`AJENT_AGENT_TURNRETRIES` bind for free through EnvLayer. They are
+startup-time configuration: pkg/app copies them into `agent.Options` once at
+process start, so they are deliberately absent from `/settings`, whose session
+overrides could never reach the running agent.
 
 ### UI
 

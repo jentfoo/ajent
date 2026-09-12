@@ -522,7 +522,7 @@ func (s *compatStream) finish(cause error) []Event {
 				stop = StopEndTurn
 			}
 		} else {
-			streamErr = errors.New("llm: stream ended without finish_reason")
+			streamErr = ErrStreamTruncated
 			stop = StopError
 			s.err = streamErr
 		}

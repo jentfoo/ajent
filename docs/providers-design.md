@@ -399,7 +399,11 @@ and connection errors) plus a conflict only when the
 server sent a `Retry-After` (some gateways use it for "model loading").
 Exponential backoff with jitter, honouring `Retry-After` but **capped**:
 beyond the cap the request fails immediately, because an agent that silently sleeps
-is indistinguishable from a hang.
+is indistinguishable from a hang. A failure that survives the transport ladder,
+or happens once the body is streaming, is classified by `llm.Recoverable`,
+which reports whether re-issuing the call can recover and any server-directed
+wait. The turn loop runs its own bounded recovery on that verdict (see
+agent-loop-design.md).
 
 Every provider signals "too many input tokens" differently, so each flavor has a
 phrase table in `classify.go` and maps its form to `ErrContextOverflow`, which
@@ -447,9 +451,10 @@ produce, a real bug.
 
 **1. Retry happens only before the first body byte.** `httputil.Do` performs
 every attempt and returns only once the status is 2xx and headers are read. The
-stream then reads with no retry underneath it. There is no code path that *can*
-re-emit deltas, which is what would duplicate them in the transcript. A
-mid-stream failure surfaces the partial plus an error for the caller to handle.
+stream then reads with no retry underneath it, so no code path inside the
+provider can re-emit deltas. A mid-stream failure surfaces the partial plus an
+error for the caller to handle; the turn loop's recovery re-requests the whole
+call and owns closing what the failed attempt rendered.
 
 **2. A stream is a synchronous pull, not a goroutine and a channel.** Each
 adapter's stream holds the response, the SSE reader and a pending queue. Nothing

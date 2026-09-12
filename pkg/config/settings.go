@@ -28,7 +28,8 @@ type Reasoning struct {
 // Agent configures the turn loop. MaxSteps optionally caps one turn's
 // tool-calling iterations; absent or <= 0 (the zero value) means unlimited.
 type Agent struct {
-	MaxSteps int `json:"maxSteps,omitempty"`
+	MaxSteps    int `json:"maxSteps,omitempty"`
+	TurnRetries int `json:"turnRetries,omitempty"` // failed model call re-requests; <= 0 takes the default
 }
 
 // Tools configures the enabled set and output bounds.

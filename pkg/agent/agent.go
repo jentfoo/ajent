@@ -59,8 +59,11 @@ type Options struct {
 	Compact func(ctx context.Context, r CompactReason) (bool, error)
 	// MaxSteps caps one turn's tool-calling iterations; <= 0 (the zero value)
 	// means unlimited, leaving compaction and the context window as the bounds.
-	MaxSteps  int
-	SessionID string // session-affinity headers on requests that support them
+	MaxSteps int
+	// TurnRetries bounds how often a failed model call within a step is
+	// re-requested; <= 0 (the zero value) takes the loop default of 4.
+	TurnRetries int
+	SessionID   string // session-affinity headers on requests that support them
 }
 
 // Agent runs turns against a model provider, streaming deltas to the sink and
@@ -74,6 +77,8 @@ type Agent struct {
 	ctxLast   int       // last emitted Used, for throttling Context emits
 	ctxLastAt time.Time // when that emit happened; drives the interval throttle
 
+	retrySleep func(context.Context, time.Duration) error // stream backoff; test seam
+
 	mu       sync.Mutex
 	running  bool
 	settling int // depth of OnSettled notification; observers may queue work while >0
@@ -86,7 +91,7 @@ type Agent struct {
 // fan-out so the loop always emits on one field; with none supplied events go
 // nowhere.
 func New(state *State, opts Options) *Agent {
-	a := &Agent{state: state, opts: opts}
+	a := &Agent{state: state, opts: opts, retrySleep: sleepCtx}
 	switch len(opts.Sinks) {
 	case 0:
 		a.sink = NopSink{}
@@ -166,6 +171,21 @@ func (a *Agent) Interrupt() {
 // It returns when both queues are empty or the context ends.
 func (a *Agent) Prompt(ctx context.Context, in Input) error {
 	return a.runTurns(ctx, []Input{in})
+}
+
+// sleepCtx waits for d or ctx's end, so an interrupt releases a stream backoff.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // WithState runs fn against the live state, reporting false when a turn is
