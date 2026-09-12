@@ -315,6 +315,53 @@ func TestExpand(t *testing.T) {
 		require.Len(t, second, 1)
 		assert.NotEqual(t, first[0], second[0], "a re-read of the same path needs a fresh call id")
 	})
+
+	// an unchanged directory already listed is not re-listed by @
+	t.Run("unchanged_dir_not_relisted", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
+		x, _ := newExpander(t, dir)
+
+		// first @ lists it and observes the entries in the tracker
+		first := x.Expand("list @sub")
+		require.Len(t, injected(t, first), 2)
+
+		// second @ with unchanged contents: nothing injected
+		second := x.Expand("list @sub again")
+		assert.Empty(t, injected(t, second))
+	})
+
+	// a changed directory is listed again
+	t.Run("changed_dir_relisted", func(t *testing.T) {
+		dir := t.TempDir()
+		sub := filepath.Join(dir, "sub")
+		require.NoError(t, os.Mkdir(sub, 0o700))
+		x, _ := newExpander(t, dir)
+
+		first := x.Expand("list @sub")
+		require.Len(t, injected(t, first), 2)
+
+		// an added entry changes the listing; @ must list again
+		require.NoError(t, os.WriteFile(filepath.Join(sub, "a.txt"), []byte("x"), 0o600))
+		second := x.Expand("list @sub")
+		assert.Equal(t, []string{"ref-2-ls-sub"}, toolCallIDs(injected(t, second)))
+	})
+
+	// an agent ls run earlier dedupes a later @ reference to the same dir
+	t.Run("agent_ls_dedupes_following_ref", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
+		x, _ := newExpander(t, dir)
+
+		tool, ok := x.reg.Lookup("ls")
+		require.True(t, ok)
+		agent.InjectPair(context.Background(), tool, agent.NopSink{},
+			agent.ToolCall{ID: "agent-ls", Name: "ls", Input: []byte(`{"path":"sub"}`)}, "ls sub")
+
+		// the agent listing observed the dir; a following @ is deduped
+		res := x.Expand("list @sub")
+		assert.Empty(t, injected(t, res))
+	})
 }
 
 func TestExpanderSeed(t *testing.T) {

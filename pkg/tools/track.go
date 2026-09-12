@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,16 +20,17 @@ type Record struct {
 }
 
 // Tracker records what the session has observed so @ref expansion can dedupe
-// against an unchanged in-context read, and which lines this session's edits have
-// written. Safe for concurrent use.
+// against an unchanged in-context read or listing, and which lines this
+// session's edits have written. Safe for concurrent use.
 type Tracker struct {
-	mu sync.Mutex
-	m  map[string]Record
+	mu   sync.Mutex
+	m    map[string]Record // files, keyed by resolved path
+	dirs map[string]string // directory fingerprint, keyed by resolved path
 }
 
 // NewTracker returns an empty tracker.
 func NewTracker() *Tracker {
-	return &Tracker{m: make(map[string]Record)}
+	return &Tracker{m: make(map[string]Record), dirs: make(map[string]string)}
 }
 
 // markEdited adds rs to the lines edits have written in path. The ranges hang off
@@ -87,6 +89,48 @@ func (t *Tracker) Observe(path string, data []byte, info os.FileInfo) {
 	t.m[path] = rec
 }
 
+// ObserveDir records the current entry list of dir so @ expansion can skip a
+// repeat listing whose output would be identical.
+func (t *Tracker) ObserveDir(dir string, entries []os.DirEntry) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.dirs == nil {
+		t.dirs = make(map[string]string)
+	}
+	t.dirs[dir] = dirFingerprint(entries)
+}
+
+// UnchangedDir reports whether dir's current entry list matches the last one
+// observed, so an @ listing would repeat identical text.
+func (t *Tracker) UnchangedDir(dir string) bool {
+	t.mu.Lock()
+	fp, ok := t.dirs[dir]
+	t.mu.Unlock()
+	if !ok {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	return dirFingerprint(entries) == fp
+}
+
+// dirFingerprint hashes a listing the way ls renders it: names sorted with a '/'
+// suffix on directories. ReadDir returns entries sorted by name.
+func dirFingerprint(entries []os.DirEntry) string {
+	var b strings.Builder
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		b.WriteString(name)
+		b.WriteByte('\n')
+	}
+	return hashBytes([]byte(b.String()))
+}
+
 // Unchanged reports whether path was observed earlier in the session and still
 // matches what was recorded. It is false for a file never observed.
 func (t *Tracker) Unchanged(path string) bool {
@@ -113,6 +157,7 @@ func (t *Tracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	clear(t.m)
+	clear(t.dirs)
 }
 
 // Records returns a snapshot of the observed paths and their records.

@@ -412,6 +412,11 @@ batch of messages naming one path reads it once. It is shared by
 `@file` reflects current state, and exported for reuse outside the package. Safe
 for concurrent use.
 
+The tracker also observes directory listings (`ObserveDir`) via an entry-name
+fingerprint; `ls` records every real dir it lists (agent calls and injected `@`
+refs alike), and `@ref` dedupes a repeat listing through `UnchangedDir`. Unlike
+files there is no stable hash, so only the entry set can be compared.
+
 Records describe the *process*, not the context, so a rewind, fork or compaction
 can leave them claiming a file is in context when its read was dropped or elided.
 The host calls `Reset` from every rebuild path, which makes the next `@file`

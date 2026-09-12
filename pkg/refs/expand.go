@@ -36,7 +36,7 @@ type injection struct {
 	name  string // read or ls
 	id    string
 	path  string          // as written, what the call is given
-	full  string          // resolved, for the land-time tracker re-check; empty for ls
+	full  string          // resolved, for the land-time tracker re-check; empty for a glob ls
 	input json.RawMessage // the call's arguments, marshalled at plan time
 	body  int64           // expected result bytes, for the submit reserve
 }
@@ -154,7 +154,7 @@ func (x *Expander) Expand(text string) Result {
 		// paths matched before choosing what to read.
 		if tools.HasGlob(ref.Path) {
 			if keep("ls:" + ref.Path) { // patterns never resolve; dedupe as written
-				plan = append(plan, lsCall(run, ref.Path))
+				plan = append(plan, lsCall(run, ref.Path, ""))
 			}
 			continue
 		}
@@ -169,8 +169,13 @@ func (x *Expander) Expand(text string) Result {
 			continue
 		}
 		if m.Dir {
+			// skip a repeat listing whose output would be identical: the dir's
+			// entries were observed by an earlier @ or agent ls and are unchanged.
+			if x.tracker != nil && x.tracker.UnchangedDir(full) {
+				continue
+			}
 			if keep("ls:" + full) {
-				plan = append(plan, lsCall(run, ref.Path))
+				plan = append(plan, lsCall(run, ref.Path, full))
 			}
 			continue
 		}
@@ -212,9 +217,15 @@ func (x *Expander) Expand(text string) Result {
 					break // an interrupt stops the batch rather than injecting error pairs
 				}
 				// re-checked here, not just at plan time: another message in the same
-				// batch may have read it since
-				if p.full != "" && x.tracker != nil && x.tracker.Unchanged(p.full) {
-					continue
+				// batch may have read or listed it since
+				if p.full != "" && x.tracker != nil {
+					if p.name == "ls" {
+						if x.tracker.UnchangedDir(p.full) {
+							continue
+						}
+					} else if x.tracker.Unchanged(p.full) {
+						continue
+					}
 				}
 				msgs = append(msgs, x.injectPair(ctx, p)...)
 			}
@@ -230,9 +241,11 @@ func (x *Expander) Expand(text string) Result {
 // with the pair and replaces it moments later.
 const lsNominalBytes = 1024
 
-// lsCall plans the directory listing for a glob or directory reference.
-func lsCall(run int64, path string) injection {
-	return newInjection(run, "ls", "ls-", path, "", lsNominalBytes)
+// lsCall plans the directory listing for a glob or directory reference. dir is
+// the resolved path when it names one directory (so Run can re-check it), empty
+// for a glob.
+func lsCall(run int64, path, dir string) injection {
+	return newInjection(run, "ls", "ls-", path, dir, lsNominalBytes)
 }
 
 // callID names one injected reference. The run number is what keeps a later

@@ -39,6 +39,23 @@ func TestLs(t *testing.T) {
 		assert.Contains(t, textOf(res), ".hidden")
 	})
 
+	t.Run("observes_dir_for_dedupe", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "y")
+
+		tracker := NewTracker()
+		res, err := (&lsTool{policy: policy, tracker: tracker}).Execute(t.Context(),
+			callWith([]byte(`{}`)), nil)
+		require.NoError(t, err)
+		assert.NotEmpty(t, textOf(res))
+
+		// the listing was observed, so an unchanged @ repeat can dedupe it
+		assert.True(t, tracker.UnchangedDir(dir))
+
+		mkfile(dir, "b.txt", "z")
+		assert.False(t, tracker.UnchangedDir(dir))
+	})
+
 	// a limit truncates with the shared footer naming the spill file.
 	t.Run("limit_truncates_with_footer", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)

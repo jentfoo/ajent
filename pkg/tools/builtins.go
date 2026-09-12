@@ -46,7 +46,7 @@ func Builtins(opts Options) (*Registry, error) {
 	reg.Register(&bashTool{policy: policy, sessionID: opts.SessionID}, true)
 	reg.Register(&findTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&grepTool{policy: policy, sessionID: opts.SessionID}, false)
-	reg.Register(&lsTool{policy: policy, sessionID: opts.SessionID}, false)
+	reg.Register(&lsTool{policy: policy, tracker: tracker, sessionID: opts.SessionID}, false)
 	reg.Register(&askUserTool{ask: opts.Ask}, false)
 	// a question changes nothing on disk, so it never needs approval
 	reg.MarkReadOnly([]string{ToolAskUser})

@@ -490,7 +490,7 @@ text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 |---|---|
 | wildcard pattern (contains `*`, `?` or `[`) | `ls` pair planned via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read; the pattern stays literal in prose |
 | missing | literal, warning notice |
-| directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state) |
+| directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state); skipped when the tracker's listing is unchanged (`UnchangedDir`) |
 | already read, unchanged (`Tracker.Unchanged`) | nothing planned, literal |
 | a path the same message already named | planned once; the repeat stays literal |
 | text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |

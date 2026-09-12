@@ -22,6 +22,7 @@ type lsParams struct {
 // has no shell.
 type lsTool struct {
 	policy    PathPolicy
+	tracker   *Tracker
 	sessionID string // names the spill directory for long results
 }
 
@@ -64,6 +65,9 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 	entries, err := os.ReadDir(full) // ReadDir returns entries sorted by name
 	if err != nil {
 		return resultErr("ls: " + err.Error()), nil
+	}
+	if t.tracker != nil {
+		t.tracker.ObserveDir(full, entries)
 	}
 
 	var b strings.Builder

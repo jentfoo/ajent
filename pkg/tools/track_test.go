@@ -10,6 +10,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// mustReadEntries lists dir, failing the test on error.
+func mustReadEntries(t *testing.T, dir string) []os.DirEntry {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	return entries
+}
+
 func TestTracker(t *testing.T) {
 	t.Parallel()
 
@@ -60,6 +68,30 @@ func TestTracker(t *testing.T) {
 		tr.Reset()
 		assert.False(t, tr.Unchanged(path)) // a forgotten read must inject again
 		assert.Empty(t, tr.Records())
+	})
+
+	// a directory observed unchanged is deduped, but re-listed after its entries change
+	t.Run("observe_dir_unchanged_then_changed", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o600))
+
+		tr := NewTracker()
+		tr.ObserveDir(dir, mustReadEntries(t, dir))
+		assert.True(t, tr.UnchangedDir(dir))
+
+		// an added entry changes the listing fingerprint
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("y"), 0o600))
+		assert.False(t, tr.UnchangedDir(dir))
+
+		// re-observing the new listing restores dedupe
+		tr.ObserveDir(dir, mustReadEntries(t, dir))
+		assert.True(t, tr.UnchangedDir(dir))
+	})
+
+	// a never-listed directory has no baseline for dedupe
+	t.Run("unobserved_dir_is_unchanged_false", func(t *testing.T) {
+		tr := NewTracker()
+		assert.False(t, tr.UnchangedDir(filepath.Join(t.TempDir(), "sub")))
 	})
 
 	t.Run("records_snapshot_is_copy", func(t *testing.T) {
