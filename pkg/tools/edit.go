@@ -235,10 +235,10 @@ func applyEdits(t editTarget, orig string, ops []editOp) (editOutcome, error) {
 		// matched oldText onto text newText already holds
 		if !slices.ContainsFunc(ms, func(m match) bool { return m.repl != buf[m.s:m.e] }) {
 			if op.OldText == op.NewText {
-				return editOutcome{}, fmt.Errorf("edit %d: oldText and newText are identical, so this edit would change nothing; oldText must be the text the file holds now, newText the text you want",
+				return editOutcome{}, fmt.Errorf("edit %d: oldText and newText are identical, this edit would change nothing; oldText must be the current file content, newText the text you want",
 					i+1)
 			}
-			return editOutcome{}, fmt.Errorf("edit %d: newText is already what %s holds at that region, so this edit would change nothing; read it again to see the current text",
+			return editOutcome{}, fmt.Errorf("edit %d: newText is already what %s holds at that region, this edit would change nothing; read it again to see the current content",
 				i+1, t.Path)
 		}
 		if tier != tierExact { // name the difference, so the next edit is exact
