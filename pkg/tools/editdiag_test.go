@@ -99,7 +99,7 @@ func TestMissingErrorHint(t *testing.T) {
 
 	t.Run("says_no_similar_text", func(t *testing.T) {
 		msg := missingError(1, editTarget{Path: "a.go"}, "unrelated content", "func f() {}\n", nil)
-		assert.Contains(t, msg, "no similar text found in a.go")
+		assert.Contains(t, msg, "appears nowhere in this file, read the file and copy it exactly")
 		assert.NotContains(t, msg, "must match verbatim")
 	})
 }

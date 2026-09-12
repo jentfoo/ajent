@@ -62,7 +62,8 @@ func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
 
 	text, line, ok := closestBlock(old, buf)
 	if !ok {
-		return head + fmt.Sprintf("\nno similar text found in %s; read it before editing", t.Path)
+		// the diagnosis above already says what to do; nothing close is worth offering
+		return head
 	}
 	if d := soleDifference(old, text); d != "" {
 		head += "\n" + d // name the difference rather than leaving it to be spotted
@@ -130,7 +131,7 @@ func diagnoseNoMatch(old, buf string) []string {
 			return []string{"the file appears empty or whitespace-only"}
 		}
 		// the words genuinely differ; a retry needs exact text, not an approximation
-		return []string{"your oldText appears nowhere in this file; copy it exactly"}
+		return []string{"your oldText appears nowhere in this file, read the file and copy it exactly"}
 	}
 }
 
