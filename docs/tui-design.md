@@ -353,9 +353,25 @@ only composes rows for `setLive` and touches no renderer at all.
 
 An interaction's height cap is a larger fraction of the screen than the input's:
 an interaction is transient and modal, and the input's smaller cap leaves too
-little room on a short terminal for a usable picker. Lists scroll internally with an
-overflow footer, which counts against the budget so row accounting stays
-exact per invariant 2.
+little room on a short terminal for a usable picker. `interactionMaxRows` claims
+two thirds (`interactionShareNum`/`interactionFree`) of the rows left after the
+rule, activity and queued-prompt rows have drawn (the status rows are subtracted at
+the call site), floored at `minInteractionRows` **and** at one row over the editor's
+own cap so it always outgrows the input wherever there is room; with fewer rows left
+than that share it takes them all, never fewer than one. The row naming the prompts
+queued behind the active interaction is reserved *inside* that cap rather than added
+beneath it.
+
+Lists scroll internally, keeping the cursor row in view, and an interactor never emits
+more rows than its cap: `listSection` takes an overflow footer's row out of the same
+budget it fills with items, the accounting `fitRows` already used, so a window plus its
+footer stays exact per invariant 2. Two
+deliberate exceptions: at a one-row budget the cursor row wins and no footer is drawn,
+since a list you cannot see a single row of is useless; and each interactor's chrome is
+fixed (prompt line, pick header plus filter row, always at least one option in a
+decision dialog), so a cap smaller than that renders the minimum viable block. Because
+the cap is measured against rows actually left to it, an interaction is never what tips
+the live block past the screen and makes `repaint`'s final clamp drop a header.
 
 **Pick rows reserve a kind column.** A `PickItem` may carry a `Tag` (a short kind
 word) and a `Mark` (the hue it takes). Every row of a list pads its tag to the

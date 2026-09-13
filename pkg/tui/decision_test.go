@@ -59,14 +59,16 @@ func TestUIDecisionRenders(t *testing.T) {
 		assert.NotContains(t, screen, "lines") // nothing hidden, so no cut marker
 	})
 	t.Run("wrapped_line_cut_by_height", func(t *testing.T) {
-		u, v, _ := interactionUI(t) // 12 rows: no room for a 200 column subject
-		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Repeat("x", 200),
+		// long enough that a 12 row screen cannot show it all; how many rows the
+		// subject gets follows the cap, so only the marker's presence is pinned
+		u, v, _ := interactionUI(t)
+		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Repeat("x", 600),
 			Options: []Option{{Label: "A"}}})
 		t.Cleanup(d.Close)
 
 		ctx := t.Context()
 		go func() { _, _ = d.Wait(ctx) }()
-		waitFor(t, u, v, "…+1 lines") // the partly shown line is reported as hidden
+		waitFor(t, u, v, "…+") // the partly shown line is reported as hidden
 		// the rows that do fit still carry the command
 		assert.Contains(t, strutil.StripANSI(u.snapshot(v)), strings.Repeat("x", 60))
 	})
@@ -357,5 +359,44 @@ func TestUIDecisionNoUI(t *testing.T) {
 		t.Cleanup(dd.Close)
 		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrNoUI) // a closed UI has nobody to ask
+	})
+}
+
+func TestDecisionStateRows(t *testing.T) {
+	t.Parallel()
+
+	th := NewTheme(ColorNone, DefaultPalette())
+	long := &decisionState{prompt: "Approve?", context: strings.Repeat("subject line\n", 20), options: optionsOf(8)}
+	short := &decisionState{prompt: "Approve?", context: "one subject line", options: optionsOf(8)}
+
+	tests := []struct {
+		name    string
+		st      *decisionState
+		maxRows int
+		wantLen int
+	}{
+		{"marker_and_option_share_a_tight_cap", long, 5, 5},
+		{"option_row_beats_the_marker", long, 2, 2},
+		{"footer_counts_against_the_cap", short, 6, 6},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, _, _ := tc.st.rows(th, 40, tc.maxRows)
+			assert.Len(t, rows, tc.wantLen)
+			assert.Contains(t, strutil.StripANSI(rows[0]), "Approve?") // the prompt is never dropped
+		})
+	}
+
+	t.Run("option_footer_names_the_hidden_choices", func(t *testing.T) {
+		rows, _, _ := short.rows(th, 40, 6)
+		require.Len(t, rows, 6)
+		assert.Equal(t, selectIndent+moreLabel(5), strutil.StripANSI(rows[5]))
+	})
+
+	t.Run("holds_the_cap_at_every_height", func(t *testing.T) {
+		for maxRows := range 12 {
+			rows, _, _ := long.rows(th, 40, maxRows)
+			assert.LessOrEqual(t, len(rows), max(2, maxRows)) // prompt plus one option is the floor
+		}
 	})
 }

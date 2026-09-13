@@ -142,20 +142,16 @@ func (s *decisionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	}
 	out = append(out, ctxRows...)
 
-	// a dim marker reports the subject lines that were cut or did not fit
-	if cut > 0 {
+	// a dim marker reports the subject lines that were cut or did not fit; an option
+	// row wins when there is nothing to spare below it
+	if cut > 0 && len(out) < maxRows-1 {
 		out = append(out, t.Dim.Wrap("…+"+strconv.Itoa(cut)+" lines"))
 	}
 
-	listRows := max(1, maxRows-len(out))
-	start, end := windowFor(s.cursor, len(s.options), listRows)
-	for i := start; i < end; i++ {
-		out = append(out, numberedOptionRow(t, s.options[i], i+1, i == s.cursor, width))
-	}
-	if end-start < len(s.options) && len(out) < maxRows {
-		out = append(out, t.Dim.Wrap(selectIndent+moreLabel(len(s.options)-(end-start))))
-	}
-	return out, 0, 0
+	return append(out, listSection(t, s.cursor, len(s.options), max(1, maxRows-len(out)),
+		func(i int) string {
+			return numberedOptionRow(t, s.options[i], i+1, i == s.cursor, width)
+		})...), 0, 0
 }
 
 // contextRows renders the elided subject wrapped to width, filling at most budget

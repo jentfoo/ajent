@@ -13,6 +13,7 @@ const (
 	selectMarker   = "> "
 	selectIndent   = "  "
 	interactionCap = 9 // number keys select directly up to this many options
+	pickerChrome   = 2 // rows a Pick renders above its list: header and filter echo
 )
 
 // Option is one choice in a Select.
@@ -155,14 +156,8 @@ type selectState struct {
 
 func (s *selectState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	rows := []string{t.Accent.Wrap(s.prompt)}
-	start, end := windowFor(s.cursor, len(s.options), maxRows-1)
-	for i := start; i < end; i++ {
-		rows = append(rows, optionRow(t, s.options[i], i == s.cursor, width))
-	}
-	if end-start < len(s.options) {
-		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(len(s.options)-(end-start))))
-	}
-	return rows, 0, 0
+	return append(rows, listSection(t, s.cursor, len(s.options), maxRows-len(rows),
+		func(i int) string { return optionRow(t, s.options[i], i == s.cursor, width) })...), 0, 0
 }
 
 func (s *selectState) key(k key) (bool, error) {
@@ -290,21 +285,12 @@ func (s *pickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 		shown = t.Dim.Wrap(s.placeholder)
 	}
 	filterRow := t.User.Wrap(userMarker) + shown
-	rows := []string{header, filterRow}
-
-	listRows := maxRows - len(rows)
 	tagCol := tagColumn(s.items)
-	start, end := windowFor(s.cursor, len(s.matches), listRows)
-	for i := start; i < end; i++ {
-		it := s.items[s.matches[i]]
-		rows = append(rows, pickItemRow(t, it, i == s.cursor, width, tagCol))
-	}
-	if len(s.matches) == 0 {
-		rows = append(rows, t.Dim.Wrap(selectIndent+"no matches"))
-	} else if end-start < len(s.matches) {
-		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(len(s.matches)-(end-start))))
-	}
-	return rows, 1, displayWidth(t.User.Wrap(userMarker)) + displayWidth(s.filter)
+	list := listSection(t, s.cursor, len(s.matches), maxRows-pickerChrome, func(i int) string {
+		return pickItemRow(t, s.items[s.matches[i]], i == s.cursor, width, tagCol)
+	})
+	return append([]string{header, filterRow}, list...), 1,
+		displayWidth(t.User.Wrap(userMarker)) + displayWidth(s.filter)
 }
 
 func (s *pickState) key(k key) (bool, error) {
@@ -483,6 +469,31 @@ func windowFor(cursor, total, rows int) (start, end int) {
 	return start, start + rows
 }
 
+// listSection renders items 0..total-1 into at most room rows with row(), scrolling
+// to keep cursor visible. Rows that do not fit end in a dim footer naming them,
+// which takes one of those same rows; an empty list renders no matches.
+func listSection(t Theme, cursor, total, room int, row func(i int) string) []string {
+	switch {
+	case room <= 0:
+		return nil
+	case total == 0:
+		return []string{t.Dim.Wrap(selectIndent + "no matches")}
+	}
+	listRows := min(room, total)
+	if room > 1 && room < total {
+		listRows-- // the footer takes a row of this budget
+	}
+	start, end := windowFor(cursor, total, listRows)
+	out := make([]string, 0, room)
+	for i := start; i < end; i++ {
+		out = append(out, row(i))
+	}
+	if hidden := total - (end - start); hidden > 0 && len(out) < room {
+		out = append(out, t.Dim.Wrap(selectIndent+moreLabel(hidden)))
+	}
+	return out
+}
+
 // wrapIndex moves an index cyclically, so the ends of a list join up.
 func wrapIndex(i, n int) int {
 	if n == 0 {
@@ -556,27 +567,16 @@ func (s *multiPickState) rows(t Theme, width, maxRows int) ([]string, int, int) 
 		shown = t.Dim.Wrap(s.placeholder)
 	}
 	filterRow := t.User.Wrap(userMarker) + shown
-	rows := []string{header, filterRow}
-
-	listRows := maxRows - len(rows)
-	start, end := windowFor(s.cursor, len(s.picks), listRows)
-	for i := start; i < end; i++ {
+	list := listSection(t, s.cursor, len(s.picks), maxRows-pickerChrome, func(i int) string {
 		r := s.picks[i]
 		if r.item < 0 { // group header row
-			members := s.groupMembers(r.group)
-			rows = append(rows, multiPickHeaderRow(t, r.group,
-				groupTri(members, s.selected), i == s.cursor, width))
-		} else {
-			it := s.items[r.item]
-			rows = append(rows, multiPickRow(t, it, i == s.cursor, s.isSelected(r.item), width))
+			return multiPickHeaderRow(t, r.group, groupTri(s.groupMembers(r.group), s.selected), i == s.cursor, width)
 		}
-	}
-	if len(s.picks) == 0 {
-		rows = append(rows, t.Dim.Wrap(selectIndent+"no matches"))
-	} else if end-start < len(s.picks) {
-		rows = append(rows, t.Dim.Wrap(selectIndent+moreLabel(len(s.picks)-(end-start))))
-	}
-	return rows, 1, displayWidth(t.User.Wrap(userMarker)) + displayWidth(s.filter)
+		it := s.items[r.item]
+		return multiPickRow(t, it, i == s.cursor, s.isSelected(r.item), width)
+	})
+	return append([]string{header, filterRow}, list...), 1,
+		displayWidth(t.User.Wrap(userMarker)) + displayWidth(s.filter)
 }
 
 // groupMembers returns the visible item indexes belonging to a header's group.

@@ -76,17 +76,25 @@ type questionState struct {
 }
 
 func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
-	// the prompt rides above the answer row, capped so the live block stays bounded
-	out := s.promptRows(t, width, max(1, maxRows-1))
+	// The prompt rides above the answer or option row, capped so the live block stays
+	// bounded. Choosing also reserves a row for an overflow footer naming hidden options.
+	choosing := len(s.options) > 0 && !s.chatting
+	promptBudget := max(1, maxRows-1)
+	if choosing {
+		promptBudget = max(1, maxRows-2)
+	}
+	out := s.promptRows(t, width, promptBudget)
 
-	if len(s.options) > 0 && !s.chatting { // a choice among offered options
+	if choosing { // a choice among offered options
 		budget := max(1, maxRows-len(out))
 		list, hidden := s.optionBlock(t, width, budget)
 		if hidden > 0 && budget > 1 { // re-render a row shorter so the marker fits
 			list, hidden = s.optionBlock(t, width, budget-1)
 		}
 		out = append(out, list...)
-		if hidden > 0 {
+		// under two rows there is no room for both an option and its marker; the
+		// option reads first so a truncated list stays navigable
+		if hidden > 0 && len(out) < maxRows {
 			out = append(out, t.Dim.Wrap(selectIndent+moreLabel(hidden)))
 		}
 		return out, 0, 0
@@ -98,7 +106,7 @@ func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	if s.chatting {
 		placeholder = chatPlaceholder
 	}
-	answerRows, caretRow, curCol := s.answer.view(t, max(1, width), maxRows-len(out), marker, userContinue, placeholder, false)
+	answerRows, caretRow, curCol := s.answer.view(t, max(1, width), max(1, maxRows-len(out)), marker, userContinue, placeholder, false)
 	out = append(out, answerRows...)
 	return out, len(out) - len(answerRows) + caretRow, curCol
 }

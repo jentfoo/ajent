@@ -946,11 +946,12 @@ func (u *UI) repaint() {
 	offset += len(queuedR)
 
 	// an interaction takes the input's place while it is active, so the editor
-	// keeps whatever was typed and shows it again once the prompt resolves
+	// keeps whatever was typed and shows it again once the prompt resolves; the
+	// status rows below it are reserved here so its own cap stays exact.
 	var curRow, curCol int
 	if u.act != nil {
 		var iRows []string
-		iRows, curRow, curCol = u.interactionRows(w, h-len(rows))
+		iRows, curRow, curCol = u.interactionRows(w, h-len(rows)-len(statusRows))
 		rows = append(rows, iRows...)
 	} else {
 		maxRows := u.inputRows()

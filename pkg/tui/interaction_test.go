@@ -402,6 +402,20 @@ func TestUIPick(t *testing.T) {
 		press(t, pw, "\r")
 		assert.Equal(t, 0, <-result)
 	})
+	t.Run("keeps_its_header_on_a_four_row_screen", func(t *testing.T) {
+		// the cap floor plus an unreserved overflow footer used to push the block
+		// past the screen, and the clamp then dropped the picker's own header row
+		v := newVT(60, 4)
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		u := newTestUI(t, v, pr)
+
+		go func() { _, _ = u.Pick("Model", pickItemsOf(30), PickOptions{}) }()
+
+		waitFor(t, u, v, "30 of 30")
+		assert.LessOrEqual(t, liveRowCount(u.snapshot(v)), 4)
+		press(t, pw, "\x1b")
+	})
 	t.Run("long_list_scrolls_within_the_cap", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -609,5 +623,46 @@ func TestPendingResolve(t *testing.T) {
 
 		<-p.done
 		assert.ErrorIs(t, p.err, first)
+	})
+}
+
+func TestInteractionMaxRows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		free, editorCap int
+		waiting         bool
+		want            int
+	}{
+		{"two_thirds_of_free_rows", 30, 3, false, 20},
+		{"floor_beats_a_small_share", 4, 1, false, minInteractionRows},
+		{"never_over_the_editor_cap_plus_one", 8, 5, false, 6},
+		{"queued_row_shares_the_rows", 6, 3, true, 4},
+		{"squeezed_below_its_share", 2, 10, false, 2},
+		{"one_row_when_squeezed_flat", 0, 5, false, 1},
+		{"never_zero", -3, 0, true, 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, interactionMaxRows(tc.free, tc.editorCap, tc.waiting))
+		})
+	}
+
+	t.Run("always_outgrows_the_input", func(t *testing.T) {
+		// spec: an interaction's cap is a larger fraction of the screen than the
+		// input's, so on any terminal with room it beats the editor's own share
+		for h := 5; h <= 60; h++ {
+			editorCap := max(1, (h-1)/maxInputRatio)
+			free := h - 2 // a rule row and a status row are drawn above and below
+			assert.Greater(t, interactionMaxRows(free, editorCap, false), editorCap, "height %d", h)
+		}
+	})
+
+	t.Run("leaves_room_for_the_queued_row", func(t *testing.T) {
+		for free := 3; free <= 40; free++ {
+			rows := interactionMaxRows(free, 3, true)
+			assert.LessOrEqual(t, rows+1, free) // the indicator still shares those rows
+		}
 	})
 }

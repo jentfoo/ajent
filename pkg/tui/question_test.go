@@ -97,7 +97,7 @@ func TestUIAsk(t *testing.T) {
 		ctx := t.Context()
 		go func() { _, _ = u.Ask(ctx, Question{Text: many.String()}) }()
 
-		waitFor(t, u, v, "… +9 lines")
+		waitFor(t, u, v, "… +") // the marker names the hidden lines; its count follows the cap
 		// the live block stays inside its share of a 12 row screen, divider included
 		require.Eventually(t, func() bool {
 			return liveRowCount(u.snapshot(v)) <= 8
@@ -327,6 +327,22 @@ func TestQuestionStateRows(t *testing.T) {
 		assert.Equal(t, len(rows)-1, caret) // the caret sits at the end of the last row
 		assert.Equal(t, displayWidth(rows[len(rows)-1]), col)
 		assert.NotContains(t, strings.Join(rows, "\n"), "A") // the option list gave way to the reply
+	})
+	t.Run("holds_the_cap_at_every_height", func(t *testing.T) {
+		list := &questionState{text: strings.Repeat("question line\n", 20), options: optionsOf(8)}
+		reply := &questionState{text: strings.Repeat("question line\n", 20), chatIndex: -1}
+
+		for maxRows := range 13 {
+			lrows, _, _ := list.rows(th, 40, maxRows)
+			assert.LessOrEqual(t, len(lrows), max(2, maxRows)) // prompt plus one row is the floor
+			rrows, _, _ := reply.rows(th, 40, maxRows)
+			assert.LessOrEqual(t, len(rrows), max(2, maxRows))
+
+			if maxRows >= 6 { // options or answer plus their marker fill the cap exactly
+				require.Len(t, lrows, maxRows)
+				require.Len(t, rrows, maxRows)
+			}
+		}
 	})
 }
 

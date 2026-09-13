@@ -6,10 +6,14 @@ import (
 	"sync"
 )
 
-// maxInteractionRatio caps how much of the screen an interaction may take. It
-// is looser than maxInputRatio because an interaction is transient and modal,
-// and a third of a short terminal is not a usable picker.
-const maxInteractionRatio = 2
+// A modal replaces the composer, so it claims a larger share of the live block than
+// the input's half: interactionShareNum of every interactionFree rows still free,
+// floored at minInteractionRows and one row over the editor's cap.
+const (
+	interactionShareNum = 2 // numerator of the free-row share
+	interactionFree     = 3 // denominator of the free-row share
+	minInteractionRows  = 3 // prompt row, one list row, overflow footer
+)
 
 // interactor renders into the live block and consumes keys. Implementations
 // hold their own result, which the calling method reads once done closes.
@@ -140,19 +144,27 @@ func (u *UI) routeKey(k key) {
 	}
 }
 
-// interactionRows renders the active interaction. Caller holds the lock.
-func (u *UI) interactionRows(width, height int) (rows []string, caretRow, caretCol int) {
-	maxRows := max(3, (height-2)/maxInteractionRatio)
+// interactionRows renders the active interaction within free rows, plus one naming
+// any prompts queued behind it. Caller holds the lock.
+func (u *UI) interactionRows(width, free int) (rows []string, caretRow, caretCol int) {
 	waiting := len(u.queue) - 1 // prompts queued behind the active one
-	if waiting > 0 {
-		maxRows-- // reserve a row for the queue indicator below
-	}
+	maxRows := interactionMaxRows(free, u.inputRows(), waiting > 0)
 	rows, caretRow, caretCol = u.act.it.rows(u.theme, width, maxRows)
 	if waiting > 0 {
 		// sits below the interaction so the caret position is unchanged
 		rows = append(rows, u.theme.Dim.Wrap("+"+strconv.Itoa(waiting)+" waiting"))
 	}
 	return rows, caretRow, caretCol
+}
+
+// interactionMaxRows returns an active interaction's cap from free terminal rows,
+// given the editor's own cap and whether prompts queue below it. At least one row.
+func interactionMaxRows(free, editorCap int, waiting bool) int {
+	want := max(free*interactionShareNum/interactionFree, minInteractionRows, editorCap+1)
+	if waiting {
+		free-- // the queued-prompt row shares these rows
+	}
+	return max(min(want, free), 1)
 }
 
 // cancelInteractions resolves everything pending, so no caller is left blocked
