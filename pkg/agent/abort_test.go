@@ -115,14 +115,14 @@ func TestAbortResults(t *testing.T) {
 		// completion order c2 then c1 must come back in call order.
 		out := abortResults(llm.Message{Content: llm.BlockList{
 			call("c1"), call("c2"),
-		}}, []llm.ToolResultBlock{{CallID: "c2"}, {CallID: "c1"}})
+		}}, []llm.ToolResultBlock{{CallID: "c2"}, {CallID: "c1"}}, InterruptedText)
 		assert.Equal(t, []string{"c1", "c2"}, resultIDs(out))
 	})
 
 	t.Run("missing_call_gets_synthetic_error", func(t *testing.T) {
 		out := abortResults(llm.Message{Content: llm.BlockList{
 			call("c1"), call("c2"),
-		}}, []llm.ToolResultBlock{{CallID: "c2"}})
+		}}, []llm.ToolResultBlock{{CallID: "c2"}}, InterruptedText)
 		require.Len(t, out, 2) // both calls filled in
 		assert.Equal(t, "c1", out[0].CallID)
 		assert.True(t, out[0].IsError)
@@ -130,10 +130,20 @@ func TestAbortResults(t *testing.T) {
 		assert.Equal(t, InterruptedText, tb.Text)
 	})
 
+	t.Run("fill_carries_caller_text", func(t *testing.T) {
+		out := abortResults(llm.Message{Content: llm.BlockList{
+			call("c1"),
+		}}, nil, StepLimitText)
+		require.Len(t, out, 1)
+		assert.True(t, out[0].IsError)
+		tb := out[0].Content[0].(llm.TextBlock)
+		assert.Equal(t, StepLimitText, tb.Text)
+	})
+
 	t.Run("empty_call_id_result_ignored", func(t *testing.T) {
 		out := abortResults(llm.Message{Content: llm.BlockList{
 			call("c1"),
-		}}, []llm.ToolResultBlock{{CallID: ""}})
+		}}, []llm.ToolResultBlock{{CallID: ""}}, InterruptedText)
 		require.Len(t, out, 1)
 		assert.True(t, out[0].IsError) // the empty-id result was not matched
 	})

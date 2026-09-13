@@ -317,8 +317,37 @@ func TestLoopMaxSteps(t *testing.T) {
 
 		err := a.Prompt(t.Context(), Input{Text: "x"})
 		require.NoError(t, err) // hitting the limit ends cleanly, not as an error
-		assert.NotEqual(t, llm.StopEndTurn, catch.result.Stop)
+		assert.Equal(t, llm.StopMaxTokens, catch.result.Stop)
 		assert.Equal(t, 3, catch.result.Steps)
+		assert.True(t, wellFormed(a.state.Messages)) // capped tool_use still answered
+
+		// the cap fills unanswered calls with its own marker, not an interrupt claim
+		last := a.state.Messages[len(a.state.Messages)-1]
+		trb, ok := last.Content[0].(llm.ToolResultBlock)
+		require.True(t, ok)
+		assert.True(t, trb.IsError)
+		tb := trb.Content[0].(llm.TextBlock)
+		assert.Equal(t, StepLimitText, tb.Text)
+	})
+
+	// an overflow retry reruns the step without spending any of the cap.
+	t.Run("overflow_retry_keeps_budget", func(t *testing.T) {
+		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash"}}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Err: llm.ErrContextOverflow},          // retried at step 1
+			{Events: toolCallEvents("c1", "bash")}, // step 1's reply
+			{Events: textOnly("done")},             // step 2, inside a cap of 2
+		}}
+		catch := &resultCatcher{}
+		a := newTestAgent(nil, p, catch)
+		a.opts.Tools = set
+		a.opts.MaxSteps = 2
+		a.opts.Compact = func(context.Context, CompactReason) (bool, error) { return true, nil }
+
+		err := a.Prompt(t.Context(), Input{Text: "x"})
+		require.NoError(t, err)
+		assert.Equal(t, llm.StopEndTurn, catch.result.Stop) // never tripped the cap
+		assert.Equal(t, 2, catch.result.Steps)
 	})
 
 	// a zero MaxSteps (the default) never trips: the loop runs as many steps as the model keeps calling tools.

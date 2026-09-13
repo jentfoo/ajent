@@ -189,6 +189,13 @@ when set, ends the turn cleanly with a notice once hit, not as an error. The
 cap is configurable: the `agent.maxSteps` config key (see config-design.md) is
 read once at startup; absent or non-positive means unlimited.
 
+A step counts one model reply. Recovery — a stream re-request or the overflow
+compact-retry — reruns within the step and never advances it, so `MaxSteps`
+and `TurnResult.Steps` count replies, not attempts. When the cap fires with
+calls still unanswered, the fill answers them with its own marker,
+`not run: the turn hit its step limit`, not `interrupted by user`: the turn
+was capped, not cancelled, and the transcript says which one happened.
+
 ## Streaming and cancellation
 
 `a.stream` drives `llm.Stream.Next()` and folds each event into an
@@ -211,7 +218,8 @@ thinking block.
 A recoverable model call failure (dropped connection, truncated stream,
 overloaded provider) is re-requested within the step, up to
 `Options.TurnRetries` times (default 4) with transport-shaped backoff honouring
-`Retry-After`. Recovery never consumes a step; an interrupt releases the
+`Retry-After`. Recovery never consumes a step — neither the re-request nor the
+overflow compact-retry advances it; an interrupt releases the
 backoff wait. A failed attempt appended nothing to state, so the retry sends
 the identical request; any block it left open is closed first so the
 replacement renders into a fresh region, while a terminal failure leaves

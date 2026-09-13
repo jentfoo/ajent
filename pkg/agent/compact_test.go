@@ -20,8 +20,10 @@ func TestOverflowRetry(t *testing.T) {
 			{Err: llm.ErrContextOverflow},   // first request is too big
 			{Events: textOnly("recovered")}, // the compacted retry succeeds
 		}}
+		catch := &resultCatcher{}
 		a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+			Sinks:    []Sink{catch},
 			Env:      testEnv,
 			Compact: func(_ context.Context, r CompactReason) (bool, error) {
 				reasons = append(reasons, r)
@@ -31,6 +33,7 @@ func TestOverflowRetry(t *testing.T) {
 
 		err := a.Prompt(t.Context(), Input{Text: "big"})
 		require.NoError(t, err)
+		assert.Equal(t, 1, catch.result.Steps) // the retry did not consume a step
 		// each step boundary asks first, then the overflow retry fires mid-turn, then
 		// the threshold hook fires at the turn boundary once the retried turn completes.
 		assert.Equal(t, []CompactReason{

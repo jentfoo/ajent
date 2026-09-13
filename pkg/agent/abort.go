@@ -4,14 +4,19 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// InterruptedText is the result content for work abandoned by an interrupt;
-// tools that observe cancellation reuse it so the transcript reads consistently.
-const InterruptedText = "interrupted by user"
+const (
+	// InterruptedText is the result content for work abandoned by an interrupt;
+	// tools that observe cancellation reuse it so the transcript reads consistently.
+	InterruptedText = "interrupted by user"
+	// StepLimitText marks calls never run because the turn hit its step limit; a
+	// clean cap, not an interrupt, and the transcript says which one happened.
+	StepLimitText = "not run: the turn hit its step limit"
+)
 
 // abortResults returns one tool_result per call in msg: its real result when
-// results answers it, or a synthetic interrupted error otherwise. Every cancelled
+// results answers it, or a synthetic error carrying text otherwise. Every ended
 // turn must fill all unanswered calls so the next request stays well formed.
-func abortResults(msg llm.Message, results []llm.ToolResultBlock) []llm.ToolResultBlock {
+func abortResults(msg llm.Message, results []llm.ToolResultBlock, text string) []llm.ToolResultBlock {
 	byCall := make(map[string]llm.ToolResultBlock, len(results))
 	for _, r := range results {
 		if r.CallID != "" {
@@ -32,7 +37,7 @@ func abortResults(msg llm.Message, results []llm.ToolResultBlock) []llm.ToolResu
 		out = append(out, llm.ToolResultBlock{
 			CallID: tc.ID, ToolName: tc.Name,
 			IsError: true,
-			Content: llm.BlockList{llm.TextBlock{Text: InterruptedText}},
+			Content: llm.BlockList{llm.TextBlock{Text: text}},
 		})
 	}
 	return out

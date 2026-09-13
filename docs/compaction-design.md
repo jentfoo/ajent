@@ -234,9 +234,9 @@ token count. The hook runs at the next **turn or step** boundary, never
   models get it too, which keeps the trigger, the context bar and the band ceiling
   reading one number.
 - **Emergency.** `llm.ErrContextOverflow` from a request compacts aggressively and
-  retries the same step once. Nothing was appended for the failed call, so state
-  and transcript stay in agreement. Without this, one oversized tool result bricks
-  the session.
+  retries the same step once, without consuming it. Nothing was appended for the
+  failed call, so state and transcript stay in agreement. Without this, one
+  oversized tool result bricks the session.
 
 Recovery from overflow relies on tool-layer output limits keeping any single
 result far below the window; when the bloat sits inside the verbatim band,

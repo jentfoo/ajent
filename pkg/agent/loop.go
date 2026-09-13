@@ -142,7 +142,8 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 
 	sink.TurnStart(TurnInfo{Model: a.state.Model, Input: input})
 
-	for step := 1; ; step++ {
+	// the increment lives at the body's end so a recovery retry reruns the same step
+	for step := 1; ; {
 		// AwaitInput may hold this boundary while the user finishes a message; input
 		// arriving during the wait lands at this same step.
 		if a.opts.AwaitInput != nil {
@@ -165,9 +166,10 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		result.Usage.Add(usage)
 
 		if err != nil {
-			// an oversized request: compact aggressively and retry the same step once.
-			// Nothing was appended for the failed call, so state stays in agreement. The
-			// turn's own context drives the retry so an interrupt stops its model call.
+			// an oversized request: compact aggressively and retry the same step once,
+			// without consuming it. Nothing was appended for the failed call, so state
+			// stays in agreement. The turn's own context drives the retry so an interrupt
+			// stops its model call.
 			if turnCtx.Err() == nil && llm.IsOverflow(err) && !overflowRetried && a.opts.Compact != nil {
 				did, cerr := a.opts.Compact(turnCtx, CompactOverflow)
 				if did && cerr == nil {
@@ -177,7 +179,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 			}
 			if turnCtx.Err() != nil {
 				// interrupted mid-call or during the overflow retry: a clean abort, not a failure
-				sink.Notice("interrupted by user", LevelInfo)
+				sink.Notice(InterruptedText, LevelInfo)
 				result.Stop = llm.StopAborted
 				break
 			}
@@ -206,8 +208,8 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		if turnCtx.Err() != nil {
 			// interrupted mid-stream: the partial assistant message stands,
 			// and any partially-built tool_use is answered with a synthetic result
-			a.appendToolResults(msg, nil)
-			sink.Notice("interrupted by user", LevelInfo)
+			a.appendToolResults(msg, nil, InterruptedText)
+			sink.Notice(InterruptedText, LevelInfo)
 			result.Stop = llm.StopAborted
 			break
 		}
@@ -221,17 +223,18 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		if maxSteps > 0 && step >= maxSteps {
 			sink.Notice("turn hit the "+strconv.Itoa(maxSteps)+" step limit", LevelWarn)
 			result.Stop = llm.StopMaxTokens // loop ran out, treat as a hard stop
-			// answer this message's tool_use so the next request stays well formed
-			a.appendToolResults(msg, nil)
+			// answer this message's tool_use so the next request stays well formed;
+			// the cap is not an interrupt, so it gets its own marker text
+			a.appendToolResults(msg, nil, StepLimitText)
 			break
 		}
 
 		results, endTurn := a.dispatch(turnCtx, sink, calls)
-		a.appendToolResults(msg, results)
+		a.appendToolResults(msg, results, InterruptedText)
 
 		if turnCtx.Err() != nil {
-			// interrupted during tool execution; abortResults filled the gaps
-			sink.Notice("interrupted by user", LevelInfo)
+			// interrupted during tool execution; the fill marked the gaps
+			sink.Notice(InterruptedText, LevelInfo)
 			result.Stop = llm.StopAborted
 			break
 		}
@@ -240,6 +243,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 			result.Stop = llm.StopEndTurn
 			break
 		}
+		step++
 	}
 
 	sink.TurnEnd(result)
@@ -597,9 +601,9 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 }
 
 // appendToolResults appends one user message holding every tool result in the
-// order of its calls.
-func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock) {
-	results = abortResults(msg, results)
+// order of its calls. Unanswered calls get a synthetic error carrying text.
+func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock, text string) {
+	results = abortResults(msg, results, text)
 	if len(results) == 0 {
 		return
 	}
