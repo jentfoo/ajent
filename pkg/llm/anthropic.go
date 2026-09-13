@@ -578,7 +578,7 @@ func (s *anthropicStream) onMessageStart(ev antEvent) []Event {
 	if ev.Message != nil {
 		out[0].Meta = &StreamMeta{Model: ev.Message.Model, RequestID: ev.Message.ID}
 		if ev.Message.Usage != nil {
-			s.usage = ev.Message.Usage.toUsage()
+			s.usage.Merge(ev.Message.Usage.toUsage())
 			out = append(out, Event{Type: EventUsage, Usage: s.usage})
 		}
 	}
@@ -657,20 +657,16 @@ func (s *anthropicStream) onBlockStop(ev antEvent) []Event {
 }
 
 func (s *anthropicStream) onMessageDelta(ev antEvent) []Event {
-	var out []Event
 	if ev.Delta != nil && ev.Delta.StopReason != "" {
 		s.stop = antStopReason(ev.Delta.StopReason)
 	}
-	if ev.Usage != nil {
-		// message_delta reports only the output side, the rest came at the start
-		u := ev.Usage.toUsage()
-		s.usage.Output = u.Output
-		if u.Input > 0 {
-			s.usage.Input = u.Input
-		}
-		out = append(out, Event{Type: EventUsage, Usage: s.usage})
+	if ev.Usage == nil {
+		return nil
 	}
-	return out
+	// every report covers the whole response; thinking and cache numbers may
+	// arrive only here, so what message_start reported must survive
+	s.usage.Merge(ev.Usage.toUsage())
+	return []Event{{Type: EventUsage, Usage: s.usage}}
 }
 
 // finish drains any open block and emits the terminal event.

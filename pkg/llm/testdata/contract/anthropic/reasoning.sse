@@ -26,7 +26,7 @@ event: content_block_stop
 data: {"type":"content_block_stop","index":1}
 
 event: message_delta
-data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20}}
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20,"output_tokens_details":{"thinking_tokens":12}}}
 
 event: message_stop
 data: {"type":"message_stop"}

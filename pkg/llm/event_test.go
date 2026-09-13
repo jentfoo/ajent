@@ -23,6 +23,50 @@ func TestUsageAdd(t *testing.T) {
 	})
 }
 
+func TestUsageMerge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		have Usage
+		next Usage
+		want Usage
+	}{
+		{
+			name: "keeps_what_the_later_omits",
+			have: Usage{Input: 412, Output: 3, CacheRead: 8},
+			next: Usage{Output: 37},
+			want: Usage{Input: 412, Output: 37, CacheRead: 8},
+		},
+		{
+			name: "adds_a_new_breakdown",
+			have: Usage{Input: 100, Output: 20},
+			next: Usage{Output: 20, Reasoning: 12, CacheWrite: 5},
+			want: Usage{Input: 100, Output: 20, Reasoning: 12, CacheWrite: 5},
+		},
+		{
+			name: "later_wins_per_field",
+			have: Usage{Output: 5},
+			next: Usage{Output: 40},
+			want: Usage{Output: 40},
+		},
+		{
+			name: "zero_is_identity",
+			have: Usage{Input: 7, Reasoning: 3},
+			next: Usage{},
+			want: Usage{Input: 7, Reasoning: 3},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.have
+			got.Merge(tc.next)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestEventTypeString(t *testing.T) {
 	t.Parallel()
 

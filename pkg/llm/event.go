@@ -124,3 +124,14 @@ func (u *Usage) Add(o Usage) {
 	u.CacheWrite += o.CacheWrite
 	u.Reasoning += o.Reasoning
 }
+
+// Merge folds another report of the same response into u, field by field, so a
+// number only one report carries survives. Reports must be whole-response
+// totals: an increment would be counted twice.
+func (u *Usage) Merge(o Usage) {
+	u.Input = max(u.Input, o.Input)
+	u.Output = max(u.Output, o.Output)
+	u.CacheRead = max(u.CacheRead, o.CacheRead)
+	u.CacheWrite = max(u.CacheWrite, o.CacheWrite)
+	u.Reasoning = max(u.Reasoning, o.Reasoning)
+}

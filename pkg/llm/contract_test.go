@@ -56,13 +56,14 @@ type contractCall struct {
 // contractResult is one scenario's normalised outcome, the unit of comparison
 // between dialects.
 type contractResult struct {
-	Text     string
-	Thinking string
-	Calls    []contractCall
-	Stop     StopReason
-	Input    int
-	Output   int
-	Kinds    []string
+	Text      string
+	Thinking  string
+	Calls     []contractCall
+	Stop      StopReason
+	Input     int
+	Output    int
+	Reasoning int
+	Kinds     []string
 }
 
 // runContract replays one dialect's encoding of a scenario and reduces the
@@ -85,12 +86,13 @@ func runContract(t *testing.T, d contractDialect, scenario string, chunk int) (c
 	}
 
 	got := contractResult{
-		Text:     textOf(events),
-		Thinking: thinkingOf(events),
-		Stop:     acc.StopReason(),
-		Input:    acc.Usage().Input,
-		Output:   acc.Usage().Output,
-		Kinds:    distinctKinds(events),
+		Text:      textOf(events),
+		Thinking:  thinkingOf(events),
+		Stop:      acc.StopReason(),
+		Input:     acc.Usage().Input,
+		Output:    acc.Usage().Output,
+		Reasoning: acc.Usage().Reasoning,
+		Kinds:     distinctKinds(events),
 	}
 	for _, b := range acc.Message().Content {
 		if call, ok := b.(ToolCallBlock); ok {
@@ -137,7 +139,8 @@ func TestContractStreamParity(t *testing.T) {
 		}, {
 			scenario: "reasoning",
 			want: contractResult{
-				Text: "the answer", Thinking: "let me consider", Stop: StopEndTurn, Input: 100, Output: 20,
+				Text: "the answer", Thinking: "let me consider", Stop: StopEndTurn,
+				Input: 100, Output: 20, Reasoning: 12,
 				Kinds: []string{"done", "message_start", "text_delta", "text_end", "text_start",
 					"thinking_delta", "thinking_end", "thinking_start", "usage"},
 			},

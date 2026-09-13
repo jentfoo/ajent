@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,6 +79,42 @@ func TestAnthropicProviderStream(t *testing.T) {
 		_, usage, err := Accumulate(s)
 		require.NoError(t, err)
 		assert.Equal(t, Usage{Input: 412, Output: 7}, usage)
+	})
+	t.Run("delta_reports_reasoning_and_cache", func(t *testing.T) {
+		srv, _ := sseServer(t, "anthropic/thinking_usage.sse")
+		p := newAnthropicTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
+		require.NoError(t, err)
+
+		events := collect(t, s)
+		want := Usage{Input: 120, Output: 320, CacheRead: 4096, CacheWrite: 800, Reasoning: 250}
+
+		// every frame carries the whole response so far, since consumers read it directly
+		frames := bulk.SliceFilter(func(ev Event) bool { return ev.Type == EventUsage }, events)
+		require.Len(t, frames, 2)
+		assert.Equal(t, Usage{Input: 120, Output: 3, CacheRead: 4096, CacheWrite: 800}, frames[0].Usage)
+		assert.Equal(t, want, frames[1].Usage)
+
+		done := events[len(events)-1]
+		require.Equal(t, EventDone, done.Type)
+		assert.Equal(t, want, done.Usage)
+	})
+	t.Run("delta_without_usage_keeps_the_start", func(t *testing.T) {
+		srv, _ := sseServer(t, "anthropic/delta_without_usage.sse")
+		p := newAnthropicTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
+		require.NoError(t, err)
+
+		events := collect(t, s)
+		assert.Equal(t, []string{
+			"message_start", "usage", "text_start", "text_delta", "text_end", "done",
+		}, eventKinds(events))
+
+		done := events[len(events)-1]
+		assert.Equal(t, StopEndTurn, done.StopReason)
+		assert.Equal(t, Usage{Input: 120, Output: 3, CacheRead: 4096}, done.Usage)
 	})
 	t.Run("thinking_accumulates_its_signature", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/thinking_text.sse")
@@ -173,6 +210,59 @@ func TestAnthropicProviderStream(t *testing.T) {
 		_, ok = s.Next()
 		assert.False(t, ok)
 		assert.NoError(t, s.Err())
+	})
+}
+
+func TestAntUsageToUsage(t *testing.T) {
+	t.Parallel()
+
+	decode := func(raw string) Usage {
+		var u antUsage
+		require.NoError(t, json.Unmarshal([]byte(raw), &u))
+		return u.toUsage()
+	}
+
+	tests := []struct {
+		name string
+		raw  string
+		want Usage
+	}{
+		{
+			name: "message_start_side",
+			raw:  `{"input_tokens":120,"output_tokens":3,"cache_read_input_tokens":4096,"cache_creation_input_tokens":800}`,
+			want: Usage{Input: 120, Output: 3, CacheRead: 4096, CacheWrite: 800},
+		},
+		{
+			name: "thinking_tokens",
+			raw:  `{"output_tokens":320,"output_tokens_details":{"thinking_tokens":250}}`,
+			want: Usage{Output: 320, Reasoning: 250},
+		},
+		{
+			name: "nested_creation_five_minute",
+			raw:  `{"output_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":40}}`,
+			want: Usage{Output: 9, CacheWrite: 40},
+		},
+		{
+			name: "nested_creation_one_hour",
+			raw:  `{"output_tokens":9,"cache_creation":{"ephemeral_1h_input_tokens":70}}`,
+			want: Usage{Output: 9, CacheWrite: 70},
+		},
+		{
+			name: "flat_creation_wins",
+			raw:  `{"output_tokens":9,"cache_creation_input_tokens":12,"cache_creation":{"ephemeral_5m_input_tokens":40}}`,
+			want: Usage{Output: 9, CacheWrite: 12},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, decode(tc.raw))
+		})
+	}
+
+	t.Run("nil_report", func(t *testing.T) {
+		var none *antUsage
+		assert.Equal(t, Usage{}, none.toUsage())
 	})
 }
 

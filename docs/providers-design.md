@@ -126,6 +126,10 @@ usage                                may arrive more than once, last wins
 done                                 StopReason, or Err when the turn failed
 ```
 
+Every `usage` frame carries **the whole response so far**, never an increment,
+so a consumer may replace on each one. A frame reporting no numbers at all is
+absent, not zero: the ledger's mid-stream snapshot must never go backwards.
+
 `Index` is the content block index, pairing a start with its deltas and its end.
 `Accumulate(Stream)` builds the final `Message` from the end events, falling back
 to concatenating deltas for a block whose end never arrived, so an aborted stream
@@ -438,7 +442,7 @@ sent, beyond llama.cpp's `cache_prompt`.
 
 | Provider | Worth knowing |
 |---|---|
-| anthropic | System is a top-level field, not a message. Tool results ride on **user** messages, never a tool role. Consecutive same-role messages must be merged. Temperature must be dropped when thinking is enabled, or the request 400s. `count_tokens` is exact but billed, so it is a method and never called automatically. |
+| anthropic | System is a top-level field, not a message. Tool results ride on **user** messages, never a tool role. Consecutive same-role messages must be merged. Temperature must be dropped when thinking is enabled, or the request 400s. Usage is split across events: input and cache numbers arrive at `message_start`, final totals with `output_tokens_details.thinking_tokens` only on the terminal `message_delta` (see invariant 12). `count_tokens` is exact but billed, so it is a method and never called automatically. |
 | openai | Responses API primary. Tools are flat, not nested under a `function` key. `max_output_tokens`, not `max_tokens`. Reasoning items replay by id, and statelessly only with `encrypted_content`, which requires asking for it via `include`. Falls back to chat-completions per model, decided from resolved capabilities rather than sniffed. |
 | openrouter | Carries reasoning in a `reasoning` object rather than `reasoning_effort`. `reasoning_details` must be echoed back verbatim or a model routed to anthropic loses its signatures. Pricing fields in the discovery response are dropped. |
 | llama.cpp | Older builds reject an unknown `stream_options`, so stream usage starts off and discovery turns it on. `/tokenize` is exact, local and cheap, so it is the one tokenizer used freely. |
@@ -503,6 +507,16 @@ providers echo the key into.
 An MCP transport can reuse it; `openaicompat` breaks on `[DONE]` while MCP
 ignores it.
 
+**12. Anthropic's usage reports are cumulative and split across events, so the
+adapter folds them with `Usage.Merge`, never by overwriting.** `message_start`
+carries input and cache numbers with a seed output; the final totals plus
+`output_tokens_details.thinking_tokens` arrive only on the terminal
+`message_delta`, which may carry no usage at all. Overwriting drops the thinking
+breakdown that `pkg/tokens` bills apart from `Output`, and summing would double
+it. The other two dialects report once per turn and keep plain assignment: their
+`Input` is derived by subtracting cached tokens from a prompt total, so merging
+two reports that disagree about that nesting can inflate it.
+
 ## Testing
 
 Fixtures are **raw wire bytes**, byte-identical to what the vendor sends, under
@@ -520,8 +534,8 @@ per-dialect suites above each prove one adapter reads its own vendor correctly;
 none of them prove the three agree. The contract matrix does: `testdata/contract/`
 holds each dialect's encoding of the *same* logical exchange, and every scenario
 asserts the normalised outcome (accumulated text, thinking, tool name and
-decoded arguments, stop reason, input and output tokens) is identical across
-anthropic, responses and chat-completions.
+decoded arguments, stop reason, input, output and reasoning tokens) is identical
+across anthropic, responses and chat-completions.
 
 Two things are deliberately **not** compared, because they differ by design and
 comparing them would encode a false contract:
@@ -555,6 +569,9 @@ payloads line up would leak one test's needs into unrelated tests.
   deliberately never sent.
 - **`deferredToolsMode` is accepted and not yet honoured.** It resolves onto
   `Caps.DeferredTools` and nothing reads it; pi's only value is `"kimi"`.
+- **Do not overwrite an anthropic stream's accumulated usage with a single wire
+  report.** Only `Usage.Merge` is correct there (invariant 12), and only there:
+  the other dialects' input total is derived, so merging can inflate it.
 - **Do not cache a provider adapter by vendor name.** `api` and `baseUrl` are
   per model, so two models on one provider entry can need two adapters; keying is
   on provider, dialect and base URL together.

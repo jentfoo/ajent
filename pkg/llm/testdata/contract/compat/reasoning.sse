@@ -8,7 +8,7 @@ data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"the answ
 
 data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
-data: {"id":"c1","model":"m1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20}}
+data: {"id":"c1","model":"m1","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"completion_tokens_details":{"reasoning_tokens":12}}}
 
 data: [DONE]
 
