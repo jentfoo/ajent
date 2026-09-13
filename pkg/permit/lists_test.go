@@ -10,8 +10,8 @@ func TestReadOnlyCommandsContents(t *testing.T) {
 	t.Parallel()
 
 	want := []string{
-		"awk", "ls", "find", "grep", "rg", "diff", "which", "ps", "jq",
-		"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "sort", "du",
+		"ls", "find", "grep", "diff", "which", "ps", "jq",
+		"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "du",
 		"date", "od",
 	}
 	assert.Len(t, readOnlyCommands, len(want))

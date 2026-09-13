@@ -7,9 +7,11 @@ import (
 )
 
 // readOnlyCommands are verifiably side-effect-free; a matching head is auto-allowed.
+// Commands with an exec or write form (sed, git, awk, rg, sort) are not here:
+// they are verified per invocation in their own checkers instead.
 var readOnlyCommands = bulk.SliceToSet([]string{
-	"awk", "ls", "find", "grep", "rg", "diff", "which", "ps", "jq",
-	"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "sort", "du",
+	"ls", "find", "grep", "diff", "which", "ps", "jq",
+	"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "du",
 	"date", "od",
 })
 

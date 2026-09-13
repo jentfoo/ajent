@@ -141,6 +141,8 @@ VCS metadata (`.git`, `.hg`, `.svn`) is excluded from the roots, since a hook or
 shallowest one is scope-checked and everything it can reach sits under that. The
 `WithUserInitiated` marker rides the context so a user's own staged `!` shell line
 is exempt in every permission mode; it is the human's shell, not the model's.
+Shell commands are name-trusted only when they have no exec or write form; `awk`,
+`rg` and `sort` are verified per invocation like sed. Anything unverifiable prompts.
 
 ### Headless: the tool set is the gate
 

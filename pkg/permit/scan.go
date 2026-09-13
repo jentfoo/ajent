@@ -9,7 +9,7 @@ import (
 type Scan struct {
 	// Segments split on unquoted control operators; quoted regions collapse to "".
 	Segments []string
-	// Raw is the index-aligned verbatim counterpart of Segments (only sed reads it).
+	// Raw is the index-aligned verbatim counterpart of Segments; sed/awk/rg/sort read it.
 	Raw []string
 	// HasSplitOp reports any &&, ||, |, ;, & or newline outside quotes.
 	HasSplitOp bool
@@ -263,6 +263,12 @@ func segmentIsReadOnly(seg, raw string) bool {
 		return sedReadSafe(raw) // quoted flags need the verbatim text
 	case "git":
 		return gitReadOnly(tokens)
+	case "awk":
+		return awkReadSafe(raw) // quoted scripts need the verbatim text, like sed
+	case "rg":
+		return rgReadOnly(unwrapLaunchers(tokenizeRaw(raw)))
+	case "sort":
+		return sortReadOnly(unwrapLaunchers(tokenizeRaw(raw)))
 	default:
 		_, ok := readOnlyCommands[head]
 		return ok

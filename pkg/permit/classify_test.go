@@ -56,6 +56,13 @@ func TestClassify(t *testing.T) {
 		{"bash git status", "", "git status", nil, VerdictAllow},
 		{"bash sed read only", "", `sed -n 's/a/b/p' f.txt`, nil, VerdictAllow},
 
+		// bash: exec or write vectors in awk/rg/sort prompt even though the
+		// head is otherwise name-trusted.
+		{"awk system prompts", "", `awk 'BEGIN{system("x")}'`, nil, VerdictPrompt},
+		{"awk print field allows", "", "awk '{print $1}' f", nil, VerdictAllow},
+		{"rg pre prompts", "", "rg --pre c p", nil, VerdictPrompt},
+		{"sort output prompts", "", "sort -o /tmp/e i", nil, VerdictPrompt},
+
 		// bash: in-place writes are hard rejects.
 		{"sed -i reject", "", "sed -i s/a/b/ f", nil, VerdictReject},
 		{"sed --in-place reject", "", "sed --in-place='.bak' s/a/b/ f", nil, VerdictReject},
