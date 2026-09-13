@@ -133,8 +133,9 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	// outlives bash keeps the pipes open and stalls those copiers, so we sweep the
 	// whole process group when done waiting instead of hanging.
 	var writeMu sync.Mutex
-	cmd.Stdout = &syncSink{mu: &writeMu, out: out, w: w}
-	cmd.Stderr = &syncSink{mu: &writeMu, out: out, w: w}
+	sink := &syncSink{mu: &writeMu, out: out, w: w}
+	cmd.Stdout = sink
+	cmd.Stderr = sink
 	// backstop for a backgrounded child that holds the pipes open after bash
 	// exits normally; without it os/exec would wait on those copiers forever.
 	cmd.WaitDelay = 5 * time.Second
@@ -157,16 +158,18 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}
 	w.Flush()      // trailing partial line still held in the buffer
 	killGroup(cmd) // sweep backgrounded survivors so they don't linger (safe post-Wait)
-	statusText := exitStatus(waitErr, cmd.ProcessState)
 	var interrupted bool
-	if runCtx.Err() == context.DeadlineExceeded {
-		// surface a timeout distinctly from an ordinary exit
-		statusText = fmt.Sprintf("killed after %s timeout\n", timeout) + statusText
-	} else if runCtx.Err() == context.Canceled {
+	var statusText string
+	switch {
+	case runCtx.Err() == context.DeadlineExceeded:
+		statusText = fmt.Sprintf("killed after %s timeout\n", timeout) + ownExitStatus(waitErr, cmd.ProcessState)
+	case runCtx.Err() == context.Canceled:
 		// parent cancelled (turn interrupt or Stager.Cancel): drop the SIGKILL exit
 		// noise and mark the result so it reads as an interruption, not a failure.
 		interrupted = true
 		statusText = agent.InterruptedText + "\n"
+	default:
+		statusText = exitStatus(waitErr, cmd.ProcessState)
 	}
 
 	captured := normalizeToLF(head.String()) // model-visible text is LF-only
@@ -188,19 +191,22 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 }
 
 // syncSink writes sanitized output to both the live stream and the capture,
-// serializing stdout/stderr under one lock so they stay in arrival order.
+// serializing stdout/stderr under one lock so they stay in arrival order. One sink
+// serves both streams, so stripping carries across chunk boundaries.
 type syncSink struct {
-	mu  *sync.Mutex
-	out agent.Output // live streamed sink, may discard
-	w   io.Writer    // bounded capture (head + spill)
+	mu   *sync.Mutex
+	out  agent.Output // live streamed sink, may discard
+	w    io.Writer    // bounded capture (head + spill)
+	ansi strutil.ANSIFilter
 }
 
 func (s *syncSink) Write(p []byte) (int, error) {
-	san := strutil.StripANSI(string(p))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _ = s.out.Write([]byte(san))
-	_, _ = s.w.Write([]byte(san))
+	// under the lock: one strip position for both streams
+	san := s.ansi.Strip(string(p))
+	_, _ = io.WriteString(s.out, san)
+	_, _ = io.WriteString(s.w, san)
 	return len(p), nil
 }
 
@@ -245,10 +251,37 @@ func exitStatus(err error, state *os.ProcessState) string {
 	}
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
+		if sig, ok := deathSignal(ee); ok {
+			return fmt.Sprintf("signal: %s\n", sig) // a signal death has no exit code
+		}
 		return fmt.Sprintf("exit status %d\n", ee.ExitCode())
 	}
 	if errors.Is(err, exec.ErrWaitDelay) { // real failure: command died but pipes lingered
 		return "command failed: backgrounded child outlived the command\n"
 	}
 	return "command failed: " + err.Error() + "\n"
+}
+
+// deathSignal returns the signal that killed err's process, if a signal did
+// rather than an exit code.
+func deathSignal(err error) (syscall.Signal, bool) {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return 0, false
+	}
+	ws, ok := ee.Sys().(syscall.WaitStatus)
+	if !ok || !ws.Signaled() {
+		return 0, false
+	}
+	return ws.Signal(), true
+}
+
+// ownExitStatus reports how a run we killed itself ended: the code it reached
+// before our kill landed, or "" when that signal was the end of it. The timeout
+// note already names that death, so an extra status there is noise.
+func ownExitStatus(err error, state *os.ProcessState) string {
+	if _, bySignal := deathSignal(err); bySignal {
+		return ""
+	}
+	return exitStatus(err, state)
 }

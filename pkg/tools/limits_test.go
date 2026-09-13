@@ -313,6 +313,8 @@ func TestWriterSpillsAtBound(t *testing.T) {
 func TestApplyLimitsNonZeroFields(t *testing.T) {
 	t.Parallel()
 
+	testLimitsGate.Lock()
+	t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
 	orig := Limits{
 		Bash: BashLimit(), Read: ReadFileLimit(), Find: FindResultLimit(),
 		Grep: GrepResultLimit(), Ls: LsResultLimit(), Other: OtherLimit(),

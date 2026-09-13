@@ -261,6 +261,8 @@ func TestGrepDefaultCapNamed(t *testing.T) {
 	t.Parallel()
 
 	// reaching the default cap without an explicit limit is named, never silent
+	testLimitsGate.Lock()
+	t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
 	orig := GrepResultLimit()
 	t.Cleanup(func() { ApplyLimits(Limits{Grep: orig}) })
 	ApplyLimits(Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})

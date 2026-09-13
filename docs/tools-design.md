@@ -311,20 +311,21 @@ model gets a pointer to it. Because that spill is an ordinary readable text file
 the model can open it with `read` and page through it, exactly as it does for
 grep's spilled results. Bash differs from read only in that its output has no
 pre-existing source file to re-read, so the footer names a written one instead of
-a next offset. ANSI
-escapes are stripped from captured output. The child runs in its own process
-group; on timeout or cancellation the
-whole group is killed so grandchildren cannot leak, and the model is told it
-was a timeout.
+a next offset. ANSI escapes are stripped from captured output, **with the strip
+position carried between chunks**: `os/exec` splits at pipe reads, so one sequence can
+straddle two writes and stdout and stderr share one filter under the ordering lock.
+The child runs in its own process group; on timeout or cancellation the whole group is
+killed so grandchildren cannot leak, and the model is told it was a timeout.
 
 The cancellation contract: each run owns its process group; when the parent
 context is cancelled (a turn interrupt, or `Stager.Cancel` on a `!` line), the
 whole group is SIGKILLed, whatever partial stdout/stderr arrived rides in the
 result, and the result is an **error result** marked as interrupted with the shared
 interruption text, so the transcript reads as an interruption.
-A timeout stays a distinct non-error result. The
-environment forces non-interactive settings (no pagers, no terminal prompts,
-no colour).
+A timeout stays a distinct non-error result. Its status line names only what that
+note does not: an exit code, or `signal: <name>` for a death by any other signal. The
+kill we send adds nothing beyond its own note. The environment forces non-interactive
+settings (no pagers, no terminal prompts, no colour).
 
 ### find / grep / ls (`find.go`, `grep.go`, `ls.go`)
 

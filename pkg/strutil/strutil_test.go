@@ -94,20 +94,6 @@ func TestFirstArgText(t *testing.T) {
 	}
 }
 
-func TestStripANSI(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		in, want string
-	}{
-		{"plain text", "plain text"},
-		{"\x1b[31mred\x1b[0m", "red"}, // CSI color
-		{"a\x1b]0;title\x07b", "ab"},  // OSC with BEL terminator
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.want, StripANSI(tc.in))
-	}
-}
-
 func TestHumanSize(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

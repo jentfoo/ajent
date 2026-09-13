@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -67,6 +68,15 @@ func TestBash(t *testing.T) {
 		assert.Contains(t, textOf(r.res), "exit status 3")
 	})
 
+	// a signal death names the signal instead of a bogus exit code.
+	t.Run("signal_death_names_signal", func(t *testing.T) {
+		r := newBash(t, `{"command":"kill -SEGV $$"}`)
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		assert.Contains(t, out, "signal: segmentation fault")
+		assert.NotContains(t, out, "exit status -1")
+	})
+
 	// stdout and stderr are both captured for the model.
 	t.Run("streams_stdout_and_stderr_interleaved", func(t *testing.T) {
 		r := newBash(t, `{"command":"echo out; echo err >&2"}`)
@@ -98,7 +108,10 @@ func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
 	// (including the grandchild) must be killed.
 	r := newBash(t, `{"command":"sleep 300 & echo $! > pid.txt; wait","timeout":1}`)
 	assert.False(t, r.res.IsError)
-	assert.Contains(t, textOf(r.res), "killed after") // the model learns it was a timeout
+	out := textOf(r.res)
+	assert.Contains(t, out, "killed after") // the model learns it was a timeout
+	// our own SIGKILL is not an exit status: the timeout note already says why
+	assert.NotContains(t, out, "exit status")
 
 	data, err := os.ReadFile(r.env.cwd + "/pid.txt")
 	if err != nil {
@@ -228,6 +241,17 @@ func TestBashEnvironment(t *testing.T) {
 		assert.Contains(t, out, "plain")
 	})
 
+	// a sequence split over two writes arrives as two chunks: still no leak. The
+	// sleep keeps them separate reads; coalesced they would strip just the same.
+	t.Run("strips_ansi_split_across_chunks", func(t *testing.T) {
+		r := newBash(t, `{"command":"printf '\\033[3'; sleep 0.2; printf '1mred\\033[m done'"}`)
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		assert.NotContains(t, out, "\x1b")
+		assert.NotContains(t, out, "1m") // the tail of a half-received sequence
+		assert.Contains(t, out, "red done")
+	})
+
 	// a non-login shell inherits our PATH verbatim (a login shell would reset it).
 	t.Run("preserves_parent_path", func(t *testing.T) {
 		want := os.Getenv("PATH")
@@ -240,6 +264,41 @@ func TestBashEnvironment(t *testing.T) {
 	t.Run("respects_cwd_override", func(t *testing.T) {
 		r := newBash(t, `{"command":"pwd","cwd":""}`)
 		assert.Contains(t, textOf(r.res), r.env.cwd)
+	})
+}
+
+// TestSyncSink proves one strip position serves every write: os/exec splits at
+// pipe reads, so an escape sequence can arrive as several chunks.
+func TestSyncSink(t *testing.T) {
+	t.Parallel()
+
+	const stream = "a\x1b[31mred\x1b[0m\nb\x1b]0;title\x07c\n"
+	const want = "ared\nbc\n"
+
+	run := func(chunks ...string) (live, captured string) {
+		var mu sync.Mutex
+		var out captureOutput
+		var head strings.Builder
+		sink := &syncSink{mu: &mu, out: &out, w: &head}
+		for _, c := range chunks {
+			_, err := sink.Write([]byte(c))
+			require.NoError(t, err)
+		}
+		return out.buf.String(), head.String()
+	}
+
+	t.Run("stdout_esc_stderr_rest", func(t *testing.T) {
+		live, captured := run("a\x1b", "[31mred")
+		assert.Equal(t, "ared", live)
+		assert.Equal(t, "ared", captured)
+	})
+
+	t.Run("split_at_every_boundary", func(t *testing.T) {
+		for i := 0; i <= len(stream); i++ {
+			live, captured := run(stream[:i], stream[i:])
+			assert.Equal(t, want, live)
+			assert.Equal(t, want, captured)
+		}
 	})
 }
 
