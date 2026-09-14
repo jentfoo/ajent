@@ -200,6 +200,39 @@ func TestStagerExcludedRunFlushesNothingAndDoesNotWait(t *testing.T) {
 	require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
 }
 
+func TestStagerFlushKeepsInFlightCancellable(t *testing.T) {
+	t.Parallel()
+
+	s, _ := newShellStager(t)
+	s.Run("sleep 30; echo never", false)
+	require.True(t, s.Pending())
+
+	// Flush blocks on the run's done channel. Pending must stay true while it does,
+	// otherwise Esc cannot interrupt a staged command once flushing begins.
+	type flushResult struct{ msgs []agent.MessageInfo }
+	resCh := make(chan flushResult, 1)
+	go func() { resCh <- flushResult{s.Flush(t.Context())} }()
+
+	require.Eventually(t, s.Pending, time.Second, time.Millisecond,
+		"run stays pending while Flush waits on it")
+
+	s.Cancel()
+
+	var got flushResult
+	require.Eventually(t, func() bool {
+		select {
+		case got = <-resCh:
+			return true
+		default:
+		}
+		return false
+	}, 3*time.Second, time.Millisecond,
+		"Flush returns promptly after Cancel reaches the run")
+
+	require.Len(t, got.msgs, 1)
+	assert.Contains(t, resultText(got.msgs[0].Message.Content), "interrupted by user")
+}
+
 // fullSinkForShell records whether ToolStartFull was chosen for a staged run.
 type fullSinkForShell struct {
 	*recordingSinkForShell

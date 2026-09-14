@@ -188,15 +188,17 @@ func (s *Stager) Cancel() {
 
 // Flush returns one user message per included staged command, staging each
 // completed run's output ahead of the next prompt. Excluded runs never produce a
-// message: finished ones are dropped outright and still-running ones stay in
-// s.runs so Pending/Cancel keep tracking them — their output goes nowhere, so
-// Flush must not hold the next prompt hostage waiting for them.
+// message: finished ones drop outright and still-running ones stay in s.runs so
+// Pending/Cancel keep tracking them — their output goes nowhere, so Flush must not
+// hold the next prompt hostage waiting for them.
 func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 	s.mu.Lock()
-	// included runs are taken out for flushing; excluded finished ones drop, and
-	// still-running excluded stay so Pending/Cancel keep tracking them.
-	included := bulk.SliceFilterInto(nil, func(r *stageRun) bool { return !r.excluded }, s.runs)
-	s.runs = bulk.SliceFilterInPlace(func(r *stageRun) bool { return r.excluded && !isDone(r.done) }, s.runs)
+	var included []*stageRun
+	for _, r := range s.runs {
+		if !r.excluded {
+			included = append(included, r)
+		}
+	}
 	s.mu.Unlock()
 
 	var out []agent.MessageInfo
@@ -205,18 +207,31 @@ func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 		select {
 		case <-r.done:
 		case <-ctx.Done():
-			// requeue every unfinished included run (this one and the tail) so a
+			// unfinished runs (this one and the tail) stay tracked in s.runs, so a
 			// later flush picks them up instead of dropping staged results.
-			s.mu.Lock()
-			s.runs = append(s.runs, included[i:]...)
-			s.mu.Unlock()
 			s.reportStaged()
 			return out
 		}
 		out = append(out, shellUserMessage(r.cmd, r.result))
+		s.removeRun(r)
 	}
+
+	// included runs are all consumed; drop finished excluded ones outright and keep
+	// still-running ones so Pending/Cancel keep tracking them.
+	s.mu.Lock()
+	s.runs = bulk.SliceFilterInPlace(func(r *stageRun) bool { return !r.excluded || !isDone(r.done) }, s.runs)
+	s.mu.Unlock()
+
 	s.reportStaged() // the flushed results are the submission's to account for now
 	return out
+}
+
+// removeRun drops a consumed run from tracking so Pending/Cancel stop seeing it and
+// a later flush does not re-emit its message.
+func (s *Stager) removeRun(r *stageRun) {
+	s.mu.Lock()
+	s.runs = bulk.SliceFilterInPlace(func(x *stageRun) bool { return x != r }, s.runs)
+	s.mu.Unlock()
 }
 
 // shellUserMessage renders one completed run as the user message the model sees.

@@ -325,7 +325,9 @@ drops the staged set and reports zero back to the bar.
 then injects each result ahead of the user message. The model therefore sees "here
 is a shell invocation I ran and its output" together with whatever the user just
 said. Multiple staged commands flush together, in submission order, each as its
-own **user** message.
+own **user** message. A run stays tracked for `Pending()`/`Cancel()` until Flush
+consumes it, so an included command that is still running when flushing begins can
+still be interrupted rather than freezing the front end.
 
 **Representation.** A completed run lands as a single `llm.RoleUser` text message,
 not a synthetic tool-call pair: it reads as the human's own action rather than an
@@ -362,7 +364,8 @@ derived context ends. A cancelled command still stages (if included): its partia
 output plus the killed-status the bash tool records, so the model's view matches
 what the user saw. Excluded runs cancel identically but their partial output goes
 nowhere. `Ctrl+C`/Esc cancels an in-flight staged command through the host's
-interrupt path.
+interrupt path. Included runs are not removed from tracking until Flush consumes
+them, so this holds even while a flush is blocked on one.
 
 > Staged `!` results live only in memory until the next prompt flushes them. If
 > the process exits before that flush, the staged results are lost: they are
