@@ -59,13 +59,16 @@ type server struct {
 	source        string  // "mcp: <name>", the /tools grouping key
 	c             *Client // nil while disconnected
 	logs          *ringLog
-	defs          []ToolDef   // last filtered tool list, for status/tool groups and drift compare
-	resources     []Resource  // discovered on connect, exposed to callers
-	prompts       []PromptDef // discovered on connect, no UI yet
-	failures      int         // consecutive connect failures, for backoff and notices
-	down          bool        // a reconnect loop is active; suppresses the already-connected check
-	reopenKeep    *toolState  // live split captured at death, restored on reconnect
-	rediscovering bool        // a list_changed re-discovery is in flight; coalesces bursts
+	defs          []ToolDef     // last filtered tool list, for status/tool groups and drift compare
+	resources     []Resource    // discovered on connect, exposed to callers
+	prompts       []PromptDef   // discovered on connect, no UI yet
+	failures      int           // consecutive connect failures, for backoff and notices
+	down          bool          // a reconnect loop is active; suppresses the already-connected check
+	reopenKeep    *toolState    // live split captured at death, restored on reconnect
+	rediscovering bool          // a list_changed re-discovery is in flight; coalesces bursts
+	connecting    bool          // a connect attempt is in flight (single-flight)
+	connectCh     chan struct{} // closed when that attempt settles, waking waiters
+	connectErr    error         // the settled attempt's outcome, read by waiters after ch closes
 
 	notice func(string, bool) // notice sink over the manager's Options; immutable, so no lock
 
@@ -82,6 +85,8 @@ type Manager struct {
 	mu      sync.Mutex // guards servers and loaded only; per-server state lives under server.mu
 	servers map[string]*server
 	loaded  bool // first-message load has run (LoadOnFirstMessage)
+
+	connectClient func(context.Context, string, ServerConfig) (*Client, error) // seam for tests
 }
 
 // New returns a manager over the given servers. Restore names are applied to each
@@ -90,6 +95,7 @@ type Manager struct {
 func New(cfg map[string]ServerConfig, opts Options) *Manager {
 	m := &Manager{opts: opts, servers: make(map[string]*server)}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.connectClient = Connect // overridden by tests to drive single-flight deterministically
 	for name, sc := range cfg {
 		m.servers[name] = m.newServer(name, sc)
 	}
@@ -154,20 +160,65 @@ func (m *Manager) LoadOnFirstMessage(ctx context.Context) {
 }
 
 // Connect dials and registers a server's tools. Idempotent for an already
-// connected server.
+// connected server; concurrent calls for one server share a single connect.
 func (m *Manager) Connect(ctx context.Context, name string) error {
 	return m.connect(ctx, name)
 }
 
+// claimConnect claims the per-server connect slot and returns whether it won,
+// or the channel waiters read the in-flight outcome from.
+func (s *server) claimConnect() (bool, <-chan struct{}) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.connecting {
+		return false, s.connectCh
+	}
+	s.connecting = true
+	s.connectCh = make(chan struct{})
+	return true, nil
+}
+
+// finishConnect releases the slot with an attempt's result for waiters.
+func (s *server) finishConnect(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connecting = false
+	s.connectErr = err
+	close(s.connectCh)
+	s.connectCh = nil
+}
+
+// connect runs one dial per server at a time; callers that arrive while another
+// is in flight share its outcome instead of starting their own.
 func (m *Manager) connect(ctx context.Context, name string) error {
 	s := m.serverByName(name)
 	if s == nil {
 		return fmt.Errorf("no MCP server %q", name)
 	}
+	run, done := s.claimConnect()
+	if !run { // another attempt is in flight; share its outcome
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			s.mu.Lock()
+			err := s.connectErr
+			s.mu.Unlock()
+			return err
+		}
+	}
+	err := m.dial(ctx, name, s)
+	s.finishConnect(err)
+	return err
+}
+
+// dial opens the transport, discovers capabilities, then installs it and
+// registers tools. Only a single-flight winner runs it (see connect).
+func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 	s.mu.Lock()
 	already := !s.down && s.c != nil && s.failures == 0
 	s.mu.Unlock()
-	if already {
+	if already { // a path that connected while we waited for the slot
 		return nil
 	}
 	keep := m.captureLive(s.source) // registrar call stays off s.mu
@@ -177,7 +228,7 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	}
 	s.mu.Unlock()
 
-	c, err := Connect(ctx, name, s.config())
+	c, err := m.connectClient(ctx, name, s.config())
 	if err != nil {
 		// an unreachable server is expected (offline or not yet started); keep the
 		// reason out of notices — visible in /mcp logs and the status ratio only.
@@ -204,6 +255,15 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	prompts, perr := c.Prompts(dctx)
 	if perr != nil {
 		s.diag("prompts/list failed: " + perr.Error())
+	}
+	// a reload may have removed or replaced this server while we were dialing;
+	// close the fresh client rather than leaking it into a stale object.
+	m.mu.Lock()
+	live := m.servers[name] == s
+	m.mu.Unlock()
+	if !live {
+		_ = c.Close()
+		return fmt.Errorf("mcp %s: server removed during connect", name)
 	}
 	// drop anything registered under this source before bridging the fresh list
 	m.opts.Registrar.Unregister(s.source)

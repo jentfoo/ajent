@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -18,18 +19,24 @@ import (
 
 func main() {
 	var httpAddr string
-	var slow bool              // block every tool call until the client cancels
-	var tools int              // number of generated echo tools to expose
-	var notifyListChanged bool // emit a notifications/tools/list_changed on each trigger_listchanged call
-	var legacyOnly bool        // serve only legacy protocol versions, for client fallback tests
+	var slow bool                  // block every tool call until the client cancels
+	var tools int                  // number of generated echo tools to expose
+	var notifyListChanged bool     // emit a notifications/tools/list_changed on each trigger_listchanged call
+	var legacyOnly bool            // serve only legacy protocol versions, for client fallback tests
+	var startupDelay time.Duration // block before serving so connects overlap in single-flight tests
 	flag.StringVar(&httpAddr, "http", "", "serve over Streamable HTTP on this address")
 	flag.BoolVar(&slow, "slow", false, "block each tool call until cancelled")
 	flag.IntVar(&tools, "tools", 3, "number of generated echo tools to expose")
 	flag.BoolVar(&notifyListChanged, "notify-list-changed", false, "emit list_changed via trigger_listchanged")
 	flag.BoolVar(&legacyOnly, "legacy", false, "refuse protocol versions after 2025-11-25")
+	flag.DurationVar(&startupDelay, "startup-delay", 0, "sleep before serving; for connect single-flight tests")
 	var die bool // expose a trigger_die tool that exits the process, for reconnect tests
 	flag.BoolVar(&die, "die", false, "expose a trigger_die tool that exits the server")
 	flag.Parse()
+
+	if startupDelay > 0 { // hold the init handshake open so concurrent connects overlap
+		time.Sleep(startupDelay)
+	}
 
 	srv := mcpserver.NewMCPServer("fakeserver", "1.0")
 

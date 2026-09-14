@@ -201,6 +201,14 @@ the server rather than installed on connect, so it needs no lock. An unreachable
 is expected (offline or not yet started), so a dial failure stays in `/mcp logs` only
 rather than surfacing as a notice; the status ratio still reflects it.
 
+**Single-flight connect.** A server's connection is coalesced: at most one dial runs
+for a server at a time, and any path that wants it while another is in flight shares that
+after instead of starting its own. Without this the reconnect backoff, `/mcp reload`
+eager-connect and a manual `/mcp connect` can all target the same dead server at once and
+each spawn its own client, leaking every loser's stdio process and watcher goroutine
+(see *Reconnection*). A dial in flight when `Reload` removes the server closes its fresh
+client rather than installing into a stale object.
+
 Network servers have no death supervision: `watchServer` only supervises a stdio child's
 stderr, so a dead HTTP or SSE server is noticed on the next call rather than proactively.
 

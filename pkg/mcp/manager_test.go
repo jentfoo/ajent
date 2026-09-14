@@ -1,7 +1,9 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -251,6 +253,100 @@ func TestConfigDisabledServer(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, StateEnabled, st) // explicit /tools enablement wins over the default
 	})
+}
+
+// TestClaimConnectCoalesces drives the per-server connect slot directly: only
+// one goroutine may win it at a time, losers wait for its outcome on the shared
+// channel, and a fresh claim after release starts a new attempt.
+func TestClaimConnectCoalesces(t *testing.T) {
+	t.Parallel()
+
+	var s server // zero value: mutex ready, no client yet
+	win, done := s.claimConnect()
+	require.True(t, win)
+	assert.Nil(t, done)
+
+	// a second claim while the slot is held coalesces onto the same channel
+	lose, wait := s.claimConnect()
+	assert.False(t, lose)
+	require.NotNil(t, wait)
+
+	// releasing hands every waiter the settled error and frees a fresh slot
+	s.finishConnect(errors.New("boom"))
+	select {
+	case <-wait:
+		s.mu.Lock()
+		err := s.connectErr
+		s.mu.Unlock()
+		require.EqualError(t, err, "boom")
+	default:
+		t.Fatal("slot never released for waiters")
+	}
+
+	win2, _ := s.claimConnect()
+	assert.True(t, win2) // a new attempt may start after the previous one settled
+	s.finishConnect(nil)
+}
+
+// TestDialAbortsWhenServerRemoved removes a server while its dial is in flight,
+// as /mcp reload does; the fresh client must be closed rather than installed.
+func TestDialAbortsWhenServerRemoved(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=1s"}},
+	}, Options{Registrar: fr})
+	t.Cleanup(mgr.Close)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- mgr.Connect(context.Background(), "fake") }()
+
+	s := mgr.serverByName("fake")
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.connecting // the dial holds the slot while startup delay blocks it
+	}, time.Second, 10*time.Millisecond)
+
+	// remove the server from the map mid-dial; dial must not install its client
+	mgr.mu.Lock()
+	delete(mgr.servers, "fake")
+	mgr.mu.Unlock()
+
+	require.ErrorContains(t, <-errCh, "server removed during connect")
+}
+
+// TestConcurrentConnectsShareOneClient fires several connects at once against a
+// down server: they must coalesce into one dial so no second client/process is
+// leaked, and every caller gets a clean result.
+func TestConcurrentConnectsShareOneClient(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=1s"}},
+	}, Options{Registrar: fr})
+	t.Cleanup(mgr.Close)
+
+	// a gate releases every goroutine together so they all arrive while the first
+	// dial is still held open by the server's startup delay.
+	start := make(chan struct{})
+	const n = 6
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func() { defer wg.Done(); <-start; errs[i] = mgr.Connect(context.Background(), "fake") }()
+	}
+	close(start)
+	wg.Wait()
+
+	for _, e := range errs {
+		require.NoError(t, e)
+	}
+	c := mgr.serverByName("fake").client()
+	require.NotNil(t, c) // exactly one client installed and serving
 }
 
 func TestRegisterMarksReadOnlyTools(t *testing.T) {
