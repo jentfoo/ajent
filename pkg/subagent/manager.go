@@ -580,12 +580,14 @@ func (m *Manager) publishStatus() {
 	var running, done int
 	var oldest time.Duration
 	for _, j := range m.jobs {
-		s := j.statusOf()
+		s, started := j.runningSince()
 		switch s {
 		case StatusQueued, StatusRunning:
 			running++
-			if d := time.Since(j.started); d > oldest {
-				oldest = d
+			if !started.IsZero() {
+				if d := time.Since(started); d > oldest {
+					oldest = d
+				}
 			}
 		case StatusDone:
 			done++

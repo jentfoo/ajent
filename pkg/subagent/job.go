@@ -124,6 +124,14 @@ func (j *job) statusOf() Status {
 	return j.status
 }
 
+// runningSince reports the live status and started stamp under one lock, so a
+// caller that needs both never reads them at different instants.
+func (j *job) runningSince() (Status, time.Time) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.status, j.started
+}
+
 // finished reports whether the owning goroutine has completed, without blocking.
 func (j *job) finished() bool {
 	select {
