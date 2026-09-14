@@ -148,10 +148,11 @@ func reasoningCommand(_ context.Context, arg string, c Console) error {
 		}
 	}
 
+	cur := c.State().Reasoning
 	c.SetReasoning(llm.ReasoningConfig{
 		Level:  lvl,
-		Retain: c.State().Reasoning.Retain, // keep the current retention policy
-		Show:   true,
+		Retain: cur.Retain, // keep the current retention policy
+		Show:   cur.Show,   // keep whether thinking streams to the UI
 	})
 	return nil
 }
