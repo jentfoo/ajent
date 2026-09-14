@@ -131,7 +131,7 @@ type manualEsc struct {
 	resets int
 }
 
-func newManualEsc() *manualEsc { return &manualEsc{ch: make(chan time.Time)} }
+func newManualEsc() *manualEsc { return &manualEsc{ch: make(chan time.Time, 1)} }
 
 func (m *manualEsc) Reset(d time.Duration) bool {
 	m.mu.Lock()

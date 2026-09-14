@@ -441,6 +441,10 @@ Recovery is one shared path with a single exception:
   bound, capping every kept line. The footer names shown/total lines and bytes
   plus a spill file under `os.TempDir()/ajent-<session>` holding the complete
   output, so the model can page it. A normal command leaves nothing behind.
+
+  Every spill is its own exclusive fresh file in that session dir, so concurrent
+  or sequential spills never share a path and each footer pointer names exactly
+  one call's output.
 - **Native paging** (read). The source file is the recovery: the footer names
   the next offset and nothing is written to disk. A range wider than the limit
   is an error result, keeping read out of the spill path entirely.
