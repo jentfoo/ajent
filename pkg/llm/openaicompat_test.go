@@ -158,6 +158,40 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, "call_1", msg.Content[0].(ToolCallBlock).ID)
 		assert.Equal(t, "call_2", msg.Content[1].(ToolCallBlock).ID)
 	})
+	t.Run("malformed_args_fail_the_call_not_the_turn", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/malformed_tool_args.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		var acc Accumulator
+		var events []Event
+		for ev, ok := s.Next(); ok; ev, ok = s.Next() {
+			acc.Add(ev)
+			events = append(events, ev)
+		}
+		require.NoError(t, s.Err()) // a malformed call must not fail the stream
+		assert.NoError(t, acc.Err())
+
+		var ends []Event
+		for _, ev := range events {
+			if ev.Type == EventToolCallEnd {
+				ends = append(ends, ev)
+			}
+		}
+		require.Len(t, ends, 2)
+		require.ErrorIs(t, ends[0].Err, ErrMalformedToolArgs) // the one call failed
+		require.NoError(t, ends[1].Err)                       // its sibling stayed valid
+
+		done := events[len(events)-1]
+		assert.Equal(t, EventDone, done.Type)
+		assert.Equal(t, StopToolUse, done.StopReason)
+		require.NoError(t, done.Err)
+
+		require.Len(t, acc.Message().Content, 2) // both calls reach the agent for dispatch
+	})
 	t.Run("stop_reason_tool_use", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/parallel_tools.sse")
 		p := newCompatTestProvider(t, srv.URL)

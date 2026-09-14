@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"runtime"
@@ -567,6 +568,11 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 	if a.opts.Tools == nil {
 		return llm.ToolResultBlock{CallID: call.ID, IsError: true,
 			Content: llm.BlockList{llm.TextBlock{Text: "no tools configured"}}}, false
+	}
+	if !json.Valid(call.Input) {
+		// answered here so the failure never depends on the tool's own arg tolerance
+		return llm.ToolResultBlock{CallID: call.ID, ToolName: call.Name, IsError: true,
+			Content: llm.BlockList{llm.TextBlock{Text: "malformed tool arguments: not valid JSON"}}}, false
 	}
 	tool, ok := a.opts.Tools.Get(call.Name)
 	if !ok {

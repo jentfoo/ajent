@@ -500,13 +500,7 @@ func (s *compatStream) finish(cause error) []Event {
 			Block: TextBlock{Text: st.textBuf.String()}})
 	}
 	if st.tools != nil {
-		closed := st.tools.Close()
-		events = append(events, closed...)
-		for _, ev := range closed {
-			if ev.Err != nil && s.err == nil {
-				s.err = ev.Err
-			}
-		}
+		events = append(events, st.tools.Close()...)
 	}
 
 	stop := st.stop

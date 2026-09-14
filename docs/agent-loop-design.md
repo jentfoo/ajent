@@ -285,6 +285,9 @@ Dispatch rules:
 - **Tool errors are results, not failures.** An erroring tool produces a
   `ToolResultBlock{IsError: true}` and the loop continues. Only transport or
   context errors abort; they surface as a notice plus `TurnEnd{Err}`.
+- **Malformed arguments never reach the tool.** `runTool` answers a call whose
+  arguments are not valid JSON with an error result before `Execute`, keeping
+  the failure on the call (invariant 7 in providers-design.md).
 - **A tool may end the turn** by returning `ToolResult{EndTurn: true}`: results
   are appended as usual and the loop stops with `StopEndTurn` instead of
   streaming another reply. It is how a control tool hands a phase to another

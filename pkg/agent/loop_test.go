@@ -298,6 +298,53 @@ func TestLoopToolFailureContinues(t *testing.T) {
 	}
 }
 
+// TestLoopMalformedArgsFailsCall asserts a call with invalid JSON arguments is
+// answered with an error result and never executed, while a valid sibling and
+// the turn itself continue.
+func TestLoopMalformedArgsFailsCall(t *testing.T) {
+	t.Parallel()
+
+	tool := &stubTool{name: "bash", result: "ok"}
+	set := &mapSet{tools: map[string]Tool{"bash": tool}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: []llm.Event{
+			{Type: llm.EventToolCallStart, Index: 0, ToolCallID: "c1", ToolName: "bash"},
+			{Type: llm.EventToolCallDelta, Index: 0, Text: `{"pa`},
+			{Type: llm.EventToolCallEnd, Index: 0, Block: llm.ToolCallBlock{
+				ID: "c1", Name: "bash", Input: json.RawMessage(`{"pa`)},
+				Err: llm.ErrMalformedToolArgs},
+			{Type: llm.EventToolCallStart, Index: 1, ToolCallID: "c2", ToolName: "bash"},
+			{Type: llm.EventToolCallDelta, Index: 1, Text: `{}`},
+			{Type: llm.EventToolCallEnd, Index: 1, Block: llm.ToolCallBlock{
+				ID: "c2", Name: "bash", Input: json.RawMessage(`{}`)}},
+			doneEvent(),
+		}},
+		{Events: textOnly("recovered")},
+	}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.Tools = set
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+	require.Len(t, tool.calls, 1) // only the valid sibling ran
+	assert.Equal(t, "c2", tool.calls[0].ID)
+
+	var results []llm.ToolResultBlock
+	for _, blk := range a.state.Messages[2].Content {
+		if trb, ok := blk.(llm.ToolResultBlock); ok {
+			results = append(results, trb)
+		}
+	}
+	require.Len(t, results, 2) // in call order
+	assert.True(t, results[0].IsError)
+	assert.False(t, results[1].IsError)
+
+	// the loop continues to the recovery step: the call failed, not the turn
+	require.Len(t, a.state.Messages, 4)
+	tb, ok := a.state.Messages[3].Content[0].(llm.TextBlock)
+	require.True(t, ok)
+	assert.Equal(t, "recovered", tb.Text)
+}
+
 func TestLoopMaxSteps(t *testing.T) {
 	t.Parallel()
 

@@ -488,8 +488,9 @@ valid long before `,"b":2` arrives), so completion is decided by a new index
 appearing, a finish reason, or the stream ending. Validation happens there.
 
 **7. A malformed tool call fails the call, not the turn.** The end event is still
-emitted with `Err` set, so the agent can hand the model a tool error it can
-correct. Local models produce broken argument JSON routinely, and losing the
+emitted with `Err` set, and no adapter promotes it into the stream error. The
+loop answers a call with invalid arguments as an error result instead of
+running it. Local models produce broken argument JSON routinely, and losing the
 whole turn each time is unusable. No repair heuristics: an argument that
 "repairs" into a valid-but-wrong call is worse than a visible failure.
 
