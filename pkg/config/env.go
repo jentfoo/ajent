@@ -40,16 +40,17 @@ var rawMessageType = reflect.TypeOf((*json.RawMessage)(nil)).Elem()
 
 // scalarLeaves returns the scalar dotted paths Settings declares, recursing into
 // nested structs and skipping slices, maps and provider/model subtrees (which are
-// opaque to this package).
+// opaque to this package). Path segments keep their original JSON case so env
+// bindings match config keys exactly.
 func scalarLeaves(t reflect.Type, prefix string) []leafPath {
 	var out []leafPath
-	for name, ft := range jsonFields(t) {
-		p := join(prefix, name)
-		if derefKind(ft) == reflect.Struct && !isRawMessage(ft) {
-			out = append(out, scalarLeaves(deref(ft), p)...)
+	for _, fd := range declaredFields(t) {
+		p := join(prefix, fd.name)
+		if derefKind(fd.typ) == reflect.Struct && !isRawMessage(fd.typ) {
+			out = append(out, scalarLeaves(deref(fd.typ), p)...)
 			continue
 		}
-		k := derefKind(ft)
+		k := derefKind(fd.typ)
 		switch k {
 		case reflect.String, reflect.Bool,
 			reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,

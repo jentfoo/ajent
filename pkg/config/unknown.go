@@ -2,7 +2,6 @@ package config
 
 import (
 	"encoding/json"
-	"maps"
 	"reflect"
 	"strings"
 )
@@ -60,9 +59,27 @@ func walkUnknown(node any, t reflect.Type, path string, out *[]string) {
 }
 
 // jsonFields maps the lower cased JSON names t declares to their field types,
-// flattening embedded structs the way encoding/json does.
+// flattening embedded structs the way encoding/json does. Names are lowercased
+// for case-insensitive lookup against decoded keys.
 func jsonFields(t reflect.Type) map[string]reflect.Type {
 	out := make(map[string]reflect.Type, t.NumField())
+	for _, fd := range declaredFields(t) {
+		out[strings.ToLower(fd.name)] = fd.typ
+	}
+	return out
+}
+
+// fieldDecl is one struct field with its JSON name as the schema declares it.
+type fieldDecl struct {
+	name string // original-case JSON tag or Go field name
+	typ  reflect.Type
+}
+
+// declaredFields returns t's fields in declaration order, flattening anonymous
+// embedded structs the way encoding/json does. Names keep their original case so
+// callers can build schema paths that match config files and env bindings.
+func declaredFields(t reflect.Type) []fieldDecl {
+	var out []fieldDecl
 	for i := range t.NumField() {
 		f := t.Field(i)
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -70,14 +87,14 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 			continue
 		} else if name == "" && f.Anonymous && deref(f.Type).Kind() == reflect.Struct {
 			// embedded struct fields are promoted even when the type is unexported
-			maps.Copy(out, jsonFields(deref(f.Type)))
+			out = append(out, declaredFields(deref(f.Type))...)
 			continue
 		} else if !f.IsExported() {
 			continue
 		} else if name == "" {
 			name = f.Name
 		}
-		out[strings.ToLower(name)] = f.Type
+		out = append(out, fieldDecl{name: name, typ: f.Type})
 	}
 	return out
 }
