@@ -214,7 +214,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		c.notify("compaction recorded but the state rebuild failed", agent.LevelWarn)
 		return false, rerr
 	}
-	rebuilt, warns := session.State(session.Branch(entries2, session.Head(entries2)), c.reg.Resolve)
+	rebuilt, warns := session.State(session.Branch(entries2, resumeHead(c.rec.w.Head(), entries2)), c.reg.Resolve)
 	for _, wmsg := range warns {
 		c.notify("compact: "+wmsg, agent.LevelWarn)
 	}
