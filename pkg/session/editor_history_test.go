@@ -121,8 +121,17 @@ func TestEditorHistoryRecent(t *testing.T) {
 	t.Run("includes_unflushed_appends", func(t *testing.T) {
 		h := newTestHistory(t, t.TempDir())
 		h.Append("on disk")
-		h.added = append(h.added, histLine{msg: "in memory"}) // simulate an unflushed local message
+		h.added = append(h.added, histLine{msg: "in memory"}) // simulate a failed write kept in added
 		assert.Equal(t, []string{"in memory", "on disk"}, h.Recent())
+	})
+
+	t.Run("durable_append_not_buffered", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		for i := 0; i < 10; i++ { // each append flushes to disk successfully
+			h.Append(fmt.Sprintf("line-%d", i))
+		}
+		assert.Empty(t, h.added) // no flush double-counts: durable rows live only on disk
+		assert.Len(t, storedMessages(h.path), 10)
 	})
 
 	t.Run("hidden_excluded_but_persisted", func(t *testing.T) {
@@ -133,6 +142,13 @@ func TestEditorHistoryRecent(t *testing.T) {
 		raw := readHistLines(h.path) // hidden rows still land on disk and round-trip
 		require.Len(t, raw, 2)
 		assert.Equal(t, histLine{msg: "/tools", hidden: true}, raw[0])
+	})
+
+	t.Run("hidden_newer_copy_keeps_typed_line", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.Append("git status")       // typed by the user
+		h.AppendHidden("git status") // later argv bootstrap reuses the same text
+		assert.Contains(t, h.Recent(), "git status", "a hidden copy must not hide a real typed line")
 	})
 
 	t.Run("missing_file_is_empty", func(t *testing.T) {
@@ -198,6 +214,14 @@ func TestEditorHistoryCompact(t *testing.T) {
 		h.added = append(h.added, histLine{msg: "later"}) // a local message not yet flushed
 		h.Compact()
 		assert.Equal(t, []string{"before", "later"}, storedMessages(h.path))
+	})
+
+	t.Run("mixed_hidden_text_stays_visible_on_disk", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.Append("git status")       // typed by the user
+		h.AppendHidden("git status") // later argv bootstrap reuses the text
+		h.Compact()
+		assert.Equal(t, []string{"git status"}, storedMessages(h.path), "a hidden copy must not erase a typed line on disk")
 	})
 }
 

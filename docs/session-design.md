@@ -197,19 +197,24 @@ The store is append-only at submit time: `EditorHistory.Append` trims trailing C
 drops blank and secret-prefixed messages (the pasted-secret invariant), then one
 atomic `O_APPEND` write of the JSON row. A single short write never interleaves
 bytes, so concurrent agents on one workspace cannot corrupt it; different workspaces
-are different files.
+are different files. Every append is durable before recall, so a line lives only on
+disk; an append that fails to persist is held back and retried by the next
+compaction.
 
 Most rows are bare JSON strings (visible). Non-editor input that must still be
 durable (an `ajent "prompt"` argv bootstrap line) is written via `AppendHidden` as a
 marked hidden row so it survives restart and compaction yet
 never surfaces in ↑/↓ or Ctrl+R; the corresponding turn also carries `Input.Injected`
 so transcripts exclude it from prompt recall. Hidden rows are otherwise treated like
-any other line for dedup, cap and secret filtering.
+any other line for dedup, cap and secret filtering. A text is excluded from recall
+only when **every** occurrence was hidden, so a programmatic bootstrap reusing an
+earlier typed line never hides the user's own input.
 
-Recall (`EditorHistory.Recent`) reads the file plus this process's unflushed
-appends, dedups to each text's most recent occurrence, and caps at a bounded line
-count, newest kept. When the raw file grows well past the cap it kicks a background
-compaction, self-healing after a crash off the recall path. Compaction
+Recall (`EditorHistory.Recent`) reads the file plus this process's unflushed (failed)
+appends, dedups to each text's most recent occurrence, drops texts whose every copy is
+hidden, and caps at a bounded line count, newest kept. When the raw file grows well past
+the cap it kicks a background compaction, self-healing after a crash off the recall path.
+Compaction
 (`EditorHistory.Compact`) rewrites via `config.WriteFileAtomic`: read-current,
 merge local appends, dedup + cap, replace. It takes **no lock**; last writer wins.
 Losing at most a few messages in the read→rename window is accepted over flocking the

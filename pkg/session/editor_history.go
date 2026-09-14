@@ -36,7 +36,7 @@ type EditorHistory struct {
 	secretPrefix string
 
 	mu         sync.Mutex
-	added      []histLine // appended this process, oldest first
+	added      []histLine // appends not yet durable (write failed), oldest first
 	compacting bool       // a compaction goroutine is in flight; don't start another
 }
 
@@ -57,9 +57,8 @@ func (h *EditorHistory) Append(msg string) { h.append(msg, false) }
 // a no-op.
 func (h *EditorHistory) AppendHidden(msg string) { h.append(msg, true) }
 
-// append writes msg to disk immediately and remembers it for this process's recall.
-// Messages prefixed by the secret marker and blank messages never reach disk; errors
-// are dropped because history is best effort. A nil receiver is a no-op.
+// append writes msg durably and offers it for recall. Blank and secret-prefixed
+// messages are skipped; a failed write keeps the line recallable this session.
 func (h *EditorHistory) append(msg string, hidden bool) {
 	if h == nil || msg == "" { // nil receiver keeps callers free of guards
 		return
@@ -69,22 +68,25 @@ func (h *EditorHistory) append(msg string, hidden bool) {
 		return
 	}
 	l := histLine{msg: msg, hidden: hidden}
-	h.mu.Lock()
-	h.added = append(h.added, l)
-	h.mu.Unlock()
 
 	f, err := os.OpenFile(h.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, config.SecretPerm)
-	if err != nil {
-		return
+	if err == nil {
+		// a single short write is atomic under the OS; two agents never interleave bytes
+		if _, werr := f.Write(encodeHistLine(l)); werr != nil {
+			err = werr
+		}
+		_ = f.Close()
 	}
-	// a single short write is atomic under the OS; two agents never interleave bytes
-	defer func() { _ = f.Close() }()
-	_, _ = f.Write(encodeHistLine(l))
+	if err != nil { // not yet durable: recall this session and retry on Compact
+		h.mu.Lock()
+		h.added = append(h.added, l)
+		h.mu.Unlock()
+	}
 }
 
 // Recent returns the workspace's submitted messages newest first, deduplicated to
 // each text's most recent occurrence and capped at maxHistoryLines. Messages appended
-// by this process but not yet flushed are included without re-reading. A missing or
+// by this process but not yet durable are included without re-reading. A missing or
 // unreadable file yields nil.
 func (h *EditorHistory) Recent() []string {
 	if h == nil {
@@ -93,7 +95,7 @@ func (h *EditorHistory) Recent() []string {
 	lines := readHistLines(h.path)
 
 	h.mu.Lock()
-	if len(h.added) > 0 {
+	if len(h.added) > 0 { // unflushed local appends only, never double-counting disk rows
 		lines = append(lines, h.added...)
 	}
 	overgrown := !h.compacting && len(lines) > 2*maxHistoryLines
@@ -118,9 +120,9 @@ func (h *EditorHistory) Recent() []string {
 }
 
 // Compact rewrites the file to a merged, deduplicated, capped form of whatever is
-// on disk plus this process's appends. It holds no lock against concurrent agents:
-// last writer wins and their in-window messages are lost at most once per compaction.
-// A nil receiver is a no-op.
+// on disk plus this process's unflushed appends. It holds no lock against concurrent
+// agents: last writer wins and their in-window messages are lost at most once per
+// compaction. A nil receiver is a no-op.
 func (h *EditorHistory) Compact() {
 	if h == nil {
 		return
@@ -214,9 +216,9 @@ func decodeHistLine(row string) (histLine, bool) {
 	return histLine{msg: row}, true // plain-text leftover
 }
 
-// normalize trims CRs, drops blank and secret-prefixed lines, keeps only the most
-// recent occurrence of each line (preserving its hidden flag), then caps at
-// maxHistoryLines from the newest.
+// normalize trims CRs, drops blank/secret lines, keeps each text's newest occurrence,
+// then caps at maxHistoryLines from the newest. A text stays visible when any copy was
+// typed; purely hidden texts stay excluded.
 func normalize(lines []histLine, secretPrefix string) []histLine {
 	var clean []histLine
 	for _, l := range lines {
@@ -225,19 +227,25 @@ func normalize(lines []histLine, secretPrefix string) []histLine {
 			clean = append(clean, histLine{msg: m, hidden: l.hidden})
 		}
 	}
-	// dedup to the most recent copy: walk backwards keeping first-seen lines,
-	// then reverse to restore original order.
+
+	// keep each text's newest occurrence; a text is recallable when any copy was typed.
+	newestPos := make(map[string]int, len(clean))
+	visibleSet := make(map[string]struct{}, len(clean)) // texts with at least one visible copy
+	for i, l := range clean {
+		newestPos[l.msg] = i
+		if !l.hidden {
+			visibleSet[l.msg] = struct{}{}
+		}
+	}
+
 	var out []histLine
-	seen := make(map[string]struct{}, len(clean))
-	for i := len(clean) - 1; i >= 0; i-- {
-		l := clean[i]
-		if _, ok := seen[l.msg]; ok {
+	for i, l := range clean {
+		if newestPos[l.msg] != i { // skip copies older than the newest occurrence
 			continue
 		}
-		seen[l.msg] = struct{}{}
-		out = append(out, l)
+		_, anyVisible := visibleSet[l.msg]
+		out = append(out, histLine{msg: l.msg, hidden: !anyVisible})
 	}
-	slices.Reverse(out)
 	if len(out) > maxHistoryLines {
 		out = out[len(out)-maxHistoryLines:]
 	}
