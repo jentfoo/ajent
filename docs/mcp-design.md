@@ -167,8 +167,10 @@ package stays free of `pkg/tools`.
   `tools.enabled`) is therefore consulted at registration: a server exposes everything by
   default; the restored subset stays on and the rest are off.
 - **Live state survives re-registration.** Before unregistering on reconnect or
-  `list_changed`, the manager captures `EnabledNames(source)` and forces those back to
-  enabled, so a tool-list refresh does not reset what is exposed.
+  `list_changed`, the manager captures a source's full enable/disable split
+  (`EnabledNames` + `DisabledNames`) and forces each tool back to its prior state,
+  so a refresh restores exactly what was exposed, including tools the user turned
+  off via `/tools`.
 - **`tools/list_changed`** triggers re-discovery: unregister source, register fresh,
   preserving live enable state. It runs through `rediscan`, which serializes per server.
   A second notification while one pass is in flight is coalesced, since the running pass reads
@@ -254,4 +256,4 @@ off mcp-go's reader goroutine and `list_changed` re-discovery runs serialized wi
 bounded context (see *Notifications never block mcp-go's reader*). Reconnection is
 complete: a stdio child that exits has its tools unregistered while down, then is
 reconnected with capped exponential backoff (`maxReconnectWait`) and its pre-death
-enabled set restored on the next successful connect.
+enable/disable split restored on the next successful connect.

@@ -118,6 +118,16 @@ func (f *fakeRegistrar) state(name string) (State, bool) {
 	return st, ok
 }
 
+// set overrides the recorded state for an already-registered name, standing in
+// for a /tools toggle against the real registry.
+func (f *fakeRegistrar) set(name string, s State) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.tool[name]; ok {
+		f.tool[name] = s
+	}
+}
+
 // toolByName returns the agent.Tool registered under name.
 func (f *fakeRegistrar) toolByName(name string) (agent.Tool, bool) {
 	f.mu.Lock()
@@ -258,6 +268,64 @@ func TestRegisterMarksReadOnlyTools(t *testing.T) {
 
 	assert.Contains(t, fr.readonly(), "srv__read1")
 	assert.NotContains(t, fr.readonly(), "srv__write1") // not annotated read-only
+}
+
+// TestRegisterPreservesLiveDisabled pins the re-registration invariant: a tool the
+// user turned off via /tools stays off after a reconnect or list_changed refresh.
+func TestRegisterPreservesLiveDisabled(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(nil, Options{Registrar: fr})
+	s := mgr.newTestServer("srv")
+	defs := []ToolDef{
+		{Name: "a", InputSchema: jsonRawObject},
+		{Name: "b", InputSchema: jsonRawObject},
+	}
+
+	// first registration exposes everything; the user then turns b off via /tools
+	mgr.register(s, nil, defs, nil)
+	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
+	fr.set("srv__b", StateDisabled)
+
+	// capture the live split and re-register as a refresh would (unregister first)
+	keep := mgr.captureLive(s.source)
+	fr.Unregister(s.source)
+	mgr.register(s, nil, defs, keep)
+
+	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))  // live enablement kept
+	assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // explicit off survives re-registration
+}
+
+// TestRegisterLiveDisabledBeatsRestore pins precedence: a /tools disable captured
+// before the refresh wins even when Restore (the persisted enabled set) names it.
+func TestRegisterLiveDisabledBeatsRestore(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(nil, Options{Registrar: fr, Restore: []string{"srv__a", "srv__b"}})
+	s := mgr.newTestServer("srv")
+	defs := []ToolDef{
+		{Name: "a", InputSchema: jsonRawObject},
+		{Name: "b", InputSchema: jsonRawObject},
+	}
+
+	// a prior registration enabled both, then the user disabled b; Restore still names it
+	mgr.register(s, nil, defs, &toolState{
+		enabled:  map[string]struct{}{"srv__a": {}},
+		disabled: map[string]struct{}{"srv__b": {}},
+	})
+
+	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
+	assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // live off wins over Restore
+}
+
+func mustState(fr *fakeRegistrar, name string) State {
+	st, ok := fr.state(name)
+	if !ok {
+		panic("unregistered tool: " + name)
+	}
+	return st
 }
 
 // TestManagerDiscoversResourcesAndPrompts verifies resources and prompts captured at
@@ -435,6 +503,8 @@ func TestReconnectAfterDeath(t *testing.T) {
 	die := mgr.serverByName("fake")
 	require.NotNil(t, die.client())
 
+	fr.set("fake__tool_01", StateDisabled) // the user turned it off via /tools
+
 	// kill the child through its own trigger_die tool; Execute returns an error
 	// result (transport failure) rather than a Go error.
 	tool, ok := fr.toolByName("fake__trigger_die")
@@ -447,15 +517,17 @@ func TestReconnectAfterDeath(t *testing.T) {
 		return len(fr.AllNames("mcp: fake")) == 0
 	}, 5*time.Second, 20*time.Millisecond)
 
-	// and come back enabled once the child respawns (the reconnect loop re-registers).
+	// and come back once the child respawns: enablements restored, but the /tools
+	// disablement survives too rather than reverting to enabled.
 	require.Eventually(t, func() bool {
-		for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+		for _, n := range []string{"tool_00", "tool_02"} {
 			st, ok := fr.state("fake__" + n)
 			if !ok || st != StateEnabled {
 				return false
 			}
 		}
-		return true
+		st, ok := fr.state("fake__tool_01")
+		return ok && st == StateDisabled // explicit off survives a reconnect
 	}, 10*time.Second, 50*time.Millisecond)
 	assert.NotNil(t, mgr.serverByName("fake").client())
 }

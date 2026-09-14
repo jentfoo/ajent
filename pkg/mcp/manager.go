@@ -35,6 +35,14 @@ type Registrar interface {
 	MarkReadOnly(names []string)          // record read-only publication metadata by name
 }
 
+// toolState is one source's live enable/disable split captured before a
+// re-registration, so the refresh restores exactly what was exposed rather than
+// resetting it.
+type toolState struct {
+	enabled  map[string]struct{}
+	disabled map[string]struct{}
+}
+
 // Options configures the manager with adapters from the front end.
 type Options struct {
 	Registrar Registrar
@@ -51,13 +59,13 @@ type server struct {
 	source        string  // "mcp: <name>", the /tools grouping key
 	c             *Client // nil while disconnected
 	logs          *ringLog
-	defs          []ToolDef           // last filtered tool list, for status/tool groups and drift compare
-	resources     []Resource          // discovered on connect, exposed to callers
-	prompts       []PromptDef         // discovered on connect, no UI yet
-	failures      int                 // consecutive connect failures, for backoff and notices
-	down          bool                // a reconnect loop is active; suppresses the already-connected check
-	reopenKeep    map[string]struct{} // enabled set captured at death, restored on reconnect
-	rediscovering bool                // a list_changed re-discovery is in flight; coalesces bursts
+	defs          []ToolDef   // last filtered tool list, for status/tool groups and drift compare
+	resources     []Resource  // discovered on connect, exposed to callers
+	prompts       []PromptDef // discovered on connect, no UI yet
+	failures      int         // consecutive connect failures, for backoff and notices
+	down          bool        // a reconnect loop is active; suppresses the already-connected check
+	reopenKeep    *toolState  // live split captured at death, restored on reconnect
+	rediscovering bool        // a list_changed re-discovery is in flight; coalesces bursts
 
 	notice func(string, bool) // notice sink over the manager's Options; immutable, so no lock
 
@@ -162,10 +170,10 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	if already {
 		return nil
 	}
-	keepEnabled := toSet(m.opts.Registrar.EnabledNames(s.source)) // registrar call stays off s.mu
+	keep := m.captureLive(s.source) // registrar call stays off s.mu
 	s.mu.Lock()
-	for k := range s.reopenKeep { // restore the pre-death enabled set across a reconnect
-		keepEnabled[k] = struct{}{}
+	if keep != nil && s.reopenKeep != nil { // restore the pre-death split across a reconnect
+		mergeToolState(keep, s.reopenKeep)
 	}
 	s.mu.Unlock()
 
@@ -207,7 +215,7 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	s.reopenKeep = nil
 	s.failures = 0
 	s.mu.Unlock()
-	m.register(s, c, defs, keepEnabled) // register never fails; it logs and continues
+	m.register(s, c, defs, keep) // register never fails; it logs and continues
 	go m.watchServer(s)
 	// m.ctx, not the caller's: notification refresh outlives whoever connected
 	c.OnNotification(func(n mcp.JSONRPCNotification) { m.onNotification(m.ctx, s, n) })
@@ -215,9 +223,10 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	return nil
 }
 
-// register bridges live defs into the registry under s.source. forceEnabled names
-// stay enabled regardless of restore, preserving live state across a re-register.
-func (m *Manager) register(s *server, c *Client, defs []ToolDef, forceEnabled map[string]struct{}) {
+// register bridges live defs into the registry under s.source. keep holds a
+// source's pre-refresh enable/disable split, so re-registration restores exactly
+// what was exposed rather than resetting it; tools not in keep follow defaults.
+func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState) {
 	cfg := s.config()
 	defs = filterTools(defs, cfg.Tools, cfg.ExcludeTools)
 	dur := time.Duration(cfg.Timeout)
@@ -239,8 +248,10 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, forceEnabled ma
 			// config default, and a restored subset keeps only its members on
 			st = StateEnabled
 		}
-		if forceEnabled != nil && has(forceEnabled, n) { // live registry state wins over restore/default
+		if keep != nil && has(keep.enabled, n) { // live enablement wins over restore/default
 			st = StateEnabled
+		} else if keep != nil && has(keep.disabled, n) { // an explicit /tools off survives re-registration too
+			st = StateDisabled
 		}
 		m.opts.Registrar.RegisterState(s.source, tool, st)
 	}
@@ -293,6 +304,26 @@ func (s *server) promptsSnapshot() []PromptDef {
 func has(set map[string]struct{}, k string) bool {
 	_, ok := set[k]
 	return ok
+}
+
+// captureLive reads a source's current enable/disable split from the registrar,
+// so re-registration restores exactly what was exposed rather than resetting it.
+func (m *Manager) captureLive(source string) *toolState {
+	return &toolState{
+		enabled:  toSet(m.opts.Registrar.EnabledNames(source)),
+		disabled: toSet(m.opts.Registrar.DisabledNames(source)),
+	}
+}
+
+// mergeToolState overlays src onto dst, so a pre-death split wins over any
+// current registrar split. A name lives in exactly one set, so this is a union.
+func mergeToolState(dst, src *toolState) {
+	for k := range src.enabled {
+		dst.enabled[k] = struct{}{}
+	}
+	for k := range src.disabled {
+		dst.disabled[k] = struct{}{}
+	}
 }
 
 // Disconnect closes and unregisters a server without removing its config.
@@ -623,7 +654,7 @@ func (m *Manager) rediscan(s *server) {
 	s.rediscovering = true
 	c := s.c
 	s.mu.Unlock()
-	keepEnabled := toSet(m.opts.Registrar.EnabledNames(s.source))
+	keep := m.captureLive(s.source)
 	if c == nil {
 		s.mu.Lock()
 		s.rediscovering = false
@@ -651,7 +682,7 @@ func (m *Manager) rediscan(s *server) {
 			return
 		}
 		m.opts.Registrar.Unregister(s.source)
-		m.register(s, c, defs, keepEnabled)
+		m.register(s, c, defs, keep)
 	}()
 }
 
@@ -747,7 +778,7 @@ const maxReconnectWait = 30 * time.Second
 // dead process; on success connect() re-registers them restoring the pre-death
 // enabled set.
 func (m *Manager) reconnect(s *server) {
-	keep := toSet(m.opts.Registrar.EnabledNames(s.source)) // registrar call stays off s.mu
+	keep := m.captureLive(s.source) // registrar call stays off s.mu
 	s.mu.Lock()
 	c := s.c
 	if c == nil { // already disconnected by /mcp disconnect or another path
