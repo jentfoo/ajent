@@ -183,18 +183,22 @@ func (x *Expander) Expand(text string) Result {
 			out = splice(out, ref, annotate(ref, m))
 			continue
 		}
-		// dedupe against an unchanged read this session; the literal stays
-		if x.tracker != nil && x.tracker.Unchanged(full) {
-			continue
-		}
 		rl := tools.RefInjectLimit()
-		if overInjectLimit(m, rl) || spent+int(m.Bytes) > tools.RefTotalLimit().Bytes {
+		overCap := overInjectLimit(m, rl) || spent+int(m.Bytes) > tools.RefTotalLimit().Bytes
+		if overCap {
 			out = splice(out, ref, annotate(ref, m))
 			notices = append(notices, "@"+ref.Path+" too large; annotated")
 			continue
 		}
-		if !keep(full) {
+		// within cap: content is injected now (or already present this session),
+		// so an absorbed size claim from a prior larger measurement must not survive
+		out = stripNote(out, ref)
+		// dedupe against an unchanged read this session; the literal stays bare
+		if x.tracker != nil && x.tracker.Unchanged(full) {
 			continue
+		}
+		if !keep(full) {
+			continue // repeat already planned above, its note stripped too
 		}
 		// the tool returns line-numbered text, so what lands is the file plus a
 		// prefix per line, not its raw size
@@ -281,6 +285,16 @@ func (x *Expander) injectPair(ctx context.Context, p injection) []llm.Message {
 // doubled.
 func annotate(ref Ref, m tools.Measurement) string {
 	return "@" + ref.Path + " (" + measurementText(m) + ")"
+}
+
+// stripNote drops an absorbed size claim from a small text reference: its real
+// content comes from the read (now or earlier this session), so any prior
+// measurement is stale and must not survive.
+func stripNote(out string, ref Ref) string {
+	if ref.Note == "" {
+		return out
+	}
+	return splice(out, ref, "@"+ref.Path)
 }
 
 // measurementText renders the annotation shape: "800 lines, 64kb" for text,

@@ -218,6 +218,28 @@ func TestExpand(t *testing.T) {
 			"no double annotation")
 	})
 
+	t.Run("shrunk_file_strips_annotation", func(t *testing.T) {
+		dir := t.TempDir()
+		// a file that was large and annotated, now small enough to inject: the stale
+		// size claim must not survive alongside the fresh read
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @a.go (800 lines, 64kb)")
+		assert.Equal(t, "see @a.go", res.Text)
+		require.Len(t, injected(t, res), 2) // a fresh read is planned for the shrunk file
+	})
+
+	t.Run("repeat_ref_strips_annotation_each_time", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @a.go (800 lines) and @a.go")
+		assert.Equal(t, "see @a.go and @a.go", res.Text)
+		require.Len(t, injected(t, res), 2) // one injection for both mentions
+	})
+
 	t.Run("reads_land_in_transcript_order", func(t *testing.T) {
 		dir := t.TempDir()
 		for _, f := range []string{"a.go", "b.txt"} {
