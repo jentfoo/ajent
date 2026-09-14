@@ -51,10 +51,29 @@ func mapCallResult(r *mcp.CallToolResult) Result {
 func refText(c mcp.Content) string {
 	switch b := c.(type) {
 	case mcp.ResourceLink:
-		if strings.TrimSpace(b.Description) != "" {
-			return fmt.Sprintf("[resource: %s (%s)]", b.URI, b.Description)
-		}
-		return "[resource: " + b.URI + "]"
+		return uriRef(b.URI, b.Description)
+	case mcp.EmbeddedResource:
+		return resourceRef(b.Resource)
+	default:
+		return "[content of unrecognized type]"
+	}
+}
+
+// uriRef renders a reference as [resource: uri (label)].
+func uriRef(uri, label string) string {
+	if strings.TrimSpace(label) != "" {
+		return fmt.Sprintf("[resource: %s (%s)]", uri, label)
+	}
+	return "[resource: " + uri + "]"
+}
+
+// resourceRef renders an embedded resource by its uri and mime type.
+func resourceRef(r mcp.ResourceContents) string {
+	switch b := r.(type) {
+	case mcp.TextResourceContents:
+		return uriRef(b.URI, b.MIMEType)
+	case mcp.BlobResourceContents:
+		return uriRef(b.URI, b.MIMEType)
 	default:
 		return "[content of unrecognized type]"
 	}

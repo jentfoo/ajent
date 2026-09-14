@@ -105,7 +105,8 @@ deadline. The offset keeps the two id spaces disjoint.
 
 Text content becomes a text block; image and audio become short placeholders
 (naming the media kind) since image processing is separate work;
-embedded resources / resource links become text references (uri + description);
+embedded resources become text references (uri + mime type) and resource links
+become text references (uri + description);
 structured content with empty `content` falls back to its raw JSON. `isError` maps onto
 `Result.IsError`.
 
