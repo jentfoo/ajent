@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 
@@ -35,8 +34,10 @@ type EditorHistory struct {
 	path         string
 	secretPrefix string
 
+	writeFile func(path string, data []byte, perm os.FileMode) error // seam for tests
+
 	mu         sync.Mutex
-	added      []histLine // appends not yet durable (write failed), oldest first
+	added      []histLine // appends not yet durable (write failed), capped at maxHistoryLines
 	compacting bool       // a compaction goroutine is in flight; don't start another
 }
 
@@ -46,7 +47,8 @@ func NewEditorHistory(s *Store, workspace, secretPrefix string) (*EditorHistory,
 	if err != nil {
 		return nil, err
 	}
-	return &EditorHistory{path: filepath.Join(dir, historyFileName), secretPrefix: secretPrefix}, nil
+	return &EditorHistory{path: filepath.Join(dir, historyFileName), secretPrefix: secretPrefix,
+		writeFile: config.WriteFileAtomic}, nil
 }
 
 // Append records a submitted editor message immediately and offers it for recall.
@@ -80,6 +82,9 @@ func (h *EditorHistory) append(msg string, hidden bool) {
 	if err != nil { // not yet durable: recall this session and retry on Compact
 		h.mu.Lock()
 		h.added = append(h.added, l)
+		if n := len(h.added) - maxHistoryLines; n > 0 { // a failing disk stays bounded
+			h.added = h.added[n:] // the oldest are the least recallable anyway
+		}
 		h.mu.Unlock()
 	}
 }
@@ -122,21 +127,22 @@ func (h *EditorHistory) Recent() []string {
 // Compact rewrites the file to a merged, deduplicated, capped form of whatever is
 // on disk plus this process's unflushed appends. It holds no lock against concurrent
 // agents: last writer wins and their in-window messages are lost at most once per
-// compaction. A nil receiver is a no-op.
+// compaction. A write failure keeps the appends queued for the next compaction.
+// A nil receiver is a no-op.
 func (h *EditorHistory) Compact() {
 	if h == nil {
 		return
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	defer func() { h.compacting = false }() // cleared on every exit path, even a skipped rewrite
 
 	data, err := os.ReadFile(h.path)
 	var lines []histLine
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		lines = slices.Clone(h.added) // nothing on disk yet; compact just the local appends
+		// nothing on disk yet; compaction is just the local appends
 	case err != nil:
-		h.compacting = false
 		return // cannot read current state; leave the file alone
 	default:
 		for _, row := range strings.Split(string(data), "\n") {
@@ -145,10 +151,8 @@ func (h *EditorHistory) Compact() {
 			}
 		}
 	}
-	if len(h.added) > 0 {
-		lines = append(lines, h.added...)
-		h.added = nil // flushed into the rewrite
-	}
+	// queued appends ride along; they leave the queue only once durably written
+	lines = append(lines, h.added...)
 
 	out := normalize(lines, h.secretPrefix)
 	if len(out) == 0 { // nothing to persist; don't create a phantom empty file
@@ -158,8 +162,10 @@ func (h *EditorHistory) Compact() {
 	for _, m := range out { // one JSON row per message so multi-line turns round-trip whole
 		buf.Write(encodeHistLine(m))
 	}
-	_ = config.WriteFileAtomic(h.path, buf.Bytes(), config.SecretPerm)
-	h.compacting = false
+	if err := h.writeFile(h.path, buf.Bytes(), config.SecretPerm); err != nil {
+		return // not durable: the queue stays for the next compaction's retry
+	}
+	h.added = nil // durable: the queue is flushed
 }
 
 // encodeHistLine marshals one message to a single physical row so multi-line turns

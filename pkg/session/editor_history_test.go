@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -88,6 +90,18 @@ func TestEditorHistoryAppend(t *testing.T) {
 	t.Run("nil_receiver_is_noop", func(t *testing.T) {
 		var h *EditorHistory
 		h.Append("nothing happens") // must not panic
+	})
+
+	// every append failing keeps the newest maxHistoryLines queued, dropping the
+	// oldest, so a session writing to a failing disk stays bounded.
+	t.Run("failed_appends_stay_bounded", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.path = t.TempDir() // a directory: every open fails and queues
+		for i := 0; i < maxHistoryLines+5; i++ {
+			h.Append(fmt.Sprintf("line-%d", i))
+		}
+		require.Len(t, h.added, maxHistoryLines)
+		assert.Equal(t, "line-5", h.added[0].msg) // the oldest five were dropped
 	})
 }
 
@@ -222,6 +236,41 @@ func TestEditorHistoryCompact(t *testing.T) {
 		h.AppendHidden("git status") // later argv bootstrap reuses the text
 		h.Compact()
 		assert.Equal(t, []string{"git status"}, storedMessages(h.path), "a hidden copy must not erase a typed line on disk")
+	})
+
+	// a failed rewrite must not drop the queued appends: the next compaction retries
+	// them against whatever landed.
+	t.Run("failed_write_keeps_queue", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.Append("on disk")
+		h.added = append(h.added, histLine{msg: "pending"}) // a failed append
+
+		var attempts int
+		h.writeFile = func(path string, data []byte, perm os.FileMode) error {
+			attempts++
+			if attempts == 1 {
+				return errors.New("disk full")
+			}
+			return config.WriteFileAtomic(path, data, perm)
+		}
+		h.Compact()
+		assert.Equal(t, []histLine{{msg: "pending"}}, h.added) // kept for the retry
+		assert.Equal(t, []string{"on disk"}, storedMessages(h.path))
+
+		h.Compact()
+		assert.Empty(t, h.added) // the retry flushed the queue
+		assert.Equal(t, []string{"on disk", "pending"}, storedMessages(h.path))
+	})
+
+	// a rewrite skipped for lack of content must not latch the guard, or every
+	// later background compaction is silently disabled.
+	t.Run("guard_clears_on_skipped_rewrite", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.secretPrefix = "secret:"
+		require.NoError(t, os.WriteFile(h.path, []byte("\"secret:only\"\n"), 0o600))
+		h.compacting = true // Recent armed a compaction before the file turned all-secret
+		h.Compact()
+		assert.False(t, h.compacting)
 	})
 }
 

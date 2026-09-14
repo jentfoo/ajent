@@ -198,8 +198,10 @@ drops blank and secret-prefixed messages (the pasted-secret invariant), then one
 atomic `O_APPEND` write of the JSON row. A single short write never interleaves
 bytes, so concurrent agents on one workspace cannot corrupt it; different workspaces
 are different files. Every append is durable before recall, so a line lives only on
-disk; an append that fails to persist is held back and retried by the next
-compaction.
+disk; an append that fails to persist is held back in a queue capped at the same
+line budget as recall, and retried by the next compaction. A retry that fails keeps
+the queue, so the lines stay recallable this session rather than being dropped by
+the failed rewrite.
 
 Most rows are bare JSON strings (visible). Non-editor input that must still be
 durable (an `ajent "prompt"` argv bootstrap line) is written via `AppendHidden` as a
