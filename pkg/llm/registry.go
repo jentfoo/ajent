@@ -20,6 +20,7 @@ type Registry struct {
 	models   []Model
 	byKey    map[string]int
 	byAlias  map[string]int
+	dupAlias map[string]struct{} // aliases claimed by more than one model, never resolved silently
 	entries  map[string]ProviderConfig
 	flavors  map[string]Flavor
 	env      func(string) string
@@ -140,10 +141,21 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	r.applyCompactDefault()
 	r.byKey = make(map[string]int, len(models))
 	r.byAlias = make(map[string]int, len(models))
+	r.dupAlias = make(map[string]struct{})
 	for i, m := range models {
 		r.byKey[strings.ToLower(m.Key())] = i
 		for _, a := range m.Aliases {
-			r.byAlias[strings.ToLower(a)] = i
+			key := strings.ToLower(a)
+			if _, isDup := r.dupAlias[key]; isDup {
+				continue // already reported; never re-add so it cannot silently resolve
+			}
+			if prev, ok := r.byAlias[key]; ok && prev != i {
+				delete(r.byAlias, key)
+				r.dupAlias[key] = struct{}{}
+				warnings = append(warnings, fmt.Sprintf("model alias %q is claimed by both %s and %s; resolving it reports the ambiguity", key, models[prev].Key(), m.Key()))
+			} else {
+				r.byAlias[key] = i
+			}
 		}
 	}
 	return warnings
@@ -421,6 +433,10 @@ func (r *Registry) Resolve(name string) (Model, error) {
 	if q == "" {
 		return Model{}, ErrUnknownModel
 	}
+	if _, ok := r.dupAlias[q]; ok {
+		// a duplicated alias is never resolved silently, matching the ambiguity rule
+		return Model{}, &ErrAmbiguousModel{Name: name, Candidates: aliasCandidates(r.models, q)}
+	}
 	if i, ok := r.byAlias[q]; ok {
 		return r.models[i], nil
 	}
@@ -441,6 +457,22 @@ func (r *Registry) Resolve(name string) (Model, error) {
 		}
 	}
 	return Model{}, ErrUnknownModel
+}
+
+// aliasCandidates returns the key of every model listing an alias equal to q,
+// sorted by provider then id.
+func aliasCandidates(models []Model, q string) []string {
+	hits := bulk.SliceFilter(func(m Model) bool { return hasAlias(m, q) }, models)
+	out := make([]string, len(hits))
+	for i, m := range hits {
+		out[i] = m.Key()
+	}
+	return out
+}
+
+// hasAlias reports whether the model lists an alias equal to q (case-insensitive).
+func hasAlias(m Model, q string) bool {
+	return slices.ContainsFunc(m.Aliases, func(a string) bool { return strings.EqualFold(a, q) })
 }
 
 // unique returns the single model matching pred, nil when none match, or an

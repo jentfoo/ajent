@@ -192,6 +192,36 @@ func TestRegistryResolve(t *testing.T) {
 	})
 }
 
+func TestRegistryDuplicateAlias(t *testing.T) {
+	t.Parallel()
+
+	f := File{Providers: map[string]ProviderConfig{
+		"anthropic": {Models: []ModelConfig{
+			{ID: "claude-opus-4-5", Aliases: []string{"opus"}},
+			{ID: "some/other-model", Name: "Other Opus", Aliases: []string{"OPUS", "other"}},
+		}},
+	}}
+	r, warnings := NewRegistry(f, nil, RegistryOptions{})
+
+	t.Run("build_warns_on_the_collision", func(t *testing.T) {
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "alias \"opus\" is claimed by both")
+	})
+	t.Run("resolve_reports_ambiguity_not_a_pick", func(t *testing.T) {
+		_, err := r.Resolve("OPUS")
+
+		var ae *ErrAmbiguousModel
+		require.ErrorAs(t, err, &ae)
+		assert.ElementsMatch(t,
+			[]string{"anthropic/claude-opus-4-5", "anthropic/some/other-model"}, ae.Candidates)
+	})
+	t.Run("a_non_colliding_alias_still_resolves", func(t *testing.T) {
+		got, err := r.Resolve("other")
+		require.NoError(t, err)
+		assert.Equal(t, "anthropic/some/other-model", got.Key())
+	})
+}
+
 func TestMergeModels(t *testing.T) {
 	t.Parallel()
 

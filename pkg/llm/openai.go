@@ -349,6 +349,7 @@ type responsesStream struct {
 	emittedReasoning map[string]respEmittedThink
 	usage            Usage
 	status           string
+	incomplete       string // incomplete_details.reason, when the response stopped short
 	sawTool          bool
 }
 
@@ -543,6 +544,9 @@ func (s *responsesStream) onCompleted(ev respEvent) []Event {
 	var out []Event
 	if ev.Response != nil {
 		s.status = ev.Response.Status
+		if d := ev.Response.IncompleteDetails; d != nil && d.Reason != "" {
+			s.incomplete = d.Reason
+		}
 		// azure can omit reasoning.encrypted_content from output_item.done and give
 		// it only in response.completed.output; re-emit any thinking block that was
 		// missing one before EventDone so stateless replay keeps working
@@ -566,11 +570,17 @@ func (s *responsesStream) onCompleted(ev respEvent) []Event {
 	return append(out, s.finish(io.EOF)...)
 }
 
-// respStopReason maps a terminal response status.
-func respStopReason(status string, sawToolCall bool) StopReason {
+// respStopReason maps a terminal response status. An incomplete stop is
+// output-token truncation only when the API says so; other reasons (content
+// filter) are not truncation and must not be retried as one.
+func respStopReason(status string, sawToolCall bool, incompleteReason string) StopReason {
 	switch status {
 	case "incomplete":
-		return StopMaxTokens
+		if strings.EqualFold(incompleteReason, fieldMaxOutputTokens) || incompleteReason == "" {
+			// an absent reason keeps the safe truncation default: partial text is never acted on
+			return StopMaxTokens
+		}
+		return StopIncomplete
 	case "failed":
 		return StopError
 	default:
@@ -587,7 +597,7 @@ func (s *responsesStream) finish(cause error) []Event {
 	}
 	s.done = true
 
-	stop := respStopReason(s.status, s.sawTool)
+	stop := respStopReason(s.status, s.sawTool, s.incomplete)
 	var streamErr error
 	switch {
 	case cause != nil && !errors.Is(cause, io.EOF):

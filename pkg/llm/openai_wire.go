@@ -131,12 +131,18 @@ type respEvent struct {
 
 // respPayload is the response object carried by lifecycle frames.
 type respPayload struct {
-	ID     string     `json:"id"`
-	Model  string     `json:"model"`
-	Status string     `json:"status"`
-	Output []respItem `json:"output"`
-	Usage  *respUsage `json:"usage"`
-	Error  *respError `json:"error"`
+	ID                string                 `json:"id"`
+	Model             string                 `json:"model"`
+	Status            string                 `json:"status"`
+	Output            []respItem             `json:"output"`
+	Usage             *respUsage             `json:"usage"`
+	Error             *respError             `json:"error"`
+	IncompleteDetails *respIncompleteDetails `json:"incomplete_details,omitempty"`
+}
+
+// respIncompleteDetails names why a response stopped before completing.
+type respIncompleteDetails struct {
+	Reason string `json:"reason"`
 }
 
 type respError struct {

@@ -105,6 +105,7 @@ func TestStopReasonString(t *testing.T) {
 		{StopEndTurn, "end_turn"},
 		{StopToolUse, "tool_use"},
 		{StopMaxTokens, "max_tokens"},
+		{StopIncomplete, "incomplete"},
 		{StopAborted, "aborted"},
 		{StopError, "error"},
 		{StopUnknown, "unknown"},
@@ -126,6 +127,7 @@ func TestStopReasonMarshalRoundTrip(t *testing.T) {
 		{"end_turn", StopEndTurn},
 		{"tool_use", StopToolUse},
 		{"max_tokens", StopMaxTokens},
+		{"incomplete", StopIncomplete},
 		{"aborted", StopAborted},
 		{"error", StopError},
 	}

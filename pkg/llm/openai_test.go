@@ -245,6 +245,33 @@ func TestResponsesStreamTruncated(t *testing.T) {
 		require.ErrorIs(t, err, ErrStreamTruncated) // sawTool must not mask the drop
 		assert.Equal(t, StopError, stop)
 	})
+	t.Run("incomplete_max_output_is_truncation", func(t *testing.T) {
+		stop := collectIncompleteStop(t, "openai/incomplete_max_tokens.sse")
+		assert.Equal(t, StopMaxTokens, stop)
+	})
+	t.Run("incomplete_content_filter_is_not_truncation", func(t *testing.T) {
+		// a non-token incompletion must not be retried as output truncation
+		stop := collectIncompleteStop(t, "openai/incomplete_content_filter.sse")
+		assert.Equal(t, StopIncomplete, stop)
+	})
+}
+
+// collectIncompleteStop drives an incomplete fixture to EventDone and returns its stop reason.
+func collectIncompleteStop(t *testing.T, fixture string) StopReason {
+	t.Helper()
+	srv, _ := sseServer(t, fixture)
+	p := newResponsesTestProvider(t, srv.URL)
+
+	s, err := p.Stream(t.Context(), Request{Model: responsesModel(nil)})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	var events []Event
+	for ev, ok := s.Next(); ok; ev, ok = s.Next() {
+		events = append(events, ev)
+	}
+	require.NoError(t, s.Err())
+	return events[len(events)-1].StopReason
 }
 
 func TestBuildResponsesBody(t *testing.T) {
@@ -805,17 +832,20 @@ func TestRespStopReason(t *testing.T) {
 		name     string
 		status   string
 		sawTool  bool
+		reason   string
 		expected StopReason
 	}{
-		{"completed", "completed", false, StopEndTurn},
-		{"completed_with_tools", "completed", true, StopToolUse},
-		{"incomplete_is_max_tokens", "incomplete", false, StopMaxTokens},
-		{"failed", "failed", false, StopError},
-		{"unknown_defaults_to_end_turn", "", false, StopEndTurn},
+		{"completed", "completed", false, "", StopEndTurn},
+		{"completed_with_tools", "completed", true, "", StopToolUse},
+		{"incomplete_max_output_tokens", "incomplete", false, "max_output_tokens", StopMaxTokens},
+		{"incomplete_content_filter", "incomplete", false, "content_filter", StopIncomplete},
+		{"incomplete_absent_reason_is_safe", "incomplete", false, "", StopMaxTokens},
+		{"failed", "failed", false, "", StopError},
+		{"unknown_defaults_to_end_turn", "", false, "", StopEndTurn},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, respStopReason(tc.status, tc.sawTool))
+			assert.Equal(t, tc.expected, respStopReason(tc.status, tc.sawTool, tc.reason))
 		})
 	}
 }

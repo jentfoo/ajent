@@ -80,16 +80,19 @@ const (
 	StopEndTurn
 	StopToolUse
 	StopMaxTokens
+	// StopIncomplete is a non-token terminal stop, e.g. openai's content filter.
+	StopIncomplete
 	StopAborted
 	StopError
 )
 
 var stopReasonNames = enumNames[StopReason]{
-	StopEndTurn:   "end_turn",
-	StopToolUse:   "tool_use",
-	StopMaxTokens: "max_tokens",
-	StopAborted:   "aborted",
-	StopError:     "error",
+	StopEndTurn:    "end_turn",
+	StopToolUse:    "tool_use",
+	StopMaxTokens:  "max_tokens",
+	StopIncomplete: "incomplete",
+	StopAborted:    "aborted",
+	StopError:      "error",
 }
 
 // String returns the stop reason name used in logs and golden fixtures.

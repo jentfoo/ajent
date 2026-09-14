@@ -343,7 +343,10 @@ defaults. Models come from `models.json` and from asking the provider.
 
 `Registry.Resolve` matches, in order: alias, `provider/id`, bare id, unique id
 suffix, unique key substring, unique name substring. An ambiguous name is an
-error listing the candidates, never a coin flip.
+error listing the candidates, never a coin flip. That extends to aliases: two
+models claiming the same alias are detected at build time (a warning names both),
+and resolving that alias reports the ambiguity rather than silently picking whichever
+model sorted last.
 
 **The merge rule:** when a provider declares models, that list *is* the list for
 that provider. Discovery may fill fields the declaration left unset but never
@@ -459,7 +462,7 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
 | Provider | Worth knowing |
 |---|---|
 | anthropic | System is a top-level field, not a message. Tool results ride on **user** messages, never a tool role. Consecutive same-role messages must be merged. Temperature must be dropped when thinking is enabled, or the request 400s. Usage is split across events: input and cache numbers arrive at `message_start`, final totals with `output_tokens_details.thinking_tokens` only on the terminal `message_delta` (see invariant 12). `count_tokens` is exact but billed, so it is a method and never called automatically. |
-| openai | Responses API primary. Tools are flat, not nested under a `function` key. `max_output_tokens`, not `max_tokens`. Reasoning items replay by id, and statelessly only with `encrypted_content`, which requires asking for it via `include`. Falls back to chat-completions per model, decided from resolved capabilities rather than sniffed. |
+| openai | Responses API primary. Tools are flat, not nested under a `function` key. `max_output_tokens`, not `max_tokens`. Reasoning items replay by id, and statelessly only with `encrypted_content`, which requires asking for it via `include`. Falls back to chat-completions per model, decided from resolved capabilities rather than sniffed. A terminal `incomplete` stop is output-token truncation (`StopMaxTokens`) only when `incomplete_details.reason` says so; any other reason maps to `StopIncomplete`, so a content-filtered turn is not retried as though it ran out of room, and an absent reason keeps the safe truncation default. |
 | openrouter | Carries reasoning in a `reasoning` object rather than `reasoning_effort`. `reasoning_details` must be echoed back verbatim or a model routed to anthropic loses its signatures. Pricing fields in the discovery response are dropped. |
 | llama.cpp | Older builds reject an unknown `stream_options`, so stream usage starts off and discovery turns it on. `/tokenize` is exact, local and cheap, so it is the one tokenizer used freely. |
 | lm-studio | Header and idle bounds default to disabled for JIT loads. Tool support varies per loaded model, so it is a capability. |
