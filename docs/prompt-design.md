@@ -117,8 +117,7 @@ not this block.
 ```
 1. Opening sentence         — how the agent works, domain- and tool-neutral.
 2. Guidelines               — concise bullets; some derived from which tools exist.
-3. Environment facts        — working directory, an ls-style listing of it, plus
-                              platform and day-granular date.
+3. Environment facts        — working directory, platform and day-granular date.
 4. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
 5. Extension snippets       — caller-supplied, blank-line separated; sub-agents inject their contract here.
 ```
@@ -158,22 +157,19 @@ that is not present.
 ### Environment facts
 
 The header describes where the agent is and what it can see, not machine trivia.
-Shell and git status are deliberately omitted; instead the cwd is listed like
-`ls`, so the model knows which files exist. Empty values drop their line rather
-than emitting `unknown`:
+Shell, git status and a directory listing are deliberately omitted. A listing
+would change whenever the workspace changes, breaking cache stability, and the
+model discovers files with its tools instead. Empty values drop their line
+rather than emitting `unknown`:
 
 ```
 Working directory: /path
 Platform: linux/amd64       # only when known
 Date: 2026-08-10            # day granularity — the one thing that changes per day
-Directory contents:
-  AGENTS.md
-  bin/
-  pkg/
 ```
 
-The listing is captured at startup and fixed for the session. Only the date
-varies within a session: that is the cache-stability contract.
+Every input is fixed at startup, so only a date rollover varies within a
+session: that is the cache-stability contract.
 
 ### Composition invariants
 

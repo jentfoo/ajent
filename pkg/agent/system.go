@@ -24,8 +24,9 @@ type Environment struct {
 }
 
 // DetectEnvironment reads the facts about this machine that a coding agent is
-// expected to know. The cwd listing is captured at startup and stays fixed for
-// the session so the system block remains cache-stable.
+// expected to know: working directory, platform and the day-granular date. All
+// three are fixed at startup, so the system block never varies within a session
+// except across midnight.
 func DetectEnvironment() Environment {
 	cwd, _ := os.Getwd()
 	return Environment{
@@ -137,22 +138,16 @@ func buildGuidelines(names []string) string {
 	return b.String() + "\n"
 }
 
-// buildEnvironmentFacts appends the working directory and an ls-style listing of
-// it. Empty values are omitted rather than emitted as "unknown"; shell and git
-// status are deliberately absent, and only Date varies within a session so the
-// provider prompt cache survives.
+// buildEnvironmentFacts appends the working directory, platform and date.
+// Empty values are omitted rather than emitted as "unknown"; shell, git status
+// and a directory listing are deliberately absent — the listing would vary
+// whenever the workspace changes, and the model discovers files with its tools.
 func buildEnvironmentFacts(b *strings.Builder, env Environment) {
 	fmt.Fprintf(b, "Working directory: %s\n", cwdOrDot(env.Cwd))
 	if env.OS != "" {
 		fmt.Fprintf(b, "Platform: %s\n", env.OS)
 	}
 	fmt.Fprintf(b, "Date: %s\n", env.Date)
-	if entries := listCwd(cwdOrDot(env.Cwd)); len(entries) > 0 {
-		b.WriteString("Directory contents:\n")
-		for _, e := range entries {
-			fmt.Fprintf(b, "  %s\n", e)
-		}
-	}
 }
 
 func cwdOrDot(cwd string) string {
@@ -160,23 +155,4 @@ func cwdOrDot(cwd string) string {
 		return "."
 	}
 	return cwd
-}
-
-// listCwd returns the sorted names of entries in dir, dirs marked with a trailing
-// slash like ls. Absent or unreadable dirs yield nil so the section is omitted.
-func listCwd(dir string) []string {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() {
-			name += "/"
-		}
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	return names
 }

@@ -54,7 +54,7 @@ type Capabilities struct {
 	ToolReferences                   bool
 	SupportsAdditionalTools          bool // responses message-anchored additional_tools
 	SupportsToolSearch               bool // client-executed tool search for deferred tools
-	SupportsExplicitPromptCache      bool // openai prompt_cache_options
+	SupportsExplicitPromptCache      bool // supportsExplicitPromptCacheMode; gates openai prompt_cache_key
 	ZaiToolStream                    bool
 	SessionAffinity                  bool // send session-affinity headers
 

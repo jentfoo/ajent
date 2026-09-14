@@ -435,8 +435,11 @@ the code will not emit more. Models declaring `supportsLongCacheRetention` get
 the extended `ttl` tier.
 
 OpenAI and openrouter cache automatically and report it through
-`Usage.CacheRead`. Local providers reuse their own KV cache and need nothing
-sent, beyond llama.cpp's `cache_prompt`.
+`Usage.CacheRead`. With `CachePolicy` and a session id, models accepting it
+get `prompt_cache_key` (clamped to 64 chars) for cache routing: default on
+api.openai.com, `supportsExplicitPromptCacheMode` opts in elsewhere. Local
+providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
+`cache_prompt`.
 
 ## Provider notes
 

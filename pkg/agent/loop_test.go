@@ -729,6 +729,10 @@ func TestBuildRequest(t *testing.T) {
 		req := a3.buildRequest()
 		assert.Equal(t, llm.MaxOutputFor(m, 0), req.MaxTokens) // no used tokens -> full window cap
 	})
+	t.Run("requests_prompt_caching", func(t *testing.T) {
+		req := a.buildRequest()
+		assert.True(t, req.Cache.Enabled) // providers gate on caps and ignore it when unsupported
+	})
 }
 
 func TestLoopToolProgressReachesSink(t *testing.T) {

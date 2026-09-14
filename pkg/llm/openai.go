@@ -109,6 +109,9 @@ func buildResponsesBody(req Request) ([]byte, error) {
 		// replay reasoning on the next turn
 		body.Store = ptrOf(false)
 	}
+	if req.Cache.Enabled && req.SessionID != "" && caps.SupportsExplicitPromptCache {
+		body.PromptCacheKey = clampPromptCacheKey(req.SessionID)
+	}
 	return json.Marshal(body)
 }
 

@@ -22,6 +22,17 @@ const (
 // request is rejected.
 const respMinOutputTokens = 16
 
+// openaiPromptCacheKeyLimit is the API's cap on prompt_cache_key length.
+const openaiPromptCacheKeyLimit = 64
+
+// clampPromptCacheKey trims a session id to the key length openai accepts.
+func clampPromptCacheKey(key string) string {
+	if len(key) <= openaiPromptCacheKeyLimit {
+		return key
+	}
+	return key[:openaiPromptCacheKeyLimit]
+}
+
 // respRequest is a Responses API request body.
 type respRequest struct {
 	Model           string         `json:"model"`
@@ -36,6 +47,7 @@ type respRequest struct {
 	Store           *bool          `json:"store,omitempty"`
 	Stream          bool           `json:"stream"`
 	ParallelTools   *bool          `json:"parallel_tool_calls,omitempty"`
+	PromptCacheKey  string         `json:"prompt_cache_key,omitempty"`
 }
 
 // respReasoning asks for reasoning at a given effort.

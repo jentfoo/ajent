@@ -331,6 +331,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			schema:      toolSchema(toolsReg),
 			cwd:         wcwd,
 			tmp:         wtmp,
+			session:     sessionHint(rec),
 		}.Classify))
 		barrier.SetWriteRoots(wcwd, wtmp)
 		barrier.SetNotice(func(msg string) { ui.Notify(msg, tui.LevelInfo) })

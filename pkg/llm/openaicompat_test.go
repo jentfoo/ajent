@@ -316,6 +316,34 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"role":"developer"`)
 	})
+	t.Run("prompt_cache_key_when_enabled", func(t *testing.T) {
+		req := baseReq()
+		req.SessionID = t.Name()
+		req.Cache = CachePolicy{Enabled: true}
+		req.Model.Caps.SupportsExplicitPromptCache = true
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"prompt_cache_key":"`+t.Name()+`"`)
+	})
+	t.Run("no_prompt_cache_key_when_disabled", func(t *testing.T) {
+		req := baseReq()
+		req.SessionID = t.Name()
+		req.Model.Caps.SupportsExplicitPromptCache = true // capable but not requested
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), "prompt_cache_key")
+	})
+	t.Run("no_prompt_cache_key_when_uncapable", func(t *testing.T) {
+		req := baseReq() // lmstudio flavor: no SupportsExplicitPromptCache
+		req.SessionID = t.Name()
+		req.Cache = CachePolicy{Enabled: true}
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), "prompt_cache_key")
+	})
 	t.Run("temperature_omitted_when_unsupported", func(t *testing.T) {
 		req := baseReq()
 		temp := 0.7

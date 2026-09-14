@@ -20,7 +20,7 @@ type Request struct {
 	Temperature *float64 // nil uses the provider default
 	Reasoning   ReasoningConfig
 	Cache       CachePolicy
-	SessionID   string // session-affinity headers, when a provider supports them
+	SessionID   string // session-affinity headers when supported; prompt_cache_key on openai
 }
 
 // ToolSchema is a tool as the model sees it.
@@ -46,7 +46,10 @@ const (
 	ToolChoiceSpecific
 )
 
-// CachePolicy asks the adapter to place prompt cache breakpoints.
+// CachePolicy asks the adapter to apply provider prompt caching: cache_control
+// breakpoints where the dialect supports them (anthropic), prompt_cache_key
+// routing affinity where it does not (openai, with SessionID set). Providers
+// without caching support ignore it.
 type CachePolicy struct {
 	Enabled bool
 	// KeepLast is how many trailing message boundaries get a breakpoint beyond

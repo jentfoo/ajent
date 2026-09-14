@@ -69,6 +69,7 @@ type classifierAdapter struct {
 	schema      func(name string) (llm.ToolSchema, bool) // nil: no MCP metadata available
 	cwd         string
 	tmp         string
+	session     string
 }
 
 func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permit.Class {
@@ -103,6 +104,9 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 		System:    llm.BlockList{llm.TextBlock{Text: sys}},
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: userMsg}}}},
 		MaxTokens: classifyBudget(m),
+		// constant prompt re-sent per gated call; needs SessionID on openai
+		Cache:     llm.CachePolicy{Enabled: true},
+		SessionID: a.session,
 	}
 	req.Reasoning = llm.ReasoningConfig{Level: llm.ClampLevel(m, llm.LevelOff)}
 	out, _, serr := llm.RunSummary(ctx, p, req)

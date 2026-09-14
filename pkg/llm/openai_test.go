@@ -247,6 +247,40 @@ func TestBuildResponsesBody(t *testing.T) {
 			]
 		}`, string(body))
 	})
+	t.Run("prompt_cache_key_from_session", func(t *testing.T) {
+		req := baseReq() // openai flavor defaults SupportsExplicitPromptCache on
+		req.SessionID = "sess-1"
+		req.Cache = CachePolicy{Enabled: true}
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"prompt_cache_key":"sess-1"`)
+	})
+	t.Run("prompt_cache_key_clamped", func(t *testing.T) {
+		req := baseReq()
+		req.SessionID = strings.Repeat("k", 100)
+		req.Cache = CachePolicy{Enabled: true}
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), strings.Repeat("k", 65))
+	})
+	t.Run("no_prompt_cache_key_without_policy", func(t *testing.T) {
+		req := baseReq()
+		req.SessionID = "sess-1" // capable but CachePolicy not requested
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), "prompt_cache_key")
+	})
+	t.Run("no_prompt_cache_key_without_session", func(t *testing.T) {
+		req := baseReq()
+		req.Cache = CachePolicy{Enabled: true} // requested but no key to send
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), "prompt_cache_key")
+	})
 	t.Run("assistant_text_uses_the_output_type", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{Text(RoleUser, "q"), Text(RoleAssistant, "a")}

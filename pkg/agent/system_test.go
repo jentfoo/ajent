@@ -52,24 +52,8 @@ func TestBuildSystem(t *testing.T) {
 		assert.NotEqual(t, b1.Text, b2.Text) // the date differs across days
 	})
 
-	// the ls-style directory listing is emitted.
-	t.Run("lists_cwd", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("// x\n"), 0o644))
-		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
-
-		s := &State{Model: llm.Model{ID: "test"}}
-		blocks := buildSystem(s, Environment{Cwd: dir}, nil, nil)
-		tb, ok := blocks[0].(llm.TextBlock)
-		require.True(t, ok)
-
-		assert.Contains(t, tb.Text, "Directory contents:")
-		assert.Contains(t, tb.Text, "  a.go\n")
-		assert.Contains(t, tb.Text, "  sub/\n")
-	})
-
-	// an absent cwd is tolerated.
-	t.Run("omits_missing_cwd_listing", func(t *testing.T) {
+	// an absent cwd still names the working directory line.
+	t.Run("no_cwd_listing", func(t *testing.T) {
 		s := &State{Model: llm.Model{ID: "test"}}
 		blocks := buildSystem(s, Environment{Cwd: "/does/not/exist"}, nil, nil)
 		tb, ok := blocks[0].(llm.TextBlock)
@@ -154,24 +138,6 @@ func TestDetectEnvironment(t *testing.T) {
 	assert.NotEmpty(t, env.Cwd)
 	assert.NotEmpty(t, env.OS)
 	assert.NotEmpty(t, env.Date)
-}
-
-func TestListCwd(t *testing.T) {
-	t.Parallel()
-
-	// names are sorted and directories marked.
-	t.Run("sorts_and_marks_dirs", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "b.go"), []byte("// x\n"), 0o644))
-		require.NoError(t, os.Mkdir(filepath.Join(dir, "a"), 0o755))
-
-		assert.Equal(t, []string{"a/", "b.go"}, listCwd(dir))
-	})
-
-	// an absent dir returns nil.
-	t.Run("missing_returns_nil", func(t *testing.T) {
-		assert.Nil(t, listCwd("/does/not/exist"))
-	})
 }
 
 func TestBuildSystemProjectInstructions(t *testing.T) {

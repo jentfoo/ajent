@@ -33,6 +33,7 @@ type compatRequest struct {
 	Provider          any                `json:"provider,omitempty"` // typed routing or verbatim compat JSON
 	Usage             *compatUsageOption `json:"usage,omitempty"`
 	CachePrompt       *bool              `json:"cache_prompt,omitempty"`
+	PromptCacheKey    string             `json:"prompt_cache_key,omitempty"`
 
 	// extra carries body keys whose name comes from configuration, folded in at
 	// marshal time; unexported so encoding/json skips it

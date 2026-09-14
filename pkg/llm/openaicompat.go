@@ -94,6 +94,9 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 	if profile.decorate != nil {
 		profile.decorate(&body, req)
 	}
+	if req.Cache.Enabled && req.SessionID != "" && caps.SupportsExplicitPromptCache {
+		body.PromptCacheKey = clampPromptCacheKey(req.SessionID)
+	}
 	// configured extra keys win over everything, including our own dynamic ones
 	return marshalWithExtra(body, mergeExtra(body.extra, caps.ExtraBody))
 }

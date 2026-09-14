@@ -51,7 +51,7 @@ func (t *writeTool) Label(agent.ToolCall) string {
 	return "write"
 }
 func (t *writeTool) Description() string {
-	return "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories."
+	return "Creates a file if it doesn't exist, overwrites with the content if it does. Automatically creates parent directories."
 }
 func (t *writeTool) Schema() llm.ToolSchema {
 	return llm.ToolSchema{Parameters: SchemaOf[writeParams]()}

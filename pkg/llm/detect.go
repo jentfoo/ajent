@@ -103,5 +103,8 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	longCache := !isTogether && !isCFWorkersAI && !isCFGateway && !isNvidia && !isAntLing
 	c.SupportsLongCache = ptrOf(longCache)
 
+	// the routing key is verified on api.openai.com only
+	c.SupportsExplicitPromptCache = ptrOf(false)
+
 	return c
 }
