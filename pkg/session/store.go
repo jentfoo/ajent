@@ -230,24 +230,35 @@ func readInfo(path string) (Info, bool) {
 	}
 	var info Info
 	info.Path = path
-	// count only the persisted head's branch so message counts and the first user
-	// prompt match what resuming would actually rebuild after a fork
-	for _, e := range Branch(entries, headFor(path, entries)) {
+	// identity belongs to the file, not its active branch: a head sitting on a
+	// second root never reaches line 1's session entry, yet still names the file.
+	info.ID, info.Started, info.Model = sessionIdentity(entries)
+	branch := Branch(entries, headFor(path, entries))
+	for _, e := range branch {
 		switch e.Type {
-		case TypeSession:
-			var sd SessionData
-			_ = e.Decode(&sd)
-			info.ID = e.ID
-			info.Started = time.UnixMilli(e.TS).UTC()
-			info.Model = sd.Model
 		case TypeMessage:
 			info.Messages++
 		}
 	}
 	info.Name = NameOf(entries)
 	info.Updated = lastUsed(path, entries)
-	info.First = firstUserOn(Branch(entries, headFor(path, entries)))
+	info.First = firstUserOn(branch)
 	return info, true
+}
+
+// sessionIdentity returns the transcript's own id, start time and model from raw
+// file order: these identify the file as a whole, like NameOf.
+func sessionIdentity(entries []Entry) (id string, started time.Time, model string) {
+	for _, e := range entries {
+		if e.Type != TypeSession {
+			continue
+		}
+		var sd SessionData
+		if err := e.Decode(&sd); err == nil {
+			return e.ID, time.UnixMilli(e.TS).UTC(), sd.Model
+		}
+	}
+	return "", time.Time{}, ""
 }
 
 // lastUsed returns when the transcript was last written: the newest entry, or the

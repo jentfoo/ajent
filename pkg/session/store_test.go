@@ -382,6 +382,35 @@ func TestReadInfo(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "fix-parser", info.Name)
 	})
+
+	// identity survives a fresh root: ID/Started/Model belong to the file, so a
+	// head on a second root still resolves them from line 1.
+	t.Run("identity_survives_new_root", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "2026-01-02T03-04-05Z-f00d.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion, Model: "trunk-model", Name: "plan-session"})
+		require.NoError(t, err)
+
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "prior chat")})
+		require.NoError(t, aerr)
+		w.SetHead("")
+		rootTip, rerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "kickoff")})
+		require.NoError(t, rerr)
+
+		// SetHead("") dropped the cursor sidecar; re-persist a head on the new root so
+		// tail recovery lands there and Branch never reaches line 1.
+		w.SetHead(rootTip.ID)
+		require.NoError(t, w.Close())
+
+		sessID := readEntries(t, p)[0].ID
+		info, ok := readInfo(p)
+		require.True(t, ok)
+
+		assert.Equal(t, sessID, info.ID) // identity comes from line 1, not the branch
+		assert.False(t, info.Started.IsZero())
+		assert.Equal(t, "trunk-model", info.Model)
+		assert.Equal(t, 1, info.Messages) // only kickoff sits on the new root's branch
+	})
 }
 
 func TestNameOf(t *testing.T) {

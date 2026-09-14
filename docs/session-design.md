@@ -167,6 +167,10 @@ Names are never parsed back into a workspace. The store:
   file mtime when that is later. Taking the later of the two is the conservative
   direction, so a restored backup is not mistaken for abandoned work. Raw file
   order, like `NameOf`: work on an abandoned fork was still work.
+- **Info.ID/Started/Model** identify the transcript *file*, not its active branch:
+  they are read from the `session` entry in raw file order (the same rationale as
+  `NameOf`), so a head sitting on a second root still resolves them and `Find` by
+  id or prefix keeps working.
 - **Prompts** returns the workspace's recorded user prompts, newest first and
   deduplicated to each distinct text's most recent occurrence. It walks recent
   append-only files in reverse, so the newest prompt is read first, and sweeps a
@@ -409,11 +413,12 @@ History search is one deliberate exception: it scans every entry of each file in
 raw append order (newest first) rather than only the persisted head branch, so
 a prompt on an abandoned rewind fork stays findable.
 
-`NameOf` is the other: a name identifies the transcript *file* that
+`NameOf` is another: a name identifies the transcript *file* that
 `--resume` opens, not a branch inside it, so it reads raw file order.
 Branch-scoped resolution would let a rewind past a rename silently un-name
 the session while its entry stays on disk, freeing the old name to create a
-duplicate.
+duplicate. `Info.ID/Started/Model` share that rationale: they identify the
+file (the `session` entry in raw order), not any branch.
 
 **3. The live head wins over the file tail.** They agree only until the first
 fork. After a rewind, or a plan workflow that leaves the cursor on the review
