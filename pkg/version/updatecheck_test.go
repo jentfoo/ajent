@@ -96,12 +96,32 @@ func TestCheckUpdateNotice(t *testing.T) {
 		assert.Equal(t, "v9.9.9", c.Version)
 	})
 
-	t.Run("fetch_error_returns_err", func(t *testing.T) {
+	t.Run("offline_still_notices_known", func(t *testing.T) {
+		setVersionForTest(t, "v0.1.4")
 		path := filepath.Join(t.TempDir(), "remote.json")
 		stale := now.Add(-(remoteVersionTTL + time.Hour))
-		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: stale.Unix()}))
+		cached := "v0.2.0"
+		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: cached, CheckedAt: stale.Unix()}))
 		fn := func(context.Context) (string, error) { return "", errors.New("offline") }
+		want := fmt.Sprintf("update available: ajent %s → %s (run /update or --update)", Version, cached)
+		msg, err := CheckUpdateNotice(context.Background(), path,
+			optsAt(fn, now))
+		require.NoError(t, err)
+		assert.Equal(t, want, msg)
+
+		// the stale tag is kept; a later run retries the fetch.
+		var c UpdateCache
+		loadUpdateCache(path, &c)
+		assert.Equal(t, cached, c.Version)
+		assert.Equal(t, stale.Unix(), c.CheckedAt)
+	})
+
+	t.Run("fetch_error_no_cache_returns_err", func(t *testing.T) {
 		setVersionForTest(t, "v0.1.4")
+		path := filepath.Join(t.TempDir(), "remote.json")
+		stale := now.Add(-(remoteVersionTTL + time.Hour))
+		require.NoError(t, saveUpdateCache(path, UpdateCache{CheckedAt: stale.Unix()}))
+		fn := func(context.Context) (string, error) { return "", errors.New("offline") }
 		_, err := CheckUpdateNotice(context.Background(), path,
 			optsAt(fn, now))
 		require.Error(t, err)

@@ -83,15 +83,20 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 	var c UpdateCache
 	loadUpdateCache(cacheFile, &c)
 
-	// refresh a stale cached tag; a failed fetch keeps the old value and is not fatal.
+	// refresh a stale cached tag; on failure keep the old value and still compare
+	// against it, so going offline past the TTL does not hide a known update.
 	if now().Sub(time.Unix(c.CheckedAt, 0)) > remoteVersionTTL {
 		latest, err := fetch(ctx)
 		if err != nil {
-			return "", fmt.Errorf("update check: %w", err)
+			// only report failure when there is no cached version to fall back on.
+			if c.Version == "" {
+				return "", fmt.Errorf("update check: %w", err)
+			}
+		} else {
+			c.Version = latest
+			c.CheckedAt = now().Unix()
+			_ = saveUpdateCache(cacheFile, c) // best effort; a failed write keeps the old cache
 		}
-		c.Version = latest
-		c.CheckedAt = now().Unix()
-		_ = saveUpdateCache(cacheFile, c) // best effort; a failed write keeps the old cache
 	}
 
 	// only real builds are worth nagging about; dev is always behind by design.

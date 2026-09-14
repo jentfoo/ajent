@@ -174,8 +174,11 @@ Two TTLs bound it: the fetched version is reused for a while before the tags
 endpoint is hit again, and an update notice is
 shown at most once per interval. The check only reports for real builds, never `dev`,
 which is always behind by design, and compares clean `vX.Y.Z` tags strictly.
-A failed fetch keeps the stale cached tag and returns an error; both writes are
-best-effort, so a broken cache directory cannot break startup.
+A failed fetch keeps the stale cached tag; when it already holds a newer release
+the notice is still reported, so going offline past the TTL never hides a known
+update. Only a failed check with no cached version to fall back on reports an
+error. Both writes are best-effort, so a broken cache directory cannot break
+startup.
 
 The notice can be switched off entirely with `disableUpdateCheck` (a top-level
 Settings bool, env `AJENT_DISABLEUPDATECHECK`). It is read once at startup in
