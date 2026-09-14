@@ -402,6 +402,15 @@ any `Retry-After` hint, and the (redacted) response body. `pkg/httputil` owns th
 retry ladder and calls back into `httpClient.apiError` to build it, so the shape
 stays llm's while the mechanism is shared.
 
+Retryability is decided once, at the point where a classified error meets the
+transport's parsed `Retry-After`. The status table and that wait together drive
+whether the call retries and how long to back off, so a classified 409 with a
+`Retry-After`, or any transient failure carrying one, keeps its server-directed
+wait. Overflow is the single exception: it always wins over the status table,
+which matters because llama.cpp reports overflow as a 500 that would otherwise
+transient-retry. Classifiers only parse vendor error shapes; they set no retry
+verdict of their own.
+
 Retry covers transient failures (rate limiting, request timeouts, server errors
 and connection errors) plus a conflict only when the
 server sent a `Retry-After` (some gateways use it for "model loading").

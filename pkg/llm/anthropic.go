@@ -9,8 +9,6 @@ import (
 	"maps"
 	"net/http"
 	"strings"
-
-	"github.com/jentfoo/ajent/pkg/httputil"
 )
 
 const (
@@ -475,7 +473,6 @@ func anthropicClassifier(provider string) func(int, []byte) error {
 		}
 		err := &APIError{
 			Provider: provider, Status: status, Code: code, Message: msg, Body: body,
-			Retryable: httputil.ShouldRetryStatus(status, false),
 		}
 		if status == http.StatusBadRequest {
 			if matchesOverflow(msg, FlavorAnthropic) {

@@ -46,9 +46,9 @@ func TestHTTPClientAPIError(t *testing.T) {
 		assert.False(t, e.Retryable)
 	})
 	t.Run("retry_after_makes_conflict_retryable", func(t *testing.T) {
-		e := c.apiError(http.StatusConflict, nil, 2*time.Second, nil)
+		e := c.apiError(http.StatusConflict, nil, 3*time.Second, nil)
 		assert.True(t, e.Retryable)
-		assert.Equal(t, 2*time.Second, e.RetryAfter)
+		assert.Equal(t, 3*time.Second, e.RetryAfter)
 	})
 	t.Run("classifier_result_wins", func(t *testing.T) {
 		classify := func(status int, _ []byte) error {
@@ -69,6 +69,37 @@ func TestHTTPClientAPIError(t *testing.T) {
 		assert.Equal(t, "oops", e.Message)
 		assert.True(t, e.Retryable)
 	})
+	t.Run("classified_conflict_with_retry_after_is_retryable", func(t *testing.T) {
+		classify := func(status int, _ []byte) error {
+			return &APIError{Provider: "testprov", Status: status}
+		}
+		e := c.apiError(http.StatusConflict, nil, 3*time.Second, classify)
+		assert.True(t, e.Retryable)
+		assert.Equal(t, 3*time.Second, e.RetryAfter)
+	})
+	t.Run("classified_transient_keeps_retry_after", func(t *testing.T) {
+		classify := func(status int, _ []byte) error {
+			return &APIError{Provider: "testprov", Status: status}
+		}
+		e := c.apiError(http.StatusServiceUnavailable, nil, 3*time.Second, classify)
+		assert.True(t, e.Retryable)
+		assert.Equal(t, 3*time.Second, e.RetryAfter)
+	})
+	t.Run("classified_transient_without_wait_is_retryable", func(t *testing.T) {
+		classify := func(status int, _ []byte) error {
+			return &APIError{Provider: "testprov", Status: status}
+		}
+		e := c.apiError(http.StatusTooManyRequests, nil, 0, classify)
+		assert.True(t, e.Retryable)
+	})
+	t.Run("overflow_beats_the_status_table", func(t *testing.T) {
+		classify := func(status int, _ []byte) error {
+			return (&APIError{Provider: "testprov", Status: status}).Overflow()
+		}
+		e := c.apiError(http.StatusInternalServerError, nil, time.Second, classify)
+		assert.True(t, IsOverflow(e))
+		assert.False(t, e.Retryable)
+	})
 }
 
 func TestHTTPClientErrorFunc(t *testing.T) {
@@ -88,6 +119,16 @@ func TestHTTPClientErrorFunc(t *testing.T) {
 		err, retryable := c.errorFunc(classify)(http.StatusBadRequest, nil, 0)
 		assert.True(t, IsOverflow(err))
 		assert.False(t, retryable)
+	})
+	t.Run("classified_conflict_reports_wait_to_transport", func(t *testing.T) {
+		classify := func(status int, _ []byte) error {
+			return &APIError{Provider: "testprov", Status: status}
+		}
+		err, retryable := c.errorFunc(classify)(http.StatusConflict, nil, 2*time.Second)
+		assert.True(t, retryable)
+		ok, after := Recoverable(err)
+		assert.True(t, ok)
+		assert.Equal(t, 2*time.Second, after)
 	})
 }
 

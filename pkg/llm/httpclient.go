@@ -122,23 +122,30 @@ func (c *httpClient) errorFunc(classify func(int, []byte) error) httputil.ErrorF
 // apiError builds the error for a non 2xx response, letting the adapter's
 // classifier refine it.
 func (c *httpClient) apiError(status int, body []byte, retryAfter time.Duration, classify func(int, []byte) error) *APIError {
+	e := &APIError{Provider: c.provider, Status: status,
+		Message: strings.TrimSpace(string(body)), Body: body}
 	if classify != nil {
 		if err := classify(status, body); err != nil {
 			var ae *APIError
 			if errors.As(err, &ae) {
-				return ae
+				return finalizeClassified(ae, status, retryAfter)
 			}
-			return &APIError{Provider: c.provider, Status: status, Message: err.Error(), Body: body}
+			e.Message = err.Error()
 		}
 	}
-	return &APIError{
-		Provider:   c.provider,
-		Status:     status,
-		Message:    strings.TrimSpace(string(body)),
-		Retryable:  httputil.ShouldRetryStatus(status, retryAfter > 0),
-		RetryAfter: retryAfter,
-		Body:       body,
+	return finalizeClassified(e, status, retryAfter)
+}
+
+// finalizeClassified applies the transport's status verdict and server-directed
+// wait to a classified error. Overflow wins over the status table: llama.cpp
+// reports it as a 500, which would otherwise look transient.
+func finalizeClassified(e *APIError, status int, retryAfter time.Duration) *APIError {
+	if IsOverflow(e) {
+		return e // overflow already cleared Retryable
 	}
+	e.Retryable = httputil.ShouldRetryStatus(status, retryAfter > 0)
+	e.RetryAfter = retryAfter
+	return e
 }
 
 // resolveKey returns the API key for a provider. The configured environment
