@@ -334,6 +334,12 @@ commits, `commitHist` flushes the notice into history first and it stops being
 collapsible. This is the only form of collapse that is safe here, and it is
 enough for a progress notice that updates in place.
 
+Because flushing moves content out of the live block into history, it follows
+the same repaint-before-commit rule as streaming text (invariant 3):
+`flushNotice` drops the notice row from `r.live` (`repaint()`) ahead of the
+`commit` that lands it in history. Otherwise the renderer recomposes the stale
+row below the new content and a ghost copy scrolls committed output away.
+
 ## Interactions
 
 Anything above the TUI can ask the user a question: `Select`, `Confirm`, `Input`,

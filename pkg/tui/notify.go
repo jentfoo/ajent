@@ -57,5 +57,7 @@ func (u *UI) flushNotice() {
 	}
 	text := u.noticeText
 	u.noticeText, u.noticeKey = "", ""
+	// repaint drops the notice from r.live before commit redraws it as a ghost below history
+	u.repaint()
 	u.commit(text, flowWrap)
 }

@@ -51,6 +51,18 @@ func TestUINotify(t *testing.T) {
 func TestUINotifyKeyed(t *testing.T) {
 	t.Parallel()
 
+	// countLines counts screen rows containing sub, so a duplicated live-block
+	// ghost (the invariant-3 bug) is caught rather than hidden by assert.Contains.
+	countLines := func(screen, sub string) int {
+		n := 0
+		for _, l := range strings.Split(screen, "\n") {
+			if strings.Contains(l, sub) {
+				n++
+			}
+		}
+		return n
+	}
+
 	t.Run("same_key_collapses_in_place", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -73,6 +85,17 @@ func TestUINotifyKeyed(t *testing.T) {
 		screen := u.snapshot(v)
 		assert.Contains(t, screen, "scanning 1")
 		assert.Contains(t, screen, "scanning 2")
+	})
+	t.Run("flushed_notice_has_no_live_ghost", func(t *testing.T) {
+		// a commit must drop the notice from r.live before it lands in history,
+		// or the inline renderer recomposes it below the new content as a duplicate
+		v := newVT(80, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+
+		u.NotifyKeyed("scan", "scanning 1", LevelInfo)
+		u.UserEcho("hello") // flushes the notice and does not repaint afterwards
+
+		assert.Equal(t, 1, countLines(u.snapshot(v), "scanning 1"))
 	})
 	t.Run("different_key_flushes_the_previous", func(t *testing.T) {
 		v := newVT(80, 12)
