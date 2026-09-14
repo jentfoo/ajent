@@ -335,7 +335,9 @@ Off-by-default extras for no-shell agents.
 - `find`: glob matching with `**` support; a bare pattern (`*.go`) matches at
   any depth. Uses `git ls-files -z` (quoting disabled, so non-ASCII filenames
   stay usable) inside a repo for `.gitignore` semantics, walking otherwise.
-  Results sorted by mtime (stat once per file), newest first. The complete
+  A search never leaves its root. The listing is scoped to `Path` and any entry
+  resolving outside it is dropped. Results sorted by mtime (stat once per file),
+  newest first. The complete
   match set spills when the bound cuts it, so an explicit small `limit` still
   leaves the rest recoverable.
 - `grep`: shells out to `rg` when present (exit 1 = no matches, exit ≥ 2

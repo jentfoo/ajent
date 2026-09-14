@@ -398,3 +398,44 @@ func TestRelToDotPrefixedFilename(t *testing.T) {
 	assert.Equal(t, "..hidden.go", relTo("/a", "/a/..hidden.go"))
 	assert.Equal(t, "/a/sibling", relTo("/a/b", "/a/sibling")) // true escape stays absolute
 }
+
+// TestFindScopedInsideGitRepo asserts a nested root never enumerates files
+// outside its subtree.
+func TestFindScopedInsideGitRepo(t *testing.T) {
+	t.Parallel()
+
+	// files outside the requested subtree must never appear in find results.
+	dir, _ := newSearchEnv(t)
+	mkfile(dir, "outside/leak.go", "x")
+	mkfile(dir, "root/nested/inner.go", "y")
+	gitInit(t, dir)
+
+	nestedRoot := filepath.Join(dir, "root", "nested")
+	policy := PathPolicy{Cwd: nestedRoot}
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
+		callWith([]byte(`{"pattern":"*.go"}`)), nil)
+	require.NoError(t, err)
+
+	out := textOf(res)
+	assert.Contains(t, out, "inner.go")   // the in-scope file is found
+	assert.NotContains(t, out, "leak.go") // a sibling outside scope never leaks
+}
+
+func TestGrepFallbackScopedInsideGitRepo(t *testing.T) {
+	t.Parallel()
+
+	dir, _ := newSearchEnv(t)
+	mkfile(dir, "outside/leak.go", "needle\n")
+	mkfile(dir, "root/nested/inner.go", "needle\n")
+	gitInit(t, dir)
+
+	nestedRoot := filepath.Join(dir, "root", "nested")
+	policy := PathPolicy{Cwd: nestedRoot}
+	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+		callWith([]byte(`{"pattern":"needle"}`)), nil)
+	require.NoError(t, err)
+
+	out := textOf(res)
+	assert.Contains(t, out, "inner.go")   // the in-scope file is searched
+	assert.NotContains(t, out, "leak.go") // a sibling outside scope never leaks
+}

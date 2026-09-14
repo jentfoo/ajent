@@ -61,13 +61,18 @@ func allWalk(root string) []string {
 func repoFiles(root string) []string {
 	var entries []string
 	if IsGitRepo(root) {
-		out := runQuiet("git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z")
+		// The "." pathspec keeps ls-files to root's subtree, so a nested cwd never
+		// lists parent or sibling files as "../".
+		out := runQuiet("git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
 		seen := make(map[string]struct{})
 		for _, f := range strings.Split(out, "\x00") {
 			if f == "" { // the trailing separator always yields one empty element
 				continue
 			}
 			p := filepath.Join(root, f)
+			if !withinRoot(root, p) { // older git still emits ../; never leave scope
+				continue
+			}
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() { // -c lists deleted-but-tracked files
 				if _, dup := seen[p]; dup { // unmerged entries repeat; git --deduplicate is 2.31+
 					continue
@@ -81,6 +86,15 @@ func repoFiles(root string) []string {
 		}
 	}
 	return allWalk(root)
+}
+
+// withinRoot reports whether path stays inside root.
+func withinRoot(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 // runQuiet runs a command with a short timeout and returns trimmed stdout or
