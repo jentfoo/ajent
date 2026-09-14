@@ -253,7 +253,8 @@ Two guards keep the per-step trigger affordable:
 - **A compaction that succeeds without clearing the point holds the step trigger
   until the turn boundary.** It cut as far as the band allows, so the next step
   would fold one more step for another summariser call; a run that clears the
-  point holds nothing.
+  point holds nothing. The reset is unconditional at every real turn end,
+  including an errored turn.
 
 The agent cannot import `session` or `compact` (session already imports agent),
 so the trigger is a func field on `agent.Options`, matching `Provider` and

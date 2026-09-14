@@ -56,15 +56,18 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 			continue
 		}
 		err := a.runTurn(ctx, input)
-		// a real turn boundary: the hook decides whether an automatic compact fires,
-		// and resets its per-turn state. Step boundaries fire it too, mid-turn.
-		if err == nil && a.opts.Compact != nil {
-			a.mu.Lock()
-			idle := !a.running
-			a.mu.Unlock()
-			if idle {
-				_, _ = a.opts.Compact(ctx, CompactThreshold)
-			}
+		// a real turn boundary: the compact hook decides whether an automatic fold
+		// fires. Step boundaries fire it too, mid-turn. The per-turn state reset runs
+		// unconditionally so an errored turn cannot leave stalled/warned armed for the
+		// next one; only the summariser call stays gated on a clean end.
+		a.mu.Lock()
+		idle = !a.running
+		a.mu.Unlock()
+		if a.opts.TurnBoundary != nil {
+			a.opts.TurnBoundary()
+		}
+		if err == nil && a.opts.Compact != nil && idle {
+			_, _ = a.opts.Compact(ctx, CompactThreshold)
 		}
 		failed := err != nil
 		a.mu.Lock()

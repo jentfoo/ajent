@@ -104,6 +104,11 @@ func RunHeadless(o HeadlessOptions) int {
 			}
 			return comp.run(ctx, reason, "")
 		},
+		TurnBoundary: func() {
+			if comp != nil {
+				comp.endTurn()
+			}
+		},
 		MaxSteps:    o.Set.Settings().Agent.MaxSteps,
 		TurnRetries: o.Set.Settings().Agent.TurnRetries,
 		SessionID:   sessionHint(rec),

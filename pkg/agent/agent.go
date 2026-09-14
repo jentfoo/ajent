@@ -57,6 +57,9 @@ type Options struct {
 	// Compact reduces the live context at a turn or step boundary, or after an
 	// overflow, reporting whether anything changed. It never runs mid-stream.
 	Compact func(ctx context.Context, r CompactReason) (bool, error)
+	// TurnBoundary is called once per real turn end, success or failure, so
+	// per-turn trigger state re-arms before the next turn's step boundaries.
+	TurnBoundary func()
 	// MaxSteps caps one turn's tool-calling iterations; <= 0 (the zero value)
 	// means unlimited, leaving compaction and the context window as the bounds.
 	MaxSteps int

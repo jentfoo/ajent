@@ -392,7 +392,9 @@ boundary) and cancels the running turn.
 per appended message in registration order, so more than one feature can watch
 the transcript without displacing the session recorder (which keeps its own slot).
 The turn boundary needs no new hook: `Sink.TurnEnd` already marks it, and sink
-fan-out makes that event available to a second consumer.
+fan-out makes that event available to a second consumer. The exception is the
+compaction per-turn re-arm (`Options.TurnBoundary`), which fires even on an errored
+turn where the threshold fold never runs.
 
 A front end that also needs the boundary reached on **errored** turns, as the plan
 workflow's implementor-retry rule does, hooks the driver's own drain loop rather

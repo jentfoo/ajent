@@ -72,6 +72,13 @@ func (c *compactor) resumeAuto() {
 	c.warned.Store(false)
 }
 
+// endTurn clears the per-turn step-trigger hold after any turn boundary, so an
+// errored turn cannot leave stalled/warned armed for the next one.
+func (c *compactor) endTurn() {
+	c.stalled.Store(false)
+	c.warned.Store(false)
+}
+
 // compaction returns the live compaction settings, or the built-in defaults.
 func (c *compactor) compaction() config.Compaction {
 	if c.cfg == nil {
@@ -100,9 +107,8 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		if !cfg.Auto {
 			return false, nil // automatic reduction disabled by config
 		}
-		if reason == agent.CompactThreshold { // a real turn boundary re-arms both
-			c.stalled.Store(false)
-			c.warned.Store(false)
+		if reason == agent.CompactThreshold { // a real turn boundary re-arms the step hold
+			c.endTurn()
 		}
 		if !c.overPoint(model) {
 			return false, nil // not at the compaction point yet

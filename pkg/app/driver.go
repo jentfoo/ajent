@@ -85,6 +85,11 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 			return comp.run(ctx, reason, "")
 		},
+		TurnBoundary: func() {
+			if comp != nil {
+				comp.endTurn()
+			}
+		},
 		MaxSteps:    set.Settings().Agent.MaxSteps, // <= 0 or unset means unlimited
 		TurnRetries: set.Settings().Agent.TurnRetries,
 		SessionID:   sessionHint(rec),

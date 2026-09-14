@@ -851,6 +851,43 @@ func TestCompactorProviderError(t *testing.T) {
 	require.Empty(t, compactionEntries(t, w))
 }
 
+// An errored turn still ends at a real boundary; endTurn must clear the per-turn
+// step hold so the next turn's first CompactStep can act again. This mirrors the
+// P0 regression: a mid-turn compact left the point crossed, then the turn failed.
+func TestEndTurnClearsStalled(t *testing.T) {
+	// a roomy window with a low compaction point, so the verbatim band alone
+	// outweighs the point while there is still history to fold
+	model := llm.Model{Provider: "test", ID: "m",
+		ContextWindow: 40000, MaxOutput: 1000, CompactThreshold: 3000}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textStream("## Goal\nthe lighthouse story")},
+	}}
+	c, st, w := testCompactor(t, model, sp)
+	var notices []string
+	c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 12)
+	st.Tokens.Add(7000)
+
+	// the mid-turn compact left the point crossed and stalled armed; the next step
+	// in that same turn is held off without attempting a fold.
+	c.stalled.Store(true)
+	did, err := c.run(t.Context(), agent.CompactStep, "")
+	require.NoError(t, err)
+	assert.False(t, did)
+	require.Empty(t, compactionEntries(t, w), "the stall latch short-circuits the fold")
+
+	// the errored turn's boundary still re-arms per-turn state
+	c.endTurn()
+	assert.False(t, c.stalled.Load())
+	assert.False(t, c.warned.Load())
+
+	// the next turn's first step can fold again rather than being held off
+	did, err = c.run(t.Context(), agent.CompactStep, "")
+	require.NoError(t, err)
+	require.True(t, did)
+}
+
 func TestVerbatimTokens(t *testing.T) {
 	t.Parallel()
 

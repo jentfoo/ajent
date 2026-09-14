@@ -237,12 +237,12 @@ func TestResponsesStreamTruncated(t *testing.T) {
 	t.Run("eof_without_terminal_flags_truncation", func(t *testing.T) {
 		text, stop, err := collectStop(t, "openai/truncated.sse")
 		assert.Equal(t, "Hello there", text) // the partial is still delivered
-		assert.ErrorIs(t, err, ErrStreamTruncated)
+		require.ErrorIs(t, err, ErrStreamTruncated)
 		assert.Equal(t, StopError, stop)
 	})
 	t.Run("eof_tool_call_is_still_truncation", func(t *testing.T) {
 		_, stop, err := collectStop(t, "openai/truncated_tool.sse")
-		assert.ErrorIs(t, err, ErrStreamTruncated) // sawTool must not mask the drop
+		require.ErrorIs(t, err, ErrStreamTruncated) // sawTool must not mask the drop
 		assert.Equal(t, StopError, stop)
 	})
 }

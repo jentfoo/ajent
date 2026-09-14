@@ -108,6 +108,32 @@ func TestThresholdHookAtTurnBoundary(t *testing.T) {
 	assert.Equal(t, []CompactReason{CompactStep, CompactThreshold}, reasons)
 }
 
+// an errored turn is still a real boundary for the per-turn state reset, but it
+// must not trigger the threshold fold: nothing was appended for the failed stream.
+func TestTurnBoundaryFiresOnErroredTurn(t *testing.T) {
+	t.Parallel()
+
+	var reasons []CompactReason
+	boundaries := 0
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}
+	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Env:      testEnv,
+		Compact: func(_ context.Context, r CompactReason) (bool, error) {
+			reasons = append(reasons, r)
+			return false, nil
+		},
+		TurnBoundary: func() { boundaries++ },
+	})
+
+	err := a.Prompt(t.Context(), Input{Text: "x"})
+	require.ErrorIs(t, err, llm.ErrContextOverflow)
+	assert.Equal(t, 1, boundaries) // the boundary still re-arms per-turn state
+	// no threshold fold on an errored turn; step and overflow hooks may fire but
+	// never the clean-end-only one.
+	assert.NotContains(t, reasons, CompactThreshold)
+}
+
 // the hook is asked before every stream, not only once per turn, so a tool result
 // cannot leave the turn running past the compaction point.
 func TestStepHookAtEveryStepBoundary(t *testing.T) {
