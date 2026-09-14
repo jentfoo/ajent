@@ -96,6 +96,9 @@ model entry.
 The user gate at **AwaitingPlan** is the point of the workflow: `dev_implement`
 hands off to nobody. The plan lands in the editor to read, edit, rewrite or
 abandon, and the next submitted prompt is what the implementor receives.
+Only a non-injected (typed) submission clears the gate; injected context — a
+staged `!` flush, a permission-barrier note, a sub-agent completion steer —
+is never captured as approval, mirroring the Planning phase guard.
 
 **The implementor's report always reaches the reviewer.** The reviewer sees none
 of the implementation branch, so `dev_review`'s `summary` is required. An empty
@@ -173,6 +176,11 @@ a later resume never resurrects a finished run, and a model that no longer
 resolves abandons the restore with a notice. Tool sets are runtime-only, so a
 resume re-applies the phase scope rather than reconstructing it from
 `setting_change` entries.
+
+The entry also persists the awaiting draft (`draftPlan`) at the gate, and resume
+puts it back into the editor: a crash or exit while parked must not silently turn
+the next arbitrary prompt into the plan of record. The draft is cleared once the
+gate passes.
 
 Because ending a workflow leaves HEAD at the review tip while the file tail is an
 implementation entry, resume must prefer the live head over the tail

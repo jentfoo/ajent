@@ -113,6 +113,7 @@ type Controller struct {
 	savedTools []string
 
 	approvedPlan   string
+	draftPlan      string // awaiting-plan editor contents, restored across a resume
 	revisionRounds []string
 	execSummary    string
 	goalCaptured   bool
@@ -189,6 +190,7 @@ func (c *Controller) Start(ctx context.Context, prefill string) string {
 		c.savedTools = c.h.ToolNames()
 	}
 	c.approvedPlan, c.revisionRounds, c.execSummary = "", nil, ""
+	c.draftPlan = ""
 	c.planTip, c.reviewTip = "", ""
 	c.retries, c.pending, c.cancelled = 0, nil, false
 	c.goalCaptured = false

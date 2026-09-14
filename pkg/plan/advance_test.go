@@ -70,6 +70,16 @@ func TestControllerBeforePrompt(t *testing.T) {
 		assert.Equal(t, implementorModel, last.model)
 	})
 
+	t.Run("injected_input_never_approves", func(t *testing.T) {
+		c, _ := started(t)
+		handOff(t, c, "draft plan")
+		_, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "staged flush", Injected: true})
+
+		assert.False(t, ok) // the gate is untouched; nothing becomes approved
+		assert.Equal(t, PhaseAwaitingPlan, c.phase)
+		assert.Empty(t, c.approvedPlan)
+	})
+
 	t.Run("idle_controller_passes_through", func(t *testing.T) {
 		c := New(newFakeHost().host())
 		_, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "hi"})

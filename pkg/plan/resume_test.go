@@ -88,6 +88,20 @@ func TestControllerRestore(t *testing.T) {
 		assert.False(t, c.Restore())
 		assert.Equal(t, PhasePlanning, c.phase)
 	})
+
+	t.Run("awaiting_gate_refills_draft", func(t *testing.T) {
+		f := newFakeHost()
+		p := mid()
+		p.Phase = PhaseAwaitingPlan
+		p.DraftPlan = "the draft"
+		p.ApprovedPlan = "" // nothing approved while parked at the gate
+		f.stored = p
+		c := New(f.host())
+
+		require.True(t, c.Restore())
+		assert.Equal(t, PhaseAwaitingPlan, c.phase)
+		assert.Contains(t, f.inputs, "the draft") // the editor is refilled for editing
+	})
 }
 
 func TestControllerPersistLocked(t *testing.T) {
@@ -98,9 +112,15 @@ func TestControllerPersistLocked(t *testing.T) {
 	submitPlan(t, c, "edited plan")
 
 	require.NotEmpty(t, f.persisted)
+	// the gate entry carries the draft so a resume restores it
+	gated := f.persisted[len(f.persisted)-2]
+	assert.Equal(t, PhaseAwaitingPlan, gated.Phase)
+	assert.Empty(t, gated.ApprovedPlan) // nothing approved yet at the gate
+	assert.Equal(t, "the plan", gated.DraftPlan)
 	last := f.persisted[len(f.persisted)-1]
 	assert.Equal(t, PhaseImplementing, last.Phase)
 	assert.Equal(t, "edited plan", last.ApprovedPlan) // the approved text, not the draft
+	assert.Empty(t, last.DraftPlan)                   // gate passed; no draft lingers
 	assert.Equal(t, plannerModel.Key(), last.Planner)
 	assert.Equal(t, []string{"read", "write", "edit", "bash"}, last.SavedTools)
 }

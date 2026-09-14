@@ -26,9 +26,10 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 		in.Blocks = append(llm.BlockList{llm.TextBlock{Text: planningContract()}}, in.Blocks...)
 		return in, true
 
-	case c.phase == PhaseAwaitingPlan && text != "":
+	case c.phase == PhaseAwaitingPlan && !in.Injected && text != "":
 		// whatever the user submits is the plan of record, edits included
 		c.approvedPlan = text
+		c.draftPlan = "" // gate passed; no draft to restore
 		in.Text = c.beginImplementationLocked()
 		in.Injected = true
 		return in, true
@@ -99,6 +100,7 @@ func (c *Controller) awaitPlanLocked(plan string) agent.Input {
 	if c.h.Head != nil {
 		c.planTip = c.h.Head() // review round 1 forks from here
 	}
+	c.draftPlan = plan
 	c.setPhaseLocked(PhaseAwaitingPlan)
 	if c.h.SetInput != nil {
 		c.h.SetInput(plan)

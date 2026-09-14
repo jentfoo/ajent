@@ -15,6 +15,7 @@ type persisted struct {
 	SavedModel     string   `json:"savedModel,omitempty"`
 	SavedTools     []string `json:"savedTools,omitempty"`
 	ApprovedPlan   string   `json:"approvedPlan,omitempty"`
+	DraftPlan      string   `json:"draftPlan,omitempty"`
 	RevisionRounds []string `json:"revisionRounds,omitempty"`
 	GoalCaptured   bool     `json:"goalCaptured,omitempty"`
 	PlanTip        string   `json:"planTip,omitempty"`
@@ -34,6 +35,7 @@ func (c *Controller) persistLocked() {
 		SavedModel:     c.savedModel.Key(),
 		SavedTools:     c.savedTools,
 		ApprovedPlan:   c.approvedPlan,
+		DraftPlan:      c.draftPlan,
 		RevisionRounds: c.revisionRounds,
 		GoalCaptured:   c.goalCaptured,
 		PlanTip:        c.planTip,
@@ -83,6 +85,7 @@ func (c *Controller) Restore() bool {
 	c.planner, c.implementor, c.savedModel = planner, implementor, saved
 	c.savedTools = slices.Clone(p.SavedTools)
 	c.approvedPlan = p.ApprovedPlan
+	c.draftPlan = p.DraftPlan
 	c.revisionRounds = slices.Clone(p.RevisionRounds)
 	c.goalCaptured = p.GoalCaptured
 	c.planTip, c.reviewTip = p.PlanTip, p.ReviewTip
@@ -96,6 +99,11 @@ func (c *Controller) Restore() bool {
 	c.phase = p.Phase
 	c.applyScopeLocked(p.Phase)
 	c.setPhaseLocked(p.Phase)
+	// a parked gate loses its draft unless it is put back, so the user can read,
+	// edit and submit rather than an arbitrary prompt becoming the plan of record
+	if c.phase == PhaseAwaitingPlan && c.draftPlan != "" && c.h.SetInput != nil {
+		c.h.SetInput(c.draftPlan)
+	}
 	c.notify("resumed plan workflow: "+p.Phase.String(), agent.LevelInfo)
 	return true
 }
