@@ -395,6 +395,7 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 		order = nil
 		if len(content) > 0 {
 			out = append(out, Message{Role: RoleUser, Content: content})
+			lastWasResults = true // the synthesized results turn still needs a bridge
 		}
 	}
 

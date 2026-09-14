@@ -507,6 +507,26 @@ func TestRepairTurns(t *testing.T) {
 		// the assistant reply already separates the turns, so no bridge is added
 		assert.NotEqual(t, processedTools, out[2].Content[0].(TextBlock).Text)
 	})
+
+	t.Run("orphan_after_tool_result_bridged", func(t *testing.T) {
+		// an unanswered call flushed before a plain user turn synthesizes results;
+		// those still need the assistant bridge under RequiresAssistantAfterToolResult
+		mc := Model{Provider: "p", ID: "m", Caps: Capabilities{
+			RequiresAssistantAfterToolResult: true,
+		}}
+		in := []Message{
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1", Name: "read"}}},
+			Text(RoleUser, "next question"),
+		}
+		out := Prepare(Request{Model: mc, Messages: in}).Messages
+		require.Len(t, out, 4)
+		assert.Equal(t, RoleUser, out[1].Role) // synthesized error result for c1
+		assert.True(t, out[1].Content[0].(ToolResultBlock).IsError)
+		tb, ok := out[2].Content[0].(TextBlock) // the bridge separates results from text
+		assert.True(t, ok)
+		assert.Equal(t, processedTools, tb.Text)
+		assert.Equal(t, RoleUser, out[3].Role) // then the plain user question
+	})
 }
 
 func TestToolResultPlaceholderLadder(t *testing.T) {
