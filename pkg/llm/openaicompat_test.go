@@ -108,6 +108,25 @@ func TestCompatProviderStream(t *testing.T) {
 		// pi reads reasoning_content before reasoning; chutes sends both fields
 		assert.Equal(t, "preferred", thinkingOf(events))
 	})
+	t.Run("separated_reasoning_regions_stay_clean", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/second_thinking.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		msg, _, err := Accumulate(s)
+		require.NoError(t, err)
+		// interleaved regions become distinct blocks in stream order, each with its
+		// own text and field; nothing duplicates or inherits the other's metadata.
+		assert.Equal(t, BlockList{
+			ThinkingBlock{Text: "first region", Field: "reasoning_content"},
+			TextBlock{Text: "visible answer"},
+			ThinkingBlock{Text: "second region", Field: "reasoning_content"},
+			TextBlock{Text: "more text"},
+		}, msg.Content)
+	})
 	t.Run("think_tags_split_across_deltas", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/think_tags.sse")
 		p := newCompatTestProvider(t, srv.URL)

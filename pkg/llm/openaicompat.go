@@ -416,6 +416,10 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	}
 
 	if reasoning != "" {
+		// entering thinking closes an open text segment, keeping block order
+		if st.textIdx >= 0 {
+			events = append(events, s.endText())
+		}
 		if st.thinkIdx < 0 {
 			st.thinkIdx = st.nextBlock
 			st.nextBlock++
@@ -425,7 +429,8 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 		events = append(events, Event{Type: EventThinkingDelta, Index: st.thinkIdx, Text: reasoning})
 	}
 	if content != "" {
-		if st.thinkIdx >= 0 && st.textIdx < 0 {
+		// entering text closes an open thinking segment
+		if st.thinkIdx >= 0 {
 			events = append(events, s.endThinking())
 		}
 		if st.textIdx < 0 {
@@ -456,8 +461,26 @@ func (s *compatStream) endThinking() Event {
 	st := s.st
 	idx := st.thinkIdx
 	st.thinkIdx = -2 // closed, so a later drain does not repeat it
-	return Event{Type: EventThinkingEnd, Index: idx,
+	event := Event{Type: EventThinkingEnd, Index: idx,
 		Block: ThinkingBlock{Text: st.thinkBuf.String(), Details: st.details, Field: st.reasonField}}
+	// reset per-block accumulators so a second region starts clean
+	st.thinkBuf.Reset()
+	st.details = nil
+	st.reasonField = ""
+	return event
+}
+
+// endText closes the text block, carrying its accumulated content. It is
+// idempotent so both the thinking transition and the terminal drain may call it.
+func (s *compatStream) endText() Event {
+	st := s.st
+	idx := st.textIdx
+	st.textIdx = -2 // closed, so a later drain does not repeat it
+	event := Event{Type: EventTextEnd, Index: idx,
+		Block: TextBlock{Text: st.textBuf.String()}}
+	// reset per-block accumulators so a second region starts clean
+	st.textBuf.Reset()
+	return event
 }
 
 // deltaReasonText returns the first non-empty reasoning field and its name.
@@ -496,8 +519,7 @@ func (s *compatStream) finish(cause error) []Event {
 		events = append(events, s.endThinking())
 	}
 	if st.textIdx >= 0 {
-		events = append(events, Event{Type: EventTextEnd, Index: st.textIdx,
-			Block: TextBlock{Text: st.textBuf.String()}})
+		events = append(events, s.endText())
 	}
 	if st.tools != nil {
 		events = append(events, st.tools.Close()...)
