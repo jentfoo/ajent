@@ -31,7 +31,7 @@ func (u *UI) DetectTone() Tone {
 	u.mu.Unlock()
 
 	expired := make(chan struct{})
-	deadline := u.afterDelay(toneQueryTimeout, func() { close(expired) })
+	deadline := u.afterSafe(toneQueryTimeout, func() { close(expired) })
 	defer deadline.Stop()
 	for {
 		select {

@@ -828,6 +828,25 @@ func TestUISafeGo(t *testing.T) {
 	assert.NotContains(t, string(out), "test timed out")
 }
 
+// TestAfterSafePanicRestoresTerminal checks the recover path for timer callbacks:
+// a panic inside an afterSafe callback must close the UI (restore the terminal)
+// before re-panicking. The captured callback is fired inline so Close's effect
+// is observable without crashing the test process.
+func TestAfterSafePanicRestoresTerminal(t *testing.T) {
+	t.Parallel()
+
+	u := newTestUI(t, newVT(40, 10), strings.NewReader(""))
+	var fire func()
+	u.afterDelay = func(_ time.Duration, fn func()) *time.Timer {
+		fire = fn // hold the wrapped callback instead of arming a real timer
+		return nil
+	}
+	_ = u.afterSafe(0, func() { panic("boom") })
+
+	require.PanicsWithValue(t, "boom", fire)
+	assert.True(t, u.closed) // Close ran before the re-panic unwound
+}
+
 func TestUIReadLines(t *testing.T) {
 	t.Parallel()
 

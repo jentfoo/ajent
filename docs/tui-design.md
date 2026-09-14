@@ -313,8 +313,10 @@ normal exit, Ctrl+C, Ctrl+D, SIGTERM and panic. It restores raw mode, disables
 bracketed paste, and leaves the alternate screen. Alt mode also replays the
 transcript onto the main screen so the session is not lost. Every long lived
 goroutine starts through `UI.safeGo`, which closes the UI before a panic unwinds,
-so a failure off the main goroutine cannot leave the terminal raw. That is only
-deadlock free because those goroutines release `u.mu` with `defer`.
+so a failure off the main goroutine cannot leave the terminal raw. The same
+protection wraps every timer callback armed through `afterSafe` (the resize
+probe/grace, rewind window and rule-flash timers all go through it). Both are only
+deadlock free because those callbacks release `u.mu` with `defer`.
 
 **6. Tabs are expanded at commit** (`tabSpaces`). `uniseg` measures a tab as one
 column but terminals render eight, so an unexpanded tab breaks every width

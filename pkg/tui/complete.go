@@ -185,12 +185,8 @@ func (u *UI) flashRule() {
 	if u.ruleFlash || u.closed {
 		return
 	}
-	fn := u.afterDelay
-	if fn == nil {
-		fn = time.AfterFunc // UI built without New (tests) still gets a real timer
-	}
 	u.ruleFlash = true
-	fn(ruleFlashDuration, func() {
+	u.afterSafe(ruleFlashDuration, func() {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		u.ruleFlash = false

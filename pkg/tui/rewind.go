@@ -41,12 +41,7 @@ func (u *UI) armRewindLocked() {
 	if u.rewTimer != nil {
 		u.rewTimer.Stop()
 	}
-	fn := u.afterDelay
-	if fn == nil {
-		fn = time.AfterFunc // UI built without New (tests) still arms a real timer
-	}
-	t := fn(u.doubleEscWindow, func() { u.flushLoneEscape() })
-	u.rewTimer = t
+	u.rewTimer = u.afterSafe(u.doubleEscWindow, func() { u.flushLoneEscape() })
 	u.escPending = true
 }
 

@@ -254,9 +254,9 @@ func New(opts Options) (*UI, error) {
 	return u, nil
 }
 
-// safeGo runs fn in a goroutine, restoring the terminal before a panic unwinds.
-func (u *UI) safeGo(fn func()) {
-	go func() {
+// guard wraps fn so a panic restores the terminal before it unwinds.
+func (u *UI) guard(fn func()) func() {
+	return func() {
 		defer func() {
 			if p := recover(); p != nil {
 				u.Close()
@@ -264,7 +264,23 @@ func (u *UI) safeGo(fn func()) {
 			}
 		}()
 		fn()
-	}()
+	}
+}
+
+// safeGo runs fn in a goroutine, restoring the terminal before a panic unwinds.
+func (u *UI) safeGo(fn func()) {
+	go u.guard(fn)()
+}
+
+// afterSafe arms an afterDelay timer whose callback is wrapped by guard, so a
+// panicking timer cannot leave the terminal raw. UI built without New still arms
+// a real timer.
+func (u *UI) afterSafe(delay time.Duration, fn func()) *time.Timer {
+	after := u.afterDelay
+	if after == nil {
+		after = time.AfterFunc
+	}
+	return after(delay, u.guard(fn))
 }
 
 // SetTheme recolors the live block and everything committed after it. History
@@ -1579,7 +1595,7 @@ func (u *UI) probeResize() {
 	u.cursorRow() // drop replies to superseded probes; what remains answers this one
 	u.cprPending = true
 	u.render.probe()
-	u.afterDelay(resizeProbeTimeout, func() { u.probeTimedOut(gen) })
+	u.afterSafe(resizeProbeTimeout, func() { u.probeTimedOut(gen) })
 }
 
 // probeTimedOut arms the settled redraw when the terminal never answered,
@@ -1604,7 +1620,7 @@ func (u *UI) settleProbedLocked(gen int) {
 	// one quiet grace before drawing: the reply proves the terminal caught up,
 	// but a resize starting right now (its SIGWINCH perhaps still in flight)
 	// would reflow onto the frame we are about to write
-	u.afterDelay(resizeDrawGrace, func() { u.drawSettled(gen) })
+	u.afterSafe(resizeDrawGrace, func() { u.drawSettled(gen) })
 }
 
 // drawSettled runs the settled redraw once the draw grace elapsed without a
