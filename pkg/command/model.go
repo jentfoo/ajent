@@ -11,34 +11,52 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// modelCommand resolves arg by name, or opens the picker when empty. The
-// registry stays the single source of truth; Console.SetModel reflects the
-// choice in the status line, agent state, session entry and user config.
+// modelCommand resolves arg by name, or opens the picker when empty, and
+// persists the choice to the user layer so a fresh start keeps it. The registry
+// stays the single source of truth; Console.SetModel reflects the selection in
+// the status line, agent state and session record.
 func modelCommand(_ context.Context, arg string, c Console) error {
+	changed, err := applyModel(arg, c)
+	if err != nil || !changed {
+		return err
+	}
+	key := c.Models().Active().Key()
+	if serr := c.SaveSetting("user", "model", key); serr != nil {
+		c.Notify("could not save model: "+serr.Error(), levelWarn)
+	}
+	return nil
+}
+
+// applyModel resolves arg by name, or opens the picker when empty, and applies it
+// via Console.SetModel. It reports whether a different model became active so
+// callers decide persistence; /settings' Model row uses this alone and leaves the
+// save-to-layer choice to its prompt.
+func applyModel(arg string, c Console) (bool, error) {
 	if len(c.Models().Models()) == 0 {
 		c.Notify("no models configured; add some to ~/.ajent/"+llm.ModelsFileName, levelWarn)
-		return nil
+		return false, nil
 	}
 	var m llm.Model
 	var err error
+	prev := c.Models().Active().Key()
 	if arg != "" {
 		target, rerr := c.Models().Resolve(arg)
 		if rerr != nil {
 			reportResolveError(c, arg, rerr)
-			return nil
+			return false, nil
 		}
 		m = target
 	} else {
 		// pre-select the active model so an empty /model shows where it sits.
 		// SetModel announces the change below, so skip the picker's own summary line.
-		m, err = PickModel(context.Background(), c, "Model", c.Models().Active().Key(),
+		m, err = PickModel(context.Background(), c, "Model", prev,
 			tui.PickOptions{Silent: true})
 		if err != nil {
-			return err // cancelled or failed
+			return false, err // cancelled or failed
 		}
 	}
 	c.SetModel(m)
-	return nil
+	return m.Key() != prev, nil
 }
 
 // PickModel opens the model picker under title and returns the chosen model

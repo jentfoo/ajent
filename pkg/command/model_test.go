@@ -49,6 +49,32 @@ func TestModelCommand(t *testing.T) {
 		require.NoError(t, cmd.Handler(t.Context(), "", c))
 		assert.Equal(t, "beta", c.setModel.ID)
 	})
+
+	// a real change persists to the user layer so the next start keeps it.
+	t.Run("change_persists_user_layer", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+
+		cmd, _ := r.Get("model")
+		require.NoError(t, cmd.Handler(t.Context(), "beta", c))
+		require.Len(t, c.saveCalls, 1)
+		assert.Equal(t, "user", c.saveCalls[0].layer)
+		assert.Equal(t, "model", c.saveCalls[0].key)
+	})
+
+	// re-selecting the already-active model writes nothing.
+	t.Run("same_model_writes_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+
+		cmd, _ := r.Get("model")
+		require.NoError(t, cmd.Handler(t.Context(), "test/alpha", c))
+		assert.Empty(t, c.saveCalls)
+	})
 }
 
 func TestReasoningCommand(t *testing.T) {

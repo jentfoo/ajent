@@ -131,8 +131,7 @@ sent this session, and exit.
 
 `pkg/app` implements it once (`uiConsole`) over the objects the driver already
 holds. `SetModel` records a `model_change` entry the old bespoke switch never
-did, persists the selection to the user config so a fresh start keeps it (see
-config-design.md's Model section), and recomputes only the live effective reasoning
+did, applies the session override, and recomputes only the live effective reasoning
 level for display, leaving the stored override untouched so intent survives
 switching back. `ToolsChanged` records the enabled set as a `setting_change` so
 resume keeps the set. The three interaction methods are one-line
@@ -156,7 +155,7 @@ dispatched, never on a command or a `!`.
 | Command | Behaviour |
 |---|---|
 | `/help` | markdown list of commands and keybindings through `Console.Print` |
-| `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice, records a model-change entry and saves the key to the user config; a no-op when the key is unchanged, and its picker runs silent so only that one line lands (see `tui-design.md`) |
+| `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it; a no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
 | `/reasoning [level]` | report, or set/clear the level for capable models |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/session [name]` | report the session's name, or set it; an invalid or conflicting name is a notice (see `session-design.md`) |

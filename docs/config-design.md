@@ -41,14 +41,15 @@ package parsing its own.
 ### Model
 
 `model` is the model a fresh start defaults to, resolved through normal layer
-precedence and handed to the registry before discovery runs. Every `/model`
-change (and the `/settings` Model row, which routes through the same command)
+precedence and handed to the registry before discovery runs. A `/model` change
 writes the selection to the **user** layer in addition to the session override,
-so the next start keeps the most recent choice. There is no separate
-last-used key. Because the write lands in the user layer, a `model` pinned in
-project/local config or an `-m` flag still outranks it, and a resumed session
-replays its own `model_change` entries instead. A failed save is a warning,
-never a lost switch.
+so the next start keeps the most recent choice; there is no separate last-used
+key. The `/settings` Model row routes through the same picker but defers its
+persistence to the save-to-layer prompt, so a "this session only" answer leaves
+the config files untouched like every other settings row. Because the write lands
+in the user layer when chosen, a `model` pinned in project/local config or an
+`-m` flag still outranks it, and a resumed session replays its own `model_change`
+entries instead. A failed save is a warning, never a lost switch.
 
 ### Permissions
 

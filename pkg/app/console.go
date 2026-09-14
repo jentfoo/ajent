@@ -225,15 +225,10 @@ func (c *uiConsole) SetModel(m llm.Model) {
 			Estimated: cs.Estimated,
 		})
 	}
-	// record a session override so Explain and Settings report (session), and
-	// persist the selection so the next start keeps it. The save targets the
-	// user layer: a pinned project/local model or -m still outranks it through
-	// normal layer precedence.
+	// record a session override so Explain and Settings report (session). The
+	// user-layer persist is the direct /model command's job, not this apply.
 	if c.set != nil {
 		_ = c.set.SetSession("model", m.Key())
-		if serr := c.SaveSetting("user", "model", m.Key()); serr != nil {
-			c.ui.Notify("could not save model: "+serr.Error(), tui.LevelWarn)
-		}
 	}
 	c.ui.Notify("model: "+m.Key(), tui.LevelInfo)
 

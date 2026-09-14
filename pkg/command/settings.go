@@ -298,10 +298,10 @@ func rowCompaction(c Console) (string, string) {
 		fmt.Sprintf("%s, %s  (%s)", boolWord(auto), thr, orDefault(asrc))
 }
 
-// editModel delegates to the model picker.
+// editModel applies a pick through the model picker without persisting; the
+// save-to-layer choice is offered by editRow's prompt.
 func editModel(ctx context.Context, c Console) ([]settingChange, error) {
-	err := modelCommand(ctx, "", c)
-	if err != nil {
+	if _, err := applyModel("", c); err != nil {
 		return nil, err
 	}
 	key := c.Models().Active().Key()

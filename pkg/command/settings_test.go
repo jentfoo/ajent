@@ -115,24 +115,49 @@ func TestEditCompactionGathersThenApplies(t *testing.T) {
 	})
 }
 
-func TestSettingsMenuSavesToProjectLayer(t *testing.T) {
+func TestSettingsModelRowHonoursSaveChoice(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
+	// a save-to-project answer writes only that layer, never an automatic user one.
+	t.Run("saves_to_project_layer", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
 
-	// pick the Model row (0); modelCommand picks index 1 = beta; save prompt => project.
-	c.picks = []fakePick{{result: 0}, {result: 1}}
-	c.selects = []int{2} // "save to project config"
+		// pick the Model row; applyModel picks beta; save prompt => project.
+		c.picks = []fakePick{{result: 0}, {result: 1}}
+		c.selects = []int{2} // "save to project config"
 
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(context.Background(), "", c))
+		cmd, _ := r.Get("settings")
+		require.NoError(t, cmd.Handler(context.Background(), "", c))
 
-	require.NotEmpty(t, c.saveCalls)
-	assert.Equal(t, "project", c.saveCalls[0].layer)
-	assert.Equal(t, "model", c.saveCalls[0].key)
+		require.Len(t, c.saveCalls, 1)
+		assert.Equal(t, "project", c.saveCalls[0].layer)
+		assert.Equal(t, "model", c.saveCalls[0].key)
+	})
+
+	// a session-only answer leaves every config layer untouched.
+	t.Run("session_only_writes_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+
+		// pick the Model row; applyModel picks beta; save prompt => session only.
+		c.picks = []fakePick{{result: 0}, {result: 1}}
+		c.selects = []int{0} // "this session only"
+
+		cmd, _ := r.Get("settings")
+		require.NoError(t, cmd.Handler(context.Background(), "", c))
+
+		assert.Empty(t, c.saveCalls)
+		// the switch still applies as a live session override.
+		v, src, ok := c.settings.Explain("model")
+		require.True(t, ok)
+		assert.Equal(t, "session", src)
+		assert.JSONEq(t, `"test/beta"`, string(v))
+	})
 }
 
 // non-parallel: the edit case uses Setenv which cannot run alongside parallel siblings.

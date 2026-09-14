@@ -88,8 +88,8 @@ type Console interface {
 	SetSessionName(name string) error
 
 	// SetModel makes m active, reflects it in the status line and agent state,
-	// records a model-change entry in the session, and persists the selection
-	// to the user config so the next start keeps it.
+	// records a model-change entry and sets a session override. Persistence to
+	// a file layer is the caller's job.
 	SetModel(m llm.Model)
 	// SetReasoning sets the session reasoning level and persists it.
 	SetReasoning(c llm.ReasoningConfig)
