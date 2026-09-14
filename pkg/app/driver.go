@@ -410,6 +410,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		cwd: config.Cwd(), toolsReg: toolsReg, sink: sink, ag: ag,
 		notify: ui.Notify, agents: sag, watch: initSeen, pump: pump,
 	})
+	if ictl != nil {
+		ictl.runner.Seed(st.Messages) // a resumed transcript already holds /init ids
+	}
 	command.RegisterBuiltins(cmds, console)
 	for _, c := range append(planCommands(ctl), initCommands(ictl)...) {
 		cmds.Register(c)
@@ -440,6 +443,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				t.Reset() // reads the new context lacks must re-inject, not dedupe
 			}
 			expander.Seed(msgs)
+			if ictl != nil {
+				ictl.runner.Seed(msgs) // a rewound or forked transcript holds /init ids too
+			}
 		}
 	}
 	idx := refs.NewIndex(config.Cwd())

@@ -42,11 +42,32 @@ type Options struct {
 // Runner performs project surveys.
 type Runner struct {
 	opts Options
-	runs atomic.Int64 // call ids carry it: a second survey must not reuse the first's
+	runs atomic.Int64 // call ids carry it; a second survey must not reuse the first's
 }
 
 // New returns a Runner over opts.
 func New(opts Options) *Runner { return &Runner{opts: opts} }
+
+// Seed raises the run counter above every /init id already in msgs, so a fresh
+// runner's first survey after a resume cannot mint ids the transcript holds.
+func (r *Runner) Seed(msgs []llm.Message) {
+	var high int64
+	for _, m := range msgs {
+		for _, blk := range m.Content {
+			if call, ok := blk.(llm.ToolCallBlock); ok {
+				if n := runOf(call.ID); n > high {
+					high = n
+				}
+			}
+		}
+	}
+	for {
+		cur := r.runs.Load()
+		if cur >= high || r.runs.CompareAndSwap(cur, high) {
+			return
+		}
+	}
+}
 
 // Survey reads the project's README files, fans the build and the codebase out to
 // read-only sub-agents, and returns the distillation prompt carrying every call
@@ -203,11 +224,30 @@ func terminal(res agent.ToolResult) bool {
 	}
 }
 
-// callID names one survey call. The run number is what keeps a second /init in the
-// same session from reusing the first's ids: Input.Before stays in State, and a
-// repeated tool_use id makes every later Anthropic request fail permanently.
+// initPrefix leads every survey call id, so Seed can recover its run number.
+const initPrefix = "init-"
+
+// callID names one survey call. The run number keeps a second /init from reusing
+// the first's ids; Input.Before stays in State and a repeated tool_use 400s later requests.
 func callID(run int64, stage, suffix string) string {
-	return fmt.Sprintf("init-%d-%s-%s", run, stage, suffix)
+	return fmt.Sprintf("%s%d-%s-%s", initPrefix, run, stage, suffix)
+}
+
+// runOf returns the run number encoded in a survey call id, or 0 for other ids.
+func runOf(id string) int64 {
+	rest, ok := strings.CutPrefix(id, initPrefix)
+	if !ok {
+		return 0
+	}
+	digits, _, ok := strings.Cut(rest, "-")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // resultText joins a tool result's text blocks, for reporting a refusal.

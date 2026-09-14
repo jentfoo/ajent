@@ -220,7 +220,8 @@ are three different errors, never one "unavailable".
 to `State` and persisted, so a second `/init` in one session would otherwise
 replay the first run's `tool_use` ids: a duplicate id makes every later
 Anthropic request fail permanently. Re-running is the advertised regenerate path,
-so this is not theoretical.
+so this is not theoretical. A fresh controller per process seeds its runner above
+any survey ids replayed from the transcript, mirroring how `@` references are seeded.
 
 Instructions are read once at startup, so a freshly written file applies on the
 next start. `initWatch` (an `opts.Sinks` member) is armed by the pump, not by the

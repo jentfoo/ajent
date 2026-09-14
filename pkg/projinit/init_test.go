@@ -2,6 +2,7 @@ package projinit
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -222,4 +223,98 @@ func TestTerminal(t *testing.T) {
 		})
 	}
 	assert.True(t, terminal(agent.ToolResult{})) // no Details at all
+}
+
+func TestRunOf(t *testing.T) {
+	t.Parallel()
+
+	// runOf extracts the integer between init- and the next dash; a foreign or
+	// malformed id carries no run number at all. Each want is the same run value
+	// passed to callID, so it cannot drift from what was minted.
+	run := int64(7)
+	cases := []struct {
+		name string
+		id   string
+		want int64
+	}{
+		{"survey_id", callID(run, "read", "a"), run},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, runOf(tc.id))
+		})
+	}
+
+	t.Run("foreign_and_malformed_return_zero", func(t *testing.T) {
+		for _, id := range []string{"ref-4-a", "", "init-x-read-1"} {
+			assert.Zero(t, runOf(id), id)
+		}
+	})
+}
+
+func TestSeedRaisesCounter(t *testing.T) {
+	t.Parallel()
+
+	// Seed must lift the counter to the highest survey run already in context, so a
+	// fresh runner's first /init after a resume mints ids one above it and never
+	// collides with the replayed ones
+	cases := []struct {
+		name string
+		runs []int64
+	}{
+		{"above_present", []int64{3}},
+		{"multiple_ids", []int64{2, 7}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msgs := make([]llm.Message, len(tc.runs))
+			for i, run := range tc.runs {
+				id := callID(run, "read", strconv.Itoa(i+1))
+				msgs[i] = llm.Message{Content: llm.BlockList{llm.ToolCallBlock{ID: id}}}
+			}
+			r := New(Options{})
+			r.Seed(msgs)
+			assert.Equal(t, tc.runs[len(tc.runs)-1], r.runs.Load())
+		})
+	}
+
+	// a seed below the current counter leaves it untouched
+	r := New(Options{})
+	r.runs.Store(10)
+	r.Seed([]llm.Message{{Content: llm.BlockList{
+		llm.ToolCallBlock{ID: callID(9, "read", "1")},
+	}}})
+	assert.Equal(t, int64(10), r.runs.Load())
+}
+
+func TestSeedIgnoresForeignIds(t *testing.T) {
+	t.Parallel()
+
+	// a ref id must not move the survey's counter: only init-* ids carry its run number
+	msgs := []llm.Message{{Content: llm.BlockList{
+		llm.ToolCallBlock{ID: "ref-9-read-x"},
+	}}}
+	r := New(Options{})
+	r.Seed(msgs)
+	assert.Equal(t, int64(0), r.runs.Load())
+}
+
+func TestSurveyAfterSeedIsUnique(t *testing.T) {
+	t.Parallel()
+
+	// the end-to-end contract: a survey run after seeding mints ids above every id
+	// already in context, so re-running /init on a resumed session never collides
+	dir := t.TempDir()
+	writeTree(t, dir, "README.md", "pkg/a.go")
+	r := New(Options{Cwd: dir, Registry: newRegistry(t, dir, startStub(), pollStub())})
+	r.Seed([]llm.Message{{Content: llm.BlockList{
+		llm.ToolCallBlock{ID: callID(3, "read", "1")},
+	}}})
+
+	in, err := r.Survey(t.Context())
+	require.NoError(t, err)
+	for _, id := range callIDs(agent.BeforeMessages(in.Before)) {
+		assert.GreaterOrEqual(t, runOf(id), int64(4)) // the seed raised it past run 3
+	}
 }
