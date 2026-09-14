@@ -88,11 +88,11 @@ func findMatches(buf, old, replacement string, edited []lineRange) ([]match, mat
 		// nothing to prove the drift was the intended change rather than a typo
 		return nil, tierExact
 	}
-	if !nonBlank(old) {
-		return nil, tierExact // folds to bare newlines, which match every line boundary
+	cold, _ := canonical(old)
+	if strings.TrimSpace(cold) == "" { // folds to bare whitespace: matches every line boundary
+		return nil, tierExact
 	}
 	cbuf, cmap := canonical(buf)
-	cold, _ := canonical(old)
 	// skip canon when old==new under folding: matching rewrites already-correct
 	// text with itself, so let it fail instead. Indent below still runs.
 	if !canonEq(old, replacement) {

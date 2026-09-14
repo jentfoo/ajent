@@ -221,8 +221,9 @@ A match ladder resolves each `oldText` through four tiers: exact byte-for-byte, 
 happens only on *zero* matches; a tier that finds several leaves the ambiguity for the caller to reject rather than
 guessing which was meant. Canon and indent prove their span equal to the `oldText` it claims before
 writing, so a mapping bug degrades into a no-match error instead of corrupting the file; fuzzy
-cannot, and earns its span through its own guards below. An `oldText` that folds to bare newlines is
-refused above exact, since it would match every line boundary. The indent tier applies only to a
+cannot, and earns its span through its own guards below. An `oldText` whose canonical fold is bare
+whitespace is refused above exact, since it would match every line boundary; the fold drops zero-width
+runes, so one carrying them still refuses. The indent tier applies only to a
 uniform whole-block shift, where both texts' non-blank lines share one base indent, in either
 direction including onto a block the file holds flush left; a mixed or nested tab/space conversion
 matches nothing and falls through rather than being applied wrongly. Any match above exact reports in

@@ -414,7 +414,14 @@ func TestFindMatchesRefusesBlankOldText(t *testing.T) {
 	ms, _ := findMatches("a\n\nb\n", "   \n  ", "   \n  //Z", nil)
 	assert.Empty(t, ms)
 
-	ms, tier := findMatches("a\n   \nb\n", "   ", "xx", nil) // exact still applies
+	// a zero-width rune hides inside whitespace-only oldText; it folds to bare newlines
+	ms, _ = findMatches("a\n b\n\nc\n", " \u200b\n", "x", nil) // canon tier would match every line boundary
+	assert.Empty(t, ms)
+	ms, _ = findMatches("a\nb\n", "\ufeff ", "x", nil)
+	assert.Empty(t, ms)
+
+	// exact still applies: the file genuinely holds that whitespace text
+	ms, tier := findMatches("a\n   \nb\n", "   ", "xx", nil)
 	require.Len(t, ms, 1)
 	assert.Equal(t, tierExact, tier)
 }
