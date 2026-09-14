@@ -271,7 +271,8 @@ func (m *Manager) wait(ctx context.Context, id string) (Job, bool) {
 	case <-j.done:
 		return m.claimResult(j), true
 	case <-timer.C:
-		if j.finished() { // completed in the same instant; never report it as running
+		// finish sets the status before close(done); a timer in that window must claim
+		if j.finished() || j.terminal() {
 			return m.claimResult(j), true
 		}
 		return j.snapshot(), false // still running; caller reads progress for the payload

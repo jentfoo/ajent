@@ -248,7 +248,9 @@ Two details keep that suppression from swallowing a result:
 - The wait selects over `j.done`, the timeout and the turn context, and Go picks
   uniformly among ready cases. A job finishing in the same instant the timer fires
   would otherwise be reported as still running with its summary already in hand, so
-  the timeout branch re-checks `j.finished()` and returns the result when it has one.
+  the timeout branch re-checks completion before reporting progress: both a closed
+  `done` channel and an already-recorded terminal status mean the result is claimed,
+  never reported as still running.
 - `pollers > 0` means *a poll will carry this*, not *a poll did*. A poll that leaves
   empty-handed, because its timer fired or the turn was interrupted, may already have
   caused `onComplete` to skip the enqueue. So the deferred decrement re-checks: the

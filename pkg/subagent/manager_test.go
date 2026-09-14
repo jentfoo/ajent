@@ -469,7 +469,41 @@ func TestPollPrefersResultOverTimeout(t *testing.T) {
 	assert.Contains(t, got.Summary, "done in time")
 }
 
-// TestOrphanedCompletionRecovered covers a poll that departs empty-handed (its
+// TestPollClaimsStatusBeforeChannelClosed covers the finish→close(done) window:
+// finish records StatusDone and only later does spawn close j.done, so a poll
+// whose timer fires in between must claim the result rather than report running.
+func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	entered := make(chan struct{}) // terminal Activity clear reached: status done, channel not yet closed
+	var enteredOnce sync.Once
+	unblock := make(chan struct{})
+	m := New(Options{
+		Provider: func(llm.Model) (llm.Provider, error) {
+			return &delayedProvider{release: release, turn: summaryTurn("done in time", llm.Usage{})}, nil
+		},
+		PollTimeout: time.Nanosecond, // timer always ready once the poll registers
+		Activity: func(_, text string, _ int) {
+			if text == "" { // spawn's terminal clear runs between finish and close(done)
+				enteredOnce.Do(func() { close(entered) })
+				<-unblock
+			}
+		},
+	})
+	t.Cleanup(m.Close)
+
+	id := m.Start("x", "")
+	close(release) // the provider turn returns; spawn reaches finish then blocks in Activity
+	<-entered      // status is done while close(done) has not yet run
+
+	j, ok := m.Poll(t.Context(), id) // timer fires inside the window and must claim
+	assert.True(t, ok)
+	assert.Equal(t, StatusDone, j.Status)
+	assert.Contains(t, j.Summary, "done in time")
+
+	close(unblock) // let spawn reach close(done); cleanup can proceed
+}
+
 // timer fired, or the turn was interrupted) in the same instant the job finished:
 // onComplete saw pollers>0 and skipped the enqueue, so the last poller out has to
 // re-arm delivery or the summary reaches nobody.

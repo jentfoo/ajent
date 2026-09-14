@@ -141,3 +141,11 @@ func (j *job) finished() bool {
 		return false
 	}
 }
+
+// terminal reports whether a final status is recorded; finish sets it before
+// close(j.done), so the timeout branch checks it to avoid reporting running.
+func (j *job) terminal() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.status == StatusDone || j.status == StatusError || j.status == StatusAborted
+}
