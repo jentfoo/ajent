@@ -243,8 +243,8 @@ func TestCompactRecompaction(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
-		effective := tokensFor(branch, prior, model, llm.RetainNone, 0)
-		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0)
+		effective := tokensFor(branch, prior, model, llm.RetainNone, 0, nil)
+		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0, nil)
 		assert.Equal(t, effective, res.Before)
 		assert.Less(t, res.Before, raw)
 	})

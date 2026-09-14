@@ -8,14 +8,12 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
-// tokensFor estimates the request input tokens a branch contributes under cd,
-// applying its cut and reductions exactly as assembly would, then the same
-// Prepare pass the wire applies (retention, cross-model degradation, repair) so
-// thinking a request would drop is never counted as context compaction saved.
-// base is the fixed request overhead (system block + tool schemas); it is added
-// so Before/After measure full usage, not just messages.
-func tokensFor(branch []session.Entry, cd session.CompactionData, model llm.Model, retain llm.RetainPolicy, base int) int {
-	msgs, warns := session.ContextMessages(branch, cd, nil)
+// tokensFor estimates the input tokens branch contributes under cd through the
+// same ContextMessages and Prepare passes assembly uses, so what measures is what
+// the next request gets. resolve stamps each assistant message with its producing
+// model; nil leaves them unstamped (foreign). base adds the fixed request overhead.
+func tokensFor(branch []session.Entry, cd session.CompactionData, model llm.Model, retain llm.RetainPolicy, base int, resolve func(string) (llm.Model, error)) int {
+	msgs, warns := session.ContextMessages(branch, cd, resolve)
 	if msgs == nil && len(warns) > 0 {
 		return math.MaxInt // an unlocatable cut saves nothing
 	}

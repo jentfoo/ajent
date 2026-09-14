@@ -3,6 +3,7 @@ package compact
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +20,18 @@ import (
 func fixtureCompactModel() llm.Model {
 	return llm.Model{Provider: "anthropic", ID: "claude-opus-4-5",
 		ContextWindow: 8192, MaxOutput: 1024, Caps: llm.Capabilities{Reasoning: true}}
+}
+
+// fixtureResolver resolves the model key recorded on the committed corpus to
+// the same Model the fixtures measure against, so assistant messages are stamped
+// with their producing origin like the real rebuild path does.
+func fixtureResolver() func(string) (llm.Model, error) {
+	return func(key string) (llm.Model, error) {
+		if key == "anthropic/claude-opus-4-5" {
+			return fixtureCompactModel(), nil
+		}
+		return llm.Model{}, errors.New("unknown model key")
+	}
 }
 
 // TestFixtureCompact runs the reduction over the committed tool-heavy branch. The
@@ -57,17 +70,18 @@ func TestFixtureCompact(t *testing.T) {
 	t.Run("plan_replays_to_the_measured_size", func(t *testing.T) {
 		branch := loadFixtureBranch(t, "tools.jsonl")
 
-		opts := Options{Cwd: "/w", Retain: llm.RetainAll}
+		opts := Options{Cwd: "/w", Retain: llm.RetainAll, Resolve: fixtureResolver()}
 		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\ntidy the parser"), opts)
 		require.NoError(t, err)
 		require.NotNil(t, res, "the fixture has measurable slack")
 		assert.Less(t, res.After, res.Before)
 
-		// the recorded plan, replayed through assembly, must measure what was promised
+		// the recorded plan, replayed through assembly with the same resolver, must
+		// measure what was promised: a measured saving is the saving the request gets.
 		cd := session.CompactionData{
 			Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID, Reduce: &res.Reduce,
 		}
-		assert.Equal(t, res.After, tokensFor(branch, cd, model, opts.Retain, 0))
+		assert.Equal(t, res.After, tokensFor(branch, cd, model, opts.Retain, 0, fixtureResolver()))
 	})
 
 	t.Run("summary_leads_the_rebuilt_context", func(t *testing.T) {
@@ -146,14 +160,14 @@ func TestFixtureRecompaction(t *testing.T) {
 		got = req
 		return "## Goal\nmerged checkpoint", nil
 	}
-	opts := Options{Cwd: "/w", Retain: llm.RetainAll}
+	opts := Options{Cwd: "/w", Retain: llm.RetainAll, Resolve: fixtureResolver()}
 
 	res, err := Compact(t.Context(), branch, model, run, opts)
 	require.NoError(t, err)
 	require.NotNil(t, res)
 
-	assert.Equal(t, tokensFor(branch, prior, model, opts.Retain, 0), res.Before)
-	assert.Less(t, res.Before, tokensFor(branch, session.CompactionData{}, model, opts.Retain, 0))
+	assert.Equal(t, tokensFor(branch, prior, model, opts.Retain, 0, fixtureResolver()), res.Before)
+	assert.Less(t, res.Before, tokensFor(branch, session.CompactionData{}, model, opts.Retain, 0, fixtureResolver()))
 
 	newCut := session.CutIndex(branch, session.CompactionData{
 		Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID,
@@ -167,6 +181,6 @@ func TestFixtureRecompaction(t *testing.T) {
 	cd := session.CompactionData{
 		Summary: res.Summary, FirstKeptEntryID: res.FirstKeptEntryID, Reduce: &res.Reduce,
 	}
-	assert.Equal(t, res.After, tokensFor(branch, cd, model, opts.Retain, 0))
+	assert.Equal(t, res.After, tokensFor(branch, cd, model, opts.Retain, 0, fixtureResolver()))
 	assert.Less(t, res.After, res.Before)
 }

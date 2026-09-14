@@ -167,6 +167,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		Instructions:   instructions,
 		Retain:         c.st.Reasoning.Retain,
 		Base:           base,
+		Resolve:        c.reg.Resolve,
 		MinSteps:       cfg.MinSteps,
 		VerbatimTokens: verbatimTokens(model, cfg.VerbatimFraction),
 	}

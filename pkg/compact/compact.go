@@ -18,7 +18,8 @@ type Options struct {
 	Instructions string           // /compact <instructions>; appended to the summary prompt
 	Retain       llm.RetainPolicy // session retention policy, for measurement
 	Base         int              // fixed request overhead (system block + tool schemas), added to every measure
-	MinSteps     int              // recent steps kept verbatim however large; 0 uses defaultMinSteps
+	Resolve      func(string) (llm.Model, error)
+	MinSteps     int // recent steps kept verbatim however large; 0 uses defaultMinSteps
 	// VerbatimTokens caps the band past that floor; 0 uses a tenth of the
 	// compaction point.
 	VerbatimTokens int
@@ -76,7 +77,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		return nil, errors.New("compact: a cut needs a kept message entry")
 	}
 
-	before := tokensFor(branch, prior, model, opts.Retain, opts.Base)
+	before := tokensFor(branch, prior, model, opts.Retain, opts.Base, opts.Resolve)
 	// the stubs never reach context: everything they touch is replaced by the
 	// summary. They exist only so the summariser reads what is already known to be
 	// superseded as a marker rather than as bytes.
@@ -94,7 +95,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		Reduce: session.Reduce{Stats: session.Stats{Summarized: nsum}},
 	}
 	cd := session.CompactionData{Summary: summary, FirstKeptEntryID: firstKept, Reduce: &res.Reduce}
-	res.After = tokensFor(branch, cd, model, opts.Retain, opts.Base)
+	res.After = tokensFor(branch, cd, model, opts.Retain, opts.Base, opts.Resolve)
 	return finish(res)
 }
 
