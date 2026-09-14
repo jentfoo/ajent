@@ -213,6 +213,40 @@ func TestResponsesProviderStream(t *testing.T) {
 	})
 }
 
+func TestResponsesStreamTruncated(t *testing.T) {
+	t.Parallel()
+
+	collectStop := func(t *testing.T, fixture string) (string, StopReason, error) {
+		t.Helper()
+		srv, _ := sseServer(t, fixture)
+		p := newResponsesTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: responsesModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		var events []Event
+		for ev, ok := s.Next(); ok; ev, ok = s.Next() {
+			events = append(events, ev)
+		}
+		require.Error(t, s.Err())
+		last := events[len(events)-1]
+		return textOf(events), last.StopReason, last.Err
+	}
+
+	t.Run("eof_without_terminal_flags_truncation", func(t *testing.T) {
+		text, stop, err := collectStop(t, "openai/truncated.sse")
+		assert.Equal(t, "Hello there", text) // the partial is still delivered
+		assert.ErrorIs(t, err, ErrStreamTruncated)
+		assert.Equal(t, StopError, stop)
+	})
+	t.Run("eof_tool_call_is_still_truncation", func(t *testing.T) {
+		_, stop, err := collectStop(t, "openai/truncated_tool.sse")
+		assert.ErrorIs(t, err, ErrStreamTruncated) // sawTool must not mask the drop
+		assert.Equal(t, StopError, stop)
+	})
+}
+
 func TestBuildResponsesBody(t *testing.T) {
 	t.Parallel()
 

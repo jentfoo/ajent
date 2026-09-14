@@ -30,3 +30,4 @@ data: {"type":"response.output_item.done","output_index":2,"item":{"type":"funct
 
 event: response.completed
 data: {"type":"response.completed","response":{"id":"resp_04","model":"gpt-5","status":"completed","usage":{"input_tokens":15,"output_tokens":9}}}
+

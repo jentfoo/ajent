@@ -589,10 +589,20 @@ func (s *responsesStream) finish(cause error) []Event {
 
 	stop := respStopReason(s.status, s.sawTool)
 	var streamErr error
-	if cause != nil && !errors.Is(cause, io.EOF) {
+	switch {
+	case cause != nil && !errors.Is(cause, io.EOF):
 		streamErr = cause
 		stop = StopError
 		s.err = cause
+	case s.status == "":
+		// EOF with no terminal frame is a truncated stream unless the caller
+		// deliberately closed or cancelled it.
+		if s.ctx.Err() != nil || s.isClosed() {
+			return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage}}
+		}
+		streamErr = ErrStreamTruncated
+		stop = StopError
+		s.err = streamErr
 	}
 	return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr}}
 }

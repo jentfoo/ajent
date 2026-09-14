@@ -130,6 +130,10 @@ Every `usage` frame carries **the whole response so far**, never an increment,
 so a consumer may replace on each one. A frame reporting no numbers at all is
 absent, not zero: the ledger's mid-stream snapshot must never go backwards.
 
+A stream that ends without its terminal frame is truncated, not clean: both
+adapters leave `ErrStreamTruncated` so the turn loop retries instead of committing
+a partial answer. A deliberate `Close()` or cancelled context stays clean (invariant 3).
+
 `Index` is the content block index, pairing a start with its deltas and its end.
 `Accumulate(Stream)` builds the final `Message` from the end events, falling back
 to concatenating deltas for a block whose end never arrived, so an aborted stream
