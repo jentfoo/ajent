@@ -168,8 +168,9 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	case err != nil:
 		return nil, err
 	default:
-		if !bytes.Equal(RelaxJSON(raw), raw) {
+		if relaxed := RelaxJSON(raw); !bytes.Equal(relaxed, raw) {
 			warns = append(warns, path+" has comments; saving will remove them")
+			raw = relaxed
 		}
 	}
 

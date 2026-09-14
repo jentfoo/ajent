@@ -102,6 +102,24 @@ func TestSave(t *testing.T) {
 		_, err = s.Save("bogus", "model", "x")
 		assert.Error(t, err)
 	})
+
+	t.Run("commented_file_saves", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		writeConfig(t, userPathFor(t), `{
+  // user preference
+  "model": "old",
+}`)
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+
+		warns, err := s.Save("user", "reasoning.level", "high")
+		require.NoError(t, err)
+		assert.NotEmpty(t, warns) // comments are dropped but save succeeds
+
+		st := s.Settings()
+		assert.Equal(t, "high", st.Reasoning.Level)
+	})
 }
 
 // helpers ----------------------------------------------------------------
