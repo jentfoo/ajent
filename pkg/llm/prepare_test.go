@@ -286,7 +286,7 @@ func TestNormalizeCallID(t *testing.T) {
 	})
 
 	t.Run("responses_model_switch_drops_item_id", func(t *testing.T) {
-		// same provider and dialect but a different model: pi drops the fc item so
+		// same provider and dialect but a different model: the fc item is dropped so
 		// openai pairing validation cannot reject it, instead of hashing like foreign
 		out := normalizeCallID("call.1|fc_9", caps(DialectOpenAIResponses), "p", callForeignModel)
 		assert.Equal(t, "call_1", out)
@@ -434,15 +434,12 @@ func TestRepairTurns(t *testing.T) {
 			{Role: RoleUser, Content: BlockList{ToolResultBlock{CallID: "c1", Content: BlockList{TextBlock{Text: "r"}}}}},
 		}
 		out := Prepare(Request{Model: m, Messages: in}).Messages
-		var syn bool
-		for _, msg := range out {
-			for _, b := range msg.Content {
-				if tr, ok := b.(ToolResultBlock); ok && tr.CallID == "c2" {
-					syn = true
-				}
-			}
-		}
-		assert.True(t, syn)
+		require.Len(t, out, 3) // assistant turn, answered result, synthesized error result
+		tr, ok := out[2].Content[0].(ToolResultBlock)
+		require.True(t, ok)
+		assert.Equal(t, "c2", tr.CallID)
+		assert.True(t, tr.IsError) // the unanswered call is a synthetic error
+		assert.Equal(t, noResult, tr.Content[0].(TextBlock).Text)
 	})
 
 	t.Run("errored_turn_skipped_with_results", func(t *testing.T) {
@@ -462,7 +459,12 @@ func TestRepairTurns(t *testing.T) {
 			ToolCallBlock{ID: "c1"}, TextBlock{Text: "partial"},
 		}}}
 		out := Prepare(Request{Model: m, Messages: in}).Messages
-		assert.Len(t, out, 2) // the call is orphaned and synthesized a result
+		require.Len(t, out, 2)
+		// the partial assistant text survives and the orphaned call gets a synthetic error
+		assert.Equal(t, TextBlock{Text: "partial"}, out[0].Content[1])
+		tr := out[1].Content[0].(ToolResultBlock)
+		assert.True(t, tr.IsError)
+		assert.Equal(t, noResult, tr.Content[0].(TextBlock).Text)
 	})
 
 	t.Run("bridging_assistant_inserted", func(t *testing.T) {
@@ -599,7 +601,7 @@ func TestPrepareToolResultImageSplit(t *testing.T) {
 		tr := out[0].Content[0].(ToolResultBlock)
 		assert.Equal(t, "(see attached image)", tr.Content[0].(TextBlock).Text)
 		require.Len(t, tr.Content, 1)
-		// a following user message carries the images with pi's lead-in
+		// a following user message carries the images with the tool-result lead-in
 		assert.Equal(t, RoleUser, out[1].Role)
 		tb := out[1].Content[0].(TextBlock)
 		assert.Equal(t, "Attached image(s) from tool result:", tb.Text)

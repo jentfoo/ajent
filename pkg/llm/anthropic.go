@@ -145,7 +145,7 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 		body.Thinking = &antThinking{Type: antThinkEnabled, BudgetTokens: budget,
 			Display: "summarized"}
 	case !on && caps.Dialect == DialectAnthropic && caps.Reasoning && !offSuppressed(caps):
-		// an explicit off shape matches pi and keeps the deepseek parity locked in B
+		// an explicit off shape is sent and keeps the deepseek parity locked in B
 		body.Thinking = &antThinking{Type: antThinkDisabled}
 	default:
 	}
@@ -342,7 +342,7 @@ func anthropicHeaders(req Request) map[string]string {
 		if base == nil {
 			base = make(map[string]string, 1)
 		}
-		// pi joins in order and last-wins over a model-declared beta value
+		// values join in order and last-win over a model-declared beta value
 		base["anthropic-beta"] = strings.Join(values, ",")
 	}
 	return withSessionHeaders(base, req)

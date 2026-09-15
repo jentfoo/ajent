@@ -16,9 +16,6 @@ func reasoningModel() llm.Model {
 		Caps: llm.Capabilities{Reasoning: true, Dialect: llm.DialectAnthropic}}
 }
 
-// TestMeasureOriginStampsThinking guards invariant 2 against a nil resolver: the
-// measurement must match what Prepare does to rebuilt messages, so retained
-// thinking is counted at its real size rather than as degraded foreign content.
 func TestMeasureOriginStampsThinking(t *testing.T) {
 	t.Parallel()
 

@@ -73,10 +73,10 @@ func TestCachedClassifierHitsCache(t *testing.T) {
 	fn := &countingFn{verdict: ClassAllow}
 	c := NewCachedClassifier(fn.call)
 
-	assert.Equal(t, ClassAllow, c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"}))
+	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
 	assert.Equal(t, 1, fn.count())
 	// an identical subject is served from cache without re-invoking the model.
-	assert.Equal(t, ClassAllow, c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"}))
+	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
 	assert.Equal(t, 1, fn.count())
 }
 
@@ -86,8 +86,8 @@ func TestCachedClassifierDistinctCommandsMissCache(t *testing.T) {
 	fn := &countingFn{verdict: ClassDeny}
 	c := NewCachedClassifier(fn.call)
 
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "a"})
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "b"}) // different subject misses
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"}) // different subject misses
 	assert.Equal(t, 2, fn.count())
 }
 
@@ -97,12 +97,12 @@ func TestCachedClassifierSeparatesRuleSets(t *testing.T) {
 	fn := &countingFn{verdict: ClassDeny}
 	c := NewCachedClassifier(fn.call)
 
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "rm f"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f"})
 	assert.Equal(t, 1, fn.count())
 	// the same command under auto+write asks a different question; never the cached one.
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
 	assert.Equal(t, 2, fn.count())
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
 	assert.Equal(t, 2, fn.count()) // cached within its own rule set
 }
 
@@ -112,15 +112,15 @@ func TestCachedClassifierNeverStoresUnsure(t *testing.T) {
 	fn := &countingFn{verdict: ClassUnsure}
 	c := NewCachedClassifier(fn.call)
 
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 1, fn.count())
 	// unsure is transient and never cached; the same subject runs the model again.
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "stat a"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 2, fn.count())
 
 	fn.verdict = ClassAllow // next call now succeeds and gets stored
-	assert.Equal(t, ClassAllow, c.Classify(context.Background(), Subject{Name: "bash", Args: "stat b"}))
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "stat b"}) // cached from here on
+	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat b"}))
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat b"}) // cached from here on
 	assert.Equal(t, 3, fn.count())
 }
 
@@ -183,7 +183,7 @@ func collect(t *testing.T, ch <-chan Class, n int) []Class {
 func TestCachedClassifierInFlight(t *testing.T) {
 	t.Parallel()
 
-	t.Run("joins concurrent callers", func(t *testing.T) {
+	t.Run("joins_concurrent_callers", func(t *testing.T) {
 		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow}
 		c := NewCachedClassifier(fn.call)
 
@@ -203,7 +203,7 @@ func TestCachedClassifierInFlight(t *testing.T) {
 		assert.Equal(t, 1, fn.endedN())
 	})
 
-	t.Run("cancelled joiner takes unsure", func(t *testing.T) {
+	t.Run("cancelled_joiner_takes_unsure", func(t *testing.T) {
 		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow}
 		c := NewCachedClassifier(fn.call)
 		subj := Subject{Name: "bash", Args: "rm f"}
@@ -224,7 +224,7 @@ func TestCachedClassifierInFlight(t *testing.T) {
 		assert.Equal(t, 1, fn.startedN())
 	})
 
-	t.Run("retries after failed leader", func(t *testing.T) {
+	t.Run("retries_after_failed_leader", func(t *testing.T) {
 		// the first call answers unsure (a cancelled leader); the retry gets allow
 		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow, fails: 1}
 		c := NewCachedClassifier(fn.call)
@@ -252,15 +252,15 @@ func TestCachedClassifierEvictsLeastRecentlyUsedAtCap(t *testing.T) {
 	c := newCachedClassifierMax(fn.call, 2)
 
 	// fill the cache to its cap.
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "a"})
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "b"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
 
 	// touch a so b becomes least-recently-used, then push past the cap: b evicts.
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "a"})
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "c"}) // forces an eviction
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "c"}) // forces an eviction
 
 	assert.Equal(t, 3, fn.count()) // a,b,c each classified once
 	// b was evicted and must run the model again; a survived via recency touch.
-	_ = c.Classify(context.Background(), Subject{Name: "bash", Args: "b"})
+	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
 	assert.Equal(t, 4, fn.count())
 }

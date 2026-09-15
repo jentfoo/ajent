@@ -25,7 +25,7 @@ func TestUINotify(t *testing.T) {
 		for _, tc := range []struct {
 			name  string
 			level Level
-			style Style // the notice style that level must carry
+			style Style
 		}{
 			{"info", LevelInfo, th.Dim},
 			{"warn", LevelWarn, th.Warn},
@@ -35,14 +35,7 @@ func TestUINotify(t *testing.T) {
 				u := &UI{theme: th}
 
 				got := u.noticeLine("something", tc.level)
-				assert.True(t, strings.HasPrefix(got, tc.style.Open()))
-				// each level carries only its own style.
-				for _, other := range []Style{th.Dim, th.Warn, th.Error} {
-					if other == tc.style {
-						continue
-					}
-					assert.NotContains(t, got, other.Open())
-				}
+				assert.Equal(t, tc.style.Wrap(noticeMarker+" "+"something"), got)
 			})
 		}
 	})

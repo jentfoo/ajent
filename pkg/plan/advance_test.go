@@ -14,6 +14,7 @@ import (
 // handOff drives planning through dev_implement to the awaiting-plan gate.
 func handOff(t *testing.T, c *Controller, plan string) {
 	t.Helper()
+
 	require.True(t, call(t, c, DevImplementTool, `{"plan":`+quote(plan)+`}`).EndTurn)
 	in, ok := c.Advance(t.Context(), done())
 	require.False(t, ok) // the gate starts no turn
@@ -23,6 +24,7 @@ func handOff(t *testing.T, c *Controller, plan string) {
 // submitPlan puts the (possibly edited) plan through the pump seam.
 func submitPlan(t *testing.T, c *Controller, text string) agent.Input {
 	t.Helper()
+
 	in, ok := c.BeforePrompt(t.Context(), agent.Input{Text: text})
 	require.True(t, ok)
 	return in

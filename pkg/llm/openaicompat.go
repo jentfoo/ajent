@@ -269,7 +269,7 @@ func resolveReasonField(m Message, caps Capabilities) string {
 }
 
 // blocksText joins the text of every non-empty text block with a newline. This
-// differs from pi's separator-less join for assistant parts, which is only hit by
+// differs from the separator-less join used for assistant parts, which is only hit by
 // responses phase blocks replayed onto compat.
 func blocksText(blocks BlockList) string {
 	var texts []string
@@ -399,7 +399,7 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	st := s.st
 	var events []Event
 
-	// pi reads the first non-empty of reasoning_content, reasoning, reasoning_text;
+	// the first non-empty of reasoning_content, reasoning, reasoning_text wins;
 	// chutes.ai sends the same text in two fields and this order picks the right one.
 	reasoning, field := deltaReasonText(c.Delta)
 	if field != "" {

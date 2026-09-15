@@ -20,6 +20,7 @@ import (
 // cleanup.
 func setVersionForTest(t *testing.T, v string) {
 	t.Helper()
+
 	prev := Version
 	Version = v
 	t.Cleanup(func() { Version = prev })
@@ -28,7 +29,7 @@ func setVersionForTest(t *testing.T, v string) {
 func TestCheckUpdateNotice(t *testing.T) {
 	t.Parallel()
 
-	// fixed clock; no-op fetch used when the cached entry is still fresh.
+	// fixed clock; no-op fetch used when the cached entry is still fresh
 	now := time.Unix(1_000_000, 0)
 	noFetch := func(context.Context) (string, error) { return "", errors.New("unexpected fetch") }
 	optsAt := func(fn func(context.Context) (string, error), at time.Time) UpdateCheckOptions {
@@ -39,7 +40,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		setVersionForTest(t, "v0.1.5")
 		path := filepath.Join(t.TempDir(), "remote.json")
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
-		msg, err := CheckUpdateNotice(context.Background(), path,
+		msg, err := CheckUpdateNotice(t.Context(), path,
 			optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Empty(t, msg)
@@ -50,7 +51,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "remote.json")
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
 		want := fmt.Sprintf("update available: ajent %s → v0.1.5 (run /update or --update)", Version)
-		msg, err := CheckUpdateNotice(context.Background(), path,
+		msg, err := CheckUpdateNotice(t.Context(), path,
 			optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Equal(t, want, msg)
@@ -60,7 +61,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		setVersionForTest(t, "dev")
 		path := filepath.Join(t.TempDir(), "remote.json")
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
-		msg, err := CheckUpdateNotice(context.Background(), path,
+		msg, err := CheckUpdateNotice(t.Context(), path,
 			optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Empty(t, msg)
@@ -73,7 +74,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 			Version: "v0.1.5", CheckedAt: now.Unix(),
 			NoticedAt: now.Add(-time.Hour).Unix(), // within 2h
 		}))
-		msg, err := CheckUpdateNotice(context.Background(), path,
+		msg, err := CheckUpdateNotice(t.Context(), path,
 			optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Empty(t, msg) // already noticed recently
@@ -86,7 +87,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		fetched := false
 		fn := func(context.Context) (string, error) { fetched = true; return "v9.9.9", nil }
 		setVersionForTest(t, "v0.1.5")
-		msg, err := CheckUpdateNotice(context.Background(), path,
+		msg, err := CheckUpdateNotice(t.Context(), path,
 			optsAt(fn, now))
 		require.NoError(t, err)
 		assert.True(t, fetched)
@@ -104,12 +105,12 @@ func TestCheckUpdateNotice(t *testing.T) {
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: cached, CheckedAt: stale.Unix()}))
 		fn := func(context.Context) (string, error) { return "", errors.New("offline") }
 		want := fmt.Sprintf("update available: ajent %s → %s (run /update or --update)", Version, cached)
-		msg, err := CheckUpdateNotice(context.Background(), path,
+		msg, err := CheckUpdateNotice(t.Context(), path,
 			optsAt(fn, now))
 		require.NoError(t, err)
 		assert.Equal(t, want, msg)
 
-		// the stale tag is kept; a later run retries the fetch.
+		// the stale tag is kept; a later run retries the fetch
 		var c UpdateCache
 		loadUpdateCache(path, &c)
 		assert.Equal(t, cached, c.Version)
@@ -122,7 +123,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		stale := now.Add(-(remoteVersionTTL + time.Hour))
 		require.NoError(t, saveUpdateCache(path, UpdateCache{CheckedAt: stale.Unix()}))
 		fn := func(context.Context) (string, error) { return "", errors.New("offline") }
-		_, err := CheckUpdateNotice(context.Background(), path,
+		_, err := CheckUpdateNotice(t.Context(), path,
 			optsAt(fn, now))
 		require.Error(t, err)
 	})
@@ -171,7 +172,7 @@ func TestLoadUpdateCacheMissingFile(t *testing.T) {
 func TestFetchLatestVersion(t *testing.T) {
 	t.Parallel()
 
-	// swapURL points the fetch at srv for one subtest.
+	// swapURL points the fetch at srv for one subtest
 	swapURL := func(t *testing.T, url string) {
 		t.Helper()
 		prev := githubTagsURL

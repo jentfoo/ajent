@@ -62,7 +62,7 @@ func TestBound(t *testing.T) {
 		}
 	})
 
-	t.Run("overlong line alone truncates", func(t *testing.T) {
+	t.Run("overlong_line_alone_truncates", func(t *testing.T) {
 		// within both bounds, but one minified line must not reach the model whole
 		in := "short\n" + strings.Repeat("y", MaxLineRunes+100)
 		b := Bound(in, Limit{Lines: 10, Bytes: 1 << 20})
@@ -73,21 +73,23 @@ func TestBound(t *testing.T) {
 		}
 	})
 
-	t.Run("single_long_line_cut_at_rune_budget", func(t *testing.T) {
-		cjk := strings.Repeat("\u4e2d", 3000) // runes, not bytes; a byte-bound cut would stop at ~667
-		b := Bound(cjk+"\n", Limit{Bytes: 100})
-		assert.True(t, b.Truncated)
-		runes := []rune(b.Text)
-		assert.Len(t, runes, MaxLineRunes) // cut to the rune budget, not bytes
-	})
-
-	t.Run("first_line_alone_cut_when_nothing_fits", func(t *testing.T) {
-		in := strings.Repeat("\u4e2d", 3000) + "\nrest\n"
-		b := Bound(in, Limit{Bytes: 100})
-		assert.True(t, b.Truncated)
-		runes := []rune(b.Text)
-		assert.Len(t, runes, MaxLineRunes) // single cut first line
-	})
+	// a byte bound must cut by rune budget, whether or not the next line survives
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"single_long_line_cut_at_rune_budget", strings.Repeat("\u4e2d", MaxLineRunes+100) + "\n"},
+		{"first_line_alone_cut_when_nothing_fits", strings.Repeat("\u4e2d", MaxLineRunes+100) + "\nrest\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := Bound(tc.in, Limit{Bytes: 100})
+			assert.True(t, b.Truncated)
+			runes := []rune(b.Text)
+			// cut to the rune budget, not bytes; a byte-bound cut would stop at ~667
+			assert.Len(t, runes, MaxLineRunes)
+		})
+	}
 
 	t.Run("truncation_note_names_totals", func(t *testing.T) {
 		b := Bound(longLines(50), Limit{Lines: 5})
@@ -165,13 +167,13 @@ func TestElide(t *testing.T) {
 		})
 	}
 
-	t.Run("head and tail preserved", func(t *testing.T) {
+	t.Run("head_and_tail_preserved", func(t *testing.T) {
 		out, _ := Elide(longLines(50), Limit{Lines: 10})
 		assert.True(t, strings.HasPrefix(out, "line"))
 		assert.True(t, strings.HasSuffix(strings.ReplaceAll(out, "\n...", ""), "line"))
 	})
 
-	t.Run("byte bound shrinks output", func(t *testing.T) {
+	t.Run("byte_bound_shrinks_output", func(t *testing.T) {
 		out, _ := Elide(strings.Repeat("x", 10000), Limit{Bytes: 200})
 		assert.Less(t, len(out), 400)
 	})
@@ -187,7 +189,7 @@ func TestElide(t *testing.T) {
 func TestWriterSpillsAtBound(t *testing.T) {
 	t.Parallel()
 
-	t.Run("crosses byte bound whole lines", func(t *testing.T) {
+	t.Run("crosses_byte_bound_whole_lines", func(t *testing.T) {
 		var kept bytes.Buffer
 		var over bytes.Buffer
 		w := Writer(&kept, Limit{Bytes: 16}, &over)
@@ -206,7 +208,7 @@ func TestWriterSpillsAtBound(t *testing.T) {
 		assert.Contains(t, over.String(), "abcdefghij\n")
 	})
 
-	t.Run("line bound spills whole lines", func(t *testing.T) {
+	t.Run("line_bound_spills_whole_lines", func(t *testing.T) {
 		var kept bytes.Buffer
 		var over bytes.Buffer
 		w := Writer(&kept, Limit{Lines: 2}, &over)
@@ -224,7 +226,7 @@ func TestWriterSpillsAtBound(t *testing.T) {
 		assert.Contains(t, over.String(), "three\nfour\n")
 	})
 
-	t.Run("buffers partial line across writes", func(t *testing.T) {
+	t.Run("buffers_partial_line_across_writes", func(t *testing.T) {
 		var kept bytes.Buffer
 		var over bytes.Buffer
 		w := Writer(&kept, Limit{Lines: 1}, &over)
@@ -263,7 +265,7 @@ func TestWriterSpillsAtBound(t *testing.T) {
 		assert.True(t, bw.Truncated())
 	})
 
-	t.Run("spill keeps order across a mid-line bound", func(t *testing.T) {
+	t.Run("spill_keeps_order_across_a_mid_line_bound", func(t *testing.T) {
 		// a partial line held in the buffer when the byte bound hits must reach
 		// the spill before later chunks, or the file is not the real stream
 		var kept bytes.Buffer
@@ -284,7 +286,7 @@ func TestWriterSpillsAtBound(t *testing.T) {
 		assert.Equal(t, len("abcdefghijk"), byts)
 	})
 
-	t.Run("nil overflow still reports truncation", func(t *testing.T) {
+	t.Run("nil_overflow_still_reports_truncation", func(t *testing.T) {
 		var kept bytes.Buffer
 		w := Writer(&kept, Limit{Lines: 1}, nil).(*boundedWriter)
 

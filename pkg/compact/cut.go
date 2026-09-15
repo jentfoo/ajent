@@ -63,13 +63,17 @@ func isLivePrompt(e session.Entry) bool {
 func verbatimCut(branch []session.Entry, priorCut, minSteps, maxTokens int) int {
 	priorCut, minSteps = max(priorCut, 0), max(minSteps, 1)
 
-	cut, seen, acc := len(branch), 0, 0
+	var cut, seen, acc = len(branch), 0, 0
 	for i := len(branch) - 1; i >= priorCut; i-- {
 		if branch[i].Type != session.TypeMessage {
 			continue
 		}
-		acc += entryTokens(branch[i]) // acc == spanTokens(branch, i, len(branch))
-		if !isStepStart(branch[i]) {
+		var md session.MessageData
+		if err := branch[i].Decode(&md); err != nil {
+			continue // unreadable entry carries no tokens and opens no step
+		}
+		acc += tokens.EstimateMessage(md.Message) // acc == spanTokens(branch, i, len(branch))
+		if md.Message.Role != llm.RoleAssistant {
 			continue
 		}
 		seen++

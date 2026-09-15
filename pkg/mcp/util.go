@@ -14,8 +14,8 @@ import (
 const jsonNull = "null"
 
 // FlexDuration is a config duration that accepts either a JSON number of
-// milliseconds (the convention other MCP clients such as pi use) or a Go
-// duration string like "60s". It marshals back to the millisecond form.
+// milliseconds (the common MCP client convention) or a Go duration string like
+// "60s". It marshals back to the millisecond form.
 type FlexDuration time.Duration
 
 // UnmarshalJSON decodes a numeric timeout in milliseconds or a duration string.
@@ -33,7 +33,7 @@ func (d *FlexDuration) UnmarshalJSON(b []byte) error {
 		*d = FlexDuration(dur)
 		return nil
 	}
-	var ms float64 // unquoted: milliseconds, matching pi's numeric timeouts
+	var ms float64 // unquoted: milliseconds
 	if err := json.Unmarshal(b, &ms); err != nil {
 		return errors.New("timeout must be a millisecond number or duration string")
 	}

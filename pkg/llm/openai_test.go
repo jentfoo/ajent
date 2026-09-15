@@ -324,7 +324,8 @@ func TestBuildResponsesBody(t *testing.T) {
 
 		body, err := buildResponsesBody(req)
 		require.NoError(t, err)
-		assert.NotContains(t, string(body), strings.Repeat("k", 65))
+		// trimmed to the api cap, not truncated at an arbitrary byte
+		assert.Contains(t, string(body), `"prompt_cache_key":"`+strings.Repeat("k", openaiPromptCacheKeyLimit)+`"`)
 	})
 	t.Run("no_prompt_cache_key_without_policy", func(t *testing.T) {
 		req := baseReq()
@@ -399,7 +400,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.NotContains(t, m, "store")
 	})
 	t.Run("level_off_names_the_none_effort", func(t *testing.T) {
-		// pi sends reasoning:{effort:"none"} for off so the model stops
+		// reasoning:{effort:"none"} is sent for off so the model stops
 		// thinking; only {off:null} suppresses the key entirely
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
@@ -509,7 +510,8 @@ func TestBuildResponsesBody(t *testing.T) {
 
 		input := decode(t, body)["input"].([]any)
 		result := input[len(input)-1].(map[string]any)
-		assert.IsType(t, "", result["output"])
+		// the image is dropped to a text placeholder rather than emitted as a parts array
+		assert.Equal(t, "(tool image omitted: model does not support images)", result["output"])
 	})
 	t.Run("mid_conversation_system_becomes_developer", func(t *testing.T) {
 		req := baseReq()
@@ -606,7 +608,7 @@ func TestBuildResponsesBody(t *testing.T) {
 }
 
 // TestResponsesReplayRoundTrip streams a multi-turn fixture and replays it,
-// asserting pi's stateless replay: the reasoning item round-trips verbatim, the
+// asserting stateless replay: the reasoning item round-trips verbatim, the
 // message keeps its id and phase, and the tool call keeps its fc_ pairing.
 func TestResponsesReplayRoundTrip(t *testing.T) {
 	t.Parallel()

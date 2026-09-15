@@ -98,29 +98,8 @@ func TestEventTypeString(t *testing.T) {
 func TestStopReasonString(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		reason   StopReason
-		expected string
-	}{
-		{StopEndTurn, "end_turn"},
-		{StopToolUse, "tool_use"},
-		{StopMaxTokens, "max_tokens"},
-		{StopIncomplete, "incomplete"},
-		{StopAborted, "aborted"},
-		{StopError, "error"},
-		{StopUnknown, "unknown"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.expected, func(t *testing.T) {
-			assert.Equal(t, tc.expected, tc.reason.String())
-		})
-	}
-}
-
-func TestStopReasonMarshalRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	reasons := []struct {
+	// every canonical name encodes and round-trips through its JSON text form
+	for _, tc := range []struct {
 		name   string
 		reason StopReason
 	}{
@@ -130,18 +109,24 @@ func TestStopReasonMarshalRoundTrip(t *testing.T) {
 		{"incomplete", StopIncomplete},
 		{"aborted", StopAborted},
 		{"error", StopError},
-	}
-	for _, tc := range reasons {
+	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.name, tc.reason.String())
+
 			b, err := json.Marshal(tc.reason)
 			require.NoError(t, err)
-			assert.Equal(t, `"`+tc.reason.String()+`"`, string(b))
+			assert.Equal(t, `"`+tc.name+`"`, string(b))
 
 			var back StopReason
 			require.NoError(t, json.Unmarshal(b, &back))
 			assert.Equal(t, tc.reason, back)
 		})
 	}
+
+	// the unmapped value falls back to "unknown" for logging; it has no wire form
+	t.Run("unknown_falls_back", func(t *testing.T) {
+		assert.Equal(t, "unknown", StopUnknown.String())
+	})
 }
 
 func TestParseStop(t *testing.T) {

@@ -354,7 +354,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 		if serr != nil && ctx.Err() == nil && retry < retries {
 			if ok, after := llm.Recoverable(serr); ok {
 				delay, retrying = httputil.BackoffDelay(
-					httputil.RetryPolicy{Attempts: retries + 1}, retry+1, after, rand.Float64())
+					llm.DefaultPromptPolicy(retries+1), retry+1, after, rand.Float64())
 			}
 		}
 		if !retrying {

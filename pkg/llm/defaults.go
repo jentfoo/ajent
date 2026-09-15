@@ -13,7 +13,7 @@ const (
 	fieldMaxOutputTokens = "max_output_tokens"
 	fieldReasoning       = "reasoning"
 	fieldReasoningConten = "reasoning_content"
-	// vLLM's spelling, the value pi's supportsThinkingTokenBudget alias selects
+	// vLLM's spelling; selected by the supportsThinkingTokenBudget alias.
 	fieldThinkingTokenBudget = "thinking_token_budget"
 	thinkOpenTag             = "<think>"
 	thinkCloseTag            = "</think>"
@@ -50,7 +50,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Images:          true,
 			Temperature:     true,
 			ToolChoice:      true,
-			// pi defaults both on; an entry that says nothing behaves like pi
+			// both default on so a bare anthropic entry gets them
 			EagerToolInputStreaming: true,
 			CacheControlOnTools:     true,
 		},
@@ -89,7 +89,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Reasoning:      true,
 			Thinking:       ThinkingOpenRouter,
 			ReasoningField: fieldReasoning,
-			// pi's openrouter default emits reasoning_effort for generic levels
+			// the openrouter default emits reasoning_effort for generic levels
 			SupportsReasoningEffort: true,
 			SupportsFinishReason:    true,
 			SupportsStrict:          true,
@@ -124,7 +124,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			StreamUsage:    true,
 			Temperature:    true,
 			ToolChoice:     true,
-			// pi's chat-completions default emits reasoning_effort
+			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			SupportsFinishReason:    true,
 			SupportsStrict:          true,
@@ -145,7 +145,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Tokenizer:      TokenizerRemoteTokenize,
 			MaxTokensField: fieldMaxTokens,
 			SystemAsRole:   true,
-			// pi's chat-completions default emits reasoning_effort
+			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			// older builds reject the unknown stream_options key, discovery
 			// turns it back on when the build reports support
@@ -164,7 +164,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			SystemAsRole:   true,
 			Temperature:    true,
 			ToolChoice:     true,
-			// pi's chat-completions default emits reasoning_effort
+			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			SupportsFinishReason:    true,
 			SupportsStrict:          true,
@@ -253,7 +253,7 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.SystemAsRole = orBool(c.SystemAsRole, o.SupportsSystemRole)
 	c.Temperature = orBool(c.Temperature, o.SupportsTemperature)
 	c.ParallelTools = orBool(c.ParallelTools, o.SupportsParallelTools)
-	// supportsStreamUsage is ajent's historical name for pi's supportsUsageInStreaming
+	// supportsStreamUsage is ajent's historical name; supportsUsageInStreaming is canonical
 	c.StreamUsage = orBool(orBool(c.StreamUsage, o.SupportsUsageInStreaming), o.SupportsStreamUsage)
 	c.ToolChoice = orBool(c.ToolChoice, o.SupportsToolChoice)
 	c.Store = orBool(c.Store, o.SupportsStore)
@@ -269,7 +269,7 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.SupportsStrict = orBool(c.SupportsStrict, o.SupportsStrictMode)
 	c.SupportsStrictTools = orBool(c.SupportsStrictTools, o.SupportsStrictTools)
 	c.SupportsGrammarTools = orBool(c.SupportsGrammarTools, o.SupportsOpenAIGrammarTools)
-	// supportsThinkingTokenBudget is the boolean alias for pi's thinkingTokenBudgetField,
+	// supportsThinkingTokenBudget is the boolean alias for thinkingTokenBudgetField,
 	// so the canonical spelling wins when a block carries both
 	if o.SupportsThinkingTokenBudget != nil {
 		c.ThinkingBudgetField = ""
@@ -349,8 +349,8 @@ func orStr(dst string, p *string) string {
 	return dst
 }
 
-// pi's documented defaults for a model entry that omits them, so a one line
-// entry is a complete one. See pi/packages/coding-agent/docs/models.md.
+// defaultContextWindow and defaultMaxTokens fill what a model entry omits, so
+// an id-only line is a complete one.
 const (
 	defaultContextWindow = 128000
 	defaultMaxTokens     = 16384
@@ -363,7 +363,7 @@ type modelContext struct {
 	baseURL  string  // the provider's, which ModelConfig.BaseURL overrides
 }
 
-// applyModelDefaults fills what a model entry left unset with pi's defaults. It
+// applyModelDefaults fills what a model entry left unset with the schema defaults. It
 // runs after configuration and discovery have merged, so a discovered value wins.
 func applyModelDefaults(mc ModelConfig) ModelConfig {
 	if mc.Name == "" {

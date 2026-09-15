@@ -88,13 +88,13 @@ func buildResponsesBody(req Request) ([]byte, error) {
 		}
 	}
 	if caps.Dialect == DialectOpenAIResponses && caps.Reasoning {
-		// the responses dialect stays ungated by SupportsReasoningEffort, as in pi;
+		// the responses dialect stays ungated by SupportsReasoningEffort;
 		// it clamps internally like every encoder so a bare build is self-contained
 		level := clampLevel(caps, req.Reasoning.Level)
 		if on := level != LevelOff; on {
 			if effort, ok := levelValue(caps, level); ok && effort != "" {
 				body.Reasoning = &respReasoning{Effort: effort, Summary: "auto"}
-				// pi requests the encrypted payload whenever a non-off reasoning
+				// the encrypted payload is requested whenever a non-off reasoning
 				// param is sent, independent of server-side store state
 				body.Include = []string{respEncryptedInclude}
 			}
@@ -121,7 +121,7 @@ func responsesInput(req Request, caps Capabilities) ([]respItem, error) {
 	out := make([]respItem, 0, len(msgs))
 
 	// msgIndex counts every converted message so fallback ids stay unique across
-	// turns; it matches pi's per-message counter.
+	// turns; every message counts once.
 	msgIndex := 0
 	for _, m := range msgs {
 		// mid-conversation system messages become input items rather than being
@@ -240,7 +240,7 @@ func responsesItems(m Message, caps Capabilities, msgIndex int) ([]respItem, err
 
 // toolResultOutput renders a tool result's output for function_call_output: a
 // plain text string, or an array of input_text/input_image parts when the result
-// kept images and the model accepts them (pi's shape).
+// kept images and the model accepts them.
 func toolResultOutput(caps Capabilities, blocks BlockList) any {
 	text := blocksText(blocks)
 	if caps.Dialect != DialectOpenAIResponses || !caps.Images || !hasImage(blocks) {
@@ -312,7 +312,7 @@ func parseTextSignature(sig string) (id, phase string) {
 		return strings.TrimSpace(sig), ""
 	}
 	id = v.ID
-	switch v.Phase { // only the phases pi round-trips are accepted back
+	switch v.Phase { // only the phases that round-trip are accepted back
 	case "commentary", "final_answer":
 		phase = v.Phase
 	}
@@ -406,7 +406,7 @@ func (s *responsesStream) readFrame() []Event {
 		return s.onDelta(ev, EventTextDelta)
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		// reasoning_text is the inline content form; summary_text streams the
-		// condensed version. both feed the thinking block, as in pi.
+		// condensed version. Both feed the thinking block.
 		return s.onDelta(ev, EventThinkingDelta)
 	case "response.reasoning_summary_part.done":
 		return s.onSummaryDone(ev)
@@ -471,7 +471,7 @@ func (s *responsesStream) onDelta(ev respEvent, typ EventType) []Event {
 	return []Event{out}
 }
 
-// onSummaryDone appends the separator pi inserts between reasoning summary parts.
+// onSummaryDone appends the separator inserted between reasoning summary parts.
 func (s *responsesStream) onSummaryDone(ev respEvent) []Event {
 	it := s.items[ev.OutputIndex]
 	if it == nil {

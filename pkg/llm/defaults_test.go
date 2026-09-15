@@ -304,7 +304,7 @@ func TestFlavorDefaults(t *testing.T) {
 		assert.True(t, flavorDefaults[FlavorOpenAI].caps.ReasoningReplay)
 	})
 	t.Run("anthropic_defaults_eager_streaming_and_tool_cache", func(t *testing.T) {
-		// pi defaults both on; an unset entry must behave the same
+		// both default on; an unset entry must behave the same
 		caps := flavorDefaults[FlavorAnthropic].caps
 		assert.True(t, caps.EagerToolInputStreaming)
 		assert.True(t, caps.CacheControlOnTools)
@@ -331,7 +331,7 @@ func TestFlavorDefaults(t *testing.T) {
 		}
 	})
 	t.Run("chat_completions_flavors_default_finish_reason_and_strict", func(t *testing.T) {
-		// pi's chat-completions default emits strict:false on tools and treats a
+		// the chat-completions default emits strict:false on tools and treats a
 		// stream that ends without finish_reason as truncated, so every flavor that
 		// can reach the compat builder carries both gates.
 		for _, f := range []Flavor{FlavorGeneric, FlavorOpenRouter, FlavorLMStudio, FlavorLlamaCpp} {

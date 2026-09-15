@@ -1000,9 +1000,6 @@ func TestAnthropicProviderCountTokens(t *testing.T) {
 	assert.NotContains(t, sent, "max_tokens")
 }
 
-// TestCompactionSummaryReachesTheModel guards that a compaction summary
-// injected as a user message must survive the adapter,
-// whereas a system-role message is dropped (system is a top-level field).
 func TestCompactionSummaryReachesTheModel(t *testing.T) {
 	t.Parallel()
 
@@ -1022,7 +1019,7 @@ func TestCompactionSummaryReachesTheModel(t *testing.T) {
 	}
 	assert.Contains(t, sb.String(), "<summary>") // the summary survives as a user message
 
-	// the same text as a system message would be dropped entirely.
+	// the same text as a system message would be dropped entirely
 	sysReq := Request{Model: anthropicModel(nil), Messages: []Message{Text(RoleSystem, "<summary>lost</summary>")}}
 	sysMsgs, err := anthropicMessages(sysReq, sysReq.Model.Caps)
 	require.NoError(t, err)

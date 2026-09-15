@@ -11,20 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The parity matrix. Three dialects encode one exchange very differently on the
-// wire, and testdata/contract holds each dialect's encoding of the same logical
-// scenario. What must agree is what reaches the caller, so every assertion here
-// is on the normalised outcome rather than the frames that carried it.
-//
-// Event ordering is deliberately not compared: anthropic reports usage up front
-// and chat-completions reports it last, which is a real difference in when a
-// number arrives, not in the vocabulary. The distinct kinds are compared, the
-// sequence is not. Tool call ids are not compared either, because Prepare
-// derives them per dialect on purpose (see normalizeCallID).
-//
-// A new dialect adds a row to contractDialects and a testdata/contract/<dir>
-// beside the others; a new scenario adds one file per dialect.
-
 type contractDialect struct {
 	name        string
 	dir         string
@@ -53,8 +39,7 @@ type contractCall struct {
 	Args string
 }
 
-// contractResult is one scenario's normalised outcome, the unit of comparison
-// between dialects.
+// contractResult is one scenario's normalised outcome, the unit of comparison between dialects.
 type contractResult struct {
 	Text      string
 	Thinking  string
@@ -115,6 +100,7 @@ func distinctKinds(events []Event) []string {
 // masquerade as a behaviour difference.
 func canonicalJSON(t *testing.T, raw json.RawMessage) string {
 	t.Helper()
+
 	var v any
 	require.NoError(t, json.Unmarshal(raw, &v))
 	out, err := json.Marshal(v)
@@ -167,8 +153,6 @@ func TestContractStreamParity(t *testing.T) {
 	}
 }
 
-// TestContractErrorParity keeps failure on the same contract as success: the
-// partial content survives and the error is reported, on every dialect.
 func TestContractErrorParity(t *testing.T) {
 	t.Parallel()
 
@@ -182,8 +166,6 @@ func TestContractErrorParity(t *testing.T) {
 	}
 }
 
-// TestContractChunkedParity re-runs the matrix with writes landing inside JSON
-// tokens, proving reassembly happens before decoding on every dialect.
 func TestContractChunkedParity(t *testing.T) {
 	t.Parallel()
 
@@ -267,9 +249,6 @@ func str(v any) string {
 	return s
 }
 
-// TestContractRequestParity sends one exchange through all three body builders:
-// the wire shapes differ entirely, but each must carry the same content and
-// leave every tool result matched to a call in the same body.
 func TestContractRequestParity(t *testing.T) {
 	t.Parallel()
 

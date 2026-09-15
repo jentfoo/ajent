@@ -24,8 +24,7 @@ const testPoll = time.Millisecond
 // testWords is filler prose long enough to wrap at every width the tests use.
 const testWords = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo "
 
-// newTestUI drives a UI in inline mode against the emulator, with no real
-// terminal behind it.
+// newTestUI drives a UI in inline mode against the emulator, with no real terminal behind it.
 func newTestUI(tb testing.TB, v *vt, in io.Reader) *UI {
 	tb.Helper()
 	return newTestUIWith(tb, v, in, NewTheme(ColorNone, DefaultPalette()))
@@ -35,6 +34,7 @@ func newTestUI(tb testing.TB, v *vt, in io.Reader) *UI {
 // paths are reachable from tests.
 func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 	tb.Helper()
+
 	u := &UI{
 		theme:    theme,
 		render:   newTestInline(v),
@@ -67,6 +67,7 @@ func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 // whose renderer writes into the returned buffer.
 func newRecordingUI(tb testing.TB, in io.Reader) (*UI, *strings.Builder) {
 	tb.Helper()
+
 	var out strings.Builder
 	u := &UI{
 		theme:      NewTheme(ColorNone, DefaultPalette()),
@@ -202,8 +203,6 @@ func TestUIInputEditing(t *testing.T) {
 	require.NoError(t, pw.Close())
 }
 
-// TestUIModeCycle checks Shift+Tab reaches the control channel both idle and
-// while a dialog owns the keyboard.
 func TestUIModeCycle(t *testing.T) {
 	t.Parallel()
 
@@ -284,7 +283,7 @@ func TestThinkingStreamsLive(t *testing.T) {
 	v := newVT(60, 20)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	// first delta: the marker commits; the partial stays as a live preview above input.
+	// first delta: the marker commits; the partial stays as a live preview above input
 	u.Thinking("reasoning so f")
 	assert.Equal(t, "✻ thinking", v.Line(0))
 	screen := u.snapshot(v)
@@ -294,7 +293,7 @@ func TestThinkingStreamsLive(t *testing.T) {
 	require.NotEqual(t, -1, previewAt)
 	assert.Less(t, previewAt, promptAt)
 
-	// a newline commits the completed line; only the pending tail stays in the preview.
+	// a newline commits the completed line; only the pending tail stays in the preview
 	u.Thinking("ar\nnext partial")
 	screen = u.snapshot(v)
 	assert.Contains(t, screen, "reasoning so far")
@@ -303,14 +302,14 @@ func TestThinkingStreamsLive(t *testing.T) {
 	require.NotEqual(t, -1, tail)
 	assert.Less(t, tail, promptAt)
 
-	// EndThinking commits the remainder and drops the preview.
+	// EndThinking commits the remainder and drops the preview
 	u.EndThinking()
 	screen = u.snapshot(v)
 	promptAt = strings.Index(screen, promptFirst)
 	assert.Contains(t, screen, "next partial")
 	require.NotEqual(t, -1, promptAt)
 
-	// a second EndThinking is idempotent: the frame does not change.
+	// a second EndThinking is idempotent: the frame does not change
 	before := u.snapshot(v)
 	u.EndThinking()
 	assert.Equal(t, before, u.snapshot(v))
@@ -377,7 +376,7 @@ func TestUIBusy(t *testing.T) {
 	u.mu.Unlock()
 	assert.Contains(t, u.snapshot(v), spinnerFrames[1%len(spinnerFrames)])
 
-	// a running tool keeps the busy glyph animated but adds no label to the line.
+	// a running tool keeps the busy glyph animated but adds no label to the line
 	doneTool := u.ToolStart("c1", "bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
 	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1: divider, then input and status
@@ -387,8 +386,6 @@ func TestUIBusy(t *testing.T) {
 	stop()
 }
 
-// recordingUI drives a UI whose renderer writes SGR escapes into out, so the
-// phase color of the status glyph is observable (the vt emulator strips them).
 func TestUISpinnerPhaseColor(t *testing.T) {
 	t.Parallel()
 
@@ -484,9 +481,6 @@ func TestUIOutput(t *testing.T) {
 	})
 }
 
-// TestUIOutputHeadSummary asserts the shared output-head contract: 30 streamed
-// lines commit only the head plus one summary row, and the activity row tracks
-// the running count past it.
 func TestUIOutputHeadSummary(t *testing.T) {
 	t.Parallel()
 
@@ -520,8 +514,6 @@ func TestUIOutputHeadSummary(t *testing.T) {
 	require.Empty(t, act)
 }
 
-// TestUIOutputFull asserts SetOutputFull bypasses the head: every streamed line
-// reaches history and no summary or activity row appears.
 func TestUIOutputFull(t *testing.T) {
 	t.Parallel()
 
@@ -579,9 +571,6 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(screen, "… +20 lines"))
 }
 
-// TestUIInterleavedCallsKeepTheirOwnHead guards the per-call output head: calls
-// streaming at once (a staged `!` shell alongside an agent tool) must not reset
-// or close each other's stream.
 func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 	t.Parallel()
 
@@ -617,9 +606,6 @@ func TestUIInterleavedCallsKeepTheirOwnHead(t *testing.T) {
 	assert.Empty(t, open)
 }
 
-// TestUIEndOutputKeepsStagedRuns guards a `!!` shell outliving its turn: TurnEnd
-// lands mid-stream, and closing it there would commit a summary and reopen a
-// second, nameless head for the tail.
 func TestUIEndOutputKeepsStagedRuns(t *testing.T) {
 	t.Parallel()
 
@@ -673,11 +659,11 @@ func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 
 	screen := u.snapshot(v)
 	assert.Equal(t, "⏺ read big.txt", v.Line(0))
-	// head shows the numbered lines; past it a single summary row.
+	// head shows the numbered lines; past it a single summary row
 	for i := 1; i <= outputHeadLines; i++ {
 		assert.Contains(t, screen, fmt.Sprintf("%6d    line %d", i, i)) // tab renders as spaces
 	}
-	// exactly one collapse row for the whole body (the remaining 26 lines).
+	// exactly one collapse row for the whole body (the remaining 26 lines)
 	assert.Equal(t, 1, strings.Count(screen, "… +20 lines"))
 }
 
@@ -715,8 +701,6 @@ func TestUIScrollKeys(t *testing.T) {
 	assert.Positive(t, u.page())
 }
 
-// TestUIInlinePageKeys routes PageUp/PageDown to the editor in inline mode,
-// where there is no viewport to scroll.
 func TestUIInlinePageKeys(t *testing.T) {
 	t.Parallel()
 
@@ -733,8 +717,6 @@ func TestUIInlinePageKeys(t *testing.T) {
 	assert.Equal(t, len("one\ntwo\nthree"), u.editor.pos)
 }
 
-// TestNew covers the wiring from Options through to a live renderer. Pipes are
-// not terminals, so the mode resolves to plain without needing a pty.
 func TestNew(t *testing.T) {
 	t.Parallel()
 
@@ -802,8 +784,6 @@ func TestUIResume(t *testing.T) {
 	assert.Contains(t, u.snapshot(v), "/1k · test")
 }
 
-// TestUISafeGo checks the recover path in a subprocess, since it re-panics by
-// design. The risk it guards is a deadlock on the UI lock instead of an exit.
 func TestUISafeGo(t *testing.T) {
 	if os.Getenv("TUI_PANIC_CHILD") == "1" {
 		u := newTestUI(t, newVT(40, 10), strings.NewReader(""))
@@ -828,10 +808,6 @@ func TestUISafeGo(t *testing.T) {
 	assert.NotContains(t, string(out), "test timed out")
 }
 
-// TestAfterSafePanicRestoresTerminal checks the recover path for timer callbacks:
-// a panic inside an afterSafe callback must close the UI (restore the terminal)
-// before re-panicking. The captured callback is fired inline so Close's effect
-// is observable without crashing the test process.
 func TestAfterSafePanicRestoresTerminal(t *testing.T) {
 	t.Parallel()
 
@@ -939,30 +915,19 @@ func TestUISearchEscapeSelectsThenClears(t *testing.T) {
 	u.waitOpenSearch(t)
 	searchPress(u, key{typ: keyRune, text: "foun"}) // narrow to the match so current() holds
 
-	// first Escape selects the highlighted prompt and closes the overlay
-	searchPress(u, key{typ: keyEscape})
-	require.Nil(t, u.search)
-	assert.Equal(t, "found prompt", u.editor.Value())
-	assert.Equal(t, 0, u.editor.pos)
+	t.Run("first_selects_second_clears", func(t *testing.T) {
+		// first Escape selects the highlighted prompt and closes the overlay
+		searchPress(u, key{typ: keyEscape})
+		require.Nil(t, u.search)
+		assert.Equal(t, "found prompt", u.editor.Value())
+		assert.Equal(t, 0, u.editor.pos)
 
-	// second Escape clears the now-selected prompt
-	searchPress(u, key{typ: keyEscape})
-	assert.Empty(t, u.editor.Value())
+		// second Escape clears the now-selected prompt
+		searchPress(u, key{typ: keyEscape})
+		assert.Empty(t, u.editor.Value())
+	})
 }
 
-// openSearch waits until the Ctrl+R overlay is up and its provider delivered.
-func (u *UI) waitOpenSearch(t *testing.T) {
-	t.Helper()
-	require.Eventually(t, func() bool {
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		return u.search != nil && !u.search.pending
-	}, time.Second, testPoll)
-}
-
-// An arrow in the search overlay selects the highlighted (newest) prompt into the
-// field, caret on the match, and closes it without submitting; a Down press stops
-// there, while Up then scrolls back through older recalled prompts.
 func TestUISearchArrowCommits(t *testing.T) {
 	t.Parallel()
 
@@ -1084,7 +1049,7 @@ func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
 		}
 	}() // drain submissions so the loop keeps running
 
-	// type and submit a message; it is recorded into editor history live.
+	// type and submit a message; it is recorded into editor history live
 	_, err := io.WriteString(pw, "last sent")
 	require.NoError(t, err)
 	_, err = io.WriteString(pw, "\r") // enter submits
@@ -1126,18 +1091,25 @@ func searchPress(u *UI, k key) *string {
 	return submit
 }
 
-// TestUIMultiLineArrowsAreCursorFirst locks in the requested cursor behaviour for
-// multi-line prompts: arrows move the caret through visual rows and only recall
-// history at the prompt's very start (Up) or end (Down).
+// waitOpenSearch waits until the Ctrl+R overlay is up and its provider delivered.
+func (u *UI) waitOpenSearch(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.search != nil && !u.search.pending
+	}, time.Second, testPoll)
+}
+
 func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 	const wide = 40 // no wrapping; each logical line is its own visual row
 
 	press := func(u *UI, k key) { pressKey(u, k) }
-	// point editorWidth at the emulator so arrow movement sees a stable width.
+	// point editorWidth at the emulator so arrow movement sees a stable width
 	pinSize := func(v *vt, u *UI) {
 		u.render.(*inlineRenderer).t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 	}
-	// editor access goes through the lock: the key loop owns the same fields.
+	// editor access goes through the lock: the key loop owns the same fields
 	setEditor := func(u *UI, s string, pos int) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
@@ -1163,7 +1135,7 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 
 		press(u, key{typ: keyUp})
 		assert.Equal(t, 0, editorPos(u)) // mid-first-line up jumps to the prompt's start
-		// second press at the very first character recalls history (none here -> noop).
+		// second press at the very first character recalls history (none here -> noop)
 		press(u, key{typ: keyUp})
 		assert.Equal(t, 0, editorPos(u))
 
@@ -1189,7 +1161,7 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 
 		press(u, key{typ: keyDown})
 		assert.Equal(t, len("hello world"), editorPos(u)) // mid-last-line down jumps to the prompt's end
-		// second press at the very end walks toward newer history (none -> noop).
+		// second press at the very end walks toward newer history (none -> noop)
 		press(u, key{typ: keyDown})
 		assert.Equal(t, len("hello world"), editorPos(u))
 
@@ -1250,7 +1222,7 @@ func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
 		got = append(got, text)
 	})
 
-	// a large paste is stored under a placeholder; the editor holds the tiny marker.
+	// a large paste is stored under a placeholder; the editor holds the tiny marker
 	big := strings.Repeat("a", 3000)
 	u.mu.Lock()
 	ph := pastePlaceholder(big, 1)
@@ -1260,7 +1232,7 @@ func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
 	u.repaint()
 	u.mu.Unlock()
 
-	// OnEdit receives the expanded paste, not the placeholder.
+	// OnEdit receives the expanded paste, not the placeholder
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -1270,9 +1242,6 @@ func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
 	_ = pw.Close()
 }
 
-// TestUIResizeGate covers the burst gate: while a resize is in flight no draw
-// may happen, because an erase landing mid-reflow under-shoots the top of the
-// live block and strands rows (a duplicated divider) no later erase can reach.
 func TestUIResizeGate(t *testing.T) {
 	t.Parallel()
 
@@ -1381,9 +1350,6 @@ func TestUIResizeGate(t *testing.T) {
 	})
 }
 
-// TestThinkingResize covers the same burst gate as TestUIResizeGate while a
-// thinking preview is live: no duplicated divider or stranded rows across a
-// resize, and commits made during the held burst flush in order at settle.
 func TestThinkingResize(t *testing.T) {
 	t.Parallel()
 
@@ -1393,7 +1359,7 @@ func TestThinkingResize(t *testing.T) {
 		u.mu.Unlock()
 	}
 	countDividers := func(screen string, width int) int {
-		n := 0
+		var n int
 		for line := range strings.Lines(screen) {
 			if strings.TrimRight(line, " \n") == strings.Repeat(ruleChar, width-1) {
 				n++
@@ -1416,7 +1382,7 @@ func TestThinkingResize(t *testing.T) {
 		assert.Contains(t, screen, "reasoning")
 		assert.Equal(t, 1, countDividers(screen, 20))
 
-		// further deltas still stream against the settled grid.
+		// further deltas still stream against the settled grid
 		u.Thinking(" more")
 		screen = u.snapshot(v)
 		assert.Contains(t, screen, "more")
@@ -1427,7 +1393,7 @@ func TestThinkingResize(t *testing.T) {
 		u := newTestUI(t, v, strings.NewReader(""))
 		setResizing(u, true)
 
-		// thinking deltas complete a line while the burst holds repaints/commits.
+		// thinking deltas complete a line while the burst holds repaints/commits
 		u.Thinking("first held reasoning\nsecond")
 		screen := u.snapshot(v)
 		assert.NotContains(t, screen, "first held reasoning")
@@ -1443,11 +1409,6 @@ func TestThinkingResize(t *testing.T) {
 	})
 }
 
-// TestCommitSanitizesToolOutput pins the committed boundary: Output streams
-// caller bytes verbatim into the line buffer, so a motion or screen escape in
-// tool output must be dropped at commit (an ESC[2J would fire the no-full-erase
-// trap through caller data; a motion escape desyncs the park identically)
-// while SGR survives so colored tools still read.
 func TestCommitSanitizesToolOutput(t *testing.T) {
 	t.Parallel()
 
@@ -1482,13 +1443,6 @@ func countRules(screen string) int {
 	return n
 }
 
-// TestUIResizeStorm drives a burst of resizes while tool progress updates, the
-// shape of the reported corruption: gated draws never land mid-reflow, so the
-// settled redraw leaves exactly one divider at every step and never duplicates
-// a committed line. The history lines are short enough to survive the narrowest
-// step unwrapped, so counting them stays independent of where the terminal wraps.
-// The progress row carries an escape and a wide glyph, so the storm exercises
-// contaminated caller text end to end.
 func TestUIResizeStorm(t *testing.T) {
 	t.Parallel()
 
@@ -1528,9 +1482,6 @@ func TestUIResizeStorm(t *testing.T) {
 	assert.Contains(t, screen, "writing \u4e16\u754c notes.go")
 }
 
-// TestUIHoldsDrawingFromTheSignal pins when the resize gate goes up: nothing
-// may reach the terminal between the signal and the settle, so the gate is
-// raised before the lock, not under it.
 func TestUIHoldsDrawingFromTheSignal(t *testing.T) {
 	t.Parallel()
 
@@ -1556,10 +1507,6 @@ func TestUIHoldsDrawingFromTheSignal(t *testing.T) {
 	assert.Contains(t, u.snapshot(v), "november")
 }
 
-// TestUIActivityNewlineKeepsRowCount guards invariant 2 against caller text: a
-// live row carrying a newline moves the cursor a row nothing counted, so every
-// later erase stops short of the block's top and strands the divider. Tool
-// progress is arbitrary caller text, so this is reachable from the public API.
 func TestUIActivityNewlineKeepsRowCount(t *testing.T) {
 	t.Parallel()
 
@@ -1584,12 +1531,6 @@ func TestUIActivityNewlineKeepsRowCount(t *testing.T) {
 	assert.Contains(t, screen, "committed reply line")
 }
 
-// TestUILiveBlockFitsTheScreen guards the block's height. The streaming preview
-// is the one part whose size follows the content rather than the terminal, so a
-// reply longer than the screen is tall used to push the block past the bottom.
-// Drawing a block taller than the screen scrolls it, and the previous frame's
-// rows (divider included) land in scrollback, where no erase can ever reach
-// them: one stranded copy per delta, compounding.
 func TestUILiveBlockFitsTheScreen(t *testing.T) {
 	t.Parallel()
 
@@ -1625,10 +1566,6 @@ func TestUILiveBlockFitsTheScreen(t *testing.T) {
 	})
 }
 
-// TestStreamingPreviewMarksDroppedHead covers an open block taller than the
-// screen: its head is cut to fit, and the cut is marked so the preview does not
-// read as committed output being overwritten. The marker is preview-only —
-// closing the block commits every line.
 func TestStreamingPreviewMarksDroppedHead(t *testing.T) {
 	t.Parallel()
 
@@ -1686,9 +1623,6 @@ func TestStreamingPreviewMarksDroppedHead(t *testing.T) {
 	})
 }
 
-// TestStreamingPreviewMatchesCommit pins the preview to the layout its block
-// lands in: the separator row is reserved and prose breaks where the terminal
-// will break it, so committing does not re-flow what was already on screen.
 func TestStreamingPreviewMatchesCommit(t *testing.T) {
 	t.Parallel()
 
@@ -1739,9 +1673,6 @@ func TestStreamingPreviewMatchesCommit(t *testing.T) {
 	}
 }
 
-// TestStreamingRowsLaysOutStructuredLines pins that a table or rule still
-// buffered in textBuf previews as itself, not as a blank row: structured
-// histLines carry no text, so the preview must lay them out like commit does.
 func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 	t.Parallel()
 
@@ -1759,10 +1690,6 @@ func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 	})
 }
 
-// TestUIResizeProbeGatesTheRedraw covers the barrier end to end: after a
-// settled burst the redraw waits for the terminal's status reply, because the
-// ioctl reports the new size before the emulator has reflowed to it; drawing
-// on that say-so alone is what strands a divider.
 func TestUIResizeProbeGatesTheRedraw(t *testing.T) {
 	t.Parallel()
 
@@ -1786,8 +1713,6 @@ func TestUIResizeProbeGatesTheRedraw(t *testing.T) {
 	}, time.Second, 5*time.Millisecond)
 }
 
-// TestUIResizeProbeTimeoutSettles covers terminals that never answer the
-// status query: the grace timeout releases the redraw anyway.
 func TestUIResizeProbeTimeoutSettles(t *testing.T) {
 	t.Parallel()
 
@@ -1813,9 +1738,6 @@ func TestUIResizeProbeTimeoutSettles(t *testing.T) {
 	assert.Equal(t, 1, countRules(u.snapshot(v)))
 }
 
-// TestUIResizeProbeStaleReplyIgnored covers a reply answering a superseded
-// probe: it proves the terminal caught up with the older burst only, so the
-// redraw keeps waiting for the newer burst's own probe.
 func TestUIResizeProbeStaleReplyIgnored(t *testing.T) {
 	t.Parallel()
 
@@ -1861,10 +1783,6 @@ func TestUIResizeProbeStaleReplyIgnored(t *testing.T) {
 	})
 }
 
-// TestUIResizeDrawGraceCancelledBySignal covers the last window: the terminal
-// answered and the quiet grace is running, but a new resize begins before the
-// draw goes out. The draw must be abandoned; the frame would land on a grid
-// the next reflow is about to move.
 func TestUIResizeDrawGraceCancelledBySignal(t *testing.T) {
 	t.Parallel()
 
@@ -1912,10 +1830,6 @@ func settleProbe(u *UI, row int) {
 	u.probeAnswered()
 }
 
-// TestUIRestoreReanchorsTheBlock drives the reported gesture: a session with a
-// tall live block is maximized and then restored, and either half can leave the
-// block ending above the last row. The emulator answers nothing of its own, so
-// the test injects the replies a real terminal would send.
 func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 	t.Parallel()
 
@@ -1971,9 +1885,6 @@ func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 	})
 }
 
-// TestUIBlockEndsAtScreenBottom is the guard the re-anchor exists to keep:
-// after a narrowing whose reflow overflows the screen, the settled redraw
-// leaves the block's last row on the screen's last row.
 func TestUIBlockEndsAtScreenBottom(t *testing.T) {
 	t.Parallel()
 
@@ -2005,9 +1916,6 @@ func TestUIBlockEndsAtScreenBottom(t *testing.T) {
 	}
 }
 
-// TestUIReanchorKeepsHistoryOnScreen guards the pad's arithmetic: it is
-// measured from the reported park row, so it fills the rows the erase just
-// cleared and stops, never scrolling committed history away.
 func TestUIReanchorKeepsHistoryOnScreen(t *testing.T) {
 	t.Parallel()
 
@@ -2029,9 +1937,6 @@ func TestUIReanchorKeepsHistoryOnScreen(t *testing.T) {
 	assert.Equal(t, v.h-block, v.row)
 }
 
-// TestUIReanchorGestures pins which resizes are repaired: only a shrink can
-// retire the park, so a grow's dead band stays, a corner drag that widens but
-// shortens still shrinks, and an equal-size settle keeps the repair.
 func TestUIReanchorGestures(t *testing.T) {
 	t.Parallel()
 
@@ -2073,9 +1978,6 @@ func TestUIReanchorGestures(t *testing.T) {
 	}
 }
 
-// TestUISettleIgnoresUnsolicitedReport pins that a settle acts only on a reply
-// its own probe asked for: SIGCONT and a direct resize settle without probing,
-// so a report left over from an earlier burst must not re-anchor.
 func TestUISettleIgnoresUnsolicitedReport(t *testing.T) {
 	t.Parallel()
 
@@ -2100,9 +2002,6 @@ func TestUISettleIgnoresUnsolicitedReport(t *testing.T) {
 	assert.Equal(t, v.h-block, v.row)
 }
 
-// TestUISettleClearsPendingPad pins the pad's lifetime: one left pending on a
-// frame the gate abandoned must not survive a settle that cannot re-anchor,
-// since its row belongs to a grid the next gesture has already moved.
 func TestUISettleClearsPendingPad(t *testing.T) {
 	t.Parallel()
 
@@ -2211,9 +2110,6 @@ func newResponsiveUI(tb testing.TB, v *vt) (*UI, *respVT) {
 	return u, term
 }
 
-// TestUIResponsiveResize drives the gesture against a terminal that answers
-// the probes: deltas land both in the signal-delivery window and inside the
-// burst, and the settle must leave the block ending on the last row.
 func TestUIResponsiveResize(t *testing.T) {
 	t.Parallel()
 

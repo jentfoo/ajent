@@ -376,7 +376,7 @@ func TestCSIModifier(t *testing.T) {
 func TestDecodeKeyResync(t *testing.T) {
 	t.Parallel()
 
-	// decodeAll feeds b and returns every key decoded until an incomplete one.
+	// decodeAll feeds b and returns every key decoded until an incomplete one
 	decodeAll := func(b []byte) (out []keyType) {
 		for len(b) > 0 {
 			k, n, ok := decodeKey(b)
@@ -405,7 +405,7 @@ func TestDecodeKeyResync(t *testing.T) {
 
 	t.Run("overlong_csi_dropped", func(t *testing.T) {
 		// an unterminated CSI (no final byte for > maxControlLen params) must not
-		// swallow the Enter behind it: cap and resync let decoding reach it.
+		// swallow the Enter behind it: cap and resync let decoding reach it
 		b := append([]byte("\x1b["), bytes.Repeat([]byte{0x01}, maxControlLen+64)...)
 		b = append(b, '\r')
 		var enter bool
@@ -512,9 +512,6 @@ func TestInputReaderBounded(t *testing.T) {
 	})
 }
 
-// TestInputReaderPasteOverflow guards the 4 MiB cap: the body so far is
-// delivered, but the reader stays inside the paste, so a \r in the tail is
-// dropped rather than decoded as Enter and submitting mid-paste.
 func TestInputReaderPasteOverflow(t *testing.T) {
 	t.Parallel()
 

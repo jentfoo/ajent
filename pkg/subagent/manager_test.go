@@ -67,7 +67,7 @@ func TestJob(t *testing.T) {
 func TestCompletionNotification(t *testing.T) {
 	t.Parallel()
 
-	// a finished job reaches the user and the model when nobody is polling for it.
+	// a finished job reaches the user and the model when nobody is polling for it
 	t.Run("notifies_at_completion_steers_at_boundary", func(t *testing.T) {
 		c := newCapture()
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
@@ -199,9 +199,6 @@ func TestCompletionNotification(t *testing.T) {
 	})
 }
 
-// TestCompletionBatching covers the one-message-per-boundary contract: completions
-// share a single keyed notice and a single steer, ids a poll already claimed are
-// never named, and an interrupt releases the in-flight marks for re-offer.
 func TestCompletionBatching(t *testing.T) {
 	t.Parallel()
 
@@ -355,6 +352,7 @@ func TestCompletionBatching(t *testing.T) {
 
 func TestPollTimeoutThenComplete(t *testing.T) {
 	t.Parallel()
+
 	d := &delayedProvider{turn: summaryTurn("slow but done", llm.Usage{}), release: make(chan struct{})}
 	m := New(Options{
 		Provider:    func(llm.Model) (llm.Provider, error) { return d, nil },
@@ -434,6 +432,7 @@ func TestReserve(t *testing.T) {
 
 func TestPollBatchDetection(t *testing.T) {
 	t.Parallel()
+
 	m := New(Options{})
 	t.Cleanup(m.Close)
 
@@ -469,9 +468,6 @@ func TestPollPrefersResultOverTimeout(t *testing.T) {
 	assert.Contains(t, got.Summary, "done in time")
 }
 
-// TestPollClaimsStatusBeforeChannelClosed covers the finish→close(done) window:
-// finish records StatusDone and only later does spawn close j.done, so a poll
-// whose timer fires in between must claim the result rather than report running.
 func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
@@ -504,11 +500,9 @@ func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
 	close(unblock) // let spawn reach close(done); cleanup can proceed
 }
 
-// timer fired, or the turn was interrupted) in the same instant the job finished:
-// onComplete saw pollers>0 and skipped the enqueue, so the last poller out has to
-// re-arm delivery or the summary reaches nobody.
 func TestOrphanedCompletionRecovered(t *testing.T) {
 	t.Parallel()
+
 	c := newCapture()
 	release := make(chan struct{})
 	m := New(Options{
@@ -547,6 +541,7 @@ func TestOrphanedCompletionRecovered(t *testing.T) {
 
 func TestOnCompleteIgnoresRunningJob(t *testing.T) {
 	t.Parallel()
+
 	c := newCapture()
 	m := New(Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
@@ -565,6 +560,7 @@ func TestOnCompleteIgnoresRunningJob(t *testing.T) {
 
 func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 	t.Parallel()
+
 	const total, max = 8, 4
 	g := &gatedProvider{}
 	m := New(Options{
@@ -591,6 +587,7 @@ func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 
 func TestShutdownCancelsRunningJobs(t *testing.T) {
 	t.Parallel()
+
 	b := &blockingProvider{}
 	c := newCapture()
 	m := New(Options{
@@ -608,7 +605,6 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 	require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
 }
 
-// TestActivityRow covers how a job's row appears and is cleared.
 func TestActivityRow(t *testing.T) {
 	t.Parallel()
 
@@ -624,7 +620,7 @@ func TestActivityRow(t *testing.T) {
 		t.Cleanup(m.Close)
 
 		id := m.Start("one", "")
-		// the row appears immediately while the job is queued/running and pinned open.
+		// the row appears immediately while the job is queued/running and pinned open
 		assert.Equal(t, "sub-1  one", c.rowText(id))
 
 		g.releaseAll()
@@ -679,7 +675,7 @@ func TestActivityRow(t *testing.T) {
 		}
 	})
 
-	// a job cancelled before acquiring its slot still clears the row Start published (no childSink ever ran).
+	// a job cancelled before acquiring its slot still clears the row Start published (no childSink ever ran)
 	t.Run("queued_cancelled_clears", func(t *testing.T) {
 		g := &blockingProvider{}
 		c := newCapture()
@@ -703,6 +699,7 @@ func TestActivityRow(t *testing.T) {
 
 func TestStatusSegmentAndList(t *testing.T) {
 	t.Parallel()
+
 	g := &gatedProvider{}
 	var mu sync.Mutex // publishStatus runs from concurrent job goroutines
 	var statuses []string
@@ -728,11 +725,12 @@ func TestStatusSegmentAndList(t *testing.T) {
 	jobs := m.List()
 	assert.Len(t, jobs, 2)
 	assert.Contains(t, jobs[0].ID, "sub-")
-	// a status was published with the running count
+
+	// a status was published naming the live count, not just an opaque marker
 	mu.Lock()
 	var found bool
 	for _, s := range statuses {
-		if strings.Contains(s, "running") {
+		if strings.HasPrefix(s, "subagents: ") && (strings.Contains(s, "running") || strings.Contains(s, "done")) {
 			found = true
 		}
 	}
@@ -760,6 +758,7 @@ func TestStopAllCancelsEverything(t *testing.T) {
 
 func TestChildSpendRollsIntoParentLedger(t *testing.T) {
 	t.Parallel()
+
 	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})
 	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{Input: 200, Output: 40})}})
 	m := New(Options{
@@ -784,6 +783,7 @@ func TestChildSpendRollsIntoParentLedger(t *testing.T) {
 
 func TestParentContextUnchangedByChild(t *testing.T) {
 	t.Parallel()
+
 	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})
 	g := &gatedProvider{}
 	m := New(Options{

@@ -105,7 +105,7 @@ func TestCompatProviderStream(t *testing.T) {
 		require.NoError(t, err)
 		events := collect(t, s)
 
-		// pi reads reasoning_content before reasoning; chutes sends both fields
+		// reasoning_content is read before reasoning; chutes sends both fields
 		assert.Equal(t, "preferred", thinkingOf(events))
 	})
 	t.Run("separated_reasoning_regions_stay_clean", func(t *testing.T) {

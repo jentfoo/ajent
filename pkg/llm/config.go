@@ -43,7 +43,7 @@ func dialectChoices() []string {
 	}
 }
 
-// dialectAliases maps legacy spellings pi's catalogue once used onto their
+// dialectAliases maps legacy spellings once used by a model catalogue onto their
 // canonical name, consulted after the enum lookup fails.
 var dialectAliases = map[string]Dialect{
 	"anthropic": DialectAnthropic,
@@ -154,7 +154,7 @@ type ProviderConfig struct {
 }
 
 // Routing is openrouter's upstream provider preference. The four camelCase
-// fields are ajent's historical spellings; the snake_case ones mirror pi's
+// fields are ajent's historical spellings; the snake_case ones mirror
 // OpenRouterRouting so a drop-in file loads unchanged.
 type Routing struct {
 	Order          []string `json:"order,omitempty"`
@@ -199,7 +199,7 @@ type ModelConfig struct {
 }
 
 // ModelOverride is a partial model applied over a discovered entry. It carries
-// pi's documented override field set, which is narrower than ModelConfig: an
+// the documented override field set, which is narrower than ModelConfig: an
 // override cannot introduce a model, rename its id or change its endpoint.
 type ModelOverride struct {
 	Name          string            `json:"name,omitempty"`
@@ -215,7 +215,7 @@ type ModelOverride struct {
 	Cost           json.RawMessage   `json:"cost,omitempty"`           // accepted for compatibility; pricing is out of scope
 }
 
-// Compat is the per model quirk set: a flat union of pi's four dialect schemas,
+// Compat is the per model quirk set: a flat union of the four dialect schemas,
 // plus ajent extensions. Every scalar field is a pointer so an override turns
 // one quirk on without restating the rest.
 //
@@ -238,7 +238,7 @@ type Compat struct {
 	SupportsTemperature      *bool `json:"supportsTemperature,omitempty"`
 	SupportsParallelTools    *bool `json:"supportsParallelToolCalls,omitempty"`
 	SupportsStreamUsage      *bool `json:"supportsStreamUsage,omitempty" dialect:"openai-completions"`
-	SupportsUsageInStreaming *bool `json:"supportsUsageInStreaming,omitempty" dialect:"openai-completions"` // pi name
+	SupportsUsageInStreaming *bool `json:"supportsUsageInStreaming,omitempty" dialect:"openai-completions"` // canonical field name
 	SupportsToolChoice       *bool `json:"supportsToolChoice,omitempty"`
 	SupportsStore            *bool `json:"supportsStore,omitempty" dialect:"openai-completions"`
 	SupportsPromptCache      *bool `json:"supportsPromptCache,omitempty"`
@@ -255,7 +255,7 @@ type Compat struct {
 	RequiresThinkingAsText           *bool `json:"requiresThinkingAsText,omitempty" dialect:"openai-completions"`
 	SupportsOpenAIGrammarTools       *bool `json:"supportsOpenAIGrammarTools,omitempty" dialect:"openai-completions,openai-responses"`
 	SupportsThinkingTokenBudget      *bool `json:"supportsThinkingTokenBudget,omitempty" dialect:"openai-completions"`
-	// ThinkingTokenBudgetField is pi's canonical spelling; SupportsThinkingTokenBudget
+	// ThinkingTokenBudgetField is the canonical spelling; SupportsThinkingTokenBudget
 	// is the boolean alias for "thinking_token_budget".
 	ThinkingTokenBudgetField *string `json:"thinkingTokenBudgetField,omitempty" dialect:"openai-completions"`
 	ZaiToolStream            *bool   `json:"zaiToolStream,omitempty" dialect:"openai-completions"`

@@ -73,7 +73,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.status = rec.record
 
 		select {
-		case <-g.holdIn(context.Background()):
+		case <-g.holdIn(t.Context()):
 		case <-time.After(2 * time.Second):
 			t.Fatal("an empty draft must not hold the boundary")
 		}
@@ -86,7 +86,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.status = rec.record
 
 		g.edit("draft")
-		done := g.holdIn(context.Background())
+		done := g.holdIn(t.Context())
 		// wait for the first countdown publish: proof the hold is engaged on the draft
 		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond,
 			"the hold must begin waiting on a visible draft")
@@ -107,7 +107,7 @@ func TestTypingGateHold(t *testing.T) {
 		// a fresh typing session after clearing must republish its own countdown, even
 		// when the remaining seconds match what was shown before the clear
 		g.edit("draft A")
-		done := g.holdIn(context.Background())
+		done := g.holdIn(t.Context())
 		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond,
 			"the first draft must publish its countdown")
 
@@ -130,7 +130,7 @@ func TestTypingGateHold(t *testing.T) {
 
 		g.edit("draft")
 		select {
-		case <-g.holdIn(context.Background()):
+		case <-g.holdIn(t.Context()):
 		case <-time.After(2 * time.Second):
 			t.Fatal("the idle window must release the boundary without further edits")
 		}
@@ -144,7 +144,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.status = rec.record
 
 		g.edit("draft")
-		done := g.holdIn(context.Background())
+		done := g.holdIn(t.Context())
 		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond,
 			"the hold must be waiting on the draft before a prompt lands")
 
@@ -161,7 +161,7 @@ func TestTypingGateHold(t *testing.T) {
 		rec := &statusRecorder{}
 		g.status = rec.record
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		g.edit("draft")
 		done := g.holdIn(ctx)
@@ -182,7 +182,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.taken()     // ...but it resolved, so there is no handoff to wait for
 
 		select {
-		case <-g.holdIn(context.Background()):
+		case <-g.holdIn(t.Context()):
 		case <-time.After(2 * time.Second):
 			t.Fatal("taken must skip the handoff grace entirely")
 		}
@@ -200,7 +200,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.edit("")
 
 		select {
-		case <-g.holdIn(context.Background()):
+		case <-g.holdIn(t.Context()):
 		case <-time.After(2 * time.Second):
 			t.Fatal("a late clear notification must not stall the boundary")
 		}
@@ -211,7 +211,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.handoff = 0 // grace already elapsed at every check
 
 		g.submitted()
-		<-g.holdIn(context.Background())
+		<-g.holdIn(t.Context())
 		assert.False(t, g.inFlight, "an elapsed handoff must clear so later boundaries never stall")
 	})
 
@@ -222,7 +222,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.status = rec.record
 
 		g.edit("draft")
-		<-g.holdIn(context.Background())
+		<-g.holdIn(t.Context())
 
 		require.NotZero(t, rec.count())
 		assert.Contains(t, rec.first(), "paused ", "the countdown must name the remaining seconds")

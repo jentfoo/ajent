@@ -104,13 +104,15 @@ func (t *stubTool) callCount() int {
 }
 
 func (t *stubTool) Name() string { return t.name }
+
 func (t *stubTool) Label(ToolCall) string {
 	if t.name != "" {
 		return t.name + ": ..."
 	}
 	return t.name
 }
-func (t *stubTool) Description() string    { return "test tool" }
+func (t *stubTool) Description() string { return "test tool" }
+
 func (t *stubTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: t.name} }
 func (t *stubTool) Mode() ExecutionMode {
 	if t.parallel {
@@ -118,6 +120,7 @@ func (t *stubTool) Mode() ExecutionMode {
 	}
 	return ModeSerial
 }
+
 func (t *stubTool) Execute(ctx context.Context, call ToolCall, _ Output) (ToolResult, error) {
 	t.mu.Lock()
 	t.calls = append(t.calls, call)
@@ -151,6 +154,7 @@ func (s *mapSet) Schemas() []llm.ToolSchema {
 	}
 	return out
 }
+
 func (s *mapSet) Names() []string {
 	names := make([]string, 0, len(s.tools))
 	for name := range s.tools {
@@ -258,8 +262,6 @@ func TestLoopParallelCalls(t *testing.T) {
 	assert.Equal(t, []string{"c1", "c2"}, ids)
 }
 
-// TestLoopToolFailureContinues asserts failed or unknown tools yield IsError
-// results, letting the loop continue rather than aborting.
 func TestLoopToolFailureContinues(t *testing.T) {
 	t.Parallel()
 
@@ -298,9 +300,6 @@ func TestLoopToolFailureContinues(t *testing.T) {
 	}
 }
 
-// TestLoopMalformedArgsFailsCall asserts a call with invalid JSON arguments is
-// answered with an error result and never executed, while a valid sibling and
-// the turn itself continue.
 func TestLoopMalformedArgsFailsCall(t *testing.T) {
 	t.Parallel()
 
@@ -348,7 +347,7 @@ func TestLoopMalformedArgsFailsCall(t *testing.T) {
 func TestLoopMaxSteps(t *testing.T) {
 	t.Parallel()
 
-	// a finite cap trips the loop, ending cleanly rather than as an error.
+	// a finite cap trips the loop, ending cleanly rather than as an error
 	t.Run("step_limit_trips", func(t *testing.T) {
 		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash"}}}
 		// every turn ends with a tool call that produces no text; the loop spins
@@ -377,7 +376,7 @@ func TestLoopMaxSteps(t *testing.T) {
 		assert.Equal(t, StepLimitText, tb.Text)
 	})
 
-	// an overflow retry reruns the step without spending any of the cap.
+	// an overflow retry reruns the step without spending any of the cap
 	t.Run("overflow_retry_keeps_budget", func(t *testing.T) {
 		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash"}}}
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -548,7 +547,7 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 		"the turn must be in flight before steering is accepted")
 
 	assert.True(t, a.Steer(Input{Text: "steered!"}))
-	// an injected steer surfaces live (no submission echo) while the typed one stays silent.
+	// an injected steer surfaces live (no submission echo) while the typed one stays silent
 	assert.True(t, a.Steer(Input{Text: "Allowed with note: keep it", Injected: true}))
 	close(block) // release the tool; the next step boundary drains the steers
 
@@ -651,92 +650,62 @@ func TestLoopAwaitInput(t *testing.T) {
 	})
 }
 
-func TestInterruptDuringOverflowCompaction(t *testing.T) {
+func TestInterruptDuringCompaction(t *testing.T) {
 	t.Parallel()
 
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Err: llm.ErrContextOverflow},
-	}}
-	catch := &resultCatcher{}
-
-	entered := make(chan struct{}, 1)
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
-		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sinks:    []Sink{catch},
-		Env:      testEnv,
-		Compact: func(ctx context.Context, r CompactReason) (bool, error) {
-			if r != CompactOverflow {
-				return false, nil // the step boundary asks first; only the retry blocks here
-			}
-			entered <- struct{}{}
-			<-ctx.Done() // the summariser call blocks until the interrupt
-			return false, ctx.Err()
-		},
-	})
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
-	require.Eventually(t, func() bool {
-		select {
-		case <-entered:
-			return true
-		default:
-			return false
-		}
-	}, defaultTimeout, pollInterval, "the overflow compaction must start before the interrupt")
-
-	a.Interrupt()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err) // an interrupted retry is a clean abort, not a failure
-	case <-time.After(defaultTimeout):
-		t.Fatal("Prompt did not return after the interrupt")
+	tests := []struct {
+		name   string
+		reason CompactReason
+		turn   llm.ScriptedTurn
+	}{
+		{"overflow", CompactOverflow, llm.ScriptedTurn{Err: llm.ErrContextOverflow}},
+		{"step", CompactStep, llm.ScriptedTurn{Events: textOnly("hi")}},
 	}
-	assert.Equal(t, llm.StopAborted, catch.result.Stop)
-}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{tc.turn}}
+			catch := &resultCatcher{}
 
-func TestInterruptDuringStepCompaction(t *testing.T) {
-	t.Parallel()
+			entered := make(chan struct{}, 1)
+			a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+				Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+				Sinks:    []Sink{catch},
+				Env:      testEnv,
+				Compact: func(ctx context.Context, r CompactReason) (bool, error) {
+					if r != tc.reason {
+						return false, nil
+					}
+					entered <- struct{}{}
+					<-ctx.Done() // the summariser call blocks until the interrupt
+					return false, ctx.Err()
+				},
+			})
 
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
-	catch := &resultCatcher{}
+			errCh := make(chan error, 1)
+			go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+			require.Eventually(t, func() bool {
+				select {
+				case <-entered:
+					return true
+				default:
+					return false
+				}
+			}, defaultTimeout, pollInterval, "compaction must start before the interrupt")
 
-	entered := make(chan struct{}, 1)
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
-		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sinks:    []Sink{catch},
-		Env:      testEnv,
-		Compact: func(ctx context.Context, r CompactReason) (bool, error) {
-			if r != CompactStep {
-				return false, nil
-			}
-			entered <- struct{}{}
-			<-ctx.Done() // the summariser call blocks until the interrupt
-			return false, ctx.Err()
-		},
-	})
+			a.Interrupt()
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
-	require.Eventually(t, func() bool {
-		select {
-		case <-entered:
-			return true
-		default:
-			return false
-		}
-	}, defaultTimeout, pollInterval, "the step compaction must start before the interrupt")
-
-	a.Interrupt()
-
-	select {
-	case err := <-errCh:
-		require.NoError(t, err) // a clean abort, not a failure
-	case <-time.After(defaultTimeout):
-		t.Fatal("Prompt did not return after the interrupt")
+			// an interrupted retry is a clean abort, not a failure
+			require.Eventually(t, func() bool {
+				select {
+				case err := <-errCh:
+					return err == nil
+				default:
+					return false
+				}
+			}, defaultTimeout, pollInterval)
+			assert.Equal(t, llm.StopAborted, catch.result.Stop)
+		})
 	}
-	assert.Equal(t, llm.StopAborted, catch.result.Stop)
 }
 
 func TestBuildRequest(t *testing.T) {

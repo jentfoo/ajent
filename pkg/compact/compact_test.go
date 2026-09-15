@@ -16,6 +16,7 @@ import (
 // mustMsgs returns the messages ContextMessages would send for branch under cd.
 func mustMsgs(t *testing.T, branch []session.Entry, cd session.CompactionData) []llm.Message {
 	t.Helper()
+
 	msgs, warns := session.ContextMessages(branch, cd, nil)
 	require.Empty(t, warns)
 	return msgs
@@ -198,6 +199,7 @@ func TestCompactMeasuresRequestRetention(t *testing.T) {
 
 	measure := func(t *testing.T, retain llm.RetainPolicy) int {
 		t.Helper()
+
 		res, err := Compact(t.Context(), branch, model, run,
 			Options{Retain: retain, VerbatimTokens: 1})
 		require.NoError(t, err)

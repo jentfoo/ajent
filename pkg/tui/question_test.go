@@ -17,11 +17,10 @@ func TestUIAsk(t *testing.T) {
 
 	t.Run("free_text_collects_typed", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, err := u.Ask(ctx, Question{Text: "What should I name the branch?"})
+			a, err := u.Ask(t.Context(), Question{Text: "What should I name the branch?"})
 			assert.NoError(t, err)
 			result <- a
 		}()
@@ -37,11 +36,10 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("offered_options_selects", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, err := u.Ask(ctx, Question{
+			a, err := u.Ask(t.Context(), Question{
 				Text:    "Which approach?",
 				Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
 			})
@@ -60,11 +58,10 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("number_key_selects_directly", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, _ := u.Ask(ctx, Question{
+			a, _ := u.Ask(t.Context(), Question{
 				Text:    "Pick a plan",
 				Options: []Option{{Label: "A"}, {Label: "B"}},
 			})
@@ -80,8 +77,7 @@ func TestUIAsk(t *testing.T) {
 	t.Run("multi_line_prompt_renders", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
-		ctx := t.Context()
-		go func() { _, _ = u.Ask(ctx, Question{Text: "Line one\nLine two"}) }()
+		go func() { _, _ = u.Ask(t.Context(), Question{Text: "Line one\nLine two"}) }()
 
 		waitFor(t, u, v, "Line one")
 		waitFor(t, u, v, "Line two")
@@ -94,8 +90,7 @@ func TestUIAsk(t *testing.T) {
 		for i := 0; i < 12; i++ {
 			many.WriteString("question line " + strconv.Itoa(i) + "\n")
 		}
-		ctx := t.Context()
-		go func() { _, _ = u.Ask(ctx, Question{Text: many.String()}) }()
+		go func() { _, _ = u.Ask(t.Context(), Question{Text: many.String()}) }()
 
 		waitFor(t, u, v, "… +") // the marker names the hidden lines; its count follows the cap
 		// the live block stays inside its share of a 12 row screen, divider included
@@ -106,12 +101,11 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("escape_declines_with_no_error", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			a, err := u.Ask(ctx, Question{Text: "Proceed?"})
+			a, err := u.Ask(t.Context(), Question{Text: "Proceed?"})
 			result <- a
 			errCh <- err
 		}()
@@ -125,11 +119,10 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("chat_row_takes_a_typed_reply", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, err := u.Ask(ctx, Question{
+			a, err := u.Ask(t.Context(), Question{
 				Text:    "Which approach?",
 				Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
 			})
@@ -149,11 +142,10 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("chat_escape_returns_to_options", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, _ := u.Ask(ctx, Question{
+			a, _ := u.Ask(t.Context(), Question{
 				Text:    "Which approach?",
 				Options: []Option{{Label: "Rewrite"}, {Label: "Patch"}},
 			})
@@ -175,9 +167,8 @@ func TestUIAsk(t *testing.T) {
 	t.Run("commits_one_summary_line", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
-		ctx := t.Context()
 		go func() {
-			_, _ = u.Ask(ctx, Question{Text: "Color?", Options: []Option{{Label: "Red"}}})
+			_, _ = u.Ask(t.Context(), Question{Text: "Color?", Options: []Option{{Label: "Red"}}})
 		}()
 
 		waitFor(t, u, v, "Color?")
@@ -194,10 +185,9 @@ func TestUIAsk(t *testing.T) {
 		go func() { _, _ = u.Select("First:", []Option{{Label: "A"}}) }()
 		waitFor(t, u, v, "First:")
 
-		ctx := t.Context()
 		result := make(chan Answer, 1)
 		go func() {
-			a, _ := u.Ask(ctx, Question{Text: "Second?"})
+			a, _ := u.Ask(t.Context(), Question{Text: "Second?"})
 			result <- a
 		}()
 
@@ -212,11 +202,10 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("free_text_arrow_keys_edit", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, err := u.Ask(ctx, Question{Text: "Note:"})
+			a, err := u.Ask(t.Context(), Question{Text: "Note:"})
 			assert.NoError(t, err)
 			result <- a
 		}()
@@ -239,11 +228,10 @@ func TestUIAsk(t *testing.T) {
 	})
 	t.Run("free_text_backspace_mid_buffer", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
-		ctx := t.Context()
 
 		result := make(chan Answer, 1)
 		go func() {
-			a, err := u.Ask(ctx, Question{Text: "Note:"})
+			a, err := u.Ask(t.Context(), Question{Text: "Note:"})
 			assert.NoError(t, err)
 			result <- a
 		}()

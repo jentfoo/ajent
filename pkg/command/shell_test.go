@@ -54,6 +54,7 @@ func (r *recordingSinkForShell) TurnEnd(agent.TurnResult) {}
 // newShellStager builds a real bash-backed registry and stager for tests.
 func newShellStager(t *testing.T) (*Stager, *recordingSinkForShell) {
 	t.Helper()
+
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "shelltest"})
 	require.NoError(t, err)
 	sink := &recordingSinkForShell{}
@@ -158,7 +159,7 @@ func TestStagerNonZeroExitStagesAsError(t *testing.T) {
 
 	s, _ := newShellStager(t)
 	s.Run("exit 3", false)
-	// budget clears the bash tool's 5s WaitDelay ceiling (see TestStagerRunsAndFlushesInOrder).
+	// budget clears the bash tool's 5s WaitDelay ceiling
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 1)

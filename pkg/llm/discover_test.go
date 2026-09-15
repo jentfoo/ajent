@@ -124,6 +124,9 @@ func TestDiscoverProvider(t *testing.T) {
 		assert.Equal(t, testNow.UnixMilli(), got.CheckedAt)
 	})
 	t.Run("network_failure_keeps_the_stale_entry", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("-short mode")
+		}
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
@@ -378,6 +381,9 @@ func TestDiscover(t *testing.T) {
 		assert.Equal(t, 1, modelsHits)                    // then the fallback won
 	})
 	t.Run("unreachable_server_skips_the_fallback", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("-short mode")
+		}
 		// a dead server fails every endpoint; only the primary is tried once its own
 		// retry ladder is spent, rather than doubling it on /v1/models
 		var trips atomic.Int32

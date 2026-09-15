@@ -2,7 +2,7 @@ package llm
 
 import "strings"
 
-// detectCompat derives the quirks pi auto-detects for a chat-completions
+// detectCompat derives the quirks it auto-detects for a chat-completions
 // provider from its name and base URL, returning a sparse Compat that layers
 // under configured compat blocks. It returns a zero Compat when no vendor family
 // matches, so generic endpoints keep their flavor defaults.
@@ -46,7 +46,7 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	isGrok := provider == "xai" || strings.Contains(baseURL, "api.x.ai")
 	openRouterDevRoleModel := isOpenRouter &&
 		(strings.HasPrefix(modelID, "anthropic/") || strings.HasPrefix(modelID, "openai/"))
-	// pi keys this on the literal provider name, not the base URL
+	// cache-control format keys on the literal provider name, not the base URL
 	cacheControlFormat := ""
 	if provider == "openrouter" && strings.HasPrefix(modelID, "anthropic/") {
 		cacheControlFormat = "anthropic"
@@ -56,7 +56,7 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	c.SupportsDeveloperRole = ptrOf(openRouterDevRoleModel || (!isNonStandard && !isOpenRouter))
 	c.SupportsReasoningEffort = ptrOf(!isGrok && !isZai && !isMoonshot && !isTogether &&
 		!isCFGateway && !isNvidia && !isAntLing)
-	c.SupportsStreamUsage = ptrOf(true) // pi's supportsUsageInStreaming default
+	c.SupportsStreamUsage = ptrOf(true) // stream usage is supported by default
 	c.SupportsFinishReason = ptrOf(true)
 	c.SupportsStrictMode = ptrOf(!isMoonshot && !isTogether && !isCFGateway && !isNvidia)
 
@@ -71,7 +71,7 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	c.RequiresThinkingAsText = ptrOf(false)
 	c.RequiresReasoningContent = ptrOf(isDeepSeek)
 	if isOpenCode {
-		// pi remaps opencode-go reasoning to the reasoning_content field
+		// opencode-go reasoning maps onto the reasoning_content field
 		reasoningField := fieldReasoningConten
 		c.ReasoningContentField = &reasoningField
 	}

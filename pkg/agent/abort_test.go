@@ -31,7 +31,7 @@ func wellFormed(msgs []llm.Message) bool {
 func TestInterrupt(t *testing.T) {
 	t.Parallel()
 
-	// cancelling while a turn is streaming text: the partial assistant message stands with StopAborted.
+	// cancelling while a turn is streaming text: the partial assistant message stands with StopAborted
 	t.Run("mid_stream", func(t *testing.T) {
 		gp := &hangProvider{turn: textOnly("hello ")}
 		catch := &resultCatcher{}
@@ -53,7 +53,7 @@ func TestInterrupt(t *testing.T) {
 			"the model stream must be closed when the turn ends")
 	})
 
-	// synthetic results fill unanswered calls so the transcript stays well formed.
+	// synthetic results fill unanswered calls so the transcript stays well formed
 	t.Run("during_tool_execution", func(t *testing.T) {
 		block := make(chan struct{})
 		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
@@ -77,7 +77,7 @@ func TestInterrupt(t *testing.T) {
 		assert.True(t, wellFormed(a.state.Messages)) // every tool call has a matching result
 	})
 
-	// two tools mid-execution both get synthetic results.
+	// two tools mid-execution both get synthetic results
 	t.Run("two_unanswered_calls", func(t *testing.T) {
 		block := make(chan struct{})
 		set := &mapSet{tools: map[string]Tool{
@@ -112,7 +112,7 @@ func TestAbortResults(t *testing.T) {
 	call := func(id string) llm.Block { return llm.ToolCallBlock{ID: id, Name: "bash"} }
 
 	t.Run("real_results_preserve_call_order", func(t *testing.T) {
-		// completion order c2 then c1 must come back in call order.
+		// completion order c2 then c1 must come back in call order
 		out := abortResults(llm.Message{Content: llm.BlockList{
 			call("c1"), call("c2"),
 		}}, []llm.ToolResultBlock{{CallID: "c2"}, {CallID: "c1"}}, InterruptedText)

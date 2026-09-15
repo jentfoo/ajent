@@ -5,7 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 
 func newSearchEnv(t *testing.T) (string, PathPolicy) {
 	t.Helper()
+
 	dir := t.TempDir()
 	return dir, PathPolicy{Cwd: dir}
 }
@@ -30,7 +30,7 @@ func mkfile(dir, name, content string) {
 func TestFind(t *testing.T) {
 	t.Parallel()
 
-	// a glob matches the right files.
+	// a glob matches the right files
 	t.Run("matches_glob", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.go", "x")
@@ -44,7 +44,7 @@ func TestFind(t *testing.T) {
 		assert.NotContains(t, out, "b.txt")
 	})
 
-	// a bare pattern matches at any depth.
+	// a bare pattern matches at any depth
 	t.Run("bare_pattern_matches_at_any_depth", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "top.go", "x")
@@ -58,7 +58,7 @@ func TestFind(t *testing.T) {
 		assert.Contains(t, out, filepath.Join("pkg", "tools", "nested.go")) // bare glob reaches any depth
 	})
 
-	// ** spans zero or more segments.
+	// ** spans zero or more segments
 	t.Run("doublestar_matches_root_and_nested", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "root.go", "x")
@@ -74,7 +74,7 @@ func TestFind(t *testing.T) {
 		assert.NotContains(t, out, "skip.txt")
 	})
 
-	// a limit truncates with the shared footer naming the spill file.
+	// a limit truncates with the shared footer naming the spill file
 	t.Run("limit_param_truncates", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		for i := 0; i < 5; i++ {
@@ -102,7 +102,7 @@ func TestFind(t *testing.T) {
 		assert.True(t, res.IsError)
 	})
 
-	// no matches is empty, not an error.
+	// no matches is empty, not an error
 	t.Run("no_match_is_empty_not_error", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.md", "x")
@@ -138,7 +138,7 @@ func TestFind(t *testing.T) {
 func TestGrep(t *testing.T) {
 	t.Parallel()
 
-	// content mode names the file and line numbers.
+	// content mode names the file and line numbers
 	t.Run("content_mode_finds_line_numbers", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.txt", "hello world\nfoo bar\n")
@@ -148,7 +148,7 @@ func TestGrep(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
-		assert.Contains(t, out, "a.txt") // content mode names the file
+		assert.Contains(t, out, "a.txt:1:") // content mode names the file and its line
 	})
 
 	t.Run("count_mode_reports_per_file", func(t *testing.T) {
@@ -158,7 +158,8 @@ func TestGrep(t *testing.T) {
 			callWith([]byte(`{"pattern":"one","mode":"count"}`)), nil)
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
-		assert.Contains(t, textOf(res), "a.txt") // count mode still names the file
+		// the count is matching lines, not occurrences: "one one two\n" matches once
+		assert.Contains(t, textOf(res), "a.txt:1")
 	})
 
 	// files mode lists only matching files.
@@ -184,7 +185,7 @@ func TestGrep(t *testing.T) {
 		assert.True(t, res.IsError)
 	})
 
-	// both the rg path and the Go fallback surface a bad pattern as an error.
+	// both the rg path and the Go fallback surface a bad pattern as an error
 	t.Run("invalid_regex_is_actionable_error", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.txt", "hello\n")
@@ -281,7 +282,7 @@ func TestGrepDefaultCapNamed(t *testing.T) {
 func TestGrepFallback(t *testing.T) {
 	t.Parallel()
 
-	// context lines appear on both sides of a match.
+	// context lines appear on both sides of a match
 	t.Run("context_lines", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.txt", "before\nmatch here\nafter\n")
@@ -296,7 +297,7 @@ func TestGrepFallback(t *testing.T) {
 		assert.Contains(t, out, ":3: after")
 	})
 
-	// count mode output is deterministically sorted.
+	// count mode output is deterministically sorted
 	t.Run("count_mode_sorted", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "zeta.txt", "hit\n")
@@ -315,6 +316,7 @@ func TestGrepFallback(t *testing.T) {
 // gitInit turns dir into a fresh repo with everything tracked.
 func gitInit(t *testing.T, dir string) {
 	t.Helper()
+
 	init := exec.CommandContext(t.Context(), "git", "init", "-q")
 	init.Dir = dir
 	if err := init.Run(); err != nil {
@@ -325,41 +327,28 @@ func gitInit(t *testing.T, dir string) {
 	require.NoError(t, add.Run())
 }
 
-// TestFindGitRepoUsableNonAsciiPath exercises the git ls-files -z path: a
-// non-ASCII filename must come back as a usable relative path and .gitignore'd
-// files are excluded.
 func TestFindGitRepoUsableNonAsciiPath(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name    string
-		pattern string
-	}{
-		{"non_ascii_filename", "caf*.go"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			dir, policy := newSearchEnv(t)
-			mkfile(dir, "café.go", "x")
-			mkfile(dir, "ignored.log", "y") // .gitignore'd below
-			require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0o644))
+	dir, policy := newSearchEnv(t)
+	mkfile(dir, "café.go", "x")
+	mkfile(dir, "ignored.log", "y") // .gitignore'd below
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0o644))
 
-			gitInit(t, dir)
+	gitInit(t, dir)
 
-			res, err := (&findTool{policy: policy}).Execute(t.Context(),
-				callWith([]byte(`{"pattern":`+strconv.Quote(tc.pattern)+`}`)), nil)
-			require.NoError(t, err)
-			out := textOf(res)
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
+		callWith([]byte(`{"pattern":"caf*.go"}`)), nil)
+	require.NoError(t, err)
+	out := textOf(res)
 
-			assert.Contains(t, out, "café.go") // usable relative path, not octal-escaped
-			assert.NotContains(t, out, "ignored.log")
-		})
-	}
+	assert.Contains(t, out, "café.go") // usable relative path, not octal-escaped
+	assert.NotContains(t, out, "ignored.log")
 }
 
-// TestGrepFallbackSkipsGitIgnored asserts the Go fallback honours .gitignore via
-// git ls-files, matching what rg does.
 func TestGrepFallbackSkipsGitIgnored(t *testing.T) {
+	t.Parallel()
+
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "keep.go", "needle\n")
 	mkfile(dir, "dist/bundle.js", "needle\n") // .gitignore'd
@@ -377,19 +366,17 @@ func TestGrepFallbackSkipsGitIgnored(t *testing.T) {
 }
 
 func TestGrepFallbackCrlfStripsTrailingCarriage(t *testing.T) {
+	t.Parallel()
+
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.txt", "match here\r\nother line\r\n")
 
-	for name, tool := range map[string]*grepTool{
-		"go-only": {policy: policy, forceGo: true},
-	} {
-		res, err := tool.Execute(t.Context(),
-			callWith([]byte(`{"pattern":"match"}`)), nil)
-		require.NoError(t, err, name)
-		assert.False(t, res.IsError, name)
-		out := textOf(res)
-		assert.NotContains(t, out, "\r", name) // LF-only model-visible output
-	}
+	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+		callWith([]byte(`{"pattern":"match"}`)), nil)
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+	out := textOf(res)
+	assert.NotContains(t, out, "\r") // LF-only model-visible output
 }
 
 func TestRelToDotPrefixedFilename(t *testing.T) {

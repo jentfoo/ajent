@@ -7,7 +7,7 @@ import "encoding/json"
 // configuration. It is what an adapter reads instead of special casing a vendor.
 type Capabilities struct {
 	Dialect    Dialect
-	Reasoning  bool           // whether the model reasons at all (pi's reasoning)
+	Reasoning  bool           // whether the model reasons at all
 	Thinking   ThinkingFormat // request encoding for chat-completions
 	ThinkOpen  string         // inline reasoning tags, empty when unused
 	ThinkClose string

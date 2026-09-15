@@ -56,7 +56,7 @@ func TestEditorHistoryAppend(t *testing.T) {
 		h.Append("good line")
 		h.Append("secret:api-key-value")
 		assert.Equal(t, []string{"good line"}, storedMessages(h.path))
-		assert.NotContains(t, string(mustReadFile(t, h.path)), "api-key-value", "a secret must never reach disk")
+		assert.NotContains(t, string(mustReadFile(t, h.path)), "api-key-value")
 	})
 
 	t.Run("drops_blank_and_cr", func(t *testing.T) {
@@ -274,8 +274,6 @@ func TestEditorHistoryCompact(t *testing.T) {
 	})
 }
 
-// TestEditorHistoryRecentTriggersCompaction verifies an over-long file is compacted
-// off Recent's path (self-healing) without blocking the caller.
 func TestEditorHistoryRecentTriggersCompaction(t *testing.T) {
 	t.Parallel()
 
@@ -293,6 +291,7 @@ func TestEditorHistoryRecentTriggersCompaction(t *testing.T) {
 // mustReadFile returns path's bytes or fails the test.
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
+
 	b, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return b

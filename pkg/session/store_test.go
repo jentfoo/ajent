@@ -52,7 +52,7 @@ func TestStoreDirDeterministic(t *testing.T) {
 }
 
 func TestStoreList(t *testing.T) {
-	// the latest/find case pins the package clock via setClock, so this is sequential.
+	// the latest/find case pins the package clock via setClock, so this is sequential
 
 	t.Run("latest_find", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
@@ -82,7 +82,8 @@ func TestStoreList(t *testing.T) {
 		assert.Equal(t, bID, list[0].ID) // newest first
 		assert.Equal(t, "c/d", list[0].Model)
 		assert.Equal(t, aID, list[1].ID)
-		assert.Positive(t, list[0].Messages)
+		// one message was appended to each session
+		assert.Equal(t, 1, list[0].Messages)
 
 		latest, lerr := s.Latest(ws)
 		require.NoError(t, lerr)
@@ -93,7 +94,7 @@ func TestStoreList(t *testing.T) {
 		assert.Equal(t, aID, found.ID)
 	})
 
-	// side files (output-*.txt, the editor-history line file) never surface as phantom sessions.
+	// side files (output-*.txt, the editor-history line file) never surface as phantom sessions
 	t.Run("skips_non_jsonl_files", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		ws := t.TempDir()
@@ -106,7 +107,7 @@ func TestStoreList(t *testing.T) {
 
 		dir, derr := s.Dir(ws)
 		require.NoError(t, derr)
-		// side files beside the transcript must be ignored by List.
+		// side files beside the transcript must be ignored by List
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "output-abc.txt"), []byte("tool out"), 0o600))
 		hh, hherr := NewEditorHistory(s, ws, "")
 		require.NoError(t, hherr)
@@ -119,7 +120,7 @@ func TestStoreList(t *testing.T) {
 		assert.Equal(t, txID, list[0].ID)
 	})
 
-	// --continue means the session last worked in, not the one started last.
+	// --continue means the session last worked in, not the one started last
 	t.Run("orders_by_last_use", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		ws := t.TempDir()
@@ -185,6 +186,8 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 }
 
 func TestStoreRemoveDeletesOneSession(t *testing.T) {
+	t.Parallel()
+
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()
 
@@ -204,7 +207,7 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	_, ok := readHead(w2.Path())
 	require.True(t, ok) // each session carries its own cursor
 
-	// removing the empty w2 takes its file and cursor, leaving w1 whole.
+	// removing the empty w2 takes its file and cursor, leaving w1 whole
 	rerr := s.Remove(w2.Path())
 	require.NoError(t, rerr)
 
@@ -259,8 +262,7 @@ func TestStoreStale(t *testing.T) {
 		assert.Empty(t, stale)
 	})
 
-	// a restored backup carries old entries but a fresh mtime; the later half wins
-	// so it is not swept.
+	// a restored backup carries old entries but a fresh mtime; the later half wins so it is not swept
 	t.Run("fresh_mtime_keeps_it", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		ws := t.TempDir()
@@ -325,7 +327,7 @@ func TestReadInfo(t *testing.T) {
 		assert.Contains(t, info.First, "first on main")
 	})
 
-	// metadata reflects a head that sits on the abandoned fork rather than the file tail.
+	// metadata reflects a head that sits on the abandoned fork rather than the file tail
 	t.Run("branch_points_at_fork", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "s.jsonl")
@@ -560,8 +562,6 @@ func TestStoreFindByName(t *testing.T) {
 	})
 }
 
-// FindNamed resolves a target by its session name alone: it finds only when
-// the target reaches an entry whose name matches, not one reached purely by id.
 func TestStoreFindNamed(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()

@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,7 +29,7 @@ func TestHelpPrintsCommandList(t *testing.T) {
 
 	cmd, ok := r.Get("help")
 	require.True(t, ok)
-	require.NoError(t, cmd.Handler(context.Background(), "", c))
+	require.NoError(t, cmd.Handler(t.Context(), "", c))
 
 	require.Len(t, c.prints, 1)
 	assert.Contains(t, c.prints[0], "# Commands")
@@ -47,7 +46,7 @@ func TestExitSignalsConsoleExit(t *testing.T) {
 	RegisterBuiltins(r, c)
 
 	cmd, _ := r.Get("exit")
-	require.NoError(t, cmd.Handler(context.Background(), "", c))
+	require.NoError(t, cmd.Handler(t.Context(), "", c))
 	assert.True(t, c.exited)
 }
 

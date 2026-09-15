@@ -37,8 +37,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		d := u.OpenDecision(req)
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
-		go func() { _, _ = d.Wait(ctx) }()
+		go func() { _, _ = d.Wait(t.Context()) }()
 		waitFor(t, u, v, "Run command?")
 		waitFor(t, u, v, "rm -rf /tmp/x")
 		assert.Contains(t, u.snapshot(v), "> 1 Allow")
@@ -50,8 +49,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: long, Options: []Option{{Label: "A"}}})
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
-		go func() { _, _ = d.Wait(ctx) }()
+		go func() { _, _ = d.Wait(t.Context()) }()
 		waitFor(t, u, v, "> 1 A")
 		// every character is on screen, spread over rows rather than cut at the width
 		screen := strutil.StripANSI(u.snapshot(v))
@@ -66,8 +64,7 @@ func TestUIDecisionRenders(t *testing.T) {
 			Options: []Option{{Label: "A"}}})
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
-		go func() { _, _ = d.Wait(ctx) }()
+		go func() { _, _ = d.Wait(t.Context()) }()
 		waitFor(t, u, v, "…+") // the partly shown line is reported as hidden
 		// the rows that do fit still carry the command
 		assert.Contains(t, strutil.StripANSI(u.snapshot(v)), strings.Repeat("x", 60))
@@ -78,8 +75,7 @@ func TestUIDecisionRenders(t *testing.T) {
 			Options: []Option{{Label: "A"}}})
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
-		go func() { _, _ = d.Wait(ctx) }()
+		go func() { _, _ = d.Wait(t.Context()) }()
 		waitFor(t, u, v, strings.Repeat("z", 79)) // kept, not elided away to nothing
 	})
 	t.Run("subject_cut_by_height", func(t *testing.T) {
@@ -91,8 +87,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Join(lines, "\n"), Options: []Option{{Label: "A"}}})
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
-		go func() { _, _ = d.Wait(ctx) }()
+		go func() { _, _ = d.Wait(t.Context()) }()
 		waitFor(t, u, v, "…+3 lines")
 		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "line-"+strings.Repeat("a", decisionContextRows+2))
 	})
@@ -105,8 +100,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Join(lines, "\n"), Options: []Option{{Label: "A"}}})
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
-		go func() { _, _ = d.Wait(ctx) }()
+		go func() { _, _ = d.Wait(t.Context()) }()
 		// the total exceeds decisionContextChars, so some lines are dropped
 		assert.Eventually(t, func() bool {
 			s := strutil.StripANSI(u.snapshot(v))
@@ -127,11 +121,10 @@ func TestUIDecisionKeys(t *testing.T) {
 		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}, {Label: "B"}, {Label: "C"}}))
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
 		resCh := make(chan DecisionResult, 1)
 		errCh := make(chan error, 1)
 		go func() {
-			r, err := d.Wait(ctx)
+			r, err := d.Wait(t.Context())
 			resCh <- r
 			errCh <- err
 		}()
@@ -146,10 +139,9 @@ func TestUIDecisionKeys(t *testing.T) {
 		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}}))
 		t.Cleanup(d.Close)
 
-		ctx := t.Context()
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := d.Wait(ctx)
+			_, err := d.Wait(t.Context())
 			errCh <- err
 		}()
 		waitFor(t, u, v, "Pick:")
@@ -169,9 +161,8 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 
 		resCh := make(chan DecisionResult, 1)
 		errCh := make(chan error, 1)
-		ctx := t.Context()
 		go func() {
-			r, err := d.Wait(ctx)
+			r, err := d.Wait(t.Context())
 			resCh <- r
 			errCh <- err
 		}()
@@ -188,9 +179,8 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 
 		resCh := make(chan DecisionResult, 1)
 		errCh := make(chan error, 1)
-		ctx := t.Context()
 		go func() {
-			r, err := d.Wait(ctx)
+			r, err := d.Wait(t.Context())
 			resCh <- r
 			errCh <- err
 		}()
@@ -212,10 +202,9 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		d2 := u.OpenDecision(DecisionRequest{Prompt: "Second?", Context: "", Options: []Option{{Label: "B"}}})
 		t.Cleanup(d2.Close)
 
-		ctx := t.Context()
 		resCh := make(chan DecisionResult, 1)
 		go func() {
-			r, _ := d1.Wait(ctx)
+			r, _ := d1.Wait(t.Context())
 			resCh <- r
 		}()
 		waitFor(t, u, v, "+1 waiting")
@@ -233,19 +222,18 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		d1 := u.OpenDecision(DecisionRequest{Prompt: "First?", Context: "", Options: []Option{{Label: "A"}}})
 		t.Cleanup(d1.Close)
-		ctx := t.Context()
-		go func() { _, _ = d1.Wait(ctx) }()
+		go func() { _, _ = d1.Wait(t.Context()) }()
 
 		d2 := u.OpenDecision(DecisionRequest{Prompt: "Second?", Context: "", Options: []Option{{Label: "B"}}})
 		t.Cleanup(d2.Close)
-		go func() { _, _ = d2.Wait(ctx) }()
+		go func() { _, _ = d2.Wait(t.Context()) }()
 
 		waitFor(t, u, v, "+1 waiting")
 		assert.NotContains(t, u.snapshot(v), "Second?")
 
 		d3 := u.OpenDecision(DecisionRequest{Prompt: "Third?", Context: "", Options: []Option{{Label: "C"}}})
 		t.Cleanup(d3.Close)
-		go func() { _, _ = d3.Wait(ctx) }()
+		go func() { _, _ = d3.Wait(t.Context()) }()
 
 		waitFor(t, u, v, "+2 waiting")
 		assert.NotContains(t, u.snapshot(v), "Third?")
@@ -257,10 +245,9 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 		d2 := u.OpenDecision(DecisionRequest{Prompt: "Second?", Context: "", Options: []Option{{Label: "B"}}})
 		t.Cleanup(d2.Close)
 
-		ctx := t.Context()
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := d1.Wait(ctx)
+			_, err := d1.Wait(t.Context())
 			errCh <- err
 		}()
 		waitFor(t, u, v, "+1 waiting")
@@ -270,7 +257,7 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 
 		res2 := make(chan DecisionResult, 1)
 		go func() {
-			r, _ := d2.Wait(ctx)
+			r, _ := d2.Wait(t.Context())
 			res2 <- r
 		}()
 		waitFor(t, u, v, "Second?")
@@ -292,8 +279,7 @@ func TestUIDecisionHeightCap(t *testing.T) {
 	d := u.OpenDecision(many)
 	t.Cleanup(d.Close)
 
-	ctx := t.Context()
-	go func() { _, _ = d.Wait(ctx) }()
+	go func() { _, _ = d.Wait(t.Context()) }()
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Approve?") }, time.Second, testPoll)
 	assert.LessOrEqual(t, liveRowCount(u.snapshot(v)), 5)
 }
@@ -305,10 +291,9 @@ func TestUIDecisionSummary(t *testing.T) {
 	d := u.OpenDecision(DecisionRequest{Prompt: "Approve edit?", Context: "pkg/x.go", Options: []Option{{Label: "Allow"}, {Label: "Deny"}}})
 	t.Cleanup(d.Close)
 
-	ctx := t.Context()
 	resCh := make(chan DecisionResult, 1)
 	go func() {
-		r, _ := d.Wait(ctx)
+		r, _ := d.Wait(t.Context())
 		resCh <- r
 	}()
 	waitFor(t, u, v, "Approve edit?")

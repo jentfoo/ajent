@@ -37,8 +37,6 @@ func TestUIConsoleStartedFlag(t *testing.T) {
 	assert.True(t, c.Started())
 }
 
-// TestUIConsoleToolsChangedWritesThrough verifies a /tools change persists the
-// enabled names into session settings, and is safe with no wiring attached.
 func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	t.Parallel()
 
@@ -62,10 +60,6 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	assert.JSONEq(t, `["read"]`, string(raw))
 }
 
-// TestUIConsoleSetModelRemasuresLedger verifies a mid-session /model switch does
-// not leave the ledger reading empty. SetModel drops every context term for the new
-// window; it must remeasure against the actual in-memory messages so switching to a
-// smaller window immediately reflects real occupancy and threshold auto-compaction can fire.
 func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 	t.Parallel()
 	inR, inW, err := os.Pipe()
@@ -100,13 +94,9 @@ func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 	// switching to a smaller window must not leave Used at zero.
 	c.SetModel(llm.Model{ID: "p/small", ContextWindow: 8000})
 
-	assert.Greater(t, tk.Context().Used, 100,
-		"a model switch must remeasure the ledger from actual messages, not read empty")
+	assert.Greater(t, tk.Context().Used, 100)
 }
 
-// TestUIConsoleSetModelNoChangeSilent verifies re-selecting the already-active
-// model is a no-op: it neither rebases state nor records an announcement line, so
-// a stray /model on the current model stays quiet. A real change still records.
 func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 	t.Parallel()
 	inR, inW, err := os.Pipe()
@@ -131,7 +121,7 @@ func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 		Tokens: tokens.New(active),
 	}
 
-	// a real recorder so we can assert what does (and does not) get recorded.
+	// a real recorder so we can assert what does (and does not) get recorded
 	trPath := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(trPath, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
@@ -139,19 +129,13 @@ func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 
 	// re-selecting the same model must not record a change.
 	c.SetModel(active)
-	assert.NotContains(t, readFileString(t, trPath), "model_change",
-		"same-model SetModel must be a silent no-op")
+	assert.NotContains(t, readFileString(t, trPath), "model_change")
 
 	// selecting a different model still records the switch.
 	c.SetModel(llm.Model{Provider: "p", ID: "other"})
-	assert.Contains(t, readFileString(t, trPath), "model_change",
-		"a real change must record a model_change entry")
+	assert.Contains(t, readFileString(t, trPath), "model_change")
 }
 
-// TestUIConsoleSetModelKeepsSessionOnly verifies a model switch applies only the
-// session override and never touches a config file layer. Persistence belongs to
-// the /settings save prompt (or the direct /model command), not this apply, so a
-// "this session only" answer cannot be silently overridden.
 func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
 	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
 	home := t.TempDir()
@@ -193,9 +177,6 @@ func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
 	assert.JSONEq(t, `"p/picked"`, string(rv))
 }
 
-// TestUIConsoleSetModelPreservesReasoningIntent verifies a mid-session /model
-// switch clamps only the live effective reasoning level for display, leaving the
-// stored override untouched so the user's choice survives switching back.
 func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
 	home := t.TempDir()
@@ -238,8 +219,7 @@ func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 
 	// switching back restores the user's original choice.
 	c.SetModel(reasoning)
-	assert.Equal(t, llm.LevelHigh, st.Reasoning.Level,
-		"the raw preference must be re-read on switch-back, not left clamped down")
+	assert.Equal(t, llm.LevelHigh, st.Reasoning.Level)
 }
 
 // readFileString returns a file's contents as text for assertions.
@@ -250,9 +230,6 @@ func readFileString(t *testing.T, path string) string {
 	return string(b)
 }
 
-// A /settings edit of compaction.threshold must move the trigger, the context bar
-// marker and the compaction tail together. It must not blank the ledger the way a
-// model switch does: only the window changed, not what occupies it.
 func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	t.Parallel()
 	inR, inW, err := os.Pipe()
@@ -289,9 +266,9 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	c := &uiConsole{ui: ui, reg: reg, st: st}
 	require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
 
-	assert.InDelta(t, 0.5, c.st.Model.CompactThreshold, 1e-09, "the live model carries the new threshold")
-	assert.Equal(t, 100000, tk.Context().Compact, "the bar fills against the new compaction point")
-	assert.Equal(t, used, tk.Context().Used, "a threshold edit must not blank the ledger")
+	assert.InDelta(t, 0.5, c.st.Model.CompactThreshold, 1e-09)
+	assert.Equal(t, 100000, tk.Context().Compact)
+	assert.Equal(t, used, tk.Context().Used)
 }
 
 func ptrTo[T any](v T) *T { return &v }

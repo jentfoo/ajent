@@ -56,7 +56,7 @@ func TestApplyThinking(t *testing.T) {
 	t.Parallel()
 
 	// every format at a reasoning-on and reasoning-off level asserts the exact wire
-	// shape pi emits. effort controls whether top-level reasoning_effort is gated on,
+	// shape emitted. effort controls whether top-level reasoning_effort is gated on,
 	// mirroring each provider's detection default.
 	cases := []struct {
 		name        string
@@ -173,7 +173,7 @@ func TestApplyThinkingBudgetGates(t *testing.T) {
 		assert.JSONEq(t, `{}`, reasoningFragment(encodeThinking(t, m, LevelOff)))
 	})
 	t.Run("explicit_empty_off_value_reaches_wire", func(t *testing.T) {
-		// pi sends an explicit empty string rather than omitting the key
+		// an explicit empty string is sent rather than omitting the key
 		v := ""
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingOpenAI,
 			SupportsReasoningEffort: true}
@@ -216,7 +216,7 @@ func TestChatTemplateValues(t *testing.T) {
 		assert.Nil(t, chatTemplateValues(nil, caps, LevelHigh))
 	})
 	t.Run("unknown_var_falls_through_to_effort_map", func(t *testing.T) {
-		// pi routes any object that is not thinking.enabled through the effort map
+		// any object that is not thinking.enabled routes through the effort map
 		got := chatTemplateValues(map[string]json.RawMessage{
 			"custom": json.RawMessage(`{"$var":"reasoning_depth"}`),
 		}, caps, LevelHigh)

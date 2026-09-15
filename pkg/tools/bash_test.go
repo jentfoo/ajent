@@ -33,22 +33,26 @@ type bashRun struct {
 
 func newBash(t *testing.T, args string) *bashRun {
 	t.Helper()
+
 	return newBashCtx(t.Context(), t, args)
 }
 
 func newBashWithLimit(t *testing.T, lim Limit, args string) *bashRun {
 	t.Helper()
+
 	return newBashCtxLim(t.Context(), t, lim, args)
 }
 
 func newBashCtx(ctx context.Context, t *testing.T, args string) *bashRun {
 	t.Helper()
+
 	return newBashCtxLim(ctx, t, Limit{}, args)
 }
 
 // newBashCtxLim runs a command with an explicit output limit on the tool.
 func newBashCtxLim(ctx context.Context, t *testing.T, lim Limit, args string) *bashRun {
 	t.Helper()
+
 	dir := t.TempDir()
 	r := &bashRun{env: toolEnv{cwd: dir, tracker: NewTracker(), policy: PathPolicy{Cwd: dir}}}
 	c := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(args)}
@@ -61,14 +65,14 @@ func newBashCtxLim(ctx context.Context, t *testing.T, lim Limit, args string) *b
 func TestBash(t *testing.T) {
 	t.Parallel()
 
-	// a non-zero exit is reported in the result text.
+	// a non-zero exit is reported in the result text
 	t.Run("exit_code_reported", func(t *testing.T) {
 		r := newBash(t, `{"command":"exit 3"}`)
 		assert.False(t, r.res.IsError)
 		assert.Contains(t, textOf(r.res), "exit status 3")
 	})
 
-	// a signal death names the signal instead of a bogus exit code.
+	// a signal death names the signal instead of a bogus exit code
 	t.Run("signal_death_names_signal", func(t *testing.T) {
 		r := newBash(t, `{"command":"kill -SEGV $$"}`)
 		assert.False(t, r.res.IsError)
@@ -77,7 +81,7 @@ func TestBash(t *testing.T) {
 		assert.NotContains(t, out, "exit status -1")
 	})
 
-	// stdout and stderr are both captured for the model.
+	// stdout and stderr are both captured for the model
 	t.Run("streams_stdout_and_stderr_interleaved", func(t *testing.T) {
 		r := newBash(t, `{"command":"echo out; echo err >&2"}`)
 		assert.False(t, r.res.IsError)
@@ -90,7 +94,7 @@ func TestBash(t *testing.T) {
 		assert.True(t, r.res.IsError)
 	})
 
-	// an already-cancelled context means the command never runs to completion.
+	// an already-cancelled context means the command never runs to completion
 	t.Run("cancellation_via_context", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel() // already cancelled: the command must not run to completion
@@ -102,6 +106,9 @@ func TestBash(t *testing.T) {
 }
 
 func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short mode")
+	}
 	t.Parallel()
 
 	// a subshell starts a grandchild that sleeps; on timeout the whole group
@@ -122,9 +129,6 @@ func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
 	assertEventuallyGone(t, grandchildPid)
 }
 
-// TestBashMidRunCancelKillsGroupAndRecordsPartial interrupts a running command,
-// proving the whole process group (including a TERM-trapping grandchild) is killed
-// and the partial output comes back as an interrupted error result.
 func TestBashMidRunCancelKillsGroupAndRecordsPartial(t *testing.T) {
 	t.Parallel()
 
@@ -187,7 +191,7 @@ func TestBashMidRunCancelKillsGroupAndRecordsPartial(t *testing.T) {
 func TestBashOutputElision(t *testing.T) {
 	t.Parallel()
 
-	// a head-only policy names the shown/total counts and spills.
+	// a head-only policy names the shown/total counts and spills
 	t.Run("elision_by_line_bound_spills_file_suffix", func(t *testing.T) {
 		r := newBashWithLimit(t, Limit{Lines: 5}, `{"command":"seq 1 10000"}`)
 		assert.False(t, r.res.IsError)
@@ -197,7 +201,7 @@ func TestBashOutputElision(t *testing.T) {
 		assert.Regexp(t, `full output in @\S+`, out)
 	})
 
-	// one minified line within every bound must not reach the model whole when the result truncates.
+	// one minified line within every bound must not reach the model whole when the result truncates
 	t.Run("truncated_head_caps_overlong_lines", func(t *testing.T) {
 		long := strings.Repeat("y", MaxLineRunes+200)
 		cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'; seq 1 20"}`, long)
@@ -209,7 +213,7 @@ func TestBashOutputElision(t *testing.T) {
 		assert.Regexp(t, `full output in @\S+`, textOf(r.res))
 	})
 
-	// a single overlong line under every bound is still capped and spilled.
+	// a single overlong line under every bound is still capped and spilled
 	t.Run("overlong_line_within_bounds_capped_and_spilled", func(t *testing.T) {
 		long := strings.Repeat("y", 2000)
 		cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'"}`, long)
@@ -232,7 +236,7 @@ func TestBashOutputElision(t *testing.T) {
 func TestBashEnvironment(t *testing.T) {
 	t.Parallel()
 
-	// ANSI escapes are stripped before the model sees output.
+	// ANSI escapes are stripped before the model sees output
 	t.Run("strips_ansi_from_captured_output", func(t *testing.T) {
 		r := newBash(t, `{"command":"printf '\\033[31mred\\033[0m plain'"}`)
 		assert.False(t, r.res.IsError)
@@ -252,7 +256,7 @@ func TestBashEnvironment(t *testing.T) {
 		assert.Contains(t, out, "red done")
 	})
 
-	// a non-login shell inherits our PATH verbatim (a login shell would reset it).
+	// a non-login shell inherits our PATH verbatim (a login shell would reset it)
 	t.Run("preserves_parent_path", func(t *testing.T) {
 		want := os.Getenv("PATH")
 		r := newBash(t, `{"command":"printf %s \"$PATH\""}`)
@@ -260,15 +264,13 @@ func TestBashEnvironment(t *testing.T) {
 		assert.Equal(t, want, textOf(r.res))
 	})
 
-	// an empty cwd override falls back to the policy cwd.
+	// an empty cwd override falls back to the policy cwd
 	t.Run("respects_cwd_override", func(t *testing.T) {
 		r := newBash(t, `{"command":"pwd","cwd":""}`)
 		assert.Contains(t, textOf(r.res), r.env.cwd)
 	})
 }
 
-// TestSyncSink proves one strip position serves every write: os/exec splits at
-// pipe reads, so an escape sequence can arrive as several chunks.
 func TestSyncSink(t *testing.T) {
 	t.Parallel()
 
@@ -306,6 +308,7 @@ func TestSyncSink(t *testing.T) {
 // (including grandchildren) was killed on timeout.
 func assertEventuallyGone(t *testing.T, pid int) {
 	t.Helper()
+
 	require.Eventually(t, func() bool {
 		err := syscall.Kill(pid, 0)
 		return err != nil && errors.Is(err, syscall.ESRCH)

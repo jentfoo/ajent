@@ -56,6 +56,6 @@ func TestRegistryHandlerInvoked(t *testing.T) {
 
 	cmd, ok := r.Get("ping")
 	require.True(t, ok)
-	require.NoError(t, cmd.Handler(context.Background(), "", nil))
+	require.NoError(t, cmd.Handler(t.Context(), "", nil))
 	assert.True(t, called)
 }

@@ -377,7 +377,7 @@ func TestExpand(t *testing.T) {
 
 		tool, ok := x.reg.Lookup("ls")
 		require.True(t, ok)
-		agent.InjectPair(context.Background(), tool, agent.NopSink{},
+		agent.InjectPair(t.Context(), tool, agent.NopSink{},
 			agent.ToolCall{ID: "agent-ls", Name: "ls", Input: []byte(`{"path":"sub"}`)}, "ls sub")
 
 		// the agent listing observed the dir; a following @ is deduped
@@ -436,7 +436,7 @@ func toolCallIDs(msgs []llm.Message) []string {
 func TestExpandReserve(t *testing.T) {
 	t.Parallel()
 
-	// the reserved estimate for a large source-file reference exactly matches what lands.
+	// the reserved estimate for a large source-file reference exactly matches what lands
 	t.Run("matches_landed_pairs", func(t *testing.T) {
 		dir := t.TempDir()
 		var src strings.Builder

@@ -160,14 +160,14 @@ func countSteps(branch []session.Entry) int {
 }
 
 func TestVerbatimCutFuzz(t *testing.T) {
+	if testing.Short() {
+		t.Skip("-short mode")
+	}
 	t.Parallel()
 
 	for seed := int64(0); seed < 40; seed++ {
 		r := rand.New(rand.NewSource(seed))
 		branch := randomBranch(r)
-		// budgets cover the boundaries that matter (below one step, at a few steps,
-		// far above), not every ~97-token rung: a dense sweep costs thousands of
-		// JSON decodes per seed for no added interleaving coverage.
 		budgets := []int{30, 100, 300, 600, 1200, 2000, 2900}
 		for _, priorCut := range []int{0, len(branch) / 3} {
 			for minSteps := 1; minSteps <= 4; minSteps++ {

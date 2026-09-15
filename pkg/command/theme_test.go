@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +21,7 @@ func TestThemeSetup(t *testing.T) {
 		c.tone = tui.ToneLight
 		c.selects = []int{0}
 
-		require.NoError(t, ThemeSetup(context.Background(), c))
+		require.NoError(t, ThemeSetup(t.Context(), c))
 
 		require.Len(t, c.selectOpts, 1)
 		assert.Equal(t, paletteNames(tui.PalettesFor(tui.ToneLight)), optionLabels(c.selectOpts[0]))
@@ -34,7 +33,7 @@ func TestThemeSetup(t *testing.T) {
 		c.tone = tui.ToneUnknown
 		c.selects = []int{0}
 
-		require.NoError(t, ThemeSetup(context.Background(), c))
+		require.NoError(t, ThemeSetup(t.Context(), c))
 
 		require.Len(t, c.selectOpts, 1)
 		assert.Equal(t, paletteNames(tui.Palettes()), optionLabels(c.selectOpts[0]))
@@ -45,7 +44,7 @@ func TestThemeSetup(t *testing.T) {
 		c.tone = tui.ToneDark
 		c.selects = []int{1} // the second dark palette
 
-		require.NoError(t, ThemeSetup(context.Background(), c))
+		require.NoError(t, ThemeSetup(t.Context(), c))
 
 		want := tui.PalettesFor(tui.ToneDark)[1].Name
 		assert.Equal(t, want, c.palette.Name)
@@ -61,7 +60,7 @@ func TestThemeSetup(t *testing.T) {
 		c := newFakeConsole(t)
 		c.tone = tui.ToneLight // no queued Select answer, so the picker is cancelled
 
-		require.NoError(t, ThemeSetup(context.Background(), c))
+		require.NoError(t, ThemeSetup(t.Context(), c))
 
 		assert.Equal(t, tui.PalettesFor(tui.ToneLight)[0].Name, c.palette.Name)
 		require.Len(t, c.saveCalls, 1) // saved, so the picker never returns
@@ -72,7 +71,7 @@ func TestThemeSetup(t *testing.T) {
 		c := newFakeConsole(t)
 		c.tone = tui.ToneUnknown
 
-		require.NoError(t, ThemeSetup(context.Background(), c))
+		require.NoError(t, ThemeSetup(t.Context(), c))
 
 		assert.Equal(t, tui.DefaultPalette().Name, c.palette.Name)
 	})
@@ -81,7 +80,7 @@ func TestThemeSetup(t *testing.T) {
 		c := newFakeConsole(t)
 		require.NoError(t, c.settings.SetSession(themeKey, "light"))
 
-		require.NoError(t, ThemeSetup(context.Background(), c))
+		require.NoError(t, ThemeSetup(t.Context(), c))
 
 		assert.Empty(t, c.selectOpts)
 		assert.Empty(t, c.palette.Name)
@@ -103,7 +102,7 @@ func TestThemeRow(t *testing.T) {
 	idx := slices.IndexFunc(tui.Palettes(), func(p tui.Palette) bool { return p.Name == "light" })
 	require.GreaterOrEqual(t, idx, 0)
 	c.selects = []int{idx}
-	changes, err := row.edit(context.Background(), c)
+	changes, err := row.edit(t.Context(), c)
 	require.NoError(t, err)
 
 	require.Len(t, changes, 1)

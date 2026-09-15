@@ -96,7 +96,7 @@ func TestEnvLayerKeepsOriginalCaseKeys(t *testing.T) {
 	l, warns := EnvLayer(func(k string) string { return vars[k] })
 	assert.Empty(t, warns)
 
-	// camelCase leaves bind at their exact-case path; no lowercased twin appears.
+	// camelCase leaves bind at their exact-case path; no lowercased twin appears
 	var merged map[string]any
 	require.NoError(t, json.Unmarshal(l.Data, &merged))
 	agent := merged["agent"].(map[string]any)
@@ -120,7 +120,7 @@ func TestEnvLayerOverridesDefaultWithProvenance(t *testing.T) {
 	r, err := Merge(Defaults(), env)
 	require.NoError(t, err)
 
-	// the camelCase key overrides in place and keeps its exact-case spelling.
+	// the camelCase key overrides in place and keeps its exact-case spelling
 	v, src, ok := r.Explain("compaction.minSteps")
 	require.True(t, ok)
 	assert.Equal(t, `3`, string(v))
@@ -130,7 +130,7 @@ func TestEnvLayerOverridesDefaultWithProvenance(t *testing.T) {
 	assert.Equal(t, `true`, string(v))
 	assert.Equal(t, "env", src)
 
-	// no lowercased sibling survives in the merged bytes.
+	// no lowercased sibling survives in the merged bytes
 	_, _, ok = r.Explain("compaction.minsteps")
 	assert.False(t, ok)
 	assert.NotContains(t, string(r.Bytes()), "minsteps")

@@ -1,23 +1,23 @@
 # Plan workflow design (`pkg/plan`)
 
 `/plan` splits one conversation into two models and four phases: a **planner**
-drafts, the **user approves**, an **implementor** builds against that plan alone,
-and the planner **reviews** the result. It exists because deciding what to build
-and doing it need different context, and sharing one ever-growing message list
-serves neither.
+drafts, the **user approves**, an **implementor** builds against that plan
+alone, and the planner **reviews** the result. It exists because deciding what
+to build and doing it need different context, and sharing one ever-growing
+message list serves neither.
 
 The reference implementation spends most of its length compensating for a host
-with no notion of phases:
-synthetic messages tagged with a magic string and re-parsed out of the list, a
-hand-written context projector re-derived on every request, and compaction
-intercepted so the cut point stays inside a phase. **ajent needs none of that**,
-and that is the whole point of this design.
+with no notion of phases: synthetic messages tagged with a magic string and
+re-parsed out of the list, a hand-written context projector re-derived on every
+request, and compaction intercepted so the cut point stays inside a phase.
+**ajent needs none of that**, and that is the whole point of this design.
 
 ## Phases are branches, not projections
 
 The transcript is already a tree. `session.Branch(entries, head)` walks
-`ParentID` to the root and is the only read path; `session.State(branch, resolve)`
-rebuilds `agent.State` from it. So a phase switch is a **head switch**:
+`ParentID` to the root and is the only read path;
+`session.State(branch, resolve)` rebuilds `agent.State` from it. So a phase
+switch is a **head switch**:
 
 ```
 root ─ prior chat ─ /plan ─ planning turns ─ dev_implement ─ P
@@ -26,8 +26,8 @@ root ─ prior chat ─ /plan ─ planning turns ─ dev_implement ─ P
 (new root) ─ impl r2 kickoff ─ implementation turns
 ```
 
-- **Planning** continues on the current branch, so it inherits every message that
-  came before `/plan` by construction. `/plan` can be run at any point in a
+- **Planning** continues on the current branch, so it inherits every message
+  that came before `/plan` by construction. `/plan` can be run at any point in a
   conversation.
 - **Implementing** appends with `ParentID == ""`, a **new root**. `Branch` stops
   there, so the rebuilt state is that round's kickoff and its own work. Nothing
@@ -50,8 +50,8 @@ projection transform would leave every one of them reporting the wrong list.
 2. **Only a successful control call ends a turn.** `dev_*` tools set
    `agent.ToolResult.EndTurn` on their success path only; a rejected call is an
    `IsError` result the model corrects inside the same turn. The loop enforces
-   this too. `runTool` reports `EndTurn && !IsError`, so a tool cannot silence
-   a model by erroring.
+   this too. `runTool` reports `EndTurn && !IsError`, so a tool cannot silence a
+   model by erroring.
 3. **Every exit path restores scope.** Completion, `/plan-stop`, `Esc` and the
    revision cap all reach one `stopLocked`, which forks back to the live branch
    with the saved model, restores the saved tool set, unregisters the control
@@ -66,18 +66,18 @@ projection transform would leave every one of them reporting the wrong list.
 ## The `Host` seam
 
 `pkg/plan` imports only `pkg/agent` and `pkg/llm`, never `session`, `tools`,
-`tui` or `command`. Everything else arrives as func fields on `Host`, supplied by
-`pkg/app` (`plan.go`), the same shape `pkg/subagent` uses. A nil field disables
-that capability rather than panicking, and the whole workflow is unit-testable
-against a fake `Host` with no UI, transcript or registry in scope.
+`tui` or `command`. Everything else arrives as func fields on `Host`, supplied
+by `pkg/app` (`plan.go`), the same shape `pkg/subagent` uses. A nil field
+disables that capability rather than panicking, and the whole workflow is
+unit-testable against a fake `Host` with no UI, transcript or registry in scope.
 
 `Fork(head string, m llm.Model) error` is the interesting one. `pkg/app`
-implements it as `(*sessRec).forkTo`, built on the branch-switch half of `rewind`
-(`switchState`) **without** rewind's `ui.Reset()` + `Replay`: the screen is never
-reset, because a phase switch changes what the *model* sees, not what the user
-sees. An empty head starts a new root. It deliberately does not go through
-`console.SetModel`, whose same-model early return would leave a branch with no
-model entry.
+implements it as `(*sessRec).forkTo`, built on the branch-switch half of
+`rewind` (`switchState`) **without** rewind's `ui.Reset()` + `Replay`: the
+screen is never reset, because a phase switch changes what the *model* sees, not
+what the user sees. An empty head starts a new root. It deliberately does not go
+through `console.SetModel`, whose same-model early return would leave a branch
+with no model entry.
 
 ## Phases and transitions
 
@@ -95,10 +95,10 @@ model entry.
 
 The user gate at **AwaitingPlan** is the point of the workflow: `dev_implement`
 hands off to nobody. The plan lands in the editor to read, edit, rewrite or
-abandon, and the next submitted prompt is what the implementor receives.
-Only a non-injected (typed) submission clears the gate; injected context — a
-staged `!` flush, a permission-barrier note, a sub-agent completion steer —
-is never captured as approval, mirroring the Planning phase guard.
+abandon, and the next submitted prompt is what the implementor receives. Only a
+non-injected (typed) submission clears the gate; injected context — a staged `!`
+flush, a permission-barrier note, a sub-agent completion steer — is never
+captured as approval, mirroring the Planning phase guard.
 
 **The implementor's report always reaches the reviewer.** The reviewer sees none
 of the implementation branch, so `dev_review`'s `summary` is required. An empty
@@ -156,9 +156,9 @@ user-initiated and restored on every exit path, so it calls
 
 Phase transitions emit a divider plus a keyed notice naming phase, model and
 round, and update the `plan` status segment with the phase and round. A fork
-that does not move (for example `/plan` itself, which only records the planner on the
-current head) draws no divider, since nothing was divided. The
-kickoff message itself is **not** echoed live: the user just read the plan in the
+that does not move (for example `/plan` itself, which only records the planner
+on the current head) draws no divider, since nothing was divided. The kickoff
+message itself is **not** echoed live: the user just read the plan in the
 editor, and the review kickoff's `git status` reads better in the reviewer's own
 output. It is recorded in the transcript, so `session.Replay` does show it after
 a resume. That is a deliberate asymmetry.
@@ -178,18 +178,18 @@ resume re-applies the phase scope rather than reconstructing it from
 `setting_change` entries.
 
 The entry also persists the awaiting draft (`draftPlan`) at the gate, and resume
-puts it back into the editor: a crash or exit while parked must not silently turn
-the next arbitrary prompt into the plan of record. The draft is cleared once the
-gate passes.
+puts it back into the editor: a crash or exit while parked must not silently
+turn the next arbitrary prompt into the plan of record. The draft is cleared
+once the gate passes.
 
-Because ending a workflow leaves HEAD at the review tip while the file tail is an
-implementation entry, resume must prefer the live head over the tail
+Because ending a workflow leaves HEAD at the review tip while the file tail is
+an implementation entry, resume must prefer the live head over the tail
 (`resumeHead`); the same divergence already existed after a rewind.
 
 ## Compaction
 
-Compaction already runs over the live head's branch, which *is* the phase. There is no
-minimum cut, no segment-aware entries, no summary masquerading as a phase seed.
-The only addition is a per-phase focus (`Controller.Focus`) fed to
+Compaction already runs over the live head's branch, which *is* the phase. There
+is no minimum cut, no segment-aware entries, no summary masquerading as a phase
+seed. The only addition is a per-phase focus (`Controller.Focus`) fed to
 `compact.Options.Instructions` for automatic runs; an explicit
 `/compact <instructions>` still wins.

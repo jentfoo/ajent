@@ -123,7 +123,7 @@ Per model you can set:
 
 * `id` (required) - the identifier; also how overrides address it.
 * `name` / `aliases` - display name and extra names the registry resolves.
-* `reasoning` - a boolean: `true` enables reasoning with the model's resolved thinking format. There is no style-name form; that matches pi.
+* `reasoning` - a boolean: `true` enables reasoning with the model's resolved thinking format. There is no style-name form.
 * `input` - accepted modalities (`text`, `image`); defaults to text plus image when capabilities allow it.
 * `contextWindow` / `maxTokens` - input window and output cap in tokens.
 * `compat` - the capability overrides for this model: thinking format, tokenizer, cache-control encoding, parallel tool support, temperature, images, and so on. Every field is a pointer internally, so an override turns one quirk on without restating the others.

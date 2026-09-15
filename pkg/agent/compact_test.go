@@ -13,7 +13,7 @@ import (
 func TestOverflowRetry(t *testing.T) {
 	t.Parallel()
 
-	// a first request too big is compacted then retried successfully.
+	// a first request too big is compacted then retried successfully
 	t.Run("retries_after_compact", func(t *testing.T) {
 		var reasons []CompactReason
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -55,7 +55,7 @@ func TestOverflowRetry(t *testing.T) {
 		assert.Equal(t, "recovered", sb.String())
 	})
 
-	// still overflowing after one compaction fails the turn.
+	// still overflowing after one compaction fails the turn
 	t.Run("retries_at_most_once", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 			{Err: llm.ErrContextOverflow},
@@ -78,7 +78,7 @@ func TestOverflowRetry(t *testing.T) {
 		assert.Equal(t, 1, calls) // one overflow retry per turn, then it fails
 	})
 
-	// with no compact hook wired the overflow fails the turn outright.
+	// with no compact hook wired the overflow fails the turn outright
 	t.Run("no_hook_fails_turn", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}
 		a := New(&State{Model: llm.Model{ID: "test"}}, Options{

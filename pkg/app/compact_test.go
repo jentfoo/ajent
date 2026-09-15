@@ -48,6 +48,7 @@ func truncatedStream(text string) []llm.Event {
 // testCompactor wires a compactor over a real transcript with a scripted provider.
 func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*compactor, *agent.State, *session.Writer) {
 	t.Helper()
+
 	store := session.StoreAt(t.TempDir())
 	w, err := store.Create("/ws", session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
@@ -69,6 +70,7 @@ func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*co
 // something to fold once the newest steps are held back verbatim.
 func appendSteps(t *testing.T, w *session.Writer, n int) session.Entry {
 	t.Helper()
+
 	var last session.Entry
 	for i := 0; i < n; i++ {
 		last = appendText(t, w, llm.RoleAssistant,
@@ -79,6 +81,7 @@ func appendSteps(t *testing.T, w *session.Writer, n int) session.Entry {
 
 func appendText(t *testing.T, w *session.Writer, role llm.Role, text string) session.Entry {
 	t.Helper()
+
 	e, err := w.Append(session.TypeMessage, session.MessageData{Message: llm.Text(role, text)})
 	require.NoError(t, err)
 	return e
@@ -87,6 +90,7 @@ func appendText(t *testing.T, w *session.Writer, role llm.Role, text string) ses
 // compactionEntries returns the compaction entries on the writer's live branch.
 func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 	t.Helper()
+
 	entries, _, err := session.Read(w.Path())
 	require.NoError(t, err)
 	var out []session.Entry
@@ -98,8 +102,6 @@ func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 	return out
 }
 
-// A manual compact on a single-turn session folds the whole history into a
-// a real cut, not a summary-only one: the newest steps stay verbatim.
 func TestCompactorManualSingleTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -127,9 +129,6 @@ func TestCompactorManualSingleTurn(t *testing.T) {
 	assert.Contains(t, textOfMain(st.Messages[0]), "lighthouse")
 }
 
-// A compaction cuts and elides tool results, taking file content out of context
-// that read tracking still vouches for, so it must report the rebuild like a
-// rewind does — or a later @ref would dedupe against content the model lost.
 func TestCompactorReportsRebuiltContext(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -151,8 +150,6 @@ func TestCompactorReportsRebuiltContext(t *testing.T) {
 	assert.Equal(t, st.Messages, switched[0]) // the reduced context, not the old one
 }
 
-// After a rewind the file tail sits on an abandoned branch; planning must use
-// the writer's live head or the recorded cut cannot be found on rebuild.
 func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -174,8 +171,6 @@ func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
 	assert.Contains(t, textOfMain(st.Messages[0]), "story")
 }
 
-// An overflow compaction fires mid-turn from the turn's own goroutine; it must
-// not be refused for running, and the retried request must see the reduced context.
 func TestCompactorOverflowRunsMidTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 600, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -213,8 +208,6 @@ func TestCompactorOverflowRunsMidTurn(t *testing.T) {
 	assert.Contains(t, sb.String(), "recovered")
 }
 
-// The summariser call is the only slow part, so the start notice must fire there
-// and nowhere else: a decline that never reaches it must stay silent.
 func TestCompactorAnnouncesStart(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
 
@@ -259,8 +252,6 @@ func TestCompactorAnnouncesStart(t *testing.T) {
 	})
 }
 
-// A compaction that succeeds without clearing the point must not re-run at every
-// following step: each one would fold a single step for a whole summariser call.
 func TestCompactorStallsWhenStillOverPoint(t *testing.T) {
 	// a roomy window with a low compaction point, so the verbatim band alone
 	// outweighs the point while the summariser prompt still fits
@@ -301,8 +292,6 @@ func TestCompactorStallsWhenStillOverPoint(t *testing.T) {
 	assert.False(t, c.stalled.Load())
 }
 
-// A step compaction fires mid-turn from the turn's own goroutine, so it must not
-// be refused for running, and it writes State.Messages rather than via WithState.
 func TestCompactorStepRunsMidTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -339,8 +328,6 @@ func TestCompactorStepRunsMidTurn(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
-// An automatic run that cannot reduce latches the automatic triggers off and tells
-// the user to compact themselves, rather than re-attempting at every step boundary.
 func TestCompactorDeclineLatchesAuto(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
 
@@ -540,11 +527,6 @@ func (c *ctxSink) Usage(llm.Usage)                 {}
 func (c *ctxSink) Notice(string, agent.Level)      {}
 func (c *ctxSink) TurnEnd(agent.TurnResult)        {}
 
-// After a manual /compact the bar must drop to a calibrated estimate of the
-// reduced full usage: pending carries the reduced messages, the ledger's base
-// rides on top once, and the calibrator's factor still applies (the ~ marker
-// stays). The recorded Before/After include base, and the summariser's own call
-// must never snap the context terms.
 func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -613,7 +595,7 @@ func (s *blockingStream) Next() (llm.Event, bool) {
 		s.mu.Unlock()
 		return ev, true // deliver events immediately; hold the pull open after them
 	}
-	// no more events and not closed: block until Close abandons the stream.
+	// no more events and not closed: block until Close abandons the stream
 	done := s.done
 	closed := s.closed
 	s.mu.Unlock()
@@ -707,8 +689,6 @@ func TestRunSummaryCancelStopsDraining(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-// A response the provider stopped at its output token cap is partial and must be
-// rejected; an end_turn stop returns its text unchanged.
 func TestRunSummaryRejectsTruncatedResponses(t *testing.T) {
 	t.Parallel()
 
@@ -736,8 +716,6 @@ func TestRunSummaryRejectsTruncatedResponses(t *testing.T) {
 	})
 }
 
-// A truncated summariser response must fail the compaction loudly and leave the
-// transcript untouched rather than persist a partial checkpoint.
 func TestCompactorRejectsTruncatedSummary(t *testing.T) {
 	t.Parallel()
 
@@ -763,9 +741,6 @@ func TestCompactorRejectsTruncatedSummary(t *testing.T) {
 	assert.Len(t, st.Messages, before) // state untouched
 }
 
-// The compaction.auto setting gates only the threshold trigger: a user turning
-// automatic reduction off must still be able to run /compact, and an overflow
-// must still recover rather than brick the session.
 func TestCompactorAutoSetting(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
 
@@ -824,8 +799,6 @@ func TestCompactorAutoSetting(t *testing.T) {
 	})
 }
 
-// A compaction whose summariser provider cannot be resolved must report the
-// setup failure rather than masquerade as a successful "nothing to compact".
 func TestCompactorProviderError(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 
@@ -851,9 +824,6 @@ func TestCompactorProviderError(t *testing.T) {
 	require.Empty(t, compactionEntries(t, w))
 }
 
-// An errored turn still ends at a real boundary; endTurn must clear the per-turn
-// step hold so the next turn's first CompactStep can act again. This mirrors the
-// P0 regression: a mid-turn compact left the point crossed, then the turn failed.
 func TestEndTurnClearsStalled(t *testing.T) {
 	// a roomy window with a low compaction point, so the verbatim band alone
 	// outweighs the point while there is still history to fold

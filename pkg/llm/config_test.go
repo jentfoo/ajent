@@ -182,7 +182,7 @@ func TestLoadFilePiParity(t *testing.T) {
 
 	f, warnings, err := loadFixture(t, "models_pi_full.json")
 	require.NoError(t, err)
-	// every field pi documents must survive the load without a complaint
+	// every documented field must survive the load without a complaint
 	assert.Empty(t, warnings)
 	require.Len(t, f.Providers, 5)
 
@@ -276,8 +276,8 @@ func TestDialectUnmarshalText(t *testing.T) {
 		assert.Equal(t, DialectAnthropic, got)
 	})
 	t.Run("unsupported_is_not_an_error", func(t *testing.T) {
-		// pi ships apis ajent cannot speak; failing here would cost the user every
-		// other provider in the file
+		// some configs name protocols ajent cannot speak; failing on one would cost
+		// the user every other provider in the file
 		var got Dialect
 		require.NoError(t, got.UnmarshalText([]byte("google-generative-ai")))
 		assert.Equal(t, DialectUnknown, got)

@@ -161,8 +161,9 @@ func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
 		m.Content = content
 		out = append(out, m)
 		if len(images) > 0 {
-			// a user message carries the images with pi's lead-in text; RequiresAssistant-
-			// AfterToolResult then places its bridge ahead of it in repairTurns.
+			// a user message carries the images with the tool-result lead-in text;
+			// RequiresAssistantAfterToolResult then places its bridge ahead of it in
+			// repairTurns.
 			attach := make([]Block, 1, len(images)+1)
 			attach[0] = TextBlock{Text: "Attached image(s) from tool result:"}
 			out = append(out, Message{Role: RoleUser, Content: BlockList(append(attach, images...))})
@@ -367,8 +368,7 @@ func trHasText(content BlockList) bool {
 // repairTurns enforces request well-formedness: errored assistant turns are
 // skipped along with their tool results (their results would be an unmatched
 // tool_result Anthropic rejects), aborted ones stay because the abort path fills
-// every pending call, and unanswered calls receive a synthetic error result. It
-// is pi's second normalization pass.
+// every pending call, and unanswered calls receive a synthetic error result.
 func repairTurns(msgs []Message, caps Capabilities) []Message {
 	var out []Message
 	skippedCalls := map[string]struct{}{}
@@ -478,7 +478,7 @@ func normalizeCallID(id string, caps Capabilities, provider string, kind callKin
 	}
 }
 
-// responsesCallID normalizes a piped Responses call id per pi's rules.
+// responsesCallID normalizes a piped Responses call id for the dialect.
 func responsesCallID(id string, kind callKind) string {
 	callID, itemID, ok := strings.Cut(id, "|")
 	if !ok {
@@ -488,8 +488,8 @@ func responsesCallID(id string, kind callKind) string {
 	case callForeignEndpoint:
 		// the raw unsanitized item id is what gets hashed
 		return normalizeIDPart(callID) + "|fc_" + shortHash(itemID)
-	default: // same endpoint; pi prefixes a non-fc or cross-model id then drops it at
-		// emit time, so dropping here makes the wire result identical to its shape
+	default: // same endpoint; a non-fc or cross-model id is prefixed then dropped at
+		// emit time, so dropping here makes the wire result identical to that shape
 		if !strings.HasPrefix(itemID, "fc_") || kind == callForeignModel {
 			return normalizeIDPart(callID)
 		}
@@ -537,8 +537,8 @@ func cutID(s string, n int) string {
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
 // shortHash returns an FNV-64a base36 digest of s, for ids that must be bounded
-// and stable within ajent. Determinism here is all that matters; it need not match
-// pi's JavaScript hash.
+// and stable within ajent. Only determinism matters here; the exact hash function
+// is free to change.
 func shortHash(s string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(s))

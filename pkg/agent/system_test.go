@@ -14,7 +14,7 @@ import (
 func TestBuildSystem(t *testing.T) {
 	t.Parallel()
 
-	// the whole system prompt is a single text block carrying env facts.
+	// the whole system prompt is a single text block carrying env facts
 	t.Run("base", func(t *testing.T) {
 		s := &State{Model: llm.Model{ID: "test"}}
 		env := Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}
@@ -29,7 +29,17 @@ func TestBuildSystem(t *testing.T) {
 		}
 	})
 
-	// equal inputs produce byte-identical blocks so the provider prompt cache survives between requests.
+	t.Run("identity_line", func(t *testing.T) {
+		s := &State{Model: llm.Model{ID: "test"}}
+		blocks := buildSystem(s, Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}, nil, nil)
+
+		tb, ok := blocks[0].(llm.TextBlock)
+		require.True(t, ok)
+		assert.Contains(t, tb.Text,
+			"You help by following the user's instructions: research and review until you understand them, then focus on what is asked.")
+	})
+
+	// equal inputs produce byte-identical blocks so the provider prompt cache survives between requests
 	t.Run("cache_stable", func(t *testing.T) {
 		s := &State{Model: llm.Model{ID: "test"}}
 		env := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}
@@ -41,7 +51,7 @@ func TestBuildSystem(t *testing.T) {
 		assert.Equal(t, b1.Text, b2.Text)
 	})
 
-	// the date changes at day granularity, not sub-day.
+	// the date changes at day granularity, not sub-day
 	t.Run("date_day_granular", func(t *testing.T) {
 		s := &State{Model: llm.Model{ID: "test"}}
 		b1, ok := buildSystem(s, Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}, nil, nil)[0].(llm.TextBlock)
@@ -52,7 +62,7 @@ func TestBuildSystem(t *testing.T) {
 		assert.NotEqual(t, b1.Text, b2.Text) // the date differs across days
 	})
 
-	// an absent cwd still names the working directory line.
+	// an absent cwd still names the working directory line
 	t.Run("no_cwd_listing", func(t *testing.T) {
 		s := &State{Model: llm.Model{ID: "test"}}
 		blocks := buildSystem(s, Environment{Cwd: "/does/not/exist"}, nil, nil)
@@ -63,7 +73,7 @@ func TestBuildSystem(t *testing.T) {
 		assert.NotContains(t, tb.Text, "Directory contents:")
 	})
 
-	// snippets land after project instructions, each separated by a blank line.
+	// snippets land after project instructions, each separated by a blank line
 	t.Run("snippets_append_after_project", func(t *testing.T) {
 		base := &State{Model: llm.Model{ID: "test"}}
 		env := Environment{Cwd: "/repo", Date: "2024-01-02"}
@@ -81,15 +91,15 @@ func TestBuildSystem(t *testing.T) {
 
 		snippetsOnly, ok := buildSystem(base, env, nil, []string{})[0].(llm.TextBlock)
 		require.True(t, ok)
-		// empty snippets must not change the block at all.
+		// empty snippets must not change the block at all
 		assert.Equal(t, empty.Text, snippetsOnly.Text)
 		assert.NotEqual(t, empty.Text, withProj.Text) // proj alone still differs
 
 		snippetsOnlyText := buildSystem(base, env, nil, []string{"first snippet"})[0].(llm.TextBlock)
-		// a snippet appended without project instructions is separated by a blank line.
+		// a snippet appended without project instructions is separated by a blank line
 		assert.Contains(t, snippetsOnlyText.Text, "\n\nfirst snippet\n")
 
-		// each snippet appears after the project context and is newline-separated.
+		// each snippet appears after the project context and is newline-separated
 		i1 := strings.Index(snippets.Text, "</project_context>")
 		i2 := strings.Index(snippets.Text, "first snippet")
 		i3 := strings.Index(snippets.Text, "second snippet")
@@ -97,7 +107,7 @@ func TestBuildSystem(t *testing.T) {
 		assert.Greater(t, i3, i2)
 	})
 
-	// the provenance-marked <project_context> block is appended after environment facts.
+	// the provenance-marked <project_context> block is appended after environment facts
 	t.Run("project_instructions", func(t *testing.T) {
 		s := &State{Model: llm.Model{ID: "test"}}
 		env := Environment{Cwd: "/repo", Date: "2024-01-02"}
@@ -126,11 +136,6 @@ func TestBuildSystem(t *testing.T) {
 	})
 }
 
-func TestIdentityLine(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "You help by following the user's instructions: research and review until you understand them, then focus on what is asked.\n\n", identityLine())
-}
-
 func TestDetectEnvironment(t *testing.T) {
 	t.Parallel()
 
@@ -140,39 +145,10 @@ func TestDetectEnvironment(t *testing.T) {
 	assert.NotEmpty(t, env.Date)
 }
 
-func TestBuildSystemProjectInstructions(t *testing.T) {
-	t.Parallel()
-
-	s := &State{Model: llm.Model{ID: "test"}}
-	env := Environment{Cwd: "/repo", Date: "2024-01-02"}
-	proj := []ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\nbuild with make test\n"}}
-
-	blocks := buildSystem(s, env, proj, nil)
-	tb, ok := blocks[0].(llm.TextBlock)
-	require.True(t, ok)
-
-	for _, want := range []string{
-		"<project_context>",
-		"Project-specific instructions and guidelines:",
-		`<project_instructions path="/repo/AGENTS.md">`,
-		"# Rules",
-		"build with make test",
-		"</project_instructions>",
-		"</project_context>",
-	} {
-		assert.Contains(t, tb.Text, want)
-	}
-
-	// provenance block comes after the environment facts, not before them
-	assert.Less(t,
-		strings.Index(tb.Text, "Working directory: /repo\n"),
-		strings.Index(tb.Text, "<project_context>"))
-}
-
 func TestLoadProjectInstructions(t *testing.T) {
 	t.Parallel()
 
-	// reads AGENTS.md from a dir when present.
+	// reads AGENTS.md from a dir when present
 	t.Run("reads_when_present", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Rules\n"), 0o644))
@@ -184,14 +160,14 @@ func TestLoadProjectInstructions(t *testing.T) {
 		assert.Equal(t, "# Rules\n", proj[0].Body)
 	})
 
-	// returns nil when no AGENTS.md exists.
+	// returns nil when no AGENTS.md exists
 	t.Run("missing_returns_nil", func(t *testing.T) {
 		proj, err := LoadProjectInstructions(t.TempDir())
 		require.NoError(t, err)
 		assert.Nil(t, proj)
 	})
 
-	// orders global before project.
+	// orders global before project
 	t.Run("layers_global_before_project", func(t *testing.T) {
 		global := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(global, "AGENTS.md"), []byte("# Global\n"), 0o644))
@@ -205,7 +181,7 @@ func TestLoadProjectInstructions(t *testing.T) {
 		assert.Equal(t, filepath.Join(project, "AGENTS.md"), proj[1].Path)
 	})
 
-	// tolerates a missing home and an absent cwd.
+	// tolerates a missing home and an absent cwd
 	t.Run("skips_empty_and_absent", func(t *testing.T) {
 		proj, err := LoadProjectInstructions("", t.TempDir(), "")
 		require.NoError(t, err)

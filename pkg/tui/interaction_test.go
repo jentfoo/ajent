@@ -206,6 +206,7 @@ func TestUIInputPrompt(t *testing.T) {
 
 func TestPickItemRowRoleTags(t *testing.T) {
 	t.Parallel()
+
 	th := NewTheme(Color256, DefaultPalette())
 
 	t.Run("user_tag_hue", func(t *testing.T) {
@@ -236,6 +237,7 @@ func TestPickItemRowRoleTags(t *testing.T) {
 
 func TestPickItemRowAlignment(t *testing.T) {
 	t.Parallel()
+
 	th := NewTheme(Color256, DefaultPalette())
 
 	items := []PickItem{
@@ -262,6 +264,7 @@ func TestPickItemRowAlignment(t *testing.T) {
 
 func TestPickItemRowNoColorMarksActive(t *testing.T) {
 	t.Parallel()
+
 	th := NewTheme(ColorNone, DefaultPalette())
 
 	live := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "in context"}, false, 80, 4)

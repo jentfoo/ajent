@@ -1164,7 +1164,7 @@ func TestPrefetchCancellation(t *testing.T) {
 		cl := &countingBlockingClassifier{}
 		b.SetClassifier(cl)
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		calls := []agent.ToolCall{bashCall("rm f"), bashCall("git push origin main")}
 		b.Prefetch(ctx, calls)
 		require.Eventually(t, func() bool { return cl.startedN() == 2 }, time.Second, 10*time.Millisecond)
@@ -1182,7 +1182,7 @@ func TestPrefetchCancellation(t *testing.T) {
 		b.SetClassifier(NewCachedClassifier((&blockingClassifier{cancel: stopped}).Classify))
 
 		// the turn stays live past the answer; only the answer may stop the request
-		turnCtx, turnCancel := context.WithCancel(context.Background())
+		turnCtx, turnCancel := context.WithCancel(t.Context())
 		t.Cleanup(turnCancel)
 		b.Prefetch(turnCtx, []agent.ToolCall{bashCall("rm build")})
 

@@ -34,10 +34,6 @@ func fixtureResolver() func(string) (llm.Model, error) {
 	}
 }
 
-// TestFixtureCompact runs the reduction over the committed tool-heavy branch. The
-// measurement is the point: Before and After are taken through the same
-// session.ContextMessages the next request is built from, so a saving that
-// measures is a saving the request actually gets.
 func TestFixtureCompact(t *testing.T) {
 	t.Parallel()
 
@@ -133,8 +129,6 @@ func TestFixtureCompact(t *testing.T) {
 	})
 }
 
-// TestFixtureRecompaction compacts a frozen transcript that already carries a cut,
-// which is the case that used to silently reopen the folded history.
 func TestFixtureRecompaction(t *testing.T) {
 	t.Parallel()
 

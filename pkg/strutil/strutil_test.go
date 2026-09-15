@@ -31,6 +31,7 @@ func TestFirstLine(t *testing.T) {
 
 func TestTrimZero(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		in, want string
 	}{
@@ -45,6 +46,7 @@ func TestTrimZero(t *testing.T) {
 
 func TestFormatTokens(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		in   int
 		want string
@@ -64,6 +66,7 @@ func TestFormatTokens(t *testing.T) {
 
 func TestClip(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		in   string
 		n    int
@@ -81,6 +84,7 @@ func TestClip(t *testing.T) {
 
 func TestFirstArgText(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		in   json.RawMessage
 		want string
@@ -96,6 +100,7 @@ func TestFirstArgText(t *testing.T) {
 
 func TestHumanSize(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		in   int64
 		want string
@@ -112,6 +117,7 @@ func TestHumanSize(t *testing.T) {
 
 func TestElapsed(t *testing.T) {
 	t.Parallel()
+
 	cases := []struct {
 		in   time.Duration
 		want string

@@ -122,8 +122,6 @@ func TestSave(t *testing.T) {
 	})
 }
 
-// helpers ----------------------------------------------------------------
-
 func userPathFor(t *testing.T) string {
 	t.Helper()
 	p, err := UserPath(ConfigFileName)

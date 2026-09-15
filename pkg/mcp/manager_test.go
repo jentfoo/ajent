@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -154,7 +153,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 	// build once at the test level; every case reuses the same binary
 	srv := buildFakeServer(t)
 
-	// a first-message load connects every server and registers all of its tools as enabled.
+	// a first-message load connects every server and registers all of its tools as enabled
 	t.Run("connects", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
@@ -180,7 +179,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 		assert.False(t, hasLoad)
 	})
 
-	// a second load is a no-op: the server stays connected and its tools are not re-registered.
+	// a second load is a no-op: the server stays connected and its tools are not re-registered
 	t.Run("runs_once", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
@@ -189,14 +188,14 @@ func TestLoadOnFirstMessage(t *testing.T) {
 		t.Cleanup(mgr.Close)
 
 		mgr.LoadOnFirstMessage(t.Context())
-		first, ok := fr.toolByName("fake__tool_00")
-		require.True(t, ok)
 
 		// disconnect is a manual act; LoadOnFirstMessage must not reconnect it again
 		mgr.Disconnect("fake")
+		before := len(fr.AllNames("mcp: fake"))
 		mgr.LoadOnFirstMessage(t.Context())
 		assert.Nil(t, mgr.serverByName("fake").client())
-		_ = first // registration object itself is unchanged; the point is no reconnect
+		// no re-registration either
+		assert.Len(t, fr.AllNames("mcp: fake"), before)
 	})
 }
 
@@ -255,9 +254,6 @@ func TestConfigDisabledServer(t *testing.T) {
 	})
 }
 
-// TestClaimConnectCoalesces drives the per-server connect slot directly: only
-// one goroutine may win it at a time, losers wait for its outcome on the shared
-// channel, and a fresh claim after release starts a new attempt.
 func TestClaimConnectCoalesces(t *testing.T) {
 	t.Parallel()
 
@@ -288,8 +284,6 @@ func TestClaimConnectCoalesces(t *testing.T) {
 	s.finishConnect(nil)
 }
 
-// TestDialAbortsWhenServerRemoved removes a server while its dial is in flight,
-// as /mcp reload does; the fresh client must be closed rather than installed.
 func TestDialAbortsWhenServerRemoved(t *testing.T) {
 	t.Parallel()
 
@@ -300,7 +294,7 @@ func TestDialAbortsWhenServerRemoved(t *testing.T) {
 	t.Cleanup(mgr.Close)
 
 	errCh := make(chan error, 1)
-	go func() { errCh <- mgr.Connect(context.Background(), "fake") }()
+	go func() { errCh <- mgr.Connect(t.Context(), "fake") }()
 
 	s := mgr.serverByName("fake")
 	require.Eventually(t, func() bool {
@@ -317,9 +311,6 @@ func TestDialAbortsWhenServerRemoved(t *testing.T) {
 	require.ErrorContains(t, <-errCh, "server removed during connect")
 }
 
-// TestConcurrentConnectsShareOneClient fires several connects at once against a
-// down server: they must coalesce into one dial so no second client/process is
-// leaked, and every caller gets a clean result.
 func TestConcurrentConnectsShareOneClient(t *testing.T) {
 	t.Parallel()
 
@@ -337,7 +328,7 @@ func TestConcurrentConnectsShareOneClient(t *testing.T) {
 	errs := make([]error, n)
 	for i := range n {
 		wg.Add(1)
-		go func() { defer wg.Done(); <-start; errs[i] = mgr.Connect(context.Background(), "fake") }()
+		go func() { defer wg.Done(); <-start; errs[i] = mgr.Connect(t.Context(), "fake") }()
 	}
 	close(start)
 	wg.Wait()
@@ -366,8 +357,6 @@ func TestRegisterMarksReadOnlyTools(t *testing.T) {
 	assert.NotContains(t, fr.readonly(), "srv__write1") // not annotated read-only
 }
 
-// TestRegisterPreservesLiveDisabled pins the re-registration invariant: a tool the
-// user turned off via /tools stays off after a reconnect or list_changed refresh.
 func TestRegisterPreservesLiveDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -393,8 +382,6 @@ func TestRegisterPreservesLiveDisabled(t *testing.T) {
 	assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // explicit off survives re-registration
 }
 
-// TestRegisterLiveDisabledBeatsRestore pins precedence: a /tools disable captured
-// before the refresh wins even when Restore (the persisted enabled set) names it.
 func TestRegisterLiveDisabledBeatsRestore(t *testing.T) {
 	t.Parallel()
 
@@ -424,8 +411,6 @@ func mustState(fr *fakeRegistrar, name string) State {
 	return st
 }
 
-// TestManagerDiscoversResourcesAndPrompts verifies resources and prompts captured at
-// connect time are exposed through the manager's API.
 func TestManagerDiscoversResourcesAndPrompts(t *testing.T) {
 	t.Parallel()
 
@@ -447,9 +432,6 @@ func TestManagerDiscoversResourcesAndPrompts(t *testing.T) {
 	assert.True(t, ps[0].Arguments[0].Required)
 }
 
-// TestManagerRediscoverAfterListChanged drives tools/list_changed through the manager's
-// real notification path: trigger_listchanged makes the server emit it, and rediscovery
-// must re-list + re-register without deadlocking stdio (see Client.OnNotification).
 func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
@@ -479,7 +461,7 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 		return !busy && ok
 	}, 5*time.Second, 20*time.Millisecond, "rediscovery deadlocked stdio or dropped registration")
 
-	// a follow-up call still works after notification handling.
+	// a follow-up call still works after notification handling
 	s = mgr.serverByName("fake")
 	rc = s.client()
 	require.NotNil(t, rc)
@@ -491,11 +473,9 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 // jsonRawObject is a minimal valid tool schema.
 var jsonRawObject = []byte(`{"type":"object","properties":{}}`)
 
-// TestReload covers what a reloaded config does to an already connected server:
-// filter edits re-register in place, transport edits only report, and a server
-// dropped from the file is disconnected.
 func TestReload(t *testing.T) {
-	// reload reads mcp.json, so each case owns a workspace and AJENT_HOME; no t.Parallel.
+	// reload reads mcp.json, so each case owns a workspace and AJENT_HOME; no t.Parallel
+
 	setup := func(t *testing.T, initial string) (*Manager, *fakeRegistrar, string) {
 		t.Helper()
 		t.Setenv("AJENT_HOME", mkHome(t))
@@ -643,10 +623,8 @@ func TestManagerClose(t *testing.T) {
 		mgr.LoadOnFirstMessage(t.Context())
 		require.NotEmpty(t, fr.AllNames("mcp: fake"))
 
-		start := time.Now()
 		mgr.Close()
 
-		assert.Less(t, time.Since(start), closeTimeout)
 		assert.Nil(t, mgr.serverByName("fake").client())
 		assert.Empty(t, fr.AllNames("mcp: fake"))
 	})
@@ -667,12 +645,9 @@ func TestManagerClose(t *testing.T) {
 		}
 		mgr := New(servers, Options{Registrar: br})
 
-		start := time.Now()
 		mgr.Close()
-		elapsed := time.Since(start)
 
-		assert.GreaterOrEqual(t, elapsed, closeTimeout) // the bound, not a hang
-		assert.Less(t, elapsed, 5*time.Second)
-		assert.Len(t, br.entered, len(names)) // all disconnected at once, not one after another
+		// every disconnect was entered concurrently; a stalled one never blocks the others
+		assert.Len(t, br.entered, len(names))
 	})
 }

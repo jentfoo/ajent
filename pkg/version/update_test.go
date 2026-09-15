@@ -28,7 +28,7 @@ func TestSelfUpdate(t *testing.T) {
 
 	t.Run("newer_version_installs", func(t *testing.T) {
 		latest := "v3.4.5"
-		res := selfUpdateWith(context.Background(), "v1.0.2",
+		res := selfUpdateWith(t.Context(), "v1.0.2",
 			fakeUpdateCmds(latest, nil))
 		require.NoError(t, res.Err)
 		assert.True(t, res.Installed)
@@ -37,21 +37,21 @@ func TestSelfUpdate(t *testing.T) {
 
 	t.Run("already_up_to_date", func(t *testing.T) {
 		current := "v1.2.3"
-		res := selfUpdateWith(context.Background(), current,
+		res := selfUpdateWith(t.Context(), current,
 			fakeUpdateCmds(current, nil))
 		require.NoError(t, res.Err)
 		assert.False(t, res.Installed)
 	})
 
 	t.Run("resolve_error_reported", func(t *testing.T) {
-		res := selfUpdateWith(context.Background(), "v1.0.2",
+		res := selfUpdateWith(t.Context(), "v1.0.2",
 			fakeUpdateCmds("", errors.New("offline")))
 		require.Error(t, res.Err)
 		assert.False(t, res.Installed)
 	})
 
 	t.Run("install_error_reported", func(t *testing.T) {
-		res := selfUpdateWith(context.Background(), "v1.0.3",
+		res := selfUpdateWith(t.Context(), "v1.0.3",
 			fakeUpdateCmds("v2.5.6", errors.New("offline")))
 		require.Error(t, res.Err)
 		assert.False(t, res.Installed)
@@ -92,17 +92,14 @@ func TestUpdateResultNotice(t *testing.T) {
 			assert.Equal(t, tc.want, tc.res.Notice())
 		})
 	}
-}
 
-func TestVersionLabel(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct{ in, want string }{
-		{"v6.7.8", "v6.7.8"},
-		{"dev", "v0.0.0-dev"},
-		{"", "v0.0.0-dev"},
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.want, versionLabel(tc.in))
-	}
+	t.Run("label", func(t *testing.T) {
+		for _, tc := range []struct{ in, want string }{
+			{"v6.7.8", "v6.7.8"},
+			{"dev", "v0.0.0-dev"},
+			{"", "v0.0.0-dev"},
+		} {
+			assert.Equal(t, tc.want, versionLabel(tc.in))
+		}
+	})
 }

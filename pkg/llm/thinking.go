@@ -11,7 +11,7 @@ const (
 	minAnswerTokens = 1024
 )
 
-// applyThinking dispatches reasoning on or off onto the wire shape pi emits for
+// applyThinking dispatches reasoning on or off onto the wire shape for
 // caps.Thinking. It runs after max-tokens fields are set in buildCompatBody so
 // the vLLM thinking_token_budget can read them; it writes nothing when reasoning
 // is unsupported or this request has none.
@@ -151,7 +151,7 @@ func applyThinkingTokenBudget(body *compatRequest, req Request, lvl Level, on bo
 
 // chatTemplateValues resolves configured template additions onto the kwargs a
 // provider expects. Literal scalars pass through; every object that is not
-// $var:"thinking.enabled" routes through the reasoning effort map, mirroring pi.
+// $var:"thinking.enabled" routes through the reasoning effort map.
 // omitWhenOff drops an object while reasoning is off. It returns nil when nothing survives.
 func chatTemplateValues(vals map[string]json.RawMessage, caps Capabilities, l Level) map[string]any {
 	if len(vals) == 0 {
@@ -184,9 +184,9 @@ func chatTemplateValues(vals map[string]json.RawMessage, caps Capabilities, l Le
 	return out
 }
 
-// chatTemplateEffort maps a level onto the provider effort an object routes to,
-// mirroring pi: on resolves through LevelMap with the bare level as fallback, off
-// only when an explicit off entry exists.
+// chatTemplateEffort maps a level onto the provider effort an object routes to:
+// on resolves through LevelMap with the bare level as fallback, off only when an
+// explicit off entry exists.
 func chatTemplateEffort(caps Capabilities, l Level) (string, bool) {
 	if l != LevelOff {
 		return levelValue(caps, l)
@@ -233,7 +233,7 @@ var thinkingNames = enumNames[ThinkingFormat]{
 	ThinkingThinkTags:        "think-tags",
 }
 
-// thinkingAliases maps legacy spellings pi's catalogue once used onto their
+// thinkingAliases maps legacy spellings once used by a model catalogue onto their
 // canonical format, consulted after the enum lookup fails.
 var thinkingAliases = map[string]ThinkingFormat{
 	"reasoning_effort":  ThinkingOpenAI,
