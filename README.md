@@ -17,7 +17,13 @@ Feedback is welcome. Please open issues if you have any suggestions or comments.
 ```sh
 go install github.com/jentfoo/ajent@latest
 ```
+
 ## Design Philosophy
+
+You may like `ajent` if:
+* You care about copy and paste out of your terminal more than a pretty TUI.
+* You like permission choices that are basically "read anything", "write anything" or "do anything".
+* You use open models, which benefit from minimized context usage, flexible tool handling, and a variety of providers.
 
 ### TUI
 
