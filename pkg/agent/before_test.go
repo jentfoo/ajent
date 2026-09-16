@@ -6,15 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
-// TestInputBeforeAppendedAheadOfText asserts synthetic messages in Input.Before
-// land in transcript order ahead of the user's own text, so a staged tool call
-// + result pair reads as context for what the user then said.
 func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	t.Parallel()
 
@@ -44,9 +42,6 @@ func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	assert.Equal(t, "what was that?", tb.Text)
 }
 
-// TestInputAfterAppendedBehindText asserts Input.After resolves once the user
-// message has landed and its pairs follow it, so a rewind onto that message
-// drops the context it asked for along with it.
 func TestInputAfterAppendedBehindText(t *testing.T) {
 	t.Parallel()
 
@@ -90,8 +85,6 @@ func TestInputAfterAppendedBehindText(t *testing.T) {
 	assert.Equal(t, []string{"delivered", "after", "settled"}, order)
 }
 
-// TestInputAfterOnlyStillLands asserts an input carrying only After is not
-// dropped as an empty steer.
 func TestInputAfterOnlyStillLands(t *testing.T) {
 	t.Parallel()
 
@@ -111,8 +104,6 @@ func TestInputAfterOnlyStillLands(t *testing.T) {
 	assert.Equal(t, "ctx", tb.Text)
 }
 
-// TestInputBeforeMarkedInjected asserts Input.Before messages are appended as
-// injected context so prompt recall (Ctrl+R / up-arrow) excludes them.
 func TestInputBeforeMarkedInjected(t *testing.T) {
 	t.Parallel()
 
@@ -128,7 +119,7 @@ func TestInputBeforeMarkedInjected(t *testing.T) {
 	err := a.Prompt(t.Context(), Input{Before: before, Text: "next?"})
 	require.NoError(t, err)
 
-	// the Before message and the typed prompt both land; only the former is injected.
+	// the Before message and the typed prompt both land; only the former is injected
 	var gotInjected *MessageInfo
 	for i := range infos {
 		tb, ok := infos[i].Message.Content[0].(llm.TextBlock)

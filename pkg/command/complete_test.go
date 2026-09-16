@@ -6,16 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/refs"
-	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/refs"
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 func TestCompleter(t *testing.T) {
 	t.Parallel()
 
-	// a slash command at the line start is offered.
+	// a slash command at the line start is offered
 	t.Run("commands_at_line_start", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()
@@ -54,7 +55,7 @@ func TestCompleter(t *testing.T) {
 		assert.Contains(t, labelsOf(items), "/model")
 	})
 
-	// a path after @ is completed.
+	// a path after @ is completed
 	t.Run("path_after_at", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
@@ -71,7 +72,7 @@ func TestCompleter(t *testing.T) {
 		assert.Contains(t, labels, "main.go")
 	})
 
-	// a cursor on @ with nothing after offers no completion.
+	// a cursor on @ with nothing after offers no completion
 	t.Run("cursor_on_at_does_not_panic", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
@@ -80,12 +81,12 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		comp := NewCompleter(r, c, idx)
 
-		// cursor sits on the @ (a break precedes it) with nothing after; no path to complete.
+		// cursor sits on the @ (a break precedes it) with nothing after; no path to complete
 		_, items := comp.Complete(" @", 1)
 		assert.Empty(t, items)
 	})
 
-	// completion does not trigger mid-token without a special char.
+	// completion does not trigger mid-token without a special char
 	t.Run("no_trigger_mid_token", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()
@@ -95,7 +96,7 @@ func TestCompleter(t *testing.T) {
 		assert.Empty(t, items)
 	})
 
-	// a trailing space still offers every argument candidate.
+	// a trailing space still offers every argument candidate
 	t.Run("trailing_space_lists_all_args", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()
@@ -141,7 +142,7 @@ func TestCompleter(t *testing.T) {
 		assert.Empty(t, items)
 	})
 
-	// a command delegates argument completion to its own Complete.
+	// a command delegates argument completion to its own Complete
 	t.Run("argument_delegates", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()

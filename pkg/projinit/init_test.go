@@ -8,12 +8,14 @@ import (
 	"testing"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSurvey(t *testing.T) {
@@ -182,8 +184,7 @@ func TestSurvey(t *testing.T) {
 	t.Run("without_read", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md")
-		// an empty registry has no read; drafting blind could overwrite a file
-		// the model never saw
+		// an empty registry has no read; drafting blind could overwrite a file the model never saw
 		_, err := New(Options{Cwd: dir, Registry: tools.New()}).Survey(t.Context())
 		require.ErrorIs(t, err, ErrNoRead)
 	})

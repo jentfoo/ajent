@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func (e *toolEnv) editDryRun(args string) error {
@@ -59,7 +60,7 @@ func TestDecodeEditParams(t *testing.T) {
 	})
 
 	t.Run("array_into_object_names_field", func(t *testing.T) {
-		// the message names the shape instead of leaking a Go type.
+		// the message names the shape instead of leaking a Go type
 		_, err := decodeEditParams(json.RawMessage(`[1]`))
 		assert.EqualError(t, err, "arguments must be a JSON object, but was given a JSON array")
 	})

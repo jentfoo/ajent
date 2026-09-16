@@ -9,10 +9,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func (r *Registry) enabled(name string) bool {
@@ -42,6 +43,7 @@ func editCall(path, old, new string) agent.ToolCall {
 // wrapper plus the env backing it.
 func guardedEdit(t *testing.T) (agent.Tool, *toolEnv) {
 	t.Helper()
+
 	e := newToolEnv(t.TempDir())
 	r := New()
 	r.Register(&editTool{policy: e.policy, tracker: e.tracker}, true)
@@ -233,7 +235,7 @@ func TestRegistryTrackerExposedByBuiltins(t *testing.T) {
 func TestRegistryDryRun(t *testing.T) {
 	t.Parallel()
 
-	// a tool implementing DryRunner is consulted: a doomed call errors.
+	// a tool implementing DryRunner is consulted: a doomed call errors
 	t.Run("dispatches_to_tool", func(t *testing.T) {
 		dir := t.TempDir()
 		e := newToolEnv(dir)
@@ -247,7 +249,7 @@ func TestRegistryDryRun(t *testing.T) {
 		require.NoError(t, reg.DryRun(c))
 	})
 
-	// a non-dry tool cannot predict; never skip a prompt on uncertainty.
+	// a non-dry tool cannot predict; never skip a prompt on uncertainty
 	t.Run("nil_for_non_dry_tool", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		reg := New()
@@ -396,8 +398,6 @@ func TestRegistryUnitsRowNamesAndSource(t *testing.T) {
 	assert.Len(t, rows, 1)
 }
 
-// TestGuardedToolPreviewOrdering pins when the change is rendered: before the
-// guard chain runs, so an approval dialog opens below the full diff.
 func TestGuardedToolPreviewOrdering(t *testing.T) {
 	t.Parallel()
 
@@ -507,8 +507,6 @@ func TestGuardedToolPreviewSkipsNonPreviewers(t *testing.T) {
 	assert.Empty(t, dc.calls)
 }
 
-// TestRegistryConcurrentRegisterAndSetEnabled exercises the group-name expansion
-// path under the lock, so -race catches a read of r.groups outside it.
 func TestRegistryConcurrentRegisterAndSetEnabled(t *testing.T) {
 	r := New()
 	for _, n := range []string{"read", "write"} {
@@ -578,7 +576,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		return out
 	}
 
-	// oversized text spills and the footer names the file; fields survive.
+	// oversized text spills and the footer names the file; fields survive
 	t.Run("oversized_result_spills", func(t *testing.T) {
 		var b strings.Builder
 		for i := 0; i < OtherLimit().Lines+50; i++ {
@@ -600,7 +598,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		assert.Equal(t, "details", res.Details)
 	})
 
-	// within the bound the original blocks pass through byte-identical.
+	// within the bound the original blocks pass through byte-identical
 	t.Run("in_bound_result_unchanged", func(t *testing.T) {
 		res := exec(agent.ToolResult{
 			Content: llm.BlockList{llm.TextBlock{Text: "one"}, llm.TextBlock{Text: "two"}},
@@ -611,7 +609,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		assert.Equal(t, "one\ntwo", joined)
 	})
 
-	// non-text content cannot be rebuilt faithfully, so it stays whole.
+	// non-text content cannot be rebuilt faithfully, so it stays whole
 	t.Run("non_text_content_untouched", func(t *testing.T) {
 		res := exec(agent.ToolResult{
 			Content: llm.BlockList{llm.ImageBlock{Data: []byte{1}}},
@@ -622,7 +620,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		assert.IsType(t, llm.ImageBlock{}, res.Content[0]) // image block preserved, not rewritten
 	})
 
-	// a self-bounding tool is never double-bounded by the registry.
+	// a self-bounding tool is never double-bounded by the registry
 	t.Run("self_bounding_tool_unwrapped", func(t *testing.T) {
 		r := New()
 		r.Register(&readTool{policy: PathPolicy{Cwd: t.TempDir()}, tracker: NewTracker()}, true)

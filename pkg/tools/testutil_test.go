@@ -42,8 +42,7 @@ func (f *fakeTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent
 	return agent.ToolResult{}, nil
 }
 
-// recordingTool records whether Execute ran so a denial can be shown to touch
-// nothing on disk.
+// recordingTool records whether Execute ran so a denial can be shown to touch nothing on disk.
 type recordingTool struct {
 	done bool
 }

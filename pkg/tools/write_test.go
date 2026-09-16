@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func TestWrite(t *testing.T) {
@@ -93,7 +94,7 @@ func TestWrite(t *testing.T) {
 		assert.Equal(t, "new line here\r\n", string(data)) // CRLF restored on write
 	})
 
-	// a brand-new file defaults to LF.
+	// a brand-new file defaults to LF
 	t.Run("new_file_gets_lf", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		res := e.writeExec(t.Context(), `{"path":"fresh.txt","content":"one\ntwo\n"}`)

@@ -320,7 +320,7 @@ func (e *editor) layoutAt(width, firstW, contW int) (starts, ends []int) {
 	// word boundaries (trailing spaces dropped) so a word wraps whole to the next
 	// line; explicit newlines and too-wide tokens still split.
 	starts = append(starts, 0)
-	i := 0
+	var i int
 	for i < len(cells) {
 		prefixW := firstW
 		if len(starts) > 1 { // continuation rows indent by two
@@ -329,7 +329,7 @@ func (e *editor) layoutAt(width, firstW, contW int) (starts, ends []int) {
 		rowStart := i
 		end, lineW := rowStart, prefixW
 		lastSpace := -1 // last wrap-able space cell index in this row
-		overflow := false
+		var overflow bool
 		for end < len(cells) && cells[end] != "\n" {
 			w := displayWidth(cells[end])
 			if lineW+w > width {

@@ -47,7 +47,7 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	openRouterDevRoleModel := isOpenRouter &&
 		(strings.HasPrefix(modelID, "anthropic/") || strings.HasPrefix(modelID, "openai/"))
 	// cache-control format keys on the literal provider name, not the base URL
-	cacheControlFormat := ""
+	var cacheControlFormat string
 	if provider == "openrouter" && strings.HasPrefix(modelID, "anthropic/") {
 		cacheControlFormat = "anthropic"
 	}

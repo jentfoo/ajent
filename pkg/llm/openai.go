@@ -122,7 +122,7 @@ func responsesInput(req Request, caps Capabilities) ([]respItem, error) {
 
 	// msgIndex counts every converted message so fallback ids stay unique across
 	// turns; every message counts once.
-	msgIndex := 0
+	var msgIndex int
 	for _, m := range msgs {
 		// mid-conversation system messages become input items rather than being
 		// dropped; the top-level prompt is handled as instructions
@@ -143,8 +143,8 @@ func responsesInput(req Request, caps Capabilities) ([]respItem, error) {
 func responsesItems(m Message, caps Capabilities, msgIndex int) ([]respItem, error) {
 	var out []respItem
 	var content []respContent
-	id, phase := "", ""
-	textN := 0 // text-block counter for fallback ids within this message
+	var id, phase string
+	var textN int // text-block counter for fallback ids within this message
 
 	flushMessage := func() {
 		if len(content) == 0 {
@@ -514,7 +514,7 @@ func (s *responsesStream) onItemDone(ev respEvent) []Event {
 		s.emittedReasoning[block.ItemID] = respEmittedThink{idx: ev.OutputIndex, block: block}
 		return []Event{{Type: EventThinkingEnd, Index: ev.OutputIndex, Block: block}}
 	case respTypeMessage:
-		sig := ""
+		var sig string
 		if ev.Item != nil {
 			sig = encodeTextSignature(ev.Item.ID, ev.Item.Phase)
 		}

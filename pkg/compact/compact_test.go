@@ -7,10 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/session"
 )
 
 // mustMsgs returns the messages ContextMessages would send for branch under cd.
@@ -222,8 +223,7 @@ func TestCompactRecompaction(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000}
 	run := summaryRun("## Goal\nfresh")
 
-	// priorBranch is eight folded steps, a compaction keeping from "a7", then ten
-	// new steps recorded after it.
+	// priorBranch is eight folded steps, a compaction keeping from "a7", then ten new steps recorded after it
 	priorBranch := func(t *testing.T) []session.Entry {
 		t.Helper()
 		branch := toolBranch(t, 8, 400)

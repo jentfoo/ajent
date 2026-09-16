@@ -90,7 +90,7 @@ func unifiedDiff(path, before, after string) string {
 // lineStarts returns each line's byte offset in the LF-joined text.
 func lineStarts(lines []string) []int {
 	starts := make([]int, len(lines))
-	off := 0
+	var off int
 	for i := range lines {
 		starts[i] = off
 		off += len(lines[i]) + 1 // +1 for the newline separator

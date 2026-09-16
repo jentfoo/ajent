@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func resolveModel(key string) (llm.Model, error) {
@@ -45,7 +46,7 @@ func TestStateAppliesToolsSetting(t *testing.T) {
 func TestStateCompactionRebuild(t *testing.T) {
 	t.Parallel()
 
-	// a summary plus the kept tail rebuild into messages.
+	// a summary plus the kept tail rebuild into messages
 	t.Run("emits_summary_and_kept_tail", func(t *testing.T) {
 		branch := []Entry{
 			msgWithID("m1", llm.Text(llm.RoleUser, "first")),
@@ -63,7 +64,7 @@ func TestStateCompactionRebuild(t *testing.T) {
 		assert.Equal(t, "kept start", textOf(st.Messages[1]))
 	})
 
-	// firstKeptEntryId can point before the compaction entry in file order.
+	// firstKeptEntryId can point before the compaction entry in file order
 	t.Run("keeps_from_earlier_message", func(t *testing.T) {
 		branch := []Entry{
 			msgWithID("m1", llm.Text(llm.RoleUser, "drop me")),
@@ -137,7 +138,7 @@ func TestSettingOverridesLastWriteWins(t *testing.T) {
 func TestStateLedger(t *testing.T) {
 	t.Parallel()
 
-	// a resumed branch folds each message's reported usage back into the ledger totals.
+	// a resumed branch folds each message's reported usage back into the ledger totals
 	t.Run("rebuilds_from_recorded_usage", func(t *testing.T) {
 		branch := []Entry{
 			entry(TypeSession, SessionData{Model: "p/m1"}),
@@ -153,7 +154,7 @@ func TestStateLedger(t *testing.T) {
 		assert.Equal(t, 1000+200+500+50,
 			totals.Input+totals.Output+totals.CacheRead+totals.CacheWrite)
 
-		// a recorded response snaps the context exact terms to its input+output.
+		// a recorded response snaps the context exact terms to its input+output
 		cs := st.Tokens.Context()
 		assert.False(t, cs.Estimated)
 	})
@@ -167,7 +168,7 @@ func TestStateLedger(t *testing.T) {
 			usageMessage("a0", "summarized away reply", llm.Usage{Input: 4000, Output: 1000}), // before the cut
 			msgWithID("u1", llm.Text(llm.RoleUser, "kept ask")),                               // no usage -> estimated
 		)
-		// a compaction whose firstKept is u1 folds everything before it into the summary.
+		// a compaction whose firstKept is u1 folds everything before it into the summary
 		branch = append(branch,
 			Entry{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"s","firstKeptEntryId":"u1"}`)})
 
@@ -175,7 +176,7 @@ func TestStateLedger(t *testing.T) {
 		assert.Empty(t, warns)
 		require.Len(t, stCompact.Messages, 2) // summary + kept ask
 
-		// the same history without a cut: a0's exact terms stay in context.
+		// the same history without a cut: a0's exact terms stay in context
 		fullBranch := branch[:len(branch)-1]
 		stFull, _ := State(fullBranch, resolveModel)
 
@@ -184,7 +185,7 @@ func TestStateLedger(t *testing.T) {
 		assert.Less(t, stCompact.Tokens.Context().Used, stFull.Tokens.Context().Used)
 	})
 
-	// rewinding onto a mid-branch point yields a ledger covering only the messages before it.
+	// rewinding onto a mid-branch point yields a ledger covering only the messages before it
 	t.Run("rewind_rebuilds_for_point_only", func(t *testing.T) {
 		branch := []Entry{
 			entry(TypeSession, SessionData{Model: "p/m1"}),
@@ -196,7 +197,7 @@ func TestStateLedger(t *testing.T) {
 		stFull, warns := State(branch, resolveModel)
 		assert.Empty(t, warns)
 
-		// rewind before the last assistant message: only a1's spend survives.
+		// rewind before the last assistant message: only a1's spend survives
 		rewound := branch[:3]
 		stPart, warns := State(rewound, resolveModel)
 		assert.Empty(t, warns)
@@ -207,13 +208,11 @@ func TestStateLedger(t *testing.T) {
 		sum := func(u llm.Usage) int {
 			return u.Input + u.Output + u.CacheRead + u.CacheWrite
 		}
-		// the rewound ledger holds strictly less spend than the full one.
+		// the rewound ledger holds strictly less spend than the full one
 		assert.Less(t, sum(totalsPart), sum(fullTotals))
 		require.NotZero(t, sum(totalsPart)) // but it kept the earlier reported turn
 	})
 }
-
-// helpers ---------------------------------------------------------
 
 func modelChange(key string) Entry { return entry(TypeModelChange, ModelData{Model: key}) }
 
@@ -262,7 +261,7 @@ func usageMessage(id string, text string, u llm.Usage) Entry {
 func TestStateContextPrecision(t *testing.T) {
 	t.Parallel()
 
-	// a cut that rewrote the branch re-measures, so the bar wears its ~.
+	// a cut that rewrote the branch re-measures, so the bar wears its ~
 	t.Run("compacted_rebuild_remeasures", func(t *testing.T) {
 		// the cut keeps only m4, so the next request is a short summary plus that message.
 		// m4's recorded prompt describes the 150k request it was sent with, which no

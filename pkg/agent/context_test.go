@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // ctxCatcher records every ContextState the loop emits, for turn accounting tests.
@@ -112,7 +113,7 @@ func TestFirstTurnContextIncludesSystemAndTools(t *testing.T) {
 
 	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
 
-	// what the request owes beyond its messages: system prompt + tool schemas.
+	// what the request owes beyond its messages: system prompt + tool schemas
 	fixed := tokens.EstimateFixed(llm.Request{
 		System: buildSystem(st, testEnv, a.opts.ProjectInstructions, nil),
 		Tools:  set.Schemas(),
@@ -128,8 +129,6 @@ func TestFirstTurnContextIncludesSystemAndTools(t *testing.T) {
 	assert.True(t, sawBase)
 }
 
-// bigDelta is prose long enough that a single delta moves Used past the emit
-// throttle, so each lands as its own progressive Context update.
 func TestStreamingEmitsProgressiveContext(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +155,6 @@ func TestStreamingEmitsProgressiveContext(t *testing.T) {
 	err := a.Prompt(t.Context(), Input{Text: "x"})
 	require.NoError(t, err)
 
-	// more than one Context emit means the bar advanced mid-stream, not just at end.
+	// more than one Context emit means the bar advanced mid-stream, not just at end
 	assert.GreaterOrEqual(t, len(catch.states), 2)
 }

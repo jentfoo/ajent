@@ -116,8 +116,7 @@ func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error
 		if c.tran == "sse" {
 			cl, err = mcpclient.NewSSEMCPClient(cfg.URL, transport.WithHeaders(hdr))
 		} else {
-			cl, err = mcpclient.NewStreamableHttpClient(cfg.URL,
-				transport.WithHTTPHeaders(hdr))
+			cl, err = mcpclient.NewStreamableHttpClient(cfg.URL, transport.WithHTTPHeaders(hdr))
 		}
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: connect: %w", name, err)
@@ -215,7 +214,7 @@ func (c *Client) spawnStdio(ctx context.Context) error {
 func mcpEnv(cfg ServerConfig) []string {
 	env := os.Environ()
 	for k, v := range cfg.Env { // replace or append each override
-		found := false
+		var found bool
 		for i, kv := range env {
 			if strings.HasPrefix(kv, k+"=") {
 				env[i] = k + "=" + v
@@ -234,7 +233,7 @@ func mcpEnv(cfg ServerConfig) []string {
 // as raw JSON so a lossy typed decode cannot drop schema keywords.
 func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 	var out []ToolDef
-	cursor := ""
+	var cursor string
 	for {
 		resp, err := c.sendRaw(ctx, string(mcp.MethodToolsList), listToolParams(cursor))
 		if err != nil {
@@ -290,7 +289,7 @@ type promptPage struct {
 // unsupported listing returns an error; callers treat discovery as best effort.
 func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
 	var out []Resource
-	cursor := ""
+	var cursor string
 	for {
 		resp, err := c.sendRaw(ctx, string(mcp.MethodResourcesList), listToolParams(cursor))
 		if err != nil {
@@ -315,7 +314,7 @@ func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
 // Prompts lists the server's prompt templates, following pagination.
 func (c *Client) Prompts(ctx context.Context) ([]PromptDef, error) {
 	var out []PromptDef
-	cursor := ""
+	var cursor string
 	for {
 		resp, err := c.sendRaw(ctx, string(mcp.MethodPromptsList), listToolParams(cursor))
 		if err != nil {
@@ -410,10 +409,9 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage, ou
 // OnNotification registers a handler for server notifications (progress,
 // tools/list_changed). Handlers are invoked asynchronously: mcp-go delivers
 // notifications on its transport's single reader goroutine, so doing blocking I/O
-// inside a handler (e.g. re-discovering after list_changed) would deadlock stdio;
-// the reader is what returns those responses. Dispatching each notification to its
-// own goroutine keeps that invariant at this boundary for every current and future
-// handler.
+// inside a handler would deadlock stdio; the reader is what returns those
+// responses. Dispatching each notification to its own goroutine keeps that
+// invariant at this boundary for every current and future handler.
 func (c *Client) OnNotification(h func(mcp.JSONRPCNotification)) {
 	if c.c == nil {
 		return

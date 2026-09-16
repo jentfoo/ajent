@@ -66,7 +66,7 @@ func TestModeNextCyclesInOrder(t *testing.T) {
 func TestModeStringRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	// String() must round-trip through ParseMode for every valid mode.
+	// String() must round-trip through ParseMode for every valid mode
 	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoWrite, ModeBlockAll} {
 		got, ok := ParseMode(m.String())
 		assert.True(t, ok)

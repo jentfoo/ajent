@@ -154,9 +154,6 @@ func newPTYUI(t *testing.T, master, slave *os.File) *UI {
 	return u
 }
 
-// TestPTYResizeStrandsNoRow drives narrowing and widening over a real pty and
-// asserts what the whole machinery exists to guarantee: exactly one divider,
-// committed history never doubled, and the park on the block's top row.
 func TestPTYResizeStrandsNoRow(t *testing.T) {
 	master, slave := openPTY(t)
 	setPTYSize(t, master, 60, 20)
@@ -212,9 +209,6 @@ func TestPTYContaminatedRowParks(t *testing.T) {
 	assert.Equal(t, strings.Repeat(ruleChar, 29), v.Line(v.row))
 }
 
-// TestPTYKeystrokes types through the kernel's line discipline: the bytes reach
-// the decoder, the line submits, and raw mode means the terminal never echoed
-// them, so the only copy on screen is the one the UI painted.
 func TestPTYKeystrokes(t *testing.T) {
 	master, slave := openPTY(t)
 	setPTYSize(t, master, 60, 20)
@@ -237,8 +231,6 @@ func TestPTYKeystrokes(t *testing.T) {
 	}
 }
 
-// TestPTYRawMode asserts the line discipline itself, the state the whole
-// renderer assumes: raw while the UI is live, exactly as found on teardown.
 func TestPTYRawMode(t *testing.T) {
 	master, slave := openPTY(t)
 	setPTYSize(t, master, 60, 20)
@@ -295,9 +287,6 @@ func TestPTYSignalResize(t *testing.T) {
 	assert.Equal(t, 34, u.Width())
 }
 
-// TestPTYSignalResizeReanchors drives the re-anchor over a real pty. The pty
-// carries no terminal of its own, so the test writes the replies a clamped
-// terminal would send.
 func TestPTYSignalResizeReanchors(t *testing.T) {
 	master, slave := openPTY(t)
 	setPTYSize(t, master, 80, 24)
@@ -333,8 +322,6 @@ func TestPTYSignalResizeReanchors(t *testing.T) {
 	assert.Equal(t, 48, u.Width())
 }
 
-// TestPTYTeardown asserts what a terminal is left holding after Close: the
-// cursor back, bracketed paste off, and a second Close changing nothing.
 func TestPTYTeardown(t *testing.T) {
 	master, slave := openPTY(t)
 	setPTYSize(t, master, 60, 20)

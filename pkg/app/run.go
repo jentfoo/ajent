@@ -18,13 +18,13 @@ import (
 // Run carries the parsed command line through config load, model resolution and
 // either a headless turn or the interactive driver. It returns an exit code.
 func Run(o RunOptions) int {
-	// the flag layer outranks every file layer; -m/--render stop being ad hoc.
+	// the flag layer outranks every file layer; -m/--render stop being ad hoc
 	flagLayer := config.Layer{Name: "flag"}
 	if o.Model != "" {
 		var err error
 		flagLayer.Data, err = config.SetKey(flagLayer.Data, "model", o.Model)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "ajent:", err)
+			_, _ = fmt.Fprintln(os.Stderr, "ajent:", err)
 			return ExitUsage
 		}
 	}
@@ -36,14 +36,14 @@ func Run(o RunOptions) int {
 		Flags:     flagLayer,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "ajent:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "ajent:", err)
 		return ExitUsage
 	}
 
 	modeName := set.Settings().UI.Render
 	mode, ok := tui.ParseMode(modeName)
 	if !ok || modeName == "" {
-		fmt.Fprintf(os.Stderr, "ajent: unknown render mode %q\n", modeName)
+		_, _ = fmt.Fprintf(os.Stderr, "ajent: unknown render mode %q\n", modeName)
 		return ExitUsage
 	}
 	colorName := set.Settings().UI.Color
@@ -63,7 +63,7 @@ func Run(o RunOptions) int {
 	// and the interactive driver, so every path reads one models file.
 	reg, wregs, rerr := registryFor(set)
 	if rerr != nil {
-		fmt.Fprintln(os.Stderr, "ajent:", rerr)
+		_, _ = fmt.Fprintln(os.Stderr, "ajent:", rerr)
 		return ExitUsage
 	}
 	warnings = append(warnings, wregs...)
@@ -100,7 +100,7 @@ func Run(o RunOptions) int {
 		MaxTokens:  active.ContextWindow,
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "ajent:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "ajent:", err)
 		return ExitUsage
 	}
 	defer ui.Close()
@@ -131,8 +131,7 @@ func Run(o RunOptions) int {
 
 	resumeLabel := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.Args)
 
-	// Restore the terminal before printing so the hint is visible after a Ctrl+C /
-	// Ctrl+D quit, then tell the user how to get back to this conversation.
+	// tell the user how to get back to this conversation
 	ui.Close()
 	if resumeLabel != "" {
 		fmt.Printf("\nRun `ajent --resume %s` to resume this session.\n", resumeLabel)

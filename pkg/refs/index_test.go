@@ -8,13 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// TestHomeOneLevel proves ~ completion lists one directory and never recurses:
-// a deeply nested file must not surface from a top-level query.
 func TestHomeOneLevel(t *testing.T) {
 	home := t.TempDir()
 	writeTree(t, home, "deep/one/two/three.txt", ".bashrc")
@@ -43,7 +42,7 @@ func TestCandidates(t *testing.T) {
 		idx := NewIndex(dir)
 
 		assert.Equal(t, []string{"deep/", "main.go"}, labelsOf(idx.Candidates("", nil)))
-		// drilling one level at a time reaches the deep file.
+		// drilling one level at a time reaches the deep file
 		sub := idx.Candidates("deep/one/two/th", nil)
 		assert.Equal(t, []string{"deep/one/two/three.txt"}, labelsOf(sub))
 	})
@@ -94,11 +93,11 @@ func TestCandidates(t *testing.T) {
 		drill := idx.Candidates(filepath.Join(dir, "ma"), nil)
 		assert.Equal(t, []string{filepath.Join(dir, "main.go")}, labelsOf(drill))
 
-		// a trailing slash lists that directory's immediate children.
+		// a trailing slash lists that directory's immediate children
 		children := idx.Candidates(dir+"/", nil)
 		assert.Equal(t, []string{dir + "/main.go"}, labelsOf(children))
 
-		// the parent dir shows the workspace as one completable sibling.
+		// the parent dir shows the workspace as one completable sibling
 		siblings := labelsOf(idx.Candidates(parent+"/", nil))
 		require.True(t, slices.ContainsFunc(siblings,
 			func(l string) bool { return strings.HasSuffix(l, baseName+"/") }))
@@ -142,6 +141,7 @@ func TestCandidates(t *testing.T) {
 			}
 			assert.NotContains(t, labelsOf(cands), "main.go")
 		})
+
 		t.Run("drills_deeper_with_slash", func(t *testing.T) {
 			docs := idx.Candidates("~/d", nil)
 			require.Equal(t, []string{"~/docs/"}, labelsOf(docs))
@@ -189,6 +189,7 @@ func TestShellCandidates(t *testing.T) {
 // restoreHome points the injected userHome at home for the duration of a test.
 func restoreHome(t *testing.T, home string) {
 	t.Helper()
+
 	orig := userHome
 	userHome = func() (string, error) { return home, nil }
 	t.Cleanup(func() { userHome = orig })
@@ -197,6 +198,7 @@ func restoreHome(t *testing.T, home string) {
 // writeTree creates the given relative files (creating parent dirs) under root.
 func writeTree(t *testing.T, root string, rels ...string) {
 	t.Helper()
+
 	for _, rel := range rels {
 		p := filepath.Join(root, rel)
 		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o700))

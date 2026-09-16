@@ -27,6 +27,7 @@ func TestThemeSetup(t *testing.T) {
 		assert.Equal(t, paletteNames(tui.PalettesFor(tui.ToneLight)), optionLabels(c.selectOpts[0]))
 		assert.Equal(t, "light", c.palette.Name)
 	})
+
 	t.Run("unknown_tone_offers_all", func(t *testing.T) {
 		t.Setenv(config.EnvHome, t.TempDir())
 		c := newFakeConsole(t)
@@ -38,6 +39,7 @@ func TestThemeSetup(t *testing.T) {
 		require.Len(t, c.selectOpts, 1)
 		assert.Equal(t, paletteNames(tui.Palettes()), optionLabels(c.selectOpts[0]))
 	})
+
 	t.Run("choice_is_recorded_and_saved", func(t *testing.T) {
 		t.Setenv(config.EnvHome, t.TempDir())
 		c := newFakeConsole(t)
@@ -55,6 +57,7 @@ func TestThemeSetup(t *testing.T) {
 		require.Len(t, c.saveCalls, 1)
 		assert.Equal(t, saveCall{layer: "user", key: themeKey}, c.saveCalls[0])
 	})
+
 	t.Run("esc_persists_detected_match", func(t *testing.T) {
 		t.Setenv(config.EnvHome, t.TempDir())
 		c := newFakeConsole(t)
@@ -66,6 +69,7 @@ func TestThemeSetup(t *testing.T) {
 		require.Len(t, c.saveCalls, 1) // saved, so the picker never returns
 		assert.Equal(t, themeKey, c.saveCalls[0].key)
 	})
+
 	t.Run("esc_without_detection_uses_default", func(t *testing.T) {
 		t.Setenv(config.EnvHome, t.TempDir())
 		c := newFakeConsole(t)
@@ -75,6 +79,7 @@ func TestThemeSetup(t *testing.T) {
 
 		assert.Equal(t, tui.DefaultPalette().Name, c.palette.Name)
 	})
+
 	t.Run("existing_choice_skips_picker", func(t *testing.T) {
 		t.Setenv(config.EnvHome, t.TempDir())
 		c := newFakeConsole(t)
@@ -126,6 +131,7 @@ func TestPaletteSample(t *testing.T) {
 		assert.Contains(t, sample, th.DiffAdd.Open())
 		assert.Contains(t, sample, th.DiffDel.Open())
 	})
+
 	t.Run("plain_without_color", func(t *testing.T) {
 		sample := paletteSample(tui.ColorNone, tui.DefaultPalette())
 		assert.NotContains(t, sample, "\x1b")

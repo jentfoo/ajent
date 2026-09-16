@@ -21,6 +21,7 @@ func TestOutputHead(t *testing.T) {
 		assert.Zero(t, h.hidden())
 		assert.Empty(t, h.summary())
 	})
+
 	t.Run("head_then_summary", func(t *testing.T) {
 		var h outputHead
 		var out strings.Builder
@@ -33,15 +34,17 @@ func TestOutputHead(t *testing.T) {
 		assert.Equal(t, 2, h.hidden())
 		assert.Contains(t, h.summary(), "+2 lines")
 	})
+
 	t.Run("partial_line_flush", func(t *testing.T) {
 		var h outputHead
-		out := ""
+		var out string
 		out += h.add("ok  gith") // no newline: held back whole
 		assert.Empty(t, out)
 		assert.Zero(t, h.hidden())
 		out = h.flush()
 		assert.Equal(t, "ok  gith\n", out)
 	})
+
 	t.Run("single_write_whole_body", func(t *testing.T) {
 		const lines = outputHeadLines + 2
 		var b []byte
@@ -57,6 +60,7 @@ func TestOutputHead(t *testing.T) {
 		assert.Equal(t, expected.String(), out)
 		assert.Equal(t, lines-outputHeadLines, h.hidden())
 	})
+
 	t.Run("full_shows_every_line", func(t *testing.T) {
 		var h outputHead
 		h.full = true

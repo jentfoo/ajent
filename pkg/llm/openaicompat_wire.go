@@ -201,13 +201,13 @@ func (u *compatUsage) toUsage() Usage {
 	if u == nil {
 		return Usage{}
 	}
-	cacheRead := 0
+	var cacheRead int
 	if u.PromptTokensDetails.CachedTokens != nil {
 		cacheRead = *u.PromptTokensDetails.CachedTokens
 	} else if u.PromptCacheHitTokens != nil {
 		cacheRead = *u.PromptCacheHitTokens
 	}
-	cacheWrite := 0
+	var cacheWrite int
 	if u.PromptTokensDetails.CacheWriteTokens != nil {
 		cacheWrite = *u.PromptTokensDetails.CacheWriteTokens
 	}

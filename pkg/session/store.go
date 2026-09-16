@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -188,9 +189,8 @@ func (s *Store) NameConflict(workspace, name, selfPath string) error {
 	return fmt.Errorf("%w: %q matches session id %s", ErrNameConflict, name, info.ID)
 }
 
-// Stale returns the workspace's unnamed sessions last used before cutoff, most
-// recently used first. A named session is never stale: the name is what --session
-// resumes it by.
+// Stale returns the workspace's unnamed sessions last used before cutoff, most recently used first.
+// A named session is never stale: the name is what --session resumes it by.
 func (s *Store) Stale(workspace string, cutoff time.Time) ([]Info, error) {
 	list, err := s.List(workspace)
 	if err != nil {
@@ -353,10 +353,9 @@ func dirName(abs, home string) string {
 	return s + "-" + hash4(abs)
 }
 
-// slug encodes abs as a flat lowercase name: path segments joined with "_",
-// with anything outside [a-z0-9] dropped. A path outside home keeps its leading
-// separator as a "_" prefix. An over-long name keeps its tail, where the
-// project name is.
+// slug encodes abs as a flat lowercase name: path segments joined with "_", with anything
+// outside [a-z0-9] dropped. A path outside home keeps its leading separator as a "_" prefix.
+// An over-long name keeps its tail, where the project name is.
 func slug(abs, home string) string {
 	rel, under := relHome(abs, home)
 	var b strings.Builder

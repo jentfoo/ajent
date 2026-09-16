@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/config"
@@ -23,8 +26,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // stubTool is a minimal agent.Tool for guard-chain and registry tests.
@@ -169,7 +170,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	reqs := p.Requests()
 	assert.Len(t, reqs, 2, "the steer must ride into step two with no third model call")
 
-	foundSteer := false
+	var foundSteer bool
 	for _, m := range reqs[len(reqs)-1].Messages {
 		if m.Role != llm.RoleUser || len(m.Content) == 0 {
 			continue
@@ -257,9 +258,6 @@ func TestControlLoop(t *testing.T) {
 	})
 }
 
-// TestCheckSessionTarget covers the pre-TUI resolution: a bad --resume target
-// and a --session name that would resume a session by id must fail fast, while a
-// merely new name is fine because --session creates it.
 func TestCheckSessionTarget(t *testing.T) {
 	ws := t.TempDir()
 	t.Chdir(ws)
@@ -307,13 +305,13 @@ func TestResolveSubAgentModel(t *testing.T) {
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
 
-	// configured child model resolves through the registry.
+	// configured child model resolves through the registry
 	require.NoError(t, set.SetSession("subagent.model", "p/child"))
 	st := &agent.State{Model: llm.Model{Provider: "p", ID: "session"}}
 	got := resolveSubAgentModel(set, reg, st)
 	assert.Equal(t, "child", got.ID) // the configured child model wins
 
-	// unset falls back to the session's current model.
+	// unset falls back to the session's current model
 	set2, _, _ := config.Load(config.Options{Workspace: t.TempDir()})
 	got = resolveSubAgentModel(set2, reg, st)
 	assert.Equal(t, "session", got.ID) // inherited when subagent.model is empty
@@ -386,9 +384,6 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 	})
 }
 
-// TestPermissionsModeDefaultResolves asserts the compiled-in default is
-// allow-read and Explain reports it at the (default) layer. The home dir is
-// isolated so a real user config on the machine never shifts the source.
 func TestPermissionsModeDefaultResolves(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	set, _, err := config.Load(config.Options{
@@ -404,10 +399,6 @@ func TestPermissionsModeDefaultResolves(t *testing.T) {
 	assert.Equal(t, "default", src)
 }
 
-// TestMCPConfigDisabledToolsEnableViaSlashTools wires a real tools.Registry to
-// an MCP manager for a config-disabled server and verifies /tools can bring its
-// tools into the agent context via live free-select (SetEnabled after load). The
-// resume path is covered by TestMCPConfigDisabledToolsResumeRestoresEnablement.
 func TestMCPConfigDisabledToolsEnableViaSlashTools(t *testing.T) {
 	reg := tools.New()
 	reg.RegisterState("builtin", &stubTool{name: "read"}, tools.StateEnabled)
@@ -439,10 +430,6 @@ func TestMCPConfigDisabledToolsEnableViaSlashTools(t *testing.T) {
 	assert.NotContains(t, reg.DisabledNames("mcp: fake"), "fake__tool_00")
 }
 
-// TestMCPConfigDisabledToolsResumeRestoresEnablement verifies a resumed session's
-// persisted tools.enabled (Options.Restore) re-enables an MCP tool even when its
-// server is config-disabled — /tools enablement is explicit, not vetoed by the
-// config default.
 func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
 	reg := tools.New()
 	reg.RegisterState("builtin", &stubTool{name: "read"}, tools.StateEnabled)
@@ -464,6 +451,7 @@ func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
 // buildFakeMCPServer builds the pkg/mcp fakeserver binary and returns its path.
 func buildFakeMCPServer(t *testing.T) string {
 	t.Helper()
+
 	out := filepath.Join(t.TempDir(), "fakeserver")
 	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "../../pkg/mcp/testdata/fakeserver")
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -472,8 +460,6 @@ func buildFakeMCPServer(t *testing.T) string {
 	return out
 }
 
-// TestGuardRegisteredAgainstRegistry verifies the barrier's guard and asker are
-// registered so an unverifiable call asks through them.
 func TestGuardRegisteredAgainstRegistry(t *testing.T) {
 	reg := tools.New()
 	b := permit.NewBarrier(func(string) bool { return false })
@@ -539,16 +525,16 @@ func TestClassifierAdapterClassifiesShellCommands(t *testing.T) {
 	t.Run("allow_verdict", func(t *testing.T) {
 		assert.Equal(t, permit.ClassAllow, adapterFor("allow").Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
 	})
+
 	t.Run("deny_verdict_with_noise", func(t *testing.T) {
 		assert.Equal(t, permit.ClassDeny, adapterFor("DENY: it modifies the file!").Classify(t.Context(), permit.Subject{Name: "bash", Args: "rm a"}))
 	})
+
 	t.Run("garbled_maps_to_unsure", func(t *testing.T) {
 		assert.Equal(t, permit.ClassUnsure, adapterFor("? maybe 42").Classify(t.Context(), permit.Subject{Name: "bash", Args: "weird cmd"}))
 	})
 }
 
-// A classifier adapter that cannot reach a provider must fail safe to "unsure"
-// rather than guess.
 func TestClassifierAdapterFailuresAreUnsure(t *testing.T) {
 	t.Parallel()
 
@@ -595,7 +581,7 @@ func TestClassifierAdapterRequestUsesFreshContextNoReasoning(t *testing.T) {
 		}
 	}
 	assert.Contains(t, sys.String(), `"allow"`)
-	// the classifier never reasons; off stays off whatever the model supports.
+	// the classifier never reasons; off stays off whatever the model supports
 	assert.Equal(t, llm.ClampLevel(model, llm.LevelOff), r.Reasoning.Level)
 }
 
@@ -625,7 +611,7 @@ func TestClassifierAdapterClassifiesMCPCallWithMetadata(t *testing.T) {
 			sys.WriteString(tb.Text)
 		}
 	}
-	// the MCP prompt embeds description and parameters so the model can judge it.
+	// the MCP prompt embeds description and parameters so the model can judge it
 	assert.Contains(t, sys.String(), "lists things")
 	assert.Contains(t, sys.String(), `{"type":"object"}`)
 }
@@ -643,8 +629,6 @@ func TestClassifierAdapterUnknownMCPSafelyUnsure(t *testing.T) {
 	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "ghost", Args: `{}`}))
 }
 
-// A truncated verdict must never be guessed from partial text: it falls back to
-// the approval dialog as unsure.
 func TestClassifierAdapterTruncatedVerdictIsUnsure(t *testing.T) {
 	t.Parallel()
 
@@ -657,8 +641,6 @@ func TestClassifierAdapterTruncatedVerdictIsUnsure(t *testing.T) {
 	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
 }
 
-// TestClassifierAdapterSelectsPromptPerRuleSet covers auto+write's prompt and its
-// allow/deny vocabulary, and that MCP calls keep the strict read-only prompt.
 func TestClassifierAdapterSelectsPromptPerRuleSet(t *testing.T) {
 	t.Parallel()
 
@@ -690,22 +672,26 @@ func TestClassifierAdapterSelectsPromptPerRuleSet(t *testing.T) {
 		assert.Equal(t, permit.ClassAllow, got)
 		assert.Equal(t, permit.WorkspaceClassifierSystem("/work/proj", "/tmp"), systemOf(sp))
 	})
+
 	t.Run("allow_write_shell_denies", func(t *testing.T) {
 		a, _ := adapterFor("deny")
 		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "curl x", AllowWrite: true})
 		assert.Equal(t, permit.ClassDeny, got)
 	})
+
 	t.Run("allow_write_rejects_readonly_word", func(t *testing.T) {
 		a, _ := adapterFor("readonly")
 		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "ls", AllowWrite: true})
 		assert.Equal(t, permit.ClassUnsure, got) // the retired vocabulary no longer approves
 	})
+
 	t.Run("plain_shell_keeps_strict_prompt", func(t *testing.T) {
 		a, sp := adapterFor("allow")
 		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "ls"})
 		assert.Equal(t, permit.ClassAllow, got)
 		assert.Equal(t, permit.ClassifierSystem, systemOf(sp))
 	})
+
 	t.Run("mcp_keeps_strict_prompt", func(t *testing.T) {
 		a, sp := adapterFor("allow")
 		got := a.Classify(t.Context(), permit.Subject{Name: "mcp__x", Args: `{}`, AllowWrite: true})

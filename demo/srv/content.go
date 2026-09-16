@@ -346,7 +346,7 @@ func TestBackoffGrows(t *testing.T) {
 
 func TestRetrySucceedsEventually(t *testing.T) {
 	r := NewRetrier().WithMaxAttempts(3)
-	calls := 0
+	var calls int
 	err := r.Run(context.Background(), func(ctx context.Context) error {
 		calls++
 		if calls < 2 {

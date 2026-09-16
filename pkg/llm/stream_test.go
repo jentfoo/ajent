@@ -47,17 +47,20 @@ func TestAccumulate(t *testing.T) {
 		}, msg.Content)
 		assert.Equal(t, Usage{Input: 412, Output: 37, CacheRead: 8}, usage) // last wins
 	})
+
 	t.Run("empty_stream", func(t *testing.T) {
 		msg, usage, err := Accumulate(&SliceStream{})
 		require.NoError(t, err)
 		assert.Equal(t, Message{Role: RoleAssistant}, msg)
 		assert.Zero(t, usage)
 	})
+
 	t.Run("stream_error_surfaces", func(t *testing.T) {
 		want := errors.New("boom")
 		_, _, err := Accumulate(&SliceStream{Events: textTurn(), Error: want})
 		assert.ErrorIs(t, err, want)
 	})
+
 	t.Run("done_error_surfaces", func(t *testing.T) {
 		want := errors.New("mid stream")
 		_, _, err := Accumulate(&SliceStream{Events: []Event{
@@ -66,6 +69,7 @@ func TestAccumulate(t *testing.T) {
 		}})
 		assert.ErrorIs(t, err, want)
 	})
+
 	t.Run("aborted_keeps_partial_blocks", func(t *testing.T) {
 		evs := textTurn()[:8] // cut before the text end event
 		msg, _, err := Accumulate(&SliceStream{Events: evs})
@@ -76,6 +80,7 @@ func TestAccumulate(t *testing.T) {
 			TextBlock{Text: "Checking"},
 		}, msg.Content)
 	})
+
 	t.Run("aborted_tool_args_normalize", func(t *testing.T) {
 		msg, _, err := Accumulate(&SliceStream{Events: []Event{
 			{Type: EventToolCallStart, Index: 0, ToolCallID: "c1", ToolName: "read"},
@@ -102,6 +107,7 @@ func TestAccumulatorAdd(t *testing.T) {
 		assert.Equal(t, StopToolUse, a.StopReason())
 		assert.NoError(t, a.Err())
 	})
+
 	t.Run("message_is_repeatable", func(t *testing.T) {
 		var a Accumulator
 		for _, ev := range textTurn()[:8] {
@@ -111,6 +117,7 @@ func TestAccumulatorAdd(t *testing.T) {
 		second := a.Message()
 		assert.Equal(t, first, second)
 	})
+
 	t.Run("delta_for_unopened_index_ignored", func(t *testing.T) {
 		var a Accumulator
 		a.Add(Event{Type: EventTextDelta, Index: 9, Text: "orphan"})
@@ -130,6 +137,7 @@ func TestSliceStream(t *testing.T) {
 		assert.Equal(t, []EventType{EventTextDelta, EventDone}, got)
 		assert.NoError(t, s.Err())
 	})
+
 	t.Run("close_stops_iteration", func(t *testing.T) {
 		s := &SliceStream{Events: textTurn()}
 		_, ok := s.Next()

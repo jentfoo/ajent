@@ -15,8 +15,8 @@ import (
 // persists the choice to the user layer so a fresh start keeps it. The registry
 // stays the single source of truth; Console.SetModel reflects the selection in
 // the status line, agent state and session record.
-func modelCommand(_ context.Context, arg string, c Console) error {
-	changed, err := applyModel(arg, c)
+func modelCommand(ctx context.Context, arg string, c Console) error {
+	changed, err := applyModel(ctx, arg, c)
 	if err != nil || !changed {
 		return err
 	}
@@ -27,11 +27,9 @@ func modelCommand(_ context.Context, arg string, c Console) error {
 	return nil
 }
 
-// applyModel resolves arg by name, or opens the picker when empty, and applies it
-// via Console.SetModel. It reports whether a different model became active so
-// callers decide persistence; /settings' Model row uses this alone and leaves the
-// save-to-layer choice to its prompt.
-func applyModel(arg string, c Console) (bool, error) {
+// applyModel resolves arg by name, or opens the picker when empty, and applies it via
+// Console.SetModel. It reports whether a different model became active so callers decide persistence.
+func applyModel(ctx context.Context, arg string, c Console) (bool, error) {
 	if len(c.Models().Models()) == 0 {
 		c.Notify("no models configured; add some to ~/.ajent/"+llm.ModelsFileName, levelWarn)
 		return false, nil
@@ -49,7 +47,7 @@ func applyModel(arg string, c Console) (bool, error) {
 	} else {
 		// pre-select the active model so an empty /model shows where it sits.
 		// SetModel announces the change below, so skip the picker's own summary line.
-		m, err = PickModel(context.Background(), c, "Model", prev,
+		m, err = PickModel(ctx, c, "Model", prev,
 			tui.PickOptions{Silent: true})
 		if err != nil {
 			return false, err // cancelled or failed
@@ -130,7 +128,7 @@ func reportResolveError(c Console, arg string, err error) {
 
 // reasoningCommand sets the session reasoning level. With no argument it reports
 // the current choice; with a level it sets it and persists through the console.
-func reasoningCommand(_ context.Context, arg string, c Console) error {
+func reasoningCommand(ctx context.Context, arg string, c Console) error {
 	active := c.Models().Active()
 	supported := llm.LevelsFor(active)
 	var lvl llm.Level
@@ -145,7 +143,7 @@ func reasoningCommand(_ context.Context, arg string, c Console) error {
 			}
 			items[i] = tui.PickItem{Label: marker + name, Terms: []string{name}}
 		}
-		picked, err := c.Pick(context.Background(), "Reasoning", items,
+		picked, err := c.Pick(ctx, "Reasoning", items,
 			tui.PickOptions{Placeholder: "filter"})
 		if err != nil {
 			return nil // cancelled
@@ -177,9 +175,12 @@ func reasoningCommand(_ context.Context, arg string, c Console) error {
 
 // levelsList joins level names for a supported-level notice.
 func levelsList(levels []llm.Level) string {
-	names := make([]string, len(levels))
+	var sb strings.Builder
 	for i, l := range levels {
-		names[i] = l.String()
+		if i > 0 {
+			sb.WriteRune('|')
+		}
+		sb.WriteString(l.String())
 	}
-	return strings.Join(names, "|")
+	return sb.String()
 }

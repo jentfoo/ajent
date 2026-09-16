@@ -27,7 +27,7 @@ type startTool struct{ m *Manager }
 
 func (t *startTool) Name() string { return startToolName }
 
-// label shows which agent was spawned so the header identifies it, not just that
+// Label shows which agent was spawned so the header identifies it, not just that
 // one was started. Falls back to the generic form when args do not parse.
 func (t *startTool) Label(call agent.ToolCall) string {
 	var p startParams
@@ -40,15 +40,18 @@ func (t *startTool) Label(call agent.ToolCall) string {
 	}
 	return "sub-agent: start"
 }
+
 func (t *startTool) Description() string {
 	return "Spawn an isolated, read-only sub-agent to investigate a focused question. Returns a job id immediately; the work runs in the background. Call agent_poll with that id later to retrieve the final summary. Fan out several in one batch and keep working while they run. " + sharedToolHint
 }
+
 func (t *startTool) Schema() llm.ToolSchema {
 	return llm.ToolSchema{Parameters: paramsSchema("task", map[string]any{
 		"task":         strProp("the focused question to investigate; give file paths and key facts, not content"),
 		"instructions": strProp("optional extra guidance for the sub-agent (constraints, style, focus areas)"),
 	})}
 }
+
 func (t *startTool) Mode() agent.ExecutionMode { return agent.ModeParallel }
 
 // startParams is the model-facing arguments shape.
@@ -80,7 +83,7 @@ type pollTool struct{ m *Manager }
 
 func (t *pollTool) Name() string { return "agent_poll" }
 
-// label names the agent being waited on so parallel polls are distinguishable.
+// Label names the agent being waited on so parallel polls are distinguishable.
 func (t *pollTool) Label(call agent.ToolCall) string {
 	var p pollParams
 	if json.Unmarshal(call.Input, &p) == nil {
@@ -90,14 +93,17 @@ func (t *pollTool) Label(call agent.ToolCall) string {
 	}
 	return "sub-agent: poll"
 }
+
 func (t *pollTool) Description() string {
 	return "Wait for a sub-agent to complete and return its summary. When it has finished, returns the final summary as the only text content; on an error or abort that is reported instead. On timeout reports still-running plus elapsed time and the child's context usage against its model window, so you can judge whether to keep waiting. Accepts id like sub-2 or bare 2."
 }
+
 func (t *pollTool) Schema() llm.ToolSchema {
 	return llm.ToolSchema{Parameters: paramsSchema("id", map[string]any{
 		"id": strProp("the sub-agent id, e.g. sub-2 (or bare 2)"),
 	})}
 }
+
 func (t *pollTool) Mode() agent.ExecutionMode { return agent.ModeParallel }
 
 // pollParams is the model-facing arguments shape.
@@ -185,7 +191,7 @@ func (t *listTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output
 		if !j.Ended.IsZero() {
 			elapsed = j.Ended.Sub(j.Started)
 		}
-		fmt.Fprintf(&b, "%s\t%s\t%s\n", j.ID, j.Status, strutil.Elapsed(elapsed))
+		_, _ = fmt.Fprintf(&b, "%s\t%s\t%s\n", j.ID, j.Status, strutil.Elapsed(elapsed))
 	}
 	return result(b.String()), nil
 }

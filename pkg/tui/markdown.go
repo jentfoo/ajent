@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -313,15 +314,15 @@ func layoutTable(t *mdTable, width int) []string {
 // shrinkColumns reduces natural column widths so their sum fits avail, trimming the
 // currently widest column first and never below a per-column floor.
 func shrinkColumns(nat []int, avail int) []int {
-	sum := 0
+	var sum int
 	for _, n := range nat {
 		sum += n
 	}
 	if sum <= avail || len(nat) == 0 {
-		return append([]int(nil), nat...)
+		return slices.Clone(nat)
 	}
 	minCol := min(3, max(avail/len(nat), 1))
-	w := append([]int(nil), nat...)
+	w := slices.Clone(nat)
 	overflow := sum - avail
 	for overflow > 0 {
 		bi := -1
@@ -355,7 +356,7 @@ func hBorder(left, mid, right string, w []int) string {
 // tableRowGroup renders one logical row (header or data) into physical lines,
 // wrapping when a cell spans more than one column line.
 func tableRowGroup(cells [][]string, w []int, al []mdAlign) []string {
-	n := 0
+	var n int
 	for _, c := range cells {
 		if len(c) > n {
 			n = len(c)
@@ -445,7 +446,7 @@ func wrapCellLine(line string, w int) []string {
 
 // cellMaxWidth returns the widest logical line in a possibly multi-line cell.
 func cellMaxWidth(s string) int {
-	m := 0
+	var m int
 	for _, ln := range strings.Split(s, "\n") {
 		if d := displayWidth(ln); d > m {
 			m = d

@@ -15,13 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
 
-// retryAttempts mirrors the default httputil retry ladder length.
-const retryAttempts = 4
+	"github.com/jentfoo/ajent/pkg/config"
+)
 
 var testNow = time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 
@@ -100,6 +98,7 @@ func TestDiscoverProvider(t *testing.T) {
 		assert.Equal(t, testNow.UnixMilli(), got.CheckedAt)
 		assert.Contains(t, got.Source, "/models")
 	})
+
 	t.Run("sends_conditional_headers", func(t *testing.T) {
 		var gotETag, gotSince string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +122,7 @@ func TestDiscoverProvider(t *testing.T) {
 		assert.Equal(t, prev.Models, got.Models) // kept
 		assert.Equal(t, testNow.UnixMilli(), got.CheckedAt)
 	})
+
 	t.Run("network_failure_keeps_the_stale_entry", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("-short mode")
@@ -139,6 +139,7 @@ func TestDiscoverProvider(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, prev, got) // untouched, including CheckedAt
 	})
+
 	t.Run("unparseable_body_keeps_the_stale_entry", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`not json`))
@@ -152,6 +153,7 @@ func TestDiscoverProvider(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, prev, got)
 	})
+
 	t.Run("empty_result_is_an_error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"data":[]}`))
@@ -163,6 +165,7 @@ func TestDiscoverProvider(t *testing.T) {
 		_, err := discoverProvider(t.Context(), c, "/models", idParser, prev, testNow)
 		assert.Error(t, err)
 	})
+
 	t.Run("parser_error_propagates", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{}`))
@@ -218,6 +221,7 @@ func TestSaveCache(t *testing.T) {
 		require.Len(t, got["openrouter"].Models, 1)
 		assert.Equal(t, 1000, *got["openrouter"].Models[0].ContextWindow)
 	})
+
 	t.Run("written_privately", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), CacheFileName)
 		require.NoError(t, SaveCache(path, nil))
@@ -231,11 +235,13 @@ func TestLoadCache(t *testing.T) {
 	t.Run("missing_file_is_empty", func(t *testing.T) {
 		assert.Empty(t, LoadCache(filepath.Join(t.TempDir(), "absent.json")))
 	})
+
 	t.Run("corrupt_file_is_empty", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), CacheFileName)
 		require.NoError(t, os.WriteFile(path, []byte(`{`), 0o600))
 		assert.Empty(t, LoadCache(path))
 	})
+
 	t.Run("wrong_version_is_discarded", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), CacheFileName)
 		require.NoError(t, os.WriteFile(path,
@@ -286,6 +292,7 @@ func TestDiscover(t *testing.T) {
 		require.Contains(t, cache, "openrouter")
 		assert.Len(t, cache["openrouter"].Models, 2)
 	})
+
 	t.Run("each_flavor_uses_its_own_endpoint", func(t *testing.T) {
 		tests := []struct {
 			flavor  string
@@ -312,6 +319,7 @@ func TestDiscover(t *testing.T) {
 			})
 		}
 	})
+
 	t.Run("generic_provider_discovers_via_openai_list", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/v1/models", "openaimodels/models.json", &hits)
@@ -324,6 +332,7 @@ func TestDiscover(t *testing.T) {
 		require.Contains(t, cache, "lutra")
 		assert.Len(t, cache["lutra"].Models, 3)
 	})
+
 	t.Run("generic_base_ending_in_v1_drops_the_prefix", func(t *testing.T) {
 		// a base URL that already carries /v1 must not be asked for /v1/v1/models
 		var hits int
@@ -339,6 +348,7 @@ func TestDiscover(t *testing.T) {
 		assert.Len(t, cache["lutra"].Models, 3)
 		assert.Equal(t, 1, hits) // served at /v1/models once, not /v1/v1/models
 	})
+
 	t.Run("generic_without_opt_in_is_skipped", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"lutra": {BaseURL: "http://127.0.0.1:1"},
@@ -347,6 +357,7 @@ func TestDiscover(t *testing.T) {
 		assert.Empty(t, cache)
 		assert.Empty(t, warnings)
 	})
+
 	t.Run("llamacpp_router_falls_back_to_openai_list", func(t *testing.T) {
 		var propsHits, modelsHits int
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -380,6 +391,7 @@ func TestDiscover(t *testing.T) {
 		assert.Equal(t, 1, propsHits)                     // consulted first
 		assert.Equal(t, 1, modelsHits)                    // then the fallback won
 	})
+
 	t.Run("unreachable_server_skips_the_fallback", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("-short mode")
@@ -399,8 +411,9 @@ func TestDiscover(t *testing.T) {
 
 		_, warnings := Discover(t.Context(), f, nil, o)
 		require.Len(t, warnings, 1)
-		assert.Equal(t, retryAttempts, int(trips.Load())) // the primary's full ladder, no fallback
+		assert.Equal(t, 4, int(trips.Load())) // the primary's full ladder, no fallback
 	})
+
 	t.Run("http_failure_retries_the_next_candidate", func(t *testing.T) {
 		// a reachable server that answers unhelpfully still falls through; the first
 		// failure is the one reported when neither candidate yields models
@@ -425,6 +438,7 @@ func TestDiscover(t *testing.T) {
 		assert.Equal(t, 2, int(trips.Load()))                     // both candidates tried once each
 		assert.Equal(t, "cached", cache["llamacpp"].Models[0].ID) // stale entry kept
 	})
+
 	t.Run("fresh_cache_skips_the_network", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
@@ -438,6 +452,7 @@ func TestDiscover(t *testing.T) {
 		assert.Zero(t, hits)
 		assert.Equal(t, "cached", cache["openrouter"].Models[0].ID)
 	})
+
 	t.Run("force_ignores_the_time_to_live", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
@@ -452,6 +467,7 @@ func TestDiscover(t *testing.T) {
 		_, _ = Discover(t.Context(), f, prev, o)
 		assert.Equal(t, 1, hits)
 	})
+
 	t.Run("local_providers_expire_sooner", func(t *testing.T) {
 		// a loaded model changes far more often than a hosted catalogue
 		var hits int
@@ -465,6 +481,7 @@ func TestDiscover(t *testing.T) {
 		_, _ = Discover(t.Context(), f, prev, opts())
 		assert.Equal(t, 1, hits)
 	})
+
 	t.Run("opt_out_is_honoured", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
@@ -476,6 +493,7 @@ func TestDiscover(t *testing.T) {
 		assert.Zero(t, hits)
 		assert.Empty(t, warnings)
 	})
+
 	t.Run("providers_without_discovery_are_skipped", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"anthropic": {BaseURL: "http://127.0.0.1:1"},
@@ -484,6 +502,7 @@ func TestDiscover(t *testing.T) {
 		assert.Empty(t, cache)
 		assert.Empty(t, warnings)
 	})
+
 	t.Run("disabled_provider_is_skipped", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
@@ -494,6 +513,7 @@ func TestDiscover(t *testing.T) {
 		_, _ = Discover(t.Context(), f, nil, opts())
 		assert.Zero(t, hits)
 	})
+
 	t.Run("failure_warns_and_keeps_the_stale_entry", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -510,6 +530,7 @@ func TestDiscover(t *testing.T) {
 		assert.Contains(t, warnings[0], "openrouter")
 		assert.Equal(t, "cached", cache["openrouter"].Models[0].ID)
 	})
+
 	t.Run("offline_with_no_cache_yields_nothing", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"lmstudio": {BaseURL: "http://127.0.0.1:1", Retry: RetryPolicy{Attempts: 1}},
@@ -518,6 +539,7 @@ func TestDiscover(t *testing.T) {
 		assert.NotEmpty(t, warnings)
 		assert.Empty(t, cache["lmstudio"].Models)
 	})
+
 	t.Run("source_cache_is_not_mutated", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)

@@ -62,10 +62,9 @@ func (m Model) Display() string {
 	return m.ID
 }
 
-// Reserve returns the tokens held back from m's window for its response. A value
-// >= 1 is an absolute token count; a value in (0,1) is a fraction of the window;
-// anything else uses the default fraction. It clamps to at most 90% of the window,
-// and to at least one token.
+// Reserve returns the tokens held back from m's window for its response. A value >= 1 is an
+// absolute token count; a value in (0,1) is a fraction of the window; anything else uses the
+// default fraction. It clamps to at most 90% of the window, and to at least one token.
 func (m Model) Reserve() int {
 	window := m.ContextWindow
 	if window <= 0 {

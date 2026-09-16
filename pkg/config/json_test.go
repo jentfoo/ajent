@@ -42,23 +42,26 @@ func TestRelaxJSON(t *testing.T) {
 		assert.Equal(t, "trailing, ]", got["b"])
 		assert.Equal(t, `quote " then , }`, got["c"])
 	})
+
 	t.Run("a_url_is_not_a_comment", func(t *testing.T) {
 		in := `{"baseUrl":"http://localhost:1234/v1"}`
 		var got map[string]string
 		require.NoError(t, json.Unmarshal(RelaxJSON([]byte(in)), &got))
 		assert.Equal(t, "http://localhost:1234/v1", got["baseUrl"])
 	})
+
 	t.Run("offsets_are_preserved", func(t *testing.T) {
-		// blanking rather than deleting is what lets errors point at the
-		// original file
+		// blanking rather than deleting is what lets errors point at the original file
 		in := []byte("{\"a\":1, // note\n}")
 		assert.Len(t, RelaxJSON(in), len(in))
 	})
+
 	t.Run("input_is_not_mutated", func(t *testing.T) {
 		in := []byte(`{"a":1,}`)
 		RelaxJSON(in)
 		assert.Equal(t, `{"a":1,}`, string(in))
 	})
+
 	t.Run("comma_before_a_real_value_is_kept", func(t *testing.T) {
 		var got map[string]any
 		require.NoError(t, json.Unmarshal(RelaxJSON([]byte(`{"a":1,"b":2}`)), &got))
@@ -80,6 +83,7 @@ func TestJSONError(t *testing.T) {
 		assert.Contains(t, got, `"b": 2`) // the offending line
 		assert.Contains(t, got, "^")
 	})
+
 	t.Run("type_errors_are_located_too", func(t *testing.T) {
 		data := []byte("{\n  \"a\": \"text\"\n}")
 		var v struct {
@@ -90,10 +94,12 @@ func TestJSONError(t *testing.T) {
 
 		assert.Contains(t, JSONError("models.json", data, err).Error(), "models.json:2:")
 	})
+
 	t.Run("errors_without_an_offset_still_name_the_file", func(t *testing.T) {
 		got := JSONError("models.json", nil, assert.AnError).Error()
 		assert.Contains(t, got, "models.json")
 	})
+
 	t.Run("wraps_the_original", func(t *testing.T) {
 		data := []byte("{")
 		var v map[string]any

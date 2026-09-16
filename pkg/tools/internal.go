@@ -9,8 +9,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
-// decode unmarshals raw tool arguments into v, with model-facing errors from
-// strutil.DecodeArgs.
+// decode unmarshals raw tool arguments into v, with model-facing errors from strutil.DecodeArgs.
 func decode(raw json.RawMessage, v any) error {
 	return strutil.DecodeArgs(raw, v)
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func TestResolve(t *testing.T) {
-	// several cases swap the package-global userHome, so this cannot run in parallel.
+	// several cases swap the package-global userHome, so this cannot run in parallel
 
 	t.Run("absolute_and_relative", func(t *testing.T) {
 		cwd := t.TempDir()
@@ -25,7 +25,7 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, filepath.Join(cwd, "g.txt"), rel)
 	})
 
-	// no containment: any absolute path resolves even outside Cwd.
+	// no containment: any absolute path resolves even outside Cwd
 	t.Run("allows_absolute_outside_cwd", func(t *testing.T) {
 		cwd := t.TempDir()
 		outside := t.TempDir() // a dir outside Cwd to prove no containment
@@ -36,7 +36,7 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, filepath.Join(outside, "secret.txt"), abs)
 	})
 
-	// a symlink target outside Cwd is folded to canonical.
+	// a symlink target outside Cwd is folded to canonical
 	t.Run("symlink_folded_to_canonical_path", func(t *testing.T) {
 		cwd := t.TempDir()
 		outside := t.TempDir() // symlink target outside Cwd is folded to canonical
@@ -51,7 +51,7 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, filepath.Join(outside, "secret.txt"), resolved)
 	})
 
-	// a new file in missing dirs still resolves to its cleaned absolute path.
+	// a new file in missing dirs still resolves to its cleaned absolute path
 	t.Run("new_file_in_missing_dir_still_works", func(t *testing.T) {
 		cwd := t.TempDir()
 		p := PathPolicy{Cwd: cwd}
@@ -82,7 +82,7 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, home, abs)
 	})
 
-	// ~ expands to home even when Cwd is set.
+	// ~ expands to home even when Cwd is set
 	t.Run("tilde_ignores_cwd", func(t *testing.T) {
 		home := t.TempDir()
 		cwd := t.TempDir()
@@ -95,7 +95,7 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, filepath.Join(home, "f.txt"), abs) // home wins over Cwd
 	})
 
-	// ~ is only special at the start of a path.
+	// ~ is only special at the start of a path
 	t.Run("tilde_mid_path_not_expanded", func(t *testing.T) {
 		cwd := t.TempDir()
 		p := PathPolicy{Cwd: cwd}
@@ -104,7 +104,7 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, filepath.Join(cwd, "a~b.txt"), abs) // ~ only special at the start
 	})
 
-	// empty Cwd uses os.Getwd; a relative path joins onto it.
+	// empty Cwd uses os.Getwd; a relative path joins onto it
 	t.Run("empty_cwd_falls_back_to_getwd", func(t *testing.T) {
 		p := PathPolicy{}
 		abs, err := p.Resolve("somefile.txt")
@@ -119,8 +119,7 @@ func TestResolveTildeNotExpanded(t *testing.T) {
 	restore := setTestUserHome(home)
 	t.Cleanup(restore)
 
-	cwd := t.TempDir()
-	p := PathPolicy{Cwd: cwd}
+	p := PathPolicy{Cwd: home}
 
 	cases := []struct {
 		name string
@@ -136,13 +135,12 @@ func TestResolveTildeNotExpanded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			abs, err := p.Resolve(tc.rel)
 			require.NoError(t, err)
-			assert.Equal(t, filepath.Join(cwd, tc.rel), abs)
+			assert.Equal(t, filepath.Join(home, tc.rel), abs)
 		})
 	}
 }
 
-// setTestUserHome swaps userHome for the duration of a test and returns a
-// restore func.
+// setTestUserHome swaps userHome for the duration of a test and returns a restore func.
 func setTestUserHome(home string) func() {
 	orig := userHome
 	userHome = func() (string, error) { return home, nil }

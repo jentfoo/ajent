@@ -64,6 +64,7 @@ func TestUISelect(t *testing.T) {
 
 		assert.Equal(t, 1, <-result)
 	})
+
 	t.Run("escape_cancels", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -78,6 +79,7 @@ func TestUISelect(t *testing.T) {
 
 		assert.ErrorIs(t, <-errCh, ErrCancelled)
 	})
+
 	t.Run("number_key_selects_directly", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -92,6 +94,7 @@ func TestUISelect(t *testing.T) {
 
 		assert.Equal(t, 2, <-result)
 	})
+
 	t.Run("cancel_commits_nothing", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -109,6 +112,7 @@ func TestUISelect(t *testing.T) {
 		waitFor(t, u, v, userMarker)
 		assert.NotContains(t, u.snapshot(v), "Enable compaction? Yes")
 	})
+
 	t.Run("commits_one_summary_line", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -126,6 +130,7 @@ func TestUISelect(t *testing.T) {
 		// the live block reverted to the input prompt
 		waitFor(t, u, v, userMarker)
 	})
+
 	t.Run("cursor_wraps_at_the_ends", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -142,6 +147,7 @@ func TestUISelect(t *testing.T) {
 
 		assert.Equal(t, 1, <-result)
 	})
+
 	t.Run("empty_options_cancel", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		_, err := u.Select("Pick:", nil)
@@ -186,6 +192,7 @@ func TestUIInputPrompt(t *testing.T) {
 
 		assert.Equal(t, "ajent", <-result)
 	})
+
 	t.Run("backspace_deletes", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -213,22 +220,27 @@ func TestPickItemRowRoleTags(t *testing.T) {
 		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "the question"}, false, 80, 5)
 		assert.Equal(t, selectIndent+th.UserTag.Wrap("user")+"  "+Style{}.Wrap("the question"), row)
 	})
+
 	t.Run("agent_tag_hue", func(t *testing.T) {
 		row := pickItemRow(th, PickItem{Tag: "agent", Mark: MarkAssistant, Label: "a reply"}, false, 80, 5)
 		assert.Equal(t, selectIndent+th.Assist.Wrap("agent")+" "+Style{}.Wrap("a reply"), row)
 	})
+
 	t.Run("tool_tag_hue", func(t *testing.T) {
 		row := pickItemRow(th, PickItem{Tag: "tool", Mark: MarkTool, Label: "[ls] docs/"}, false, 80, 5)
 		assert.Equal(t, selectIndent+th.ToolTag.Wrap("tool")+"  "+Style{}.Wrap("[ls] docs/"), row)
 	})
+
 	t.Run("off_branch_faint", func(t *testing.T) {
 		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "abandoned", Off: true}, false, 80, 5)
 		assert.Equal(t, selectIndent+th.UserTagOff.Wrap("user")+"  "+th.Dim.Wrap("abandoned"), row)
 	})
+
 	t.Run("selected_accents_body", func(t *testing.T) {
 		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "picked"}, true, 80, 5)
 		assert.Equal(t, selectMarker+th.UserTag.Wrap("user")+"  "+th.Accent.Wrap("picked"), row)
 	})
+
 	t.Run("no_tag_plain_label", func(t *testing.T) { // every other picker: unchanged
 		row := pickItemRow(th, PickItem{Label: "a model"}, false, 80, 0)
 		assert.Equal(t, selectIndent+th.Dim.Wrap("a model"), row)
@@ -304,6 +316,7 @@ func TestUIPick(t *testing.T) {
 
 		assert.Equal(t, 1, <-result)
 	})
+
 	t.Run("matches_hidden_terms", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -320,6 +333,7 @@ func TestUIPick(t *testing.T) {
 
 		assert.Equal(t, 0, <-result)
 	})
+
 	t.Run("matches_role_tag", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -340,6 +354,7 @@ func TestUIPick(t *testing.T) {
 
 		assert.Equal(t, 1, <-result)
 	})
+
 	t.Run("initial_selection_honoured", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -354,6 +369,7 @@ func TestUIPick(t *testing.T) {
 
 		assert.Equal(t, 2, <-result)
 	})
+
 	t.Run("no_matches_blocks_enter", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -371,6 +387,7 @@ func TestUIPick(t *testing.T) {
 
 		assert.ErrorIs(t, <-errCh, ErrCancelled)
 	})
+
 	t.Run("counts_shown_and_total", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -380,6 +397,7 @@ func TestUIPick(t *testing.T) {
 		press(t, pw, "qwen")
 		waitFor(t, u, v, "1 of 3")
 	})
+
 	t.Run("fits_a_five_row_terminal", func(t *testing.T) {
 		// the tightest layout the cap has to survive
 		v := newVT(60, 5)
@@ -405,6 +423,7 @@ func TestUIPick(t *testing.T) {
 		press(t, pw, "\r")
 		assert.Equal(t, 0, <-result)
 	})
+
 	t.Run("keeps_its_header_on_a_four_row_screen", func(t *testing.T) {
 		// the cap floor plus an unreserved overflow footer used to push the block
 		// past the screen, and the clamp then dropped the picker's own header row
@@ -419,6 +438,7 @@ func TestUIPick(t *testing.T) {
 		assert.LessOrEqual(t, liveRowCount(u.snapshot(v)), 4)
 		press(t, pw, "\x1b")
 	})
+
 	t.Run("long_list_scrolls_within_the_cap", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -438,6 +458,7 @@ func TestUIPick(t *testing.T) {
 
 		press(t, pw, "\x1b")
 	})
+
 	t.Run("silent_pick_skips_the_summary_line", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -540,6 +561,7 @@ func TestInteractionQueue(t *testing.T) {
 		press(t, pw, "\r")
 		<-second
 	})
+
 	t.Run("close_unblocks_everything_pending", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 
@@ -558,6 +580,7 @@ func TestInteractionQueue(t *testing.T) {
 		require.ErrorIs(t, <-errs, ErrCancelled)
 		require.ErrorIs(t, <-errs, ErrCancelled)
 	})
+
 	t.Run("context_cancel_clears_the_live_block", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 
@@ -577,6 +600,7 @@ func TestInteractionQueue(t *testing.T) {
 				strings.Contains(u.snapshot(v), userMarker)
 		}, time.Second, testPoll)
 	})
+
 	t.Run("interaction_on_a_closed_ui", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		u.Close()
@@ -603,6 +627,7 @@ func TestUIWait(t *testing.T) {
 			require.NoError(t, u.wait(ctx, p))
 		}
 	})
+
 	t.Run("cancelled_ctx_reports_cancelled", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		ctx, cancel := context.WithCancel(t.Context())

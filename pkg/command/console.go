@@ -34,8 +34,7 @@ type Console interface {
 	Notify(msg string, level tui.Level)
 	// Print renders markdown into history, the form /help uses.
 	Print(markdown string)
-	// Pick presents a filterable list and returns the chosen index, or
-	// ErrCancelled on Esc.
+	// Pick presents a filterable list and returns the chosen index, or ErrCancelled on Esc.
 	Pick(ctx context.Context, prompt string, items []tui.PickItem, opts tui.PickOptions) (int, error)
 	// MultiPick presents a filterable multi-select list and returns the chosen
 	// indexes, or ErrCancelled on Esc.
@@ -56,8 +55,7 @@ type Console interface {
 	// SetTheme recolors the live UI and everything committed after it.
 	SetTheme(pal tui.Palette)
 
-	// Models returns the live model registry, the single source of truth for the
-	// active model.
+	// Models returns the live model registry, the single source of truth for the active model.
 	Models() *llm.Registry
 	// State returns the live agent state; handlers read and mutate it directly.
 	State() *agent.State

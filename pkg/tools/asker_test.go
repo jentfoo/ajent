@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func TestGuardedToolExecuteWithAsker(t *testing.T) {
@@ -42,7 +43,6 @@ func TestGuardedToolExecuteWithAsker(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			r := New()
 			inner := &recordingTool{}

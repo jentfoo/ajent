@@ -7,10 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // blockingTool blocks Execute until the context is cancelled, simulating a slow
@@ -99,7 +100,7 @@ func TestCrashResumeRebuildsState(t *testing.T) {
 	a.Interrupt()
 	require.NoError(t, <-done)
 
-	// crash: close without a graceful final state; reopen from the file alone.
+	// crash: close without a graceful final state; reopen from the file alone
 	require.NoError(t, w.Close())
 
 	entries, warns, rerr := Read(p)

@@ -50,6 +50,7 @@ func (c *Calibrator) Feed(key string, predicted, reported int) {
 func (c *Calibrator) Factor(key string) float64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if f, ok := c.factors[key]; ok && f > 0 {
 		return f
 	}
@@ -60,6 +61,7 @@ func (c *Calibrator) Factor(key string) float64 {
 func (c *Calibrator) Settled(key string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	f, ok := c.factors[key]
 	return ok && f > 0
 }

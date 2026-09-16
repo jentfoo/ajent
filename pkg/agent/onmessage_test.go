@@ -3,15 +3,16 @@ package agent
 import (
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestOnMessage(t *testing.T) {
 	t.Parallel()
 
-	// the hook sees every appended message in transcript order, including user echo and tool results.
+	// the hook sees every appended message in transcript order, including user echo and tool results
 	t.Run("fires_once_per_message_in_order", func(t *testing.T) {
 		var seen []llm.Role
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -33,7 +34,7 @@ func TestOnMessage(t *testing.T) {
 		}, seen)
 	})
 
-	// the assistant message carries end_turn for a plain reply.
+	// the assistant message carries end_turn for a plain reply
 	t.Run("records_end_turn", func(t *testing.T) {
 		var got llm.StopReason
 		a := newTestAgent(nil, &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}, nil)
@@ -43,7 +44,7 @@ func TestOnMessage(t *testing.T) {
 		assert.Equal(t, llm.StopEndTurn, got)
 	})
 
-	// an interrupted partial message is recorded with StopAborted.
+	// an interrupted partial message is recorded with StopAborted
 	t.Run("records_aborted_stop", func(t *testing.T) {
 		gp := &hangProvider{turn: textOnly("hello ")}
 		catch := &resultCatcher{}
@@ -62,7 +63,7 @@ func TestOnMessage(t *testing.T) {
 		assert.Equal(t, llm.StopAborted, got)
 	})
 
-	// a tool-calling turn records StopToolUse on its assistant message.
+	// a tool-calling turn records StopToolUse on its assistant message
 	t.Run("records_tool_use_stop", func(t *testing.T) {
 		toolTurn := toolCallEvents("c1", "bash")
 		toolTurn[len(toolTurn)-1] = llm.Event{Type: llm.EventDone, StopReason: llm.StopToolUse}
@@ -82,6 +83,7 @@ func TestOnMessage(t *testing.T) {
 			if _, ok := firstBlock(info.Message).(llm.ToolCallBlock); !ok {
 				continue // only the tool-call assistant message carries StopToolUse
 			}
+
 			assert.Equal(t, llm.StopToolUse, info.Stop)
 			found = true
 		}

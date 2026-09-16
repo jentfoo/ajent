@@ -122,30 +122,29 @@ func treePrefix(node string, parentOf map[string]string, children map[string][]s
 		path[i] = rev[n-1-i]
 	}
 
-	var cols []string
+	var out strings.Builder
 	// continuation bars for forks strictly above this node's own connector.
 	for j := 0; j < n-2; j++ {
 		kids := children[path[j]]
 		if len(kids) > 1 { // a fork level: does the branch toward node continue past it?
 			if dispLast(kids, path[j+1]) {
-				cols = append(cols, "    ")
+				out.WriteString("    ")
 			} else {
-				cols = append(cols, "│   ")
+				out.WriteString("│   ")
 			}
 		}
 	}
 
-	out := strings.Join(cols, "")
 	if p, ok := parentOf[node]; ok { // node is directly under a fork -> its connector
 		if kids := children[p]; len(kids) > 1 {
 			if dispLast(kids, node) {
-				out += "└── "
+				out.WriteString("└── ")
 			} else {
-				out += "├── "
+				out.WriteString("├── ")
 			}
 		}
 	}
-	return out
+	return out.String()
 }
 
 // dispLast reports whether id is the last child in display order. Children are
@@ -217,13 +216,16 @@ func EntryMessageText(e Entry) string {
 
 // messageText joins an entry's non-empty text blocks into one newline-delimited string.
 func messageText(md MessageData) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range md.Message.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, tb.Text)
+			if sb.Len() > 0 {
+				sb.WriteRune('\n')
+			}
+			sb.WriteString(tb.Text)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return sb.String()
 }
 
 // treeRowInfo is rowFor's internal descriptor: what a pickable entry looks like
@@ -292,40 +294,48 @@ func rowFor(e Entry) *treeRowInfo {
 
 // toolResultLabel collapses a user message's tool results into one summary line.
 func toolResultLabel(m llm.Message) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range m.Content {
 		if tr, ok := b.(llm.ToolResultBlock); ok {
 			if s := strings.TrimSpace(summarize(tr)); s != "" {
-				parts = append(parts, s)
+				if sb.Len() > 0 {
+					sb.WriteRune(' ')
+				}
+				sb.WriteString(s)
 			}
 		}
 	}
-	return strutil.Clip(strings.Join(parts, " "), maxFirstLen)
+	return strutil.Clip(sb.String(), maxFirstLen)
 }
 
 // summarize collapses a tool result into one display line for the picker.
 func summarize(tr llm.ToolResultBlock) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range tr.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, strutil.FirstLine(strings.TrimSpace(tb.Text)))
+			if sb.Len() > 0 {
+				sb.WriteRune(' ')
+			}
+			sb.WriteString(strutil.FirstLine(strings.TrimSpace(tb.Text)))
 		}
 	}
-	s := strings.Join(parts, " ")
-	return strutil.Clip(s, maxFirstLen)
+	return strutil.Clip(sb.String(), maxFirstLen)
 }
 
 // toolCallLabel renders assistant tool calls as [name] args collapsed labels.
 func toolCallLabel(m llm.Message) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range m.Content {
 		if tc, ok := b.(llm.ToolCallBlock); ok {
 			lbl := "[" + tc.Name + "]"
 			if s := strings.TrimSpace(strutil.FirstArgText(tc.Input)); s != "" {
 				lbl += " " + strutil.Clip(strutil.FirstLine(s), maxFirstLen)
 			}
-			parts = append(parts, lbl)
+			if sb.Len() > 0 {
+				sb.WriteRune(' ')
+			}
+			sb.WriteString(lbl)
 		}
 	}
-	return strings.Join(parts, " ")
+	return sb.String()
 }

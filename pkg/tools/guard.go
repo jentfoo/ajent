@@ -38,8 +38,7 @@ type Decision struct {
 }
 
 // Guard vets a tool call before it runs. The permission layer registers the
-// barrier; core registers none by default so an agent runs unguarded unless
-// configured.
+// barrier; core registers none by default so an agent runs unguarded unless configured.
 type Guard func(ctx context.Context, call agent.ToolCall) Decision
 
 // Allow is a guard that always permits its calls.

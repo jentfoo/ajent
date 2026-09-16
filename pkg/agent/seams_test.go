@@ -4,15 +4,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestSinkFanout(t *testing.T) {
 	t.Parallel()
 
-	// two sinks each receive the full event sequence, in registration order.
+	// two sinks each receive the full event sequence, in registration order
 	t.Run("forwards_to_every_member", func(t *testing.T) {
 		a := newTestAgent(nil, &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 			{Events: toolCallEvents("c1", "bash")},
@@ -31,7 +32,7 @@ func TestSinkFanout(t *testing.T) {
 		}
 	})
 
-	// the ToolStart done closure reaches every member even when a member returns its own per-call closure.
+	// the ToolStart done closure reaches every member even when a member returns its own per-call closure
 	t.Run("tool_done_calls_every_closure", func(t *testing.T) {
 		var one, two recordingSink
 		fan := &fanoutSink{sinks: []Sink{&one, &two}}
@@ -48,8 +49,6 @@ func TestSinkFanout(t *testing.T) {
 	})
 }
 
-// TestMessageObserversFireInOrder asserts every OnMessage fires per appended
-// message in registration order.
 func TestMessageObserversFireInOrder(t *testing.T) {
 	t.Parallel()
 
@@ -70,14 +69,14 @@ func TestMessageObserversFireInOrder(t *testing.T) {
 
 	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
 
-	// the prompt echo and assistant reply each invoke both observers in order.
+	// the prompt echo and assistant reply each invoke both observers in order
 	assert.Equal(t, [][]string{{"first", "second"}, {"first", "second"}}, order)
 }
 
 func TestOnSettled(t *testing.T) {
 	t.Parallel()
 
-	// the settled observer runs once after the queues empty on a successful turn.
+	// the settled observer runs once after the queues empty on a successful turn
 	t.Run("fires_when_drained", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
 		a := newTestAgent(nil, p, nil)
@@ -92,7 +91,7 @@ func TestOnSettled(t *testing.T) {
 		assert.Equal(t, 1, settled)
 	})
 
-	// an observer that queues another input keeps the same Prompt call alive until everything drains.
+	// an observer that queues another input keeps the same Prompt call alive until everything drains
 	t.Run("observer_can_queue_work", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 			{Events: textOnly("one")},
@@ -117,7 +116,7 @@ func TestOnSettled(t *testing.T) {
 		assert.Equal(t, 2, settled) // once after each turn drains
 	})
 
-	// an observer that queues via Steer keeps the same Prompt call alive until everything drains.
+	// an observer that queues via Steer keeps the same Prompt call alive until everything drains
 	t.Run("observer_can_steer", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 			{Events: textOnly("one")},
@@ -140,7 +139,7 @@ func TestOnSettled(t *testing.T) {
 		assert.Equal(t, 2, settled) // once after each turn drains
 	})
 
-	// an errored turn never reports itself as settled.
+	// an errored turn never reports itself as settled
 	t.Run("not_called_on_errored_turn", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}
 		a := newTestAgent(nil, p, nil)

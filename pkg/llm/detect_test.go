@@ -7,8 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestDetectCompat covers one case per vendor family, asserted both by provider
-// name and base-URL spelling, plus the guards that keep detection sparse.
 func TestDetectCompat(t *testing.T) {
 	t.Parallel()
 
@@ -54,6 +52,7 @@ func TestDetectCompat(t *testing.T) {
 		require.NotNil(t, byBase.ReasoningContentField)
 		assert.Equal(t, fieldReasoningConten, *byBase.ReasoningContentField)
 	})
+
 	t.Run("cache_format_keys_on_literal_provider_not_base_url", func(t *testing.T) {
 		// an openrouter base URL alone must not imply the anthropic cache format
 		got := detectCompat("custom", "https://openrouter.ai/api/v1", "anthropic/claude-opus-4")
@@ -88,18 +87,21 @@ func TestDetectCompat(t *testing.T) {
 		assert.Equal(t, zero, detectCompat("lmstudio", "http://localhost:1234/v1", ""))
 		assert.Equal(t, zero, detectCompat("myproxy", "", ""))
 	})
+
 	t.Run("base_url_alone_detects_deepseek", func(t *testing.T) {
 		got := detectCompat("custom", "https://api.deepseek.com", "")
 		if got.ThinkingFormat != nil {
 			assert.Equal(t, "deepseek", *got.ThinkingFormat)
 		}
 	})
+
 	t.Run("openrouter_anthropic_prefix_sets_cache_format", func(t *testing.T) {
 		got := detectCompat("openrouter", "", "anthropic/claude-opus-4")
 		if got.CacheControlFormat != nil {
 			assert.Equal(t, "anthropic", *got.CacheControlFormat)
 		}
 	})
+
 	t.Run("detection_never_enables_reasoning", func(t *testing.T) {
 		// a deepseek provider still needs "reasoning": true to actually reason
 		base := flavorDefaults[FlavorGeneric].caps

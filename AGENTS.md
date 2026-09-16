@@ -207,8 +207,9 @@ judge by one rule.
 
 ## Code Style
 
-- Use `var` style for zero-value initialization: `var foo bool`, not `foo := false`.
+- Use `var` style for zero-value initialization: `var foo bool`, not `foo := false`. Applies to every type.
 - Comments are concise short phrases, not full sentences, and only where they add non-obvious context — never restating a single line of code.
+- Wrap comments at ~100 columns.
 - Godocs describe inputs and outputs, not how the function works.
 - Follow existing naming conventions and neighboring code style.
 

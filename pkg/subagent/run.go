@@ -106,13 +106,16 @@ func assistantText(m *llm.Message) string {
 	if m == nil {
 		return ""
 	}
-	var parts []string
+	var sb strings.Builder
 	for _, b := range m.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, tb.Text)
+			if sb.Len() > 0 {
+				sb.WriteRune('\n')
+			}
+			sb.WriteString(tb.Text)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return sb.String()
 }
 
 // bestThinking returns the longest reasoning text among the trailing assistant
@@ -139,11 +142,14 @@ func bestThinking(msgs []llm.Message) string {
 
 // thinkingText joins a message's non-empty thinking blocks.
 func thinkingText(m *llm.Message) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range m.Content {
 		if tb, ok := b.(llm.ThinkingBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, tb.Text)
+			if sb.Len() > 0 {
+				sb.WriteRune('\n')
+			}
+			sb.WriteString(tb.Text)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return sb.String()
 }

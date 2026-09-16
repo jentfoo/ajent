@@ -4,8 +4,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 // fullSource is the parent-like registry view: every tool, some read-only.
@@ -27,6 +28,7 @@ func fullSource() *fakeSource {
 
 func TestChildTools(t *testing.T) {
 	t.Parallel()
+
 	src := fullSource()
 	assert.ElementsMatch(t, []string{"read", "grep", "find", "ls", "mcp_search"}, toolNames(childTools(src)))
 	for _, tl := range childTools(src) {
@@ -42,6 +44,7 @@ func TestChildTools(t *testing.T) {
 
 func TestToolSetView(t *testing.T) {
 	t.Parallel()
+
 	set := &toolSet{tools: childTools(fullSource())}
 	assert.Equal(t, []string{"read", "grep", "find", "ls", "mcp_search"}, set.Names())
 

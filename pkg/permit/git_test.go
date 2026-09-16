@@ -19,21 +19,18 @@ func TestGitReadOnly(t *testing.T) {
 		{"diff", "git diff HEAD~1", true},
 		{"show", "git show abc123", true},
 		{`no subcommand`, `git -c pager.log=cat`, false},
-
 		// branch: read vs create
 		{"branch bare lists", "git branch", true},
 		{"branch list flag", "git branch --list foo", true},
 		{"branch short l", "git branch -l foo", true},
 		{"branch verbose", "git branch -avv", true},
 		{`branch name creates`, `git branch foo`, false},
-
 		// tag: read vs create
 		{"tag bare lists", "git tag", true},
 		{"tag list flag", "git tag --list v*", true},
 		{"tag num lines", "git tag -n5", true},
 		{`tag verify`, `git tag -v v1.0`, true},
 		{`tag name creates`, `git tag foo`, false},
-
 		// config: read vs write
 		{"config get flag", "git config --get user.name", true},
 		{"config list", "git config --list", true},
@@ -42,7 +39,6 @@ func TestGitReadOnly(t *testing.T) {
 		{`config set writes`, `git config user.name Foo`, false},
 		{"config subcommand get", "git config get user.name", true},
 		{`config action word rejected`, `git config edit`, false},
-
 		// remote / reflog / worktree actions
 		{"remote bare lists", "git remote", true},
 		{"remote show", "git remote show origin", true},
@@ -51,14 +47,12 @@ func TestGitReadOnly(t *testing.T) {
 		{"reflog show", "git reflog show HEAD", true},
 		{"worktree list", "git worktree list", true},
 		{`stash bare is push`, `git stash`, false},
-
 		// exec / write flags rejected globally and per subcommand
 		{`output flag`, `git diff --output out.patch`, false},
 		{`ext diff`, `git log --ext-diff`, false},
 		{"grep open pager", "git grep -O vim foo", false},
 		{"ls remote upload pack", "git ls-remote --upload-pack=sh origin", false},
 		{"ls remote ext url", "git ls-remote 'ext::sh -c cat% .'", false},
-
 		// pre-subcommand pager flag
 		{`pager config executes`, `git -c pager.log=less status`, false},
 	}

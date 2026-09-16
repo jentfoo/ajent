@@ -100,10 +100,9 @@ type llamaTokenize struct {
 	Tokens []int `json:"tokens"`
 }
 
-// CountTokens returns the exact input token count from the server's own
-// tokenizer, which is local and cheap enough to call freely. It renders every
-// block a request would send so tool schemas, calls, results and images are not
-// silently counted as zero.
+// CountTokens returns the exact input token count from the server's own tokenizer, which is
+// local and cheap enough to call freely. It renders every block a request would send so tool
+// schemas, calls, results and images are not silently counted as zero.
 func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, error) {
 	if req.Model.Caps.Tokenizer != TokenizerRemoteTokenize {
 		return 0, ErrNoTokenizer

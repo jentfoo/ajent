@@ -1,6 +1,3 @@
-// Package tools provides the built-in coding-agent toolset: read, write, edit
-// and bash enabled by default plus find and grep registered off. It implements
-// pkg/agent.Tool directly and never imports pkg/tui, keeping the front end free.
 package tools
 
 import (

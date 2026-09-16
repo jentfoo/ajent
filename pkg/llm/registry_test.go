@@ -48,6 +48,7 @@ func TestNewRegistry(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, flavorDefaults[FlavorLMStudio].baseURL, m.BaseURL)
 	})
+
 	t.Run("unknown_flavor_falls_back_to_generic", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"proxy": {Flavor: FlavorUnknown, BaseURL: "http://x/v1", Models: []ModelConfig{{ID: "m1"}}},
@@ -56,6 +57,7 @@ func TestNewRegistry(t *testing.T) {
 		require.Len(t, warnings, 1)
 		assert.Contains(t, warnings[0], "unknown flavor ignored, using generic")
 	})
+
 	t.Run("sorts_by_provider_then_id", func(t *testing.T) {
 		r, warnings := NewRegistry(testFile(), nil, RegistryOptions{})
 		assert.Empty(t, warnings)
@@ -71,10 +73,12 @@ func TestNewRegistry(t *testing.T) {
 			"lmstudio/qwen3.6-27b-mtp",
 		}, keys)
 	})
+
 	t.Run("first_model_is_active_without_a_default", func(t *testing.T) {
 		r, _ := NewRegistry(testFile(), nil, RegistryOptions{})
 		assert.Equal(t, "anthropic/claude-opus-4-5", r.Active().Key())
 	})
+
 	t.Run("default_model_is_honoured", func(t *testing.T) {
 		f := testFile()
 		f.DefaultModel = "sonnet"
@@ -82,6 +86,7 @@ func TestNewRegistry(t *testing.T) {
 		assert.Empty(t, warnings)
 		assert.Equal(t, "anthropic/claude-sonnet-4-5", r.Active().Key())
 	})
+
 	t.Run("unknown_default_model_warns", func(t *testing.T) {
 		f := testFile()
 		f.DefaultModel = "nonexistent"
@@ -89,6 +94,7 @@ func TestNewRegistry(t *testing.T) {
 		require.NotEmpty(t, warnings)
 		assert.Contains(t, warnings[0], "nonexistent")
 	})
+
 	t.Run("disabled_provider_is_skipped", func(t *testing.T) {
 		f := testFile()
 		e := f.Providers["lmstudio"]
@@ -99,6 +105,7 @@ func TestNewRegistry(t *testing.T) {
 		assert.Len(t, r.Models(), 2)
 		assert.Equal(t, []string{"anthropic"}, r.ProviderNames())
 	})
+
 	t.Run("provider_with_no_models_warns", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{"openrouter": {}}}
 		r, warnings := NewRegistry(f, nil, RegistryOptions{})
@@ -106,6 +113,7 @@ func TestNewRegistry(t *testing.T) {
 		require.Len(t, warnings, 1)
 		assert.Contains(t, warnings[0], "openrouter")
 	})
+
 	t.Run("flavor_defaults_from_the_provider_key", func(t *testing.T) {
 		r, _ := NewRegistry(testFile(), nil, RegistryOptions{})
 		m, err := r.Resolve("opus")
@@ -118,6 +126,7 @@ func TestNewRegistry(t *testing.T) {
 		assert.Equal(t, ThinkingAnthropic, m.Caps.Thinking)
 		assert.True(t, m.Caps.ReasoningReplay)
 	})
+
 	t.Run("unknown_provider_key_is_generic", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"myproxy": {Models: []ModelConfig{{ID: "m1"}}},
@@ -129,6 +138,7 @@ func TestNewRegistry(t *testing.T) {
 		_, flavor, _ := r.ProviderConfigFor(m)
 		assert.Equal(t, FlavorGeneric, flavor)
 	})
+
 	t.Run("explicit_flavor_overrides_the_key", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"myproxy": {Flavor: FlavorLMStudio, Models: []ModelConfig{{ID: "m1"}}},
@@ -173,10 +183,12 @@ func TestRegistryResolve(t *testing.T) {
 		_, err := r.Resolve("gpt-5")
 		assert.ErrorIs(t, err, ErrUnknownModel)
 	})
+
 	t.Run("empty_name", func(t *testing.T) {
 		_, err := r.Resolve("")
 		assert.ErrorIs(t, err, ErrUnknownModel)
 	})
+
 	t.Run("ambiguous_names_the_candidates", func(t *testing.T) {
 		_, err := r.Resolve("claude")
 
@@ -185,6 +197,7 @@ func TestRegistryResolve(t *testing.T) {
 		assert.ElementsMatch(t,
 			[]string{"anthropic/claude-opus-4-5", "anthropic/claude-sonnet-4-5"}, ae.Candidates)
 	})
+
 	t.Run("alias_beats_a_substring_match", func(t *testing.T) {
 		got, err := r.Resolve("opus")
 		require.NoError(t, err)
@@ -207,6 +220,7 @@ func TestRegistryDuplicateAlias(t *testing.T) {
 		require.Len(t, warnings, 1)
 		assert.Contains(t, warnings[0], "alias \"opus\" is claimed by both")
 	})
+
 	t.Run("resolve_reports_ambiguity_not_a_pick", func(t *testing.T) {
 		_, err := r.Resolve("OPUS")
 
@@ -215,6 +229,7 @@ func TestRegistryDuplicateAlias(t *testing.T) {
 		assert.ElementsMatch(t,
 			[]string{"anthropic/claude-opus-4-5", "anthropic/some/other-model"}, ae.Candidates)
 	})
+
 	t.Run("a_non_colliding_alias_still_resolves", func(t *testing.T) {
 		got, err := r.Resolve("other")
 		require.NoError(t, err)
@@ -238,35 +253,42 @@ func TestMergeModels(t *testing.T) {
 		assert.Equal(t, "a", got[0].ID)
 		assert.Equal(t, "b", got[1].ID)
 	})
+
 	t.Run("declared_fields_win", func(t *testing.T) {
 		got, _ := mergeModels(declared, discovered, nil)
 		require.NotNil(t, got[0].ContextWindow)
 		assert.Equal(t, 1000, *got[0].ContextWindow)
 	})
+
 	t.Run("discovery_fills_unset_fields", func(t *testing.T) {
 		got, _ := mergeModels(declared, discovered, nil)
 		assert.Equal(t, "Discovered A", got[0].Name)
 		require.NotNil(t, got[1].ContextWindow)
 		assert.Equal(t, 2000, *got[1].ContextWindow) // the real loaded window
 	})
+
 	t.Run("thinking_budgets_fill_from_discovery", func(t *testing.T) {
 		d := []ModelConfig{{ID: "b"}}
 		disc := []ModelConfig{{ID: "b", ThinkingBudgets: map[Level]int{LevelHigh: 7777}}}
 		got, _ := mergeModels(d, disc, nil)
 		assert.Equal(t, 7777, got[0].ThinkingBudgets[LevelHigh])
 	})
+
 	t.Run("discovery_supplies_everything_when_nothing_declared", func(t *testing.T) {
 		got, _ := mergeModels(nil, discovered, nil)
 		assert.Len(t, got, 3)
 	})
+
 	t.Run("declared_only", func(t *testing.T) {
 		got, _ := mergeModels(declared, nil, nil)
 		assert.Len(t, got, 2)
 	})
+
 	t.Run("both_empty", func(t *testing.T) {
 		got, _ := mergeModels(nil, nil, nil)
 		assert.Empty(t, got)
 	})
+
 	t.Run("override_adjusts_a_discovered_entry", func(t *testing.T) {
 		got, w := mergeModels(nil, discovered,
 			map[string]ModelOverride{"c": {Name: "Renamed C", ContextWindow: ptr(4096)}})
@@ -276,11 +298,13 @@ func TestMergeModels(t *testing.T) {
 		require.NotNil(t, got[2].ContextWindow)
 		assert.Equal(t, 4096, *got[2].ContextWindow)
 	})
+
 	t.Run("override_never_adds_a_model", func(t *testing.T) {
 		got, w := mergeModels(nil, discovered, map[string]ModelOverride{"nope": {Name: "X"}})
 		assert.Len(t, got, 3)
 		assert.Empty(t, w) // an id discovery has not returned yet is not a mistake
 	})
+
 	t.Run("override_on_an_excluded_id_warns", func(t *testing.T) {
 		// "c" is discovered but the declared list is the whole list, so the
 		// override is inert; silence here would look like it applied
@@ -288,12 +312,14 @@ func TestMergeModels(t *testing.T) {
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], `modelOverrides "c" is not in models`)
 	})
+
 	t.Run("override_on_a_declared_id_warns", func(t *testing.T) {
 		got, w := mergeModels(declared, discovered, map[string]ModelOverride{"a": {Name: "X"}})
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], `modelOverrides "a"`)
 		assert.Equal(t, "Discovered A", got[0].Name) // the declaration still wins
 	})
+
 	t.Run("override_does_not_mutate_the_cache", func(t *testing.T) {
 		disc := []ModelConfig{{ID: "a", Name: "Discovered A"}}
 		_, _ = mergeModels(nil, disc, map[string]ModelOverride{"a": {Name: "Renamed"}})
@@ -324,22 +350,26 @@ func TestApplyOverride(t *testing.T) {
 		assert.True(t, *got.Reasoning)
 		assert.Equal(t, []Modality{ModalityText, ModalityImage}, got.Input)
 	})
+
 	t.Run("unset_fields_leave_the_base", func(t *testing.T) {
 		got := applyOverride(base, ModelOverride{Name: "Over"})
 		assert.Equal(t, 1000, *got.ContextWindow)
 		assert.False(t, *got.Reasoning)
 	})
+
 	t.Run("headers_merge_per_key", func(t *testing.T) {
 		got := applyOverride(base, ModelOverride{
 			Headers: map[string]string{"X-Both": "over", "X-New": "2"},
 		})
 		assert.Equal(t, map[string]string{"X-Base": "1", "X-Both": "over", "X-New": "2"}, got.Headers)
 	})
+
 	t.Run("sampling_params_merge_per_key", func(t *testing.T) {
 		got := applyOverride(base, ModelOverride{SamplingParams: map[string]any{"temperature": 1.0}})
 		assert.InDelta(t, 1.0, got.SamplingParams["temperature"], 1e-9)
 		assert.InDelta(t, 0.9, got.SamplingParams["top_p"], 1e-9)
 	})
+
 	t.Run("compat_merges_per_field", func(t *testing.T) {
 		got := applyOverride(base, ModelOverride{
 			Compat: &Compat{SupportsImages: ptr(false), SupportsPromptCache: ptr(true)},
@@ -349,10 +379,12 @@ func TestApplyOverride(t *testing.T) {
 		assert.False(t, *got.Compat.SupportsImages)     // replaced
 		assert.True(t, *got.Compat.SupportsPromptCache) // added
 	})
+
 	t.Run("level_map_replaces", func(t *testing.T) {
 		got := applyOverride(base, ModelOverride{LevelMap: map[Level]*string{LevelOff: nil}})
 		assert.Contains(t, got.LevelMap, LevelOff)
 	})
+
 	t.Run("does_not_mutate_the_base_maps", func(t *testing.T) {
 		_ = applyOverride(base, ModelOverride{
 			Headers:        map[string]string{"X-Both": "over"},
@@ -390,6 +422,7 @@ func TestRegistryWithCache(t *testing.T) {
 		require.Len(t, r.Models(), 1)
 		assert.Equal(t, "openrouter/z-ai/glm-5.2", r.Models()[0].Key())
 	})
+
 	t.Run("declared_provider_ignores_extra_discovered_models", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"openrouter": {Models: []ModelConfig{{ID: "z-ai/glm-5.2"}}},
@@ -424,6 +457,7 @@ func TestRegistryRefresh(t *testing.T) {
 		assert.Len(t, r.Models(), 2)
 		assert.Len(t, cache["openrouter"].Models, 2)
 	})
+
 	t.Run("keeps_the_active_model", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
@@ -441,6 +475,7 @@ func TestRegistryRefresh(t *testing.T) {
 		})
 		assert.Equal(t, before, r.Active().Key())
 	})
+
 	t.Run("declared_models_survive_a_refresh", func(t *testing.T) {
 		var hits int
 		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)

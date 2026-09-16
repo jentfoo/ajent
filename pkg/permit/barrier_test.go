@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 // fakeDialog is a controllable approval dialog for tests.
@@ -55,6 +56,7 @@ func newFakePrompter() *fakePrompter { return &fakePrompter{reasons: make(map[st
 func (f *fakePrompter) Open(prompt, subject string, options []string) (Dialog, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -66,6 +68,7 @@ func (f *fakePrompter) Open(prompt, subject string, options []string) (Dialog, e
 func (f *fakePrompter) Reason(ctx context.Context, label string) (string, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	r, ok := f.reasons[label]
 	if !ok {
 		return "", false
@@ -77,6 +80,7 @@ func (f *fakePrompter) Reason(ctx context.Context, label string) (string, bool) 
 func (f *fakePrompter) last() *fakeDialog {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.dialogs) == 0 {
 		return nil
 	}
@@ -86,6 +90,7 @@ func (f *fakePrompter) last() *fakeDialog {
 func (f *fakePrompter) count() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	return len(f.dialogs)
 }
 
@@ -93,6 +98,7 @@ func (f *fakePrompter) count() int {
 // asker runs in its own goroutine during tests, so the Open may lag the call.
 func waitDialog(t *testing.T, p *fakePrompter) *fakeDialog {
 	t.Helper()
+
 	require.Eventually(t, func() bool { return p.last() != nil }, time.Second, 10*time.Millisecond)
 	return p.last()
 }
@@ -101,6 +107,7 @@ func waitDialog(t *testing.T, p *fakePrompter) *fakeDialog {
 // returns the resulting decision.
 func runAndAnswer(t *testing.T, p *fakePrompter, b *Barrier, name string, input []byte, idx int) tools.Decision {
 	t.Helper()
+
 	var got tools.Decision
 	done := make(chan struct{})
 	go func() { got = runAsk(b, t.Context(), name, input); close(done) }()
@@ -242,7 +249,7 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
 	t.Parallel()
 
-	// naming an MCP server (tools register as server__tool) covers every tool it exposes.
+	// naming an MCP server (tools register as server__tool) covers every tool it exposes
 	b := newTestBarrier(newFakePrompter())
 	b.SetSafeCommands([]string{"sectool"})
 
@@ -251,13 +258,13 @@ func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
 		assert.Equal(t, tools.ActionAllow, d.Action, name)
 	}
 
-	// a different server's tool still prompts.
+	// a different server's tool still prompts
 	b2 := newTestBarrier(newFakePrompter())
 	b2.SetSafeCommands([]string{"sectool"})
 	d := b2.Guard()(t.Context(), call("github__get_repo", `{}`))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 
-	// an exact namespaced tool name still matches that one tool only.
+	// an exact namespaced tool name still matches that one tool only
 	b3 := newTestBarrier(newFakePrompter())
 	b3.SetSafeCommands([]string{"sectool__proxy_poll"})
 	assert.Equal(t, tools.ActionAllow, b3.Guard()(t.Context(), call("sectool__proxy_poll", `{}`)).Action)
@@ -274,19 +281,19 @@ func TestGuardSafeMatchesBashCommandComponents(t *testing.T) {
 	d := b.Guard()(t.Context(), bashCall("cd /tmp && make lint 2>&1 | tail -5"))
 	assert.Equal(t, tools.ActionAllow, d.Action)
 
-	// an appended write never rides in on a listed prefix.
+	// an appended write never rides in on a listed prefix
 	b2 := newTestBarrier(newFakePrompter())
 	b2.SetSafeCommands([]string{"make lint"})
 	d = b2.Guard()(t.Context(), bashCall("make lint && rm -rf /tmp/x"))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 
-	// a compound whose unlisted component is neither read-only nor listed prompts.
+	// a compound whose unlisted component is neither read-only nor listed prompts
 	b3 := newTestBarrier(newFakePrompter())
 	b3.SetSafeCommands([]string{"make lint"})
 	d = b3.Guard()(t.Context(), bashCall("cd /tmp && make test"))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 
-	// unsafe ops (redirect/substitution) defeat component matching entirely.
+	// unsafe ops (redirect/substitution) defeat component matching entirely
 	b4 := newTestBarrier(newFakePrompter())
 	b4.SetSafeCommands([]string{"make lint", "tail"})
 	d = b4.Guard()(t.Context(), bashCall("cd /tmp && make lint > out.txt"))
@@ -296,7 +303,7 @@ func TestGuardSafeMatchesBashCommandComponents(t *testing.T) {
 func TestGuardDenyMatchesBashCommandComponents(t *testing.T) {
 	t.Parallel()
 
-	// a denied command nested in a compound is still refused.
+	// a denied command nested in a compound is still refused
 	b := newTestBarrier(newFakePrompter())
 	b.SetMode(ModeAllowAll)
 	b.SetDeniedCommands([]string{"git stash"})
@@ -310,7 +317,7 @@ func TestGuardDeniedCommandsMatchMCPServerNamespace(t *testing.T) {
 	b := newTestBarrier(newFakePrompter())
 	b.SetDeniedCommands([]string{"sectool"})
 	assert.Equal(t, tools.ActionDeny, b.Guard()(t.Context(), call("sectool__proxy_poll", `{}`)).Action)
-	// naming one server does not deny another.
+	// naming one server does not deny another
 	assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), call("github__get_repo", `{}`)).Action)
 }
 
@@ -318,7 +325,7 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBarrier(newFakePrompter())
-	// a bash line and an MCP tool name; a core writer may also be denied.
+	// a bash line and an MCP tool name; a core writer may also be denied
 	b.SetDeniedCommands([]string{"git stash", "mcp__danger", "write"})
 
 	cases := []struct {
@@ -327,16 +334,16 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		call agent.ToolCall
 		want tools.Action
 	}{
-		// a configured bash prefix denies in every mode, even allow-all.
+		// a configured bash prefix denies in every mode, even allow-all
 		{"deny_git_stash_allow_all", ModeAllowAll, bashCall("git stash"), tools.ActionDeny},
 		{"deny_git_stash_subcommand", ModeAuto, bashCall("git stash push -m x"), tools.ActionDeny},
-		// whitespace is tolerated; a different command still asks.
+		// whitespace is tolerated; a different command still asks
 		{"deny_padded", ModeAllowRead, bashCall("  git stash "), tools.ActionDeny},
 		{"unlisted_bash_prompts", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
-		// an exact tool name denies regardless of registry metadata.
+		// an exact tool name denies regardless of registry metadata
 		{"deny_mcp_tool", ModeAuto, call("mcp__danger", `{}`), tools.ActionDeny},
 		{"other_mcp_prompts", ModeAllowRead, call("mcp__safe", `{}`), tools.ActionAsk},
-		// a denied core writer refuses even under allow-all.
+		// a denied core writer refuses even under allow-all
 		{"deny_write_tool", ModeAllowAll, call("write", `{}`), tools.ActionDeny},
 	}
 	for _, c := range cases {
@@ -347,12 +354,12 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		})
 	}
 
-	// a user's own ! line runs regardless of config denial; the human owns that shell.
+	// a user's own ! line runs regardless of config denial; the human owns that shell
 	ctx := tools.WithUserInitiated(t.Context())
 	d := b.Guard()(ctx, bashCall("git stash"))
 	assert.Equal(t, tools.ActionAllow, d.Action)
 
-	// clearing the list lifts the denial for a previously listed command.
+	// clearing the list lifts the denial for a previously listed command
 	b.SetMode(ModeAllowRead)
 	b.SetDeniedCommands(nil)
 	d = b.Guard()(t.Context(), bashCall("git stash"))
@@ -380,7 +387,7 @@ func TestGuardDoomedEditRunsInsteadOfPrompting(t *testing.T) {
 	d := b.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`))
 	assert.Equal(t, tools.ActionAllow, d.Action)
 
-	// without a dry run the barrier cannot predict and prompts.
+	// without a dry run the barrier cannot predict and prompts
 	b2 := newTestBarrier(newFakePrompter())
 	d = b2.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`))
 	assert.Equal(t, tools.ActionAsk, d.Action)
@@ -389,7 +396,7 @@ func TestGuardDoomedEditRunsInsteadOfPrompting(t *testing.T) {
 func TestAskerNoUI(t *testing.T) {
 	t.Parallel()
 
-	// no prompter installed denies headless.
+	// no prompter installed denies headless
 	t.Run("denies_when_headless", func(t *testing.T) {
 		b := NewBarrier(noRO) // no prompter installed
 		d := runAsk(b, t.Context(), "write", []byte(`{}`))
@@ -419,11 +426,11 @@ func TestAskerAllowThisCallOnly(t *testing.T) {
 	p := newFakePrompter()
 	b := newTestBarrier(p)
 
-	// first call prompts and is allowed.
+	// first call prompts and is allowed
 	d1 := runAndAnswer(t, p, b, "write", []byte(`{}`), int(optAllow))
 	assert.Equal(t, tools.ActionAllow, d1.Action)
 
-	// a second identical write still prompts (no session memory for this-call-only).
+	// a second identical write still prompts (no session memory for this-call-only)
 	assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), call("write", `{}`)).Action)
 }
 
@@ -457,7 +464,7 @@ func TestAskerAllowEmitsDescriptiveNotices(t *testing.T) {
 func TestAskerDenyAndNotes(t *testing.T) {
 	t.Parallel()
 
-	// a deny captures the canned reason.
+	// a deny captures the canned reason
 	t.Run("deny_captures_reason", func(t *testing.T) {
 		p := newFakePrompter()
 		p.reasons["reason for denying"] = "not now"
@@ -473,7 +480,7 @@ func TestAskerDenyAndNotes(t *testing.T) {
 		assert.Contains(t, got.Reason, "not now")
 	})
 
-	// an allow-with-note injects steering into the session.
+	// an allow-with-note injects steering into the session
 	t.Run("allow_with_note_injects_steering", func(t *testing.T) {
 		p := newFakePrompter()
 		p.reasons["note for allowing"] = "only inside build/"
@@ -490,7 +497,7 @@ func TestAskerDenyAndNotes(t *testing.T) {
 		assert.Contains(t, notes[0], "only inside build/")
 	})
 
-	// a deny injects its reason as a note.
+	// a deny injects its reason as a note
 	t.Run("deny_injects_note_when_reason_given", func(t *testing.T) {
 		p := newFakePrompter()
 		p.reasons["reason for denying"] = "not now"
@@ -507,7 +514,7 @@ func TestAskerDenyAndNotes(t *testing.T) {
 		assert.Contains(t, notes[0], "not now")
 	})
 
-	// a deny without a canned reason injects nothing.
+	// a deny without a canned reason injects nothing
 	t.Run("deny_no_reason_injects_nothing", func(t *testing.T) {
 		p := newFakePrompter() // no canned reason -> Reason returns false
 		n := &fakeNoter{}
@@ -524,7 +531,7 @@ func TestAskerDenyAndNotes(t *testing.T) {
 func TestAskerSessionGrants(t *testing.T) {
 	t.Parallel()
 
-	// an allow-for-session bash:git grant covers a different git command without a new dialog.
+	// an allow-for-session bash:git grant covers a different git command without a new dialog
 	t.Run("allow_for_session_short_circuits_next_call", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -532,14 +539,14 @@ func TestAskerSessionGrants(t *testing.T) {
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"git status"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// a different git command matches the same bash:git grant and opens no dialog.
+		// a different git command matches the same bash:git grant and opens no dialog
 		n := p.count()
 		d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"git log --oneline"}`))
 		assert.Equal(t, tools.ActionAllow, d2.Action)
 		assert.Equal(t, n, p.count())
 	})
 
-	// a write grant is tool-scoped and does not cover edit.
+	// a write grant is tool-scoped and does not cover edit
 	t.Run("session_grant_is_tool_scoped_not_global", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -547,44 +554,44 @@ func TestAskerSessionGrants(t *testing.T) {
 		got := runAndAnswer(t, p, b, "write", []byte(`{}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// a different tool name is not covered by the write grant.
+		// a different tool name is not covered by the write grant
 		assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), call("edit", `{}`)).Action)
 	})
 
-	// a compound command takes the broad grant and covers only other compounds.
+	// a compound command takes the broad grant and covers only other compounds
 	t.Run("compound_grant_covers_only_compound_commands", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// a piped command takes the broad grant; derive its display index from the actions.
+		// a piped command takes the broad grant; derive its display index from the actions
 		displayIdx := slices.Index(optionActions("cat a | sort"), int(optAllowCompound))
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"cat a | sort"}`), displayIdx)
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// another compound command is covered without a new dialog.
+		// another compound command is covered without a new dialog
 		_, ok := b.sessionAllowed(bashCall("grep foo f && wc -l"))
 		assert.True(t, ok)
 
-		// a plain (non-compound) command does not match the broad grant.
+		// a plain (non-compound) command does not match the broad grant
 		_, ok = b.sessionAllowed(bashCall("rm build"))
 		assert.False(t, ok)
 	})
 
-	// a piped git never matches the named bash:git grant.
+	// a piped git never matches the named bash:git grant
 	t.Run("compound_command_never_matches_named_grant", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// grant git for session.
+		// grant git for session
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"git status"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// a piped git command is compound and never matches the named git grant.
+		// a piped git command is compound and never matches the named git grant
 		_, ok := b.sessionAllowed(bashCall("git log | head"))
 		assert.False(t, ok)
 	})
 
-	// one non-readonly head grants per-name memory for it.
+	// one non-readonly head grants per-name memory for it
 	t.Run("compound_single_head_grants_per_name_for_session", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -594,22 +601,22 @@ func TestAskerSessionGrants(t *testing.T) {
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"ifconfig | head -n 10"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// the named grant covers a plain ifconfig call (no new dialog).
+		// the named grant covers a plain ifconfig call (no new dialog)
 		n := p.count()
 		d1 := runAsk(b, t.Context(), "bash", []byte(`{"command":"ifconfig eth0"}`))
 		assert.Equal(t, tools.ActionAllow, d1.Action)
 		assert.Equal(t, n, p.count())
 
-		// and a future compound whose only non-readonly head is ifconfig.
+		// and a future compound whose only non-readonly head is ifconfig
 		d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"ifconfig | grep flags"}`))
 		assert.Equal(t, tools.ActionAllow, d2.Action)
 
-		// an unrelated write command is not covered by the named grant.
+		// an unrelated write command is not covered by the named grant
 		_, ok := b.sessionAllowed(bashCall("rm build"))
 		assert.False(t, ok)
 	})
 
-	// three distinct non-readonly heads defeat per-name memory and fall back to a broad grant.
+	// three distinct non-readonly heads defeat per-name memory and fall back to a broad grant
 	t.Run("compound_multiple_heads_falls_back_to_broad_grant", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -621,25 +628,25 @@ func TestAskerSessionGrants(t *testing.T) {
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm a && mkdir b && touch c"}`), displayIdx)
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// the broad grant covers a different compound command.
+		// the broad grant covers a different compound command
 		_, ok := b.sessionAllowed(bashCall("touch x | wc -l"))
 		assert.True(t, ok)
 
-		// but not a plain (non-compound) command.
+		// but not a plain (non-compound) command
 		_, ok = b.sessionAllowed(bashCall("rm build"))
 		assert.False(t, ok)
 	})
 
-	// two non-readonly heads are both granted for the session by name.
+	// two non-readonly heads are both granted for the session by name
 	t.Run("compound_two_heads_grants_both_for_session", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// rm and mkdir are the two non-readonly heads; answering allow-for-session adds both.
+		// rm and mkdir are the two non-readonly heads; answering allow-for-session adds both
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build && mkdir dir"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// each command is granted on its own (no new dialog).
+		// each command is granted on its own (no new dialog)
 		n := p.count()
 		for _, cmd := range []string{"rm old", "mkdir fresh"} {
 			d := runAsk(b, t.Context(), "bash", []byte(`{"command":`+strconvQuote(cmd)+`}`))
@@ -647,11 +654,11 @@ func TestAskerSessionGrants(t *testing.T) {
 		}
 		assert.Equal(t, n+0, p.count())
 
-		// a compound whose non-readonly heads are both granted matches by name.
+		// a compound whose non-readonly heads are both granted matches by name
 		d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build && mkdir dir"}`))
 		assert.Equal(t, tools.ActionAllow, d2.Action)
 
-		// an unrelated write is not covered.
+		// an unrelated write is not covered
 		_, ok := b.sessionAllowed(bashCall("touch x"))
 		assert.False(t, ok)
 	})
@@ -660,7 +667,7 @@ func TestAskerSessionGrants(t *testing.T) {
 func TestAskerAuto(t *testing.T) {
 	t.Parallel()
 
-	// a read-only verdict resolves the open dialog without a keystroke.
+	// a read-only verdict resolves the open dialog without a keystroke
 	t.Run("classifies_read_only_and_resolves_dialog", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -676,7 +683,7 @@ func TestAskerAuto(t *testing.T) {
 		assert.Equal(t, tools.ActionAllow, got.Action)
 	})
 
-	// a write verdict must not resolve; a user keystroke still decides.
+	// a write verdict must not resolve; a user keystroke still decides
 	t.Run("write_verdict_keeps_dialog_waiting", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -688,14 +695,14 @@ func TestAskerAuto(t *testing.T) {
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
-		// the write verdict must not resolve; a user keystroke still decides.
+		// the write verdict must not resolve; a user keystroke still decides
 		waitDialog(t, p).answer(int(optDeny))
 		<-done
 
 		assert.Equal(t, tools.ActionDeny, got.Action)
 	})
 
-	// a confident write (rm) is still classified in auto mode; a readonly verdict resolves the dialog open.
+	// a confident write (rm) is still classified in auto mode; a readonly verdict resolves the dialog open
 	t.Run("classifies_clear_write_and_approves_on_read_only", func(t *testing.T) {
 		b := NewBarrier(noRO)
 		b.SetMode(ModeAuto)
@@ -715,7 +722,7 @@ func TestAskerAuto(t *testing.T) {
 		assert.Equal(t, tools.ActionAllow, got.Action)
 	})
 
-	// an auto-approved readonly call emits a notice.
+	// an auto-approved readonly call emits a notice
 	t.Run("read_only_emits_notice", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -735,7 +742,7 @@ func TestAskerAuto(t *testing.T) {
 		assert.Equal(t, "Tool auto allowed", n.all()[0])
 	})
 
-	// a user-decided write verdict emits no auto-allow notice.
+	// a user-decided write verdict emits no auto-allow notice
 	t.Run("write_verdict_emits_no_notice", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -750,7 +757,7 @@ func TestAskerAuto(t *testing.T) {
 		require.Empty(t, n.all())
 	})
 
-	// answering before classification returns cancels the in-flight classifier.
+	// answering before classification returns cancels the in-flight classifier
 	t.Run("user_answer_cancels_in_flight_classification", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -777,7 +784,7 @@ func TestAskerAuto(t *testing.T) {
 		}, time.Second, 10*time.Millisecond)
 	})
 
-	// auto also classifies MCP/extension calls.
+	// auto also classifies MCP/extension calls
 	t.Run("mcp_classifies_non_bash_calls", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -804,11 +811,13 @@ type noticeRecorder struct {
 func (r *noticeRecorder) record(s string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.notices = append(r.notices, s)
 }
 func (r *noticeRecorder) all() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return append([]string(nil), r.notices...)
 }
 
@@ -824,7 +833,7 @@ func (c *blockingClassifier) Classify(ctx context.Context, s Subject) Class {
 func TestSetModeResolvesOpenDialog(t *testing.T) {
 	t.Parallel()
 
-	// switching to allow-all resolves the open dialog as an allow.
+	// switching to allow-all resolves the open dialog as an allow
 	t.Run("resolves_open_dialog_as_allow_for_allow_all", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -840,7 +849,7 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 		assert.Equal(t, tools.ActionAllow, got.Action)
 	})
 
-	// leaving block-all auto-allows a pending read.
+	// leaving block-all auto-allows a pending read
 	t.Run("out_of_block_all_resolves_read_only_dialog_as_allow", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -857,7 +866,7 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 		assert.Equal(t, tools.ActionAllow, got.Action)
 	})
 
-	// block-all still prompts writes; the dialog stays open.
+	// block-all still prompts writes; the dialog stays open
 	t.Run("into_block_all_leaves_write_dialog_waiting", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -948,8 +957,6 @@ func TestGuardAutoWriteScope(t *testing.T) {
 	})
 }
 
-// TestAskerNeverClassifiesBuiltins pins that a core writer reaching the dialog is
-// never handed to the model: a readonly verdict would otherwise auto-allow it.
 func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 	t.Parallel()
 
@@ -1031,10 +1038,12 @@ func TestClassifySubject(t *testing.T) {
 		s := classifySubject(ModeAutoWrite, bashCall("rm f"))
 		assert.Equal(t, Subject{Name: tools.ToolBash, Args: "rm f", AllowWrite: true}, s)
 	})
+
 	t.Run("shell_under_auto", func(t *testing.T) {
 		s := classifySubject(ModeAuto, bashCall("rm f"))
 		assert.False(t, s.AllowWrite)
 	})
+
 	t.Run("mcp_never_allows_write", func(t *testing.T) {
 		s := classifySubject(ModeAutoWrite, call("mcp__x", `{"a":1}`))
 		assert.Equal(t, "mcp__x", s.Name)
@@ -1071,12 +1080,14 @@ type concurrentClassifier struct {
 func (c *concurrentClassifier) Classify(ctx context.Context, s Subject) Class {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	c.n++
 	return c.verdict
 }
 func (c *concurrentClassifier) count() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.n
 }
 
@@ -1102,11 +1113,13 @@ func (c *countingBlockingClassifier) Classify(ctx context.Context, s Subject) Cl
 func (c *countingBlockingClassifier) startedN() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.started
 }
 func (c *countingBlockingClassifier) finishedN() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.finished
 }
 
@@ -1120,9 +1133,9 @@ func TestPrefetch(t *testing.T) {
 		safe []string // config safe commands, when set
 		want int      // model invocations expected from Prefetch
 	}{
-		// two unverifiable bash calls: both are classified.
+		// two unverifiable bash calls: both are classified
 		{"two_prompt_bash", ModeAuto, []agent.ToolCall{bashCall("rm -rf build"), bashCall("git push origin main")}, nil, 2},
-		// built-in read-only tools resolve statically; the model is never asked.
+		// built-in read-only tools resolve statically; the model is never asked
 		{"read_only_skipped", ModeAuto, []agent.ToolCall{bashCall("ls -la"), bashCall("grep foo bar.c")}, nil, 0},
 		// make lint is Ask by default but listed safe; the two unlisted prompt
 		// commands still go. Only those two are sent.
@@ -1130,7 +1143,7 @@ func TestPrefetch(t *testing.T) {
 		// a lone eligible call is prefetched too: serial predecessors may run for a
 		// while before its dialog opens.
 		{"single_call_prefetched", ModeAuto, []agent.ToolCall{bashCall("ls -la"), bashCall("rm f")}, nil, 1},
-		// identical commands are one subject: one request serves both dialogs.
+		// identical commands are one subject: one request serves both dialogs
 		{"identical_commands_share_call", ModeAuto, []agent.ToolCall{bashCall("rm -rf build"), bashCall("rm -rf build")}, nil, 1},
 	}
 	for _, c := range cases {
@@ -1157,7 +1170,7 @@ func TestPrefetch(t *testing.T) {
 func TestPrefetchCancellation(t *testing.T) {
 	t.Parallel()
 
-	// the turn's abort cancels every in-flight prefetched classification.
+	// the turn's abort cancels every in-flight prefetched classification
 	t.Run("abort_cancels_batch", func(t *testing.T) {
 		b := newTestBarrier(newFakePrompter())
 		b.SetMode(ModeAuto)
@@ -1173,7 +1186,7 @@ func TestPrefetchCancellation(t *testing.T) {
 		require.Eventually(t, func() bool { return cl.finishedN() == 2 }, time.Second, 100*time.Millisecond)
 	})
 
-	// answering the dialog a prefetched request fronts stops it, abort or not.
+	// answering the dialog a prefetched request fronts stops it, abort or not
 	t.Run("answer_cancels_warm", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)

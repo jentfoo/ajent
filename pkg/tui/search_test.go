@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 func TestSearchOverlayKey(t *testing.T) {
@@ -92,12 +93,14 @@ func TestSearchOverlayRows(t *testing.T) {
 		s.refilter()
 		assert.Contains(t, s.rows(theme, 80, 8)[0], "(reverse-i-search)`fix':")
 	})
+
 	t.Run("empty_query_stays_blank", func(t *testing.T) {
 		s := &searchOverlay{items: []SearchItem{{Text: "line one\nline two"}}}
 		s.refilter()
 		rows := s.rows(theme, 80, 8)
 		assert.Len(t, rows, 1)
 	})
+
 	t.Run("shows_full_multiline_prompt", func(t *testing.T) {
 		s := &searchOverlay{query: "line", items: []SearchItem{{Text: "line one\nline two\nline three"}}}
 		s.refilter()
@@ -106,22 +109,26 @@ func TestSearchOverlayRows(t *testing.T) {
 		assert.Contains(t, rows[2], "line two")
 		assert.Contains(t, rows[3], "line three")
 	})
+
 	t.Run("no_match_under_header", func(t *testing.T) {
 		s := &searchOverlay{query: "zzz"}
 		s.refilter()
 		rows := s.rows(theme, 80, 8)
 		assert.Equal(t, selectIndent+"no match", strutil.StripANSI(rows[1]))
 	})
+
 	t.Run("searching_while_pending", func(t *testing.T) {
 		s := &searchOverlay{pending: true}
 		rows := s.rows(theme, 80, 8)
 		assert.Equal(t, selectIndent+"searching…", strutil.StripANSI(rows[1]))
 	})
+
 	t.Run("detail_in_header", func(t *testing.T) {
 		s := &searchOverlay{query: "h", items: []SearchItem{{Text: "hi", Detail: "2026-01-02 03:04 UTC"}}}
 		s.refilter()
 		assert.Contains(t, s.rows(theme, 80, 8)[0], "2026-01-02 03:04 UTC")
 	})
+
 	t.Run("long_prompt_collapses_to_more", func(t *testing.T) {
 		s := &searchOverlay{query: "a", items: []SearchItem{{Text: strings.Join([]string{"a", "b", "c", "d", "e"}, "\n")}}}
 		s.refilter()
@@ -181,8 +188,6 @@ func TestTrimLastCluster(t *testing.T) {
 	}
 }
 
-// The search overlay wraps every matched occurrence of the query in the accent
-// style across wrapped rows, and emits no emphasis escapes on a plain terminal.
 func TestSearchOverlayRowsHighlightsMatch(t *testing.T) {
 	t.Parallel()
 

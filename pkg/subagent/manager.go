@@ -219,6 +219,7 @@ func (m *Manager) poll(ctx context.Context, id string) (Job, bool, bool) {
 func (m *Manager) enterPoll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	m.polling++
 	if m.polling > 1 { // every poll in an overlapping group needs its result named
 		m.batched = true
@@ -230,6 +231,7 @@ func (m *Manager) enterPoll() {
 func (m *Manager) leavePoll() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	m.polling--
 	batched := m.batched
 	if m.polling == 0 {
@@ -330,7 +332,8 @@ func (m *Manager) Stop(id string) error {
 func (m *Manager) StopAll() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	n := 0 // only in-flight jobs are actually cancelled; finished ones are not counted
+
+	var n int // only in-flight jobs are actually cancelled; finished ones are not counted
 	for _, j := range m.jobs {
 		s := j.statusOf()
 		if s == StatusQueued || s == StatusRunning {
@@ -601,14 +604,14 @@ func (m *Manager) publishStatus() {
 		return
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "subagents: %d running", running)
+	_, _ = fmt.Fprintf(&b, "subagents: %d running", running)
 	if oldest > 0 {
-		fmt.Fprintf(&b, " (oldest %s)", strutil.Elapsed(oldest))
+		_, _ = fmt.Fprintf(&b, " (oldest %s)", strutil.Elapsed(oldest))
 	}
 	if done > 0 {
-		fmt.Fprintf(&b, ", %d done", done)
+		_, _ = fmt.Fprintf(&b, ", %d done", done)
 	}
-	short := ""
+	var short string
 	if running > 0 {
 		short = fmt.Sprintf("sub %d", running)
 	}
@@ -631,8 +634,7 @@ func (m *Manager) reasoning() llm.ReasoningConfig {
 	return llm.ReasoningConfig{}
 }
 
-// pollProgress reads a still-running job's elapsed and child context usage for the
-// timeout payload.
+// pollProgress reads a still-running job's elapsed and child context usage for the timeout payload.
 func (j *job) pollProgress() string {
 	j.mu.Lock()
 	elapsed := time.Since(j.started).Round(time.Second)
@@ -681,6 +683,7 @@ func (m *Manager) lookup(id string) (*job, bool) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	j, ok := m.jobs[n]
 	return j, ok
 }

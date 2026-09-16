@@ -5,16 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// TestForkResumeAcrossBranches drives the full session-tree loop: a live agent
-// grows a chain, we rewind via SetHead to an earlier point and grow a new tip,
-// then kill and reopen; resume must come back on the persisted (new) branch
-// with its exact context, while the old path stays reachable as another tip.
 func TestForkResumeAcrossBranches(t *testing.T) {
 	t.Parallel()
 
@@ -108,6 +105,7 @@ func textTurn(text string) []llm.Event {
 // readEntries parses every entry of a transcript for tests.
 func readEntries(t *testing.T, p string) []Entry {
 	t.Helper()
+
 	entries, warns, err := Read(p)
 	require.NoError(t, err)
 	assert.Empty(t, warns)

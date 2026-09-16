@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // writeAt creates a session holding one message whose entry timestamps and file
@@ -161,7 +162,7 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	ws := t.TempDir()
 	t.Cleanup(setClock(time.UnixMilli(1_900_000_001).UTC()))
 
-	// two sessions at the same millisecond share a timestamp prefix.
+	// two sessions at the same millisecond share a timestamp prefix
 	w1, cerr := s.Create(ws, SessionData{Version: sessionVersion})
 	require.NoError(t, cerr)
 	idA := w1.Head()
@@ -174,7 +175,7 @@ func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	_, ferr := s.Find(ws, "no-such-id")
 	require.ErrorIs(t, ferr, ErrNotFound)
 
-	// a short prefix covering both sessions is ambiguous.
+	// a short prefix covering both sessions is ambiguous
 	_, ferr = s.Find(ws, idA[:8])
 	require.EqualError(t, ferr, fmt.Sprintf("ambiguous session id %q", idA[:8]))
 

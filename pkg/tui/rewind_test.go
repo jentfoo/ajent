@@ -14,6 +14,7 @@ import (
 // within it; tests that need an elapsing window use a short one explicitly.
 func rewindSetup(t *testing.T) (*UI, io.Writer) {
 	t.Helper()
+
 	v := newVT(40, 10)
 	pr, pw := io.Pipe()
 	u := newTestUI(t, v, pr)
@@ -32,6 +33,7 @@ func rewindSetup(t *testing.T) (*UI, io.Writer) {
 func (u *UI) setOnRewind(cb func()) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.onRewind = cb
 }
 
@@ -39,6 +41,7 @@ func (u *UI) setOnRewind(cb func()) {
 func (u *UI) editorValue() string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	return u.editor.Value()
 }
 
@@ -46,6 +49,7 @@ func (u *UI) editorValue() string {
 func (u *UI) editorPos() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	return u.editor.pos
 }
 
@@ -53,6 +57,7 @@ func (u *UI) editorPos() int {
 // keyEscape (the input reader holds a bare Esc for escTimeout before reporting).
 func feedEscape(t *testing.T, w io.Writer) {
 	t.Helper()
+
 	_, err := io.WriteString(w, "\x1b")
 	require.NoError(t, err)
 }
@@ -60,7 +65,7 @@ func feedEscape(t *testing.T, w io.Writer) {
 func TestDoubleEsc(t *testing.T) {
 	t.Parallel()
 
-	// two lone Esc presses while idle and within the window invoke OnRewind.
+	// two lone Esc presses while idle and within the window invoke OnRewind
 	t.Run("rewinds_while_idle", func(t *testing.T) {
 		u, pw := rewindSetup(t)
 		rewound := make(chan struct{})
@@ -85,7 +90,7 @@ func TestDoubleEsc(t *testing.T) {
 		}
 	})
 
-	// after the window elapses a lone Esc emits its deferred single control.
+	// after the window elapses a lone Esc emits its deferred single control
 	t.Run("single_esc_emits_control_after_window_elapses", func(t *testing.T) {
 		v := newVT(40, 10)
 		pr, pw := io.Pipe()
@@ -110,7 +115,7 @@ func TestDoubleEsc(t *testing.T) {
 		}
 	})
 
-	// mid-turn (idle false) a lone Esc keeps its interrupt role immediately.
+	// mid-turn (idle false) a lone Esc keeps its interrupt role immediately
 	t.Run("single_esc_not_idle_emits_immediately", func(t *testing.T) {
 		v := newVT(40, 10)
 		pr, pw := io.Pipe()
@@ -121,7 +126,7 @@ func TestDoubleEsc(t *testing.T) {
 		assert.Equal(t, ControlEscape, <-u.Controls())
 	})
 
-	// with no OnRewind wired, an idle lone Esc still emits a control immediately.
+	// with no OnRewind wired, an idle lone Esc still emits a control immediately
 	t.Run("no_callback_keeps_plain_single_esc", func(t *testing.T) {
 		v := newVT(40, 10)
 		pr, pw := io.Pipe()
@@ -137,7 +142,7 @@ func TestDoubleEsc(t *testing.T) {
 		assert.Equal(t, ControlEscape, <-u.Controls())
 	})
 
-	// Esc with a non-empty buffer clears it rather than rewinding.
+	// Esc with a non-empty buffer clears it rather than rewinding
 	t.Run("esc_with_text_clears_buffer_not_rewinds", func(t *testing.T) {
 		v := newVT(40, 10)
 		pr, pw := io.Pipe()
@@ -166,7 +171,7 @@ func TestDoubleEsc(t *testing.T) {
 		}
 	})
 
-	// starting a turn before the second Esc cancels the pending gesture.
+	// starting a turn before the second Esc cancels the pending gesture
 	t.Run("set_idle_false_cancels_pending_rewind", func(t *testing.T) {
 		v := newVT(40, 10)
 		pr, pw := io.Pipe()
@@ -195,5 +200,6 @@ func TestDoubleEsc(t *testing.T) {
 func (u *UI) isEscPending() bool {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	return u.escPending
 }

@@ -8,12 +8,11 @@ import (
 )
 
 // updateCommand runs a self-update in the background and reports the outcome as
-// notices. It returns immediately so it never blocks the prompt pump; Notify is
-// safe from any goroutine.
-func updateCommand(_ context.Context, _ string, c Console) error {
+// notices. It returns immediately so it never blocks the prompt pump.
+func updateCommand(ctx context.Context, _ string, c Console) error {
 	c.Notify("checking for updates...", tui.LevelInfo)
 	go func() {
-		res := version.SelfUpdate(context.Background())
+		res := version.SelfUpdate(ctx)
 		if res.Err != nil {
 			c.Notify(res.Notice(), levelError)
 		} else {

@@ -74,6 +74,7 @@ type job struct {
 func (j *job) snapshot() Job {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+
 	return Job{
 		ID:      j.id,
 		Status:  j.status,
@@ -89,6 +90,7 @@ func (j *job) snapshot() Job {
 func (j *job) finish(s Status, summary string, err error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+
 	j.status = s
 	if j.ended.IsZero() {
 		j.ended = time.Now()
@@ -102,6 +104,7 @@ func (j *job) finish(s Status, summary string, err error) {
 func (j *job) markRunning() {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+
 	if j.status == StatusQueued {
 		j.status = StatusRunning
 	}
@@ -111,6 +114,7 @@ func (j *job) markRunning() {
 func (j *job) setQueued(now time.Time) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+
 	j.status = StatusQueued
 	if j.started.IsZero() {
 		j.started = now
@@ -121,6 +125,7 @@ func (j *job) setQueued(now time.Time) {
 func (j *job) statusOf() Status {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+
 	return j.status
 }
 
@@ -129,6 +134,7 @@ func (j *job) statusOf() Status {
 func (j *job) runningSince() (Status, time.Time) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+
 	return j.status, j.started
 }
 
@@ -147,5 +153,6 @@ func (j *job) finished() bool {
 func (j *job) terminal() bool {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+
 	return j.status == StatusDone || j.status == StatusError || j.status == StatusAborted
 }

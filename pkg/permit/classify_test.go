@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 // classifyCase pins one tool call's expected static verdict.
@@ -40,30 +41,26 @@ func TestClassify(t *testing.T) {
 	t.Parallel()
 
 	cases := []classifyCase{
-		// read-only built-ins run without a prompt regardless of registry metadata.
+		// read-only built-ins run without a prompt regardless of registry metadata
 		{"read tool", "read", `{"path":"a.txt"}`, nil, VerdictAllow},
 		{"grep tool", "grep", `{}`, nil, VerdictAllow},
 		{"find tool", "find", `{}`, nil, VerdictAllow},
 		{"ls tool", "ls", `{}`, nil, VerdictAllow},
-
-		// registry-marked read-only MCP tools.
+		// registry-marked read-only MCP tools
 		{"ro mcp tool", "mcp__list", `{}`, []string{"mcp__list"}, VerdictAllow},
 		{"unannotated mcp prompts", "mcp__create", `{}`, nil, VerdictPrompt},
-
-		// bash: verifiably read-only commands.
+		// bash: verifiably read-only commands
 		{"bash ls", "", "ls -la", nil, VerdictAllow},
 		{"bash grep pipeline", "", "grep foo f | sort", nil, VerdictAllow},
 		{"bash git status", "", "git status", nil, VerdictAllow},
 		{"bash sed read only", "", `sed -n 's/a/b/p' f.txt`, nil, VerdictAllow},
-
 		// bash: exec or write vectors in awk/rg/sort prompt even though the
 		// head is otherwise name-trusted.
 		{"awk system prompts", "", `awk 'BEGIN{system("x")}'`, nil, VerdictPrompt},
 		{"awk print field allows", "", "awk '{print $1}' f", nil, VerdictAllow},
 		{"rg pre prompts", "", "rg --pre c p", nil, VerdictPrompt},
 		{"sort output prompts", "", "sort -o /tmp/e i", nil, VerdictPrompt},
-
-		// bash: in-place writes are hard rejects.
+		// bash: in-place writes are hard rejects
 		{"sed -i reject", "", "sed -i s/a/b/ f", nil, VerdictReject},
 		{"sed --in-place reject", "", "sed --in-place='.bak' s/a/b/ f", nil, VerdictReject},
 
@@ -72,13 +69,11 @@ func TestClassify(t *testing.T) {
 		{"write tool prompts", "write", `{"path":"a.txt"}`, nil, VerdictPrompt},
 		{"edit tool prompts", "edit", `{}`, nil, VerdictPrompt},
 		{"unverifiable command prompts", "", "stat f.txt", nil, VerdictPrompt},
-
-		// network commands never classify read-only by any path.
+		// network commands never classify read-only by any path
 		{"curl never readonly", "", "curl -s https://x", nil, VerdictPrompt},
 		{"wget never readonly", "", "wget http://x/f", nil, VerdictPrompt},
 		{"nc never readonly", "", "nc host 80", nil, VerdictPrompt},
-
-		// find unsafe actions prompt even though find is read-only by name.
+		// find unsafe actions prompt even though find is read-only by name
 		{"find -delete prompts", "find", `{}`, []string{"find"}, VerdictAllow}, // tool form; shell handled below
 	}
 
@@ -104,7 +99,7 @@ func TestClassify(t *testing.T) {
 func TestClassifyEdgeCases(t *testing.T) {
 	t.Parallel()
 
-	// find subcommands that mutate or write must prompt.
+	// find subcommands that mutate or write must prompt
 	t.Run("bash_find_unsafe_actions_prompt", func(t *testing.T) {
 		for _, cmd := range []string{
 			"find . -exec rm {} \\;",
@@ -115,7 +110,7 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
-	// unparseable input fails closed.
+	// unparseable input fails closed
 	t.Run("bash_unparseable_fails_safe", func(t *testing.T) {
 		c := agent.ToolCall{ID: "c", Name: "bash", Input: json.RawMessage(`not json`)}
 		assert.Equal(t, VerdictPrompt, Classify(c, noRO))
@@ -135,8 +130,7 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
-	// write marked read-only must still prompt; only declared metadata for
-	// non-built-in names is trusted.
+	// write marked read-only must still prompt; only declared metadata for non-built-in names is trusted
 	t.Run("ignores_read_only_mark_for_builtins_not_in_list", func(t *testing.T) {
 		assert.Equal(t, VerdictPrompt, Classify(call("write", `{}`), roSet([]string{"write"})))
 	})

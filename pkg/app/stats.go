@@ -96,15 +96,18 @@ func writeStats(w io.Writer, prefix string, s sessionStats) {
 
 // toolLine renders per-tool counts in name order, marking failures.
 func toolLine(s sessionStats) string {
-	parts := make([]string, 0, len(s.Calls))
-	for _, name := range slices.Sorted(maps.Keys(s.Calls)) {
+	var sb strings.Builder
+	for i, name := range slices.Sorted(maps.Keys(s.Calls)) {
 		part := fmt.Sprintf("%s %d", name, s.Calls[name])
 		if n := s.Failed[name]; n > 0 {
 			part += fmt.Sprintf(" (%d failed)", n)
 		}
-		parts = append(parts, part)
+		if i > 0 {
+			sb.WriteString("  ")
+		}
+		sb.WriteString(part)
 	}
-	return strings.Join(parts, "  ")
+	return sb.String()
 }
 
 // thousands renders n with separators, since token counts are read at a glance.

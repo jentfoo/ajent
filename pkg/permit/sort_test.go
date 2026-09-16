@@ -16,8 +16,7 @@ func TestSortReadOnly(t *testing.T) {
 	}{
 		{"plain file", []string{"sort", "f"}, true},
 		{`unique flag`, []string{"sort", "-u", "f"}, true},
-
-		// write and exec vectors fail safe.
+		// write and exec vectors fail safe
 		{"output separate", []string{"sort", "-o", "out", "in"}, false},
 		{"output attached", []string{"sort", "-oout", "in"}, false},
 		{`cluster output`, []string{"sort", "-ro", "out", "in"}, false},

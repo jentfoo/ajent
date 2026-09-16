@@ -4,13 +4,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// TestSteerIdleRejected verifies Steer/FollowUp refuse work when no turn runs,
-// so the caller knows to call Prompt instead.
 func TestSteerIdleRejected(t *testing.T) {
 	t.Parallel()
 
@@ -21,8 +20,6 @@ func TestSteerIdleRejected(t *testing.T) {
 	assert.False(t, a.FollowUp(Input{Text: "x"}))
 }
 
-// TestRunningReportsState verifies the running flag flips for the duration of a
-// turn and clears after.
 func TestRunningReportsState(t *testing.T) {
 	t.Parallel()
 
@@ -44,8 +41,6 @@ func TestRunningReportsState(t *testing.T) {
 	assert.False(t, a.Running())
 }
 
-// TestSteerDeliveredFiresWhenLanded asserts an input's Delivered hook runs once
-// the steer actually lands in state at a step boundary.
 func TestSteerDeliveredFiresWhenLanded(t *testing.T) {
 	t.Parallel()
 
@@ -69,10 +64,6 @@ func TestSteerDeliveredFiresWhenLanded(t *testing.T) {
 	assert.Equal(t, 1, delivered)
 }
 
-// TestOnBoundaryPullsAtStepBoundary verifies the OnBoundary hook hands queued
-// inputs to drainSteer at a step boundary mid-turn: they land as one user message
-// after the tool result and before the assistant's next call, with their Delivered
-// hooks fired.
 func TestOnBoundaryPullsAtStepBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -106,7 +97,7 @@ func TestOnBoundaryPullsAtStepBoundary(t *testing.T) {
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
 	assert.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
 
-	// wait until bash is executing (blocked), then arm and release it.
+	// wait until bash is executing (blocked), then arm and release it
 	tool := set.tools["bash"].(*stubTool)
 	assert.Eventually(t, func() bool { return tool.callCount() >= 1 }, defaultTimeout, pollInterval)
 	mu.Lock()
@@ -126,14 +117,12 @@ func TestOnBoundaryPullsAtStepBoundary(t *testing.T) {
 	assert.Equal(t, "nudge", tb.Text)
 }
 
-// TestOnBoundaryEmptyIsNoop verifies a nil-returning OnBoundary leaves the turn
-// unaffected.
 func TestOnBoundaryEmptyIsNoop(t *testing.T) {
 	t.Parallel()
 
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
 	a := newTestAgent(nil, p, nil)
-	called := 0
+	var called int
 	a.opts.OnBoundary = func() []Input {
 		called++
 		return nil
@@ -145,8 +134,6 @@ func TestOnBoundaryEmptyIsNoop(t *testing.T) {
 	assert.Equal(t, 1, called) // a single-step turn hits exactly one boundary
 }
 
-// TestSteerEmptyNeverDelivered asserts an empty steer that would inject a blank
-// user turn is skipped and its Delivered hook never fires.
 func TestSteerEmptyNeverDelivered(t *testing.T) {
 	t.Parallel()
 

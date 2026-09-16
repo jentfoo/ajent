@@ -36,7 +36,7 @@ func TestOpenSpill(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = f.Close() })
 
-		calls := 0
+		var calls int
 		suffix := func() string {
 			calls++
 			if calls == 1 {

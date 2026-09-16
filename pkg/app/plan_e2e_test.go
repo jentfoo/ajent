@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/go-analyze/bulk"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/plan"
@@ -16,8 +19,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -36,8 +37,7 @@ func devCallTurn(id, name, args string) []llm.Event {
 	}
 }
 
-// textTurn scripts a turn that only speaks, as an implementor that stops without
-// calling dev_review does.
+// textTurn scripts a turn that only speaks, as an implementor that stops without calling dev_review does.
 func textTurn(text string) []llm.Event {
 	return []llm.Event{
 		{Type: llm.EventMessageStart},
@@ -232,10 +232,6 @@ func TestPlanWorkflowEndToEnd(t *testing.T) {
 	assert.Empty(t, h.toolsReg.AllNames(plan.Source))
 }
 
-// TestPlanWorkflowBranchesPerPhase asserts the transcript really forks: the
-// implementation round is its own root and the review continues the trunk. The
-// implementor here stops without dev_review, so its closing message must reach
-// the reviewer as the summary.
 func TestPlanWorkflowBranchesPerPhase(t *testing.T) {
 	t.Parallel()
 

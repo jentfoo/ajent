@@ -16,12 +16,14 @@ func TestToolProgress(t *testing.T) {
 		got := p.start("c1", 0, "write")
 		assert.Equal(t, ToolProgress{CallID: "c1", Name: "write"}, got)
 	})
+
 	t.Run("delta_below_step_publishes_nothing", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")
 		_, ok := p.delta("c1", 0, `{"path":"a.go","content":"x"}`)
 		assert.False(t, ok) // under progressStep, the row would repaint per token
 	})
+
 	t.Run("delta_publishes_once_past_the_step", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")
@@ -35,6 +37,7 @@ func TestToolProgress(t *testing.T) {
 		assert.True(t, got.Done)
 		assert.Greater(t, got.Bytes, progressStep)
 	})
+
 	t.Run("counts_newline_escapes_across_chunks", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")
@@ -45,6 +48,7 @@ func TestToolProgress(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, 2, got.Lines)
 	})
+
 	t.Run("escaped_backslash_is_not_a_newline", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")
@@ -53,6 +57,7 @@ func TestToolProgress(t *testing.T) {
 		require.True(t, ok)
 		assert.Zero(t, got.Lines)
 	})
+
 	t.Run("pairs_by_index_when_id_is_absent", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")
@@ -64,6 +69,7 @@ func TestToolProgress(t *testing.T) {
 		assert.Equal(t, "a.go", got.Path)
 		assert.Equal(t, 1, got.Lines)
 	})
+
 	t.Run("keeps_parallel_calls_apart", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")
@@ -80,6 +86,7 @@ func TestToolProgress(t *testing.T) {
 		assert.Equal(t, "b.go", b.Path)
 		assert.Zero(t, b.Lines)
 	})
+
 	t.Run("unknown_call_is_ignored", func(t *testing.T) {
 		var p toolProgress
 		_, ok := p.delta("nope", 9, "{}")
@@ -87,6 +94,7 @@ func TestToolProgress(t *testing.T) {
 		_, ok = p.end("nope", 9)
 		assert.False(t, ok)
 	})
+
 	t.Run("clear_closes_every_in_flight_call", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")
@@ -98,6 +106,7 @@ func TestToolProgress(t *testing.T) {
 		}
 		assert.Empty(t, p.clear()) // and forgets them
 	})
+
 	t.Run("end_forgets_the_call", func(t *testing.T) {
 		var p toolProgress
 		p.start("c1", 0, "write")

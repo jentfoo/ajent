@@ -57,7 +57,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 			st.Tokens.SetModel(resolved)
 			st.Model = resolved
 		case TypeSession:
-			// seed the active model from session start; a later model_change overrides it.
+			// seed the active model from session start; a later model_change overrides it
 			var sd SessionData
 			if err := e.Decode(&sd); err != nil || sd.Model == "" {
 				continue
@@ -161,7 +161,7 @@ func SettingOverrides(branch []Entry) map[string]json.RawMessage {
 // wellFormed reports whether every ToolCallBlock has a matching ToolResultBlock,
 // which is what keeps the next request valid.
 func wellFormed(msgs []llm.Message) bool {
-	calls := 0
+	var calls int
 	for _, m := range msgs {
 		for _, b := range m.Content {
 			switch blk := b.(type) {

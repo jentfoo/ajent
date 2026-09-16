@@ -1,7 +1,3 @@
-// Package compact reduces a session's context before it overflows. It keeps the
-// most recent steps verbatim and folds everything older into one structured
-// checkpoint, recording the plan on a compaction entry; pkg/session replays that
-// plan on every rebuild so what the model sees is always exactly what was measured.
 package compact
 
 import (
@@ -20,8 +16,7 @@ type Options struct {
 	Base         int              // fixed request overhead (system block + tool schemas), added to every measure
 	Resolve      func(string) (llm.Model, error)
 	MinSteps     int // recent steps kept verbatim however large; 0 uses defaultMinSteps
-	// VerbatimTokens caps the band past that floor; 0 uses a tenth of the
-	// compaction point.
+	// VerbatimTokens caps the band past that floor; 0 uses a tenth of the compaction point.
 	VerbatimTokens int
 }
 
@@ -33,8 +28,7 @@ const (
 	minSpanTokens          = 1024 // below this a summary cannot pay for itself
 )
 
-// Result is what one compaction produced: enough to write a session entry and
-// rebuild context.
+// Result is what one compaction produced: enough to write a session entry and rebuild context.
 type Result struct {
 	Summary          string
 	FirstKeptEntryID string

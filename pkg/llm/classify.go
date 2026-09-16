@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -58,10 +59,7 @@ func isOverflowStatus(status int, flavor Flavor) bool {
 // matchesOverflow reports whether text carries a vendor's overflow wording.
 func matchesOverflow(text string, flavor Flavor) bool {
 	lower := strings.ToLower(text)
-	for _, phrase := range overflowPhrases[flavor] {
-		if strings.Contains(lower, phrase) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(overflowPhrases[flavor], func(phrase string) bool {
+		return strings.Contains(lower, phrase)
+	})
 }

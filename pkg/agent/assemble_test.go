@@ -27,6 +27,7 @@ func TestAssemble(t *testing.T) {
 		out := assemble(s, nil)
 		assert.Equal(t, s.Messages, out)
 	})
+
 	t.Run("transform_applied", func(t *testing.T) {
 		prependSystem := func(ms []llm.Message) []llm.Message {
 			return append([]llm.Message{{Role: llm.RoleSystem, Content: llm.BlockList{llm.TextBlock{Text: "sys"}}}}, ms...)
@@ -35,6 +36,7 @@ func TestAssemble(t *testing.T) {
 		assert.Len(t, out, 2)
 		assert.Equal(t, llm.RoleSystem, out[0].Role)
 	})
+
 	t.Run("chain_applies_in_order", func(t *testing.T) {
 		first := func(ms []llm.Message) []llm.Message {
 			return append([]llm.Message{{Role: llm.RoleSystem, Content: llm.BlockList{llm.TextBlock{Text: "a"}}}}, ms...)
@@ -47,6 +49,7 @@ func TestAssemble(t *testing.T) {
 		assert.Equal(t, "b", systemText(out[0]))
 		assert.Equal(t, "a", systemText(out[1]))
 	})
+
 	t.Run("state_untouched_by_transform", func(t *testing.T) {
 		before := len(s.Messages)
 		assemble(s, []Transform{func(ms []llm.Message) []llm.Message { return nil }})

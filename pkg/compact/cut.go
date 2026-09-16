@@ -114,8 +114,7 @@ func withLivePrompt(branch []session.Entry, cut, priorCut int) int {
 
 // chooseCut returns the index the verbatim band starts at and whether folding
 // everything before it into a summary is worth a model call. It never moves
-// earlier than priorCut, so a recompaction cannot reopen history a prior one
-// folded.
+// earlier than priorCut, so a recompaction cannot reopen history a prior one folded.
 func chooseCut(branch []session.Entry, priorCut, minSteps, maxTokens int) (int, bool) {
 	cut := verbatimCut(branch, priorCut, minSteps, maxTokens)
 	if cut <= priorCut || cut >= len(branch) {

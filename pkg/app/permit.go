@@ -37,7 +37,7 @@ type decisionAdapter struct{ d *tui.Decision }
 func (a decisionAdapter) Wait(ctx context.Context) (int, error) {
 	r, err := a.d.Wait(ctx)
 	if err != nil {
-		// an explicit Esc is a real denial, not the headless no-UI path.
+		// an explicit Esc is a real denial, not the headless no-UI path
 		if errors.Is(err, tui.ErrCancelled) {
 			return 0, permit.ErrDenied
 		}

@@ -1,6 +1,3 @@
-// Package config resolves the ajent configuration directory and provides the
-// file primitives the rest of the system loads its configuration through. It
-// holds no domain types and must never import pkg/llm.
 package config
 
 import (

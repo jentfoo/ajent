@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -16,8 +19,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // singleToolSet backs an agent with one tool, so a scripted turn can call it.
@@ -115,7 +116,7 @@ func TestRewindStateRebuild(t *testing.T) {
 	entries = readEntriesRewind(t, p)
 	tree := session.TreeRows(entries, forkA.ID) // active head is the new submission
 
-	// both branches are present: the old tip and the new one.
+	// both branches are present: the old tip and the new one
 	ids := make([]string, len(tree))
 	for i, tr := range tree {
 		ids[i] = tr.ID
@@ -123,7 +124,7 @@ func TestRewindStateRebuild(t *testing.T) {
 	assert.Contains(t, ids, tipOld)
 	assert.Contains(t, ids, forkA.ID)
 
-	// only the new chain is active; the abandoned old reply is not.
+	// only the new chain is active; the abandoned old reply is not
 	assert.False(t, slices.ContainsFunc(tree, func(tr session.TreeRow) bool {
 		return tr.ID == tipOld && tr.Active
 	}))
@@ -142,10 +143,12 @@ func TestInitialRow(t *testing.T) {
 	t.Run("head_row", func(t *testing.T) {
 		assert.Equal(t, 1, initialRow(tree, "a1"))
 	})
+
 	t.Run("head_without_row", func(t *testing.T) {
 		// a session or tool-only entry has no row: the last row still in context stands in
 		assert.Equal(t, 1, initialRow(tree, "no-row"))
 	})
+
 	t.Run("nothing_active", func(t *testing.T) {
 		stale := make([]session.TreeRow, 0, len(tree))
 		for _, r := range tree {
@@ -153,6 +156,7 @@ func TestInitialRow(t *testing.T) {
 		}
 		assert.Equal(t, len(stale)-1, initialRow(stale, ""))
 	})
+
 	t.Run("single_row", func(t *testing.T) {
 		assert.Equal(t, 0, initialRow(tree[:1], "u1"))
 	})
@@ -182,9 +186,6 @@ func TestRewindRowLabels(t *testing.T) {
 	}
 }
 
-// TestRewindKeepsCurrentModel locks in that a rewind onto an earlier message does
-// not silently revert the active model to whatever produced it: /model then fork
-// must keep the switched-to model when that prior message is re-sent.
 func TestRewindKeepsCurrentModel(t *testing.T) {
 	t.Parallel()
 
@@ -203,7 +204,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	require.NoError(t, err)
 	r := &sessRec{w: w, rec: session.NewRecorder(w)}
 
-	// grow a chain on model a.
+	// grow a chain on model a
 	a := agent.New(&agent.State{Model: llm.Model{ID: "a"}, Tools: []string{tools.ToolBash}}, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("reply one")}}}, nil
@@ -217,13 +218,13 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	entries := readEntriesRewind(t, p)
 	branch := session.Branch(entries, w.Head())
 
-	// switch to b live and record it, as /model does.
+	// switch to b live and record it, as /model does
 	bModel, err := reg.Resolve("p/b")
 	require.NoError(t, err)
 	a.WithState(func(st *agent.State) { st.Model = bModel })
 	r.rec.ModelChange(bModel, "command")
 
-	// rewind onto the first user message and restore the fork model: it must stay b.
+	// rewind onto the first user message and restore the fork model: it must stay b
 	save := r.liveModel(a)
 	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, "rewind: "))
 	r.restoreForkModel(nil, a, reg, save)
@@ -236,6 +237,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 
 func TestRewindTarget(t *testing.T) {
 	t.Parallel()
+
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
@@ -249,7 +251,7 @@ func TestRewindTarget(t *testing.T) {
 
 	entries := readEntriesRewind(t, p)
 
-	// picking the assistant reply keeps that message as its own head with no pre-fill.
+	// picking the assistant reply keeps that message as its own head with no pre-fill
 	head, fill, ok := session.RewindTarget(entries, a2.ID)
 	assert.True(t, ok)
 	assert.Equal(t, a2.ID, head)
@@ -263,16 +265,13 @@ func TestRewindTarget(t *testing.T) {
 	assert.Equal(t, "hello world", fill2)
 }
 
-// TestOpenSessionModes locks in how --continue/--resume/no-flag choose a
-// transcript: new always makes one even when sessions exist; continue and resume
-// (via pick) reuse an existing one.
 func TestOpenSessionModes(t *testing.T) {
 	t.Parallel()
-	ws := t.TempDir() + "/workspace"
-	require.NoError(t, os.MkdirAll(ws, 0o700))
-	store := session.StoreAt(filepath.Join(t.TempDir(), "root"))
 
-	// seed one saved transcript so resume/continue have something to reuse.
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
+
+	// seed one saved transcript so resume/continue have something to reuse
 	seed, err := store.Create(ws, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
 	firstPath := seed.Path()
@@ -294,27 +293,27 @@ func TestOpenSessionModes(t *testing.T) {
 	// session; ResumeNewSession and the cancelled resume each create a newer file,
 	// so they come last to keep "latest" pointing at the seed above.
 
-	// --continue: reuse the most recent transcript (the seed, still alone).
+	// --continue: reuse the most recent transcript (the seed, still alone)
 	wCont, err := openSession(store, ResumeContinue, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wCont.Path())
 
-	// --resume with a selection: reuse that root's transcript.
+	// --resume with a selection: reuse that root's transcript
 	wPick, err := openSession(store, ResumePick, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wPick.Path())
 
-	// --resume <id>: reuse that exact saved transcript directly.
+	// --resume <id>: reuse that exact saved transcript directly
 	wID, err := openSession(store, ResumeID, ws, seedID, "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wID.Path())
 
-	// no flag: always a fresh file, never reuses.
+	// no flag: always a fresh file, never reuses
 	wNew, err := openSession(store, ResumeNewSession, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.NotEqual(t, firstPath, wNew.Path())
 
-	// --resume cancelled (ErrCancelled): start fresh rather than stall.
+	// --resume cancelled (ErrCancelled): start fresh rather than stall
 	wCancel, err := openSession(store, ResumePick, ws, "", "",
 		func([]session.Info) (int, error) { return 0, tui.ErrCancelled })
 	require.NoError(t, err)
@@ -323,9 +322,9 @@ func TestOpenSessionModes(t *testing.T) {
 
 func TestOpenSessionContinueRewound(t *testing.T) {
 	t.Parallel()
-	ws := t.TempDir() + "/workspace"
-	require.NoError(t, os.MkdirAll(ws, 0o700))
-	store := session.StoreAt(filepath.Join(t.TempDir(), "root"))
+
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
 
 	// session A ends on a rewind, so its branch head is a1 while its file tail is a3
 	wa, err := store.Create(ws, session.SessionData{Version: session.Version()})
@@ -368,13 +367,11 @@ func TestOpenSessionContinueRewound(t *testing.T) {
 	assert.False(t, slices.ContainsFunc(branch, func(e session.Entry) bool { return e.ID == a3.ID }))
 }
 
-// TestOpenSessionByName locks in --session: an unknown name creates a transcript
-// carrying it, and the same name reopens that transcript rather than a new one.
 func TestOpenSessionByName(t *testing.T) {
 	t.Parallel()
-	ws := t.TempDir() + "/workspace"
-	require.NoError(t, os.MkdirAll(ws, 0o700))
-	store := session.StoreAt(filepath.Join(t.TempDir(), "root"))
+
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
 
 	created, err := openSession(store, ResumeSessionName, ws, "fix-parser", "p/a", nil)
 	require.NoError(t, err)
@@ -407,15 +404,13 @@ func TestOpenSessionByName(t *testing.T) {
 	assert.ErrorContains(t, err, "matches session id")
 }
 
-// TestResumeByID verifies --resume <id> reopens exactly that saved transcript by
-// its root id (not the picker), and that an unknown id is reported as not found.
 func TestResumeByID(t *testing.T) {
 	t.Parallel()
-	ws := t.TempDir() + "/w"
-	require.NoError(t, os.MkdirAll(ws, 0o700))
-	store := session.StoreAt(filepath.Join(t.TempDir(), "root"))
 
-	// two distinct saved sessions; resume the older one by id.
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
+
+	// two distinct saved sessions; resume the older one by id
 	_, err := store.Create(ws, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
 	older, err := store.Create(ws, session.SessionData{Version: session.Version()})
@@ -424,7 +419,7 @@ func TestResumeByID(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 
-	// resolve the saved info for that older file so we can address it by id.
+	// resolve the saved info for that older file so we can address it by id
 	var want session.Info
 	for _, in := range list {
 		if in.Path == older.Path() {
@@ -433,11 +428,12 @@ func TestResumeByID(t *testing.T) {
 	}
 	require.NotEmpty(t, want.ID)
 
-	// the picker's chosen index maps to that exact root among several.
+	// the picker's chosen index maps to that exact root among several
 	for i, in := range list {
 		if in.Path != older.Path() {
 			continue
 		}
+
 		wPick, err := openSession(store, ResumePick, ws, "", "",
 			func([]session.Info) (int, error) { return i, nil })
 		require.NoError(t, err)
@@ -518,12 +514,11 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	}, nil, llm.RegistryOptions{})
 	require.Empty(t, warnings)
 
-	dir := t.TempDir()
-	p := filepath.Join(dir, "2026-01-02T03-04-05Z-model.jsonl")
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
 	require.NoError(t, err)
 
-	// a couple of messages so the branch is non-empty, then a threshold override.
+	// a couple of messages so the branch is non-empty, then a threshold override
 	_, _ = w.Append(session.TypeMessage, session.MessageData{
 		Message: llm.Text(llm.RoleUser, "do the work"),
 	})
@@ -585,15 +580,16 @@ func TestSubmittedEcho(t *testing.T) {
 
 func TestSessionHint(t *testing.T) {
 	t.Parallel()
+
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
 
 	r := &sessRec{w: w}
 	hint := sessionHint(r)
-	assert.NotEmpty(t, hint, "a recorded transcript must expose its resume id")
+	assert.NotEmpty(t, hint)
 
-	// nil / unwired records yield no hint.
+	// nil / unwired records yield no hint
 	assert.Empty(t, sessionHint(nil))
 }
 
@@ -640,20 +636,20 @@ func TestEmptyReportsNoConversation(t *testing.T) {
 	s := session.StoreAt(filepath.Dir(p))
 	r := &sessRec{w: w, store: s}
 
-	// a brand-new transcript with only its root entry is empty.
+	// a brand-new transcript with only its root entry is empty
 	assert.True(t, r.empty())
 
-	// any message (even just the prompt) makes it worth keeping.
+	// any message (even just the prompt) makes it worth keeping
 	_, aerr := w.Append(session.TypeMessage, session.MessageData{
 		Message: llm.Text(llm.RoleUser, "hello"),
 	})
 	require.NoError(t, aerr)
 	assert.False(t, r.empty())
 
-	// an unrecorded run (nil store) is never dropped.
+	// an unrecorded run (nil store) is never dropped
 	assert.False(t, (&sessRec{w: w}).empty())
 
-	// a named session is kept even with no conversation: --session resumes by name.
+	// a named session is kept even with no conversation: --session resumes by name
 	named := filepath.Join(t.TempDir(), "named.jsonl")
 	nw, nerr := session.Create(named, session.SessionData{Version: session.Version(), Name: "keep-me"})
 	require.NoError(t, nerr)

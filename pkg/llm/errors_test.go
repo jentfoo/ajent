@@ -46,14 +46,17 @@ func TestAPIErrorUnwrap(t *testing.T) {
 		assert.True(t, IsOverflow(err))
 		assert.False(t, err.Retryable) // an overflow is never worth retrying
 	})
+
 	t.Run("overflow_through_wrapping", func(t *testing.T) {
 		err := fmt.Errorf("building request: %w", (&APIError{Provider: "openai"}).Overflow())
 		assert.True(t, IsOverflow(err))
 	})
+
 	t.Run("plain_error_is_not_overflow", func(t *testing.T) {
 		assert.False(t, IsOverflow(&APIError{Provider: "openai", Status: 429}))
 		assert.False(t, IsOverflow(errors.New("boom")))
 	})
+
 	t.Run("errors_as_recovers_detail", func(t *testing.T) {
 		err := fmt.Errorf("wrapped: %w", &APIError{Provider: "openrouter", Status: 429, RetryAfter: 2 * time.Second})
 		var ae *APIError
@@ -69,6 +72,7 @@ func TestErrNoAPIKeyError(t *testing.T) {
 		err := &ErrNoAPIKey{Provider: "anthropic", EnvVar: "ANTHROPIC_API_KEY"}
 		assert.Equal(t, "llm: no api key for anthropic, set ANTHROPIC_API_KEY", err.Error())
 	})
+
 	t.Run("without_variable", func(t *testing.T) {
 		assert.Equal(t, "llm: no api key for custom", (&ErrNoAPIKey{Provider: "custom"}).Error())
 	})

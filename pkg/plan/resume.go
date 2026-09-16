@@ -6,8 +6,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 )
 
-// persisted is the workflow state written as a latest-wins session entry and
-// read back on resume.
+// persisted is the workflow state written as a latest-wins session entry and read back on resume.
 type persisted struct {
 	Phase          Phase    `json:"phase"`
 	Planner        string   `json:"planner"`
@@ -53,6 +52,7 @@ func (c *Controller) persistLocked() {
 func (c *Controller) Restore() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if c.h.Restore == nil || c.phase.active() {
 		return false
 	}

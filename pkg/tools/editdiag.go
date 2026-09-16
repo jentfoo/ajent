@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	udiff "github.com/aymanbagabas/go-udiff"
+	"github.com/aymanbagabas/go-udiff"
 	"github.com/go-analyze/bulk"
 
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -40,7 +40,7 @@ func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
 	cascade := cascadeIssue(idx, old, ops)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, t.Path)
+	_, _ = fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, t.Path)
 	if self := selfReplaceIssue(idx, ops); self != "" {
 		b.WriteString("- " + self + "\n") // orthogonal to the causes below, so never displaces one
 	}
@@ -53,7 +53,7 @@ func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
 		b.WriteString("- " + cascade + "\n")
 	case len(issues) > 0:
 		for _, it := range issues {
-			fmt.Fprintf(&b, "- %s\n", it)
+			_, _ = fmt.Fprintf(&b, "- %s\n", it)
 		}
 	default:
 		b.WriteString("you must provide the oldText exactly as it appears in the file\n")
@@ -137,16 +137,21 @@ func diagnoseNoMatch(old, buf string) []string {
 
 // stripTrailingWS removes the whitespace at each line's end.
 func stripTrailingWS(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = strings.TrimRightFunc(l, unicode.IsSpace)
+	var sb strings.Builder
+	sb.Grow(len(s))
+	for i, l := range strings.Split(s, "\n") {
+		if i > 0 {
+			sb.WriteRune('\n')
+		}
+		sb.WriteString(strings.TrimRightFunc(l, unicode.IsSpace))
 	}
-	return strings.Join(lines, "\n")
+	return sb.String()
 }
 
 // stripSpace removes all unicode whitespace.
 func stripSpace(s string) string {
 	var b strings.Builder
+	b.Grow(len(s))
 	for _, r := range s {
 		if !unicode.IsSpace(r) {
 			b.WriteRune(r)
@@ -320,7 +325,7 @@ func whitespaceIssue(oldLine, fileLine string) string {
 // leadingWS returns the indentation of s's first line, never crossing into the
 // next one. Indentation is ASCII space/tab, so byte-wise scanning is rune-safe.
 func leadingWS(s string) string {
-	i := 0
+	var i int
 	for i < len(s) && s[i] != '\n' && unicode.IsSpace(rune(s[i])) {
 		i++
 	}
@@ -483,7 +488,7 @@ func blockSimilarity(a, b string) float64 {
 // match is reported where it actually landed.
 func ambiguousError(idx int, path string, old, buf string, ms []match) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "edit %d matches %d occurrences in %s; widen its oldText with surrounding context or set replace_all:true.\n",
+	_, _ = fmt.Fprintf(&b, "edit %d matches %d occurrences in %s; widen its oldText with surrounding context or set replace_all:true.\n",
 		idx, len(ms), path)
 	lines := dropTrailingEmpty(strings.Split(buf, "\n"))
 	starts := lineStarts(lines)
@@ -492,7 +497,7 @@ func ambiguousError(idx int, path string, old, buf string, ms []match) string {
 		if n >= len(lines) {
 			continue
 		}
-		fmt.Fprintf(&b, "%6d\t%s\n", n+1, strutil.Clip(strings.TrimSpace(lines[n]), MaxLineRunes))
+		_, _ = fmt.Fprintf(&b, "%6d\t%s\n", n+1, strutil.Clip(strings.TrimSpace(lines[n]), MaxLineRunes))
 		if b.Len() > 800 {
 			b.WriteString("... more matches omitted; add unique context or set replace_all:true\n")
 			break

@@ -81,6 +81,7 @@ func TestDetectTone(t *testing.T) {
 		assert.Equal(t, ToneLight, u.DetectTone())
 		assert.Empty(t, out.String())
 	})
+
 	t.Run("light_reply", func(t *testing.T) {
 		u, pw, out := newReplyUI(t)
 		swapEnv(t, nil)
@@ -92,6 +93,7 @@ func TestDetectTone(t *testing.T) {
 		assert.Equal(t, ToneLight, <-done)
 		assert.Contains(t, out.String(), backgroundQuery+attrsQuery)
 	})
+
 	t.Run("dark_reply", func(t *testing.T) {
 		u, pw, _ := newReplyUI(t)
 		swapEnv(t, nil)
@@ -102,6 +104,7 @@ func TestDetectTone(t *testing.T) {
 
 		assert.Equal(t, ToneDark, <-done)
 	})
+
 	t.Run("attrs_fence_ends_wait", func(t *testing.T) {
 		u, pw, _ := newReplyUI(t)
 		swapEnv(t, nil)
@@ -112,6 +115,7 @@ func TestDetectTone(t *testing.T) {
 
 		assert.Equal(t, ToneUnknown, <-done)
 	})
+
 	t.Run("no_reply_times_out", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		t.Cleanup(func() { _ = pw.Close() })
@@ -125,6 +129,7 @@ func TestDetectTone(t *testing.T) {
 
 		assert.Equal(t, ToneUnknown, u.DetectTone())
 	})
+
 	t.Run("plain_mode_never_queries", func(t *testing.T) {
 		u, out := newRecordingUI(t, strings.NewReader("\x1b]11;rgb:ffff/ffff/ffff\x07"))
 		u.mode = ModePlain
@@ -141,6 +146,7 @@ func TestDetectTone(t *testing.T) {
 // it even when no answer arrives.
 func newReplyUI(tb testing.TB) (*UI, *io.PipeWriter, *strings.Builder) {
 	tb.Helper()
+
 	pr, pw := io.Pipe()
 	tb.Cleanup(func() { _ = pw.Close() })
 	u, out := newRecordingUI(tb, pr)
@@ -159,6 +165,7 @@ func feed(pw io.Writer, reply string) {
 // swapEnv points the package env lookup at a fixed map for one test.
 func swapEnv(tb testing.TB, vars map[string]string) {
 	tb.Helper()
+
 	prev := osEnv
 	osEnv = func(k string) string { return vars[k] }
 	tb.Cleanup(func() { osEnv = prev })

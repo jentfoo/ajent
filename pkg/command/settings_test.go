@@ -5,11 +5,12 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tui"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSettingsSectionOpensDirectly(t *testing.T) {
@@ -63,7 +64,7 @@ func TestSettingsRetentionRowEditsStateAndSaves(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// section jump lands on the retention row; Select picks "none" (index 0).
+	// section jump lands on the retention row; Select picks "none" (index 0)
 	c.selects = []int{0}
 
 	cmd, _ := r.Get("settings")
@@ -84,7 +85,7 @@ func TestSettingsCompactionRowSetsSessionKeys(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// menu opens, pick the Auto-compaction row (index 5); Confirm on; Input threshold.
+	// menu opens, pick the Auto-compaction row (index 5); Confirm on; Input threshold
 	c.picks = []fakePick{{result: 5}}
 	c.confirms = []bool{true}
 	c.inputs = []string{"0.6"}
@@ -134,6 +135,7 @@ func TestEditCompaction(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, changes)
 	})
+
 	t.Run("out_of_range_aborts_with_zero_changes", func(t *testing.T) {
 		c := newFakeConsole(t)
 		c.confirms = []bool{true}
@@ -257,7 +259,7 @@ func TestModelRow(t *testing.T) {
 		c := newFakeConsole(t)
 		r := modelRow("Sub-agent model", "subagent.model")
 
-		// no queued pick: ErrCancelled, nothing recorded.
+		// no queued pick: ErrCancelled, nothing recorded
 		changes, err := r.edit(t.Context(), c)
 		require.ErrorIs(t, err, tui.ErrCancelled)
 		assert.Empty(t, changes)

@@ -42,10 +42,9 @@ func (p RetryPolicy) withDefaults() RetryPolicy {
 	return p
 }
 
-// BackoffDelay returns how long to wait after the given one based attempt
-// failed, and whether waiting is worthwhile at all. A server supplied
-// retryAfter wins, unless it is longer than we are willing to stall for. rnd is
-// a jitter sample in [0,1).
+// BackoffDelay returns how long to wait after the given one based attempt failed, and whether
+// waiting is worthwhile at all. A server supplied retryAfter wins, unless it is longer than we
+// are willing to stall for. rnd is a jitter sample in [0,1).
 func BackoffDelay(p RetryPolicy, attempt int, retryAfter time.Duration, rnd float64) (time.Duration, bool) {
 	p = p.withDefaults()
 	if attempt >= p.Attempts {

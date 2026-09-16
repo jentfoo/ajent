@@ -5,8 +5,7 @@ import (
 )
 
 // assemble returns the message list for one request, system prompt excluded. It
-// is a pure function of State plus the ordered transform chain and never mutates
-// State.
+// is a pure function of State plus the ordered transform chain and never mutates State.
 func assemble(s *State, ts []Transform) []llm.Message {
 	messages := s.Messages
 	for _, t := range ts {

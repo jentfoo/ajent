@@ -15,8 +15,7 @@ type MCPGroup struct {
 	Label  string // full header text shown above the server's tools
 }
 
-// MCPServerStatus is one /mcp row, declared here so pkg/command does not import
-// pkg/mcp.
+// MCPServerStatus is one /mcp row, declared here so pkg/command does not import pkg/mcp.
 type MCPServerStatus struct {
 	Name      string
 	Transport string // stdio, http or sse
@@ -26,10 +25,9 @@ type MCPServerStatus struct {
 	Latency   time.Duration
 }
 
-// mcpCommand manages configured MCP servers: list them, connect or disconnect,
-// show logs and reload config. SplitCommand only splits the first word, so the
-// verb is parsed here.
-func mcpCommand(_ context.Context, arg string, c Console) error {
+// mcpCommand manages configured MCP servers: list them, connect or disconnect, show logs and
+// reload config. SplitCommand only splits the first word, so the verb is parsed here.
+func mcpCommand(ctx context.Context, arg string, c Console) error {
 	s := c.MCP()
 	if s == nil {
 		c.Notify("MCP not available", levelWarn)
@@ -40,13 +38,13 @@ func mcpCommand(_ context.Context, arg string, c Console) error {
 
 	switch verb {
 	case "", "list":
-		mcpList(c, s)
+		mcpList(ctx, c, s)
 	case "connect":
 		if rest == "" {
 			c.Notify("usage: /mcp connect <name>", levelWarn)
 			return nil
 		}
-		if err := s.Connect(context.Background(), rest); err != nil {
+		if err := s.Connect(ctx, rest); err != nil {
 			c.Notify(err.Error(), levelError)
 		} else {
 			c.Notify("mcp "+rest+": connected", levelInfo)
@@ -65,7 +63,7 @@ func mcpCommand(_ context.Context, arg string, c Console) error {
 		}
 		mcpLogs(c, s, rest)
 	case "reload":
-		if err := s.Reload(context.Background()); err != nil {
+		if err := s.Reload(ctx); err != nil {
 			c.Notify(err.Error(), levelError)
 		} else {
 			c.Notify("mcp: reloaded", levelInfo)
@@ -77,10 +75,10 @@ func mcpCommand(_ context.Context, arg string, c Console) error {
 }
 
 // mcpList prints a markdown table of server status.
-func mcpList(c Console, s MCPServers) {
+func mcpList(ctx context.Context, c Console, s MCPServers) {
 	var b strings.Builder
 	b.WriteString("# MCP servers\n")
-	rows := s.Status(context.Background())
+	rows := s.Status(ctx)
 	if len(rows) == 0 {
 		b.WriteString("\n_no servers configured in ~/.ajent/mcp.json_\n")
 		c.Print(b.String())
@@ -89,7 +87,7 @@ func mcpList(c Console, s MCPServers) {
 	b.WriteString("\n| server | state | transport | tools | latency |\n")
 	b.WriteString("|--------|-------|-----------|------:|---------:|\n")
 	for _, r := range rows {
-		fmt.Fprintf(&b, "| %s | %s | %s | %d | %s |\n",
+		_, _ = fmt.Fprintf(&b, "| %s | %s | %s | %d | %s |\n",
 			r.Name, r.State, orDash(r.Transport),
 			r.ToolCount, latencyStr(r.Latency))
 	}
@@ -104,7 +102,7 @@ func mcpLogs(c Console, s MCPServers, name string) {
 		return
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# mcp %s logs\n\n```\n", name)
+	_, _ = fmt.Fprintf(&b, "# mcp %s logs\n\n```\n", name)
 	for _, l := range lines {
 		b.WriteString(l + "\n")
 	}

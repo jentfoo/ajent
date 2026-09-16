@@ -17,8 +17,7 @@ import (
 )
 
 const (
-	// UpdateCacheFileName holds the latest-tag and last-notice state under
-	// ~/.ajent/cache.
+	// UpdateCacheFileName holds the latest-tag and last-notice state under ~/.ajent/cache.
 	UpdateCacheFileName = "remote-version.json"
 
 	// remoteVersionTTL reuses a fetched tag within this window before asking GitHub again.
@@ -88,7 +87,7 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 	if now().Sub(time.Unix(c.CheckedAt, 0)) > remoteVersionTTL {
 		latest, err := fetch(ctx)
 		if err != nil {
-			// only report failure when there is no cached version to fall back on.
+			// only report failure when there is no cached version to fall back on
 			if c.Version == "" {
 				return "", fmt.Errorf("update check: %w", err)
 			}
@@ -99,7 +98,7 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 		}
 	}
 
-	// only real builds are worth nagging about; dev is always behind by design.
+	// only real builds are worth nagging about; dev is always behind by design
 	if Version == "" || Version == "dev" {
 		return "", nil
 	}
@@ -112,7 +111,7 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 		return "", nil // nothing newer to report
 	}
 
-	// at most one notice per install within the interval.
+	// at most one notice per install within the interval
 	if now().Sub(time.Unix(c.NoticedAt, 0)) < noticeInterval {
 		return "", nil
 	}

@@ -5,9 +5,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // The committed corpus in testdata/branches. Every other test in this package
@@ -38,8 +39,6 @@ func tipIDs(entries []Entry) []string {
 	return out
 }
 
-// TestFixtureSchema pins the on-disk transcript format: the intricate part is
-// the compaction entry, whose reduce plan is replayed on every rebuild.
 func TestFixtureSchema(t *testing.T) {
 	t.Parallel()
 
@@ -100,8 +99,6 @@ func TestFixtureSchema(t *testing.T) {
 	})
 }
 
-// TestFixtureContextMessages asserts the whole assembled shape, so a message
-// silently added or dropped fails rather than passing unnoticed.
 func TestFixtureContextMessages(t *testing.T) {
 	t.Parallel()
 
@@ -160,8 +157,6 @@ func TestFixtureContextMessages(t *testing.T) {
 	})
 }
 
-// TestFixtureBranch walks the committed tree: one parent with two children is
-// two independent lineages, not one log.
 func TestFixtureBranch(t *testing.T) {
 	t.Parallel()
 
@@ -197,7 +192,6 @@ func TestFixtureBranch(t *testing.T) {
 	}, second)
 }
 
-// TestFixtureState rebuilds the agent state a resume would start from.
 func TestFixtureState(t *testing.T) {
 	t.Parallel()
 

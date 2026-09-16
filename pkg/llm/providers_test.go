@@ -38,11 +38,13 @@ func TestProvidersProviderFor(t *testing.T) {
 		first := get("chat")
 		assert.Same(t, first, get("chat"))
 	})
+
 	t.Run("differing_dialect_gets_its_own_adapter", func(t *testing.T) {
 		assert.NotSame(t, get("chat"), get("claude"))
 		assert.IsType(t, &anthropicProvider{}, get("claude"))
 		assert.IsType(t, &compatProvider{}, get("chat"))
 	})
+
 	t.Run("differing_base_url_gets_its_own_adapter", func(t *testing.T) {
 		assert.NotSame(t, get("chat"), get("elsewhere"))
 	})

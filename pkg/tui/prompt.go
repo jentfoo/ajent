@@ -268,7 +268,8 @@ func refilterMatches(items []PickItem, filter string) (matches []int) {
 
 // bestScore returns the best score across an item's matchable strings.
 func bestScore(it PickItem, filter string, score func(text, query string) (int, bool)) (int, bool) {
-	best, found := 0, false
+	var best int
+	var found bool
 	for _, field := range append([]string{it.Label, it.Detail, it.Tag}, it.Terms...) {
 		if s, ok := score(field, filter); ok && (!found || s > best) {
 			best, found = s, true
@@ -390,7 +391,7 @@ func pickItemRow(t Theme, it PickItem, selected bool, width, tagCol int) string 
 // tagColumn is the width a list reserves for role tags: the widest tag present,
 // or zero when no row carries one.
 func tagColumn(items []PickItem) int {
-	col := 0
+	var col int
 	for _, it := range items {
 		col = max(col, displayWidth(it.Tag))
 	}
@@ -547,7 +548,7 @@ func (s *multiPickState) refilter() {
 // group change so the list reads as grouped sections.
 func buildRows(items []PickItem, filter string) []pickRow {
 	var out []pickRow
-	prev := ""
+	var prev string
 	for _, idx := range refilterMatches(items, filter) {
 		g := items[idx].Group
 		if g != "" && g != prev {
@@ -602,7 +603,7 @@ func (s *multiPickState) allSelected(members []int) bool {
 
 // groupTri reports a header's checkbox state: -1 none, 0 partial, 1 all.
 func groupTri(members []int, selected map[int]struct{}) int {
-	sel := 0
+	var sel int
 	for _, m := range members {
 		if _, ok := selected[m]; ok {
 			sel++

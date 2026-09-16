@@ -33,12 +33,12 @@ func TestNormalizeClass(t *testing.T) {
 		{"conflicting allow and deny", "allow if safe but deny otherwise", ClassUnsure},
 		{"hedged both words", "not sure; maybe allow, maybe deny", ClassUnsure},
 		{"verb form not verdict", "allowing this would be unsafe", ClassUnsure},
-		// a negator before an approval never fails open: the dialog stays.
+		// a negator before an approval never fails open: the dialog stays
 		{"negated cannot allow", "I can't allow this because it's unsafe", ClassUnsure},
 		{"negated do not allow", "do not allow this modification", ClassUnsure},
 		{"negated semicolon clause", "I cannot allow; it writes to the network", ClassUnsure},
 		{"negated never allowed", "never allowed: modifies files", ClassUnsure},
-		// a negator anywhere shadows every verdict word, even across a clause boundary.
+		// a negator anywhere shadows every verdict word, even across a clause boundary
 		{"negation does not reset", "I can't deny it reads; so allow it", ClassUnsure},
 		{"unsure literal", "unsure", ClassUnsure},
 		{"old readonly word", "readonly", ClassUnsure},
@@ -75,7 +75,7 @@ func TestCachedClassifierHitsCache(t *testing.T) {
 
 	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
 	assert.Equal(t, 1, fn.count())
-	// an identical subject is served from cache without re-invoking the model.
+	// an identical subject is served from cache without re-invoking the model
 	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
 	assert.Equal(t, 1, fn.count())
 }
@@ -99,7 +99,7 @@ func TestCachedClassifierSeparatesRuleSets(t *testing.T) {
 
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f"})
 	assert.Equal(t, 1, fn.count())
-	// the same command under auto+write asks a different question; never the cached one.
+	// the same command under auto+write asks a different question; never the cached one
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
 	assert.Equal(t, 2, fn.count())
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
@@ -114,7 +114,7 @@ func TestCachedClassifierNeverStoresUnsure(t *testing.T) {
 
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 1, fn.count())
-	// unsure is transient and never cached; the same subject runs the model again.
+	// unsure is transient and never cached; the same subject runs the model again
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 2, fn.count())
 
@@ -251,11 +251,11 @@ func TestCachedClassifierEvictsLeastRecentlyUsedAtCap(t *testing.T) {
 	fn := &countingFn{verdict: ClassDeny}
 	c := newCachedClassifierMax(fn.call, 2)
 
-	// fill the cache to its cap.
+	// fill the cache to its cap
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
 
-	// touch a so b becomes least-recently-used, then push past the cap: b evicts.
+	// touch a so b becomes least-recently-used, then push past the cap: b evicts
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "c"}) // forces an eviction
 

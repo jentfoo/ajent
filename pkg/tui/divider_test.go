@@ -29,13 +29,14 @@ func TestDividerRow(t *testing.T) {
 	})
 
 	t.Run("zero_width_is_safe", func(t *testing.T) {
-		// unknown width falls back to a thin rule rather than an empty band.
+		// unknown width falls back to a thin rule rather than an empty band
 		assert.Equal(t, strings.Repeat(ruleChar, 1), dividerRow(NewTheme(Color256, DefaultPalette()).Divider, 0))
 	})
 }
 
 func TestUIDividerCommitsBand(t *testing.T) {
 	t.Parallel()
+
 	var buf strings.Builder
 	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), render: &plainRenderer{out: &buf}, mode: ModePlain}
 	u.Divider()

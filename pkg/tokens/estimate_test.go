@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestEstimateText(t *testing.T) {
@@ -27,9 +28,9 @@ func TestEstimateText(t *testing.T) {
 		{"go_source", "package main\nfunc f(x int) (int, error) {\n\treturn x * 2, nil\n}\n", KindCode, 20, 6},
 		{"json_args", `{"file":"a.go","content":"line one\n"}`, KindJSON, 16, 5},
 		{"minified_json", `[{"name":"x"},{"name":"y"}]`, KindJSON, 12, 4},
-		// non-ASCII runes count exactly (one each), so tol < 1 enforces equality.
+		// non-ASCII runes count exactly (one each), so tol < 1 enforces equality
 		{"cjk_one_token_per_rune", "\u4f60\u597d\u4e16\u754c\uff0c\u4eca\u5929\u6c14\u5f88\u597d\u3002", KindProse, 11, 0.1},
-		// astral (emoji) pairs cost two; the trailing U+2728 is BMP and costs one.
+		// astral (emoji) pairs cost two; the trailing U+2728 is BMP and costs one
 		{"astral_pairs_cost_two", "🎉🚀🔥✨", KindProse, 7, 0.5},
 	}
 	for _, tc := range tests {
@@ -134,7 +135,7 @@ func TestEstimateRequest(t *testing.T) {
 
 		estimated := EstimateRequest(req) // normalizes through Prepare internally
 		prepared := llm.Prepare(req).Messages
-		manual := 0
+		var manual int
 		for _, msg := range prepared {
 			manual += messageOverhead + estimateBlocks(msg.Content)
 		}
@@ -248,16 +249,19 @@ func TestImageDims(t *testing.T) {
 		assert.Equal(t, 640, w)
 		assert.Equal(t, 480, h)
 	})
+
 	t.Run("jpeg", func(t *testing.T) {
 		w, h, ok := imageDims(jpeg)
 		require.True(t, ok)
 		assert.Equal(t, 320, w)
 		assert.Equal(t, 200, h)
 	})
+
 	t.Run("unknown_format", func(t *testing.T) {
 		_, _, ok := imageDims([]byte("GIF89a and then some bytes to pad it out"))
 		assert.False(t, ok)
 	})
+
 	t.Run("dimensions_beat_byte_size", func(t *testing.T) {
 		// the same pixels compress differently; cost must follow area, not bytes
 		small := imageTokens(llm.ImageBlock{Data: png})
@@ -265,6 +269,7 @@ func TestImageDims(t *testing.T) {
 		assert.Equal(t, small, padded)
 		assert.Equal(t, 640*480/imagePixelsPerToken, small)
 	})
+
 	t.Run("unparsed_falls_back_to_bytes", func(t *testing.T) {
 		assert.Equal(t, imageBaseTokens, imageTokens(llm.ImageBlock{Data: []byte("GIF89a")}))
 	})

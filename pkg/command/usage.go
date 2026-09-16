@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
@@ -36,11 +37,11 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	if denom <= 0 {
 		denom = budget
 	}
-	fmt.Fprintf(&b, "\ncontext: %s / %s  (%d%% of %s before compaction)\n",
+	_, _ = fmt.Fprintf(&b, "\ncontext: %s / %s  (%d%% of %s before compaction)\n",
 		strutil.FormatTokens(cs.Used), strutil.FormatTokens(window),
 		pctOf(cs.Used, denom), strutil.FormatTokens(denom))
 	if cs.Reserve > 0 {
-		fmt.Fprintf(&b, "\nreserve: %s held back for the response\n",
+		_, _ = fmt.Fprintf(&b, "\nreserve: %s held back for the response\n",
 			strutil.FormatTokens(cs.Reserve))
 	}
 
@@ -51,12 +52,12 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	n := t.TurnsCount()
 	est := t.EstimatedTurns()
 
-	fmt.Fprintf(&b, "| %d | %s | %s |\n", n,
+	_, _ = fmt.Fprintf(&b, "| %d | %s | %s |\n", n,
 		strutil.FormatTokens(total.Input), strutil.FormatTokens(total.Output))
 
 	// delegation cost is tracked separately so /usage shows what sub-agents spent.
 	if child := t.ChildTotal(); child.Input > 0 || child.Output > 0 {
-		fmt.Fprintf(&b, "\nof which sub-agents: %s in / %s out\n",
+		_, _ = fmt.Fprintf(&b, "\nof which sub-agents: %s in / %s out\n",
 			strutil.FormatTokens(child.Input), strutil.FormatTokens(child.Output))
 	}
 
@@ -67,7 +68,7 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 		slices.Sort(keys)
 		for _, key := range keys {
 			m := byModel[key]
-			fmt.Fprintf(&b, "| %s | %s | %s |\n", key,
+			_, _ = fmt.Fprintf(&b, "| %s | %s | %s |\n", key,
 				strutil.FormatTokens(m.Input), strutil.FormatTokens(m.Output))
 		}
 	}
@@ -80,8 +81,7 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	return nil
 }
 
-// pctOf clamps the percentage of used against a denominator to [0,100], matching
-// how the status bar fills.
+// pctOf clamps the percentage of used against a denominator to [0,100], matching how the status bar fills.
 func pctOf(used, total int) int {
 	if total <= 0 || used < 1 {
 		return 0

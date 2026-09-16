@@ -17,6 +17,7 @@ import (
 // binary lands in the calling test's temp dir and is removed when that test ends.
 func buildFakeServer(t *testing.T) string {
 	t.Helper()
+
 	out := filepath.Join(t.TempDir(), "fakeserver")
 	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "./testdata/fakeserver")
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -28,6 +29,7 @@ func buildFakeServer(t *testing.T) string {
 // freePort reserves a TCP port for the HTTP fakeserver.
 func freePort(t *testing.T) int {
 	t.Helper()
+
 	var lc net.ListenConfig
 	l, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
@@ -42,16 +44,17 @@ func freePort(t *testing.T) int {
 // once it accepts connections.
 func startHTTP(t *testing.T, args ...string) string {
 	t.Helper()
+
 	srv := buildFakeServer(t)
 	port := freePort(t)
 	full := append([]string{"-http", fmt.Sprintf("127.0.0.1:%d", port)}, args...)
 	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 	c := exec.CommandContext(ctx, srv, full...)
 	if err := c.Start(); err != nil {
 		t.Fatalf("start fakeserver http: %v", err)
 	}
 	t.Cleanup(func() {
-		cancel()
 		_ = c.Process.Kill()
 		_ = c.Wait()
 	})
@@ -73,5 +76,6 @@ func startHTTP(t *testing.T, args ...string) string {
 // stdioConfig builds a ServerConfig pointing at the fakeserver binary.
 func stdioConfig(t *testing.T, args ...string) ServerConfig {
 	t.Helper()
+
 	return ServerConfig{Command: buildFakeServer(t), Args: args}
 }

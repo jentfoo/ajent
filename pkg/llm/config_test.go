@@ -6,9 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/config"
 )
 
 // loadFixture copies a config fixture into a private temp file and loads it,
@@ -49,6 +50,7 @@ func TestLoadFile(t *testing.T) {
 		assert.Equal(t, "qwen-chat-template", *qwen.Compat.ThinkingFormat)
 		assert.Equal(t, []Modality{ModalityText, ModalityImage}, qwen.Input)
 	})
+
 	t.Run("thinking_level_map_maps_every_level", func(t *testing.T) {
 		f, _, err := loadFixture(t, "models_compat_style.json")
 		require.NoError(t, err)
@@ -62,6 +64,7 @@ func TestLoadFile(t *testing.T) {
 		require.Contains(t, minimax.LevelMap, LevelOff)
 		assert.Nil(t, minimax.LevelMap[LevelOff]) // null disables reasoning at that level
 	})
+
 	t.Run("unknown_keys_warn_without_failing", func(t *testing.T) {
 		f, warnings, err := loadFixture(t, "models_unknown_keys.json")
 		require.NoError(t, err)
@@ -73,18 +76,21 @@ func TestLoadFile(t *testing.T) {
 		// so it must not warn on a real config that carries it
 		assert.NotContains(t, joined, "cost")
 	})
+
 	t.Run("minimal_file", func(t *testing.T) {
 		f, warnings, err := loadFixture(t, "models_minimal.json")
 		require.NoError(t, err)
 		assert.Empty(t, warnings)
 		assert.Equal(t, "http://localhost:8080", f.Providers["llamacpp"].BaseURL)
 	})
+
 	t.Run("missing_file_is_not_an_error", func(t *testing.T) {
 		f, warnings, err := LoadFile(filepath.Join(t.TempDir(), "absent.json"))
 		require.NoError(t, err)
 		assert.Empty(t, f.Providers)
 		assert.Empty(t, warnings)
 	})
+
 	t.Run("malformed_json_names_the_file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), ModelsFileName)
 		require.NoError(t, os.WriteFile(path, []byte(`{"providers":`), 0o600))
@@ -93,6 +99,7 @@ func TestLoadFile(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), path)
 	})
+
 	t.Run("compat_quirks_load_unchanged", func(t *testing.T) {
 		// line comments, a trailing comma and a duplicated key, exactly as
 		// a real-world models.json carries them
@@ -108,6 +115,7 @@ func TestLoadFile(t *testing.T) {
 		assert.Contains(t, joined, "duplicate key")
 		assert.Contains(t, joined, "thinkingFormat")
 	})
+
 	t.Run("syntax_error_names_the_line", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), ModelsFileName)
 		require.NoError(t, os.WriteFile(path,
@@ -117,6 +125,7 @@ func TestLoadFile(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), path+":4:")
 	})
+
 	t.Run("literal_key_in_readable_file_warns", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), ModelsFileName)
 		require.NoError(t, os.WriteFile(path,
@@ -126,6 +135,7 @@ func TestLoadFile(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, strings.Join(warnings, "\n"), "chmod 600")
 	})
+
 	t.Run("no_literal_key_no_permission_warning", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), ModelsFileName)
 		require.NoError(t, os.WriteFile(path,
@@ -137,9 +147,6 @@ func TestLoadFile(t *testing.T) {
 	})
 }
 
-// TestModelConfigCompatParity loads a compatibility-style model entry carrying the fields ajent
-// accepts for parity: per-model headers, opaque sampling params and a cost block
-// that is out of scope but must not warn.
 func TestModelConfigCompatParity(t *testing.T) {
 	t.Parallel()
 
@@ -191,15 +198,18 @@ func TestLoadFilePiParity(t *testing.T) {
 		assert.Equal(t, DialectAnthropic, m.API)
 		assert.Equal(t, "https://proxy.example.com/anthropic", m.BaseURL)
 	})
+
 	t.Run("unsupported_api_keeps_other_providers", func(t *testing.T) {
 		assert.Equal(t, DialectUnknown, f.Providers["my-google"].API)
 		assert.Equal(t, DialectOpenAICompletions, f.Providers["ollama"].API)
 	})
+
 	t.Run("thinking_token_budget_field", func(t *testing.T) {
 		c := f.Providers["local-llm"].Compat
 		require.NotNil(t, c.ThinkingTokenBudgetField)
 		assert.Equal(t, "thinking_budget", *c.ThinkingTokenBudgetField)
 	})
+
 	t.Run("model_overrides_carry_pis_field_set", func(t *testing.T) {
 		ov := f.Providers["openrouter"].ModelOverrides["anthropic/claude-sonnet-4"]
 		assert.Equal(t, "Claude Sonnet 4 (Bedrock Route)", ov.Name)
@@ -213,6 +223,7 @@ func TestLoadFilePiParity(t *testing.T) {
 		require.NotNil(t, ov.Compat)
 		assert.NotEmpty(t, ov.Compat.OpenRouterRouting)
 	})
+
 	t.Run("unsupported_api_disables_only_its_provider", func(t *testing.T) {
 		reg, w := NewRegistry(f, nil, RegistryOptions{})
 		joined := strings.Join(w, "\n")
@@ -231,10 +242,12 @@ func TestMergeCompat(t *testing.T) {
 	t.Run("nil_over_returns_base", func(t *testing.T) {
 		assert.Equal(t, base, mergeCompat(base, nil))
 	})
+
 	t.Run("nil_base_returns_over", func(t *testing.T) {
 		over := &Compat{SupportsStore: ptr(false)}
 		assert.Equal(t, over, mergeCompat(nil, over))
 	})
+
 	t.Run("set_fields_win_field_by_field", func(t *testing.T) {
 		got := mergeCompat(base, &Compat{SupportsImages: ptr(false), SupportsToolChoice: ptr(true)})
 		require.NotNil(t, got)
@@ -243,6 +256,7 @@ func TestMergeCompat(t *testing.T) {
 		assert.True(t, *got.SupportsToolChoice)            // added
 		assert.Equal(t, "max_tokens", *got.MaxTokensField) // untouched string
 	})
+
 	t.Run("does_not_mutate_either_side", func(t *testing.T) {
 		_ = mergeCompat(base, &Compat{SupportsStore: ptr(false)})
 		assert.True(t, *base.SupportsStore)
@@ -275,6 +289,7 @@ func TestDialectUnmarshalText(t *testing.T) {
 		require.NoError(t, got.UnmarshalText([]byte("anthropic")))
 		assert.Equal(t, DialectAnthropic, got)
 	})
+
 	t.Run("unsupported_is_not_an_error", func(t *testing.T) {
 		// some configs name protocols ajent cannot speak; failing on one would cost
 		// the user every other provider in the file
@@ -293,6 +308,7 @@ func TestFlavorUnmarshalText(t *testing.T) {
 		assert.Equal(t, FlavorLMStudio, got)
 		assert.Equal(t, "lmstudio", got.String())
 	})
+
 	t.Run("unknown_is_not_an_error", func(t *testing.T) {
 		var got Flavor
 		require.NoError(t, got.UnmarshalText([]byte("bogus")))
@@ -306,20 +322,24 @@ func TestCompatWarnings(t *testing.T) {
 	t.Run("nil_compat_warns_nothing", func(t *testing.T) {
 		assert.Empty(t, compatWarnings(nil, DialectOpenAICompletions))
 	})
+
 	t.Run("unknown_thinking_format_names_the_value", func(t *testing.T) {
 		w := compatWarnings(&Compat{ThinkingFormat: ptr("bogus")}, DialectOpenAICompletions)
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], "thinkingFormat \"bogus\" is not supported")
 	})
+
 	t.Run("known_thinking_format_does_not_warn", func(t *testing.T) {
 		w := compatWarnings(&Compat{ThinkingFormat: ptr("deepseek")}, DialectOpenAICompletions)
 		assert.Empty(t, w)
 	})
+
 	t.Run("anthropic_tagged_field_ignored_by_compat_dialect", func(t *testing.T) {
 		w := compatWarnings(&Compat{ForceAdaptiveThinking: ptr(true)}, DialectOpenAICompletions)
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], "forceAdaptiveThinking")
 	})
+
 	t.Run("anthropic_tagged_field_accepted_by_anthropic_messages", func(t *testing.T) {
 		w := compatWarnings(&Compat{ForceAdaptiveThinking: ptr(true)}, DialectAnthropic)
 		assert.Empty(t, w)

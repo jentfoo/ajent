@@ -5,14 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// TestCompactionResumeRebuildsReducedContext writes a compaction with a reduce
-// plan, appends more turns, reopens from disk, and checks the rebuilt context is
-// exactly the summary plus the reduced kept tail.
 func TestCompactionResumeRebuildsReducedContext(t *testing.T) {
 	t.Parallel()
 
@@ -26,11 +24,11 @@ func TestCompactionResumeRebuildsReducedContext(t *testing.T) {
 		return e
 	}
 
-	// turn one is summarized away.
+	// turn one is summarized away
 	appendMsg(llm.Text(llm.RoleUser, "first ask"))
 	appendMsg(llm.Text(llm.RoleAssistant, "first reply"))
 
-	// turn two is kept; its tool result is stubbed by the reduce plan.
+	// turn two is kept; its tool result is stubbed by the reduce plan
 	firstKept := appendMsg(llm.Text(llm.RoleUser, "second ask"))
 	appendMsg(llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
 		llm.ToolCallBlock{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)},
@@ -40,7 +38,7 @@ func TestCompactionResumeRebuildsReducedContext(t *testing.T) {
 			Content: llm.BlockList{llm.TextBlock{Text: "a very large tool output"}}},
 	}})
 
-	// a compaction records the cut and the reduction plan.
+	// a compaction records the cut and the reduction plan
 	red := &Reduce{Stubs: []Stub{{CallID: "c1", Text: "[bash failed: output dropped]"}}}
 	_, err = w.Append(TypeCompaction, CompactionData{
 		Summary:          "did the first thing",
@@ -51,13 +49,13 @@ func TestCompactionResumeRebuildsReducedContext(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// more turns land after the compaction.
+	// more turns land after the compaction
 	appendMsg(llm.Text(llm.RoleUser, "third ask"))
 	appendMsg(llm.Text(llm.RoleAssistant, "final answer"))
 	require.NoError(t, w.Sync())
 	require.NoError(t, w.Close())
 
-	// reopen from disk and rebuild.
+	// reopen from disk and rebuild
 	entries, _, rerr := Read(p)
 	require.NoError(t, rerr)
 	branch := Branch(entries, Head(entries))
@@ -76,9 +74,6 @@ func TestCompactionResumeRebuildsReducedContext(t *testing.T) {
 	assert.True(t, wellFormed(st.Messages))
 }
 
-// TestCompactionSummaryOnlyResumeRebuildsCheckpoint writes a summary-only
-// compaction (no kept entry), appends more turns, reopens from disk, and checks
-// the rebuilt context is exactly the summary plus the later turns.
 func TestCompactionSummaryOnlyResumeRebuildsCheckpoint(t *testing.T) {
 	t.Parallel()
 
@@ -94,7 +89,7 @@ func TestCompactionSummaryOnlyResumeRebuildsCheckpoint(t *testing.T) {
 	appendMsg(llm.Text(llm.RoleUser, "only ask"))
 	appendMsg(llm.Text(llm.RoleAssistant, "only reply"))
 
-	// a summary-only compaction folds everything before it.
+	// a summary-only compaction folds everything before it
 	_, err = w.Append(TypeCompaction, CompactionData{
 		Summary: "the whole exchange, condensed",
 		Before:  500,

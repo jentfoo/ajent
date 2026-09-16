@@ -23,7 +23,9 @@ func TestBridge(t *testing.T) {
 		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "1", Name: b.Name()}, nil)
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
-		assert.Contains(t, textOf(res.Content), "tool_00: ok")
+		text, ok := res.Content.AsText()
+		require.True(t, ok)
+		assert.Contains(t, text, "tool_00: ok")
 	})
 
 	t.Run("namespaces_name", func(t *testing.T) {

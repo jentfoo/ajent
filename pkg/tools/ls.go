@@ -57,7 +57,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 		return resultErr(err.Error()), nil
 	}
 
-	// a wildcard pattern is not a real directory: list the files it matches.
+	// a wildcard pattern is not a real directory: list the files it matches
 	if HasGlob(full) {
 		return t.listMatches(full, p.Limit), nil
 	}

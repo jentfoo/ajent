@@ -18,11 +18,11 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// scopeRegistry mirrors a live headless registry: the built-ins, the sub-agent
-// trio, and one MCP server offering a read-only tool, a writer and a tool its
-// config left disabled.
+// scopeRegistry mirrors a live headless registry: the built-ins, the sub-agent trio, and one
+// MCP server offering a read-only tool, a writer and a tool its config left disabled.
 func scopeRegistry(t *testing.T) *tools.Registry {
 	t.Helper()
+
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir()})
 	require.NoError(t, err)
 
@@ -173,6 +173,7 @@ func textAndCallTurn(text, id, name, args string) []llm.Event {
 // non-empty projectCfg is written as the workspace's .ajent/config.json.
 func headlessHarness(t *testing.T, o HeadlessOptions, projectCfg string, turns []llm.ScriptedTurn) (int, string, string) {
 	t.Helper()
+
 	t.Chdir(t.TempDir())
 	t.Setenv("AJENT_HOME", t.TempDir())
 	if projectCfg != "" {
@@ -197,6 +198,7 @@ func headlessHarness(t *testing.T, o HeadlessOptions, projectCfg string, turns [
 // loadTestConfig loads config for the harness's isolated workspace.
 func loadTestConfig(t *testing.T) *config.Set {
 	t.Helper()
+
 	set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
 	require.NoError(t, err)
 	return set

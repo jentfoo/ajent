@@ -4,8 +4,9 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/jentfoo/ajent/pkg/config"
 )
 
 func TestLevelValue(t *testing.T) {
@@ -18,6 +19,7 @@ func TestLevelValue(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, "high", e)
 	})
+
 	t.Run("mapped_value_is_sent", func(t *testing.T) {
 		c := caps
 		v := "x-high"
@@ -26,6 +28,7 @@ func TestLevelValue(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, "x-high", e)
 	})
+
 	t.Run("null_entry_reports_unsupported", func(t *testing.T) {
 		c := caps
 		c.LevelMap = map[Level]*string{LevelMax: nil}
@@ -33,6 +36,7 @@ func TestLevelValue(t *testing.T) {
 		assert.False(t, ok)
 		assert.Empty(t, e)
 	})
+
 	t.Run("never_substitutes_high", func(t *testing.T) {
 		// an unmapped xhigh/max must not silently become "high"
 		c := caps
@@ -51,10 +55,12 @@ func TestOffValueAndSuppressed(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, "none", e)
 	})
+
 	t.Run("empty_default_reports_false", func(t *testing.T) {
 		_, ok := offValue(caps, "")
 		assert.False(t, ok)
 	})
+
 	t.Run("null_off_is_suppressed", func(t *testing.T) {
 		c := caps
 		c.LevelMap = map[Level]*string{LevelOff: nil}
@@ -63,6 +69,7 @@ func TestOffValueAndSuppressed(t *testing.T) {
 		assert.Empty(t, e)
 		assert.True(t, offSuppressed(c))
 	})
+
 	t.Run("mapped_off_value_sent", func(t *testing.T) {
 		c := caps
 		v := "disabled"
@@ -81,12 +88,14 @@ func TestLevelsFor(t *testing.T) {
 		c := Capabilities{Reasoning: false}
 		assert.Equal(t, []Level{LevelOff}, levelsFor(c))
 	})
+
 	t.Run("all_levels_by_default", func(t *testing.T) {
 		c := Capabilities{Reasoning: true}
 		// xhigh and max are opt-in, so the default ladder stops at high
 		assert.Equal(t, []Level{LevelOff, LevelMinimal, LevelLow, LevelMedium, LevelHigh},
 			levelsFor(c))
 	})
+
 	t.Run("null_entry_removes_a_level", func(t *testing.T) {
 		c := Capabilities{Reasoning: true}
 		v := "on"
@@ -96,6 +105,7 @@ func TestLevelsFor(t *testing.T) {
 		assert.Contains(t, got, LevelXHigh)
 		assert.Len(t, got, 6) // off..medium plus xhigh and max
 	})
+
 	t.Run("xhigh_and_max_are_opt_in", func(t *testing.T) {
 		c := Capabilities{Reasoning: true}
 		v := "on"
@@ -104,6 +114,7 @@ func TestLevelsFor(t *testing.T) {
 		assert.Contains(t, got, LevelXHigh)
 		assert.Contains(t, got, LevelMax)
 	})
+
 	t.Run("off_null_hides_off", func(t *testing.T) {
 		c := Capabilities{Reasoning: true}
 		c.LevelMap = map[Level]*string{LevelOff: nil}
@@ -119,14 +130,17 @@ func TestClampLevel(t *testing.T) {
 	t.Run("supported_level_unchanged", func(t *testing.T) {
 		assert.Equal(t, LevelMedium, clampLevel(full, LevelMedium))
 	})
+
 	t.Run("off_stays_off_even_when_suppressed", func(t *testing.T) {
 		c := Capabilities{Reasoning: true}
 		c.LevelMap = map[Level]*string{LevelOff: nil}
 		assert.Equal(t, LevelOff, clampLevel(c, LevelOff))
 	})
+
 	t.Run("xhigh_absent_clamps_down_to_high", func(t *testing.T) {
 		assert.Equal(t, LevelHigh, clampLevel(full, LevelMax)) // max opt-in -> down to high
 	})
+
 	t.Run("restricted_map_snaps_upward_first", func(t *testing.T) {
 		c := Capabilities{Reasoning: true}
 		v := "on"
@@ -135,6 +149,7 @@ func TestClampLevel(t *testing.T) {
 		assert.Equal(t, LevelOff, clampLevel(c, LevelOff))
 		assert.Equal(t, LevelMinimal, clampLevel(c, LevelMinimal)) // supported stays
 	})
+
 	t.Run("xhigh_only_map", func(t *testing.T) {
 		c := Capabilities{Reasoning: true}
 		v := "on"

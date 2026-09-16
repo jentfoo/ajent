@@ -24,16 +24,19 @@ func TestMergePrecedenceAndExplain(t *testing.T) {
 		assert.Equal(t, `"u"`, string(v))
 		assert.Equal(t, "user", r.Source("model"))
 	})
+
 	t.Run("nested_path_provenance", func(t *testing.T) {
 		v, src, ok := r.Explain("reasoning.level")
 		require.True(t, ok)
 		assert.Equal(t, `"high"`, string(v))
 		assert.Equal(t, "project", src)
 	})
+
 	t.Run("default_only_key_present", func(t *testing.T) {
 		_, _, ok := r.Explain("ui.render") // only in defaults
 		require.True(t, ok)
 	})
+
 	t.Run("missing_key_not_found", func(t *testing.T) {
 		v, src, ok := r.Explain("no.such.key")
 		assert.False(t, ok)
@@ -74,6 +77,7 @@ func TestMergeDeepObjectsAndArrayReplace(t *testing.T) {
 		assert.InDelta(t, float64(1), bash["lines"], 0)
 		assert.InDelta(t, float64(4), bash["bytes"], 0)
 	})
+
 	t.Run("arrays_replace_not_merge", func(t *testing.T) {
 		var merged map[string]any
 		require.NoError(t, json.Unmarshal(r.Bytes(), &merged))

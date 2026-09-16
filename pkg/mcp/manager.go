@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -293,7 +294,7 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 
 	var restore map[string]struct{}
 	if len(m.opts.Restore) > 0 { // a resumed session's enabled set is authoritative
-		restore = toSet(m.opts.Restore)
+		restore = bulk.SliceToSet(m.opts.Restore)
 	}
 	disabledByCfg := disabledByConfig(cfg) // config-disabled stays inactive by default
 
@@ -344,6 +345,7 @@ func readOnlyOf(defs []ToolDef, server string) []string {
 func (s *server) defsSnapshot() []ToolDef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return slices.Clone(s.defs)
 }
 
@@ -351,6 +353,7 @@ func (s *server) defsSnapshot() []ToolDef {
 func (s *server) resourcesSnapshot() []Resource {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return slices.Clone(s.resources)
 }
 
@@ -358,6 +361,7 @@ func (s *server) resourcesSnapshot() []Resource {
 func (s *server) promptsSnapshot() []PromptDef {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return slices.Clone(s.prompts)
 }
 
@@ -370,8 +374,8 @@ func has(set map[string]struct{}, k string) bool {
 // so re-registration restores exactly what was exposed rather than resetting it.
 func (m *Manager) captureLive(source string) *toolState {
 	return &toolState{
-		enabled:  toSet(m.opts.Registrar.EnabledNames(source)),
-		disabled: toSet(m.opts.Registrar.DisabledNames(source)),
+		enabled:  bulk.SliceToSet(m.opts.Registrar.EnabledNames(source)),
+		disabled: bulk.SliceToSet(m.opts.Registrar.DisabledNames(source)),
 	}
 }
 
@@ -501,6 +505,7 @@ func disabledByConfig(cfg ServerConfig) bool { return cfg.Enabled != nil && !*cf
 func (m *Manager) ServerNames() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	out := make([]string, 0, len(m.servers))
 	for n := range m.servers {
 		out = append(out, n)
@@ -676,10 +681,10 @@ func (m *Manager) Close() {
 // bounded context so bursts cannot race the registry nor a dead server hang forever.
 func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNotification) {
 	switch n.Method {
-	case string(mcp.MethodNotificationToolsListChanged):
+	case mcp.MethodNotificationToolsListChanged:
 		s.diag("tools changed; re-discovering")
 		m.rediscan(s)
-	case string(mcp.MethodNotificationResourcesListChanged), string(mcp.MethodNotificationPromptsListChanged):
+	case mcp.MethodNotificationResourcesListChanged, mcp.MethodNotificationPromptsListChanged:
 		m.refreshCapabilities(ctx, s) // re-discover resources and prompts
 	case string(mcp.MethodNotificationProgress):
 		s.writeProgress(n.Params.AdditionalFields)
@@ -773,6 +778,7 @@ func (m *Manager) refreshCapabilities(ctx context.Context, s *server) {
 func (s *server) client() *Client {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.c
 }
 
@@ -832,11 +838,10 @@ func (m *Manager) watchServer(s *server) {
 // maxReconnectWait caps the exponential backoff between reconnection attempts.
 const maxReconnectWait = 30 * time.Second
 
-// reconnect marks a stdio server's death and retries with capped exponential
-// backoff until it is back, the manager closes, or a manual disconnect/connect
-// resolves it. Tools are deregistered while down so the model never calls into a
-// dead process; on success connect() re-registers them restoring the pre-death
-// enabled set.
+// reconnect marks a stdio server's death and retries with capped exponential backoff until it is
+// back, the manager closes, or a manual disconnect/connect resolves it. Tools are deregistered
+// while down so the model never calls into a dead process; on success connect() re-registers them
+// restoring the pre-death enabled set.
 func (m *Manager) reconnect(s *server) {
 	keep := m.captureLive(s.source) // registrar call stays off s.mu
 	s.mu.Lock()
@@ -878,6 +883,7 @@ func (m *Manager) reconnect(s *server) {
 func (m *Manager) settled(s *server) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return !s.down || s.c != nil
 }
 
@@ -928,7 +934,7 @@ func (m *Manager) updateStatus() {
 			continue
 		}
 		registered := m.opts.Registrar.AllNames(s.source)
-		disabled := toSet(m.opts.Registrar.DisabledNames(s.source))
+		disabled := bulk.SliceToSet(m.opts.Registrar.DisabledNames(s.source))
 		discovered += len(registered)
 		for _, n := range registered {
 			if !has(disabled, n) {

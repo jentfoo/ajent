@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
@@ -17,9 +18,8 @@ type writeScope struct {
 	roots []string // canonicalized roots; a path must land under one
 }
 
-// newWriteScope canonicalises cwd and each extra root, dropping any that fail.
-// Roots resolve like call paths, so a root matches its symlinked form; a zero
-// scope allows nothing.
+// newWriteScope canonicalises cwd and each extra root, dropping any that fail. Roots resolve
+// like call paths, so a root matches its symlinked form; a zero scope allows nothing.
 func newWriteScope(cwd string, extra ...string) writeScope {
 	s := writeScope{cwd: cwd}
 	for _, r := range append([]string{cwd}, extra...) {
@@ -69,9 +69,8 @@ func (s writeScope) contains(full string) bool {
 	return false
 }
 
-// allows reports whether call writes only inside the scope: a core writer on an
-// in-scope path, or a shell line that only reads or makes bounded directory
-// changes there.
+// allows reports whether call writes only inside the scope: a core writer on an in-scope
+// path, or a shell line that only reads or makes bounded directory changes there.
 func (s writeScope) allows(call agent.ToolCall) bool {
 	if len(s.roots) == 0 {
 		return false
@@ -102,9 +101,8 @@ func (s writeScope) rebase(cwd string) (writeScope, bool) {
 	return writeScope{cwd: full, roots: s.roots}, true
 }
 
-// shellExpansion are characters the shell resolves after this check, so they
-// can name a path the gate never saw: $ and ` substitute, and {} split one
-// token into several words.
+// shellExpansion are characters the shell resolves after this check, so they can name a path
+// the gate never saw: $ and ` substitute, and {} split one token into several words.
 const shellExpansion = "$`{}"
 
 // vcsDirs hold repository metadata that executes or rewrites history — a hook, a
@@ -205,9 +203,8 @@ func (s writeScope) inScopeFrom(bases []string, p string) bool {
 	return true
 }
 
-// topComponent returns the shallowest component of p — the highest directory an
-// ancestor-removing flag can reach. Containment is closed downward, so checking it
-// covers every deeper ancestor.
+// topComponent returns the shallowest component of p — the highest directory an ancestor-removing
+// flag can reach. Containment is closed downward, so checking it covers every deeper ancestor.
 func topComponent(p string) string {
 	sep := string(filepath.Separator)
 	abs := strings.HasPrefix(p, sep)

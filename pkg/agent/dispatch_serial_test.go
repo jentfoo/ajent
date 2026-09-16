@@ -5,8 +5,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // serializeSet wraps mapSet with a fixed MustSerialize answer, so dispatch's

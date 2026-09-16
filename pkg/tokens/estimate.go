@@ -1,6 +1,3 @@
-// Package tokens estimates and accounts token usage without a vendored BPE
-// tokenizer. Exact counts come from llm.Counter where the provider has one; this
-// package supplies the heuristic estimate that fills between exact reports.
 package tokens
 
 import (
@@ -70,9 +67,8 @@ func EstimateBytes(n int64, kind Kind) int {
 	return int(math.Round(float64(n) / ratio))
 }
 
-// EstimateText estimates the token count of text under kind. ASCII bytes divide
-// by the ratio; each non-ASCII rune counts one token, plus one more for astral
-// (emoji) pairs above U+FFFF.
+// EstimateText estimates the token count of text under kind. ASCII bytes divide by the ratio;
+// each non-ASCII rune counts one token, plus one more for astral (emoji) pairs above U+FFFF.
 func EstimateText(text string, kind Kind) int {
 	var ascii int64
 	var tokens int
@@ -211,7 +207,7 @@ func EstimateMessage(m llm.Message) int {
 
 // EstimateMessages estimates one or more messages including per-message framing.
 func EstimateMessages(msgs []llm.Message) int {
-	n := 0
+	var n int
 	for _, m := range msgs {
 		n += EstimateMessage(m)
 	}
@@ -252,7 +248,7 @@ func EstimateToolPair(call llm.ToolCallBlock, body int64, kind Kind) int {
 // blocks and tool schemas. Messages are excluded because callers account them as
 // they append, so this is what a fresh ledger still owes once its messages land.
 func EstimateFixed(req llm.Request) int {
-	n := 0
+	var n int
 	for _, blk := range req.System {
 		if tb, ok := blk.(llm.TextBlock); ok {
 			n += EstimateText(tb.Text, KindProse)

@@ -6,12 +6,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // recordingSinkForShell captures tool start/output and notices for shell tests.
@@ -94,8 +95,7 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 
 	// budget clears the bash tool's 5s WaitDelay ceiling so a slow CI runner
 	// (throttled login-shell startup) doesn't flake; a genuine hang still fails.
-	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond,
-		"quick commands finish")
+	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 2)
 
@@ -227,8 +227,7 @@ func TestStagerFlushKeepsInFlightCancellable(t *testing.T) {
 		default:
 		}
 		return false
-	}, 3*time.Second, time.Millisecond,
-		"Flush returns promptly after Cancel reaches the run")
+	}, 3*time.Second, time.Millisecond)
 
 	require.Len(t, got.msgs, 1)
 	assert.Contains(t, resultText(got.msgs[0].Message.Content), "interrupted by user")
@@ -260,8 +259,7 @@ func TestStagerPrefersFullToolStart(t *testing.T) {
 		full.mu.Lock()
 		defer full.mu.Unlock()
 		return !s.Pending() && full.fullStarts == 1
-	}, time.Second, time.Millisecond,
-		"staged shell must route through ToolStartFull when the sink offers it")
+	}, time.Second, time.Millisecond)
 }
 
 func TestShellUserMessage(t *testing.T) {
@@ -303,6 +301,7 @@ func TestStagerStagedEstimate(t *testing.T) {
 		mu.Unlock()
 		assert.Positive(t, last)
 	})
+
 	t.Run("excluded_run_not_counted", func(t *testing.T) {
 		s, _ := newShellStager(t)
 		var last int
@@ -316,6 +315,7 @@ func TestStagerStagedEstimate(t *testing.T) {
 		defer mu.Unlock()
 		assert.Zero(t, last)
 	})
+
 	t.Run("flush_clears", func(t *testing.T) {
 		s, _ := newShellStager(t)
 		var last int

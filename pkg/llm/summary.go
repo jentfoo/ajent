@@ -42,13 +42,13 @@ func RunSummary(ctx context.Context, p Provider, req Request) (string, Usage, er
 		return "", Usage{}, ErrTruncated
 	}
 
-	var parts []string
+	var sb strings.Builder
 	for _, b := range acc.Message().Content {
 		if tb, ok := b.(TextBlock); ok {
-			parts = append(parts, tb.Text)
+			sb.WriteString(tb.Text)
 		}
 	}
-	return strings.Join(parts, ""), acc.Usage(), nil
+	return sb.String(), acc.Usage(), nil
 }
 
 // FinalAnswer returns the joined text of the last assistant message's non-blank
@@ -58,13 +58,17 @@ func FinalAnswer(msgs []Message) string {
 		if msgs[i].Role != RoleAssistant {
 			continue
 		}
-		var parts []string
+
+		var sb strings.Builder
 		for _, b := range msgs[i].Content {
 			if tb, ok := b.(TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-				parts = append(parts, tb.Text)
+				if sb.Len() > 0 {
+					sb.WriteRune('\n')
+				}
+				sb.WriteString(tb.Text)
 			}
 		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
+		return strings.TrimSpace(sb.String())
 	}
 	return ""
 }
@@ -76,6 +80,7 @@ func LastAssistantText(msgs []Message) string {
 		if msgs[i].Role != RoleAssistant {
 			continue
 		}
+
 		var b strings.Builder
 		for _, blk := range msgs[i].Content {
 			if tb, ok := blk.(TextBlock); ok {

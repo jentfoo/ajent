@@ -13,6 +13,7 @@ import (
 // mustReadEntries lists dir, failing the test on error.
 func mustReadEntries(t *testing.T, dir string) []os.DirEntry {
 	t.Helper()
+
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	return entries

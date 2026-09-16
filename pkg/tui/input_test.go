@@ -145,6 +145,7 @@ func (m *manualEsc) Reset(d time.Duration) bool {
 func (m *manualEsc) resetCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	return m.resets
 }
 
@@ -161,6 +162,7 @@ func (m *manualEsc) C() <-chan time.Time { return m.ch }
 // fire simulates the escape timeout elapsing.
 func (m *manualEsc) fire(tb testing.TB) {
 	tb.Helper()
+
 	select {
 	case m.ch <- time.Now():
 	default:
@@ -191,6 +193,7 @@ func TestEscapeTimeout(t *testing.T) {
 		esc.fire(t)
 		assert.Equal(t, key{typ: keyEscape}, <-r.keys)
 	})
+
 	t.Run("sequence_within_window_decodes", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r, esc := newManualReader(pr)
@@ -204,6 +207,7 @@ func TestEscapeTimeout(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, key{typ: keyUp}, <-r.keys)
 	})
+
 	t.Run("paste_containing_escape", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r, _ := newManualReader(pr)
@@ -213,6 +217,7 @@ func TestEscapeTimeout(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, key{typ: keyPaste, text: "a\x1bb"}, <-r.keys)
 	})
+
 	t.Run("timer_never_fires_without_data", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r, esc := newManualReader(pr)
@@ -248,6 +253,7 @@ func TestInputReaderRun(t *testing.T) {
 		_, ok := <-r.keys // stream end emits no editing keystroke, just a channel close
 		assert.False(t, ok)
 	})
+
 	t.Run("splits_across_reads", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r := newInputReader(pr)
@@ -260,6 +266,7 @@ func TestInputReaderRun(t *testing.T) {
 		}()
 		assert.Equal(t, key{typ: keyWordRight}, <-r.keys)
 	})
+
 	t.Run("reports_go_to_separate_channel", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r := newInputReader(pr)
@@ -277,6 +284,7 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
 		require.NoError(t, pw.Close())
 	})
+
 	t.Run("newest_cursor_report_wins", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r := newInputReader(pr)
@@ -303,6 +311,7 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, 6, last)
 		require.NoError(t, pw.Close())
 	})
+
 	t.Run("color_report_separate_channel", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r := newInputReader(pr)
@@ -321,6 +330,7 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
 		require.NoError(t, pw.Close())
 	})
+
 	t.Run("device_attrs_separate_channel", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r := newInputReader(pr)
@@ -337,6 +347,7 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, key{typ: keyRune, text: " "}, <-r.keys)
 		require.NoError(t, pw.Close())
 	})
+
 	t.Run("ignored_keys_dropped", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		r := newInputReader(pr)
@@ -421,6 +432,7 @@ func TestDecodeKeyResync(t *testing.T) {
 		}
 		assert.True(t, enter)
 	})
+
 	t.Run("short_csi_still_waits", func(t *testing.T) {
 		// the cap must not turn a split read into a drop.
 		_, _, ok := decodeKey([]byte("\x1b[1;5"))
@@ -440,6 +452,7 @@ func TestDecodeKeyPasteFrom(t *testing.T) {
 		assert.Equal(t, k0, k1)
 		assert.Equal(t, n0, n1)
 	})
+
 	t.Run("terminator_straddles_boundary", func(t *testing.T) {
 		// run keeps the last len(pasteEnd)-1 body bytes re-scannable; a terminator
 		// split across reads must still be found from that resume offset.
@@ -450,6 +463,7 @@ func TestDecodeKeyPasteFrom(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, key{typ: keyPaste, text: "abc"}, k)
 	})
+
 	t.Run("out_of_range_hint_does_not_panic", func(t *testing.T) {
 		b := []byte(pasteStart + "hi" + pasteEnd)
 		_, _, ok := decodeKeyFrom(b, 1000) // hint beyond the body: clamped, no panic
@@ -560,6 +574,7 @@ func TestDecodeOSC(t *testing.T) {
 			assert.Equal(t, tc.n, n)
 		})
 	}
+
 	t.Run("over_long_resyncs", func(t *testing.T) {
 		b := []byte("\x1b]11;" + strings.Repeat("x", maxControlLen) + "\x07")
 		k, n, ok := decodeKeyFrom(b, 0)

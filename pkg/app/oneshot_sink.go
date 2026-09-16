@@ -104,6 +104,7 @@ func (s *textSink) Text(delta string) {
 func (s *textSink) EndText() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.pending.Reset()
 	s.inBlock = false
 	s.endLineLocked()
@@ -125,6 +126,7 @@ func (s *textSink) ToolProgress(p agent.ToolProgress) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.paths[p.CallID] = p.Path
 }
 
@@ -157,18 +159,21 @@ func (s *textSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolR
 func (s *textSink) Notice(msg string, level agent.Level) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	_, _ = fmt.Fprintf(s.errw, "ajent: %s: %s\n", levelName(level), msg)
 }
 
 func (s *textSink) TurnEnd(r agent.TurnResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.res = r
 }
 
 func (s *textSink) result() agent.TurnResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.res
 }
 
@@ -176,6 +181,7 @@ func (s *textSink) result() agent.TurnResult {
 func (s *textSink) summary(st sessionStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.endLineLocked()
 	writeStats(s.errw, "ajent: ", st)
 }
@@ -185,6 +191,7 @@ func (s *textSink) summary(st sessionStats) {
 func (s *textSink) finish(_ string, _ int, _ string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.pending.Reset()
 	s.endLineLocked()
 }
@@ -252,18 +259,21 @@ func (s *jsonSink) emit(v any) {
 func (s *jsonSink) TurnStart(i agent.TurnInfo) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.emit(jsonEvent{Type: "turn_start", Model: i.Model.Key()})
 }
 
 func (s *jsonSink) Text(delta string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.text.WriteString(delta)
 }
 
 func (s *jsonSink) EndText() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if text := strings.TrimSpace(s.text.String()); text != "" {
 		s.emit(jsonEvent{Type: "text", Text: text})
 	}
@@ -278,6 +288,7 @@ func (s *jsonSink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResul
 	return func(res agent.ToolResult) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+
 		out := res.Display
 		if strings.TrimSpace(out) == "" {
 			out = s.output[call.ID]
@@ -296,18 +307,21 @@ func (s *jsonSink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResul
 func (s *jsonSink) ToolOutput(callID, delta string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.output[callID] += delta
 }
 
 func (s *jsonSink) Notice(msg string, level agent.Level) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.emit(jsonEvent{Type: "notice", Level: levelName(level), Text: msg})
 }
 
 func (s *jsonSink) TurnEnd(r agent.TurnResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.res = r
 	usage := r.Usage
 	s.emit(jsonEvent{Type: "turn_end", Stop: r.Stop.String(), Steps: r.Steps, Usage: &usage})
@@ -316,17 +330,20 @@ func (s *jsonSink) TurnEnd(r agent.TurnResult) {
 func (s *jsonSink) result() agent.TurnResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return s.res
 }
 
 func (s *jsonSink) summary(st sessionStats) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.emit(jsonSummary{Type: "summary", sessionStats: st})
 }
 
 func (s *jsonSink) finish(status string, code int, answer string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.emit(jsonResult{Type: "result", Status: status, Exit: code, Text: answer})
 }

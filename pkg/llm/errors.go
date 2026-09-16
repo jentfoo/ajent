@@ -111,8 +111,7 @@ func (e *APIError) Overflow() *APIError {
 // IsOverflow reports whether err is or wraps a context overflow.
 func IsOverflow(err error) bool { return errors.Is(err, ErrContextOverflow) }
 
-// Recoverable reports whether a failed model call is worth re-requesting, and
-// any server-directed wait.
+// Recoverable reports whether a failed model call is worth re-requesting, and any server-directed wait.
 func Recoverable(err error) (bool, time.Duration) {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false, 0

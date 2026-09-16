@@ -174,12 +174,10 @@ func (s *decisionState) contextRows(t Theme, width, budget int) ([]string, int) 
 // elideContext splits the subject into up to decisionContextLines source lines whose
 // total length stays under decisionContextChars. The first line is always kept, so a
 // single long command is never dropped whole. It returns the kept lines and how many
-// input lines were dropped. The result is tool output: never passed through
-// renderMarkdown.
+// input lines were dropped. The result is tool output: never passed through renderMarkdown.
 func (s *decisionState) elideContext() ([]string, int) {
 	var out []string
-	total := 0
-	cut := 0
+	var total, cut int
 	for _, ln := range strings.Split(s.context, "\n") {
 		if len(out) > 0 && (len(out) >= decisionContextRows || total+len(ln) > decisionContextChars) {
 			cut++ // count dropped lines so the marker can name them

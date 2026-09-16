@@ -29,16 +29,19 @@ func TestResolveDir(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "/custom/ajent", dir)
 	})
+
 	t.Run("falls_back_to_home", func(t *testing.T) {
 		dir, err := resolveDir(noEnv, homeOK("/home/u"))
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join("/home/u", DirName), dir)
 	})
+
 	t.Run("home_error_propagates", func(t *testing.T) {
 		want := errors.New("boom")
 		_, err := resolveDir(noEnv, func() (string, error) { return "", want })
 		assert.ErrorIs(t, err, want)
 	})
+
 	t.Run("empty_home_errors", func(t *testing.T) {
 		_, err := resolveDir(noEnv, homeOK(""))
 		assert.ErrorIs(t, err, ErrNoHome)
@@ -46,7 +49,7 @@ func TestResolveDir(t *testing.T) {
 }
 
 func TestHomeDoesNotCreateDir(t *testing.T) {
-	// t.Setenv below forbids t.Parallel: env vars are process-global.
+	// t.Setenv below forbids t.Parallel: env vars are process-global
 	root := filepath.Join(t.TempDir(), "nested", "ajent")
 	t.Setenv(EnvHome, root)
 
@@ -67,6 +70,7 @@ func TestDir(t *testing.T) {
 		assert.Equal(t, root, got)
 		assert.DirExists(t, root)
 	})
+
 	t.Run("existing_file_blocks_creation", func(t *testing.T) {
 		blocked := filepath.Join(t.TempDir(), "ajent")
 		require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))

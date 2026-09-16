@@ -14,7 +14,7 @@ func TestCalibrator(t *testing.T) {
 		c := NewCalibrator()
 		const key = "p/m"
 
-		// feed a steady 2x undercount; the factor settles at exactly that ratio.
+		// feed a steady 2x undercount; the factor settles at exactly that ratio
 		for i := 0; i < 20; i++ {
 			c.Feed(key, 1000, 2000)
 		}
@@ -37,7 +37,7 @@ func TestCalibrator(t *testing.T) {
 		identity := c.Factor(key) // unsampled: the identity factor (one)
 		assert.InDelta(t, 1.0, identity, 1e-9)
 
-		// a single sample with ratio three moves the factor to it immediately.
+		// a single sample with ratio three moves the factor to it immediately
 		c.Feed(key, 100, 300)
 		assert.InDelta(t, 3.0, c.Factor(key), 1e-9) // first sample seeds directly
 	})
@@ -50,7 +50,7 @@ func TestCalibrator(t *testing.T) {
 		mid := c.Factor(key)
 		assert.Greater(t, mid, before) // it did move off identity
 
-		// zero predicted: nothing to ratio against, factor unchanged.
+		// zero predicted: nothing to ratio against, factor unchanged
 		afterSample := c.Factor(key)
 		c.Feed(key, 0, 900000)
 		assert.InDelta(t, afterSample, c.Factor(key), 1e-9)

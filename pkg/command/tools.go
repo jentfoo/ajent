@@ -12,25 +12,25 @@ import (
 // toolsCommand widens the enabled set. Before the first prompt the picker lists
 // every registered tool and the selection is free; after it only disabled tools
 // are offered, since the tool block the model has already seen is not retractable.
-func toolsCommand(_ context.Context, _ string, c Console) error {
+func toolsCommand(ctx context.Context, _ string, c Console) error {
 	reg := c.Tools()
 	if reg == nil {
 		c.Notify("no tools registered", levelWarn)
 		return nil
 	}
 	if !c.Started() {
-		return toolsFreeSelect(c, reg)
+		return toolsFreeSelect(ctx, c, reg)
 	}
-	return toolsWidenOnly(c, reg)
+	return toolsWidenOnly(ctx, c, reg)
 }
 
 // toolsFreeSelect lists every tool with the current set preselected; the
 // selection is free to enable or disable anything ahead of the first prompt.
-func toolsFreeSelect(c Console, reg *tools.Registry) error {
+func toolsFreeSelect(ctx context.Context, c Console, reg *tools.Registry) error {
 	all := reg.All()
 	rows := reg.Units(all)
 	items, initial := toolRows(reg, rows, c)
-	picked, err := c.MultiPick(context.Background(), "Tools", items,
+	picked, err := c.MultiPick(ctx, "Tools", items,
 		tui.MultiPickOptions{Placeholder: "filter", Initial: initial})
 	if err != nil {
 		return nil // cancelled
@@ -47,7 +47,7 @@ func toolsFreeSelect(c Console, reg *tools.Registry) error {
 
 // toolsWidenOnly lists only disabled tools; selecting enables them. Nothing can
 // be turned off again for the rest of the session.
-func toolsWidenOnly(c Console, reg *tools.Registry) error {
+func toolsWidenOnly(ctx context.Context, c Console, reg *tools.Registry) error {
 	disabled := reg.Disabled()
 	if len(disabled) == 0 {
 		c.Notify("all tools already enabled", levelInfo)
@@ -55,7 +55,7 @@ func toolsWidenOnly(c Console, reg *tools.Registry) error {
 	}
 	rows := reg.Units(disabled)
 	items, _ := toolRows(reg, rows, c)
-	picked, err := c.MultiPick(context.Background(), "Enable tools", items,
+	picked, err := c.MultiPick(ctx, "Enable tools", items,
 		tui.MultiPickOptions{Placeholder: "filter"})
 	if err != nil {
 		return nil // cancelled

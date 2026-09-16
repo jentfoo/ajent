@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -140,8 +141,7 @@ func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]ll
 	return out, existing
 }
 
-// startAll runs stage 2's spawns, returning their pairs, the ids to poll and a
-// reason per spawn that was refused.
+// startAll runs stage 2's spawns, returning their pairs, the ids to poll and a reason per spawn that was refused.
 func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []string, run int64) (msgs []llm.Message, ids, failed []string) {
 	for i, task := range tasks {
 		if ctx.Err() != nil {

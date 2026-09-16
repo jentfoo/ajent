@@ -44,6 +44,7 @@ func TestResponsesProviderStream(t *testing.T) {
 			"text_end", "usage", "done",
 		}, eventKinds(events))
 	})
+
 	t.Run("usage_splits_cached_input", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/text.sse")
 		p := newResponsesTestProvider(t, srv.URL)
@@ -56,6 +57,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, Usage{Input: 40, Output: 7, CacheRead: 10}, usage)
 	})
+
 	t.Run("reasoning_carries_its_replay_tokens", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/encrypted_reasoning.sse")
 		p := newResponsesTestProvider(t, srv.URL)
@@ -78,6 +80,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.Equal(t, TextBlock{Text: "the answer", Signature: encodeTextSignature("msg_02", "")}, msg.Content[1])
 		assert.Equal(t, 25, usage.Reasoning)
 	})
+
 	t.Run("reasoning_round_trips_into_the_next_request", func(t *testing.T) {
 		// without the item id and encrypted payload a stateless replay is
 		// rejected, which is what breaks multi turn reasoning
@@ -101,6 +104,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.Contains(t, string(body), `"id":"rs_abc"`)
 		assert.Contains(t, string(body), `"encrypted_content":"ENCRYPTED-PAYLOAD"`)
 	})
+
 	t.Run("tool_call_arguments_split", func(t *testing.T) {
 		srv, _ := sseServerChunked(t, "openai/tool_call.sse", 19)
 		p := newResponsesTestProvider(t, srv.URL)
@@ -119,6 +123,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.Equal(t, "read", call.Name)
 		assert.JSONEq(t, `{"path":"main.go"}`, string(call.Input))
 	})
+
 	t.Run("tool_call_sets_the_stop_reason", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/tool_call.sse")
 		p := newResponsesTestProvider(t, srv.URL)
@@ -129,6 +134,7 @@ func TestResponsesProviderStream(t *testing.T) {
 
 		assert.Equal(t, StopToolUse, events[len(events)-1].StopReason)
 	})
+
 	t.Run("failure_surfaces_the_partial", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/failed.sse")
 		p := newResponsesTestProvider(t, srv.URL)
@@ -146,6 +152,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.Equal(t, StopError, events[len(events)-1].StopReason)
 		assert.ErrorContains(t, s.Err(), "upstream exploded")
 	})
+
 	t.Run("close_mid_stream_is_not_an_error", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/text.sse")
 		p := newResponsesTestProvider(t, srv.URL)
@@ -161,6 +168,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.False(t, ok)
 		assert.NoError(t, s.Err())
 	})
+
 	t.Run("reasoning_text_and_summary_separator", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/reasoning_text.sse")
 		p := newResponsesTestProvider(t, srv.URL)
@@ -178,6 +186,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		// inserts a separator between them
 		assert.Equal(t, "step one \n\nstep two", think.Text)
 	})
+
 	t.Run("encrypted_payload_backfilled_from_completed", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/encrypted_backfill.sse")
 		p := newResponsesTestProvider(t, srv.URL)
@@ -197,6 +206,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.Equal(t, "ENC-LATE", think.Encrypted)
 		assert.Contains(t, string(think.Item), `"encrypted_content":"ENC-LATE"`)
 	})
+
 	t.Run("falls_back_to_chat_completions", func(t *testing.T) {
 		// the dialect is chosen per model from the resolved capabilities
 		srv, req := sseServer(t, "compat/text.sse")
@@ -240,15 +250,18 @@ func TestResponsesStreamTruncated(t *testing.T) {
 		require.ErrorIs(t, err, ErrStreamTruncated)
 		assert.Equal(t, StopError, stop)
 	})
+
 	t.Run("eof_tool_call_is_still_truncation", func(t *testing.T) {
 		_, stop, err := collectStop(t, "openai/truncated_tool.sse")
 		require.ErrorIs(t, err, ErrStreamTruncated) // sawTool must not mask the drop
 		assert.Equal(t, StopError, stop)
 	})
+
 	t.Run("incomplete_max_output_is_truncation", func(t *testing.T) {
 		stop := collectIncompleteStop(t, "openai/incomplete_max_tokens.sse")
 		assert.Equal(t, StopMaxTokens, stop)
 	})
+
 	t.Run("incomplete_content_filter_is_not_truncation", func(t *testing.T) {
 		// a non-token incompletion must not be retried as output truncation
 		stop := collectIncompleteStop(t, "openai/incomplete_content_filter.sse")
@@ -259,6 +272,7 @@ func TestResponsesStreamTruncated(t *testing.T) {
 // collectIncompleteStop drives an incomplete fixture to EventDone and returns its stop reason.
 func collectIncompleteStop(t *testing.T, fixture string) StopReason {
 	t.Helper()
+
 	srv, _ := sseServer(t, fixture)
 	p := newResponsesTestProvider(t, srv.URL)
 
@@ -287,6 +301,7 @@ func TestBuildResponsesBody(t *testing.T) {
 	}
 	decode := func(t *testing.T, body []byte) map[string]any {
 		t.Helper()
+
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
 		return m
@@ -308,6 +323,7 @@ func TestBuildResponsesBody(t *testing.T) {
 			]
 		}`, string(body))
 	})
+
 	t.Run("prompt_cache_key_from_session", func(t *testing.T) {
 		req := baseReq() // openai flavor defaults SupportsExplicitPromptCache on
 		req.SessionID = "sess-1"
@@ -317,6 +333,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"prompt_cache_key":"sess-1"`)
 	})
+
 	t.Run("prompt_cache_key_clamped", func(t *testing.T) {
 		req := baseReq()
 		req.SessionID = strings.Repeat("k", 100)
@@ -327,6 +344,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		// trimmed to the api cap, not truncated at an arbitrary byte
 		assert.Contains(t, string(body), `"prompt_cache_key":"`+strings.Repeat("k", openaiPromptCacheKeyLimit)+`"`)
 	})
+
 	t.Run("no_prompt_cache_key_without_policy", func(t *testing.T) {
 		req := baseReq()
 		req.SessionID = "sess-1" // capable but CachePolicy not requested
@@ -335,6 +353,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), "prompt_cache_key")
 	})
+
 	t.Run("no_prompt_cache_key_without_session", func(t *testing.T) {
 		req := baseReq()
 		req.Cache = CachePolicy{Enabled: true} // requested but no key to send
@@ -343,6 +362,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), "prompt_cache_key")
 	})
+
 	t.Run("assistant_text_uses_the_output_type", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{Text(RoleUser, "q"), Text(RoleAssistant, "a")}
@@ -351,6 +371,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"type":"output_text"`)
 	})
+
 	t.Run("tools_are_flat_not_nested", func(t *testing.T) {
 		req := baseReq()
 		req.Tools = []ToolSchema{{Name: "read", Description: "read a file",
@@ -366,6 +387,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.Equal(t, "read", tool["name"]) // not under a "function" key
 		assert.NotContains(t, tool, "function")
 	})
+
 	t.Run("reasoning_effort_and_encrypted_include", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelHigh}
@@ -380,11 +402,13 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.Equal(t, []any{respEncryptedInclude}, m["include"])
 		assert.Equal(t, false, m["store"])
 	})
+
 	t.Run("no_include_without_reasoning", func(t *testing.T) {
 		body, err := buildResponsesBody(baseReq())
 		require.NoError(t, err)
 		assert.NotContains(t, decode(t, body), "include")
 	})
+
 	t.Run("stored_responses_keep_the_include", func(t *testing.T) {
 		// include rides on the reasoning param rather than the store flag; a
 		// stored model still requests the encrypted payload so replay works
@@ -399,6 +423,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.Equal(t, []any{respEncryptedInclude}, m["include"])
 		assert.NotContains(t, m, "store")
 	})
+
 	t.Run("level_off_names_the_none_effort", func(t *testing.T) {
 		// reasoning:{effort:"none"} is sent for off so the model stops
 		// thinking; only {off:null} suppresses the key entirely
@@ -411,6 +436,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		reasoning := decode(t, body)["reasoning"].(map[string]any)
 		assert.Equal(t, "none", reasoning["effort"])
 	})
+
 	t.Run("off_null_suppresses_reasoning", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.LevelMap = map[Level]*string{LevelOff: nil}
@@ -419,6 +445,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, decode(t, body), "reasoning")
 	})
+
 	t.Run("unsupported_level_clamps_internally", func(t *testing.T) {
 		// xhigh is opt-in; a bare build clamps to high so the encoder never sends
 		// an unmapped level even when no agent pre-clamped it
@@ -431,6 +458,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		reasoning := decode(t, body)["reasoning"].(map[string]any)
 		assert.Equal(t, "high", reasoning["effort"])
 	})
+
 	t.Run("tool_calls_and_results_become_items", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{
@@ -456,6 +484,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.Equal(t, "function_call_output", result["type"])
 		assert.Equal(t, "body", result["output"])
 	})
+
 	t.Run("max_output_tokens_clamped_to_the_floor", func(t *testing.T) {
 		req := baseReq()
 		req.MaxTokens = 5 // below openai's floor of 16
@@ -466,6 +495,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		m := decode(t, body)
 		assert.Equal(t, respMinOutputTokens, int(m["max_output_tokens"].(float64)))
 	})
+
 	t.Run("tool_result_images_become_parts", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{
@@ -492,6 +522,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.Equal(t, "input_image", img["type"])
 		assert.Contains(t, img["image_url"], "data:image/png;base64,AQ==")
 	})
+
 	t.Run("tool_result_images_stay_text_when_unsupported", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Images = false
@@ -513,6 +544,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		// the image is dropped to a text placeholder rather than emitted as a parts array
 		assert.Equal(t, "(tool image omitted: model does not support images)", result["output"])
 	})
+
 	t.Run("mid_conversation_system_becomes_developer", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{
@@ -528,6 +560,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.Equal(t, "message", sys["type"])
 		assert.Equal(t, "developer", sys["role"])
 	})
+
 	t.Run("mid_conversation_system_stays_system_without_dev_role", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.DeveloperRole = false
@@ -542,6 +575,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		sys := input[0].(map[string]any)
 		assert.Equal(t, "system", sys["role"])
 	})
+
 	t.Run("thinking_without_an_item_id_is_dropped", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning.Retain = RetainAll
@@ -556,6 +590,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), "unreferencable")
 	})
+
 	t.Run("image_becomes_an_input_image", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{{Role: RoleUser, Content: BlockList{
@@ -566,6 +601,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.Contains(t, string(body), `"type":"input_image"`)
 		assert.Contains(t, string(body), "data:image/png;base64,AQID")
 	})
+
 	t.Run("image_downgraded_when_unsupported", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Images = false
@@ -577,6 +613,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), imageOmitted)
 	})
+
 	t.Run("tool_choice_modes", func(t *testing.T) {
 		tests := []struct {
 			name     string
@@ -607,9 +644,6 @@ func TestBuildResponsesBody(t *testing.T) {
 	})
 }
 
-// TestResponsesReplayRoundTrip streams a multi-turn fixture and replays it,
-// asserting stateless replay: the reasoning item round-trips verbatim, the
-// message keeps its id and phase, and the tool call keeps its fc_ pairing.
 func TestResponsesReplayRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -662,12 +696,14 @@ func TestResponsesItemsReplay(t *testing.T) {
 
 	decode := func(t *testing.T, body []byte) []any {
 		t.Helper()
+
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
 		return m["input"].([]any)
 	}
 	build := func(t *testing.T, msgs ...Message) []any {
 		t.Helper()
+
 		m := responsesModel(nil)
 		body, err := buildResponsesBody(Request{
 			Model:     m,
@@ -687,6 +723,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		assert.Equal(t, "msg_pi_0", input[0].(map[string]any)["id"])
 		assert.Equal(t, "msg_pi_1", input[1].(map[string]any)["id"])
 	})
+
 	t.Run("later_text_blocks_index_the_fallback", func(t *testing.T) {
 		// a tool call interrupts the text run, so the second message needs its own
 		// fallback id rather than reusing the first
@@ -700,6 +737,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		assert.Equal(t, "msg_pi_0", input[0].(map[string]any)["id"])
 		assert.Equal(t, "msg_pi_0_1", input[2].(map[string]any)["id"])
 	})
+
 	t.Run("adjacent_text_blocks_merge", func(t *testing.T) {
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
 			ThinkingBlock{ItemID: "rs_1"},
@@ -711,6 +749,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		assert.Equal(t, "msg_pi_0", message["id"])
 		assert.Len(t, message["content"].([]any), 2)
 	})
+
 	t.Run("distinct_signed_texts_stay_separate", func(t *testing.T) {
 		// commentary and final answer are separate output items; each keeps its own
 		// id and phase across the replay rather than collapsing into one message
@@ -730,6 +769,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		assert.Equal(t, "msg_f", second["id"])
 		assert.Equal(t, "final_answer", second["phase"])
 	})
+
 	t.Run("overlong_id_hashes_to_a_msg_id", func(t *testing.T) {
 		longID := strings.Repeat("x", 100)
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
@@ -740,6 +780,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		assert.True(t, strings.HasPrefix(id, "msg_"))
 		assert.NotEqual(t, longID, id)
 	})
+
 	t.Run("legacy_bare_signature_is_the_id", func(t *testing.T) {
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
 			TextBlock{Text: "a", Signature: "msg_legacy"},
@@ -747,6 +788,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		require.Len(t, input, 1)
 		assert.Equal(t, "msg_legacy", input[0].(map[string]any)["id"])
 	})
+
 	t.Run("non_fc_item_id_is_dropped", func(t *testing.T) {
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
 			ToolCallBlock{ID: "call_1|rs_9", Name: "read", Input: json.RawMessage(`{}`)},
@@ -757,6 +799,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		assert.Equal(t, "call_1", call["call_id"])
 		assert.NotContains(t, call, "id")
 	})
+
 	t.Run("thinking_without_a_replay_token_is_dropped", func(t *testing.T) {
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
 			ThinkingBlock{Text: "unreferencable"},
@@ -765,6 +808,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		require.Len(t, input, 1)
 		assert.Equal(t, "message", input[0].(map[string]any)["type"])
 	})
+
 	t.Run("item_only_reasoning_replays_verbatim", func(t *testing.T) {
 		raw := json.RawMessage(`{"type":"reasoning","id":"rs_full","summary":[{"type":"summary_text","text":"s"}]}`)
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
@@ -775,6 +819,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 		require.NoError(t, err)
 		assert.JSONEq(t, string(raw), string(got))
 	})
+
 	t.Run("tool_result_uses_the_bare_call_id", func(t *testing.T) {
 		input := build(t,
 			Message{Role: RoleAssistant, Content: BlockList{
@@ -799,27 +844,33 @@ func TestTextSignature(t *testing.T) {
 		assert.Equal(t, "msg_02", id)
 		assert.Equal(t, "final_answer", phase)
 	})
+
 	t.Run("phase_omitted_when_empty", func(t *testing.T) {
 		assert.JSONEq(t, `{"v":1,"id":"msg_02"}`, encodeTextSignature("msg_02", ""))
 	})
+
 	t.Run("commentary_is_accepted", func(t *testing.T) {
 		_, phase := parseTextSignature(`{"v":1,"id":"m","phase":"commentary"}`)
 		assert.Equal(t, "commentary", phase)
 	})
+
 	t.Run("unknown_phase_is_dropped", func(t *testing.T) {
 		id, phase := parseTextSignature(`{"v":1,"id":"m","phase":"draft"}`)
 		assert.Equal(t, "m", id)
 		assert.Empty(t, phase)
 	})
+
 	t.Run("bare_id_passes_through", func(t *testing.T) {
 		id, phase := parseTextSignature("msg_legacy")
 		assert.Equal(t, "msg_legacy", id)
 		assert.Empty(t, phase)
 	})
+
 	t.Run("bare_id_trims_surrounding_space", func(t *testing.T) {
 		id, _ := parseTextSignature("  msg_padded\t")
 		assert.Equal(t, "msg_padded", id)
 	})
+
 	t.Run("empty_is_empty", func(t *testing.T) {
 		id, phase := parseTextSignature("")
 		assert.Empty(t, id)

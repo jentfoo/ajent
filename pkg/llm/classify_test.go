@@ -41,6 +41,7 @@ func TestCompatClassifier(t *testing.T) {
 		err := compatClassifier("p", FlavorOpenAI)(400, []byte(`{"error":{"message":"bad thing"}}`))
 		assert.Contains(t, err.Error(), "bad thing")
 	})
+
 	t.Run("plain_body_is_kept", func(t *testing.T) {
 		err := compatClassifier("p", FlavorOpenAI)(500, []byte(`internal failure`))
 		assert.Contains(t, err.Error(), "internal failure")

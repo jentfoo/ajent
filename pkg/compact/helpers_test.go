@@ -5,12 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
-	"github.com/stretchr/testify/require"
 )
-
-// builders shared by every test file in the package.
 
 func msg(id string, m llm.Message) session.Entry {
 	b, _ := json.Marshal(session.MessageData{Message: m})

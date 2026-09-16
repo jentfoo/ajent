@@ -10,13 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // textStream is one scripted provider turn emitting parts as a text message.
@@ -114,16 +115,16 @@ func TestCompactorManualSingleTurn(t *testing.T) {
 
 	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
-	require.True(t, did, "a session with foldable steps must compact")
+	require.True(t, did)
 
 	comps := compactionEntries(t, w)
 	require.Len(t, comps, 1)
 	var cd session.CompactionData
 	require.NoError(t, comps[0].Decode(&cd))
-	assert.NotEmpty(t, cd.FirstKeptEntryID, "the newest steps stay verbatim")
+	assert.NotEmpty(t, cd.FirstKeptEntryID)
 	assert.Contains(t, cd.Summary, "lighthouse")
 	assert.Less(t, cd.After, cd.Before)
-	assert.Empty(t, cd.Reduce.Stubs, "the cut already removed everything a stub could touch")
+	assert.Empty(t, cd.Reduce.Stubs)
 
 	require.Len(t, st.Messages, 3) // the summary plus the two kept steps
 	assert.Contains(t, textOfMain(st.Messages[0]), "lighthouse")
@@ -167,7 +168,7 @@ func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, did)
 
-	require.NotEmpty(t, st.Messages, "a cut that cannot be located must not wipe context")
+	require.NotEmpty(t, st.Messages)
 	assert.Contains(t, textOfMain(st.Messages[0]), "story")
 }
 
@@ -229,7 +230,7 @@ func TestCompactorAnnouncesStart(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, did)
 		require.NotEmpty(t, notices)
-		assert.Contains(t, notices[0], "compacting ", "it announces before the model call")
+		assert.Contains(t, notices[0], "compacting ")
 	})
 
 	t.Run("silent_when_it_declines_early", func(t *testing.T) {
@@ -274,7 +275,7 @@ func TestCompactorStallsWhenStillOverPoint(t *testing.T) {
 	did, err := c.run(t.Context(), agent.CompactStep, "")
 	require.NoError(t, err)
 	require.True(t, did)
-	require.True(t, c.overPoint(model), "the cut did not clear the point")
+	require.True(t, c.overPoint(model))
 	require.True(t, c.stalled.Load())
 
 	// the rest of the turn asks and is held, spending nothing
@@ -321,7 +322,7 @@ func TestCompactorStepRunsMidTurn(t *testing.T) {
 
 	did, err := c.run(t.Context(), agent.CompactStep, "")
 	require.NoError(t, err)
-	assert.True(t, did, "a step run is not refused while a turn is running")
+	assert.True(t, did)
 	assert.Len(t, compactionEntries(t, w), 1)
 
 	close(blocked)
@@ -371,7 +372,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 		did, err := c.run(t.Context(), agent.CompactStep, "")
 		require.NoError(t, err)
 		require.False(t, did)
-		require.False(t, c.autoDisabled.Load(), "no fold was attempted, so nothing was learned")
+		require.False(t, c.autoDisabled.Load())
 		assert.NotContains(t, strings.Join(notices, "\n"), "could not reduce")
 
 		// once enough history has accrued the very next step boundary compacts
@@ -411,7 +412,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 			_, err := c.run(t.Context(), agent.CompactStep, "")
 			require.NoError(t, err)
 		}
-		assert.Empty(t, *notices, "the decline notice was the first turn's reminder")
+		assert.Empty(t, *notices)
 
 		_, err := c.run(t.Context(), agent.CompactThreshold, "") // turn boundary re-arms it
 		require.NoError(t, err)
@@ -483,6 +484,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 // warmLatch runs one declining automatic compaction so the latch is set.
 func warmLatch(t *testing.T, c *compactor) error {
 	t.Helper()
+
 	did, err := c.run(t.Context(), agent.CompactStep, "")
 	require.False(t, did)
 	require.True(t, c.autoDisabled.Load())
@@ -491,6 +493,7 @@ func warmLatch(t *testing.T, c *compactor) error {
 
 func mustBranch(t *testing.T, w *session.Writer) []session.Entry {
 	t.Helper()
+
 	entries, _, err := session.Read(w.Path())
 	require.NoError(t, err)
 	return session.Branch(entries, w.Head())
@@ -560,7 +563,7 @@ func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 	require.Len(t, comp, 1)
 	var cd session.CompactionData
 	require.NoError(t, comp[0].Decode(&cd))
-	// recorded Before counts full usage: fixed overhead plus all messages.
+	// recorded Before counts full usage: fixed overhead plus all messages
 	base := c.ag.BaseEstimate(true)
 	assert.Equal(t, base+tokens.EstimateMessages(msgs), cd.Before)
 	assert.Less(t, cd.After, cd.Before)
@@ -845,7 +848,7 @@ func TestEndTurnClearsStalled(t *testing.T) {
 	did, err := c.run(t.Context(), agent.CompactStep, "")
 	require.NoError(t, err)
 	assert.False(t, did)
-	require.Empty(t, compactionEntries(t, w), "the stall latch short-circuits the fold")
+	require.Empty(t, compactionEntries(t, w))
 
 	// the errored turn's boundary still re-arms per-turn state
 	c.endTurn()

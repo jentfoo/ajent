@@ -119,8 +119,7 @@ func (c *httpClient) errorFunc(classify func(int, []byte) error) httputil.ErrorF
 	}
 }
 
-// apiError builds the error for a non 2xx response, letting the adapter's
-// classifier refine it.
+// apiError builds the error for a non 2xx response, letting the adapter's classifier refine it.
 func (c *httpClient) apiError(status int, body []byte, retryAfter time.Duration, classify func(int, []byte) error) *APIError {
 	e := &APIError{Provider: c.provider, Status: status,
 		Message: strings.TrimSpace(string(body)), Body: body}

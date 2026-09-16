@@ -164,6 +164,7 @@ func TestSSEReaderLastEventID(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "2", r.LastEventID())
 	})
+
 	t.Run("nul_in_id_ignored", func(t *testing.T) {
 		r := NewSSEReader(strings.NewReader("id: a\x00b\ndata: x\n\n"), 0)
 		_, err := r.Next(t.Context())
@@ -182,20 +183,24 @@ func TestSSEReaderFrameBound(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, f.Data, 58)
 	})
+
 	t.Run("line_one_over_the_bound_fails", func(t *testing.T) {
 		body := "data: " + strings.Repeat("x", 59) + "\n\n"
 		_, err := NewSSEReader(strings.NewReader(body), 64).Next(t.Context())
 		assert.ErrorIs(t, err, ErrFrameTooLarge)
 	})
+
 	t.Run("unterminated_stream_fails", func(t *testing.T) {
 		_, err := NewSSEReader(strings.NewReader(strings.Repeat("x", 500)), 64).Next(t.Context())
 		assert.ErrorIs(t, err, ErrFrameTooLarge)
 	})
+
 	t.Run("accumulated_lines_hit_the_bound", func(t *testing.T) {
 		body := strings.Repeat("data: "+strings.Repeat("x", 20)+"\n", 10) + "\n"
 		_, err := NewSSEReader(strings.NewReader(body), 64).Next(t.Context())
 		assert.ErrorIs(t, err, ErrFrameTooLarge)
 	})
+
 	t.Run("error_is_latched", func(t *testing.T) {
 		body := "data: " + strings.Repeat("x", 65) + "\n\ndata: fine\n\n"
 		r := NewSSEReader(strings.NewReader(body), 64)
@@ -217,6 +222,7 @@ func TestSSEReaderCancellation(t *testing.T) {
 		_, err := NewSSEReader(strings.NewReader("data: a\n\n"), 0).Next(ctx)
 		assert.ErrorIs(t, err, context.Canceled)
 	})
+
 	t.Run("cancelled_mid_frame", func(t *testing.T) {
 		pr, pw := io.Pipe()
 		t.Cleanup(func() { _ = pr.Close() })
@@ -250,6 +256,7 @@ func TestSSEReaderClose(t *testing.T) {
 		_, err := r.Next(t.Context())
 		assert.ErrorIs(t, err, io.EOF)
 	})
+
 	t.Run("plain_reader_is_fine", func(t *testing.T) {
 		r := NewSSEReader(strings.NewReader("data: a\n\n"), 0)
 		assert.NoError(t, r.Close())

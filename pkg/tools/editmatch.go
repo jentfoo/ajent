@@ -102,8 +102,7 @@ func findMatches(buf, old, replacement string, edited []lineRange) ([]match, mat
 	}
 	if ms := indentMatches(buf, cbuf, cmap, old, replacement); len(ms) > 0 {
 		return preserveQuoted(buf, ms), tierIndent
-	}
-	if ms := fuzzyMatches(buf, cbuf, cmap, old, replacement, edited); len(ms) > 0 {
+	} else if ms := fuzzyMatches(buf, cbuf, cmap, old, replacement, edited); len(ms) > 0 {
 		return preserveQuoted(buf, ms), tierFuzzy
 	}
 	return nil, tierExact
@@ -337,11 +336,11 @@ func fuzzyWindow(old, rep, window []string) (int, bool) {
 // rewrittenLines returns the half-open range of old's lines that rep rewrites:
 // what is left after trimming the leading and trailing lines the two share.
 func rewrittenLines(old, rep []string) (int, int) {
-	lo := 0
+	var lo int
 	for lo < len(old) && lo < len(rep) && old[lo] == rep[lo] {
 		lo++
 	}
-	n := 0
+	var n int
 	for n < len(old)-lo && n < len(rep)-lo && old[len(old)-1-n] == rep[len(rep)-1-n] {
 		n++
 	}
@@ -433,11 +432,11 @@ func driftNote(old, matched string) string {
 // commonAffixes returns the lengths of a and b's common prefix and common
 // suffix, which never overlap.
 func commonAffixes(a, b string) (int, int) {
-	p := 0
+	var p int
 	for p < len(a) && p < len(b) && a[p] == b[p] {
 		p++
 	}
-	s := 0
+	var s int
 	for s < len(a)-p && s < len(b)-p && a[len(a)-1-s] == b[len(b)-1-s] {
 		s++
 	}

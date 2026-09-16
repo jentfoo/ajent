@@ -1,6 +1,3 @@
-// Package session persists an agent turn stream as an append-only JSONL
-// transcript, one entry per line. The transcript is the source of truth: every
-// state rebuild and resume reads it back through a branch rooted at a head id.
 package session
 
 import (

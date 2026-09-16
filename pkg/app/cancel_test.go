@@ -12,12 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/tools"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // devBashCallTurn scripts a turn whose only output is one bash tool call.
@@ -34,7 +35,7 @@ func devBashCallTurn(id, name, args string) []llm.Event {
 // wellFormedMain reports whether every ToolCallBlock in messages has a matching
 // ToolResultBlock, which is what keeps the next Anthropic request valid.
 func wellFormedMain(msgs []llm.Message) bool {
-	calls := 0
+	var calls int
 	for _, m := range msgs {
 		for _, b := range m.Content {
 			switch blk := b.(type) {
@@ -62,9 +63,6 @@ func resultTextOf(tr llm.ToolResultBlock) string {
 	return sb.String()
 }
 
-// TestInterruptCancelsRunningBashEndToEnd is the phase's done-when: an interrupt
-// while a turn's bash runs kills the process group, records partial output as an
-// interrupted error result in call order, and Prompt returns promptly with StopAborted.
 func TestInterruptCancelsRunningBashEndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -91,7 +89,7 @@ func TestInterruptCancelsRunningBashEndToEnd(t *testing.T) {
 	require.Eventually(t, func() bool {
 		data, rerr := os.ReadFile(dir + "/pid.txt")
 		return rerr == nil && len(strings.TrimSpace(string(data))) > 0
-	}, time.Second*2, time.Millisecond*10, "the bash command must be running before the interrupt")
+	}, time.Second*2, time.Millisecond*10)
 
 	ag.Interrupt()
 
@@ -111,11 +109,11 @@ func TestInterruptCancelsRunningBashEndToEnd(t *testing.T) {
 	require.Eventually(t, func() bool {
 		err := syscall.Kill(pid, 0)
 		return err != nil && errors.Is(err, syscall.ESRCH)
-	}, time.Second*2, time.Millisecond*30, "the bash leader must be gone")
+	}, time.Second*2, time.Millisecond*30)
 	require.Eventually(t, func() bool {
 		err := syscall.Kill(-pid, 0)
 		return err != nil && errors.Is(err, syscall.ESRCH)
-	}, time.Second*2, time.Millisecond*30, "no descendant of the group may survive")
+	}, time.Second*2, time.Millisecond*30)
 
 	// every tool call is answered, and the bash result reads as an interruption
 	assert.True(t, wellFormedMain(st.Messages))
@@ -133,7 +131,7 @@ func TestInterruptCancelsRunningBashEndToEnd(t *testing.T) {
 			}
 		}
 	}
-	assert.True(t, found, "the bash call must have an interrupted error result")
+	assert.True(t, found)
 }
 
 func TestClassifierAdapterCancelClosesStream(t *testing.T) {
@@ -156,8 +154,7 @@ func TestClassifierAdapterCancelClosesStream(t *testing.T) {
 	resCh := make(chan clres, 1)
 	go func() { resCh <- clres{adapter.Classify(ctx, permit.Subject{Name: "bash", Args: "stat a"})} }()
 
-	require.Eventually(t, func() bool { return bp.created.Load() >= 1 }, time.Second, time.Millisecond,
-		"the classifier model call must start before cancelling")
+	require.Eventually(t, func() bool { return bp.created.Load() >= 1 }, time.Second, time.Millisecond)
 	cancel()
 
 	var got clres
@@ -175,7 +172,7 @@ func TestClassifierAdapterCancelClosesStream(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, 10*time.Millisecond, "the classifier stream must be closed on cancel")
+	}, time.Second, 10*time.Millisecond)
 }
 
 // cancelFakeDialog is an approval dialog that blocks until resolved or closed.
@@ -217,12 +214,10 @@ func (p *cancelPrompter) Reason(context.Context, string) (string, bool) { return
 func (p *cancelPrompter) count() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	return len(p.dialogs)
 }
 
-// TestUserAllowCancelsClassifierCall is the user's exact scenario end to end: an
-// auto-mode dialog answer cancels the in-flight classifier model call, nothing is
-// cached, and a second ask re-invokes the model.
 func TestUserAllowCancelsClassifierCall(t *testing.T) {
 	t.Parallel()
 
@@ -242,7 +237,7 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 	b.SetMode(permit.ModeAuto)
 	b.SetClassifier(permit.NewCachedClassifier(adapter.Classify))
 
-	// askAllow drives one asker call, answering the dialog it opens with Allow.
+	// askAllow drives one asker call, answering the dialog it opens with Allow
 	askAllow := func() tools.Decision {
 		dialogsBefore := prompter.count()
 		createdBefore := bp.created.Load()
@@ -250,13 +245,11 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 		done := make(chan struct{})
 		go func() { got = askCancel(b, t.Context(), `{"command":"stat f.txt"}`); close(done) }()
 		// wait for this ask's own dialog to open and its classifier stream to start
-		require.Eventually(t, func() bool { return prompter.count() > dialogsBefore }, time.Second, time.Millisecond,
-			"a new approval dialog must open for each ask")
+		require.Eventually(t, func() bool { return prompter.count() > dialogsBefore }, time.Second, time.Millisecond)
 		prompter.mu.Lock()
 		d := prompter.dialogs[len(prompter.dialogs)-1]
 		prompter.mu.Unlock()
-		require.Eventually(t, func() bool { return bp.created.Load() >= createdBefore+1 }, time.Second, time.Millisecond,
-			"the classifier stream must be in flight before answering")
+		require.Eventually(t, func() bool { return bp.created.Load() >= createdBefore+1 }, time.Second, time.Millisecond)
 		d.Resolve(0) // "Allow"
 		select {
 		case <-done:
@@ -276,12 +269,11 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, 10*time.Millisecond, "the cancelled classification stream must be closed")
+	}, time.Second, 10*time.Millisecond)
 
 	// the cancelled verdict was ClassUnsure, never cached: a second ask re-invokes the model
 	assert.Equal(t, tools.ActionAllow, askAllow().Action)
-	require.Eventually(t, func() bool { return bp.created.Load() >= 2 }, time.Second, time.Millisecond,
-		"the classifier must run again for an identical subject after cancellation")
+	require.Eventually(t, func() bool { return bp.created.Load() >= 2 }, time.Second, time.Millisecond)
 }
 
 // askCancel drives one barrier asker call and returns its decision.

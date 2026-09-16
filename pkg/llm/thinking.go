@@ -184,9 +184,8 @@ func chatTemplateValues(vals map[string]json.RawMessage, caps Capabilities, l Le
 	return out
 }
 
-// chatTemplateEffort maps a level onto the provider effort an object routes to:
-// on resolves through LevelMap with the bare level as fallback, off only when an
-// explicit off entry exists.
+// chatTemplateEffort maps a level onto the provider effort an object routes to: on resolves
+// through LevelMap with the bare level as fallback, off only when an explicit off entry exists.
 func chatTemplateEffort(caps Capabilities, l Level) (string, bool) {
 	if l != LevelOff {
 		return levelValue(caps, l)

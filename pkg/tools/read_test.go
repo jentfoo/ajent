@@ -14,7 +14,7 @@ import (
 func TestRead(t *testing.T) {
 	t.Parallel()
 
-	// a happy path reads line-numbered content with a display header.
+	// a happy path reads line-numbered content with a display header
 	t.Run("happy_path", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		e.writeFile("a.txt", "line one\nline two\n")
@@ -32,7 +32,7 @@ func TestRead(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		var b strings.Builder
 		for i := 1; i <= 10; i++ {
-			fmt.Fprintf(&b, "line %d\n", i)
+			_, _ = fmt.Fprintf(&b, "line %d\n", i)
 		}
 		e.writeFile("big.txt", b.String()) // each line: "line N" = 6 runes + newline
 
@@ -73,7 +73,7 @@ func TestRead(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		var b strings.Builder
 		for i := 1; i <= 3000; i++ {
-			fmt.Fprintf(&b, "line %d\n", i)
+			_, _ = fmt.Fprintf(&b, "line %d\n", i)
 		}
 		e.writeFile("big.txt", b.String())
 
@@ -90,7 +90,7 @@ func TestRead(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		var b strings.Builder
 		for i := 1; i <= 3000; i++ {
-			fmt.Fprintf(&b, "line %d\n", i)
+			_, _ = fmt.Fprintf(&b, "line %d\n", i)
 		}
 		e.writeFile("big.txt", b.String())
 
@@ -105,7 +105,7 @@ func TestRead(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		var b strings.Builder
 		for i := 1; i <= 1200; i++ {
-			fmt.Fprintf(&b, "line %d\n", i)
+			_, _ = fmt.Fprintf(&b, "line %d\n", i)
 		}
 		e.writeFile("big.txt", b.String())
 
@@ -122,7 +122,7 @@ func TestRead(t *testing.T) {
 		assert.True(t, ok) // read records the file so @ref expansion can dedupe
 	})
 
-	// a CRLF file reads as LF: the model never sees a \r.
+	// a CRLF file reads as LF: the model never sees a \r
 	t.Run("crlf_reads_as_lf", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		require.NoError(t, os.WriteFile(filepath.Join(e.cwd, "crlf.txt"), []byte("alpha\r\nbeta\r\n"), 0o644))
@@ -134,7 +134,7 @@ func TestRead(t *testing.T) {
 		assert.Contains(t, out, "     1\talpha") // LF-only model-visible output
 	})
 
-	// a lone mid-line \r is preserved.
+	// a lone mid-line \r is preserved
 	t.Run("lone_carriage_return_survives", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		require.NoError(t, os.WriteFile(filepath.Join(e.cwd, "cr.txt"), []byte("a\rb\n"), 0o644))

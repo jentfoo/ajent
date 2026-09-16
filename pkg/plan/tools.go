@@ -42,8 +42,7 @@ func (t *controlTool) Description() string         { return t.desc }
 func (t *controlTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Parameters: t.params} }
 func (t *controlTool) Mode() agent.ExecutionMode   { return agent.ModeSerial }
 
-// Execute records the transition and hands the turn over, or explains why it
-// could not.
+// Execute records the transition and hands the turn over, or explains why it could not.
 func (t *controlTool) Execute(_ context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	t.c.mu.Lock()
 	defer t.c.mu.Unlock()

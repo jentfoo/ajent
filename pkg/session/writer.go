@@ -63,6 +63,7 @@ func (w *Writer) Append(typ Type, data any) (Entry, error) {
 	// build and write under the lock so concurrent appends form one linear chain
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	if w.closed {
 		return Entry{}, errors.New("session writer is closed")
 	}
@@ -91,6 +92,7 @@ func (w *Writer) Append(typ Type, data any) (Entry, error) {
 func (w *Writer) Path() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	return w.path
 }
 
@@ -98,6 +100,7 @@ func (w *Writer) Path() string {
 func (w *Writer) Head() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	return w.head
 }
 
@@ -107,6 +110,7 @@ func (w *Writer) Head() string {
 func (w *Writer) SetHead(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	w.head = id
 	// a failure here resurfaces from the next Sync, which rewrites the same cursor
 	_ = w.persistHeadLocked()
@@ -128,6 +132,7 @@ func (w *Writer) persistHeadLocked() error {
 func (w *Writer) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	if w.closed || w.f == nil {
 		return nil
 	}
@@ -138,6 +143,7 @@ func (w *Writer) Sync() error {
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	if w.closed {
 		return nil
 	}

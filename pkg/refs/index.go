@@ -127,7 +127,7 @@ func dirTarget(base, rel string) string {
 // rankCandidate builds one completion, scoring by conversation presence first,
 // then recency, then fuzzy match.
 func rankCandidate(text string, inConvo bool, mt time.Time, query string) tui.Completion {
-	score := 0
+	var score int
 	if inConvo {
 		score += 1000
 	}

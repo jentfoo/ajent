@@ -81,7 +81,7 @@ func wrapLine(line string, width int) []string {
 	var start int
 	for start < len(cs) {
 		avail := width
-		prefix := ""
+		var prefix string
 		if len(rows) > 0 {
 			avail, prefix = width-hang, indent
 		}

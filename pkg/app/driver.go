@@ -274,7 +274,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		rec.resumeAuto = comp.resumeAuto
 	}
 
-	// the prompt is at rest until a turn starts; double-Esc rewinds from here.
+	// the prompt is at rest until a turn starts; double-Esc rewinds from here
 	ui.SetIdle(true)
 
 	showReasoningIndicator(ui, set, st)
@@ -484,7 +484,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 	}
 
-	go runPump(pump, ag, console, stager, expander, rec != nil, ui, &started,
+	go runPump(context.Background(),
+		pump, ag, console, stager, expander, rec != nil, ui, &started,
 		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line

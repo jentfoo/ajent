@@ -134,8 +134,10 @@ func (h *EditorHistory) Compact() {
 		return
 	}
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	defer func() { h.compacting = false }() // cleared on every exit path, even a skipped rewrite
+	defer func() {
+		h.compacting = false // cleared on every exit path, even a skipped rewrite
+		h.mu.Unlock()
+	}()
 
 	data, err := os.ReadFile(h.path)
 	var lines []histLine

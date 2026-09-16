@@ -22,6 +22,7 @@ func thinkingModel(caps Capabilities) Model {
 // reasoning choice, returning the decoded body map.
 func encodeThinking(t *testing.T, m Model, level Level) map[string]any {
 	t.Helper()
+
 	body, err := buildCompatBody(Request{
 		Model:     m,
 		System:    BlockList{TextBlock{Text: "sys"}},
@@ -107,6 +108,7 @@ func TestApplyThinkingRegressionPins(t *testing.T) {
 		m := thinkingModel(caps)
 		assert.NotContains(t, encodeThinking(t, m, LevelOff), "thinking")
 	})
+
 	t.Run("empty_reasoning_content_when_level_on", func(t *testing.T) {
 		// detection sets ReplayReasoning for deepseek; it drives the empty echo
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek, ReplayReasoning: true}
@@ -120,6 +122,7 @@ func TestApplyThinkingRegressionPins(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":""`)
 	})
+
 	t.Run("no_empty_reasoning_when_level_off", func(t *testing.T) {
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek}
 		m := thinkingModel(caps)
@@ -132,11 +135,13 @@ func TestApplyThinkingRegressionPins(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), `reasoning_content`)
 	})
+
 	t.Run("no_reasoning_capability_sends_nothing", func(t *testing.T) {
 		caps := Capabilities{Thinking: ThinkingDeepSeek} // Reasoning false
 		m := thinkingModel(caps)
 		assert.JSONEq(t, `{}`, reasoningFragment(encodeThinking(t, m, LevelHigh)))
 	})
+
 	t.Run("max_clamps_to_mapped_xhigh_not_bare_high", func(t *testing.T) {
 		// a provider that genuinely accepts xhigh gets its mapped value when max
 		// is requested; it never falls through to an unmapped bare "high"
@@ -158,6 +163,7 @@ func TestApplyThinkingBudgetGates(t *testing.T) {
 		m := thinkingModel(caps)
 		assert.NotContains(t, encodeThinking(t, m, LevelHigh), "reasoning_effort")
 	})
+
 	t.Run("baseten_sends_effort_while_on", func(t *testing.T) {
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingBaseten,
 			SupportsReasoningEffort: true}
@@ -165,6 +171,7 @@ func TestApplyThinkingBudgetGates(t *testing.T) {
 		assert.JSONEq(t, `{"reasoning_effort":"high"}`,
 			reasoningFragment(encodeThinking(t, m, LevelHigh)))
 	})
+
 	t.Run("baseten_off_sends_no_spurious_effort", func(t *testing.T) {
 		// no map entry: off must not emit a bare reasoning_effort:"off"
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingBaseten,
@@ -172,9 +179,10 @@ func TestApplyThinkingBudgetGates(t *testing.T) {
 		m := thinkingModel(caps)
 		assert.JSONEq(t, `{}`, reasoningFragment(encodeThinking(t, m, LevelOff)))
 	})
+
 	t.Run("explicit_empty_off_value_reaches_wire", func(t *testing.T) {
 		// an explicit empty string is sent rather than omitting the key
-		v := ""
+		var v string
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingOpenAI,
 			SupportsReasoningEffort: true}
 		caps.LevelMap = map[Level]*string{LevelOff: &v}
@@ -205,6 +213,7 @@ func TestChatTemplateValues(t *testing.T) {
 			"effort":      "high",
 		}, got)
 	})
+
 	t.Run("off_drops_omit_when_off", func(t *testing.T) {
 		got := chatTemplateValues(vals, caps, LevelOff)
 		assert.NotContains(t, got, "thinking_on")
@@ -212,9 +221,11 @@ func TestChatTemplateValues(t *testing.T) {
 		assert.Equal(t, "on", got["effort"])
 		assert.JSONEq(t, `0.7`, string(got["temperature"].(json.RawMessage)))
 	})
+
 	t.Run("nil_when_no_values", func(t *testing.T) {
 		assert.Nil(t, chatTemplateValues(nil, caps, LevelHigh))
 	})
+
 	t.Run("unknown_var_falls_through_to_effort_map", func(t *testing.T) {
 		// any object that is not thinking.enabled routes through the effort map
 		got := chatTemplateValues(map[string]json.RawMessage{
@@ -222,12 +233,14 @@ func TestChatTemplateValues(t *testing.T) {
 		}, caps, LevelHigh)
 		assert.Equal(t, map[string]any{"custom": "high"}, got)
 	})
+
 	t.Run("object_without_var_falls_through_to_effort_map", func(t *testing.T) {
 		got := chatTemplateValues(map[string]json.RawMessage{
 			"plain": json.RawMessage(`{"depth": 2}`),
 		}, caps, LevelHigh)
 		assert.Equal(t, map[string]any{"plain": "high"}, got)
 	})
+
 	t.Run("off_without_map_entry_drops_object", func(t *testing.T) {
 		// off has no explicit entry here (caps maps Off to a value), so it resolves
 		caps := Capabilities{Reasoning: true}
@@ -297,18 +310,21 @@ func TestThinkingTokenBudget(t *testing.T) {
 		require.NoError(t, json.Unmarshal(body, &m))
 		assert.InDelta(t, 18976, m["thinking_token_budget"], 0.001) // min(30000, maxTokens-1024)
 	})
+
 	t.Run("omitted_when_ceiling_too_small", func(t *testing.T) {
 		req := base()
 		req.MaxTokens = 500 // ceiling - floor <= 0
 		assert.NotContains(t,
 			decodeThinkingBudget(t, req), "thinking_token_budget")
 	})
+
 	t.Run("absent_without_the_capability", func(t *testing.T) {
 		req := base()
 		req.Model.Caps.ThinkingBudgetField = ""
 		assert.NotContains(t,
 			decodeThinkingBudget(t, req), "thinking_token_budget")
 	})
+
 	t.Run("absent_at_level_off", func(t *testing.T) {
 		req := base()
 		req.Reasoning.Level = LevelOff
@@ -320,6 +336,7 @@ func TestThinkingTokenBudget(t *testing.T) {
 // decodeThinkingBudget runs buildCompatBody and returns the decoded body map.
 func decodeThinkingBudget(t *testing.T, req Request) map[string]any {
 	t.Helper()
+
 	body, err := buildCompatBody(req, compatProfile{})
 	require.NoError(t, err)
 	var m map[string]any

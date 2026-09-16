@@ -41,6 +41,7 @@ func (t *Tracker) markEdited(path string, rs []lineRange) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	rec, ok := t.m[path]
 	if !ok {
 		return // no observation to measure the lines against
@@ -54,6 +55,7 @@ func (t *Tracker) markEdited(path string, rs []lineRange) {
 func (t *Tracker) editedFor(path string, data []byte) []lineRange {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	rec, ok := t.m[path]
 	if !ok || rec.Hash != hashBytes(data) {
 		return nil
@@ -73,6 +75,7 @@ func hashBytes(data []byte) string {
 func (t *Tracker) Observe(path string, data []byte, info os.FileInfo) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	if t.m == nil {
 		t.m = make(map[string]Record)
 	}
@@ -94,6 +97,7 @@ func (t *Tracker) Observe(path string, data []byte, info os.FileInfo) {
 func (t *Tracker) ObserveDir(dir string, entries []os.DirEntry) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	if t.dirs == nil {
 		t.dirs = make(map[string]string)
 	}
@@ -156,6 +160,7 @@ func (t *Tracker) Unchanged(path string) bool {
 func (t *Tracker) Reset() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	clear(t.m)
 	clear(t.dirs)
 }
@@ -164,6 +169,7 @@ func (t *Tracker) Reset() {
 func (t *Tracker) Records() map[string]Record {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	if t.m == nil {
 		return map[string]Record{}
 	}

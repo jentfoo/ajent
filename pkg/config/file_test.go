@@ -56,6 +56,7 @@ func TestWriteFileAtomic(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, os.FileMode(SecretPerm), fi.Mode().Perm())
 	})
+
 	t.Run("overwrites_existing", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "cache.json")
 		require.NoError(t, WriteFileAtomic(p, []byte("old"), SecretPerm))
@@ -65,11 +66,13 @@ func TestWriteFileAtomic(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "new", string(got))
 	})
+
 	t.Run("creates_missing_dirs", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "nested", "deep", "cache.json")
 		require.NoError(t, WriteFileAtomic(p, []byte("x"), SecretPerm))
 		assert.FileExists(t, p)
 	})
+
 	t.Run("leaves_no_temp_files", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, WriteFileAtomic(filepath.Join(dir, "cache.json"), []byte("x"), SecretPerm))

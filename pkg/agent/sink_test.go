@@ -5,8 +5,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
-// recordingSink captures every sink call in order, for asserting exact
-// sequences.
+// recordingSink captures every sink call in order, for asserting exact sequences.
 type recordingSink struct {
 	calls    []string
 	progress []ToolProgress

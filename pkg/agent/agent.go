@@ -91,8 +91,7 @@ type Agent struct {
 }
 
 // New returns an agent bound to state. Sinks are resolved once into a single
-// fan-out so the loop always emits on one field; with none supplied events go
-// nowhere.
+// fan-out so the loop always emits on one field; with none supplied events go nowhere.
 func New(state *State, opts Options) *Agent {
 	a := &Agent{state: state, opts: opts, retrySleep: sleepCtx}
 	switch len(opts.Sinks) {
@@ -111,6 +110,7 @@ func New(state *State, opts Options) *Agent {
 func (a *Agent) Running() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return a.running
 }
 
@@ -120,6 +120,7 @@ func (a *Agent) Running() bool {
 func (a *Agent) BaseEstimate(tools bool) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if a.running {
 		return 0
 	}
@@ -138,6 +139,7 @@ func (a *Agent) BaseEstimate(tools bool) int {
 func (a *Agent) Steer(in Input) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if !a.running && a.settling == 0 { // an OnSettled observer may queue work
 		return false
 	}
@@ -150,6 +152,7 @@ func (a *Agent) Steer(in Input) bool {
 func (a *Agent) FollowUp(in Input) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if !a.running && a.settling == 0 { // an OnSettled observer may queue work
 		return false
 	}
@@ -191,12 +194,12 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// WithState runs fn against the live state, reporting false when a turn is
-// running. Rewind and compaction both rewrite context this way, so every holder
-// of *State observes the change.
+// WithState runs fn against the live state, reporting false when a turn is running. Rewind and
+// compaction both rewrite context this way, so every holder of *State observes the change.
 func (a *Agent) WithState(fn func(*State)) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if a.running {
 		return false
 	}

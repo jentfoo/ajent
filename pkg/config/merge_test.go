@@ -73,6 +73,7 @@ func TestMergeObjects(t *testing.T) {
 		_, err := MergeObjects([]byte(`{"a":1}`), []byte(`{`))
 		assert.Error(t, err)
 	})
+
 	t.Run("source_layer_not_mutated", func(t *testing.T) {
 		base := []byte(`{"p":{"x":1}}`)
 		_, err := MergeObjects(base, []byte(`{"p":{"y":2}}`))

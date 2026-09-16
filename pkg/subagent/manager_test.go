@@ -10,11 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestJob(t *testing.T) {
@@ -109,9 +110,14 @@ func TestCompletionNotification(t *testing.T) {
 			j, ok := m.Poll(t.Context(), id)
 			res <- pollRes{j, ok}
 		}()
-		require.Eventually(t, func() bool { // the poller must be waiting first
+		require.Eventually(t, func() bool { // the poller must be registered before release
 			jj, ok := m.lookup(id)
-			return ok && jj.statusOf() == StatusRunning
+			if !ok {
+				return false
+			}
+			jj.mu.Lock()
+			defer jj.mu.Unlock()
+			return jj.pollers > 0
 		}, 2*time.Second, 5*time.Millisecond)
 
 		g.releaseAll()
@@ -453,6 +459,7 @@ func TestPollBatchDetection(t *testing.T) {
 // still-running report the model would act on.
 func TestPollPrefersResultOverTimeout(t *testing.T) {
 	t.Parallel()
+
 	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("done in time", llm.Usage{})}})
 	m := New(Options{Provider: p, PollTimeout: time.Nanosecond}) // the timer is always ready
 	t.Cleanup(m.Close)
@@ -470,6 +477,7 @@ func TestPollPrefersResultOverTimeout(t *testing.T) {
 
 func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
 	t.Parallel()
+
 	release := make(chan struct{})
 	entered := make(chan struct{}) // terminal Activity clear reached: status done, channel not yet closed
 	var enteredOnce sync.Once
@@ -740,6 +748,7 @@ func TestStatusSegmentAndList(t *testing.T) {
 
 func TestStopAllCancelsEverything(t *testing.T) {
 	t.Parallel()
+
 	b := &blockingProvider{}
 	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
 	t.Cleanup(m.Close)

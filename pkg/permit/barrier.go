@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -66,6 +67,7 @@ func NewBarrier(ro func(string) bool) *Barrier {
 func (b *Barrier) SetPrompter(p Prompter) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.prompter = p
 }
 
@@ -73,6 +75,7 @@ func (b *Barrier) SetPrompter(p Prompter) {
 func (b *Barrier) SetNoter(n Noter) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.noter = n
 }
 
@@ -80,6 +83,7 @@ func (b *Barrier) SetNoter(n Noter) {
 func (b *Barrier) SetClassifier(c Classifier) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.classifier = c
 }
 
@@ -88,6 +92,7 @@ func (b *Barrier) SetClassifier(c Classifier) {
 func (b *Barrier) SetNotice(n func(string)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.notice = n
 }
 
@@ -96,6 +101,7 @@ func (b *Barrier) SetNotice(n func(string)) {
 func (b *Barrier) SetDryRun(fn func(agent.ToolCall) error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.dryRun = fn
 }
 
@@ -104,6 +110,7 @@ func (b *Barrier) SetDryRun(fn func(agent.ToolCall) error) {
 func (b *Barrier) SetPreview(p func(agent.ToolCall) string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.preview = p
 }
 
@@ -115,8 +122,10 @@ func (b *Barrier) SetSafeCommands(cmds []string) {
 	if len(cmds) > 0 {
 		fn = func(call agent.ToolCall) bool { return SafeMatches(call, cmds) }
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.safe = fn
 }
 
@@ -128,8 +137,10 @@ func (b *Barrier) SetDeniedCommands(cmds []string) {
 	if len(cmds) > 0 {
 		fn = func(call agent.ToolCall) bool { return DenyMatches(call, cmds) }
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.deny = fn
 }
 
@@ -139,6 +150,7 @@ func (b *Barrier) SetWriteRoots(cwd string, extra ...string) {
 	s := newWriteScope(cwd, extra...)
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	b.scope = s
 }
 
@@ -146,6 +158,7 @@ func (b *Barrier) SetWriteRoots(cwd string, extra ...string) {
 func (b *Barrier) Mode() Mode {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	return b.mode
 }
 
@@ -258,6 +271,7 @@ func (b *Barrier) startWarm(ctx context.Context, s Subject) {
 func (b *Barrier) cancelWarm(s Subject) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	if cancel, ok := b.warm[s.key()]; ok {
 		cancel()
 	}
@@ -415,12 +429,16 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	cmd := bashCommand(call.Input)
 	if call.Name != tools.ToolBash || !compound(cmd) { // plain command or non-bash tool
 		key := allowSessionKey(call)
+
 		b.mu.Lock()
 		defer b.mu.Unlock()
+
 		return key, b.allows[key]
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	heads, ok := compoundGoverningHeads(cmd)
 	if !ok || len(heads) == 0 {
 		return "", b.compoundAllowed // unidentifiable: only the broad grant covers it
@@ -508,6 +526,7 @@ func (b *Barrier) resolveNotice(scope string, auto bool) {
 func (b *Barrier) prompterSnapshot() (Prompter, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	return b.prompter, b.prompter != nil
 }
 
@@ -515,6 +534,7 @@ func (b *Barrier) prompterSnapshot() (Prompter, bool) {
 func (b *Barrier) noticeSnapshot() func(string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	return b.notice
 }
 
@@ -533,6 +553,7 @@ type gate struct {
 func (b *Barrier) gateFor(m Mode) gate {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	return gate{mode: m, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny, scope: b.scope}
 }
 
@@ -540,6 +561,7 @@ func (b *Barrier) gateFor(m Mode) gate {
 func (b *Barrier) gateNow() gate {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	return gate{mode: b.mode, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny, scope: b.scope}
 }
 
@@ -654,7 +676,7 @@ func safeBashLine(cmd string, cmds []string) bool {
 		return entryCovered(strings.TrimSpace(cmd), cmds)
 	}
 	for i, seg := range s.Segments {
-		rw := ""
+		var rw string
 		if i < len(s.Raw) { // Segments and Raw stay index-aligned from pushSegment
 			rw = s.Raw[i]
 		}

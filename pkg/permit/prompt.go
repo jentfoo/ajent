@@ -94,9 +94,8 @@ func buildOptions(command string) []string {
 	return labels
 }
 
-// optionActions maps a dialog's display index back to the logical opt constant,
-// matching optionsFor so Deny is always resolved as a denial regardless of where it
-// sits in the rendered list.
+// optionActions maps a dialog's display index back to the logical opt constant, matching
+// optionsFor so Deny is always resolved as a denial regardless of where it sits in the rendered list.
 func optionActions(command string) []int {
 	_, actions := optionsFor(command)
 	return actions
@@ -144,7 +143,7 @@ func compoundGoverningHeads(command string) ([]string, bool) {
 	}
 	var heads []string
 	for i, seg := range s.Segments {
-		raw := ""
+		var raw string
 		if i < len(s.Raw) { // Segments and Raw stay index-aligned from pushSegment
 			raw = s.Raw[i]
 		}
@@ -190,7 +189,7 @@ func elideSubject(s string) string {
 		return ""
 	}
 	var out []string
-	total := 0
+	var total int
 	for _, ln := range strings.Split(s, "\n") {
 		if len(out) > 0 && (len(out) >= decisionContextRows || total+len(ln) > decisionContextChars) {
 			break

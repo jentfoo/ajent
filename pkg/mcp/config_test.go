@@ -10,8 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLoadConfig exercises the user-to-project merge by server name with whole-entry
-// replacement, env interpolation and validation.
 func TestLoadConfig(t *testing.T) {
 	t.Run("user_overridden_by_whole_entry", func(t *testing.T) {
 		t.Setenv("AJENT_HOME", mkHome(t))
@@ -165,12 +163,14 @@ func TestExpandVar(t *testing.T) {
 // mkHome creates a fresh AJENT home dir.
 func mkHome(t *testing.T) string {
 	t.Helper()
+
 	return t.TempDir()
 }
 
 // mkFile writes content to path creating parent dirs.
 func mkFile(t *testing.T, path, content string) {
 	t.Helper()
+
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)

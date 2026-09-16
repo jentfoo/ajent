@@ -9,14 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/config"
 )
 
 // newTestHistory returns an EditorHistory rooted in a temp store for ws.
 func newTestHistory(t *testing.T, ws string) *EditorHistory {
 	t.Helper()
+
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	h, err := NewEditorHistory(s, ws, "")
 	require.NoError(t, err)

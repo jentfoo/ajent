@@ -52,7 +52,7 @@ func TestWriteReadHead(t *testing.T) {
 		assert.Equal(t, "second", id)
 	})
 
-	// each transcript owns its own cursor, so a sibling's never leaks into it.
+	// each transcript owns its own cursor, so a sibling's never leaks into it
 	t.Run("sidecars_are_independent", func(t *testing.T) {
 		dir := t.TempDir()
 		p1 := filepath.Join(dir, "one.jsonl")
@@ -105,14 +105,14 @@ func TestHeadFor(t *testing.T) {
 		assert.Equal(t, "a", headFor(p, entries))
 	})
 
-	// a cursor naming an entry this file no longer holds degrades to the tail.
+	// a cursor naming an entry this file no longer holds degrades to the tail
 	t.Run("unresolvable_id_falls_back", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		require.NoError(t, writeHead(p, "gone"))
 		assert.Equal(t, "b", headFor(p, entries))
 	})
 
-	// a sibling session's cursor must not steer this one.
+	// a sibling session's cursor must not steer this one
 	t.Run("ignores_sibling_cursor", func(t *testing.T) {
 		dir := t.TempDir()
 		p1 := filepath.Join(dir, "one.jsonl")

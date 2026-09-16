@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
@@ -92,6 +93,7 @@ func (r *Registry) RegisterFrom(source string, t agent.Tool, defaultEnabled bool
 func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	if _, ok := t.(SelfBounding); !ok {
 		t = &boundTool{t: t, sessionID: r.sessionID}
 	}
@@ -105,6 +107,7 @@ func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 func (r *Registry) RegisterGroup(g ToolGroup) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	for i := range r.groups {
 		if r.groups[i].Name == g.Name {
 			r.groups[i] = g
@@ -119,6 +122,7 @@ func (r *Registry) RegisterGroup(g ToolGroup) {
 func (r *Registry) Unregister(source string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.tools = bulk.SliceFilter(func(rt registeredTool) bool { return rt.source != source }, r.tools)
 	r.schema = nil
 }
@@ -128,6 +132,7 @@ func (r *Registry) Unregister(source string) {
 func (r *Registry) AddGuard(g Guard) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.guards = append(r.guards, g)
 }
 
@@ -155,6 +160,7 @@ type Previewer interface {
 func (r *Registry) Preview(call agent.ToolCall) (Change, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	for _, rt := range r.tools {
 		if rt.tool.Name() != call.Name {
 			continue
@@ -178,6 +184,7 @@ func (r *Registry) Preview(call agent.ToolCall) (Change, bool) {
 func (r *Registry) DryRun(call agent.ToolCall) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	for _, rt := range r.tools {
 		if rt.tool.Name() != call.Name {
 			continue
@@ -196,6 +203,7 @@ func (r *Registry) DryRun(call agent.ToolCall) error {
 func (r *Registry) guardSnapshot() ([]Guard, Asker) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	return slices.Clone(r.guards), r.asker
 }
 
@@ -227,6 +235,7 @@ func (r *Registry) MustSerialize(calls []agent.ToolCall) bool {
 func (r *Registry) Enabled() []agent.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	var out []agent.Tool
 	for _, rt := range r.tools {
 		if rt.state == StateEnabled {
@@ -258,6 +267,7 @@ func (r *Registry) expandGroupNamesLocked(want map[string]struct{}) {
 func (r *Registry) SetEnabled(names []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	want := bulk.SliceToSet(names)
 	r.expandGroupNamesLocked(want)
 	for i := range r.tools {
@@ -277,6 +287,7 @@ func (r *Registry) SetEnabled(names []string) {
 func (r *Registry) Enable(names []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	want := bulk.SliceToSet(names)
 	r.expandGroupNamesLocked(want)
 	for i := range r.tools {
@@ -292,6 +303,7 @@ func (r *Registry) Enable(names []string) {
 func (r *Registry) Get(name string) (agent.Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	for _, rt := range r.tools {
 		if rt.state != StateEnabled || rt.tool.Name() != name {
 			continue
@@ -322,6 +334,7 @@ func (r *Registry) Lookup(name string) (agent.Tool, bool) {
 func (r *Registry) Disabled() []agent.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	var out []agent.Tool
 	for _, rt := range r.tools {
 		if rt.state == StateDisabled {
@@ -336,6 +349,7 @@ func (r *Registry) Disabled() []agent.Tool {
 func (r *Registry) All() []agent.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	out := make([]agent.Tool, 0, len(r.tools))
 	for _, rt := range r.tools {
 		out = append(out, rt.tool)
@@ -413,6 +427,7 @@ func allPresent(members []string, present map[string]bool) bool {
 func (r *Registry) BySource(source string) []agent.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	var out []agent.Tool
 	for _, rt := range r.tools {
 		if rt.source == source {
@@ -428,6 +443,7 @@ func (r *Registry) BySource(source string) []agent.Tool {
 func (r *Registry) EnabledNames(source string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	var out []string
 	for _, rt := range r.tools {
 		if rt.source == source && rt.state == StateEnabled {
@@ -443,6 +459,7 @@ func (r *Registry) EnabledNames(source string) []string {
 func (r *Registry) DisabledNames(source string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	var out []string
 	for _, rt := range r.tools {
 		if rt.source == source && rt.state == StateDisabled {
@@ -457,6 +474,7 @@ func (r *Registry) DisabledNames(source string) []string {
 func (r *Registry) AllNames(source string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	var out []string
 	for _, rt := range r.tools {
 		if rt.source == source {
@@ -484,6 +502,7 @@ func (r *Registry) MarkReadOnly(names []string) {
 func (r *Registry) ReadOnly(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	for _, rt := range r.tools {
 		if rt.tool.Name() == name {
 			return rt.readOnly
@@ -496,6 +515,7 @@ func (r *Registry) ReadOnly(name string) bool {
 func (r *Registry) Source(name string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	for _, rt := range r.tools {
 		if rt.tool.Name() == name {
 			return rt.source
@@ -511,6 +531,7 @@ func (r *Registry) Tracker() *Tracker { return r.tracker }
 func (r *Registry) Schemas() []llm.ToolSchema {
 	r.mu.Lock() // caches into r.schema, so it needs the write lock
 	defer r.mu.Unlock()
+
 	if r.schema != nil {
 		return slices.Clone(r.schema)
 	}
@@ -533,6 +554,7 @@ func (r *Registry) Schemas() []llm.ToolSchema {
 func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	var out []string
 	for _, rt := range r.tools {
 		if rt.state == StateEnabled {

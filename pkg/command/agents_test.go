@@ -35,7 +35,7 @@ func (e *fakeErr) Error() string { return e.msg }
 
 func (f *fakeAgents) StopAll() int {
 	f.stopsAll++
-	n := 0
+	var n int
 	for _, j := range f.jobs {
 		if j.Status == "running" || j.Status == "queued" {
 			n++
@@ -47,6 +47,7 @@ func (f *fakeAgents) StopAll() int {
 // agentsConsole returns a fake console with canned sub-agent rows.
 func agentsConsole(tb testing.TB) (*fakeConsole, *fakeAgents) {
 	tb.Helper()
+
 	c := newFakeConsole(tb)
 	a := &fakeAgents{jobs: []AgentJob{
 		{ID: "sub-1", Status: "running", Task: "grep func New", Elapsed: 41 * time.Second},
@@ -59,7 +60,7 @@ func agentsConsole(tb testing.TB) (*fakeConsole, *fakeAgents) {
 func TestAgentsCommand(t *testing.T) {
 	t.Parallel()
 
-	// the list verb renders a table.
+	// the list verb renders a table
 	t.Run("list_renders_table", func(t *testing.T) {
 		c, _ := agentsConsole(t)
 		err := agentsCommand(t.Context(), "", c)
@@ -112,7 +113,7 @@ func TestAgentsCommand(t *testing.T) {
 func TestAgentsCompletion(t *testing.T) {
 	t.Parallel()
 
-	// verbs then ids are offered.
+	// verbs then ids are offered
 	t.Run("offers_verbs_then_ids", func(t *testing.T) {
 		c, _ := agentsConsole(t)
 		fn := agentsCompletion(c)

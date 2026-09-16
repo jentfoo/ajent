@@ -43,6 +43,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		assert.Contains(t, u.snapshot(v), "> 1 Allow")
 		assert.Contains(t, u.snapshot(v), "  2 Deny")
 	})
+
 	t.Run("wraps_long_lines_to_the_width", func(t *testing.T) {
 		u, v, _ := tallUI(t)
 		long := strings.Repeat("x", 200)
@@ -56,6 +57,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		assert.Equal(t, 200, strings.Count(screen, "x"))
 		assert.NotContains(t, screen, "lines") // nothing hidden, so no cut marker
 	})
+
 	t.Run("wrapped_line_cut_by_height", func(t *testing.T) {
 		// long enough that a 12 row screen cannot show it all; how many rows the
 		// subject gets follows the cap, so only the marker's presence is pinned
@@ -69,6 +71,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		// the rows that do fit still carry the command
 		assert.Contains(t, strutil.StripANSI(u.snapshot(v)), strings.Repeat("x", 60))
 	})
+
 	t.Run("long_single_line_survives_the_char_budget", func(t *testing.T) {
 		u, v, _ := tallUI(t)
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Repeat("z", decisionContextChars+50),
@@ -78,6 +81,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		go func() { _, _ = d.Wait(t.Context()) }()
 		waitFor(t, u, v, strings.Repeat("z", 79)) // kept, not elided away to nothing
 	})
+
 	t.Run("subject_cut_by_height", func(t *testing.T) {
 		u, v, _ := tallUI(t)
 		var lines []string
@@ -91,6 +95,7 @@ func TestUIDecisionRenders(t *testing.T) {
 		waitFor(t, u, v, "…+3 lines")
 		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "line-"+strings.Repeat("a", decisionContextRows+2))
 	})
+
 	t.Run("subject_char_budget_cut", func(t *testing.T) {
 		u, v, _ := tallUI(t)
 		var lines []string
@@ -134,6 +139,7 @@ func TestUIDecisionKeys(t *testing.T) {
 		require.NoError(t, <-errCh)
 		assert.Equal(t, DecisionResult{Index: 2}, <-resCh)
 	})
+
 	t.Run("escape_cancels", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(mk("Pick:", []Option{{Label: "A"}}))
@@ -172,6 +178,7 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		require.NoError(t, <-errCh)
 		assert.Equal(t, DecisionResult{Index: 0, External: true}, <-resCh)
 	})
+
 	t.Run("later_resolve_is_noop", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d := u.OpenDecision(DecisionRequest{Prompt: "Go?", Context: "cmd", Options: []Option{{Label: "Yes"}, {Label: "No"}}})
@@ -195,6 +202,7 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		// the late Resolve stays a no-op and never repaints one.
 		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "Go? Yes")
 	})
+
 	t.Run("resolve_promotes_next", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		d1 := u.OpenDecision(DecisionRequest{Prompt: "First?", Context: "", Options: []Option{{Label: "A"}}})
@@ -238,6 +246,7 @@ func TestUIDecisionQueueDepth(t *testing.T) {
 		waitFor(t, u, v, "+2 waiting")
 		assert.NotContains(t, u.snapshot(v), "Third?")
 	})
+
 	t.Run("escape_resolves_only_the_active_and_promotes", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 		d1 := u.OpenDecision(DecisionRequest{Prompt: "First?", Context: "", Options: []Option{{Label: "A"}}})
@@ -321,6 +330,7 @@ func TestUIDecisionNoUI(t *testing.T) {
 		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrNoUI)
 	})
+
 	t.Run("no_options_reports_no_ui", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		dd := u.OpenDecision(DecisionRequest{Prompt: "P"})
@@ -328,6 +338,7 @@ func TestUIDecisionNoUI(t *testing.T) {
 		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrNoUI)
 	})
+
 	t.Run("closed_ui_cancels", func(t *testing.T) {
 		u, v, _ := interactionUI(t)
 		dd := u.OpenDecision(DecisionRequest{Prompt: "P", Options: []Option{{Label: "A"}}})
@@ -337,6 +348,7 @@ func TestUIDecisionNoUI(t *testing.T) {
 		_, err := dd.Wait(t.Context())
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
+
 	t.Run("open_after_close_reports_no_ui", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		u.Close()

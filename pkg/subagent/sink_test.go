@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func TestToolStart(t *testing.T) {
@@ -47,6 +48,7 @@ func TestToolStart(t *testing.T) {
 
 func TestSinkTurnEndFallsBackToIdle(t *testing.T) {
 	t.Parallel()
+
 	c := newCapture()
 	s := newChildSink("sub-3", 3, c.recordRow)
 	s.set(rowLine(s.id, "read pkg/tui/ui.go"), true)
@@ -59,6 +61,7 @@ func TestSinkTurnEndFallsBackToIdle(t *testing.T) {
 
 func TestToolStartParallelCalls(t *testing.T) {
 	t.Parallel()
+
 	c := newCapture()
 	s := newChildSink("sub-2", 2, c.recordRow)
 	s.set(thinkingRow(s.id), true)
@@ -79,6 +82,7 @@ func TestToolStartParallelCalls(t *testing.T) {
 
 func TestSinkThinkingCoalesces(t *testing.T) {
 	t.Parallel()
+
 	c := newCapture()
 	s := newChildSink("sub-4", 4, c.recordRow)
 	for i := 0; i < 50; i++ { // all within the flush window -> one coalesced row
@@ -100,7 +104,7 @@ func TestSinkText(t *testing.T) {
 		assert.Equal(t, "sub-5  pkg/tui/ui.go", c.rowText("sub-5"))
 	})
 
-	// streaming deltas show only the current in-progress line: completed lines scroll past and each newline starts fresh.
+	// streaming deltas show only the current in-progress line: completed lines scroll past and each newline starts fresh
 	t.Run("scrolls_per_line", func(t *testing.T) {
 		c := newCapture()
 		s := newChildSink("sub-9", 9, c.recordRow)
@@ -115,7 +119,7 @@ func TestSinkText(t *testing.T) {
 		require.Eventually(t, func() bool { return c.rowText("sub-9") == "sub-9  thinking…" }, time.Second, 5*time.Millisecond)
 	})
 
-	// a blank or whitespace-only current line never publishes a row, so empty streaming lines don't flash.
+	// a blank or whitespace-only current line never publishes a row, so empty streaming lines don't flash
 	t.Run("ignores_whitespace_lines", func(t *testing.T) {
 		c := newCapture()
 		s := newChildSink("sub-10", 10, c.recordRow)
@@ -130,6 +134,7 @@ func TestSinkText(t *testing.T) {
 
 func TestSinkThinkingShowsReasoning(t *testing.T) {
 	t.Parallel()
+
 	c := newCapture()
 	s := newChildSink("sub-6", 6, c.recordRow)
 
@@ -139,6 +144,7 @@ func TestSinkThinkingShowsReasoning(t *testing.T) {
 
 func TestSinkStreamSwitchStartsFresh(t *testing.T) {
 	t.Parallel()
+
 	c := newCapture()
 	s := newChildSink("sub-11", 11, c.recordRow)
 

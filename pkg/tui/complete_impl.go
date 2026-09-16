@@ -5,10 +5,9 @@ import (
 	"strings"
 )
 
-// completionOverlay is the candidate list drawn above the editor, in either of
-// two presentations. A menu is live while typing and owns ↑/↓/Enter/Tab; the
-// Tab-driven form holds no selection, consumes no keys and is cleared by the
-// next keystroke.
+// completionOverlay is the candidate list drawn above the editor, in either of two
+// presentations. A menu is live while typing and owns ↑/↓/Enter/Tab; the tab-driven
+// form holds no selection, consumes no keys and is cleared by the next keystroke.
 type completionOverlay struct {
 	menu   bool
 	items  []Completion
@@ -83,8 +82,7 @@ func (o *completionOverlay) move(delta int) {
 	}
 }
 
-// applyCurrent replaces the text from start to the cursor with the highlighted
-// candidate's Text.
+// applyCurrent replaces the text from start to the cursor with the highlighted candidate's Text.
 func (o *completionOverlay) applyCurrent(u *UI) {
 	if len(o.items) > 0 {
 		u.replaceSpan(o.start, o.items[o.cursor].Text)
@@ -161,8 +159,7 @@ func fitRows(total, maxRows, perRow int) (shown, more int) {
 	return shown, total - shown
 }
 
-// commonPrefix returns the longest prefix every candidate's Text shares, cut on
-// a grapheme boundary.
+// commonPrefix returns the longest prefix every candidate's Text shares, cut on a grapheme boundary.
 func commonPrefix(items []Completion) string {
 	if len(items) == 0 {
 		return ""
@@ -171,7 +168,7 @@ func commonPrefix(items []Completion) string {
 	for _, it := range items[1:] {
 		other := graphemesOf(it.Text)
 		n := min(len(cells), len(other))
-		i := 0
+		var i int
 		for i < n && cells[i] == other[i] {
 			i++
 		}

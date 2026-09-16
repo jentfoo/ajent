@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/go-analyze/bulk"
 )
 
 // jsonNull is the literal for an absent JSON value, compared against RawMessage.
@@ -71,12 +69,9 @@ func (f *FlexStrings) UnmarshalJSON(b []byte) error {
 		if err := json.Unmarshal(b, &list); err != nil {
 			return errors.New("readOnly must be a bool or a list of tool name globs")
 		}
-		*f = FlexStrings(list)
+		*f = list
 		return nil
 	}
 	*f = []string{s} // a single quoted glob
 	return nil
 }
-
-// toSet builds a set from names for O(1) membership.
-func toSet(names []string) map[string]struct{} { return bulk.SliceToSet(names) }

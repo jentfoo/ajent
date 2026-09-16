@@ -53,7 +53,7 @@ func scanCommand(command string) Scan {
 	var segments, raw []string
 	buf := strings.Builder{}
 	rawBuf := strings.Builder{}
-	i := 0
+	var i int
 	n := len(command)
 	var hasSplitOp, hasUnsafeOp bool
 
@@ -234,7 +234,7 @@ func allSegmentsReadOnly(s Scan) bool {
 // verbatim raw text, which Segments and Raw keep index-aligned from pushSegment.
 func forEachSegment(s Scan, ok func(seg, raw string) bool) bool {
 	for i, seg := range s.Segments {
-		raw := ""
+		var raw string
 		if i < len(s.Raw) {
 			raw = s.Raw[i]
 		}

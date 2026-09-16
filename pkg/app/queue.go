@@ -129,6 +129,7 @@ func (s *steerQueue) settled() {
 func (s *steerQueue) pending() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return len(s.items)
 }
 
@@ -137,6 +138,7 @@ func (s *steerQueue) pending() int {
 func (s *steerQueue) pull() []agent.Input {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if len(s.items) == 0 {
 		return nil
 	}
@@ -148,6 +150,7 @@ func (s *steerQueue) pull() []agent.Input {
 func (s *steerQueue) take() (agent.Input, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if len(s.items) == 0 {
 		s.draining = false // the drain goroutine is done; the next submit starts one
 		return agent.Input{}, false
@@ -160,6 +163,7 @@ func (s *steerQueue) take() (agent.Input, bool) {
 func (s *steerQueue) stopDrain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.draining = false
 }
 
@@ -168,6 +172,7 @@ func (s *steerQueue) stopDrain() {
 func (s *steerQueue) recall() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if len(s.items) == 0 {
 		return false
 	}
@@ -187,6 +192,7 @@ func (s *steerQueue) recall() bool {
 func (s *steerQueue) abort() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if len(s.items) == 0 {
 		return
 	}
@@ -211,7 +217,7 @@ func (s *steerQueue) refreshLocked() {
 		}
 		s.ui.SetQueued(labels)
 	}
-	sum := 0
+	var sum int
 	for _, it := range s.items {
 		sum += it.est
 	}

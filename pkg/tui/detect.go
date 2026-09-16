@@ -111,8 +111,7 @@ func rgbFractions(rs, gs, bs string) (r, g, b float64, ok bool) {
 	return r, g, b, okR && okG && okB
 }
 
-// hexFraction scales one hex component by its own width, so "ff" and "ffff"
-// both read as full intensity.
+// hexFraction scales one hex component by its own width, so "ff" and "ffff" both read as full intensity.
 func hexFraction(s string) (float64, bool) {
 	if s == "" || len(s) > 4 {
 		return 0, false

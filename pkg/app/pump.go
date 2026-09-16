@@ -40,7 +40,7 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 	push()
 }
 
-func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
+func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
 	for line := range pump {
 		switch line.kind {
 		case command.KindCommand:
@@ -52,14 +52,14 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			// MCP servers load eagerly so the pre-first-prompt /tools picker and /mcp
 			// list already show them; LoadOnFirstMessage is idempotent (runs once).
 			if console.mcp.m != nil && (name == "tools" || name == "mcp") {
-				console.mcp.LoadOnFirstMessage(context.Background())
+				console.mcp.LoadOnFirstMessage(ctx)
 			}
 			cmd, ok := console.commands.Get(name)
 			if !ok {
 				console.Notify("unknown command /"+name, tui.LevelWarn)
 				continue
 			}
-			_ = cmd.Handler(context.Background(), arg, console)
+			_ = cmd.Handler(ctx, arg, console)
 		case command.KindPrompt:
 			if line.input == nil && strings.TrimSpace(line.rest) == "" {
 				continue
@@ -67,11 +67,11 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			// connect every MCP server in full, once, so its tools exist before this
 			// (the first) turn is assembled; /tools or /mcp changes made up to now hold
 			if console.mcp.m != nil {
-				console.mcp.LoadOnFirstMessage(context.Background())
+				console.mcp.LoadOnFirstMessage(ctx)
 			}
 			// flush staged shell results ahead of the message, waiting for any
 			// in-flight command to finish first
-			before := stager.Flush(context.Background())
+			before := stager.Flush(ctx)
 
 			in, echo, pending := promptInput(line, before, expander, func(n string) {
 				console.Notify(n, tui.LevelWarn)
@@ -85,7 +85,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			}
 			// only reached with no drain running, so a workflow may branch here
 			if hooks.beforePrompt != nil {
-				if wrapped, ok := hooks.beforePrompt(context.Background(), in); ok {
+				if wrapped, ok := hooks.beforePrompt(ctx, in); ok {
 					in = wrapped
 					est = submitEstimate(in, pending)
 				}
@@ -99,7 +99,7 @@ func runPump(pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *
 			if gate != nil {
 				gate.taken() // the submitted line starts its own turn; no handoff to wait for
 			}
-			startDrain(ui, recording, ag, q, in, started, hooks)
+			startDrain(ctx, ui, recording, ag, q, in, started, hooks)
 		}
 	}
 }
@@ -133,16 +133,16 @@ func submitEstimate(in agent.Input, pending int) int {
 	return est
 }
 
-func startDrain(ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, input agent.Input, started *bool, hooks planHooks) {
+func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, input agent.Input, started *bool, hooks planHooks) {
 	ui.SetIdle(false)
 	*started = true
 	go func() {
 		for {
-			err := ag.Prompt(context.Background(), input)
+			err := ag.Prompt(ctx, input)
 			// a workflow owns the next turn when it says so, errored turns included:
 			// its executor-retry rule depends on being reached after a failure.
 			if hooks.advance != nil {
-				if next, ok := hooks.advance(context.Background()); ok {
+				if next, ok := hooks.advance(ctx); ok {
 					input = next
 					continue
 				}

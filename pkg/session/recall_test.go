@@ -6,14 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // newRecallIndex builds a RecallIndex over a fresh store and history for ws.
 func newRecallIndex(t *testing.T) (*Store, string, *EditorHistory, *RecallIndex) {
 	t.Helper()
+
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir() // transcripts must live under the same workspace as recall
 	h, err := NewEditorHistory(s, ws, "")
@@ -24,6 +26,7 @@ func newRecallIndex(t *testing.T) (*Store, string, *EditorHistory, *RecallIndex)
 // recordPrompt appends one user text message to a fresh transcript in store for ws.
 func recordPrompt(t *testing.T, s *Store, ws, txt string) {
 	t.Helper()
+
 	w, err := s.Create(ws, SessionData{Version: sessionVersion})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })

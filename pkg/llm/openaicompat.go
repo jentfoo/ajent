@@ -223,8 +223,7 @@ func compatMessageFor(m Message, caps Capabilities, on bool) ([]compatMessage, e
 	return append(results, msg), nil
 }
 
-// compatContent renders blocks as a plain string, or as parts when an image is
-// present.
+// compatContent renders blocks as a plain string, or as parts when an image is present.
 func compatContent(blocks BlockList, caps Capabilities) ([]compatPart, string, error) {
 	var hasImage bool
 	for _, b := range blocks {

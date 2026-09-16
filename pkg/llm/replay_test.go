@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,14 +63,9 @@ func sseServerChunked(t *testing.T, fixture string, n int) (*httptest.Server, *c
 // otherwise fixed size chunks.
 func splitStream(data string, n int) []string {
 	if n <= 0 {
-		frames := strings.SplitAfter(data, "\n\n")
-		out := make([]string, 0, len(frames))
-		for _, f := range frames {
-			if f != "" {
-				out = append(out, f)
-			}
-		}
-		return out
+		return bulk.SliceFilterInPlace(func(f string) bool {
+			return f != ""
+		}, strings.SplitAfter(data, "\n\n"))
 	}
 	var out []string
 	for i := 0; i < len(data); i += n {

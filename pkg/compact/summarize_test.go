@@ -6,16 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// The summariser budget must carry forward what a merged checkpoint replaces:
-// at least minSummaryTokens, enough to hold any prior summary plus the new span,
-// and capped by what the model can emit.
 func TestSummarizeBudget(t *testing.T) {
 	t.Parallel()
 

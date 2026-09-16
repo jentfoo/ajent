@@ -20,18 +20,21 @@ type statusRecorder struct {
 func (r *statusRecorder) record(text, short string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	r.calls = append(r.calls, text)
 }
 
 func (r *statusRecorder) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return len(r.calls)
 }
 
 func (r *statusRecorder) first() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	if len(r.calls) == 0 {
 		return ""
 	}
@@ -41,6 +44,7 @@ func (r *statusRecorder) first() string {
 func (r *statusRecorder) last() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	if len(r.calls) == 0 {
 		return ""
 	}
@@ -77,7 +81,7 @@ func TestTypingGateHold(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatal("an empty draft must not hold the boundary")
 		}
-		assert.Equal(t, 0, rec.count(), "an unheld boundary publishes nothing")
+		assert.Equal(t, 0, rec.count())
 	})
 
 	t.Run("clear_releases", func(t *testing.T) {
@@ -108,13 +112,11 @@ func TestTypingGateHold(t *testing.T) {
 		// when the remaining seconds match what was shown before the clear
 		g.edit("draft A")
 		done := g.holdIn(t.Context())
-		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond,
-			"the first draft must publish its countdown")
+		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond)
 
 		g.edit("")  // clear: arms the handoff grace
 		g.edit("B") // retype within that grace
-		require.Eventually(t, func() bool { return rec.count() >= 2 }, time.Second, time.Millisecond,
-			"retyping must publish a fresh countdown rather than leave the stale one")
+		require.Eventually(t, func() bool { return rec.count() >= 2 }, time.Second, time.Millisecond)
 
 		g.edit("") // clear again so the hold can exit cleanly
 		select {
@@ -145,8 +147,7 @@ func TestTypingGateHold(t *testing.T) {
 
 		g.edit("draft")
 		done := g.holdIn(t.Context())
-		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond,
-			"the hold must be waiting on the draft before a prompt lands")
+		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond)
 
 		pending.Store(1) // a submitted line reached the queue during the hold
 		select {
@@ -165,8 +166,7 @@ func TestTypingGateHold(t *testing.T) {
 		defer cancel()
 		g.edit("draft")
 		done := g.holdIn(ctx)
-		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond,
-			"the hold must be waiting before it is cancelled")
+		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond)
 
 		cancel()
 		select {
@@ -212,7 +212,7 @@ func TestTypingGateHold(t *testing.T) {
 
 		g.submitted()
 		<-g.holdIn(t.Context())
-		assert.False(t, g.inFlight, "an elapsed handoff must clear so later boundaries never stall")
+		assert.False(t, g.inFlight)
 	})
 
 	t.Run("countdown_status_set_and_cleared", func(t *testing.T) {
@@ -225,8 +225,8 @@ func TestTypingGateHold(t *testing.T) {
 		<-g.holdIn(t.Context())
 
 		require.NotZero(t, rec.count())
-		assert.Contains(t, rec.first(), "paused ", "the countdown must name the remaining seconds")
-		assert.Empty(t, rec.last(), "release clears the published segment")
+		assert.Contains(t, rec.first(), "paused ")
+		assert.Empty(t, rec.last())
 	})
 }
 
@@ -236,26 +236,26 @@ func TestTypingGateEdit(t *testing.T) {
 	g := newTypingGate()
 	g.edit("hello")
 	assert.Equal(t, "hello", g.draft)
-	assert.False(t, g.inFlight, "typing into an empty draft must not arm inFlight")
+	assert.False(t, g.inFlight)
 
 	at := g.at
 
 	g.edit("world") // same non-empty -> non-empty transition keeps inFlight clear
 	assert.Equal(t, "world", g.draft)
 	assert.False(t, g.inFlight)
-	assert.True(t, g.at.After(at), "each edit advances the change timestamp")
+	assert.True(t, g.at.After(at))
 
 	g.edit("") // a real submit: ends the session; arming is submitted()'s job
 	assert.Empty(t, g.draft)
-	assert.False(t, g.inFlight, "an editor clear alone must not arm the handoff")
+	assert.False(t, g.inFlight)
 	sess := g.session
 
 	// editing to empty again when already empty must not re-arm after taken cleared it
 	g.taken()
 	assert.False(t, g.inFlight)
 	g.edit("")
-	assert.False(t, g.inFlight, "empty -> empty is not a submit; inFlight stays clear")
-	assert.Equal(t, sess, g.session, "an already-empty draft must not start a new session")
+	assert.False(t, g.inFlight)
+	assert.Equal(t, sess, g.session)
 
 	g.edit("draft") // typing again clears the stale handoff arm
 	assert.Equal(t, "draft", g.draft)
@@ -272,12 +272,12 @@ func TestTypingGateSubmitted(t *testing.T) {
 	g := newTypingGate()
 	g.edit("draft")
 	g.submitted()
-	assert.True(t, g.inFlight, "a submitted line arms the handoff grace")
+	assert.True(t, g.inFlight)
 
 	g.edit("next") // typing again supersedes the handoff wait
 	assert.False(t, g.inFlight)
 
 	g.submitted()
 	g.taken()
-	assert.False(t, g.inFlight, "taken ends the grace once the line resolves")
+	assert.False(t, g.inFlight)
 }

@@ -48,6 +48,7 @@ func TestCompatProviderStream(t *testing.T) {
 		}, eventKinds(events))
 		assert.Equal(t, "Hello world", textOf(events))
 	})
+
 	t.Run("accumulates_to_a_message", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/text.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -61,6 +62,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, BlockList{TextBlock{Text: "Hello world"}}, msg.Content)
 		assert.Equal(t, Usage{Input: 12, Output: 3}, usage)
 	})
+
 	t.Run("reasoning_content_field_records_source", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/reasoning_content.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -80,6 +82,7 @@ func TestCompatProviderStream(t *testing.T) {
 		}
 		assert.Equal(t, "reasoning_content", tb.Field)
 	})
+
 	t.Run("reasoning_text_field_read_last", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/reasoning_text.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -97,6 +100,7 @@ func TestCompatProviderStream(t *testing.T) {
 		}
 		assert.Equal(t, "reasoning_text", tb.Field)
 	})
+
 	t.Run("reasoning_content_precedes_reasoning", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/reasoning_precedence.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -108,6 +112,7 @@ func TestCompatProviderStream(t *testing.T) {
 		// reasoning_content is read before reasoning; chutes sends both fields
 		assert.Equal(t, "preferred", thinkingOf(events))
 	})
+
 	t.Run("separated_reasoning_regions_stay_clean", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/second_thinking.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -127,6 +132,7 @@ func TestCompatProviderStream(t *testing.T) {
 			TextBlock{Text: "more text"},
 		}, msg.Content)
 	})
+
 	t.Run("think_tags_split_across_deltas", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/think_tags.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -142,6 +148,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, "pondering", thinkingOf(events))
 		assert.Equal(t, "the answer", textOf(events)) // no leaked tag fragment
 	})
+
 	t.Run("tool_arguments_split_mid_token", func(t *testing.T) {
 		// 17 bytes is coprime with the frame lengths, so a write boundary lands
 		// inside a JSON escape and proves reassembly happens before decoding
@@ -163,6 +170,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.JSONEq(t, `{"path": "main.go"}`, string(call.Input))
 		assert.Equal(t, Usage{Input: 120, Output: 18}, usage)
 	})
+
 	t.Run("parallel_tool_calls", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/parallel_tools.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -177,6 +185,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, "call_1", msg.Content[0].(ToolCallBlock).ID)
 		assert.Equal(t, "call_2", msg.Content[1].(ToolCallBlock).ID)
 	})
+
 	t.Run("malformed_args_fail_the_call_not_the_turn", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/malformed_tool_args.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -211,6 +220,7 @@ func TestCompatProviderStream(t *testing.T) {
 
 		require.Len(t, acc.Message().Content, 2) // both calls reach the agent for dispatch
 	})
+
 	t.Run("stop_reason_tool_use", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/parallel_tools.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -223,6 +233,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, EventDone, last.Type)
 		assert.Equal(t, StopToolUse, last.StopReason)
 	})
+
 	t.Run("usage_only_final_frame", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/usage_only.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -239,6 +250,7 @@ func TestCompatProviderStream(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, Usage{Input: 10, CacheRead: 40}, usage)
 	})
+
 	t.Run("mid_stream_error_surfaces_the_partial", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/error_midstream.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -259,6 +271,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, StopError, last.StopReason)
 		assert.Error(t, last.Err)
 	})
+
 	t.Run("close_mid_stream_is_not_an_error", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/text.sse")
 		p := newCompatTestProvider(t, srv.URL)
@@ -301,6 +314,7 @@ func TestCompatStreamFinishReason(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, StopToolUse, stop)
 	})
+
 	t.Run("no_finish_text_infer_end_turn", func(t *testing.T) {
 		caps := flavorDefaults[FlavorLMStudio].caps
 		caps.SupportsFinishReason = false
@@ -308,6 +322,7 @@ func TestCompatStreamFinishReason(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, StopEndTurn, stop)
 	})
+
 	t.Run("no_finish_with_support_is_truncation", func(t *testing.T) {
 		caps := flavorDefaults[FlavorLMStudio].caps
 		caps.SupportsFinishReason = true
@@ -329,6 +344,7 @@ func TestBuildCompatBody(t *testing.T) {
 	}
 	decode := func(t *testing.T, body []byte) map[string]any {
 		t.Helper()
+
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
 		return m
@@ -350,6 +366,7 @@ func TestBuildCompatBody(t *testing.T) {
 			]
 		}`, string(body))
 	})
+
 	t.Run("max_completion_tokens_field", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.MaxTokensField = fieldMaxCompletion
@@ -361,6 +378,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.InDelta(t, 100, m["max_completion_tokens"], 0.001)
 		assert.NotContains(t, m, "max_tokens")
 	})
+
 	t.Run("developer_role_when_supported", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.DeveloperRole = true
@@ -369,6 +387,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"role":"developer"`)
 	})
+
 	t.Run("prompt_cache_key_when_enabled", func(t *testing.T) {
 		req := baseReq()
 		req.SessionID = t.Name()
@@ -379,6 +398,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"prompt_cache_key":"`+t.Name()+`"`)
 	})
+
 	t.Run("no_prompt_cache_key_when_disabled", func(t *testing.T) {
 		req := baseReq()
 		req.SessionID = t.Name()
@@ -388,6 +408,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), "prompt_cache_key")
 	})
+
 	t.Run("no_prompt_cache_key_when_uncapable", func(t *testing.T) {
 		req := baseReq() // lmstudio flavor: no SupportsExplicitPromptCache
 		req.SessionID = t.Name()
@@ -397,6 +418,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), "prompt_cache_key")
 	})
+
 	t.Run("temperature_omitted_when_unsupported", func(t *testing.T) {
 		req := baseReq()
 		temp := 0.7
@@ -407,6 +429,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, decode(t, body), "temperature")
 	})
+
 	t.Run("temperature_sent_when_supported", func(t *testing.T) {
 		req := baseReq()
 		temp := 0.7
@@ -416,6 +439,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 0.7, decode(t, body)["temperature"], 0.001)
 	})
+
 	t.Run("stream_usage_omitted_when_unsupported", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.StreamUsage = false
@@ -424,6 +448,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, decode(t, body), "stream_options")
 	})
+
 	t.Run("tools_and_choice", func(t *testing.T) {
 		req := baseReq()
 		req.Tools = []ToolSchema{{Name: "read", Description: "read a file",
@@ -439,6 +464,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.Len(t, tools, 1)
 		assert.Equal(t, "function", tools[0].(map[string]any)["type"])
 	})
+
 	t.Run("specific_tool_choice", func(t *testing.T) {
 		req := baseReq()
 		req.Tools = []ToolSchema{{Name: "read"}}
@@ -448,6 +474,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"tool_choice":{"function":{"name":"read"},"type":"function"}`)
 	})
+
 	t.Run("tool_results_become_tool_messages", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{
@@ -468,6 +495,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Equal(t, "c1", last["tool_call_id"])
 		assert.Equal(t, "file body", last["content"])
 	})
+
 	t.Run("reasoning_effort_for_effort_models", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Reasoning, req.Model.Caps.Thinking = true, ThinkingOpenAI
@@ -477,6 +505,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "high", decode(t, body)["reasoning_effort"])
 	})
+
 	t.Run("level_map_translates_the_effort", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Reasoning, req.Model.Caps.Thinking = true, ThinkingOpenAI
@@ -487,6 +516,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "high", decode(t, body)["reasoning_effort"])
 	})
+
 	t.Run("null_level_map_entry_omits_the_parameter", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Reasoning, req.Model.Caps.Thinking = true, ThinkingOpenAI
@@ -497,6 +527,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, decode(t, body), "reasoning_effort")
 	})
+
 	t.Run("extra_body_is_merged", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.ExtraBody = map[string]json.RawMessage{
@@ -506,6 +537,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 40, decode(t, body)["top_k"], 0.001)
 	})
+
 	t.Run("image_content_becomes_parts", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Images = true
@@ -519,6 +551,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"type":"image_url"`)
 		assert.Contains(t, string(body), "data:image/png;base64,AQID")
 	})
+
 	t.Run("image_downgraded_when_unsupported", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Images = false
@@ -530,6 +563,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), imageOmitted)
 	})
+
 	t.Run("reasoning_replays_to_its_source_field", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning.Retain = RetainAll
@@ -544,6 +578,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":"because"`)
 	})
+
 	t.Run("replays_to_block_field_without_config", func(t *testing.T) {
 		// no configured ReasoningField: the block's own source field wins
 		req := baseReq()
@@ -560,6 +595,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning":"pondered"`)
 	})
+
 	t.Run("configured_field_overrides_block_source", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.ReasoningField = "custom_reason"
@@ -575,6 +611,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"custom_reason":"pondered"`)
 	})
+
 	t.Run("multi_block_thinking_joined_with_newline", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning.Retain = RetainAll
@@ -590,6 +627,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":"first\nsecond"`)
 	})
+
 	t.Run("empty_reasoning_forced_when_level_on", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelHigh, Retain: RetainAll}
@@ -601,6 +639,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":""`)
 	})
+
 	t.Run("no_empty_reasoning_when_level_off", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Retain: RetainAll}
@@ -612,6 +651,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), `reasoning_content`)
 	})
+
 	t.Run("non_deepseek_replay_override_forces_empty", func(t *testing.T) {
 		// requiresReplayReasoningOnAssistantMessages drives the empty echo for any
 		// model, not just deepseek; detection supplies it for deepseek by default
@@ -626,6 +666,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"reasoning_content":""`)
 	})
+
 	t.Run("non_deepseek_without_replay_sends_nothing", func(t *testing.T) {
 		// the field stays silent when not requested: ReplayReasoning is now a real gate
 		req := baseReq()
@@ -640,6 +681,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), `reasoning_content`)
 	})
+
 	t.Run("empty_assistant_message_skipped", func(t *testing.T) {
 		// neither content nor tool calls: dropped regardless of reasoning fields
 		req := baseReq()
@@ -653,6 +695,7 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), `reasoning_content`)
 	})
+
 	t.Run("profile_decorator_runs", func(t *testing.T) {
 		body, err := buildCompatBody(baseReq(), compatProfile{
 			decorate: func(b *compatRequest, _ Request) { b.CachePrompt = ptr(true) },
@@ -676,20 +719,24 @@ func TestCompatUsageToUsage(t *testing.T) {
 			"prompt_tokens_details":{"cached_tokens":30}}`)
 		assert.Equal(t, Usage{Input: 70, Output: 20, CacheRead: 30}, got)
 	})
+
 	t.Run("deepseek_prompt_cache_hit", func(t *testing.T) {
 		got := decode(`{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":30}`)
 		assert.Equal(t, Usage{Input: 70, Output: 20, CacheRead: 30}, got)
 	})
+
 	t.Run("present_zero_wins_over_fallback", func(t *testing.T) {
 		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
 			"prompt_cache_hit_tokens":30,"prompt_tokens_details":{"cached_tokens":0}}`)
 		assert.Equal(t, Usage{Input: 100, Output: 20}, got)
 	})
+
 	t.Run("cache_write_subtracted", func(t *testing.T) {
 		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
 			"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":10}}`)
 		assert.Equal(t, Usage{Input: 60, Output: 20, CacheRead: 30, CacheWrite: 10}, got)
 	})
+
 	t.Run("reasoning_tokens", func(t *testing.T) {
 		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
 			"completion_tokens_details":{"reasoning_tokens":12}}`)

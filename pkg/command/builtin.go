@@ -8,6 +8,13 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
+// notice levels re-exported for handlers
+const (
+	levelInfo  = tui.LevelInfo
+	levelWarn  = tui.LevelWarn
+	levelError = tui.LevelError
+)
+
 // RegisterBuiltins installs /help, /model, /reasoning, /usage, /compact, /tools,
 // /session, /mcp, /agents, /settings and /exit into r against c. The driver adds
 // its feature commands (/plan*, /init) to the same registry on top.
@@ -134,10 +141,3 @@ func filterPrefix(names []string, prefix string) []string {
 	}
 	return out
 }
-
-// notice levels re-exported for handlers
-const (
-	levelInfo  = tui.LevelInfo
-	levelWarn  = tui.LevelWarn
-	levelError = tui.LevelError
-)

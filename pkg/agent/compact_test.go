@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestOverflowRetry(t *testing.T) {
@@ -108,13 +109,11 @@ func TestThresholdHookAtTurnBoundary(t *testing.T) {
 	assert.Equal(t, []CompactReason{CompactStep, CompactThreshold}, reasons)
 }
 
-// an errored turn is still a real boundary for the per-turn state reset, but it
-// must not trigger the threshold fold: nothing was appended for the failed stream.
 func TestTurnBoundaryFiresOnErroredTurn(t *testing.T) {
 	t.Parallel()
 
 	var reasons []CompactReason
-	boundaries := 0
+	var boundaries int
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}
 	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
@@ -129,13 +128,9 @@ func TestTurnBoundaryFiresOnErroredTurn(t *testing.T) {
 	err := a.Prompt(t.Context(), Input{Text: "x"})
 	require.ErrorIs(t, err, llm.ErrContextOverflow)
 	assert.Equal(t, 1, boundaries) // the boundary still re-arms per-turn state
-	// no threshold fold on an errored turn; step and overflow hooks may fire but
-	// never the clean-end-only one.
 	assert.NotContains(t, reasons, CompactThreshold)
 }
 
-// the hook is asked before every stream, not only once per turn, so a tool result
-// cannot leave the turn running past the compaction point.
 func TestStepHookAtEveryStepBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -162,8 +157,6 @@ func TestStepHookAtEveryStepBoundary(t *testing.T) {
 	}, reasons)
 }
 
-// a step compaction swaps State.Messages from the turn goroutine, and the next
-// stream must assemble from what it left rather than the pre-compaction list.
 func TestStepHookReducesContextMidTurn(t *testing.T) {
 	t.Parallel()
 

@@ -17,7 +17,6 @@ func TestRgReadOnly(t *testing.T) {
 		{"plain pattern", []string{"rg", "pattern"}, true},
 		{`common flags`, []string{"rg", "-l", "--json", "pattern"}, true},
 		{`pre glob inert`, []string{"rg", "--pre-glob", `*.txt`, "pattern"}, true},
-
 		// exec vectors fail safe.
 		{`--pre command`, []string{"rg", "--pre", "cmd", "pattern"}, false},
 		{`--pre attached`, []string{"rg", "--pre=cmd", "pattern"}, false},

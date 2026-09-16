@@ -6,17 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// TestEmptySummary covers the nudge-then-summarise retry for thinking-only replies.
 func TestEmptySummary(t *testing.T) {
 	t.Parallel()
 
-	// a thinking-only final message is followed by one nudge and then the real summary.
+	// a thinking-only final message is followed by one nudge and then the real summary
 	t.Run("nudges_then_summarises", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{
 			{Events: thinkingOnlyTurn()}, // no text; triggers a nudge
@@ -32,7 +32,7 @@ func TestEmptySummary(t *testing.T) {
 		assert.Contains(t, j.Summary, "the answer is 42")
 	})
 
-	// a bounded retry gives up: short reasoning fails rather than reporting done.
+	// a bounded retry gives up: short reasoning fails rather than reporting done
 	t.Run("short_thinking_fails", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{
 			{Events: thinkingOnlyTurn()}, // no text; triggers a nudge
@@ -66,7 +66,7 @@ func TestEmptySummary(t *testing.T) {
 		assert.Contains(t, j.Summary, think)
 	})
 
-	// long mid-investigation reasoning is excluded by the tool-call boundary.
+	// long mid-investigation reasoning is excluded by the tool-call boundary
 	t.Run("tool_turn_thinking_ignored", func(t *testing.T) {
 		longThink := strings.Repeat("reasoning ", 30) // past minThinkingSummary, but pre-tool
 		toolTurn := []llm.Event{
@@ -100,6 +100,7 @@ func TestEmptySummary(t *testing.T) {
 
 func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 	t.Parallel()
+
 	b := &blockingProvider{}
 	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
 	t.Cleanup(m.Close)
@@ -113,6 +114,7 @@ func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 
 func TestRunInheritsModel(t *testing.T) {
 	t.Parallel()
+
 	_, sp := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
 	p := func(llm.Model) (llm.Provider, error) { return sp, nil }
 	m := New(Options{

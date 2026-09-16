@@ -18,8 +18,7 @@ type DeleteOptions struct {
 }
 
 // RunDelete removes saved sessions per --delete or --delete-old and returns
-// the process exit code. Progress goes to out; in answers the sweep's
-// confirmation.
+// the process exit code. Progress goes to out; in answers the sweep's confirmation.
 func RunDelete(out io.Writer, in io.Reader, o DeleteOptions) int {
 	store, err := session.NewStore()
 	if err == nil {
@@ -32,7 +31,7 @@ func RunDelete(out io.Writer, in io.Reader, o DeleteOptions) int {
 		}
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
 		return ExitUsage
 	}
 	return ExitOK

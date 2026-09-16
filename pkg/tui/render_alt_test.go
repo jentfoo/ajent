@@ -52,6 +52,7 @@ func TestAltRendererRender(t *testing.T) {
 			assert.Equal(t, want, v.Line(i))
 		}
 	})
+
 	t.Run("clear_history_repaints", func(t *testing.T) {
 		v := newVT(20, 4)
 		r := newTestAlt(v)
@@ -62,6 +63,7 @@ func TestAltRendererRender(t *testing.T) {
 		r.clearHistory()
 		assert.Empty(t, v.Line(2))
 	})
+
 	t.Run("older_output_falls_off_the_top", func(t *testing.T) {
 		v := newVT(20, 5)
 		r := newTestAlt(v)
@@ -114,17 +116,21 @@ func TestAltRendererScroll(t *testing.T) {
 		assert.Equal(t, "b", v.Line(0))
 		assert.Equal(t, "d", v.Line(2))
 	})
+
 	t.Run("marks_the_status_line", func(t *testing.T) {
 		assert.Contains(t, v.Line(4), "[scrolled]")
 	})
+
 	t.Run("clamped_at_the_oldest_line", func(t *testing.T) {
 		r.scroll(100)
 		assert.Equal(t, "a", v.Line(0))
 	})
+
 	t.Run("new_output_holds_the_position", func(t *testing.T) {
 		commitText(r, "g")
 		assert.Equal(t, "a", v.Line(0))
 	})
+
 	t.Run("scrolls_forward_to_the_tail", func(t *testing.T) {
 		r.scroll(-100)
 		assert.Equal(t, "g", v.Line(2))

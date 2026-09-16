@@ -5,16 +5,17 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestToolsCommand(t *testing.T) {
 	t.Parallel()
 
-	// before the first prompt, a free multi-select can enable any tool.
+	// before the first prompt, a free multi-select can enable any tool
 	t.Run("free_select_before_started", func(t *testing.T) {
 		c := newFakeConsole(t)
 		// register a couple of tools; ls is disabled by default
@@ -32,7 +33,7 @@ func TestToolsCommand(t *testing.T) {
 		assert.Equal(t, 1, c.toolsChanged)
 	})
 
-	// after the first prompt only disabled tools are offered (widen-only).
+	// after the first prompt only disabled tools are offered (widen-only)
 	t.Run("widen_only_after_started", func(t *testing.T) {
 		c := newFakeConsole(t)
 		c.tools.Register(&fakeToolAdapter{name: "read"}, true)

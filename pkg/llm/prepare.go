@@ -162,8 +162,7 @@ func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
 		out = append(out, m)
 		if len(images) > 0 {
 			// a user message carries the images with the tool-result lead-in text;
-			// RequiresAssistantAfterToolResult then places its bridge ahead of it in
-			// repairTurns.
+			// RequiresAssistantAfterToolResult then places its bridge ahead of it in repairTurns.
 			attach := make([]Block, 1, len(images)+1)
 			attach[0] = TextBlock{Text: "Attached image(s) from tool result:"}
 			out = append(out, Message{Role: RoleUser, Content: BlockList(append(attach, images...))})
@@ -172,9 +171,8 @@ func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
 	return out
 }
 
-// normalizeContent is the merged retention and cross-model degradation pass. Per
-// message it computes keep from the policy and foreign from whether its origin
-// matches target, then rewrites blocks once.
+// normalizeContent is the merged retention and cross-model degradation pass. Per-message it computes
+// keep from the policy and foreign from whether its origin matches target, then rewrites blocks once.
 func normalizeContent(msgs []Message, policy RetainPolicy, caps Capabilities, target Origin) []Message {
 	policy = resolveRetention(policy, caps)
 	keepFrom, lastAssistant := retentionBounds(msgs)
@@ -453,9 +451,8 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 	return out
 }
 
-// normalizeCallID returns id in the form target dialect accepts. kind marks how
-// far the source crossed: a same-endpoint model switch drops an fc_ item, while
-// a foreign endpoint hashes it.
+// normalizeCallID returns id in the form target dialect accepts. kind marks how far the source
+// crossed: a same-endpoint model switch drops an fc_ item, while a foreign endpoint hashes it.
 func normalizeCallID(id string, caps Capabilities, provider string, kind callKind) string {
 	switch caps.Dialect {
 	case DialectAnthropic:
@@ -536,9 +533,8 @@ func cutID(s string, n int) string {
 // utf8RuneStart reports whether the byte is a UTF-8 rune start.
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
-// shortHash returns an FNV-64a base36 digest of s, for ids that must be bounded
-// and stable within ajent. Only determinism matters here; the exact hash function
-// is free to change.
+// shortHash returns an FNV-64a base36 digest of s, for ids that must be bounded and stable within
+// ajent. Only determinism matters here; the exact hash function is free to change.
 func shortHash(s string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(s))

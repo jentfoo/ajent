@@ -9,14 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestInitCommands(t *testing.T) {
@@ -296,6 +297,7 @@ func newInitHarness(t *testing.T) *initHarness {
 // awaitPump returns the line the survey handed back, failing if none arrives.
 func (h *initHarness) awaitPump(t *testing.T) pumpLine {
 	t.Helper()
+
 	select {
 	case line := <-h.pump:
 		return line
@@ -321,6 +323,7 @@ func callIDs(msgs []llm.Message) []string {
 func (h *initHarness) notices() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
 	return append([]string(nil), h.msgs...)
 }
 
@@ -328,6 +331,7 @@ func (h *initHarness) notices() []string {
 func (c *initController) running() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.cancel != nil
 }
 

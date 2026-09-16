@@ -2,10 +2,9 @@ package llm
 
 import "strings"
 
-// thinkSplitter routes streamed content to text or thinking for models that
-// mark reasoning with inline tags. Bytes that could still be the start of a tag
-// are withheld until the next delta resolves them, so a tag split across
-// several deltas never leaks into the visible text.
+// thinkSplitter routes streamed content to text or thinking for models that mark reasoning with
+// inline tags. Bytes that could still be the start of a tag are withheld until the next delta
+// resolves them, so a tag split across several deltas never leaks into the visible text.
 type thinkSplitter struct {
 	open   string
 	close  string
@@ -75,8 +74,7 @@ func (s *thinkSplitter) emit(text, thinking *strings.Builder, chunk string) {
 	}
 }
 
-// partialTagLen returns the length of the longest suffix of buf that is a
-// proper prefix of tag.
+// partialTagLen returns the length of the longest suffix of buf that is a proper prefix of tag.
 func partialTagLen(buf, tag string) int {
 	n := min(len(buf), len(tag)-1)
 	for ; n > 0; n-- {

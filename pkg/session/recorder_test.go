@@ -4,11 +4,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // captureSink records the notices and turn ends it receives.
@@ -39,7 +40,7 @@ func countMessages(t *testing.T, p string) int {
 	t.Helper()
 	entries, _, err := Read(p)
 	require.NoError(t, err)
-	n := 0
+	var n int
 	for _, e := range entries {
 		if e.Type == TypeMessage {
 			n++
@@ -116,7 +117,7 @@ func TestRecorderWriteFailureNoticesInsteadOfFailing(t *testing.T) {
 func TestRecorderTypedRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	// setting and custom entries round-trip through the transcript.
+	// setting and custom entries round-trip through the transcript
 	t.Run("setting_and_custom_round_trip", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
@@ -139,7 +140,7 @@ func TestRecorderTypedRoundTrip(t *testing.T) {
 		assert.Equal(t, "plan", cd.CustomType)
 	})
 
-	// a model change persists its key.
+	// a model change persists its key
 	t.Run("model_change_persists_key", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})

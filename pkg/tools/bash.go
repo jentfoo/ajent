@@ -30,8 +30,7 @@ const (
 	maxBashTimeout     = 10 * time.Minute
 )
 
-// ToolBash is the built-in shell tool's name; its command feeds the permission
-// classifier.
+// ToolBash is the built-in shell tool's name; its command feeds the permission classifier.
 const ToolBash = "bash"
 
 // bashTool runs one non-login bash -c process per call. A fresh shell each time
@@ -262,8 +261,7 @@ func exitStatus(err error, state *os.ProcessState) string {
 	return "command failed: " + err.Error() + "\n"
 }
 
-// deathSignal returns the signal that killed err's process, if a signal did
-// rather than an exit code.
+// deathSignal returns the signal that killed err's process, if a signal did rather than an exit code.
 func deathSignal(err error) (syscall.Signal, bool) {
 	var ee *exec.ExitError
 	if !errors.As(err, &ee) {

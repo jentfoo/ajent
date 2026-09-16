@@ -5,14 +5,14 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// fakeQueueUI records every call the steer queue makes, so tests assert on what
-// reached the TUI without one.
+// fakeQueueUI records every call the steer queue makes, so tests assert on what reached the TUI.
 type fakeQueueUI struct {
 	queued    [][]string
 	echoed    []string
@@ -57,7 +57,7 @@ func TestSteerQueuePending(t *testing.T) {
 
 	assert.Equal(t, 0, q.pending())
 	q.offer(agent.Input{Text: "seed"}, "one", 1) // starts the drain; not queued
-	assert.Equal(t, 0, q.pending(), "the running turn's input is not pending")
+	assert.Equal(t, 0, q.pending())
 
 	require.True(t, q.offer(agent.Input{Text: "a"}, "alpha", 2))
 	assert.Equal(t, 1, q.pending())
@@ -65,7 +65,7 @@ func TestSteerQueuePending(t *testing.T) {
 	assert.Equal(t, 2, q.pending())
 
 	q.take()
-	assert.Equal(t, 0, q.pending(), "pulling the batch empties it")
+	assert.Equal(t, 0, q.pending())
 }
 
 func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
@@ -85,7 +85,7 @@ func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.Equal(t, "first\nsecond", out[0].Text)
 	assert.Len(t, out[0].Before, 2)
-	assert.Nil(t, out[0].After, "no queued item carried @ reads")
+	assert.Nil(t, out[0].After)
 
 	out[0].Delivered() // fires once the batch lands
 	assert.Contains(t, fake.echoed, "label one\nlabel two")

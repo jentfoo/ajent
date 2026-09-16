@@ -10,15 +10,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // runTool executes a tool against the manager with canned args.
 func exec(t *testing.T, tl agent.Tool, input any) (agent.ToolResult, error) {
 	t.Helper()
+
 	raw, err := json.Marshal(input)
 	require.NoError(t, err)
 	return tl.Execute(t.Context(), agent.ToolCall{ID: "c1", Name: tl.Name(), Input: raw}, discardOutput{})
@@ -33,6 +35,7 @@ func (discardOutput) Diff(string, string, string)     {}
 // toolsManager wires a Manager over scripted turns for tool-level tests.
 func toolsManager(t *testing.T, d *delayedProvider, timeout time.Duration) (*Manager, []agent.Tool) {
 	t.Helper()
+
 	opts := Options{
 		PollTimeout: timeout,
 	}
@@ -95,8 +98,7 @@ func TestAgentPoll(t *testing.T) {
 		assert.False(t, res.IsError) // bare 1 resolves to sub-1
 	})
 
-	// a lone poll's payload lands directly under its own tool header, so naming it
-	// again would be noise.
+	// a lone poll's payload lands directly under its own tool header, so naming it again would be noise
 	t.Run("lone_poll_display_is_bare", func(t *testing.T) {
 		m, tools := toolsManager(t, nil, time.Second)
 		id := m.Start("x", "")
@@ -182,6 +184,7 @@ func TestAgentPoll(t *testing.T) {
 
 func TestAgentListEmptyAndPopulated(t *testing.T) {
 	t.Parallel()
+
 	m, tools := toolsManager(t, nil, time.Second)
 	res, err := exec(t, tools[2], map[string]any{})
 	require.NoError(t, err)
@@ -197,6 +200,7 @@ func TestAgentListEmptyAndPopulated(t *testing.T) {
 
 func TestAgentToolsAreParallelAndLabeled(t *testing.T) {
 	t.Parallel()
+
 	_, tools := toolsManager(t, nil, time.Second)
 	for _, tl := range tools {
 		assert.Equal(t, agent.ModeParallel, tl.Mode())
@@ -206,6 +210,7 @@ func TestAgentToolsAreParallelAndLabeled(t *testing.T) {
 
 func TestSubagentLabelsNameTheirTarget(t *testing.T) {
 	t.Parallel()
+
 	_, tools := toolsManager(t, nil, time.Second)
 
 	startLabel := func(task string) string {
@@ -225,13 +230,14 @@ func TestSubagentLabelsNameTheirTarget(t *testing.T) {
 	assert.Equal(t, "sub-agent: poll sub-2", poll("sub-2"))
 	assert.Equal(t, "sub-agent: poll sub-3", poll("3")) // bare id normalizes
 
-	// unparseable or empty args fall back to the generic label.
+	// unparseable or empty args fall back to the generic label
 	assert.Contains(t, tools[0].Label(agent.ToolCall{}), "start")
 	assert.Equal(t, "sub-agent: poll", tools[1].Label(agent.ToolCall{Input: json.RawMessage(`{"id":""}`)}))
 }
 
 func TestAgentStartDescriptionStatesContract(t *testing.T) {
 	t.Parallel()
+
 	_, tools := toolsManager(t, nil, time.Second)
 	d := tools[0].Description()
 	for _, want := range []string{"read", "grep", "find", "ls", "no session context"} {
@@ -269,11 +275,9 @@ func startCall(id, task string) []llm.Event {
 	}
 }
 
-// TestStartIDOrder asserts ids follow the order the model asked for the agents.
-// agent_start is ModeParallel, so the dispatch goroutines race for the id counter:
-// without the batch reservation the task submitted last routinely became sub-1.
 func TestStartIDOrder(t *testing.T) {
 	t.Parallel()
+
 	g := &gatedProvider{}
 	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return g, nil }})
 	t.Cleanup(m.Close)

@@ -88,7 +88,8 @@ func spanStubs(branch []session.Entry, lo, band int, cwd string) []session.Stub 
 			// the key includes name and path so two distinct results that happen to
 			// share bytes are not collapsed into each other
 			key := c.name + "\x00" + c.path + "\x00" + text
-			first, dup := "", false
+			var first string
+			var dup bool
 			if text != "" {
 				first, dup = seen[key]
 				if !dup {

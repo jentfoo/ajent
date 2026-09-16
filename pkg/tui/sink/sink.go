@@ -1,6 +1,3 @@
-// Package sink adapts an agent turn's events onto a *tui.UI, keeping the front
-// end in main thin. It imports pkg/agent only for the event types and maps each
-// one to the corresponding TUI call; pkg/tui itself never sees the agent.
 package sink
 
 import (

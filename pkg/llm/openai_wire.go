@@ -18,8 +18,7 @@ const (
 	respEncryptedInclude = "reasoning.encrypted_content"
 )
 
-// respMinOutputTokens is openai's floor on max_output_tokens, below which a
-// request is rejected.
+// respMinOutputTokens is openai's floor on max_output_tokens, below which a request is rejected.
 const respMinOutputTokens = 16
 
 // openaiPromptCacheKeyLimit is the API's cap on prompt_cache_key length.
@@ -108,8 +107,7 @@ type respContent struct {
 	ImageURL string `json:"image_url,omitempty"`
 }
 
-// respTool is a tool definition. Unlike chat-completions it is flat, not nested
-// under a function key.
+// respTool is a tool definition. Unlike chat-completions it is flat, not nested under a function key.
 type respTool struct {
 	Type        string          `json:"type"`
 	Name        string          `json:"name"`
@@ -167,11 +165,11 @@ func (u *respUsage) toUsage() Usage {
 	if u == nil {
 		return Usage{}
 	}
-	cacheRead := 0
+	var cacheRead int
 	if u.InputTokensDetails.CachedTokens != nil {
 		cacheRead = *u.InputTokensDetails.CachedTokens
 	}
-	cacheWrite := 0
+	var cacheWrite int
 	if u.InputTokensDetails.CacheWriteTokens != nil {
 		cacheWrite = *u.InputTokensDetails.CacheWriteTokens
 	}

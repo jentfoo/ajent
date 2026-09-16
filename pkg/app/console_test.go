@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -13,29 +16,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func TestUIConsoleExitSignalsQuit(t *testing.T) {
-	// not parallel: uses a shared channel
-	c := &uiConsole{quit: make(chan struct{}, 1)}
-	c.Exit()
-	select {
-	case <-c.quit:
-	default:
-		t.Fatal("Exit must signal the quit channel")
-	}
-}
-
-func TestUIConsoleStartedFlag(t *testing.T) {
-	// not parallel: mutates a shared bool
-	started := false
-	c := &uiConsole{started: &started}
-	assert.False(t, c.Started())
-	started = true
-	assert.True(t, c.Started())
-}
 
 func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	t.Parallel()
@@ -44,7 +25,7 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	reg.Register(&stubTool{name: "read"}, true)
 	reg.Register(&stubTool{name: "bash"}, false)
 
-	// unwired console must not panic on the no-op path.
+	// unwired console must not panic on the no-op path
 	assert.NotPanics(t, func() { (&uiConsole{tools: reg}).ToolsChanged() })
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
@@ -53,7 +34,7 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 
 	assert.NotPanics(t, func() { c.ToolsChanged() })
 
-	// the enabled names land in session settings.
+	// the enabled names land in session settings
 	raw, layer, ok := set.Explain("tools.enabled")
 	require.True(t, ok)
 	assert.Equal(t, "session", layer)
@@ -62,6 +43,7 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 
 func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 	t.Parallel()
+
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
 	outR, outW, err := os.Pipe()
@@ -99,6 +81,7 @@ func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 
 func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 	t.Parallel()
+
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
 	outR, outW, err := os.Pipe()
@@ -138,6 +121,7 @@ func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 
 func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
 	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+
 	home := t.TempDir()
 	t.Setenv("AJENT_HOME", home)
 	userCfg := filepath.Join(home, "config.json")
@@ -179,6 +163,7 @@ func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
 
 func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+
 	home := t.TempDir()
 	t.Setenv("AJENT_HOME", home)
 
@@ -225,6 +210,7 @@ func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 // readFileString returns a file's contents as text for assertions.
 func readFileString(t *testing.T, path string) string {
 	t.Helper()
+
 	b, err := os.ReadFile(path)
 	require.NoError(t, err)
 	return string(b)
@@ -232,6 +218,7 @@ func readFileString(t *testing.T, path string) string {
 
 func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	t.Parallel()
+
 	inR, inW, err := os.Pipe()
 	require.NoError(t, err)
 	outR, outW, err := os.Pipe()

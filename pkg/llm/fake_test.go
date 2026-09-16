@@ -27,6 +27,7 @@ func TestScriptedProviderStream(t *testing.T) {
 			require.NoError(t, s.Close())
 		}
 	})
+
 	t.Run("records_requests", func(t *testing.T) {
 		p := &ScriptedProvider{Turns: []ScriptedTurn{{}, {}}}
 		_, err := p.Stream(t.Context(), Request{MaxTokens: 10})
@@ -39,17 +40,20 @@ func TestScriptedProviderStream(t *testing.T) {
 		assert.Equal(t, 10, got[0].MaxTokens)
 		assert.Equal(t, 20, got[1].MaxTokens)
 	})
+
 	t.Run("exhausted_script_errors", func(t *testing.T) {
 		p := &ScriptedProvider{}
 		_, err := p.Stream(t.Context(), Request{})
 		assert.ErrorIs(t, err, ErrScriptExhausted)
 	})
+
 	t.Run("turn_error_returned", func(t *testing.T) {
 		want := errors.New("rate limited")
 		p := &ScriptedProvider{Turns: []ScriptedTurn{{Err: want}}}
 		_, err := p.Stream(t.Context(), Request{})
 		assert.ErrorIs(t, err, want)
 	})
+
 	t.Run("cancelled_context", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()

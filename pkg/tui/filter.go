@@ -16,7 +16,8 @@ func verbatimScore(text, query string) (int, bool) {
 	}
 	lowText, lowQuery := strings.ToLower(text), strings.ToLower(query)
 
-	best, found := 0, false
+	var best int
+	var found bool
 	for i := 0; i < len(lowText); {
 		idx := strings.Index(lowText[i:], lowQuery)
 		if idx < 0 {
@@ -45,7 +46,7 @@ func matchScore(text, query string) (int, bool) {
 	lowText, lowQuery := strings.ToLower(text), strings.ToLower(query)
 
 	var score, run int
-	ti := 0
+	var ti int
 	for qi := 0; qi < len(lowQuery); qi++ {
 		c := lowQuery[qi]
 		idx := strings.IndexByte(lowText[ti:], c)

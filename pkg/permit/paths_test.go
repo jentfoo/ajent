@@ -122,7 +122,6 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 		{"quoted_path", `mkdir "my dir"`, true},
 		{"chained_with_read", "ls && mkdir build", true},
 		{"pure_readonly", "ls -la", true},
-
 		{"mkdir_outside", "mkdir " + outside + "/x", false},
 		{"mkdir_home", "mkdir ~/x", false},
 		{"mkdir_parent_escape", "mkdir ../x", false},
@@ -182,6 +181,7 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 	t.Run("unset_scope", func(t *testing.T) {
 		assert.False(t, writeScope{}.allows(bashCall("mkdir build")))
 	})
+
 	t.Run("routed_through_allows", func(t *testing.T) {
 		assert.True(t, s.allows(bashCall("mkdir build")))
 		assert.False(t, s.allows(bashCall("mkdir /etc/x")))

@@ -10,9 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestUIQueued covers the dimmed pending-prompt rows shown above the input while
-// a turn runs: ordered rendering, the +N more cap, clearing, multi-line labels,
-// and yielding on a short terminal like activity.
 func TestUIQueued(t *testing.T) {
 	t.Parallel()
 
@@ -30,6 +27,7 @@ func TestUIQueued(t *testing.T) {
 		assert.Contains(t, screen, userMarker+"first queued")
 		assert.Contains(t, screen, userMarker+"second queued")
 	})
+
 	t.Run("cap_shows_plus_n_more", func(t *testing.T) {
 		u, v := newUI(80, 12)
 
@@ -47,6 +45,7 @@ func TestUIQueued(t *testing.T) {
 		assert.NotContains(t, screen, "row 5")
 		assert.Contains(t, screen, "+2 more")
 	})
+
 	t.Run("single_overflow_lists_instead_of_indicator", func(t *testing.T) {
 		u, v := newUI(80, 12)
 
@@ -63,6 +62,7 @@ func TestUIQueued(t *testing.T) {
 		}
 		assert.NotContains(t, screen, "more")
 	})
+
 	t.Run("nil_clears", func(t *testing.T) {
 		u, v := newUI(80, 12)
 		u.SetQueued([]string{"pending"})
@@ -72,6 +72,7 @@ func TestUIQueued(t *testing.T) {
 
 		assert.NotContains(t, u.snapshot(v), "pending")
 	})
+
 	t.Run("first_line_only_of_multiline", func(t *testing.T) {
 		u, v := newUI(80, 12)
 		u.SetQueued([]string{"line one\nline two"})
@@ -80,6 +81,7 @@ func TestUIQueued(t *testing.T) {
 		assert.Contains(t, screen, userMarker+"line one")
 		assert.NotContains(t, screen, "line two")
 	})
+
 	t.Run("yields_on_short_terminal", func(t *testing.T) {
 		v := newVT(80, 3)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -101,6 +103,7 @@ func TestUIPrependInput(t *testing.T) {
 		assert.Equal(t, "queued", u.editor.Value())
 		u.mu.Unlock()
 	})
+
 	t.Run("non_empty_prepends_newline", func(t *testing.T) {
 		v2 := newVT(40, 10)
 		u2 := newTestUI(t, v2, strings.NewReader(""))

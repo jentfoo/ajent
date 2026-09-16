@@ -1,8 +1,3 @@
-// Package plan runs a two-model development workflow: a planner drafts, the
-// user approves, an implementor builds against that plan alone, and the planner
-// reviews the result. Each phase is a branch of the session tree rather than a
-// projection of one message list, so what a model sees is what the transcript
-// holds. Everything the workflow cannot import arrives through Host.
 package plan
 
 import (
@@ -126,8 +121,7 @@ type Controller struct {
 	cancelled bool
 }
 
-// New returns a controller bound to h. Nothing is registered or changed until
-// Start runs.
+// New returns a controller bound to h. Nothing is registered or changed until Start runs.
 func New(h Host) *Controller { return &Controller{h: h} }
 
 // Active reports whether a workflow is running.
@@ -149,9 +143,8 @@ func (c *Controller) Status() string {
 		" planner=" + c.planner.Key() + " implementor=" + c.implementor.Key()
 }
 
-// Start opens the planner picker and enters the planning phase, prefilling the
-// editor with prefill. It reports an error message for the caller to show, or
-// empty on success.
+// Start opens the planner picker and enters the planning phase, prefilling the editor with
+// prefill. It reports an error message for the caller to show, or empty on success.
 func (c *Controller) Start(ctx context.Context, prefill string) string {
 	c.mu.Lock()
 	if c.phase.active() {

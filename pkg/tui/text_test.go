@@ -35,18 +35,23 @@ func TestTruncateDisplay(t *testing.T) {
 	t.Run("under_limit_unchanged", func(t *testing.T) {
 		assert.Equal(t, "hello", truncateDisplay("hello", 10))
 	})
+
 	t.Run("zero_width_empty", func(t *testing.T) {
 		assert.Empty(t, truncateDisplay("hello", 0))
 	})
+
 	t.Run("cuts_to_width", func(t *testing.T) {
 		assert.Equal(t, "hel", truncateDisplay("hello", 3))
 	})
+
 	t.Run("keeps_escapes_and_resets", func(t *testing.T) {
 		assert.Equal(t, "\x1b[1mhel\x1b[0m", truncateDisplay("\x1b[1mhello\x1b[0m", 3))
 	})
+
 	t.Run("does_not_split_wide_rune", func(t *testing.T) {
 		assert.Equal(t, "Ａ", truncateDisplay("ＡＢＣ", 3))
 	})
+
 	t.Run("zero_width_clusters_kept", func(t *testing.T) {
 		// lone combining marks cost no columns, so the budget is spent on the bases
 		assert.Equal(t, 3, displayWidth(truncateDisplay("\u0301abc\u0301def", 3)))
@@ -76,6 +81,7 @@ func TestSplitANSI(t *testing.T) {
 	t.Run("plain_text", func(t *testing.T) {
 		assert.Equal(t, []ansiSegment{{text: "abc"}}, splitANSI("abc"))
 	})
+
 	t.Run("csi_sequence", func(t *testing.T) {
 		expected := []ansiSegment{
 			{text: "\x1b[1m", escape: true},
@@ -84,6 +90,7 @@ func TestSplitANSI(t *testing.T) {
 		}
 		assert.Equal(t, expected, splitANSI("\x1b[1ma\x1b[0m"))
 	})
+
 	t.Run("osc_string_terminator", func(t *testing.T) {
 		expected := []ansiSegment{
 			{text: "\x1b]8;;http://x\x1b\\", escape: true},
@@ -91,10 +98,12 @@ func TestSplitANSI(t *testing.T) {
 		}
 		assert.Equal(t, expected, splitANSI("\x1b]8;;http://x\x1b\\link"))
 	})
+
 	t.Run("two_byte_escape", func(t *testing.T) {
 		expected := []ansiSegment{{text: "\x1b7", escape: true}, {text: "x"}}
 		assert.Equal(t, expected, splitANSI("\x1b7x"))
 	})
+
 	t.Run("truncated_escape", func(t *testing.T) {
 		assert.Equal(t, []ansiSegment{{text: "\x1b[1", escape: true}}, splitANSI("\x1b[1"))
 	})
@@ -224,9 +233,11 @@ func TestPaintCaret(t *testing.T) {
 		// the caret cell is the last one, not the first pad
 		assert.True(t, strings.HasSuffix(out, caretReverse+" "+sgrReset))
 	})
+
 	t.Run("never_past_the_bound", func(t *testing.T) {
 		assert.LessOrEqual(t, displayWidth(paintCaret("ab", 9, 5)), 5)
 	})
+
 	t.Run("keeps_the_row_readable", func(t *testing.T) {
 		out := paintCaret("\x1b[2mdim\x1b[0m", 0, 10)
 		assert.Equal(t, 3, displayWidth(out))
@@ -240,9 +251,11 @@ func TestPaintCaret(t *testing.T) {
 		// styling is re-cut around the caret, text is not
 		assert.Equal(t, "dim", text)
 	})
+
 	t.Run("empty_row", func(t *testing.T) {
 		assert.Equal(t, 1, displayWidth(paintCaret("", 0, 10)))
 	})
+
 	t.Run("zero_width_row_terminates", func(t *testing.T) {
 		out := paintCaret("\u0301\u0301\u0301", 2, 10)
 		assert.Contains(t, out, caretReverse)

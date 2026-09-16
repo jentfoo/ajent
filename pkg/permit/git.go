@@ -16,7 +16,7 @@ var gitReadonlySubcommands = bulk.SliceToSet([]string{
 	"status", "log", "diff", "show", "blame", "shortlog", "describe",
 	"rev-parse", "rev-list", "ls-files", "ls-tree", "ls-remote", "grep",
 	"count-objects", "name-rev",
-	// Read-only plumbing/porcelain additions with no write form.
+	// Read-only plumbing/porcelain additions with no write form
 	"for-each-ref", // print refs by format
 	"show-branch",  // show branch commit history
 	"merge-base",   // find common ancestor(s)
@@ -122,7 +122,7 @@ func gitReadOnlyPositionals(args []string, shortFlags string, longFlags map[stri
 			}
 			continue
 		}
-		// short cluster: every character must be a read-only flag or a digit.
+		// short cluster: every character must be a read-only flag or a digit
 		for k := 1; k < len(t); k++ {
 			c := t[k]
 			if !strings.ContainsRune(shortFlags, rune(c)) && (c < '0' || c > '9') {
@@ -236,7 +236,7 @@ func isGitConfigReadOnly(args []string) bool {
 			break
 		}
 	}
-	// query flags make the positionals keys/patterns/urls rather than values.
+	// query flags make the positionals keys/patterns/urls rather than values
 	if query || hasGitFlag(args, "l", "--list") {
 		return len(positionals) <= 2
 	}

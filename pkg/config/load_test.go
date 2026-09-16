@@ -124,6 +124,7 @@ func TestSave(t *testing.T) {
 
 func userPathFor(t *testing.T) string {
 	t.Helper()
+
 	p, err := UserPath(ConfigFileName)
 	if err != nil {
 		return filepath.Join(os.Getenv("AJENT_HOME"), ConfigFileName)
@@ -133,6 +134,7 @@ func userPathFor(t *testing.T) string {
 
 func writeConfig(t *testing.T, path, body string) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 }
@@ -140,6 +142,7 @@ func writeConfig(t *testing.T, path, body string) {
 // mustFlagLayer builds a flag layer from key/value pairs.
 func mustFlagLayer(t *testing.T, kvs map[string]any) Layer {
 	t.Helper()
+
 	data := []byte("{}")
 	var err error
 	for k, v := range kvs {

@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // threeToolCalls frames three parallel calls as distinct blocks in one message.
@@ -25,8 +26,6 @@ func threeToolCalls() []llm.Event {
 	return ev
 }
 
-// TestDispatchParallelAppendsResultsInCallOrder asserts three parallel tools
-// produce results in the order of their calls regardless of completion timing.
 func TestDispatchParallelAppendsResultsInCallOrder(t *testing.T) {
 	t.Parallel()
 
@@ -60,9 +59,6 @@ func TestDispatchParallelAppendsResultsInCallOrder(t *testing.T) {
 	assert.Equal(t, []string{"1", "2", "3"}, ids) // call order preserved
 }
 
-// TestOnToolBatchSeesCallsInMessageOrder asserts the hook gets one step's calls
-// in message order and runs before any of them: parallel dispatch races the calls
-// against each other, so this is the only ordered view of a batch a host gets.
 func TestOnToolBatchSeesCallsInMessageOrder(t *testing.T) {
 	t.Parallel()
 
@@ -104,7 +100,6 @@ func (t *diffTool) Execute(ctx context.Context, call ToolCall, out Output) (Tool
 	return t.stubTool.Execute(ctx, call, out)
 }
 
-// TestDispatchDiffReachesSink asserts a tool's Diff lands on the sink.
 func TestDispatchDiffReachesSink(t *testing.T) {
 	t.Parallel()
 
@@ -123,7 +118,6 @@ func TestDispatchDiffReachesSink(t *testing.T) {
 	assert.Contains(t, sink.calls, "diff") // the diff reached the sink
 }
 
-// TestToolStartFiresOncePerCall asserts ToolStart/done wrap each execution once.
 func TestToolStartFiresOncePerCall(t *testing.T) {
 	t.Parallel()
 
@@ -139,7 +133,7 @@ func TestToolStartFiresOncePerCall(t *testing.T) {
 	err := a.Prompt(t.Context(), Input{Text: "x"})
 	require.NoError(t, err)
 
-	count := 0
+	var count int
 	for _, c := range sink.calls {
 		if c == "tool_start:bash" {
 			count++
@@ -148,8 +142,6 @@ func TestToolStartFiresOncePerCall(t *testing.T) {
 	assert.Equal(t, 1, count) // ToolStart fires exactly once for the single call
 }
 
-// TestLoopMirrorsToolNamesAtTurnStart asserts state.Tools is populated from the
-// enabled toolset when a turn begins.
 func TestLoopMirrorsToolNamesAtTurnStart(t *testing.T) {
 	t.Parallel()
 

@@ -46,9 +46,6 @@ func TestStreamingCommitKeepsOutput(t *testing.T) {
 	assert.Contains(t, screen, "second para")
 }
 
-// TestThinkingCommitKeepsOutput is the thinking mirror of the streaming guard:
-// a committed reasoning line must not be redrawn from the stale live preview
-// below the new history, which overflowed on a small terminal.
 func TestThinkingCommitKeepsOutput(t *testing.T) {
 	t.Parallel()
 

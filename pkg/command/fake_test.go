@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,7 @@ type saveCall struct {
 
 func newFakeConsole(tb testing.TB) *fakeConsole {
 	tb.Helper()
+
 	// a small registry with two models so /model can resolve and list
 	reasoning := true
 	file := llm.File{Providers: map[string]llm.ProviderConfig{
@@ -104,6 +106,7 @@ func ptrInt(v int) *int { return &v }
 func (f *fakeConsole) Notify(msg string, level tui.Level) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	f.notices = append(f.notices, msg)
 	_ = level
 }
@@ -111,12 +114,14 @@ func (f *fakeConsole) Notify(msg string, level tui.Level) {
 func (f *fakeConsole) Print(markdown string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	f.prints = append(f.prints, markdown)
 }
 
 func (f *fakeConsole) Pick(_ context.Context, prompt string, _ []tui.PickItem, _ tui.PickOptions) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.picks) == 0 {
 		return 0, tui.ErrCancelled
 	}
@@ -128,6 +133,7 @@ func (f *fakeConsole) Pick(_ context.Context, prompt string, _ []tui.PickItem, _
 func (f *fakeConsole) MultiPick(_ context.Context, prompt string, _ []tui.PickItem, _ tui.MultiPickOptions) ([]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.multiPicks) == 0 {
 		return nil, tui.ErrCancelled
 	}
@@ -139,6 +145,7 @@ func (f *fakeConsole) MultiPick(_ context.Context, prompt string, _ []tui.PickIt
 func (f *fakeConsole) Select(_ context.Context, prompt string, opts []tui.Option) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	f.selectOpts = append(f.selectOpts, opts)
 	if len(f.selects) == 0 {
 		return 0, tui.ErrCancelled
@@ -151,6 +158,7 @@ func (f *fakeConsole) Select(_ context.Context, prompt string, opts []tui.Option
 func (f *fakeConsole) Confirm(_ context.Context, prompt string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.confirms) == 0 {
 		return false, tui.ErrCancelled
 	}
@@ -162,6 +170,7 @@ func (f *fakeConsole) Confirm(_ context.Context, prompt string) (bool, error) {
 func (f *fakeConsole) Input(_ context.Context, label, placeholder string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.inputs) == 0 {
 		return "", tui.ErrCancelled
 	}
@@ -189,6 +198,7 @@ func (f *fakeConsole) Settings() *config.Set { return f.settings }
 func (f *fakeConsole) SaveSetting(layer, key string, value any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	f.saveCalls = append(f.saveCalls, saveCall{layer: layer, key: key})
 	return nil
 }
@@ -215,15 +225,13 @@ func (f *fakeConsole) Compact(context.Context, string) error { return nil }
 func (f *fakeConsole) noticesSeen() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	return append([]string(nil), f.notices...)
 }
 
 // noticeContains reports whether any recorded notice contains substr.
 func (f *fakeConsole) noticeContains(substr string) bool {
-	for _, n := range f.noticesSeen() {
-		if strings.Contains(n, substr) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(f.noticesSeen(), func(n string) bool {
+		return strings.Contains(n, substr)
+	})
 }

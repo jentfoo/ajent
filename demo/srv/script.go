@@ -154,7 +154,7 @@ func script() []scriptStep {
 // stepIndex derives the next script index from a request: the count of assistant
 // messages already in context, which grows exactly one per completed script step.
 func stepIndex(req chatRequest) int {
-	n := 0
+	var n int
 	for _, m := range req.Messages {
 		if m.Role == "assistant" {
 			n++

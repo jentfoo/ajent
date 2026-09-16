@@ -8,12 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // sinkCapturer records tool starts so the expander's display order is visible.
@@ -414,6 +415,7 @@ func writeBigLines(t *testing.T, dir string, name string) {
 // injected runs a result's planned reads and returns the messages they produce.
 func injected(t *testing.T, res Result) []llm.Message {
 	t.Helper()
+
 	if res.Run == nil {
 		return nil
 	}

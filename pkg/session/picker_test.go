@@ -4,15 +4,16 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestTreeRows(t *testing.T) {
 	t.Parallel()
 
-	// an un-forked chat stays one flat column: every message at depth 0 with no branch connectors.
+	// an un-forked chat stays one flat column: every message at depth 0 with no branch connectors
 	t.Run("flat_linear", func(t *testing.T) {
 		entries := []Entry{
 			sessionOnly("root"),
@@ -25,20 +26,19 @@ func TestTreeRows(t *testing.T) {
 		tree := TreeRows(entries, "a4")
 		require.Len(t, tree, 4) // session entry skipped
 
-		// pre-order from the root: oldest first along a single chain.
+		// pre-order from the root: oldest first along a single chain
 		assert.Equal(t, []string{"u1", "a2", "u3", "a4"}, idsOf(tree))
 		for _, r := range tree {
 			assert.Equalf(t, 0, r.Depth, "linear chain must stay flat (id=%s)", r.ID)
 			assert.Emptyf(t, r.Guide, "no fork means no branch connector (id=%s)", r.ID)
 		}
-		// the whole active path is live.
+		// the whole active path is live
 		for _, r := range tree {
 			assert.Truef(t, r.Active, "every node of a linear chat is on the head's path (id=%s)", r.ID)
 		}
 	})
 
-	// every pickable kind shows up in pre-order with a collapsed label; the session
-	// entry never does.
+	// every pickable kind shows up in pre-order with a collapsed label; the session entry never does
 	t.Run("mixed_entry_kinds", func(t *testing.T) {
 		entries := []Entry{
 			sessionOnly("root"),
@@ -76,11 +76,11 @@ func TestTreeRows(t *testing.T) {
 			pickMsg("u2", "u1", llm.Text(llm.RoleUser, "unrelated fork")),
 			pickAssistText("a2", "u2", "the other reply"))
 
-		// head is a2; u1 and u2 are active, a1 is an abandoned fork.
+		// head is a2; u1 and u2 are active, a1 is an abandoned fork
 		tree := TreeRows(forked, "a2")
 		require.Len(t, tree, 4) // u1 + (a1 | u2,a2)
 
-		// pre-order in insertion order: older sibling first, newer branch last (bottom).
+		// pre-order in insertion order: older sibling first, newer branch last (bottom)
 		assert.Equal(t, []string{"u1", "a1", "u2", "a2"}, idsOf(tree))
 
 		depth := map[string]int{}
@@ -89,24 +89,24 @@ func TestTreeRows(t *testing.T) {
 		for _, r := range tree {
 			depth[r.ID], guide[r.ID], active[r.ID] = r.Depth, r.Guide, r.Active
 		}
-		// both siblings of the fork sit at depth 1 together; the shared root stays flat.
+		// both siblings of the fork sit at depth 1 together; the shared root stays flat
 		assert.Equal(t, 0, depth["u1"])
 		assert.Equal(t, 1, depth["a1"])
 		assert.Equal(t, 1, depth["u2"])
 		assert.Equal(t, 1, depth["a2"])
 
-		// drawn with connectors: older child listed first (├──), newer closes the fork (└──).
+		// drawn with connectors: older child listed first (├──), newer closes the fork (└──)
 		assert.Empty(t, guide["u1"])
 		assert.Equal(t, "├── ", guide["a1"])
 		assert.Equal(t, "└── ", guide["u2"])
 		assert.Equal(t, "    ", guide["a2"])
 
-		// u2 is the last/newest sibling -> └──; a1 is not live.
+		// u2 is the last/newest sibling -> └──; a1 is not live
 		assert.True(t, active["u1"] && active["u2"] && active["a2"])
 		assert.False(t, active["a1"])
 	})
 
-	// every guide cell is four columns wide, so a branch's continuation lines up under the text of its own connector.
+	// every guide cell is four columns wide, so a branch's continuation lines up under the text of its own connector
 	t.Run("guide_alignment", func(t *testing.T) {
 		entries := []Entry{
 			sessionOnly("root"),
@@ -172,8 +172,6 @@ func TestTreeRowLabelsAndKinds(t *testing.T) {
 		})
 	}
 }
-
-// helpers ---------------------------------------------------------
 
 func sessionOnly(id string) Entry {
 	return Entry{ID: id, Type: TypeSession}
@@ -278,9 +276,6 @@ func TestRewindTarget(t *testing.T) {
 	}
 }
 
-// TestRewindTargetDropsReferenceReads pins the ordering @ expansion depends on:
-// an injected read follows the message that asked for it, so rewinding onto that
-// message leaves neither in the branch and a resubmit re-reads the file.
 func TestRewindTargetDropsReferenceReads(t *testing.T) {
 	t.Parallel()
 

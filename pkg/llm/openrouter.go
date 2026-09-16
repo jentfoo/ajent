@@ -5,9 +5,8 @@ import (
 	"slices"
 )
 
-// decorateOpenRouter adds the upstream routing preference and usage reporting
-// that openrouter accepts beyond the shared dialect. The reasoning parameter is
-// owned by applyThinking.
+// decorateOpenRouter adds the upstream routing preference and usage reporting that openrouter
+// accepts beyond the shared dialect. The reasoning parameter is owned by applyThinking.
 func decorateOpenRouter(routing *Routing) func(*compatRequest, Request) {
 	return func(body *compatRequest, req Request) {
 		body.Usage = &compatUsageOption{Include: true}

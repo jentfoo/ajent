@@ -40,10 +40,12 @@ func TestWrapLine(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("wide_runes_never_stall", func(t *testing.T) {
 		rows := wrapLine("ＡＢＣ", 1)
 		require.Len(t, rows, 3)
 	})
+
 	t.Run("zero_width_never_stalls", func(t *testing.T) {
 		// a lone combining mark is its own cluster measuring nothing; the loop has
 		// to advance on cell count, not on columns consumed
@@ -51,6 +53,7 @@ func TestWrapLine(t *testing.T) {
 		require.NotEmpty(t, rows)
 		assert.Equal(t, "\u0301\u0301\u0301abc", strings.Join(rows, ""))
 	})
+
 	t.Run("graphemes_never_split", func(t *testing.T) {
 		// a family emoji is one cluster of many runes, splitting it would corrupt it
 		line := "ok 👨‍👩‍👧‍👦 done"
@@ -63,6 +66,7 @@ func TestWrapLine(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("combining_marks_measured_as_one", func(t *testing.T) {
 		rows := wrapLine("éé ab", 2) // precomposed then combining form
 		assert.Equal(t, []string{"éé", "ab"}, rows)
@@ -76,18 +80,22 @@ func TestWrapLineIndent(t *testing.T) {
 		rows := wrapLine("• alpha beta gamma", 10)
 		assert.Equal(t, []string{"• alpha", "  beta", "  gamma"}, rows)
 	})
+
 	t.Run("ordered_marker_hangs", func(t *testing.T) {
 		rows := wrapLine("12. alpha beta", 10)
 		assert.Equal(t, []string{"12. alpha", "    beta"}, rows)
 	})
+
 	t.Run("quote_hangs", func(t *testing.T) {
 		rows := wrapLine(quotePrefix+"alpha beta gamma", 12)
 		assert.Equal(t, []string{quotePrefix + "alpha beta", "  gamma"}, rows)
 	})
+
 	t.Run("existing_indent_preserved", func(t *testing.T) {
 		rows := wrapLine("    alpha beta", 10)
 		assert.Equal(t, []string{"    alpha", "    beta"}, rows)
 	})
+
 	t.Run("hang_capped_for_narrow_width", func(t *testing.T) {
 		rows := wrapLine("          alpha beta", 8)
 		for _, r := range rows {
@@ -106,10 +114,12 @@ func TestWrapLineStyled(t *testing.T) {
 		assert.Equal(t, "\x1b[2mhello\x1b[0m", rows[0])
 		assert.Equal(t, "\x1b[2mworld\x1b[0m", rows[1])
 	})
+
 	t.Run("escapes_not_counted_as_width", func(t *testing.T) {
 		styled := Style{open: sgr(attrBold)}.Wrap("0123456789")
 		assert.Equal(t, []string{styled}, wrapLine(styled, 10))
 	})
+
 	t.Run("mixed_styles_preserved", func(t *testing.T) {
 		bold := Style{open: sgr(attrBold)}
 		line := "plain " + bold.Wrap("strong") + " tail"
@@ -155,14 +165,17 @@ func TestHardWrap(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("wide_runes_never_stall", func(t *testing.T) {
 		assert.Len(t, hardWrap("ＡＢＣ", 1), 3)
 	})
+
 	t.Run("zero_width_never_stalls", func(t *testing.T) {
 		rows := hardWrap("́́́abc", 1)
 		require.NotEmpty(t, rows)
 		assert.Equal(t, "́́́abc", strings.Join(rows, ""))
 	})
+
 	t.Run("graphemes_never_split", func(t *testing.T) {
 		line := "ok 👨‍👩‍👧‍👦 done"
 		for _, w := range []int{3, 4, 5, 9} {
@@ -174,6 +187,7 @@ func TestHardWrap(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("style_reopened_on_each_row", func(t *testing.T) {
 		style := Style{open: sgr(attrDim)}
 		rows := hardWrap(style.Wrap("hello world"), 8)
@@ -221,6 +235,7 @@ func TestCells(t *testing.T) {
 		assert.Equal(t, "\x1b[1m", cs[1].style)
 		assert.Empty(t, cs[2].style)
 	})
+
 	t.Run("measures_width", func(t *testing.T) {
 		cs := cells("ＡB")
 		require.Len(t, cs, 2)
@@ -235,9 +250,11 @@ func TestRenderCells(t *testing.T) {
 	t.Run("round_trips_plain", func(t *testing.T) {
 		assert.Equal(t, "abc", renderCells(cells("abc"), ""))
 	})
+
 	t.Run("emits_style_once", func(t *testing.T) {
 		assert.Equal(t, "\x1b[1mab\x1b[0m", renderCells(cells("\x1b[1mab"), ""))
 	})
+
 	t.Run("applies_prefix", func(t *testing.T) {
 		assert.Equal(t, "  ab", renderCells(cells("ab"), "  "))
 	})

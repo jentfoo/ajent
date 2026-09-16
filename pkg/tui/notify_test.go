@@ -20,6 +20,7 @@ func TestUINotify(t *testing.T) {
 		u.Notify("model loaded", LevelInfo)
 		assert.Contains(t, u.snapshot(v), "! model loaded")
 	})
+
 	t.Run("levels_styled_distinctly", func(t *testing.T) {
 		th := NewTheme(Color256, DefaultPalette())
 		for _, tc := range []struct {
@@ -47,7 +48,7 @@ func TestUINotifyKeyed(t *testing.T) {
 	// countLines counts screen rows containing sub, so a duplicated live-block
 	// ghost (the invariant-3 bug) is caught rather than hidden by assert.Contains.
 	countLines := func(screen, sub string) int {
-		n := 0
+		var n int
 		for _, l := range strings.Split(screen, "\n") {
 			if strings.Contains(l, sub) {
 				n++
@@ -67,6 +68,7 @@ func TestUINotifyKeyed(t *testing.T) {
 		assert.Contains(t, screen, "scanning 2")
 		assert.NotContains(t, screen, "scanning 1")
 	})
+
 	t.Run("a_commit_between_makes_it_permanent", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -79,6 +81,7 @@ func TestUINotifyKeyed(t *testing.T) {
 		assert.Contains(t, screen, "scanning 1")
 		assert.Contains(t, screen, "scanning 2")
 	})
+
 	t.Run("flushed_notice_has_no_live_ghost", func(t *testing.T) {
 		// a commit must drop the notice from r.live before it lands in history,
 		// or the inline renderer recomposes it below the new content as a duplicate
@@ -90,6 +93,7 @@ func TestUINotifyKeyed(t *testing.T) {
 
 		assert.Equal(t, 1, countLines(u.snapshot(v), "scanning 1"))
 	})
+
 	t.Run("different_key_flushes_the_previous", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -120,6 +124,7 @@ func TestUISetStatusSegment(t *testing.T) {
 		assert.Contains(t, screen, "subagents: 2")
 		assert.NotContains(t, screen, "subagents: 1")
 	})
+
 	t.Run("empty_text_removes", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -163,6 +168,7 @@ func TestUISetTokens(t *testing.T) {
 		assert.Contains(t, screen, "subagents: 1")
 		assert.Contains(t, screen, "4.2k")
 	})
+
 	t.Run("repeated_updates_keep_the_model", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -173,6 +179,7 @@ func TestUISetTokens(t *testing.T) {
 		}
 		assert.Contains(t, u.snapshot(v), "lmstudio/qwen")
 	})
+
 	t.Run("set_status_still_replaces_everything", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -200,6 +207,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.Contains(t, row, "plan: reviewing")
 		assert.Contains(t, row, "subagents: 2")
 	})
+
 	t.Run("model_shortens_before_segments_split", func(t *testing.T) {
 		s := Status{
 			Model: "openrouter/z-ai/glm-5.2", ModelShort: "glm-5.2",
@@ -213,10 +221,12 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.Contains(t, got[0], "plan: reviewing") // segments stay at full text
 		assert.Contains(t, got[0], "subagents: 2")
 	})
+
 	t.Run("model_short_falls_back_to_full", func(t *testing.T) {
 		s := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}
 		assert.Equal(t, []string{"▓▓▓▓░░░░░░ 68.2k/200k · opus-5"}, s.rows(plain, 80))
 	})
+
 	t.Run("segments_shorten_before_splitting", func(t *testing.T) {
 		// full segments overflow the one-row attempt, but their short forms fit it:
 		// the block must stay on one row rather than splitting
@@ -231,6 +241,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.Contains(t, got[0], "plan")    // and so is the segment
 		assert.NotContains(t, got[0], "reviewing")
 	})
+
 	t.Run("segments_expand_on_second_row", func(t *testing.T) {
 		s := Status{
 			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
@@ -242,6 +253,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.Contains(t, got[1], "plan: reviewing") // row two uses full text while it fits
 		assert.Contains(t, got[1], "subagents: 2")
 	})
+
 	t.Run("row_one_shortens_model_before_clipping", func(t *testing.T) {
 		s := Status{
 			Model: "openrouter/z-ai/glm-5.2", ModelShort: "glm-5.2",
@@ -254,6 +266,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.NotContains(t, got[0], "openrouter")
 		assert.Contains(t, got[0], "68.2k/200k")
 	})
+
 	t.Run("fixed_part_never_drops_for_segments", func(t *testing.T) {
 		// even at a width that clips the fixed part hard, segments do not evict it
 		s := Status{
@@ -264,6 +277,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.Len(t, got, 2)
 		assert.Contains(t, strings.Join(got, " "), "68.2k/200k") // token totals outlive segments
 	})
+
 	t.Run("priority_drops_lowest_first", func(t *testing.T) {
 		// both short forms together overflow row two; the lower-priority one drops
 		s := Status{
@@ -282,6 +296,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.NotContains(t, row2, "subagents")   // priority 1 drops before priority 10
 		assert.Contains(t, row2, "plan-reviewing") // the survivor expands to full text
 	})
+
 	t.Run("tie_drops_later_insertion_first", func(t *testing.T) {
 		// equal priorities; the later insertion is dropped first (drop-last rule)
 		s := Status{
@@ -300,6 +315,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		assert.NotContains(t, row2, "subagents")   // later insertion drops first
 		assert.Contains(t, row2, "plan-reviewing") // the survivor expands to full text
 	})
+
 	t.Run("short_form_used_when_full_does_not_fit", func(t *testing.T) {
 		// the single segment overflows row two at full text; its short form is used
 		s := Status{
@@ -311,10 +327,12 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 		row2 := got[1]
 		assert.Equal(t, "pr", strutil.StripANSI(row2)) // short form, never a clipped full text
 	})
+
 	t.Run("empty_segment_text_skipped", func(t *testing.T) {
 		got := Status{Model: "m", Segments: []Segment{{Key: "a", Text: ""}}}.rows(plain, 80)
 		assert.Equal(t, []string{"m"}, got)
 	})
+
 	t.Run("no_segments_matches_the_bar_shape", func(t *testing.T) {
 		got := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}.rows(plain, 80)
 		assert.Equal(t, []string{"▓▓▓▓░░░░░░ 68.2k/200k · opus-5"}, got)
@@ -350,6 +368,7 @@ func TestUIPlainInteraction(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, i)
 	})
+
 	t.Run("input_takes_the_line", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("ajent\n"))
 
@@ -357,6 +376,7 @@ func TestUIPlainInteraction(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "ajent", got)
 	})
+
 	t.Run("pick_takes_the_best_match", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("qwen\n"))
 
@@ -366,18 +386,21 @@ func TestUIPlainInteraction(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, i)
 	})
+
 	t.Run("out_of_range_number_cancels", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("9\n"))
 
 		_, err := u.Select("Pick:", []Option{{Label: "A"}})
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
+
 	t.Run("no_match_cancels", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("zzz\n"))
 
 		_, err := u.Pick("Model", []PickItem{{Label: "opus"}}, PickOptions{})
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
+
 	t.Run("prompt_is_written_to_history", func(t *testing.T) {
 		u, v := newPlainUI(t, strings.NewReader("1\n"))
 

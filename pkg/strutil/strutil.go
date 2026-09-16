@@ -1,4 +1,3 @@
-// Package strutil holds tiny string helpers shared across packages.
 package strutil
 
 import (

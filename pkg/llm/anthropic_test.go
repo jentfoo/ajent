@@ -26,6 +26,7 @@ func anthropicModel(fn func(*Capabilities)) Model {
 // buildBody marshals an anthropic request, failing the test on error.
 func buildBody(t *testing.T, req Request) []byte {
 	t.Helper()
+
 	body, err := buildAnthropicBody(req)
 	require.NoError(t, err)
 	return body
@@ -56,6 +57,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 			"text_end", "usage", "done",
 		}, eventKinds(events))
 	})
+
 	t.Run("reports_model_and_request_id", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/text.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -68,6 +70,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.Equal(t, "claude-opus-4-5", events[0].Meta.Model)
 		assert.Equal(t, "msg_01", events[0].Meta.RequestID)
 	})
+
 	t.Run("usage_merges_input_and_output", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/text.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -80,6 +83,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, Usage{Input: 412, Output: 7}, usage)
 	})
+
 	t.Run("delta_reports_reasoning_and_cache", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/thinking_usage.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -100,6 +104,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		require.Equal(t, EventDone, done.Type)
 		assert.Equal(t, want, done.Usage)
 	})
+
 	t.Run("delta_without_usage_keeps_the_start", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/delta_without_usage.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -116,6 +121,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.Equal(t, StopEndTurn, done.StopReason)
 		assert.Equal(t, Usage{Input: 120, Output: 3, CacheRead: 4096}, done.Usage)
 	})
+
 	t.Run("thinking_accumulates_its_signature", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/thinking_text.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -134,6 +140,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.Equal(t, "sig-part-1sig-part-2", think.Signature) // joined across deltas
 		assert.Equal(t, TextBlock{Text: "the answer"}, msg.Content[1])
 	})
+
 	t.Run("redacted_thinking_kept_verbatim", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/redacted_thinking.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -150,6 +157,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "cmVkYWN0ZWQtcGF5bG9hZA==", think.Redacted) // base64 untouched
 	})
+
 	t.Run("tool_arguments_split_mid_token", func(t *testing.T) {
 		srv, _ := sseServerChunked(t, "anthropic/tool_args_split.sse", 17)
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -169,6 +177,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.JSONEq(t, `{"path":"main.go"}`, string(call.Input))
 		assert.Equal(t, Usage{Input: 412, Output: 37, CacheRead: 8}, usage)
 	})
+
 	t.Run("stop_reason_tool_use", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/tool_args_split.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -180,6 +189,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		last := events[len(events)-1]
 		assert.Equal(t, StopToolUse, last.StopReason)
 	})
+
 	t.Run("mid_stream_error_surfaces_the_partial", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/error_midstream.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -196,6 +206,7 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.Equal(t, "partial", textOf(events))
 		assert.Equal(t, StopError, events[len(events)-1].StopReason)
 	})
+
 	t.Run("close_mid_stream_is_not_an_error", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/text.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -296,6 +307,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 			"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 		}`, string(body))
 	})
+
 	t.Run("max_tokens_falls_back_to_the_model", func(t *testing.T) {
 		req := baseReq()
 		req.MaxTokens = 0
@@ -304,6 +316,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 64000, decode(t, body)["max_tokens"], 0.001)
 	})
+
 	t.Run("thinking_budget_from_the_level", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelMedium}
@@ -315,6 +328,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		assert.Equal(t, "enabled", thinking["type"])
 		assert.InDelta(t, 8192, thinking["budget_tokens"], 0.001)
 	})
+
 	t.Run("explicit_budget_overrides_the_level", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelLow, Budget: 5000}
@@ -325,6 +339,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		thinking := decode(t, body)["thinking"].(map[string]any)
 		assert.InDelta(t, 5000, thinking["budget_tokens"], 0.001)
 	})
+
 	t.Run("temperature_dropped_when_thinking", func(t *testing.T) {
 		// the API rejects any temperature but the default alongside thinking
 		req := baseReq()
@@ -339,6 +354,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		assert.NotContains(t, m, "temperature")
 		assert.Contains(t, m, "thinking")
 	})
+
 	t.Run("temperature_kept_without_thinking", func(t *testing.T) {
 		req := baseReq()
 		temp := 0.7
@@ -348,6 +364,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.InDelta(t, 0.7, decode(t, body)["temperature"], 0.001)
 	})
+
 	t.Run("small_max_tokens_is_inflated_for_thinking", func(t *testing.T) {
 		// part C inflates max_tokens by the budget so a small request still leaves
 		// room for both reasoning and a full answer
@@ -362,6 +379,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		thinking := m["thinking"].(map[string]any)
 		assert.Equal(t, "enabled", thinking["type"])
 	})
+
 	t.Run("off_emits_the_disabled_shape", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
@@ -373,6 +391,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		assert.Contains(t, m, "thinking")
 		assert.Equal(t, "disabled", m["thinking"].(map[string]any)["type"])
 	})
+
 	t.Run("tool_results_ride_on_a_user_message", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{
@@ -396,6 +415,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		assert.Equal(t, "tool_result", blocks[0].(map[string]any)["type"])
 		assert.Equal(t, "toolu_1", blocks[0].(map[string]any)["tool_use_id"])
 	})
+
 	t.Run("consecutive_same_role_messages_merge", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{
@@ -409,6 +429,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		require.Len(t, msgs, 1)
 		assert.Len(t, msgs[0].(map[string]any)["content"].([]any), 2)
 	})
+
 	t.Run("thinking_replayed_with_its_signature", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning.Retain = RetainAll
@@ -424,6 +445,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		assert.Contains(t, string(body), `"signature":"sig"`)
 		assert.Contains(t, string(body), `"thinking":"because"`)
 	})
+
 	t.Run("unsigned_thinking_is_not_replayed", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning.Retain = RetainAll
@@ -438,6 +460,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), "no signature")
 	})
+
 	t.Run("cache_breakpoints_on_system_and_tools", func(t *testing.T) {
 		req := baseReq()
 		req.Cache = CachePolicy{Enabled: true}
@@ -454,6 +477,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		last := tools[len(tools)-1].(map[string]any)
 		assert.Equal(t, "ephemeral", last["cache_control"].(map[string]any)["type"])
 	})
+
 	t.Run("cache_breakpoints_skip_the_newest_message", func(t *testing.T) {
 		req := baseReq()
 		req.Cache = CachePolicy{Enabled: true, KeepLast: 1}
@@ -466,6 +490,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		newest := msgs[len(msgs)-1].(map[string]any)["content"].([]any)[0].(map[string]any)
 		assert.NotContains(t, newest, "cache_control") // still changing
 	})
+
 	t.Run("long_retention_tier_when_supported", func(t *testing.T) {
 		req := baseReq()
 		req.Cache = CachePolicy{Enabled: true}
@@ -477,6 +502,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		system := decode(t, body)["system"].([]any)[0].(map[string]any)
 		assert.Equal(t, "1h", system["cache_control"].(map[string]any)["ttl"])
 	})
+
 	t.Run("default_tier_omits_the_ttl", func(t *testing.T) {
 		req := baseReq()
 		req.Cache = CachePolicy{Enabled: true}
@@ -487,11 +513,13 @@ func TestBuildAnthropicBody(t *testing.T) {
 		system := decode(t, body)["system"].([]any)[0].(map[string]any)
 		assert.NotContains(t, system["cache_control"].(map[string]any), "ttl")
 	})
+
 	t.Run("no_cache_control_when_disabled", func(t *testing.T) {
 		body, err := buildAnthropicBody(baseReq())
 		require.NoError(t, err)
 		assert.NotContains(t, string(body), "cache_control")
 	})
+
 	t.Run("tool_choice_modes", func(t *testing.T) {
 		tests := []struct {
 			name     string
@@ -521,6 +549,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 			})
 		}
 	})
+
 	t.Run("image_becomes_a_base64_source", func(t *testing.T) {
 		req := baseReq()
 		req.Messages = []Message{{Role: RoleUser, Content: BlockList{
@@ -560,6 +589,7 @@ func TestBuildAnthropicBodyInflation(t *testing.T) {
 		assert.InDelta(t, 16000+8192, m["max_tokens"], 0.001)
 		assert.InDelta(t, 8192, m["thinking"].(map[string]any)["budget_tokens"], 0.001)
 	})
+
 	t.Run("inflation_clamps_at_the_model_cap", func(t *testing.T) {
 		// near the full window the cap bites, and the budget still leaves the floor
 		req := baseReq()
@@ -570,6 +600,7 @@ func TestBuildAnthropicBodyInflation(t *testing.T) {
 		assert.InDelta(t, 64000, m["max_tokens"], 0.001)
 		assert.InDelta(t, 8192, m["thinking"].(map[string]any)["budget_tokens"], 0.001)
 	})
+
 	t.Run("budget_keeps_the_answer_floor", func(t *testing.T) {
 		// a budget bigger than the remaining window clamps so the answer floor stays
 		req := baseReq()
@@ -580,6 +611,7 @@ func TestBuildAnthropicBodyInflation(t *testing.T) {
 		assert.InDelta(t, 64000-minAnswerTokens,
 			m["thinking"].(map[string]any)["budget_tokens"], 0.001)
 	})
+
 	t.Run("floor_drops_thinking_and_restores_temperature", func(t *testing.T) {
 		// a model cap too small to leave any room drops thinking entirely and
 		// temperature, rejected while thinking is on, comes back
@@ -593,6 +625,7 @@ func TestBuildAnthropicBodyInflation(t *testing.T) {
 		assert.NotContains(t, m, "thinking")
 		assert.InDelta(t, temp, m["temperature"], 0.001)
 	})
+
 	t.Run("no_inflation_on_adaptive_models", func(t *testing.T) {
 		req := baseReq()
 		req.MaxTokens = 16000
@@ -652,6 +685,7 @@ func TestBuildAnthropicBodyThinkingShape(t *testing.T) {
 			})
 		}
 	})
+
 	t.Run("level_map_overrides_the_default_effort", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelMedium}
@@ -662,6 +696,7 @@ func TestBuildAnthropicBodyThinkingShape(t *testing.T) {
 		m := decode(t, buildBody(t, req))
 		assert.Equal(t, "max", m["output_config"].(map[string]any)["effort"])
 	})
+
 	t.Run("temperature_dropped_on_adaptive", func(t *testing.T) {
 		req := baseReq()
 		temp := 0.7
@@ -675,6 +710,7 @@ func TestBuildAnthropicBodyThinkingShape(t *testing.T) {
 		assert.Equal(t, "adaptive", think["type"])
 		assert.Equal(t, "summarized", think["display"])
 	})
+
 	t.Run("off_null_suppresses_the_thinking_key", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
@@ -683,6 +719,7 @@ func TestBuildAnthropicBodyThinkingShape(t *testing.T) {
 		m := decode(t, buildBody(t, req))
 		assert.NotContains(t, m, "thinking")
 	})
+
 	t.Run("budget_shape_sends_summarized_display", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelMedium}
@@ -692,6 +729,7 @@ func TestBuildAnthropicBodyThinkingShape(t *testing.T) {
 		assert.Equal(t, "enabled", think["type"])
 		assert.Equal(t, "summarized", think["display"])
 	})
+
 	t.Run("non_reasoning_models_emit_no_thinking", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
@@ -717,16 +755,19 @@ func TestAnthropicHeaders(t *testing.T) {
 		headers := anthropicHeaders(baseReq())
 		assert.Equal(t, betaInterleavedThinking, headers["anthropic-beta"])
 	})
+
 	t.Run("absent_on_adaptive_models", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.ForceAdaptiveThinking = true
 		assert.NotContains(t, anthropicHeaders(req), "anthropic-beta")
 	})
+
 	t.Run("absent_on_non_reasoning_models", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Reasoning = false
 		assert.NotContains(t, anthropicHeaders(req), "anthropic-beta")
 	})
+
 	t.Run("fine_grained_only_without_eager_streaming", func(t *testing.T) {
 		req := baseReq()
 		req.Tools = []ToolSchema{{Name: "read"}}
@@ -734,16 +775,19 @@ func TestAnthropicHeaders(t *testing.T) {
 		assert.Equal(t, betaFineGrainedTools+","+betaInterleavedThinking,
 			anthropicHeaders(req)["anthropic-beta"])
 	})
+
 	t.Run("fine_grained_needs_tools", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.EagerToolInputStreaming = false
 		assert.Equal(t, betaInterleavedThinking, anthropicHeaders(req)["anthropic-beta"])
 	})
+
 	t.Run("model_declared_beta_is_overridden", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Headers = map[string]string{"anthropic-beta": "stale"}
 		assert.Equal(t, betaInterleavedThinking, anthropicHeaders(req)["anthropic-beta"])
 	})
+
 	t.Run("model_headers_are_not_mutated", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Headers = map[string]string{"X-Org": "acme"}
@@ -751,6 +795,7 @@ func TestAnthropicHeaders(t *testing.T) {
 		assert.Equal(t, "acme", headers["X-Org"])
 		assert.NotContains(t, req.Model.Headers, "anthropic-beta")
 	})
+
 	t.Run("beta_header_reaches_the_wire", func(t *testing.T) {
 		srv, req := sseServer(t, "anthropic/text.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
@@ -777,6 +822,7 @@ func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
 	}
 	decode := func(t *testing.T, body []byte) map[string]any {
 		t.Helper()
+
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
 		return m
@@ -786,6 +832,7 @@ func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
 		tools := decode(t, buildBody(t, baseReq()))["tools"].([]any)
 		assert.Equal(t, true, tools[0].(map[string]any)["eager_input_streaming"])
 	})
+
 	t.Run("eager_streaming_absent_when_cleared", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.EagerToolInputStreaming = false
@@ -793,6 +840,7 @@ func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
 		tools := decode(t, buildBody(t, req))["tools"].([]any)
 		assert.NotContains(t, tools[0].(map[string]any), "eager_input_streaming")
 	})
+
 	t.Run("tool_cache_marker_gated_on_capability", func(t *testing.T) {
 		req := baseReq()
 		req.Cache = CachePolicy{Enabled: true}
@@ -812,6 +860,7 @@ func TestAnthropicEmptySignatureReplay(t *testing.T) {
 
 	build := func(t *testing.T, blocks BlockList, caps Capabilities) string {
 		t.Helper()
+
 		req := Request{
 			Model:     anthropicModel(func(c *Capabilities) { *c = caps }),
 			MaxTokens: 16000,
@@ -834,6 +883,7 @@ func TestAnthropicEmptySignatureReplay(t *testing.T) {
 		body := build(t, BlockList{ThinkingBlock{Text: "orphaned"}}, anthropic())
 		assert.NotContains(t, body, `"orphaned"`)
 	})
+
 	t.Run("demoted_to_text_when_it_reaches_blocks", func(t *testing.T) {
 		// retention normally strips it first; if a block gets through it demotes
 		// to visible text rather than vanishing
@@ -843,6 +893,7 @@ func TestAnthropicEmptySignatureReplay(t *testing.T) {
 		assert.Equal(t, antTypeText, blocks[0].Type)
 		assert.Equal(t, "orphaned", blocks[0].Text)
 	})
+
 	t.Run("kept_with_empty_signature_when_allowed", func(t *testing.T) {
 		caps := anthropic()
 		caps.AllowEmptySignature = true
@@ -850,6 +901,7 @@ func TestAnthropicEmptySignatureReplay(t *testing.T) {
 		assert.Contains(t, body, `"thinking":"orphaned"`)
 		assert.Contains(t, body, `"signature":""`)
 	})
+
 	t.Run("blank_text_and_signature_dropped", func(t *testing.T) {
 		caps := anthropic()
 		caps.AllowEmptySignature = true
@@ -860,6 +912,7 @@ func TestAnthropicEmptySignatureReplay(t *testing.T) {
 		assert.NotContains(t, body, `"type":"thinking"`)
 		assert.Contains(t, body, `"answer"`)
 	})
+
 	t.Run("signed_block_replays_even_without_text", func(t *testing.T) {
 		body := build(t, BlockList{ThinkingBlock{Signature: "sig"}}, anthropic())
 		assert.Contains(t, body, `"signature":"sig"`)
@@ -912,6 +965,7 @@ func TestThinkingBudget(t *testing.T) {
 		assert.Equal(t, minThinkingBudget,
 			thinkingBudget(r2.Model.Caps, LevelLow, r2.Reasoning.Budget, 64000))
 	})
+
 	t.Run("leaves_room_for_the_reply", func(t *testing.T) {
 		// an explicit budget bigger than the ceiling clamps so minAnswerTokens stay
 		r := req(LevelHigh, 8000, 100000)
@@ -919,23 +973,27 @@ func TestThinkingBudget(t *testing.T) {
 		assert.Equal(t, maxTok-minAnswerTokens,
 			thinkingBudget(r.Model.Caps, LevelHigh, r.Reasoning.Budget, maxTok))
 	})
+
 	t.Run("gives_up_when_max_tokens_is_too_small", func(t *testing.T) {
 		// ceiling falls under the API minimum once the answer floor is kept
 		r := req(LevelHigh, 8000, 100000)
 		assert.Zero(t,
 			thinkingBudget(r.Model.Caps, LevelHigh, r.Reasoning.Budget, minAnswerTokens+minThinkingBudget-1))
 	})
+
 	t.Run("off_is_zero", func(t *testing.T) {
 		r := req(LevelOff, 0, 100000)
 		assert.Zero(t,
 			thinkingBudget(r.Model.Caps, LevelOff, r.Reasoning.Budget, 64000))
 	})
+
 	t.Run("non_budget_styles_are_zero", func(t *testing.T) {
 		r := req(LevelHigh, 0, 64)
 		r.Model.Caps.Dialect = DialectOpenAICompletions
 		assert.Zero(t,
 			thinkingBudget(r.Model.Caps, LevelLow, r.Reasoning.Budget, 64000))
 	})
+
 	t.Run("unsupported_level_clamps_down", func(t *testing.T) {
 		// xhigh is opt-in; without a map entry it clamps to high before the budget lookup
 		r := req(LevelXHigh, 0, 8000)

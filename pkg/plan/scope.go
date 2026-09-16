@@ -6,9 +6,8 @@ import (
 	"github.com/go-analyze/bulk"
 )
 
-// readOnlyBase is what the planner and reviewer investigate with. Neither is
-// given write or edit; bash stays gated by the permission barrier as everywhere
-// else.
+// readOnlyBase is what the planner and reviewer investigate with. Neither is given
+// write or edit; bash stays gated by the permission barrier as everywhere else.
 var readOnlyBase = []string{"read", "grep", "find", "ls", "bash"}
 
 // implementorBase stands in when nothing was captured at /plan, so a workflow
@@ -24,8 +23,8 @@ var controlNames = []string{
 
 // toolsFor returns the enabled tool names for p. The implementor keeps the set
 // the user had at /plan plus the one tool that signals completion; the planner
-// and reviewer get read-only investigation and their own control tools. Caller
-// holds mu.
+// and reviewer get read-only investigation and their own control tools.
+// Caller holds mu.
 func (c *Controller) toolsFor(p Phase) []string {
 	if p == PhaseImplementing {
 		// the user's own working set, minus anything this workflow owns

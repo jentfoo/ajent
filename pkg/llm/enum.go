@@ -6,9 +6,8 @@ import (
 	"strings"
 )
 
-// enumNames maps a small enum to the names used in configuration and logs.
-// Enums encode as text rather than JSON so they work as map keys too, which is
-// what thinkingLevelMap needs.
+// enumNames maps a small enum to the names used in configuration and logs. Enums encode as
+// text rather than JSON so they work as map keys too, which is what thinkingLevelMap needs.
 type enumNames[T ~uint8] map[T]string
 
 // name returns the configuration name of v, or "unknown".

@@ -4,13 +4,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// endTool returns a canned result carrying the EndTurn / IsError combination
-// under test.
+// endTool returns a canned result carrying the EndTurn / IsError combination under test.
 type endTool struct {
 	name     string
 	endTurn  bool

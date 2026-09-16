@@ -281,8 +281,7 @@ func (x *Expander) injectPair(ctx context.Context, p injection) []llm.Message {
 }
 
 // annotate returns the replacement text for a large/non-text reference: the
-// @path plus its measurement. An existing annotation on ref is replaced, never
-// doubled.
+// @path plus its measurement. An existing annotation on ref is replaced, never doubled.
 func annotate(ref Ref, m tools.Measurement) string {
 	return "@" + ref.Path + " (" + measurementText(m) + ")"
 }

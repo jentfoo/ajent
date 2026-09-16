@@ -317,6 +317,7 @@ func (u *UI) Controls() <-chan Control { return u.controls }
 func (u *UI) Width() int {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	w, _ := u.render.size()
 	return w
 }
@@ -325,6 +326,7 @@ func (u *UI) Width() int {
 func (u *UI) Close() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed {
 		return
 	}
@@ -351,6 +353,7 @@ func (u *UI) Close() {
 func (u *UI) SetDeferHistory(v bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if r, ok := u.render.(*altRenderer); ok {
 		r.deferHistory = v
 	}
@@ -363,6 +366,7 @@ func (u *UI) SetDeferHistory(v bool) {
 func (u *UI) Reset() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed {
 		return
 	}
@@ -387,6 +391,7 @@ func (u *UI) Reset() {
 func (u *UI) Divider() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed {
 		return
 	}
@@ -399,6 +404,7 @@ func (u *UI) Divider() {
 func (u *UI) SetStatus(s Status) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.status = s
 	u.repaint()
 }
@@ -419,6 +425,7 @@ type ContextInfo struct {
 func (u *UI) SetContext(ci ContextInfo) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if ci.Window > 0 {
 		u.status.MaxTokens = ci.Window
 	}
@@ -434,6 +441,7 @@ func (u *UI) SetContext(ci ContextInfo) {
 func (u *UI) SetTokens(tokens int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.status.Tokens = tokens
 	u.repaint()
 }
@@ -442,6 +450,7 @@ func (u *UI) SetTokens(tokens int) {
 func (u *UI) SetInput(text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed || u.act != nil { // never clobber an active interaction's input
 		return
 	}
@@ -454,6 +463,7 @@ func (u *UI) SetInput(text string) {
 func (u *UI) SetQueued(texts []string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if len(texts) == 0 && len(u.queued) == 0 {
 		return
 	}
@@ -466,6 +476,7 @@ func (u *UI) SetQueued(texts []string) {
 func (u *UI) PrependInput(text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed || u.act != nil { // never clobber an active interaction's input
 		return
 	}
@@ -481,6 +492,7 @@ func (u *UI) PrependInput(text string) {
 func (u *UI) UserEcho(text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.gap()
 	// flowReflow, not flowWrap: pre-wrapping it here would freeze the message at
 	// the width it was sent at, and the terminal could never reflow it again.
@@ -517,6 +529,7 @@ func (u *UI) endStream(rest string, commit func(string)) {
 func (u *UI) Thinking(delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if !u.thinking {
 		u.thinking = true
 		u.gap()
@@ -533,6 +546,7 @@ func (u *UI) Thinking(delta string) {
 func (u *UI) EndThinking() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	rest := u.thinkBuf.Flush()
 	u.thinking = false
 	u.endStream(rest,
@@ -545,6 +559,7 @@ func (u *UI) EndThinking() {
 func (u *UI) Text(delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.textBuf += delta
 	u.streaming = true
 	done, rest := splitCompleteBlocks(u.textBuf)
@@ -561,6 +576,7 @@ func (u *UI) Text(delta string) {
 func (u *UI) EndText() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	rest := u.textBuf
 	u.textBuf = ""
 	u.streaming = false
@@ -637,6 +653,7 @@ func (u *UI) thinkingPreviewRows(w int) []string {
 func (u *UI) Output(id, delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	r := u.runLocked(id)
 	if head := styleLines(u.theme.Dim, r.head.add(delta)); head != "" {
 		u.commit(head, flowWrap)
@@ -651,6 +668,7 @@ func (u *UI) Output(id, delta string) {
 func (u *UI) SetOutputFull(id string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.runLocked(id).head.full = true
 }
 
@@ -659,6 +677,7 @@ func (u *UI) SetOutputFull(id string) {
 func (u *UI) EndOutput() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	for _, r := range slices.Clone(u.runs) {
 		if !r.head.full {
 			u.endRunLocked(r.id)
@@ -725,6 +744,7 @@ func (u *UI) commitSummary(h *outputHead) {
 func (u *UI) Diff(path, before, after string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	out := RenderDiff(u.theme, path, before, after)
 	if out == "" {
 		return
@@ -752,6 +772,7 @@ func (u *UI) ToolStart(id, name, label string) func(result string) {
 	return func(result string) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
+
 		// close this call's stream before showing its result, so calls sharing a turn
 		// (an agent tool and a staged shell) each get their own head and summary.
 		u.endRunLocked(id)
@@ -1039,6 +1060,7 @@ func (u *UI) spinnerStyleLocked() Style {
 func (u *UI) tickSpinner() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.spinner++
 	u.repaint()
 }
@@ -1074,9 +1096,10 @@ func (u *UI) readKeys() {
 // handleKey applies one key and redraws when it changed the view. A control
 // emission or a no-op skips repaint: nothing on screen moved.
 func (u *UI) handleKey(k key) (submit *string, quit bool) {
-	var dirty bool
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
+	var dirty bool
 	submit, dirty, quit = u.applyKey(k)
 	if u.editCh != nil && !quit {
 		u.notifyEditLocked(u.expandPastes(u.editor.Value()))
@@ -1097,6 +1120,7 @@ func (u *UI) SetOnEdit(fn func(string)) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed {
 		return
 	} else if u.editCh != nil && u.onEdit != nil {
@@ -1141,6 +1165,7 @@ func (u *UI) drainEdits() {
 func (u *UI) SetHistorySearch(fn func() []SearchItem) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.historySearch = fn
 	if fn == nil {
 		u.search = nil // clear any open overlay when the source is removed
@@ -1246,6 +1271,7 @@ func (u *UI) resetPromptNavLocked() {
 func (u *UI) deliverSearch(items []SearchItem) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed || u.search == nil || !u.search.pending {
 		return
 	}
@@ -1569,6 +1595,7 @@ func (u *UI) watchSignals() {
 func (u *UI) holdForResize() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	u.resizing.Store(u.mode == ModeInline)
 	u.holdGen.Store(u.sigGen.Load()) // every bump so far is sequenced; settles may clear
 	u.resizeSeq++
@@ -1583,6 +1610,7 @@ func (u *UI) holdForResize() {
 func (u *UI) probeResize() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed || u.mode == ModePlain {
 		return
 	} else if u.mode != ModeInline {
@@ -1603,6 +1631,7 @@ func (u *UI) probeResize() {
 func (u *UI) probeTimedOut(gen int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.probesOut == 0 || gen != u.probeSeq {
 		return // a newer burst owns the barrier; its own timeout releases it
 	}
@@ -1630,6 +1659,7 @@ func (u *UI) settleProbedLocked(gen int) {
 func (u *UI) drawSettled(gen int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed || gen != u.probeSeq || u.probeSeq != u.resizeSeq {
 		return
 	}
@@ -1643,6 +1673,7 @@ func (u *UI) drawSettled(gen int) {
 func (u *UI) probeAnswered() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.probesOut == 0 {
 		return // nothing outstanding: a reply we never asked for, or a late one
 	}
@@ -1687,6 +1718,7 @@ func (u *UI) watchStatus() {
 func (u *UI) resize() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed || u.mode == ModePlain {
 		return
 	}
@@ -1755,6 +1787,7 @@ func (u *UI) suspend() {
 func (u *UI) resume() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	if u.closed || u.mode == ModePlain {
 		return
 	} else if err := u.render.resume(u.inFd); err != nil {

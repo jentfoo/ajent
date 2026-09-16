@@ -78,6 +78,7 @@ func TestDo(t *testing.T) {
 		assert.Empty(t, *slept)
 		assert.Len(t, *logs, 1)
 	})
+
 	t.Run("honours_retry_after_header", func(t *testing.T) {
 		var served atomic.Int64
 		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -97,6 +98,7 @@ func TestDo(t *testing.T) {
 		assert.Equal(t, int64(2), hits.Load())
 		assert.Equal(t, []time.Duration{2 * time.Second}, *slept)
 	})
+
 	t.Run("exponential_backoff_until_attempts_exhausted", func(t *testing.T) {
 		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -111,6 +113,7 @@ func TestDo(t *testing.T) {
 		assert.Equal(t, int64(4), hits.Load())
 		assert.Equal(t, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}, *slept)
 	})
+
 	t.Run("client_error_is_not_retried", func(t *testing.T) {
 		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
@@ -126,6 +129,7 @@ func TestDo(t *testing.T) {
 		assert.Empty(t, *slept)
 		assert.Contains(t, string(he.Body), "bad")
 	})
+
 	t.Run("absurd_retry_after_fails_immediately", func(t *testing.T) {
 		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Retry-After", "86400")
@@ -139,6 +143,7 @@ func TestDo(t *testing.T) {
 		assert.Equal(t, int64(1), hits.Load())
 		assert.Empty(t, *slept)
 	})
+
 	t.Run("error_func_replaces_the_error", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
@@ -155,6 +160,7 @@ func TestDo(t *testing.T) {
 		_, err := Do(t.Context(), hc, r)
 		assert.ErrorIs(t, err, sentinel)
 	})
+
 	t.Run("error_func_drives_retry", func(t *testing.T) {
 		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest) // not retryable by status alone
@@ -168,6 +174,7 @@ func TestDo(t *testing.T) {
 		assert.Equal(t, int64(4), hits.Load())
 		assert.Len(t, *slept, 3)
 	})
+
 	t.Run("cancelled_context_stops_retrying", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
@@ -182,6 +189,7 @@ func TestDo(t *testing.T) {
 		_, err := Do(ctx, hc, r)
 		assert.ErrorIs(t, err, context.Canceled)
 	})
+
 	t.Run("sets_json_content_type_with_body", func(t *testing.T) {
 		var got string
 		srv, _ := countingServer(t, func(w http.ResponseWriter, req *http.Request) {
@@ -195,6 +203,7 @@ func TestDo(t *testing.T) {
 		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, "application/json", got)
 	})
+
 	t.Run("not_modified_counts_as_success", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotModified)
@@ -207,6 +216,7 @@ func TestDo(t *testing.T) {
 		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, http.StatusNotModified, resp.StatusCode)
 	})
+
 	t.Run("user_agent_sent_on_every_attempt", func(t *testing.T) {
 		var mu sync.Mutex
 		var got []string
@@ -227,6 +237,7 @@ func TestDo(t *testing.T) {
 			assert.Equal(t, "ajent/v0.4.2", ua)
 		}
 	})
+
 	t.Run("request_header_overrides_user_agent", func(t *testing.T) {
 		var got string
 		srv, _ := countingServer(t, func(w http.ResponseWriter, req *http.Request) {
@@ -242,6 +253,7 @@ func TestDo(t *testing.T) {
 		t.Cleanup(func() { _ = resp.Body.Close() })
 		assert.Equal(t, "custom/1.0", got)
 	})
+
 	t.Run("redirect_is_not_followed", func(t *testing.T) {
 		var target atomic.Int64
 		mux := http.NewServeMux()
@@ -263,6 +275,7 @@ func TestDo(t *testing.T) {
 		assert.Equal(t, http.StatusFound, he.Status)
 		assert.Zero(t, target.Load()) // a credential bearing request is never replayed
 	})
+
 	t.Run("credentials_never_reach_the_log_or_error", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
@@ -286,6 +299,7 @@ func TestDo(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("total_timeout_outlives_the_call", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "streamed")
@@ -312,10 +326,12 @@ func TestWrapIdle(t *testing.T) {
 	t.Run("unset_uses_the_default", func(t *testing.T) {
 		assert.IsType(t, &idleReader{}, wrapIdle(body(), nil, timer))
 	})
+
 	t.Run("explicit_zero_disables", func(t *testing.T) {
 		_, wrapped := wrapIdle(body(), dur(0), timer).(*idleReader)
 		assert.False(t, wrapped)
 	})
+
 	t.Run("explicit_value_wraps", func(t *testing.T) {
 		assert.IsType(t, &idleReader{}, wrapIdle(body(), dur(time.Second), timer))
 	})

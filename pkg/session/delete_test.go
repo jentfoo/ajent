@@ -6,15 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // deleteWorkspace points the cwd and AJENT_HOME at fresh temp dirs so a case sees
 // only the sessions it writes.
 func deleteWorkspace(t *testing.T) (*Store, string) {
 	t.Helper()
+
 	ws := t.TempDir()
 	t.Chdir(ws)
 	t.Setenv("AJENT_HOME", t.TempDir())
@@ -27,6 +29,7 @@ func deleteWorkspace(t *testing.T) (*Store, string) {
 // returns its root id.
 func writeDeletableSession(t *testing.T, store *Store, ws, name string) string {
 	t.Helper()
+
 	w, err := store.Create(ws, SessionData{Version: Version(), Name: name})
 	require.NoError(t, err)
 	id := w.Head() // the session entry, before any message advances the cursor

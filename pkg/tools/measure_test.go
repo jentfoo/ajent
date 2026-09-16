@@ -12,10 +12,9 @@ import (
 func TestMeasure(t *testing.T) {
 	t.Parallel()
 
-	// a small text file measures its lines and bytes and classifies as text.
+	// a small text file measures its lines and bytes and classifies as text
 	t.Run("text_file", func(t *testing.T) {
-		dir := t.TempDir()
-		p := filepath.Join(dir, "a.go")
+		p := filepath.Join(t.TempDir(), "a.go")
 		content := "package a\n\nfunc f() {}" // 3 lines, no trailing newline
 		require.NoError(t, os.WriteFile(p, []byte(content), 0o600))
 
@@ -27,10 +26,9 @@ func TestMeasure(t *testing.T) {
 		assert.Equal(t, int64(len(content)), m.Bytes)
 	})
 
-	// a directory reports Dir and leaves bytes zero.
+	// a directory reports Dir and leaves bytes zero
 	t.Run("directory", func(t *testing.T) {
-		dir := t.TempDir()
-		inner := filepath.Join(dir, "sub")
+		inner := filepath.Join(t.TempDir(), "sub")
 		require.NoError(t, os.Mkdir(inner, 0o700))
 
 		m, err := Measure(inner)

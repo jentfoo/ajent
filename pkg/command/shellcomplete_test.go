@@ -7,10 +7,11 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/refs"
-	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/refs"
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 func TestShellComplete(t *testing.T) {
@@ -129,6 +130,7 @@ func TestShellNames(t *testing.T) {
 // newShellCompleter returns a completer rooted at a temp dir holding dirs.
 func newShellCompleter(t *testing.T, dirs ...string) *Completer {
 	t.Helper()
+
 	dir := t.TempDir()
 	for _, d := range dirs {
 		require.NoError(t, os.Mkdir(filepath.Join(dir, d), 0o750))
@@ -138,6 +140,7 @@ func newShellCompleter(t *testing.T, dirs ...string) *Completer {
 
 func requireBash(t *testing.T) {
 	t.Helper()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash unavailable")
 	}

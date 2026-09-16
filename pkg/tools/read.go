@@ -16,9 +16,8 @@ type readParams struct {
 	Limit  int    `json:"limit,omitempty" desc:"max lines to return; defaults to the tool limit"`
 }
 
-// readTool reads a file with line numbers so edit and the model agree on
-// positions. Image files are not yet supported and are refused rather than
-// dumped as text.
+// readTool reads a file with line numbers so edit and the model agree on positions.
+// Image files are not yet supported and are refused rather than dumped as text.
 type readTool struct {
 	policy  PathPolicy
 	tracker *Tracker
@@ -86,7 +85,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	var b strings.Builder
 	b.WriteString(out)
 	if truncatedAt > 0 {
-		fmt.Fprintf(&b, "\n... truncated at line %d of %d (%d more); read again with offset=%d\n",
+		_, _ = fmt.Fprintf(&b, "\n... truncated at line %d of %d (%d more); read again with offset=%d\n",
 			truncatedAt, total, total-truncatedAt, truncatedAt+1)
 	}
 	content := b.String()

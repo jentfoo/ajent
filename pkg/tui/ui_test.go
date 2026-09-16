@@ -14,9 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 const testPoll = time.Millisecond
@@ -89,6 +90,7 @@ func newRecordingUI(tb testing.TB, in io.Reader) (*UI, *strings.Builder) {
 func (u *UI) snapshot(v *vt) string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	return v.Screen()
 }
 
@@ -96,6 +98,7 @@ func (u *UI) snapshot(v *vt) string {
 func (u *UI) line(v *vt, row int) string {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	return v.Line(row)
 }
 
@@ -104,6 +107,7 @@ func (u *UI) line(v *vt, row int) string {
 func (u *UI) cursor(v *vt) (int, int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
 	return v.row, v.col
 }
 
@@ -127,17 +131,20 @@ func TestUIInput(t *testing.T) {
 		// the leftmost working glyph always leads the status line
 		assert.Equal(t, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test", v.Line(2))
 	})
+
 	t.Run("typed_text_replaces_hint", func(t *testing.T) {
 		_, err := io.WriteString(pw, "hi")
 		require.NoError(t, err)
 		waitLine(1, promptFirst+"hi")
 	})
+
 	t.Run("enter_submits", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\r")
 		require.NoError(t, err)
 		assert.Equal(t, "hi", <-u.Messages())
 		waitLine(1, promptFirst+inputHint)
 	})
+
 	t.Run("status_follows_the_input", func(t *testing.T) {
 		u.SetStatus(Status{Model: "opus-5"})
 		// the working glyph always leads, then the model
@@ -168,28 +175,33 @@ func TestUIInputEditing(t *testing.T) {
 		require.NoError(t, err)
 		waitLine(1, promptFirst+"one")
 	})
+
 	t.Run("alt_enter_grows_the_block", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x1b\rsecond")
 		require.NoError(t, err)
 		waitLine(2, promptCont+"second")
 		waitLine(3, spinnerFrames[0]+" · ░░░░░░░░░░ 0/1k · test")
 	})
+
 	t.Run("ctrl_c_clears_buffer", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
 		require.NoError(t, err)
 		waitLine(1, promptFirst+inputHint)
 		assert.Empty(t, u.line(v, 3))
 	})
+
 	t.Run("ctrl_c_on_empty_emits_interrupt", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x03")
 		require.NoError(t, err)
 		assert.Equal(t, ControlInterrupt, <-u.Controls())
 	})
+
 	t.Run("ctrl_d_on_empty_emits_eof", func(t *testing.T) {
 		_, err := io.WriteString(pw, "\x04")
 		require.NoError(t, err)
 		assert.Equal(t, ControlEOF, <-u.Controls())
 	})
+
 	t.Run("ctrl_d_deletes_forward", func(t *testing.T) {
 		_, err := io.WriteString(pw, "abc")
 		require.NoError(t, err)
@@ -237,6 +249,7 @@ func TestUIHistory(t *testing.T) {
 		u.UserEcho("fix the retry logic")
 		assert.Equal(t, "❯ fix the retry logic", v.Line(0))
 	})
+
 	t.Run("thinking_streams_lines", func(t *testing.T) {
 		u.Thinking("the retry helper loops\nwith no backoff")
 		assert.Equal(t, "✻ thinking", v.Line(2))
@@ -245,6 +258,7 @@ func TestUIHistory(t *testing.T) {
 		u.EndThinking()
 		assert.Equal(t, "with no backoff", v.Line(4))
 	})
+
 	t.Run("markdown_commits_complete_blocks", func(t *testing.T) {
 		u.Text("## Retry\n\nfirst para")
 		assert.Equal(t, "## Retry", v.Line(6))
@@ -257,6 +271,7 @@ func TestUIHistory(t *testing.T) {
 		assert.Equal(t, "• one", v.Line(10))
 		assert.Equal(t, "• two", v.Line(11))
 	})
+
 	t.Run("partial_text_streams_live_then_commits", func(t *testing.T) {
 		v2 := newVT(60, 20)
 		u2 := newTestUI(t, v2, strings.NewReader(""))
@@ -270,6 +285,7 @@ func TestUIHistory(t *testing.T) {
 		assert.Equal(t, "first para", v2.Line(0))
 		assert.Contains(t, v2.Line(2), promptFirst)
 	})
+
 	t.Run("block_follows_the_last_line", func(t *testing.T) {
 		// the committed transcript ends at row 11; divider on 12, input then status
 		assert.Contains(t, v.Line(13), promptFirst)
@@ -463,17 +479,20 @@ func TestUIOutput(t *testing.T) {
 		assert.Equal(t, "=== RUN   TestRetry", v.Line(1))
 		assert.Equal(t, "--- PASS: TestRetry (0.01s)", v.Line(2))
 	})
+
 	t.Run("holds_partial_lines", func(t *testing.T) {
 		u.Output("c1", "ok  gith")
 		assert.NotContains(t, u.snapshot(v), "ok  gith")
 		u.Output("c1", "ub.com/x\n")
 		assert.Equal(t, "ok  github.com/x", v.Line(3))
 	})
+
 	t.Run("flushes_unterminated_line", func(t *testing.T) {
 		u.Output("c1", "no newline")
 		u.EndOutput()
 		assert.Equal(t, "no newline", v.Line(4))
 	})
+
 	t.Run("not_parsed_as_markdown", func(t *testing.T) {
 		u.Output("c1", "--- PASS: TestX (0.00s)\n")
 		u.EndOutput()
@@ -548,7 +567,7 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	v := newVT(60, 40)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	// first call streams past the head.
+	// first call streams past the head
 	doneA := u.ToolStart("a", "bash", "bash: a")
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
@@ -557,7 +576,7 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	u.Output("a", b.String())
 	doneA("")
 
-	// second call in the same turn streams its own output past the head.
+	// second call in the same turn streams its own output past the head
 	doneB := u.ToolStart("b", "bash", "bash: b")
 	b.Reset()
 	for i := 1; i <= 30; i++ {
@@ -566,7 +585,7 @@ func TestUITwoSequentialCallsEachSummarize(t *testing.T) {
 	u.Output("b", b.String())
 	doneB("")
 
-	// each call leaves exactly one summary row, so two appear in history.
+	// each call leaves exactly one summary row, so two appear in history
 	screen := u.snapshot(v)
 	assert.Equal(t, 2, strings.Count(screen, "… +20 lines"))
 }
@@ -649,7 +668,7 @@ func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 	v := newVT(50, 30)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	// a non-streaming tool (read) sets Display; the done hook elides it.
+	// a non-streaming tool (read) sets Display; the done hook elides it
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
 		fmt.Fprintf(&b, "%6d\tline %d\n", i, i)
@@ -680,6 +699,7 @@ func TestUICommit(t *testing.T) {
 		assert.Empty(t, v.Line(1))
 		assert.Equal(t, "❯ two", v.Line(2))
 	})
+
 	t.Run("no_leading_blank_line", func(t *testing.T) {
 		v2 := newVT(40, 10)
 		u2 := newTestUI(t, v2, strings.NewReader(""))
@@ -742,7 +762,7 @@ func TestNew(t *testing.T) {
 		_, err := inW.WriteString("  \nhello\n") // blank lines are skipped
 		require.NoError(t, err)
 
-		// drain messages so the pump never blocks; assert on what lands.
+		// drain messages so the pump never blocks; assert on what lands
 		var got atomic.Value
 		go func() {
 			for msg := range u.Messages() {
@@ -751,6 +771,7 @@ func TestNew(t *testing.T) {
 		}()
 		require.Eventually(t, func() bool { return got.Load() == "hello" }, time.Second, testPoll)
 	})
+
 	t.Run("output_reaches_the_writer", func(t *testing.T) {
 		u.UserEcho("echoed")
 
@@ -759,6 +780,7 @@ func TestNew(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(buf[:n]), "echoed")
 	})
+
 	t.Run("close_is_idempotent", func(t *testing.T) {
 		u.Close()
 		assert.True(t, u.closed)
@@ -867,12 +889,14 @@ func TestUISearchOverlay(t *testing.T) {
 		u.waitOpenSearch(t)
 		assert.Contains(t, strutil.StripANSI(v.Line(1)), "(reverse-i-search)`':")
 	})
+
 	t.Run("typing_narrows", func(t *testing.T) {
 		searchPress(u, key{typ: keyRune, text: "retry"})
 		// the header shows the query and detail; the full match renders below it
 		assert.Contains(t, strutil.StripANSI(v.Line(1)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
 		assert.Contains(t, v.Line(2), "fix the retry loop")
 	})
+
 	t.Run("enter_fills_editor_without_submitting", func(t *testing.T) {
 		submit := searchPress(u, key{typ: keyEnter})
 		assert.Nil(t, submit)
@@ -1094,6 +1118,7 @@ func searchPress(u *UI, k key) *string {
 // waitOpenSearch waits until the Ctrl+R overlay is up and its provider delivered.
 func (u *UI) waitOpenSearch(t *testing.T) {
 	t.Helper()
+
 	require.Eventually(t, func() bool {
 		u.mu.Lock()
 		defer u.mu.Unlock()
@@ -1145,6 +1170,7 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 		press(u, key{typ: keyUp}) // still at pos 0; now the recall list exists
 		assert.Equal(t, "prior prompt", editorVal(u))
 	})
+
 	t.Run("up_later_line_moves_to_row_above", func(t *testing.T) {
 		v := newVT(wide, 10)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -1153,6 +1179,7 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 		press(u, key{typ: keyUp})
 		assert.Equal(t, 2, editorPos(u)) // moves up to the same column on the first line
 	})
+
 	t.Run("down_mid_last_line_goes_to_end_then_history", func(t *testing.T) {
 		v := newVT(wide, 10)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -1177,6 +1204,7 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 		press(u, key{typ: keyDown})
 		assert.Equal(t, "hello world", editorVal(u)) // restores the held draft on returning to it
 	})
+
 	t.Run("down_line_before_last_moves_to_row_below", func(t *testing.T) {
 		v := newVT(wide, 10)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -1196,12 +1224,15 @@ func TestStyleLines(t *testing.T) {
 		var none Style
 		assert.Equal(t, "a\nb\n", styleLines(none, "a\nb\n"))
 	})
+
 	t.Run("each_line_wrapped", func(t *testing.T) {
 		assert.Equal(t, "\x1b[2ma\x1b[0m\n\x1b[2mb\x1b[0m\n", styleLines(s, "a\nb\n"))
 	})
+
 	t.Run("blank_lines_untouched", func(t *testing.T) {
 		assert.Equal(t, "\x1b[2ma\x1b[0m\n\n", styleLines(s, "a\n\n"))
 	})
+
 	t.Run("empty_input", func(t *testing.T) {
 		assert.Empty(t, styleLines(s, ""))
 	})
@@ -1682,6 +1713,7 @@ func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 		require.NotEmpty(t, rows)
 		assert.Contains(t, strings.Join(rows, "\n"), "│ A │ B │")
 	})
+
 	t.Run("rule", func(t *testing.T) {
 		u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"}
 		rows := u.streamingRows(40)
@@ -1865,6 +1897,7 @@ func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 		assert.Contains(t, v.Line(v.h-1), "test")
 		assert.Equal(t, 1, countRules(v.Screen()))
 	})
+
 	t.Run("fresh_session_no_reanchor", func(t *testing.T) {
 		v := newVT(80, 24)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -2166,6 +2199,7 @@ func TestUIResponsiveResize(t *testing.T) {
 
 		assertBottomAnchored(t, u, v)
 	})
+
 	t.Run("no_reply_degrades_gracefully", func(t *testing.T) {
 		v := newVT(80, 24)
 		u, term := newResponsiveUI(t, v)

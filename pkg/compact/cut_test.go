@@ -6,13 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-)
 
-// the verbatim band ----------------------------------------------------
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/session"
+)
 
 // stepBranch builds n steps, each an assistant reply of roughly equal weight, and
 // opens with one real user prompt. Steps are "a1".."aN", the prompt "u1".
@@ -124,7 +123,7 @@ func TestChooseCut(t *testing.T) {
 
 // tailWellFormed reports whether every tool call in [cut:] is answered within it.
 func tailWellFormed(branch []session.Entry, cut int) bool {
-	calls := 0
+	var calls int
 	for i := cut; i < len(branch); i++ {
 		if branch[i].Type != session.TypeMessage {
 			continue
@@ -218,7 +217,7 @@ func TestVerbatimCutFuzz(t *testing.T) {
 // assistant text and tool call/result pairs in random order.
 func randomBranch(r *rand.Rand) []session.Entry {
 	var branch []session.Entry
-	id := 0
+	var id int
 	next := func() string { id++; return "e" + strconv.Itoa(id) }
 	turns := 2 + r.Intn(5)
 	for tn := 0; tn < turns; tn++ {

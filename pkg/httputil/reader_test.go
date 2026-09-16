@@ -42,6 +42,7 @@ func TestIdleReaderRead(t *testing.T) {
 		_, err := r.Read(make([]byte, 8))
 		assert.ErrorIs(t, err, ErrIdleTimeout)
 	})
+
 	t.Run("progress_stops_the_timer", func(t *testing.T) {
 		var timer *fakeTimer
 		r := &idleReader{rc: io.NopCloser(strings.NewReader("hello")), d: time.Minute,
@@ -55,6 +56,7 @@ func TestIdleReaderRead(t *testing.T) {
 		assert.Equal(t, 5, n)
 		assert.True(t, timer.stopped)
 	})
+
 	t.Run("normal_eof_is_not_an_idle_timeout", func(t *testing.T) {
 		r := &idleReader{rc: io.NopCloser(strings.NewReader("")), d: time.Minute,
 			afterFunc: func(_ time.Duration, fn func()) stopper { return &fakeTimer{fn: fn} }}
@@ -85,6 +87,7 @@ func TestSleepContext(t *testing.T) {
 	t.Run("zero_returns_immediately", func(t *testing.T) {
 		assert.NoError(t, sleepContext(t.Context(), 0))
 	})
+
 	t.Run("cancelled_context_reports_the_cause", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()

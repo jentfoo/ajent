@@ -15,8 +15,7 @@ func setClock(t time.Time) func() {
 }
 
 func TestNewID(t *testing.T) {
-	// the sorted-by-time and monotonic cases mutate the package clock, so this
-	// test cannot run in parallel.
+	// the sorted-by-time and monotonic cases mutate the package clock, so this cannot run in parallel
 
 	t.Run("length_and_alphabet", func(t *testing.T) {
 		id := NewID()
@@ -26,7 +25,7 @@ func TestNewID(t *testing.T) {
 		}
 	})
 
-	// increasing timestamps produce ids that sort in that order.
+	// increasing timestamps produce ids that sort in that order
 	t.Run("sorted_by_time", func(t *testing.T) {
 		t.Cleanup(setClock(time.UnixMilli(1_700_000_000_123).UTC()))
 
@@ -42,7 +41,7 @@ func TestNewID(t *testing.T) {
 		}
 	})
 
-	// one pinned timestamp still yields increasing ids.
+	// one pinned timestamp still yields increasing ids
 	t.Run("monotonic_within_ms", func(t *testing.T) {
 		t.Cleanup(setClock(time.UnixMilli(1_700_000_123).UTC()))
 

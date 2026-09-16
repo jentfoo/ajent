@@ -7,9 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func TestGuardVerdict(t *testing.T) {
@@ -129,7 +130,6 @@ func TestMustSerialize(t *testing.T) {
 		{"deny resolves without prompting", []Guard{deny}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.name, func(t *testing.T) {
 			r := New()
 			r.Register(&recordingTool{}, true)

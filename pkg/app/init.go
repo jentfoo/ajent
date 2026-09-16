@@ -66,6 +66,7 @@ func newInitController(deps initDeps) *initController {
 func (c *initController) track(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	c.spawned = append(c.spawned, id)
 }
 
@@ -181,6 +182,7 @@ func (w *initWatch) arm(path string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	w.path, w.prev = path, modTime(path)
 }
 

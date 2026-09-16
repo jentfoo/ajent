@@ -13,7 +13,7 @@ import (
 func TestLs(t *testing.T) {
 	t.Parallel()
 
-	// entries are sorted with directories suffixed.
+	// entries are sorted with directories suffixed
 	t.Run("lists_entries_sorted_with_dir_suffix", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "b.txt", "x")
@@ -56,7 +56,7 @@ func TestLs(t *testing.T) {
 		assert.False(t, tracker.UnchangedDir(dir))
 	})
 
-	// a limit truncates with the shared footer naming the spill file.
+	// a limit truncates with the shared footer naming the spill file
 	t.Run("limit_truncates_with_footer", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		for i := 0; i < 5; i++ {

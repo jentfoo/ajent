@@ -172,7 +172,7 @@ func sedReadSafe(raw string) bool {
 		return false
 	}
 	var scripts []string
-	positional := false
+	var positional bool
 	for j := 1; j < len(tokens); j++ {
 		tok := tokens[j]
 		if strings.HasPrefix(tok, "-") && tok != "-" {
@@ -196,8 +196,7 @@ func sedReadSafe(raw string) bool {
 			}
 			continue
 		}
-		// first non-flag token is the positional script when none seen yet;
-		// later ones are input files.
+		// first non-flag token is the positional script when none seen yet; later ones are input files
 		if len(scripts) == 0 && !positional {
 			scripts = append(scripts, tok)
 			positional = true
@@ -206,7 +205,7 @@ func sedReadSafe(raw string) bool {
 	if len(scripts) == 0 {
 		return false
 	}
-	sawCommand := false
+	var sawCommand bool
 	for _, part := range strings.FieldsFunc(strings.Join(scripts, "\n"), isSedSplitter) {
 		cmd := strings.TrimSpace(part)
 		if cmd == "" {

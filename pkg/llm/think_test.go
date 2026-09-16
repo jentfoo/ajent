@@ -64,6 +64,7 @@ func TestThinkSplitterWrite(t *testing.T) {
 		assert.Equal(t, "because", text)
 		assert.Equal(t, "why", thinking)
 	})
+
 	t.Run("never_leaks_a_partial_tag_as_text", func(t *testing.T) {
 		s := newThinkSplitter("", "")
 		for _, d := range []string{"<", "t", "h", "i", "n", "k"} {

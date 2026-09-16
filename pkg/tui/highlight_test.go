@@ -20,18 +20,21 @@ func TestHighlight(t *testing.T) {
 		assert.Contains(t, rows[0], esc)
 		assert.Equal(t, "func f() int { return 1 }", strutil.StripANSI(rows[0]))
 	})
+
 	t.Run("bash_tokens_colored", func(t *testing.T) {
 		rows := highlight(th, "bash", "echo \"hi\" | wc -l")
 		require.Len(t, rows, 1)
 		assert.Contains(t, rows[0], esc)
 		assert.Equal(t, "echo \"hi\" | wc -l", strutil.StripANSI(rows[0]))
 	})
+
 	t.Run("json_tokens_colored", func(t *testing.T) {
 		rows := highlight(th, "json", "{\"a\": 1}")
 		require.Len(t, rows, 1)
 		assert.Contains(t, rows[0], esc)
 		assert.Equal(t, "{\"a\": 1}", strutil.StripANSI(rows[0]))
 	})
+
 	t.Run("language_aliases_resolve", func(t *testing.T) {
 		aliases := map[string]string{
 			"golang": "func f() {}",
@@ -47,20 +50,24 @@ func TestHighlight(t *testing.T) {
 	t.Run("unknown_language_falls_back", func(t *testing.T) {
 		assert.Nil(t, highlight(th, "zzznotalanguage", "x := 1"))
 	})
+
 	t.Run("no_language_falls_back", func(t *testing.T) {
 		assert.Nil(t, highlight(th, "", "x := 1"))
 	})
+
 	t.Run("plaintext_falls_back", func(t *testing.T) {
 		// a plaintext lexer colors nothing, so the flat code style reads better
 		for _, lang := range []string{"text", "plaintext", "plain"} {
 			assert.Nil(t, highlight(th, lang, "just some words"), lang)
 		}
 	})
+
 	t.Run("unknown_style_falls_back", func(t *testing.T) {
 		bogus := th
 		bogus.CodeStyle = "zzznotastyle"
 		assert.Nil(t, highlight(bogus, "go", "x := 1"))
 	})
+
 	t.Run("no_style_falls_back", func(t *testing.T) {
 		assert.Nil(t, highlight(NewTheme(ColorNone, DefaultPalette()), "go", "x := 1"))
 		assert.Nil(t, highlight(NewTheme(ColorBasic, DefaultPalette()), "go", "x := 1"))
@@ -79,6 +86,7 @@ func TestHighlight(t *testing.T) {
 			assert.Len(t, highlight(th, "go", code), strings.Count(code, "\n")+1, code)
 		}
 	})
+
 	t.Run("no_newline_within_a_row", func(t *testing.T) {
 		// a histLine is one terminal row; a break inside a styled span would corrupt
 		// the layout and cannot be trimmed off afterwards
@@ -86,6 +94,7 @@ func TestHighlight(t *testing.T) {
 			assert.NotContains(t, row, "\n")
 		}
 	})
+
 	t.Run("no_background_emitted", func(t *testing.T) {
 		// unterminated input lexes as Error, which several styles shade
 		for _, pal := range Palettes() {
@@ -93,6 +102,7 @@ func TestHighlight(t *testing.T) {
 			assert.NotContains(t, strings.Join(rows, ""), "48;", pal.Name)
 		}
 	})
+
 	t.Run("whitespace_is_never_colored", func(t *testing.T) {
 		// github paints whitespace against its own page background, which in a
 		// terminal is invisible and pure escape bloat
@@ -105,11 +115,13 @@ func TestHighlight(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("truecolor_uses_rgb", func(t *testing.T) {
 		row := highlight(NewTheme(ColorTrue, DefaultPalette()), "go", "x := 1")[0]
 		assert.Contains(t, row, "38;2;")
 		assert.NotContains(t, row, "38;5;")
 	})
+
 	t.Run("every_palette_style_resolves", func(t *testing.T) {
 		// a renamed chroma style would silently drop a palette back to flat code
 		for _, pal := range Palettes() {

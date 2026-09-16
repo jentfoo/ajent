@@ -67,7 +67,7 @@ func agentsList(c Console, a Agents) {
 	b.WriteString("# Sub-agents\n\n| id | status | elapsed | task |\n")
 	b.WriteString("|----|--------|---------:|------|\n")
 	for _, j := range jobs {
-		fmt.Fprintf(&b, "| %s | %s | %s | %s |\n",
+		_, _ = fmt.Fprintf(&b, "| %s | %s | %s | %s |\n",
 			j.ID, j.Status, strutil.Elapsed(j.Elapsed), orDash(j.Task))
 	}
 	c.Print(b.String())

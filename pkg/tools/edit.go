@@ -270,7 +270,7 @@ func applyEdits(t editTarget, orig string, ops []editOp) (editOutcome, error) {
 
 	var out strings.Builder // LF rebuild from the original buffer in span order
 	var written [][2]int    // each replacement's offsets in the rebuilt text
-	last := 0
+	var last int
 	for _, sp := range spans {
 		out.WriteString(buf[last:sp.s])
 		at := out.Len()
@@ -381,7 +381,7 @@ func rebuild(orig, buf string, spans []matchSpan) []byte {
 	}
 
 	var out strings.Builder
-	last := 0
+	var last int
 	for _, sp := range spans {
 		l := lineAt(sp.s)
 		out.WriteString(orig[last:toOrig(l, sp.s)])

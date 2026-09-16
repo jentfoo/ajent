@@ -263,6 +263,7 @@ func TestNormalizeCallID(t *testing.T) {
 		out := normalizeCallID(long, caps(DialectOpenAICompletions), "openai", callForeignEndpoint)
 		assert.Len(t, out, maxCompatCallID)
 	})
+
 	t.Run("chat_completions_other_provider_bare_kept", func(t *testing.T) {
 		long := strings.Repeat("y", 80)
 		out := normalizeCallID(long, caps(DialectOpenAICompletions), "lmstudio", callForeignEndpoint)
@@ -481,6 +482,7 @@ func TestRepairTurns(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, processedTools, tb.Text)
 	})
+
 	t.Run("user_after_user_no_bridge", func(t *testing.T) {
 		mc := Model{Provider: "p", ID: "m", Caps: Capabilities{
 			RequiresAssistantAfterToolResult: true,
@@ -494,6 +496,7 @@ func TestRepairTurns(t *testing.T) {
 		require.Len(t, out, 2)
 		assert.Equal(t, RoleUser, out[1].Role)
 	})
+
 	t.Run("assistant_between_results_and_user_no_bridge", func(t *testing.T) {
 		mc := Model{Provider: "p", ID: "m", Caps: Capabilities{
 			RequiresAssistantAfterToolResult: true,
@@ -609,6 +612,7 @@ func TestPrepareToolResultImageSplit(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, []byte{1}, img.Data)
 	})
+
 	t.Run("anthropic_keeps_images_in_result", func(t *testing.T) {
 		out := Prepare(Request{Model: imgMsg(DialectAnthropic, true),
 			Messages: []Message{toolImage}}).Messages
@@ -616,6 +620,7 @@ func TestPrepareToolResultImageSplit(t *testing.T) {
 		tr := out[0].Content[0].(ToolResultBlock)
 		assert.True(t, hasImage(tr.Content)) // image stayed put for anthropic
 	})
+
 	t.Run("responses_keeps_images_in_result", func(t *testing.T) {
 		out := Prepare(Request{Model: imgMsg(DialectOpenAIResponses, true),
 			Messages: []Message{toolImage}}).Messages
@@ -623,6 +628,7 @@ func TestPrepareToolResultImageSplit(t *testing.T) {
 		tr := out[0].Content[0].(ToolResultBlock)
 		assert.True(t, hasImage(tr.Content)) // image stayed put for responses
 	})
+
 	t.Run("no_split_without_image_capability", func(t *testing.T) {
 		m := Model{Provider: "p", ID: "m", Caps: Capabilities{Dialect: DialectOpenAICompletions, Images: false}}
 		out := Prepare(Request{Model: m, Messages: []Message{toolImage}}).Messages
@@ -630,6 +636,7 @@ func TestPrepareToolResultImageSplit(t *testing.T) {
 		tr := out[0].Content[0].(ToolResultBlock)
 		assert.Equal(t, toolImageOmitted, tr.Content[0].(TextBlock).Text)
 	})
+
 	t.Run("split_is_idempotent", func(t *testing.T) {
 		req := Request{Model: imgMsg(DialectOpenAICompletions, true),
 			Messages: []Message{toolImage}}
@@ -637,6 +644,7 @@ func TestPrepareToolResultImageSplit(t *testing.T) {
 		twice := Prepare(Prepare(req))
 		assert.Equal(t, once.Messages, twice.Messages)
 	})
+
 	t.Run("does_not_mutate_input_blocks", func(t *testing.T) {
 		m := imgMsg(DialectOpenAICompletions, true)
 		in := []Message{toolImage}

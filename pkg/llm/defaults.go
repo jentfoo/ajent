@@ -378,10 +378,9 @@ func applyModelDefaults(mc ModelConfig) ModelConfig {
 	return mc
 }
 
-// resolveModel builds a Model from a config entry against a provider's defaults,
-// layering flavor caps then detection then the compat blocks, and finally the
-// schema defaults. Detection runs only for chat-completions and never overrides
-// configured compat.
+// resolveModel builds a Model from a config entry against a provider's defaults, layering
+// flavor caps then detection then the compat blocks, and finally the schema defaults.
+// Detection runs only for chat-completions and never overrides configured compat.
 func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, mc ModelConfig) Model {
 	mc = applyModelDefaults(mc)
 	dialect, baseURL := modelEndpoint(ctx, mc)
@@ -397,7 +396,7 @@ func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, m
 	if mc.Reasoning != nil {
 		caps.Reasoning = *mc.Reasoning
 	}
-	maxOut := 0
+	var maxOut int
 	if mc.MaxTokens != nil {
 		maxOut = *mc.MaxTokens
 	}
@@ -412,8 +411,7 @@ func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, m
 	if !caps.Reasoning {
 		caps.ReasoningReplay = false
 	} else {
-		// start from the ladder, then overlay configured rungs so a partial map
-		// keeps the rest of it
+		// start from the ladder, then overlay configured rungs so a partial map keeps the rest of it
 		caps.Budgets = defaultBudgets(maxOut)
 		for l, b := range mc.ThinkingBudgets {
 			caps.Budgets[l] = b

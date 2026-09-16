@@ -16,6 +16,7 @@ func newRingLog(max int) *ringLog { return &ringLog{max: max} }
 func (l *ringLog) add(line string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
 	if len(l.buf) == l.max {
 		copy(l.buf, l.buf[1:])
 		l.buf[len(l.buf)-1] = line
@@ -27,6 +28,7 @@ func (l *ringLog) add(line string) {
 func (l *ringLog) lines() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
 	out := make([]string, len(l.buf))
 	copy(out, l.buf)
 	return out

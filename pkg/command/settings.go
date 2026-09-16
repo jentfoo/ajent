@@ -22,8 +22,7 @@ type settingsRow struct {
 	edit   func(ctx context.Context, c Console) ([]settingChange, error)
 }
 
-// settingChange is one config key/value an editor produced for persistence. An
-// edit may yield several (e.g. auto-compaction's toggle and threshold).
+// settingChange is one config key/value an editor produced for persistence.
 type settingChange struct {
 	key   string
 	value any
@@ -31,8 +30,8 @@ type settingChange struct {
 
 // settingsCommand shows or edits configuration. No section opens the full menu;
 // a section name jumps straight to that row's editor.
-func settingsCommand(_ context.Context, arg string, c Console) error {
-	return runSettings(c, strings.TrimSpace(arg))
+func settingsCommand(ctx context.Context, arg string, c Console) error {
+	return runSettings(ctx, c, strings.TrimSpace(arg))
 }
 
 // settingsCompletion offers section names for /settings <section>.
@@ -48,19 +47,19 @@ func settingsCompletion(c Console) func(prefix string) []string {
 
 // runSettings drives the menu loop. A section jumps to one row then returns; an
 // empty section reopens after every edit until cancelled.
-func runSettings(c Console, section string) error {
+func runSettings(ctx context.Context, c Console, section string) error {
 	if section != "" {
 		for i := range allRows() {
 			r := &allRows()[i]
 			if strings.EqualFold(r.name, section) || (section == "reasoning" && r.name == "Reasoning") {
-				return editRow(context.Background(), c, r)
+				return editRow(ctx, c, r)
 			}
 		}
 		c.Notify("no settings section "+section+"; try /settings", levelWarn)
 		return nil
 	}
 
-	last := 0
+	var last int
 	for {
 		rows := allRows()
 		items := make([]tui.PickItem, len(rows))
@@ -68,12 +67,12 @@ func runSettings(c Console, section string) error {
 			label, detail := rows[i].render(c)
 			items[i] = tui.PickItem{Label: label, Detail: detail}
 		}
-		picked, err := c.Pick(context.Background(), "Settings", items,
+		picked, err := c.Pick(ctx, "Settings", items,
 			tui.PickOptions{Initial: last})
 		if err != nil {
 			return nil // cancelled
 		}
-		err = editRow(context.Background(), c, &rows[picked])
+		err = editRow(ctx, c, &rows[picked])
 		if errorsIsCancelled(err) {
 			continue // Esc leaves the row; reopen the menu on it
 		} else if err != nil {
@@ -89,14 +88,14 @@ func editRow(ctx context.Context, c Console, r *settingsRow) error {
 	if err != nil || len(changes) == 0 {
 		return err // nothing changed or a row with no persistent key
 	}
-	savePrompt(c, changes...)
+	savePrompt(ctx, c, changes...)
 	return nil
 }
 
 // savePrompt asks where a just-applied session override should persist. The
 // editor already SetSession; this only copies to a file layer when chosen.
-func savePrompt(c Console, changes ...settingChange) {
-	idx, err := c.Select(context.Background(), "Save change",
+func savePrompt(ctx context.Context, c Console, changes ...settingChange) {
+	idx, err := c.Select(ctx, "Save change",
 		[]tui.Option{
 			{Label: "this session only"},
 			{Label: "save to user config"},
@@ -127,7 +126,7 @@ func savePrompt(c Console, changes ...settingChange) {
 
 // enumRow builds a row editing a string key from a fixed set of values.
 func enumRow(name, key string, values []string) settingsRow {
-	edit := func(_ context.Context, c Console) ([]settingChange, error) {
+	edit := func(ctx context.Context, c Console) ([]settingChange, error) {
 		opts := make([]tui.Option, len(values))
 		current, _, _ := c.Settings().Explain(key)
 		var cur string
@@ -139,7 +138,7 @@ func enumRow(name, key string, values []string) settingsRow {
 			}
 			opts[i] = tui.Option{Label: marker + v}
 		}
-		idx, err := c.Select(context.Background(), name, opts)
+		idx, err := c.Select(ctx, name, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -156,11 +155,11 @@ func enumRow(name, key string, values []string) settingsRow {
 // the current value, prompts for a replacement and validates before persisting,
 // so it fits numeric fields that enumRow's string storage cannot unmarshal into.
 func intRow(name, key string, min, max int) settingsRow {
-	edit := func(_ context.Context, c Console) ([]settingChange, error) {
+	edit := func(ctx context.Context, c Console) ([]settingChange, error) {
 		current, _, _ := c.Settings().Explain(key)
 		var cur int
 		_ = json.Unmarshal(current, &cur)
-		in, err := c.Input(context.Background(), name, strconv.Itoa(cur))
+		in, err := c.Input(ctx, name, strconv.Itoa(cur))
 		if err != nil {
 			return nil, err
 		}
@@ -180,11 +179,11 @@ func intRow(name, key string, min, max int) settingsRow {
 // floatRow builds a row editing a fractional key within [min,max], the numeric
 // counterpart of intRow for settings stored as a fraction.
 func floatRow(name, key string, min, max float64) settingsRow {
-	edit := func(_ context.Context, c Console) ([]settingChange, error) {
+	edit := func(ctx context.Context, c Console) ([]settingChange, error) {
 		current, _, _ := c.Settings().Explain(key)
 		var cur float64
 		_ = json.Unmarshal(current, &cur)
-		in, err := c.Input(context.Background(), name, strconv.FormatFloat(cur, 'g', -1, 64))
+		in, err := c.Input(ctx, name, strconv.FormatFloat(cur, 'g', -1, 64))
 		if err != nil {
 			return nil, err
 		}
@@ -235,7 +234,7 @@ func allRows() []settingsRow {
 		themeRow(),
 		{name: "Tool limits",
 			render: func(_ Console) (string, string) { return "Tool limits", "edit per-tool output bounds" },
-			edit:   func(_ context.Context, c Console) ([]settingChange, error) { return editLimits(c) }},
+			edit:   func(ctx context.Context, c Console) ([]settingChange, error) { return editLimits(ctx, c) }},
 	}
 	return rows
 }
@@ -278,7 +277,7 @@ func rowThinking(c Console) (string, string) {
 
 func rowTools(c Console) (string, string) {
 	n := len(c.Settings().Settings().Tools.Enabled)
-	total := 0
+	var total int
 	if tr := c.Tools(); tr != nil {
 		total = len(tr.All())
 	}
@@ -301,7 +300,7 @@ func rowCompaction(c Console) (string, string) {
 // editModel applies a pick through the model picker without persisting; the
 // save-to-layer choice is offered by editRow's prompt.
 func editModel(ctx context.Context, c Console) ([]settingChange, error) {
-	if _, err := applyModel("", c); err != nil {
+	if _, err := applyModel(ctx, "", c); err != nil {
 		return nil, err
 	}
 	key := c.Models().Active().Key()
@@ -310,8 +309,8 @@ func editModel(ctx context.Context, c Console) ([]settingChange, error) {
 }
 
 // editReasoning delegates to the reasoning picker.
-func editReasoning(_ context.Context, c Console) ([]settingChange, error) {
-	err := reasoningCommand(context.Background(), "", c)
+func editReasoning(ctx context.Context, c Console) ([]settingChange, error) {
+	err := reasoningCommand(ctx, "", c)
 	if err != nil || c.State() == nil {
 		return nil, err
 	}
@@ -322,7 +321,7 @@ func editReasoning(_ context.Context, c Console) ([]settingChange, error) {
 }
 
 // editRetention lets the user pick a reasoning retention policy.
-func editRetention(_ context.Context, c Console) ([]settingChange, error) {
+func editRetention(ctx context.Context, c Console) ([]settingChange, error) {
 	policies := []string{"none", "lastTurn", "wholeTurn", "all"}
 	current := llm.RetainWholeTurn
 	if p, ok := llm.ParseRetain(c.State().Reasoning.Retain.String()); ok {
@@ -336,7 +335,7 @@ func editRetention(_ context.Context, c Console) ([]settingChange, error) {
 		}
 		opts[i] = tui.Option{Label: marker + p}
 	}
-	idx, err := c.Select(context.Background(), "Reasoning retention", opts)
+	idx, err := c.Select(ctx, "Reasoning retention", opts)
 	if err != nil {
 		return nil, err
 	}
@@ -356,8 +355,8 @@ func editRetention(_ context.Context, c Console) ([]settingChange, error) {
 }
 
 // editThinking flips whether thinking streams to the UI.
-func editThinking(_ context.Context, c Console) ([]settingChange, error) {
-	on, err := c.Confirm(context.Background(), "Stream thinking to the UI?")
+func editThinking(ctx context.Context, c Console) ([]settingChange, error) {
+	on, err := c.Confirm(ctx, "Stream thinking to the UI?")
 	if err != nil {
 		return nil, err
 	}
@@ -386,8 +385,8 @@ func editTools(ctx context.Context, c Console) ([]settingChange, error) {
 // gathered and validated before anything applies: valid values are a fraction in
 // (0,1) of the window or an absolute token count >= 1; anything else aborts the
 // whole edit with no session settings recorded.
-func editCompaction(_ context.Context, c Console) ([]settingChange, error) {
-	on, err := c.Confirm(context.Background(), "Enable automatic compaction?")
+func editCompaction(ctx context.Context, c Console) ([]settingChange, error) {
+	on, err := c.Confirm(ctx, "Enable automatic compaction?")
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +396,7 @@ func editCompaction(_ context.Context, c Console) ([]settingChange, error) {
 	_ = json.Unmarshal(pct, &threshold)
 
 	if on {
-		in, ierr := c.Input(context.Background(), "Threshold (fraction of window or absolute tokens)", fmt.Sprintf("%g", threshold))
+		in, ierr := c.Input(ctx, "Threshold (fraction of window or absolute tokens)", fmt.Sprintf("%g", threshold))
 		if ierr != nil {
 			return nil, ierr
 		}
@@ -423,7 +422,7 @@ func editCompaction(_ context.Context, c Console) ([]settingChange, error) {
 }
 
 // editLimits opens a sub-pick over flattened tool limit dimensions.
-func editLimits(c Console) ([]settingChange, error) {
+func editLimits(ctx context.Context, c Console) ([]settingChange, error) {
 	dims := []struct{ key, label string }{
 		{"tools.limits.bash.lines", "bash lines"},
 		{"tools.limits.bash.bytes", "bash bytes"},
@@ -437,11 +436,11 @@ func editLimits(c Console) ([]settingChange, error) {
 		_ = json.Unmarshal(v, &n)
 		items[i] = tui.PickItem{Label: d.label, Detail: strconv.Itoa(n)}
 	}
-	picked, err := c.Pick(context.Background(), "Tool limits", items, tui.PickOptions{})
+	picked, err := c.Pick(ctx, "Tool limits", items, tui.PickOptions{})
 	if err != nil {
 		return nil, err
 	}
-	in, ierr := c.Input(context.Background(), dims[picked].label, "")
+	in, ierr := c.Input(ctx, dims[picked].label, "")
 	if ierr != nil {
 		return nil, ierr
 	}
@@ -454,8 +453,6 @@ func editLimits(c Console) ([]settingChange, error) {
 	_ = c.SetSessionSetting(key, n)
 	return []settingChange{{key: key, value: n}}, nil
 }
-
-// helpers ----------------------------------------------------------------
 
 // toolNames returns the currently enabled tool names in order.
 func toolNames(c Console) []string {

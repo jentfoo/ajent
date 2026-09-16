@@ -135,10 +135,12 @@ func TestEnumTextRoundTrip(t *testing.T) {
 	t.Run("level", func(t *testing.T) {
 		enumRoundTrip[Level, *Level](t, allLevels())
 	})
+
 	t.Run("retain_policy", func(t *testing.T) {
 		enumRoundTrip[RetainPolicy, *RetainPolicy](t,
 			[]RetainPolicy{RetainNone, RetainLastTurn, RetainWholeTurn, RetainAll})
 	})
+
 	t.Run("thinking_format", func(t *testing.T) {
 		enumRoundTrip[ThinkingFormat, *ThinkingFormat](t, []ThinkingFormat{
 			ThinkingNone, ThinkingOpenAI, ThinkingOpenRouter, ThinkingDeepSeek,
@@ -147,15 +149,18 @@ func TestEnumTextRoundTrip(t *testing.T) {
 			ThinkingAntLing, ThinkingAnthropic, ThinkingThinkTags,
 		})
 	})
+
 	t.Run("tokenizer_kind", func(t *testing.T) {
 		enumRoundTrip[TokenizerKind, *TokenizerKind](t, []TokenizerKind{
 			TokenizerNone, TokenizerRemoteCount, TokenizerRemoteTokenize, TokenizerLocalEstimate,
 		})
 	})
+
 	t.Run("unencodable_value_errors", func(t *testing.T) {
 		_, err := Level(200).MarshalText()
 		assert.ErrorContains(t, err, "cannot encode enum value 200")
 	})
+
 	t.Run("unknown_value_names_unknown", func(t *testing.T) {
 		assert.Equal(t, "unknown", Level(200).String())
 	})

@@ -3,15 +3,16 @@ package agent
 import (
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // wellFormed reports whether every ToolCallBlock in messages has a matching
 // ToolResultBlock, which is what keeps the next Anthropic request valid.
 func wellFormed(msgs []llm.Message) bool {
-	calls := 0
+	var calls int
 	for _, m := range msgs {
 		for _, b := range m.Content {
 			switch blk := b.(type) {
@@ -40,8 +41,7 @@ func TestInterrupt(t *testing.T) {
 		errCh := make(chan error, 1)
 		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
 
-		require.Eventually(t, func() bool { return gp.current() != nil }, defaultTimeout, pollInterval,
-			"the stream must be created before cancelling")
+		require.Eventually(t, func() bool { return gp.current() != nil }, defaultTimeout, pollInterval)
 		a.Interrupt()
 
 		require.NoError(t, <-errCh) // an interrupt is a clean stop reason, not an error
@@ -49,8 +49,7 @@ func TestInterrupt(t *testing.T) {
 		// ending the turn closes the model stream: zero incoming tokens after interrupt
 		s := gp.current()
 		require.NotNil(t, s)
-		require.Eventually(t, s.isClosed, defaultTimeout, pollInterval,
-			"the model stream must be closed when the turn ends")
+		require.Eventually(t, s.isClosed, defaultTimeout, pollInterval)
 	})
 
 	// synthetic results fill unanswered calls so the transcript stays well formed

@@ -75,14 +75,11 @@ func TestInlineNeverAbsolute(t *testing.T) {
 // draw parks there so the next erase needs no row maths.
 func assertParked(t *testing.T, v *vt, want int) {
 	t.Helper()
+
 	assert.Equal(t, want, v.row)
 	assert.Equal(t, 0, v.col)
 }
 
-// TestInlineContaminatedRowParks drives live rows carrying the escapes caller
-// text may hold. Unsanitized, each moves the cursor in ways no row count
-// predicted, so the park lands inside the block and the next erase strands
-// its top row.
 func TestInlineContaminatedRowParks(t *testing.T) {
 	t.Parallel()
 
@@ -119,6 +116,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		assert.Equal(t, "❯", v.Line(2))
 		assert.Equal(t, "ctx 0%", v.Line(3))
 	})
+
 	t.Run("block_is_erased_not_duplicated", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -130,6 +128,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		assert.Equal(t, "ctx 0%", v.Line(2))
 		assert.Empty(t, v.Line(3))
 	})
+
 	t.Run("prose_left_for_the_terminal_to_wrap", func(t *testing.T) {
 		v := newVT(10, 8)
 		r := newTestInline(v)
@@ -139,6 +138,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		assert.Equal(t, "aaaa bbbb", v.Line(0))
 		assert.Equal(t, "cccc", v.Line(1))
 	})
+
 	t.Run("wrapped_lines_left_for_the_terminal", func(t *testing.T) {
 		v := newVT(10, 8)
 		r := newTestInline(v)
@@ -149,6 +149,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		assert.Equal(t, "• aaaa bbb", v.Line(0))
 		assert.Equal(t, "b", v.Line(1))
 	})
+
 	t.Run("structural_rows_never_fill_the_last_column", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -159,6 +160,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		// live_rows_never_fill_the_last_column
 		assert.Equal(t, 19, displayWidth(v.Line(0)))
 	})
+
 	t.Run("cursor_parks_on_the_block_not_the_caret", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -171,6 +173,7 @@ func TestInlineRendererCommit(t *testing.T) {
 		assert.Equal(t, 1, v.row)
 		assert.Equal(t, 0, v.col)
 	})
+
 	t.Run("multi_row_block", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -251,7 +254,6 @@ func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 	assert.Equal(t, []string{line}, rejoined)
 }
 
-// TestInlineDiff covers the live-block diffing and its full-erase fallbacks.
 func TestInlineDiff(t *testing.T) {
 	t.Parallel()
 
@@ -276,7 +278,7 @@ func TestInlineDiff(t *testing.T) {
 		assert.Contains(t, out, eraseTail)
 	})
 
-	// only the width can reflow rows the diff did not write, so a width change redraws the whole block.
+	// only the width can reflow rows the diff did not write, so a width change redraws the whole block
 	t.Run("falls_back_on_width_change", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
@@ -290,7 +292,7 @@ func TestInlineDiff(t *testing.T) {
 		assert.Contains(t, out, "draft text")
 	})
 
-	// the single erase-below used to cover a block that grew or shrank; the diff cannot, so it falls back.
+	// the single erase-below used to cover a block that grew or shrank; the diff cannot, so it falls back
 	t.Run("falls_back_on_row_count_change", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
@@ -306,9 +308,6 @@ func TestInlineDiff(t *testing.T) {
 	})
 }
 
-// TestInlineAbortsFrameOnResizeSignal pins the pre-write gate: while a signal
-// is unsettled the frame is abandoned, and the baseline is the settled
-// generation, not one captured as the frame starts.
 func TestInlineAbortsFrameOnResizeSignal(t *testing.T) {
 	t.Parallel()
 
@@ -337,9 +336,6 @@ func TestInlineAbortsFrameOnResizeSignal(t *testing.T) {
 	assertParked(t, v, top)
 }
 
-// TestInlineReanchor covers the underfill recovery: a reflow that clamped or
-// stranded the parked cursor leaves the block ending above the last row, and
-// the next full draw pads it back to the screen bottom in newlines only.
 func TestInlineReanchor(t *testing.T) {
 	t.Parallel()
 
@@ -358,6 +354,7 @@ func TestInlineReanchor(t *testing.T) {
 		assert.False(t, hasCursorTo(out))
 		assert.False(t, r.reanchored)
 	})
+
 	t.Run("pads_when_stranded_mid_screen", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
@@ -373,6 +370,7 @@ func TestInlineReanchor(t *testing.T) {
 		assert.Contains(t, out, strings.Repeat("\r\n", 18))
 		assert.NotContains(t, out, strings.Repeat("\r\n", 19))
 	})
+
 	t.Run("pad_never_scrolls", func(t *testing.T) {
 		v := newVT(40, 12)
 		r := newTestInline(v)
@@ -392,6 +390,7 @@ func TestInlineReanchor(t *testing.T) {
 		assert.Equal(t, v.h-2, v.row) // parked on the block's top, block at the bottom
 		assert.Contains(t, v.Line(v.h-1), "ctx")
 	})
+
 	t.Run("suspend_clears_the_flag", func(t *testing.T) {
 		v := newVT(40, 12)
 		r := newTestInline(v)
@@ -403,6 +402,7 @@ func TestInlineReanchor(t *testing.T) {
 
 		assert.False(t, r.reanchored)
 	})
+
 	t.Run("pad_follows_the_frame_it_lands_on", func(t *testing.T) {
 		v := newVT(40, 12)
 		r := newTestInline(v)
@@ -426,6 +426,7 @@ func TestInlineReanchor(t *testing.T) {
 		r.live = make([]string, r.t.height)
 		assert.Empty(t, r.anchorPad())
 	})
+
 	t.Run("no_pad_when_block_reaches_bottom", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
@@ -438,6 +439,7 @@ func TestInlineReanchor(t *testing.T) {
 		assert.NotContains(t, buf.String(), strings.Repeat("\r\n", 2))
 		assert.False(t, r.reanchored)
 	})
+
 	t.Run("reject_clears_a_pending_pad", func(t *testing.T) {
 		v := newVT(40, 12)
 		r := newTestInline(v)
@@ -460,6 +462,7 @@ func TestInlineReanchor(t *testing.T) {
 		assert.Len(t, v.scrollback, before)
 		assert.Contains(t, v.Line(0), "hist")
 	})
+
 	t.Run("no_pad_on_fresh_session", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
@@ -471,6 +474,7 @@ func TestInlineReanchor(t *testing.T) {
 
 		assert.NotContains(t, buf.String(), "\r\n\r\n")
 	})
+
 	t.Run("no_pad_when_live_is_empty", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
@@ -481,6 +485,7 @@ func TestInlineReanchor(t *testing.T) {
 		assert.NotContains(t, buf.String(), "\r\n")
 		assert.False(t, r.reanchored)
 	})
+
 	t.Run("abandoned_frame_keeps_the_flag", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -494,6 +499,7 @@ func TestInlineReanchor(t *testing.T) {
 
 		assert.True(t, r.reanchored)
 	})
+
 	t.Run("commit_clears_the_flag", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 20, height: 8}}
@@ -506,6 +512,7 @@ func TestInlineReanchor(t *testing.T) {
 		assert.False(t, r.reanchored)
 		assert.NotContains(t, buf.String(), strings.Repeat("\r\n", 6))
 	})
+
 	t.Run("forces_a_full_draw", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
@@ -551,6 +558,7 @@ func TestInlineRendererResize(t *testing.T) {
 		assert.Equal(t, 1, v.row)
 		assert.Equal(t, 0, v.col)
 	})
+
 	t.Run("resize_alone_draws_nothing", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -564,6 +572,7 @@ func TestInlineRendererResize(t *testing.T) {
 		assert.Equal(t, before, v.Screen())
 		assert.Equal(t, 10, r.t.width)
 	})
+
 	t.Run("erase_lands_on_the_reflowed_block", func(t *testing.T) {
 		v := newVT(40, 10)
 		r := newTestInline(v)
@@ -580,6 +589,7 @@ func TestInlineRendererResize(t *testing.T) {
 		assert.Equal(t, 1, countRules(v.Screen()))
 		assert.Equal(t, "committed output", v.Line(0))
 	})
+
 	t.Run("committed_rows_are_never_re_rendered", func(t *testing.T) {
 		v := newVT(40, 12)
 		r := newTestInline(v)
@@ -602,6 +612,7 @@ func TestInlineRendererResize(t *testing.T) {
 			v.Line(0), v.Line(1), v.Line(2), v.Line(3), v.Line(4), v.Line(5),
 		}, reflowed)
 	})
+
 	t.Run("leaves_content_above_the_session", func(t *testing.T) {
 		v := newVT(40, 12)
 		r := newTestInline(v)
@@ -620,6 +631,7 @@ func TestInlineRendererResize(t *testing.T) {
 		assert.Contains(t, screen, "$ ajent")
 		assert.Equal(t, 1, strings.Count(screen, "session line one"))
 	})
+
 	t.Run("erase_needs_no_row_maths", func(t *testing.T) {
 		v := newVT(20, 10)
 		r := newTestInline(v)
@@ -634,6 +646,7 @@ func TestInlineRendererResize(t *testing.T) {
 		assert.Equal(t, 1, countRules(v.Screen()))
 		assert.Equal(t, "kept", v.Line(0))
 	})
+
 	t.Run("repeated_draws_never_accumulate", func(t *testing.T) {
 		v := newVT(40, 10)
 		r := newTestInline(v)
@@ -648,6 +661,7 @@ func TestInlineRendererResize(t *testing.T) {
 			assert.Equal(t, 1, countRules(v.Screen()), "width %d", w)
 		}
 	})
+
 	t.Run("live_rows_never_fill_the_last_column", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -656,6 +670,7 @@ func TestInlineRendererResize(t *testing.T) {
 		// emulators reflow inconsistently
 		assert.Equal(t, 19, displayWidth(v.Line(0)))
 	})
+
 	t.Run("history_is_never_touched", func(t *testing.T) {
 		v := newVT(20, 8)
 		r := newTestInline(v)
@@ -737,10 +752,6 @@ func relayout(lines []histLine, w int) []string {
 	return out
 }
 
-// TestInlineRelayoutBakesNoWidth pins the retained-intent guarantee behind
-// histLine.table and histLine.rule: nothing a producer commits may carry the
-// width it was rendered at. Re-laying lines committed at one width must
-// reproduce rendering them fresh at another, for every flow and kind.
 func TestInlineRelayoutBakesNoWidth(t *testing.T) {
 	t.Parallel()
 

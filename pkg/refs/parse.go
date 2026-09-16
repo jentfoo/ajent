@@ -43,7 +43,7 @@ func Parse(text string) []Ref {
 			j++
 		}
 		path := text[pathStart:j]
-		note := ""
+		var note string
 		// absorb a trailing (...) measurement, allowing a single space before it
 		noteStart := j
 		if noteStart < len(text) && text[noteStart] == ' ' && noteStart+1 < len(text) && text[noteStart+1] == '(' {
@@ -93,7 +93,7 @@ func absorbNote(text string, pos int) (end int, ok bool) {
 	if pos >= len(text) || text[pos] != '(' {
 		return pos, false
 	}
-	depth := 0
+	var depth int
 	for j := pos; j < len(text); j++ {
 		switch text[j] {
 		case '(':

@@ -51,8 +51,7 @@ func TestParse(t *testing.T) {
 func TestParseIdempotentAnnotation(t *testing.T) {
 	t.Parallel()
 
-	// re-parsing already-annotated text yields the ref with the note absorbed,
-	// never a second annotation
+	// re-parsing already-annotated text yields the ref with the note absorbed, never a second annotation
 	annotated := "@file (800 lines, 64kb) and @file (800 lines, 64kb)"
 	refs := Parse(annotated)
 	require.Len(t, refs, 2)

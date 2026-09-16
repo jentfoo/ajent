@@ -4,15 +4,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// TestBranchAcrossRoots covers the shape the plan workflow relies on: SetHead("")
-// starts a second root whose branch stops there, so a rebuilt state carries only
-// that root's own chain and resolves its model from the leading model_change.
 func TestBranchAcrossRoots(t *testing.T) {
 	t.Parallel()
 

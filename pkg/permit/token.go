@@ -20,7 +20,7 @@ func tokenizeRaw(segment string) []string {
 		b.Reset()
 		started = false
 	}
-	i := 0
+	var i int
 	n := len(segment)
 	for i < n {
 		ch := segment[i]

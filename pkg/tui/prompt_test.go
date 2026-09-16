@@ -40,6 +40,7 @@ func TestRefilterMatches(t *testing.T) {
 		// (moonshotai/**k**imi... vs gem**i**ni-3-pro), so only item 0 lists
 		assert.Equal(t, []int{0}, refilterMatches(items, "kimi"))
 	})
+
 	t.Run("boundary_hit_ranks_first", func(t *testing.T) {
 		ranked := []PickItem{
 			{Label: "a-very-long-prefix-opus"},
@@ -75,6 +76,7 @@ func TestListSection(t *testing.T) {
 	t.Run("empty_list_is_named", func(t *testing.T) {
 		assert.Equal(t, []string{selectIndent + "no matches"}, listSection(th, 0, 0, 4, row))
 	})
+
 	t.Run("cursor_stays_visible_while_scrolling", func(t *testing.T) {
 		for cursor := range 12 {
 			rows := listSection(th, cursor, 12, 4, row)
@@ -134,6 +136,7 @@ func TestSelectStateRows(t *testing.T) {
 		assert.Equal(t, "Confirm?", rows[0])
 		assert.Equal(t, selectIndent+moreLabel(26), rows[5])
 	})
+
 	t.Run("short_list_draws_no_footer", func(t *testing.T) {
 		s := &selectState{prompt: "Confirm?", options: optionsOf(3)}
 

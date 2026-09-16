@@ -16,8 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// setVersionForTest overrides Version for a subtest and restores it on
-// cleanup.
+// setVersionForTest overrides Version for a subtest and restores it on cleanup.
 func setVersionForTest(t *testing.T, v string) {
 	t.Helper()
 
@@ -40,8 +39,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		setVersionForTest(t, "v0.1.5")
 		path := filepath.Join(t.TempDir(), "remote.json")
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
-		msg, err := CheckUpdateNotice(t.Context(), path,
-			optsAt(noFetch, now))
+		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Empty(t, msg)
 	})
@@ -51,8 +49,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "remote.json")
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
 		want := fmt.Sprintf("update available: ajent %s → v0.1.5 (run /update or --update)", Version)
-		msg, err := CheckUpdateNotice(t.Context(), path,
-			optsAt(noFetch, now))
+		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Equal(t, want, msg)
 	})
@@ -61,8 +58,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		setVersionForTest(t, "dev")
 		path := filepath.Join(t.TempDir(), "remote.json")
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
-		msg, err := CheckUpdateNotice(t.Context(), path,
-			optsAt(noFetch, now))
+		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Empty(t, msg)
 	})
@@ -74,8 +70,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 			Version: "v0.1.5", CheckedAt: now.Unix(),
 			NoticedAt: now.Add(-time.Hour).Unix(), // within 2h
 		}))
-		msg, err := CheckUpdateNotice(t.Context(), path,
-			optsAt(noFetch, now))
+		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Empty(t, msg) // already noticed recently
 	})
@@ -84,11 +79,10 @@ func TestCheckUpdateNotice(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "remote.json")
 		stale := now.Add(-(remoteVersionTTL + time.Hour))
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.0", CheckedAt: stale.Unix()}))
-		fetched := false
+		var fetched bool
 		fn := func(context.Context) (string, error) { fetched = true; return "v9.9.9", nil }
 		setVersionForTest(t, "v0.1.5")
-		msg, err := CheckUpdateNotice(t.Context(), path,
-			optsAt(fn, now))
+		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(fn, now))
 		require.NoError(t, err)
 		assert.True(t, fetched)
 		assert.Contains(t, msg, "v9.9.9")
@@ -105,8 +99,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: cached, CheckedAt: stale.Unix()}))
 		fn := func(context.Context) (string, error) { return "", errors.New("offline") }
 		want := fmt.Sprintf("update available: ajent %s → %s (run /update or --update)", Version, cached)
-		msg, err := CheckUpdateNotice(t.Context(), path,
-			optsAt(fn, now))
+		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(fn, now))
 		require.NoError(t, err)
 		assert.Equal(t, want, msg)
 
@@ -123,8 +116,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		stale := now.Add(-(remoteVersionTTL + time.Hour))
 		require.NoError(t, saveUpdateCache(path, UpdateCache{CheckedAt: stale.Unix()}))
 		fn := func(context.Context) (string, error) { return "", errors.New("offline") }
-		_, err := CheckUpdateNotice(t.Context(), path,
-			optsAt(fn, now))
+		_, err := CheckUpdateNotice(t.Context(), path, optsAt(fn, now))
 		require.Error(t, err)
 	})
 }
@@ -194,6 +186,7 @@ func TestFetchLatestVersion(t *testing.T) {
 		assert.Equal(t, "v1.4.9", got)
 		assert.Equal(t, UserAgent(), ua)
 	})
+
 	t.Run("http_error_is_reported", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNotFound)
@@ -204,6 +197,7 @@ func TestFetchLatestVersion(t *testing.T) {
 		_, err := fetchLatestVersion(t.Context())
 		require.Error(t, err)
 	})
+
 	t.Run("no_clean_tags_is_an_error", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, `[{"name":"nightly"}]`)

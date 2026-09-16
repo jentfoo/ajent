@@ -6,8 +6,7 @@ import "strings"
 // progress is republished, so a per-token stream does not repaint per token.
 const progressStep = 256
 
-// ToolProgress reports a tool call the model is still composing, before it can
-// run. Done clears it.
+// ToolProgress reports a tool call the model is still composing, before it can run. Done clears it.
 type ToolProgress struct {
 	CallID string
 	Name   string

@@ -16,6 +16,7 @@ import (
 // decodeLines parses newline-delimited json, failing on anything unparseable.
 func decodeLines(t *testing.T, s string) []map[string]any {
 	t.Helper()
+
 	var out []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(s), "\n") {
 		if line == "" {
@@ -31,6 +32,7 @@ func decodeLines(t *testing.T, s string) []map[string]any {
 // jsonInt reads a decoded json number as an int.
 func jsonInt(t *testing.T, m map[string]any, key string) int {
 	t.Helper()
+
 	v, ok := m[key].(float64)
 	require.True(t, ok, key)
 	return int(v)

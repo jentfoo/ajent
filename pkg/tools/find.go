@@ -111,8 +111,7 @@ func listFiles(root, pattern string) []string {
 	return paths
 }
 
-// fileEntry pairs a path with its modification time so listFiles sorts without
-// re-statting every comparison.
+// fileEntry pairs a path with its modification time so listFiles sorts without re-statting every comparison.
 type fileEntry struct {
 	path string
 	mod  time.Time

@@ -65,14 +65,13 @@ func RunHeadless(o HeadlessOptions) int {
 		Tokens:    tokens.New(o.Active),
 	}
 
-	// recording keeps -p composable: a follow-up --continue rejoins this transcript.
+	// recording keeps -p composable: a follow-up --continue rejoins this transcript
 	rec := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key())
 	if rec == nil {
 		notify("session recording disabled", agent.LevelWarn)
 	}
 
-	// ask_user has nobody to ask, so it is left without an Ask func and excluded
-	// from every scope below.
+	// ask_user has nobody to ask, so it is left without an Ask func and excluded from every scope below
 	toolsReg, terr := tools.Builtins(tools.Options{SessionID: config.Cwd()})
 	if terr != nil {
 		_, _ = fmt.Fprintln(errw, "ajent:", terr)
@@ -249,10 +248,9 @@ func headlessOutcome(err error, res agent.TurnResult, answer string) (string, in
 	}
 }
 
-// headlessTools returns the tool names to enable for scope, then applies the
-// allow and deny adjustments. Built-in names follow the scope regardless of
-// tools.enabled; every other source keeps its registered state, so a server
-// disabled in mcp.json stays off.
+// headlessTools returns the tool names to enable for scope, then applies the allow and deny
+// adjustments. Built-in names follow the scope regardless of tools.enabled; every other source
+// keeps its registered state, so a server disabled in mcp.json stays off.
 func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) []string {
 	inScope := func(name string) bool {
 		if name == tools.ToolAskUser { // no human to answer a question headless

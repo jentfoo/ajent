@@ -56,6 +56,7 @@ func TestOpenRouterStream(t *testing.T) {
 		assert.Equal(t, TextBlock{Text: "the answer"}, msg.Content[1])
 		assert.Equal(t, Usage{Input: 30, Output: 9}, usage)
 	})
+
 	t.Run("details_round_trip_into_the_next_request", func(t *testing.T) {
 		// this is what keeps signatures intact when openrouter routes to anthropic
 		srv, _ := sseServer(t, "openrouter/reasoning_details.sse")
@@ -101,6 +102,7 @@ func TestDecorateOpenRouter(t *testing.T) {
 		m := build(t, baseReq(), nil)
 		assert.Equal(t, true, m["usage"].(map[string]any)["include"])
 	})
+
 	t.Run("effort_from_the_level", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelHigh}
@@ -109,6 +111,7 @@ func TestDecorateOpenRouter(t *testing.T) {
 		assert.Equal(t, "high", m["reasoning"].(map[string]any)["effort"])
 		assert.NotContains(t, m, "reasoning_effort") // carried in the object instead
 	})
+
 	t.Run("explicit_budget_becomes_max_tokens", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelHigh, Budget: 4096}
@@ -116,6 +119,7 @@ func TestDecorateOpenRouter(t *testing.T) {
 		m := build(t, req, nil)
 		assert.InDelta(t, 4096, m["reasoning"].(map[string]any)["max_tokens"], 0.001)
 	})
+
 	t.Run("level_off_sends_none", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
@@ -123,6 +127,7 @@ func TestDecorateOpenRouter(t *testing.T) {
 		m := build(t, req, nil)
 		assert.Equal(t, "none", m["reasoning"].(map[string]any)["effort"])
 	})
+
 	t.Run("off_suppressed_omits_reasoning", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
@@ -131,6 +136,7 @@ func TestDecorateOpenRouter(t *testing.T) {
 		m := build(t, req, nil)
 		assert.NotContains(t, m, "reasoning")
 	})
+
 	t.Run("routing_preference_passed_through", func(t *testing.T) {
 		m := build(t, baseReq(), &Routing{
 			Order: []string{"anthropic"}, AllowFallbacks: ptr(false), DataCollection: "deny",
@@ -140,6 +146,7 @@ func TestDecorateOpenRouter(t *testing.T) {
 		assert.Equal(t, false, provider["allow_fallbacks"])
 		assert.Equal(t, "deny", provider["data_collection"])
 	})
+
 	t.Run("no_provider_block_without_routing", func(t *testing.T) {
 		assert.NotContains(t, build(t, baseReq(), nil), "provider")
 	})
@@ -161,20 +168,24 @@ func TestParseOpenRouterModels(t *testing.T) {
 		require.NotNil(t, got[0].MaxTokens)
 		assert.Equal(t, 64000, *got[0].MaxTokens)
 	})
+
 	t.Run("input_modalities", func(t *testing.T) {
 		assert.Equal(t, []Modality{ModalityText, ModalityImage}, got[0].Input)
 		assert.Equal(t, []Modality{ModalityText}, got[1].Input)
 	})
+
 	t.Run("reasoning_support_detected", func(t *testing.T) {
 		require.NotNil(t, got[0].Reasoning)
 		assert.True(t, *got[0].Reasoning)
 		assert.Nil(t, got[1].Reasoning)
 	})
+
 	t.Run("tool_support_detected", func(t *testing.T) {
 		require.NotNil(t, got[0].Compat)
 		assert.True(t, *got[0].Compat.SupportsToolChoice)
 		assert.Nil(t, got[1].Compat)
 	})
+
 	t.Run("no_pricing_is_carried", func(t *testing.T) {
 		// pricing is out of scope, so the response fields are dropped
 		encoded, err := json.Marshal(got)
@@ -182,6 +193,7 @@ func TestParseOpenRouterModels(t *testing.T) {
 		assert.NotContains(t, string(encoded), "pricing")
 		assert.NotContains(t, string(encoded), "cost")
 	})
+
 	t.Run("malformed_body_errors", func(t *testing.T) {
 		_, err := parseOpenRouterModels([]byte("nope"))
 		assert.Error(t, err)

@@ -27,12 +27,14 @@ func TestRedactHeaders(t *testing.T) {
 		}
 		assert.Equal(t, "application/json", got.Get("Content-Type"))
 	})
+
 	t.Run("does_not_mutate_the_original", func(t *testing.T) {
 		h := http.Header{}
 		h.Set("Authorization", testAPIKey)
 		redactHeaders(h)
 		assert.Equal(t, testAPIKey, h.Get("Authorization"))
 	})
+
 	t.Run("absent_header_not_added", func(t *testing.T) {
 		got := redactHeaders(http.Header{})
 		assert.Empty(t, got.Get("Authorization"))

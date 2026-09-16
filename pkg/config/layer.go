@@ -40,7 +40,7 @@ func (r Resolved) Explain(key string) (json.RawMessage, string, bool) {
 	if v == nil {
 		return nil, "", false
 	}
-	return json.RawMessage(v.marshal()), r.src[key], true
+	return v.marshal(), r.src[key], true
 }
 
 // Source returns the layer name that supplied key's value.

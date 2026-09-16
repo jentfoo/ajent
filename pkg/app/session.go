@@ -21,9 +21,8 @@ type sessRec struct {
 	store *session.Store
 	w     *session.Writer
 	rec   *session.Recorder
-	// onSwitch reports a rebuilt context — rewind, fork or compaction — so read
-	// tracking and @ reference ids stop describing what it replaced. Nil until
-	// main wires it.
+	// onSwitch reports a rebuilt context — rewind, fork or compaction — so read tracking
+	// and @ reference ids stop describing what it replaced. Nil until main wires it.
 	onSwitch func([]llm.Message)
 	// started is the driver's tool-block-committed flag, shared so a rewind seeds
 	// its base with the same rule the pump uses. Nil until main wires it.
@@ -210,7 +209,7 @@ func searchItems(prompts []session.Prompt) []tui.SearchItem {
 }
 
 func rewindBody(row session.TreeRow) string {
-	prefix := ""
+	var prefix string
 	switch row.Kind {
 	case session.RowUser:
 		prefix = "user: "

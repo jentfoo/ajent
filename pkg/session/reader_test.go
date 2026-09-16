@@ -24,7 +24,7 @@ func writeLines(t *testing.T, p string, lines []string) {
 func TestRead(t *testing.T) {
 	t.Parallel()
 
-	// garbage and truncation are tolerated with warnings.
+	// garbage and truncation are tolerated with warnings
 	t.Run("tolerates_garbage_and_truncation", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		writeLines(t, p, []string{
@@ -47,7 +47,7 @@ func TestRead(t *testing.T) {
 		assert.Equal(t, []string{"a", "b"}, ids(entries))
 	})
 
-	// a session with a newer version is rejected.
+	// a session with a newer version is rejected
 	t.Run("rejects_newer_version", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		writeLines(t, p, []string{`{"id":"a","type":"session","ts":1,"data":{"version":99}}`})
@@ -56,7 +56,7 @@ func TestRead(t *testing.T) {
 		assert.ErrorContains(t, err, "newer than supported v1")
 	})
 
-	// an unknown entry type is kept through a read.
+	// an unknown entry type is kept through a read
 	t.Run("keeps_unknown_entry_type", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		writeLines(t, p, []string{
@@ -84,6 +84,6 @@ func TestBranchFollowsHeadIgnoresSibling(t *testing.T) {
 
 	forked := slices.Clone(entries)
 	forked = append(forked, Entry{ID: "c", ParentID: "a", Type: TypeNotice, Data: noticeData("sibling")})
-	// Branch from b still follows root->a->b and ignores the fork c.
+	// Branch from b still follows root->a->b and ignores the fork c
 	assert.Equal(t, []string{"root", "a", "b"}, ids(Branch(forked, "b")))
 }

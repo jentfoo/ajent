@@ -28,9 +28,8 @@ type planHooks struct {
 	advance func(context.Context) (agent.Input, bool)
 }
 
-// turnRecorder keeps the last turn's result so a turn-boundary hook can tell a
-// clean stop from an abort or a provider error. Prompt only returns an error, and
-// an aborted turn is not one.
+// turnRecorder keeps the last turn's result so a turn-boundary hook can tell a clean stop from an
+// abort or a provider error. Prompt only returns an error, and an aborted turn is not one.
 type turnRecorder struct {
 	agent.NopSink
 
@@ -41,12 +40,14 @@ type turnRecorder struct {
 func (t *turnRecorder) TurnEnd(r agent.TurnResult) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	t.result = r
 }
 
 func (t *turnRecorder) last() agent.TurnResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
 	return t.result
 }
 

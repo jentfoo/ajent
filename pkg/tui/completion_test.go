@@ -89,8 +89,6 @@ func TestCompletionTabAcceptsSingleCandidate(t *testing.T) {
 	}
 }
 
-// TestCompletionTabTakesTopCandidate covers candidates that do not extend the
-// typed text, where no common prefix is meaningful.
 func TestCompletionTabTakesTopCandidate(t *testing.T) {
 	t.Parallel()
 
@@ -114,8 +112,6 @@ type fakeMenuCompleter struct{ items []Completion }
 func (f fakeMenuCompleter) Complete(_ string, _ int) (int, []Completion) { return 0, f.items }
 func (f fakeMenuCompleter) Style(string, int) CompleteStyle              { return CompleteStyle{Menu: true} }
 
-// TestCompletionMenu covers the live presentation /commands and their arguments
-// keep: it opens while typing, owns ↑/↓, and accepts on Tab or Enter.
 func TestCompletionMenu(t *testing.T) {
 	t.Parallel()
 
@@ -201,9 +197,6 @@ func (f fakeAtCompleter) Complete(text string, pos int) (int, []Completion) {
 	return 1, f.items // start past @, like command.pathComplete
 }
 
-// TestCompletionAtReferences pins @ to the same rules as every other context.
-// Its candidates replace from past the trigger, so every outcome is covered
-// again on that shape.
 func TestCompletionAtReferences(t *testing.T) {
 	t.Parallel()
 
@@ -261,8 +254,6 @@ func TestCompletionAtReferences(t *testing.T) {
 	})
 }
 
-// TestCompletionArrowsReachTheEditor proves the arrows stay cursor movement,
-// even with a listing on screen.
 func TestCompletionArrowsReachTheEditor(t *testing.T) {
 	t.Parallel()
 
@@ -345,8 +336,7 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 	require.Eventually(t, func() bool { return u.editorValue() == "@abc.go" }, time.Second, testPoll)
 }
 
-// gatedAsync reports each query's text on queries, then blocks until the test
-// sends its candidates on answers.
+// gatedAsync reports each query's text on queries, then blocks until the test sends its candidates on answers.
 type gatedAsync struct {
 	queries chan string
 	answers chan []Completion
@@ -358,8 +348,6 @@ func (g *gatedAsync) Complete(text string, pos int) (int, []Completion) {
 	return 1, <-g.answers // start past @; the test drives delivery timing
 }
 
-// TestFlashRuleOnSpentTab drives the real key path, where the flash depends on
-// the keypress repaint rather than one of flashRule's own.
 func TestFlashRuleOnSpentTab(t *testing.T) {
 	t.Parallel()
 

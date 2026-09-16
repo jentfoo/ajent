@@ -44,11 +44,11 @@ func (g *typingGate) edit(text string) {
 	g.at = time.Now()
 }
 
-// submitted arms the handoff grace for a line that left the editor but has not
-// reached the queue yet.
+// submitted arms the handoff grace for a line that left the editor but has not reached the queue yet.
 func (g *typingGate) submitted() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
 	g.inFlight = true
 	g.at = time.Now()
 }
@@ -58,15 +58,16 @@ func (g *typingGate) submitted() {
 func (g *typingGate) taken() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
 	g.inFlight = false
 }
 
 // hold is the AwaitInput hook: it waits at a step boundary while a draft is being
 // typed or a just-submitted line is still reaching the queue. ctx cancels on an interrupt.
 func (g *typingGate) hold(ctx context.Context) {
-	var shown bool   // published; cleared on exit so an unheld boundary repaints nothing
-	last := -1       // last displayed second; forces the first publish
-	lastSession := 0 // session the current countdown dedup is for
+	var shown bool      // published; cleared on exit so an unheld boundary repaints nothing
+	last := -1          // last displayed second; forces the first publish
+	var lastSession int // session the current countdown dedup is for
 	defer func() {
 		if !shown || g.status == nil {
 			return
@@ -88,7 +89,7 @@ func (g *typingGate) hold(ctx context.Context) {
 		g.mu.Unlock()
 
 		var deadline time.Time
-		countdown := false
+		var countdown bool
 		switch {
 		case draft != "":
 			deadline = at.Add(g.idle)

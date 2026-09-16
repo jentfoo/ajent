@@ -349,7 +349,7 @@ func (v *vt) setSize(w, h int) {
 			text = text[n:]
 		}
 	}
-	newRow, newCol := 0, 0
+	var newRow, newCol int
 	if len(logical) > 0 {
 		newRow = lineStart[min(starts[v.row], len(logical)-1)] + cursorOff/w
 		newCol = min(cursorOff%w, w-1)
@@ -407,12 +407,14 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "abcd", v.Line(0))
 		assert.Equal(t, "ef", v.Line(1))
 	})
+
 	t.Run("exact_width_defers_wrap", func(t *testing.T) {
 		v := newVT(4, 3)
 		v.WriteString("abcd\r\nx")
 		assert.Equal(t, "abcd", v.Line(0))
 		assert.Equal(t, "x", v.Line(1))
 	})
+
 	t.Run("scroll_region_confines_scrolling", func(t *testing.T) {
 		v := newVT(4, 4)
 		v.WriteString(setRegionSeq(1, 2))
@@ -423,22 +425,26 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "c", v.Line(1))
 		assert.Equal(t, []string{"a"}, v.scrollback)
 	})
+
 	t.Run("erase_line", func(t *testing.T) {
 		v := newVT(4, 2)
 		v.WriteString("abcd" + cursorTo(1, 1) + eraseLine)
 		assert.Empty(t, v.Line(0))
 	})
+
 	t.Run("save_restore_cursor", func(t *testing.T) {
 		v := newVT(6, 2)
 		v.WriteString("ab" + saveCursor + cursorTo(2, 1) + "z" + restoreCursor + "c")
 		assert.Equal(t, "abc", v.Line(0))
 		assert.Equal(t, "z", v.Line(1))
 	})
+
 	t.Run("sgr_ignored", func(t *testing.T) {
 		v := newVT(6, 2)
 		v.WriteString(sgr(attrBold) + "hi" + sgrReset)
 		assert.Equal(t, "hi", v.Line(0))
 	})
+
 	t.Run("sgr_keeps_deferred_wrap", func(t *testing.T) {
 		v := newVT(4, 3)
 		v.WriteString("abcd") // fills the row, wrap deferred
@@ -446,17 +452,20 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "abcd", v.Line(0))
 		assert.Equal(t, "x", v.Line(1))
 	})
+
 	t.Run("tab_advances_to_next_stop", func(t *testing.T) {
 		v := newVT(24, 2)
 		v.WriteString("a\tb")
 		assert.Equal(t, "a       b", v.Line(0)) // b lands at column 8
 	})
+
 	t.Run("tab_clamps_at_margin", func(t *testing.T) {
 		v := newVT(9, 2)
 		v.WriteString("abcdefgh\t") // already at the last column
 		assert.Equal(t, "abcdefgh", v.Line(0))
 		assert.Empty(t, v.Line(1))
 	})
+
 	t.Run("vertical_tab_and_form_feed_feed", func(t *testing.T) {
 		v := newVT(8, 4)
 		v.WriteString("a\vb\fc") // column rides, like a bare line feed
@@ -464,18 +473,21 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, " b", v.Line(1))
 		assert.Equal(t, "  c", v.Line(2))
 	})
+
 	t.Run("ind_feeds_a_line", func(t *testing.T) {
 		v := newVT(8, 4)
 		v.WriteString("a\x1bDb")
 		assert.Equal(t, "a", v.Line(0))
 		assert.Equal(t, " b", v.Line(1))
 	})
+
 	t.Run("nel_returns_and_feeds", func(t *testing.T) {
 		v := newVT(8, 3)
 		v.WriteString("ab\x1bEc")
 		assert.Equal(t, "ab", v.Line(0))
 		assert.Equal(t, "c", v.Line(1))
 	})
+
 	t.Run("reverse_index_scrolls_at_top", func(t *testing.T) {
 		v := newVT(8, 3)
 		v.WriteString("a\r\nb\r\nc")
@@ -484,22 +496,26 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "a", v.Line(1))
 		assert.Equal(t, "b", v.Line(2))
 	})
+
 	t.Run("reverse_index_moves_up_below_top", func(t *testing.T) {
 		v := newVT(8, 3)
 		v.WriteString("a\r\nb\x1bMc")
 		assert.Equal(t, "ac", v.Line(0))
 	})
+
 	t.Run("vpa_sets_row", func(t *testing.T) {
 		v := newVT(8, 4)
 		v.WriteString("a\x1b[3db") // row moves, column stays
 		assert.Equal(t, "a", v.Line(0))
 		assert.Equal(t, " b", v.Line(2))
 	})
+
 	t.Run("cha_sets_column", func(t *testing.T) {
 		v := newVT(8, 2)
 		v.WriteString("a\x1b[4Gb")
 		assert.Equal(t, "a  b", v.Line(0))
 	})
+
 	t.Run("insert_lines", func(t *testing.T) {
 		v := newVT(8, 4)
 		v.WriteString("a\r\nb\r\nc\r\nd")
@@ -508,6 +524,7 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "a", v.Line(1))
 		assert.Equal(t, "c", v.Line(3))
 	})
+
 	t.Run("delete_lines", func(t *testing.T) {
 		v := newVT(8, 4)
 		v.WriteString("a\r\nb\r\nc\r\nd")
@@ -516,6 +533,7 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "c", v.Line(1))
 		assert.Empty(t, v.Line(3))
 	})
+
 	t.Run("scroll_up", func(t *testing.T) {
 		v := newVT(8, 3)
 		v.WriteString("a\r\nb\r\nc")
@@ -523,6 +541,7 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "b", v.Line(0))
 		assert.Equal(t, []string{"a"}, v.scrollback)
 	})
+
 	t.Run("scroll_down", func(t *testing.T) {
 		v := newVT(8, 3)
 		v.WriteString("a\r\nb\r\nc")
@@ -531,18 +550,21 @@ func TestVT(t *testing.T) {
 		assert.Equal(t, "a", v.Line(1))
 		assert.Equal(t, "b", v.Line(2))
 	})
+
 	t.Run("c1_csi_parsed", func(t *testing.T) {
 		v := newVT(8, 4)
 		v.WriteString("a\u009b2Bb")
 		assert.Equal(t, "a", v.Line(0))
 		assert.Equal(t, " b", v.Line(2))
 	})
+
 	t.Run("cpr_and_dsr_counted_separately", func(t *testing.T) {
 		v := newVT(8, 2)
 		v.WriteString(cursorQuery + statusQuery)
 		assert.Equal(t, 1, v.cprCount)
 		assert.Equal(t, 1, v.dsrCount)
 	})
+
 	t.Run("del_and_c1_print_nothing", func(t *testing.T) {
 		v := newVT(8, 2)
 		v.WriteString("a\x7f\u0090b")
@@ -563,6 +585,7 @@ func TestVTReflow(t *testing.T) {
 		assert.Equal(t, "fghij", v.Line(1))
 		assert.Equal(t, "klmno", v.Line(2))
 	})
+
 	t.Run("hard_lines_stay_separate", func(t *testing.T) {
 		v := newVT(10, 4)
 		v.WriteString("abc\r\ndef")
@@ -573,12 +596,14 @@ func TestVTReflow(t *testing.T) {
 		assert.Equal(t, "de", v.Line(2))
 		assert.Equal(t, "f", v.Line(3))
 	})
+
 	t.Run("widening_rejoins", func(t *testing.T) {
 		v := newVT(5, 4)
 		v.WriteString("abcdefghij")
 		v.setSize(20, 4)
 		assert.Equal(t, "abcdefghij", v.Line(0))
 	})
+
 	t.Run("overflow_retires_to_scrollback", func(t *testing.T) {
 		v := newVT(10, 2)
 		v.WriteString("abcdefghijklmno")
@@ -587,6 +612,7 @@ func TestVTReflow(t *testing.T) {
 		assert.Equal(t, "fghij", v.Line(0))
 		assert.Equal(t, "klmno", v.Line(1))
 	})
+
 	t.Run("cursor_rides_its_cell", func(t *testing.T) {
 		v := newVT(10, 4)
 		v.WriteString("abcdefghijklmno") // cursor on row 1 col 5

@@ -4,24 +4,25 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestUsageCommand(t *testing.T) {
 	t.Parallel()
 
-	// child spend is shown when work was delegated.
+	// child spend is shown when work was delegated
 	t.Run("shows_child_spend_when_delegated", func(t *testing.T) {
 		c := newFakeConsole(t)
 		a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
 		c.state.Tokens = a
 
-		// parent spends, then a child rolls its own spend up separately.
+		// parent spends, then a child rolls its own spend up separately
 		a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
 		child := a.Child()
 		child.Response("test/alpha", llm.Usage{Input: 300, Output: 50}, 250, true)
@@ -35,7 +36,7 @@ func TestUsageCommand(t *testing.T) {
 		assert.Contains(t, out, strutil.FormatTokens(ct.Input)+" in / "+strutil.FormatTokens(ct.Output)+" out")
 	})
 
-	// the child row is omitted when nothing was delegated.
+	// the child row is omitted when nothing was delegated
 	t.Run("omits_child_row_without_delegation", func(t *testing.T) {
 		c := newFakeConsole(t)
 		a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
@@ -49,14 +50,14 @@ func TestUsageCommand(t *testing.T) {
 		assert.NotContains(t, out, "of which sub-agents:")
 	})
 
-	// the session ledger is printed.
+	// the session ledger is printed
 	t.Run("prints_session_ledger", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
 
-		// give the fake state a ledger with one reported turn so /usage has data.
+		// give the fake state a ledger with one reported turn so /usage has data
 		st := &agent.State{Model: llm.Model{ID: "alpha", Provider: "test"},
 			Reasoning: llm.ReasoningConfig{}}
 		tok := tokens.New(st.Model)
@@ -75,7 +76,7 @@ func TestUsageCommand(t *testing.T) {
 		assert.Contains(t, c.prints[0], "output")
 	})
 
-	// no accounting configured notifies.
+	// no accounting configured notifies
 	t.Run("with_no_ledger_notifies", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()

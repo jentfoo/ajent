@@ -18,7 +18,7 @@ type ReplayOptions struct {
 // Thinking is off unless opts.Thinking requests it.
 func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 	var cur llm.Model
-	turnOpen := false
+	var turnOpen bool
 	// per-turn accumulators; reset each time a real user prompt opens a turn so
 	// every TurnEnd reports only that turn's usage and final stop reason.
 	var turnUsage llm.Usage
@@ -143,24 +143,30 @@ func foldResults(pending map[string]agent.ToolCall, content llm.BlockList, sink 
 
 // toolBody joins a result's text blocks into the body streaming would have shown.
 func toolBody(tr llm.ToolResultBlock) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range tr.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, tb.Text)
+			if sb.Len() > 0 {
+				sb.WriteRune('\n')
+			}
+			sb.WriteString(tb.Text)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return sb.String()
 }
 
 // userText extracts the plain text of a prompt message.
 func userText(m llm.Message) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range m.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, tb.Text)
+			if sb.Len() > 0 {
+				sb.WriteRune(' ')
+			}
+			sb.WriteString(tb.Text)
 		}
 	}
-	return strings.Join(parts, " ")
+	return sb.String()
 }
 
 // modelFromKey splits a provider/id key into a displayable model.

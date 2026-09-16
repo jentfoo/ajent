@@ -124,9 +124,8 @@ func (c *uiConsole) SetSessionName(name string) error {
 	return c.rec.Rename(canonical)
 }
 
-// SetSessionSetting applies a dotted key as a session override and records it so
-// a resume restores it, mirroring ToolsChanged. permissions.mode also drives the
-// live barrier and its status segment.
+// SetSessionSetting applies a dotted key as a session override and records it so a resume restores
+// it, mirroring ToolsChanged. permissions.mode also drives the live barrier and its status segment.
 func (c *uiConsole) SetSessionSetting(key string, value any) error {
 	if key == "permissions.mode" && c.permit != nil {
 		s := fmt.Sprint(value)
@@ -149,9 +148,8 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 	return nil
 }
 
-// applyCompactThreshold re-defaults the registry and refreshes the live model, so
-// a /settings edit moves the trigger, the context bar and the compaction tail
-// together instead of waiting for a restart.
+// applyCompactThreshold re-defaults the registry and refreshes the live model, so a /settings edit
+// moves the trigger, the context bar and the compaction tail together instead of waiting for a restart.
 func (c *uiConsole) applyCompactThreshold(value any) {
 	f, ok := value.(float64)
 	if !ok {

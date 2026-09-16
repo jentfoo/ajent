@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
@@ -37,8 +38,7 @@ type State struct {
 	Tokens    *tokens.Accounting
 }
 
-// Transform rewrites an assembled message list before it is sent, never by
-// mutating State.
+// Transform rewrites an assembled message list before it is sent, never by mutating State.
 type Transform func([]llm.Message) []llm.Message
 
 // TurnInfo describes one turn to the sink when it starts.
@@ -77,8 +77,7 @@ type ToolCall struct {
 }
 
 // ToolResult is what the loop feeds back to the model for one call. An erroring
-// tool still returns here with IsError set, so the turn continues rather than
-// aborting.
+// tool still returns here with IsError set, so the turn continues rather than aborting.
 type ToolResult struct {
 	Content llm.BlockList // what the model sees
 	// Display is what history shows. A tool either streams to agent.Output or sets

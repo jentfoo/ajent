@@ -152,8 +152,7 @@ func (a *Accumulator) Message() Message {
 	return Message{Role: RoleAssistant, Content: blocks}
 }
 
-// pendingIndexes returns the indexes of blocks opened but never closed, in
-// index order.
+// pendingIndexes returns the indexes of blocks opened but never closed, in index order.
 func (a *Accumulator) pendingIndexes() []int {
 	var out []int
 	for i, p := range a.partial {
@@ -252,6 +251,7 @@ func (p *streamPump) Close() error {
 func (p *streamPump) isClosed() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	return p.closed
 }
 
@@ -271,6 +271,7 @@ type SliceStream struct {
 func (s *SliceStream) Next() (Event, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if s.closed || s.pos >= len(s.Events) {
 		return Event{}, false
 	}
@@ -286,6 +287,7 @@ func (s *SliceStream) Err() error { return s.Error }
 func (s *SliceStream) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.closed = true
 	return nil
 }

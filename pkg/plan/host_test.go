@@ -7,9 +7,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -154,6 +155,7 @@ func (f *fakeHost) host() Host {
 func (f *fakeHost) lastTools() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	if len(f.toolSets) == 0 {
 		return nil
 	}
@@ -163,6 +165,7 @@ func (f *fakeHost) lastTools() []string {
 // started builds a controller already in the planning phase.
 func started(t *testing.T) (*Controller, *fakeHost) {
 	t.Helper()
+
 	f := newFakeHost()
 	c := New(f.host())
 	require.Empty(t, c.Start(t.Context(), ""))
@@ -172,6 +175,7 @@ func started(t *testing.T) (*Controller, *fakeHost) {
 // call runs a control tool by name with the given JSON arguments.
 func call(t *testing.T, c *Controller, name, args string) agent.ToolResult {
 	t.Helper()
+
 	for _, tool := range controlTools(c) {
 		if tool.Name() != name {
 			continue

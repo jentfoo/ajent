@@ -157,7 +157,7 @@ func priorSummary(branch []session.Entry) string {
 
 // countMessages reports how many message entries a span holds, for the notice.
 func countMessages(entries []session.Entry) int {
-	n := 0
+	var n int
 	for _, e := range entries {
 		if e.Type == session.TypeMessage {
 			n++
@@ -189,7 +189,7 @@ func buildPrompt(entries []session.Entry, prev, instructions string, stubs []ses
 	}
 	b.WriteString(instr)
 	if strings.TrimSpace(instructions) != "" {
-		fmt.Fprintf(&b, "\n\nAdditional focus: %s", instructions)
+		_, _ = fmt.Fprintf(&b, "\n\nAdditional focus: %s", instructions)
 	}
 	return b.String()
 }
@@ -212,7 +212,7 @@ func serialise(b *strings.Builder, entries []session.Entry, stubs map[string]ses
 		case llm.RoleUser:
 			for _, blk := range m.Content {
 				if tr, ok := blk.(llm.ToolResultBlock); ok {
-					fmt.Fprintf(b, "[Tool result]: %s\n", clipTo(stubbedText(tr, stubs), clip))
+					_, _ = fmt.Fprintf(b, "[Tool result]: %s\n", clipTo(stubbedText(tr, stubs), clip))
 				}
 			}
 			if t := userPlain(m); t != "" {
@@ -226,7 +226,7 @@ func serialise(b *strings.Builder, entries []session.Entry, stubs map[string]ses
 						b.WriteString("[Assistant]: " + c.Text + "\n")
 					}
 				case llm.ToolCallBlock:
-					fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, clipTo(string(c.Input), capCallInput(clip)))
+					_, _ = fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, clipTo(string(c.Input), capCallInput(clip)))
 				}
 			}
 		default:
@@ -339,11 +339,14 @@ func summarizeBudget(model llm.Model, span, prev int) int {
 
 // userPlain extracts the plain text blocks of a prompt message.
 func userPlain(m llm.Message) string {
-	var parts []string
+	var sb strings.Builder
 	for _, b := range m.Content {
 		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			parts = append(parts, tb.Text)
+			if sb.Len() > 0 {
+				sb.WriteRune('\n')
+			}
+			sb.WriteString(tb.Text)
 		}
 	}
-	return strings.Join(parts, "\n")
+	return sb.String()
 }

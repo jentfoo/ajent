@@ -4,9 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestAccountingPendingLiveLifecycle(t *testing.T) {
@@ -26,7 +27,7 @@ func TestAccountingPendingLiveLifecycle(t *testing.T) {
 	t.Run("pending_estimate_counts_added_messages", func(t *testing.T) {
 		a := newLedger()
 
-		// an appended user message is estimated pending until the provider reports.
+		// an appended user message is estimated pending until the provider reports
 		added := 200
 		a.Add(added)
 		cs := a.Context()
@@ -37,7 +38,7 @@ func TestAccountingPendingLiveLifecycle(t *testing.T) {
 	t.Run("partial_snapshot_clears_pending", func(t *testing.T) {
 		a := newLedger()
 
-		// anthropic reports input mid-stream: that snaps promptExact and clears pending.
+		// anthropic reports input mid-stream: that snaps promptExact and clears pending
 		snapIn := 1000
 		a.Partial(llm.Usage{Input: snapIn})
 		cs := a.Context()
@@ -48,7 +49,7 @@ func TestAccountingPendingLiveLifecycle(t *testing.T) {
 	t.Run("stream_grows_used_above_snapshot", func(t *testing.T) {
 		a := newLedger()
 
-		// text deltas make the bar estimated again and grow Used above the snapshot.
+		// text deltas make the bar estimated again and grow Used above the snapshot
 		snapIn := 1000
 		a.Partial(llm.Usage{Input: snapIn})
 		a.Stream(50)
@@ -60,13 +61,13 @@ func TestAccountingPendingLiveLifecycle(t *testing.T) {
 	t.Run("response_clears_every_bucket", func(t *testing.T) {
 		a := newLedger()
 
-		// build up both estimate buckets first so clearing them is observable.
+		// build up both estimate buckets first so clearing them is observable
 		a.Add(300)                        // pending: appended messages
 		a.Partial(llm.Usage{Input: 1000}) // exact snapshot lands mid-stream
 		a.Stream(50)                      // live: response still streaming
 		assert.True(t, a.Context().Estimated)
 
-		// a completed response clears every estimate bucket: exact, no longer growing.
+		// a completed response clears every estimate bucket: exact, no longer growing
 		a.Response(key, llm.Usage{Input: 1000, Output: 500}, 200, true)
 		cs := a.Context()
 		assert.False(t, cs.Estimated)  // no pending or live estimates remain
@@ -80,7 +81,7 @@ func TestAccountingUnreportedTurnIsEstimated(t *testing.T) {
 	a := New(llm.Model{ID: "m1", Provider: "p"})
 	const key = "p/m1"
 
-	// a provider that reported nothing (llama.cpp) marks the turn estimated.
+	// a provider that reported nothing (llama.cpp) marks the turn estimated
 	a.Response(key, llm.Usage{}, 0, true)
 	assert.Equal(t, 1, a.TurnsCount())
 	assert.Equal(t, 1, a.EstimatedTurns())
@@ -97,7 +98,7 @@ func TestAccountingChildRollsUpSpendNotContext(t *testing.T) {
 
 	child := parent.Child()
 	in, out := 2000, 300
-	// child spends on its own context; the parent must not see that used.
+	// child spends on its own context; the parent must not see that used
 	child.Response(key, llm.Usage{Input: in, Output: out}, 1500, true)
 
 	assert.Zero(t, parent.Context().Used) // child's context is its own
@@ -114,7 +115,7 @@ func TestAccountingSetModelRebasesContext(t *testing.T) {
 
 	a := New(llm.Model{ID: "a", Provider: "p", ContextWindow: 40000})
 
-	// accumulate an estimate, then switch models mid-session.
+	// accumulate an estimate, then switch models mid-session
 	a.Add(300)
 	assert.True(t, a.Context().Estimated)
 
@@ -138,12 +139,12 @@ func TestAccountingComposeGrowsAndClears(t *testing.T) {
 	assert.True(t, cs.Estimated)
 	big := cs.Used
 
-	// replacing the buffer with far less text shrinks Used rather than accumulating.
+	// replacing the buffer with far less text shrinks Used rather than accumulating
 	a.SetCompose(1000)
 	small := a.Context().Used
 	assert.Less(t, small, big)
 
-	// clearing (submit empties the editor -> empty text estimates to zero).
+	// clearing (submit empties the editor -> empty text estimates to zero)
 	a.SetCompose(EstimateText("", KindProse))
 	cs = a.Context()
 	assert.Zero(t, cs.Used)
@@ -163,11 +164,12 @@ func TestAccountingSetBase(t *testing.T) {
 		assert.True(t, cs.Estimated)
 		assert.Equal(t, base, cs.Used)
 
-		// an appended message estimate rides on top of the seeded base.
+		// an appended message estimate rides on top of the seeded base
 		msg := 300
 		a.Add(msg)
 		assert.Equal(t, base+msg, a.Context().Used)
 	})
+
 	t.Run("exact_supersedes_base", func(t *testing.T) {
 		a := New(llm.Model{ID: "m1", Provider: "p"})
 		// an exact snapshot already includes system and schemas, so the base drops out
@@ -176,14 +178,16 @@ func TestAccountingSetBase(t *testing.T) {
 		a.Partial(llm.Usage{Input: exact}) // snaps promptExact; pending cleared
 		assert.Equal(t, exact, a.Context().Used)
 	})
+
 	t.Run("set_replaces_not_adds", func(t *testing.T) {
 		a := New(llm.Model{ID: "m1", Provider: "p"})
 		a.SetBase(300)
 		first := a.Context().Used
 		a.SetBase(900)
-		// replaced rather than accumulated: only the newer value shows.
+		// replaced rather than accumulated: only the newer value shows
 		assert.Equal(t, first+600, a.Context().Used)
 	})
+
 	t.Run("reseed_reapplies_base", func(t *testing.T) {
 		a := New(llm.Model{ID: "m1", Provider: "p"})
 		exact := 5000
@@ -197,6 +201,7 @@ func TestAccountingSetBase(t *testing.T) {
 		a.Reseed(resAfter)
 		assert.Equal(t, resAfter+900, a.Context().Used) // base persists across reseed
 	})
+
 	t.Run("base_readable", func(t *testing.T) {
 		a := New(llm.Model{ID: "m1", Provider: "p"})
 		assert.Zero(t, a.Base())
@@ -223,6 +228,7 @@ func TestAccountingSetSubmit(t *testing.T) {
 		a.SetSubmit(sub)
 		assert.Equal(t, sub, a.Context().Used)
 	})
+
 	t.Run("cleared_on_delivery", func(t *testing.T) {
 		sub := 300
 		a.SetSubmit(sub)
@@ -244,11 +250,13 @@ func TestAccountingSetStaged(t *testing.T) {
 		assert.Equal(t, 4000, cs.Used)
 		assert.True(t, cs.Estimated)
 	})
+
 	t.Run("replaces_rather_than_accumulates", func(t *testing.T) {
 		a.SetStaged(4000)
 		a.SetStaged(900) // a second report supersedes the first
 		assert.Equal(t, 900, a.Context().Used)
 	})
+
 	t.Run("cleared_on_flush", func(t *testing.T) {
 		a.SetStaged(900)
 		a.SetSubmit(900) // the flush hands the same results to the submission
@@ -300,7 +308,7 @@ func TestAccountingReseedKeepsSpendResetsContext(t *testing.T) {
 	total := a.Total()
 	assert.Equal(t, 5300, total.Input+total.Output)
 
-	// compaction reseeds the context to a fresh estimate without touching spend.
+	// compaction reseeds the context to a fresh estimate without touching spend
 	a.Reseed(1200)
 	cs := a.Context()
 	assert.True(t, cs.Estimated) // the reseeded figure is an estimate

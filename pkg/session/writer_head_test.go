@@ -12,7 +12,7 @@ import (
 func TestWriterHeadCursor(t *testing.T) {
 	t.Parallel()
 
-	// SetHead persists the cursor immediately.
+	// SetHead persists the cursor immediately
 	t.Run("set_head_persists_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
@@ -28,7 +28,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		require.NoError(t, w.Close())
 	})
 
-	// a fork to a new root leaves no cursor to point back at the abandoned branch.
+	// a fork to a new root leaves no cursor to point back at the abandoned branch
 	t.Run("empty_head_drops_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
@@ -44,7 +44,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		assert.False(t, fileExists(headPath(p)))
 	})
 
-	// Sync alone must record the appended head at a turn boundary.
+	// Sync alone must record the appended head at a turn boundary
 	t.Run("sync_persists_cursor_at_turn_boundary", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
@@ -61,7 +61,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		assert.Equal(t, e1.ID, id)
 	})
 
-	// a reopen resumes the persisted branch rather than the file tail.
+	// a reopen resumes the persisted branch rather than the file tail
 	t.Run("open_recovers_persisted_branch_not_tail", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
@@ -74,7 +74,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		w.SetHead(e1.ID) // fork back to one
 		require.NoError(t, w.Close())
 
-		// the file tail is e2, but the cursor points at e1; a reopen must resume from e1.
+		// the file tail is e2, but the cursor points at e1; a reopen must resume from e1
 		w2, oerr := Open(p)
 		require.NoError(t, oerr)
 		assert.Equal(t, e1.ID, w2.Head())
@@ -85,11 +85,11 @@ func TestWriterHeadCursor(t *testing.T) {
 		// and that fork is now a new tip alongside the abandoned one
 		entries, _, rerr := Read(p)
 		require.NoError(t, rerr)
-		// both the abandoned tip and the new fork stay reachable.
+		// both the abandoned tip and the new fork stay reachable
 		assert.Equal(t, []string{e2.ID, e3.ID}, tipIDs(entries))
 	})
 
-	// a sibling session in the same directory keeps its own branch.
+	// a sibling session in the same directory keeps its own branch
 	t.Run("sibling_session_keeps_its_branch", func(t *testing.T) {
 		dir := t.TempDir()
 		pa := filepath.Join(dir, "a.jsonl")
@@ -117,7 +117,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		assert.Equal(t, a1.ID, wa2.Head())
 	})
 
-	// a discard writer never writes a cursor.
+	// a discard writer never writes a cursor
 	t.Run("discard_writes_no_head_cursor", func(t *testing.T) {
 		w := Discard()
 		e, err := w.Append(TypeMessage, MessageData{Message: llmText("x")})

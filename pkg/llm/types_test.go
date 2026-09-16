@@ -116,6 +116,7 @@ func TestMessageMarshalJSON(t *testing.T) {
 		require.NoError(t, json.Unmarshal(data, &got))
 		assert.Equal(t, m, got)
 	})
+
 	t.Run("role_is_plain_string", func(t *testing.T) {
 		data, err := json.Marshal(Text(RoleUser, "hi"))
 		require.NoError(t, err)
@@ -132,9 +133,6 @@ func TestText(t *testing.T) {
 	assert.Equal(t, TextBlock{Text: "hi"}, m.Content[0])
 }
 
-// TestBlockTypesCoversDecoder keeps llm.BlockTypes honest: every discriminator it
-// lists must decode, so the estimator's own walk over the list cannot silently
-// miss a type.
 func TestBlockTypesCoversDecoder(t *testing.T) {
 	t.Parallel()
 

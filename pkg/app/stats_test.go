@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestStatsSinkCounts(t *testing.T) {
@@ -120,11 +121,6 @@ func usageTextTurn(in, out int, text string) []llm.Event {
 	}
 }
 
-// TestStatsBenchmarkDataPath walks the whole path the benchmark depends on: the
-// json stream must carry per-call tool events with names and error flags, and a
-// summary line carrying real token totals. The benchmark derives tool counts
-// from the events and tokens from the summary, so both halves are asserted here
-// rather than trusted.
 func TestStatsBenchmarkDataPath(t *testing.T) {
 	find := func(lines []map[string]any, typ string) []map[string]any {
 		var out []map[string]any

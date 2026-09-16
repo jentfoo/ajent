@@ -10,8 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeUpdateCmds returns canned resolve/install results and records whether
-// install ran.
+// fakeUpdateCmds returns canned resolve/install results and records whether install ran.
 func fakeUpdateCmds(latest string, resErr error) updateCmds {
 	var installed atomic.Bool
 	return updateCmds{

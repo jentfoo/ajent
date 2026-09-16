@@ -69,9 +69,8 @@ func (d *Dialect) UnmarshalText(data []byte) error {
 	return nil
 }
 
-// Flavor selects discovery and quirk defaults. It is separate from Dialect so
-// an OpenAI compatible proxy in front of a known server still gets the right
-// defaults.
+// Flavor selects discovery and quirk defaults. It is separate from Dialect so an
+// OpenAI compatible proxy in front of a known server still gets the right defaults.
 type Flavor uint8
 
 const (
@@ -307,8 +306,7 @@ func LoadFile(path string) (File, []string, error) {
 	for _, k := range unknown {
 		warnings = append(warnings, fmt.Sprintf("%s: unrecognized key %q", path, k))
 	}
-	// encoding/json keeps the last of a repeated key, so the earlier one looks
-	// applied and is not
+	// encoding/json keeps the last of a repeated key, so the earlier one looks applied and is not
 	for _, k := range config.DuplicateKeys(data) {
 		warnings = append(warnings, fmt.Sprintf("%s: duplicate key %q, the last one wins", path, k))
 	}

@@ -47,6 +47,7 @@ func New(m llm.Model) *Accounting {
 func (a *Accounting) SetModel(m llm.Model) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.model = m
 	a.promptExact, a.outputExact = 0, 0
 	a.pending, a.live = 0, 0 // composing and staged stay; neither is a context term yet
@@ -59,6 +60,7 @@ func (a *Accounting) SetModel(m llm.Model) {
 func (a *Accounting) SetWindow(m llm.Model) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.model = m
 }
 
@@ -68,6 +70,7 @@ func (a *Accounting) SetWindow(m llm.Model) {
 func (a *Accounting) SetCompose(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.composing = float64(est)
 }
 
@@ -78,6 +81,7 @@ func (a *Accounting) SetCompose(est int) {
 func (a *Accounting) SetStaged(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.staged = float64(est)
 }
 
@@ -86,6 +90,7 @@ func (a *Accounting) SetStaged(est int) {
 func (a *Accounting) SetSubmit(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.submitted = float64(est)
 }
 
@@ -95,6 +100,7 @@ func (a *Accounting) SetSubmit(est int) {
 func (a *Accounting) SetBase(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.base = float64(est)
 }
 
@@ -102,6 +108,7 @@ func (a *Accounting) SetBase(est int) {
 func (a *Accounting) Base() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return int(a.base)
 }
 
@@ -151,6 +158,7 @@ func (a *Accounting) Response(key string, u llm.Usage, predicted int, keepThink 
 func (a *Accounting) Partial(u llm.Usage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if p := u.Input + u.CacheRead + u.CacheWrite; p > 0 {
 		a.promptExact = p
 		a.pending = 0 // now covered by the reported prompt
@@ -161,6 +169,7 @@ func (a *Accounting) Partial(u llm.Usage) {
 func (a *Accounting) Add(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.pending += float64(est)
 }
 
@@ -168,6 +177,7 @@ func (a *Accounting) Add(est int) {
 func (a *Accounting) Stream(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.live += float64(est)
 }
 
@@ -176,6 +186,7 @@ func (a *Accounting) Stream(est int) {
 func (a *Accounting) Rebase(used int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if used > 0 {
 		a.promptExact = used
 	}
@@ -190,6 +201,7 @@ func (a *Accounting) Rebase(used int) {
 func (a *Accounting) Reseed(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.promptExact, a.outputExact = 0, 0
 	a.live = 0 // composing and staged stay: neither is part of est
 	a.pending = float64(est)
@@ -202,6 +214,7 @@ func (a *Accounting) Reseed(est int) {
 func (a *Accounting) Spend(key string, u llm.Usage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if Zero(u) {
 		return
 	}
@@ -215,6 +228,7 @@ func (a *Accounting) Spend(key string, u llm.Usage) {
 func (a *Accounting) RecordSpend(key string, u llm.Usage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if Zero(u) {
 		// every appended message is a recorded entry, user echoes and tool results
 		// included, so only a report makes one a turn. This matches the replay path,
@@ -229,6 +243,7 @@ func (a *Accounting) RecordSpend(key string, u llm.Usage) {
 func (a *Accounting) Context() ContextState {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	// every estimate bucket scales by the same per-model factor so composing text
 	// is corrected exactly like pending and live are.
 	factor := a.cal.Factor(a.model.Key())
@@ -251,6 +266,7 @@ func (a *Accounting) Context() ContextState {
 func (a *Accounting) Total() llm.Usage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return a.total
 }
 
@@ -258,6 +274,7 @@ func (a *Accounting) Total() llm.Usage {
 func (a *Accounting) TurnsCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return a.turnCount
 }
 
@@ -266,6 +283,7 @@ func (a *Accounting) TurnsCount() int {
 func (a *Accounting) EstimatedTurn(key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	a.turnCount++
 	a.estTurnCount++
 }
@@ -275,6 +293,7 @@ func (a *Accounting) EstimatedTurn(key string) {
 func (a *Accounting) EstimatedTurns() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return a.estTurnCount
 }
 
@@ -283,6 +302,7 @@ func (a *Accounting) EstimatedTurns() int {
 func (a *Accounting) ChildTotal() llm.Usage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return a.totalChild
 }
 
@@ -291,6 +311,7 @@ func (a *Accounting) ChildTotal() llm.Usage {
 func (a *Accounting) ByModel() map[string]llm.Usage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	out := make(map[string]llm.Usage, len(a.byModel))
 	for k, v := range a.byModel {
 		out[k] = v
@@ -303,6 +324,7 @@ func (a *Accounting) ByModel() map[string]llm.Usage {
 func (a *Accounting) Child() *Accounting {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	return &Accounting{model: a.model, cal: a.cal, parent: a}
 }
 
@@ -311,6 +333,7 @@ func (a *Accounting) Child() *Accounting {
 func (a *Accounting) rollUp(key string, u llm.Usage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
 	if Zero(u) {
 		return
 	}

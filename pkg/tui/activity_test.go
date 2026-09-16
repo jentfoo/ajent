@@ -56,7 +56,7 @@ func TestShadeRow(t *testing.T) {
 		assert.NotContains(t, emitted, "\x1b[2B")
 	})
 
-	// a no-op theme falls back to an elided row.
+	// a no-op theme falls back to an elided row
 	t.Run("no_color_is_plain", func(t *testing.T) {
 		assert.Equal(t, "sub-2  work", shadeRow(NewTheme(ColorNone, DefaultPalette()).Activity, "sub-2  work", 40))
 	})
@@ -80,6 +80,7 @@ func TestUIActivity(t *testing.T) {
 		assert.Contains(t, screen, "running agent 1")
 		assert.Contains(t, screen, "running agent 2")
 	})
+
 	t.Run("same_key_replaces_in_place", func(t *testing.T) {
 		u, v := newUI(80, 12, strings.NewReader(""))
 
@@ -90,6 +91,7 @@ func TestUIActivity(t *testing.T) {
 		assert.Contains(t, screen, "step two")
 		assert.NotContains(t, screen, "step one")
 	})
+
 	t.Run("empty_text_removes", func(t *testing.T) {
 		u, v := newUI(80, 12, strings.NewReader(""))
 
@@ -98,6 +100,7 @@ func TestUIActivity(t *testing.T) {
 
 		assert.NotContains(t, u.snapshot(v), "running agent 1")
 	})
+
 	t.Run("empty_text_only_removes_its_key", func(t *testing.T) {
 		u, v := newUI(80, 12, strings.NewReader(""))
 
@@ -109,6 +112,7 @@ func TestUIActivity(t *testing.T) {
 		assert.NotContains(t, screen, "one")
 		assert.Contains(t, screen, "two")
 	})
+
 	t.Run("ranked_rows_sort_by_rank", func(t *testing.T) {
 		u, _ := newUI(80, 12, strings.NewReader(""))
 
@@ -120,6 +124,7 @@ func TestUIActivity(t *testing.T) {
 
 		assert.Equal(t, []string{"sub-1", "sub-2", "sub-3", "sub-10"}, activityKeys(u))
 	})
+
 	t.Run("clear_and_readd_keeps_place", func(t *testing.T) {
 		u, _ := newUI(80, 12, strings.NewReader(""))
 
@@ -132,6 +137,7 @@ func TestUIActivity(t *testing.T) {
 
 		assert.Equal(t, []string{"sub-1", "sub-2", "sub-3"}, activityKeys(u))
 	})
+
 	t.Run("unranked_rows_follow_ranked", func(t *testing.T) {
 		u, _ := newUI(80, 12, strings.NewReader(""))
 
@@ -143,6 +149,7 @@ func TestUIActivity(t *testing.T) {
 		// parent tool rows keep insertion order among themselves, after every job
 		assert.Equal(t, []string{"sub-1", "sub-2", outputKey + "c9", "call:c10"}, activityKeys(u))
 	})
+
 	t.Run("cap_shows_plus_n_more", func(t *testing.T) {
 		u, v := newUI(80, 12, strings.NewReader(""))
 
@@ -153,6 +160,7 @@ func TestUIActivity(t *testing.T) {
 		screen := u.snapshot(v)
 		assert.Contains(t, screen, "+4 more")
 	})
+
 	t.Run("single_overflow_lists_instead_of_indicator", func(t *testing.T) {
 		u, v := newUI(80, 12, strings.NewReader(""))
 
@@ -167,6 +175,7 @@ func TestUIActivity(t *testing.T) {
 		}
 		assert.NotContains(t, screen, "more")
 	})
+
 	t.Run("two_overflow_shows_indicator", func(t *testing.T) {
 		u, v := newUI(80, 12, strings.NewReader(""))
 
@@ -183,6 +192,7 @@ func TestUIActivity(t *testing.T) {
 		assert.NotContains(t, screen, "row 6")
 		assert.Contains(t, screen, "+2 more")
 	})
+
 	t.Run("elides_at_narrow_width", func(t *testing.T) {
 		u, v := newUI(30, 12, strings.NewReader(""))
 
@@ -192,6 +202,7 @@ func TestUIActivity(t *testing.T) {
 		assert.Contains(t, screen, "a very long activity")
 		assert.NotContains(t, screen, "will not fit") // elided to the width
 	})
+
 	t.Run("never_reaches_committed_history", func(t *testing.T) {
 		v := newVT(80, 12)
 		u := newTestUI(t, v, strings.NewReader(""))
@@ -205,6 +216,7 @@ func TestUIActivity(t *testing.T) {
 			assert.NotContains(t, row, "transient work")
 		}
 	})
+
 	t.Run("yields_first_on_a_short_terminal", func(t *testing.T) {
 		// a two-row status plus the input minimum leaves no room for activity
 		v := newVT(80, 3)
@@ -217,10 +229,6 @@ func TestUIActivity(t *testing.T) {
 	})
 }
 
-// TestUIActivityTabKeepsPark guards the shadeRow arithmetic against tabs:
-// uniseg charges a tab one column while the terminal advances to the next
-// 8-column stop, so an unmeasured tab makes the padded row wrap and the park
-// lands one row short of the block's top.
 func TestUIActivityTabKeepsPark(t *testing.T) {
 	t.Parallel()
 
@@ -239,8 +247,6 @@ func TestUIActivityTabKeepsPark(t *testing.T) {
 	assert.Contains(t, v.Screen(), "a "+strings.Repeat("x", 15))
 }
 
-// TestUIActivityEscapeKeepsRowCount drives a cursor-motion escape through the
-// public activity API: unsanitized it moves the cursor rows nothing counted.
 func TestUIActivityEscapeKeepsRowCount(t *testing.T) {
 	t.Parallel()
 

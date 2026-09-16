@@ -82,6 +82,7 @@ func TestRenderMarkdown(t *testing.T) {
 			assert.Equal(t, strings.Repeat(ruleChar, 12), strutil.StripANSI(rows[0]))
 		}
 	})
+
 	t.Run("table_rendered", func(t *testing.T) {
 		out := mdText(renderMarkdown(plain, 60, "| A | B |\n|---|---|\n| 1 | 2 |"), 60)
 		assert.Contains(t, out, "│ A │ B │")
@@ -151,6 +152,7 @@ func TestRenderMarkdownTable(t *testing.T) {
 		// the header and data rows are separated by a mid line
 		assert.True(t, strings.HasPrefix(shape[2], "├────┼"), "mid border: %q", shape[2])
 	})
+
 	t.Run("long_cell_wraps_within_the_column", func(t *testing.T) {
 		lines := renderMarkdown(plain, 60, src)
 		rows := layoutTable(lines[0].table, 40)
@@ -160,6 +162,7 @@ func TestRenderMarkdownTable(t *testing.T) {
 				strings.HasPrefix(row, "└") || strings.HasPrefix(row, "│"), "row: %q", row)
 		}
 	})
+
 	t.Run("reflows_to_a_narrower_width", func(t *testing.T) {
 		lines := renderMarkdown(plain, 60, src)
 		wide := layoutTable(lines[0].table, 80)
@@ -177,11 +180,13 @@ func TestRenderMarkdownStyled(t *testing.T) {
 	t.Run("bold_wrapped", func(t *testing.T) {
 		assert.Equal(t, "a \x1b[1mb\x1b[0m\n", mdText(renderMarkdown(th, 40, "a **b**"), 40))
 	})
+
 	t.Run("nested_style_restores_parent", func(t *testing.T) {
 		out := mdText(renderMarkdown(th, 40, "**bold `code` more**"), 40)
 		// the code span reset must be followed by a reopen of the bold style
 		assert.Contains(t, out, sgrReset+th.Bold.Open()+" more")
 	})
+
 	t.Run("heading_styled", func(t *testing.T) {
 		assert.Equal(t, th.Dim.Wrap("# ")+th.Heading.Wrap("Title")+"\n", mdText(renderMarkdown(th, 40, "# Title"), 40))
 	})
@@ -281,37 +286,44 @@ func TestCodeBlock(t *testing.T) {
 		assert.NotContains(t, rows[1], th.Code.Open())
 		assert.Equal(t, codeIndent+"func f() {}", strutil.StripANSI(rows[1]))
 	})
+
 	t.Run("no_language_falls_back", func(t *testing.T) {
 		rows := body(th, "```\nfunc f() {}\n```")
 		require.Len(t, rows, 1)
 		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), rows[0])
 	})
+
 	t.Run("indented_block_falls_back", func(t *testing.T) {
 		rows := body(th, "    func f() {}")
 		require.Len(t, rows, 1)
 		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), rows[0])
 	})
+
 	t.Run("unknown_language_falls_back", func(t *testing.T) {
 		rows := body(th, "```zzznotalanguage\nfunc f() {}\n```")
 		require.Len(t, rows, 2)
 		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), rows[1])
 	})
+
 	t.Run("plain_theme_unchanged", func(t *testing.T) {
 		assert.Equal(t, []string{codeIndent + "go", codeIndent + "func f() {}"},
 			body(plain, "```go\nfunc f() {}\n```"))
 	})
+
 	t.Run("basic_color_falls_back", func(t *testing.T) {
 		basic := NewTheme(ColorBasic, DefaultPalette())
 		rows := body(basic, "```go\nfunc f() {}\n```")
 		require.Len(t, rows, 2)
 		assert.Equal(t, codeIndent+basic.Code.Wrap("func f() {}"), rows[1])
 	})
+
 	t.Run("preview_falls_back", func(t *testing.T) {
 		// a block still arriving is re-rendered per delta and lexes half typed code
 		lines := renderPreview(th, 40, "```go\nfunc f() {}\n```")
 		require.Len(t, lines, 2)
 		assert.Equal(t, codeIndent+th.Code.Wrap("func f() {}"), lines[1].text)
 	})
+
 	t.Run("one_row_per_source_line", func(t *testing.T) {
 		// row accounting is exact, so a highlighted block keeps the source line count
 		src := "```go\ns := `multi\nline`\n\nx := 1\n```"

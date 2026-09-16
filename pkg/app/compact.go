@@ -87,10 +87,9 @@ func (c *compactor) compaction() config.Compaction {
 	return c.cfg()
 }
 
-// run performs one compaction for reason, returning whether anything changed. A
-// manual run refuses while a turn streams; an automatic run only acts when Used has
-// crossed the model's compaction point; step and overflow runs fire mid-turn from
-// the turn's own goroutine.
+// run performs one compaction for reason, returning whether anything changed. A manual run refuses
+// while a turn streams; an automatic run only acts when Used has crossed the model's compaction
+// point; step and overflow runs fire mid-turn from the turn's own goroutine.
 func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instructions string) (bool, error) {
 	if !reason.MidTurn() && c.ag != nil && c.ag.Running() {
 		c.notify("compaction refused: press Esc to stop the turn first", agent.LevelWarn)
@@ -260,9 +259,8 @@ func (c *compactor) declineAuto(reason agent.CompactReason) {
 		"instructions, switch models, or rewind", agent.LevelWarn)
 }
 
-// verbatimTokens converts a configured fraction into a token ceiling against the
-// model's compaction point. A fraction outside (0,1) returns 0, leaving the bound
-// to pkg/compact's own default.
+// verbatimTokens converts a configured fraction into a token ceiling against the model's compaction
+// point. A fraction outside (0,1) returns 0, leaving the bound to pkg/compact's own default.
 func verbatimTokens(m llm.Model, fraction float64) int {
 	if fraction <= 0 || fraction >= 1 {
 		return 0
@@ -274,7 +272,7 @@ func verbatimTokens(m llm.Model, fraction float64) int {
 // history was folded. It names nothing else, because nothing else changed — the
 // summariser reads a reduced transcript, but that reduction never reaches context.
 func reportLine(res *compact.Result) string {
-	detail := ""
+	var detail string
 	if n := res.Reduce.Stats.Summarized; n > 0 {
 		detail = fmt.Sprintf(" (summarised %d messages)", n)
 	}

@@ -16,6 +16,7 @@ func TestUsageAdd(t *testing.T) {
 		u.Add(Usage{Input: 10, Output: 20, CacheRead: 30, CacheWrite: 40, Reasoning: 50})
 		assert.Equal(t, Usage{Input: 11, Output: 22, CacheRead: 33, CacheWrite: 44, Reasoning: 55}, u)
 	})
+
 	t.Run("zero_is_identity", func(t *testing.T) {
 		u := Usage{Input: 7}
 		u.Add(Usage{})

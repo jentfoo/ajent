@@ -77,7 +77,7 @@ func TestScriptServed(t *testing.T) {
 	}
 
 	// every bash call in a non-final step carried a recoverable scratch path
-	found := false
+	var found bool
 	for _, m := range msgs {
 		for _, c := range m.ToolCalls {
 			if strings.Contains(string(c.Function.Arguments), scratchPrefix) {
@@ -259,7 +259,7 @@ func wireMessages(msgs []wireMessage) string {
 	parts := make([]string, 0, len(msgs))
 	for _, m := range msgs {
 		c := marshalJSONBytes(m.Content)
-		tc := ""
+		var tc string
 		if len(m.ToolCalls) > 0 {
 			tc = `,"tool_calls":` + marshalJSONBytes(m.ToolCalls)
 		}

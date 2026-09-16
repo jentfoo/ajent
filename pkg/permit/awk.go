@@ -8,9 +8,8 @@ import (
 	"github.com/go-analyze/bulk"
 )
 
-// awkInertLongFlags are long options with no exec or write surface; anything else
-// starting with a dash (-f/--file, --profile, --pretty-print, -W, unknown) fails
-// safe to the prompt path.
+// awkInertLongFlags are long options with no exec or write surface; anything else starting
+// with a dash (-f/--file, --profile, --pretty-print, -W, unknown) fails safe to the prompt path.
 var awkInertLongFlags = bulk.SliceToSet([]string{
 	"--posix", "--traditional", "--re-interval", "--lint", "--lint-old",
 })
@@ -26,8 +25,7 @@ var (
 	awkAtDirectiveRe = regexp.MustCompile(`@(?:include|load|namespace)\b|@[A-Za-z_][A-Za-z0-9_]*\(`)
 )
 
-// isAwkValueFlag reports whether tok names an exact value flag taking the next
-// token as its value.
+// isAwkValueFlag reports whether tok names an exact value flag taking the next token as its value.
 func isAwkValueFlag(tok string) bool {
 	return slices.Contains([]string{"-F", "--field-separator", "-v", "--assign"}, tok)
 }
@@ -77,7 +75,7 @@ func awkRegexOpens(out string) bool {
 // replaced by one space, so exec/write vectors inside literals never match.
 func awkStripStrings(script string) string {
 	var b strings.Builder
-	i := 0
+	var i int
 	n := len(script)
 	for i < n {
 		ch := script[i]
@@ -136,8 +134,7 @@ func awkIsWordChar(b byte) bool {
 		b >= '0' && b <= '9' || b == '_'
 }
 
-// awkKeywordAt reports whether kw starts at i in code with a word boundary on
-// both sides.
+// awkKeywordAt reports whether kw starts at i in code with a word boundary on both sides.
 func awkKeywordAt(code string, i int, kw string) bool {
 	if !strings.HasPrefix(code[i:], kw) {
 		return false
@@ -158,8 +155,8 @@ func awkScriptReadSafe(script string) bool {
 		awkAtDirectiveRe.MatchString(code) {
 		return false
 	}
-	sawPrint := false
-	depth := 0
+	var sawPrint bool
+	var depth int
 	for i := 0; i < len(code); i++ {
 		switch code[i] {
 		case '(':
@@ -192,7 +189,7 @@ func awkReadSafe(raw string) bool {
 		return false
 	}
 	var scripts []string
-	positional := false
+	var positional bool
 	for j := 1; j < len(tokens); j++ {
 		tok := tokens[j]
 		if strings.HasPrefix(tok, "-") && tok != "-" {
@@ -221,8 +218,7 @@ func awkReadSafe(raw string) bool {
 			}
 			continue
 		}
-		// first non-flag token is the positional script when none seen yet; later
-		// ones are input files.
+		// first non-flag token is the positional script when none seen yet; later ones are input files
 		if len(scripts) == 0 && !positional {
 			scripts = append(scripts, tok)
 			positional = true

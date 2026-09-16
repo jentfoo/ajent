@@ -320,8 +320,7 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 // defaultTurnRetries bounds a step's re-requests of a failed model call.
 const defaultTurnRetries = 4
 
-// stream runs one model call, re-requesting a failed call up to
-// Options.TurnRetries times.
+// stream runs one model call, re-requesting a failed call up to Options.TurnRetries times.
 func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, llm.StopReason, error) {
 	provider, err := a.opts.Provider(a.state.Model)
 	if err != nil {
@@ -625,8 +624,7 @@ func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock
 	a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: content}})
 }
 
-// modelOrigin returns the Origin stamp for an assistant message produced by the
-// current model.
+// modelOrigin returns the Origin stamp for an assistant message produced by the current model.
 func (a *Agent) modelOrigin() *llm.Origin {
 	return &llm.Origin{Provider: a.state.Model.Provider, Dialect: a.state.Model.Caps.Dialect, Model: a.state.Model.ID}
 }
@@ -677,9 +675,8 @@ func (a *Agent) syncContext(force bool) {
 	a.sink.Context(cs)
 }
 
-// needsRecount reports whether a provider reported no usage and has an exact
-// local tokenizer, which is when the loop recounts after appending instead of
-// trusting an estimate.
+// needsRecount reports whether a provider reported no usage and has an exact local tokenizer,
+// which is when the loop recounts after appending instead of trusting an estimate.
 func needsRecount(caps llm.Capabilities, u llm.Usage) bool {
 	return tokens.Zero(u) && caps.Tokenizer == llm.TokenizerRemoteTokenize
 }
@@ -729,6 +726,7 @@ type sinkWriter struct {
 func (w *sinkWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	w.sink.ToolOutput(w.id, string(p))
 	return len(p), nil
 }
@@ -737,5 +735,6 @@ func (w *sinkWriter) Write(p []byte) (int, error) {
 func (w *sinkWriter) Diff(path, before, after string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
 	w.sink.Diff(path, before, after)
 }

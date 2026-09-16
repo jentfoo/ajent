@@ -3,9 +3,10 @@ package session
 import (
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // toolResultEntry builds a user message entry holding one tool result for callID.
@@ -55,8 +56,7 @@ func TestContextMessages(t *testing.T) {
 	})
 
 	t.Run("reductions_only_no_cut", func(t *testing.T) {
-		// an empty FirstKeptEntryID applies reductions without truncating and warns
-		// about nothing.
+		// an empty FirstKeptEntryID applies reductions without truncating and warns about nothing
 		branch := []Entry{
 			pickMsg("m1", "", llm.Text(llm.RoleUser, "one")),
 			toolResultEntry("m2", "m1", "c1", "old failed output", true),

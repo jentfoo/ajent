@@ -14,19 +14,17 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// Environment is the machine facts the system prompt states. It is a plain
-// struct so tests can inject it and callers can layer project instructions
-// (AGENTS.md) on top.
+// Environment is the machine facts the system prompt states. It is a plain struct so
+// tests can inject it and callers can layer project instructions (AGENTS.md) on top.
 type Environment struct {
 	Cwd  string
 	OS   string
 	Date string // day granularity, so the prompt cache survives
 }
 
-// DetectEnvironment reads the facts about this machine that a coding agent is
-// expected to know: working directory, platform and the day-granular date. All
-// three are fixed at startup, so the system block never varies within a session
-// except across midnight.
+// DetectEnvironment reads the facts about this machine that a coding agent is expected to
+// know: working directory, platform and the day-granular date. All three are fixed at
+// startup, so the system block never varies within a session except across midnight.
 func DetectEnvironment() Environment {
 	cwd, _ := os.Getwd()
 	return Environment{
@@ -50,9 +48,8 @@ const agentsFileName = "AGENTS.md"
 
 // LoadProjectInstructions reads <dir>/AGENTS.md from each of dirs, in order,
 // returning a provenance-marked instruction per existing file (global first,
-// then project). Empty dirs and absent files are skipped; nil means none were
-// found. A read error other than a file being absent is returned for callers to
-// surface.
+// then project). Empty dirs and absent files are skipped; nil means none were found.
+// A read error other than a file being absent is returned for callers to surface.
 func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 	var proj []ProjectInstruction
 	for _, dir := range dirs {
@@ -104,7 +101,7 @@ func writeProjectInstructions(b *strings.Builder, proj []ProjectInstruction) {
 	b.WriteString("\n<project_context>\n\n")
 	b.WriteString("Project-specific instructions and guidelines:\n\n")
 	for _, p := range proj {
-		fmt.Fprintf(b, "<project_instructions path=%q>\n%s\n</project_instructions>\n",
+		_, _ = fmt.Fprintf(b, "<project_instructions path=%q>\n%s\n</project_instructions>\n",
 			p.Path, strings.TrimSuffix(p.Body, "\n"))
 	}
 	b.WriteString("</project_context>")
@@ -121,9 +118,8 @@ func hasAny(names []string, want ...string) bool {
 	return slices.ContainsFunc(want, func(w string) bool { return slices.Contains(names, w) })
 }
 
-// buildGuidelines returns the guideline block: the always-included bullets first,
-// then any derived from the enabled toolset. The derivation rule is that
-// guidelines never name a tool that is not present.
+// buildGuidelines returns the guideline block: the always-included bullets first, then any derived
+// from the enabled toolset. The derivation rule is that guidelines never name a tool that is not present.
 func buildGuidelines(names []string) string {
 	var b strings.Builder
 	b.WriteString("Guidelines:\n")
@@ -143,16 +139,13 @@ func buildGuidelines(names []string) string {
 // and a directory listing are deliberately absent — the listing would vary
 // whenever the workspace changes, and the model discovers files with its tools.
 func buildEnvironmentFacts(b *strings.Builder, env Environment) {
-	fmt.Fprintf(b, "Working directory: %s\n", cwdOrDot(env.Cwd))
-	if env.OS != "" {
-		fmt.Fprintf(b, "Platform: %s\n", env.OS)
-	}
-	fmt.Fprintf(b, "Date: %s\n", env.Date)
-}
-
-func cwdOrDot(cwd string) string {
+	cwd := env.Cwd
 	if cwd == "" {
-		return "."
+		cwd = "."
 	}
-	return cwd
+	_, _ = fmt.Fprintf(b, "Working directory: %s\n", cwd)
+	if env.OS != "" {
+		_, _ = fmt.Fprintf(b, "Platform: %s\n", env.OS)
+	}
+	_, _ = fmt.Fprintf(b, "Date: %s\n", env.Date)
 }

@@ -103,11 +103,13 @@ func TestStyleWrap(t *testing.T) {
 		assert.Empty(t, s.Open())
 		assert.Empty(t, s.Close())
 	})
+
 	t.Run("wraps_with_reset", func(t *testing.T) {
 		s := Style{open: sgr(attrBold)}
 		assert.Equal(t, "\x1b[1mhello\x1b[0m", s.Wrap("hello"))
 		assert.Equal(t, sgrReset, s.Close())
 	})
+
 	t.Run("empty_text_unchanged", func(t *testing.T) {
 		s := Style{open: sgr(attrBold)}
 		assert.Empty(t, s.Wrap(""))
@@ -125,25 +127,31 @@ func TestNewTheme(t *testing.T) {
 			assert.Equal(t, "text", s.Wrap("text"))
 		}
 	})
+
 	t.Run("basic_uses_16_color", func(t *testing.T) {
 		th := NewTheme(ColorBasic, DefaultPalette())
 		assert.Equal(t, "\x1b[32m+ok\x1b[0m", th.DiffAdd.Wrap("+ok"))
 	})
+
 	t.Run("256_uses_extended", func(t *testing.T) {
 		th := NewTheme(Color256, DefaultPalette())
 		assert.Equal(t, "\x1b[38;5;78m+ok\x1b[0m", th.DiffAdd.Wrap("+ok"))
 		assert.Equal(t, "\x1b[2;3;38;5;245mhmm\x1b[0m", th.Thinking.Wrap("hmm"))
 	})
+
 	t.Run("activity_shades_background_at_256", func(t *testing.T) {
 		th := NewTheme(Color256, DefaultPalette())
 		assert.Equal(t, "\x1b[2;48;5;236mrow\x1b[0m", th.Activity.Wrap("row"))
 	})
+
 	t.Run("activity_falls_back_to_dim_at_basic", func(t *testing.T) {
 		assert.Equal(t, "\x1b[2mrow\x1b[0m", NewTheme(ColorBasic, DefaultPalette()).Activity.Wrap("row"))
 	})
+
 	t.Run("zero_palette_is_default", func(t *testing.T) {
 		assert.Equal(t, NewTheme(Color256, DefaultPalette()), NewTheme(Color256, Palette{}))
 	})
+
 	t.Run("color_none_ignores_palette", func(t *testing.T) {
 		for _, pal := range Palettes() {
 			th := NewTheme(ColorNone, pal)
@@ -212,6 +220,7 @@ func TestPalettes(t *testing.T) {
 			assert.Equal(t, expected[pal.Name], actual, pal.Name)
 		}
 	})
+
 	t.Run("basic_fallbacks_are_readable", func(t *testing.T) {
 		for _, pal := range Palettes() {
 			th := NewTheme(ColorBasic, pal)
@@ -226,6 +235,7 @@ func TestPalettes(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("tones_are_balanced", func(t *testing.T) {
 		dark, light := PalettesFor(ToneDark), PalettesFor(ToneLight)
 		assert.Len(t, dark, 4)
@@ -261,18 +271,22 @@ func TestPaletteInvariants(t *testing.T) {
 			}
 		}
 	})
+
 	t.Run("names_are_unique", func(t *testing.T) {
 		assert.Len(t, bulk.SliceToSetBy(func(p Palette) string { return p.Name }, palettes), len(palettes))
 	})
+
 	t.Run("every_palette_names_a_code_style", func(t *testing.T) {
 		for _, pal := range Palettes() {
 			assert.NotEmpty(t, pal.codeStyle, pal.Name)
 			assert.Equal(t, pal.codeStyle, NewTheme(Color256, pal).CodeStyle, pal.Name)
 		}
 	})
+
 	t.Run("no_code_style_without_color", func(t *testing.T) {
 		assert.Empty(t, NewTheme(ColorNone, DefaultPalette()).CodeStyle)
 	})
+
 	t.Run("no_code_style_below_256", func(t *testing.T) {
 		assert.Empty(t, NewTheme(ColorBasic, DefaultPalette()).CodeStyle)
 	})
@@ -288,11 +302,13 @@ func TestLookupPalette(t *testing.T) {
 			assert.Equal(t, pal, found)
 		}
 	})
+
 	t.Run("unknown_name", func(t *testing.T) {
 		found, ok := LookupPalette("solarized")
 		assert.False(t, ok)
 		assert.Empty(t, found.Name)
 	})
+
 	t.Run("empty_name", func(t *testing.T) {
 		_, ok := LookupPalette("")
 		assert.False(t, ok)

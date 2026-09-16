@@ -189,7 +189,6 @@ func TestScannerCorpus(t *testing.T) {
 	cases := []corpusCase{
 		{"read only ls", "ls -la", false, false},
 		{"pipeline split", `grep foo f.txt | sort`, true, false},
-
 		// quoting
 		{`semicolon single quoted`, `echo 'a;b'`, false, false},
 		{`ampersand double quoted`, `echo "x & y"`, false, false},
@@ -198,7 +197,6 @@ func TestScannerCorpus(t *testing.T) {
 		{"backtick in double unsafe", "echo \"`pwd`\"", false, true},
 		{`unterminated single`, `cat 'oops`, false, true},
 		{`escaped space outside quotes`, `ls a\ b`, false, false},
-
 		// redirects
 		{"append", "cmd >> log", false, true},
 		{"stderr merge ok", "cmd 2>&1", false, false},
@@ -207,14 +205,12 @@ func TestScannerCorpus(t *testing.T) {
 		{"word digit not eaten", "cat file1> /dev/null", false, false},
 		{`dev null foo is a file`, `echo hi >/dev/nullfoo`, false, true},
 		{`backtick unsafe`, "cmd `id`", false, true},
-
 		// split operators
 		{"double amp", "a && b", true, false},
 		{"or op", "a || b", true, false},
 		{"semicolon", "a;b", true, false},
 		{"background", "sleep 5 &", true, false},
 		{"newline", "a\nb", true, false},
-
 		// process substitution
 		{`process subst`, `grep -f <(cat x)`, false, true},
 	}

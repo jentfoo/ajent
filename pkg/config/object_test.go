@@ -54,6 +54,7 @@ func TestSetKey(t *testing.T) {
 		require.NoError(t, err)
 		assert.Less(t, strings.Index(string(out), `"z"`), strings.Index(string(out), `"m"`))
 	})
+
 	t.Run("unserializable_value_errors", func(t *testing.T) {
 		// a value json.Marshal rejects surfaces as an error rather than corrupting the layer
 		_, err := SetKey([]byte(`{}`), "a", make(chan int))

@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestStorePrompts(t *testing.T) {
-	// several cases pin the package clock via setClock, so this cannot run in parallel.
+	// several cases pin the package clock via setClock, so this cannot run in parallel
 
 	t.Run("recalls_newest_first_with_forks", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
@@ -157,7 +158,7 @@ func TestStorePrompts(t *testing.T) {
 }
 
 func TestPromptIndexPrompts(t *testing.T) {
-	// both cases pin package clocks, so this cannot run in parallel.
+	// both cases pin package clocks, so this cannot run in parallel
 
 	t.Run("ttl", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))

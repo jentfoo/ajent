@@ -14,6 +14,7 @@ func TestLineBufferAdd(t *testing.T) {
 		assert.Empty(t, b.Add("hel"))
 		assert.Equal(t, "hel", b.pending.String())
 	})
+
 	t.Run("releases_complete_lines", func(t *testing.T) {
 		var b lineBuffer
 		assert.Empty(t, b.Add("hel"))
@@ -22,10 +23,12 @@ func TestLineBufferAdd(t *testing.T) {
 		assert.Equal(t, "world\n", b.Add("ld\n"))
 		assert.Empty(t, b.pending.String())
 	})
+
 	t.Run("releases_multiple_lines", func(t *testing.T) {
 		var b lineBuffer
 		assert.Equal(t, "a\nb\n", b.Add("a\nb\nc"))
 	})
+
 	t.Run("accumulates_across_deltas", func(t *testing.T) {
 		var b lineBuffer
 		for _, d := range []string{"a", "b", "c"} {
@@ -33,6 +36,7 @@ func TestLineBufferAdd(t *testing.T) {
 		}
 		assert.Equal(t, "abcd\n", b.Add("d\n"))
 	})
+
 	t.Run("empty_add", func(t *testing.T) {
 		var b lineBuffer
 		assert.Empty(t, b.Add(""))
@@ -49,6 +53,7 @@ func TestLineBufferFlush(t *testing.T) {
 		assert.Equal(t, "tail\n", b.Flush())
 		assert.Empty(t, b.pending.String())
 	})
+
 	t.Run("empty_stays_empty", func(t *testing.T) {
 		var b lineBuffer
 		assert.Empty(t, b.Flush())
@@ -66,12 +71,14 @@ func TestLineBufferPending(t *testing.T) {
 		assert.Equal(t, "partial more\n", b.Add(" more\nnext"))
 		assert.Equal(t, "next", b.Pending())
 	})
+
 	t.Run("flush_returns_the_pending_tail", func(t *testing.T) {
 		var b lineBuffer
 		b.Add("partial")
 		b.Add(" more\nnext")
 		assert.Equal(t, "next\n", b.Flush())
 	})
+
 	t.Run("fresh_buffer_is_empty", func(t *testing.T) {
 		var b lineBuffer
 		assert.Empty(t, b.Pending())

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -55,6 +56,7 @@ func NewStager(reg *tools.Registry, sink agent.Sink) *Stager {
 func (s *Stager) SetOnChange(fn func(est int)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.onChange = fn
 }
 
@@ -170,6 +172,7 @@ func (s *Stager) Discard() {
 func (s *Stager) Pending() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return slices.ContainsFunc(s.runs, func(r *stageRun) bool { return !isDone(r.done) })
 }
 
@@ -179,6 +182,7 @@ func (s *Stager) Pending() bool {
 func (s *Stager) Cancel() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	for _, r := range s.runs {
 		if !isDone(r.done) {
 			r.cancel()

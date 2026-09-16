@@ -113,8 +113,6 @@ func TestConnectHTTPListsTools(t *testing.T) {
 	assert.Len(t, defs, 3)
 }
 
-// TestLegacyServerCompat verifies a server refusing protocol 2026-07-28 falls
-// back to the classic initialize handshake with an unstamped wire contract.
 func TestLegacyServerCompat(t *testing.T) {
 	t.Parallel()
 
@@ -142,8 +140,6 @@ func TestLegacyServerCompat(t *testing.T) {
 	require.NoError(t, c.Ping(t.Context()))
 }
 
-// TestHTTPAgainstHTTPServer exercises the Streamable HTTP transport against an
-// httptest-backed server via our own in-process server handler.
 func TestHTTPAgainstHTTPServer(t *testing.T) {
 	t.Parallel()
 
@@ -191,7 +187,7 @@ func TestRequestRawSeam(t *testing.T) {
 func TestClientDiscovers(t *testing.T) {
 	t.Parallel()
 
-	// resources/list is fetched through the raw seam and mapped onto our own shape.
+	// resources/list is fetched through the raw seam and mapped onto our own shape
 	t.Run("resources", func(t *testing.T) {
 		c, err := Connect(t.Context(), "fake", stdioConfig(t))
 		require.NoError(t, err)
@@ -217,7 +213,6 @@ func TestClientDiscovers(t *testing.T) {
 	})
 }
 
-// TestNotificationHandlerDoesNotDeadlock verifies OnNotification dispatches handlers off mcp-go's reader goroutine so a handler that does blocking I/O (like re-discovering after tools/list_changed) cannot stall the stdio transport.
 func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {
 	t.Parallel()
 
@@ -226,7 +221,7 @@ func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {
 	t.Cleanup(func() { _ = c.Close() })
 
 	var rediscovered atomic.Bool
-	// mimic the manager: handle list_changed by synchronously re-listing tools.
+	// mimic the manager: handle list_changed by synchronously re-listing tools
 	c.OnNotification(func(n mcp.JSONRPCNotification) {
 		if n.Method != "notifications/tools/list_changed" {
 			return
@@ -237,7 +232,7 @@ func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {
 		}
 	})
 
-	// trigger_listchanged makes the server respond AND emit list_changed in one burst.
+	// trigger_listchanged makes the server respond AND emit list_changed in one burst
 	res, err := c.Call(t.Context(), "trigger_listchanged", json.RawMessage(`{}`), nil)
 	require.NoError(t, err)
 	require.False(t, res.IsError)

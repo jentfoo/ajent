@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // testEnv is a fixed environment so system prompt tests are deterministic.
@@ -36,14 +37,12 @@ func newTestAgent(state *State, p llm.Provider, sink Sink) *Agent {
 
 // textEvents frames a reply the way providers do: start, deltas, end.
 func textEvents(parts ...string) []llm.Event {
+	var b strings.Builder
 	out := make([]llm.Event, 1, len(parts)+2)
 	out[0] = llm.Event{Type: llm.EventTextStart, Index: 0}
 	for _, p := range parts {
-		out = append(out, llm.Event{Type: llm.EventTextDelta, Index: 0, Text: p})
-	}
-	var b strings.Builder
-	for _, p := range parts {
 		b.WriteString(p)
+		out = append(out, llm.Event{Type: llm.EventTextDelta, Index: 0, Text: p})
 	}
 	out = append(out, llm.Event{Type: llm.EventTextEnd, Index: 0, Block: llm.TextBlock{Text: b.String()}})
 	return out
@@ -82,9 +81,8 @@ func twoToolCalls(aID, aName, bID, bName string) []llm.Event {
 	}
 }
 
-// stubTool is a Tool that records executions and returns canned results. A non-
-// nil block channel holds Execute open until it is closed, so tests can pin the
-// turn in flight.
+// stubTool is a Tool that records executions and returns canned results. A non-nil block channel
+// holds Execute open until it is closed, so tests can pin the turn in flight.
 type stubTool struct {
 	name     string
 	result   string
@@ -114,6 +112,7 @@ func (t *stubTool) Label(ToolCall) string {
 func (t *stubTool) Description() string { return "test tool" }
 
 func (t *stubTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: t.name} }
+
 func (t *stubTool) Mode() ExecutionMode {
 	if t.parallel {
 		return ModeParallel
@@ -147,6 +146,7 @@ type mapSet struct {
 }
 
 func (s *mapSet) Get(name string) (Tool, bool) { t, ok := s.tools[name]; return t, ok }
+
 func (s *mapSet) Schemas() []llm.ToolSchema {
 	out := make([]llm.ToolSchema, 0, len(s.tools))
 	for _, t := range s.tools {
@@ -396,7 +396,7 @@ func TestLoopMaxSteps(t *testing.T) {
 		assert.Equal(t, 2, catch.result.Steps)
 	})
 
-	// a zero MaxSteps (the default) never trips: the loop runs as many steps as the model keeps calling tools.
+	// a zero MaxSteps (the default) never trips: the loop runs as many steps as the model keeps calling tools
 	t.Run("unlimited_by_default", func(t *testing.T) {
 		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash"}}}
 		turns := make([]llm.ScriptedTurn, 0, 6)
@@ -511,13 +511,14 @@ func TestLoopFollowUpRunsAfterTurn(t *testing.T) {
 	close(block) // let turn one finish; the loop then drains the follow-up
 
 	require.NoError(t, <-errCh)
-	// turn one: the tool-call assistant message and its closing reply; turn two:
-	// the follow-up's own reply
+	// turn one: the tool-call assistant message and its closing reply
+	// turn two: the follow-up's own reply
 	var replies []string
 	for _, m := range a.state.Messages {
 		if m.Role != llm.RoleAssistant {
 			continue
 		}
+
 		for _, b := range m.Content {
 			if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
 				replies = append(replies, tb.Text)
@@ -552,7 +553,7 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 	close(block) // release the tool; the next step boundary drains the steers
 
 	require.NoError(t, <-errCh)
-	foundSteer := false
+	var foundSteer bool
 	for _, m := range a.state.Messages {
 		if m.Role == llm.RoleUser && len(m.Content) > 0 {
 			if tb, ok := m.Content[0].(llm.TextBlock); ok && strings.Contains(tb.Text, "steered!") {
@@ -617,7 +618,7 @@ func TestLoopAwaitInput(t *testing.T) {
 		case <-time.After(defaultTimeout):
 			t.Fatal("AwaitInput never engaged at the boundary")
 		}
-		assert.Len(t, p.Requests(), 1, "no request may leave while AwaitInput holds the boundary")
+		assert.Len(t, p.Requests(), 1)
 
 		close(release)
 		require.NoError(t, <-errCh)
@@ -646,7 +647,7 @@ func TestLoopAwaitInput(t *testing.T) {
 		case <-time.After(defaultTimeout):
 			t.Fatal("Prompt did not return after the interrupt")
 		}
-		assert.Len(t, p.Requests(), 1, "cancelling during AwaitInput must send no further request")
+		assert.Len(t, p.Requests(), 1)
 	})
 }
 
@@ -690,7 +691,7 @@ func TestInterruptDuringCompaction(t *testing.T) {
 				default:
 					return false
 				}
-			}, defaultTimeout, pollInterval, "compaction must start before the interrupt")
+			}, defaultTimeout, pollInterval)
 
 			a.Interrupt()
 
@@ -726,6 +727,7 @@ func TestBuildRequest(t *testing.T) {
 		assert.Equal(t, llm.LevelHigh, req.Reasoning.Level) // max clamps down to high
 		assert.Positive(t, req.MaxTokens)
 	})
+
 	t.Run("max_tokens_respects_the_window", func(t *testing.T) {
 		st2 := &State{
 			Model:     m,
@@ -735,6 +737,7 @@ func TestBuildRequest(t *testing.T) {
 		req := a2.buildRequest()
 		assert.LessOrEqual(t, req.MaxTokens, 200000) // never exceeds the window
 	})
+
 	t.Run("nil_ledger_full_cap", func(t *testing.T) {
 		st3 := &State{
 			Model:     m,
@@ -745,6 +748,7 @@ func TestBuildRequest(t *testing.T) {
 		req := a3.buildRequest()
 		assert.Equal(t, llm.MaxOutputFor(m, 0), req.MaxTokens) // no used tokens -> full window cap
 	})
+
 	t.Run("requests_prompt_caching", func(t *testing.T) {
 		req := a.buildRequest()
 		assert.True(t, req.Cache.Enabled) // providers gate on caps and ignore it when unsupported

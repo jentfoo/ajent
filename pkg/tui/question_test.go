@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 func TestUIAsk(t *testing.T) {
@@ -34,6 +35,7 @@ func TestUIAsk(t *testing.T) {
 		assert.False(t, a.Declined)
 		assert.Equal(t, "feature/x", a.Text)
 	})
+
 	t.Run("offered_options_selects", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -56,6 +58,7 @@ func TestUIAsk(t *testing.T) {
 		assert.False(t, a.Declined)
 		assert.Equal(t, 1, a.Index)
 	})
+
 	t.Run("number_key_selects_directly", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -74,6 +77,7 @@ func TestUIAsk(t *testing.T) {
 		a := <-result
 		assert.Equal(t, 1, a.Index)
 	})
+
 	t.Run("multi_line_prompt_renders", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -83,6 +87,7 @@ func TestUIAsk(t *testing.T) {
 		waitFor(t, u, v, "Line two")
 		press(t, pw, "\r")
 	})
+
 	t.Run("long_prompt_elides_within_cap", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -99,6 +104,7 @@ func TestUIAsk(t *testing.T) {
 		}, time.Second, testPoll)
 		press(t, pw, "\r")
 	})
+
 	t.Run("escape_declines_with_no_error", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -117,6 +123,7 @@ func TestUIAsk(t *testing.T) {
 		a := <-result
 		assert.True(t, a.Declined)
 	})
+
 	t.Run("chat_row_takes_a_typed_reply", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -140,6 +147,7 @@ func TestUIAsk(t *testing.T) {
 		assert.False(t, a.Declined)
 		assert.Equal(t, "neither, split it in two", a.Text)
 	})
+
 	t.Run("chat_escape_returns_to_options", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -164,6 +172,7 @@ func TestUIAsk(t *testing.T) {
 		assert.False(t, a.Declined)
 		assert.Equal(t, 1, a.Index)
 	})
+
 	t.Run("commits_one_summary_line", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -179,6 +188,7 @@ func TestUIAsk(t *testing.T) {
 		// the live block reverted to the input prompt
 		waitFor(t, u, v, userMarker)
 	})
+
 	t.Run("queues_behind_a_select", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -200,6 +210,7 @@ func TestUIAsk(t *testing.T) {
 		press(t, pw, "yes\r")
 		assert.Equal(t, "yes", (<-result).Text)
 	})
+
 	t.Run("free_text_arrow_keys_edit", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -226,6 +237,7 @@ func TestUIAsk(t *testing.T) {
 		assert.False(t, a.Declined)
 		assert.Equal(t, "!abcdXYef", a.Text)
 	})
+
 	t.Run("free_text_backspace_mid_buffer", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
@@ -250,9 +262,10 @@ func TestUIAsk(t *testing.T) {
 
 func TestQuestionStateRows(t *testing.T) {
 	t.Parallel()
+
 	th := NewTheme(ColorNone, DefaultPalette())
 
-	// widest returns the widest rendered row.
+	// widest returns the widest rendered row
 	widest := func(rows []string) int {
 		var w int
 		for _, r := range rows {
@@ -270,6 +283,7 @@ func TestQuestionStateRows(t *testing.T) {
 		assert.LessOrEqual(t, widest(rows), 20)
 		assert.Contains(t, strings.Join(rows, " "), "providers")
 	})
+
 	t.Run("options_wrap_under_the_label", func(t *testing.T) {
 		s := &questionState{
 			text:      "Which?",
@@ -286,6 +300,7 @@ func TestQuestionStateRows(t *testing.T) {
 		// the continuation of the first option is indented under its label
 		assert.Contains(t, joined, "\n"+selectIndent)
 	})
+
 	t.Run("wrapped_options_stay_within_budget", func(t *testing.T) {
 		var opts []Option
 		for i := 0; i < 6; i++ {
@@ -299,6 +314,7 @@ func TestQuestionStateRows(t *testing.T) {
 		assert.Contains(t, strings.Join(rows, "\n"), "more") // the hidden options are named
 		assert.Contains(t, strings.Join(rows, "\n"), "label 5")
 	})
+
 	t.Run("typed_reply_wraps", func(t *testing.T) {
 		s := &questionState{
 			text:      "Which?",
@@ -316,6 +332,7 @@ func TestQuestionStateRows(t *testing.T) {
 		assert.Equal(t, displayWidth(rows[len(rows)-1]), col)
 		assert.NotContains(t, strings.Join(rows, "\n"), "A") // the option list gave way to the reply
 	})
+
 	t.Run("holds_the_cap_at_every_height", func(t *testing.T) {
 		list := &questionState{text: strings.Repeat("question line\n", 20), options: optionsOf(8)}
 		reply := &questionState{text: strings.Repeat("question line\n", 20), chatIndex: -1}
@@ -337,7 +354,7 @@ func TestQuestionStateRows(t *testing.T) {
 func TestQuestionStateArrowKeys(t *testing.T) {
 	t.Parallel()
 
-	// key presses a single decoded key into s, failing the test on error.
+	// key presses a single decoded key into s, failing the test on error
 	press := func(s *questionState, k key) {
 		t.Helper()
 		_, err := s.key(k)
@@ -349,7 +366,7 @@ func TestQuestionStateArrowKeys(t *testing.T) {
 		s.answer.SetValue("abcdefghij")
 		s.answer.pos = len(s.answer.cells) // caret at the very end
 
-		// Up climbs from the second row to the first, keeping roughly the same column.
+		// Up climbs from the second row to the first, keeping roughly the same column
 		press(s, key{typ: keyUp})
 		assert.Less(t, s.answer.pos, 6)
 
@@ -404,6 +421,7 @@ func TestUIPlainAsk(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "feature/x", a.Text)
 	})
+
 	t.Run("number_selects_an_option", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("2\n"))
 
@@ -414,6 +432,7 @@ func TestUIPlainAsk(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, a.Index)
 	})
+
 	t.Run("non_numeric_line_is_a_chat_reply", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("neither, split it in two\n"))
 
@@ -425,6 +444,7 @@ func TestUIPlainAsk(t *testing.T) {
 		assert.True(t, a.Chat)
 		assert.Equal(t, "neither, split it in two", a.Text)
 	})
+
 	t.Run("out_of_range_number_cancels", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("9\n"))
 

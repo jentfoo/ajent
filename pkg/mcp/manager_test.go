@@ -150,7 +150,6 @@ func sourceOf(name string) string {
 func TestLoadOnFirstMessage(t *testing.T) {
 	t.Parallel()
 
-	// build once at the test level; every case reuses the same binary
 	srv := buildFakeServer(t)
 
 	// a first-message load connects every server and registers all of its tools as enabled
@@ -202,7 +201,6 @@ func TestLoadOnFirstMessage(t *testing.T) {
 func TestConfigDisabledServer(t *testing.T) {
 	t.Parallel()
 
-	// built at the test level; reused by the live-connection case below
 	srv := buildFakeServer(t)
 
 	// a config-disabled server still connects so its tools appear in /tools, but
@@ -476,8 +474,13 @@ var jsonRawObject = []byte(`{"type":"object","properties":{}}`)
 func TestReload(t *testing.T) {
 	// reload reads mcp.json, so each case owns a workspace and AJENT_HOME; no t.Parallel
 
+	cmd := buildFakeServer(t)
+	cfgJSON := func(extra string) string {
+		return `{"servers":{"fake":{"command":` + strconv.Quote(cmd) + extra + `}}}`
+	}
 	setup := func(t *testing.T, initial string) (*Manager, *fakeRegistrar, string) {
 		t.Helper()
+
 		t.Setenv("AJENT_HOME", mkHome(t))
 		ws := t.TempDir()
 		mkFile(t, ws+"/.ajent/mcp.json", initial)
@@ -489,10 +492,6 @@ func TestReload(t *testing.T) {
 		t.Cleanup(mgr.Close)
 		mgr.LoadOnFirstMessage(t.Context())
 		return mgr, fr, ws
-	}
-	cmd := buildFakeServer(t)
-	cfgJSON := func(extra string) string {
-		return `{"servers":{"fake":{"command":` + strconv.Quote(cmd) + extra + `}}}`
 	}
 
 	t.Run("filter_change_reregisters", func(t *testing.T) {
@@ -611,7 +610,6 @@ func TestReconnectAfterDeath(t *testing.T) {
 func TestManagerClose(t *testing.T) {
 	t.Parallel()
 
-	// built once at the test level; reused by both cases below
 	srv := buildFakeServer(t)
 
 	// a connected server closes well inside the bound, leaving nothing registered

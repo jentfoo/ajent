@@ -14,9 +14,8 @@ const (
 	barEmpty       = "░"
 )
 
-// Segment is a keyed status line item, rendered after the model in insertion
-// order and shortened, then dropped, lowest priority first once even two rows
-// overflow.
+// Segment is a keyed status line item, rendered after the model in insertion order
+// and shortened, then dropped, lowest priority first once even two rows overflow.
 type Segment struct {
 	Key      string
 	Text     string
@@ -87,9 +86,8 @@ func (s Status) rows(t Theme, width int) []string {
 	}
 }
 
-// fixedParts returns the always-present pieces: spinner, context bar and token
-// totals. The model is not among them; it collapses first when its row would
-// overflow (see rows).
+// fixedParts returns the always-present pieces: spinner, context bar and token totals.
+// The model is not among them; it collapses first when its row would overflow (see rows).
 func (s Status) fixedParts(t Theme) []string {
 	var parts []string
 	if s.Spinner != "" {
@@ -112,7 +110,7 @@ func (s Status) fixedParts(t Theme) []string {
 			pct = 100
 		}
 		bar := usageStyle(t, pct).Wrap(usageBar(pct))
-		tilde := ""
+		var tilde string
 		if s.Estimated {
 			tilde = "~" // the count is approximate until the next provider report
 		}
@@ -268,5 +266,3 @@ func usageBar(pct int) string {
 	}
 	return strings.Repeat(barFull, filled) + strings.Repeat(barEmpty, statusBarCells-filled)
 }
-
-// Segment is a keyed status line item

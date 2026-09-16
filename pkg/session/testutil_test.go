@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // ids returns each entry's id in order.
@@ -60,8 +61,7 @@ func loadBranch(t *testing.T, name string) []Entry {
 	return Branch(entries, Head(entries))
 }
 
-// blockKind names a block's type from outside pkg/llm, where blockType is
-// unexported.
+// blockKind names a block's type from outside pkg/llm, where blockType is unexported.
 func blockKind(b llm.Block) string {
 	switch b.(type) {
 	case llm.TextBlock:

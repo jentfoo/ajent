@@ -39,6 +39,7 @@ func TestMatchScore(t *testing.T) {
 		require.True(t, ok)
 		assert.Greater(t, tight, loose)
 	})
+
 	t.Run("word_boundary_beats_mid_word", func(t *testing.T) {
 		boundary, ok := matchScore("lmstudio/qwen", "qwen")
 		require.True(t, ok)
@@ -46,6 +47,7 @@ func TestMatchScore(t *testing.T) {
 		require.True(t, ok)
 		assert.Greater(t, boundary, mid)
 	})
+
 	t.Run("earlier_match_beats_later", func(t *testing.T) {
 		early, ok := matchScore("opus-model", "opus")
 		require.True(t, ok)
@@ -88,6 +90,7 @@ func TestVerbatimScore(t *testing.T) {
 		require.True(t, ok)
 		assert.Greater(t, boundary, mid)
 	})
+
 	t.Run("earlier_match_beats_later", func(t *testing.T) {
 		early, ok := verbatimScore("opus-model", "opus")
 		require.True(t, ok)
@@ -95,6 +98,7 @@ func TestVerbatimScore(t *testing.T) {
 		require.True(t, ok)
 		assert.Greater(t, early, late)
 	})
+
 	t.Run("best_of_repeated_hits", func(t *testing.T) {
 		// the mid-word hit comes first; the boundary hit later still wins
 		best, ok := verbatimScore("xopus/opus", "opus")

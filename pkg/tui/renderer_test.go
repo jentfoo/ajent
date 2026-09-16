@@ -68,6 +68,7 @@ func TestSplitHistLines(t *testing.T) {
 		lines := []histLine{{text: "a"}, {rule: true}, {text: "b", flow: flowWrap}}
 		assert.Equal(t, lines, splitHistLines(lines))
 	})
+
 	t.Run("splits_embedded_newlines", func(t *testing.T) {
 		lines := []histLine{{text: "one\ntwo", flow: flowWrap}, {text: "three"}}
 		assert.Equal(t, []histLine{
@@ -76,6 +77,7 @@ func TestSplitHistLines(t *testing.T) {
 			{text: "three"},
 		}, splitHistLines(lines))
 	})
+
 	t.Run("keeps_structured_lines", func(t *testing.T) {
 		table := histLine{table: &mdTable{}}
 		lines := []histLine{{text: "x\ny"}, table, {rule: true}}

@@ -128,8 +128,7 @@ func (r *SSEReader) Next(ctx context.Context) (Frame, error) {
 	}
 }
 
-// fail latches err so every later Next reports it rather than resyncing on
-// whatever follows.
+// fail latches err so every later Next reports it rather than resyncing on whatever follows.
 func (r *SSEReader) fail(err error) error {
 	if r.err == nil {
 		r.err = err

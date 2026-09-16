@@ -15,6 +15,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 		a := newTestAgent(nil, &llm.ScriptedProvider{}, nil)
 		assert.Positive(t, a.BaseEstimate(false))
 	})
+
 	t.Run("with_tools", func(t *testing.T) {
 		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
 		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)
@@ -26,6 +27,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 		a.opts.Tools = set
 		assert.Greater(t, a.BaseEstimate(true), sysOnly)
 	})
+
 	t.Run("zero_while_running", func(t *testing.T) {
 		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
 		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)
@@ -34,6 +36,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 		a.mu.Unlock()
 		assert.Zero(t, a.BaseEstimate(false))
 	})
+
 	t.Run("includes_project_instructions", func(t *testing.T) {
 		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
 		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)

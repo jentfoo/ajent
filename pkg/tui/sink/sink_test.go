@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tui"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // headlessUI wraps a plain-mode UI plus the pipe reader that drains its output,
@@ -63,7 +64,7 @@ func (h *headlessUI) rendered() string {
 func TestToolStartDisplay(t *testing.T) {
 	t.Parallel()
 
-	// the resolved label drives the header.
+	// the resolved label drives the header
 	t.Run("uses_label_in_header", func(t *testing.T) {
 		h := newHeadless(t)
 		_ = h.s.ToolStart(agent.ToolCall{Name: "bash"}, "bash: go test ./...")
@@ -71,7 +72,7 @@ func TestToolStartDisplay(t *testing.T) {
 			2*time.Second, time.Millisecond)
 	})
 
-	// a successful completion commits its Display string to history.
+	// a successful completion commits its Display string to history
 	t.Run("completion_commits_display_on_success", func(t *testing.T) {
 		h := newHeadless(t)
 		done := h.s.ToolStart(agent.ToolCall{Name: "edit"}, "")
@@ -81,7 +82,7 @@ func TestToolStartDisplay(t *testing.T) {
 			2*time.Second, time.Millisecond)
 	})
 
-	// an errored completion surfaces its message.
+	// an errored completion surfaces its message
 	t.Run("completion_error_shows_message", func(t *testing.T) {
 		h := newHeadless(t)
 		done := h.s.ToolStart(agent.ToolCall{Name: "bash"}, "")
@@ -94,7 +95,7 @@ func TestToolStartDisplay(t *testing.T) {
 			2*time.Second, time.Millisecond)
 	})
 
-	// a completion with no Display commits nothing extra.
+	// a completion with no Display commits nothing extra
 	t.Run("completion_no_display_commits_nothing_extra", func(t *testing.T) {
 		h := newHeadless(t)
 		done := h.s.ToolStart(agent.ToolCall{Name: "read"}, "")
@@ -111,7 +112,7 @@ func TestToolStartDisplay(t *testing.T) {
 func TestTurnEndFlushesThinking(t *testing.T) {
 	t.Parallel()
 
-	// an interrupt mid-thinking never delivers EventThinkingEnd; TurnEnd must flush.
+	// an interrupt mid-thinking never delivers EventThinkingEnd; TurnEnd must flush
 	t.Run("flushes_unterminated_partial", func(t *testing.T) {
 		h := newHeadless(t)
 		h.s.Thinking("unterminated partial")
@@ -121,13 +122,13 @@ func TestTurnEndFlushesThinking(t *testing.T) {
 			2*time.Second, time.Millisecond)
 	})
 
-	// a clean turn already flushed via EndThinking: TurnEnd must not duplicate it.
+	// a clean turn already flushed via EndThinking: TurnEnd must not duplicate it
 	t.Run("clean_end_thinking_is_not_duplicated", func(t *testing.T) {
 		h := newHeadless(t)
 		h.s.Thinking("reasoning line")
 		h.s.EndThinking()
 
-		// sync on the async drain so `before` captures everything EndThinking wrote.
+		// sync on the async drain so `before` captures everything EndThinking wrote
 		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "reasoning line\n") },
 			2*time.Second, time.Millisecond)
 		before := h.rendered()

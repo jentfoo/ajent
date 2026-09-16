@@ -134,9 +134,8 @@ var controlKeys = map[byte]keyType{
 // sequence and more input is needed.
 func decodeKey(b []byte) (key, int, bool) { return decodeKeyFrom(b, 0) }
 
-// decodeKeyFrom is decodeKey plus a hint: pasteFrom bytes at the start of an
-// in-progress paste body are already known to hold no terminator. Still pure:
-// the offset is just another input.
+// decodeKeyFrom is decodeKey plus a hint: pasteFrom bytes at the start of an in-progress paste
+// body are already known to hold no terminator. Still pure: the offset is just another input.
 func decodeKeyFrom(b []byte, pasteFrom int) (k key, n int, ok bool) {
 	if len(b) == 0 {
 		return key{}, 0, false
@@ -365,8 +364,7 @@ func arrowKey(final byte, params string) keyType {
 }
 
 // inputReader decodes keys from a terminal in raw mode. Cursor position and
-// status reports are delivered separately so a query cannot swallow a
-// keystroke.
+// status reports are delivered separately so a query cannot swallow a keystroke.
 type inputReader struct {
 	src     io.Reader
 	keys    chan key
@@ -517,10 +515,9 @@ func (r *inputReader) emit(k key) {
 	}
 }
 
-// sendLatest leaves ch holding the newest value, dropping an older one to make
-// room: a cursor report is a position, and only the last one is true. Bounded
-// (one drain, one retry) so the reader never spins. Single writer only; a
-// second would need its own lock.
+// sendLatest leaves ch holding the newest value, dropping an older one to make room: a cursor
+// report is a position, and only the last one is true. Bounded (one drain, one retry) so the
+// reader never spins. Single writer only; a second would need its own lock.
 func sendLatest(ch chan int, v int) {
 	select {
 	case ch <- v:

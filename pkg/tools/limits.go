@@ -128,9 +128,8 @@ func applyLimit(dst *Limit, src Limit) {
 	}
 }
 
-// MeasureCeiling is the byte size above which Measure reports only the byte
-// count and never reads the file to count lines, so annotating a giant file is
-// itself bounded.
+// MeasureCeiling is the byte size above which Measure reports only the byte count and
+// never reads the file to count lines, so annotating a giant file is itself bounded.
 const MeasureCeiling int64 = 512 << 10
 
 // MaxLineRunes caps a single line before it is emitted. Counted in runes so an
@@ -189,7 +188,7 @@ func Bound(s string, l Limit) Bounded {
 // paging when the tool offers its own way to continue.
 func truncationNote(b Bounded, spillPath, paging string) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "... truncated: %d/%d lines shown (%d bytes total)", b.Shown, b.Lines, b.Bytes)
+	_, _ = fmt.Fprintf(&sb, "... truncated: %d/%d lines shown (%d bytes total)", b.Shown, b.Lines, b.Bytes)
 	if spillPath != "" {
 		sb.WriteString("; full output in @" + spillPath)
 	}
