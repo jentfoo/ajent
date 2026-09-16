@@ -174,7 +174,7 @@ func Bound(s string, l Limit) Bounded {
 
 	b.Truncated = true
 	if len(kept) == 0 { // no complete line fit; cut the first alone on the rune
-		// budget alone — a byte-bound cut of one overlong line (a minified file)
+		// budget alone. A byte-bound cut of one overlong line (a minified file)
 		// would leave the model a useless sliver, so MaxLineRunes is a floor here
 		kept = []string{capLine(strutil.FirstLine(s))}
 	}
@@ -239,7 +239,7 @@ func capText(s string) string {
 // the head (which usually carries errors) and the tail result. Text within the
 // bound is returned whole and uncapped; only retained lines of a truncated
 // result are capped at MaxLineRunes, so one minified line cannot eat the budget.
-// Head+tail survival is for compaction's structural reduction only — tool
+// Head+tail survival is for compaction's structural reduction only, while tool
 // output uses Bound.
 func Elide(s string, l Limit) (string, bool) {
 	if !overBudget(s, l) {

@@ -136,7 +136,7 @@ func buildGuidelines(names []string) string {
 
 // buildEnvironmentFacts appends the working directory, platform and date.
 // Empty values are omitted rather than emitted as "unknown"; shell, git status
-// and a directory listing are deliberately absent — the listing would vary
+// and a directory listing are deliberately absent, since the listing would vary
 // whenever the workspace changes, and the model discovers files with its tools.
 func buildEnvironmentFacts(b *strings.Builder, env Environment) {
 	cwd := env.Cwd

@@ -5,8 +5,8 @@ import (
 	"strings"
 )
 
-// Survey prompts, from docs/prompt-design.md. Stage 2's tasks go to read-only
-// sub-agents; stage 3's instruction is what turns their summaries into the file.
+// Survey prompts, from docs/prompt-design.md. The survey tasks go to read-only
+// sub-agents, and the distillation instruction turns their summaries into the file.
 const (
 	// summaryTail closes every sub-agent task: the parent pastes prose, not dumps.
 	summaryTail = `
@@ -28,7 +28,7 @@ Report what each package or module does, the dependency edges between them, the 
 )
 
 // The distillation instruction. Both variants share a header naming the survey as
-// data and a closing rule set; only the middle — draft versus correct — differs.
+// data and a closing rule set, while only the middle (draft versus correct) differs.
 const (
 	distillHeader = `The messages above are a survey of this repository: the files read directly, plus one summary per read-only sub-agent that investigated the build and the code.
 

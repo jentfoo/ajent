@@ -101,8 +101,8 @@ func TestContextMessages(t *testing.T) {
 	})
 
 	t.Run("drops_assistant_emptied_by_strip_thinking", func(t *testing.T) {
-		// an assistant message holding only thinking becomes empty when stage 3 strips it;
-		// providers reject zero-content assistant messages, so the entry is dropped.
+		// an assistant message holding only thinking becomes empty when strip-thinking
+		// runs. Providers reject zero-content assistant messages, so the entry is dropped.
 		assist := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
 			llm.ThinkingBlock{Text: "only hidden reasoning"},
 		}}
@@ -122,7 +122,7 @@ func TestContextMessages(t *testing.T) {
 
 		msgs, warns := ContextMessages(branch, CompactionData{}, nil)
 		assert.Empty(t, warns)
-		require.Len(t, msgs, 1) // left as recorded when no stage-3 strip ran
+		require.Len(t, msgs, 1) // left as recorded when no strip-thinking ran
 	})
 
 	t.Run("summary_only_compaction", func(t *testing.T) {

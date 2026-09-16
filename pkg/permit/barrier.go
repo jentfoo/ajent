@@ -220,7 +220,7 @@ func (b *Barrier) Guard() tools.Guard {
 
 // Prefetch starts classification for every call in a batch that will actually
 // reach the model classifier, warming the verdict cache so each dialog resolves
-// as soon as its verdict lands — a lone eligible call included, since serial
+// as soon as its verdict lands, including a lone eligible call, since serial
 // predecessors may run for a while before its dialog opens. It filters exactly
 // as the asker does: only auto-mode bash and non-write extension calls whose
 // static verdict is Ask and which are not already session-allowed go to the

@@ -105,7 +105,7 @@ func (s writeScope) rebase(cwd string) (writeScope, bool) {
 // the gate never saw: $ and ` substitute, and {} split one token into several words.
 const shellExpansion = "$`{}"
 
-// vcsDirs hold repository metadata that executes or rewrites history — a hook, a
+// vcsDirs hold repository metadata that executes or rewrites history (a hook, a
 // config alias, core.hooksPath. They sit under the roots but are never unattended.
 var vcsDirs = bulk.SliceToSet([]string{".git", ".hg", ".svn"})
 
@@ -203,8 +203,9 @@ func (s writeScope) inScopeFrom(bases []string, p string) bool {
 	return true
 }
 
-// topComponent returns the shallowest component of p — the highest directory an ancestor-removing
-// flag can reach. Containment is closed downward, so checking it covers every deeper ancestor.
+// topComponent returns the shallowest component of p, which is the highest
+// directory an ancestor-removing flag can reach. Containment is closed downward,
+// so checking it covers every deeper ancestor.
 func topComponent(p string) string {
 	sep := string(filepath.Separator)
 	abs := strings.HasPrefix(p, sep)
@@ -251,7 +252,7 @@ func (s writeScope) segmentWritesInScope(bases []string, seg, raw string) bool {
 }
 
 // parseFlags splits a command's arguments into operands, reporting whether any
-// flag makes it act on ancestors. ok is false on an unrecognised flag — one
+// flag makes it act on ancestors. ok is false on an unrecognised flag, since one
 // that consumes a value is indistinguishable from an operand.
 func (c workspaceWriteCommand) parseFlags(args []string) (operands []string, ancestors, ok bool) {
 	for i := 0; i < len(args); i++ {

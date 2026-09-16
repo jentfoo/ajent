@@ -30,8 +30,8 @@ const (
 
 // childSink publishes one activity row per running job: the current tool call or
 // a "thinking..." line, elided to a single line. The row lives as long as the job
-// does — Manager.spawn clears it on every terminal path — so a child that runs a
-// second turn never blinks out of the list. Nothing it emits ever reaches
+// does. Manager.spawn clears the row on every terminal path, so a child that runs
+// a second turn never blinks out of the list. Nothing it emits ever reaches
 // committed history; it feeds Options.Activity only.
 type childSink struct {
 	agent.NopSink

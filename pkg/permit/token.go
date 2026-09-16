@@ -128,7 +128,7 @@ var envAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // headOf returns the command name a segment runs after unwrapping launchers, or
 // ("",false) when none can be named reliably. A leading VAR= assignment is never
-// stripped: PATH/LD_PRELOAD/BASH_ENV/ENV — or any var a binary reads — can hijack
+// stripped: PATH/LD_PRELOAD/BASH_ENV/ENV, plus any other var a binary reads, can
 // what the head actually executes, so such a segment has no trustworthy name and
 // must fail closed (never read-only, never matches an existing grant).
 func headOf(seg string) (string, bool) {

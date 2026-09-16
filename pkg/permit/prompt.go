@@ -113,7 +113,7 @@ func namedSessionLabel(names []string) string {
 
 // sessionNames returns the distinct non-readonly command names an "allow for
 // session" would remember for a bash line. (nil,false) when no reliable name list
-// exists — sub-shell/redirect or three or more commands — so only the broad grant applies.
+// exists (a sub-shell/redirect or three or more commands), so only the broad grant applies.
 func sessionNames(command string) ([]string, bool) {
 	s := scanCommand(command)
 	if !s.HasSplitOp && len(s.Segments) <= 1 { // a single simple command

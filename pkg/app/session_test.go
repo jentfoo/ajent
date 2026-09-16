@@ -61,8 +61,8 @@ func readEntriesRewind(t *testing.T, p string) []session.Entry {
 }
 
 // TestRewindStateRebuild drives a transcript, rewinds onto an earlier message,
-// and verifies the rebuilt agent state carries exactly that branch's context —
-// the heart of "double-Esc opens the context tree".
+// and verifies the rebuilt agent state carries exactly that branch's context.
+// This is the heart of "double-Esc opens the context tree".
 func TestRewindStateRebuild(t *testing.T) {
 	t.Parallel()
 
@@ -93,8 +93,8 @@ func TestRewindStateRebuild(t *testing.T) {
 	branch := session.Branch(entries, w.Head())
 	assert.Len(t, branch, 3) // session + user "one" + assistant reply
 
-	// rewind onto the *first user message* (index 1): context is just that prompt,
-	// before its assistant reply — rewinding drops everything after the pick.
+	// rewind onto the *first user message* (index 1). Context is just that
+	// prompt, because rewinding drops everything after the pick.
 	st, _ := r.stateFor(rewindResolve(), entries, branch[1].ID)
 	require.Len(t, st.Messages, 1)
 	assert.Equal(t, llm.RoleUser, st.Messages[0].Role)

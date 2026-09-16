@@ -83,8 +83,7 @@ const anthropicVersion = "2023-06-01"
 
 // applyAuthHeader sets the credential header a flavor expects.
 //
-// It keys on flavor rather than the resolved dialect, which phase 17 corrects.
-// Per-model api made that gap newly reachable: a model declaring
+// It keys on flavor rather than the resolved dialect. A per-model api setting
 // api:"anthropic-messages" under a generic-flavor provider gets
 // Authorization: Bearer instead of x-api-key, and no anthropic-version header.
 func applyAuthHeader(headers map[string]string, flavor Flavor, key string) {

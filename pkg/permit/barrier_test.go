@@ -1092,8 +1092,8 @@ func (c *concurrentClassifier) count() int {
 }
 
 // blockingClassifier records how many classifications have started and finished,
-// holding each in-flight one open until its context is cancelled — the shape a
-// real model call takes when the turn aborts.
+// holding each in-flight one open until its context is cancelled, which is the
+// shape a real model call takes when the turn aborts.
 type countingBlockingClassifier struct {
 	mu       sync.Mutex
 	started  int

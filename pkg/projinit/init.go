@@ -127,7 +127,7 @@ func startError(failed []string) error {
 	return fmt.Errorf("%w: %s", ErrNoneStarted, strings.Join(failed, "; "))
 }
 
-// readDocs runs stage 1: a real read per README and any existing AGENTS.md,
+// readDocs does one real read per README and any existing AGENTS.md,
 // reporting whether that file was found.
 func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]llm.Message, bool) {
 	paths, existing := docFiles(r.opts.Cwd)
@@ -141,7 +141,8 @@ func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]ll
 	return out, existing
 }
 
-// startAll runs stage 2's spawns, returning their pairs, the ids to poll and a reason per spawn that was refused.
+// startAll runs the survey spawns, returning their pairs, the ids to poll and
+// a reason per spawn that was refused.
 func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []string, run int64) (msgs []llm.Message, ids, failed []string) {
 	for i, task := range tasks {
 		if ctx.Err() != nil {

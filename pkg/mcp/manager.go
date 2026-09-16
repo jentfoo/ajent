@@ -232,7 +232,7 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 	c, err := m.connectClient(ctx, name, s.config())
 	if err != nil {
 		// an unreachable server is expected (offline or not yet started); keep the
-		// reason out of notices — visible in /mcp logs and the status ratio only.
+		// reason out of notices, so it appears only in /mcp logs and the status ratio.
 		s.diag("connect failed: " + err.Error())
 		m.updateStatus() // this server contributes nothing to the ratio until it connects
 		return err

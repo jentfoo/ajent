@@ -8,8 +8,8 @@ import (
 
 // InjectPair runs tool as a synthetic call through sink and returns the call and
 // result messages to place ahead of a user message, plus the raw result. Use it
-// for host-initiated tool work that must read like the model's own — an injected
-// @ reference, a project survey — so truncation, display and tracking follow the
+// for host-initiated tool work that must read like the model's own (an injected
+// @ reference or a project survey), so truncation, display and tracking follow the
 // one path an agent-run tool takes.
 func InjectPair(ctx context.Context, tool Tool, sink Sink, call ToolCall, label string) ([]llm.Message, ToolResult) {
 	if tool == nil {

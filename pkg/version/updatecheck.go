@@ -66,8 +66,8 @@ func CheckForUpdate(notify func(string)) {
 }
 
 // CheckUpdateNotice returns an update-available notice line or "" when none
-// applies. It refreshes the cached latest tag at most once per 12h — fetching
-// from GitHub otherwise — and only reports when the running build is not dev,
+// applies. It refreshes the cached latest tag at most once every 12h, fetching it
+// from GitHub otherwise, and only reports when the running build is not dev,
 // older than the remote version, and no notice was shown in the last 2h.
 func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOptions) (string, error) {
 	now := time.Now

@@ -25,7 +25,7 @@ type Reduce struct {
 	Stats         Stats    `json:"stats,omitzero"`
 }
 
-// Stats counts what each stage did, for the compaction notice.
+// Stats counts what each reduction pass did, for the compaction notice.
 type Stats struct {
 	Failed     int `json:"failed,omitzero"`
 	Superseded int `json:"superseded,omitzero"`

@@ -21,7 +21,7 @@ type sessRec struct {
 	store *session.Store
 	w     *session.Writer
 	rec   *session.Recorder
-	// onSwitch reports a rebuilt context — rewind, fork or compaction — so read tracking
+	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
 	// and @ reference ids stop describing what it replaced. Nil until main wires it.
 	onSwitch func([]llm.Message)
 	// started is the driver's tool-block-committed flag, shared so a rewind seeds

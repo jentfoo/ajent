@@ -158,8 +158,8 @@ func (s *steerQueue) take() (agent.Input, bool) {
 	return s.join(), true
 }
 
-// stopDrain marks draining off after a Prompt error. Items stay queued as rows;
-// a failing provider must not be hammered — the next submit delivers them.
+// stopDrain marks draining off after a Prompt error. Items stay queued as rows
+// so a failing provider is not hammered, and the next submit delivers them.
 func (s *steerQueue) stopDrain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

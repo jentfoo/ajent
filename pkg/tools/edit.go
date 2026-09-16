@@ -340,7 +340,7 @@ type matchSpan struct {
 
 // rebuild applies spans directly to the original bytes so untouched regions
 // keep their exact line endings, with each replacement adopting the ending of
-// the line it starts on — a mixed-ending file keeps its mix outside the edits.
+// the line it starts on. A mixed-ending file keeps its mix outside the edits.
 func rebuild(orig, buf string, spans []matchSpan) []byte {
 	// one walk records each line's start in both spaces plus its ending;
 	// normalizeToLF only deletes the \r of a CRLF pair, so bytes map one-to-one

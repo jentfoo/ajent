@@ -97,8 +97,8 @@ func verbatimCut(branch []session.Entry, priorCut, minSteps, maxTokens int) int 
 // withLivePrompt extends a band back over the user prompt that opens it, when one
 // sits immediately before. Without it a mid-turn compaction folds the question the
 // user just asked into the summary while keeping the answer to it verbatim. The
-// prompt is added whatever it weighs — it is half of the live exchange — so the
-// ceiling bounds the steps, not the prompt in front of them.
+// prompt is half of the live exchange, so whatever it weighs only affects how
+// many steps fit under the ceiling, not whether the prompt itself does.
 func withLivePrompt(branch []session.Entry, cut, priorCut int) int {
 	for i := cut - 1; i >= priorCut; i-- {
 		if branch[i].Type != session.TypeMessage {

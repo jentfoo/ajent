@@ -50,7 +50,7 @@ func agentLevelOf(warn bool) agent.Level {
 }
 
 // textSink streams the model's prose to stdout as it arrives and reports
-// everything else — notices, tool calls, failures — on stderr, so a redirected
+// everything else (notices, tool calls, failures) on stderr. A redirected
 // stdout holds the answer alone while a terminal still shows progress.
 type textSink struct {
 	agent.NopSink

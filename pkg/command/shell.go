@@ -193,7 +193,7 @@ func (s *Stager) Cancel() {
 // Flush returns one user message per included staged command, staging each
 // completed run's output ahead of the next prompt. Excluded runs never produce a
 // message: finished ones drop outright and still-running ones stay in s.runs so
-// Pending/Cancel keep tracking them — their output goes nowhere, so Flush must not
+// Pending/Cancel keep tracking them. Their output goes nowhere, so Flush must not
 // hold the next prompt hostage waiting for them.
 func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 	s.mu.Lock()

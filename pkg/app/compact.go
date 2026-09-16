@@ -269,7 +269,7 @@ func verbatimTokens(m llm.Model, fraction float64) int {
 }
 
 // reportLine describes a compaction honestly: before/after tokens plus how much
-// history was folded. It names nothing else, because nothing else changed — the
+// history was folded. It names nothing else, because nothing else changed. The
 // summariser reads a reduced transcript, but that reduction never reaches context.
 func reportLine(res *compact.Result) string {
 	var detail string

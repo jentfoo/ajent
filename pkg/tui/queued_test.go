@@ -56,7 +56,8 @@ func TestUIQueued(t *testing.T) {
 		u.SetQueued(labels)
 
 		screen := u.snapshot(v)
-		// all five rows listed; no "more" indicator — a single overflow takes the indicator's line
+		// all five rows are listed with no "more" indicator, since a single overflow
+		// takes the indicator's line.
 		for i := range 5 {
 			assert.Contains(t, screen, userMarker+"row "+strconv.Itoa(i))
 		}

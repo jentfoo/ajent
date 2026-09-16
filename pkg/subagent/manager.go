@@ -462,8 +462,8 @@ func (m *Manager) offer(ids []string) {
 	}
 }
 
-// take filters ids down to those still needing delivery — not claimed by a poll,
-// not already carried by a queued input — and marks them in flight.
+// take filters ids down to those still needing delivery, excluding ones claimed
+// by a poll or already carried by a queued input, then marks them in flight.
 func (m *Manager) take(ids []string) []string {
 	var deliverable []string
 	m.mu.Lock()
@@ -493,7 +493,7 @@ func (m *Manager) take(ids []string) []string {
 }
 
 // noticeInput builds the batched completion steer. Delivered clears exactly the
-// names the message carried — one dropped by an interrupt stays pending — and
+// names the message carried. A name dropped by an interrupt stays pending, and it
 // starts a fresh UI notice batch.
 func (m *Manager) noticeInput(ids []string) agent.Input {
 	return agent.Input{

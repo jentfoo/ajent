@@ -311,7 +311,7 @@ func fitPrompt(entries []session.Entry, prev, instructions string, stubs []sessi
 
 // promptBudget reports how many tokens the summariser user message may occupy:
 // the window less the reply, the system block that rides beside it, and a margin
-// for estimator error. Only the system block is subtracted — the instruction and
+// for estimator error. Only the system block is subtracted, because the instruction
 // any previous summary live inside the message being measured. Zero means the
 // window is unknown and no bound applies.
 func promptBudget(model llm.Model, maxOut int) int {

@@ -183,7 +183,7 @@ type UI struct {
 	// under the lock. The draw path abandons any frame written while sigGen and
 	// drawGen differ: landing it would park by a row count taken on the old
 	// grid, the classic stranding miss. A settle only clears the gate while
-	// sigGen equals holdGen — otherwise a signal that bumped but has not
+	// sigGen equals holdGen. Otherwise a signal that bumped but has not
 	// reached holdForResize would be absorbed into drawGen and a frame could
 	// land mid-reflow with neither gate raised.
 	sigGen  atomic.Uint64
@@ -909,7 +909,7 @@ func (u *UI) repaint() {
 		rows = append(rows, u.noticeText)
 	}
 	// In-progress reasoning streams live above the input, above the reply preview;
-	// it yields by the same room rule — only the tail rows render.
+	// it yields by the same room rule, so only the tail rows render.
 	if tr := u.thinkingPreviewRows(w); len(tr) > 0 {
 		room := h - len(rows) - 1 - len(statusRows) - 1 // divider, status, input
 		if room < len(tr) {

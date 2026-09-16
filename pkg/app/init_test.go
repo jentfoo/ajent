@@ -224,7 +224,7 @@ type initHarness struct {
 	pump chan pumpLine
 
 	// held blocks agent_poll until the test releases it; polling closes once to
-	// announce that a survey really reached stage 2.
+	// announce that a survey really reached its spawn step.
 	held    chan struct{}
 	polling chan struct{}
 	once    sync.Once

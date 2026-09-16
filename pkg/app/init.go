@@ -44,7 +44,7 @@ type initController struct {
 }
 
 // newInitController returns the controller, or nil when there is no tool registry
-// to run the survey through — /init is then simply absent.
+// to run the survey through. In that case /init is simply absent.
 func newInitController(deps initDeps) *initController {
 	if deps.toolsReg == nil || deps.notify == nil || deps.pump == nil {
 		return nil
@@ -108,7 +108,7 @@ func (c *initController) start() {
 
 // abort ends a running survey and stops the children it spawned, reporting
 // whether there was one to stop. A returning Poll does not end a job, so each is
-// stopped by id — never StopAll, which would also kill investigations the model
+// stopped by id, never StopAll. That would also kill investigations the model
 // started for itself while the survey ran.
 func (c *initController) abort() bool {
 	if c == nil {

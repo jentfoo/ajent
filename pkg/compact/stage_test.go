@@ -112,7 +112,7 @@ func TestSpanStubs(t *testing.T) {
 	})
 }
 
-// The band is what the agent continues from, so nothing in it may be replaced —
+// The band is what the agent continues from, so nothing in it may be replaced.
 // but the rules must still *see* it, or a read superseded by a band read would
 // look like the newest copy of that file.
 func TestSpanStubsBandScope(t *testing.T) {

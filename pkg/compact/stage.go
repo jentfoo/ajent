@@ -30,9 +30,9 @@ type callInfo struct {
 // earlier result, and failed results reduced to their first line.
 //
 // Detection runs over the whole in-context region [lo, len(branch)) but emission
-// stops at band. Narrowing detection instead would blind the best rules — a read
-// superseded by a later read inside the band would go unnoticed — while narrowing
-// emission is what keeps the band verbatim.
+// stops at band. Narrowing detection too would hide a real win, such as a read
+// superseded by a later read inside the band that otherwise goes unnoticed,
+// while narrowing emission alone is what keeps the band verbatim.
 func spanStubs(branch []session.Entry, lo, band int, cwd string) []session.Stub {
 	lo = max(lo, 0)
 	resolve := tools.PathPolicy{Cwd: cwd}.Resolve

@@ -30,14 +30,15 @@ const (
 	gitTimeout = 5 * time.Second // matches the plan workflow's git calls
 )
 
-// ownedElsewhere names the root files stage 1 or the build agent already reads.
+// ownedElsewhere names the root files /init itself reads or the build agent
+// already reads.
 var ownedElsewhere = bulk.SliceToSet([]string{
 	agentsFile, "CONTRIBUTING.md", "LICENSE", "LICENSE.md", "LICENSE.txt",
 	"Makefile", "go.sum", "package-lock.json", "yarn.lock",
 })
 
-// docFiles returns the files /init reads for itself — every README plus an
-// existing AGENTS.md — and whether that AGENTS.md was among them.
+// docFiles returns the files /init reads for itself (every README plus any
+// existing AGENTS.md) and whether that AGENTS.md was among them.
 func docFiles(cwd string) ([]string, bool) {
 	var out []string
 	matches, _ := filepath.Glob(filepath.Join(cwd, "README*"))
@@ -54,7 +55,7 @@ func docFiles(cwd string) ([]string, bool) {
 	return out, false
 }
 
-// surveyTasks returns every stage 2 task: one build and test survey, then one
+// surveyTasks returns every sub-agent task: one build and test survey, then one
 // per disjoint codebase slice.
 func surveyTasks(cwd string) []string {
 	parts := codeSlices(cwd)
@@ -189,8 +190,8 @@ func largest(us []unit) int {
 	return best
 }
 
-// surveyable drops hidden and dependency paths, plus the files stage 1 and the
-// build agent already read — a codebase slice should not re-read them.
+// surveyable drops hidden and dependency paths, plus the files /init already read
+// and the build agent. A codebase slice should not re-read them.
 func surveyable(files []string) []string {
 	return bulk.SliceFilterInPlace(func(f string) bool {
 		if strings.HasPrefix(f, ".") || tools.IsSkippedDir(f) {

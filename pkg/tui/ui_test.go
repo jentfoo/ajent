@@ -445,7 +445,7 @@ func TestUISpinnerPhaseColor(t *testing.T) {
 
 	stop()
 
-	// each phase's style appears at some point across the accumulated frames (the
+	// each spinner style appears at some point across the accumulated frames (the
 	// renderer diffs, so only changed rows are re-emitted).
 	for _, s := range []Style{th.Spinner, th.SpinnerWait, th.SpinnerTool, th.SpinnerStream} {
 		assert.Contains(t, out.String(), s.Open())
@@ -1876,7 +1876,7 @@ func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 		u.Print(strings.Repeat(words, 4))
 		u.Text(strings.Repeat(words, 8)) // an unclosed block; the preview takes the rest of the rows
 
-		// maximize: the block ends above the bottom, but widening never re-anchors —
+		// maximize: the block ends above the bottom, but widening never re-anchors.
 		// the dead band is cosmetic and the pad would be visible churn
 		v.setSize(200, 50)
 		u.holdForResize()

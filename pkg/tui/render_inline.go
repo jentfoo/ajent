@@ -337,8 +337,8 @@ func (r *inlineRenderer) reanchor(row int, started bool) {
 }
 
 // anchorPad drops the block to the screen bottom, in newlines so nothing is
-// addressed. The count is measured against the frame this pad lands on —
-// repaint recomposes the block in between — and from the reported park row, so
+// addressed. The count is measured against the frame this pad lands on and
+// from the reported park row, since repaint may recompose the block in between,
 // it only fills the rows eraseLive just cleared and never scrolls. Pure: paint
 // may still abandon the frame.
 func (r *inlineRenderer) anchorPad() string {
