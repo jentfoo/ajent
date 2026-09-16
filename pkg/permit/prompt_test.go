@@ -100,7 +100,7 @@ func TestElideSubject(t *testing.T) {
 func TestClassifierSystemVerbatim(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, ClassifierSystem, "You decide whether a single shell command may run unattended")
-	assert.Contains(t, ClassifierSystem, `"allow" — only reads or inspects data with no side effects`)
+	assert.Contains(t, ClassifierSystem, `"allow": only reads or inspects data with no side effects`)
 	assert.Contains(t, ClassifierSystem, `downloads, installs or runs software, redirects output`)
 	assert.NotContains(t, ClassifierSystem, "with lasting effects")
 	assert.Contains(t, ClassifierSystem, `Reserve "unsure" for unrecognized commands. Respond with ONLY the one word.`)
@@ -126,7 +126,7 @@ func TestWorkspaceClassifierSystemVerbatim(t *testing.T) {
 	p := WorkspaceClassifierSystem("/work/proj", "/tmp")
 
 	assert.Contains(t, p, "You decide whether a single shell command may run unattended")
-	assert.Contains(t, p, `"allow" — the command only reads or inspects, or it only changes things inside the workspace`)
+	assert.Contains(t, p, `"allow": the command only reads or inspects, or it only changes things inside the workspace`)
 	assert.Contains(t, p, "Always deny, whatever else the command does:")
 	assert.Contains(t, p, "Reading from the network is not safe on its own")
 	assert.Contains(t, p, `answer "unsure" rather than "allow"`)

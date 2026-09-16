@@ -123,7 +123,7 @@ func controlTools(c *Controller) []agent.Tool {
 			c: c, name: DevReviewTool, label: "implement: request review",
 			from: PhaseImplementing, params: reviewSchema,
 			desc: "Signal that the implementation is complete and hand off to review. The " +
-				"summary is how the reviewer learns what you did — it sees none of this " +
+				"summary is how the reviewer learns what you did, since review sees none of this " +
 				"conversation, only the plan and what you report here, so cover what you " +
 				"changed, anything you could not do, and anything it must check. Review " +
 				"begins automatically if you stop without calling this, so call it only " +

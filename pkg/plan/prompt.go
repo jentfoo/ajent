@@ -18,8 +18,8 @@ const (
 func planningContract() string {
 	return "You are planning, not implementing. Explore the codebase to ground the plan in what " +
 		"is actually there, reusing existing helpers and following the conventions you find. " +
-		"When a genuine design fork appears — one with real trade-offs, or a fact you cannot " +
-		"discover — put it to the user with `" + AskUserTool + "` rather than guessing.\n\n" +
+		"When a genuine design fork appears (one with real trade-offs, or a fact you cannot discover), " +
+		"put it to the user with `" + AskUserTool + "` rather than guessing.\n\n" +
 		"The plan is handed to a SEPARATE model with NO prior context: it will not see this " +
 		"conversation, this codebase exploration, or anything the user told you. Every file path, " +
 		"interface, constraint and acceptance criterion must be carried in the plan text itself. " +

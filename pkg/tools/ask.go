@@ -41,7 +41,7 @@ func (t *askUserTool) Label(call agent.ToolCall) string {
 
 func (t *askUserTool) Description() string {
 	return "Ask the user a question and wait for their answer. Use it only when a decision is " +
-		"genuinely theirs — a design fork with real trade-offs, or a fact you cannot discover. " +
+		"genuinely theirs (a design fork with real trade-offs, or a fact you cannot discover). " +
 		"Never ask for permission to act, and never ask what you could determine by reading the " +
 		"project. Offer options when the choice is closed, omit them for free text."
 }

@@ -11,7 +11,7 @@ const (
 	// summaryTail closes every sub-agent task: the parent pastes prose, not dumps.
 	summaryTail = `
 
-End with a summary written to be pasted into an AGENTS.md: prose, not a raw dump. Report only what you actually read — never guess, and never generalise from convention.`
+End with a summary written to be pasted into an AGENTS.md: prose, not a raw dump. Report only what you actually read. Never guess, and never generalise from convention.`
 
 	buildTask = `Survey how this project is built, tested and linted.
 
@@ -41,7 +41,7 @@ Rules:
 - Keep the wording clear and concise. This file is read on every turn, so brevity is a feature.
 - Write the finished document to AGENTS.md with the write tool, then stop. Do not repeat it in your reply.`
 
-	distillNew = distillHeader + `Write AGENTS.md for this project — the instruction file an agent reads at the start of every turn. Use these sections, in order:
+	distillNew = distillHeader + `Write AGENTS.md for this project. This is the instruction file an agent reads at the start of every turn. Use these sections, in order:
 
 ## Project Overview
 One paragraph: what this project is.

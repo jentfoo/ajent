@@ -125,7 +125,7 @@ func diagnoseNoMatch(old, buf string) []string {
 		return []string{"your words are all in the file but separated by different whitespace; you must match it exactly"}
 	case strings.Contains(strings.ToLower(stripSpace(buf)), strings.ToLower(compact)):
 		// words and order present ignoring case: only letter casing differs
-		return []string{"the text matches the file only if you ignore letter case; your oldText's capitalization differs — copy it exactly"}
+		return []string{"the text matches the file only if you ignore letter case. Your oldText's capitalization differs, so copy it exactly"}
 	default:
 		if stripSpace(buf) == "" {
 			return []string{"the file appears empty or whitespace-only"}

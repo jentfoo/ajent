@@ -15,7 +15,7 @@ func TestBuildTask(t *testing.T) {
 		assert.Contains(t, buildTask, want)
 	}
 	assert.True(t, strings.HasSuffix(buildTask, summaryTail))
-	assert.Contains(t, summaryTail, "never guess")
+	assert.Contains(t, summaryTail, "Never guess")
 }
 
 func TestDistillPrompts(t *testing.T) {

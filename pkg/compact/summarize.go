@@ -59,8 +59,8 @@ current objective and note what changed.]
 Be brief in wording and complete in substance. Cut preamble, hedging and
 adjectives; never cut a fact. Preserve file paths, function names, error messages
 and command lines exactly as written. For content the assistant produced (code,
-prose, plans, answers), include a 2-3 sentence synopsis of its substance — never
-just a title or name.`
+prose, plans, answers), include a 2-3 sentence synopsis of its substance, never just
+a title or name.`
 
 	// excludedTail tells the summariser its span deliberately stops short of the
 	// present, so it stops writing Next Steps as though its last message were the

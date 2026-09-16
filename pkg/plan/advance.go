@@ -105,7 +105,7 @@ func (c *Controller) awaitPlanLocked(plan string) agent.Input {
 	if c.h.SetInput != nil {
 		c.h.SetInput(plan)
 	}
-	c.notify("plan ready — edit and submit to hand it to "+c.implementor.Key()+
+	c.notify("plan ready. Edit and submit to hand it to "+c.implementor.Key()+
 		", or /plan-stop to cancel", agent.LevelInfo)
 	return agent.Input{}
 }

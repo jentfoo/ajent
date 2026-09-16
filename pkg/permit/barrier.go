@@ -748,7 +748,7 @@ func deniedReason(call agent.ToolCall) string {
 // promptText is the dialog's question line for a mode and tool.
 func promptText(m Mode, name string) string {
 	if m == ModeBlockAll { // block-all genuinely prompts everything
-		return "block-all permits nothing without approval — run this?"
+		return "block-all permits nothing without approval. Run this?"
 	}
 	return fmt.Sprintf("Allow `%s` tool call?", name)
 }
