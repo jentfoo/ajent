@@ -56,12 +56,12 @@ prompt lines go to a single **prompt pump** goroutine that owns ordering.
   row) and defers its echo to
 
 The steer queue turns mid-turn prompts into **steering messages**: they deliver
-as ONE newline-joined user message at the agent's next step boundary via
-`Options.OnBoundary`, or (if no boundary comes first) as the next turn's prompt
-drained by `startDrain`. Esc/Ctrl+C during a turn recovers every queued item
-back into the editor (collapsed with newlines) before interrupting; Alt+Up
-recalls the newest queued message. See `agent-loop-design.md` for the boundary
-contract.
+as newline-joined messages (one per provenance run, see below) at the agent's
+next step boundary via `Options.OnBoundary`, or (if no boundary comes first) as
+the next turn's prompt drained by `startDrain`. Esc/Ctrl+C during a turn
+recovers every queued item back into the editor (collapsed with newlines)
+before interrupting; Alt+Up recalls the newest queued message. See
+`agent-loop-design.md` for the boundary contract.
 
 The pump also wires the **typing hold** (`Options.AwaitInput`, see
 `agent-loop-design.md`): at each step boundary, if a draft is being composed in
@@ -89,7 +89,13 @@ too, so its references expand like any other prompt; the headless one
 settled.
 
 Joining a batch joins its resolvers too: `steerQueue.join` chains every queued
-item's `After` into one, run in submit order behind the joined message.
+item's `After` into one, run in submit order behind the joined message. The
+batch splits into **one input per contiguous provenance run**: items sharing an
+`Injected` value merge into a single newline-joined message, while a provenance
+change starts a new input. A batch mixing user text with system-injected
+context therefore keeps per-item attribution on the transcript rows, so recall
+excludes exactly the injected messages and replay renders them as such, instead
+of one OR-ed flag labelling the whole batch.
 
 ## Commands
 

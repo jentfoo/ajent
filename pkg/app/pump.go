@@ -99,7 +99,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 			if gate != nil {
 				gate.taken() // the submitted line starts its own turn; no handoff to wait for
 			}
-			startDrain(ctx, ui, recording, ag, q, in, started, hooks)
+			startDrain(ctx, ui, recording, ag, q, []agent.Input{in}, started, hooks)
 		}
 	}
 }
@@ -108,6 +108,7 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 	if line.input != nil {
 		in := *line.input
 		in.Before = append(before, in.Before...)
+		in.Prepared = true // assembled by its sender; the append seam must not re-expand
 		if line.onTurn != nil {
 			line.onTurn() // this turn writes, not the one running when the sender finished
 		}
@@ -122,6 +123,7 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 		Before:   before,
 		After:    res.Run,
 		Injected: line.injected,
+		Prepared: true, // expanded here; the append seam must not re-expand
 	}, submittedEcho(line.rest), res.Est // "" unless a real prompt; commands and shell lines are not echoed here
 }
 
@@ -133,17 +135,17 @@ func submitEstimate(in agent.Input, pending int) int {
 	return est
 }
 
-func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, input agent.Input, started *bool, hooks planHooks) {
+func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, started *bool, hooks planHooks) {
 	ui.SetIdle(false)
 	*started = true
 	go func() {
 		for {
-			err := ag.Prompt(ctx, input)
+			err := ag.PromptBatch(ctx, inputs)
 			// a workflow owns the next turn when it says so, errored turns included:
 			// its executor-retry rule depends on being reached after a failure.
 			if hooks.advance != nil {
 				if next, ok := hooks.advance(ctx); ok {
-					input = next
+					inputs = []agent.Input{next}
 					continue
 				}
 			}
@@ -155,7 +157,7 @@ func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent
 			if !ok {
 				break
 			}
-			input = next
+			inputs = next
 		}
 		if recording {
 			ui.SetIdle(true)

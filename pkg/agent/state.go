@@ -26,6 +26,7 @@ type Input struct {
 	Delivered func()                              // called once the message lands, ahead of After; nil is the normal case
 	Settled   func()                              // called once After has landed too; nil is the normal case
 	Injected  bool                                // system-injected context (not a typed prompt); excluded from recall
+	Prepared  bool                                // the host's submit pipeline already ran; Options.NormalizeInput skips it
 }
 
 // State is the in-memory projection of a session. It is owned by the loop

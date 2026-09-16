@@ -326,6 +326,14 @@ Two kinds of mid-turn input:
   the normal case. It fires **before** `Input.After` resolves. The host clears
   its submit bucket there, and running the reads first would leave them counted
   in both that bucket and pending.
+- The `Options.NormalizeInput` seam runs once per input on the append path, so a
+  steered, follow-up or host-supplied input gets the same handling a freshly
+  submitted prompt gets (the pump's `refs.Expander` pass). The loop applies it
+  at the two dequeue points (`runTurn` before `TurnStart`, and `drainSteer`
+  before `appendSteer`), so every route into a turn is covered by construction:
+  anything not dequeued from the steer/follow queues must arrive through
+  `OnBoundary`, which `drainSteer` covers. Inputs the host already expanded set
+  `Input.Prepared` and skip the hook, so an expanded prompt is never re-read.
 - An `Input.Injected` flag marks system-provided context (sub-agent completion
   steers, permission-barrier notes) rather than a typed prompt. It rides onto
   the appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R /

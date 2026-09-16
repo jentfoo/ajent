@@ -18,9 +18,10 @@ type queueUI interface {
 }
 
 // steerQueue holds prompts submitted while a turn runs: they render as dimmed
-// rows above the prompt, hand over as one newline-joined message at the next
-// step boundary (or as the next turn's prompt), and are recoverable to the
-// editor until then. Lock order: q.mu before any tui.UI lock.
+// rows above the prompt, hand over as newline-joined messages (one per
+// provenance run) at the next step boundary or behind the next turn's prompt,
+// and are recoverable to the editor until then. Lock order: q.mu before any
+// tui.UI lock.
 type steerQueue struct {
 	ui     queueUI
 	submit func(est int) // SetSubmit(sum) while anything is pending; nil-safe in main
@@ -58,37 +59,57 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 	return true
 }
 
-// join builds one agent.Input from every queued item (caller holds the lock):
-// texts joined by newline, Before blocks and After resolvers chained in submit
-// order, Injected OR-ed, a Delivered hook that echoes the labels once the batch
-// lands and a Settled hook that clears accounting once its reads have too.
-func (s *steerQueue) join() agent.Input {
-	texts := make([]string, 0, len(s.items))
-	before := make([]agent.MessageInfo, 0, len(s.items))
-	labels := make([]string, len(s.items))
-	var afters []func(context.Context) []llm.Message
-	var injected bool
-	for i, it := range s.items {
-		texts = append(texts, it.input.Text)
-		before = append(before, it.input.Before...)
+// join splits the queue into contiguous provenance runs (caller holds the
+// lock): items sharing an Injected value merge into one input, texts joined by
+// newline, Before blocks and After resolvers chained in submit order. A
+// provenance change starts a new input, so a mixed user + system batch keeps
+// per-item attribution on the transcript rows instead of one OR-ed flag. The
+// final run clears accounting once everything behind it has landed; each run
+// echoes its labels as its message lands.
+func (s *steerQueue) join() []agent.Input {
+	type runAcc struct {
+		in     agent.Input
+		afters []func(context.Context) []llm.Message
+		labels []string
+	}
+	var runs []runAcc
+
+	cur := func() *runAcc {
+		return &runs[len(runs)-1]
+	}
+	for _, it := range s.items {
+		if len(runs) == 0 || cur().in.Injected != it.input.Injected {
+			runs = append(runs, runAcc{
+				in: agent.Input{Injected: it.input.Injected, Prepared: it.input.Prepared}})
+		}
+		r := cur()
+		// merged text is only skip-the-seam clean when every item already ran it
+		r.in.Prepared = r.in.Prepared && it.input.Prepared
+		if r.in.Text != "" {
+			r.in.Text += "\n"
+		}
+		r.in.Text += it.input.Text
+		r.in.Before = append(r.in.Before, it.input.Before...)
 		if it.input.After != nil {
-			afters = append(afters, it.input.After)
+			r.afters = append(r.afters, it.input.After)
 		}
-		if it.input.Injected {
-			injected = true
+		if it.label != "" {
+			r.labels = append(r.labels, it.label)
 		}
-		labels[i] = it.label
 	}
 	s.items = nil
 
-	out := agent.Input{Text: strings.Join(texts, "\n"), Before: before,
-		After: joinAfter(afters), Injected: injected}
-	// the echo lands with the message so the batch's reads render under it; the
-	// reserve is released only once those reads have been accounted too
-	out.Settled = s.settled
-	if labelJoin := strings.Join(labels, "\n"); labelJoin != "" {
-		joined := labelJoin // captured for the closure; landed takes no lock
-		out.Delivered = func() { s.landed(joined) }
+	out := make([]agent.Input, len(runs))
+	for i, r := range runs {
+		r.in.After = joinAfter(r.afters)
+		if label := strings.Join(r.labels, "\n"); label != "" {
+			joined := label // captured for the closure; landed takes no lock
+			r.in.Delivered = func() { s.landed(joined) }
+		}
+		out[i] = r.in
+	}
+	if len(out) > 0 {
+		out[len(out)-1].Settled = s.settled // released only once every read landed
 	}
 	s.refreshLocked()
 	return out
@@ -133,8 +154,8 @@ func (s *steerQueue) pending() int {
 	return len(s.items)
 }
 
-// pull is the OnBoundary callback: hand over every queued item joined into one
-// input at this step boundary. Returns nil when empty.
+// pull is the OnBoundary callback: hand over every queued item joined into
+// provenance runs at this step boundary. Returns nil when empty.
 func (s *steerQueue) pull() []agent.Input {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,18 +163,19 @@ func (s *steerQueue) pull() []agent.Input {
 	if len(s.items) == 0 {
 		return nil
 	}
-	return []agent.Input{s.join()}
+	return s.join()
 }
 
-// take returns the next joined batch to run as a follow-up turn, or false when
-// empty (which also clears draining so a later offer starts a fresh drain).
-func (s *steerQueue) take() (agent.Input, bool) {
+// take returns the next batch of joined runs to deliver behind the next turn's
+// prompt, or false when empty (which also clears draining so a later offer
+// starts a fresh drain).
+func (s *steerQueue) take() ([]agent.Input, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.items) == 0 {
 		s.draining = false // the drain goroutine is done; the next submit starts one
-		return agent.Input{}, false
+		return nil, false
 	}
 	return s.join(), true
 }

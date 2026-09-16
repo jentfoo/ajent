@@ -787,3 +787,157 @@ func TestLoopToolProgressReachesSink(t *testing.T) {
 	assert.Equal(t, 200, last.Lines)
 	assert.Equal(t, len(args), last.Bytes)
 }
+
+// lastUserText returns the newest user text block in the recorded requests.
+func lastUserText(p *llm.ScriptedProvider) string {
+	reqs := p.Requests()
+	if len(reqs) == 0 {
+		return ""
+	}
+	msgs := reqs[len(reqs)-1].Messages
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != llm.RoleUser {
+			continue
+		}
+		for _, b := range msgs[i].Content {
+			if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
+				return tb.Text
+			}
+		}
+	}
+	return ""
+}
+
+func TestNormalizeInputAllRoutes(t *testing.T) {
+	t.Parallel()
+
+	mark := func(in Input) Input {
+		if in.Text != "" {
+			in.Text = "seen:" + in.Text
+		}
+		return in
+	}
+
+	t.Run("fresh_prompt", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.NormalizeInput = mark
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "hello"}))
+		assert.Equal(t, "seen:hello", lastUserText(p))
+	})
+
+	t.Run("steered_midturn", func(t *testing.T) {
+		block := make(chan struct{})
+		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "bash")},
+			{Events: textOnly("done")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+		a.opts.NormalizeInput = mark
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "start"}) }()
+		require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+
+		require.True(t, a.Steer(Input{Text: "hello"}))
+		close(block)
+		require.NoError(t, <-errCh)
+		assert.Equal(t, "seen:hello", lastUserText(p))
+	})
+
+	t.Run("follow_up_turn", func(t *testing.T) {
+		block := make(chan struct{})
+		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "bash")},
+			{Events: textOnly("done")},
+			{Events: textOnly("again")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+		a.opts.NormalizeInput = mark
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "start"}) }()
+		require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+
+		require.True(t, a.FollowUp(Input{Text: "hello"}))
+		close(block)
+		require.NoError(t, <-errCh)
+		assert.Equal(t, "seen:hello", lastUserText(p))
+	})
+
+	t.Run("boundary_hook_input", func(t *testing.T) {
+		block := make(chan struct{})
+		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "bash")},
+			{Events: textOnly("done")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+		a.opts.NormalizeInput = mark
+
+		var mu sync.Mutex
+		var pending []Input
+		a.opts.OnBoundary = func() []Input {
+			mu.Lock()
+			defer mu.Unlock()
+			out := pending
+			pending = nil
+			return out
+		}
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+		require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+
+		tool := set.tools["bash"].(*stubTool)
+		assert.Eventually(t, func() bool { return tool.callCount() >= 1 }, defaultTimeout, pollInterval)
+		mu.Lock()
+		pending = []Input{{Text: "hello"}}
+		mu.Unlock()
+
+		close(block)
+		require.NoError(t, <-errCh)
+		assert.Equal(t, "seen:hello", lastUserText(p))
+	})
+}
+
+func TestNormalizeInputPreparedSkips(t *testing.T) {
+	t.Parallel()
+
+	mark := func(in Input) Input {
+		in.Text = "seen:" + in.Text
+		return in
+	}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.NormalizeInput = mark
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "hello", Prepared: true}))
+	assert.Equal(t, "hello", lastUserText(p))
+}
+
+func TestPromptBatchPerItemProvenance(t *testing.T) {
+	t.Parallel()
+
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+	a := newTestAgent(nil, p, nil)
+	var marks []bool
+	a.opts.OnMessage = append(a.opts.OnMessage, func(mi MessageInfo) {
+		if mi.Message.Role == llm.RoleUser && !llm.OnlyToolResults(mi.Message.Content) {
+			marks = append(marks, mi.Injected)
+		}
+	})
+
+	// a mixed batch lands as two rows: the typed prompt and the injected context
+	require.NoError(t, a.PromptBatch(t.Context(), []Input{
+		{Text: "typed"},
+		{Text: "sys", Injected: true},
+	}))
+	assert.Equal(t, []bool{false, true}, marks)
+}

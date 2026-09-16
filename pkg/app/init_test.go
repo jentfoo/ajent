@@ -370,6 +370,7 @@ func TestPromptInput(t *testing.T) {
 
 		assert.Equal(t, "distill this", in.Text)
 		assert.True(t, in.Injected)
+		assert.True(t, in.Prepared)    // assembled by its sender; the seam must not re-expand
 		assert.Equal(t, "/init", echo) // a label, not the whole instruction
 		assert.Equal(t, 1, armed)      // armed as it becomes a turn
 		// staged shell results still land ahead of the survey's own pairs
@@ -382,6 +383,7 @@ func TestPromptInput(t *testing.T) {
 		line := pumpLine{kind: command.KindPrompt, input: &agent.Input{Text: "x"}}
 		in, echo, _ := promptInput(line, nil, nil, func(string) {})
 		assert.Equal(t, "x", in.Text)
+		assert.True(t, in.Prepared)
 		assert.Empty(t, echo)
 	})
 
@@ -398,6 +400,7 @@ func TestPromptInput(t *testing.T) {
 		assert.Contains(t, in.Text, "@a.go")
 		assert.Equal(t, in.Text, echo) // a typed prompt echoes itself
 		assert.False(t, in.Injected)
+		assert.True(t, in.Prepared) // expanded here; the seam must not re-expand
 		assert.Positive(t, pending) // the read is sized before it lands
 		// staged shell results ride ahead; the @ read lands behind the message
 		assert.Equal(t, staged, in.Before)

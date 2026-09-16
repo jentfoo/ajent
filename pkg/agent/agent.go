@@ -46,6 +46,12 @@ type Options struct {
 	// before any input drains, and may block while the user finishes a message. ctx is
 	// the turn's, so an interrupt releases it; nil disables.
 	AwaitInput func(ctx context.Context)
+	// NormalizeInput, when set, rewrites every input once at its append point so a
+	// steered, follow-up or host-supplied input gets the handling a fresh prompt
+	// gets. Inputs the host already expanded set Input.Prepared and skip it.
+	// It runs on the loop goroutine at a boundary and must stay bounded. nil
+	// disables.
+	NormalizeInput func(Input) Input
 	// OnToolBatch, when set, is called on the loop goroutine with one step's tool
 	// calls in message order, before any of them runs. Parallel dispatch races the
 	// calls against each other, so this is the only ordered view of a batch a host
@@ -176,7 +182,18 @@ func (a *Agent) Interrupt() {
 // Prompt runs input to completion, including any follow-up queued while it ran.
 // It returns when both queues are empty or the context ends.
 func (a *Agent) Prompt(ctx context.Context, in Input) error {
-	return a.runTurns(ctx, []Input{in})
+	return a.PromptBatch(ctx, []Input{in})
+}
+
+// PromptBatch queues inputs for the next turns: with the agent idle the first
+// becomes the prompt and the rest land behind it as pre-start steering, while a
+// turn runs each input queues as its own follow-up turn. It returns when every
+// queue is empty or the context ends.
+func (a *Agent) PromptBatch(ctx context.Context, inputs []Input) error {
+	if len(inputs) == 0 {
+		return nil
+	}
+	return a.runTurns(ctx, inputs)
 }
 
 // sleepCtx waits for d or ctx's end, so an interrupt releases a stream backoff.

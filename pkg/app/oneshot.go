@@ -182,6 +182,13 @@ func RunHeadless(o HeadlessOptions) int {
 	toolsReg.AddGuard(barrier.Guard())
 	toolsReg.SetAsker(barrier.Asker())
 
+	// steered inputs (sub-agent completions) expand through the same @ pipeline
+	// the initial prompt gets, via the agent's append-point seam.
+	expander := refs.NewExpander(toolsReg, opts.Sinks[0], tools.PathPolicy{Cwd: config.Cwd()})
+	opts.NormalizeInput = func(in agent.Input) agent.Input {
+		return refs.Normalize(expander, in, func(n string) { notify(n, agent.LevelWarn) })
+	}
+
 	ag = agent.New(st, opts)
 	// a resumed ledger carries no base of its own, and buildRequest reads Used for
 	// MaxOutputFor before stream() seeds one. A one-shot's tool set is fixed by its
@@ -199,13 +206,14 @@ func RunHeadless(o HeadlessOptions) int {
 	}
 
 	// expand @ references like the pump does, once the scope has settled
-	expander := refs.NewExpander(toolsReg, opts.Sinks[0], tools.PathPolicy{Cwd: config.Cwd()})
 	expander.Seed(st.Messages) // --continue reopens a transcript that holds ref ids
 	expanded := expander.Expand(o.Prompt)
 	for _, n := range expanded.Notices {
 		notify(n, agent.LevelWarn)
 	}
-	err := ag.Prompt(ctx, agent.Input{Text: expanded.Text, After: expanded.Run, Injected: true})
+	err := ag.Prompt(ctx, agent.Input{
+		Text: expanded.Text, After: expanded.Run, Injected: true, Prepared: true,
+	})
 	answer := llm.FinalAnswer(st.Messages)
 	res := drain.result()
 	status, code := headlessOutcome(err, res, answer)

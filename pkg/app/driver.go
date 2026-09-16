@@ -245,6 +245,13 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 	}
 
+	// steered, follow-up and host-supplied inputs expand through the same @
+	// pipeline a submitted prompt gets, via the agent's append-point seam.
+	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: config.Cwd()})
+	opts.NormalizeInput = func(in agent.Input) agent.Input {
+		return refs.Normalize(expander, in, func(n string) { ui.Notify(n, tui.LevelWarn) })
+	}
+
 	ag = agent.New(st, opts)
 
 	// started is the single answer to "has the tool block been committed?": it gates
@@ -439,7 +446,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		_ = console.SetSessionSetting("permissions.mode", m.String())
 	}
 	watchControls(ui, ag, q, stager, ictl, quit, onModeCycle)
-	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: config.Cwd()})
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
 		rec.started = &started

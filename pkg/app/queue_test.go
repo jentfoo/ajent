@@ -92,6 +92,56 @@ func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 	require.GreaterOrEqual(t, cleared, 1)
 }
 
+func TestSteerQueueJoinSplitsProvenance(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeQueueUI{}
+	q := newSteerQueue(fake, nil, func() {})
+
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	require.True(t, q.offer(agent.Input{Text: "user text"}, "typed", 1))
+	require.True(t, q.offer(agent.Input{Text: "system notice", Injected: true}, "notice", 1))
+	require.True(t, q.offer(agent.Input{Text: "more user text"}, "typed two", 1))
+
+	runs := q.pull()
+	require.Len(t, runs, 3)
+	assert.False(t, runs[0].Injected)
+	assert.Equal(t, "user text", runs[0].Text)
+	assert.True(t, runs[1].Injected)
+	assert.Equal(t, "system notice", runs[1].Text)
+	assert.False(t, runs[2].Injected)
+	assert.Equal(t, "more user text", runs[2].Text)
+
+	runs[0].Delivered()
+	runs[2].Delivered()
+	assert.Equal(t, []string{"typed", "typed two"}, fake.echoed)
+}
+
+func TestSteerQueueJoinChainsAftersPerRun(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeQueueUI{}
+	q := newSteerQueue(fake, nil, func() {})
+	after := func(text string) func(context.Context) []llm.Message {
+		return func(context.Context) []llm.Message {
+			return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: text}}}}
+		}
+	}
+
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	require.True(t, q.offer(agent.Input{Text: "a", After: after("read a")}, "a", 1))
+	require.True(t, q.offer(agent.Input{Text: "sys", Injected: true, After: after("read sys")}, "sys", 1))
+
+	runs := q.pull()
+	require.Len(t, runs, 2)
+	msgs := runs[0].After(t.Context())
+	require.Len(t, msgs, 1)
+	assert.Equal(t, llm.TextBlock{Text: "read a"}, msgs[0].Content[0])
+	msgs = runs[1].After(t.Context())
+	require.Len(t, msgs, 1)
+	assert.Equal(t, llm.TextBlock{Text: "read sys"}, msgs[0].Content[0])
+}
+
 func TestJoinAfter(t *testing.T) {
 	t.Parallel()
 
@@ -124,6 +174,41 @@ func TestJoinAfter(t *testing.T) {
 	})
 }
 
+func TestSteerQueueJoinPreservesPrepared(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeQueueUI{}
+	q := newSteerQueue(fake, nil, func() {})
+
+	// every queued item is pump-expanded (Prepared); the runs must stay so the
+	// append seam never re-expands an annotate-only reference at delivery
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	require.True(t, q.offer(agent.Input{Text: "see @big.bin", Prepared: true}, "typed", 1))
+	require.True(t, q.offer(agent.Input{Text: "sys", Injected: true, Prepared: true}, "sys", 1))
+
+	runs := q.pull()
+	require.Len(t, runs, 2)
+	assert.True(t, runs[0].Prepared)
+	assert.True(t, runs[1].Prepared)
+}
+
+func TestSteerQueueJoinMixedPrepared(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeQueueUI{}
+	q := newSteerQueue(fake, nil, func() {})
+
+	// a run is prepared only when every item in it is, so raw text still expands
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	require.True(t, q.offer(agent.Input{Text: "expanded", Prepared: true}, "a", 1))
+	require.True(t, q.offer(agent.Input{Text: "raw @a.go"}, "b", 1))
+
+	runs := q.pull()
+	require.Len(t, runs, 1)
+	assert.False(t, runs[0].Prepared)
+	assert.Equal(t, "expanded\nraw @a.go", runs[0].Text)
+}
+
 func TestSteerQueueTake(t *testing.T) {
 	t.Parallel()
 
@@ -135,9 +220,10 @@ func TestSteerQueueTake(t *testing.T) {
 	assert.True(t, q.offer(agent.Input{Text: "a"}, "alpha", 1))
 	assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 2))
 
-	in, ok := q.take()
+	ins, ok := q.take()
 	require.True(t, ok)
-	assert.Equal(t, "a\nb", in.Text)
+	require.Len(t, ins, 1)
+	assert.Equal(t, "a\nb", ins[0].Text)
 
 	_, ok = q.take() // empty now: clears draining so a later offer starts fresh
 	assert.False(t, ok)

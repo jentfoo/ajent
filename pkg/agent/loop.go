@@ -143,8 +143,10 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	}
 	a.steer = nil
 	a.mu.Unlock()
+	// normalize before TurnStart so the sink sees the input as it will land
+	promptInputs = a.normalizeInputs(promptInputs)
 
-	sink.TurnStart(TurnInfo{Model: a.state.Model, Input: input})
+	sink.TurnStart(TurnInfo{Model: a.state.Model, Input: promptInputs[0]})
 
 	// the increment lives at the body's end so a recovery retry reruns the same step
 	for step := 1; ; {
@@ -268,13 +270,34 @@ func (a *Agent) drainSteer(ctx context.Context) {
 		in = append(in, a.opts.OnBoundary()...)
 	}
 	if len(in) > 0 {
-		a.appendSteer(ctx, in)
+		a.appendSteer(ctx, a.normalizeInputs(in))
 	}
+}
+
+// normalizeInputs returns every input with Options.NormalizeInput applied, so
+// steering and follow-ups share the handling a fresh prompt gets. Inputs
+// already expanded by the host (Input.Prepared) and unset hooks pass through
+// unchanged.
+func (a *Agent) normalizeInputs(inputs []Input) []Input {
+	if a.opts.NormalizeInput == nil {
+		return inputs
+	}
+	out := make([]Input, len(inputs))
+	for i, in := range inputs {
+		if in.Prepared {
+			out[i] = in
+			continue
+		}
+		out[i] = a.opts.NormalizeInput(in)
+	}
+	return out
 }
 
 // appendSteer adds queued steering inputs as user messages at a step boundary.
 // Input.Before lands ahead of the user's text and Input.After behind it, so a
-// rewind onto that text drops the context it asked for along with it.
+// rewind onto that text drops the context it asked for along with it. It is the
+// only append path for turn input; its callers (runTurn and drainSteer) run the
+// Options.NormalizeInput seam before handing inputs over.
 func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 	for _, in := range inputs {
 		for _, mi := range in.Before {
