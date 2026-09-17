@@ -74,8 +74,31 @@ closes.
 So `Tools()` issues raw `tools/list` through the transport and decodes each
 entry's `inputSchema` into a `json.RawMessage`, preserving the server's schema
 **byte for byte** (proof that the raw request seam works). Pagination follows
-`nextCursor`. A tool whose schema is not an object, or that has no name/schema,
-is skipped with one warning rather than failing the whole list.
+`nextCursor`. Names are validated as composed: server key, bare tool name and
+the composed `server__tool` string all fit the tightest provider tool-name
+charset and cap (64; Anthropic allows 128). A bad server key is skipped with
+a warning at config load, so one non-conforming entry never disables the
+other servers.
+A tool without a usable name or whose schema is structurally invalid is
+dropped with one warning naming it rather than failing the whole list, a
+server listing one tool twice yields a single registration, and a repeated
+warning for the same defect on reconnect or `list_changed` stays in `/mcp`
+logs instead of re-entering history (a config edit resets the dedupe, since
+the owner may have fixed or re-broken the tool). Validation happens at
+discovery, the single point where untrusted schemas enter: one broken schema
+would otherwise fail serialization on every request carrying it, far from its
+cause, so the tool is rejected there and the rest of the server's surface
+stays usable. The rule is deliberately best-effort, not a JSON-Schema
+interpreter: a single bounded walk over every schema-valued keyword,
+rejecting only what providers police on the wire. That is a non-object schema
+position, an unknown type name, a property key outside the providers'
+parameter-key pattern `^[a-zA-Z0-9_.-]{1,64}$` (dots legal, unlike tool
+names), or a non-array `required`/combinator. Everything else passes through
+byte-identical: untyped or boolean-schema nodes, tuple `items`, empty arrays,
+explicit nulls, combinators, `$ref` (never resolved, and `$defs` bodies
+unchecked since nothing reads them), draft-03 boolean `required`, and unknown
+keywords. Only remote schemas travel untrusted, and shrinking a working
+tool's surface is worse than a tolerable schema.
 
 ### Raw seams
 

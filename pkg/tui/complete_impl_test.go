@@ -3,7 +3,6 @@ package tui
 import (
 	"testing"
 
-	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,7 +88,9 @@ func TestCompletionOverlayRows(t *testing.T) {
 }
 
 func itemsOf(labels ...string) []Completion {
-	return bulk.SliceTransform(func(s string) Completion {
-		return Completion{Text: s, Label: s}
-	}, labels)
+	out := make([]Completion, 0, len(labels))
+	for _, s := range labels {
+		out = append(out, Completion{Text: s, Label: s})
+	}
+	return out
 }

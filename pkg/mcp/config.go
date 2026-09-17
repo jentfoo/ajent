@@ -69,6 +69,12 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 	}
 
 	for name, cfg := range merged {
+		if err := validateServerName(name); err != nil {
+			// a bad key must not disable every server; the owner renames it
+			warnings = append(warnings, err.Error()+"; skipped")
+			delete(merged, name)
+			continue
+		}
 		if err := validateServer(name, cfg); err != nil {
 			return nil, warnings, err
 		}
@@ -185,9 +191,27 @@ func (c ServerConfig) NetworkKind() string {
 	return TransportHTTP
 }
 
-// validateServer checks a single server's declaration: exactly one of command or
-// url, and a known transport consistent with it. Errors name the offending value.
+// validateServerName checks a server key: every bridged tool is named
+// <server>__<tool>, so the key needs the provider tool-name charset and may
+// not contain the separator itself.
+func validateServerName(name string) error {
+	if !toolNameRe.MatchString(name) {
+		return fmt.Errorf("server %q: name must match [a-zA-Z0-9_-]{1,64}", name)
+	}
+	if strings.Contains(name, "__") {
+		return fmt.Errorf("server %q: name may not contain \"__\" (reserved as the tool namespace separator)", name)
+	}
+	return nil
+}
+
+// validateServer checks a single server's declaration: a usable name (the
+// provider tool-name charset, without the "__" namespace separator), exactly
+// one of command or url, and a known transport consistent with it. Errors name
+// the offending value.
 func validateServer(name string, cfg ServerConfig) error {
+	if err := validateServerName(name); err != nil {
+		return err
+	}
 	switch {
 	case cfg.Command != "" && cfg.URL != "":
 		return fmt.Errorf("server %q: declare either command or url, not both", name)

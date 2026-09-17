@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -72,6 +73,7 @@ type server struct {
 	connectErr    error         // the settled attempt's outcome, read by waiters after ch closes
 
 	notice func(string, bool) // notice sink over the manager's Options; immutable, so no lock
+	warned map[string]bool    // surfaced warnings, so repeated discovery stays in /mcp logs only
 
 	mu sync.Mutex // sole guard for every mutable field above; m.mu covers only the servers map
 }
@@ -237,7 +239,14 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 		m.updateStatus() // this server contributes nothing to the ratio until it connects
 		return err
 	}
-	c.SetNotice(func(msg string) { s.note(strings.TrimPrefix(msg, "mcp "+name+": "), true) })
+	c.SetNotice(func(msg string) {
+		msg = strings.TrimPrefix(msg, "mcp "+name+": ")
+		if s.sawWarn(msg) { // same defect re-reported on every reconnect: log, do not re-notice
+			s.diag(msg)
+			return
+		}
+		s.note(msg, true)
+	})
 
 	// discovery is bounded so an unresponsive server surfaces as a connect error
 	// instead of hanging LoadOnFirstMessage / reload (mirrors rediscan).
@@ -471,6 +480,9 @@ func (m *Manager) applyConfig(s *server, sc ServerConfig) {
 	s.mu.Lock()
 	old, c := s.cfg, s.c
 	s.cfg = sc
+	if configChanged(old, sc) {
+		s.warned = nil // an edit may fix or re-break a tool; each state deserves a fresh notice
+	}
 	s.mu.Unlock()
 	if c == nil { // the next connect picks the new config up whole
 		return
@@ -488,6 +500,14 @@ func (m *Manager) applyConfig(s *server, sc ServerConfig) {
 func connectionChanged(a, b ServerConfig) bool {
 	return a.Command != b.Command || a.URL != b.URL || a.Transport != b.Transport ||
 		!slices.Equal(a.Args, b.Args) || !maps.Equal(a.Env, b.Env) || !maps.Equal(a.Headers, b.Headers)
+}
+
+// configChanged reports whether two declarations differ at all, so a reload
+// with an untouched server keeps its warning dedupe. DeepEqual, not field
+// lists: Enabled is a fresh *bool per load, and a new ServerConfig field must
+// not silently miss the comparison.
+func configChanged(a, b ServerConfig) bool {
+	return !reflect.DeepEqual(a, b)
 }
 
 // filterChanged reports whether a config edit changes which tools register or how
@@ -903,6 +923,22 @@ func (s *server) note(msg string, warn bool) {
 	if s.notice != nil {
 		s.notice(msg, warn)
 	}
+}
+
+// sawWarn reports whether msg was already surfaced, marking it seen. A repeated
+// warning names the same defect (re-discovery on reconnect and list_changed),
+// so repeats stay in the log rather than history.
+func (s *server) sawWarn(msg string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.warned == nil {
+		s.warned = make(map[string]bool)
+	}
+	if s.warned[msg] {
+		return true
+	}
+	s.warned[msg] = true
+	return false
 }
 
 // diag records a line only in /mcp logs; routine diagnostics stay out of history.

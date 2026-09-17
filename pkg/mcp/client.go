@@ -10,12 +10,15 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/go-analyze/bulk"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -250,7 +253,7 @@ func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 			return nil, fmt.Errorf("mcp %s: tools/list decode: %w", c.name, err)
 		}
 		for _, raw := range page.Tools {
-			def, ok, warn := parseTool(raw, c.cfg.ReadOnly)
+			def, ok, warn := parseTool(raw, c.name, c.cfg.ReadOnly)
 			if !ok {
 				c.warn(warn) // one bad tool skips without failing the whole list
 				continue
@@ -262,7 +265,7 @@ func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 		}
 		cursor = page.NextCursor
 	}
-	return out, nil
+	return uniqueTools(out, c.warn), nil
 }
 
 func listToolParams(cursor string) any {
@@ -271,6 +274,20 @@ func listToolParams(cursor string) any {
 		p["cursor"] = cursor
 	}
 	return p
+}
+
+// uniqueTools drops later duplicates of an already-accepted name, so a server
+// listing one tool twice cannot register two entries under one name.
+func uniqueTools(defs []ToolDef, warn func(string)) []ToolDef {
+	seen := make(map[string]struct{}, len(defs))
+	return bulk.SliceFilter(func(d ToolDef) bool {
+		if _, ok := seen[d.Name]; ok {
+			warn(fmt.Sprintf("tool %q listed more than once; duplicates skipped", d.Name))
+			return false
+		}
+		seen[d.Name] = struct{}{}
+		return true
+	}, defs)
 }
 
 // resourcePage is one page of a resources/list response.
@@ -336,8 +353,18 @@ func (c *Client) Prompts(ctx context.Context) ([]PromptDef, error) {
 	return out, nil
 }
 
+// toolNameRe is the tightest tool-name pattern ajent's providers accept
+// (the spec's charset is looser but dotted names 400 on OpenAI).
+var toolNameRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,64}$`)
+
+// maxToolNameLen is the composed tool-name budget every provider enforces.
+const maxToolNameLen = 64
+
 // parseTool decodes one tools/list entry preserving inputSchema byte for byte.
-func parseTool(raw json.RawMessage, readOnly FlexStrings) (def ToolDef, ok bool, warn string) {
+// A tool whose name or schema could not survive into a provider request body,
+// including once namespaced under server, is dropped with a warning for the
+// caller to report.
+func parseTool(raw json.RawMessage, server string, readOnly FlexStrings) (def ToolDef, ok bool, warn string) {
 	var wire struct {
 		Name        string          `json:"name"`
 		Description string          `json:"description"`
@@ -352,9 +379,19 @@ func parseTool(raw json.RawMessage, readOnly FlexStrings) (def ToolDef, ok bool,
 	if wire.Name == "" || len(wire.InputSchema) == 0 {
 		return def, false, fmt.Sprintf("tool %q has no name or input schema; skipped", wire.Name)
 	}
-	var probe map[string]any
-	if err := json.Unmarshal(wire.InputSchema, &probe); err != nil || probe["type"] != "object" {
-		return def, false, fmt.Sprintf("tool %q has a non-object input schema; skipped", wire.Name)
+	// providers reject names outside this charset on every request; the MCP spec
+	// requires the same pattern, so a miss is the server's defect
+	if !toolNameRe.MatchString(wire.Name) {
+		return def, false, fmt.Sprintf("tool %q has a name outside [a-zA-Z0-9_-]{1,64}; skipped", wire.Name)
+	}
+	// the provider cap applies to the composed server__tool string the registry
+	// ships, which only this side of the bridge can measure
+	if n := len(server) + len(wire.Name) + 2; n > maxToolNameLen {
+		return def, false, fmt.Sprintf("tool %q exceeds the %d character name limit once namespaced as %s__%s; skipped",
+			wire.Name, maxToolNameLen, server, wire.Name)
+	}
+	if reason := schemaDefect(wire.InputSchema); reason != "" {
+		return def, false, fmt.Sprintf("tool %q has an invalid input schema: %s; skipped", wire.Name, reason)
 	}
 	def = ToolDef{
 		Name:        wire.Name,

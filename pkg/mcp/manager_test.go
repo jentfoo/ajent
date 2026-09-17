@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -336,6 +337,79 @@ func TestConcurrentConnectsShareOneClient(t *testing.T) {
 	}
 	c := mgr.serverByName("fake").client()
 	require.NotNil(t, c) // exactly one client installed and serving
+}
+
+func TestBadSchemaNeverRegistered(t *testing.T) {
+	t.Parallel()
+
+	srv := buildFakeServer(t)
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: srv, Args: []string{"-bad-schema"}},
+	}, Options{Registrar: fr})
+	t.Cleanup(mgr.Close)
+
+	mgr.LoadOnFirstMessage(t.Context())
+
+	names := fr.AllNames("mcp: fake")
+	assert.Contains(t, names, "fake__tool_00") // the server still yields a usable session
+	assert.NotContains(t, names, "fake__bad_schema")
+
+	// regression: every schema that reaches the registry is sound, so nothing
+	// malformed can flow from Registry.Schemas() into a provider request body
+	for _, n := range names {
+		tool, ok := fr.toolByName(n)
+		require.True(t, ok)
+		assert.Empty(t, schemaDefect(tool.Schema().Parameters))
+	}
+}
+
+func TestRepeatedBadSchemaStaysQuiet(t *testing.T) {
+	t.Parallel()
+
+	srv := buildFakeServer(t)
+	fr := newFakeRegistrar()
+	var notices []string
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: srv, Args: []string{"-bad-schema"}},
+	}, Options{
+		Registrar: fr,
+		Notice:    func(msg string, warn bool) { notices = append(notices, msg) },
+	})
+	t.Cleanup(mgr.Close)
+
+	mgr.LoadOnFirstMessage(t.Context())
+	require.Len(t, notices, 1) // the first discovery warns once, naming the tool
+	assert.Contains(t, notices[0], `tool "bad_schema"`)
+
+	// re-discovery of the same defect (reconnect here, list_changed in the wild)
+	// logs the repeat but never re-notifies history
+	mgr.Disconnect("fake")
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	assert.Len(t, notices, 1)
+	warns := bulk.SliceFilter(func(line string) bool {
+		return strings.Contains(line, `tool "bad_schema"`)
+	}, mgr.serverByName("fake").logs.lines())
+	assert.Len(t, warns, 2) // both passes recorded in /mcp logs
+
+	// a config edit resets the dedupe, so a fix-then-rebreak cycle re-notifies.
+	// Re-applying an unchanged declaration (parsed fresh, as Reload does) keeps it.
+	mgr.Disconnect("fake")
+	s := mgr.serverByName("fake")
+	var fresh map[string]ServerConfig
+	b, err := json.Marshal(map[string]ServerConfig{"fake": s.config()})
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(b, &fresh)) // new pointers, same content
+	mgr.applyConfig(s, fresh["fake"])
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	assert.Len(t, notices, 1)
+
+	mgr.Disconnect("fake")
+	edited := s.config()
+	edited.Timeout = FlexDuration(90 * time.Second) // inert for the connection, still an edit
+	mgr.applyConfig(s, edited)
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	assert.Len(t, notices, 2) // fresh defect state, fresh notice
 }
 
 func TestRegisterMarksReadOnlyTools(t *testing.T) {

@@ -24,12 +24,14 @@ func main() {
 	var notifyListChanged bool     // emit a notifications/tools/list_changed on each trigger_listchanged call
 	var legacyOnly bool            // serve only legacy protocol versions, for client fallback tests
 	var startupDelay time.Duration // block before serving so connects overlap in single-flight tests
+	var badSchema bool             // expose one tool whose input schema is structurally malformed
 	flag.StringVar(&httpAddr, "http", "", "serve over Streamable HTTP on this address")
 	flag.BoolVar(&slow, "slow", false, "block each tool call until cancelled")
 	flag.IntVar(&tools, "tools", 3, "number of generated echo tools to expose")
 	flag.BoolVar(&notifyListChanged, "notify-list-changed", false, "emit list_changed via trigger_listchanged")
 	flag.BoolVar(&legacyOnly, "legacy", false, "refuse protocol versions after 2025-11-25")
 	flag.DurationVar(&startupDelay, "startup-delay", 0, "sleep before serving; for connect single-flight tests")
+	flag.BoolVar(&badSchema, "bad-schema", false, "expose a tool with a malformed input schema")
 	var die bool // expose a trigger_die tool that exits the process, for reconnect tests
 	flag.BoolVar(&die, "die", false, "expose a trigger_die tool that exits the server")
 	flag.Parse()
@@ -62,6 +64,14 @@ func main() {
 					return &mcp.CallToolResult{}, fmt.Errorf("send list_changed: %w", err)
 				}
 				return okText("sent"), nil
+			})
+	}
+
+	if badSchema { // a structurally broken schema parseTool must drop, keeping its siblings
+		srv.AddTool(mcp.NewToolWithRawSchema("bad_schema", "tool with a malformed input schema",
+			json.RawMessage(`{"type":"object","properties":{"rows":{"type":"array","items":"string"}}}`)),
+			func(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+				return okText("bad_schema: ok"), nil
 			})
 	}
 

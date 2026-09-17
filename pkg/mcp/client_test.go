@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,6 +213,108 @@ func TestClientDiscovers(t *testing.T) {
 		assert.Equal(t, "summarize", ps[0].Name)
 		assert.Len(t, ps[0].Arguments, 1)
 	})
+}
+
+func TestParseTool(t *testing.T) {
+	t.Parallel()
+
+	readOnly := FlexStrings{"gen_*"}
+	tests := []struct {
+		name    string
+		raw     string
+		ok      bool
+		schema  string // expected InputSchema; empty asserts rejection
+		wantSub string // expected substring of the warning
+	}{
+		{
+			name:   "valid_tool_passes",
+			raw:    `{"name":"t1","description":"d","inputSchema":{"type":"object","properties":{}}}`,
+			ok:     true,
+			schema: `{"type":"object","properties":{}}`,
+		},
+		{
+			name:   "schema_preserved_byte_for_byte",
+			raw:    `{"name":"t1","inputSchema":{"type": "object", "properties":{"a": {"type":"string"}}}}`,
+			ok:     true,
+			schema: `{"type": "object", "properties":{"a": {"type":"string"}}}`,
+		},
+		{name: "missing_name", raw: `{"inputSchema":{"type":"object"}}`, wantSub: "has no name or input schema"},
+		{name: "missing_schema", raw: `{"name":"t1"}`, wantSub: "has no name or input schema"},
+		{name: "name_with_space", raw: `{"name":"my tool","inputSchema":{"type":"object"}}`, wantSub: "name outside [a-zA-Z0-9_-]{1,64}"},
+		{name: "name_too_long", raw: `{"name":"` + strings.Repeat("x", 65) + `","inputSchema":{"type":"object"}}`, wantSub: "name outside [a-zA-Z0-9_-]{1,64}"},
+		{ // bare name is legal but fake__<58 x's> exceeds the composed 64 budget
+			name:    "namespaced_name_too_long",
+			raw:     `{"name":"` + strings.Repeat("x", 59) + `","inputSchema":{"type":"object"}}`,
+			wantSub: "exceeds the 64 character name limit once namespaced as fake__",
+		},
+		{name: "undecodable_entry", raw: `{"name":`, wantSub: "undecodable"},
+		{name: "top_not_json", raw: `{"name":"t1","inputSchema":[]}`, wantSub: "not a JSON object"},
+		{
+			name:    "top_not_object",
+			raw:     `{"name":"t1","inputSchema":{"type":"string"}}`,
+			wantSub: `type must be "object"`,
+		},
+		{
+			name:    "malformed_property_rejected",
+			raw:     `{"name":"t1","inputSchema":{"type":"object","properties":{"rows":{"type":"array","items":"string"}}}}`,
+			wantSub: "properties.rows.items is not an object",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			def, ok, warn := parseTool(json.RawMessage(tt.raw), "fake", readOnly)
+			assert.Equal(t, tt.ok, ok)
+			assert.Contains(t, warn, tt.wantSub)
+			if tt.schema != "" {
+				assert.Equal(t, tt.schema, string(def.InputSchema)) // byte for byte
+			}
+		})
+	}
+
+	t.Run("read_only_globs_apply", func(t *testing.T) {
+		def, ok, warn := parseTool(json.RawMessage(`{"name":"gen_echo","inputSchema":{"type":"object"}}`), "fake", readOnly)
+		require.True(t, ok)
+		assert.Empty(t, warn)
+		assert.True(t, def.ReadOnly)
+	})
+}
+
+func TestUniqueTools(t *testing.T) {
+	t.Parallel()
+
+	var warns []string
+	defs := uniqueTools([]ToolDef{
+		{Name: "a", InputSchema: jsonRawObject},
+		{Name: "b", InputSchema: jsonRawObject},
+		{Name: "a", InputSchema: jsonRawObject}, // listed twice by the server
+	}, func(msg string) { warns = append(warns, msg) })
+
+	names := make([]string, 0, len(defs))
+	for _, d := range defs {
+		names = append(names, d.Name)
+	}
+	assert.Equal(t, []string{"a", "b"}, names)
+	require.Len(t, warns, 1)
+	assert.Contains(t, warns[0], `tool "a" listed more than once`)
+}
+
+func TestToolsDropsBadSchema(t *testing.T) {
+	t.Parallel()
+
+	c, err := Connect(t.Context(), "fake", stdioConfig(t, "-bad-schema"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	var notices []string // warn fires synchronously inside Tools, single goroutine
+	c.SetNotice(func(msg string) { notices = append(notices, msg) })
+
+	defs, err := c.Tools(t.Context())
+	require.NoError(t, err)
+	assert.Len(t, defs, 3) // the generated tools survive the bad one
+	assert.False(t, slices.ContainsFunc(defs, func(d ToolDef) bool { return d.Name == "bad_schema" }))
+	require.Len(t, notices, 1)
+	assert.Contains(t, notices[0], `tool "bad_schema" has an invalid input schema`)
+	assert.Contains(t, notices[0], "properties.rows.items is not an object")
 }
 
 func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {

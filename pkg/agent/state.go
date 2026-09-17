@@ -8,8 +8,6 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/go-analyze/bulk"
-
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
@@ -67,7 +65,11 @@ type MessageInfo struct {
 
 // BeforeMessages returns the bare messages of infos, in order.
 func BeforeMessages(infos []MessageInfo) []llm.Message {
-	return bulk.SliceTransform(func(mi MessageInfo) llm.Message { return mi.Message }, infos)
+	out := make([]llm.Message, 0, len(infos))
+	for _, mi := range infos {
+		out = append(out, mi.Message)
+	}
+	return out
 }
 
 // ToolCall is one model-requested invocation handed to a Tool.

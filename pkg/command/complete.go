@@ -3,7 +3,6 @@ package command
 import (
 	"strings"
 
-	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -164,9 +163,11 @@ func offer(start, pos int, items []tui.Completion) (int, []tui.Completion) {
 
 // textCompletions turns plain candidate strings into completions.
 func textCompletions(items []string) []tui.Completion {
-	return bulk.SliceTransform(func(s string) tui.Completion {
-		return tui.Completion{Text: s, Label: s}
-	}, items)
+	out := make([]tui.Completion, 0, len(items))
+	for _, s := range items {
+		out = append(out, tui.Completion{Text: s, Label: s})
+	}
+	return out
 }
 
 // tokenStart returns the first cell of the token ending at pos, never scanning

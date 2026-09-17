@@ -3,6 +3,7 @@ package mcp
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,23 @@ func TestLoadConfig(t *testing.T) {
 		assert.Contains(t, err.Error(), "both")
 	})
 
+	t.Run("bad_server_key_skips_only_that_server", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", mkHome(t))
+		mkFile(t, os.Getenv("AJENT_HOME")+"/mcp.json", `{"servers":{
+		  "my.server":{"command":"x"},
+		  "good":{"command":"y"}
+		}}`)
+
+		got, warns, err := LoadConfig(t.TempDir())
+		require.NoError(t, err) // one bad key must not disable every server
+		_, ok := got["my.server"]
+		assert.False(t, ok) // the offending entry is dropped
+		_, ok = got["good"]
+		assert.True(t, ok) // healthy servers load untouched
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], `server "my.server"`)
+	})
+
 	t.Run("unknown_key_warns", func(t *testing.T) {
 		t.Setenv("AJENT_HOME", mkHome(t))
 		mkFile(t, os.Getenv("AJENT_HOME")+"/mcp.json",
@@ -122,6 +140,31 @@ func TestValidateServer(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateServer("s", tc.cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errContains)
+		})
+	}
+}
+
+func TestValidateServerName(t *testing.T) {
+	t.Parallel()
+
+	cfg := ServerConfig{Command: "x"} // connection fields are valid; the name is under test
+	require.NoError(t, validateServer("github", cfg))
+
+	cases := []struct {
+		name        string
+		srvName     string
+		errContains string
+	}{
+		{"dotted_name", "my.server", "name must match"},
+		{"unicode_name", "servér", "name must match"},
+		{"name_too_long", strings.Repeat("x", 65), "name must match"},
+		{"name_with_separator", "a__b", `may not contain "__"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateServer(tc.srvName, cfg)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errContains)
 		})

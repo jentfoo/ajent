@@ -13,8 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/go-analyze/bulk"
-
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -112,9 +110,10 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 	}
 	// the survey's tool pairs are machinery, not conversation: they carry no
 	// replay mark, so a resume shows the distilled result rather than the survey
-	infos := bulk.SliceTransform(func(m llm.Message) agent.MessageInfo {
-		return agent.MessageInfo{Message: m}
-	}, before)
+	infos := make([]agent.MessageInfo, 0, len(before))
+	for _, m := range before {
+		infos = append(infos, agent.MessageInfo{Message: m})
+	}
 	return agent.Input{Text: text, Before: infos, Injected: true}, nil
 }
 
