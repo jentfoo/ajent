@@ -140,7 +140,7 @@ func newPlanController(d planDeps) *plan.Controller {
 		},
 		Notify: func(msg string, level agent.Level) { d.ui.Notify("plan: "+msg, tui.Level(level)) },
 		Status: func(text, short string) {
-			d.ui.SetStatusSegment(tui.Segment{Key: "plan", Text: text, Short: short})
+			d.ui.SetStatusSegment(segment(segPlan, text, short))
 		},
 		Git: plan.GitState,
 	})

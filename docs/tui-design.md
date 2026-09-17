@@ -109,63 +109,44 @@ gap in a rule reads as a defect.
 
 ## Status line
 
-The status block (`status.go`) is the fixed chrome beneath the input: a
-fixed-width context bar, used/total tokens, the model, then keyed `Segment`s in
-insertion order. A running tool keeps the status-bar glyph animated and colored
-(`SpinnerTool`); it adds no label to the bar. The bar fills against the
-compaction budget (`window - reserve`) so a full bar means "compaction fires
-now" rather than at raw capacity; the count shows used against the real window.
-A `~` prefixes the count while it is an estimate (mid-stream or between provider
-reports). The colour escalates as it nears the budget, at a warning threshold
-and then a critical one, both relative to it.
+The status block (`status.go`) is the fixed chrome beneath the input, in a fixed
+order that does not depend on which publisher spoke first: spinner, context bar
+with used/total tokens, model, then keyed `Segment`s. A running tool keeps the
+status-bar glyph animated and colored (`SpinnerTool`); it adds no label to the
+bar. The bar fills against the compaction budget (`window - reserve`) so a full
+bar means "compaction fires now" rather than at raw capacity; the count shows used
+against the real window, prefixed `~` while it is an estimate. Colour escalates as
+it nears that budget.
 
-The model carries a short form (`ModelShort`, from `Model.ShortName`) and each
-segment a `Short` form (fallback: full text) plus a `Priority`; a narrow
-terminal shortens them in that order before anything splits. Packing
-(`Status.rows`) is:
+**Order comes from data, not arrival.** Every piece carries an `Order` and the sort is
+stable, so clearing a segment cannot move its neighbours when it returns. Placement
+is declared once per key in `pkg/app/status.go`; publishers pass a key through
+`segment(key, text, short)` rather than picking numbers, and position is independent
+of how long a piece keeps its full text.
 
-1. Everything on one row at full text, as long as it fits.
-2. Otherwise the model shortens to its short form: first and always; it never
-   vanishes.
-3. Then segments shorten on the same row, in drop order (lowest `Priority`
-   first, ties the later insertion).
-4. Only when even all-short segments overflow does the block split in two. Row
-   one is the fixed part (spinner, bar/tokens) plus the model, shortening then
-   clipping it. Row two packs the segments full-then-short, dropping in drop
-   order only once every survivor is already short; survivors re-expand into
-   freed width.
+**Collapse before dropping.** A narrow row walks each piece's `Priority` ascending,
+unset (0) first then 1, 2…, taking that `Short` at every step until the row fits; a
+negative `Priority`, or no short form, never collapses. Only a fully collapsed single
+row that still overflows splits in two: row one keeps the fixed part and the model,
+collapsed else clipped and never dropped, row two packs the segments and drops them by
+the same order, negatives last. Capped at two rows; overflow clips rather than wraps.
+Safety state (`permissions`) is numbered to collapse after the informational segments,
+so nobody forgets the gate is open.
 
-The block is capped at two rows; an overflowing segment line is clipped to width
-rather than wrapped, so row accounting stays exact.
+`SetStatusSegment(seg Segment)` is the single setter: add a key, replace by key,
+remove with an empty `Text`. The live block is recomposed on every repaint, so a second
+row appearing costs nothing structurally.
 
-`SetStatusSegment(seg Segment)` is the single setter: add by a new key, replace
-by key, remove with an empty `Text`. Because the live block is recomposed on
-every repaint, a second row appearing and disappearing costs nothing
-structurally. The front end publishes a `permissions` segment
-(`Key: "permissions"`) whenever the live mode differs from the `allow-read`
-default, mirroring the reasoning indicator. The non-default modes must always be
-visible so nobody forgets the gate is open; it carries a short form for narrow
-rows.
+### One hint line
 
-The sub-agent manager publishes a `subagents` segment (`Key: "subagents"`) on
-every transition: a full form naming the running count (with the oldest job's
-age) and the done count, a short form when only the count matters, cleared with
-an empty text when no jobs exist. It carries a default priority and drops before
-`permissions` under narrow widths, since permissions is a safety indicator that
-must stay visible.
-
-The plan workflow publishes a `plan` segment (`Key: "plan"`) on every phase
-transition: a full form naming the phase and round, a short form for narrow
-rows, cleared when the workflow ends. It also drops before `permissions`. The
-workflow never resets the screen: a phase switch changes what the *model* sees,
-not what the user sees, so the whole run reads top to bottom with a divider per
-phase and the segment is what makes the divergence inspectable.
-
-The typing hold (`agent-loop-design.md`) publishes a `typing` segment while it
-waits on a visible draft: the remaining seconds (ceiling, never 0), republished
-only as that second changes and cleared when the hold releases. It carries
-default priority, so being inserted last it drops before `permissions`,
-`subagents` and `plan` on narrow rows; an unheld boundary publishes nothing.
+The transient notices from the typing hold (`agent-loop-design.md`) and the control loop
+(quit arming, cancelled survey or staged command) share one `hint` segment rather than
+owning keys. They arrive from two goroutines, so a shared key written directly would be
+last-writer-wins: an unwinding hold could erase a quit message, or its per-second repaint
+overwrite it. `hintBoard` (`pkg/app/hints.go`) arbitrates that, which is why there is no
+separate typing segment. A source takes its own slot and the board shows only the most
+recently requested live one; freeing hands the line back to the next holder, whose text
+is still current because a masked slot keeps whatever its owner last set.
 
 ## Layers
 

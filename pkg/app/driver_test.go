@@ -191,6 +191,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 func TestControlLoop(t *testing.T) {
 	t.Parallel()
 
+	rec := &hintRecorder{} // records what the loop paints on the hint line
 	// start runs the loop over a control channel the caller drives. cycled fires
 	// per Shift+Tab, giving a test a signal ordered behind earlier controls.
 	start := func(t *testing.T) (controls chan tui.Control, quit chan struct{}, cycled chan struct{}) {
@@ -214,7 +215,7 @@ func TestControlLoop(t *testing.T) {
 		quit = make(chan struct{})
 		cycled = make(chan struct{}, 4)
 		ag := agent.New(&agent.State{}, agent.Options{})
-		go controlLoop(controls, ui, ag, &steerQueue{}, command.NewStager(nil, nil), nil, quit,
+		go controlLoop(controls, newHintBoard(rec.record), ag, &steerQueue{}, command.NewStager(nil, nil), nil, quit,
 			func() { cycled <- struct{}{} })
 		return controls, quit, cycled
 	}
@@ -241,6 +242,7 @@ func TestControlLoop(t *testing.T) {
 		controls <- tui.ControlInterrupt
 		controls <- tui.ControlModeCycle // ordered behind the press: it has been handled
 		<-cycled
+		assert.Equal(t, []string{"ctrl+c again to quit"}, rec.last())
 
 		select {
 		case <-quit:

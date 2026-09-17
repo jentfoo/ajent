@@ -245,7 +245,7 @@ func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
 		_ = c.set.SetSession("reasoning.retain", rc.Retain.String())
 	}
 	// keep the status indicator in step with a non-default level.
-	c.ui.SetStatusSegment(tui.Segment{Key: "reasoning", Text: levelOrEmpty(rc)})
+	c.ui.SetStatusSegment(segment(segReasoning, levelOrEmpty(rc), ""))
 	c.ui.Notify("reasoning: "+rc.Level.String(), tui.LevelInfo)
 	if c.rec != nil {
 		_ = c.rec.SettingChange("reasoning", rc)
@@ -405,5 +405,5 @@ func showReasoningIndicator(ui *tui.UI, set *config.Set, st *agent.State) {
 	} else {
 		text = levelOrEmpty(st.Reasoning)
 	}
-	ui.SetStatusSegment(tui.Segment{Key: "reasoning", Text: text})
+	ui.SetStatusSegment(segment(segReasoning, text, ""))
 }

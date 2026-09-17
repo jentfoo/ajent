@@ -131,6 +131,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
 		settled,
 	)
+	// hints arbitrates the one hint status line across its sources: the typing hold and
+	// the control loop's quit/cancel notices (hints.go).
+	hints := uiHintBoard(ui)
 	// typingGate holds the next step boundary while the user is mid-message, so a
 	// prompt they are still typing lands in this step instead of behind it.
 	gate := &typingGate{
@@ -139,10 +142,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		poll:    typingPoll,
 		pending: q.pending,
 	}
-	// the hold publishes a keyed status segment while it waits on a visible draft.
-	gate.status = func(text, short string) {
-		ui.SetStatusSegment(tui.Segment{Key: "typing", Text: text, Short: short})
-	}
+	// the hold speaks through the shared hint board (hints.go), so a quit countdown can
+	// take the line and hand it back to a still-held boundary when it releases.
+	gate.status = hints.Line().Set
 	// the editor's in-progress text feeds accounting so the context bar grows as you
 	// type or paste, then clears once submitted (the buffer empties); it is also the
 	// typing signal the boundary hold reads.
@@ -179,9 +181,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				}
 			},
 			Notice: func(msg string) { ui.NotifyKeyed("subagent", msg, tui.LevelInfo) },
-			Status: func(text, short string) {
-				ui.SetStatusSegment(tui.Segment{Key: "subagents", Text: text, Short: short})
-			},
+			Status: func(text, short string) { ui.SetStatusSegment(segment(segSubagents, text, short)) },
 			Deliver: func(in agent.Input) bool {
 				if ag == nil || !ag.Running() { // never start a turn on an idle parent
 					return false
@@ -309,7 +309,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			Workspace: config.Cwd(),
 			Restore:   st.Tools,
 			Notice:    func(msg string, warn bool) { ui.Notify(msg, levelOf(warn)) },
-			Status:    func(text string) { ui.SetStatusSegment(tui.Segment{Key: "mcp", Text: text}) },
+			Status:    func(text, short string) { ui.SetStatusSegment(segment(segMCP, text, short)) },
 		})
 	}
 
@@ -445,7 +445,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// resume restores it; the config file is never rewritten.
 		_ = console.SetSessionSetting("permissions.mode", m.String())
 	}
-	watchControls(ui, ag, q, stager, ictl, quit, onModeCycle)
+	watchControls(ui, hints, ag, q, stager, ictl, quit, onModeCycle)
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
 		rec.started = &started
@@ -586,24 +586,32 @@ func resolveSubAgentModel(set *config.Set, reg *llm.Registry, st *agent.State) l
 	return st.Model
 }
 
-const doublePressWindow = 10 * time.Second
+const (
+	doublePressWindow = 10 * time.Second
+	// hintNoticeTTL is how long a one-shot control notice (a cancelled survey or staged
+	// command) holds the hint line before releasing it to whatever claimed it before.
+	hintNoticeTTL = 6 * time.Second
+)
 
-func watchControls(ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
-	go controlLoop(ui.Controls(), ui, ag, q, stager, initCtl, quit, onModeCycle)
+func watchControls(ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
+	go controlLoop(ui.Controls(), hints, ag, q, stager, initCtl, quit, onModeCycle)
 }
 
-func controlLoop(controls <-chan tui.Control, ui *tui.UI, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
+func controlLoop(controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
 	// armed is when the first Ctrl+C landed; quitHint fires to retire the hint
 	// that advertises the window, keeping the gesture and the hint the same
 	// length. The window is measured from armed, not from the timer, so a press
 	// arriving as the timer fires cannot lose the arm to select's coin flip.
 	var armed time.Time
 	var quitHint <-chan time.Time
+	// arm holds the hint line for as long as the double-press window is open, so an
+	// older claim (a typing hold) reclaims it the moment the window closes.
+	arm := hints.Line()
 	for {
 		select {
 		case <-quitHint:
 			quitHint = nil
-			ui.SetStatusSegment(tui.Segment{Key: "hint"}) // empty Text removes it
+			arm.Set("", "") // the window closed unanswered: free the line
 		case c, ok := <-controls:
 			if !ok {
 				return // the UI went away
@@ -625,25 +633,25 @@ func controlLoop(controls <-chan tui.Control, ui *tui.UI, ag *agent.Agent, q *st
 					continue
 				}
 				if initCtl.abort() {
-					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled project survey"})
+					hints.ShowFor("cancelled project survey", "", hintNoticeTTL)
 					continue
 				}
 				// a running `!` cancels on the first Ctrl+C instead of quitting
 				if stager.Pending() {
 					stager.Cancel()
-					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "cancelled shell command"})
+					hints.ShowFor("cancelled shell command", "", hintNoticeTTL)
 					continue
 				}
 				if !armed.IsZero() && time.Since(armed) < doublePressWindow { // inside the promised window
 					// teardown still has to run; say so rather than leaving the
 					// "again to quit" hint up, which reads as a press that missed
-					ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "quitting…"})
+					hints.Request("quitting…", "")
 					close(quit)
 					return
 				}
 				armed = time.Now()
 				quitHint = time.After(doublePressWindow)
-				ui.SetStatusSegment(tui.Segment{Key: "hint", Text: "ctrl+c again to quit"})
+				arm.Set("ctrl+c again to quit", "")
 			case tui.ControlEOF:
 				if ag.Running() {
 					continue // ignored while a turn streams, per the key table

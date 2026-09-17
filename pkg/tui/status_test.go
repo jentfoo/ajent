@@ -5,6 +5,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStatusRows(t *testing.T) {
@@ -60,6 +61,83 @@ func TestStatusRows(t *testing.T) {
 	t.Run("zero_window_renders_no_bar", func(t *testing.T) {
 		s := Status{Model: "opus-5"}
 		assert.Equal(t, []string{"opus-5"}, s.rows(plain, 40)) // no MaxTokens -> no bar
+	})
+
+	t.Run("order_places_regardless_of_insertion", func(t *testing.T) {
+		s := Status{Model: "opus-5", Segments: []Segment{
+			{Key: "sub", Text: "sub 2", Order: 40},
+			{Key: "mode", Text: "high", Order: 20},
+		}}
+		assert.Equal(t, []string{"opus-5 · high · sub 2"}, single(s, 80))
+	})
+
+	t.Run("lowest_priority_collapses_first", func(t *testing.T) {
+		s := Status{Model: "opus-very-long-name", Segments: []Segment{
+			{Key: "reasoning", Text: "xhigh", Short: "xh", Order: 20, Priority: 0},
+			{Key: "mcp", Text: "mcp: 7/14", Short: "7/14", Order: 30, Priority: 5},
+		}}
+		all := displayWidth("opus-very-long-name · xhigh · mcp: 7/14")
+		oneCollapsed := displayWidth("opus-very-long-name · xh · mcp: 7/14")
+		got := single(s, (all+oneCollapsed)/2)
+		assert.Equal(t, []string{"opus-very-long-name · xh · mcp: 7/14"}, got)
+	})
+
+	t.Run("negative_priority_never_collapses", func(t *testing.T) {
+		// the width fits only if "hint text" stays short, which a negative priority forbids,
+		// so the positive one collapses and the negative keeps its full text
+		s := Status{Model: "m", Segments: []Segment{
+			{Key: "hint", Text: "again to quit", Short: "again", Order: 70, Priority: -1},
+			{Key: "plan", Text: "planning now", Short: "plan", Order: 50, Priority: 2},
+		}}
+		want := "m · plan · again to quit" // the positive one collapses; the negative holds
+		assert.Equal(t, []string{want}, single(s, displayWidth(want)))
+	})
+
+	t.Run("missing_short_keeps_full_text", func(t *testing.T) {
+		// no short form means the collapse ladder skips the segment even at priority 0, so
+		// the later higher-priority one is what shortens
+		s := Status{Model: "m", Segments: []Segment{
+			{Key: "hint", Text: "again to quit", Order: 70},
+			{Key: "plan", Text: "planning now", Short: "plan", Order: 50, Priority: 2},
+		}}
+		want := "m · plan · again to quit"
+		assert.Equal(t, []string{want}, single(s, displayWidth(want)))
+	})
+
+	t.Run("model_collapses_before_higher_priorities", func(t *testing.T) {
+		// reasoning yields first, then the long model label; plan keeps its full text
+		s := Status{Model: "opus-very-long-name", ModelShort: "opus", Segments: []Segment{
+			{Key: "reasoning", Text: "xhigh", Short: "xh", Order: 20, Priority: 0},
+			{Key: "plan", Text: "planning now", Short: "plan", Order: 50, Priority: 2},
+		}}
+		want := "opus · xh · planning now"
+		assert.Equal(t, []string{want}, single(s, displayWidth(want)))
+	})
+
+	t.Run("two_rows_drop_lowest_priority_first", func(t *testing.T) {
+		// row two overflows even fully collapsed, so the lower-priority segment leaves and
+		// the negative-priority hint survives
+		s := Status{Model: "opus-5", Segments: []Segment{
+			{Key: "perm", Text: "allow-all modes", Short: "allow-all", Order: 60, Priority: 8},
+			{Key: "hint", Text: "ctrl+c again to quit", Order: 70, Priority: -1},
+		}}
+		width := displayWidth("allow-all · ctrl+c again to quit") - 1 // neither short form fits
+		got := single(s, width)
+		require.Len(t, got, 2)
+		assert.Equal(t, "opus-5", got[0])
+		assert.Equal(t, "ctrl+c again to quit", got[1])
+	})
+
+	t.Run("drop_ignores_missing_short", func(t *testing.T) {
+		// a missing short form only blocks collapsing, so the low-priority segment without
+		// one is what leaves row two while the higher-priority one shortens to fit
+		s := Status{Model: "opus-5", Segments: []Segment{
+			{Key: "reasoning", Text: "xhigh", Order: 20},
+			{Key: "perm", Text: "allow-all modes", Short: "allow", Order: 60, Priority: 8},
+		}}
+		got := single(s, displayWidth("xhigh · allow")-1)
+		require.Len(t, got, 2)
+		assert.Equal(t, "allow", got[1])
 	})
 }
 

@@ -49,9 +49,9 @@ type toolState struct {
 type Options struct {
 	Registrar Registrar
 	Notice    func(msg string, warn bool)
-	Status    func(text string) // status segment text, "" clears it
-	Restore   []string          // persisted tools.enabled names to honour on connect
-	Workspace string            // for re-reading mcp.json on /mcp reload
+	Status    func(text, short string) // status segment texts, empty text clears it
+	Restore   []string                 // persisted tools.enabled names to honour on connect
+	Workspace string                   // for re-reading mcp.json on /mcp reload
 }
 
 // server is one configured server and its live client (nil when disconnected).
@@ -960,7 +960,7 @@ func (m *Manager) updateStatus() {
 	}
 	names := m.ServerNames()
 	if len(names) == 0 {
-		m.opts.Status("") // nothing configured; clear any stale segment
+		m.opts.Status("", "") // nothing configured; clear any stale segment
 		return
 	}
 	var active, discovered int
@@ -978,5 +978,6 @@ func (m *Manager) updateStatus() {
 			}
 		}
 	}
-	m.opts.Status(fmt.Sprintf("mcp: %d/%d", active, discovered))
+	// the short form is the bare ratio: narrow rows collapse it, dropping the label
+	m.opts.Status(fmt.Sprintf("mcp: %d/%d", active, discovered), fmt.Sprintf("%d/%d", active, discovered))
 }

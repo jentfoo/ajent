@@ -130,8 +130,8 @@ func showPermissionIndicator(ui *tui.UI, b *permit.Barrier) {
 	}
 	m := b.Mode()
 	if m != permit.ModeAllowRead { // default: hidden until the user changes it
-		ui.SetStatusSegment(tui.Segment{Key: "permissions", Text: m.String(), Short: m.Short()})
+		ui.SetStatusSegment(segment(segPermissions, m.String(), m.Short()))
 		return
 	}
-	ui.SetStatusSegment(tui.Segment{Key: "permissions"})
+	ui.SetStatusSegment(tui.Segment{Key: segPermissions}) // empty Text removes it
 }
