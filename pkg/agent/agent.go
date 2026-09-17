@@ -130,7 +130,7 @@ func (a *Agent) BaseEstimate(tools bool) int {
 	if a.running {
 		return 0
 	}
-	req := llm.Request{System: buildSystem(a.state, a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets)}
+	req := llm.Request{System: buildSystem(a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets)}
 	if tools {
 		if ts := a.opts.Tools; ts != nil {
 			req.Tools = ts.Schemas() // registry-cached

@@ -34,8 +34,12 @@ type Agent struct {
 
 // Tools configures the enabled set and output bounds.
 type Tools struct {
-	Enabled []string   `json:"enabled,omitempty"`
-	Limits  ToolLimits `json:"limits,omitzero"`
+	Enabled []string `json:"enabled,omitempty"`
+	// ShellCommands names extra shell commands the bash tool description may
+	// advertise when bash is enabled. PATH probing and deny filtering happen at
+	// startup in pkg/app.
+	ShellCommands []string   `json:"shellCommands,omitempty"`
+	Limits        ToolLimits `json:"limits,omitzero"`
 }
 
 // ToolLimits is the configurable subset of pkg/tools' built-in output bounds,

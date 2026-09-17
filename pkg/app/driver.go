@@ -50,7 +50,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// read, write, edit and run commands.
 	// ask_user rides the TUI's question queue, so it never pre-empts a permission
 	// dialog. It stays disabled until a workflow enables it.
-	toolsReg, terr := tools.Builtins(tools.Options{SessionID: config.Cwd(), Ask: askUser(ui)})
+	toolsReg, terr := builtinTools(set, askUser(ui), func(msg string) { ui.Notify(msg, tui.LevelWarn) })
 	if terr != nil {
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
 	}
@@ -132,7 +132,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		settled,
 	)
 	// hints arbitrates the one hint status line across its sources: the typing hold and
-	// the control loop's quit/cancel notices (hints.go).
+	// the control loop's quit/cancel notices
 	hints := uiHintBoard(ui)
 	// typingGate holds the next step boundary while the user is mid-message, so a
 	// prompt they are still typing lands in this step instead of behind it.
@@ -142,7 +142,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		poll:    typingPoll,
 		pending: q.pending,
 	}
-	// the hold speaks through the shared hint board (hints.go), so a quit countdown can
+	// the hold speaks through the shared hint board, so a quit countdown can
 	// take the line and hand it back to a still-held boundary when it releases.
 	gate.status = hints.Line().Set
 	// the editor's in-progress text feeds accounting so the context bar grows as you

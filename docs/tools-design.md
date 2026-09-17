@@ -451,12 +451,15 @@ structural reduction and edit feedback only.
 
 ## Agent integration
 
-`pkg/app` builds the set with `tools.Builtins(Options{Cwd, SessionID})` and
-hands the registry to the agent loop as its `ToolSet`. Per turn the loop:
+`pkg/app` builds the set with `tools.Builtins(Options{Cwd, SessionID,
+ShellCommands})` and hands the registry to the agent loop as its `ToolSet`.
+Per turn the loop:
 
-1. Mirrors the enabled names into state (the system prompt derives its search
-   hint from them. `ls`/`grep`/`find` via `bash` is suggested only when no
+1. Mirrors the enabled names into state, so the transcript records what the
+   turn could call and a later resume can restore the same set.
 2. Sends the registry's cached schemas with each request.
 3. Dispatches tool calls: parallel when the model supports it and every call is
-   `ModeParallel`, serial otherwise; results are appended in call order.
-   `Display`/`Details` onto the recorded `ToolResultBlock`, so the transcript
+   `ModeParallel`, serial otherwise. Results are appended in call order.
+4. Runs each call through the guard chain and any asker inside `Execute`, and
+   surfaces permission outcomes as `Display`/`Details` onto the recorded
+   `ToolResultBlock`, so the transcript shows why a call ran or was refused.

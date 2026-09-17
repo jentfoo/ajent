@@ -92,6 +92,19 @@ See `tools-design.md` "Headless: the tool set is the gate" for the rule. The
 flag surface itself lives in `flags.go`; per the README contract every scope
 flag also has its entry there.
 
+### Tools
+
+`tools.enabled` replaces the default enabled set (`read`, `write`, `edit`,
+`bash`) and `tools.limits` bounds each tool's output.
+
+`tools.shellCommands` names extra shell commands the bash tool description
+may advertise. The list starts from a built-in set, adds these extras, then
+drops any entry that is not a bare executable name on PATH, refused by
+`permissions.deniedCommands`, or already covered by an enabled tool (a rule
+naming a subcommand also drops its bare parent). The probe runs once at
+startup and warns when an entry is missing from PATH. Like every slice key it
+has no `AJENT_*` binding.
+
 ### Subagent
 
 The `subagent` block ships a compiled-in `maxConcurrent` default; `model` is

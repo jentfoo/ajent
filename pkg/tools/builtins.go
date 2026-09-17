@@ -18,6 +18,9 @@ const ToolAskUser = "ask_user"
 type Options struct {
 	Cwd       string // base for relative paths; empty uses os.Getwd
 	SessionID string // names the bash spill directory
+	// ShellCommands lists common commands for the bash description's examples,
+	// already filtered by the caller against PATH, deny rules and enabled tools.
+	ShellCommands []string
 	// Ask backs the ask_user tool. nil registers it in a state that reports no
 	// UI is available, so a headless run never blocks on a question.
 	Ask AskFunc
@@ -43,7 +46,7 @@ func Builtins(opts Options) (*Registry, error) {
 	reg.Register(&readTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&writeTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&editTool{policy: policy, tracker: tracker}, true)
-	reg.Register(&bashTool{policy: policy, sessionID: opts.SessionID}, true)
+	reg.Register(&bashTool{policy: policy, sessionID: opts.SessionID, shellExamples: opts.ShellCommands}, true)
 	reg.Register(&findTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&grepTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&lsTool{policy: policy, tracker: tracker, sessionID: opts.SessionID}, false)

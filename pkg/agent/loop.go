@@ -124,7 +124,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 
 	sink := a.sink
 	// mirror the enabled set into state so the transcript records what this turn
-	// could call; buildSystem derives its search hint from it.
+	// could call and resume can restore it.
 	if ts := a.opts.Tools; ts != nil {
 		a.state.Tools = ts.Names()
 	} else {
@@ -471,7 +471,7 @@ func (a *Agent) buildRequest() llm.Request {
 	}
 	return llm.Request{
 		Model:     a.state.Model,
-		System:    buildSystem(a.state, a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets),
+		System:    buildSystem(a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets),
 		Messages:  messages,
 		Tools:     tools,
 		Reasoning: reasoning,

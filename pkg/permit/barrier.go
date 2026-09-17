@@ -637,6 +637,25 @@ func DenyMatches(call agent.ToolCall, cmds []string) bool {
 	return false
 }
 
+// CommandRefused reports whether the deny configuration refuses bash cmd at
+// all: the bare invocation matches an entry, or an entry runs cmd with
+// arguments. Callers advertising example commands use it to hide anything the
+// barrier would question.
+func CommandRefused(cmd string, denied []string) bool {
+	if len(denied) == 0 {
+		return false
+	}
+	if entryCovered(cmd, denied) {
+		return true
+	}
+	for _, e := range denied {
+		if fields := strings.Fields(e); len(fields) > 0 && fields[0] == cmd {
+			return true
+		}
+	}
+	return false
+}
+
 // SafeMatches reports whether call is named by a configured safe command: an exact
 // tool name for any non-bash tool (MCP/extension/built-in), or, for bash, the
 // trimmed command line matched as a token-boundary prefix, so "git" covers every

@@ -119,8 +119,8 @@ Invariants worth memorising:
 
 - `assemble(state, transform)` is **pure** — compaction and plan projection transform
   the assembled list, never `State`.
-- `buildSystem` must stay **cache-stable**: only day-granular date, project-instruction
-  reloads and tool-set changes may differ between requests in a session.
+- `buildSystem` must stay **cache-stable**: only day-granular date and
+  project-instruction/snippet reloads may differ between requests in a session.
 - On abort, every unanswered `ToolCallBlock` gets a synthetic error `ToolResultBlock`.
   A dangling `tool_use` makes the next Anthropic request 400 permanently.
 - Tool errors are `ToolResultBlock{IsError:true}` results, not Go errors — the turn

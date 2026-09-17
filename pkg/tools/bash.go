@@ -33,12 +33,17 @@ const (
 // ToolBash is the built-in shell tool's name; its command feeds the permission classifier.
 const ToolBash = "bash"
 
+// ShellExamples is the base set of common commands the bash description may
+// list as examples; callers filter it against PATH, deny rules and enabled tools.
+var ShellExamples = []string{"ls", "grep", "find", "diff", "wc"}
+
 // bashTool runs one non-login bash -c process per call. A fresh shell each time
 // keeps cd and state from confusing later calls.
 type bashTool struct {
-	policy    PathPolicy
-	sessionID string // names the spill directory for long output
-	limit     Limit  // zero means BashOutput; overridable for tests
+	policy        PathPolicy
+	sessionID     string   // names the spill directory for long output
+	limit         Limit    // zero means BashOutput; overridable for tests
+	shellExamples []string // common commands the description may name; startup-fixed
 }
 
 var _ agent.Tool = (*bashTool)(nil)
@@ -66,7 +71,12 @@ func (t *bashTool) Label(call agent.ToolCall) string {
 }
 
 func (t *bashTool) Description() string {
-	return "Execute a bash command in the session working directory. Returns stdout and stderr; output is truncated with the full log spilled to a file. Use timeout (seconds) to override the default."
+	desc := "Execute a bash command in the session working directory. Returns stdout and stderr; output is truncated with the full log spilled to a file. Prefer a dedicated tool when one is enabled."
+	if len(t.shellExamples) == 0 {
+		return desc
+	}
+	// startup-fixed list, never retracted: an enabled dedicated tool wins by wording
+	return desc + " Example available commands: " + strings.Join(t.shellExamples, ", ")
 }
 func (t *bashTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: SchemaOf[bashParams]()} }
 func (t *bashTool) Mode() agent.ExecutionMode {

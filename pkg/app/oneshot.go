@@ -72,7 +72,9 @@ func RunHeadless(o HeadlessOptions) int {
 	}
 
 	// ask_user has nobody to ask, so it is left without an Ask func and excluded from every scope below
-	toolsReg, terr := tools.Builtins(tools.Options{SessionID: config.Cwd()})
+	toolsReg, terr := builtinTools(o.Set, nil, func(msg string) {
+		_, _ = fmt.Fprintln(errw, "ajent:", msg)
+	})
 	if terr != nil {
 		_, _ = fmt.Fprintln(errw, "ajent:", terr)
 		return ExitUsage

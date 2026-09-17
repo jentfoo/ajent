@@ -1236,3 +1236,24 @@ func TestPrefetchSkipsSessionAllowed(t *testing.T) {
 	require.Eventually(t, func() bool { return cl.count() == 1 }, time.Second, 10*time.Millisecond)
 	assert.Never(t, func() bool { return cl.count() > 1 }, 100*time.Millisecond, 10*time.Millisecond)
 }
+
+func TestCommandRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty_denied_never_refuses", func(t *testing.T) {
+		assert.False(t, CommandRefused("git", nil))
+	})
+
+	t.Run("bare_entry_refuses_invocation", func(t *testing.T) {
+		assert.True(t, CommandRefused("git", []string{"git"}))
+		assert.False(t, CommandRefused("git", []string{"gitk"}))
+	})
+
+	t.Run("parent_of_denied_subcommand", func(t *testing.T) {
+		assert.True(t, CommandRefused("git", []string{"git stash"}))
+	})
+
+	t.Run("unrelated_entry", func(t *testing.T) {
+		assert.False(t, CommandRefused("make", []string{"git stash", "rm"}))
+	})
+}

@@ -41,9 +41,9 @@ later model pick up where one stopped. Every lossy prompt in this document
 carries an explicit instruction to keep those artefacts exact.
 
 **5. Only advertise what is real.** A tool appears in the request only when it
-is enabled; guidelines adapt to which tools are available. Advertising something
-that is not there makes the model burn a round-trip discovering it, or worse,
-try and fail.
+is enabled. Advertising something that is not there makes the model burn a
+round-trip discovering it, or worse, try and fail. Guidance for using a tool
+rides that tool's own description, which exists only when the tool does.
 
 **6. Provenance everywhere.** Every block of injected content carries where it
 came from: `<project_instructions path="/abs/AGENTS.md">`, a compaction summary
@@ -115,7 +115,7 @@ not this block.
 
 ```
 1. Opening sentence         — how the agent works, domain- and tool-neutral.
-2. Guidelines               — concise bullets; some derived from which tools exist.
+2. Guidelines               — two static bullets, no tool-derived content.
 3. Environment facts        — working directory, platform and day-granular date.
 4. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
 5. Extension snippets       — caller-supplied, blank-line separated; sub-agents inject their contract here.
@@ -133,13 +133,10 @@ costs more than one simply given accurate scope.
 
 ### Guidelines
 
-Short bullets: conciseness and clear file paths are always included, with
-further bullets derived from the enabled toolset. When `bash` exists but no
-dedicated exploration tools do (`grep`, `find`, `ls`), a bullet points at using
-bash for those operations.
-
-The derivation rule matters: guidelines should never tell the model to use a
-tool that is not present.
+Two static bullets: conciseness and clear file paths. Nothing is derived from
+the enabled toolset, so the block stays cache-stable across tool changes. The
+rule that guidance never names an absent tool is structural: per-tool guidance
+rides each tool's `Description`, which is sent only while that tool is enabled.
 
 ### Environment facts
 
@@ -184,9 +181,10 @@ anything that changes how the model should use the tool:
 
 - `read`: returns line-numbered text and refuses binary files; supports
   offset/limit paging.
-- `bash`: runs in the session working directory; output is truncated with the
-  full log spilled to a file, and timeout overrides the default. One shell
-  process per call; there is no persistent `cd`.
+- `bash`: runs in the session working directory. Output is truncated with the
+  full log spilled to a file and timeout overrides the default. One shell
+  process per call, no persistent `cd`. May end with a startup-probed list of
+  common commands, framed as a fallback.
 - `write`: creates or overwrites files, making parent directories; an overwrite
   reports what it displaced as a diff.
 - `edit`: text replacement that applies atomically or not at all; non-exact text

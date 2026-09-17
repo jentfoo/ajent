@@ -314,3 +314,32 @@ func assertEventuallyGone(t *testing.T, pid int) {
 		return err != nil && errors.Is(err, syscall.ESRCH)
 	}, time.Second*2, time.Millisecond*30)
 }
+
+func TestBashDescription(t *testing.T) {
+	t.Parallel()
+
+	t.Run("omits_commands_when_unset", func(t *testing.T) {
+		got := (&bashTool{}).Description()
+		assert.NotContains(t, got, "Example available commands")
+	})
+
+	t.Run("lists_example_commands", func(t *testing.T) {
+		got := (&bashTool{shellExamples: []string{"ls", "diff", "wc"}}).Description()
+		assert.Contains(t, got, "Example available commands: ls, diff, wc")
+	})
+}
+
+func TestBuiltinsShellCommands(t *testing.T) {
+	t.Parallel()
+
+	reg, err := Builtins(Options{Cwd: t.TempDir(), ShellCommands: []string{"diff", "wc"}})
+	require.NoError(t, err)
+
+	var desc string
+	for _, s := range reg.Schemas() {
+		if s.Name == ToolBash {
+			desc = s.Description
+		}
+	}
+	assert.Contains(t, desc, "Example available commands: diff, wc")
+}

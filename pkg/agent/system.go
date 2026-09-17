@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"time"
 
@@ -69,17 +68,19 @@ func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 	return proj, nil
 }
 
-// buildSystem returns the system blocks for state, stable across a session so
+// buildSystem returns the system blocks, stable across a session so
 // the prompt cache survives. Project instructions and snippets are explicit
 // inputs (not read here) so callers control when they reload and tests can assert
 // byte equality across calls with equal inputs.
-func buildSystem(s *State, env Environment, proj []ProjectInstruction, snippets []string) llm.BlockList {
+func buildSystem(env Environment, proj []ProjectInstruction, snippets []string) llm.BlockList {
 	var b strings.Builder
 
 	b.WriteString(identityLine())
 
-	// guidelines first, then environment facts per the design doc
-	b.WriteString(buildGuidelines(s.Tools))
+	// static guidelines first, then environment facts
+	b.WriteString("Guidelines:\n")
+	b.WriteString("- Be concise in your responses\n")
+	b.WriteString("- Show file paths clearly when working with files\n\n")
 
 	buildEnvironmentFacts(&b, env)
 
@@ -111,27 +112,6 @@ func writeProjectInstructions(b *strings.Builder, proj []ProjectInstruction) {
 // domain or tool so the same block serves coding, security work and plain Q&A alike.
 func identityLine() string {
 	return "You help by following the user's instructions: research and review until you understand them, then focus on what is asked.\n\n"
-}
-
-// hasAny reports whether names holds at least one of want.
-func hasAny(names []string, want ...string) bool {
-	return slices.ContainsFunc(want, func(w string) bool { return slices.Contains(names, w) })
-}
-
-// buildGuidelines returns the guideline block: the always-included bullets first, then any derived
-// from the enabled toolset. The derivation rule is that guidelines never name a tool that is not present.
-func buildGuidelines(names []string) string {
-	var b strings.Builder
-	b.WriteString("Guidelines:\n")
-	b.WriteString("- Be concise in your responses\n")
-	b.WriteString("- Show file paths clearly when working with files\n")
-
-	// search hint only when bash is present and no dedicated find/grep tool is
-	if hasAny(names, "bash") && !hasAny(names, "find", "grep") {
-		b.WriteString("- Use bash for file operations like ls, grep, find\n")
-	}
-
-	return b.String() + "\n"
 }
 
 // buildEnvironmentFacts appends the working directory, platform and date.

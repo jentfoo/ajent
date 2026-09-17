@@ -116,8 +116,7 @@ func (b *hintBoard) ShowFor(text, short string, d time.Duration) *hintSlot {
 }
 
 // hintLine is one owner's view of the board, shaped like a plain status writer: an empty
-// text frees the line. Touched by its own goroutine only; the board itself is safe across
-// them.
+// text frees the line. Touched by its own goroutine only; the board itself is safe across them.
 type hintLine struct {
 	b    *hintBoard
 	slot *hintSlot
@@ -160,8 +159,8 @@ func (s *hintSlot) liveLocked() bool {
 }
 
 // paintLocked renders the winning slot, or clears the segment when none is alive. Writes
-// only on a change, so per-second updates from masked holders stay silent. Caller holds
-// b.mu.
+// only on a change, so per-second updates from masked holders stay silent.
+// Caller holds b.mu.
 func (b *hintBoard) paintLocked() {
 	if b.set == nil {
 		return
