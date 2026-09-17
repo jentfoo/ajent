@@ -237,10 +237,3 @@ Sessions are normally identified by an opaque id; `--resume` takes the full id o
 `--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one; delete those by name when you are done with them. Both flags act on the current workspace only, and both exit without starting a session.
 
 The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. There is no dialog in headless mode, so the barrier runs at allow-all and the **offered tool set** carries the policy instead (the model is only ever handed tools it may call, which keeps it from wasting steps discovering a refusal). Scope flags (`--allow-all`, `--read-only`) are mutually exclusive; `--allow-tools` / `--deny-tools` refine either.
-
-`--stats` prints per-tool call/failure counts, token totals by model, turn count and wall time when a run ends — to stderr under `--output text`, as a `type:"summary"` event before the result under `--output json`.
-
-Self-updates run `go install github.com/jentfoo/ajent@latest`. The `/update` command does it in the background inside a session, or the `--update` flag runs it in the foreground.
-
-Exit codes are stable enough to branch on in scripts: `0` the turn answered, `1` bad usage or setup failure before the turn, `2` the turn itself failed or produced nothing. They are identical for text and json output.
-
