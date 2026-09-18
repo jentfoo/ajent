@@ -649,7 +649,7 @@ func (j *job) pollProgress() string {
 	s := fmt.Sprintf("sub-agent %s still running after %s", id, strutil.Elapsed(elapsed))
 	switch {
 	case win > 0:
-		return s + fmt.Sprintf(", context %d/%d tokens used against its window", used, win)
+		return s + fmt.Sprintf(", context %d/%d tokens used", used, win)
 	case used > 0:
 		return s + fmt.Sprintf(", about %d context tokens used", used)
 	default:
