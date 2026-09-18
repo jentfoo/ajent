@@ -12,6 +12,7 @@ import (
 
 func writeLines(t *testing.T, p string, lines []string) {
 	t.Helper()
+
 	f, err := os.Create(p)
 	require.NoError(t, err)
 	for _, l := range lines {

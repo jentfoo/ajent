@@ -336,6 +336,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 	// fold is really attempted and finish rejects it for saving nothing
 	setup := func(t *testing.T) (*compactor, *[]string) {
 		t.Helper()
+
 		bloated := "## Goal\n" + strings.Repeat("the lighthouse keeper wrote it all down. ", 1000)
 		turns := make([]llm.ScriptedTurn, 4)
 		for i := range turns {
@@ -749,6 +750,7 @@ func TestCompactorAutoSetting(t *testing.T) {
 
 	setup := func(t *testing.T, auto bool) (*compactor, *session.Writer) {
 		t.Helper()
+
 		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 			{Events: textStream("## Goal\nthe lighthouse story")},
 		}}

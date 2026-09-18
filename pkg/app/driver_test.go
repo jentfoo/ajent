@@ -196,6 +196,7 @@ func TestControlLoop(t *testing.T) {
 	// per Shift+Tab, giving a test a signal ordered behind earlier controls.
 	start := func(t *testing.T) (controls chan tui.Control, quit chan struct{}, cycled chan struct{}) {
 		t.Helper()
+
 		inR, inW, err := os.Pipe()
 		require.NoError(t, err)
 		outR, outW, err := os.Pipe()
@@ -215,12 +216,13 @@ func TestControlLoop(t *testing.T) {
 		quit = make(chan struct{})
 		cycled = make(chan struct{}, 4)
 		ag := agent.New(&agent.State{}, agent.Options{})
-		go controlLoop(controls, newHintBoard(rec.record), ag, &steerQueue{}, command.NewStager(nil, nil), nil, quit,
+		go controlLoop(ui, controls, newHintBoard(rec.record), ag, &steerQueue{}, command.NewStager(nil, nil), nil, quit,
 			func() { cycled <- struct{}{} })
 		return controls, quit, cycled
 	}
 	quitted := func(t *testing.T, quit chan struct{}) bool {
 		t.Helper()
+
 		select {
 		case <-quit:
 			return true
@@ -338,6 +340,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 	}
 	settle := func(t *testing.T, m *subagent.Manager, id string) {
 		t.Helper()
+
 		require.Eventually(t, func() bool {
 			return slices.ContainsFunc(m.List(), func(j subagent.Job) bool {
 				return j.ID == id && j.Status == subagent.StatusDone

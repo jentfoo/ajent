@@ -31,6 +31,7 @@ import (
 
 func openPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()
+
 	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NONBLOCK, 0)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = master.Close() })
@@ -56,6 +57,7 @@ type ptyWinsize struct {
 
 func setPTYSize(t *testing.T, f *os.File, w, h int) {
 	t.Helper()
+
 	ws := ptyWinsize{Row: uint16(h), Col: uint16(w)}
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCSWINSZ, uintptr(unsafe.Pointer(&ws)))
 	require.Zero(t, errno)
@@ -93,6 +95,7 @@ func pumpPTY(master *os.File, v *vt, wait time.Duration) (string, error) {
 // deadline ends the read; writes are synchronous, so this is deterministic.
 func drainPTY(t *testing.T, master *os.File, v *vt) {
 	t.Helper()
+
 	_, err := pumpPTY(master, v, 100*time.Millisecond)
 	require.NoError(t, err)
 }
@@ -101,6 +104,7 @@ func drainPTY(t *testing.T, master *os.File, v *vt) {
 // escape sequences themselves rather than their effect.
 func readPTY(t *testing.T, master *os.File) string {
 	t.Helper()
+
 	raw, err := pumpPTY(master, nil, 100*time.Millisecond)
 	require.NoError(t, err)
 	return raw
@@ -109,6 +113,7 @@ func readPTY(t *testing.T, master *os.File) string {
 // sendPTY types bytes into the master and drains what the UI writes back.
 func sendPTY(t *testing.T, master *os.File, v *vt, s string) {
 	t.Helper()
+
 	_, err := master.WriteString(s)
 	require.NoError(t, err)
 	drainPTY(t, master, v)
@@ -120,6 +125,7 @@ func sendPTY(t *testing.T, master *os.File, v *vt, s string) {
 // never read and written at once.
 func eventuallyPTY(t *testing.T, master *os.File, v *vt, cond func() bool, msg string) {
 	t.Helper()
+
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		_, err := pumpPTY(master, v, 2*time.Millisecond)
@@ -134,6 +140,7 @@ func eventuallyPTY(t *testing.T, master *os.File, v *vt, cond func() bool, msg s
 // termiosOf reads a terminal's line discipline, for raw-mode assertions.
 func termiosOf(t *testing.T, f *os.File) syscall.Termios {
 	t.Helper()
+
 	var tio syscall.Termios
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TCGETS, uintptr(unsafe.Pointer(&tio)))
 	require.Zero(t, errno)
@@ -144,6 +151,7 @@ func termiosOf(t *testing.T, f *os.File) syscall.Termios {
 // environment so colour detection does not depend on the test runner.
 func newPTYUI(t *testing.T, master, slave *os.File) *UI {
 	t.Helper()
+
 	prev := osEnv
 	osEnv = func(string) string { return "xterm-256color" }
 	t.Cleanup(func() { osEnv = prev })

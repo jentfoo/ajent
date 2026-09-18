@@ -14,6 +14,7 @@ import (
 // askCall runs the tool with the given params and returns its result text.
 func askCall(t *testing.T, tool *askUserTool, params askParams) agent.ToolResult {
 	t.Helper()
+
 	raw, err := json.Marshal(params)
 	require.NoError(t, err)
 	res, err := tool.Execute(t.Context(), agent.ToolCall{Name: "ask_user", Input: raw}, nil)

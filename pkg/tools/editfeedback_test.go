@@ -11,6 +11,7 @@ import (
 // applied runs ops against content, failing if they do not apply.
 func applied(t *testing.T, content string, ops ...editOp) editOutcome {
 	t.Helper()
+
 	o, err := applyEdits(editTarget{Path: "a.go"}, content, ops)
 	require.NoError(t, err)
 	return o

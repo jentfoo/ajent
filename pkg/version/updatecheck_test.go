@@ -167,6 +167,7 @@ func TestFetchLatestVersion(t *testing.T) {
 	// swapURL points the fetch at srv for one subtest
 	swapURL := func(t *testing.T, url string) {
 		t.Helper()
+
 		prev := githubTagsURL
 		githubTagsURL = url
 		t.Cleanup(func() { githubTagsURL = prev })

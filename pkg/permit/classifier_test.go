@@ -163,6 +163,7 @@ func (f *gatedFn) endedN() int   { f.mu.Lock(); defer f.mu.Unlock(); return f.en
 // collect gathers n classes from ch without sleeping.
 func collect(t *testing.T, ch <-chan Class, n int) []Class {
 	t.Helper()
+
 	var out []Class
 	require.Eventually(t, func() bool {
 		for {

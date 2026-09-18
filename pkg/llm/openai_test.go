@@ -228,6 +228,7 @@ func TestResponsesStreamTruncated(t *testing.T) {
 
 	collectStop := func(t *testing.T, fixture string) (string, StopReason, error) {
 		t.Helper()
+
 		srv, _ := sseServer(t, fixture)
 		p := newResponsesTestProvider(t, srv.URL)
 

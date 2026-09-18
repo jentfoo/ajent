@@ -121,6 +121,7 @@ func TestCompletionMenu(t *testing.T) {
 	}
 	open := func(t *testing.T) (*UI, *vt, *io.PipeWriter) {
 		t.Helper()
+
 		v := newVT(80, 12)
 		pr, pw := io.Pipe()
 		t.Cleanup(func() { _ = pw.Close() })

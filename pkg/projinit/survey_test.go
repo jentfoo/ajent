@@ -51,6 +51,7 @@ func TestCodeSlices(t *testing.T) {
 	// tree builds n files spread over the named directories.
 	tree := func(t *testing.T, perDir int, dirs ...string) string {
 		t.Helper()
+
 		dir := t.TempDir()
 		paths := make([]string, 0, perDir*len(dirs))
 		for _, d := range dirs {

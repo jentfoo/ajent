@@ -226,6 +226,7 @@ func TestCompactRecompaction(t *testing.T) {
 	// priorBranch is eight folded steps, a compaction keeping from "a7", then ten new steps recorded after it
 	priorBranch := func(t *testing.T) []session.Entry {
 		t.Helper()
+
 		branch := toolBranch(t, 8, 400)
 		branch = append(branch, compactEntry("comp", "an earlier checkpoint", "a7"))
 		for i := 1; i <= 10; i++ {

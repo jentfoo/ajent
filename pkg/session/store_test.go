@@ -18,6 +18,7 @@ import (
 // mtime both sit at at, so Info.Updated (the later of the two) lands there.
 func writeAt(t *testing.T, s *Store, ws string, at time.Time, d SessionData, text string) *Writer {
 	t.Helper()
+
 	restore := setClock(at)
 	w, err := s.Create(ws, d)
 	require.NoError(t, err)
@@ -30,6 +31,7 @@ func writeAt(t *testing.T, s *Store, ws string, at time.Time, d SessionData, tex
 // appendAt adds one message to w at at, moving its last-used time with it.
 func appendAt(t *testing.T, w *Writer, at time.Time, text string) {
 	t.Helper()
+
 	restore := setClock(at)
 	_, err := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, text)})
 	require.NoError(t, err)
@@ -229,6 +231,7 @@ func TestStoreStale(t *testing.T) {
 
 	aged := func(t *testing.T, s *Store, ws string, at time.Time, d SessionData) string {
 		t.Helper()
+
 		return writeAt(t, s, ws, at, d, "hello").Path()
 	}
 
@@ -421,6 +424,7 @@ func TestNameOf(t *testing.T) {
 
 	newSession := func(t *testing.T, d SessionData) *Writer {
 		t.Helper()
+
 		w, err := Create(filepath.Join(t.TempDir(), "s.jsonl"), d)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = w.Close() })
@@ -428,6 +432,7 @@ func TestNameOf(t *testing.T) {
 	}
 	read := func(t *testing.T, w *Writer) string {
 		t.Helper()
+
 		entries, _, err := Read(w.Path())
 		require.NoError(t, err)
 		return NameOf(entries)

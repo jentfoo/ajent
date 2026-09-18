@@ -294,6 +294,7 @@ func TestCompatStreamFinishReason(t *testing.T) {
 
 	collectStop := func(t *testing.T, fixture string, caps Capabilities) (StopReason, error) {
 		t.Helper()
+
 		srv, _ := sseServer(t, fixture)
 		p := newCompatTestProvider(t, srv.URL)
 		s, err := p.Stream(t.Context(), Request{Model: compatModel(func(c *Capabilities) { *c = caps })})

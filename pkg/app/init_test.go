@@ -151,6 +151,7 @@ func TestInitWatch(t *testing.T) {
 	// touch sets path's mtime explicitly; two writes can share a coarse timestamp.
 	touch := func(t *testing.T, path string, at time.Time) {
 		t.Helper()
+
 		require.NoError(t, os.WriteFile(path, []byte("x"), 0o644))
 		require.NoError(t, os.Chtimes(path, at, at))
 	}
@@ -239,6 +240,7 @@ func (h *initHarness) hold() { h.held = make(chan struct{}) }
 // awaitPolling blocks until the survey has entered agent_poll.
 func (h *initHarness) awaitPolling(t *testing.T) {
 	t.Helper()
+
 	select {
 	case <-h.polling:
 	case <-time.After(5 * time.Second):
@@ -248,6 +250,7 @@ func (h *initHarness) awaitPolling(t *testing.T) {
 
 func newInitHarness(t *testing.T) *initHarness {
 	t.Helper()
+
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# demo\n"), 0o644))
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "pkg"), 0o755))
@@ -392,7 +395,7 @@ func TestPromptInput(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644))
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
 		require.NoError(t, err)
-		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir})
+		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
 
 		line := pumpLine{kind: command.KindPrompt, rest: "look at @a.go"}
 		in, echo, pending := promptInput(line, staged, expander, func(string) {})
@@ -412,7 +415,7 @@ func TestPromptInput(t *testing.T) {
 		dir := t.TempDir()
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
 		require.NoError(t, err)
-		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir})
+		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
 
 		var warned []string
 		line := pumpLine{kind: command.KindPrompt, rest: "see @missing.go"}

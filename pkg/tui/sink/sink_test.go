@@ -26,6 +26,7 @@ type headlessUI struct {
 
 func newHeadless(t *testing.T) *headlessUI {
 	t.Helper()
+
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 

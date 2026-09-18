@@ -25,6 +25,7 @@ type capturedRequest struct {
 // the client sees them incrementally rather than as one buffered blob.
 func sseServer(t *testing.T, fixture string) (*httptest.Server, *capturedRequest) {
 	t.Helper()
+
 	return sseServerChunked(t, fixture, 0)
 }
 

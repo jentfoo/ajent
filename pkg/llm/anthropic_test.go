@@ -290,6 +290,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 	}
 	decode := func(t *testing.T, body []byte) map[string]any {
 		t.Helper()
+
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
 		return m
@@ -573,6 +574,7 @@ func TestBuildAnthropicBodyInflation(t *testing.T) {
 	}
 	decode := func(t *testing.T, body []byte) map[string]any {
 		t.Helper()
+
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
 		return m
@@ -649,6 +651,7 @@ func TestBuildAnthropicBodyThinkingShape(t *testing.T) {
 	}
 	decode := func(t *testing.T, body []byte) map[string]any {
 		t.Helper()
+
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
 		return m

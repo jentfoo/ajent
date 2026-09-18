@@ -346,6 +346,7 @@ func TestUIPlainInteraction(t *testing.T) {
 	// answer is taken from the next submitted line
 	newPlainUI := func(t *testing.T, in io.Reader) (*UI, *vt) {
 		t.Helper()
+
 		v := newVT(80, 12)
 		u := &UI{
 			theme:  NewTheme(ColorNone, DefaultPalette()),

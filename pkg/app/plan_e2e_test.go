@@ -155,6 +155,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 // workflow itself took over with.
 func (h *planHarness) prompt(t *testing.T, text string) {
 	t.Helper()
+
 	in := agent.Input{Text: text}
 	if wrapped, ok := h.ctl.BeforePrompt(t.Context(), in); ok {
 		in = wrapped

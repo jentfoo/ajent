@@ -82,6 +82,7 @@ func pollStub() *stubTool {
 // newRegistry returns the built-in tools rooted at cwd plus the given stubs.
 func newRegistry(t *testing.T, cwd string, stubs ...agent.Tool) *tools.Registry {
 	t.Helper()
+
 	reg, err := tools.Builtins(tools.Options{Cwd: cwd})
 	require.NoError(t, err)
 	for _, s := range stubs {
@@ -93,6 +94,7 @@ func newRegistry(t *testing.T, cwd string, stubs ...agent.Tool) *tools.Registry 
 // writeTree creates each named file under dir with placeholder content.
 func writeTree(t *testing.T, dir string, paths ...string) {
 	t.Helper()
+
 	for _, p := range paths {
 		full := filepath.Join(dir, filepath.FromSlash(p))
 		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))

@@ -55,6 +55,7 @@ func textTurnRewind(text string) []llm.Event {
 
 func readEntriesRewind(t *testing.T, p string) []session.Entry {
 	t.Helper()
+
 	e, _, err := session.Read(p)
 	require.NoError(t, err)
 	return e

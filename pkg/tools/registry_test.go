@@ -566,6 +566,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 
 	exec := func(res agent.ToolResult) agent.ToolResult {
 		t.Helper()
+
 		r := New()
 		r.sessionID = "bound-test"
 		r.Register(&stubTool{name: "srv__dump", res: res}, true)
@@ -609,14 +610,15 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		assert.Equal(t, "one\ntwo", joined)
 	})
 
-	// non-text content cannot be rebuilt faithfully, so it stays whole
+	// non-text content cannot be rebuilt faithfully, so it stays whole; an
+	// image block that is not a decodable image is kept with a note beside it
 	t.Run("non_text_content_untouched", func(t *testing.T) {
 		res := exec(agent.ToolResult{
 			Content: llm.BlockList{llm.ImageBlock{Data: []byte{1}}},
 		})
 		_, ok := res.Content.AsText()
 		assert.False(t, ok)
-		require.Len(t, res.Content, 1)
+		require.Len(t, res.Content, 2)
 		assert.IsType(t, llm.ImageBlock{}, res.Content[0]) // image block preserved, not rewritten
 	})
 

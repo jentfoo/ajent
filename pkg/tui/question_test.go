@@ -357,6 +357,7 @@ func TestQuestionStateArrowKeys(t *testing.T) {
 	// key presses a single decoded key into s, failing the test on error
 	press := func(s *questionState, k key) {
 		t.Helper()
+
 		_, err := s.key(k)
 		require.NoError(t, err)
 	}
@@ -399,6 +400,7 @@ func TestUIPlainAsk(t *testing.T) {
 
 	newPlainUI := func(t *testing.T, in io.Reader) (*UI, *vt) {
 		t.Helper()
+
 		v := newVT(80, 12)
 		u := &UI{
 			theme:  NewTheme(ColorNone, DefaultPalette()),

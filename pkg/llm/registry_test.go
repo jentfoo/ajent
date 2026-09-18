@@ -500,6 +500,7 @@ func TestRegistrySetCompactDefault(t *testing.T) {
 
 	build := func(t *testing.T) *Registry {
 		t.Helper()
+
 		f := File{Providers: map[string]ProviderConfig{
 			"anthropic": {Flavor: FlavorAnthropic, Models: []ModelConfig{
 				{ID: "declared", ContextWindow: ptr(200000), CompactThreshold: ptr(0.5)},
@@ -512,6 +513,7 @@ func TestRegistrySetCompactDefault(t *testing.T) {
 
 	thresholdOf := func(t *testing.T, r *Registry, id string) float64 {
 		t.Helper()
+
 		m, err := r.Resolve("anthropic/" + id)
 		require.NoError(t, err)
 		return m.CompactThreshold

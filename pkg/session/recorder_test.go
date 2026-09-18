@@ -38,6 +38,7 @@ func (c *captureSink) TurnEnd(agent.TurnResult)         { c.turnEnd++ }
 // countMessages returns the number of message entries in a file.
 func countMessages(t *testing.T, p string) int {
 	t.Helper()
+
 	entries, _, err := Read(p)
 	require.NoError(t, err)
 	var n int
