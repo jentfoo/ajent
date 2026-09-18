@@ -177,8 +177,17 @@ Line-numbered (`cat -n` style) output so `edit` and the model agree on
 positions. Output is bounded by lines, bytes (each at whole lines) and a
 per-line rune cap. read never spills: the source file is its recovery, so the
 footer pages with `offset`. A range wider than the line limit is refused. Binary
-files are refused and images are refused for now. Every successful read is
-recorded in the tracker.
+files are refused. Every successful read is recorded in the tracker.
+
+An image file reads as an image block plus its sizing note on a vision model.
+On a text-only model the read is refused with a note naming that, so the model
+does not spend a read it cannot be paid back for. Fitting follows *Images*
+below. The gate is a pull, not a mirror: `tools.Options.Vision` closes over the
+llm registry's active model and is consulted inside `Execute`, so a `/model`
+switch, a resume or a plan phase shows up on the very next read with no host
+push. A sub-agent on a different `subagent.model` shares the parent's gate and
+can therefore be refused where it could see images: single-sourced on purpose,
+and the harmless direction.
 
 The model always sees the full line-numbered content (`Content`); `Display` is
 that same block, which the TUI elides to a head plus a collapse count via the
@@ -448,6 +457,32 @@ Recovery is one shared path with a single exception:
 
 `Elide`, rune-capped head and tail with a marker, survives for compaction's
 structural reduction and edit feedback only.
+
+### Images
+
+Image decode, resize and re-encode lives in `pkg/img` behind a bytes-in,
+blocks-out seam: the only package that touches an imaging codec. The rules:
+
+- **Fit, don't reject.** User-supplied images are transformed to fit the inline
+  pixel and encoded-size ceilings rather than refused, converting foreign
+  formats to png. Anything whose pixels change (a re-encode, EXIF orientation,
+  flattening an animated png to its first frame) gets a coordinate-mapping note
+  beside it so spatial answers stay correct against the source. Refusal is left
+  for what no transform can rescue and for headers claiming more pixels than
+  decoding may allocate, checked on the header alone so a small file cannot
+  promise gigabytes.
+- **Normalize once, at history's door.** The registry guard wrapper is the one
+  path every tool result takes, so tool-produced images are fitted there before
+  session history persists them. The transcript replays blocks verbatim forever,
+  and an oversized image let into history would poison every later request. A
+  failure keeps the original block with a note beside it rather than dropping
+  output. Bytes that neither decode nor resemble recoverable content become the
+  note alone.
+- **One gate.** The block-images setting replaces every image with a text note
+  at that same seam, so mid-session changes take effect without restarts.
+- **Classification before bytes.** The text/binary/image sniffer trusts image
+  headers over the NUL scan, because most image headers contain NULs and would
+  otherwise read as binary.
 
 ## Agent integration
 

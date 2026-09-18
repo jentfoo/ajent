@@ -2,12 +2,10 @@ package mcp
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // defaultCallTimeout bounds a single MCP tool call when the server sets none.
@@ -101,9 +99,4 @@ func (b *bridgeTool) Execute(ctx context.Context, call agent.ToolCall, out agent
 		Display: displayOf(res),
 		IsError: res.IsError,
 	}, nil
-}
-
-// displayOf renders a one-line history summary of the result.
-func displayOf(r Result) string {
-	return strutil.Clip(strings.Join(r.Content, ""), 1000)
 }

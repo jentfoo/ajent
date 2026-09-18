@@ -16,11 +16,18 @@ type SearchItem struct {
 type searchAction uint8
 
 const (
-	searchStay   searchAction = iota // consumed, overlay stays open
-	searchClose                      // close, buffer untouched
-	searchAccept                     // close and fill the editor with current()
-	searchPass                       // close, editor handles the key
+	searchStay       searchAction = iota // consumed, overlay stays open
+	searchClose                          // close, buffer untouched
+	searchAccept                         // close and fill the editor with current()
+	searchAcceptMove                     // accept, then the editor applies this caret key
+	searchPass                           // close, editor handles the key
 )
+
+// caretMotionKeys select the match and move within it in one press.
+var caretMotionKeys = map[keyType]bool{
+	keyLeft: true, keyRight: true, keyWordLeft: true, keyWordRight: true,
+	keyHome: true, keyEnd: true,
+}
 
 // searchOverlay is an incremental reverse history search over recorded prompts.
 type searchOverlay struct {
@@ -74,6 +81,12 @@ func (s *searchOverlay) key(k key) searchAction {
 	case keyInterrupt:
 		return searchClose
 	default:
+		// a caret key takes the match so the prompt is editable on the same press
+		if caretMotionKeys[k.typ] {
+			if _, ok := s.current(); ok {
+				return searchAcceptMove
+			}
+		}
 		return searchPass
 	}
 }

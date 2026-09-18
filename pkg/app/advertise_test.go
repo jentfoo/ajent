@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -97,14 +98,15 @@ func TestBuiltinTools(t *testing.T) {
 
 	set := loadTestConfig(t)
 	require.NoError(t, set.SetSession("tools.shellCommands", []string{"diff", "ajent-no-such-bin"}))
+	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
 	var warns []string
-	reg, err := builtinTools(set, nil, func(msg string) { warns = append(warns, msg) })
+	breg, err := builtinTools(set, reg, nil, func(msg string) { warns = append(warns, msg) })
 	require.NoError(t, err)
-	require.NotNil(t, reg)
+	require.NotNil(t, breg)
 
 	var desc string
-	for _, s := range reg.Schemas() {
+	for _, s := range breg.Schemas() {
 		if s.Name == tools.ToolBash {
 			desc = s.Description
 		}

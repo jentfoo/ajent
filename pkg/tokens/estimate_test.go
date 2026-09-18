@@ -1,7 +1,10 @@
 package tokens
 
 import (
+	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"strings"
 	"testing"
 
@@ -234,33 +237,13 @@ func TestEstimateToolResultExcludesTranscriptFields(t *testing.T) {
 	assert.Equal(t, estimateToolResult(base), estimateToolResult(loaded))
 }
 
-func TestImageDims(t *testing.T) {
+func TestImageTokens(t *testing.T) {
 	t.Parallel()
 
-	png := append(append([]byte{}, pngMagic...), // IHDR length + tag, then 640x480
-		0, 0, 0, 13, 'I', 'H', 'D', 'R', 0, 0, 2, 128, 0, 0, 1, 224)
-	jpeg := []byte{0xFF, 0xD8, // SOI, then APP0 skipped by length, then SOF0 320x200
-		0xFF, 0xE0, 0, 4, 0, 0,
-		0xFF, 0xC0, 0, 17, 8, 0, 200, 1, 64, 3, 0, 0, 0, 0, 0, 0, 0, 0}
-
-	t.Run("png", func(t *testing.T) {
-		w, h, ok := imageDims(png)
-		require.True(t, ok)
-		assert.Equal(t, 640, w)
-		assert.Equal(t, 480, h)
-	})
-
-	t.Run("jpeg", func(t *testing.T) {
-		w, h, ok := imageDims(jpeg)
-		require.True(t, ok)
-		assert.Equal(t, 320, w)
-		assert.Equal(t, 200, h)
-	})
-
-	t.Run("unknown_format", func(t *testing.T) {
-		_, _, ok := imageDims([]byte("GIF89a and then some bytes to pad it out"))
-		assert.False(t, ok)
-	})
+	m := image.NewRGBA(image.Rect(0, 0, 640, 480))
+	var buf bytes.Buffer
+	require.NoError(t, png.Encode(&buf, m))
+	png := buf.Bytes()
 
 	t.Run("dimensions_beat_byte_size", func(t *testing.T) {
 		// the same pixels compress differently; cost must follow area, not bytes

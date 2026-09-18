@@ -44,7 +44,14 @@ func TestSearchOverlayKey(t *testing.T) {
 		}, key{typ: keyEscape}, searchAccept},
 		{"escape_closes_without_match", nil, key{typ: keyEscape}, searchClose},
 		{"interrupt_closes", nil, key{typ: keyInterrupt}, searchClose},
-		{"unhandled_passes", nil, key{typ: keyLeft}, searchPass},
+		{"unhandled_passes", nil, key{typ: keyTab}, searchPass},
+		{"caret_keys_select_and_move", func(s *searchOverlay) {
+			s.query = "re"
+			s.items = []SearchItem{{Text: "fix the retry loop"}}
+			s.refilter()
+		}, key{typ: keyLeft}, searchAcceptMove},
+		{"caret_moves_without_match", func(s *searchOverlay) { s.query = "zzz"; s.refilter() },
+			key{typ: keyRight}, searchPass},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

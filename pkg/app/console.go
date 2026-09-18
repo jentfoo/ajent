@@ -141,6 +141,9 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 		if err := c.set.SetSession(key, value); err != nil {
 			return err
 		}
+		if key == "images.block" {
+			applyImagesBlock(c.set) // live flip, from the just-applied value
+		}
 	}
 	if c.rec != nil {
 		return c.rec.SettingChange(key, value)

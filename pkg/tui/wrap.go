@@ -70,7 +70,7 @@ func renderCells(cs []cell, prefix string) string {
 // marker. Wrapping here rather than in the terminal keeps the row count exact and
 // the layout identical across emulators.
 func wrapLine(line string, width int) []string {
-	if width <= 0 || displayWidth(line) <= width {
+	if isImageLine(line) || width <= 0 || displayWidth(line) <= width {
 		return []string{line}
 	}
 	cs := cells(line)

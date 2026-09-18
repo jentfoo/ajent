@@ -3,6 +3,7 @@ package tui
 import (
 	"io"
 	"os"
+	"slices"
 	"strings"
 
 	"golang.org/x/term"
@@ -44,10 +45,20 @@ const (
 type histLine struct {
 	text    string
 	flow    lineFlow
-	table   *mdTable // non-nil for a markdown table; laid out fresh at each width
-	rule    bool     // true: a horizontal rule drawn to fit the width it is laid at
-	divider bool     // true: a solid full-width band marking a session boundary
-	style   Style    // styling re-applied when rendering a rule or divider (or empty)
+	table   *mdTable   // non-nil for a markdown table; laid out fresh at each width
+	image   *histImage // non-nil for a terminal image; emitted verbatim, never re-wrapped
+	rule    bool       // true: a horizontal rule drawn to fit the width it is laid at
+	divider bool       // true: a solid full-width band marking a session boundary
+	style   Style      // styling re-applied when rendering a rule or divider (or empty)
+}
+
+// histImage is one committed terminal image. seq is the protocol escape, rows
+// the height it occupies (for inline's row accounting), and text the
+// placeholder every non-emitting renderer falls back to.
+type histImage struct {
+	seq  string
+	rows int
+	text string
 }
 
 // rows lays the line out at width, for the renderers that lay history out
@@ -68,6 +79,16 @@ func (l histLine) rows(width int) []string {
 		// a solid full-width band, re-filled at the width it is laid at so
 		// resize reproduces commit; style carries the background that makes it read.
 		return []string{dividerRow(l.style, max(width, minRuleWidth))}
+	case l.image != nil:
+		// the protocol sequence where the mode draws images, else the
+		// placeholder. The blank rows after the first are what the drawing
+		// occupies, so every renderer's row accounting agrees
+		out := make([]string, l.image.rows)
+		out[0] = l.image.seq
+		if l.image.seq == "" {
+			out[0] = l.image.text
+		}
+		return out
 	default:
 		return wrapLine(l.text, width)
 	}
@@ -75,9 +96,22 @@ func (l histLine) rows(width int) []string {
 
 // structured reports whether a line carries layout intent rather than baked text,
 // so renderers lay it out fresh at the width in force instead of emitting its empty
-// text field.
+// text field. Images count: their text field is only the placeholder, and rows()
+// is what picks it over the protocol sequence.
 func (l histLine) structured() bool {
-	return l.table != nil || l.rule || l.divider
+	return l.table != nil || l.image != nil || l.rule || l.divider
+}
+
+// imageMarkers are the two control-introducing prefixes an emitted image line
+// can carry: kitty's APC introducer and iTerm2's OSC 1337. A line starting
+// with one is never wrapped, padded or SGR-reset.
+var imageMarkers = []string{esc + "_G", esc + "]1337;"}
+
+// isImageLine reports whether s carries an image protocol sequence. Such a
+// line is never wrapped, padded or SGR-reset: mangling the sequence would
+// render garbage or swallow the surrounding frame's escapes.
+func isImageLine(s string) bool {
+	return slices.ContainsFunc(imageMarkers, func(m string) bool { return strings.HasPrefix(s, m) })
 }
 
 // dividerRow renders a solid full-width band: every cell filled with a space that

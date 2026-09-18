@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/png"
 	"slices"
 	"testing"
 
@@ -10,6 +13,8 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 // fakeQueueUI records every call the steer queue makes, so tests assert on what reached the TUI.
@@ -18,12 +23,16 @@ type fakeQueueUI struct {
 	echoed    []string
 	prepended []string
 	set       []string
+	images    [][]tui.Image
 }
 
 func (f *fakeQueueUI) SetQueued(texts []string) { f.queued = append(f.queued, slices.Clone(texts)) }
 func (f *fakeQueueUI) PrependInput(t string)    { f.prepended = append(f.prepended, t) }
 func (f *fakeQueueUI) SetInput(t string)        { f.set = append(f.set, t) }
 func (f *fakeQueueUI) UserEcho(t string)        { f.echoed = append(f.echoed, t) }
+func (f *fakeQueueUI) UserImages(imgs []tui.Image) {
+	f.images = append(f.images, imgs)
+}
 
 // lastQueued returns the most recent queued-rows snapshot.
 func (f *fakeQueueUI) lastQueued() []string {
@@ -90,6 +99,31 @@ func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 	out[0].Delivered() // fires once the batch lands
 	assert.Contains(t, fake.echoed, "label one\nlabel two")
 	require.GreaterOrEqual(t, cleared, 1)
+}
+
+func TestSteerQueueDeliveredEchoesImages(t *testing.T) {
+	t.Parallel()
+
+	var pngBuf bytes.Buffer
+	require.NoError(t, png.Encode(&pngBuf, image.NewRGBA(image.Rect(0, 0, 4, 4))))
+
+	fake := &fakeQueueUI{}
+	q := newSteerQueue(fake, nil, func() {})
+
+	in := agent.Input{
+		Text:   "look",
+		Blocks: llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: pngBuf.Bytes()}},
+	}
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	require.True(t, q.offer(in, "look", 2))
+
+	out := q.pull()
+	require.Len(t, out, 1)
+	out[0].Delivered()
+	assert.Contains(t, fake.echoed, "look")
+	require.Len(t, fake.images, 1)
+	require.Len(t, fake.images[0], 1)
+	assert.Equal(t, "[image 4x4, "+strutil.HumanSize(int64(pngBuf.Len()))+"]", fake.images[0][0].String())
 }
 
 func TestSteerQueueJoinSplitsProvenance(t *testing.T) {

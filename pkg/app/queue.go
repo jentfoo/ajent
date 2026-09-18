@@ -7,6 +7,8 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tui"
+	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
 // queueUI is the narrow TUI surface the steer queue needs; *tui.UI satisfies it.
@@ -15,6 +17,7 @@ type queueUI interface {
 	PrependInput(text string)
 	SetInput(text string)
 	UserEcho(text string)
+	UserImages(imgs []tui.Image)
 }
 
 // steerQueue holds prompts submitted while a turn runs: they render as dimmed
@@ -65,7 +68,8 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 // provenance change starts a new input, so a mixed user + system batch keeps
 // per-item attribution on the transcript rows instead of one OR-ed flag. The
 // final run clears accounting once everything behind it has landed; each run
-// echoes its labels as its message lands.
+// echoes its labels as its message lands. Blocks concatenate in queue order
+// across a run's items, so the joined message need not match any one label.
 func (s *steerQueue) join() []agent.Input {
 	type runAcc struct {
 		in     agent.Input
@@ -89,6 +93,7 @@ func (s *steerQueue) join() []agent.Input {
 			r.in.Text += "\n"
 		}
 		r.in.Text += it.input.Text
+		r.in.Blocks = append(r.in.Blocks, it.input.Blocks...)
 		r.in.Before = append(r.in.Before, it.input.Before...)
 		if it.input.After != nil {
 			r.afters = append(r.afters, it.input.After)
@@ -104,7 +109,8 @@ func (s *steerQueue) join() []agent.Input {
 		r.in.After = joinAfter(r.afters)
 		if label := strings.Join(r.labels, "\n"); label != "" {
 			joined := label // captured for the closure; landed takes no lock
-			r.in.Delivered = func() { s.landed(joined) }
+			blocks := r.in.Blocks
+			r.in.Delivered = func() { s.landed(joined, blocks) }
 		}
 		out[i] = r.in
 	}
@@ -130,11 +136,17 @@ func joinAfter(afters []func(context.Context) []llm.Message) func(context.Contex
 	}
 }
 
-// landed echoes the delivered labels on the loop goroutine. It must not take q.mu
-// (Delivered can fire inside drainSteer).
-func (s *steerQueue) landed(labels string) {
-	if s.ui != nil && labels != "" {
+// landed echoes the delivered labels and images on the loop goroutine. It must
+// not take q.mu (Delivered can fire inside drainSteer).
+func (s *steerQueue) landed(labels string, blocks llm.BlockList) {
+	if s.ui == nil {
+		return
+	}
+	if labels != "" {
 		s.ui.UserEcho(labels)
+	}
+	if imgs := tuisink.Images(blocks); len(imgs) > 0 {
+		s.ui.UserImages(imgs)
 	}
 }
 
@@ -201,11 +213,23 @@ func (s *steerQueue) recall() bool {
 	i := len(s.items) - 1 // LIFO: the most recently queued message first
 	last := s.items[i]
 	s.items = s.items[:i]
-	if s.ui != nil && last.label != "" {
-		s.ui.PrependInput(last.label)
+	label := restoredLabel(last)
+	if s.ui != nil && label != "" {
+		s.ui.PrependInput(label)
 	}
 	s.refreshLocked()
 	return true
+}
+
+// restoredLabel refiles an item's image blocks under fresh slots, their
+// submission slots having been consumed, and prefixes the token onto the typed
+// label so a recalled or aborted message keeps its images.
+func restoredLabel(it steerItem) string {
+	label := it.label
+	if tok := pendingImages.refile(it.input.Blocks); tok != "" {
+		label = strings.TrimSpace(tok + " " + label)
+	}
+	return label
 }
 
 // abort recovers every queued item into the editor, joined by newlines ahead of
@@ -220,7 +244,7 @@ func (s *steerQueue) abort() {
 	}
 	labels := make([]string, len(s.items))
 	for i, it := range s.items {
-		labels[i] = it.label
+		labels[i] = restoredLabel(it)
 	}
 	s.items = nil
 	if s.ui != nil && len(labels) > 0 {

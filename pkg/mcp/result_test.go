@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 )
@@ -13,10 +15,13 @@ import (
 func TestMapCallResult(t *testing.T) {
 	t.Parallel()
 
+	pngData := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nfake"))
+
 	cases := []struct {
 		name    string
 		result  *mcp.CallToolResult
 		want    []string
+		images  int
 		isError bool
 	}{
 		{
@@ -29,7 +34,12 @@ func TestMapCallResult(t *testing.T) {
 			result: &mcp.CallToolResult{Content: []mcp.Content{mcp.TextContent{Text: "   "}}},
 		},
 		{
-			name:   "image_becomes_placeholder",
+			name:   "image_becomes_block",
+			result: &mcp.CallToolResult{Content: []mcp.Content{mcp.ImageContent{MIMEType: "image/png", Data: pngData}}},
+			images: 1,
+		},
+		{
+			name:   "image_without_data_is_placeholder",
 			result: &mcp.CallToolResult{Content: []mcp.Content{mcp.ImageContent{MIMEType: "image/png"}}},
 			want:   []string{"[image omitted: image/png]"},
 		},
@@ -82,13 +92,22 @@ func TestMapCallResult(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			res := mapCallResult(tc.result)
 			assert.Equal(t, tc.isError, res.IsError)
-			assert.Equal(t, tc.want, res.Content)
 
-			var blocks []string
-			for _, b := range res.toBlocks() {
-				blocks = append(blocks, b.(llm.TextBlock).Text)
+			require.Len(t, res.Blocks, len(tc.want)+tc.images)
+			var texts []string
+			var images int
+			for _, b := range res.Blocks {
+				switch v := b.(type) {
+				case llm.TextBlock:
+					texts = append(texts, v.Text)
+				case llm.ImageBlock:
+					images++
+					assert.Equal(t, "image/png", v.MediaType)
+					assert.NotEmpty(t, v.Data)
+				}
 			}
-			assert.Equal(t, tc.want, blocks)
+			assert.Equal(t, tc.images, images)
+			assert.Equal(t, tc.want, texts)
 		})
 	}
 }
@@ -117,4 +136,37 @@ func TestRefTextEmbeddedResource(t *testing.T) {
 			assert.Equal(t, tc.want, refText(tc.in))
 		})
 	}
+}
+
+func TestImageBytes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("decodes image payload", func(t *testing.T) {
+		t.Parallel()
+		b, ok := imageBytes("image/png", base64.StdEncoding.EncodeToString([]byte("abc")))
+		assert.True(t, ok)
+		assert.Equal(t, []byte("abc"), b)
+	})
+
+	t.Run("rejects non image mime", func(t *testing.T) {
+		t.Parallel()
+		_, ok := imageBytes("text/plain", base64.StdEncoding.EncodeToString([]byte("abc")))
+		assert.False(t, ok)
+	})
+
+	t.Run("rejects bad base64", func(t *testing.T) {
+		t.Parallel()
+		_, ok := imageBytes("image/png", "!!!not base64!!!")
+		assert.False(t, ok)
+	})
+}
+
+func TestDisplayOf(t *testing.T) {
+	t.Parallel()
+
+	res := Result{Blocks: []llm.Block{
+		llm.TextBlock{Text: "chart follows "},
+		llm.ImageBlock{MediaType: "image/png", Data: []byte("12345")},
+	}}
+	assert.Equal(t, "chart follows [image 5b]", displayOf(res))
 }

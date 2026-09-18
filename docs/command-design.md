@@ -60,8 +60,10 @@ as newline-joined messages (one per provenance run, see below) at the agent's
 next step boundary via `Options.OnBoundary`, or (if no boundary comes first) as
 the next turn's prompt drained by `startDrain`. Esc/Ctrl+C during a turn
 recovers every queued item back into the editor (collapsed with newlines)
-before interrupting; Alt+Up recalls the newest queued message. See
-`agent-loop-design.md` for the boundary contract.
+before interrupting. Alt+Up recalls the newest queued message. Image blocks ride
+along with whatever is queued. Their slots were consumed at submit, so recall and
+abort refile each one under a fresh token and the recovered line still names its
+`[image #N]`. See `agent-loop-design.md` for the boundary contract.
 
 The pump also wires the **typing hold** (`Options.AwaitInput`, see
 `agent-loop-design.md`): at each step boundary, if a draft is being composed in
@@ -481,7 +483,8 @@ text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 | already read, unchanged (`Tracker.Unchanged`) | nothing planned, literal |
 | a path the same message already named | planned once; the repeat stays literal |
 | text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |
-| large, binary, image, or over the cap | annotation replaced in place; cap trim adds a notice |
+| image on a vision model | `read` pair planned, so the image arrives through the ordinary read path |
+| image without vision, large, binary, or over the cap | annotation replaced in place, cap trim adds a notice |
 
 Text is rebuilt by splicing spans back to front so earlier offsets stay valid;
 the plan is reversed once so the reads land in document order.

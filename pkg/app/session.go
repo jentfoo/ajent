@@ -269,6 +269,7 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	// The overrides come off the branch, not raw file order: a transcript with
 	// forks holds settings from siblings this head never saw.
 	set.SeedSession(session.SettingOverrides(session.Branch(entries, head)))
+	applyImagesBlock(set) // a session saved with images blocked resumes blocked
 	resumed := set.Settings()
 	reg.SetCompactDefault(resumed.Compaction.Threshold) // models declaring none pick up the session default
 
@@ -313,7 +314,7 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	if pal, ok := tui.LookupPalette(set.Settings().UI.Theme); ok {
 		ui.SetTheme(pal)
 	}
-	session.Replay(session.Branch(entries, head), tuisink.New(ui), session.ReplayOptions{})
+	session.Replay(session.Branch(entries, head), replaySink(ui), session.ReplayOptions{})
 }
 
 func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
@@ -416,6 +417,14 @@ func syncModelUI(ui *tui.UI, reg *llm.Registry, m llm.Model) {
 		return
 	}
 	ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+}
+
+// replaySink builds the sink a rewind or resume replay drives: tool images
+// render as text, since the drawings already sit in scrollback above.
+func replaySink(ui *tui.UI) agent.Sink {
+	s := tuisink.New(ui)
+	s.SetImages(false)
+	return s
 }
 
 func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model) {
@@ -524,7 +533,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	ui.Reset()
 	// mark where restored history begins so it reads clearly in scrollback
 	ui.Divider()
-	session.Replay(session.Branch(entries, newHead), tuisink.New(ui), session.ReplayOptions{})
+	session.Replay(session.Branch(entries, newHead), replaySink(ui), session.ReplayOptions{})
 	if fillText != "" {
 		ui.SetInput(fillText)
 	}

@@ -1,7 +1,10 @@
 package refs
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,10 +46,19 @@ func (s *sinkCapturer) TurnEnd(agent.TurnResult)        {}
 // newExpander builds a real tools registry rooted at dir and an expander.
 func newExpander(t *testing.T, dir string) (*Expander, *sinkCapturer) {
 	t.Helper()
-	reg, err := tools.Builtins(tools.Options{Cwd: dir, SessionID: "refstest"})
+
+	return newVisionExpander(t, dir, nil)
+}
+
+// newVisionExpander is newExpander with an explicit vision gate, shared by the
+// read tool and the expander so both arms agree.
+func newVisionExpander(t *testing.T, dir string, vision func() bool) (*Expander, *sinkCapturer) {
+	t.Helper()
+
+	reg, err := tools.Builtins(tools.Options{Cwd: dir, SessionID: "refstest", Vision: vision})
 	require.NoError(t, err)
 	sink := &sinkCapturer{}
-	return NewExpander(reg, sink, tools.PathPolicy{Cwd: dir}), sink
+	return NewExpander(reg, sink, tools.PathPolicy{Cwd: dir}, vision), sink
 }
 
 func TestExpand(t *testing.T) {
@@ -405,6 +417,7 @@ func TestExpanderSeed(t *testing.T) {
 // writeBigLines writes name under dir with enough lines to exceed RefInject.
 func writeBigLines(t *testing.T, dir string, name string) {
 	t.Helper()
+
 	var b strings.Builder
 	for i := 0; i < 600; i++ {
 		b.WriteString("line\n")
@@ -479,5 +492,58 @@ func TestExpandReserve(t *testing.T) {
 				assert.Positive(t, res.Est)
 			})
 		}
+	})
+}
+
+// writePNG writes a small valid png as name under dir.
+func writePNG(t *testing.T, dir string, name string) {
+	t.Helper()
+
+	m := image.NewRGBA(image.Rect(0, 0, 6, 4))
+	var b bytes.Buffer
+	require.NoError(t, png.Encode(&b, m))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), b.Bytes(), 0o600))
+}
+
+func TestExpandImages(t *testing.T) {
+	t.Run("vision injects image read", func(t *testing.T) {
+		dir := t.TempDir()
+		writePNG(t, dir, "pic.png")
+		x, sink := newVisionExpander(t, dir, func() bool { return true })
+
+		res := x.Expand("look at @pic.png")
+		assert.Equal(t, "look at @pic.png", res.Text)
+		require.NotNil(t, res.Run)
+		msgs := injected(t, res)
+		require.Len(t, msgs, 2)
+		resBlk, ok := msgs[1].Content[0].(llm.ToolResultBlock)
+		require.True(t, ok)
+		assert.False(t, resBlk.IsError)
+		require.Len(t, resBlk.Content, 1)
+		img, ok := resBlk.Content[0].(llm.ImageBlock)
+		require.True(t, ok)
+		assert.Equal(t, "image/png", img.MediaType)
+		assert.Contains(t, sink.starts, "read pic.png")
+	})
+
+	t.Run("text only annotates", func(t *testing.T) {
+		dir := t.TempDir()
+		writePNG(t, dir, "pic.png")
+		x, _ := newVisionExpander(t, dir, nil) // nil vision: today's annotation
+
+		res := x.Expand("look at @pic.png")
+		assert.Contains(t, res.Text, "@pic.png (image,")
+		assert.Empty(t, injected(t, res))
+	})
+
+	t.Run("repeat ref plans once", func(t *testing.T) {
+		dir := t.TempDir()
+		writePNG(t, dir, "pic.png")
+		x, _ := newVisionExpander(t, dir, func() bool { return true })
+
+		res := x.Expand("look at @pic.png and @pic.png again")
+		assert.Equal(t, "look at @pic.png and @pic.png again", res.Text)
+		msgs := injected(t, res)
+		require.Len(t, msgs, 2) // one call + result pair
 	})
 }

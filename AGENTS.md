@@ -68,7 +68,7 @@ agent    -> llm, tokens
 tools    -> agent, config, llm, strutil
 session  -> agent, config, llm, strutil, tokens, tools
 compact  -> llm, session, strutil, tokens, tools
-tui      -> strutil (+ goldmark, uniseg, go-udiff, chroma)
+tui      -> img, strutil (+ goldmark, uniseg, go-udiff, chroma)
 mcp      -> agent, config, llm, strutil, version (+ mcp-go; never tools/tui/command — adapters live in pkg/app)
 subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by pkg/app)
 plan     -> agent, llm, strutil (never tools/tui/command/session — the driver supplies Host)

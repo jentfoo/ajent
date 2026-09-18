@@ -582,6 +582,8 @@ func (g *guardedTool) Mode() agent.ExecutionMode { return g.t.Mode() }
 
 // Execute vets the call through every guard, then delegates to the wrapped tool.
 // A denial becomes an error result carrying its reason and nothing touches disk.
+// The result's image blocks are normalized once here, at the single entry every
+// registered tool passes through, so an oversized result cannot poison history.
 func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	// the change is rendered before the call is vetted, so an approval dialog sits
 	// below the full diff rather than repeating a truncated copy of it. Once, not
@@ -612,7 +614,11 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 			return denied(reason)
 		}
 	}
-	return g.t.Execute(ctx, c, out)
+	res, err := g.t.Execute(ctx, c, out)
+	if len(res.Content) > 0 {
+		res.Content = NormalizeImageBlocks(res.Content)
+	}
+	return res, err
 }
 
 // denied builds an error result carrying the denial's reason. Reasons are already

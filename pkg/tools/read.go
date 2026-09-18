@@ -17,11 +17,18 @@ type readParams struct {
 }
 
 // readTool reads a file with line numbers so edit and the model agree on positions.
-// Image files are not yet supported and are refused rather than dumped as text.
+// An image file reads as an image block on a vision model; a text-only model is
+// refused with today's note so it does not waste a read.
 type readTool struct {
 	policy  PathPolicy
 	tracker *Tracker
+	// vision reports the active model's image capability live, so a /model or
+	// resume that changes it never leaves this gate stale. nil means no.
+	vision func() bool
 }
+
+// visionOn reports whether image reads may return image blocks.
+func (t *readTool) visionOn() bool { return t.vision != nil && t.vision() }
 
 var _ agent.Tool = (*readTool)(nil)
 
@@ -30,7 +37,7 @@ func (t *readTool) Name() string { return "read" }
 func (t *readTool) Label(agent.ToolCall) string { return "read" }
 
 func (t *readTool) Description() string {
-	return "Read the contents of a file. Returns line-numbered text; use offset/limit to page large files. Binary files are refused."
+	return "Read the contents of a file. Returns line-numbered text; use offset/limit to page large files. Image files return the picture itself; binary files are refused."
 }
 
 // Schema returns the JSON schema for read's parameters.
@@ -62,7 +69,11 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	case fileBinary:
 		return resultErr("refusing to read a binary file; use bash if you need its bytes"), nil
 	case fileImage:
-		return resultErr("image files are not supported by the read tool yet"), nil
+		if !t.visionOn() {
+			return resultErr("model does not support images; this file can only be read by a vision model"), nil
+		}
+		t.tracker.Observe(full, data, info) // an image read dedupes like a text read
+		return t.readImage(full, data)
 	}
 
 	lim := ReadFileLimit()
@@ -101,4 +112,23 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		Content: llmBlock(content),
 		Display: display,
 	}, nil
+}
+
+// readImage fits one image file and returns it as model content. A rejected
+// image becomes an error result naming why; a fitted one carries the sizing
+// note so answers stay honest against the source pixels.
+func (t *readTool) readImage(full string, data []byte) (agent.ToolResult, error) {
+	blocks, err := FitImage(data)
+	if err != nil {
+		return resultErr(FitImageError(err)), nil
+	}
+	var notes strings.Builder
+	notes.WriteString(relTo(t.policy.Cwd, full))
+	for _, b := range blocks {
+		if tb, ok := b.(llm.TextBlock); ok {
+			notes.WriteString("\n")
+			notes.WriteString(tb.Text)
+		}
+	}
+	return agent.ToolResult{Content: blocks, Display: notes.String()}, nil
 }

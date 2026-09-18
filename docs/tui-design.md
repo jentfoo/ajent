@@ -584,6 +584,40 @@ The model still receives the full unmodified `Content`; only history is elided.
 
 ## Content rendering
 
+### Terminal images
+
+Image display is detected and conservative by default: `DetectImageProtocol`
+names kitty graphics or the iTerm2 inline protocol from the environment, an
+explicit `ui.images` value wins outright, and unknown terminals, non-ttys and
+multiplexers report none (the same default the colour profile takes).
+
+Images commit into inline history only. Inline is the one mode that never
+repaints committed rows, so a drawn image is emitted exactly once and can never
+stack copies. Alt and plain modes draw the placeholder instead. Kitty placements
+carry a fresh id in a bounded registry whose overflow deletes the oldest, freeing
+terminal-side memory. iTerm2 has no deletion at all, which inline tolerates and
+repainting would not.
+
+Both protocols transmit quietly and cursor-neutral: a rejected draw cannot echo
+its error into the input stream, and one row count drives the spacer model for
+each. The input decoder consumes any stray sequence whole so protocol chatter
+cannot type into the editor. Placements are clamped by `fitCells`, width to the
+terminal's column count and height to half the screen, both axes scaled together
+so the aspect survives. Terminals clip an oversized draw while its committed
+spacer rows remain, and blank gaps in scrollback are how that looks broken.
+
+An image line carries its own row count, sized from the cell geometry queried
+once at startup, so every renderer's row accounting agrees. Lines carrying image
+sequences are exempt from wrapping, padding and SGR repair: mangling a control
+sequence renders garbage. Where nothing renders, the placeholder is honest:
+`[image <label> WxH, size]`. Resume replay uses that placeholder too. The replay
+is a fresh rendering below whatever the terminal holds, a new terminal holds
+nothing at all, and its sink suppresses protocol drawing so a replay never
+re-emits base64 into a tty that cannot already show it.
+Recorded prompts keep their `[image #N]` tokens, so history recall restores the
+line an image rode in on. A token whose slot is gone drops at submit with a
+notice rather than vanishing silently.
+
 ### Markdown
 
 `goldmark` parses (with the GFM extension); we walk the AST ourselves in
@@ -1114,14 +1148,15 @@ The key table:
 |---|---|
 | Enter | submit (accepts an open menu or search selection) |
 | Alt+Enter, Ctrl+J | insert a newline |
-| `↑`/`↓` | move the caret through visual rows; only at the prompt's very start (↑) or end (↓) do they recall history. A search overlay or a command menu selects with them; path completion never takes them |
+| `↑`/`↓` | move the caret through visual rows. Only at the prompt's very start (↑) or end (↓) do they recall history. A search overlay or a command menu takes them first, path completion never does |
 | Tab | accept the highlighted command in a menu; for a path, fill in the candidates' longest common prefix, or list what is left (`complete.go`) |
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
+| Ctrl+V | paste an image from the clipboard as an `[image #N]` token (`ControlClipboardImage`). Readers are `xclip`/`wl-paste` (Linux), `pngpaste` (macOS), PowerShell (Windows). Kitty's own paste binding takes the key first when `ctrl+v` is mapped in `kitty.conf`, and kitty pastes text only |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |
 | Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
 | Esc, twice | rewind onto an earlier message while idle |
-| Ctrl+R | reverse history search overlay (`search.go`) |
+| Ctrl+R | reverse history search overlay (`search.go`). `←`/`→`, their word-wise forms and Home select the match too |
 | Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |
 | PgUp / PgDn (inline) | page the multi-line buffer: PgUp moves toward the head, PgDn toward the tail, each snapping onto the boundary when within one page or already on its row. In alt they scroll committed output (`render.scroll`) |
 
@@ -1153,16 +1188,19 @@ Ctrl+R steps to the next older match: the overlay's only stepping key, since the
 UI claims the arrows. Enter fills the editor with the full line and does not
 send it. The first Esc selects the same way; only with no current match does it
 close leaving the buffer untouched, and a second Esc then clears the field. In
-the overlay ↑/↓ select: one press fills the editor with the highlighted line and
-closes the overlay without sending; subsequent plain arrows keep scrolling that
-same recalled list.
+the overlay ↑/↓ select and then browse: one press fills the editor with the
+highlighted line, closes the overlay without sending, and leaves subsequent plain
+arrows scrolling that same recalled list. Horizontal caret keys (←/→, their
+word-wise forms, Home) also accept the match and apply their own motion in that
+same press, so editing starts immediately. With no current match they only close
+the overlay and reach the editor as usual.
 
 **Accepting places the caret on the match**, not at the end of the recalled
 line, whichever key accepts. The offset is the first occurrence the overlay
 highlights, so caret and emphasis agree on which one "the match" is; when it
 cannot be located (`matchSpans` refuses byte offsets that lowering would shift)
 the caret falls back to the end of the text, the same degradation the highlight
-already takes.
+already takes. A horizontal caret key moves from that offset.
 
 Plain ↑/↓ are **cursor-first** for multi-line prompts rather than always
 recalling history: they move the caret across visual rows keeping roughly the

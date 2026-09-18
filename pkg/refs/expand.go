@@ -65,17 +65,21 @@ type Expander struct {
 	policy  tools.PathPolicy
 	tracker *tools.Tracker
 	run     atomic.Int64 // numbers each Expand so its call ids stay unique
+	// vision reports whether the active model reads images; image references
+	// are only injected when it does. nil means never.
+	vision func() bool
 }
 
 // NewExpander returns an expander backed by reg. read/ls run through the sink so
 // their display order matches the transcript order. policy resolves @ paths to
-// the same keys read/write/edit use.
-func NewExpander(reg *tools.Registry, sink agent.Sink, policy tools.PathPolicy) *Expander {
+// the same keys read/write/edit use. vision reports whether the active model
+// reads images; nil means never.
+func NewExpander(reg *tools.Registry, sink agent.Sink, policy tools.PathPolicy, vision func() bool) *Expander {
 	var tracker *tools.Tracker
 	if reg != nil {
 		tracker = reg.Tracker()
 	}
-	return &Expander{reg: reg, sink: sink, policy: policy, tracker: tracker}
+	return &Expander{reg: reg, sink: sink, policy: policy, tracker: tracker, vision: vision}
 }
 
 // Seed raises the run counter above every @ reference id already in msgs. Call
@@ -179,6 +183,22 @@ func (x *Expander) Expand(text string) Result {
 			}
 			continue
 		}
+		if m.Kind == tools.KindImage {
+			// a vision model gets the picture itself through the read tool; a
+			// text-only one keeps today's annotation so the reference stays visible
+			if x.vision == nil || !x.vision() {
+				out = splice(out, ref, annotate(ref, m))
+				continue
+			}
+			out = stripNote(out, ref)
+			if x.tracker != nil && x.tracker.Unchanged(full) {
+				continue
+			}
+			if keep(full) {
+				plan = append(plan, newInjection(run, "read", "", ref.Path, full, imageNominalBytes))
+			}
+			continue
+		}
 		if m.Kind != tools.KindText {
 			out = splice(out, ref, annotate(ref, m))
 			continue
@@ -244,6 +264,11 @@ func (x *Expander) Expand(text string) Result {
 // input path, so this is a floor rather than a measurement: the real size lands
 // with the pair and replaces it moments later.
 const lsNominalBytes = 1024
+
+// imageNominalBytes is what an image read reserves: a flat stand-in, not a
+// measurement, since the fitted block's size is unknowable before the read.
+// 6144 bytes prices the pair near imageMaxTokens at the code byte ratio.
+const imageNominalBytes = 6144
 
 // lsCall plans the directory listing for a glob or directory reference. dir is
 // the resolved path when it names one directory (so Run can re-check it), empty

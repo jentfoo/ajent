@@ -11,6 +11,9 @@ import (
 // its own copy (readOnlyBuiltins) because it may not import this package.
 var ReadOnlyBuiltins = []string{"read", "grep", "find", "ls"}
 
+// ToolRead is the built-in read tool's name.
+const ToolRead = "read"
+
 // ToolAskUser is the built-in question tool's name.
 const ToolAskUser = "ask_user"
 
@@ -24,6 +27,9 @@ type Options struct {
 	// Ask backs the ask_user tool. nil registers it in a state that reports no
 	// UI is available, so a headless run never blocks on a question.
 	Ask AskFunc
+	// Vision reports the active model's image capability, consulted live by
+	// read. nil disables read's image arm entirely.
+	Vision func() bool
 }
 
 // Builtins returns a registry holding read, write, edit and bash enabled plus
@@ -43,7 +49,7 @@ func Builtins(opts Options) (*Registry, error) {
 	reg := New()
 	reg.tracker = tracker
 	reg.sessionID = opts.SessionID
-	reg.Register(&readTool{policy: policy, tracker: tracker}, true)
+	reg.Register(&readTool{policy: policy, tracker: tracker, vision: opts.Vision}, true)
 	reg.Register(&writeTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&editTool{policy: policy, tracker: tracker}, true)
 	reg.Register(&bashTool{policy: policy, sessionID: opts.SessionID, shellExamples: opts.ShellCommands}, true)

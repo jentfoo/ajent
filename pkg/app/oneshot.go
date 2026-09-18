@@ -72,7 +72,7 @@ func RunHeadless(o HeadlessOptions) int {
 	}
 
 	// ask_user has nobody to ask, so it is left without an Ask func and excluded from every scope below
-	toolsReg, terr := builtinTools(o.Set, nil, func(msg string) {
+	toolsReg, terr := builtinTools(o.Set, o.Reg, nil, func(msg string) {
 		_, _ = fmt.Fprintln(errw, "ajent:", msg)
 	})
 	if terr != nil {
@@ -120,6 +120,9 @@ func RunHeadless(o HeadlessOptions) int {
 		_, _, warns := rec.restoreState(o.Set, o.Reg, st, toolsReg)
 		for _, w := range warns {
 			notify("resume: "+w, agent.LevelWarn)
+		}
+		if st.Model.ID != "" {
+			o.Reg.SetActive(st.Model) // the branch may name a model resolveActiveModel never saw
 		}
 	}
 
@@ -185,8 +188,10 @@ func RunHeadless(o HeadlessOptions) int {
 	toolsReg.SetAsker(barrier.Asker())
 
 	// steered inputs (sub-agent completions) expand through the same @ pipeline
-	// the initial prompt gets, via the agent's append-point seam.
-	expander := refs.NewExpander(toolsReg, opts.Sinks[0], tools.PathPolicy{Cwd: config.Cwd()})
+	// the initial prompt gets, via the agent's append-point seam. Vision reads
+	// the registry's active model, the read tool's own gate source.
+	expander := refs.NewExpander(toolsReg, opts.Sinks[0], tools.PathPolicy{Cwd: config.Cwd()},
+		func() bool { return o.Reg.Active().Caps.Images })
 	opts.NormalizeInput = func(in agent.Input) agent.Input {
 		return refs.Normalize(expander, in, func(n string) { notify(n, agent.LevelWarn) })
 	}

@@ -258,4 +258,18 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	assert.Equal(t, used, tk.Context().Used)
 }
 
+// Serial: flips the package-wide images gate. The apply must read the value
+// just set, not the stale one, so each flip lands immediately.
+func TestUIConsoleImagesBlockLiveFlip(t *testing.T) {
+	set := loadTestConfig(t)
+	tools.SetImagesEnabled(false)
+	t.Cleanup(func() { tools.SetImagesEnabled(true) })
+
+	c := &uiConsole{set: set}
+	require.NoError(t, c.SetSessionSetting("images.block", false))
+	assert.True(t, tools.ImagesEnabled())
+	require.NoError(t, c.SetSessionSetting("images.block", true))
+	assert.False(t, tools.ImagesEnabled())
+}
+
 func ptrTo[T any](v T) *T { return &v }

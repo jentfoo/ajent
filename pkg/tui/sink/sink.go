@@ -19,12 +19,30 @@ import (
 // turn; *tui.UI serializes them and keys each call's output by its ID. busy is
 // only touched from the loop goroutine (TurnStart/TurnEnd) and must stay that way.
 type Sink struct {
-	ui   *tui.UI
-	busy func() // clears the working spinner; nil while idle
+	ui    *tui.UI
+	busy  func() // clears the working spinner; nil while idle
+	image bool   // image blocks draw via the terminal protocol; replay turns this off
 }
 
 // New returns a sink that drives ui.
-func New(ui *tui.UI) *Sink { return &Sink{ui: ui} }
+func New(ui *tui.UI) *Sink { return &Sink{ui: ui, image: true} }
+
+// SetImages toggles whether image blocks in tool results draw through the
+// terminal protocol. Replay turns drawing off: the drawings already sit in
+// scrollback, and re-emitting them would stack copies.
+func (s *Sink) SetImages(on bool) { s.image = on }
+
+// Images adapts image blocks onto the TUI's image type, reading pixel
+// dimensions from each header.
+func Images(blocks llm.BlockList) []tui.Image {
+	ibs := llm.ImageBlocks(blocks)
+	imgs := make([]tui.Image, len(ibs))
+	for i, ib := range ibs {
+		w, h, _ := llm.ImageDims(ib.Data)
+		imgs[i] = tui.Image{Data: ib.Data, MediaType: ib.MediaType, W: w, H: h}
+	}
+	return imgs
+}
 
 // TurnStart lights the working spinner until TurnEnd. The prompt is echoed at
 // submission time, not here, so it lands above the line without waiting on the turn.
@@ -51,7 +69,8 @@ func (s *Sink) EndText() { s.ui.EndText() }
 
 // ToolStart maps a tool call onto the TUI spinner and returns the completion
 // hook that reports how it ended. Incremental output is streamed separately via
-// ToolOutput, so only an error or a Display string needs extra rendering here.
+// ToolOutput, so only an error, a Display string or image blocks need extra
+// rendering here.
 func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
 	if strings.TrimSpace(label) == "" {
 		label = call.Name
@@ -66,7 +85,19 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResul
 			// commit what history shows when it differs from the streamed output
 			result = res.Display
 		}
+		s.commitImages(call.Name, res.Content)
 		done(result)
+	}
+}
+
+// commitImages draws every image block in a tool result, below its output.
+func (s *Sink) commitImages(label string, blocks llm.BlockList) {
+	if !s.image {
+		return
+	}
+	for _, im := range Images(blocks) {
+		im.Label = label
+		s.ui.Image(im)
 	}
 }
 

@@ -153,6 +153,17 @@ outranks it. Unlike `ui.render` the palette *can* change at runtime:
 `/settings → Theme` recolors the live UI, and a resumed session applies its
 override before the transcript replays (see tui-design.md, "Semantic styling").
 
+`ui.images` names a terminal image protocol (`kitty`, `iterm2`, `none`) and
+defaults to detection, forcing the capability the way `ui.color` forces depth.
+Like `ui.render` it is read once before `tui.New` with no `/settings` row, and
+an unknown name falls back to detection (see tui-design.md, "Terminal images").
+
+### Images
+
+`images.block`, off by default, is the one image delivery key. It applies to the
+tool layer at startup, and resume re-applies it after the transcript's overrides
+are seeded so a session saved blocked comes back blocked.
+
 ## The writer
 
 Saving re-marshals an order-preserving object tree: unknown keys and key order

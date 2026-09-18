@@ -1,7 +1,6 @@
 package tokens
 
 import (
-	"encoding/binary"
 	"math"
 	"strings"
 	"unicode/utf8"
@@ -152,58 +151,19 @@ func estimateToolResult(b llm.ToolResultBlock) int {
 // them, since cost scales with area rather than with how well it compressed. A
 // format whose header does not parse falls back to a byte ratio.
 func imageTokens(b llm.ImageBlock) int {
-	if w, h, ok := imageDims(b.Data); ok {
+	if w, h, ok := llm.ImageDims(b.Data); ok {
 		return min(max(w*h/imagePixelsPerToken, imageBaseTokens), imageMaxTokens)
 	}
 	return max(len(b.Data)/imageBytesPerToken, imageBaseTokens)
-}
-
-var pngMagic = []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
-
-// imageDims returns the pixel dimensions encoded in a PNG or JPEG header. It
-// reads the header only; nothing is decoded. ok is false for any other format.
-func imageDims(data []byte) (w, h int, ok bool) {
-	switch {
-	case len(data) >= 24 && string(data[:8]) == string(pngMagic):
-		// IHDR is always the first chunk: width and height are big endian at 16 and 20
-		return int(binary.BigEndian.Uint32(data[16:20])),
-			int(binary.BigEndian.Uint32(data[20:24])), true
-	case len(data) >= 4 && data[0] == 0xFF && data[1] == 0xD8:
-		return jpegDims(data)
-	}
-	return 0, 0, false
-}
-
-// jpegDims walks JPEG segment markers to the start-of-frame that carries the
-// dimensions, skipping every other segment by its length.
-func jpegDims(data []byte) (w, h int, ok bool) {
-	for i := 2; i+9 < len(data); {
-		if data[i] != 0xFF {
-			return 0, 0, false // out of step with the segment chain
-		}
-		marker := data[i+1]
-		if marker == 0xFF {
-			i++ // fill byte, the marker continues
-			continue
-		}
-		size := int(binary.BigEndian.Uint16(data[i+2 : i+4]))
-		if size < 2 {
-			return 0, 0, false
-		}
-		// SOF0-SOF15 carry the frame header; DHT (C4), JPG (C8) and DAC (CC) do not
-		if marker >= 0xC0 && marker <= 0xCF && marker != 0xC4 && marker != 0xC8 && marker != 0xCC {
-			return int(binary.BigEndian.Uint16(data[i+7 : i+9])),
-				int(binary.BigEndian.Uint16(data[i+5 : i+7])), true
-		}
-		i += 2 + size
-	}
-	return 0, 0, false
 }
 
 // EstimateMessage estimates a single message including its per-message framing.
 func EstimateMessage(m llm.Message) int {
 	return messageOverhead + estimateBlocks(m.Content)
 }
+
+// EstimateBlocks estimates a bare block list, no message framing.
+func EstimateBlocks(blocks llm.BlockList) int { return estimateBlocks(blocks) }
 
 // EstimateMessages estimates one or more messages including per-message framing.
 func EstimateMessages(msgs []llm.Message) int {

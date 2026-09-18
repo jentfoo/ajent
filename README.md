@@ -65,6 +65,12 @@ Sub-agents only function in a read only form. They exist only to keep the main c
 
 MCP and other tools are loaded on the first message (using `/tools`). Once a tool is loaded it can't be unloaded, however we do allow adding tools later at the cost of a cache miss.
 
+### Images
+
+On a vision-capable model you can bring pictures into the conversation three ways: paste one with `Ctrl+V` (a `[image #N]` token is inserted into your prompt), reference one with `@file.png`, or have the model read one with the `read` tool. Oversized images are downscaled to at most 2000×2000 pixels and ~4.5 MB, with a note telling the model how to map coordinates back to the original. BMP, TIFF and other foreign formats are converted to PNG automatically.
+
+Images render in the terminal when a supported protocol is detected (kitty graphics on kitty, Ghostty or Konsole, or iTerm2 inline on iTerm2, WezTerm and mintty). Everywhere else, multiplexers like tmux and screen included, an honest placeholder naming the file, dimensions and size is shown instead. `ui.images` in config.json can force a protocol or turn the feature off.
+
 ## Configuration
 
 ### Providers
@@ -202,6 +208,8 @@ The top-level blocks:
 * `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it; `threshold` is the default for the ones that do not.
 * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.
 * `subagent.model` / `maxConcurrent` - a dedicated model for research sub-agents (empty inherits your session model) and how many may run at once (default 8).
+* `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers; an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
+* `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default; `/settings` can flip it for the session, and `AJENT_IMAGES_BLOCK=true` sets it for a single run.
 * `ui.render`, `ui.theme`, `showCost`, `showThinking` - paint mode (`auto`, `inline`, `alt`, `plain`), palette, and whether cost or thinking are shown.
 * `ui.color` - colour depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`; any other value names the depth outright, which is the way out if your terminal is classified badly — `256` turns on syntax highlighting where detection was too conservative, `none` turns colour off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
 * `disableUpdateCheck` - turn off the startup update-available notice. Off by default; a fork install or an offline machine that does not want to nag can set this once in the user layer.

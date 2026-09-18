@@ -14,6 +14,8 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 func TestConnectStdio(t *testing.T) {
@@ -38,8 +40,8 @@ func TestConnectStdio(t *testing.T) {
 		res, err := c.Call(t.Context(), "tool_01", json.RawMessage(`{}`), nil)
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
-		assert.Len(t, res.Content, 1)
-		assert.Equal(t, "tool_01: ok", res.Content[0])
+		require.Len(t, res.Blocks, 1)
+		assert.Equal(t, "tool_01: ok", res.Blocks[0].(llm.TextBlock).Text)
 	})
 }
 
@@ -136,7 +138,7 @@ func TestLegacyServerCompat(t *testing.T) {
 	res, err := c.Call(t.Context(), "tool_01", json.RawMessage(`{}`), nil)
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
-	assert.Equal(t, "tool_01: ok", res.Content[0])
+	assert.Equal(t, "tool_01: ok", res.Blocks[0].(llm.TextBlock).Text)
 
 	// legacy servers still answer the ping RPC for real
 	require.NoError(t, c.Ping(t.Context()))
@@ -163,7 +165,7 @@ func TestHTTPAgainstHTTPServer(t *testing.T) {
 
 	res, err := c.Call(t.Context(), "echo", json.RawMessage(`{}`), nil)
 	require.NoError(t, err)
-	assert.Equal(t, "hi", res.Content[0])
+	assert.Equal(t, "hi", res.Blocks[0].(llm.TextBlock).Text)
 }
 
 func TestPing(t *testing.T) {

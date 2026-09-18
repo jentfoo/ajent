@@ -231,6 +231,7 @@ func allRows() []settingsRow {
 		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+write", "block-all"}),
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
+		{name: "Block images", render: rowImagesBlock, edit: editImagesBlock},
 		themeRow(),
 		{name: "Tool limits",
 			render: func(_ Console) (string, string) { return "Tool limits", "edit per-tool output bounds" },
@@ -273,6 +274,21 @@ func rowRetention(c Console) (string, string) {
 }
 func rowThinking(c Console) (string, string) {
 	return "Show thinking", detailOrDefault(c, "reasoning.show")
+}
+
+func rowImagesBlock(c Console) (string, string) {
+	return "Block images", detailOrDefault(c, "images.block")
+}
+
+// editImagesBlock flips the image-reading gate. SetSessionSetting both records
+// the override and, through the console's hook, re-applies it live.
+func editImagesBlock(ctx context.Context, c Console) ([]settingChange, error) {
+	on, err := c.Confirm(ctx, "Prevent image blocks from reaching providers?")
+	if err != nil {
+		return nil, err
+	}
+	_ = c.SetSessionSetting("images.block", on)
+	return []settingChange{{key: "images.block", value: on}}, nil
 }
 
 func rowTools(c Console) (string, string) {

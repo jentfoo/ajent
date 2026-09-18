@@ -12,6 +12,7 @@ type Settings struct {
 	Compaction  Compaction  `json:"compaction,omitzero"`
 	Subagent    Subagent    `json:"subagent,omitzero"` // research sub-agents
 	UI          UI          `json:"ui,omitzero"`
+	Images      Images      `json:"images,omitzero"` // image capture and delivery
 
 	// DisableUpdateCheck turns off the startup update-available notice.
 	DisableUpdateCheck bool `json:"disableUpdateCheck,omitzero"`
@@ -84,8 +85,16 @@ type UI struct {
 	Render       string `json:"render,omitempty"` // tui.Mode name
 	Color        string `json:"color,omitempty"`  // tui.ColorProfile name
 	Theme        string `json:"theme,omitempty"`  // tui.Palette name
+	Images       string `json:"images,omitempty"` // tui.ImageProtocol name: auto, kitty, iterm2, none
 	ShowCost     bool   `json:"showCost,omitzero"`
 	ShowThinking bool   `json:"showThinking,omitzero"`
+}
+
+// Images configures how image blocks flow to providers and the terminal.
+type Images struct {
+	// Block, default off, prevents any image block from reaching providers:
+	// every image becomes an "Image reading is disabled." text placeholder.
+	Block bool `json:"block,omitzero"`
 }
 
 // Permissions configures the tool guard chain.

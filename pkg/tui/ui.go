@@ -54,8 +54,9 @@ const (
 	ControlEscape Control = iota
 	ControlInterrupt
 	ControlEOF
-	ControlModeCycle    // Shift+Tab; meaning belongs to the front end
-	ControlRecallQueued // Alt+↑: recall the newest queued prompt into the editor
+	ControlModeCycle      // Shift+Tab; meaning belongs to the front end
+	ControlRecallQueued   // Alt+↑: recall the newest queued prompt into the editor
+	ControlClipboardImage // Ctrl+V: probe the clipboard for an image
 )
 
 // Options configures a UI.
@@ -75,6 +76,10 @@ type Options struct {
 	// changes, so a host can feed token accounting while the user composes. It runs
 	// on an internal goroutine, never under the UI lock.
 	OnEdit func(text string)
+	// Images forces the terminal image protocol: "kitty", "iterm2", "none", or
+	// "" to detect from the environment. Detection is conservative: multiplexers
+	// and unknown terminals report none and every image renders as a placeholder.
+	Images string
 }
 
 // UI is the terminal front end: committed history above a live block holding the
@@ -93,7 +98,16 @@ type UI struct {
 	msgs     chan string
 	controls chan Control
 	done     chan struct{}
-	closed   bool
+
+	images ImageProtocol // resolved image protocol, ImageNone hides them
+	// kitty image ids to occupied rows, bounded. Deliberately survives Reset:
+	// inline scrollback keeps the drawings visible, and these ids are the only
+	// handle for freeing their terminal-side data.
+	imgIDs map[uint32]int
+	imgSeq uint32 // source of fresh kitty image ids
+	// terminal cell pixel size from the CSI 16 t reply, consulted by commit
+	cellW, cellH int
+	closed       bool
 
 	thinkBuf  lineBuffer
 	thinking  bool
@@ -216,6 +230,8 @@ func New(opts Options) (*UI, error) {
 		msgs:     make(chan string),
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
+		imgIDs:   make(map[uint32]int),
+		images:   DetectImageProtocol(opts.Images, osEnv, isTTY),
 	}
 	if opts.OnEdit != nil {
 		u.onEdit = opts.OnEdit
@@ -246,6 +262,11 @@ func New(opts Options) (*UI, error) {
 	u.safeGo(u.readKeys)
 	u.safeGo(u.watchSignals)
 	u.safeGo(u.watchStatus)
+	if u.images != ImageNone {
+		u.safeGo(u.watchCells)
+		// ask once; the answer sizes every image this session draws
+		u.render.query(cellSizeQuery)
+	}
 	if opts.OnEdit != nil {
 		u.editCh = make(chan string, 1)
 		u.safeGo(u.drainEdits) // runs OnEdit outside the UI lock
@@ -499,6 +520,39 @@ func (u *UI) UserEcho(text string) {
 	// Explicit newlines keep their continuation indent; soft wraps are the
 	// terminal's, exactly like the rest of committed output.
 	u.commit(indentLines(u.theme.User.Wrap(text), u.theme.User.Wrap(userMarker), userContinue), flowReflow)
+}
+
+// UserImages commits the images submitted with a prompt, each drawn by the
+// detected terminal protocol or named by its placeholder, below the echo.
+func (u *UI) UserImages(ims []Image) {
+	if len(ims) == 0 {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.closed {
+		return
+	}
+	u.gap()
+	lines := make([]histLine, len(ims))
+	for i, im := range ims {
+		lines[i] = u.imageLine(im)
+	}
+	u.commitHist(lines)
+}
+
+// Image commits one image to history, drawn via the detected terminal image
+// protocol or named honestly by a placeholder line. Sinks call it when a tool
+// result or other event carries an image block.
+func (u *UI) Image(im Image) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.closed {
+		return
+	}
+	u.commitHist([]histLine{u.imageLine(im)})
 }
 
 // streamDelta runs one buffered delta through a commit: completed units drop from
@@ -1110,6 +1164,22 @@ func (u *UI) handleKey(k key) (submit *string, quit bool) {
 	return submit, quit
 }
 
+// Insert inserts text at the caret, as if typed, for hosts that deliver
+// content outside the key stream (an image token captured from the clipboard).
+func (u *UI) Insert(text string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.closed {
+		return
+	}
+	u.editor.Insert(text)
+	u.repaint()
+	if u.editCh != nil {
+		u.notifyEditLocked(u.expandPastes(u.editor.Value()))
+	}
+}
+
 // SetOnEdit installs an input-change callback after construction, for hosts that
 // build their accounting state later than Options (e.g. main's driver). It may be
 // called again to swap the callback; drainEdits reads it per iteration so the new
@@ -1328,6 +1398,8 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			case searchClose:
 				u.search = nil
 				return nil, true, false
+			case searchAcceptMove:
+				u.acceptSearchLocked() // commit, then this caret key edits the line below
 			case searchPass:
 				u.search = nil // close and let the editor handle this key below
 			}
@@ -1403,6 +1475,11 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	case keyAltUp:
 		u.emitControl(ControlRecallQueued) // the driver updates the editor via SetInput/PrependInput
 		return nil, false, false           // no repaint here: those methods repaint
+	case keyClipboardPaste:
+		// out-of-band like Shift+Tab: the driver probes the clipboard and may
+		// insert an image token via SetInput
+		u.emitControl(ControlClipboardImage)
+		return nil, false, false
 	case keyUp:
 		// Cursor-first: move up through visual rows, and only a press already on
 		// the very first character (or an empty buffer) recalls older history.

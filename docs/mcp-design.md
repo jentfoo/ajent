@@ -123,10 +123,10 @@ strand a waiter until its deadline. The offset keeps the two id spaces disjoint.
 
 ### Result mapping (`result.go`)
 
-Text content becomes a text block; image and audio become short placeholders
-(naming the media kind) since image processing is separate work; embedded
-resources become text references (uri + mime type) and resource links become
-text references (uri + description); structured content with empty `content`
+Text content becomes a text block. An image with usable data becomes an
+`ImageBlock`, anything else (audio included) becomes a short placeholder naming
+the media kind. Embedded resources and resource links become text references
+(uri plus mime type or description). Structured content with empty `content`
 falls back to its raw JSON. `isError` maps onto `Result.IsError`.
 
 ## Bridging into the registry (`bridge.go`)

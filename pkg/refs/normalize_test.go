@@ -31,7 +31,7 @@ func TestNormalize(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644))
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
 		require.NoError(t, err)
-		x := NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir})
+		x := NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
 
 		in := Normalize(x, agent.Input{Text: "look at @a.go"}, func(string) {})
 		assert.Contains(t, in.Text, "@a.go")
@@ -48,7 +48,7 @@ func TestNormalize(t *testing.T) {
 		dir := t.TempDir()
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
 		require.NoError(t, err)
-		x := NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir})
+		x := NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
 
 		var warned []string
 		_ = Normalize(x, agent.Input{Text: "see @missing.go"}, func(n string) { warned = append(warned, n) })
@@ -62,7 +62,7 @@ func TestNormalize(t *testing.T) {
 		dir := t.TempDir()
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
 		require.NoError(t, err)
-		x := NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir})
+		x := NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
 
 		in := agent.Input{
 			Text:   "look at @a.go",

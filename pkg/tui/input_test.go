@@ -65,6 +65,7 @@ func TestDecodeKey(t *testing.T) {
 		{"delete", "\x1b[3~", key{typ: keyDelete}, 4},
 		{"shift_tab_modified", "\x1b[1;2Z", key{typ: keyBackTab}, 6},
 		{"bare_csi_r_ignored", "\x1b[R", key{typ: keyIgnore}, 3},
+		{"apc_reply_ignored", "\x1b_G0;Invalid control range\x1b\\", key{typ: keyIgnore}, 28},
 		{"alt_enter", "\x1b\r", key{typ: keyNewline}, 2},
 		{"alt_b_word_left", "\x1bb", key{typ: keyWordLeft}, 2},
 		{"alt_f_word_right", "\x1bf", key{typ: keyWordRight}, 2},

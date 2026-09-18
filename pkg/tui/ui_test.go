@@ -960,9 +960,16 @@ func TestUISearchArrowCommits(t *testing.T) {
 		prompt      string // the narrowed prompt label to expect in the field
 		older       string // second history entry, recalled after Up scrolls past the newest
 		browseOlder bool   // whether subsequent Up presses walk back through older prompts
+		k           keyType
+		wantPos     int // caret offset after the commit press
 	}{
-		{"down_commits", "fix the newest prompt", "older prompt", false},
-		{"up_commits_then_browses", "fix the newest recorded", "older recorded", true},
+		{"down_commits", "fix the newest prompt", "older prompt", false, keyDown, len("fix the ")},
+		{"up_commits_then_browses", "fix the newest recorded", "older recorded", true, keyUp, len("fix the ")},
+		{"left_edits_match", "fix the newest recorded", "older recorded", false, keyLeft, 7},
+		{"right_edits_match", "fix the newest recorded", "older recorded", false, keyRight, 9},
+		{"word_left_edits_match", "fix the newest recorded", "older recorded", false, keyWordLeft, 4},
+		{"word_right_edits_match", "fix the newest recorded", "older recorded", false, keyWordRight, 14},
+		{"home_edits_match", "fix the newest recorded", "older recorded", false, keyHome, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			v := newVT(60, 10)
@@ -976,17 +983,11 @@ func TestUISearchArrowCommits(t *testing.T) {
 			u.waitOpenSearch(t)
 			searchPress(u, key{typ: keyRune, text: "ne"}) // narrows to the newest prompt
 
-			arrow := key{typ: keyDown}
-			if tc.browseOlder {
-				arrow = key{typ: keyUp}
-			}
-			// the arrow selects the highlighted (newest) prompt and closes the overlay;
-			// it does not scroll on this same press, nor send the message.
-			submit := searchPress(u, arrow)
+			submit := searchPress(u, key{typ: tc.k})
 			assert.Nil(t, submit)
 			require.Nil(t, u.search)
 			assert.Equal(t, tc.prompt, u.editor.Value())
-			assert.Equal(t, len("fix the "), u.editor.pos) // caret on the match, not the line end
+			assert.Equal(t, tc.wantPos, u.editor.pos) // caret moves off the match it landed on
 
 			if !tc.browseOlder {
 				return // Down stops once the prompt is committed

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/jentfoo/ajent/pkg/img"
 )
 
 // fileKind discriminates what a probed path holds.
@@ -48,8 +50,13 @@ func writePerm(path string) os.FileMode {
 	return 0o644
 }
 
-// detect classifies a buffer as text, binary or image.
+// detect classifies a buffer as text, binary or image. The image check runs
+// before the NUL scan: png, webp, bmp and tiff all carry NUL bytes in their
+// headers, so the byte scan alone would call them binary.
 func detect(data []byte) (out fileKind) {
+	if hasImageSig(data) {
+		return fileImage
+	}
 	sniff := data
 	if len(sniff) > sniffLen {
 		sniff = sniff[:sniffLen]
@@ -57,25 +64,19 @@ func detect(data []byte) (out fileKind) {
 	if bytes.IndexByte(sniff, 0) >= 0 {
 		return fileBinary
 	}
-	if hasImageSig(data) {
-		return fileImage
-	}
 	return fileText
 }
 
-// hasImageSig reports whether data begins with a common image magic number.
+// hasImageSig reports whether the registered decoders accept data's header as
+// an image, so look-alike text ("BMW ...") and sibling RIFF files (wav, avi)
+// stay out. The bare jpeg marker stands in for it: a jpeg whose frame header
+// sits beyond the sniff window fails DecodeConfig, and 0xff 0xd8 cannot start
+// text.
 func hasImageSig(data []byte) bool {
-	if len(data) < 4 {
-		return false
-	}
-	sig := map[string]bool{
-		string([]byte{0x89, 'P', 'N', 'G'}): true,
-		string([]byte{'R', 'I', 'F', 'F'}):  true, // webp/avi container start
-	}
-	if sig[string(data[:4])] {
+	if _, ok := img.Sniff(data); ok {
 		return true
 	}
-	return len(data) > 2 && data[0] == 0xff && data[1] == 0xd8 // jpeg
+	return len(data) >= 2 && data[0] == 0xff && data[1] == 0xd8
 }
 
 // numberedLinePrefix is what numberLines writes ahead of every line: a six-wide

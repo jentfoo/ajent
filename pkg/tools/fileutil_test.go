@@ -1,12 +1,58 @@
 package tools
 
 import (
+	"bytes"
+	"image"
+	"image/gif"
+	"image/jpeg"
+	"image/png"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDetect(t *testing.T) {
+	t.Parallel()
+
+	var pngBuf, jpegBuf, gifBuf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	require.NoError(t, png.Encode(&pngBuf, img))
+	require.NoError(t, jpeg.Encode(&jpegBuf, img, nil))
+	require.NoError(t, gif.Encode(&gifBuf, img, nil))
+
+	wav := []byte("RIFF\x24\x08\x00\x00WAVEfmt \x10\x00\x00\x00")
+	wav = append(wav, make([]byte, 16)...)
+	// minimal 24-bit bmp of 4x4: file header plus BITMAPINFOHEADER, zero pixels
+	bmp := make([]byte, 102)
+	bmp[0], bmp[1] = 'B', 'M'
+	bmp[2] = 102
+	bmp[10] = 54
+	bmp[14] = 40
+	bmp[18] = 4
+	bmp[22] = 4
+	bmp[26] = 1
+	bmp[28] = 24
+
+	for _, tc := range []struct {
+		name string
+		data []byte
+		want fileKind
+	}{
+		{"png", pngBuf.Bytes(), fileImage},
+		{"jpeg", jpegBuf.Bytes(), fileImage},
+		{"gif", gifBuf.Bytes(), fileImage},
+		{"bmp", bmp, fileImage},
+		{"text looking like bmp", []byte("BMW owners manual, a fine automobile\\nwith more lines"), fileText},
+		{"wav is binary", wav, fileBinary},
+		{"plain text", []byte("just some text"), fileText},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, detect(tc.data))
+		})
+	}
+}
 
 func TestReadBytes(t *testing.T) {
 	t.Parallel()

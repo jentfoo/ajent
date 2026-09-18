@@ -50,7 +50,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// read, write, edit and run commands.
 	// ask_user rides the TUI's question queue, so it never pre-empts a permission
 	// dialog. It stays disabled until a workflow enables it.
-	toolsReg, terr := builtinTools(set, askUser(ui), func(msg string) { ui.Notify(msg, tui.LevelWarn) })
+	toolsReg, terr := builtinTools(set, reg, askUser(ui), func(msg string) { ui.Notify(msg, tui.LevelWarn) })
 	if terr != nil {
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
 	}
@@ -247,7 +247,10 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// steered, follow-up and host-supplied inputs expand through the same @
 	// pipeline a submitted prompt gets, via the agent's append-point seam.
-	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: config.Cwd()})
+	// vision reads the registry's active model, the same source the read
+	// tool's gate pulls from, so @ and read can never disagree.
+	expander := refs.NewExpander(toolsReg, sink, tools.PathPolicy{Cwd: config.Cwd()},
+		func() bool { return reg.Active().Caps.Images })
 	opts.NormalizeInput = func(in agent.Input) agent.Input {
 		return refs.Normalize(expander, in, func(n string) { ui.Notify(n, tui.LevelWarn) })
 	}
@@ -541,6 +544,17 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				return finish(rec) // UI closed
 			}
 			line := command.ParseLine(msg)
+			var blocks []llm.Block
+			if line.Kind == command.KindPrompt {
+				// image tokens become blocks; the recorded line keeps them, so
+				// recall restores the text an image rode in on. Orphaned tokens
+				// (slot consumed earlier) drop here with a notice.
+				var notices []string
+				line.Rest, blocks, notices = pendingImages.take(line.Rest)
+				for _, n := range notices {
+					ui.Notify(n, tui.LevelWarn)
+				}
+			}
 			if line.Kind == command.KindCommand {
 				hist.AppendHidden(msg) // slash commands stay durable yet excluded from ↑/↓ and Ctrl+R
 			} else {
@@ -555,7 +569,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				// arm the handoff here, where the line certainly left the editor: the
 				// async edit notification cannot re-arm after the pump resolves it
 				gate.submitted()
-				pump <- pumpLine{kind: command.KindPrompt, rest: line.Rest}
+				pump <- pumpLine{kind: command.KindPrompt, rest: line.Rest, blocks: blocks}
 			}
 		case <-quit:
 			close(pump)
@@ -594,10 +608,10 @@ const (
 )
 
 func watchControls(ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
-	go controlLoop(ui.Controls(), hints, ag, q, stager, initCtl, quit, onModeCycle)
+	go controlLoop(ui, ui.Controls(), hints, ag, q, stager, initCtl, quit, onModeCycle)
 }
 
-func controlLoop(controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
+func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
 	// armed is when the first Ctrl+C landed; quitHint fires to retire the hint
 	// that advertises the window, keeping the gesture and the hint the same
 	// length. The window is measured from armed, not from the timer, so a press
@@ -617,6 +631,17 @@ func controlLoop(controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent,
 				return // the UI went away
 			}
 			switch c {
+			case tui.ControlClipboardImage:
+				// off the control loop: a slow backend must not delay interrupts
+				go func() {
+					token, notice := captureClipboardImage(context.Background())
+					switch {
+					case notice != "":
+						ui.Notify(notice, tui.LevelWarn)
+					case token != "":
+						ui.Insert(token)
+					}
+				}()
 			case tui.ControlEscape:
 				switch {
 				case ag.Running():

@@ -57,6 +57,12 @@ func Run(o RunOptions) int {
 		pal = tui.DefaultPalette()
 		warnings = append(warnings, fmt.Sprintf("unknown ui.theme %q, using %q", themeName, pal.Name))
 	}
+	imagesName := set.Settings().UI.Images
+	if _, _, known := tui.ResolveImageProtocol(imagesName); !known {
+		warnings = append(warnings, fmt.Sprintf("unknown ui.images %q, detecting instead", imagesName))
+		imagesName = ""
+	}
+	tools.SetImagesEnabled(!set.Settings().Images.Block)
 	tools.ApplyLimits(tools.LimitsFrom(set.Settings().Tools.Limits))
 
 	// the registry is built once and shared by model resolution, a headless run
@@ -95,6 +101,7 @@ func Run(o RunOptions) int {
 		Mode:       mode,
 		Color:      color,
 		Palette:    pal,
+		Images:     imagesName,
 		Model:      label,
 		ModelShort: short,
 		MaxTokens:  active.ContextWindow,

@@ -34,7 +34,7 @@ func TestSteerNormalizesThroughRefs(t *testing.T) {
 		{Events: textTurnRewind("after steer")},
 	}}
 
-	expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir})
+	expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
 	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
 	a := agent.New(st, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },

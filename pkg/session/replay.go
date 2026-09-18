@@ -145,25 +145,44 @@ func foldResults(pending map[string]agent.ToolCall, content llm.BlockList, sink 
 func toolBody(tr llm.ToolResultBlock) string {
 	var sb strings.Builder
 	for _, b := range tr.Content {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
+		switch blk := b.(type) {
+		case llm.TextBlock:
+			if strings.TrimSpace(blk.Text) != "" {
+				if sb.Len() > 0 {
+					sb.WriteRune('\n')
+				}
+				sb.WriteString(blk.Text)
+			}
+		case llm.ImageBlock:
+			// replay never redraws images, so name each one where it sat
 			if sb.Len() > 0 {
 				sb.WriteRune('\n')
 			}
-			sb.WriteString(tb.Text)
+			sb.WriteString(llm.ImagePlaceholder(blk.Data, ""))
 		}
 	}
 	return sb.String()
 }
 
-// userText extracts the plain text of a prompt message.
+// userText extracts the plain text of a prompt message, with one image
+// placeholder appended per image block so a picture submitted with the prompt
+// is never silently invisible on resume.
 func userText(m llm.Message) string {
 	var sb strings.Builder
 	for _, b := range m.Content {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
+		switch blk := b.(type) {
+		case llm.TextBlock:
+			if strings.TrimSpace(blk.Text) != "" {
+				if sb.Len() > 0 {
+					sb.WriteRune(' ')
+				}
+				sb.WriteString(blk.Text)
+			}
+		case llm.ImageBlock:
 			if sb.Len() > 0 {
 				sb.WriteRune(' ')
 			}
-			sb.WriteString(tb.Text)
+			sb.WriteString(llm.ImagePlaceholder(blk.Data, ""))
 		}
 	}
 	return sb.String()

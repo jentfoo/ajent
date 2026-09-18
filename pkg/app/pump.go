@@ -7,15 +7,20 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
+	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
 type pumpLine struct {
 	kind     command.Kind
 	rest     string
 	injected bool // non-typed input, excluded from transcript-derived prompt recall
+	// blocks are image payloads captured from clipboard tokens in rest, appended
+	// to the turn's input after the text.
+	blocks []llm.Block
 	// input is an already-assembled prompt (the /init survey and its tool pairs)
 	// re-entering the pump; it skips @ expansion and carries rest as a short label.
 	input *agent.Input
@@ -61,7 +66,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 			}
 			_ = cmd.Handler(ctx, arg, console)
 		case command.KindPrompt:
-			if line.input == nil && strings.TrimSpace(line.rest) == "" {
+			if line.input == nil && strings.TrimSpace(line.rest) == "" && len(line.blocks) == 0 {
 				continue
 			}
 			// connect every MCP server in full, once, so its tools exist before this
@@ -93,6 +98,9 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 			if echo != "" {
 				ui.UserEcho(echo)
 			}
+			if imgs := tuisink.Images(line.blocks); len(imgs) > 0 {
+				ui.UserImages(imgs)
+			}
 			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
 			submitPrompt(st, editSinks, est, pushContext)
 			in.Settled = settled
@@ -120,6 +128,7 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 	}
 	return agent.Input{
 		Text:     res.Text,
+		Blocks:   line.blocks, // clipboard images ride after the text
 		Before:   before,
 		After:    res.Run,
 		Injected: line.injected,
@@ -128,7 +137,7 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 }
 
 func submitEstimate(in agent.Input, pending int) int {
-	est := tokens.EstimateText(in.Text, tokens.KindProse) + pending
+	est := tokens.EstimateText(in.Text, tokens.KindProse) + tokens.EstimateBlocks(in.Blocks) + pending
 	if len(in.Before) > 0 {
 		est += tokens.EstimateMessages(agent.BeforeMessages(in.Before))
 	}

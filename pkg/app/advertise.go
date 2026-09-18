@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
@@ -43,8 +44,9 @@ func advertisedCommands(settings config.Settings, lookPath func(string) (string,
 }
 
 // builtinTools builds the built-in registry shared by interactive and headless
-// runs, surfacing shellCommands entries missing from PATH through warn.
-func builtinTools(set *config.Set, ask tools.AskFunc, warn func(string)) (*tools.Registry, error) {
+// runs, surfacing shellCommands entries missing from PATH through warn. The
+// registry backs read's live vision gate, so both must be the same object.
+func builtinTools(set *config.Set, reg *llm.Registry, ask tools.AskFunc, warn func(string)) (*tools.Registry, error) {
 	cmds, missing := advertisedCommands(set.Settings(), exec.LookPath)
 	if len(missing) > 0 && warn != nil {
 		warn("tools.shellCommands: not on PATH: " + strings.Join(missing, ", "))
@@ -53,5 +55,6 @@ func builtinTools(set *config.Set, ask tools.AskFunc, warn func(string)) (*tools
 		SessionID:     config.Cwd(),
 		Ask:           ask,
 		ShellCommands: cmds,
+		Vision:        func() bool { return reg.Active().Caps.Images },
 	})
 }
