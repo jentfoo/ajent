@@ -98,7 +98,11 @@ func (t *editTool) Label(agent.ToolCall) string {
 	return "edit"
 }
 func (t *editTool) Description() string {
-	return "Edit a single file by replacing text. Every edits[].oldText must identify a unique region of the file, or set replace_all. Copy oldText from the file exactly. All edits apply atomically or none do. Built-in safeguards make this safe for agent use; prefer `edit` over bash tools to modify files."
+	return "Edit a single file by replacing text. Every edits[].oldText must identify a unique region " +
+		"of the file, or set replace_all. Copy oldText from the file exactly. Merge nearby changes " +
+		"into one edit rather than separate calls. All edits " +
+		"apply atomically or none do. Built-in safeguards make this safe for agent use; prefer `edit` " +
+		"over bash tools to modify files."
 }
 func (t *editTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: SchemaOf[editParams]()} }
 func (t *editTool) Mode() agent.ExecutionMode {
