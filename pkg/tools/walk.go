@@ -19,8 +19,8 @@ func lookPath(name string) bool {
 }
 
 // IsGitRepo reports whether root is inside a git work tree.
-func IsGitRepo(root string) bool {
-	return runQuiet("git", "-C", root, "rev-parse", "--is-inside-work-tree") == "true"
+func IsGitRepo(ctx context.Context, root string) bool {
+	return runQuiet(ctx, "git", "-C", root, "rev-parse", "--is-inside-work-tree") == "true"
 }
 
 // IsSkippedDir reports whether path lies under a VCS or dependency directory.
@@ -36,9 +36,12 @@ func IsSkippedDir(path string) bool {
 
 // allWalk returns every regular file under root, skipping VCS and dependency
 // directory subtrees so a huge tree cannot hang a grep forever.
-func allWalk(root string) []string {
+func allWalk(ctx context.Context, root string) []string {
 	var out []string
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			return nil
 		}
@@ -58,12 +61,12 @@ func allWalk(root string) []string {
 // git ls-files -z (quoting disabled, so non-ASCII names stay usable), falling
 // back to allWalk otherwise or when git yields nothing. Entries that no longer
 // exist on disk are dropped.
-func repoFiles(root string) []string {
+func repoFiles(ctx context.Context, root string) []string {
 	var entries []string
-	if IsGitRepo(root) {
+	if IsGitRepo(ctx, root) {
 		// The "." pathspec keeps ls-files to root's subtree, so a nested cwd never
 		// lists parent or sibling files as "../".
-		out := runQuiet("git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
+		out := runQuiet(ctx, "git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
 		seen := make(map[string]struct{})
 		for _, f := range strings.Split(out, "\x00") {
 			if f == "" { // the trailing separator always yields one empty element
@@ -85,7 +88,7 @@ func repoFiles(root string) []string {
 			return entries
 		}
 	}
-	return allWalk(root)
+	return allWalk(ctx, root)
 }
 
 // withinRoot reports whether path stays inside root.
@@ -99,11 +102,11 @@ func withinRoot(root, path string) bool {
 
 // runQuiet runs a command with a short timeout and returns trimmed stdout or
 // empty on failure, so an unresponsive child cannot hang the tool.
-func runQuiet(args ...string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func runQuiet(ctx context.Context, args ...string) string {
+	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var out strings.Builder
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd := exec.CommandContext(dctx, args[0], args[1:]...)
 	cmd.Stdout = &out
 	if cmd.Run() != nil {
 		return ""
@@ -114,11 +117,11 @@ func runQuiet(args ...string) string {
 // runCaptured runs a command with a short timeout, returning trimmed stdout.
 // Exit status 1 is "no matches" for search tools and yields empty output; any
 // higher exit status returns stderr as an error so the model sees the cause.
-func runCaptured(name string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func runCaptured(ctx context.Context, name string, args ...string) (string, error) {
+	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(dctx, name, args...)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()

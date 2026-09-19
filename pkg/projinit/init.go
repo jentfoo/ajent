@@ -91,7 +91,7 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 		return agent.Input{}, err
 	}
 
-	tasks := surveyTasks(r.opts.Cwd)
+	tasks := surveyTasks(ctx, r.opts.Cwd)
 	started, ids, failed := r.startAll(ctx, start, tasks, run)
 	before = append(before, started...)
 	if len(ids) == 0 {

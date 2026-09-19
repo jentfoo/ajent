@@ -400,14 +400,14 @@ func TestRepeatedBadSchemaStaysQuiet(t *testing.T) {
 	b, err := json.Marshal(map[string]ServerConfig{"fake": s.config()})
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(b, &fresh)) // new pointers, same content
-	mgr.applyConfig(s, fresh["fake"])
+	mgr.applyConfig(t.Context(), s, fresh["fake"])
 	require.NoError(t, mgr.Connect(t.Context(), "fake"))
 	assert.Len(t, notices, 1)
 
 	mgr.Disconnect("fake")
 	edited := s.config()
 	edited.Timeout = FlexDuration(90 * time.Second) // inert for the connection, still an edit
-	mgr.applyConfig(s, edited)
+	mgr.applyConfig(t.Context(), s, edited)
 	require.NoError(t, mgr.Connect(t.Context(), "fake"))
 	assert.Len(t, notices, 2) // fresh defect state, fresh notice
 }

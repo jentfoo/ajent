@@ -72,12 +72,12 @@ func (c *initController) track(id string) {
 
 // start runs one survey on its own goroutine, so the pump keeps serving input for
 // the minutes it takes. Refused while a turn streams or a survey is already up.
-func (c *initController) start() {
+func (c *initController) start(ctx context.Context) {
 	if c.deps.ag != nil && c.deps.ag.Running() {
 		c.deps.notify("init refused: press Esc to stop the turn first", tui.LevelWarn)
 		return
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	c.mu.Lock()
 	if c.cancel != nil {
 		c.mu.Unlock()
@@ -156,8 +156,8 @@ func initCommands(ctl *initController) []command.Command {
 	return []command.Command{{
 		Name:        "init",
 		Description: "survey the project and write AGENTS.md",
-		Handler: func(_ context.Context, _ string, _ command.Console) error {
-			ctl.start()
+		Handler: func(ctx context.Context, _ string, _ command.Console) error {
+			ctl.start(ctx)
 			return nil
 		},
 	}}

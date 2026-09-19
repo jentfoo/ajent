@@ -57,8 +57,8 @@ func docFiles(cwd string) ([]string, bool) {
 
 // surveyTasks returns every sub-agent task: one build and test survey, then one
 // per disjoint codebase slice.
-func surveyTasks(cwd string) []string {
-	parts := codeSlices(cwd)
+func surveyTasks(ctx context.Context, cwd string) []string {
+	parts := codeSlices(ctx, cwd)
 	out := make([]string, 0, len(parts)+1)
 	out = append(out, buildTask)
 	for _, p := range parts {
@@ -70,8 +70,8 @@ func surveyTasks(cwd string) []string {
 // codeSlices partitions the working directory into disjoint path sets, one per
 // codebase sub-agent. The count scales with the tree so a small repository gets
 // one thorough pass rather than a fragmented handful.
-func codeSlices(cwd string) [][]string {
-	files := surveyable(repoFiles(cwd))
+func codeSlices(ctx context.Context, cwd string) [][]string {
+	files := surveyable(repoFiles(ctx, cwd))
 	if len(files) == 0 {
 		return [][]string{{"."}}
 	}
@@ -218,21 +218,21 @@ func isFile(path string) bool {
 
 // repoFiles lists the repository's files relative to cwd, honouring .gitignore
 // where git can answer so ignored trees never inflate a slice.
-func repoFiles(cwd string) []string {
-	if tools.IsGitRepo(cwd) {
-		if out := gitLsFiles(cwd); len(out) > 0 {
+func repoFiles(ctx context.Context, cwd string) []string {
+	if tools.IsGitRepo(ctx, cwd) {
+		if out := gitLsFiles(ctx, cwd); len(out) > 0 {
 			return out
 		}
 	}
-	return walkFiles(cwd)
+	return walkFiles(ctx, cwd)
 }
 
 // gitLsFiles returns tracked and untracked non-ignored paths, or nil on failure.
-func gitLsFiles(cwd string) []string {
-	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+func gitLsFiles(ctx context.Context, cwd string) []string {
+	dctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	var out strings.Builder
-	cmd := exec.CommandContext(ctx, "git", "-C", cwd, "ls-files", "-co", "--exclude-standard")
+	cmd := exec.CommandContext(dctx, "git", "-C", cwd, "ls-files", "-co", "--exclude-standard")
 	cmd.Stdout = &out
 	if cmd.Run() != nil {
 		return nil
@@ -246,9 +246,12 @@ func gitLsFiles(cwd string) []string {
 
 // walkFiles is the non-repository fallback: a bounded walk skipping VCS and
 // dependency directories.
-func walkFiles(cwd string) []string {
+func walkFiles(ctx context.Context, cwd string) []string {
 	var out []string
 	_ = filepath.WalkDir(cwd, func(path string, d fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		if err != nil {
 			return nil //nolint:nilerr // an unreadable subtree is skipped, not fatal
 		}

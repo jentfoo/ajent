@@ -459,7 +459,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 		m.disconnect(s)
 	}
 	for name, s := range existing {
-		m.applyConfig(s, cfg[name])
+		m.applyConfig(ctx, s, cfg[name])
 	}
 
 	for _, name := range m.ServerNames() { // every server connects eagerly on reload too
@@ -476,7 +476,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 // on its next connect; a connected one re-registers any tool-filter change against
 // the running process, and is left running with a notice when the transport itself
 // changed, since restarting it would abort calls in flight.
-func (m *Manager) applyConfig(s *server, sc ServerConfig) {
+func (m *Manager) applyConfig(ctx context.Context, s *server, sc ServerConfig) {
 	s.mu.Lock()
 	old, c := s.cfg, s.c
 	s.cfg = sc
@@ -488,7 +488,7 @@ func (m *Manager) applyConfig(s *server, sc ServerConfig) {
 		return
 	}
 	if filterChanged(old, sc) { // independent of the transport: applies against the running process
-		m.rediscan(s)
+		m.rediscan(ctx, s)
 	}
 	if connectionChanged(old, sc) {
 		s.note("connection config changed; applies on the next connect, or now with /mcp disconnect then /mcp connect", true)
@@ -703,7 +703,7 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 	switch n.Method {
 	case mcp.MethodNotificationToolsListChanged:
 		s.diag("tools changed; re-discovering")
-		m.rediscan(s)
+		m.rediscan(ctx, s)
 	case mcp.MethodNotificationResourcesListChanged, mcp.MethodNotificationPromptsListChanged:
 		m.refreshCapabilities(ctx, s) // re-discover resources and prompts
 	case string(mcp.MethodNotificationProgress):
@@ -728,9 +728,9 @@ const discoverTimeout = 45 * time.Second
 
 // rediscan re-discovers a connected server's tools and re-registers them, after a
 // tools/list_changed notification or a reloaded tool filter. It runs in its own
-// goroutine and is serialized per server: a second call while one pass is running is
-// coalesced, since the in-flight pass reads the current tool set anyway.
-func (m *Manager) rediscan(s *server) {
+// goroutine bounded by ctx, and is serialized per server: a second call while one
+// pass is running is coalesced, since the in-flight pass reads the current tool set anyway.
+func (m *Manager) rediscan(ctx context.Context, s *server) {
 	s.mu.Lock()
 	if s.rediscovering { // a refresh already in flight; it sees the latest state
 		s.mu.Unlock()
@@ -753,9 +753,9 @@ func (m *Manager) rediscan(s *server) {
 			s.rediscovering = false
 			s.mu.Unlock()
 		}()
-		ctx, cancel := context.WithTimeout(m.ctx, rediscoveryTimeout)
+		dctx, cancel := context.WithTimeout(ctx, rediscoveryTimeout)
 		defer cancel()
-		defs, err := c.Tools(ctx)
+		defs, err := c.Tools(dctx)
 		if err != nil {
 			s.note("re-discover failed: "+err.Error(), true)
 			return

@@ -64,24 +64,24 @@ func TestCodeSlices(t *testing.T) {
 	}
 
 	t.Run("small_repo_one_slice", func(t *testing.T) {
-		got := codeSlices(tree(t, 5, "pkg", "cmd"))
+		got := codeSlices(t.Context(), tree(t, 5, "pkg", "cmd"))
 		assert.Len(t, got, 1)
 		assert.ElementsMatch(t, []string{"pkg/", "cmd/"}, got[0])
 	})
 
 	t.Run("large_repo_caps_at_four", func(t *testing.T) {
-		got := codeSlices(tree(t, 200, "a", "b", "c", "d", "e"))
+		got := codeSlices(t.Context(), tree(t, 200, "a", "b", "c", "d", "e"))
 		assert.Len(t, got, maxCodeAgents)
 	})
 
 	t.Run("count_capped_by_dirs", func(t *testing.T) {
-		got := codeSlices(tree(t, 700, "only"))
+		got := codeSlices(t.Context(), tree(t, 700, "only"))
 		assert.Len(t, got, 1)
 	})
 
 	t.Run("slices_are_disjoint", func(t *testing.T) {
 		dirs := []string{"a", "b", "c", "d", "e", "f"}
-		got := codeSlices(tree(t, 60, dirs...))
+		got := codeSlices(t.Context(), tree(t, 60, dirs...))
 		all := make([]string, 0, len(dirs))
 		for _, s := range got {
 			all = append(all, s...)
@@ -94,7 +94,7 @@ func TestCodeSlices(t *testing.T) {
 	t.Run("root_files_are_one_unit", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/a.go", "main.go", "go.mod")
-		got := codeSlices(dir)
+		got := codeSlices(t.Context(), dir)
 		require.NotEmpty(t, got)
 		// loose files collapse to one phrase rather than a scatter of singletons
 		assert.Contains(t, got[0], "the files at the repository root")
@@ -103,7 +103,7 @@ func TestCodeSlices(t *testing.T) {
 	t.Run("skips_files_other_stages_read", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/a.go", "README.md", "AGENTS.md", "Makefile", "LICENSE", "go.sum")
-		got := codeSlices(dir)
+		got := codeSlices(t.Context(), dir)
 		require.Len(t, got, 1)
 		assert.Equal(t, []string{"pkg/"}, got[0]) // nothing left at the root to survey
 	})
@@ -119,7 +119,7 @@ func TestCodeSlices(t *testing.T) {
 		paths = append(paths, "docs/readme.txt")
 		writeTree(t, dir, paths...)
 
-		got := codeSlices(dir)
+		got := codeSlices(t.Context(), dir)
 		require.Greater(t, len(got), 1)
 		all := make([]string, 0, len(got))
 		for _, s := range got {
@@ -133,7 +133,7 @@ func TestCodeSlices(t *testing.T) {
 	t.Run("hidden_and_vendor_skipped", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/a.go", ".github/workflows/ci.yml", "node_modules/x/y.js")
-		got := codeSlices(dir)
+		got := codeSlices(t.Context(), dir)
 		all := make([]string, 0, len(got))
 		for _, s := range got {
 			all = append(all, s...)
@@ -143,7 +143,7 @@ func TestCodeSlices(t *testing.T) {
 	})
 
 	t.Run("bare_directory", func(t *testing.T) {
-		assert.Equal(t, [][]string{{"."}}, codeSlices(t.TempDir()))
+		assert.Equal(t, [][]string{{"."}}, codeSlices(t.Context(), t.TempDir()))
 	})
 }
 
@@ -175,7 +175,7 @@ func TestBuildTasks(t *testing.T) {
 	t.Run("full_list_with_build_first", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/a.go", "cmd/b.go")
-		got := surveyTasks(dir)
+		got := surveyTasks(t.Context(), dir)
 		require.Len(t, got, 2) // one build survey plus one codebase slice
 
 		assert.Equal(t, buildTask, got[0])

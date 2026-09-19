@@ -95,7 +95,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 
 	if !t.forceGo && rgOnPath() {
-		out, rgErr := runRg(cwd, p, mode, max)
+		out, rgErr := runRg(ctx, cwd, p, mode, max)
 		if rgErr != nil {
 			return resultErr("grep: " + rgErr.Error()), nil
 		}
@@ -103,7 +103,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		return t.finalize(out, capNote(out, p.Limit, max, mode)), nil
 	}
 
-	return t.goSearch(cwd, p, mode, re, max), nil
+	return t.goSearch(ctx, cwd, p, mode, re, max), nil
 }
 
 // capNote names the default match cap when enumeration reached it without an
@@ -132,12 +132,15 @@ func (p grepParams) compile() (*regexp.Regexp, error) {
 }
 
 // goSearch walks cwd with the compiled matcher when rg is unavailable.
-func (t *grepTool) goSearch(cwd string, p grepParams, mode string, re *regexp.Regexp, max int) agent.ToolResult {
+func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode string, re *regexp.Regexp, max int) agent.ToolResult {
 	var matches []string
 	counts := map[string]int{}
 	remaining := max
 
-	for _, path := range repoFiles(cwd) { // .gitignore semantics on the fallback too
+	for _, path := range repoFiles(ctx, cwd) { // .gitignore semantics on the fallback too
+		if ctx.Err() != nil {
+			break
+		}
 		if p.Glob != "" && !matchGlob(p.Glob, relTo(cwd, path)) {
 			continue
 		}
@@ -202,7 +205,7 @@ func rgOnPath() bool { return lookPath("rg") }
 // runRg shells out to ripgrep and returns its output for the requested mode.
 // Exit status 1 means "no matches"; anything else with stderr is an error the
 // model should see rather than a silent empty result.
-func runRg(cwd string, p grepParams, mode string, max int) (string, error) {
+func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) (string, error) {
 	args := []string{"--no-heading", "--color=never"}
 	switch mode {
 	case grepFiles:
@@ -229,7 +232,7 @@ func runRg(cwd string, p grepParams, mode string, max int) (string, error) {
 	}
 	args = append(args, "--", p.Pattern, cwd)
 
-	out, err := runCaptured("rg", args...)
+	out, err := runCaptured(ctx, "rg", args...)
 	if err != nil {
 		return "", err
 	}

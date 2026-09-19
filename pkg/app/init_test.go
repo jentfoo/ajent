@@ -50,7 +50,7 @@ func TestInitControllerStart(t *testing.T) {
 
 	t.Run("hands_survey_to_pump", func(t *testing.T) {
 		h := newInitHarness(t)
-		h.ctl.start()
+		h.ctl.start(t.Context())
 
 		line := h.awaitPump(t)
 		require.NotNil(t, line.input)
@@ -66,7 +66,7 @@ func TestInitControllerStart(t *testing.T) {
 		require.NoError(t, err)
 		h.ctl.deps.toolsReg = reg
 		h.ctl = newInitController(h.ctl.deps)
-		h.ctl.start()
+		h.ctl.start(t.Context())
 
 		require.Eventually(t, func() bool { return len(h.notices()) > 0 }, time.Second, time.Millisecond)
 		assert.Contains(t, h.notices()[0], "sub-agents are unavailable")
@@ -77,7 +77,7 @@ func TestInitControllerStart(t *testing.T) {
 		h := newInitHarness(t)
 		h.ctl.deps.toolsReg = tools.New()
 		h.ctl = newInitController(h.ctl.deps)
-		h.ctl.start()
+		h.ctl.start(t.Context())
 
 		require.Eventually(t, func() bool { return len(h.notices()) > 0 }, time.Second, time.Millisecond)
 		assert.Contains(t, h.notices()[0], "read tool is unavailable")
@@ -87,10 +87,10 @@ func TestInitControllerStart(t *testing.T) {
 		h := newInitHarness(t)
 		h.hold()
 
-		h.ctl.start()
+		h.ctl.start(t.Context())
 		h.awaitPolling(t)
 
-		h.ctl.start() // refused while the first is in flight
+		h.ctl.start(t.Context()) // refused while the first is in flight
 		require.Eventually(t, func() bool { return len(h.notices()) > 0 }, time.Second, time.Millisecond)
 		assert.Contains(t, strings.Join(h.notices(), "\n"), "already running")
 		assert.Empty(t, h.pump) // the second start never produced a turn
@@ -101,7 +101,7 @@ func TestInitControllerStart(t *testing.T) {
 		h.hold()
 
 		assert.False(t, h.ctl.abort()) // nothing running yet
-		h.ctl.start()
+		h.ctl.start(t.Context())
 		h.awaitPolling(t)
 		assert.True(t, h.ctl.running())
 
@@ -113,11 +113,11 @@ func TestInitControllerStart(t *testing.T) {
 
 	t.Run("second_run_reuses_no_ids", func(t *testing.T) {
 		h := newInitHarness(t)
-		h.ctl.start()
+		h.ctl.start(t.Context())
 		first := h.awaitPump(t)
 		// the slot frees just after the push, so wait rather than race the refusal
 		require.Eventually(t, func() bool { return !h.ctl.running() }, 5*time.Second, time.Millisecond)
-		h.ctl.start()
+		h.ctl.start(t.Context())
 		second := h.awaitPump(t)
 
 		// Before stays in State, so a repeated tool_use id 400s every later request
@@ -130,7 +130,7 @@ func TestInitControllerStart(t *testing.T) {
 
 	t.Run("tracks_only_its_own_children", func(t *testing.T) {
 		h := newInitHarness(t)
-		h.ctl.start()
+		h.ctl.start(t.Context())
 		h.awaitPump(t)
 
 		h.ctl.mu.Lock()

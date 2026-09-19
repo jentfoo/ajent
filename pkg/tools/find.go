@@ -61,7 +61,7 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		return resultErr(err.Error()), nil
 	}
 
-	matches := listFiles(root, p.Pattern)
+	matches := listFiles(ctx, root, p.Pattern)
 	var b strings.Builder
 	for _, m := range matches {
 		fmt.Fprintln(&b, relTo(root, m))
@@ -83,9 +83,12 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 
 // listFiles returns files under root matching pattern, newest first. It uses
 // git ls-files inside a repo for .gitignore semantics and walks otherwise.
-func listFiles(root, pattern string) []string {
+func listFiles(ctx context.Context, root, pattern string) []string {
 	var out []fileEntry // stat once so mtime sort does not re-Stat per comparison
-	for _, p := range repoFiles(root) {
+	for _, p := range repoFiles(ctx, root) {
+		if ctx.Err() != nil {
+			break
+		}
 		fi, err := os.Stat(p)
 		if err != nil {
 			continue
