@@ -13,6 +13,9 @@ import (
 // unix-nano suffix is both the run's identity and its start timestamp.
 const scratchPrefix = "/tmp/ajent-demo-"
 
+// fieldPath names the tool-call path argument in script args.
+const fieldPath = "path"
+
 // scriptStep is one ordered assistant turn in the demo: optional thinking prose,
 // content shown alongside the tool call(s), and the calls themselves. A step with
 // no calls ends the turn (finish_reason "stop").
@@ -49,19 +52,19 @@ func newRun(now time.Time) *run {
 func script() []scriptStep {
 	nativeRead := func(file string) stepCall { // read a scratch file natively or via cat
 		return stepCall{name: "read", bash: "cat <dir>/" + file,
-			args: func(r *run) []byte { return jsonArgs(map[string]any{"path": r.dir + "/" + file}) }}
+			args: func(r *run) []byte { return jsonArgs(map[string]any{fieldPath: r.dir + "/" + file}) }}
 	}
 	nativeGrep := func(file, pat string) stepCall {
 		return stepCall{name: "grep", bash: fmt.Sprintf("grep -n '%s' <dir>/%s", pat, file),
 			args: func(r *run) []byte {
-				return jsonArgs(map[string]any{"pattern": pat, "path": r.dir, "glob": file})
+				return jsonArgs(map[string]any{"pattern": pat, fieldPath: r.dir, "glob": file})
 			}}
 	}
 	nativeWrite := func(file string, body string) stepCall { // write a scratch file
 		bash := fmt.Sprintf("cat > <dir>/%s <<'GOEOF'\n%s\nGOEOF", file, body)
 		return stepCall{name: "write", bash: bash,
 			args: func(r *run) []byte {
-				return jsonArgs(map[string]any{"path": r.dir + "/" + file, "content": body})
+				return jsonArgs(map[string]any{fieldPath: r.dir + "/" + file, "content": body})
 			}}
 	}
 	nativeBash := func(cmd string) stepCall { // run a shell line against the scratch dir
@@ -85,7 +88,7 @@ func script() []scriptStep {
 		{ // 2: edit with a non-existent oldText; DryRun fails so no prompt
 			calls: []stepCall{{name: "edit",
 				args: func(r *run) []byte {
-					return jsonArgs(map[string]any{"path": r.dir + "/notes.go", "edits": []map[string]any{
+					return jsonArgs(map[string]any{fieldPath: r.dir + "/notes.go", "edits": []map[string]any{
 						{"oldText": missingOldText, "newText": retryAfter}}})
 				}}},
 		},
@@ -96,14 +99,14 @@ func script() []scriptStep {
 		{ // 4: edit with the correct oldText; dialog then a real Diff in history
 			calls: []stepCall{{name: "edit",
 				args: func(r *run) []byte {
-					return jsonArgs(map[string]any{"path": r.dir + "/notes.go", "edits": []map[string]any{
+					return jsonArgs(map[string]any{fieldPath: r.dir + "/notes.go", "edits": []map[string]any{
 						{"oldText": retryBefore, "newText": retryAfter}}})
 				}}},
 		},
 		{ // 5: longer planning thought, then find what is in the scratch dir
 			think: demoThinking,
 			calls: []stepCall{{name: "find", bash: "find <dir> -name '*.go'",
-				args: func(r *run) []byte { return jsonArgs(map[string]any{"pattern": "*.go", "path": r.dir}) }}},
+				args: func(r *run) []byte { return jsonArgs(map[string]any{"pattern": "*.go", fieldPath: r.dir}) }}},
 		},
 		{ // 6: write a test file; another Preview dialog
 			calls: []stepCall{nativeWrite("retry_test.go", retryTestGo)},

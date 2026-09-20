@@ -242,7 +242,7 @@ const (
 )
 
 var retainNames = enumNames[RetainPolicy]{
-	RetainNone:      "none",
+	RetainNone:      valueNone,
 	RetainLastTurn:  "lastTurn",
 	RetainWholeTurn: "wholeTurn",
 	RetainAll:       "all",

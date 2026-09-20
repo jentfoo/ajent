@@ -46,7 +46,7 @@ func (t EventType) String() string {
 	case EventDone:
 		return "done"
 	default:
-		return "unknown"
+		return nameUnknown
 	}
 }
 
@@ -89,7 +89,7 @@ const (
 var stopReasonNames = enumNames[StopReason]{
 	StopEndTurn:    "end_turn",
 	StopToolUse:    "tool_use",
-	StopMaxTokens:  "max_tokens",
+	StopMaxTokens:  fieldMaxTokens,
 	StopIncomplete: "incomplete",
 	StopAborted:    "aborted",
 	StopError:      "error",

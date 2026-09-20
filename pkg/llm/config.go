@@ -33,7 +33,7 @@ var dialectNames = enumNames[Dialect]{
 	DialectAnthropic:         "anthropic-messages",
 	DialectOpenAIResponses:   "openai-responses",
 	DialectOpenAICompletions: "openai-completions",
-	DialectUnknown:           "unknown",
+	DialectUnknown:           nameUnknown,
 }
 
 // dialectChoices are the api values a provider entry may name.
@@ -46,7 +46,7 @@ func dialectChoices() []string {
 // dialectAliases maps legacy spellings once used by a model catalogue onto their
 // canonical name, consulted after the enum lookup fails.
 var dialectAliases = map[string]Dialect{
-	"anthropic": DialectAnthropic,
+	providerAnthropic: DialectAnthropic,
 }
 
 // String returns the configuration name of the dialect.
@@ -88,13 +88,13 @@ const (
 
 var flavorNames = enumNames[Flavor]{
 	FlavorUnset:      "",
-	FlavorAnthropic:  "anthropic",
-	FlavorOpenAI:     "openai",
-	FlavorOpenRouter: "openrouter",
+	FlavorAnthropic:  providerAnthropic,
+	FlavorOpenAI:     providerOpenAI,
+	FlavorOpenRouter: openRouterAffinityFormat,
 	FlavorLMStudio:   "lmstudio",
 	FlavorLlamaCpp:   "llamacpp",
 	FlavorGeneric:    "generic",
-	FlavorUnknown:    "unknown",
+	FlavorUnknown:    nameUnknown,
 }
 
 // flavorChoices are the flavor values a provider entry may name.
@@ -377,7 +377,7 @@ func mergeCompat(base, over *Compat) *Compat {
 // compatFieldSet reports whether the struct field at i was set in configuration.
 func compatFieldSet(v reflect.Value, i int) bool {
 	switch fv := v.Field(i); fv.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return !fv.IsNil()
 	default:
 		return !fv.IsZero()

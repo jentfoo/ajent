@@ -26,6 +26,10 @@ const (
 	longCacheTTL = "1h"
 )
 
+// clientRequestIDHeader names the session-affinity request header carrying a
+// caller-supplied id so a proxy can pin the same upstream connection.
+const clientRequestIDHeader = "x-client-request-id"
+
 // anthropicProvider serves the Messages API.
 type anthropicProvider struct {
 	client *httpClient
@@ -68,7 +72,7 @@ func (p *anthropicProvider) CountTokens(ctx context.Context, req Request) (int, 
 	if err = json.Unmarshal(body, &trimmed); err != nil {
 		return 0, err
 	}
-	for _, k := range []string{"stream", "max_tokens", "temperature", "output_config"} {
+	for _, k := range []string{"stream", fieldMaxTokens, "temperature", "output_config"} {
 		delete(trimmed, k)
 	}
 	body, err = json.Marshal(trimmed)
@@ -360,9 +364,9 @@ func sessionAffinityKeys(caps Capabilities) []string {
 		case openRouterAffinityFormat:
 			return []string{"x-session-id"}
 		case "openai-nosession":
-			return []string{"x-client-request-id"}
+			return []string{clientRequestIDHeader}
 		default: // openai
-			return []string{"session_id", "x-client-request-id"}
+			return []string{"session_id", clientRequestIDHeader}
 		}
 	case DialectAnthropic:
 		return []string{"x-session-affinity"}
@@ -371,9 +375,9 @@ func sessionAffinityKeys(caps Capabilities) []string {
 		case openRouterAffinityFormat:
 			return []string{"x-session-id"}
 		case "openai-nosession":
-			return []string{"x-client-request-id", "x-session-affinity"}
+			return []string{clientRequestIDHeader, "x-session-affinity"}
 		default: // openai
-			return []string{"session_id", "x-client-request-id", "x-session-affinity"}
+			return []string{"session_id", clientRequestIDHeader, "x-session-affinity"}
 		}
 	}
 }
@@ -411,7 +415,7 @@ func anthropicTools(tools []ToolSchema, eagerStreaming bool) []antTool {
 func anthropicToolChoice(tc ToolChoice) *antToolChoi {
 	switch tc.Mode {
 	case ToolChoiceNone:
-		return &antToolChoi{Type: "none"}
+		return &antToolChoi{Type: valueNone}
 	case ToolChoiceRequired:
 		return &antToolChoi{Type: "any"}
 	case ToolChoiceSpecific:
@@ -673,7 +677,6 @@ func (s *anthropicStream) finish(cause error) []Event {
 	}
 	s.done = true
 
-	var events []Event
 	stop := s.stop
 	var streamErr error
 	if cause != nil && !errors.Is(cause, io.EOF) {
@@ -683,5 +686,5 @@ func (s *anthropicStream) finish(cause error) []Event {
 	} else if stop == StopUnknown {
 		stop = StopEndTurn
 	}
-	return append(events, Event{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr})
+	return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr}}
 }

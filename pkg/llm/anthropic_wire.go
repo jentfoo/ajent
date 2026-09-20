@@ -186,7 +186,7 @@ func antStopReason(s string) StopReason {
 		return StopEndTurn
 	case "tool_use", "pause_turn":
 		return StopToolUse
-	case "max_tokens":
+	case fieldMaxTokens:
 		return StopMaxTokens
 	case "":
 		return StopUnknown

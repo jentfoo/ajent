@@ -9,6 +9,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
+// filterPlaceholder is the default picker hint for narrowing a list.
+const filterPlaceholder = "filter"
+
 // toolsCommand widens the enabled set. Before the first prompt the picker lists
 // every registered tool and the selection is free; after it only disabled tools
 // are offered, since the tool block the model has already seen is not retractable.
@@ -31,7 +34,7 @@ func toolsFreeSelect(ctx context.Context, c Console, reg *tools.Registry) error 
 	rows := reg.Units(all)
 	items, initial := toolRows(reg, rows, c)
 	picked, err := c.MultiPick(ctx, "Tools", items,
-		tui.MultiPickOptions{Placeholder: "filter", Initial: initial})
+		tui.MultiPickOptions{Placeholder: filterPlaceholder, Initial: initial})
 	if err != nil {
 		return nil // cancelled
 	}
@@ -56,7 +59,7 @@ func toolsWidenOnly(ctx context.Context, c Console, reg *tools.Registry) error {
 	rows := reg.Units(disabled)
 	items, _ := toolRows(reg, rows, c)
 	picked, err := c.MultiPick(ctx, "Enable tools", items,
-		tui.MultiPickOptions{Placeholder: "filter"})
+		tui.MultiPickOptions{Placeholder: filterPlaceholder})
 	if err != nil {
 		return nil // cancelled
 	}

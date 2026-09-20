@@ -28,10 +28,10 @@ type lsTool struct {
 
 var _ agent.Tool = (*lsTool)(nil)
 
-func (t *lsTool) Name() string { return "ls" }
+func (t *lsTool) Name() string { return ToolLs }
 
 func (t *lsTool) Label(agent.ToolCall) string {
-	return "ls"
+	return ToolLs
 }
 
 func (t *lsTool) Description() string {
@@ -78,7 +78,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 		}
 		b.WriteString(name + "\n")
 	}
-	text, _ := truncateOutput(t.sessionID, "ls", b.String(), lsLimit(p.Limit), lsPaging(p.Limit))
+	text, _ := truncateOutput(t.sessionID, ToolLs, b.String(), lsLimit(p.Limit), lsPaging(p.Limit))
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil
 }
 
@@ -100,7 +100,7 @@ func (t *lsTool) listMatches(pattern string, limit int) agent.ToolResult {
 		}
 		b.WriteString(name + "\n")
 	}
-	text, _ := truncateOutput(t.sessionID, "ls", b.String(), lsLimit(limit), lsPaging(limit))
+	text, _ := truncateOutput(t.sessionID, ToolLs, b.String(), lsLimit(limit), lsPaging(limit))
 	return agent.ToolResult{Content: llmBlock(text), Display: text}
 }
 

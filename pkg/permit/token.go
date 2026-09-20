@@ -74,7 +74,7 @@ func stripPath(tok string) string {
 
 var (
 	timeoutValueOpts   = []string{"-k", "--kill-after", "-s", "--signal"}
-	timeoutBoolOpts    = []string{"--preserve-status", "--foreground", "-v", "--verbose"}
+	timeoutBoolOpts    = []string{"--preserve-status", "--foreground", "-v", gitFlagVerbose}
 	timeoutDurationRe  = regexp.MustCompile(`^\d+(\.\d+)?[smhd]?$`)
 	timeoutAttachedVal = regexp.MustCompile(`^--(kill-after|signal)=`)
 	timeoutShortAttach = regexp.MustCompile(`^-[ks].+`)

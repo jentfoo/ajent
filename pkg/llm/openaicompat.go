@@ -298,7 +298,7 @@ func compatTools(tools []ToolSchema, strict bool) []compatTool {
 func compatToolChoice(tc ToolChoice) any {
 	switch tc.Mode {
 	case ToolChoiceNone:
-		return "none"
+		return valueNone
 	case ToolChoiceRequired:
 		return "required"
 	case ToolChoiceSpecific:

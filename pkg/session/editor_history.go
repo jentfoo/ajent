@@ -174,7 +174,7 @@ func (h *EditorHistory) Compact() {
 // round-trip whole. Hidden rows persist as an object so their exclusion survives a
 // restart and compaction; visible rows stay bare JSON strings (hand-edit friendly).
 func encodeHistLine(l histLine) []byte {
-	var b []byte
+	var b []byte //nolint:prealloc // both branches reassign b via json.Marshal
 	if l.hidden {
 		b, _ = json.Marshal(struct {
 			Msg    string `json:"msg"`

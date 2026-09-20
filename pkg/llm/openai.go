@@ -98,7 +98,7 @@ func buildResponsesBody(req Request) ([]byte, error) {
 				// param is sent, independent of server-side store state
 				body.Include = []string{respEncryptedInclude}
 			}
-		} else if e, ok := offValue(caps, "none"); ok {
+		} else if e, ok := offValue(caps, valueNone); ok {
 			// explicit off still names an effort so the model stops thinking;
 			// {off:null} suppresses the key entirely
 			body.Reasoning = &respReasoning{Effort: e}
@@ -275,7 +275,7 @@ func responsesTools(tools []ToolSchema) []respTool {
 func responsesToolChoice(tc ToolChoice) any {
 	switch tc.Mode {
 	case ToolChoiceNone:
-		return "none"
+		return valueNone
 	case ToolChoiceRequired:
 		return "required"
 	case ToolChoiceSpecific:

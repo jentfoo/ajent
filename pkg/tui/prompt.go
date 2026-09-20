@@ -155,9 +155,11 @@ type selectState struct {
 }
 
 func (s *selectState) rows(t Theme, width, maxRows int) ([]string, int, int) {
-	rows := []string{t.Accent.Wrap(s.prompt)}
-	return append(rows, listSection(t, s.cursor, len(s.options), maxRows-len(rows),
-		func(i int) string { return optionRow(t, s.options[i], i == s.cursor, width) })...), 0, 0
+	list := listSection(t, s.cursor, len(s.options), maxRows-1,
+		func(i int) string { return optionRow(t, s.options[i], i == s.cursor, width) })
+	rows := make([]string, 0, len(list)+1)
+	rows = append(rows, t.Accent.Wrap(s.prompt))
+	return append(rows, list...), 0, 0
 }
 
 func (s *selectState) key(k key) (bool, error) {

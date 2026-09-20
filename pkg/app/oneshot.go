@@ -148,7 +148,7 @@ func RunHeadless(o HeadlessOptions) int {
 	for _, t := range sag.Tools() {
 		toolsReg.RegisterFrom(tools.SourceBuiltin, t, true)
 	}
-	toolsReg.MarkReadOnly([]string{"agent_start", "agent_poll", "agent_list"})
+	toolsReg.MarkReadOnly([]string{subAgentToolStart, subAgentToolPoll, subAgentToolList})
 	if stats != nil { // appended after the recorder settles the drain list
 		opts.Sinks = append(opts.Sinks, stats)
 	}

@@ -22,7 +22,13 @@ import (
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
-const secretPrefix = "secret:"
+const (
+	secretPrefix = "secret:"
+
+	subAgentToolStart = "agent_start"
+	subAgentToolPoll  = "agent_poll"
+	subAgentToolList  = "agent_list"
+)
 
 // Driver runs the real agent loop: it builds an Agent over the registry and
 // drives turns from submitted messages, steering mid-turn input into the running
@@ -198,10 +204,10 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		toolsReg.RegisterGroup(tools.ToolGroup{
 			Name:   "subagents",
 			Source: tools.SourceBuiltin,
-			Tools:  []string{"agent_start", "agent_poll", "agent_list"},
+			Tools:  []string{subAgentToolStart, subAgentToolPoll, subAgentToolList},
 		})
 		// agent_* delegate read-only work, so allow-read runs them free.
-		toolsReg.MarkReadOnly([]string{"agent_start", "agent_poll", "agent_list"})
+		toolsReg.MarkReadOnly([]string{subAgentToolStart, subAgentToolPoll, subAgentToolList})
 		// flush pending completion steers into the running parent turn at start.
 		opts.Sinks = append(opts.Sinks, subagentSink{mgr: sag})
 	}

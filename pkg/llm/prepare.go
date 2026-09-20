@@ -468,7 +468,7 @@ func normalizeCallID(id string, caps Capabilities, provider string, kind callKin
 			return cutID(sanitizeID(callID), 31) + "_" + shortHash(id)[:8]
 		}
 		// openai caps a bare tool_call_id; other providers accept longer ids verbatim
-		if provider == "openai" && len(id) > maxCompatCallID {
+		if provider == providerOpenAI && len(id) > maxCompatCallID {
 			return cutID(sanitizeID(id), maxCompatCallID)
 		}
 		return id

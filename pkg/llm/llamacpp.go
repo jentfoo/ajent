@@ -43,7 +43,7 @@ func parseLlamaProps(body []byte) ([]ModelConfig, error) {
 		return nil, err
 	}
 	// a router reports no loaded model path; nothing here is worth naming
-	if p.ModelPath == "" || p.ModelPath == "none" {
+	if p.ModelPath == "" || p.ModelPath == valueNone {
 		return nil, nil
 	}
 	name := path.Base(p.ModelPath)

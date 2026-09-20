@@ -138,15 +138,15 @@ func gitReadOnlyPositionals(args []string, shortFlags string, longFlags map[stri
 var (
 	gitBranchShortRead = "alrvqi"
 	gitBranchLongRead  = bulk.SliceToSet([]string{
-		"--list", "--all", "--remotes", "--verbose", "--quiet",
-		"--ignore-case", "--show-current", "--color", "--no-color", "--column",
-		"--no-column", "--abbrev", "--no-abbrev", "--omit-empty", "--contains",
-		"--no-contains", "--merged", "--no-merged", "--points-at", "--sort",
-		"--format",
+		"--list", "--all", "--remotes", gitFlagVerbose, "--quiet",
+		"--ignore-case", "--show-current", gitFlagColor, "--no-color", gitFlagColumn,
+		"--no-column", "--abbrev", "--no-abbrev", "--omit-empty", gitFlagContains,
+		gitFlagNoContain, gitFlagMerged, gitFlagNoMerged, gitFlagPointsAt, gitFlagSort,
+		gitFlagFormat,
 	})
 	gitBranchValueFlags = bulk.SliceToSet([]string{
-		"--contains", "--no-contains", "--merged", "--no-merged", "--points-at",
-		"--sort", "--format", "--abbrev", "--color", "--column",
+		gitFlagContains, gitFlagNoContain, gitFlagMerged, gitFlagNoMerged, gitFlagPointsAt,
+		gitFlagSort, gitFlagFormat, "--abbrev", gitFlagColor, gitFlagColumn,
 	})
 )
 
@@ -168,13 +168,13 @@ func isGitBranchReadOnly(args []string) bool {
 var (
 	gitTagShortRead = "lniv"
 	gitTagLongRead  = bulk.SliceToSet([]string{
-		"--list", "--ignore-case", "--verify", "--color", "--column",
-		"--no-column", "--omit-empty", "--contains", "--no-contains",
-		"--merged", "--no-merged", "--points-at", "--sort", "--format",
+		"--list", "--ignore-case", "--verify", gitFlagColor, gitFlagColumn,
+		"--no-column", "--omit-empty", gitFlagContains, gitFlagNoContain,
+		gitFlagMerged, gitFlagNoMerged, gitFlagPointsAt, gitFlagSort, gitFlagFormat,
 	})
 	gitTagValueFlags = bulk.SliceToSet([]string{
-		"--contains", "--no-contains", "--merged", "--no-merged", "--points-at",
-		"--sort", "--format", "--color", "--column",
+		gitFlagContains, gitFlagNoContain, gitFlagMerged, gitFlagNoMerged, gitFlagPointsAt,
+		gitFlagSort, gitFlagFormat, gitFlagColor, gitFlagColumn,
 	})
 )
 

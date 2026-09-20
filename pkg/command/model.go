@@ -80,7 +80,7 @@ func PickModel(ctx context.Context, c Console, title, current string, opts tui.P
 			Terms:  append([]string{mod.Name}, mod.Aliases...),
 		}
 	}
-	opts.Placeholder = "filter" // keep the default filter hint unless overridden
+	opts.Placeholder = filterPlaceholder // keep the default filter hint unless overridden
 	if opts.Initial == 0 {
 		opts.Initial = initial
 	}
@@ -144,7 +144,7 @@ func reasoningCommand(ctx context.Context, arg string, c Console) error {
 			items[i] = tui.PickItem{Label: marker + name, Terms: []string{name}}
 		}
 		picked, err := c.Pick(ctx, "Reasoning", items,
-			tui.PickOptions{Placeholder: "filter"})
+			tui.PickOptions{Placeholder: filterPlaceholder})
 		if err != nil {
 			return nil // cancelled
 		}

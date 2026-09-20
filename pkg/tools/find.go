@@ -29,10 +29,10 @@ type findTool struct {
 
 var _ agent.Tool = (*findTool)(nil)
 
-func (t *findTool) Name() string { return "find" }
+func (t *findTool) Name() string { return ToolFind }
 
 func (t *findTool) Label(agent.ToolCall) string {
-	return "find"
+	return ToolFind
 }
 
 func (t *findTool) Description() string {
@@ -75,7 +75,7 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		lim.Lines = p.Limit
 		paging = "narrow the pattern or raise limit"
 	}
-	text, _ := truncateOutput(t.sessionID, "find", b.String(), lim, paging)
+	text, _ := truncateOutput(t.sessionID, ToolFind, b.String(), lim, paging)
 
 	// Display mirrors the model-visible text so history shows head+collapse.
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil

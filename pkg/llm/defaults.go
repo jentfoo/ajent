@@ -43,7 +43,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Thinking:        ThinkingAnthropic,
 			ReasoningReplay: true,
 			PromptCache:     true,
-			CacheFormat:     "anthropic",
+			CacheFormat:     providerAnthropic,
 			Tokenizer:       TokenizerRemoteCount,
 			MaxTokensField:  fieldMaxTokens,
 			ParallelTools:   true,

@@ -35,7 +35,7 @@ const ToolBash = "bash"
 
 // ShellExamples is the base set of common commands the bash description may
 // list as examples; callers filter it against PATH, deny rules and enabled tools.
-var ShellExamples = []string{"ls", "grep", "find", "diff", "wc"}
+var ShellExamples = []string{ToolLs, ToolGrep, ToolFind, "diff", "wc"}
 
 // bashTool runs one non-login bash -c process per call. A fresh shell each time
 // keeps cd and state from confusing later calls.

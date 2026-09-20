@@ -4,13 +4,28 @@ import (
 	"regexp"
 
 	"github.com/go-analyze/bulk"
+	"github.com/jentfoo/ajent/pkg/tools"
+)
+
+// shared long-flag literals repeated across command grammars.
+const (
+	gitFlagVerbose   = "--verbose"
+	gitFlagColor     = "--color"
+	gitFlagContains  = "--contains"
+	gitFlagMerged    = "--merged"
+	gitFlagFormat    = "--format"
+	gitFlagColumn    = "--column"
+	gitFlagNoContain = "--no-contains"
+	gitFlagNoMerged  = "--no-merged"
+	gitFlagPointsAt  = "--points-at"
+	gitFlagSort      = "--sort"
 )
 
 // readOnlyCommands are verifiably side-effect-free; a matching head is auto-allowed.
 // Commands with an exec or write form (sed, git, awk, rg, sort) are not here:
 // they are verified per invocation in their own checkers instead.
 var readOnlyCommands = bulk.SliceToSet([]string{
-	"ls", "find", "grep", "diff", "which", "ps", "jq",
+	"ls", tools.ToolFind, tools.ToolGrep, "diff", "which", "ps", "jq",
 	"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "du",
 	"date", "od",
 })
@@ -28,11 +43,11 @@ type workspaceWriteCommand struct {
 // recoverable (mkdir only creates, rmdir only removes empty directories).
 var workspaceWriteCommands = map[string]workspaceWriteCommand{
 	"mkdir": {
-		boolFlags:  []string{"-p", "--parents", "-v", "--verbose", "-Z"},
+		boolFlags:  []string{"-p", "--parents", "-v", gitFlagVerbose, "-Z"},
 		valueFlags: []string{"-m", "--mode", "--context"},
 	},
 	"rmdir": {
-		boolFlags:     []string{"-p", "--parents", "-v", "--verbose", "--ignore-fail-on-non-empty"},
+		boolFlags:     []string{"-p", "--parents", "-v", gitFlagVerbose, "--ignore-fail-on-non-empty"},
 		ancestorFlags: []string{"-p", "--parents"},
 	},
 }

@@ -18,7 +18,7 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 		strings.Contains(baseURL, "api.together.ai") || strings.Contains(baseURL, "api.together.xyz")
 	isMoonshot := provider == "moonshotai" || provider == "moonshotai-cn" ||
 		strings.Contains(baseURL, "api.moonshot.")
-	isOpenRouter := provider == "openrouter" || strings.Contains(baseURL, "openrouter.ai")
+	isOpenRouter := provider == openRouterAffinityFormat || strings.Contains(baseURL, "openrouter.ai")
 	isCFWorkersAI := provider == "cloudflare-workers-ai" || strings.Contains(baseURL, "api.cloudflare.com")
 	isCFGateway := provider == "cloudflare-ai-gateway" || strings.Contains(baseURL, "gateway.ai.cloudflare.com")
 	isNvidia := provider == "nvidia" || strings.Contains(baseURL, "integrate.api.nvidia.com")
@@ -48,8 +48,8 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 		(strings.HasPrefix(modelID, "anthropic/") || strings.HasPrefix(modelID, "openai/"))
 	// cache-control format keys on the literal provider name, not the base URL
 	var cacheControlFormat string
-	if provider == "openrouter" && strings.HasPrefix(modelID, "anthropic/") {
-		cacheControlFormat = "anthropic"
+	if provider == openRouterAffinityFormat && strings.HasPrefix(modelID, "anthropic/") {
+		cacheControlFormat = providerAnthropic
 	}
 
 	c.SupportsStore = ptrOf(!isNonStandard)
@@ -86,17 +86,17 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	case isAntLing:
 		c.ThinkingFormat = ptrOf("ant-ling")
 	case isOpenRouter:
-		c.ThinkingFormat = ptrOf("openrouter")
+		c.ThinkingFormat = ptrOf(openRouterAffinityFormat)
 	default:
-		c.ThinkingFormat = ptrOf("openai")
+		c.ThinkingFormat = ptrOf(providerOpenAI)
 	}
 
 	if cacheControlFormat != "" {
 		c.CacheControlFormat = &cacheControlFormat
 	}
-	sessionAffinity := "openai"
+	sessionAffinity := providerOpenAI
 	if isOpenRouter {
-		sessionAffinity = "openrouter"
+		sessionAffinity = openRouterAffinityFormat
 	}
 	c.SessionAffinityFormat = &sessionAffinity
 

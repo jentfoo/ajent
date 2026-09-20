@@ -77,7 +77,7 @@ func applyThinking(body *compatRequest, req Request) {
 				body.Reasoning = &compatReasoning{Effort: &e}
 			}
 		} else if !offSuppressed(caps) {
-			if e, ok := offValue(caps, "none"); ok {
+			if e, ok := offValue(caps, valueNone); ok {
 				body.Reasoning = &compatReasoning{Effort: &e}
 			}
 		}
@@ -101,7 +101,7 @@ func applyThinking(body *compatRequest, req Request) {
 				body.Thinking = e
 			}
 		} else if !offSuppressed(caps) {
-			if e, ok := offValue(caps, "none"); ok {
+			if e, ok := offValue(caps, valueNone); ok {
 				body.Thinking = e
 			}
 		}
@@ -216,9 +216,9 @@ const (
 )
 
 var thinkingNames = enumNames[ThinkingFormat]{
-	ThinkingNone:             "none",
-	ThinkingOpenAI:           "openai",
-	ThinkingOpenRouter:       "openrouter",
+	ThinkingNone:             valueNone,
+	ThinkingOpenAI:           providerOpenAI,
+	ThinkingOpenRouter:       openRouterAffinityFormat,
 	ThinkingDeepSeek:         "deepseek",
 	ThinkingTogether:         "together",
 	ThinkingBaseten:          "baseten",
@@ -228,7 +228,7 @@ var thinkingNames = enumNames[ThinkingFormat]{
 	ThinkingQwenChatTemplate: "qwen-chat-template",
 	ThinkingStringThinking:   "string-thinking",
 	ThinkingAntLing:          "ant-ling",
-	ThinkingAnthropic:        "anthropic",
+	ThinkingAnthropic:        providerAnthropic,
 	ThinkingThinkTags:        "think-tags",
 }
 

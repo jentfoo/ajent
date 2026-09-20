@@ -257,7 +257,7 @@ func stopReasonFrom(s string) StopReason {
 		return StopEndTurn
 	case "tool_calls", "function_call":
 		return StopToolUse
-	case "length", "max_tokens":
+	case "length", fieldMaxTokens:
 		return StopMaxTokens
 	case "":
 		return StopUnknown

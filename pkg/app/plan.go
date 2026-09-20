@@ -235,7 +235,7 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 // plannerExtras returns the enabled sub-agent tools a planner may delegate
 // read-only research to, empty when none are registered.
 func plannerExtras(reg *tools.Registry) []string {
-	candidates := []string{"agent_start", "agent_poll", "agent_list"}
+	candidates := []string{subAgentToolStart, subAgentToolPoll, subAgentToolList}
 	all := bulk.SliceToSet(reg.AllNames(tools.SourceBuiltin))
 	return bulk.SliceFilterInPlace(func(n string) bool { _, ok := all[n]; return ok }, candidates)
 }

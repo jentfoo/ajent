@@ -44,10 +44,10 @@ type grepTool struct {
 
 var _ agent.Tool = (*grepTool)(nil)
 
-func (t *grepTool) Name() string { return "grep" }
+func (t *grepTool) Name() string { return ToolGrep }
 
 func (t *grepTool) Label(agent.ToolCall) string {
-	return "grep"
+	return ToolGrep
 }
 
 func (t *grepTool) Description() string {
@@ -192,7 +192,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 // bound never cuts it.
 func (t *grepTool) finalize(out, note string) agent.ToolResult {
 	out = normalizeToLF(out) // rg and go paths both carry \r on CRLF files; LF-only to the model
-	text, _ := truncateOutput(t.sessionID, "grep", out, GrepResultLimit(), "")
+	text, _ := truncateOutput(t.sessionID, ToolGrep, out, GrepResultLimit(), "")
 	if note != "" {
 		text += "\n" + note
 	}

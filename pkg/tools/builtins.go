@@ -7,12 +7,17 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 )
 
+// Built-in tool names for the tools that only read.
+const (
+	ToolRead = "read"
+	ToolGrep = "grep"
+	ToolFind = "find"
+	ToolLs   = "ls"
+)
+
 // ReadOnlyBuiltins names the built-in tools that only read. pkg/subagent keeps
 // its own copy (readOnlyBuiltins) because it may not import this package.
-var ReadOnlyBuiltins = []string{"read", "grep", "find", "ls"}
-
-// ToolRead is the built-in read tool's name.
-const ToolRead = "read"
+var ReadOnlyBuiltins = []string{ToolRead, ToolGrep, ToolFind, ToolLs}
 
 // ToolAskUser is the built-in question tool's name.
 const ToolAskUser = "ask_user"

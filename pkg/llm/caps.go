@@ -69,6 +69,15 @@ type Capabilities struct {
 // openRouterAffinityFormat is the compat session-affinity header format value.
 const openRouterAffinityFormat = "openrouter"
 
+// Shared provider and wire-value literals reused across providers. Single
+// definitions keep goconst quiet and make a rename one-line.
+const (
+	providerAnthropic = "anthropic"
+	providerOpenAI    = "openai"
+	valueNone         = "none"
+	nameUnknown       = "unknown"
+)
+
 // TokenizerKind is how exact input token counts are obtained.
 type TokenizerKind uint8
 
@@ -80,7 +89,7 @@ const (
 )
 
 var tokenizerNames = enumNames[TokenizerKind]{
-	TokenizerNone:           "none",
+	TokenizerNone:           valueNone,
 	TokenizerRemoteCount:    "remote_count",
 	TokenizerRemoteTokenize: "remote_tokenize",
 	TokenizerLocalEstimate:  "local_estimate",

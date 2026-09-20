@@ -32,9 +32,9 @@ func (t *readTool) visionOn() bool { return t.vision != nil && t.vision() }
 
 var _ agent.Tool = (*readTool)(nil)
 
-func (t *readTool) Name() string { return "read" }
+func (t *readTool) Name() string { return ToolRead }
 
-func (t *readTool) Label(agent.ToolCall) string { return "read" }
+func (t *readTool) Label(agent.ToolCall) string { return ToolRead }
 
 func (t *readTool) Description() string {
 	return "Read the contents of a file. Returns line-numbered text; use offset/limit to page large files. Image files return the picture itself; binary files are refused."
