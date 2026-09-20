@@ -32,8 +32,9 @@ func DecodeArgs(raw json.RawMessage, v any) error {
 func argError(err error, root reflect.Type) string {
 	var ue *json.UnmarshalTypeError
 	if errors.As(err, &ue) {
+		field := stripIndices(ue.Field)
 		want := kindName(ue.Type)
-		if ue.Field == "" {
+		if field == "" {
 			// slice roots carry no field name: element and whole-value failures differ
 			if elem, ok := rootElem(root); ok {
 				if elem == ue.Type {
@@ -44,10 +45,10 @@ func argError(err error, root reflect.Type) string {
 			return fmt.Sprintf("arguments must be %s, but was given a JSON %s", want, ue.Value)
 		}
 		// element failures are reported against the field's own name
-		if elem, ok := sliceElem(root, ue.Field); ok && elem == ue.Type {
-			return fmt.Sprintf("each item of %s must be %s, but was given a JSON %s", ue.Field, want, ue.Value)
+		if elem, ok := sliceElem(root, field); ok && elem == ue.Type {
+			return fmt.Sprintf("each item of %s must be %s, but was given a JSON %s", field, want, ue.Value)
 		}
-		return fmt.Sprintf("%s must be %s, but was given a JSON %s", ue.Field, want, ue.Value)
+		return fmt.Sprintf("%s must be %s, but was given a JSON %s", field, want, ue.Value)
 	}
 	var se *json.SyntaxError
 	if errors.As(err, &se) {
@@ -56,7 +57,21 @@ func argError(err error, root reflect.Type) string {
 	return "arguments are malformed"
 }
 
-// rootElem returns root's element type when root dereferences to a slice or array.
+// stripIndices removes numeric array-index segments from an error field path.
+func stripIndices(field string) string {
+	if field == "" {
+		return field
+	}
+	parts := strings.Split(field, ".")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" && !strings.ContainsFunc(p, func(r rune) bool { return r < '0' || r > '9' }) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return strings.Join(out, ".")
+}
 func rootElem(root reflect.Type) (reflect.Type, bool) {
 	for root.Kind() == reflect.Pointer {
 		root = root.Elem()

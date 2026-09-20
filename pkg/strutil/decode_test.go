@@ -100,3 +100,22 @@ func TestDecodeArgs(t *testing.T) {
 		assert.EqualError(t, err, "arguments are malformed")
 	})
 }
+
+func TestStripIndices(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"edits.0.oldText", "edits.oldText"},
+		{"tags.0", "tags"},
+		{"edits.2.newText", "edits.newText"},
+		{"a.b.c", "a.b.c"},
+		{"edits.10.sub.4.x", "edits.sub.x"},
+		{"oldText", "oldText"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, stripIndices(tc.in))
+	}
+}
