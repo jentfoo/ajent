@@ -55,6 +55,12 @@ func TestGitReadOnly(t *testing.T) {
 		{"ls remote ext url", "git ls-remote 'ext::sh -c cat% .'", false},
 		// pre-subcommand pager flag
 		{`pager config executes`, `git -c pager.log=less status`, false},
+		// -C <path> relocates the repo; consumes its path token
+		{"worktree path long", "git -C /tmp status", true},
+		{"worktree path branch", "git -C /tmp branch foo", false},
+		{`attached form rejected`, `git -C/tmp status`, false},
+		{`missing path token`, `git -C status`, false},
+		{"path then pager flag", "git -C /tmp -c pager.log=cat status", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

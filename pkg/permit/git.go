@@ -271,6 +271,10 @@ func gitActionReadOnly(sub string, args []string) bool {
 func gitReadOnly(tokens []string) bool {
 	j := 1
 	for j < len(tokens) {
+		if tokens[j] == "-C" {
+			j += 2 // -C requires a separate path token; consume it
+			continue
+		}
 		if _, ok := gitPreSubcommandFlags[tokens[j]]; !ok {
 			break
 		}
