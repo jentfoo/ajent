@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -45,7 +46,11 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// every turn is recorded into the workspace transcript so double-Esc while idle
 	// can open the context-tree picker and rewind onto an earlier point.
-	rec := newSession(ui, sessMode, sessTarget, active.Key())
+	var modelKey string
+	if active.ID != "" {
+		modelKey = active.Key() // a modelless start stays unstamped; "/" would warn on resume
+	}
+	rec := newSession(ui, sessMode, sessTarget, modelKey)
 	if rec == nil {
 		ui.Notify("session recording disabled; Esc will not rewind", tui.LevelWarn)
 	}
@@ -295,10 +300,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	showReasoningIndicator(ui, set, st)
 
-	if active.ID == "" {
-		ui.Notify("no model configured; use /model to pick one", tui.LevelWarn)
-	}
-
 	quit := make(chan struct{})
 
 	// MCP servers bridge their remote tools into the registry and are supervised by
@@ -497,6 +498,36 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		if terr := command.ThemeSetup(context.Background(), console); terr != nil {
 			ui.Notify("theme: "+terr.Error(), tui.LevelWarn)
 		}
+	}
+
+	// a first start with nothing configured walks through the first provider
+	if len(reg.ProviderNames()) == 0 {
+		// the probe and prompts abandon when the user quits mid-setup, so the
+		// exit is never held up by a discovery pass
+		wizardCtx, cancelWizard := context.WithCancel(context.Background())
+		defer cancelWizard()
+		go func() {
+			select {
+			case <-quit:
+				cancelWizard()
+			case <-wizardCtx.Done():
+			}
+		}()
+		if err := command.ProviderSetup(wizardCtx, console); err != nil {
+			if errors.Is(err, tui.ErrCancelled) {
+				ui.Notify("provider setup skipped; add one to ~/.ajent/"+llm.ModelsFileName, tui.LevelInfo)
+			} else {
+				ui.Notify("setup: "+err.Error(), tui.LevelWarn)
+			}
+		}
+		if m := reg.Active(); m.ID != "" && m.Key() != st.Model.Key() {
+			console.SetModel(m) // applies the model, the bar and the session record
+			st.Tokens.SetBase(ag.BaseEstimate(started))
+			pushContext()
+		}
+	}
+	if reg.Active().ID == "" {
+		ui.Notify("no model configured; use /model to pick one", tui.LevelWarn)
 	}
 
 	go runPump(context.Background(),

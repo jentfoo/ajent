@@ -1,0 +1,44 @@
+{
+  "models": [
+    {
+      "type": "llm",
+      "publisher": "google",
+      "key": "google/gemma-4-26b-a4b",
+      "display_name": "Gemma 4 26B A4B",
+      "architecture": "gemma4",
+      "max_context_length": 262144,
+      "loaded_instances": [
+        {
+          "id": "google/gemma-4-26b-a4b",
+          "config": {
+            "context_length": 4096,
+            "flash_attention": true
+          }
+        }
+      ],
+      "capabilities": {
+        "vision": true,
+        "trained_for_tool_use": true
+      }
+    },
+    {
+      "type": "llm",
+      "publisher": "deepseek",
+      "key": "deepseek-r1",
+      "display_name": "DeepSeek R1",
+      "max_context_length": 131072,
+      "loaded_instances": [],
+      "capabilities": {
+        "vision": false,
+        "trained_for_tool_use": true
+      }
+    },
+    {
+      "type": "embedding",
+      "key": "text-embedding-nomic-embed-text-v1.5-embedding",
+      "display_name": "Nomic Embed Text v1.5",
+      "max_context_length": 2048,
+      "loaded_instances": []
+    }
+  ]
+}

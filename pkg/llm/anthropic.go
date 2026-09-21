@@ -36,6 +36,26 @@ type anthropicProvider struct {
 	name   string
 }
 
+// parseAnthropicModels turns the /v1/models response into model entries.
+func parseAnthropicModels(body []byte) ([]ModelConfig, error) {
+	var wire antModels
+	if err := json.Unmarshal(body, &wire); err != nil {
+		return nil, err
+	}
+	out := make([]ModelConfig, 0, len(wire.Data))
+	for _, d := range wire.Data {
+		if d.ID == "" {
+			continue
+		}
+		m := ModelConfig{ID: d.ID, Name: d.ID}
+		if d.DisplayName != "" {
+			m.Name = d.DisplayName
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
 // newAnthropicProvider returns a Messages API provider.
 func newAnthropicProvider(name string, client *httpClient) *anthropicProvider {
 	return &anthropicProvider{client: client, name: name}

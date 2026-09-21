@@ -94,13 +94,13 @@ Providers, and the models they serve, are configured in `~/.ajent/models.json`, 
 
 Per provider you can set:
 
-* `baseUrl` - the endpoint
-* `flavor` - selects discovery and quirk defaults (`anthropic`, `openai`, `openrouter`, `lmstudio`, `llamacpp`, `generic`). Defaults to the provider key, so an OpenAI-compatible proxy in front of a known server can say `{"flavor": "lmstudio"}` and still get the right behavior.
+* `baseUrl` - the endpoint. Omitted means the flavor's own default, so a bare `"anthropic"` or `"zai"` entry needs nothing else.
+* `flavor` - selects discovery and quirk defaults. The built-in flavors are `anthropic`, `openai`, `zai`, `zai-coding-cn`, `openrouter`, `deepseek`, `together`, `xai`, `groq`, `mistral`, `moonshotai`, `moonshotai-cn`, `kimi`, `google`, `cerebras`, `nvidia`, `huggingface`, `minimax`, `minimax-cn`, `baseten`, `ant-ling`, `fireworks`, `qwen-token-plan`, `qwen-token-plan-cn`, `xiaomi`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `xiaomi-token-plan-ams`, `lmstudio`, `llamacpp` and `generic`. Defaults to the provider key, so an OpenAI-compatible proxy in front of a known server can say `{"flavor": "lmstudio"}` and still get the right behavior.
 * `apiKeyEnv` / `apiKey` - where to read the secret. Resolution order is the configured env var, then a literal key, then the dialect's conventional variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
 * `headers` - extra request headers
 * `timeouts` - connect / TLS / header / idle / total bounds as Go durations; an explicit `"0s"` disables a bound. Split these because one client timeout would clamp the body read, which is exactly what must be allowed to take minutes.
 * `retry` - attempts and backoff (`base`, `max`, `jitter`); honors `Retry-After` but caps it at 60s.
-* `discover` - whether this provider's models are fetched from the server. On by default for openrouter, lm-studio and llama.cpp; any other OpenAI-compatible endpoint can opt in with `"discover": true`, which asks its `/v1/models`.
+* `discover` - whether this provider's models are fetched from the server. On by default for every flavor with a known model list (anthropic, openai, zai, openrouter, deepseek, together, xai, groq, mistral, moonshotai, google, cerebras, nvidia, huggingface, baseten, lm-studio, llama.cpp and the token-plan flavors); any other OpenAI-compatible endpoint can opt in with `"discover": true`, which asks its `/v1/models`.
 * `models` - your declared list for this provider. When present, it *is* the whole list; discovery only fills gaps.
 
 ### Models
@@ -108,7 +108,7 @@ Per provider you can set:
 Models come from exactly two places, both under the provider they belong to:
 
 * **hand-written declarations** - your per-provider `models` list.
-* **provider discovery** - asking openrouter, lm-studio or llama.cpp for their model list. It fills any gaps in what you declared. A llama.cpp multi-model router (which reports nothing useful on `/props`) falls back to its OpenAI-compatible `/v1/models`, and any other server speaking chat-completions can be discovered the same way with `"discover": true`.
+* **provider discovery** - asking the provider for its model list. It fills any gaps in what you declared. A llama.cpp multi-model router (which reports nothing useful on `/props`) falls back to its OpenAI-compatible `/v1/models`, and any other server speaking chat-completions can be discovered the same way with `"discover": true`.
 
 The minimal entry (if not using discovery) is just an id. Everything else has a sane default, so you typically only add one to pin something discovery got wrong (a name or context window).
 

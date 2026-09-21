@@ -23,7 +23,9 @@ recorded response fixtures per provider.
 
 The package keeps a shared chat-completions dialect: three of the five providers
 are a thin profile over `openaicompat.go` plus a discovery parser, so adding a
-sixth of that shape is small and self-contained.
+sixth of that shape is small and self-contained. The flavor catalogue leans on
+that: a hosted provider with an env-var key on one of the three dialects is one
+`flavorDefaults` entry away from support, and the setup wizard lists them all.
 
 The rule `pkg/config ↛ pkg/llm` (see `config-design.md`) is why `models.json`
 decodes in `pkg/llm/config.go` rather than in `pkg/config`.
@@ -341,6 +343,23 @@ loader warns when such a file is group or world readable. Key resolution order
 is the configured env var, then the literal, then the dialect's conventional
 variable, then an error naming what to set.
 
+### First-run setup
+
+When the driver starts with zero providers configured, `command.ProviderSetup`
+(pkg/command) walks through the flavor catalogue: pick a provider, add a key or
+server URL, settle the models, write the file. The menu leads with the local
+servers and the custom URL row, then the hosted flavors — one row per vendor,
+so regional catalogue variants (`-cn`, token-plan regions) stay reachable
+through `models.json` but are not listed. The wizard is a thin caller over the
+package's own pieces — `ProbeProvider` for one discovery pass (`ProbeAll` for
+the custom row, whose server family is unknown), `SaveUserFile` for the write,
+`Registry.Load` for the in-place reload — so it adds no provider machinery of
+its own. Its rule is the catalogue's: models come from discovery or from an id
+the user declared, never a compiled-in table, and the write merges over the
+existing file so setup only ever adds. A local server URL pasted without a path
+inherits the flavor default's path, so a bare `http://host:port` still reaches
+the OpenAI-compatible chat endpoint.
+
 ## Registry and discovery
 
 Nothing about models is compiled in except per-flavor endpoint and capability
@@ -381,8 +400,10 @@ context length the model was *loaded* with, which is often smaller than its
 maximum and which nothing else can know. A flavor's native endpoint is tried
 first; the standard chat-completions list (`/v1/models`) backs it up when that
 yields nothing usable. A llama.cpp router serves no single loaded model on
-`/props`, so discovery falls through to the OpenAI list. The generic flavor
-discovers only through that list, and only when `discover: true` opts in.
+`/props`, so discovery falls through to the OpenAI list. lm-studio's native
+list moved to `/api/v1` in 0.4; its candidates walk `/api/v1`, then `/api/v0`
+for older builds, then the OpenAI list. The generic flavor discovers only
+through that list, and only when `discover: true` opts in.
 
 The discovery path is resolved against the provider's base URL, collapsing a
 `/v1` prefix the base already carries: a server configured as `http://host/v1`
@@ -390,8 +411,10 @@ serves its model list at `/models`, so asking for both would hit
 `.../v1/v1/models` and 404.
 
 The endpoints themselves are the touchpoints to extend when adding another
-server: the hosted catalogue's `/models`, lm-studio's `/api/v0/models`,
-llama.cpp's `/props`, and the standard `/v1/models` fallback.
+server: the hosted catalogue's `/models`, lm-studio's `/api/v1/models` (and
+the `/api/v0` fallback), llama.cpp's `/props`, and the standard `/v1/models`
+fallback. `probeAllSpec` unions the known endpoints for `ProbeAll`, the
+setup wizard's probe for a custom URL of unknown family.
 
 Refetch is conditional on `ETag` / `Last-Modified`; a `304` keeps the models and
 only bumps the check time. Results cache to a file under the config dir. Time to
@@ -581,7 +604,7 @@ payloads line up would leak one test's needs into unrelated tests.
 
 - **Do not add a model to `flavorDefaults`.** A stale context window silently
   corrupts the context bar, which is worse than not knowing it. A test asserts
-  the table ships no models.
+  the table ships no models; the setup wizard obeys the same rule.
 - **Do not mutate `httpClient.headers` for a per-call header.** Discovery runs
   in the background; use the request's own headers, which merge over the
   client's.
@@ -621,14 +644,22 @@ Adding a provider that speaks chat-completions:
    handled there and need no flavor at all.
 2. If it still needs its own defaults, add a `Flavor` and an entry in
    `flavorDefaults`: base URL, dialect, key variable, capabilities. No models.
+   Share `chatCaps()` / `anthropicCaps()` unless the family genuinely diverges.
 3. If it needs request fields nobody else sends, write a `decorate` hook. If it
    needs response fields nobody else reads, write an `extra` hook. Needing a
    third hook is the signal that the thing belongs in the shared layer.
-4. If it can list its own models, write a parser and add it to `discoverySpecs`.
-5. Add its overflow phrases to `overflowPhrases`.
-6. Record fixtures and run them through the same `collect` helper every other
+4. If it can list its own models, write a parser and add it to `discoverySpecs`
+   (the shared `openAIListSpec` / `openAIModelsSpec` cover the common shapes).
+5. If a first-time user could reasonably start from it, add a
+   `providerSetupChoices` row in `pkg/command/setup.go`.
+6. Add its overflow phrases to `overflowPhrases`.
+7. Record fixtures and run them through the same `collect` helper every other
    provider uses. That the assertions differ only in content, never in shape, is
    the real proof that normalisation worked.
+
+A provider whose auth is not an env-var API key — OAuth device flows, cloud
+account credentials, per-model gateways — stays configuration-only: no flavor,
+no wizard row, since `models.json` cannot express it.
 
 A genuinely new **dialect** is a new `Dialect`, a `*_wire.go`, an adapter
 implementing `Provider`, and a case in `factory.go`. It also adds a row to

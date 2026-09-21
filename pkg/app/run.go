@@ -126,6 +126,9 @@ func Run(o RunOptions) int {
 	}()
 
 	go func() {
+		if len(reg.ProviderNames()) == 0 {
+			return // nothing configured yet; the setup wizard owns the first provider
+		}
 		notify := func(msg string, warn bool) { ui.Notify(msg, levelOf(warn)) }
 		if added := reg.RefreshModels(notify); added > 0 {
 			ui.NotifyKeyed("models", "discovered "+strconv.Itoa(added)+" more models", tui.LevelInfo)

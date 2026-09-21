@@ -59,6 +59,62 @@ func TestParseLMStudioModels(t *testing.T) {
 	})
 }
 
+func TestParseLMStudioV1Models(t *testing.T) {
+	t.Parallel()
+
+	data, err := os.ReadFile(filepath.Join("testdata", "lmstudio", "models-v1.json"))
+	require.NoError(t, err)
+
+	got, err := parseLMStudioV1Models(data)
+	require.NoError(t, err)
+
+	t.Run("skips_embedding_models", func(t *testing.T) {
+		require.Len(t, got, 2)
+		for _, m := range got {
+			assert.NotEqual(t, "text-embedding-nomic-embed-text-v1.5-embedding", m.ID)
+		}
+	})
+
+	t.Run("loaded_instance_context_length_wins", func(t *testing.T) {
+		require.NotNil(t, got[0].ContextWindow)
+		assert.Equal(t, 4096, *got[0].ContextWindow)
+	})
+
+	t.Run("max_context_length_when_not_loaded", func(t *testing.T) {
+		require.NotNil(t, got[1].ContextWindow)
+		assert.Equal(t, 131072, *got[1].ContextWindow)
+	})
+
+	t.Run("display_name_and_key", func(t *testing.T) {
+		assert.Equal(t, "google/gemma-4-26b-a4b", got[0].ID)
+		assert.Equal(t, "Gemma 4 26B A4B", got[0].Name)
+		assert.Equal(t, "deepseek-r1", got[1].ID)
+		assert.Equal(t, "DeepSeek R1", got[1].Name)
+	})
+
+	t.Run("vision_capability_adds_the_image_modality", func(t *testing.T) {
+		assert.Equal(t, []Modality{ModalityText, ModalityImage}, got[0].Input)
+		assert.Equal(t, []Modality{ModalityText}, got[1].Input)
+	})
+
+	t.Run("tool_use_capability_recorded", func(t *testing.T) {
+		require.NotNil(t, got[0].Compat)
+		require.NotNil(t, got[0].Compat.SupportsToolChoice)
+		assert.True(t, *got[0].Compat.SupportsToolChoice)
+	})
+
+	t.Run("malformed_body_errors", func(t *testing.T) {
+		_, err := parseLMStudioV1Models([]byte("not json"))
+		assert.Error(t, err)
+	})
+
+	t.Run("empty_list", func(t *testing.T) {
+		out, err := parseLMStudioV1Models([]byte(`{"models":[]}`))
+		require.NoError(t, err)
+		assert.Empty(t, out)
+	})
+}
+
 func TestLMStudioDiscovery(t *testing.T) {
 	t.Parallel()
 
@@ -71,4 +127,18 @@ func TestLMStudioDiscovery(t *testing.T) {
 	assert.Equal(t, "/api/v0/models", req.Path)
 	require.Len(t, got.Models, 2)
 	assert.Equal(t, "qwen3.6-27b-mtp", got.Models[0].ID)
+}
+
+func TestLMStudioV1Discovery(t *testing.T) {
+	t.Parallel()
+
+	srv, req := jsonServer(t, "lmstudio/models-v1.json")
+	c := testClient(t, srv.URL)
+
+	got, err := discoverProvider(t.Context(), c, "/api/v1/models", parseLMStudioV1Models, CacheEntry{}, testNow)
+	require.NoError(t, err)
+
+	assert.Equal(t, "/api/v1/models", req.Path)
+	require.Len(t, got.Models, 2)
+	assert.Equal(t, "google/gemma-4-26b-a4b", got.Models[0].ID)
 }

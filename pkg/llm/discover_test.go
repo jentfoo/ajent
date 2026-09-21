@@ -300,8 +300,13 @@ func TestDiscover(t *testing.T) {
 			fixture string
 			models  int
 		}{
+			{"anthropic", "/v1/models", "anthropic/models.json", 2},
+			{"openai", "/v1/models", "openaimodels/models.json", 3},
+			{"zai", "/models", "openaimodels/models.json", 3},
+			{"deepseek", "/models", "openaimodels/models.json", 3},
+			{"google", "/models", "openaimodels/models.json", 3},
 			{"openrouter", "/models", "openrouter/models.json", 2},
-			{"lmstudio", "/api/v0/models", "lmstudio/models.json", 2},
+			{"lmstudio", "/api/v1/models", "lmstudio/models-v1.json", 2},
 			{"llamacpp", "/props", "llamacpp/props.json", 1},
 		}
 		for _, tc := range tests {
@@ -496,7 +501,7 @@ func TestDiscover(t *testing.T) {
 
 	t.Run("providers_without_discovery_are_skipped", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
-			"anthropic": {BaseURL: "http://127.0.0.1:1"},
+			"kimi": {BaseURL: "http://127.0.0.1:1"},
 		}}
 		cache, warnings := Discover(t.Context(), f, nil, opts())
 		assert.Empty(t, cache)
@@ -548,5 +553,100 @@ func TestDiscover(t *testing.T) {
 
 		_, _ = Discover(t.Context(), f, prev, opts())
 		assert.Equal(t, "cached", prev["openrouter"].Models[0].ID)
+	})
+}
+
+func TestProbeProvider(t *testing.T) {
+	t.Parallel()
+
+	envOff := func(string) string { return "" }
+
+	t.Run("asks_the_flavors_endpoint", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/models", "openaimodels/models.json", &hits)
+		entry, err := ProbeProvider(t.Context(), "zai",
+			ProviderConfig{BaseURL: srv.URL, APIKeyEnv: "ZAI_API_KEY"},
+			DiscoverOptions{Env: envOff})
+		require.NoError(t, err)
+		assert.Equal(t, 1, hits)
+		assert.Len(t, entry.Models, 3)
+		assert.Contains(t, entry.Source, "/models")
+	})
+
+	t.Run("anthropic_list_is_parsed", func(t *testing.T) {
+		srv := discoveryServer(t, "/v1/models", "anthropic/models.json", new(int))
+		entry, err := ProbeProvider(t.Context(), "anthropic",
+			ProviderConfig{BaseURL: srv.URL},
+			DiscoverOptions{Env: envOff})
+		require.NoError(t, err)
+		require.Len(t, entry.Models, 2)
+		assert.Equal(t, "claude-sonnet-4-5", entry.Models[0].ID)
+		assert.Equal(t, "Claude Sonnet 4.5", entry.Models[0].Name)
+	})
+
+	t.Run("flavor_without_a_spec_is_not_an_error", func(t *testing.T) {
+		entry, err := ProbeProvider(t.Context(), "kimi", ProviderConfig{}, DiscoverOptions{Env: envOff})
+		require.NoError(t, err)
+		assert.Empty(t, entry.Models)
+	})
+
+	t.Run("probe_all_prefers_the_native_local_list", func(t *testing.T) {
+		var hits []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits = append(hits, r.URL.Path)
+			switch r.URL.Path {
+			case "/api/v1/models":
+				data, err := os.ReadFile(filepath.Join("testdata", "lmstudio", "models-v1.json"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(data)
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		t.Cleanup(srv.Close)
+
+		entry, err := ProbeAll(t.Context(), ProviderConfig{BaseURL: srv.URL}, DiscoverOptions{Env: envOff})
+		require.NoError(t, err)
+		require.Len(t, entry.Models, 2)
+		// the native list carries the loaded context length the OpenAI list lacks
+		require.NotNil(t, entry.Models[0].ContextWindow)
+		assert.Equal(t, 4096, *entry.Models[0].ContextWindow)
+		assert.Equal(t, []string{"/api/v1/models"}, hits)
+	})
+
+	t.Run("probe_all_falls_through_to_the_openai_list", func(t *testing.T) {
+		srv := discoveryServer(t, "/v1/models", "openaimodels/models.json", new(int))
+
+		entry, err := ProbeAll(t.Context(),
+			ProviderConfig{BaseURL: srv.URL, Discover: ptr(true)}, DiscoverOptions{Env: envOff})
+		require.NoError(t, err)
+		assert.Len(t, entry.Models, 3)
+	})
+
+	t.Run("probe_all_names_the_custom_provider_on_error", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		t.Cleanup(srv.Close)
+
+		_, err := ProbeAll(t.Context(), ProviderConfig{BaseURL: srv.URL}, DiscoverOptions{Env: envOff})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), probeAllName)
+	})
+
+	t.Run("failure_names_the_provider", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			// 401 classifies as permanent, so the retry ladder never runs
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		t.Cleanup(srv.Close)
+
+		_, err := ProbeProvider(t.Context(), "zai",
+			ProviderConfig{BaseURL: srv.URL}, DiscoverOptions{Env: envOff})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "zai")
 	})
 }

@@ -49,18 +49,31 @@ func NewRegistry(f File, cache map[string]CacheEntry, opts RegistryOptions) (*Re
 	}
 	r := &Registry{env: env, file: f, cache: cache}
 	warnings := r.rebuild(f, cache)
+	return r, append(warnings, r.activateDefault(f)...)
+}
 
+// activateDefault activates the file's default model when it resolves, else the
+// first model on a registry that has none active. A default that resolves to
+// nothing is reported as a warning.
+func (r *Registry) activateDefault(f File) []string {
+	var warnings []string
 	if f.DefaultModel != "" {
 		if m, err := r.Resolve(f.DefaultModel); err == nil {
 			r.SetActive(m)
-		} else {
-			warnings = append(warnings, "defaultModel "+f.DefaultModel+" not found")
+			return warnings
 		}
+		warnings = append(warnings, "defaultModel "+f.DefaultModel+" not found")
 	}
+	r.mu.RLock()
+	var first Model
 	if !r.hasModel && len(r.models) > 0 {
-		r.SetActive(r.models[0])
+		first = r.models[0]
 	}
-	return r, warnings
+	r.mu.RUnlock()
+	if first.ID != "" {
+		r.SetActive(first)
+	}
+	return warnings
 }
 
 // rebuild recomputes the model list from configuration plus cache.
@@ -346,6 +359,20 @@ func enrichModel(declared, discovered ModelConfig) ModelConfig {
 		declared.ThinkingBudgets = discovered.ThinkingBudgets
 	}
 	return declared
+}
+
+// Load swaps the models file and cache, rebuilding the catalogue in place so
+// callers holding the registry keep their view. It activates the file's default
+// model, or the first model on a registry that had none, and returns the
+// rebuild's warnings plus one when the default model does not resolve.
+func (r *Registry) Load(f File, cache map[string]CacheEntry) []string {
+	warnings := r.rebuild(f, cache)
+
+	r.mu.Lock()
+	r.file, r.cache = f, cache
+	r.mu.Unlock()
+
+	return append(warnings, r.activateDefault(f)...)
 }
 
 // Refresh runs discovery and rebuilds the model list from the result, returning

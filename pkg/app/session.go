@@ -132,12 +132,11 @@ func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string) *sessRec {
 
 func openSession(store *session.Store, mode ResumeMode, cwd string, target, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, error) {
 	fresh := func(name string) (*session.Writer, error) {
-		return store.Create(cwd, session.SessionData{
-			Version:   session.Version(),
-			Workspace: cwd,
-			Model:     modelKey, // provenance so a resume can stamp assistant origins
-			Name:      name,
-		})
+		sd := session.SessionData{Version: session.Version(), Workspace: cwd, Name: name}
+		if modelKey != "" {
+			sd.Model = modelKey // provenance so a resume can stamp assistant origins
+		}
+		return store.Create(cwd, sd)
 	}
 
 	switch mode {

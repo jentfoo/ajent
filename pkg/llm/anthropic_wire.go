@@ -179,6 +179,14 @@ type antCountResponse struct {
 	InputTokens int `json:"input_tokens"`
 }
 
+// antModels is the /v1/models discovery response.
+type antModels struct {
+	Data []struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+	} `json:"data"`
+}
+
 // antStopReason maps a Messages API stop reason.
 func antStopReason(s string) StopReason {
 	switch s {

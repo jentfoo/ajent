@@ -152,6 +152,8 @@ the **user** layer and records a session override, so a project pin still
 outranks it. Unlike `ui.render` the palette *can* change at runtime:
 `/settings → Theme` recolors the live UI, and a resumed session applies its
 override before the transcript replays (see tui-design.md, "Semantic styling").
+A first run with nothing configured then continues into the setup wizard; see
+providers-design.md, "First-run setup".
 
 `ui.images` names a terminal image protocol (`kitty`, `iterm2`, `none`) and
 defaults to detection, forcing the capability the way `ui.color` forces depth.

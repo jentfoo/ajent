@@ -30,6 +30,51 @@ type flavorDefault struct {
 	caps      Capabilities
 }
 
+// chatCaps is the generic chat-completions baseline shared by the hosted
+// OpenAI-compatible flavors; vendor detection layers quirks over it.
+func chatCaps() Capabilities {
+	return Capabilities{
+		Dialect:                 DialectOpenAICompletions,
+		Tokenizer:               TokenizerLocalEstimate,
+		MaxTokensField:          fieldMaxTokens,
+		SystemAsRole:            true,
+		Temperature:             true,
+		ToolChoice:              true,
+		SupportsReasoningEffort: true,
+		SupportsFinishReason:    true,
+		SupportsStrict:          true,
+	}
+}
+
+// zaiCaps is the GLM baseline: reasoning always on, reasoning_content replay
+// and the zai thinking format, plus tool-call streaming.
+func zaiCaps() Capabilities {
+	caps := chatCaps()
+	caps.Reasoning = true
+	caps.Thinking = ThinkingZAI
+	caps.ReasoningField = fieldReasoningConten
+	caps.ParallelTools = true
+	caps.StreamUsage = true
+	caps.ZaiToolStream = true
+	return caps
+}
+
+// anthropicCaps is the Messages-API baseline for anthropic-compatible hosted
+// endpoints; they speak the wire shape but not anthropic's cache or tokenizer.
+func anthropicCaps() Capabilities {
+	return Capabilities{
+		Dialect:         DialectAnthropic,
+		Reasoning:       true,
+		Thinking:        ThinkingAnthropic,
+		ReasoningReplay: true,
+		Tokenizer:       TokenizerLocalEstimate,
+		MaxTokensField:  fieldMaxTokens,
+		ParallelTools:   true,
+		Temperature:     true,
+		ToolChoice:      true,
+	}
+}
+
 // flavorDefaults is the entire compiled in catalogue. Adding a model here would
 // be a staleness bug waiting to happen, so it holds endpoints and quirks only.
 var flavorDefaults = map[Flavor]flavorDefault{
@@ -37,6 +82,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 		dialect:   DialectAnthropic,
 		baseURL:   "https://api.anthropic.com",
 		apiKeyEnv: "ANTHROPIC_API_KEY",
+		discover:  true,
 		caps: Capabilities{
 			Dialect:         DialectAnthropic,
 			Reasoning:       true,
@@ -59,6 +105,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 		dialect:   DialectOpenAIResponses,
 		baseURL:   "https://api.openai.com/v1",
 		apiKeyEnv: "OPENAI_API_KEY",
+		discover:  true,
 		caps: Capabilities{
 			Dialect:         DialectOpenAIResponses,
 			Reasoning:       true,
@@ -78,6 +125,22 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Temperature:                 true,
 			ToolChoice:                  true,
 		},
+	},
+	// z.ai serves GLM over chat-completions; the coding-plan endpoints share the
+	// wire format of the general one, so only the base URL differs.
+	FlavorZAI: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.z.ai/api/coding/paas/v4",
+		apiKeyEnv: "ZAI_API_KEY",
+		discover:  true,
+		caps:      zaiCaps(),
+	},
+	FlavorZaiCodingCN: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://open.bigmodel.cn/api/coding/paas/v4",
+		apiKeyEnv: "ZAI_CODING_CN_API_KEY",
+		discover:  true,
+		caps:      zaiCaps(),
 	},
 	FlavorOpenRouter: {
 		dialect:   DialectOpenAICompletions,
@@ -103,6 +166,180 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Temperature:             true,
 			ToolChoice:              true,
 		},
+	},
+	// Hosted chat-completions providers. Each matches a detect.go family by name
+	// or base URL, so the shared baseline plus detection carries the quirks.
+	FlavorDeepSeek: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.deepseek.com",
+		apiKeyEnv: "DEEPSEEK_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorTogether: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.together.ai/v1",
+		apiKeyEnv: "TOGETHER_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorXAI: {
+		dialect:   DialectOpenAIResponses,
+		baseURL:   "https://api.x.ai/v1",
+		apiKeyEnv: "XAI_API_KEY",
+		discover:  true,
+		caps: Capabilities{
+			Dialect:         DialectOpenAIResponses,
+			Reasoning:       true,
+			Thinking:        ThinkingOpenAI,
+			ReasoningReplay: true,
+			Tokenizer:       TokenizerLocalEstimate,
+			MaxTokensField:  fieldMaxOutputTokens,
+			SystemAsRole:    true,
+			ParallelTools:   true,
+			StreamUsage:     true,
+			Temperature:     true,
+			ToolChoice:      true,
+		},
+	},
+	FlavorGroq: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.groq.com/openai/v1",
+		apiKeyEnv: "GROQ_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorMistral: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.mistral.ai/v1",
+		apiKeyEnv: "MISTRAL_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorMoonshotAI: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.moonshot.ai/v1",
+		apiKeyEnv: "MOONSHOT_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorMoonshotCN: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.moonshot.cn/v1",
+		apiKeyEnv: "MOONSHOT_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	// Google's OpenAI-compatible surface in front of Gemini.
+	FlavorGoogle: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://generativelanguage.googleapis.com/v1beta/openai",
+		apiKeyEnv: "GEMINI_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorCerebras: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.cerebras.ai/v1",
+		apiKeyEnv: "CEREBRAS_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorNVIDIA: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://integrate.api.nvidia.com/v1",
+		apiKeyEnv: "NVIDIA_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorHuggingFace: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://router.huggingface.co/v1",
+		apiKeyEnv: "HF_TOKEN",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorBaseten: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://inference.baseten.co/v1",
+		apiKeyEnv: "BASETEN_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorAntLing: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.ant-ling.com/v1",
+		apiKeyEnv: "ANT_LING_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorQwenPlan: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+		apiKeyEnv: "QWEN_TOKEN_PLAN_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorQwenPlanCN: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+		apiKeyEnv: "QWEN_TOKEN_PLAN_CN_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorXiaomi: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://api.xiaomimimo.com/v1",
+		apiKeyEnv: "XIAOMI_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorXiaomiCN: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://token-plan-cn.xiaomimimo.com/v1",
+		apiKeyEnv: "XIAOMI_TOKEN_PLAN_CN_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorXiaomiSGP: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://token-plan-sgp.xiaomimimo.com/v1",
+		apiKeyEnv: "XIAOMI_TOKEN_PLAN_SGP_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	FlavorXiaomiAMS: {
+		dialect:   DialectOpenAICompletions,
+		baseURL:   "https://token-plan-ams.xiaomimimo.com/v1",
+		apiKeyEnv: "XIAOMI_TOKEN_PLAN_AMS_API_KEY",
+		discover:  true,
+		caps:      chatCaps(),
+	},
+	// Anthropic-protocol endpoints served by other vendors. None offer a model
+	// list, so the wizard asks for one id and config declares the rest.
+	FlavorKimi: {
+		dialect:   DialectAnthropic,
+		baseURL:   "https://api.kimi.com/coding",
+		apiKeyEnv: "KIMI_API_KEY",
+		caps:      anthropicCaps(),
+	},
+	FlavorMiniMax: {
+		dialect:   DialectAnthropic,
+		baseURL:   "https://api.minimax.io/anthropic",
+		apiKeyEnv: "MINIMAX_API_KEY",
+		caps:      anthropicCaps(),
+	},
+	FlavorMiniMaxCN: {
+		dialect:   DialectAnthropic,
+		baseURL:   "https://api.minimaxi.com/anthropic",
+		apiKeyEnv: "MINIMAX_CN_API_KEY",
+		caps:      anthropicCaps(),
+	},
+	FlavorFireworks: {
+		dialect:   DialectAnthropic,
+		baseURL:   "https://api.fireworks.ai/inference",
+		apiKeyEnv: "FIREWORKS_API_KEY",
+		caps:      anthropicCaps(),
 	},
 	FlavorLMStudio: {
 		dialect:  DialectOpenAICompletions,
@@ -181,6 +418,23 @@ func flavorFor(name string, cfg ProviderConfig) Flavor {
 		return f
 	}
 	return FlavorGeneric
+}
+
+// FlavorProfile is a flavor's compiled-in endpoint and credential defaults.
+type FlavorProfile struct {
+	BaseURL   string
+	APIKeyEnv string
+	Discover  bool
+}
+
+// LookupFlavor returns the profile for a flavor name.
+func LookupFlavor(name string) (FlavorProfile, bool) {
+	f, ok := flavorNames.lookup(name)
+	if !ok || f == FlavorUnset || f == FlavorUnknown {
+		return FlavorProfile{}, false
+	}
+	def := flavorDefaults[f]
+	return FlavorProfile{BaseURL: def.baseURL, APIKeyEnv: def.apiKeyEnv, Discover: def.discover}, true
 }
 
 // dialectFor returns the wire dialect a provider speaks: its configured api,

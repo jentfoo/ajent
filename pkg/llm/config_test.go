@@ -3,6 +3,7 @@ package llm
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -344,4 +345,27 @@ func TestCompatWarnings(t *testing.T) {
 		w := compatWarnings(&Compat{ForceAdaptiveThinking: ptr(true)}, DialectAnthropic)
 		assert.Empty(t, w)
 	})
+}
+
+func TestSaveUserFile(t *testing.T) {
+	t.Setenv(config.EnvHome, t.TempDir())
+
+	want := File{DefaultModel: "zai/glm-5", Providers: map[string]ProviderConfig{
+		"zai":   {APIKeyEnv: "ZAI_API_KEY"},
+		"other": {APIKey: "literal"},
+	}}
+	require.NoError(t, SaveUserFile(want))
+
+	got, warnings, err := LoadUserFile()
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	assert.Equal(t, want, got)
+
+	path, err := config.UserPath(ModelsFileName)
+	require.NoError(t, err)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	if runtime.GOOS != "windows" {
+		assert.Zero(t, info.Mode().Perm()&0o077)
+	}
 }

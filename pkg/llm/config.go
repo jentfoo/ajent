@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/config"
 )
 
@@ -77,7 +78,32 @@ const (
 	FlavorUnset Flavor = iota
 	FlavorAnthropic
 	FlavorOpenAI
+	FlavorZAI
+	FlavorZaiCodingCN
 	FlavorOpenRouter
+	FlavorDeepSeek
+	FlavorTogether
+	FlavorXAI
+	FlavorGroq
+	FlavorMistral
+	FlavorMoonshotAI
+	FlavorMoonshotCN
+	FlavorKimi
+	FlavorGoogle
+	FlavorCerebras
+	FlavorNVIDIA
+	FlavorHuggingFace
+	FlavorMiniMax
+	FlavorMiniMaxCN
+	FlavorBaseten
+	FlavorAntLing
+	FlavorFireworks
+	FlavorQwenPlan
+	FlavorQwenPlanCN
+	FlavorXiaomi
+	FlavorXiaomiCN
+	FlavorXiaomiSGP
+	FlavorXiaomiAMS
 	FlavorLMStudio
 	FlavorLlamaCpp
 	FlavorGeneric
@@ -87,22 +113,45 @@ const (
 )
 
 var flavorNames = enumNames[Flavor]{
-	FlavorUnset:      "",
-	FlavorAnthropic:  providerAnthropic,
-	FlavorOpenAI:     providerOpenAI,
-	FlavorOpenRouter: openRouterAffinityFormat,
-	FlavorLMStudio:   "lmstudio",
-	FlavorLlamaCpp:   "llamacpp",
-	FlavorGeneric:    "generic",
-	FlavorUnknown:    nameUnknown,
+	FlavorUnset:       "",
+	FlavorAnthropic:   providerAnthropic,
+	FlavorOpenAI:      providerOpenAI,
+	FlavorZAI:         "zai",
+	FlavorZaiCodingCN: "zai-coding-cn",
+	FlavorOpenRouter:  openRouterAffinityFormat,
+	FlavorDeepSeek:    "deepseek",
+	FlavorTogether:    "together",
+	FlavorXAI:         "xai",
+	FlavorGroq:        "groq",
+	FlavorMistral:     "mistral",
+	FlavorMoonshotAI:  "moonshotai",
+	FlavorMoonshotCN:  "moonshotai-cn",
+	FlavorKimi:        "kimi",
+	FlavorGoogle:      "google",
+	FlavorCerebras:    "cerebras",
+	FlavorNVIDIA:      "nvidia",
+	FlavorHuggingFace: "huggingface",
+	FlavorMiniMax:     "minimax",
+	FlavorMiniMaxCN:   "minimax-cn",
+	FlavorBaseten:     "baseten",
+	FlavorAntLing:     "ant-ling",
+	FlavorFireworks:   "fireworks",
+	FlavorQwenPlan:    "qwen-token-plan",
+	FlavorQwenPlanCN:  "qwen-token-plan-cn",
+	FlavorXiaomi:      "xiaomi",
+	FlavorXiaomiCN:    "xiaomi-token-plan-cn",
+	FlavorXiaomiSGP:   "xiaomi-token-plan-sgp",
+	FlavorXiaomiAMS:   "xiaomi-token-plan-ams",
+	FlavorLMStudio:    "lmstudio",
+	FlavorLlamaCpp:    "llamacpp",
+	FlavorGeneric:     "generic",
+	FlavorUnknown:     nameUnknown,
 }
 
-// flavorChoices are the flavor values a provider entry may name.
+// flavorChoices are the flavor values a provider entry may name, in enum order.
 func flavorChoices() []string {
-	return []string{
-		FlavorAnthropic.String(), FlavorOpenAI.String(), FlavorOpenRouter.String(),
-		FlavorLMStudio.String(), FlavorLlamaCpp.String(), FlavorGeneric.String(),
-	}
+	return bulk.SliceFilter(func(name string) bool { return name != "" && name != nameUnknown },
+		flavorNames.sorted())
 }
 
 // String returns the configuration name of the flavor.
@@ -323,6 +372,20 @@ func LoadUserFile() (File, []string, error) {
 		return File{}, nil, err
 	}
 	return LoadFile(path)
+}
+
+// SaveUserFile writes the models file to the ajent configuration directory,
+// atomically and with secret permissions since it may hold a literal key.
+func SaveUserFile(f File) error {
+	path, err := config.UserPath(ModelsFileName)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	return config.WriteFileAtomic(path, data, config.SecretPerm)
 }
 
 // compatWarnings reports configuration that will not behave as authored for the

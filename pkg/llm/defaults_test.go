@@ -19,6 +19,8 @@ func TestFlavorFor(t *testing.T) {
 		{"key_names_a_known_flavor", "lmstudio", ProviderConfig{}, FlavorLMStudio},
 		{"anthropic_key", "anthropic", ProviderConfig{}, FlavorAnthropic},
 		{"llamacpp_key", "llamacpp", ProviderConfig{}, FlavorLlamaCpp},
+		{"zai_key", "zai", ProviderConfig{}, FlavorZAI},
+		{"deepseek_key", "deepseek", ProviderConfig{}, FlavorDeepSeek},
 		{"unknown_key_is_generic", "myproxy", ProviderConfig{}, FlavorGeneric},
 		{"explicit_flavor_wins", "myproxy", ProviderConfig{Flavor: FlavorOpenRouter}, FlavorOpenRouter},
 		{"explicit_beats_a_matching_key", "lmstudio", ProviderConfig{Flavor: FlavorGeneric}, FlavorGeneric},
@@ -352,7 +354,10 @@ func TestFlavorDefaults(t *testing.T) {
 	})
 
 	t.Run("hosted_flavors_carry_a_key_variable", func(t *testing.T) {
-		for _, f := range []Flavor{FlavorAnthropic, FlavorOpenAI, FlavorOpenRouter} {
+		for _, f := range []Flavor{
+			FlavorAnthropic, FlavorOpenAI, FlavorOpenRouter, FlavorZAI, FlavorZaiCodingCN,
+			FlavorDeepSeek, FlavorGroq, FlavorTogether, FlavorXAI, FlavorKimi, FlavorMiniMax,
+		} {
 			assert.NotEmpty(t, flavorDefaults[f].apiKeyEnv, f.String())
 		}
 	})
@@ -372,4 +377,49 @@ func TestFlavorDefaults(t *testing.T) {
 			assert.True(t, flavorDefaults[f].caps.SupportsStrict, f.String())
 		}
 	})
+}
+
+func TestLookupFlavor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hosted_flavor", func(t *testing.T) {
+		prof, ok := LookupFlavor("anthropic")
+		require.True(t, ok)
+		assert.Equal(t, "https://api.anthropic.com", prof.BaseURL)
+		assert.Equal(t, "ANTHROPIC_API_KEY", prof.APIKeyEnv)
+		assert.True(t, prof.Discover)
+	})
+
+	t.Run("local_flavor_has_no_key_variable", func(t *testing.T) {
+		prof, ok := LookupFlavor("llamacpp")
+		require.True(t, ok)
+		assert.Equal(t, "http://localhost:8080", prof.BaseURL)
+		assert.Empty(t, prof.APIKeyEnv)
+		assert.True(t, prof.Discover)
+	})
+
+	t.Run("flavor_without_discovery", func(t *testing.T) {
+		prof, ok := LookupFlavor("kimi")
+		require.True(t, ok)
+		assert.False(t, prof.Discover)
+	})
+
+	t.Run("unknown_and_unset_names", func(t *testing.T) {
+		for _, name := range []string{"bogus", ""} {
+			_, ok := LookupFlavor(name)
+			assert.False(t, ok, name)
+		}
+	})
+}
+
+func TestZaiFlavorDefaults(t *testing.T) {
+	t.Parallel()
+
+	caps := flavorDefaults[FlavorZAI].caps
+	assert.True(t, caps.Reasoning)
+	assert.Equal(t, ThinkingZAI, caps.Thinking)
+	assert.Equal(t, fieldReasoningConten, caps.ReasoningField)
+	assert.True(t, caps.ZaiToolStream)
+	assert.True(t, flavorDefaults[FlavorZaiCodingCN].discover)
+	assert.Equal(t, "zai-coding-cn", FlavorZaiCodingCN.String())
 }

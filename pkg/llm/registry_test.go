@@ -554,3 +554,38 @@ func TestRegistrySetCompactDefault(t *testing.T) {
 		assert.InDelta(t, 0.5, thresholdOf(t, r, "declared"), 1e-09)
 	})
 }
+
+func TestRegistryLoad(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty_registry_gains_models_and_default", func(t *testing.T) {
+		reg, _ := NewRegistry(File{}, nil, RegistryOptions{})
+		assert.Empty(t, reg.Models())
+
+		file := File{DefaultModel: "p/beta", Providers: map[string]ProviderConfig{
+			"p": {Models: []ModelConfig{{ID: "alpha"}, {ID: "beta"}}},
+		}}
+		warnings := reg.Load(file, nil)
+		assert.Empty(t, warnings)
+		assert.Len(t, reg.Models(), 2)
+		assert.Equal(t, "beta", reg.Active().ID)
+	})
+
+	t.Run("first_model_activates_without_a_default", func(t *testing.T) {
+		reg, _ := NewRegistry(File{}, nil, RegistryOptions{})
+		file := File{Providers: map[string]ProviderConfig{
+			"p": {Models: []ModelConfig{{ID: "alpha"}, {ID: "beta"}}},
+		}}
+		reg.Load(file, nil)
+		assert.Equal(t, "alpha", reg.Active().ID)
+	})
+
+	t.Run("load_carries_the_cache_into_rebuild", func(t *testing.T) {
+		reg, _ := NewRegistry(File{}, nil, RegistryOptions{})
+		cache := map[string]CacheEntry{
+			"p": {Models: []ModelConfig{{ID: "discovered"}}},
+		}
+		reg.Load(File{Providers: map[string]ProviderConfig{"p": {}}}, cache)
+		assert.Equal(t, "discovered", reg.Active().ID)
+	})
+}

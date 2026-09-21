@@ -1086,3 +1086,30 @@ func TestCompactionSummaryReachesTheModel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, sysMsgs)
 }
+
+func TestParseAnthropicModels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reads_ids_and_display_names", func(t *testing.T) {
+		body := []byte(`{"data":[` +
+			`{"id":"claude-sonnet-4-5","display_name":"Claude Sonnet 4.5"},` +
+			`{"id":"claude-opus-4-1","display_name":"Claude Opus 4.1"}]}`)
+		models, err := parseAnthropicModels(body)
+		require.NoError(t, err)
+		require.Len(t, models, 2)
+		assert.Equal(t, "claude-sonnet-4-5", models[0].ID)
+		assert.Equal(t, "Claude Sonnet 4.5", models[0].Name)
+	})
+
+	t.Run("blank_ids_are_dropped", func(t *testing.T) {
+		models, err := parseAnthropicModels([]byte(`{"data":[{"id":"","display_name":"x"},{"id":"m1"}]}`))
+		require.NoError(t, err)
+		require.Len(t, models, 1)
+		assert.Equal(t, "m1", models[0].ID)
+	})
+
+	t.Run("malformed_body_errors", func(t *testing.T) {
+		_, err := parseAnthropicModels([]byte(`not json`))
+		assert.Error(t, err)
+	})
+}

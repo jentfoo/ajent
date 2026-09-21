@@ -135,19 +135,64 @@ type discoverySpec struct {
 	candidates []discoveryCandidate
 }
 
+var (
+	// openAIListSpec: the standard list relative to a base already ending in the
+	// API prefix, so /v1/models collapses onto /models
+	openAIListSpec = discoverySpec{candidates: []discoveryCandidate{{path: openAIModelsPath, parse: parseOpenAIModels}}}
+	// openAIModelsSpec: /models on bases that serve the list at the root
+	openAIModelsSpec = discoverySpec{candidates: []discoveryCandidate{{path: "/models", parse: parseOpenAIModels}}}
+	// probeAllSpec: every known list endpoint, native local lists first for their
+	// loaded-model context length
+	probeAllSpec = discoverySpec{candidates: []discoveryCandidate{
+		{path: "/api/v1/models", parse: parseLMStudioV1Models},
+		{path: "/api/v0/models", parse: parseLMStudioModels},
+		{path: "/props", parse: parseLlamaProps},
+		{path: openAIModelsPath, parse: parseOpenAIModels},
+		{path: "/models", parse: parseOpenAIModels},
+	}}
+)
+
 // discoverySpecs is the set of providers that can be asked what they serve.
 // Anything absent is configuration only. The generic flavor discovers through the
 // standard OpenAI list, opt-in via "discover": true like every other provider.
 var discoverySpecs = map[Flavor]discoverySpec{
-	FlavorOpenRouter: {candidates: []discoveryCandidate{{path: "/models", parse: parseOpenRouterModels}}},
-	FlavorLMStudio:   {candidates: []discoveryCandidate{{path: "/api/v0/models", parse: parseLMStudioModels}}},
+	FlavorAnthropic:   {candidates: []discoveryCandidate{{path: "/v1/models", parse: parseAnthropicModels}}},
+	FlavorOpenAI:      openAIListSpec,
+	FlavorZAI:         openAIModelsSpec,
+	FlavorZaiCodingCN: openAIModelsSpec,
+	FlavorOpenRouter:  {candidates: []discoveryCandidate{{path: "/models", parse: parseOpenRouterModels}}},
+	FlavorDeepSeek:    openAIModelsSpec,
+	FlavorTogether:    openAIListSpec,
+	FlavorXAI:         openAIListSpec,
+	FlavorGroq:        openAIListSpec,
+	FlavorMistral:     openAIListSpec,
+	FlavorMoonshotAI:  openAIListSpec,
+	FlavorMoonshotCN:  openAIListSpec,
+	FlavorGoogle:      openAIModelsSpec,
+	FlavorCerebras:    openAIListSpec,
+	FlavorNVIDIA:      openAIListSpec,
+	FlavorHuggingFace: openAIListSpec,
+	FlavorBaseten:     openAIListSpec,
+	FlavorAntLing:     openAIListSpec,
+	FlavorQwenPlan:    openAIListSpec,
+	FlavorQwenPlanCN:  openAIListSpec,
+	FlavorXiaomi:      openAIListSpec,
+	FlavorXiaomiCN:    openAIListSpec,
+	FlavorXiaomiSGP:   openAIListSpec,
+	FlavorXiaomiAMS:   openAIListSpec,
+	// LM Studio 0.4 moved its native list to /api/v1, older builds serve /api/v0
+	FlavorLMStudio: {candidates: []discoveryCandidate{
+		{path: "/api/v1/models", parse: parseLMStudioV1Models},
+		{path: "/api/v0/models", parse: parseLMStudioModels},
+		{path: openAIModelsPath, parse: parseOpenAIModels},
+	}},
 	// llama.cpp reports one loaded model via /props; in router mode that is
 	// useless, so fall back to the OpenAI-compatible list.
 	FlavorLlamaCpp: {candidates: []discoveryCandidate{
 		{path: "/props", parse: parseLlamaProps},
 		{path: openAIModelsPath, parse: parseOpenAIModels},
 	}},
-	FlavorGeneric: {candidates: []discoveryCandidate{{path: openAIModelsPath, parse: parseOpenAIModels}}},
+	FlavorGeneric: openAIListSpec,
 }
 
 // DiscoverOptions configures a discovery pass.
@@ -157,6 +202,26 @@ type DiscoverOptions struct {
 	Log       func(HTTPLogEvent)
 	Now       func() time.Time // defaults to time.Now
 	Force     bool             // ignore the time to live
+}
+
+// ProbeProvider returns one provider's discovery result, bypassing the cache.
+// An empty entry with a nil error means the flavor has no discovery endpoint.
+func ProbeProvider(ctx context.Context, name string, cfg ProviderConfig, opts DiscoverOptions) (CacheEntry, error) {
+	flavor := flavorFor(name, cfg)
+	spec, ok := discoverySpecs[flavor]
+	if !ok {
+		return CacheEntry{}, nil
+	}
+	return discoverOne(ctx, name, cfg, flavor, spec, CacheEntry{}, time.Now(), opts)
+}
+
+// probeAllName labels the ProbeAll client and its errors.
+const probeAllName = "custom"
+
+// ProbeAll returns the first usable discovery result across every known list
+// endpoint, for a server URL of unknown family.
+func ProbeAll(ctx context.Context, cfg ProviderConfig, opts DiscoverOptions) (CacheEntry, error) {
+	return discoverOne(ctx, probeAllName, cfg, FlavorGeneric, probeAllSpec, CacheEntry{}, time.Now(), opts)
 }
 
 // Discover refreshes the cached model list for every provider that supports it
