@@ -134,6 +134,16 @@ func reasoningCommand(ctx context.Context, arg string, c Console) error {
 	var lvl llm.Level
 
 	if strings.TrimSpace(arg) == "" {
+		// no picker when there is nothing to choose: report instead of opening an
+		// empty or one-option list, so the setting reads as locked.
+		if len(supported) == 0 {
+			c.Notify("no reasoning options available", levelWarn)
+			return nil
+		}
+		if len(supported) == 1 {
+			c.Notify("only "+levelsList(supported)+" available for this model", levelWarn)
+			return nil
+		}
 		items := make([]tui.PickItem, len(supported))
 		for i, l := range supported {
 			name := l.String()

@@ -29,6 +29,20 @@ func TestSettingsSectionOpensDirectly(t *testing.T) {
 	assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
 }
 
+func TestSettingsReasoningUnavailableWithFewOptions(t *testing.T) {
+	t.Parallel()
+
+	// a model offering only off (no reasoning capability) locks the Reasoning row.
+	c := newFakeConsole(t)
+	reg, _ := llm.NewRegistry(llm.File{Providers: map[string]llm.ProviderConfig{
+		"test": {APIKeyEnv: "TEST_API_KEY", Models: []llm.ModelConfig{{ID: "alpha"}}},
+	}}, nil, llm.RegistryOptions{Env: func(string) string { return "" }})
+	c.models = reg
+	c.state.Model = reg.Active()
+
+	assert.Equal(t, "only one level for this model", reasoningUnavailable(c))
+}
+
 func TestSettingsMenuCancelledClosesSilently(t *testing.T) {
 	t.Parallel()
 

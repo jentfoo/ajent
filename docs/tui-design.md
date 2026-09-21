@@ -379,6 +379,11 @@ falls back to a `*` gutter ahead of the tag. `PickOptions.Initial` opens the
 list on the current head rather than the last row, so reopening after a rewind
 lands back at the same place in the tree.
 
+A picker can mark a row **disabled** (`PickItem.Disabled`) when it cannot be
+chosen right now: its body stays dim even under the cursor, so no accent ever
+suggests the locked option is selectable. `/settings` uses this for rows whose
+choice is impossible on the active model (Reasoning with a single level).
+
 Queued pending-prompt rows (`SetQueued`) sit above an active interaction like
 any other live-block content: they yield first on a short terminal
 (activity-style) and are driver-owned, so `Reset()` does not clear them: the

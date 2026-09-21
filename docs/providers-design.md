@@ -177,7 +177,8 @@ Only the last layer is new in kind. Defaults run **last** so a discovered
 context window is never replaced by a guess, and they are applied before the
 thinking ladder is computed so a defaulted `maxTokens` caps it. They are the
 schema defaults (a context window, a max completion size, a name derived from
-the id, text input and reasoning off), so a bare `"id"` is a complete entry;
+the id and text input; reasoning comes from the flavor baseline, which hosted
+openai-completions families set on), so a bare `"id"` is a complete entry;
 without them both values resolve to zero, and zero means the context bar has no
 denominator, auto-compaction never fires, and Anthropic gets `max_tokens: 0`.
 
@@ -190,7 +191,11 @@ vendor name alone would collapse two models onto whichever adapter was built
 first.
 
 Detection returns a sparse `Compat` (a zero one when no vendor family matches)
-and never sets `Reasoning`, which comes from the model entry. It runs only for
+and never sets `Reasoning`. Whether a model reasons at all comes from the flavor
+baseline, an explicit per-model entry, or openrouter's discovery response. Hosted
+openai-completions flavors default it on because their model lists cannot say
+otherwise and nearly every model they serve today reasons; a per-model entry can
+turn it back off for one that does not. Detection runs only for
 chat-completions; anthropic and responses providers are not detected.
 
 Every `Compat` field is a pointer so "unset" is distinguishable from "explicitly
@@ -395,7 +400,10 @@ Discovery endpoints supply a subset of model metadata; the rest must come from
 `models[]`, `modelOverrides`, or the schema defaults. The hosted catalogue
 reports the most (identifiers, context window, completion size, modalities,
 reasoning and tool support); the local servers report less, and llama.cpp
-reports only the id and the context window. The local endpoints report the
+reports only the id and the context window. Reasoning is discovered at runtime
+only by openrouter; every other chat-completions list cannot say whether a model
+reasons, so those flavors carry it in their baseline (see Capabilities). The
+local endpoints report the
 context length the model was *loaded* with, which is often smaller than its
 maximum and which nothing else can know. A flavor's native endpoint is tried
 first; the standard chat-completions list (`/v1/models`) backs it up when that

@@ -35,6 +35,7 @@ type flavorDefault struct {
 func chatCaps() Capabilities {
 	return Capabilities{
 		Dialect:                 DialectOpenAICompletions,
+		Reasoning:               true, // hosted openai-completions families reason by default
 		Tokenizer:               TokenizerLocalEstimate,
 		MaxTokensField:          fieldMaxTokens,
 		SystemAsRole:            true,

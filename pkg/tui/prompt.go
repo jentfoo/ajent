@@ -35,13 +35,14 @@ const (
 
 // PickItem is one row of a filterable list.
 type PickItem struct {
-	Label  string   // primary text
-	Detail string   // dim trailing text
-	Terms  []string // extra strings the filter matches, not displayed
-	Group  string   // source label; a dim header is emitted when it changes
-	Tag    string   // optional short role word rendered colored before Label
-	Mark   ItemMark // colors Tag; MarkNone leaves Tag uncolored and opts out of shading
-	Off    bool     // off the active branch (rewind tree): the whole row renders faint
+	Label    string   // primary text
+	Detail   string   // dim trailing text
+	Terms    []string // extra strings the filter matches, not displayed
+	Group    string   // source label; a dim header is emitted when it changes
+	Tag      string   // optional short role word rendered colored before Label
+	Mark     ItemMark // colors Tag; MarkNone leaves Tag uncolored and opts out of shading
+	Off      bool     // off the active branch (rewind tree): the whole row renders faint
+	Disabled bool     // cannot be chosen now: the whole row stays gray, even under the cursor
 }
 
 // PickOptions tunes a Pick.
@@ -444,11 +445,13 @@ func markStyle(t Theme, it PickItem) Style {
 	}
 }
 
-// bodyStyle shades a row's label: the cursor row accents, an untagged row (every
-// list but the rewind tree) stays dim as before, and among tagged rows the ones
-// still in context read plain while abandoned branches recede to dim.
+// bodyStyle shades a row's label: an untagged or disabled row stays dim, the
+// cursor row accents unless it is disabled, and among tagged rows the ones still
+// in context read plain while abandoned branches recede to dim.
 func bodyStyle(t Theme, it PickItem, selected bool) Style {
 	switch {
+	case it.Disabled:
+		return t.Dim // a disabled row stays gray even under the cursor
 	case selected:
 		return t.Accent
 	case it.Mark == MarkNone || it.Off:

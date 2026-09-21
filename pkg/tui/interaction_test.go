@@ -290,6 +290,17 @@ func TestPickItemRowNoColorMarksActive(t *testing.T) {
 	assert.Equal(t, selectIndent+"a model", plain)
 }
 
+func TestPickItemDisabledStaysGrayUnderCursor(t *testing.T) {
+	t.Parallel()
+
+	th := NewTheme(ColorNone, DefaultPalette())
+
+	// a disabled row renders dim like an untagged one even when it is the cursor,
+	// so no accent suggests the locked setting can be chosen.
+	dim := pickItemRow(th, PickItem{Label: "Reasoning", Disabled: true}, false, 80, 0)
+	assert.Equal(t, selectIndent+"Reasoning", dim)
+}
+
 func TestUIPick(t *testing.T) {
 	t.Parallel()
 

@@ -377,6 +377,18 @@ func TestFlavorDefaults(t *testing.T) {
 			assert.True(t, flavorDefaults[f].caps.SupportsStrict, f.String())
 		}
 	})
+
+	t.Run("hosted_chat_completions_flavors_reason_by_default", func(t *testing.T) {
+		// a hosted openai-completions family's models reason by default; discovery
+		// cannot say so from the /v1/models list, so the flavor baseline carries it.
+		for _, f := range []Flavor{
+			FlavorDeepSeek, FlavorTogether, FlavorGroq, FlavorMistral,
+			FlavorMoonshotAI, FlavorGoogle, FlavorCerebras, FlavorNVIDIA,
+			FlavorHuggingFace, FlavorBaseten, FlavorAntLing,
+		} {
+			assert.True(t, flavorDefaults[f].caps.Reasoning, f.String())
+		}
+	})
 }
 
 func TestLookupFlavor(t *testing.T) {

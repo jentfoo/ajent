@@ -16,10 +16,15 @@ import (
 // settingsRow is one /settings menu entry: its display, and the editor that
 // changes it. edit returns the config keys/values a change persists so the save
 // prompt can copy them to a file layer.
+//
+// unavailable reports why the row cannot be edited right now, or "" when it can;
+// an unavailable row renders grayed out and its editor explains itself if entered.
 type settingsRow struct {
 	name   string
 	render func(c Console) (label, detail string)
 	edit   func(ctx context.Context, c Console) ([]settingChange, error)
+
+	unavailable func(c Console) string
 }
 
 // settingChange is one config key/value an editor produced for persistence.
@@ -65,7 +70,12 @@ func runSettings(ctx context.Context, c Console, section string) error {
 		items := make([]tui.PickItem, len(rows))
 		for i := range rows {
 			label, detail := rows[i].render(c)
-			items[i] = tui.PickItem{Label: label, Detail: detail}
+			it := tui.PickItem{Label: label, Detail: detail}
+			if reason := rows[i].disabledReason(c); reason != "" {
+				it.Disabled = true
+				it.Detail += " (" + reason + ")"
+			}
+			items[i] = it
 		}
 		picked, err := c.Pick(ctx, "Settings", items,
 			tui.PickOptions{Initial: last})
@@ -90,6 +100,14 @@ func editRow(ctx context.Context, c Console, r *settingsRow) error {
 	}
 	savePrompt(ctx, c, changes...)
 	return nil
+}
+
+// disabledReason reports why a row cannot be edited right now, "" when it can.
+func (r *settingsRow) disabledReason(c Console) string {
+	if r.unavailable == nil {
+		return ""
+	}
+	return r.unavailable(c)
 }
 
 // savePrompt asks where a just-applied session override should persist. The
@@ -221,7 +239,8 @@ func modelRow(name, key string) settingsRow {
 func allRows() []settingsRow {
 	rows := []settingsRow{
 		{name: "Model", render: rowModel, edit: editModel},
-		{name: "Reasoning", render: rowReasoning, edit: editReasoning},
+		{name: "Reasoning", render: rowReasoning, edit: editReasoning,
+			unavailable: reasoningUnavailable},
 		{name: "Reasoning retention", render: rowRetention, edit: editRetention},
 		{name: "Show thinking", render: rowThinking, edit: editThinking},
 		{name: "Tools", render: rowTools, edit: editTools},
@@ -268,6 +287,18 @@ func rowModel(c Console) (string, string) {
 
 func rowReasoning(c Console) (string, string) {
 	return "Reasoning", detailOrDefault(c, "reasoning.level")
+}
+
+// reasoningUnavailable reports why the Reasoning level cannot be edited: a model
+// that offers fewer than two levels has no choice to make, so the row is grayed.
+func reasoningUnavailable(c Console) string {
+	switch n := len(llm.LevelsFor(c.Models().Active())); n {
+	case 0:
+		return "no options available"
+	case 1:
+		return "only one level for this model"
+	}
+	return ""
 }
 func rowRetention(c Console) (string, string) {
 	return "Reasoning retention", detailOrDefault(c, "reasoning.retain")

@@ -80,6 +80,23 @@ func TestModelCommand(t *testing.T) {
 func TestReasoningCommand(t *testing.T) {
 	t.Parallel()
 
+	// a single-option model (only off) reports instead of opening the picker
+	t.Run("single_option_reports_not_picker", func(t *testing.T) {
+		c := newFakeConsole(t)
+		reg, _ := llm.NewRegistry(llm.File{Providers: map[string]llm.ProviderConfig{
+			"test": {APIKeyEnv: "TEST_API_KEY", Models: []llm.ModelConfig{{ID: "alpha"}}},
+		}}, nil, llm.RegistryOptions{Env: func(string) string { return "" }})
+		c.models = reg
+		c.state.Model = reg.Active()
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+
+		cmd, _ := r.Get("reasoning")
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
+		assert.True(t, c.noticeContains("only off available for this model"))
+	})
+
 	// a named level is set
 	t.Run("sets_level", func(t *testing.T) {
 		c := newFakeConsole(t)
