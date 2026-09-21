@@ -139,7 +139,7 @@ func Run(o RunOptions) int {
 		go version.CheckForUpdate(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 	}
 
-	resumeLabel := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.Args)
+	resumeLabel := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.Args, o.Scope)
 
 	// tell the user how to get back to this conversation
 	ui.Close()

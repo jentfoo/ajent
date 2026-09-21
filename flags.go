@@ -16,7 +16,7 @@ import (
 )
 
 // headlessFlagNames are the flags that only mean something alongside --prompt.
-var headlessFlagNames = []string{"output", "allow-all", "read-only", "allow-tools", "deny-tools", "stats"}
+var headlessFlagNames = []string{"output", "allow-tools", "deny-tools", "stats"}
 
 // defaultStaleDays is the --delete-old window when no day count is given.
 const defaultStaleDays = 28
@@ -85,8 +85,10 @@ func parseFlags(argv []string) (cliFlags, error) {
 		"run one turn non-interactively from this prompt, print the result and exit")
 	fs.StringVarP(&f.output, "output", "o", app.OutputText,
 		"one-shot output shape: text (the final answer) or json (one event per line)")
-	fs.BoolVar(&f.allowAll, "allow-all", false, "one-shot: offer every tool, bash included")
-	fs.BoolVar(&f.readOnly, "read-only", false, "one-shot: offer only read-only tools")
+	fs.BoolVar(&f.allowAll, "allow-all", false,
+		"run with the permission barrier at allow-all")
+	fs.BoolVar(&f.readOnly, "read-only", false,
+		"run in auto read-only mode")
 	fs.StringSliceVar(&f.allowTools, "allow-tools", nil, "one-shot: extra tool names to offer")
 	fs.StringSliceVar(&f.denyTools, "deny-tools", nil, "one-shot: tool names to withhold")
 	fs.BoolVar(&f.stats, "stats", false,
@@ -154,6 +156,10 @@ func (f cliFlags) validate() error {
 			return err
 		}
 	}
+	// the two permission-mode flags conflict in every mode, interactive and one-shot
+	if f.allowAll && f.readOnly {
+		return errors.New("--allow-all and --read-only are mutually exclusive")
+	}
 	if f.prompt == "" {
 		if len(f.headless) > 0 {
 			return fmt.Errorf("%s only applies with --prompt", strings.Join(f.headless, ", "))
@@ -161,8 +167,6 @@ func (f cliFlags) validate() error {
 		return nil
 	}
 	switch {
-	case f.allowAll && f.readOnly:
-		return errors.New("--allow-all and --read-only are mutually exclusive")
 	case f.resume && f.resumeID == "":
 		return errors.New("--prompt needs --resume <id|name>; the bare session picker requires a terminal")
 	case len(f.args) > 0:

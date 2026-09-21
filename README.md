@@ -232,10 +232,10 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
     --delete-old [days] delete every unnamed session unused for 28 days,
                        or the given number of days, after confirmation
     --update           reinstall ajent from @latest in the foreground, then exit
+    --allow-all        barrier mode set to allow-all
+    --read-only        start in auto read-only mode
 -p, --prompt <text>    run one turn non-interactively, print the result and exit
 -o, --output <shape>   one-shot output: text (final answer) or json (one event per line)
-    --allow-all        one-shot: offer every tool, bash included
-    --read-only        one-shot: offer only read-only tools
     --allow-tools      one-shot: extra tool names to offer
     --deny-tools       one-shot: tool names to withhold
     --stats            one-shot: print a tool and token summary when the run ends

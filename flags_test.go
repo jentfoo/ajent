@@ -111,9 +111,9 @@ func TestParseFlags(t *testing.T) {
 	})
 
 	t.Run("headless_flags_recorded", func(t *testing.T) {
-		f, err := parseFlags([]string{"--allow-all"})
+		f, err := parseFlags([]string{"--stats"})
 		require.NoError(t, err)
-		assert.Equal(t, []string{"--allow-all"}, f.headless)
+		assert.Equal(t, []string{"--stats"}, f.headless)
 
 		f, err = parseFlags(nil)
 		require.NoError(t, err)
@@ -154,6 +154,8 @@ func TestCliFlagsValidate(t *testing.T) {
 	}{
 		{"bare_interactive", nil, true},
 		{"interactive_with_model", []string{"-m", "p/m", "--render", "plain"}, true},
+		{"interactive_allow_all", []string{"--allow-all"}, true},
+		{"interactive_read_only", []string{"--read-only"}, true},
 		{"simple_prompt", []string{"-p", "hi"}, true},
 		{"prompt_with_allow_all", []string{"-p", "hi", "--allow-all"}, true},
 		{"prompt_with_json", []string{"-p", "hi", "-o", "json"}, true},
@@ -177,12 +179,12 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"delete_old_with_continue", []string{"--delete-old", "--continue"}, false},
 		{"delete_old_zero_days", []string{"--delete-old", "0"}, false},
 		{"delete_old_bad_days", []string{"--delete-old", "soon"}, false},
-		{"both_scopes", []string{"-p", "hi", "--allow-all", "--read-only"}, false},
+		{"both_scopes", []string{"--allow-all", "--read-only"}, false},
+		{"prompt_both_scopes", []string{"-p", "hi", "--allow-all", "--read-only"}, false},
 		{"bare_resume_picker", []string{"-p", "hi", "--resume"}, false},
 		{"trailing_args", []string{"-p", "hi", "extra"}, false},
 		{"unknown_output", []string{"-p", "hi", "-o", "yaml"}, false},
 		{"output_without_prompt", []string{"-o", "json"}, false},
-		{"read_only_without_prompt", []string{"--read-only"}, false},
 		{"deny_tools_without_prompt", []string{"--deny-tools", "bash"}, false},
 	}
 	for _, tc := range tests {
