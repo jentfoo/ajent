@@ -126,13 +126,22 @@ func TestWorkspaceClassifierSystemVerbatim(t *testing.T) {
 	p := WorkspaceClassifierSystem("/work/proj", "/tmp")
 
 	assert.Contains(t, p, "You decide whether a single shell command may run unattended")
-	assert.Contains(t, p, `"allow": the command only reads or inspects, or it only changes things inside the workspace`)
+	assert.Contains(t, p, `"allow": the command only reads or inspects anywhere, or it changes things inside the workspace`)
+
+	// reading never needs approval, except credentials; only writes are confined
+	assert.Contains(t, p, "Reading never needs approval")
+	assert.Contains(t, p, `inspecting a file, directory, process or path anywhere`)
+	assert.Contains(t, p, "security-sensitive credentials and secrets")
+	assert.Contains(t, p, "Only mutations are confined to the two roots above.")
+
+	// network reads need discretion rather than blanket denial
 	assert.Contains(t, p, "Always deny, whatever else the command does:")
-	assert.Contains(t, p, "Reading from the network is not safe on its own")
+	assert.Contains(t, p, "Network requests need discretion")
 	assert.Contains(t, p, `answer "unsure" rather than "allow"`)
 
 	// both roots named, and cwd repeated as the base for relative paths
 	assert.Contains(t, p, "- /work/proj\n- /tmp")
+	assert.Contains(t, p, "within the current working directory or /tmp")
 	assert.Contains(t, p, "assume it resolves inside /work/proj")
 
 	// every prompt answers allow/deny; the read-only vocabulary is gone

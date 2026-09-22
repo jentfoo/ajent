@@ -536,12 +536,14 @@ the model.
 shell commands to `WorkspaceClassifierSystem`: there the question is not
 *does this write?* but *is this write permissible?*. The prompt names its two
 writable roots verbatim, cwd and the temp dir, the same two the barrier
-path-scopes `write`/`edit` against, so gate and model judge by one rule. Inside
-them it allows file creation, `python`/`perl` rewrites, redirects, `mv`/`cp`,
-removing individual files, build and test commands and in-repo git; it denies
-regardless any path outside the roots, bulk destruction, system or package
-changes, the network in either direction, unaccountable execution and credential
-access. An **in-scope** `mkdir`/`rmdir` never reaches it: the barrier resolves
+path-scopes `write`/`edit` against, so gate and model judge by one rule.
+Reads anywhere are always `allow`; only writes need confinement. Inside the
+two roots it allows file creation, `python`/`perl` rewrites, redirects,
+`mv`/`cp`, removing individual files, build and test commands and in-repo git;
+it denies regardless any path outside the roots (a write there), bulk
+destruction, system or package changes, the network in either direction (reading
+from it exfiltrates), unaccountable execution and credential access. An
+**in-scope** `mkdir`/`rmdir` never reaches it: the barrier resolves
 those path arguments itself, and an out-of-scope one still goes to the model
 like any other command. Ambiguity resolves to `unsure`, never allow`, and a `cd`
 into the workspace never launders a later absolute path.

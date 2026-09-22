@@ -201,9 +201,9 @@ Five modes cycle with Shift+Tab: the default `allow-read` → `auto` →
 via `tools.WithUserInitiated`. A doomed edit is detected by a dry run of the real apply
 path so it never prompts. The model classifier (`auto`, `auto+write`) runs
 concurrently with an already-open dialog and its verdict never enters the session.
-`auto+write` is the one mode where a core writer auto-runs, and only inside its roots
-(cwd and the temp dir) — the same two its classifier prompt names, so gate and model
-judge by one rule.
+`auto+write` is the one mode where a core writer auto-runs, confined to its roots
+(cwd and the temp dir) — the same two its classifier prompt names. Reads are free
+anywhere except credentials.
 
 ## Code Style
 
