@@ -47,6 +47,8 @@ const (
 	keyReverseSearch
 	keyAltUp          // Alt+↑ recalls the newest queued prompt into the editor (ControlRecallQueued)
 	keyClipboardPaste // Ctrl+V: probe the clipboard for an image (ControlClipboardImage)
+	keyShiftLeft      // Shift+←: the backward permission-mode control (ControlModeCycleBack)
+	keyShiftRight     // Shift+→: the forward permission-mode control (ControlModeCycle)
 )
 
 // key is one decoded input event.
@@ -333,7 +335,7 @@ func decodeTilde(b []byte, params string, n int, pasteFrom int) (key, int, bool)
 
 // modifier bits in tcell's CSI parameter encoding (the value is 1 + bitmask).
 const (
-	modShift = 1 << iota // shift: never promotes word movement
+	modShift = 1 << iota // shift: never promotes word movement; claims ←/→ as mode controls
 	modAlt               // alt: Alt+↑ recalls, and with ctrl promotes to word movement
 	modCtrl              // ctrl: promotes arrows to word movement
 	modMeta              // meta: modeled but unused here
@@ -376,22 +378,29 @@ func ss3Key(final byte) keyType {
 }
 
 // arrowKey maps a final byte to a movement, promoting to word movement when the
-// parameters carry a ctrl or alt modifier.
+// parameters carry a ctrl or alt modifier, and to the mode controls on shift.
 func arrowKey(final byte, params string) keyType {
+	mod := csiModifier(params)
 	switch final {
 	case 'A':
-		if csiModifier(params)&modAlt != 0 { // Alt+↑ recalls the newest queued prompt
+		if mod&modAlt != 0 { // Alt+↑ recalls the newest queued prompt
 			return keyAltUp
 		}
 		return keyUp
 	case 'B':
 		return keyDown
 	case 'C', 'D':
-		if csiModifier(params)&(modCtrl|modAlt) != 0 {
+		if mod&(modCtrl|modAlt) != 0 {
 			if final == 'C' {
 				return keyWordRight
 			}
 			return keyWordLeft
+		}
+		if mod&modShift != 0 { // Shift+←/→: out-of-band permission-mode controls
+			if final == 'C' {
+				return keyShiftRight
+			}
+			return keyShiftLeft
 		}
 		if final == 'C' {
 			return keyRight

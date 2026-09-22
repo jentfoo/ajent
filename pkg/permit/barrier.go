@@ -186,9 +186,16 @@ func (b *Barrier) SetMode(m Mode) {
 }
 
 // Cycle advances to the next mode in order and re-evaluates open dialogs.
-func (b *Barrier) Cycle() Mode {
+func (b *Barrier) Cycle() Mode { return b.rotate(b.mode.Next()) }
+
+// Prev steps back one mode in cycle order, with Cycle's dialog re-evaluation
+// and session-allow reset.
+func (b *Barrier) Prev() Mode { return b.rotate(b.mode.Prev()) }
+
+// rotate applies the neighbouring mode m: session allows never cross a mode
+// change, and open dialogs re-evaluate under m.
+func (b *Barrier) rotate(m Mode) Mode {
 	b.mu.Lock()
-	m := b.mode.Next()
 	b.mode = m
 	b.resetSessionAllowsLocked() // a new mode never inherits the previous gate's approvals
 	opens := slices.Clone(b.open)

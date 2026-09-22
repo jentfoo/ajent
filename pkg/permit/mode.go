@@ -83,6 +83,24 @@ func (m Mode) Next() Mode {
 	}
 }
 
+// Prev returns the preceding mode in cycle order, the exact inverse of Next.
+func (m Mode) Prev() Mode {
+	switch m {
+	case ModeAllowRead:
+		return ModeBlockAll
+	case ModeAuto:
+		return ModeAllowRead
+	case ModeAutoWrite:
+		return ModeAuto
+	case ModeAllowAll:
+		return ModeAutoWrite
+	case ModeBlockAll:
+		return ModeAllowAll
+	default:
+		return ModeAllowRead
+	}
+}
+
 // allowsEverything reports whether every call runs ungated.
 func (m Mode) allowsEverything() bool { return m == ModeAllowAll }
 

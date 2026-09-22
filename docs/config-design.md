@@ -50,8 +50,8 @@ The permission block has a compiled-in default mode, so `Explain` on it resolves
 and reports `(default)`. The mode name is one of the barrier's modes (see
 `permit`); `AJENT_PERMISSIONS_MODE` binds for free through EnvLayer. It seeds a
 session's live barrier at startup, so a resumed session restores its cycled mode
-(rebuild replays session overrides before this). A `Shift+Tab` cycle or
-`/settings` records the change as a **session** override via
+(rebuild replays session overrides before this). A `Shift+Tab` or `Shift+←/→`
+cycle, or `/settings`, records the change as a **session** override via
 `SetSessionSetting("permissions.mode", …)`, never rewriting the config file.
 `/settings`'s Permissions row edits the persistent default instead, offering
 save to user/project layer like any other enum row.

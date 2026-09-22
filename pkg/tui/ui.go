@@ -54,9 +54,10 @@ const (
 	ControlEscape Control = iota
 	ControlInterrupt
 	ControlEOF
-	ControlModeCycle      // Shift+Tab; meaning belongs to the front end
+	ControlModeCycle      // Shift+Tab or Shift+→; meaning belongs to the front end
 	ControlRecallQueued   // Alt+↑: recall the newest queued prompt into the editor
 	ControlClipboardImage // Ctrl+V: probe the clipboard for an image
+	ControlModeCycleBack  // Shift+←: like ControlModeCycle, one mode the other way
 )
 
 // Options configures a UI.
@@ -1370,10 +1371,14 @@ func (u *UI) inputRows() int {
 // applyKey mutates the editor for one key and reports whether it changed any
 // rendered state. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
-	// Shift+Tab is out-of-band: it reaches the control channel even while a
-	// dialog or overlay owns the keyboard.
-	if k.typ == keyBackTab {
+	// Shift+Tab and Shift+←/→ are out-of-band mode controls: they reach the
+	// control channel even while a dialog or overlay owns the keyboard.
+	switch k.typ {
+	case keyBackTab, keyShiftRight:
 		u.emitControl(ControlModeCycle)
+		return nil, false, false
+	case keyShiftLeft:
+		u.emitControl(ControlModeCycleBack)
 		return nil, false, false
 	}
 	if u.act != nil {

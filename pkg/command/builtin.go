@@ -123,7 +123,7 @@ func helpCommand(_ context.Context, _ string, c Console) error {
 	b.WriteString("- `/` at line start — a command; the menu opens as you type, `Tab` takes the highlight\n")
 	b.WriteString("- `@` anywhere — a file reference; `Tab` completes the path\n")
 	b.WriteString("- `!cmd` — run a shell command, staged ahead of your next message; `Tab` completes like bash\n")
-	b.WriteString("- `Shift+Tab` — cycle the permission mode (out-of-band control event)\n")
+	b.WriteString("- `Shift+Tab` / `Shift+→` / `Shift+←` — cycle the permission mode, forward or back (out-of-band control event)\n")
 	c.Print(b.String())
 	return nil
 }

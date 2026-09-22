@@ -192,9 +192,10 @@ func TestControlLoop(t *testing.T) {
 	t.Parallel()
 
 	rec := &hintRecorder{} // records what the loop paints on the hint line
-	// start runs the loop over a control channel the caller drives. cycled fires
-	// per Shift+Tab, giving a test a signal ordered behind earlier controls.
-	start := func(t *testing.T) (controls chan tui.Control, quit chan struct{}, cycled chan struct{}) {
+	// start runs the loop over a control channel the caller drives. cycled
+	// carries the mode-cycle direction (false forward, true back), giving a test
+	// a signal ordered behind earlier controls.
+	start := func(t *testing.T) (controls chan tui.Control, quit chan struct{}, cycled chan bool) {
 		t.Helper()
 
 		inR, inW, err := os.Pipe()
@@ -214,10 +215,10 @@ func TestControlLoop(t *testing.T) {
 
 		controls = make(chan tui.Control, 4)
 		quit = make(chan struct{})
-		cycled = make(chan struct{}, 4)
+		cycled = make(chan bool, 4)
 		ag := agent.New(&agent.State{}, agent.Options{})
 		go controlLoop(ui, controls, newHintBoard(rec.record), ag, &steerQueue{}, command.NewStager(nil, nil), nil, quit,
-			func() { cycled <- struct{}{} })
+			func(back bool) { cycled <- back })
 		return controls, quit, cycled
 	}
 	quitted := func(t *testing.T, quit chan struct{}) bool {
@@ -243,7 +244,7 @@ func TestControlLoop(t *testing.T) {
 		controls, quit, cycled := start(t)
 		controls <- tui.ControlInterrupt
 		controls <- tui.ControlModeCycle // ordered behind the press: it has been handled
-		<-cycled
+		assert.False(t, <-cycled)
 		assert.Equal(t, []string{"ctrl+c again to quit"}, rec.last())
 
 		select {
@@ -253,6 +254,15 @@ func TestControlLoop(t *testing.T) {
 		}
 		controls <- tui.ControlInterrupt
 		assert.True(t, quitted(t, quit))
+	})
+
+	// both mode-cycle controls reach the callback, each with its own direction
+	t.Run("mode_cycle_reports_direction", func(t *testing.T) {
+		controls, _, cycled := start(t)
+		controls <- tui.ControlModeCycle
+		assert.False(t, <-cycled)
+		controls <- tui.ControlModeCycleBack
+		assert.True(t, <-cycled)
 	})
 
 	t.Run("ctrl_d_quits", func(t *testing.T) {

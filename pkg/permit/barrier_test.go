@@ -1061,6 +1061,68 @@ func TestCycleAdvancesModesInOrder(t *testing.T) {
 	}
 }
 
+func TestPrevStepsModesBackInOrder(t *testing.T) {
+	t.Parallel()
+
+	b := newTestBarrier(newFakePrompter())
+	want := []Mode{ModeBlockAll, ModeAllowAll, ModeAutoWrite, ModeAuto, ModeAllowRead}
+	for _, w := range want {
+		assert.Equal(t, w, b.Prev())
+	}
+}
+
+func TestPrevResolvesOpenDialog(t *testing.T) {
+	t.Parallel()
+
+	// stepping back out of block-all lands on allow-all, which resolves the
+	// open dialog as allow exactly as Cycle would
+	p := newFakePrompter()
+	b := newTestBarrier(p)
+	b.SetMode(ModeBlockAll)
+
+	var got tools.Decision
+	done := make(chan struct{})
+	go func() { got = runAsk(b, t.Context(), "write", []byte(`{}`)); close(done) }()
+	_ = waitDialog(t, p)
+
+	b.Prev() // block-all → allow-all resolves the open dialog as allow
+	<-done
+
+	assert.Equal(t, tools.ActionAllow, got.Action)
+}
+
+func TestPrevResetsSessionAllows(t *testing.T) {
+	t.Parallel()
+
+	// a grant earned in auto must not survive stepping back into allow-read
+	p := newFakePrompter()
+	b := newTestBarrier(p)
+	b.SetMode(ModeAuto)
+
+	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"curl example.com"}`), int(optAllowSession))
+	assert.Equal(t, tools.ActionAllow, got.Action)
+
+	// premise: the grant covers a repeat call without opening a dialog
+	before := p.count()
+	covered := runAsk(b, t.Context(), "bash", []byte(`{"command":"curl example.com"}`))
+	assert.Equal(t, tools.ActionAllow, covered.Action)
+	assert.Equal(t, before, p.count())
+
+	b.Prev() // auto → allow-read; the grant does not cross the mode change
+
+	var denied tools.Decision
+	done := make(chan struct{})
+	go func() {
+		denied = runAsk(b, t.Context(), "bash", []byte(`{"command":"curl example.com"}`))
+		close(done)
+	}()
+	require.Eventually(t, func() bool { return p.count() == before+1 }, time.Second, 10*time.Millisecond)
+	p.last().answer(int(optDeny))
+	<-done
+
+	assert.Equal(t, tools.ActionDeny, denied.Action)
+}
+
 func TestRejectionReasonNamesTheRefusal(t *testing.T) {
 	t.Parallel()
 

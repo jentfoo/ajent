@@ -225,6 +225,16 @@ func TestUIModeCycle(t *testing.T) {
 		assert.Equal(t, ControlModeCycle, <-u.Controls())
 	})
 
+	t.Run("shift_right_emits_mode_cycle", func(t *testing.T) {
+		press(t, pw, "\x1b[1;2C")
+		assert.Equal(t, ControlModeCycle, <-u.Controls())
+	})
+
+	t.Run("shift_left_emits_mode_back", func(t *testing.T) {
+		press(t, pw, "\x1b[1;2D")
+		assert.Equal(t, ControlModeCycleBack, <-u.Controls())
+	})
+
 	t.Run("while_dialog_open_reaches_controls", func(t *testing.T) {
 		d := u.OpenDecision(DecisionRequest{
 			Prompt:  "Approve:",
@@ -236,6 +246,8 @@ func TestUIModeCycle(t *testing.T) {
 		waitFor(t, u, v, "Approve:")
 		press(t, pw, "\x1b[Z")
 		assert.Equal(t, ControlModeCycle, <-u.Controls())
+		press(t, pw, "\x1b[1;2D")
+		assert.Equal(t, ControlModeCycleBack, <-u.Controls())
 	})
 }
 

@@ -63,6 +63,27 @@ func TestModeNextCyclesInOrder(t *testing.T) {
 	}
 }
 
+func TestModePrevCyclesInOrder(t *testing.T) {
+	t.Parallel()
+
+	want := []Mode{ModeBlockAll, ModeAllowAll, ModeAutoWrite, ModeAuto, ModeAllowRead}
+	m := ModeAllowRead
+	for _, w := range want {
+		assert.Equal(t, w, m.Prev())
+		m = w
+	}
+}
+
+func TestModeNextPrevRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	// Prev is the exact inverse of Next over the whole cycle
+	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoWrite, ModeBlockAll} {
+		assert.Equal(t, m, m.Next().Prev())
+		assert.Equal(t, m, m.Prev().Next())
+	}
+}
+
 func TestModeStringRoundTrip(t *testing.T) {
 	t.Parallel()
 

@@ -47,6 +47,8 @@ Our CLI agent attempts to balance autonomy and safety. This is done through a va
 * **allow-all** - All operations allowed without human approval.
 * **block-all** - Nothing runs without explicit approval, reads included.
 
+Shift+Tab cycles the live mode for the session only (Shift+→ does the same; Shift+← steps back), so you can reach an adjacent mode without wrapping all the way around.
+
 When a write operation does need approval, you're presented with a dialog that lets you steer, allow once, or allow for the session (or until the barrier mode is changed).
 
 <img width="639" height="164" alt="permission check" src="https://github.com/user-attachments/assets/8b81665a-f97c-4681-a099-7c4c26c5c718" />
@@ -204,7 +206,7 @@ The top-level blocks:
 * `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them; a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.
 * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, other, refInject, refTotal).
 * `tools.shellCommands` - extra shell commands the `bash` tool description may advertise, alongside a built-in set (`ls`, `grep`, `find`, `diff`, `wc`). A name is advertised only if it exists on PATH and is not refused by `permissions.deniedCommands`.
-* `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; a Shift+Tab cycle changes it for the session only.
+* `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; Shift+Tab or Shift+←/→ cycles it for the session only.
 * `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).
 * `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it; `threshold` is the default for the ones that do not.
 * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.

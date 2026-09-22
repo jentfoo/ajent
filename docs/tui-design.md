@@ -1162,7 +1162,8 @@ The key table:
 | Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`). `←`/`→`, their word-wise forms and Home select the match too |
-| Shift+Tab | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode |
+| Shift+Tab, Shift+→ | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode forward |
+| Shift+← | out-of-band `ControlModeCycleBack` — the same cycle one mode back, same dialog re-evaluation |
 | PgUp / PgDn (inline) | page the multi-line buffer: PgUp moves toward the head, PgDn toward the tail, each snapping onto the boundary when within one page or already on its row. In alt they scroll committed output (`render.scroll`) |
 
 A paste over a size threshold does not land in the editor: its content is stored
@@ -1179,10 +1180,11 @@ those held bytes may be a split terminator. Decoding that tail as ordinary keys
 is what let a `\r` in a pasted file submit the prompt mid-paste.
 
 Keys that resolve to nothing are emitted as control events so the host decides
-their meaning. Shift+Tab is special: it reaches the control channel even while
-an interaction or overlay owns the keyboard, because changing a permission mode
-with a prompt already on screen must work — and the front end maps it to cycling
-the barrier, which re-evaluates any open approval dialog under the new mode.
+their meaning. Shift+Tab and Shift+←/→ are special: they reach the control
+channel even while an interaction or overlay owns the keyboard, because changing
+a permission mode with a prompt already on screen must work — and the front end
+maps them onto cycling the barrier forward or back, which re-evaluates any open
+approval dialog under the new mode.
 
 **Ctrl+R opens a reverse history search** over one merged recall source (every
 line typed this workspace, `/cmd` and `!shell`, plus recorded prompts, newest

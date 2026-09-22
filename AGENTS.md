@@ -196,7 +196,7 @@ only `pkg/agent` and `pkg/tools`, never `pkg/tui` — pkg/app supplies its narro
 to allow only what is **verifiably** read-only: built-ins (`read`/`grep`/`find`/`ls`) by
 name, non-built-in tools on declared `Registry.ReadOnly` metadata (MCP hint / config
 globs), bash through a quote-aware analyser. Network commands are never read-only.
-Five modes cycle with Shift+Tab: the default `allow-read` → `auto` →
+Five modes cycle with Shift+Tab or Shift+←/→: the default `allow-read` → `auto` →
 `auto+write` → `allow-all` → `block-all`; `!`/`!!` shell lines are exempt in every mode
 via `tools.WithUserInitiated`. A doomed edit is detected by a dry run of the real apply
 path so it never prompts. The model classifier (`auto`, `auto+write`) runs

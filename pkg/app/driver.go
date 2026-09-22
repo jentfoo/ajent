@@ -453,11 +453,16 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// /compact <instructions> still wins.
 		comp.focus = ctl.Focus
 	}
-	onModeCycle := func() {
+	onModeCycle := func(back bool) {
 		if barrier == nil {
 			return
 		}
-		m := barrier.Cycle() // re-evaluates any open dialog under the new mode
+		var m permit.Mode
+		if back {
+			m = barrier.Prev()
+		} else {
+			m = barrier.Cycle() // re-evaluates any open dialog under the new mode
+		}
 		showPermissionIndicator(ui, barrier)
 		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
 		// record a session override so Explain and Settings report (session) and a
@@ -653,11 +658,11 @@ const (
 	hintNoticeTTL = 6 * time.Second
 )
 
-func watchControls(ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
+func watchControls(ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
 	go controlLoop(ui, ui.Controls(), hints, ag, q, stager, initCtl, quit, onModeCycle)
 }
 
-func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func()) {
+func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
 	// armed is when the first Ctrl+C landed; quitHint fires to retire the hint
 	// that advertises the window, keeping the gesture and the hint the same
 	// length. The window is measured from armed, not from the timer, so a press
@@ -733,7 +738,11 @@ func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *
 				q.recall() // Alt+Up: pop the newest queued message back into the editor
 			case tui.ControlModeCycle:
 				if onModeCycle != nil {
-					onModeCycle()
+					onModeCycle(false)
+				}
+			case tui.ControlModeCycleBack:
+				if onModeCycle != nil {
+					onModeCycle(true)
 				}
 			}
 		}
