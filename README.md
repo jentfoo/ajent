@@ -33,6 +33,8 @@ Our agent simplifies the TUI in order to provide a terminal native output. Every
 
 <img width="640" height="309" alt="tools demo" src="https://github.com/user-attachments/assets/e17b834c-f3e9-407d-99d1-b870e9fc0d0c" />
 
+Copying things out is easy: `/copy` puts the last agent reply on your clipboard, and `ctrl+x` copies whatever message you're highlighting in the rewind picker. It works with the copy tool built into most operating systems, and over SSH or Mosh it uses a standard terminal trick instead; if nothing's available, ajent tells you exactly what to install.
+
 Tab support is available for file path completions, but our TUI favors a minimal form that is more conductive to power users. No notice of files available until you hit tab twice failing to complete a path.
 
 <img width="640" height="91" alt="files tab completion" src="https://github.com/user-attachments/assets/65ba1fb8-2577-4df1-8af4-9bbea10b5b3d" />

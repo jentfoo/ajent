@@ -227,3 +227,53 @@ func TestMultiPickStateRows(t *testing.T) {
 		assert.Contains(t, strutil.StripANSI(rows[2]), "no matches")
 	})
 }
+
+func TestUIPickerCopy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ctrl_x_copies_highlighted_row", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		items := []PickItem{
+			{Label: "user: hello", Copy: "hello world"},
+			{Label: "agent: hi", Copy: "hi there"},
+		}
+		done := make(chan error, 1)
+		go func() { _, _ = u.Pick("Rewind to", items, PickOptions{}); done <- nil }()
+
+		waitFor(t, u, v, "Rewind to")
+		press(t, pw, "\x18")
+		assert.Equal(t, ControlCopySelection, <-u.Controls())
+
+		text, ok := u.CopySelection()
+		assert.True(t, ok)
+		assert.Equal(t, "hello world", text)
+
+		press(t, pw, "\x1b[B") // down: the payload follows the highlight
+		waitFor(t, u, v, "> agent: hi")
+		text, ok = u.CopySelection()
+		assert.True(t, ok)
+		assert.Equal(t, "hi there", text)
+	})
+
+	t.Run("rows_without_payload_are_ignored", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		go func() { _, _ = u.Pick("Rewind to", []PickItem{{Label: "user: hi"}}, PickOptions{}) }()
+
+		waitFor(t, u, v, "Rewind to")
+		press(t, pw, "\x18")
+		assert.Equal(t, ControlCopySelection, <-u.Controls())
+
+		_, ok := u.CopySelection()
+		assert.False(t, ok)
+	})
+
+	t.Run("idle_ctrl_x_emits_nothing", func(t *testing.T) {
+		u, _, pw := interactionUI(t)
+
+		press(t, pw, "\x18")   // no picker: never a copy gesture
+		press(t, pw, "\x1b[Z") // shift+tab, ordered behind: proves the ctrl+x settled
+		assert.Equal(t, ControlModeCycle, <-u.Controls())
+	})
+}

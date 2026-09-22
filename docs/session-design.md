@@ -267,7 +267,9 @@ picker exposes that through one tree view:
   indenting by depth with box-drawing guides. Every guide cell is a fixed width,
   up under the text of its own connector. Sibling branches align at one level;
   shades to separate the live chain from abandoned forks. Newest work sits at
-  the reserve a kind column").
+  the reserve a kind column"). Each row also carries the clipboard payload
+  `ctrl+x` copies (see `clipboard-copy-feature.md`), rendered from the entry's
+  structured blocks rather than its display label.
 **Multiple roots.** A tree normally has one root, the `session` entry. Appending
 after `SetHead("")` stamps an empty `ParentID` and starts a second, which
 `Branch` stops at: state rebuilt from that head contains only that root's own

@@ -35,6 +35,7 @@ func TestDecodeKey(t *testing.T) {
 		{"ctrl_r_reverse_search", "\x12", key{typ: keyReverseSearch}, 1},
 		{"ctrl_u", "\x15", key{typ: keyKillLine}, 1},
 		{"ctrl_w", "\x17", key{typ: keyKillWord}, 1},
+		{"ctrl_x_picker_copy", "\x18", key{typ: keyPickerCopy}, 1},
 		{"ctrl_l_redraw", "\x0c", key{typ: keyRedraw}, 1},
 		{"ctrl_z_suspend", "\x1a", key{typ: keySuspend}, 1},
 		{"unbound_control", "\x1c", key{typ: keyIgnore}, 1},

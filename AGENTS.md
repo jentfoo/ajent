@@ -49,6 +49,7 @@ flag added without its `--help` and README entry is unfinished.
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
+| `clipboard-copy-feature.md` | `pkg/clipboard` (+ `pkg/llm`, `pkg/session`, `pkg/command`, TUI control in `pkg/tui`, routing in `pkg/app`) | The shared clipboard writer (platform-native first, OSC 52 only on remote sessions) and its two surfaces: `/copy` for the last agent response and `ctrl+x` in the rewind picker. Tool call/result JSON copies verbatim, never as display labels. |
 | `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by pkg/app. |
 | `plan-design.md` | `pkg/plan` (+ seams in `pkg/agent`, `pkg/session`, `pkg/tools`) | The two-model `/plan` workflow: phases as branches of the session tree rather than projections of one message list, the `Host` boundary, the user gate on the drafted plan, per-phase model and tool scope with guaranteed restore, `dev_*` control tools and `ToolResult.EndTurn`, persistence and resume. |
 | `prompt-design.md` | every string sent to a model | Each prompt surface ajent sends; the principles enforced by tests: cache-stability of the system block, cheap/stable/honest prompts, provenance markers on all injected content. The single reference for prompting. |
@@ -61,6 +62,7 @@ Dependency direction is load-bearing. Actual internal edges:
 config   (no internal deps — paths, JSON merge, layered settings)
 strutil  (no internal deps — tiny shared string helpers)
 httputil (no internal deps — the hardened outbound HTTP client)
+clipboard(no internal deps — the shared clipboard text writer)
 version  -> config, httputil
 llm      -> config, strutil, httputil, version
 tokens   -> llm

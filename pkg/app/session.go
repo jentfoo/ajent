@@ -486,6 +486,14 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		return
 	}
 
+	// one payload per row, verbatim from the transcript so a ctrl+x copy is
+	// truncation-independent of the labels the picker renders
+	rowIDs := make([]string, len(tree))
+	for i, row := range tree {
+		rowIDs[i] = row.ID
+	}
+	copyTexts := session.CopyTexts(entries, rowIDs)
+
 	items := make([]tui.PickItem, len(tree))
 	for i, row := range tree {
 		tag, mark := roleTag(row.Kind)
@@ -496,6 +504,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 			Tag:   tag,
 			Mark:  mark,
 			Off:   !row.Active,
+			Copy:  copyTexts[i],
 		}
 	}
 	// a large session would repaint every retained line on each arrow press in alt

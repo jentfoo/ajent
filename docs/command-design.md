@@ -124,7 +124,8 @@ read paths.
 extension host can back it with its own protocol. It exposes notices and a
 markdown printer (`/help` renders through it), the blocking interaction methods
 (pick one or many from items, select from options, confirm yes/no, free-text
-input for numbers and limits), read handles onto the model registry, agent
+input for numbers and limits), a clipboard writer (`CopyClipboard`, the one
+write path behind `/copy`), read handles onto the model registry, agent
 state, tool registry, command registry and resolved config, settings writers
 (save to a layer, record a session override), and mutators that apply and
 persist a model or reasoning change, announce tool-set changes, report whether
@@ -156,6 +157,8 @@ dispatched, never on a command or a `!`.
 | Command | Behaviour |
 |---|---|
 | `/help` | markdown list of commands and keybindings through `Console.Print` |
+| `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown; sub-agent spend called out when nonzero) |
+| `/copy` | copy the last agent response to the clipboard — text plus tool call/result JSON verbatim — through the shared writer (see `clipboard-copy-feature.md`); no agent messages yet is a notice, not an error |
 | `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it; a no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
 | `/reasoning [level]` | report, or set/clear the level for capable models; a model offering zero levels reports "no reasoning options available", one level (only off) reports "only <level> available for this model" — neither opens a picker |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
@@ -169,7 +172,7 @@ dispatched, never on a command or a `!`.
 | `/init` | survey the project and write `AGENTS.md` (see below) |
 | `/exit` | quit |
 
-`/help`, `/model`, `/reasoning`, `/usage`, `/compact`, `/tools`, `/session`,
+`/help`, `/model`, `/reasoning`, `/usage`, `/copy`, `/compact`, `/tools`, `/session`,
 `/mcp`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins;
 `/plan*` and `/init` are feature commands the driver adds on top.
 

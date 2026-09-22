@@ -693,6 +693,14 @@ func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *
 						ui.Insert(token)
 					}
 				}()
+			case tui.ControlCopySelection:
+				// off the control loop, like the image probe: a slow backend
+				// must not delay interrupts
+				go func() {
+					if notice, level, ok := copySelection(ui); ok {
+						ui.Notify(notice, level)
+					}
+				}()
 			case tui.ControlEscape:
 				switch {
 				case ag.Running():

@@ -27,6 +27,49 @@ type TreeRow struct {
 	Guide  string // box-drawing branch prefix, e.g. "├── ", "│   └── "; empty for flat rows
 }
 
+// treeIndex links entries for tree walks: entries by id, and each entry's
+// children in append order, the order TreeRows visits and CopyTexts pairs on.
+type treeIndex struct {
+	entries  []Entry
+	idx      map[string]int
+	children map[string][]string
+	parentOf map[string]string
+}
+
+func newTreeIndex(entries []Entry) treeIndex {
+	ti := treeIndex{
+		entries:  entries,
+		idx:      make(map[string]int, len(entries)),
+		children: make(map[string][]string, len(entries)),
+		parentOf: make(map[string]string, len(entries)),
+	}
+	for i, e := range entries {
+		ti.idx[e.ID] = i
+		if e.ParentID != "" {
+			ti.children[e.ParentID] = append(ti.children[e.ParentID], e.ID)
+			ti.parentOf[e.ID] = e.ParentID
+		}
+	}
+	return ti
+}
+
+// entry returns the entry named id.
+func (ti treeIndex) entry(id string) (Entry, bool) {
+	i, ok := ti.idx[id]
+	if !ok {
+		return Entry{}, false
+	}
+	return ti.entries[i], true
+}
+
+// firstChild returns the entry's first child id in append order, "" when none.
+func (ti treeIndex) firstChild(id string) string {
+	if kids := ti.children[id]; len(kids) > 0 {
+		return kids[0]
+	}
+	return ""
+}
+
 // TreeRows walks a whole transcript as a tree and emits one row per pickable
 // message, oldest (root) first so branches read top-down. Newer continuations of
 // a fork are appended after older ones, so the most recent work sits at the bottom,
@@ -35,20 +78,11 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 	if len(entries) == 0 {
 		return nil
 	}
-	idx := make(map[string]int, len(entries))
-	children := make(map[string][]string)
-	parentOf := make(map[string]string, len(entries))
-	for i, e := range entries {
-		idx[e.ID] = i
-		if e.ParentID != "" {
-			children[e.ParentID] = append(children[e.ParentID], e.ID)
-			parentOf[e.ID] = e.ParentID
-		}
-	}
+	ti := newTreeIndex(entries)
 
 	activeSet := make(map[string]bool) // the root..head chain, marked live
 	for id := head; id != ""; {
-		i, ok := idx[id]
+		i, ok := ti.idx[id]
 		if !ok || activeSet[id] { // unknown or already-walked (cycle guard)
 			break
 		}
@@ -61,8 +95,8 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 	var visit func(id string)
 	visit = func(id string) {
 		order = append(order, id)
-		for _, c := range children[id] { // insertion order: a new branch lands at the bottom
-			kids := children[id]
+		for _, c := range ti.children[id] { // insertion order: a new branch lands at the bottom
+			kids := ti.children[id]
 			if len(kids) > 1 {
 				depth[c] = depth[id] + 1 // every branch of a fork goes down one level together
 			} else {
@@ -78,7 +112,7 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 			depth[e.ID] = 0
 			visit(e.ID)
 		default:
-			if _, ok := idx[e.ParentID]; !ok { // a child whose parent is missing stands alone
+			if _, ok := ti.idx[e.ParentID]; !ok { // a child whose parent is missing stands alone
 				depth[e.ID] = 0
 				visit(e.ID)
 			}
@@ -87,7 +121,7 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 
 	out := make([]TreeRow, 0, len(order))
 	for _, id := range order {
-		e := entries[idx[id]]
+		e := entries[ti.idx[id]]
 		if pr := rowFor(e); pr != nil {
 			out = append(out, TreeRow{
 				ID:     pr.ID,
@@ -95,7 +129,7 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 				Kind:   pr.Kind,
 				Label:  pr.Label,
 				Active: activeSet[id],
-				Guide:  treePrefix(id, parentOf, children),
+				Guide:  treePrefix(id, ti.parentOf, ti.children),
 			})
 		}
 	}

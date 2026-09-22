@@ -43,6 +43,7 @@ type PickItem struct {
 	Mark     ItemMark // colors Tag; MarkNone leaves Tag uncolored and opts out of shading
 	Off      bool     // off the active branch (rewind tree): the whole row renders faint
 	Disabled bool     // cannot be chosen now: the whole row stays gray, even under the cursor
+	Copy     string   // clipboard payload for ctrl+x; empty opts the row out
 }
 
 // PickOptions tunes a Pick.

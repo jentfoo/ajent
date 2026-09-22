@@ -48,6 +48,9 @@ type fakeConsole struct {
 	sessionName    string // reported by SessionName, updated by SetSessionName
 	setSessionName error  // returned by SetSessionName when non-nil
 
+	copyCalls []string // texts handed to CopyClipboard
+	copyErr   error    // returned by CopyClipboard when non-nil
+
 	profile tui.ColorProfile // reported by ColorProfile
 	tone    tui.Tone         // reported by DetectTone
 	palette tui.Palette      // last palette handed to SetTheme
@@ -179,6 +182,14 @@ func (f *fakeConsole) Input(_ context.Context, label, placeholder string) (strin
 	return next, nil
 }
 
+func (f *fakeConsole) CopyClipboard(_ context.Context, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.copyCalls = append(f.copyCalls, text)
+	return f.copyErr
+}
+
 func (f *fakeConsole) ColorProfile() tui.ColorProfile { return f.profile }
 func (f *fakeConsole) DetectTone() tui.Tone           { return f.tone }
 func (f *fakeConsole) SetTheme(pal tui.Palette)       { f.mu.Lock(); f.palette = pal; f.mu.Unlock() }
@@ -227,6 +238,14 @@ func (f *fakeConsole) noticesSeen() []string {
 	defer f.mu.Unlock()
 
 	return append([]string(nil), f.notices...)
+}
+
+// copiesSeen returns a snapshot of the texts handed to CopyClipboard.
+func (f *fakeConsole) copiesSeen() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.copyCalls)
 }
 
 // noticeContains reports whether any recorded notice contains substr.

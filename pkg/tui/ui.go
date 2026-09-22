@@ -58,6 +58,7 @@ const (
 	ControlRecallQueued   // Alt+↑: recall the newest queued prompt into the editor
 	ControlClipboardImage // Ctrl+V: probe the clipboard for an image
 	ControlModeCycleBack  // Shift+←: like ControlModeCycle, one mode the other way
+	ControlCopySelection  // Ctrl+X: copy the highlighted picker row (rewind tree)
 )
 
 // Options configures a UI.
@@ -334,6 +335,24 @@ func (u *UI) Messages() <-chan string { return u.msgs }
 // an empty buffer. The send is non-blocking with a drop, so key handling never
 // blocks on the consumer.
 func (u *UI) Controls() <-chan Control { return u.controls }
+
+// CopySelection returns the highlighted picker row's clipboard payload. ok is
+// false when no picker row carries one, which is also the cue for a host to
+// ignore a ControlCopySelection that outlived its picker.
+func (u *UI) CopySelection() (text string, ok bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.act == nil {
+		return "", false
+	}
+	p, isPick := u.act.it.(*pickState)
+	if !isPick || len(p.matches) == 0 {
+		return "", false
+	}
+	text = p.items[p.matches[p.cursor]].Copy
+	return text, text != ""
+}
 
 // Width returns the current terminal width in columns.
 func (u *UI) Width() int {
@@ -1372,13 +1391,20 @@ func (u *UI) inputRows() int {
 // rendered state. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	// Shift+Tab and Shift+←/→ are out-of-band mode controls: they reach the
-	// control channel even while a dialog or overlay owns the keyboard.
+	// control channel even while a dialog or overlay owns the keyboard. Ctrl+X
+	// is the picker copy gesture: it is only meaningful while an interaction
+	// owns the keyboard, and the front end resolves the highlighted row.
 	switch k.typ {
 	case keyBackTab, keyShiftRight:
 		u.emitControl(ControlModeCycle)
 		return nil, false, false
 	case keyShiftLeft:
 		u.emitControl(ControlModeCycleBack)
+		return nil, false, false
+	case keyPickerCopy:
+		if u.act != nil {
+			u.emitControl(ControlCopySelection)
+		}
 		return nil, false, false
 	}
 	if u.act != nil {

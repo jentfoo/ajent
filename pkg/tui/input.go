@@ -49,6 +49,7 @@ const (
 	keyClipboardPaste // Ctrl+V: probe the clipboard for an image (ControlClipboardImage)
 	keyShiftLeft      // Shift+←: the backward permission-mode control (ControlModeCycleBack)
 	keyShiftRight     // Shift+→: the forward permission-mode control (ControlModeCycle)
+	keyPickerCopy     // Ctrl+X: copy the highlighted picker row (ControlCopySelection)
 )
 
 // key is one decoded input event.
@@ -131,6 +132,7 @@ var controlKeys = map[byte]keyType{
 	0x15: keyKillLine,
 	0x16: keyClipboardPaste, // Ctrl+V
 	0x17: keyKillWord,
+	0x18: keyPickerCopy, // Ctrl+X
 	0x1a: keySuspend,
 	0x7f: keyBackspace,
 	0x09: keyTab,

@@ -51,6 +51,11 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Handler:     usageCommand,
 	})
 	r.Register(Command{
+		Name:        "copy",
+		Description: "copy the last agent response to the clipboard",
+		Handler:     copyCommand,
+	})
+	r.Register(Command{
 		Name:        "compact",
 		Description: "reduce context toward the compaction threshold",
 		Args:        "[instructions]",
@@ -119,7 +124,7 @@ func helpCommand(_ context.Context, _ string, c Console) error {
 	b.WriteString("- `↑`/`↓` — recall history / move line\n")
 	b.WriteString("- `Ctrl+C` — interrupt a turn, or quit when idle\n")
 	b.WriteString("- `Ctrl+D` — quit on an empty editor\n")
-	b.WriteString("- `Esc` `Esc` — rewind onto an earlier message while idle\n")
+	b.WriteString("- `Esc` `Esc` — rewind onto an earlier message while idle; `ctrl+x` in the picker copies the highlighted message\n")
 	b.WriteString("- `/` at line start — a command; the menu opens as you type, `Tab` takes the highlight\n")
 	b.WriteString("- `@` anywhere — a file reference; `Tab` completes the path\n")
 	b.WriteString("- `!cmd` — run a shell command, staged ahead of your next message; `Tab` completes like bash\n")

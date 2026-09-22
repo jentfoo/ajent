@@ -265,6 +265,20 @@ func TestControlLoop(t *testing.T) {
 		assert.True(t, <-cycled)
 	})
 
+	// the picker copy control routes without a picker open: silent no-op, never a quit
+	t.Run("copy_selection_without_picker_is_silent", func(t *testing.T) {
+		controls, quit, cycled := start(t)
+		controls <- tui.ControlCopySelection
+		controls <- tui.ControlModeCycle // ordered behind: the copy control settled
+		assert.False(t, <-cycled)
+
+		select {
+		case <-quit:
+			assert.Fail(t, "quit on a picker copy without a picker")
+		default:
+		}
+	})
+
 	t.Run("ctrl_d_quits", func(t *testing.T) {
 		controls, quit, _ := start(t)
 		controls <- tui.ControlEOF

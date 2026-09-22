@@ -379,6 +379,10 @@ falls back to a `*` gutter ahead of the tag. `PickOptions.Initial` opens the
 list on the current head rather than the last row, so reopening after a rewind
 lands back at the same place in the tree.
 
+While the picker is open, `ctrl+x` copies the highlighted entry. Each row
+carries a payload rendered from the transcript (`PickItem.Copy`), so copy is
+truncation-independent of the collapsed labels on screen.
+
 A picker can mark a row **disabled** (`PickItem.Disabled`) when it cannot be
 chosen right now: its body stays dim even under the cursor, so no accent ever
 suggests the locked option is selectable. `/settings` uses this for rows whose
@@ -1158,6 +1162,7 @@ The key table:
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Ctrl+V | paste an image from the clipboard as an `[image #N]` token (`ControlClipboardImage`). Readers are `xclip`/`wl-paste` (Linux), `pngpaste` (macOS), PowerShell (Windows). Kitty's own paste binding takes the key first when `ctrl+v` is mapped in `kitty.conf`, and kitty pastes text only |
+| Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`); inert everywhere else — it never reaches the editor or steals a keystroke from a dialog. The payload is the verbatim transcript content, not the row's display label (see `clipboard-copy-feature.md`) |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |
 | Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
 | Esc, twice | rewind onto an earlier message while idle |
@@ -1184,7 +1189,12 @@ their meaning. Shift+Tab and Shift+←/→ are special: they reach the control
 channel even while an interaction or overlay owns the keyboard, because changing
 a permission mode with a prompt already on screen must work — and the front end
 maps them onto cycling the barrier forward or back, which re-evaluates any open
-approval dialog under the new mode.
+approval dialog under the new mode. Ctrl+X is out-of-band the same way while an
+interaction owns the keyboard (`ControlCopySelection`); idle it is swallowed.
+
+The clipboard split follows Ctrl+V's image read: `pkg/tui` reports the gesture
+and exposes the highlighted row's payload, never spawning a backend; the write
+runs in `pkg/app` through `pkg/clipboard` (see `clipboard-copy-feature.md`).
 
 **Ctrl+R opens a reverse history search** over one merged recall source (every
 line typed this workspace, `/cmd` and `!shell`, plus recorded prompts, newest
