@@ -33,6 +33,7 @@ type Options struct {
 	Env                 Environment                           // OS facts layered into the system prompt
 	ProjectInstructions []ProjectInstruction                  // AGENTS.md content; loaded once at startup
 	SystemSnippets      []string                              // extra system blocks, appended after project instructions
+	SystemPrompt        string                                // replaces the default opening sentence and guidelines when non-empty
 	Transforms          []Transform                           // applied in assembly order, nil entries skipped
 	OnMessage           []func(MessageInfo)                   // called per appended message, in registration order
 	OnSettled           []func(context.Context)               // agent drained and idle; observers may queue work
@@ -130,7 +131,7 @@ func (a *Agent) BaseEstimate(tools bool) int {
 	if a.running {
 		return 0
 	}
-	req := llm.Request{System: buildSystem(a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets)}
+	req := llm.Request{System: buildSystem(a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets, a.opts.SystemPrompt)}
 	if tools {
 		if ts := a.opts.Tools; ts != nil {
 			req.Tools = ts.Schemas() // registry-cached

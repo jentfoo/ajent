@@ -31,6 +31,9 @@ type Reasoning struct {
 type Agent struct {
 	MaxSteps    int `json:"maxSteps,omitempty"`
 	TurnRetries int `json:"turnRetries,omitempty"` // failed model call re-requests; <= 0 takes the default
+	// SystemPrompt replaces ajent's default prose guidance when set.
+	// Environment facts, project instructions and snippets still follow.
+	SystemPrompt string `json:"systemPrompt,omitempty"`
 }
 
 // Tools configures the enabled set and output bounds.

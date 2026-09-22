@@ -121,6 +121,11 @@ not this block.
 5. Extension snippets       — caller-supplied, blank-line separated; sub-agents inject their contract here.
 ```
 
+Parts 1 and 2 together are ajent's default prose guidance. An operator can
+replace them with `agent.systemPrompt` in config (or `--system`) when they want a
+different opening stance; environment facts, project instructions and snippets
+still follow unchanged, since tools depend on cwd/date.
+
 ### Opening sentence
 
 A single neutral line stating how the agent works, deliberately naming neither a
@@ -158,11 +163,13 @@ session: that is the cache-stability contract.
 ### Composition invariants
 
 - One text block (`llm.TextBlock`), not many; providers cache per-block.
-- `buildSystem(s *State, env Environment, proj []ProjectInstruction, snippets []string)`
+- `buildSystem(env Environment, proj []ProjectInstruction, snippets []string, override string)`
   stays deterministic given its inputs; extension snippets and project
   instructions join through explicit inputs so tests can assert byte equality
   across calls with equal inputs. An empty snippet slice produces a block
-  byte-identical to one built without the parameter.
+  byte-identical to one built without the parameter. A non-empty `override`
+  replaces parts 1–2 (opening sentence plus guidelines) but leaves environment
+  facts, project instructions and snippets in place.
 - Changing the tool set or adding/removing project instructions changes this
   block; per principle 1, a change is announced with a one-line notice.
 

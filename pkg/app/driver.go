@@ -86,6 +86,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		Sinks:               []agent.Sink{sink},
 		Env:                 env,
 		ProjectInstructions: proj,
+		SystemPrompt:        set.Settings().Agent.SystemPrompt, // config or --system; replaces default guidance
 		Tools:               toolsReg,
 		Provider: func(m llm.Model) (llm.Provider, error) {
 			return providers.ProviderFor(m)

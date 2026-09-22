@@ -31,6 +31,10 @@ func Run(o RunOptions) int {
 	if o.Render != "" && o.Render != "auto" {
 		flagLayer.Data, _ = config.SetKey(flagLayer.Data, "ui.render", o.Render)
 	}
+	// --system outranks any agent.systemPrompt set in a file layer
+	if o.System != "" {
+		flagLayer.Data, _ = config.SetKey(flagLayer.Data, "agent.systemPrompt", o.System)
+	}
 	set, warnings, err := config.Load(config.Options{
 		Workspace: config.Cwd(),
 		Flags:     flagLayer,

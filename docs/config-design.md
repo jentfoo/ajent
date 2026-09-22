@@ -127,6 +127,15 @@ configuration: pkg/app copies them into `agent.Options` once at process start,
 so they are deliberately absent from `/settings`, whose session overrides could
 never reach the running agent.
 
+The block also holds `systemPrompt`: when set it replaces ajent's default prose
+guidance (the opening sentence and guideline bullets) in the system prompt. It is
+startup-time configuration like its siblings — pkg/app copies it into
+`agent.Options.SystemPrompt`, so a `/settings` override could never reach a live
+turn — and `AJENT_AGENT_SYSTEM_PROMPT` binds for free through EnvLayer, with the
+command-line flag `--system` outranking both via the flag layer. It has no row in
+`/settings`: like `maxSteps`, it is set only by config files, env or the flag,
+never at runtime.
+
 ### UI
 
 `ui.render` is a `tui.Mode` name defaulting to `"auto"`, read once before

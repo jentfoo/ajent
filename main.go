@@ -81,6 +81,7 @@ func main() {
 	code := app.Run(app.RunOptions{
 		Model:      f.model,
 		Render:     f.render,
+		System:     f.system,
 		Prompt:     f.prompt,
 		Output:     f.output,
 		Stats:      f.stats,

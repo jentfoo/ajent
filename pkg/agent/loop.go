@@ -471,7 +471,7 @@ func (a *Agent) buildRequest() llm.Request {
 	}
 	return llm.Request{
 		Model:     a.state.Model,
-		System:    buildSystem(a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets),
+		System:    buildSystem(a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets, a.opts.SystemPrompt),
 		Messages:  messages,
 		Tools:     tools,
 		Reasoning: reasoning,

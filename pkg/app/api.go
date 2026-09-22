@@ -66,6 +66,7 @@ type HeadlessOptions struct {
 type RunOptions struct {
 	Model      string
 	Render     string // ui.render override; "auto" means unset
+	System     string // --system: replaces ajent's default prose guidance when non-empty
 	Prompt     string
 	Output     string // OutputText or OutputJSON
 	Stats      bool

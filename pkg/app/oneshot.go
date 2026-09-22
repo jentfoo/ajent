@@ -97,6 +97,7 @@ func RunHeadless(o HeadlessOptions) int {
 		Sinks:               []agent.Sink{drain},
 		Env:                 env,
 		ProjectInstructions: proj,
+		SystemPrompt:        o.Set.Settings().Agent.SystemPrompt, // config or --system; replaces default guidance
 		Tools:               toolsReg,
 		Provider:            providerFor,
 		Compact: func(ctx context.Context, reason agent.CompactReason) (bool, error) {

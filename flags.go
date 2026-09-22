@@ -40,6 +40,7 @@ type cliFlags struct {
 	deleteOldDays int    // days from --delete-old <days>, 0 when the default applies
 
 	prompt     string
+	system     string // --system: replaces ajent's default prose guidance when non-empty
 	output     string
 	stats      bool
 	allowAll   bool
@@ -83,6 +84,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 	fs.BoolVar(&f.update, "update", false, "reinstall ajent from @latest then exit")
 	fs.StringVarP(&f.prompt, "prompt", "p", "",
 		"run one turn non-interactively from this prompt, print the result and exit")
+	fs.StringVar(&f.system, "system", "",
+		"replace ajent's default prose guidance (opening sentence and guidelines) in the system prompt")
 	fs.StringVarP(&f.output, "output", "o", app.OutputText,
 		"one-shot output shape: text (the final answer) or json (one event per line)")
 	fs.BoolVar(&f.allowAll, "allow-all", false,

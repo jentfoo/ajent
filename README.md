@@ -201,6 +201,7 @@ The top-level blocks:
 * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is shown (`show`).
 * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
 * `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff; permanent errors (bad request, no credentials) never retry.
+* `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them; a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.
 * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, other, refInject, refTotal).
 * `tools.shellCommands` - extra shell commands the `bash` tool description may advertise, alongside a built-in set (`ls`, `grep`, `find`, `diff`, `wc`). A name is advertised only if it exists on PATH and is not refused by `permissions.deniedCommands`.
 * `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; a Shift+Tab cycle changes it for the session only.
@@ -236,6 +237,7 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
     --read-only        start in auto read-only mode
 -p, --prompt <text>    run one turn non-interactively, print the result and exit
 -o, --output <shape>   one-shot output: text (final answer) or json (one event per line)
+    --system <text>    replace ajent's default prose guidance in the system prompt
     --allow-tools      one-shot: extra tool names to offer
     --deny-tools       one-shot: tool names to withhold
     --stats            one-shot: print a tool and token summary when the run ends

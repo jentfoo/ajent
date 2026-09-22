@@ -18,7 +18,7 @@ func TestBuildSystem(t *testing.T) {
 	t.Run("base", func(t *testing.T) {
 		env := Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}
 
-		blocks := buildSystem(env, nil, nil)
+		blocks := buildSystem(env, nil, nil, "")
 		assert.Len(t, blocks, 1)
 
 		tb, ok := blocks[0].(llm.TextBlock)
@@ -29,7 +29,7 @@ func TestBuildSystem(t *testing.T) {
 	})
 
 	t.Run("identity_line", func(t *testing.T) {
-		blocks := buildSystem(Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}, nil, nil)
+		blocks := buildSystem(Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}, nil, nil, "")
 
 		tb, ok := blocks[0].(llm.TextBlock)
 		require.True(t, ok)
@@ -41,18 +41,18 @@ func TestBuildSystem(t *testing.T) {
 	t.Run("cache_stable", func(t *testing.T) {
 		env := Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}
 
-		b1, ok := buildSystem(env, nil, nil)[0].(llm.TextBlock)
+		b1, ok := buildSystem(env, nil, nil, "")[0].(llm.TextBlock)
 		require.True(t, ok)
-		b2, ok := buildSystem(env, nil, nil)[0].(llm.TextBlock)
+		b2, ok := buildSystem(env, nil, nil, "")[0].(llm.TextBlock)
 		require.True(t, ok)
 		assert.Equal(t, b1.Text, b2.Text)
 	})
 
 	// the date changes at day granularity, not sub-day
 	t.Run("date_day_granular", func(t *testing.T) {
-		b1, ok := buildSystem(Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}, nil, nil)[0].(llm.TextBlock)
+		b1, ok := buildSystem(Environment{Cwd: "/r", OS: "linux", Date: "2024-01-02 09:00"}, nil, nil, "")[0].(llm.TextBlock)
 		require.True(t, ok)
-		b2, ok := buildSystem(Environment{Cwd: "/r", OS: "linux", Date: "2024-01-03 08:59"}, nil, nil)[0].(llm.TextBlock)
+		b2, ok := buildSystem(Environment{Cwd: "/r", OS: "linux", Date: "2024-01-03 08:59"}, nil, nil, "")[0].(llm.TextBlock)
 		require.True(t, ok)
 
 		assert.NotEqual(t, b1.Text, b2.Text) // the date differs across days
@@ -60,7 +60,7 @@ func TestBuildSystem(t *testing.T) {
 
 	// an absent cwd still names the working directory line
 	t.Run("no_cwd_listing", func(t *testing.T) {
-		blocks := buildSystem(Environment{Cwd: "/does/not/exist"}, nil, nil)
+		blocks := buildSystem(Environment{Cwd: "/does/not/exist"}, nil, nil, "")
 		tb, ok := blocks[0].(llm.TextBlock)
 		require.True(t, ok)
 
@@ -72,24 +72,24 @@ func TestBuildSystem(t *testing.T) {
 	t.Run("snippets_append_after_project", func(t *testing.T) {
 		env := Environment{Cwd: "/repo", Date: "2024-01-02"}
 
-		empty, ok := buildSystem(env, nil, nil)[0].(llm.TextBlock)
+		empty, ok := buildSystem(env, nil, nil, "")[0].(llm.TextBlock)
 		require.True(t, ok)
 		withProj, ok := buildSystem(env,
-			[]ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\n"}}, nil)[0].(llm.TextBlock)
+			[]ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\n"}}, nil, "")[0].(llm.TextBlock)
 		require.True(t, ok)
 
 		snippets, ok := buildSystem(env,
 			[]ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\n"}},
-			[]string{"first snippet", "second snippet"})[0].(llm.TextBlock)
+			[]string{"first snippet", "second snippet"}, "")[0].(llm.TextBlock)
 		require.True(t, ok)
 
-		snippetsOnly, ok := buildSystem(env, nil, []string{})[0].(llm.TextBlock)
+		snippetsOnly, ok := buildSystem(env, nil, []string{}, "")[0].(llm.TextBlock)
 		require.True(t, ok)
 		// empty snippets must not change the block at all
 		assert.Equal(t, empty.Text, snippetsOnly.Text)
 		assert.NotEqual(t, empty.Text, withProj.Text) // proj alone still differs
 
-		snippetsOnlyText := buildSystem(env, nil, []string{"first snippet"})[0].(llm.TextBlock)
+		snippetsOnlyText := buildSystem(env, nil, []string{"first snippet"}, "")[0].(llm.TextBlock)
 		// a snippet appended without project instructions is separated by a blank line
 		assert.Contains(t, snippetsOnlyText.Text, "\n\nfirst snippet\n")
 
@@ -106,7 +106,7 @@ func TestBuildSystem(t *testing.T) {
 		env := Environment{Cwd: "/repo", Date: "2024-01-02"}
 		proj := []ProjectInstruction{{Path: "/repo/AGENTS.md", Body: "# Rules\nbuild with make test\n"}}
 
-		blocks := buildSystem(env, proj, nil)
+		blocks := buildSystem(env, proj, nil, "")
 		tb, ok := blocks[0].(llm.TextBlock)
 		require.True(t, ok)
 
@@ -126,6 +126,28 @@ func TestBuildSystem(t *testing.T) {
 		assert.Less(t,
 			strings.Index(tb.Text, "Working directory: /repo\n"),
 			strings.Index(tb.Text, "<project_context>"))
+	})
+
+	// a non-empty override replaces the opening sentence and guidelines only;
+	// environment facts still follow so tools keep their context.
+	t.Run("override_replaces_guidance", func(t *testing.T) {
+		env := Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}
+
+		blocks := buildSystem(env, nil, nil,
+			"You are a terse sysadmin. Follow orders exactly.")
+		tb, ok := blocks[0].(llm.TextBlock)
+		require.True(t, ok) // still one text block
+
+		// the default prose is gone from both forms (identity line and Guidelines)
+		assert.NotContains(t, tb.Text, "research and review until you understand them")
+		assert.NotContains(t, tb.Text, "Guidelines:")
+
+		// the override body rides verbatim at the top
+		assert.Contains(t, tb.Text, "You are a terse sysadmin. Follow orders exactly.")
+		// environment facts still follow
+		for _, want := range []string{"/repo", "linux/amd64", "2024-01-02"} {
+			assert.Contains(t, tb.Text, want)
+		}
 	})
 }
 

@@ -68,19 +68,22 @@ func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 	return proj, nil
 }
 
-// buildSystem returns the system blocks, stable across a session so
-// the prompt cache survives. Project instructions and snippets are explicit
-// inputs (not read here) so callers control when they reload and tests can assert
-// byte equality across calls with equal inputs.
-func buildSystem(env Environment, proj []ProjectInstruction, snippets []string) llm.BlockList {
+// buildSystem returns the system blocks. override replaces ajent's default prose
+// guidance (opening sentence and guidelines); environment facts, project
+// instructions and snippets still follow.
+func buildSystem(env Environment, proj []ProjectInstruction, snippets []string, override string) llm.BlockList {
 	var b strings.Builder
 
-	b.WriteString(identityLine())
+	if override == "" {
+		b.WriteString(identityLine())
 
-	// static guidelines first, then environment facts
-	b.WriteString("Guidelines:\n")
-	b.WriteString("- Be concise in your responses\n")
-	b.WriteString("- Show file paths clearly when working with files\n\n")
+		// static guidelines first, then environment facts
+		b.WriteString("Guidelines:\n")
+		b.WriteString("- Be concise in your responses\n")
+		b.WriteString("- Show file paths clearly when working with files\n\n")
+	} else {
+		b.WriteString(strings.TrimSuffix(override, "\n") + "\n\n")
+	}
 
 	buildEnvironmentFacts(&b, env)
 
