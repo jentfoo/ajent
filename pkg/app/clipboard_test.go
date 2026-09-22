@@ -46,7 +46,7 @@ func TestCopySelectionNoPicker(t *testing.T) {
 	t.Parallel()
 
 	ui := plainTestUI(t)
-	_, _, ok := copySelection(ui)
+	_, ok := ui.CopySelection()
 	assert.False(t, ok)
 }
 

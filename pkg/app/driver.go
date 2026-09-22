@@ -694,10 +694,17 @@ func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *
 					}
 				}()
 			case tui.ControlCopySelection:
-				// off the control loop, like the image probe: a slow backend
-				// must not delay interrupts
+				// Resolve which row is highlighted here, on the loop and under lock,
+				// so the payload matches what was pressed even if navigation moves the
+				// cursor before the slow clipboard write finishes. Only that write runs
+				// off-loop, like the image probe.
+				text, ok := ui.CopySelection()
+				if !ok {
+					continue // a stale ctrl+x outlived its picker: silent no-op
+				}
 				go func() {
-					if notice, level, ok := copySelection(ui); ok {
+					notice, level, ok := copyText(text)
+					if ok {
 						ui.Notify(notice, level)
 					}
 				}()

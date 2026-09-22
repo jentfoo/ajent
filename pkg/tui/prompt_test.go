@@ -269,6 +269,43 @@ func TestUIPickerCopy(t *testing.T) {
 		assert.False(t, ok)
 	})
 
+	t.Run("resolve_before_write_keeps_rows_distinct", func(t *testing.T) {
+		// models the driver fix: each ctrl+x resolves its highlighted row at press
+		// time (synchronously), and only the clipboard write runs later. Resolving
+		// both presses before writing must keep the two rows' payloads distinct even
+		// though navigation moved between them.
+		u, v, pw := interactionUI(t)
+
+		items := []PickItem{
+			{Label: "user: hello", Copy: "hello world"},
+			{Label: "agent: hi", Copy: "hi there"},
+		}
+		done := make(chan error, 1)
+		go func() { _, _ = u.Pick("Rewind to", items, PickOptions{}); done <- nil }()
+
+		waitFor(t, u, v, "Rewind to")
+
+		// press ctrl+x on row 0 and resolve immediately (the fix resolves here,
+		// before any write or navigation).
+		press(t, pw, "\x18")
+		assert.Equal(t, ControlCopySelection, <-u.Controls())
+		first, ok := u.CopySelection()
+		require.True(t, ok)
+
+		// navigate to row 1 and press ctrl+x again; resolve immediately.
+		press(t, pw, "\x1b[B")
+		waitFor(t, u, v, "> agent: hi")
+		press(t, pw, "\x18")
+		assert.Equal(t, ControlCopySelection, <-u.Controls())
+		second, ok := u.CopySelection()
+		require.True(t, ok)
+
+		// the two resolutions stayed distinct; a driver that re-resolved at write
+		// time (after both presses and navigation) would collapse them to row 1.
+		assert.Equal(t, "hello world", first)
+		assert.Equal(t, "hi there", second)
+	})
+
 	t.Run("idle_ctrl_x_emits_nothing", func(t *testing.T) {
 		u, _, pw := interactionUI(t)
 
