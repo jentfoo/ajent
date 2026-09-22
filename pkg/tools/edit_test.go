@@ -242,7 +242,7 @@ func TestEditFailure(t *testing.T) {
 		require.True(t, res.IsError)
 		out := textOf(res)
 		assert.Contains(t, out, "nothing changes")
-		assert.Contains(t, out, `you wrote "60" where the file has "30"`)
+		assert.Contains(t, out, `the file has "30" differing from your oldText`)
 		assert.Contains(t, out, "\ttimeout := 30 * time.Second") // verbatim, copyable
 
 		res = e.editExec(t.Context(), // the retry the message asks for

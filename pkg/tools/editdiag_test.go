@@ -209,7 +209,7 @@ func TestSoleDifference(t *testing.T) {
 
 	t.Run("quotes_whole_tokens", func(t *testing.T) {
 		// a shared edge digit would otherwise report "409" against "6553"
-		assert.Equal(t, `you wrote "4096" where the file has "65536"; everything else matches`,
+		assert.Equal(t, `the file has "65536" differing from your oldText`,
 			soleDifference("payloadBytes = 4096", "payloadBytes = 65536"))
 	})
 

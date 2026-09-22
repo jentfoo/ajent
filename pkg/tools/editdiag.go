@@ -82,7 +82,7 @@ func soleDifference(old, text string) string {
 		strings.Contains(a, "\n") || strings.Contains(b, "\n") {
 		return ""
 	}
-	return fmt.Sprintf("you wrote %q where the file has %q; everything else matches", a, b)
+	return fmt.Sprintf("the file has %q differing from your oldText", b)
 }
 
 // selfReplaceIssue reports when an op repeats its oldText as its newText, leaving
