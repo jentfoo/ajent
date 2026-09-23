@@ -19,7 +19,7 @@ const (
 
 // builtinReadOnly are core tools that only ever read. Registry.ReadOnly is false
 // for them today (only MCP calls MarkReadOnly), so they match by name here.
-var builtinReadOnly = bulk.SliceToSet([]string{tools.ToolRead, tools.ToolGrep, tools.ToolFind, tools.ToolLs})
+var builtinReadOnly = bulk.SliceToSet(tools.ReadOnlyBuiltins)
 
 // coreWriteTools always mutate and never auto-allow on declared metadata, even if
 // a config glob or annotation were to mark them read-only by mistake.

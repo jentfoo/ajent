@@ -279,6 +279,24 @@ func TestLsRegisteredDisabledInBuiltins(t *testing.T) {
 	assert.Contains(t, reg.Names(), "ls")
 }
 
+func TestGitToolsRegisteredDisabled(t *testing.T) {
+	t.Parallel()
+
+	reg, err := Builtins(Options{Cwd: t.TempDir(), SessionID: "test"})
+	require.NoError(t, err)
+	for _, name := range []string{ToolGitStatus, ToolGitLog, ToolGitShow, ToolGitDiff} {
+		assert.NotContains(t, reg.Names(), name) // off by default like find and grep
+		assert.Contains(t, ReadOnlyBuiltins, name)
+		assert.Equal(t, SourceBuiltin, reg.Source(name))
+		assert.False(t, reg.ReadOnly(name)) // matched by name, not metadata
+	}
+
+	reg.SetEnabled([]string{ToolGitLog})
+	assert.Contains(t, reg.Names(), ToolGitLog)
+	_, ok := reg.Get(ToolGitLog)
+	assert.True(t, ok)
+}
+
 func TestRegistryUnitsCollapsesGroup(t *testing.T) {
 	t.Parallel()
 

@@ -21,7 +21,7 @@ func TestUnifiedDiff(t *testing.T) {
 	t.Parallel()
 
 	t.Run("renders_change", func(t *testing.T) {
-		d := unifiedDiff("a.go", "one\ntwo\nthree\n", "one\n2\nthree\n")
+		d := unifiedDiff("a.go", "a.go", "one\ntwo\nthree\n", "one\n2\nthree\n")
 		assert.Contains(t, d, "--- a.go")
 		assert.Contains(t, d, "@@")
 		assert.Contains(t, d, "-two")
@@ -29,7 +29,7 @@ func TestUnifiedDiff(t *testing.T) {
 	})
 
 	t.Run("empty_when_equal", func(t *testing.T) {
-		assert.Empty(t, unifiedDiff("a.go", "same\n", "same\n"))
+		assert.Empty(t, unifiedDiff("a.go", "a.go", "same\n", "same\n"))
 	})
 
 	t.Run("bounded", func(t *testing.T) {
@@ -38,7 +38,8 @@ func TestUnifiedDiff(t *testing.T) {
 			before.WriteString("old line\n")
 			after.WriteString("new line\n")
 		}
-		d := unifiedDiff("a.go", before.String(), after.String())
+		o := editOutcome{review: true, before: before.String(), after: after.String()}
+		d := editReport("a.go", 1, o)
 		assert.Contains(t, d, "truncated")
 		assert.Less(t, countLines(d), 500) // head and tail survive, the middle does not
 	})

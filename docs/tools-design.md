@@ -157,19 +157,25 @@ tools, ahead of any MCP group. The three are presented and toggled as one row. A
 single `subagents` entry (`RegisterGroup`) appears instead of three individual
 tools.
 
-| Tool   | Default  | Mode     |
+| Tool | Default | Mode |
 |--------|----------|----------|
-| `read` | enabled  | parallel |
-| `write`| enabled  | serial   |
-| `edit` | enabled  | serial   |
-| `bash` | enabled  | serial   |
+| `read` | enabled | parallel |
+| `write`| enabled | serial |
+| `edit` | enabled | serial |
+| `bash` | enabled | serial |
 | `find` | disabled | parallel |
 | `grep` | disabled | parallel |
-| `ls`   | disabled | parallel |
+| `ls` | disabled | parallel |
+| `git_status` | disabled | parallel |
+| `git_log` | disabled | parallel |
+| `git_show` | disabled | parallel |
+| `git_diff` | disabled | parallel |
 
 `find`/`grep`/`ls` are off by default: with `bash` available the model can use
 `rg`/`find`/`ls` directly. They exist for the sub-agent (which has no shell) and
-for configurations that run without `bash`.
+for configurations that run without `bash`. The four `git_*` readers share that
+default and that role. Their engine choice, safety model and sub-agent repo-context
+gate are covered in *Git inspection tools* below.
 
 ### read (`read.go`)
 
@@ -370,6 +376,206 @@ delegated investigation can `find`/`grep`/`ls` without ever reaching for shell.
 The plan workflow's planning and review scopes enable them explicitly for the
 same reason.
 
+### Git inspection tools (`git.go`, `status.go`, `log.go`, `show.go`, `diff.go`)
+
+The four git readers inspect repository content, and a repository is attacker-shaped
+input. The parent already has `bash`, so it can run `git` freely through the
+permission barrier. These tools exist (like find/grep/ls) for read-only sub-agents
+that have **no shell** and, more importantly, **no permission guard**. A child's
+tool set is structural: it gets exactly the named read-only tools and nothing can
+widen it. So a git tool offered to a child must be *verifiably* read-only against an
+untrusted repository, not merely intended to be.
+
+The four operations:
+
+| Tool | Operation |
+|------|-----------|
+| `git_status` | branch/HEAD, staged/unstaged changes as short paths + counts |
+| `git_log` | recent commits: hash, author date, subject and an optional path filter |
+| `git_show` | one commit (or ref): full metadata plus the patch it introduces |
+| `git_diff` | diff between two refs, of a single commit, or against the working tree (`to: "worktree"`) |
+
+#### Why exec of system git is not enough
+
+The obvious implementation shells out to the `git` on PATH, exactly as
+`walk.go` does for `ls-files` and `rev-parse`. That works there because those two
+porcelain commands do not execute repository-controlled code. These tools are
+different. A work tree is attacker-shaped: `.gitattributes`, `.git/config`,
+`core.hooksPath` and pager/alias configuration all come from whoever owns the
+checkout, and several read-only-looking plumbing paths turn that into execution:
+
+- **textconv / clean / smudge filters**: a `*.pdf diff=...` or `filter=` entry
+  in `.gitattributes` names an arbitrary command git runs when materialising blob
+  content for `show`, `diff` and `log -p`. This is the classic RCE surface: clone
+  a malicious repo, run any read-only history inspection, and code executes.
+- **hooks**: `core.hooksPath` plus hook scripts can fire on porcelain that looks
+  read-only (e.g. index-touching paths). Not all ops hit them, but the blast radius
+  is wider than a single command.
+- **pagers / aliases / config includes**: `git -c core.pager=...` style defaults
+  can pull in environment or subprocesses.
+
+The permission barrier would normally catch this (a git invocation goes through
+the shell analyser and VCS metadata is excluded from roots), but a **sub-agent has
+no barrier**. Its tool set *is* the gate. Executing system `git` there turns an
+attacker's repository into arbitrary local code execution with no approval step.
+That defeats structural read-only filtering entirely.
+
+The two viable engines:
+
+1. **System `git` exec.** Matches existing convention (`walk.go`, `bash`),
+   battle-tested output, fast on huge histories, zero new dependency. But it runs
+filters/hooks and is only safe when the repo is trusted (i.e. inside the main loop
+where the barrier vets each call).
+2. **go-git (pure Go), module `github.com/go-git/go-git/v5`.** Parses objects,
+   trees, refs and diffs in-process with no subprocess: it never reads a
+filter/hook into an executable form, so a malicious work tree cannot run code.
+Trade-offs: slower on large histories (notably patches over deep logs), a sizable
+dependency, and its diff output needs formatting to match what the model expects
+from git. (v6 existed only as alphas at implementation time, so the tools pin the
+latest stable v5.)
+
+**Decision: go-git is the engine for these tools.** The deciding factor is not
+convenience but the sub-agent safety invariant that structural read-only must hold
+against an untrusted repository. System `git` cannot provide that guarantee, while
+go-git can.
+The cost (a dependency and slower history walking) is acceptable because these are
+opt-in, off-by-default tools used by no-shell children on focused investigations.
+
+Where the two differ in output shape or correctness, a tool degrades to a clear
+error rather than silently emitting something git-shaped but wrong. go-git's diff
+has known edge cases. A `git_diff` that cannot faithfully represent a rename,
+binary delta or octopus merge says so and offers what it can (e.g. "N files
+changed, binary deltas omitted") instead of emitting a misleading unified diff.
+Unified hunks are rendered by the same go-udiff engine the `edit` tool's change
+preview uses (`unidiff.go`), not go-git's encoder, so both surfaces produce one
+diff dialect. go-git supplies the object model (trees, changes and rename
+detection). `git.go` shapes git-style per-file blocks around the shared hunks.
+
+**Why not both, switchable.** A runtime fallback from go-git to system `git`
+sounds pragmatic ("go-git in a sub-agent, git otherwise") but is rejected: the
+engine that runs *inside* a child is the one with the safety requirement. A config
+flag letting an operator flip a child's tool onto system `git` would reintroduce
+exactly the RCE surface this design removes and split behaviour between two code
+paths for no user-visible gain. The tools are go-git only. Operators who want full
+git power already have `bash` in the parent.
+
+#### Package shape and conventions
+
+The four follow the find/grep/ls conventions exactly:
+
+- a params struct with `json`/`desc` tags, decoded via `decode`
+  (`strutil.DecodeArgs`)
+- `Name()` returning a `Tool*` constant, while `Label` returns the bare tool name
+  (the argument already rides on the committed header)
+- `Mode() agent.ModeParallel`. These are pure reads and may run alongside siblings
+- implement `selfBounding()` so the registry's generic bound does not double-wrap,
+  then spill via `truncateOutput(t.sessionID, ...)` like find/grep/ls
+
+Files under `pkg/tools/`, mirroring the existing built-ins:
+
+```
+git.go        # shared: repo open, object lookup, output shaping, engine errors
+status.go     # git_status
+log.go        # git_log
+show.go       # git_show
+diff.go       # git_diff
+```
+
+Every tool sets `ToolResult.Display` to the same text as model-visible `Content`,
+so history renders it through the shared output-head rule (`tui-design.md`) instead
+of a bare header. Model-facing output is LF-only (the package-wide convention) and
+bounded by `GitResultLimit()`.
+
+New bound in `pkg/tools/limits.go`:
+
+```go
+gitOutput = Limit{Lines: 100, Bytes: 16 << 10} // like find/grep/ls
+```
+
+exposed as `func GitResultLimit() Limit`, added to the configurable `Limits` struct
+(`tools.limits`) and the README's tool-limits entry. One bound covers all four
+readers and also caps the `git_log` default walk (30 commits), while an explicit
+`limit` walks up to `maxLogCommits` (1000) before stopping with an explicit note.
+
+The plan workflow enables find/grep/ls explicitly for its planning and review
+scopes. The git tools join that same explicit enable so a planner/reviewer can
+inspect history without shell. See `plan-design.md`, which needs no new seam since
+it names read-only built-ins by name already.
+
+#### Repo resolution
+
+Each call takes an optional `path` (default session cwd, resolved through the shared
+`PathPolicy`). The repo root is found from that path, so every object read is scoped
+to **that** repository. A `git_show <sha>` never resolves against some other
+checkout reachable via `.git` alternates or submodules unless the caller's path
+lands inside it. This mirrors how `repoFiles` keeps `ls-files` scoped with a `.`
+pathspec and drops `../` entries.
+
+#### Registration, defaults and headless scope
+
+In `builtins.go`, registered **disabled** like find/grep/ls under source `builtin`:
+
+```go
+reg.Register(&gitStatusTool{policy: policy}, false)
+reg.Register(&gitLogTool{policy: policy}, false)
+reg.Register(&gitShowTool{policy: policy}, false)
+reg.Register(&gitDiffTool{policy: policy}, false)
+```
+
+The names join `ReadOnlyBuiltins` in `builtins.go`, so both the headless
+(`--read-only`) scope and, via its own copy, the sub-agent filter pick them up:
+
+```go
+const (
+    ToolGitStatus = "git_status"
+    ToolGitLog    = "git_log"
+    ToolGitShow   = "git_show"
+    ToolGitDiff   = "git_diff"
+)
+
+var ReadOnlyBuiltins = []string{
+    ToolRead, ToolGrep, ToolFind, ToolLs,
+    ToolGitStatus, ToolGitLog, ToolGitShow, ToolGitDiff,
+}
+```
+
+The permission barrier's own set (`pkg/permit/classify.go`) is derived from
+`ReadOnlyBuiltins`, so all four names are also allow-listed there in one place.
+Because they are read-only built-ins by name, the barrier runs them free in
+`allow-read` mode, which is correct since go-git cannot mutate anything. Under the
+default headless scope they stay off unless configured via `tools.enabled` or
+listed in `--allow-tools`. No special-case code is needed beyond the constant list.
+
+The sub-agent repo-context gate (a child gets git tools only when its own cwd is
+inside a work tree) lives with the rest of that filter in
+`pkg/subagent/toolset.go`, described in `subagents-design.md`. The parent's enable state
+stays ignored, and the `agent_*` bar stays applied last.
+
+#### Work-tree diffs
+
+`git_diff {to: "worktree"}` covers uncommitted changes (a user refinement). Base
+defaults to HEAD and `from` names any commit-ish, so one call answers both "what
+changed since I last committed" and "what changed since release-X". Work-tree mode
+diffs **everything since the base**, committed and uncommitted together, as `git diff
+<ref>` does. It walks the union of the base tree's paths and the status entries,
+never just the HEAD-relative status. Untracked files are named in a trailing note,
+never diffed, matching git. `worktree` is only valid as `to` (it is the newer
+state), so `from: "worktree"` is a usage error.
+
+#### Prompt surface
+
+Descriptions must state what each tool reads, because a child learns them from the
+schema channel alone (no "Available tools" list in its system block). Each should:
+
+- say it operates on the repository at `path` and is **read-only**
+- bound its scope ("the repo containing path", never an arbitrary ref outside it)
+- tell the model when output was truncated or a delta could not be rendered
+  faithfully, so a partial answer is never mistaken for complete.
+
+Provenance rules in `prompt-design.md` apply: injected git content carries no
+special marker (it is ordinary tool output), but a summary that folds several calls
+must name what it came from. There is no new prompt block, just tools like any other.
+
 ### ask_user (`ask.go`)
 
 Also off by default. `ask_user(question, options?)` puts a decision back to the
@@ -440,13 +646,14 @@ elided. The host calls `Reset` from every rebuild path, which makes the next
 ### Output limits (`limits.go`, `spill.go`)
 
 Each tool has a line/byte budget: bash and other tools 200 lines/64 kB, read
-1000 lines/128 kB, grep/find/ls 100 lines/16 kB. Whichever bound is reached
+1000 lines/128 kB, and the find/grep/ls readers share 100 lines/16 kB with the
+four `git_*` readers (exposed as `GitResultLimit()`). Whichever bound is reached
 first truncates.
 
 Recovery is one shared path with a single exception:
 
-- **Spill** (bash, grep, find, ls and the generic registry bound). Truncation is
-  head-only at whole-line boundaries: keep the leading lines that fit either
+- **Spill** (bash, grep, find, ls, the `git_*` readers and the generic registry
+  bound). Truncation is head-only at whole-line boundaries: keep the leading lines that fit either
   plus a spill file under `os.TempDir()/ajent-<session>` holding the complete
 
   Every spill is its own exclusive fresh file in that session dir, so concurrent

@@ -100,8 +100,8 @@ Each job builds a fresh agent:
   resolved through the registry when set, else inherited from the session, being
   inherited verbatim: a user who dialled reasoning down meant it. parent as
   **child spend** (see accounting below). The parent's context bar never
-- **Tools** — `&toolSet{tools: childTools(src)}` when a `ToolSource` is present,
-  else no tools at all. AGENTS.md), `SystemSnippets: []string{childContract}`,
+- **Tools**: `&toolSet{tools: childTools(src, inRepo)}` when a `ToolSource` is present,
+else no tools at all. AGENTS.md), `SystemSnippets: []string{childContract(inRepo)}`,
   no recorder, no resume.
 The prompt is `agent.Input{Text: taskPrompt(task, instructions)}`. After it
 returns, the summary is read off the **last assistant message** in
@@ -129,9 +129,14 @@ and report whether a named tool is read-only.
 A child's tool set is a fixed, structural subset of `Registry.All()`:
 
 - Include when the name is one of the read-only built-ins (`read`, `grep`,
-  `find`, `ls`) **or** `src.ReadOnly(name)` (MCP hints / config globs). so
-  nothing can configure a child into spawning grandchildren. by default in the
-  parent, still reach a child that has no shell. `bash` is never
+  `find`, `ls`) **or** `src.ReadOnly(name)` (MCP hints / config globs). The
+  four `git_*` readers (`git_status`, `git_log`, `git_show`, `git_diff`) join
+  only when the child's own cwd is inside a git work tree (`inRepo`,
+  computed once per job in `run.go` via `git rev-parse`, the same check
+  `tools.IsGitRepo` makes). Outside a repo the git readers drop while
+  find/grep/ls survive, so git capability is never advertised where it cannot
+  apply. The prompt contract below names them to match: git appears in a
+  child's listed tools only when that same `inRepo` is true.
 
 This filter, not the permission barrier or a prompt instruction, is what makes a
 child read-only: there is no user at its end to approve anything else.
@@ -347,7 +352,10 @@ constraints (structural, since the tool set is filtered before the model ever
 sees it) and that the final assistant message **is** the entire return value.
 The text is quoted verbatim, and owned, by `prompt-design.md`; there is
 deliberately no "Available tools" list in a child's system block (the schema
-channel carries it).
+channel carries it). The contract names only read/grep/find/ls plus MCP. The
+four git readers are added to that sentence when the child's cwd sits inside a
+work tree (`inRepo`, the same flag gating the tool set), so the advertised
+capability always matches what a call can actually answer.
 
 ## Testing
 

@@ -124,7 +124,7 @@ guarantee the workflow exists to provide.
 
 | Phase | Model | Tools |
 |---|---|---|
-| Planning | planner | `read grep find ls bash` + `agent_*` when registered + `ask_user` + `dev_implement` |
+| Planning | planner | `read grep find ls bash git_status git_log git_show git_diff` + `agent_*` when registered + `ask_user` + `dev_implement` |
 | Implementing | implementor (the model in use at `/plan`) | the tool set saved at `/plan`, minus anything the workflow owns, + `dev_review` |
 | Reviewing | planner | as planning, minus `dev_implement`, plus `dev_revise` + `dev_complete` |
 

@@ -28,6 +28,7 @@ var (
 	findResult  = Limit{Lines: 100, Bytes: 16 << 10}
 	grepResult  = Limit{Lines: 100, Bytes: 16 << 10}
 	lsResult    = Limit{Lines: 100, Bytes: 16 << 10}
+	gitOutput   = Limit{Lines: 100, Bytes: 16 << 10}
 	otherOutput = Limit{Lines: 200, Bytes: 64 << 10} // MCP and any tool without its own bound
 	// refInject bounds a single @file injected in full; above either axis the
 	// reference is annotated with its shape instead so the model reads it explicitly.
@@ -51,6 +52,9 @@ func GrepResultLimit() Limit { return limitRead(&grepResult) }
 
 // LsResultLimit returns the ls result bound.
 func LsResultLimit() Limit { return limitRead(&lsResult) }
+
+// GitResultLimit returns the bound shared by the four git_* readers.
+func GitResultLimit() Limit { return limitRead(&gitOutput) }
 
 // OtherLimit returns the bound applied to tools without their own: MCP servers,
 // the sub-agent trio, plan tools and any extension.
@@ -79,6 +83,7 @@ type Limits struct {
 	Find      Limit `json:"find,omitzero"`
 	Grep      Limit `json:"grep,omitzero"`
 	Ls        Limit `json:"ls,omitzero"`
+	Git       Limit `json:"git,omitzero"`   // shared by git_status/log/show/diff
 	Other     Limit `json:"other,omitzero"` // tools without their own bound
 	RefInject Limit `json:"refInject,omitzero"`
 	RefTotal  Limit `json:"refTotal,omitzero"`
@@ -94,6 +99,7 @@ func ApplyLimits(l Limits) {
 	applyLimit(&findResult, l.Find)
 	applyLimit(&grepResult, l.Grep)
 	applyLimit(&lsResult, l.Ls)
+	applyLimit(&gitOutput, l.Git)
 	applyLimit(&otherOutput, l.Other)
 	applyLimit(&refInject, l.RefInject)
 	applyLimit(&refTotal, l.RefTotal)
@@ -107,6 +113,7 @@ func LimitsFrom(l config.ToolLimits) Limits {
 		Find:      limitFrom(l.Find),
 		Grep:      limitFrom(l.Grep),
 		Ls:        limitFrom(l.Ls),
+		Git:       limitFrom(l.Git),
 		Other:     limitFrom(l.Other),
 		RefInject: limitFrom(l.RefInject),
 		RefTotal:  limitFrom(l.RefTotal),

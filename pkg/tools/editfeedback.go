@@ -4,17 +4,12 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	udiff "github.com/aymanbagabas/go-udiff"
 )
 
 // editTextLimit bounds the text an edit result carries, whether a diff or the
 // closest-match hint. Head and tail survive, so both seams of an oversized block
 // reach the model.
 var editTextLimit = Limit{Lines: 400, Bytes: 32 << 10}
-
-// diffContext is how many lines of unchanged text frame each change.
-const diffContext = 3
 
 // editReport renders a successful edit for the model: summary line, notes,
 // and the diff when review asks for one.
@@ -25,8 +20,9 @@ func editReport(path string, count int, o editOutcome) string {
 		b.WriteString("\n" + n)
 	}
 	if o.review {
-		if d := unifiedDiff(path, o.before, o.after); d != "" {
-			b.WriteString("\n\n" + d)
+		if d := unifiedDiff(path, path, o.before, o.after); d != "" {
+			bounded, _ := Elide(d, editTextLimit)
+			b.WriteString("\n\n" + bounded)
 		}
 	}
 	return b.String()
@@ -66,25 +62,6 @@ func seamNote(after string, edited []lineRange) string {
 		}
 	}
 	return ""
-}
-
-// unifiedDiff renders a plain unified diff of before and after, empty when they
-// match. pkg/tools never imports pkg/tui, so this drives go-udiff directly
-// rather than reusing the theme-coupled renderer there.
-func unifiedDiff(path, before, after string) string {
-	if before == after {
-		return ""
-	}
-	edits := udiff.Lines(before, after)
-	if len(edits) == 0 {
-		return ""
-	}
-	out, err := udiff.ToUnified(path, path, before, edits, diffContext)
-	if err != nil || out == "" {
-		return ""
-	}
-	bounded, _ := Elide(strings.TrimRight(out, "\n"), editTextLimit)
-	return bounded
 }
 
 // lineStarts returns each line's byte offset in the LF-joined text.

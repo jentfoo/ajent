@@ -86,7 +86,7 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	// an overwrite displaced content the model never saw, since it supplied the
 	// whole new file; a new file has nothing to report beyond its size
 	if readErr == nil {
-		if d := unifiedDiff(p.Path, normalizeToLF(string(existing)), normalizeToLF(p.Content)); d != "" {
+		if d := unifiedDiff(p.Path, p.Path, normalizeToLF(string(existing)), normalizeToLF(p.Content)); d != "" {
 			msg += "\n\n" + d
 		}
 	}

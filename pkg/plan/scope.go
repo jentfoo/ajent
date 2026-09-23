@@ -8,7 +8,9 @@ import (
 
 // readOnlyBase is what the planner and reviewer investigate with. Neither is given
 // write or edit; bash stays gated by the permission barrier as everywhere else.
-var readOnlyBase = []string{"read", "grep", "find", "ls", "bash"}
+// The git readers let a planner inspect history without shell.
+var readOnlyBase = []string{"read", "grep", "find", "ls", "bash",
+	"git_status", "git_log", "git_show", "git_diff"}
 
 // implementorBase stands in when nothing was captured at /plan, so a workflow
 // started without a readable tool set still hands the implementor a usable one

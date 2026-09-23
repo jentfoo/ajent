@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	osexec "os/exec"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -128,4 +130,26 @@ func TestRunInheritsModel(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(sp.Requests()) > 0 }, time.Second, 5*time.Millisecond)
 	assert.Equal(t, "child-model", sp.Requests()[0].Model.ID)
+}
+
+func TestGitInWorkTree(t *testing.T) {
+	t.Parallel()
+
+	t.Run("inside_repo", func(t *testing.T) {
+		dir := t.TempDir()
+		init := osexec.CommandContext(t.Context(), "git", "init", "-q")
+		init.Dir = dir
+		if err := init.Run(); err != nil {
+			t.Skipf("git unavailable: %v", err)
+		}
+		assert.True(t, gitInWorkTree(t.Context(), dir))
+	})
+
+	t.Run("outside_repo", func(t *testing.T) {
+		assert.False(t, gitInWorkTree(t.Context(), t.TempDir()))
+	})
+
+	t.Run("empty_cwd", func(t *testing.T) {
+		assert.False(t, gitInWorkTree(t.Context(), ""))
+	})
 }

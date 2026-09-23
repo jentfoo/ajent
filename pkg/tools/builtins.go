@@ -15,9 +15,20 @@ const (
 	ToolLs   = "ls"
 )
 
+// Built-in tool names for the git history readers. They parse repositories in
+// process (go-git), so an untrusted checkout cannot execute code through
+// filters, hooks or pagers.
+const (
+	ToolGitStatus = "git_status"
+	ToolGitLog    = "git_log"
+	ToolGitShow   = "git_show"
+	ToolGitDiff   = "git_diff"
+)
+
 // ReadOnlyBuiltins names the built-in tools that only read. pkg/subagent keeps
 // its own copy (readOnlyBuiltins) because it may not import this package.
-var ReadOnlyBuiltins = []string{ToolRead, ToolGrep, ToolFind, ToolLs}
+var ReadOnlyBuiltins = []string{ToolRead, ToolGrep, ToolFind, ToolLs,
+	ToolGitStatus, ToolGitLog, ToolGitShow, ToolGitDiff}
 
 // ToolAskUser is the built-in question tool's name.
 const ToolAskUser = "ask_user"
@@ -38,7 +49,7 @@ type Options struct {
 }
 
 // Builtins returns a registry holding read, write, edit and bash enabled plus
-// find, grep, ls and ask_user registered disabled.
+// find, grep, ls, the git history readers and ask_user registered disabled.
 func Builtins(opts Options) (*Registry, error) {
 	cwd := opts.Cwd
 	if cwd == "" {
@@ -61,6 +72,10 @@ func Builtins(opts Options) (*Registry, error) {
 	reg.Register(&findTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&grepTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&lsTool{policy: policy, tracker: tracker, sessionID: opts.SessionID}, false)
+	reg.Register(&gitStatusTool{policy: policy, sessionID: opts.SessionID}, false)
+	reg.Register(&gitLogTool{policy: policy, sessionID: opts.SessionID}, false)
+	reg.Register(&gitShowTool{policy: policy, sessionID: opts.SessionID}, false)
+	reg.Register(&gitDiffTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&askUserTool{ask: opts.Ask}, false)
 	// a question changes nothing on disk, so it never needs approval
 	reg.MarkReadOnly([]string{ToolAskUser})

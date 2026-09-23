@@ -578,9 +578,13 @@ Every investigation child gets a fresh system block built by the same
 
 - `<INTRO>`: who the agent is (an isolated research sub-agent of a coding agent)
 - `<CONSTRAINS FOR USE>`: read-only constraints, only `read`, `grep`, `find`,
-  `ls` and any MCP tool marked read-only, as typed tool calls rather than shell,
+  `ls` and any MCP tool marked read-only as typed tool calls rather than shell,
   with no editing or destructive operations. The constraint is structural, not
   advisory, because the tool set is filtered before the model ever sees it.
+  Inside a git work tree the same sentence also names the four `git_*` history
+  readers (`git_status`, `git_log`, `git_show`, `git_diff`), matching the
+  repo-gated tool set. Outside one they are omitted so the advertised list is
+  never wider than what a call can answer.
 - `<EXPECTED OUTPUT>`: the final assistant message **is** the entire return
   value, a single self-contained summary of everything discovered, with
   conclusions, key file paths and line numbers, caveats, and no tool calls.

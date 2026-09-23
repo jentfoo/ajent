@@ -15,7 +15,8 @@ func TestControllerStart(t *testing.T) {
 		assert.Equal(t, PhasePlanning, c.phase)
 		assert.Equal(t, plannerModel, c.planner)
 		assert.Equal(t, implementorModel, c.implementor)
-		assert.Equal(t, []string{"read", "grep", "find", "ls", "bash", "agent_start",
+		assert.Equal(t, []string{"read", "grep", "find", "ls", "bash", "git_status",
+			"git_log", "git_show", "git_diff", "agent_start",
 			AskUserTool, DevImplementTool}, f.lastTools())
 		assert.Len(t, f.added, 4)
 		// planning stays on the current branch, but must run on the planner model

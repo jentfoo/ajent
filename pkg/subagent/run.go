@@ -5,6 +5,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
+
+	osexec "os/exec"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -28,6 +31,22 @@ const thinkingPreface = "(sub-agent produced no summary; its internal reasoning 
 // errNoSummary is returned when neither text nor usable reasoning exists.
 var errNoSummary = errors.New("sub-agent produced no output")
 
+// gitInWorkTree reports whether cwd is inside a git work tree. It shells out
+// to system git on purpose: the answer only decides whether the (go-git based,
+// subprocess-free) git tools are offered, and rev-parse executes nothing from
+// the repository. Same check as tools.IsGitRepo, which this package may not
+// import.
+func gitInWorkTree(ctx context.Context, cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := osexec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--is-inside-work-tree")
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
 // run builds and drives one child agent, returning its final summary. It runs on
 // the job's own goroutine with a per-job cancellable context.
 func (m *Manager) run(ctx context.Context, j *job) (string, error) {
@@ -47,8 +66,10 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 	}
 
 	var tools agent.ToolSet
-	if src := m.opts.Tools; src != nil {
-		tools = &toolSet{tools: childTools(src)}
+	src := m.opts.Tools
+	inRepo := src != nil && gitInWorkTree(ctx, m.opts.Env.Cwd)
+	if src != nil {
+		tools = &toolSet{tools: childTools(src, inRepo)}
 	}
 
 	a := agent.New(state, agent.Options{
@@ -57,7 +78,7 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		Sinks:               []agent.Sink{sink},
 		Env:                 m.opts.Env,
 		ProjectInstructions: m.opts.ProjectInstructions,
-		SystemSnippets:      childSnippets(),
+		SystemSnippets:      childSnippets(inRepo),
 	})
 
 	if err := a.Prompt(ctx, agent.Input{Text: taskPrompt(j.task, j.instructions)}); err != nil {

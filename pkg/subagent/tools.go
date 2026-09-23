@@ -17,7 +17,7 @@ const placeholder = "(sub-agent produced no output)"
 
 // sharedToolHint is appended to every agent_* description so a model learns the
 // contract up front instead of by trial.
-const sharedToolHint = "A sub-agent has no session context: pass file paths and key facts, not content (it can read files itself). It is read-only (read, grep, find, ls plus any MCP tool marked read-only); anything needing write, edit or shell must be done directly. Its final message is the entire return value."
+const sharedToolHint = "A sub-agent has no session context: pass file paths and key facts, not content (it can read files itself). It is read-only (the built-in reader tools such as read, grep, find, ls plus any MCP tool marked read-only; inside a git work tree also the four git_* history readers); anything needing write, edit or shell must be done directly. Its final message is the entire return value."
 
 // startToolName is the tool a batch reserves ordered ids for; see Manager.Reserve.
 const startToolName = "agent_start"

@@ -9,9 +9,14 @@ import (
 func TestChildContractVerbatim(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, childContract, "read-only tools: read, grep, find, ls")
-	assert.Contains(t, childContract, "FINAL assistant message must be a single, self-contained summary")
-	assert.Contains(t, childContract, "Do not emit tool calls in that final message")
+	assert.Contains(t, childContract(true), "read-only tools: read, grep, find, ls")
+	assert.Contains(t, childContract(false), "read-only tools: read, grep, find, ls")
+	assert.NotContains(t, childContract(false), "git_")
+	for _, name := range gitToolNames {
+		assert.Contains(t, childContract(true), name)
+	}
+	assert.Contains(t, childContract(true), "FINAL assistant message must be a single, self-contained summary")
+	assert.Contains(t, childContract(false), "Do not emit tool calls in that final message")
 }
 
 func TestContinueNudgeVerbatim(t *testing.T) {
@@ -35,8 +40,8 @@ func TestTaskPromptFramesInstructionsAndTask(t *testing.T) {
 func TestChildSnippetsIsSingleContract(t *testing.T) {
 	t.Parallel()
 
-	s := childSnippets()
+	s := childSnippets(true)
 	if assert.Len(t, s, 1) {
-		assert.Equal(t, childContract, s[0])
+		assert.Equal(t, childContract(true), s[0])
 	}
 }

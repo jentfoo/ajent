@@ -111,7 +111,9 @@ func (b *hintBoard) ShowFor(text, short string, d time.Duration) *hintSlot {
 		return s
 	}
 	timer := time.AfterFunc(d, s.Free)
-	s.stop = func() { _ = timer.Stop() }
+	b.mu.Lock()
+	s.stop = func() { _ = timer.Stop() } // under the lock: Free may already be running
+	b.mu.Unlock()
 	return s
 }
 
