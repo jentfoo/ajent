@@ -229,9 +229,9 @@ duplicate context message would waste tokens.
 Two details keep that suppression from swallowing a result:
 
 - The wait selects over `j.done`, the timeout and the turn context, and Go picks
-  uniformly among ready cases. A job finishing in the same instant the timer fires
-  the branch re-checks completion before reporting progress: a closed or terminal
-  job is never reported as still running.
+  uniformly among ready cases. When a job finishes in the same instant the
+  timer fires, that branch re-checks completion before reporting progress: a
+  closed or terminal job is never reported as still running.
 - An empty-handed poll (its timer fired or the turn was interrupted) may leave its
   last poller gone with `consumed` still false; recovery then calls `onComplete`
   again, which checks both `pending` and `noticeBatch`, so the re-offer can never

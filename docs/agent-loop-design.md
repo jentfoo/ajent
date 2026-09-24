@@ -87,8 +87,8 @@ Constraints that keep it honest:
 - Arguments stream as **partial JSON**, so a newline inside an argument is the
   two-character `\n` escape, not a byte. Counting tracks escapes mid-escape so
   `\\n` (a literal backslash then n) is never miscounted as a line break.
-- Events always carry an id, resolved on first before position, so progress can be
-  matched to the right call even when ids arrive out of order.
+- Events always carry an id, resolved by identity rather than position, so
+  progress can be matched to the right call even when ids arrive out of order.
 - The target is looked up **by argument name** (`path`, `file_path`, …), never by
   position: a marshalled Go map sorts its keys.
 - Progress must not repaint per token; rendering stays deterministic under test,
@@ -187,7 +187,7 @@ once at startup; absent or non-positive means unlimited.
 A step counts one model reply. Recovery — a stream re-request or the overflow
 compact-retry — reruns within the step and never advances it, so `MaxSteps` and
 `TurnResult.Steps` count replies, not attempts. When the cap fires with calls
-still unanswered, the fill answers them with its own marker,
+still unanswered, it fills one in with its own marker,
 `not run: the turn hit its step limit`, not `interrupted by user`: the turn was
 capped, not cancelled, and the transcript says which one happened.
 
@@ -357,8 +357,7 @@ Two kinds of mid-turn input:
   `@` reference must therefore be dropped and re-read when its message is
   re-sent, never left stale in context.
 - Every `Input.Before` and `Input.After` message is appended with the
-  **injected**
-flag set: by definition they carry system-staged context (`@` reads, `/init`'s
+  **injected** flag set: by definition they carry system-staged context (`@` reads, `/init`'s
 survey, staged shell results), never a typed prompt, so recall excludes all of
 it.
 - An injected steer with visible text is echoed to the sink (`UserPrompt`) when

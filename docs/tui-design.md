@@ -709,7 +709,8 @@ three lines of surrounding code, matching git's default. Whole-file rendering
 was tried and reverted: reprinting a large file around a two-line edit buries
 the change it is meant to show.
 
-Every row carries a right-aligned line number and a ` `/`-`/`+` marker;
+Every row carries a right-aligned line number and one of three gutter markers:
+a single space for context rows, `-` for deletions, or `+` for additions;
 deletions keep their old-file number, everything else numbers as the new file.
 The gutter is sized from the whole file, so it does not jump between hunks. Hunk
 headers follow git in dropping the count when a side spans one line

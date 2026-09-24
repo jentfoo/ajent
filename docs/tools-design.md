@@ -61,8 +61,8 @@ methods on `Registry`:
   `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be
   detected
 - `Preview(call)` → `(Change, ok)` — dispatches to a tool's optional `Previewer`
-  (`editTool`, `writeTool`). `Change{Path, Before, After}` is what the call
-  would
+  (`editTool`, `writeTool`). `Change{Path, Before, After}` describes what the
+  call would write, rendered before execution.
 - `MustSerialize(calls)` — reports whether any call would prompt, so dispatch
   runs the batch serially and approval dialogs open in submission order.
 ### Guards (`guard.go`, `asker.go`)
@@ -99,6 +99,7 @@ Invariants:
   like `allow-all`, which never prompts, would otherwise show nothing at all.
 - A `Preview` error (bad arguments, unreadable file) renders nothing and lets
   `Execute` surface its own error. Tools must therefore not rely on the render
+  having succeeded before execution.
 
 Cost: write/edit read the target file twice per call (preview, then execute).
 
@@ -237,8 +238,8 @@ what differed, so the next edit is written correctly. Each differing run is
 widened to whole identifier and number tokens before it is quoted, since a value
 and the file's often share an edge digit (`4096` against `65536`) and a
 byte-level cut would quote back halves of a number; a non-exact match names
-every line that drifted. The canon tier tells a trailing-whitespace difference
-trailing-whitespace difference from a lookalike by trailing-trim equality rather
+every line that drifted. The canon tier tells a trailing-whitespace
+difference from a lookalike by trailing-trim equality rather
 than by stripping all whitespace, which folds an nbsp away and misreports it,
 and names the characters that differed.
 
@@ -652,14 +653,16 @@ first truncates.
 Recovery is one shared path with a single exception:
 
 - **Spill** (bash, grep, find, ls, the `git_*` readers and the generic registry
-  bound). Truncation is head-only at whole-line boundaries: keep the leading lines that fit either
-  plus a spill file under `os.TempDir()/ajent-<session>` holding the complete
+  bound). Truncation is head-only at whole-line boundaries: keep the leading
+  lines that fit within the budget, writing the complete remainder to a fresh
+  file under `os.TempDir()/ajent-<session>`.
 
   Every spill is its own exclusive fresh file in that session dir, so concurrent
   or sequential spills never share a path and each footer pointer names exactly
   one call's output.
 - **Native paging** (read). The source file is the recovery: the footer names
   the next offset and nothing is written to disk. A range wider than the limit
+  spills instead of truncating.
 
 `Elide`, rune-capped head and tail with a marker, survives for compaction's
 structural reduction and edit feedback only.

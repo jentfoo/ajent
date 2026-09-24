@@ -283,7 +283,7 @@ Rules:
 ## `/init` project survey (`pkg/projinit/prompt.go`)
 
 Three surfaces, shaped by one fact:
-**the survey is data the final pass has not seen produced.** Stages 1 and 2
+**the survey is data the final pass never saw being produced.** Stages 1 and 2
 spend no model tokens: they run the real `read`, `agent_start` and `agent_poll`
 tools and let their genuine call + result pairs carry the findings, so the
 distilling model reads them as its own tool output rather than as a pasted
@@ -468,7 +468,7 @@ complete, and edit nothing yourself.
 **Implementation kickoff.** The first and only message of a fresh root. It opens
 by saying so ("You have no prior context. Everything you need is below."), then
 `<plan>`, and `<revision_instructions>` on later rounds, described as work still
-outstanding. It asks the model to verify the way the project does, and to call
+outstanding. It asks the model to verify its work as it goes, and to call
 `dev_review` with a summary, warning that review starts anyway if it stops. The
 summary's description says plainly that the reviewer sees none of this
 conversation and only learns what it reports, which is why the field is
@@ -544,8 +544,8 @@ destruction, system or package changes, the network in either direction (reading
 from it exfiltrates), unaccountable execution and credential access. An
 **in-scope** `mkdir`/`rmdir` never reaches it: the barrier resolves
 those path arguments itself, and an out-of-scope one still goes to the model
-like any other command. Ambiguity resolves to `unsure`, never allow`, and a `cd`
-into the workspace never launders a later absolute path.
+like any other command. Ambiguity resolves to `unsure`, never `allow`, and a
+`cd` into the workspace never launders a later absolute path.
 
 `Subject.AllowWrite` selects the rule set and is part of the **cache key**: the
 LRU survives a mode change, so without it one mode's verdict would answer for

@@ -18,6 +18,8 @@ consumes as plain facts:
 - **Tools** — remote tools appear in the ordinary registry, namespaced to avoid
   collisions and subject to per-server filtering, enable state and read-only
   marking. Re-discovery happens on `tools/list_changed`; disconnect/reload go through `/mcp`.
+- **Lifecycle** — one supervisor per configured server handles preload,
+  first-message load, reconnect and `/mcp` reload/disconnect.
 ## Boundary rules
 
 The dependency edge is load-bearing. The protocol layer (transports, JSON-RPC,

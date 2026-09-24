@@ -111,9 +111,9 @@ only `git status` to go on.
 Both the revision and the retry counts are bounded by small constants.
 
 An implementation turn that ends in a provider error **or** in `StopMaxTokens`
-(the step limit, or an output cut short) stopped before the work was done, so it
-is retried rather than reviewed. Reviewing it would judge an implementation that
-never finished. Only a clean stop advances to review.
+(the step limit, or an output cut short) has stopped before the work was done,
+so it is retried rather than reviewed. Reviewing it would judge an
+implementation that never finished. Only a clean stop advances to review.
 
 A failed `Fork` or `Persist` is reported, never swallowed: branching is what
 isolates a phase, so continuing against stale state would quietly break the
