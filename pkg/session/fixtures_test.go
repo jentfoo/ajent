@@ -201,6 +201,6 @@ func TestFixtureState(t *testing.T) {
 
 	assert.Len(t, st.Messages, 33)
 	assert.Equal(t, "claude-opus-4-5", st.Model.ID)
-	assert.Equal(t, llm.ReasoningConfig{Level: llm.LevelMedium, Retain: llm.RetainLastTurn, Show: true},
-		st.Reasoning)
+	assert.Equal(t, llm.ReasoningConfig{Level: llm.LevelMedium, Retain: llm.RetainLastTurn},
+		st.Reasoning) // the fixture's stale "show":true is ignored; shown by default
 }

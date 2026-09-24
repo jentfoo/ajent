@@ -82,7 +82,7 @@ type ReasoningConfig struct {
 	Level  Level        `json:"level"`
 	Budget int          `json:"budget,omitempty"` // explicit token budget, overrides Level when positive
 	Retain RetainPolicy `json:"retain,omitempty"`
-	Show   bool         `json:"show,omitempty"` // stream thinking to the UI
+	Hide   bool         `json:"hide,omitzero"` // true hides thinking from the UI; shown by default
 }
 
 // Level is the requested reasoning depth. The standard seven levels let any
@@ -273,5 +273,5 @@ func ReasoningFrom(r config.Reasoning, m Model) ReasoningConfig {
 	if p, ok := ParseRetain(r.Retain); ok && r.Retain != "" {
 		retain = p
 	}
-	return ReasoningConfig{Level: lvl, Retain: retain, Show: r.Show}
+	return ReasoningConfig{Level: lvl, Retain: retain, Hide: r.Hide}
 }

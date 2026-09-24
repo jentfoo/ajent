@@ -276,7 +276,7 @@ unless it still holds tool calls.
 ## Configuration
 
 `~/.ajent/models.json`, kept in the familiar shape so an existing configuration
-ports over with only the `cost` blocks removed:
+ports over cleanly:
 
 ```json
 {
@@ -327,7 +327,8 @@ Deliberate choices in this loader:
   resolved thinking format; there is no style-name form.
 - **Unrecognised keys warn rather than fail.** A typo silently ignored is worse
   than a warning, and a hard failure locks the user out of their agent.
-- **No `cost` block.** See "Deliberately not done".
+- **No pricing.** ajent does not track cost, and a `cost` block is an
+  unrecognised key: it warns like any typo rather than being silently accepted.
 
 - **An unrecognised `api` or `flavor` disables one provider, not the file.**
   Some configs name protocols ajent cannot speak, and decoding used to return an

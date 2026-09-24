@@ -178,7 +178,7 @@ func reasoningCommand(ctx context.Context, arg string, c Console) error {
 	c.SetReasoning(llm.ReasoningConfig{
 		Level:  lvl,
 		Retain: cur.Retain, // keep the current retention policy
-		Show:   cur.Show,   // keep whether thinking streams to the UI
+		Hide:   cur.Hide,   // keep whether thinking streams to the UI
 	})
 	return nil
 }

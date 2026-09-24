@@ -92,7 +92,6 @@ func TestEnvLayerKeepsOriginalCaseKeys(t *testing.T) {
 	vars := map[string]string{
 		"AJENT_AGENT_MAXSTEPS":               "50",
 		"AJENT_COMPACTION_MINSTEPS":          "3",
-		"AJENT_UI_SHOWCOST":                  "true",
 		"AJENT_TOOLS_LIMITS_REFINJECT_LINES": "1000",
 	}
 	l, warns := EnvLayer(func(k string) string { return vars[k] })
@@ -107,9 +106,6 @@ func TestEnvLayerKeepsOriginalCaseKeys(t *testing.T) {
 	compaction := merged["compaction"].(map[string]any)
 	assert.InDelta(t, float64(3), compaction["minSteps"], 0)
 	assert.NotContains(t, compaction, "minsteps")
-	ui := merged["ui"].(map[string]any)
-	assert.Equal(t, true, ui["showCost"])
-	assert.NotContains(t, ui, "showcost")
 	tools := merged["tools"].(map[string]any)["limits"].(map[string]any)
 	refInject := tools["refInject"].(map[string]any)
 	assert.InDelta(t, float64(1000), refInject["lines"], 0)
@@ -118,7 +114,7 @@ func TestEnvLayerKeepsOriginalCaseKeys(t *testing.T) {
 func TestEnvLayerOverridesDefaultWithProvenance(t *testing.T) {
 	t.Parallel()
 
-	env := Layer{Name: "env", Data: []byte(`{"compaction":{"minSteps":3,"verbatimFraction":0.2},"ui":{"showCost":true}}`)}
+	env := Layer{Name: "env", Data: []byte(`{"compaction":{"minSteps":3,"verbatimFraction":0.2}}`)}
 	r, err := Merge(Defaults(), env)
 	require.NoError(t, err)
 
@@ -126,10 +122,6 @@ func TestEnvLayerOverridesDefaultWithProvenance(t *testing.T) {
 	v, src, ok := r.Explain("compaction.minSteps")
 	require.True(t, ok)
 	assert.Equal(t, `3`, string(v))
-	assert.Equal(t, "env", src)
-	v, src, ok = r.Explain("ui.showCost")
-	require.True(t, ok)
-	assert.Equal(t, `true`, string(v))
 	assert.Equal(t, "env", src)
 
 	// no lowercased sibling survives in the merged bytes

@@ -1,10 +1,12 @@
 package llm
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/config"
 )
@@ -198,13 +200,27 @@ func TestReasoningFrom(t *testing.T) {
 
 	m := Model{Provider: "p", ID: "m"}
 	m.Caps.Reasoning = true
-	rc := ReasoningFrom(config.Reasoning{Level: "high", Retain: "none", Show: false}, m)
+	rc := ReasoningFrom(config.Reasoning{Level: "high", Retain: "none", Hide: true}, m)
 	assert.Equal(t, LevelHigh, rc.Level)
 	assert.Equal(t, RetainNone, rc.Retain)
-	assert.False(t, rc.Show)
+	assert.True(t, rc.Hide)
 
 	// an empty block falls back to the compiled-in defaults
 	d := ReasoningFrom(config.Reasoning{}, m)
 	assert.Equal(t, LevelMedium, d.Level)
 	assert.Equal(t, RetainWholeTurn, d.Retain)
+}
+
+func TestReasoningConfigUnmarshal(t *testing.T) {
+	t.Parallel()
+
+	var hidden ReasoningConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"hide":true}`), &hidden))
+	assert.True(t, hidden.Hide)
+
+	// a legacy setting_change wrote "show"; it is now ignored
+	var stale ReasoningConfig
+	require.NoError(t, json.Unmarshal([]byte(`{"level":"high","show":false}`), &stale))
+	assert.Equal(t, LevelHigh, stale.Level)
+	assert.False(t, stale.Hide)
 }

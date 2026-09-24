@@ -244,7 +244,7 @@ func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
 	// whole config would drop retain "none" and show false under omitempty.
 	if c.set != nil {
 		_ = c.set.SetSession("reasoning.level", rc.Level.String())
-		_ = c.set.SetSession("reasoning.show", rc.Show)
+		_ = c.set.SetSession("reasoning.hide", rc.Hide)
 		_ = c.set.SetSession("reasoning.retain", rc.Retain.String())
 	}
 	// keep the status indicator in step with a non-default level.

@@ -506,7 +506,9 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 		}
 		a.syncContext(true)
 	case llm.EventThinkingDelta:
-		sink.Thinking(ev.Text)
+		if !a.state.Reasoning.Hide {
+			sink.Thinking(ev.Text)
+		}
 		if t != nil && keepThink {
 			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
 		}
@@ -518,7 +520,9 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 		}
 		a.syncContext(false)
 	case llm.EventThinkingEnd:
-		sink.EndThinking()
+		if !a.state.Reasoning.Hide {
+			sink.EndThinking()
+		}
 		a.syncContext(true) // block end repaints unconditionally
 	case llm.EventTextEnd:
 		sink.EndText()

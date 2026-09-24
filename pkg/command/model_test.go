@@ -123,21 +123,21 @@ func TestReasoningCommand(t *testing.T) {
 	})
 
 	// a user-off show stays off across a level change
-	t.Run("preserves_show_off", func(t *testing.T) {
+	t.Run("preserves_hidden", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
 
-		c.state.Reasoning.Show = false // the /settings off choice
+		c.state.Reasoning.Hide = true // the /settings off choice
 		cmd, _ := r.Get("reasoning")
 		require.NoError(t, cmd.Handler(t.Context(), "high", c))
 		assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
-		assert.False(t, c.state.Reasoning.Show)
+		assert.True(t, c.state.Reasoning.Hide)
 	})
 
 	// a user-on show survives a level change too
-	t.Run("preserves_show_on", func(t *testing.T) {
+	t.Run("preserves_show", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()
 		c.commands = r
@@ -145,6 +145,6 @@ func TestReasoningCommand(t *testing.T) {
 
 		cmd, _ := r.Get("reasoning")
 		require.NoError(t, cmd.Handler(t.Context(), "high", c))
-		assert.True(t, c.state.Reasoning.Show)
+		assert.False(t, c.state.Reasoning.Hide)
 	})
 }

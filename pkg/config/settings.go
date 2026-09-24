@@ -23,7 +23,7 @@ type Reasoning struct {
 	Level  string `json:"level,omitempty"`  // llm.Level name
 	Retain string `json:"retain,omitempty"` // llm.RetainPolicy name
 	Budget int    `json:"budget,omitempty"`
-	Show   bool   `json:"show,omitempty"`
+	Hide   bool   `json:"hide,omitzero"` // true hides thinking from the UI; shown by default
 }
 
 // Agent configures the turn loop. MaxSteps optionally caps one turn's
@@ -86,12 +86,10 @@ type Subagent struct {
 
 // UI configures the terminal surface.
 type UI struct {
-	Render       string `json:"render,omitempty"` // tui.Mode name
-	Color        string `json:"color,omitempty"`  // tui.ColorProfile name
-	Theme        string `json:"theme,omitempty"`  // tui.Palette name
-	Images       string `json:"images,omitempty"` // tui.ImageProtocol name: auto, kitty, iterm2, none
-	ShowCost     bool   `json:"showCost,omitzero"`
-	ShowThinking bool   `json:"showThinking,omitzero"`
+	Render string `json:"render,omitempty"` // tui.Mode name
+	Color  string `json:"color,omitempty"`  // tui.ColorProfile name
+	Theme  string `json:"theme,omitempty"`  // tui.Palette name
+	Images string `json:"images,omitempty"` // tui.ImageProtocol name: auto, kitty, iterm2, none
 }
 
 // Images configures how image blocks flow to providers and the terminal.
@@ -114,7 +112,7 @@ type Permissions struct {
 // Its compaction minSteps/verbatimFraction (2 / 0.1) twin pkg/compact's
 // defaultMinSteps/defaultVerbatimDivisor; the two must agree.
 const defaultsJSON = `{
-  "reasoning": { "level": "medium", "retain": "wholeTurn", "show": true },
+  "reasoning": { "level": "medium", "retain": "wholeTurn" },
   "tools": {
     "enabled": ["read", "write", "edit", "bash"],
     "limits": {

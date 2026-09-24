@@ -33,7 +33,6 @@
           "maxTokens": 40000,
           "headers": { "X-Org": "acme" },
           "samplingParams": { "temperature": 1.0, "top_p": 0.95, "min_p": 0.0 },
-          "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 6.25 },
           "thinkingLevelMap": { "off": null, "minimal": null, "low": null, "medium": null, "high": "high", "xhigh": null, "max": "max" },
           "compat": {
             "supportsEagerToolInputStreaming": false,
@@ -87,7 +86,6 @@
           "maxTokens": 64000,
           "headers": { "X-Route": "bedrock" },
           "samplingParams": { "temperature": 0.7 },
-          "cost": { "input": 3 },
           "thinkingLevelMap": { "xhigh": null },
           "compat": { "openRouterRouting": { "only": ["amazon-bedrock"] } }
         }

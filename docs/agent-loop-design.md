@@ -36,6 +36,13 @@ marker), tool starts plus their incremental output and progress while a call is
 still being composed, rendered diffs, usage and context-state reports, notices,
 and the final `TurnEnd` outcome.
 
+The reasoning block gates on the session's `reasoning.hide`: when true, the
+loop drops thinking deltas before they reach any sink. Shown is the default (a
+zero-value config shows), so hiding must be explicit; a stale `show` key is an
+unrecognized setting and is ignored. This gating is display-only; it never
+changes what a retry keeps for retention or what gets assembled into
+the next request.
+
 `pkg/tui/sink` maps these almost 1:1 onto `tui.UI`. `NopSink` discards
 everything; a headless child agent uses it as an embedded base and overrides
 only the events that feed its activity row.

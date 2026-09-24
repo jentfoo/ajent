@@ -73,9 +73,6 @@ func TestLoadFile(t *testing.T) {
 
 		joined := strings.Join(warnings, "\n")
 		assert.Contains(t, joined, "bogusProviderKey")
-		// cost is accepted for compatibility but pricing itself stays out of scope,
-		// so it must not warn on a real config that carries it
-		assert.NotContains(t, joined, "cost")
 	})
 
 	t.Run("minimal_file", func(t *testing.T) {
@@ -162,8 +159,7 @@ func TestModelConfigCompatParity(t *testing.T) {
       "models": [{
         "id": "qwen3.6-27b-mtp",
         "headers": { "X-Org": "acme" },
-        "samplingParams": { "temperature": 0.2, "seed": 7 },
-        "cost": { "input": 1.00, "output": 3.40 }
+        "samplingParams": { "temperature": 0.2, "seed": 7 }
       }]
     }
   }
@@ -171,7 +167,7 @@ func TestModelConfigCompatParity(t *testing.T) {
 
 	f, warnings, err := LoadFile(path)
 	require.NoError(t, err)
-	assert.Empty(t, warnings) // cost and the accepted provider keys must not warn
+	assert.Empty(t, warnings) // the accepted provider keys must not warn
 
 	p := f.Providers["llamacpp"]
 	assert.Equal(t, "Local llama.cpp", p.Name)
@@ -182,7 +178,6 @@ func TestModelConfigCompatParity(t *testing.T) {
 	m := p.Models[0]
 	assert.Equal(t, map[string]string{"X-Org": "acme"}, m.Headers)
 	assert.InDelta(t, 0.2, m.SamplingParams["temperature"], 1e-9)
-	require.NotNil(t, m.Cost)
 }
 
 func TestLoadFilePiParity(t *testing.T) {

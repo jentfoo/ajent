@@ -304,7 +304,7 @@ func rowRetention(c Console) (string, string) {
 	return "Reasoning retention", detailOrDefault(c, "reasoning.retain")
 }
 func rowThinking(c Console) (string, string) {
-	return "Show thinking", detailOrDefault(c, "reasoning.show")
+	return "Show thinking", detailOrDefault(c, "reasoning.hide")
 }
 
 func rowImagesBlock(c Console) (string, string) {
@@ -394,7 +394,7 @@ func editRetention(ctx context.Context, c Console) ([]settingChange, error) {
 		Level:  c.State().Reasoning.Level,
 		Budget: c.State().Reasoning.Budget,
 		Retain: retain,
-		Show:   c.State().Reasoning.Show,
+		Hide:   c.State().Reasoning.Hide,
 	})
 	// a text leaf survives even when the policy is "none" (zero value).
 	_ = c.SetSessionSetting("reasoning.retain", retain.String())
@@ -411,10 +411,10 @@ func editThinking(ctx context.Context, c Console) ([]settingChange, error) {
 		Level:  c.State().Reasoning.Level,
 		Budget: c.State().Reasoning.Budget,
 		Retain: c.State().Reasoning.Retain,
-		Show:   on,
+		Hide:   !on,
 	})
-	_ = c.SetSessionSetting("reasoning.show", on)
-	return []settingChange{{key: "reasoning.show", value: on}}, nil
+	_ = c.SetSessionSetting("reasoning.hide", !on)
+	return []settingChange{{key: "reasoning.hide", value: !on}}, nil
 }
 
 // editTools delegates to the tools picker.

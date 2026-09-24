@@ -30,7 +30,7 @@ func newTestAgent(state *State, p llm.Provider, sink Sink) *Agent {
 		Env:      testEnv,
 	}
 	if state == nil {
-		state = &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+		state = &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{Hide: false}}
 	}
 	return New(state, opts)
 }
@@ -485,6 +485,32 @@ func TestSinkOrderThinkingPrecedesText(t *testing.T) {
 	}
 	assert.Greater(t, endTIdx, tIdx)
 	assert.Greater(t, textIdx, endTIdx)
+}
+
+func TestReasoningHiddenWhenHideTrue(t *testing.T) {
+	t.Parallel()
+
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: []llm.Event{
+			{Type: llm.EventThinkingStart, Index: 0},
+			{Type: llm.EventThinkingDelta, Text: "hmm"},
+			{Type: llm.EventThinkingEnd, Index: 0, Block: llm.ThinkingBlock{Text: "hmm"}},
+			doneEvent(),
+		}},
+	}}
+	sink := &recordingSink{}
+	a := newTestAgent(&State{
+		Model:     llm.Model{ID: "test"},
+		Reasoning: llm.ReasoningConfig{Hide: true},
+	}, p, sink)
+
+	err := a.Prompt(t.Context(), Input{Text: "x"})
+	require.NoError(t, err)
+
+	for _, c := range sink.calls {
+		assert.NotEqual(t, "thinking", c)
+		assert.NotEqual(t, "end_thinking", c)
+	}
 }
 
 func TestLoopFollowUpRunsAfterTurn(t *testing.T) {

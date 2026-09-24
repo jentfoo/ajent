@@ -243,7 +243,6 @@ type ModelConfig struct {
 
 	Headers        map[string]string `json:"headers,omitempty"`        // merged over the provider's per request
 	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // opaque additions to the request body
-	Cost           json.RawMessage   `json:"cost,omitempty"`           // accepted for compatibility; pricing is out of scope
 }
 
 // ModelOverride is a partial model applied over a discovered entry. It carries
@@ -260,7 +259,6 @@ type ModelOverride struct {
 
 	Headers        map[string]string `json:"headers,omitempty"`        // merged per key
 	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // merged per key
-	Cost           json.RawMessage   `json:"cost,omitempty"`           // accepted for compatibility; pricing is out of scope
 }
 
 // Compat is the per model quirk set: a flat union of the four dialect schemas,

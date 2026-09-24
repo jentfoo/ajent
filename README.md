@@ -202,7 +202,7 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
 The top-level blocks:
 
 * `model` - the model a fresh session starts with. A `/model` change writes your most recent choice here, so it is remembered across restarts.
-* `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is shown (`show`).
+* `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is hidden from view (`hide`). Shown by default; set `hide: true` to stop streaming it.
 * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
 * `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff; permanent errors (bad request, no credentials) never retry.
 * `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them; a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.
@@ -215,7 +215,7 @@ The top-level blocks:
 * `subagent.model` / `maxConcurrent` - a dedicated model for research sub-agents (empty inherits your session model) and how many may run at once (default 8).
 * `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers; an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
 * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default; `/settings` can flip it for the session, and `AJENT_IMAGES_BLOCK=true` sets it for a single run.
-* `ui.render`, `ui.theme`, `showCost`, `showThinking` - paint mode (`auto`, `inline`, `alt`, `plain`), palette, and whether cost or thinking are shown.
+* `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.
 * `ui.color` - colour depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`; any other value names the depth outright, which is the way out if your terminal is classified badly — `256` turns on syntax highlighting where detection was too conservative, `none` turns colour off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
 * `disableUpdateCheck` - turn off the startup update-available notice. Off by default; a fork install or an offline machine that does not want to nag can set this once in the user layer.
 

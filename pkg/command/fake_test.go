@@ -97,7 +97,7 @@ func newFakeConsole(tb testing.TB) *fakeConsole {
 	require.NoError(tb, err)
 	return &fakeConsole{
 		models:   reg,
-		state:    &agent.State{Model: reg.Active(), Reasoning: llm.ReasoningConfig{Level: llm.LevelMedium, Show: true}},
+		state:    &agent.State{Model: reg.Active(), Reasoning: llm.ReasoningConfig{Level: llm.LevelMedium, Hide: false}},
 		tools:    tr,
 		commands: NewRegistry(),
 		settings: cfg,
