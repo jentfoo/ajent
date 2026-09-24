@@ -36,19 +36,20 @@ Holds the declared tools in registration order plus their enabled state, and
 satisfies `agent.ToolSet` so the loop reads tools straight off it.
 
 - `Register(t, defaultEnabled)` — built-ins, extensions and MCP servers all
-  register the same way. toggleable `/tools` row (label + source) that always
-  shares enable state. The
+  register the same way: one toggleable `/tools` row (label + source) that always
+  shares enable state with the tool it names.
 - `Units(offered []Tool)` — collapses offered tools into toggleable `/tools`
   rows: a group whose every member is present becomes one row carrying all of
-  mode after a non-atomic change) falls back to per-member rows. the session
-  file persists it across resume. Both expand any named tool group changes the
-  prompt's tool block, so the cached schema list is invalidated. disabled tools
-  are invisible to the model. sub-agent's tool set is built from this via a
-  narrow `ToolSource`, so a child
-- Generic output bound — every tool that does not bound its own output
+  them, and a partial or non-atomic change falls back to per-member rows. The
+  session file persists the resulting enable set across resume.
+- Expanding any named tool group changes the prompt's tool block, so the cached
+  schema list is invalidated; disabled tools are invisible to the model. The
+  sub-agent's tool set is built from this via a narrow `ToolSource`, so a child
+  never sees shell or agent_* tools (see `subagents-design.md`).
+- **Generic output bound** — every tool that does not bound its own output
   (`SelfBounding`) is wrapped at registration to keep model-visible content
-  bound themselves, and read pages with offset rather than spilling.
-  `annotations.readOnlyHint` or config globs. The permission barrier uses this
+  bound. Read-only marking for MCP comes from `annotations.readOnlyHint` or config
+  globs; the permission barrier uses this metadata (see "Read-only" below).
 
 ### Sub-agent tool set and preview seams
 
@@ -93,9 +94,9 @@ screen.
 Invariants:
 
 - **Once per call.** The render sits before the guard loop, so a re-asking asker
-  cannot print the change twice. installs, because that is reached only when a
-  dialog is about to open. So `allow-all`, would all show nothing. record,
-  followed by the denial summary or the error. What is rendered is the
+  cannot print the change twice. What is rendered once stays in the record,
+  followed by the denial summary or the error when the call was refused — a mode
+  like `allow-all`, which never prompts, would otherwise show nothing at all.
 - A `Preview` error (bad arguments, unreadable file) renders nothing and lets
   `Execute` surface its own error. Tools must therefore not rely on the render
 
@@ -236,7 +237,7 @@ what differed, so the next edit is written correctly. Each differing run is
 widened to whole identifier and number tokens before it is quoted, since a value
 and the file's often share an edge digit (`4096` against `65536`) and a
 byte-level cut would quote back halves of a number; a non-exact match names
-every line that drifted, capped at `maxDriftQuotes`. The canon tier tells a
+every line that drifted. The canon tier tells a trailing-whitespace difference
 trailing-whitespace difference from a lookalike by trailing-trim equality rather
 than by stripping all whitespace, which folds an nbsp away and misreports it,
 and names the characters that differed.
@@ -254,29 +255,29 @@ edit merely quoted keeps the file's own bytes, so a lookalike the model
 flattened survives outside the change. A site that folds to the replacement is
 written whole, since there the fold is the edit.
 
-The fuzzy tier heals a mis-transcribed value — `queueDepth = 256` where the file
-says `1024`. It works line by line: a line the region differs on must be one
+The fuzzy tier heals a mis-transcribed value like `queueDepth = 256` where the
+file says `1024`. It works line by line. A line the region differs on must be one
 `newText` rewrites, and must differ only inside the part of that line `newText`
 rewrites. That is what makes writing `newText` the requested edit. A line the
-edit only quotes is refused, because applying would rewrite text the model was
-not changing and nothing in the call says whether it meant to; the same holds
-for a drift outside the rewritten part of a line it is changing. Healing needs
-`oldText` and `newText` to hold the same number of lines, since only then does
-each line pair up and the drift stay checkable; an edit that adds or removes
-lines applies through the tiers above or not at all. Five further guards apply:
-at most eight lines of one edit may differ, each differing line by one run of at
-most four characters with four characters of exact context anchoring it; the
-region must be the clear best match, where a second region under the limit is a
-guess outright and one just past it separates a match already thin; no line may
-overlap one an earlier edit wrote, since healing there could revert that edit;
-and the punctuation ending a matched line must survive into the replacement,
-since every other guard is measured on `oldText` while the apply writes over the
-file's line. Those line numbers hang off the tracker's observation of the file,
-so a later edit remaps them past its own insertions and any change the tool did
-not make drops them rather than leaving them pointing at unrelated lines; a
-re-read of unchanged content keeps them, since the numbers still name that text.
-A line differing only in indentation is left to the indent tier, which proves a
-uniform shift or refuses; healing it here would reformat the file.
+edit only quotes is refused, because applying would rewrite text the model was not
+changing and nothing in the call says whether it meant to. The same holds for a
+drift outside the rewritten part of a line it is changing.
+
+Healing needs `oldText` and `newText` to hold the same number of lines, since only
+then does each line pair up and the drift stay checkable. An edit that adds or
+removes lines applies through the tiers above or not at all. Further guards apply:
+only a bounded set of lines may differ in one edit, each by one small drift with
+exact context anchoring it; the region must be the clear best match (a second close
+region is a guess outright, and one just past the limit separates a match already
+thin); no line may overlap one an earlier edit wrote, since healing there could
+revert that edit; and the punctuation ending a matched line must survive into the
+replacement, because every other guard is measured on `oldText` while the apply
+writes over the file's line. Those line numbers hang off the tracker's observation
+of the file, so a later edit remaps them past its own insertions. Any change the
+tool did not make drops them rather than leaving them pointing at unrelated lines,
+while a re-read of unchanged content keeps them since the numbers still name that
+text. A line differing only in indentation is left to the indent tier, which proves
+a uniform shift or refuses, because healing it here would reformat the file.
 
 Diagnostics run only after every tier failed and reason in canonical space, so
 with each lookalike difference already rejected they name the real cause
@@ -356,15 +357,19 @@ non-interactive settings (no pagers, no terminal prompts, no colour).
 Off-by-default extras for no-shell agents.
 
 - `find`: glob matching with `**` support; a bare pattern (`*.go`) matches at
-  any depth. Uses `git ls-files -z` (quoting disabled, so non-ASCII filenames A
-  search never leaves its root. The listing is scoped to `Path` and any entry
-  newest first. The complete leaves the rest recoverable. surfaces stderr as an
-  error), falling back to a bounded Go `regexp` walk. Both `repoFiles`. Modes:
-  `content` (line numbers, optional context lines), Enumeration stops at the
-  default match cap with a named note, never silently,
+  any depth. It lists files via `git ls-files -z` (quoting disabled, so non-ASCII
+  filenames stay usable), falling back to a bounded Go walk when git is
+  unavailable or yields nothing. A search never leaves its root: the listing is
+  scoped to `Path`, and results are sorted newest first.
+- `grep`: searches file contents for a pattern in three modes — `files`, `content`
+  (line numbers plus optional context lines) and `count`. Enumeration stops at the
+  default match cap with a named note, never silently; surfaces stderr from an
+  underlying tool as an error.
+- Both spill their complete result when the bound cuts it, so the model can page
+  the rest recoverably rather than losing it.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via
-  `filepath.Glob`), sorted alphabetically, `/` suffix on directories. A listing
-  names. A glob with no matches is an error so it is never mistaken for an empty
+  `filepath.Glob`), sorted alphabetically with `/` suffix on directories. A glob
+  with no matches is an error, so it is never mistaken for an empty listing.
 
 Like `read`, each sets `ToolResult.Display` to the same text as its
 model-visible `Content`, so history renders it through the shared output-head
@@ -486,16 +491,10 @@ so history renders it through the shared output-head rule (`tui-design.md`) inst
 of a bare header. Model-facing output is LF-only (the package-wide convention) and
 bounded by `GitResultLimit()`.
 
-New bound in `pkg/tools/limits.go`:
-
-```go
-gitOutput = Limit{Lines: 100, Bytes: 16 << 10} // like find/grep/ls
-```
-
-exposed as `func GitResultLimit() Limit`, added to the configurable `Limits` struct
-(`tools.limits`) and the README's tool-limits entry. One bound covers all four
-readers and also caps the `git_log` default walk (30 commits), while an explicit
-`limit` walks up to `maxLogCommits` (1000) before stopping with an explicit note.
+New bound in `pkg/tools/limits.go`: one output limit covers all four
+readers (like find/grep/ls) and also caps the `git_log` default walk, while an
+explicit `limit` walks up to a far larger commit count before stopping with an
+explicit note.
 
 The plan workflow enables find/grep/ls explicitly for its planning and review
 scopes. The git tools join that same explicit enable so a planner/reviewer can

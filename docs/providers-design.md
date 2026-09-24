@@ -65,9 +65,9 @@ tolerates a redacted block's absence but not its corruption.
 ```
 Request
   -> Prepare(req)                                one normalization pass (see below)
-  -> build<Dialect>Body(req)                     pure, no network; calls Prepare itself
-  -> httpClient.do(ctx, httpReq{...})            httputil.Do; all retries happen here
-  -> <dialect>Stream over SSEReader              synchronous pull
+  -> build body                                  pure, no network; calls Prepare itself
+  -> httputil.Do                                 all retries happen here
+  -> dialect stream over SSE                     synchronous pull
   -> Event...                                    normalised, same for every vendor
   -> Accumulator                                 rebuilds the assistant Message
 ```

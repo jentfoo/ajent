@@ -27,10 +27,12 @@ The dependency edge is load-bearing:
 It imports only `agent`, `llm`, `strutil` and `tokens`.
 
 - The parent tool registry arrives as a narrow interface (`ToolSource`) declared
-  here, so the package never imports `pkg/tools`. `Options` fields supplied by
-  `pkg/app`, exactly like `permit.Barrier`. Headless
+  here, so the package never imports `pkg/tools`. `Options` fields are supplied by
+  `pkg/app`, exactly like `permit.Barrier`. Headless runs supply no steer queue,
+  so the delivery hook drives that case instead (see below).
 - There is **no permission guard on a child**: nothing to permit. That is why
   the read-only tool filtering must be structural (see `toolset.go`) rather than
+  a matter of trust or instruction.
 
 A sub-agent never spawns a sub-agent: `agent_*` is barred structurally, applied
 last in the filter so no configuration can reach past it.
@@ -51,15 +53,14 @@ three tools, and close.
 
 Concurrency model:
 
-- **One goroutine per job**, a cancellable context per job, and a
-  buffered-channel semaphore sized `MaxConcurrent`. A queued job waits in
-  `StatusQueued` until it
-- The `sync.WaitGroup.Add(1)` happens **before** the spawn goroutine launches so
-  `Close`'s wait never races a pending add. `wg.Done`, closing `j.done` and
-- A mutex guards the `jobs map[string]*job` plus the delivery state, which are
-  `pending` (completed ids awaiting a message), `inFlight` (ids a queued message
-  names) and (status, timestamps, summary, pollers) sit under a second per-job
-  lock so polls
+- **One goroutine per job**, a cancellable context per job, and a buffered-channel
+  semaphore sized to the concurrency cap. A queued job waits until it takes a slot.
+- The waitgroup add happens **before** the spawn goroutine launches so shutdown's
+  wait never races a pending add; each goroutine finishes with its done signal and
+  cleanup in one place.
+- One lock guards the job registry plus delivery state (completed ids awaiting a
+  delivery message, and ids an already-queued steer names), while each job keeps its
+  own status snapshot under its own per-job lock so polls do not contend with it.
 
 **Shutdown.** `Close` calls `StopAll`, then waits on the waitgroup with a short
 bound before clearing activity rows and the status segment, so a job stuck on a
@@ -97,12 +98,15 @@ state; jobs are never deleted from the map within a session (they show up in
 Each job builds a fresh agent:
 
 - **State** — `agent.State{Model, Reasoning, Tokens}`. Model is `subagent.model`
-  resolved through the registry when set, else inherited from the session, being
-  inherited verbatim: a user who dialled reasoning down meant it. parent as
-  **child spend** (see accounting below). The parent's context bar never
+  resolved through the registry when set (at spawn, so `/settings` applies to the
+  next job), else inherited from the session; reasoning is likewise inherited
+  verbatim, because a user who dialled it down meant it. Tokens is a fresh child
+  ledger (`Accounting.Child()`) whose usage rolls into the parent as **child spend**
+  (see accounting below); the parent's context bar never moves for it.
 - **Tools**: `&toolSet{tools: childTools(src, inRepo)}` when a `ToolSource` is present,
-else no tools at all. AGENTS.md), `SystemSnippets: []string{childContract(inRepo)}`,
-  no recorder, no resume.
+  else no tools at all. The options carry project instructions plus
+  `SystemSnippets: []string{childContract(inRepo)}`, and the session has no recorder
+  and no resume.
 The prompt is `agent.Input{Text: taskPrompt(task, instructions)}`. After it
 returns, the summary is read off the **last assistant message** in
 `State.Messages`, joining only its non-empty `llm.TextBlock` content. Thinking
@@ -149,21 +153,21 @@ committed history:
 
 - `Start` publishes `<id>  <label>` immediately (see below), so a job is visible
   above the prompt while it is still queued on the semaphore, before its turn
-  emits. multi-word provided label is kept whole, but built-in tools whose
-  labels are bare work rather than one token. Its done hook restores the prior
-  line (thinking/idle
+  emits. A multi-word provided label is kept whole; built-in tools whose labels are
+  bare words show the bare verb. Its done hook restores the prior line (the
+  thinking/idle row) once the last in-flight call ends.
 - `Thinking(delta)` and `Text(delta)` both accumulate streaming per-token deltas
-  into the current in-progress line and publish the job id plus a one-lined text
-  display to the tail). Most sub-agent activity is reasoning, so
-  chain-of-thought so replacing rather than appending would show no real
-  progress; each scrolls per streams (thinking → text) starts fresh instead of
-  appending prose onto leftover nothing, so empty streaming never flashes.
-  Deltas coalesce to a bounded rate so
+  into the current in-progress line, publishing only its head. Most sub-agent
+  activity is reasoning, so chain-of-thought is surfaced rather than collapsed;
+  the row scrolls past completed lines per newline instead of appending prose onto
+  leftover text, and switching streams (thinking → text) starts fresh on the new
+  content so empty streaming never flashes. Deltas coalesce to a bounded rate so
+  a response does not repaint per token.
 - The row belongs to the **job**, not to a turn. `run` nudges a child that ended
-  a turn without summary text, so `TurnEnd` only resets the streamed line back
-  to the out of the list and then reappear at the end of it. Every terminal path
-  in before it ever acquired its slot (no sink ran). capturing the previous row
-  per call: an early finisher would otherwise wipe a
+  a turn without summary text, and every terminal path clears or restores the
+  row, so `TurnEnd` only resets the streamed line back rather than dropping the job
+  out of the list; an early finisher is counted (not captured) so it never wipes a
+  sibling still running.
 
 Rows are single lines with no width maths. `tui.SetActivityRanked` elides to
 width and never wraps, capped to a few rows plus an overflow indicator. Each row
@@ -191,11 +195,11 @@ tools; anything needing write/edit/shell must be done directly), final message
 is the entire return value.
 
 - **`agent_start(task, instructions?)`** returns a job id immediately and tells
-  the model to poll for it. Several may run in one batch. returns the summary
-  (or error / `aborted`). **On timeout** it reports still-running the job
-  ledger. A poll that only says "still running" gives the model nothing to
-  `Details{"id","status"}`. This is invisible to the model, and the only
-  supported way a prose is not a contract; the status is.
+  the model to poll for it; several may run in one batch. `agent_poll(id)`
+  returns the summary (or an error / `aborted`) when done, and on timeout reports
+  still-running. Every poll result is tagged with `Details{"id","status"}` so a
+  host-driven poller can distinguish still-running from terminal without matching
+  the payload prose; that detail is invisible to the model.
 
 All three set `ToolResult.Display` to the same text as `Content`, so history
 shows the payload through the shared output-head rule (`tui-design.md`) instead
@@ -225,25 +229,29 @@ duplicate context message would waste tokens.
 Two details keep that suppression from swallowing a result:
 
 - The wait selects over `j.done`, the timeout and the turn context, and Go picks
-  uniformly among ready cases. A job finishing in the same instant the timer
-  fires the timeout branch re-checks completion before reporting progress: both
-  a closed never reported as still running. empty-handed, because its timer
-  fired or the turn was interrupted, may already have last poller out with
-  `consumed` still false calls `onComplete` again, which on both `pending` and
-  `noticeBatch` so the recovery can never double-name an id.
+  uniformly among ready cases. A job finishing in the same instant the timer fires
+  the branch re-checks completion before reporting progress: a closed or terminal
+  job is never reported as still running.
+- An empty-handed poll (its timer fired or the turn was interrupted) may leave its
+  last poller gone with `consumed` still false; recovery then calls `onComplete`
+  again, which checks both `pending` and `noticeBatch`, so the re-offer can never
+  double-name an id.
 ### A host as the poller
 
 `/init` (see `command-design.md`) drives `agent_start` and `agent_poll` itself
 rather than letting a model call them. Two consequences a caller must respect:
 
 - **Register every poll before any child can finish.** Suppression of both the
-  completion notice and the context steer is `pollers > 0`, not a mode. window
-  between the last `Start` and the first `Poll` is a narrow race, not a
+  completion notice and the context steer is `pollers > 0`, not a mode. The window
+  between the last `Start` and the first `Poll` is a narrow race, not a contract; a
+  host that polls too late relies on delivery instead.
 - **Poll until terminal.** A timeout is an ordinary outcome, so the caller loops
-  on `Details["status"]` and keeps only the terminal pair, or the transcript
+  on `Details["status"]` and keeps only the terminal pair (id + status); the rest
+  are progress reports to ignore.
 - **Cancel by id, not `StopAll`.** A host survey runs for minutes, during which
-  the user may start a turn whose model spawns investigations of its own.
-  `/init` so aborting the survey never kills the model's work.
+  the user may start a turn whose model spawns investigations of its own. Aborting
+  the whole manager would kill that work; cancelling only `/init`'s jobs leaves the
+  model's alone.
 ### Completion when nobody is polling
 
 A job that finishes while no poll waits must still reach the model, or the work
@@ -252,15 +260,15 @@ accumulate; the message naming them is built at the moment it lands, never
 before. Three pieces:
 
 - **UI notice** — fired at completion (`Options.Notice`), keyed by the front end
-  (`NotifyKeyed`) so consecutive notices collapse in place rather than stack.
-  The as one updating line, not one row
+  (`NotifyKeyed`) so consecutive notices collapse in place rather than stack into
+  one row per job; each renders as one updating line, not a new committed row.
 - **Context steer at a step boundary** — completed ids park in `pending`; the
   host chains `Manager.Boundary()` into `agent.Options.OnBoundary`, so on the
-  manager filters `pending` down to ids with no poller and no consumption and
-  duplicate alerts: a batch that accumulated while the model streamed is in the
-  meantime are dropped and never named again. the `Options.Deliver` hook for
-  completions that landed while no turn ran (the when the parent is idle; ids
-  stay pending.
+  boundary the manager filters `pending` down to ids with no poller and no prior
+  consumption, dropping duplicates: a batch that accumulated while the model streamed
+  is named once. The message built here is delivered through the `Options.Deliver`
+  hook for completions that landed while no turn ran; when the parent is idle, ids
+  stay pending until the next real turn.
 Marks are per id: a boundary emits whatever is not already spoken for, so no
 single stuck mark can block unrelated ids. `agent_poll` claiming a result sets
 `consumed` and drops the id from every delivery list, which are `pending`,
@@ -321,10 +329,11 @@ and barrier exist, with adapters:
 - `Deliver` → the `Running()`-guarded `ag.Steer`, per above
 - `Boundary` → chained ahead of the steer queue's `q.pull` in
   `Options.OnBoundary`, so completion steers and queued user prompts land at the
+  same step boundary in submission order.
 - A tiny sink (`NopSink`) appended to `opts.Sinks` overrides `TurnStart` to call
-  `mgr.Flush()` and `TurnEnd` to release in-flight marks whenever the turn ends
-  `/plan-stop` abort, headless) clears them through one seam instead of each
-  call
+  `mgr.Flush()` and `TurnEnd` to release in-flight marks, so every turn end (a
+  normal stop, `/plan-stop` abort or headless run) clears them through one seam
+  instead of each path calling the manager directly.
 
 Headless mode (`oneshot.go`) has no steer queue, so `Options.OnBoundary` is
 `mgr.Boundary` directly and the `Deliver` hook drives the idle case.
@@ -379,8 +388,12 @@ tool-call boundary.
 ## Invariants
 
 1. A child has only read-only tools; `agent_*` (and so grandchildren) are
-   impossible by construction, not instruction. only. dropped by an interrupt is
-   re-offered. A completion message never names an id
+   impossible by construction, not instruction.
+2. The final assistant message is the entire return value: a completion never
+   names an id twice, and one dropped by an interrupt is re-offered rather than
+  eaten.
+3. Delivery is confirmed, not assumed; `Input.Delivered` fires only when the
+  steer lands in context.
 4. A completion never starts a turn on an idle parent; `OnSettled` is unused for
    this.
 5. Child spend rolls up into the parent's totals but never moves its context

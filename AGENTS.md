@@ -15,28 +15,27 @@ make lint         # gofmt changed files, then golangci-lint + go vet
 
 ## Documentation contract
 
-`docs/*-design.md` is the specification for what is built, not notes. Each covers one
-package boundary or cross-cutting concern: it states **why** the code is shaped as it
-is and records the invariants that must hold when you change it (ownership rules,
-cache-stability requirements, ordering guarantees, precedence). These are not prose
-to skim — they encode decisions that would otherwise be lost. Read the document for a
-package before working in it, treat its stated constraints as tests to satisfy, and
-**update the document in the same change whenever you alter one of those behaviours**,
-so the spec never drifts from the code.
+`docs/*-design.md` captures **architecture and design decisions**, not a mirror of the
+codebase. Each covers one package boundary or cross-cutting concern and records the **why**
+behind how things are shaped: ownership rules, cache-stability requirements, ordering
+guarantees, precedence. Read these as invariants that must hold when you change code — read
+the doc for a package before working in it, treat its stated constraints as tests to satisfy,
+and update it only when your change alters one of those decisions or adds a new architectural
+one. Implementation details (function bodies, struct fields, wiring) belong in the code and its
+comments, not here.
 
 The docs build on each other: `agent-loop-design.md` is the core (tools,
 sessions and compaction all depend on it), and several reference the prompt surfaces
 collected in `prompt-design.md`. When a change crosses boundaries, read — and if
 needed update — every document that names the affected package.
 
-The README carries the other half of the contract: what a user actually touches.
-It documents the **user-facing surface** — model configuration (`~/.ajent/models.json`),
-the `~/.ajent/config.json` options and their environment bindings, and the
-command-line flags. Unlike the design docs it is prose for humans, not invariants,
-but it drifts just as easily: **any change to a flag, config key, model/provider
-option or environment variable must update README.md in the same change**. The
-design documents say how something works; the README says what users can set. A
-flag added without its `--help` and README entry is unfinished.
+The README carries the other half of the contract: what **new users** must know to
+get started. It covers model setup (`~/.ajent/models.json`), the important
+`config.json` options, common flags, and general patterns (like slash commands) that
+make everything else discoverable on their own. It highlights what a newcomer needs,
+not every function or feature — those live in `--help`, `/commands`, and the design
+docs. Update it when you introduce something new users need to find; don't grow it
+into a reference mirroring either surface.
 
 | Document | Package(s) / scope | What it contains |
 |---|---|---|
@@ -84,128 +83,81 @@ app      -> everything except httputil; nothing imports it (the only wiring laye
             and calls app.Run / app.RunDelete / app.CheckSessionTarget
 ```
 
-### Outbound HTTP (`pkg/httputil`, `pkg/version`)
+### Outbound HTTP (`pkg/httputil`)
 
-Every request ajent makes goes through `httputil.Do(ctx, hc, Request)` on a client
-from `httputil.New`. The package is a leaf and knows nothing about providers: the
-caller supplies the URL, headers, User-Agent, timeouts, retry policy and an
-`ErrorFunc` that turns a non-2xx status into its own error type. Hardening lives
-here once — no redirects, `http.ProxyFromEnvironment`, explicit pool bounds, and
-credential redaction before any log hook sees the event. `New` shares one
-`*http.Client` per distinct connect/TLS/header triple, so the default callers share
-a connection pool.
-
-**Never set `http.Client.Timeout`** — it covers the body read and would kill a long
-stream. All five bounds stay per-stage: connect, TLS and response-header on the
-transport, idle as a gap-between-reads wrapper on the body, and total as a context
-whose cancel hangs off the response body so it outlives `Do`.
-
-`pkg/version` owns the build version (the ldflags target), the `ajent/<version>`
-User-Agent, and both update paths (`SelfUpdate` for `/update`, `CheckUpdateNotice`
-for the startup notice). It sits above `httputil` because the GitHub tag fetch runs
-on the shared client; that is why the version does not live in `httputil` itself,
-and why `pkg/config` stays a leaf.
-
-MCP traffic is **not** on this client: mcp-go owns its own SSE and streamable-HTTP
-transports, and is only handed headers.
+Every outbound request goes through this one hardened leaf package; it knows nothing
+about providers and owns all hardening (no redirects, env proxies, explicit pool bounds,
+credential redaction). MCP traffic is not on this client — mcp-go owns its own transports.
 
 ### The turn loop (`pkg/agent`)
 
-`Agent` owns one `State` (messages, model, reasoning, enabled tool names). `State` is
-owned by the goroutine running the turn; only the input queue and `running` flag sit
-under the mutex. `Prompt` is single-owner — mid-turn input goes through `Steer`
-(injected at the next step boundary) or `FollowUp` (a separate later turn), never a
-second concurrent `Prompt`.
+`Agent` owns one `State`, owned by the goroutine running the turn. Input is single-owner:
+mid-turn steering and follow-up are separate paths, never a second concurrent prompt.
 
 Invariants worth memorising:
 
-- `assemble(state, transform)` is **pure** — compaction and plan projection transform
+- Assembling messages from state is **pure** — compaction and plan projection transform
   the assembled list, never `State`.
-- `buildSystem` must stay **cache-stable**: only day-granular date and
-  project-instruction/snippet reloads may differ between requests in a session.
-- On abort, every unanswered `ToolCallBlock` gets a synthetic error `ToolResultBlock`.
-  A dangling `tool_use` makes the next Anthropic request 400 permanently.
-- Tool errors are `ToolResultBlock{IsError:true}` results, not Go errors — the turn
-  continues. Results are appended in **call order** regardless of completion order.
-- Parallel dispatch only when every call is `ModeParallel` and `Model.Caps.ParallelTools`.
+- The system block stays **cache-stable** across requests in a session (only day-granular
+  date and project-instruction reloads may differ).
+- On abort every unanswered tool call gets an error result; a dangling one breaks the next
+  request permanently. Tool errors are results appended in **call order**, not Go errors.
+- Parallel dispatch only when every call allows it and the model supports it.
 
 ### Providers (`pkg/llm`)
 
-One streaming interface over anthropic, openai, openrouter, llama.cpp, lm-studio.
-Three of the five are a profile over `openaicompat.go`. Differences that cannot be
-normalised are declared as `Capabilities`, never leaked upward as special cases.
-
-- `*_wire.go` files hold JSON structs only, no logic.
-- `Prepare` is the single normalization pass — every `build*Body`, the estimator and
-  the exact counter go through it, so what is counted is what is sent.
-- Blocks are stored as values (immutable once appended); `BlockList` carries a
-  `{type,data}` envelope so transcripts round-trip.
-- `ThinkingBlock` carries every provider's replay token at once; `Redacted` stays a
-  `string` because a base64 round-trip must be byte-exact.
-- Wire-format fixtures live in `pkg/llm/testdata/<provider>/`; `llm.ScriptedProvider`
-  (`fake.go`) is the provider stub for tests anywhere in the tree.
+One streaming interface over five vendors (three ride one compat shim). Differences that
+can't be normalised are declared as `Capabilities`, never leaked upward. A single
+normalisation pass means what is counted is what is sent.
 
 ### Sessions and compaction
 
-The transcript is the source of truth: append-only JSONL, one `Entry` per line, each
-naming its `ParentID` so the file is a **tree**, not a log. `Branch(entries, id)` is
-the only read path. Nothing is ever deleted — rewinding sets `HEAD` to an earlier
-entry's parent and forks.
-
-Because of that, compaction cannot just rewrite the in-memory message list — it cuts
-and summarises: everything before a verbatim band folds into one checkpoint recorded
-on the `compaction` entry and replayed on every rebuild. `pkg/session` owns the schema
-and replay; `pkg/compact` measures each run through the same `session.ContextMessages`, so
-a measured saving is by construction the saving the next request gets (stubs, drops,
-strip-thinking plans are legacy-replay only). Only the newest compaction applies, so
-each run recomputes cumulatively over the whole branch.
+The transcript is the source of truth: append-only JSONL forming a **tree** via parent ids,
+never deleted — rewinding forks from an earlier point. Compaction folds everything before a
+verbatim band into one checkpoint recorded on a `compaction` entry and replayed on every
+rebuild; only the newest applies, so each run recomputes cumulatively.
 
 ### Front end and dispatch
 
-`pkg/app` classifies each submitted line with `command.ParseLine` (prompt / `/command`
-/ `!shell`) and feeds commands and prompts to a single **prompt pump** goroutine that
-owns ordering; shell lines (`!cmd`, excluded `!!cmd`) go straight to the non-blocking
-`Stager`. Prompts flush the stage, expand `@` refs, then steer or start a turn.
-The package holds small files used to connect main to the rest of the application,
-one concern each: `run.go` (`Run`, config and model resolution), `driver.go`
-(`Driver`, the interactive loop and its wiring), `session.go` (open/resume/rewind/fork), `pump.go` (`runPump`), `queue.go` (`steerQueue`),
-`typing.go`, `console.go` (the `command.Console`), `compact.go`, `plan.go`, `init.go`,
-`permit.go` (gate adapters), `oneshot.go`+`oneshot_sink.go`, `delete.go`, `stats.go`,
-`api.go` (exit codes, options types).
-
-A one-shot run takes the other path: `Run` (`run.go`) branches on `-p/--prompt` before
-`tui.New` into `RunHeadless` (`oneshot.go`), which wires the same loop, session,
-MCP, compaction and sub-agents onto a stdout drain (`oneshot_sink.go`) instead of
-the TUI. Its safety model is the tool set, not the barrier: the gate runs at
-`allow-all` and the scope flags decide what the model is offered, so a headless
-turn never meets a tool it cannot call. `--delete <name|id>` and `--delete-old [days]`
-remove saved sessions and exit via `app.RunDelete` (`delete.go`), which wraps
-`session.DeleteSession`/`DeleteOldSessions` (`pkg/session/delete.go`). Flags are parsed
-with `spf13/pflag` in root `flags.go` (package main), which calls `app.Run`; exit codes
-are `app.ExitOK`/`ExitUsage`/`ExitTurn` (0 answer, 1 usage/setup, 2 failed turn).
-
-The demo lives in `demo/`, its own stdlib-only module: `ajent-demosrv` is a
-standalone OpenAI-compatible chat server that plays a fixed script of real tool
-calls over SSE. Building with the `demo` tag (`make build-demo`) produces
-`bin/ajent-demo`, which spawns the sibling server and points its own `AJENT_HOME`
-at a temp dir, so config, models and transcripts stay hermetic.
+`pkg/app` is the only wiring layer (nothing imports it). It classifies each line as prompt /
+`/command` / `!shell`, feeds ordering to a single **prompt pump** goroutine, and sends shell
+lines straight to a non-blocking stager. A one-shot (`-p`) run wires the same loop onto a
+stdout drain instead of the TUI — its safety model is the tool set (gate at allow-all, scope
+flags decide what's offered), not the permission barrier. Exit codes are `app.ExitOK`/`ExitUsage`/
+`ExitTurn`: 0 answer, 1 usage/setup error, 2 failed turn.
 
 ### Permission barrier (`pkg/permit`)
 
-The tool gate: static classification of every call plus approval dialogs. It imports
-only `pkg/agent` and `pkg/tools`, never `pkg/tui` — pkg/app supplies its narrow
-`Prompter`/`Classifier`/`Noter` interfaces, so headless mode stays free. The rule is
-to allow only what is **verifiably** read-only: built-ins (`read`/`grep`/`find`/`ls`) by
-name, non-built-in tools on declared `Registry.ReadOnly` metadata (MCP hint / config
-globs), bash through a quote-aware analyser. Network commands are never read-only.
-Five modes cycle with Shift+Tab or Shift+←/→: the default `allow-read` → `auto` →
-`auto+write` → `allow-all` → `block-all`; `!`/`!!` shell lines are exempt in every mode
-via `tools.WithUserInitiated`. A doomed edit is detected by a dry run of the real apply
-path so it never prompts. The model classifier (`auto`, `auto+write`) runs
-concurrently with an already-open dialog and its verdict never enters the session.
-`auto+write` is the one mode where a core writer auto-runs, confined to its roots
-(cwd and the temp dir) — the same two its classifier prompt names. Reads are free
-anywhere except credentials.
+The tool gate classifies every call and prompts for approval; it imports only agent/tools,
+never tui, so headless stays free. Only **verifiably read-only** actions run without
+approval: built-in readers by name, declared-read-only tools (MCP hint / config globs),
+bash through a quote-aware analyser. Network commands are never read-only.
+
+## Package map
+
+Quick navigation from concern → package (read the matching design doc first). One line each.
+
+- **`pkg/agent`** — turn loop: `Agent`, `State` (single owner), event sink, pure message assembly, cache-stable system block. Everything else builds on it.
+- **`pkg/app`** — the only wiring layer; nothing imports it. Prompt pump + line dispatch, headless (`-p`) run, and thin adapters that supply seams other packages refuse to import (permit classifier, compact driver, plan Host).
+- **`pkg/clipboard`** — shared clipboard writer: platform-native first, OSC 52 on remote only.
+- **`pkg/command`** — `/slash`, `!shell`, and prompt-line classification + completion; registry open to MCP. Uses `pkg/refs` for `@` expansion.
+- **`pkg/compact`** — compaction: verbatim band, cut point, structured summary checkpoint recorded on a session entry.
+- **`pkg/config`** — layered settings with per-key provenance; ordered writer and secret-perm handling.
+- **`pkg/httputil`** — the one hardened outbound HTTP client (no redirects, retries, credential redaction). MCP traffic does not ride it.
+- **`pkg/img`** — image normalization for model input: sniff, downscale/convert under a ceiling.
+- **`pkg/llm`** — one streaming interface over five vendors; normalisation pass (`Prepare`), capabilities, registry/discovery from `models.json`. One file per vendor.
+- **`pkg/mcp`** — MCP client/server manager keeping mcp-go isolated here; bridge turns remote tools into `agent.Tool`.
+- **`pkg/permit`** — permission barrier: classify every tool call, prompt for approval unless verifiably read-only (bash via quote-aware analyser).
+- **`pkg/plan`** — `/plan`: two-model phases as session-tree branches; supplies `dev_*` control tools.
+- **`pkg/projinit`** — `/init`: scaffolds project instructions into the repo by driving real read and agent_* tools.
+- **`pkg/refs`** — `@`-path expansion with auto-read and gitignore-aware completion index.
+- **`pkg/session`** — append-only JSONL transcript as source of truth: entry tree, rewind/branch/resume, replay to a sink, compaction data.
+- **`pkg/strutil`** — tiny shared string helpers (Clip, FirstLine, HumanSize...). Leaf package.
+- **`pkg/subagent`** — fan-out child agents for read-only investigation; bounded concurrency, completion notification, spend rollup. Never runs shell or agent_* tools.
+- **`pkg/tokens`** — token estimation and spend accounting (child spend rolls into parent ledger).
+- **`pkg/tools`** — tool registry + built-ins (read/write/edit/bash/grep/find/diff/ask), guard chain, path policy, per-tool limits.
+- **`pkg/tui`** — no-framework terminal UI: paint layers, scrollback survival, markdown/highlight rendering.
+- **`pkg/version`** — version string + self-update.
 
 ## Code Style
 

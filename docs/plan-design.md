@@ -71,13 +71,12 @@ by `pkg/app` (`plan.go`), the same shape `pkg/subagent` uses. A nil field
 disables that capability rather than panicking, and the whole workflow is
 unit-testable against a fake `Host` with no UI, transcript or registry in scope.
 
-`Fork(head string, m llm.Model) error` is the interesting one. `pkg/app`
-implements it as `(*sessRec).forkTo`, built on the branch-switch half of
-`rewind` (`switchState`) **without** rewind's `ui.Reset()` + `Replay`: the
-screen is never reset, because a phase switch changes what the *model* sees, not
-what the user sees. An empty head starts a new root. It deliberately does not go
-through `console.SetModel`, whose same-model early return would leave a branch
-with no model entry.
+`Fork` is the interesting one. `pkg/app` implements it as a branch-switch that
+reuses rewind's state switch **without** its screen reset + replay: the screen is
+never reset, because a phase switch changes what the *model* sees, not what the
+user sees. An empty head starts a new root. It deliberately does not go through
+`console.SetModel`, whose same-model early return would leave a branch with no model
+entry.
 
 ## Phases and transitions
 

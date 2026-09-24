@@ -343,13 +343,12 @@ only composes rows for `setLive` and touches no renderer at all.
 
 An interaction's height cap is a larger fraction of the screen than the input's:
 an interaction is transient and modal, and the input's smaller cap leaves too
-little room on a short terminal for a usable picker. `interactionMaxRows` claims
-two thirds (`interactionShareNum`/`interactionFree`) of the rows left after the
-rule, activity and queued-prompt rows have drawn (the status rows are subtracted
-at the call site), floored at `minInteractionRows` **and** at one row over the
-editor's own cap so it always outgrows the input wherever there is room; with
-fewer rows left than that share it takes them all, never fewer than one. The row
-naming the prompts queued behind the active interaction is reserved *inside*
+little room on a short terminal for a usable picker. It claims about two thirds of
+the rows left after the rule, activity and queued-prompt rows have drawn (status
+rows are subtracted at the call site), floored both at a small minimum **and** at
+one row over the editor's own cap so it always outgrows the input wherever there is
+room. With fewer rows left than that share it takes them all, never fewer than one.
+The row naming prompts queued behind the active interaction is reserved *inside*
 that cap rather than added beneath it.
 
 Lists scroll internally, keeping the cursor row in view, and an interactor never

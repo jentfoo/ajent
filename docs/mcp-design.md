@@ -16,8 +16,8 @@ consumes as plain facts:
 - **Configuration** — merged from `~/.ajent/mcp.json` then
   `<workspace>/.ajent/mcp.json`.
 - **Tools** — remote tools appear in the ordinary registry, namespaced to avoid
-  collisions, subject to per-server filtering and enable state. first message;
-  re-discovery on `tools/list_changed`, disconnect/reload through `/mcp`.
+  collisions and subject to per-server filtering, enable state and read-only
+  marking. Re-discovery happens on `tools/list_changed`; disconnect/reload go through `/mcp`.
 ## Boundary rules
 
 The dependency edge is load-bearing. The protocol layer (transports, JSON-RPC,
@@ -25,16 +25,16 @@ version negotiation, OAuth) is delegated to mcp-go; what ajent owns is the
 boundary.
 
 - **`pkg/mcp ↛ pkg/tools`, `pkg/tui`, `pkg/command`, `pkg/refs`.** It imports
-  only `agent`, `config`, `llm` and mcp-go. Everything it needs from the
-  registry or front / `console.go`. This keeps the dependency isolated so the
-  library can be replaced
+  only `agent`, `config`, `llm` and mcp-go. Everything it needs from the registry,
+  front end or command layer arrives as narrow interfaces supplied by `pkg/app`.
+  This keeps the dependency isolated so the library can be replaced behind one seam.
 - **mcp-go wire types never escape `pkg/mcp`.** The bridge emits our own
   `agent.Tool`; discovery returns our own `ToolDef`/`Resource`/`PromptDef`. The
-  extension host sees a
+  extension host sees only ajent's types, never a mcp-go struct.
 - **A tool of unknown effect does not run in an unobserved agent.** Read-only
   marking (from `annotations.readOnlyHint` OR config globs) defaults to *not*
-  read-only; only a registry metadata, and the sub-agent tool set reads it: a
-  marked MCP tool joins a read-only tools too.
+  read-only; the sub-agent tool set reads that registry metadata, so only an
+  explicitly marked MCP tool joins its read-only tools.
 ## Configuration (`config.go`)
 
 A server's config carries its stdio command plus args and env overrides, or a
@@ -51,9 +51,13 @@ this spec.
 
 - The read path follows `pkg/llm/config.go`'s `LoadFile`: `RelaxJSON` →
   unmarshal → unknown-key and duplicate-key warnings returned as strings for the
-  caller to surface. unset variable is a **clear error naming it**, never an
-  empty header or value. `transport: sse` on a stdio server. There are no
-  startup modes: every configured
+  caller to surface. A missing or empty file is not an error.
+- `${env:VAR}` references in env values, headers and URL expand at load; an unset
+  variable is a **clear error naming it**, never an empty header or value.
+- Each server must declare exactly one of `command` (stdio) or `url` (network),
+  with a transport consistent with it: `transport: sse` on a stdio command, or
+  a url without http/sse, is refused. An invalid name skips that server rather
+  than failing the whole file.
 
 ## Client wrapper (`client.go`)
 
@@ -61,12 +65,11 @@ A `Client` is obtained by connecting to a named server; it lists the remote
 tools, calls one with raw JSON arguments and an output writer, pings, and
 closes.
 
-- **stdio** — runs the server as a child process in its own process group, the
-  child env built from the parent plus config overrides. `Close` tears down
-  mcp-go's client not outlive a server torn down mid-session.
-- `Initialize` errors wrap the library's version-mismatch error naming both
-  versions, rather than failing obscurely. mcp-go 1.0 probes `server/discover`
-  first and falls
+- **stdio** — runs the server as a child process in its own process group, so
+  `Close` can sweep grandchildren that outlive the child. The child env is built
+  from the parent plus config overrides.
+- **Initialize errors are legible**: a protocol version mismatch names both our
+  version and the server's rather than failing obscurely.
 
 ### Schema fidelity
 
@@ -139,15 +142,14 @@ permissions, token accounting and the sub-agent treat it like any built-in.
 
 - **Namespacing** — `Name()` namespaces the tool from the server name; this is
   what the model sees and what appears in the transcript, so stability matters.
-  `Label()` shows the bare tool
+  `Label()` shows the bare tool name when unambiguous.
 - **Mode** — serial unless read-only, which may run parallel with other reads.
-- **Timeout** — per-call cap from config, clamped to a max, mirroring `bash.go`.
-  plus a notice so the turn continues; it does not abort. The model adapts.
-  notification synchronously on its single stdout-reader goroutine, so any
-  handler that response the same blocked reader can never return, deadlocking
-  the whole server. goroutine at this boundary, so no current or future ajent
-  handler can ever stall mcp-go. stream, so a call's progress shows up where its
-  output does. bridged call cannot flood the model. See `tools-design.md`.
+- **Timeout** — per-call cap from config, clamped to a max. A call that exceeds
+  it (or fails on transport) becomes an error result plus a notice so the turn
+  continues rather than aborting; the model adapts.
+- **Output** — remote progress maps onto the same output writer as a built-in,
+  so a bridged call's incremental output streams where its caller renders it, and
+  the tool-layer cap keeps it from flooding the model. See `tools-design.md`.
 
 ## Server manager (`manager.go`)
 
@@ -176,21 +178,20 @@ package stays free of `pkg/tools`.
   split, including tools the user turned off via `/tools`.
 - **`tools/list_changed`** triggers re-discovery: unregister source, register
   fresh, preserving live enable state. It runs through `rediscan`, which
-  serializes per server.
-the current tool set anyway. Each pass is bounded with its own timeout so an
-unresponsive server surfaces an error rather than leaking a goroutine or
-hanging. Resources/prompts changes trigger best-effort capability refresh on
-reconnects; both paths are safe to do blocking I/O because notifications arrive
-asynchronously from the client (see
-*Notifications never block mcp-go's reader*).
+  serializes per server and bounds each pass with its own timeout so an
+  unresponsive server surfaces an error rather than leaking a goroutine or
+  hanging. Resources/prompts changes trigger best-effort capability refresh on
+  reconnects; both paths are safe to do blocking I/O because notifications arrive
+  asynchronously from the client (see *Notifications never block mcp-go's reader*).
 - **Disconnect / Reload.** `/mcp disconnect` closes and unregisters without
   removing the config. `Reload` re-reads `mcp.json`, disconnects removed servers
-  and connects newly two. Filter fields (`tools.allow/deny`, `excludeTools`,
-  `readOnly`, `enabled`, `tools/list_changed` — preserving the live enabled set,
-  leaving the process running — Connection fields (`command`, `args`, `env`,
-  `url`, `headers`, `transport`) are stored effect on the server's
-  **next connect**, whichever comes first — `/mcp disconnect` + re-reads the
-  stored config so a death silently adopts the new endpoint. A disconnected
+  and connects new ones, leaving the process running. Filter fields
+  (`tools.allow/deny`, `excludeTools`, `readOnly`, `enabled`) apply immediately by
+  re-registering the source with its live enabled set preserved; connection fields
+  (`command`, `args`, `env`, `url`, `headers`, `transport`) take effect only on
+  the server's **next connect**. A reconnect also re-reads stored config, so a death
+  silently adopts the new endpoint whichever comes first — `/mcp disconnect` +
+  reload or an automatic reconnect.
 
 **Lock ownership.** `server.mu` guards every mutable per-server field (client,
 failure counters, discovered defs/resources/prompts, config); `Manager.mu` only
@@ -230,23 +231,25 @@ reconnection.
 ## Registry integration (`pkg/tools/registry.go`)
 
 MCP mutates the registry from notification goroutines while the loop reads it,
-so every method takes a lock. The single enabled bool became two states,
-known-but-disabled (enabled in the prompt and callable). There is no deferred
-state: every configured server is connected in full on first-message load, so
-each bridged tool registers as one of these two.
+so every method takes a lock. The single enabled bool became two states:
+known-but-disabled (`StateDisabled`, present in `/tools` but not in the prompt
+and not callable) and `StateEnabled` (in the prompt and callable). There is no
+deferred state: every configured server is connected in full on first-message
+load, so each bridged tool registers as one of these two.
 
 - `Schemas()` includes only `StateEnabled`; `Names()` stays enabled-only (it
-  feeds state + transcript); `Get()` answers Enabled tools only. which is what
-  `/tools` calls after the first prompt. There is no other promotion method. and
-  read-only metadata (`MarkReadOnly`/`ReadOnly`) serve the manager; the
-  sub-agent Every mutator nils the schema cache.
+  feeds state + transcript); `Get()` answers Enabled tools only. `/tools` calls
+  this after the first prompt; there is no other promotion method, and read-only
+  metadata (`MarkReadOnly`/`ReadOnly`) serves the manager's sub-agent marking.
+- Every mutator nils the schema cache.
 ## Front end wiring
 
 - `/mcp` lists servers with their state, connects/disconnects, shows recent logs
-  from a per-server bounded buffer (stdio stderr plus protocol
+  from a per-server bounded buffer (stdio stderr plus protocol messages), and
+  offers reload.
 - `pkg/command` declares its own small interfaces (`MCPServers`, `MCPGroup`,
   `MCPServerStatus`) so it never imports `pkg/mcp`; `pkg/app`'s adapters back
-  them with
+  them with the manager.
 - `/tools` groups MCP tools under a per-server header carrying tool count and
   connection state.
 ## Status

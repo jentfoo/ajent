@@ -43,14 +43,13 @@ only the events that feed its activity row.
 ### The one-shot drain
 
 `-p` proves the seam: `oneshot_sink.go` is a second front end over the same
-loop, chosen instead of `tuisink` before `tui.New` is ever called. `textSink`
-writes each `Text` delta straight through to stdout, holding whitespace back
-until content follows so the blank block a model emits before a tool call never
-reaches the terminal. It puts tool progress and notices on stderr instead, so
-the two streams stay separable. `jsonSink` buffers a block and writes one JSON
-object per line. Both embed `NopSink` and both hold a mutex around their writer,
-because `ToolStart`, `ToolOutput`, `Diff` and the done closure can all fire from
-parallel tool goroutines.
+loop, chosen instead of `tuisink` before `tui.New` is ever called.
+The drain keeps the two streams separable: prose goes to stdout (holding
+whitespace back until content follows so a blank block before a tool call never
+reaches the terminal) and tool progress plus notices go to stderr. JSON output
+buffers a block and writes one object per line. Both drains hold a mutex around
+their writer, because `ToolStart`, `ToolOutput`, `Diff` and the done closure can
+also fire from parallel tool goroutines.
 
 `textSink` also shows what a partial front end gets from `ToolProgress`: the
 loop has already resolved each call's target argument by name, so the drain can
@@ -60,10 +59,12 @@ tool owns.
 Two constraints a non-TUI drain has to respect:
 
 - **`Prompt` returning nil does not mean success.** An aborted turn sets
-  `TurnResult.Stop = llm.StopAborted` and returns nil, so the outcome must be
+  `TurnResult.Stop = llm.StopAborted` and returns nil, so the outcome must be read
+  from `TurnResult`, never inferred from the return value alone.
 - **The final answer is not a sink event.** The sink sees text deltas per block,
   not which block was last. The answer comes off `State.Messages` once the loop
-  front end therefore prints prose from the sink and reads state only to decide
+  settles; the front end therefore prints prose from the sink and reads state only
+to decide it has finished.
 
 ### Tool-call progress
 
@@ -77,21 +78,21 @@ far, which the TUI renders as an activity row.
 Constraints that keep it honest:
 
 - Arguments stream as **partial JSON**, so a newline inside an argument is the
-  two-character `\n` escape, not a byte. `lineEscapeCounter` counts those
-  escapes mid-escape and `\\n` is not miscounted as a newline. on some events
-  but always carry `Index` (see `event.go`). Resolving on id first
-- The target is looked up **by argument name** (`path`, `file_path`, …), never
-  by position: a marshalled Go map sorts its keys, so a write's long `content`
-  arrived. cannot repaint per token and the behaviour stays deterministic under
-  test. each, so an aborted turn never strands a row.
+  two-character `\n` escape, not a byte. Counting tracks escapes mid-escape so
+  `\\n` (a literal backslash then n) is never miscounted as a line break.
+- Events always carry an id, resolved on first before position, so progress can be
+  matched to the right call even when ids arrive out of order.
+- The target is looked up **by argument name** (`path`, `file_path`, …), never by
+  position: a marshalled Go map sorts its keys.
+- Progress must not repaint per token; rendering stays deterministic under test,
+  and an aborted turn never strands a row.
+
 ### Sink fan-out
 
 `Options.Sinks` is a slice; more than one consumer can watch turns without
-displacing the recorder. `New` resolves it once into a single field (`a.sink`):
-no sinks become `NopSink`, one sink is used as-is, and two or more are wrapped
-in a `fanoutSink` that forwards every method to each member in registration
-order. `ToolStart` returns a closure that calls each member's done in order. The
-loop therefore always emits on one field; fan-out costs nothing at the hot path.
+displacing the recorder. The loop resolves it once and always emits on a single
+field: no sinks mean nothing, one sink is used as-is, two or more are forwarded to
+each member in registration order. Fan-out costs nothing at the hot path.
 
 ## The loop
 
@@ -144,15 +145,14 @@ while there is no exact prompt report. Once `promptExact` lands the base drops
 out, since an exact count already includes system and schemas. Replacing rather
 than accumulating keeps a fresh epoch from double-counting across steps.
 
-Two callers seed it: `Agent.BaseEstimate(tools bool)` exposes what rides along
-so the front end can paint an honest bar before the first turn, and `stream()`
-itself calls `SetBase(EstimateFixed(req))` with the real built request, which
-self-corrects whatever was seeded. Tool schemas join the base only once the tool
-block is **committed**, since `/tools` can still narrow the set before the first
-prompt; after that it can only widen, so the base grows and never shrinks. A
-resumed branch with history has committed one already, and every context-tree
-jump (rewind, fork) re-seeds the base itself, because the ledger `session.State`
-builds carries none of its own.
+Two callers seed it: `Agent` exposes a base estimate so the front end can paint
+an honest bar before the first turn, and the stream itself calls `SetBase` with
+the real built request, which self-corrects whatever was seeded. Tool schemas join
+the base only once the tool block is **committed**, since `/tools` can still
+narrow the set before the first prompt; after that it can only widen, so the base
+grows and never shrinks. A resumed branch with history has committed one already,
+and every context-tree jump (rewind, fork) re-seeds the base itself, because the
+ledger `session.State` builds carries none of its own.
 
 A separate **submitted** bucket (`SetSubmit`) carries a sent prompt across the
 gap between the editor clearing and its message landing in state.
@@ -204,17 +204,16 @@ thinking block.
 ### Stream recovery
 
 A recoverable model call failure (dropped connection, truncated stream,
-overloaded provider) is re-requested within the step, up to
-`Options.TurnRetries` times (default 4) with transport-shaped backoff honouring
-`Retry-After`. Recovery never consumes a step — neither the re-request nor the
-overflow compact-retry advances it; an interrupt releases the backoff wait. A
-failed attempt appended nothing to state, so the retry sends the identical
-request; any block it left open is closed first so the replacement renders into
-a fresh region, while a terminal failure leaves closing to `TurnEnd`'s flush,
-the same contract an interrupt uses. Permanent failures are never retried. Each
-retry re-enters the transport's own ladder deliberately: that ladder covers
-sub-second blips, and the loop adds recovery for outages that outlast it, under
-a notice that names the wait.
+overloaded provider) is re-requested within the step a bounded number of times
+with transport-shaped backoff honouring `Retry-After`. Recovery never consumes a
+step: neither the re-request nor the overflow compact-retry advances it. An
+interrupt releases the backoff wait. A failed attempt appended nothing to state,
+so the retry sends the identical request; any block it left open is closed first
+so the replacement renders into a fresh region, while a terminal failure leaves
+closing to `TurnEnd`'s flush, the same contract an interrupt uses. Permanent
+failures are never retried. Each retry re-enters the transport's own ladder
+deliberately: that ladder covers sub-second blips, and the loop adds recovery for
+outages that outlast it, under a notice that names the wait.
 
 ### Interrupt
 
@@ -451,8 +450,7 @@ network and no `time.Sleep`. The distinctive harnesses:
   `EndThinking` precedes the first `Text`, and doubles as the abort-path
   observer.
 - A **blocking stub tool** pins a turn in flight so steering/follow-up can be
-  asserted
-to land at the next boundary rather than cancelling it.
+  asserted to land at the next boundary rather than cancelling it.
 
 The invariants they protect are the loop's load-bearing ones: results append in
 call order, and on any abort every `ToolCallBlock` gets a matching

@@ -11,12 +11,17 @@ Configuration resolves lowest to highest precedence:
 
 1. **default** — compiled in (`config.Defaults()`), kept as a JSON literal so it
    reports `(default)` like any other source.
-3. **project** — `<workspace>/.ajent/config.json`, committed at the team's
-   discretion. overrides. key at dotted path `p.q.r` binds to `AJENT_P_Q_R`. An
-   unparseable number or
-6. **flag** — built by the caller with `config.SetKey` over `{}`. Only `model`
+2. **user** — the user's `~/.ajent/config.json`.
+3. **project** — `<workspace>/.ajent/config.json`, committed at the team's discretion.
+4. **local** — `<workspace>/.ajent/config.local.json`, never committed; overrides
+   project for machine-specific values.
+5. **env** — bound from `AJENT_*` variables, one per scalar key (a dotted path
+   `p.q.r` binds to `AJENT_P_Q_R`). An unparseable number or boolean warns and
+   keeps the lower layer rather than failing startup.
+6. **flag** — set by the caller at startup over an empty base. Only `model`
    and `ui.render` ride it; the one-shot flags deliberately do not (see below).
-   runtime; empty at startup.
+7. **session** — per-key session overrides that survive resume, recorded from
+   `/settings` and runtime mode cycles; empty at a fresh start.
 Merge is per-key: objects fold deeply, arrays and scalars replace wholesale.
 `Resolved.Explain(key)` returns the resolved value plus the layer that supplied
 it. That is the difference between a config system and a mystery.
@@ -85,12 +90,13 @@ hits it: a human's own staged `!` line owns its shell and always runs.
 the *offered tool set* rather than a gate, so there is no key for them to set
 and `Explain` keeps reporting the file's own values. A headless run therefore:
 
-- ignores `permissions.mode` and runs the barrier at `allow-all`, since no
-  dialog can be opened; configure into a headless run; `grep`/`ls`/`find` and a
-  scope flag is the more specific instruction.
-See `tools-design.md` "Headless: the tool set is the gate" for the rule. The
-flag surface itself lives in `flags.go`; per the README contract every scope
-flag also has its entry there.
+- ignores `permissions.mode` and runs the barrier at `allow-all`, since no dialog
+  can be opened; the scope flags are what limit what the model may call, so a
+  narrower set is expressed as offered tools rather than a permission change.
+
+The flag surface itself lives in `flags.go`; per the README contract every scope
+flag also has its entry there. See `tools-design.md` "Headless: the tool set is
+the gate" for the rule.
 
 ### Tools
 
@@ -119,8 +125,8 @@ import here.
 
 The agent block holds `maxSteps`, an **optional** cap on one turn's tool-calling
 iterations, and `turnRetries`, how often a failed model call is re-requested
-within a step (default 4; a permanent failure never retries, and `0` keeps the
-default rather than disabling). Both are deliberately absent from the defaults
+within a step (a permanent failure never retries, and `0` keeps the default rather
+than disabling). Both are deliberately absent from the defaults
 layer, so `Explain` reports `(default)`; `AJENT_AGENT_MAXSTEPS` and
 `AJENT_AGENT_TURNRETRIES` bind for free through EnvLayer. They are startup-time
 configuration: pkg/app copies them into `agent.Options` once at process start,

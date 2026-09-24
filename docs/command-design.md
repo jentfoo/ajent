@@ -10,16 +10,11 @@ mechanism.
 
 ## What it is
 
-Three packages sit above the agent, tools and TUI:
-
-- `pkg/command` — `Command`, the registry, the `Console` interface, the built-in
-  commands, the shell `Stager`, and the aggregating `Completer`. gitignore-aware
-  path index for completion. paths that leaves the arrows to the editor.
-`pkg/command` imports `pkg/tui`, `pkg/agent`, `pkg/llm`, `pkg/tools`,
-`pkg/session` and `pkg/refs` (the path-completion index lives in refs and is
-consumed by the `Completer`). The UI does not import the command package; the
-host adapts `Console` onto `*tui.UI`, so headless mode and the sub-agent can
-drive the same commands with a different front end.
+Three packages sit above the agent, tools and TUI: `pkg/command` (commands,
+the registry, the `Console` interface and shell staging) plus its completion,
+and `pkg/refs`, which owns `@`-reference expansion and the gitignore-aware path
+index. The UI never imports command; the host adapts `Console` onto `*tui.UI`, so
+headless mode and a sub-agent drive the same commands behind a different front end.
 
 ## Dispatch
 
@@ -47,13 +42,11 @@ prompt lines go to a single **prompt pump** goroutine that owns ordering.
 
 `pkg/app`'s loop is a thin classifier feeding one pump channel:
 
-- loop: `ParseLine` → shell to `Stager.Run` (non-blocking); command and prompt
-  lines to the pump; the `quit` case is unchanged. The echo of a submitted
-  instead of an immediate echo. `Stager.Flush` → `refs.Expand` → queue-or-start
-  via the **steer queue** reads run only when the message lands. A `pumpLine`
-  carrying an already-assembled expansion and the echo so the same ordering,
-  accounting and hook path still busy, it queues the item (rendering as a dimmed
-  row) and defers its echo to
+- `ParseLine` routes shell lines to `Stager.Run` (non-blocking); command and prompt
+  lines go to the single pump goroutine that owns ordering.
+- A prompt flushes staged shell results, expands `@` refs, then either queues
+  onto the steer queue (rendering as a dimmed row with its echo deferred until it
+  lands) or starts the drain directly and echoes immediately.
 
 The steer queue turns mid-turn prompts into **steering messages**: they deliver
 as newline-joined messages (one per provenance run, see below) at the agent's
@@ -246,12 +239,9 @@ latest version.
 The shared logic lives in `pkg/version/update.go`, next to the build version it
 compares against, factored into an injectable exec seam (`updateCmds`) so tests
 exercise every branch with fakes and never touch a real go toolchain or network:
-
-- resolve: query the module proxy for the latest published version string.
-- compare against `version.Version` (the running build, injected by ldflags).
-  When equal (or when resolution failed with a usable empty value), nothing is
-- otherwise: install the latest release, capturing combined output for error
-  context. Success notifies updated-from → to; any failure
+resolve the latest published version, compare against the running build, install
+when they differ. Equal versions mean nothing is installed; any failure comes back
+as an error notice rather than panicking.
 
 The `--update` flag is the opposite surface: it runs the same `SelfUpdate` in
 the **foreground** and exits immediately after printing the result, never
@@ -268,7 +258,6 @@ dropping it would leave the transcript describing a tool that no longer exists:
 
 - **Before the first prompt** the picker lists every registered tool
   (`Registry.All`) and the selection is free: enable or disable anything.
-  selecting enables them via `Enable` (additive, vs `SetEnabled`'s replacement).
 
 The plan workflow is the deliberate exception: a phase scope *narrows* the set
 by calling `Registry.SetEnabled` directly. The widen-only rule is a
@@ -400,16 +389,15 @@ edited. Menu contexts are synchronous by contract.
 
 ### Menu rules
 
-- The top candidate is highlighted from the moment the menu opens.
-  **The marker is Tab's target, not Enter's**: Tab always accepts it, Enter only
-  does once
+The top candidate is highlighted from the moment the menu opens. `Tab` always
+accepts the highlighted candidate (it is Tab's target, not Enter's) and a following
+Enter just submits the result, so `/model` then Enter runs it.
+
 - `↑`/`↓` cycle the highlight and mark the selection *moved*.
-- `Tab` accepts the highlighted candidate; a following `Enter` just submits the
-  result (e.g. `/model` then Enter runs it). offered it submits the line as
-  typed, so an open menu never swallows a send menu opens unbidden while typing,
-  and a send must not change meaning because
-- Any key that reaches the editor (a character, Backspace, or a caret move)
-  drops the *moved* state, so Enter sends what was typed rather than re-applying
+- `Enter` on a moved selection accepts-and-submits in one press; otherwise it
+  submits the line as typed, so an open menu never swallows a send. Any key that
+  reaches the editor (a character, Backspace, or a caret move) drops the *moved*
+  state, so Enter then sends what was typed rather than re-applying.
 - `Esc` dismisses without inserting.
 
 A menu is re-queried on every keystroke under the UI lock, so `Menu` is a
@@ -418,16 +406,18 @@ that cannot must use `Async` instead.
 
 ### Tab rules
 
-- `Tab` fills in the candidates' longest common prefix and stops there, so it
-  never guesses past an ambiguity: bash's behaviour. A lone candidate therefore
-- A `Tab` that cannot advance lists the remaining candidates as passive dim
-  rows, packed into columns: no highlight, no selection, and every other key
-  clears
-- A `Tab` with nothing to add and nothing new to list leaves the buffer alone
-  and flashes the rule above the prompt. the typed text) has no meaningful
-  common prefix, so its best candidate is
-- `Esc` drops a listing before it clears the buffer. Everything else, `Enter`
-  and the arrows included, reaches the editor untouched.
+The tab-driven overlay holds no selection and consumes no keys. `Tab` fills in
+the candidates' longest common prefix and stops there, never guessing past an
+ambiguity (bash's behaviour); a lone candidate therefore completes in full.
+
+- A `Tab` that cannot advance lists the remaining candidates as passive dim rows,
+  packed into columns: no highlight, no selection, and the next keystroke clears
+  them. Text with no meaningful common prefix is its best case for this listing.
+- A `Tab` with nothing to add and nothing new to list leaves the buffer alone and
+  flashes a hint above the prompt.
+- `Esc` drops a listing before it clears the buffer; everything else, Enter and
+  the arrows included, reaches the editor untouched.
+
 ### `command.Completer`
 
 The aggregating completer sources commands from the registry and paths from
@@ -441,20 +431,20 @@ with the query that then runs. It returns a `completeCtx` carrying the grapheme
 cells, the clamped cursor and where the context begins, which every branch
 slices rather than rescanning the buffer.
 
-### Shell completion (`command/shellcomplete.go`)
+### Shell completion
 
-A leading `!` routes the whole line to shell completion, so an `@` inside it
-stays the literal text bash will receive rather than a workspace ref.
+A leading `!` routes the whole line to shell completion, so an `@` inside it stays
+the literal text bash will receive rather than a workspace ref.
 
-- **Command names.** The first word of the line, and of each `|`, `||`, `&&`,
-  `;`, `(` or `{` segment, completes against `bash -c 'compgen -abck'`:
-  `bash -c` anyway, so compgen under the same non-interactive shell reports and
-  filtered in Go; an unavailable bash simply yields no command names. A bare
-- **Paths.** Everything else, plus any first word containing `/`, completes
-  through `refs.Index.ShellCandidates`: the same one-`ReadDir`-per-step listing
-  node_modules/`).
-Quoting, escapes, `VAR=path` splitting and variable expansion are not handled:
-the token under the cursor completes as-is.
+- **Command names.** The first word of the line, and of each piped or grouped
+  segment, completes against what a non-interactive `bash -c 'compgen -abck'`
+  reports (builtins, keywords and PATH), looked up once with a timeout. An empty
+  token offers nothing rather than every command on the system; an unavailable bash
+  yields no command names.
+- **Paths.** Everything else, plus any first word containing `/`, completes through
+  the same index used for `@` refs, so one read-per-step listing serves both
+  surfaces. Quoting, escapes and variable expansion are not handled: the token
+  under the cursor completes as-is.
 
 ## `@` file references
 
@@ -493,13 +483,12 @@ Text is rebuilt by splicing spans back to front so earlier offsets stay valid;
 the plan is reversed once so the reads land in document order.
 
 Because planning no longer reads, the tracker cannot dedupe within one expansion
-(nothing has been observed yet), so
-**the plan dedupes by resolved path itself**, and `Run` re-checks `Unchanged`
-per injection before executing it. The first guard keeps one message from naming
-a path twice (which would duplicate its content *and* its call id); the second
-keeps a joined batch from re-reading what an earlier item in the same batch just
-read. `Run` also stops on a cancelled context rather than appending error pairs
-for the rest of the batch.
+(nothing has been observed yet), so **the plan dedupes by resolved path itself**
+and `Run` re-checks `Unchanged` per injection before executing it. The first guard
+keeps one message from naming a path twice (which would duplicate its content
+*and* its call id); the second keeps a joined batch from re-reading what an earlier
+item in the same batch just read. `Run` also stops on a cancelled context rather
+than appending error pairs for the rest of the batch.
 
 ### Reads land behind the message
 

@@ -163,13 +163,12 @@ session: that is the cache-stability contract.
 ### Composition invariants
 
 - One text block (`llm.TextBlock`), not many; providers cache per-block.
-- `buildSystem(env Environment, proj []ProjectInstruction, snippets []string, override string)`
-  stays deterministic given its inputs; extension snippets and project
-  instructions join through explicit inputs so tests can assert byte equality
-  across calls with equal inputs. An empty snippet slice produces a block
-  byte-identical to one built without the parameter. A non-empty `override`
-  replaces parts 1–2 (opening sentence plus guidelines) but leaves environment
-  facts, project instructions and snippets in place.
+- The system prompt stays deterministic given its inputs, and is byte-stable
+  across calls with equal inputs; extension snippets and project instructions join
+  through explicit inputs so tests can assert that equality. An empty snippet slice
+  produces a block identical to one built without the parameter. A non-empty
+  `override` replaces parts 1–2 (opening sentence plus guidelines) but leaves
+  environment facts, project instructions and snippets in place.
 - Changing the tool set or adding/removing project instructions changes this
   block; per principle 1, a change is announced with a one-line notice.
 

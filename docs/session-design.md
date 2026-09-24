@@ -90,19 +90,21 @@ disk never advances the cursor.
 - **Discard** returns a writer with no backing file, so callers stay
   branch-free.
 - **Sync** flushes at a turn boundary *and* persists the current head; it is
-  never called by `Append`. A cursor that could not be written returns alongside
+  never called by `Append`. A cursor that could not be written surfaces as an
+  error rather than silently continuing.
 - **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
   transcript keeps both histories (nothing is deleted) and the new tip becomes
+  the head.
 
 ## Durability
 
 Two boundaries matter, and they are deliberately different:
 
 1. **Per message.** The recorder wires `agent.Options.OnMessage` to append one
-   `message` entry as soon as the loop produces it (`Recorder.Message`). This is
-   because every completed step was already on disk before the next began.
-   fsyncs and records the head cursor so resume continues from exactly where
-   work
+   `message` entry as soon as the loop produces it (`Recorder.Message`), so every
+   completed step is already on disk before the next begins.
+2. **Per turn.** Each `TurnEnd` fsyncs and records the head cursor, so resume
+   continues from exactly where work left off.
 
 Write failures never end a conversation: persistence errors surface as an
 error-level notice through the sink rather than failing the turn. A broken disk
@@ -130,36 +132,41 @@ the branch.
 
 The store maps workspaces to directories under `<config dir>/sessions`: a
 workspace is one `<root>/<slug>-<hash>` directory, so renaming a project does
-not orphan its sessions. The slug flattens the whole workspace path
-(`~/code/goland/ajent` is `code_goland_ajent-2cac`, `/var/log` is
-`_var_log-9a6a`) so a directory is recognisable at a glance; it is lossy, so the
-hash is what pins the identity. Names are never parsed back into a workspace.
+not orphan its sessions. The slug flattens the whole workspace path so a
+directory is recognisable at a glance; it is lossy, so the hash pins identity.
+Names are never parsed back into a workspace.
 The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
 - Timestamps are stored in UTC and rendered with `.Local()`.
 - **List** returns every session for a workspace, most recently used first
-  (start time only breaks ties); each row carries the summary a picker shows
-  (model, files never surface as phantom rows. than start time is what makes it
-  land on the work actually left in progress. exact id, then unique id prefix.
-  Names match exactly only; ambiguity at any
+  (start time only breaks ties); each row carries the summary a picker shows:
+  model, message count and started time. Newest-first is what lands on the work
+  actually left in progress rather than an abandoned fork.
+- **Find** resolves `--resume`/`--delete` targets: exact id first, then a unique
+  id prefix; names match exactly only. Ambiguity at any step fails with a clear
+  error naming the candidates (see "Resume modes").
 - **NameConflict** is naming's one rule: a name is usable iff `Find` reaches
-  nothing, or reaches the session being named. Collisions and prior ambiguity
+  nothing, or reaches the session being named. Names are kept narrower than the
+  printable set so the exit hint's resume command is never refused at the door.
 - **NameOf** resolves the current name: the newest `session_name` entry, else
-  `SessionData.Name`. See invariant 2 for why it reads raw file order. leading
-  dash. Narrower than printable so the exit hint's resume command never is
-  refused at the door. before a caller-supplied cutoff, most recently used
-  first. The cutoff is `List`'s order, which is already the key it selects by.
-  cursor, leaving siblings and editor history alone. Empty-session cleanup,
-- **Info.Updated** is what `Stale` judges: the newest entry's timestamp, or the
-  file mtime when that is later. Taking the later of the two is the conservative
-  order, like `NameOf`: work on an abandoned fork was still work. they are read
-  from the `session` entry in raw file order (the same rationale as id or prefix
-  keeps working. deduplicated to each distinct text's most recent occurrence. It
-  walks recent bounded number of files rather than the whole workspace.
-`PromptIndex` caches that list on a short TTL (`promptTTL`) behind a mutex, so
-Ctrl+R history search never rescans every transcript per keystroke. It is best
-effort: a scan failure yields an empty slice rather than an error.
+  `SessionData.Name`. See invariant 2 for why it reads raw file order;
+  `Info.ID/Started/Model` share that rationale (they identify the file's session
+  entry, not a branch).
+- **Stale** judges by `Info.Updated`: the newest entry's timestamp, or the file
+  mtime when that is later. Taking the later of the two is conservative, like
+  `NameOf`: work on an abandoned fork was still work.
+- **DeleteOld** sweeps unnamed sessions before a caller-supplied cutoff (default
+  28 days), most recently used first; its order and selection key are `List`'s
+  already. Removing a session drops its head cursor too, leaving siblings and
+  editor history alone.
+
+Ctrl+R history search reads each transcript's entries in raw append order,
+deduplicated to each distinct text's most recent occurrence across a bounded
+number of files rather than the whole workspace; `PromptIndex` caches that list
+on a short TTL (`promptTTL`) behind a mutex so it never rescans every
+transcript per keystroke. It is best effort: a scan failure yields an empty
+slice rather than an error.
 
 Sessions are scoped to the workspace they started in, so resuming from elsewhere
 sees nothing and starts fresh (see "Resume modes").
@@ -224,23 +231,18 @@ the session unopenable. Only a newer major format version is a hard error.
 Two consumers read the transcript back:
 
 - **State** (`session.State`) rebuilds `agent.State` from a branch: messages in
-  order, model switches resolved through a resolver (a failure to resolve is a
-  setting changes applied (`applySetting` accepts both `tools.enabled`, the
-  dotted `session.SettingOverrides(branch)` returns the last value per
-  setting_change never raw file order, or a transcript with forks restores a
-  sibling's `compaction-design.md`. Message assembly goes through
-  `session.ContextMessages`, which applies the newest compaction's cut and its
-  computes the plan, see `compaction-design.md`). A compaction collapses in
-  `<summary>` provenance framing; a user role reaches every provider, unlike a
-  may additionally stub or drop them, and replay still honours those. reopened
-  session shows its history: user prompts open turns, assistant content stop
-  reason and usage. Thinking is off by default: it reads as noise on resume.
-  spinner) *and* a separate `UserPrompt(text)` event that carries its words, so
-  a `ui.UserEcho`; see `tui-design.md` "Rewind and resume"). Injected user-role
-  opens or echoes it as its own turn. The subset marked `Replayed` (staged `!`
-  runs) its label, the remainder its body, committed through the same
-  head/collapse rules bodies through each call's completion hook (`Display`),
-  bounded by the same output-head
+  order, model switches resolved through a resolver (a failure to resolve is
+  a setting change left unapplied), and setting overrides applied per key
+  (`applySetting` accepts both `tools.enabled`, the dotted form of any config
+  key) from `session.SettingOverrides(branch)`, which returns the last value
+  per setting_change. Reads go through a branch, never raw file order: a
+  transcript with forks restores only that branch's chain, not a sibling's.
+- **Replay** re-submits a restored branch to a sink (`session.Replay`), so a
+  rewound or resumed session shows its history as fresh committed lines rather
+  than erasing scrollback. User prompts open their own turn through `UserPrompt`
+  and assistant content carries stop reason and usage; thinking is off by
+  default because it reads as noise on resume (see `tui-design.md`, "Rewind and
+  resume" for the full rendering rules).
 
 Both share one invariant carried over from the agent loop: the rebuilt context
 must stay well formed (every `ToolCallBlock` matched by a `ToolResultBlock`) or
@@ -264,12 +266,12 @@ Because nothing is ever deleted, an abandoned fork stays reachable. The rewind
 picker exposes that through one tree view:
 
 - **TreeRows** walks the whole transcript as a tree for the rewind picker,
-  indenting by depth with box-drawing guides. Every guide cell is a fixed width,
-  up under the text of its own connector. Sibling branches align at one level;
-  shades to separate the live chain from abandoned forks. Newest work sits at
-  the reserve a kind column"). Each row also carries the clipboard payload
-  `ctrl+x` copies (see `clipboard-copy-feature.md`), rendered from the entry's
-  structured blocks rather than its display label.
+  indenting by depth with box-drawing guides (every guide cell fixed width, so
+  sibling branches align at one level) and shading to separate the live chain
+  from abandoned forks. Newest work sits near the bottom where the picker opens.
+  Each row carries a kind for the reserved tag column (`tui-design.md`) plus the
+  clipboard payload `ctrl+x` copies (see `clipboard-copy-feature.md`), rendered
+  from the entry's structured blocks rather than its display label.
 **Multiple roots.** A tree normally has one root, the `session` entry. Appending
 after `SetHead("")` stamps an empty `ParentID` and starts a second, which
 `Branch` stops at: state rebuilt from that head contains only that root's own
@@ -421,6 +423,7 @@ Package-specific rules beyond the house style in `AGENTS.md`:
 - No em dashes and no non-ASCII in comments; ASCII-only throughout identifiers.
 - Tests use a deterministic clock (`var clock = func() time.Time ...`) so IDs
   and timestamps are stable, plus an end-to-end fork test that rewinds onto an
+  earlier message.
 
 ## The frozen corpus
 
@@ -458,6 +461,9 @@ built from, so a plan recorded differently from how it was measured fails.
 
 - **New entry type**: add a `Type` constant, its payload struct in `entry.go`,
   and handle it where the transcript is consumed (state rebuild, replay,
+  resume).
 - **Persist more of a session**: add a method on `Recorder` that appends an
   entry; keep writes best-effort so recording failure cannot break a turn.
-  `openSession`, and document it here.
+
+Each new surface also needs its read path wired into `openSession`, and the
+schema change reflected in this doc's entry-type table.
