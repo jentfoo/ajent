@@ -322,6 +322,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			Notice:    func(msg string, warn bool) { ui.Notify(msg, levelOf(warn)) },
 			Status:    func(text, short string) { ui.SetStatusSegment(segment(segMCP, text, short)) },
 		})
+		// dial every server in the background now so spawn + discovery hide behind
+		// typing; LoadOnFirstMessage waits for these before a prompt is built.
+		mgr.Preload()
 	}
 
 	// the permission barrier gates every tool call through static classification and

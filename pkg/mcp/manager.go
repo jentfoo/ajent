@@ -87,7 +87,7 @@ type Manager struct {
 
 	mu      sync.Mutex // guards servers and loaded only; per-server state lives under server.mu
 	servers map[string]*server
-	loaded  bool // first-message load has run (LoadOnFirstMessage)
+	preload *sync.WaitGroup // in-flight background dials from Preload, waited on at first message
 
 	connectClient func(context.Context, string, ServerConfig) (*Client, error) // seam for tests
 }
@@ -133,33 +133,52 @@ func (m *Manager) serverByName(name string) *server {
 	return m.servers[name]
 }
 
-// LoadOnFirstMessage connects and registers every server, exactly once,
-// just before the user's first message is assembled into a turn. Doing it here,
-// not at session start, means any /tools or /mcp changes made up to that point
-// take effect; later prompts never re-trigger it. Config-disabled servers still
-// register their tools as StateDisabled so they remain visible and toggleable in
-// /tools.
+// LoadOnFirstMessage returns once every server has connected and registered its
+// tools, so the caller can build a prompt that includes them. It blocks on any
+// background Preload still dialing; config-disabled servers register as StateDisabled
+// (visible and toggleable in /tools). Safe to call more than once: it never re-dials.
 func (m *Manager) LoadOnFirstMessage(ctx context.Context) {
+	m.Preload() // start if not already running; idempotent, never re-dials
+	w := m.preloadWG()
+	if w == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() { w.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done(): // caller gave up on waiting; dials keep running in the background
+	}
+	m.updateStatus() // publish the active/discovered ratio once settled
+}
+
+// Preload starts connecting and registering every server concurrently, exactly
+// once. It returns immediately; LoadOnFirstMessage waits for completion before a
+// prompt is built. Dials run on m.ctx so they outlive any caller's context.
+func (m *Manager) Preload() {
 	m.mu.Lock()
-	if m.loaded {
+	if m.preload != nil { // already started once
 		m.mu.Unlock()
 		return
 	}
-	m.loaded = true
 	names := make([]string, 0, len(m.servers))
 	for n := range m.servers {
 		names = append(names, n)
 	}
 	slices.Sort(names)
+	wg := &sync.WaitGroup{}
+	wg.Add(len(names)) // all Adds before publishing so a waiter never waits on an incomplete set
+	m.preload = wg
 	m.mu.Unlock()
 
-	for _, name := range names { // every server connects eagerly on the first message
-		s := m.serverByName(name)
-		if s != nil {
-			_ = m.connect(ctx, name) // errors surface via notice/status
-		}
+	for _, name := range names {
+		go func() { // errors surface via notice/status; single-flight per server
+			defer wg.Done()
+			if s := m.serverByName(name); s != nil {
+				_ = m.connect(m.ctx, name)
+			}
+		}()
 	}
-	m.updateStatus() // publish the initial active/discovered ratio
 }
 
 // Connect dials and registers a server's tools. Idempotent for an already
@@ -379,6 +398,13 @@ func has(set map[string]struct{}, k string) bool {
 	return ok
 }
 
+// preloadWG returns the in-flight preload waitgroup, or nil before Preload ran.
+func (m *Manager) preloadWG() *sync.WaitGroup {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.preload
+}
+
 // captureLive reads a source's current enable/disable split from the registrar,
 // so re-registration restores exactly what was exposed rather than resetting it.
 func (m *Manager) captureLive(source string) *toolState {
@@ -455,19 +481,32 @@ func (m *Manager) Reload(ctx context.Context) error {
 	}
 	m.mu.Unlock()
 
+	// sweep removed servers concurrently (each close bounded by its grace), matching
+	// Close; a stalled one never blocks the others.
+	var wg sync.WaitGroup
 	for _, s := range dropped { // by pointer: it is out of the map already
-		m.disconnect(s)
+		wg.Go(func() {
+			m.disconnect(s)
+		})
 	}
+	wg.Wait()
 	for name, s := range existing {
 		m.applyConfig(ctx, s, cfg[name])
 	}
 
-	for _, name := range m.ServerNames() { // every server connects eagerly on reload too
+	// dial every disconnected server concurrently (single-flight per name), so
+	// reload latency is the slowest connect, not their sum.
+	var dg sync.WaitGroup
+	for _, name := range m.ServerNames() {
 		s := m.serverByName(name)
-		if s != nil && s.client() == nil {
-			_ = m.connect(ctx, name) // errors surface via notice/status
+		if s == nil || s.client() != nil {
+			continue
 		}
+		dg.Go(func() { // errors surface via notice/status
+			_ = m.connect(ctx, name)
+		})
 	}
+	dg.Wait()
 	m.updateStatus() // reconcile changed which servers and tools are live
 	return nil
 }

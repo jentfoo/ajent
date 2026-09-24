@@ -160,20 +160,20 @@ and marks extra tools read-only.
 The local `State` enum mirrors the registry's (Disabled / Enabled) so this
 package stays free of `pkg/tools`.
 
-- **First-message load (`LoadOnFirstMessage`)** — there is no startup spawn.
-  Every server (including config-disabled ones) is connected in full, exactly
-  once, just still connects so its tools stay visible and toggleable in
-  `/tools`, but `register()` Loading here rather than at session start means any
-  `/tools` or `/mcp` change made up first message. Discovery during a connect is
-  bounded by `discoverTimeout`, so an load or `/mcp` reload that awaits it.
-  prompt, a pre-first-prompt `LoadOnFirstMessage` would otherwise leave MCP
-  tools out of therefore also triggers the (idempotent) load when either command
-  is dispatched, so
-- **Resume ordering invariant.** The persisted enabled set is applied before MCP
-  has registered anything, so those names would be dropped. `Options.Restore`
-  (the session's default; the restored subset stays on and the rest are off.
-  `list_changed`, the manager captures a source's full enable/disable split so a
-  refresh restores exactly what was exposed, including tools the user turned
+- **Background preload (`Preload`) + first-message wait
+  (`LoadOnFirstMessage`)** — `pkg/app` calls `Preload()` at startup, so every
+  server spawns and discovers capabilities in the background while the user
+  types. Registration happens during that connect; resume ordering holds because
+  `Options.Restore` carries the already-decided enabled set into the constructor.
+  `LoadOnFirstMessage` blocks on any still-dialing preload, then returns with
+  every server registered (config-disabled ones as StateDisabled), so tool
+  descriptions are complete before the first prompt. Discovery is bounded by
+  `discoverTimeout`, and dials run on the manager's own context.
+- **Resume ordering.** Registration honors restore because `Options.Restore`
+  carries the persisted enabled set into the constructor; the registry's own
+  enable state is applied before MCP connects, so eager registration never drops
+  a restored subset. Re-registration always restores a source's full live
+  split, including tools the user turned off via `/tools`.
 - **`tools/list_changed`** triggers re-discovery: unregister source, register
   fresh, preserving live enable state. It runs through `rediscan`, which
   serializes per server.

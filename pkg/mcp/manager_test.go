@@ -199,6 +199,41 @@ func TestLoadOnFirstMessage(t *testing.T) {
 	})
 }
 
+func TestPreload(t *testing.T) {
+	t.Parallel()
+
+	// Preload connects and registers every server in the background; LoadOnFirstMessage
+	// then finds them already present instead of dialing again.
+	t.Run("registers_in_background", func(t *testing.T) {
+		srv := buildFakeServer(t)
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: srv, Args: []string{"-startup-delay=500ms"}},
+		}, Options{Registrar: fr})
+		t.Cleanup(mgr.Close)
+
+		mgr.Preload() // non-blocking
+		require.Eventually(t, func() bool {
+			return len(fr.AllNames("mcp: fake")) == 3
+		}, 5*time.Second, 20*time.Millisecond)
+	})
+
+	// a second Preload is a no-op and LoadOnFirstMessage waits on the same dials.
+	t.Run("idempotent", func(t *testing.T) {
+		srv := buildFakeServer(t)
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: srv, Args: []string{"-startup-delay=500ms"}},
+		}, Options{Registrar: fr})
+		t.Cleanup(mgr.Close)
+
+		mgr.Preload()
+		mgr.Preload()                       // no-op, single dial in flight
+		mgr.LoadOnFirstMessage(t.Context()) // waits for the background preload to settle
+		assert.Len(t, fr.AllNames("mcp: fake"), 3)
+	})
+}
+
 func TestConfigDisabledServer(t *testing.T) {
 	t.Parallel()
 
