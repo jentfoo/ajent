@@ -82,6 +82,26 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, home, abs)
 	})
 
+	// a model echoing an @file reference as a tool path still resolves
+	t.Run("ref_prefixed_tilde_expands_home", func(t *testing.T) {
+		home := t.TempDir()
+		restore := setTestUserHome(home)
+		t.Cleanup(restore)
+
+		p := PathPolicy{Cwd: ""}
+		abs, err := p.Resolve("@~/f.txt")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(home, "f.txt"), abs)
+	})
+
+	// @ only strips at the start and when a path follows it
+	t.Run("ref_prefixed_relative_resolves", func(t *testing.T) {
+		cwd := t.TempDir()
+		p := PathPolicy{Cwd: cwd}
+		abs, err := p.Resolve("@./f.txt")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, "f.txt"), abs) // @ already stripped by trimRefPrefix
+	})
 	// ~ expands to home even when Cwd is set
 	t.Run("tilde_ignores_cwd", func(t *testing.T) {
 		home := t.TempDir()
@@ -102,6 +122,15 @@ func TestResolve(t *testing.T) {
 		abs, err := p.Resolve("a~b.txt")
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join(cwd, "a~b.txt"), abs) // ~ only special at the start
+	})
+
+	// a bare @ with no path after it stays literal relative text
+	t.Run("bare_at_stays_relative", func(t *testing.T) {
+		cwd := t.TempDir()
+		p := PathPolicy{Cwd: cwd}
+		abs, err := p.Resolve("@")
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(cwd, "@"), abs) // no path follows the @
 	})
 
 	// empty Cwd uses os.Getwd; a relative path joins onto it

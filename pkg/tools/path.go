@@ -29,6 +29,7 @@ func argPath(p string) string {
 // ~ or ~/ expands to the user's home directory; other relative paths are taken
 // from Cwd. Nothing is refused.
 func (p PathPolicy) Resolve(path string) (string, error) {
+	path = trimRefPrefix(path)
 	var candidate string
 	if expanded, ok := expandTilde(path); ok {
 		candidate = expanded // absolute home path, no base needed
@@ -64,6 +65,14 @@ func expandTilde(path string) (string, bool) {
 	}
 	rest := strings.TrimPrefix(strings.TrimPrefix(path, "~"), "/")
 	return filepath.Join(home, rest), true
+}
+
+// trimRefPrefix drops one leading @ so a model echoing an @file reference as a tool path still resolves.
+func trimRefPrefix(path string) string {
+	if len(path) > 1 && path[0] == '@' && !isSlash(path[1]) {
+		return strings.TrimPrefix(path, "@")
+	}
+	return path
 }
 
 // isSlash reports whether c separates path components.
