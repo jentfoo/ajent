@@ -179,6 +179,7 @@ func reasoningCommand(ctx context.Context, arg string, c Console) error {
 		Level:  lvl,
 		Retain: cur.Retain, // keep the current retention policy
 		Hide:   cur.Hide,   // keep whether thinking streams to the UI
+		Budget: cur.Budget, // keep an explicit token budget across level changes
 	})
 	return nil
 }

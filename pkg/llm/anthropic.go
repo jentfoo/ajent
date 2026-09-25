@@ -614,18 +614,29 @@ func (s *anthropicStream) onBlockStart(ev antEvent) []Event {
 	if ev.ContentBlock.Type == antTypeRedacted {
 		b.data = ev.ContentBlock.Data
 	}
-	s.blocks[ev.Index] = b
-
+	var start Event
 	switch b.kind {
 	case antTypeThinking, antTypeRedacted:
-		return []Event{{Type: EventThinkingStart, Index: ev.Index}}
+		start = Event{Type: EventThinkingStart, Index: ev.Index}
 	case antTypeText:
-		return []Event{{Type: EventTextStart, Index: ev.Index}}
+		start = Event{Type: EventTextStart, Index: ev.Index}
 	case antTypeToolUse:
-		return []Event{{Type: EventToolCallStart, Index: ev.Index, ToolCallID: b.id, ToolName: b.name}}
+		start = Event{Type: EventToolCallStart, Index: ev.Index, ToolCallID: b.id, ToolName: b.name}
 	default:
 		return nil
 	}
+	s.blocks[ev.Index] = b
+
+	// interleaved thinking seeds a partial signature at start; deltas append to it
+	if ev.ContentBlock.Signature != nil {
+		b.signature = *ev.ContentBlock.Signature
+	}
+	if ev.ContentBlock.Thinking != "" {
+		// re-emit seeded text as a delta so live views match the assembled block
+		b.text.WriteString(ev.ContentBlock.Thinking)
+		return []Event{start, {Type: EventThinkingDelta, Index: ev.Index, Text: ev.ContentBlock.Thinking}}
+	}
+	return []Event{start}
 }
 
 func (s *anthropicStream) onBlockDelta(ev antEvent) []Event {

@@ -25,9 +25,10 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	isAntLing := provider == "ant-ling" || strings.Contains(baseURL, "api.ant-ling.com")
 	isDeepSeek := provider == "deepseek" || strings.Contains(strings.ToLower(baseURL), "deepseek.com")
 	isOpenCode := provider == "opencode" || strings.Contains(baseURL, "opencode.ai")
+	isOpenAI := provider == "openai" || strings.Contains(baseURL, "api.openai.com")
 
 	matched := isZai || isTogether || isMoonshot || isOpenRouter || isCFWorkersAI ||
-		isCFGateway || isNvidia || isAntLing || isDeepSeek ||
+		isCFGateway || isNvidia || isAntLing || isDeepSeek || isOpenAI ||
 		provider == "cerebras" || strings.Contains(baseURL, "cerebras.ai") ||
 		provider == "xai" || strings.Contains(baseURL, "api.x.ai") ||
 		strings.Contains(baseURL, "chutes.ai") || isOpenCode

@@ -91,6 +91,12 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 		}
 	}
 	applyThinking(&body, req) // runs after the max-tokens fields for its budget read
+	if caps.Store {
+		// store:false opts out of server-side storage; gated because not every
+		// completions endpoint accepts the key, unlike the responses dialect
+		body.Store = ptrOf(false)
+	}
+	applyVercelGateway(&body, caps.VercelGatewayRouting)
 	if profile.decorate != nil {
 		profile.decorate(&body, req)
 	}
@@ -99,6 +105,18 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 	}
 	// configured extra keys win over everything, including our own dynamic ones
 	return marshalWithExtra(body, mergeExtra(body.extra, caps.ExtraBody))
+}
+
+// applyVercelGateway emits provider_options.gateway from configured {only,order} routing.
+func applyVercelGateway(body *compatRequest, raw json.RawMessage) {
+	if len(raw) == 0 {
+		return
+	}
+	var g compatGateway
+	if err := json.Unmarshal(raw, &g); err != nil || (len(g.Only) == 0 && len(g.Order) == 0) {
+		return // nothing usable
+	}
+	body.ProviderOptions = map[string]any{"gateway": g}
 }
 
 // marshalWithExtra folds any configured extra body keys into the request, which

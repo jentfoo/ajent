@@ -410,19 +410,22 @@ func TestBuildResponsesBody(t *testing.T) {
 		assert.NotContains(t, decode(t, body), "include")
 	})
 
-	t.Run("stored_responses_keep_the_include", func(t *testing.T) {
-		// include rides on the reasoning param rather than the store flag; a
-		// stored model still requests the encrypted payload so replay works
+	t.Run("extra_body_folds_in_sampling_params", func(t *testing.T) {
+		// sampling params ride ExtraBody; on the Responses dialect they are the only
+		// temperature/top_p channel since the agent never sets Request.Temperature.
 		req := baseReq()
-		req.Model.Caps.Store = true
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
+		req.Model.Caps.ExtraBody = map[string]json.RawMessage{"top_k": json.RawMessage(`40`)}
 
 		body, err := buildResponsesBody(req)
 		require.NoError(t, err)
+		assert.InDelta(t, 40, decode(t, body)["top_k"], 0.001)
+	})
 
-		m := decode(t, body)
-		assert.Equal(t, []any{respEncryptedInclude}, m["include"])
-		assert.NotContains(t, m, "store")
+	t.Run("store_false_without_reasoning", func(t *testing.T) {
+		// replay rides the encrypted payload so storage is always opted out
+		body, err := buildResponsesBody(baseReq())
+		require.NoError(t, err)
+		assert.Equal(t, false, decode(t, body)["store"])
 	})
 
 	t.Run("level_off_names_the_none_effort", func(t *testing.T) {

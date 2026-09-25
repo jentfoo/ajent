@@ -539,6 +539,35 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.InDelta(t, 40, decode(t, body)["top_k"], 0.001)
 	})
 
+	t.Run("store_false_sent_when_capability_set", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.Store = true // endpoint accepts the store param
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Equal(t, false, decode(t, body)["store"])
+	})
+
+	t.Run("no_store_when_capability_unset", func(t *testing.T) {
+		body, err := buildCompatBody(baseReq(), compatProfile{})
+		require.NoError(t, err)
+		assert.NotContains(t, decode(t, body), "store")
+	})
+
+	t.Run("vercel_gateway_routing_emits_provider_options", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.VercelGatewayRouting =
+			json.RawMessage(`{"only":["fireworks"],"order":["fireworks","novita"]}`)
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		po, ok := decode(t, body)["provider_options"].(map[string]any)
+		require.True(t, ok)
+		gateway := po["gateway"].(map[string]any)
+		assert.Equal(t, []any{"fireworks"}, gateway["only"])
+		assert.Equal(t, []any{"fireworks", "novita"}, gateway["order"])
+	})
+
 	t.Run("image_content_becomes_parts", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Images = true

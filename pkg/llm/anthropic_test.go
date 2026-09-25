@@ -141,6 +141,26 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.Equal(t, TextBlock{Text: "the answer"}, msg.Content[1])
 	})
 
+	t.Run("block_start_seeds_merge", func(t *testing.T) {
+		// interleaved thinking seeds a signature (and may seed text) at block start
+		srv, _ := sseServer(t, "anthropic/thinking_seeded_start.sse")
+		p := newAnthropicTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
+		require.NoError(t, err)
+
+		events := collect(t, s)
+		assert.Equal(t, []string{
+			"message_start", "usage", "thinking_start", "thinking_delta", "thinking_delta", "thinking_end", "done",
+		}, eventKinds(events))
+
+		end := events[len(events)-2]
+		think, ok := end.Block.(ThinkingBlock)
+		require.True(t, ok)
+		assert.Equal(t, "seeded text plus delta", think.Text)
+		assert.Equal(t, "sig-seed-more", think.Signature) // start seed joined with the delta
+	})
+
 	t.Run("redacted_thinking_kept_verbatim", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/redacted_thinking.sse")
 		p := newAnthropicTestProvider(t, srv.URL)

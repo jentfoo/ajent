@@ -333,6 +333,19 @@ func TestFlavorDefaults(t *testing.T) {
 		assert.True(t, flavorDefaults[FlavorOpenAI].caps.ReasoningReplay)
 	})
 
+	t.Run("chat_completions_flavors_enable_parallel_tools", func(t *testing.T) {
+		// hosted chat-completions families accept multiple calls per completion
+		for _, f := range []Flavor{FlavorDeepSeek, FlavorTogether, FlavorGroq, FlavorMistral,
+			FlavorMoonshotAI, FlavorGoogle, FlavorCerebras, FlavorNVIDIA, FlavorHuggingFace} {
+			assert.True(t, flavorDefaults[f].caps.ParallelTools, f.String())
+		}
+	})
+
+	t.Run("openrouter_replays_reasoning_details", func(t *testing.T) {
+		// details replay keeps signatures on models routed to anthropic
+		assert.True(t, flavorDefaults[FlavorOpenRouter].caps.ReasoningReplay)
+	})
+
 	t.Run("anthropic_defaults_eager_streaming_and_tool_cache", func(t *testing.T) {
 		// both default on; an unset entry must behave the same
 		caps := flavorDefaults[FlavorAnthropic].caps

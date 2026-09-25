@@ -64,6 +64,7 @@ type Capabilities struct {
 	ChatTemplateKwargs    map[string]json.RawMessage // chat_template_kwargs additions
 	ChatTemplateArgs      map[string]json.RawMessage // baseten chat_template_args additions
 	OpenRouterRouting     json.RawMessage            // verbatim openrouter provider routing
+	VercelGatewayRouting  json.RawMessage            // {only,order} gateway routing for vercel ai gateway
 }
 
 // openRouterAffinityFormat is the compat session-affinity header format value.

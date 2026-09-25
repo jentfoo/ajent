@@ -30,8 +30,10 @@ type compatRequest struct {
 	ChatTemplateKwarg map[string]any     `json:"chat_template_kwargs,omitempty"`
 	ChatTemplateArgs  map[string]any     `json:"chat_template_args,omitempty"`
 	ToolStream        *bool              `json:"tool_stream,omitempty"`
-	Provider          any                `json:"provider,omitempty"` // typed routing or verbatim compat JSON
+	Provider          any                `json:"provider,omitempty"`         // typed routing or verbatim compat JSON
+	ProviderOptions   any                `json:"provider_options,omitempty"` // vercel gateway options
 	Usage             *compatUsageOption `json:"usage,omitempty"`
+	Store             *bool              `json:"store,omitempty"` // false opts out of server-side storage on endpoints that accept it
 	CachePrompt       *bool              `json:"cache_prompt,omitempty"`
 	PromptCacheKey    string             `json:"prompt_cache_key,omitempty"`
 
@@ -46,6 +48,12 @@ func (r *compatRequest) setExtra(key string, val json.RawMessage) {
 		r.extra = make(map[string]json.RawMessage, 1)
 	}
 	r.extra[key] = val
+}
+
+// compatGateway is the vercel ai gateway provider_options shape.
+type compatGateway struct {
+	Only  []string `json:"only,omitempty"`
+	Order []string `json:"order,omitempty"`
 }
 
 // compatReasoning is the openrouter reasoning parameter.

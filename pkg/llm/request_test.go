@@ -200,10 +200,11 @@ func TestReasoningFrom(t *testing.T) {
 
 	m := Model{Provider: "p", ID: "m"}
 	m.Caps.Reasoning = true
-	rc := ReasoningFrom(config.Reasoning{Level: "high", Retain: "none", Hide: true}, m)
+	rc := ReasoningFrom(config.Reasoning{Level: "high", Retain: "none", Hide: true, Budget: 5000}, m)
 	assert.Equal(t, LevelHigh, rc.Level)
 	assert.Equal(t, RetainNone, rc.Retain)
 	assert.True(t, rc.Hide)
+	assert.Equal(t, 5000, rc.Budget)
 
 	// an empty block falls back to the compiled-in defaults
 	d := ReasoningFrom(config.Reasoning{}, m)

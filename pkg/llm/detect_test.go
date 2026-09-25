@@ -32,6 +32,8 @@ func TestDetectCompat(t *testing.T) {
 		{"ant_ling", "ant-ling", "", want{reasoningEffort: false}},
 		{"openrouter", "openrouter", "", want{thinking: "openrouter", maxTokensField: fieldMaxCompletion,
 			supportsStore: true}},
+		{"openai", "openai", "", want{thinking: "openai", maxTokensField: fieldMaxCompletion,
+			supportsStore: true, reasoningEffort: true}},
 		{"moonshot", "moonshotai", "", want{maxTokensField: fieldMaxTokens,
 			supportsStore: false, reasoningEffort: false}},
 		{"nvidia", "nvidia", "", want{maxTokensField: fieldMaxTokens,

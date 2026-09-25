@@ -273,5 +273,5 @@ func ReasoningFrom(r config.Reasoning, m Model) ReasoningConfig {
 	if p, ok := ParseRetain(r.Retain); ok && r.Retain != "" {
 		retain = p
 	}
-	return ReasoningConfig{Level: lvl, Retain: retain, Hide: r.Hide}
+	return ReasoningConfig{Level: lvl, Retain: retain, Hide: r.Hide, Budget: r.Budget}
 }

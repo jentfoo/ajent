@@ -41,6 +41,7 @@ func chatCaps() Capabilities {
 		SystemAsRole:            true,
 		Temperature:             true,
 		ToolChoice:              true,
+		ParallelTools:           true, // hosted families accept multiple calls in one completion
 		SupportsReasoningEffort: true,
 		SupportsFinishReason:    true,
 		SupportsStrict:          true,
@@ -153,6 +154,8 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Reasoning:      true,
 			Thinking:       ThinkingOpenRouter,
 			ReasoningField: fieldReasoning,
+			// replaying reasoning_details keeps signatures on models routed to anthropic
+			ReasoningReplay: true,
 			// the openrouter default emits reasoning_effort for generic levels
 			SupportsReasoningEffort: true,
 			SupportsFinishReason:    true,
@@ -558,6 +561,9 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	}
 	if len(o.OpenRouterRouting) > 0 {
 		c.OpenRouterRouting = o.OpenRouterRouting
+	}
+	if len(o.VercelGatewayRouting) > 0 {
+		c.VercelGatewayRouting = o.VercelGatewayRouting
 	}
 	return c
 }

@@ -285,6 +285,7 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 			Level:  resumed.Reasoning.Level,
 			Retain: resumed.Reasoning.Retain,
 			Hide:   resumed.Reasoning.Hide,
+			Budget: resumed.Reasoning.Budget,
 		}, st.Model)
 	}
 	if toolsReg != nil && len(resumed.Tools.Enabled) > 0 {

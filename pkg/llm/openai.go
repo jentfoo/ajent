@@ -104,15 +104,14 @@ func buildResponsesBody(req Request) ([]byte, error) {
 			body.Reasoning = &respReasoning{Effort: e}
 		}
 	}
-	if !caps.Store {
-		// without server side state the encrypted payload is the only way to
-		// replay reasoning on the next turn
-		body.Store = ptrOf(false)
-	}
+	// replay rides the encrypted payload, never server-side state; the key is
+	// first-class on this dialect so it is always accepted
+	body.Store = ptrOf(false)
 	if req.Cache.Enabled && req.SessionID != "" && caps.SupportsExplicitPromptCache {
 		body.PromptCacheKey = clampPromptCacheKey(req.SessionID)
 	}
-	return json.Marshal(body)
+	// configured extra keys win over our own, like the compat dialect
+	return marshalMerged(body, caps.ExtraBody)
 }
 
 // responsesInput converts the content model to the typed input item list.
@@ -332,6 +331,22 @@ func shortenTextID(id string) string {
 func cutToolCallID(id string) (callID, itemID string) {
 	callID, itemID, _ = strings.Cut(id, "|")
 	return callID, itemID
+}
+
+// marshalMerged marshals a body and folds configured extra keys over it.
+func marshalMerged(body any, extra map[string]json.RawMessage) ([]byte, error) {
+	data, err := json.Marshal(body)
+	if err != nil || len(extra) == 0 {
+		return data, err
+	}
+	var merged map[string]json.RawMessage
+	if err = json.Unmarshal(data, &merged); err != nil {
+		return nil, err
+	}
+	for k, v := range extra {
+		merged[k] = v
+	}
+	return json.Marshal(merged)
 }
 
 // responsesStream decodes a Responses API event stream.
