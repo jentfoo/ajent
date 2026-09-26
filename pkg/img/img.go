@@ -1,9 +1,10 @@
 // Package img fits user-supplied images to what vision providers accept: it
 // decodes png, jpeg, gif, webp, bmp and tiff, downscales to the inline limits
 // rather than rejecting, and re-encodes to png or jpeg. It is the only place
-// the imaging and webp dependencies are imported; callers deal in bytes and
-// results. The webp registration mirrors the one in pkg/llm, which reads
-// image headers without decoding.
+// the x/image dependencies are imported; callers deal in bytes and results.
+// The webp registration mirrors the one in pkg/llm, which reads image headers
+// without decoding. Decode, EXIF orientation and resampling use stdlib plus
+// golang.org/x/image/draw only.
 package img
 
 import (
@@ -12,11 +13,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"image"
-	"image/color"
 	"image/jpeg"
 	"image/png"
 
-	"github.com/disintegration/imaging"
+	draw "golang.org/x/image/draw"
+
+	_ "golang.org/x/image/bmp" // register bmp/tiff decoding into image.Decode (no stdlib encoders)
+	_ "golang.org/x/image/tiff"
 	_ "golang.org/x/image/webp" // registers webp decoding into image.Decode
 )
 
@@ -92,7 +95,7 @@ func Prepare(data []byte) (Result, error) {
 
 	// decode even a sendable format that busts a limit: the header dimensions
 	// ignore EXIF rotation, so the oriented bounds are the honest source size
-	src, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
+	src, err := decode(data)
 	if err != nil {
 		return Result{}, ErrUnsupported
 	}
@@ -112,7 +115,7 @@ func Prepare(data []byte) (Result, error) {
 // ToPNG converts data to png bytes, ok false when no decoder accepts it.
 // EXIF orientation is applied.
 func ToPNG(data []byte) ([]byte, bool) {
-	src, err := imaging.Decode(bytes.NewReader(data), imaging.AutoOrientation(true))
+	src, err := decode(data)
 	if err != nil {
 		return nil, false
 	}
@@ -123,7 +126,165 @@ func ToPNG(data []byte) ([]byte, bool) {
 	return b, true
 }
 
-// withinLimits reports whether w x h with n raw bytes fits the ceilings.
+// decode reads one frame from data, applying the JPEG EXIF orientation tag so
+// a camera shot that needed fitting comes out upright.
+func decode(data []byte) (image.Image, error) {
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if o := jpegOrientation(data); o > orientationNormal {
+		return fixOrientation(src, o), nil
+	}
+	return src, nil
+}
+
+// EXIF orientation tags, per the JPEG standard.
+const (
+	orientationNormal     = 1 // no transform (also used when unspecified)
+	orientationFlipH      = 2
+	orientationRotate180  = 3
+	orientationFlipV      = 4
+	orientationTranspose  = 5
+	orientationRotate270  = 6
+	orientationTransverse = 7
+	orientationRotate90   = 8
+)
+
+// jpegOrientation reads the EXIF orientation tag from JPEG bytes, or 0 when
+// data is not a jpeg carrying one.
+func jpegOrientation(data []byte) int {
+	const (
+		markerSOI  = 0xffd8
+		markerAPP1 = 0xffe1
+	)
+	if len(data) < 4 || binary.BigEndian.Uint16(data[:2]) != markerSOI {
+		return 0
+	}
+
+	// walk the segment table until the APP1 EXIF block; other APP1 payloads
+	// (XMP and friends) keep the walk going
+	i := 2 // past SOI
+	for i+4 <= len(data) {
+		marker := binary.BigEndian.Uint16(data[i : i+2])
+		size := int(binary.BigEndian.Uint16(data[i+2 : i+4]))
+		if marker>>8 != 0xff || size < 2 {
+			return 0
+		}
+		i += 4 // past the length field, onto this segment's payload
+		payload := size - 2
+		if i+payload > len(data) {
+			return 0
+		}
+		if marker == markerAPP1 && payload >= 4 && string(data[i:i+4]) == "Exif" {
+			break
+		}
+		i += payload
+	}
+
+	o, ok := exifOrientation(data[i:])
+	if !ok || o < orientationNormal || o > orientationRotate90 {
+		return 0
+	}
+	return o
+}
+
+// exifOrientation reads the EXIF orientation tag from an "Exif\0\0..." APP1
+// payload, ok false when the block is absent or malformed. The IFD offset field
+// is relative to the TIFF header that follows the Exif signature.
+func exifOrientation(p []byte) (int, bool) {
+	const orientationTag = 0x0112
+	if len(p) < 6 || string(p[:4]) != "Exif" {
+		return 0, false
+	}
+	tiff := p[6:] // TIFF: byte-order flag, magic, then the IFD offset field
+	if len(tiff) < 8 {
+		return 0, false
+	}
+	var bo binary.ByteOrder
+	switch be := binary.BigEndian.Uint16(tiff); be {
+	case 0x4d4d: // MM big-endian
+		bo = binary.BigEndian
+	case 0x4949: // II little-endian
+		bo = binary.LittleEndian
+	default:
+		return 0, false
+	}
+	off := int(bo.Uint32(tiff[4:8]))
+	if off <= 6 || len(tiff) < off+2 {
+		return 0, false // IFD count would sit outside the block
+	}
+
+	count := int(bo.Uint16(tiff[off : off+2]))
+	for n := range count { // each IFD entry is a fixed twelve bytes
+		e := tiff[off+2+n*12:]
+		if len(e) < 10 {
+			return 0, false
+		}
+		if bo.Uint16(e[:2]) != orientationTag {
+			continue
+		}
+		v := int(bo.Uint16(e[8:10])) // tag id, type+count, then the value field
+		return v, true
+	}
+	return 0, false
+}
+
+// fixOrientation applies the EXIF transform o to src, returning an NRGBA.
+func fixOrientation(src image.Image, o int) *image.NRGBA {
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 || o == orientationNormal {
+		return toNRGBA(src)
+	}
+
+	dw, dh := w, h
+	switch o {
+	case orientationTranspose, orientationRotate270, orientationTransverse, orientationRotate90:
+		dw, dh = h, w
+	}
+	srcN := toNRGBA(src)
+	dst := image.NewNRGBA(image.Rect(0, 0, dw, dh))
+	for y := range dh {
+		for x := range dw {
+			sx, sy := orientSrc(o, x, y, w, h)
+			si, di := srcN.PixOffset(sx, sy), dst.PixOffset(x, y)
+			copy(dst.Pix[di:di+4], srcN.Pix[si:si+4])
+		}
+	}
+	return dst
+}
+
+// orientSrc maps a destination pixel to its source for the given orientation.
+func orientSrc(o, x, y, w, h int) (int, int) {
+	switch o {
+	case orientationFlipH:
+		return w - 1 - x, y
+	case orientationRotate180:
+		return w - 1 - x, h - 1 - y
+	case orientationFlipV:
+		return x, h - 1 - y
+	case orientationTranspose: // out(x,y)=in(y,x)
+		return y, x
+	case orientationRotate270: // out(x,y)=in(row=h-1-x,col=y)
+		return y, h - 1 - x
+	case orientationTransverse: // out(x,y)=in(h-1-x,w-1-y)
+		return w - 1 - y, h - 1 - x
+	default: // orientationRotate90: out(x,y)=in(row=x,col=w-1-y)
+		return w - 1 - y, x
+	}
+}
+
+// toNRGBA converts any image into a plain NRGBA buffer.
+func toNRGBA(src image.Image) *image.NRGBA {
+	if n, ok := src.(*image.NRGBA); ok {
+		return n
+	}
+	b := src.Bounds()
+	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
+	return dst
+}
 func withinLimits(w, h, n int) bool {
 	return w <= MaxPixels && h <= MaxPixels && base64Fits(n)
 }
@@ -161,14 +322,14 @@ func encodeFit(src image.Image, w, h int) (data []byte, mediaType string, fw, fh
 		cw, ch := scaleTo(w, h, f*clamp)
 		cand := src
 		if cw != w || ch != h {
-			cand = imaging.Resize(src, cw, ch, imaging.Lanczos)
+			cand = resize(src, cw, ch)
 		}
 		if b, err := encodePNG(cand); err == nil && base64Fits(len(b)) {
 			return b, typePNG, cw, ch, true
 		}
 		// jpeg keeps no alpha: composite over white first, so a fallback from
 		// png renders transparency as white rather than whatever rgb hid beneath
-		flat := imaging.Overlay(imaging.New(cw, ch, color.White), cand, image.Point{}, 1)
+		flat := flattenWhite(cand)
 		for _, q := range jpegQualities {
 			if b, err := encodeJPEG(flat, q); err == nil && base64Fits(len(b)) {
 				return b, typeJPEG, cw, ch, true
@@ -176,6 +337,23 @@ func encodeFit(src image.Image, w, h int) (data []byte, mediaType string, fw, fh
 		}
 	}
 	return nil, "", 0, 0, false
+}
+
+// resize downscales src to w x h with a high-quality cubic filter.
+func resize(src image.Image, w, h int) *image.NRGBA {
+	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+	return dst
+}
+
+// flattenWhite composites src over an opaque white canvas, dropping alpha the
+// way jpeg requires while rendering transparency as white.
+func flattenWhite(src image.Image) *image.NRGBA {
+	b := src.Bounds()
+	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
+	draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Over)
+	return dst
 }
 
 // scaleTo rounds w x h by f, never below 1.

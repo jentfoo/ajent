@@ -5,7 +5,6 @@ go 1.26.5
 require (
 	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/aymanbagabas/go-udiff v0.4.1
-	github.com/disintegration/imaging v1.6.2
 	github.com/go-analyze/bulk v0.1.6
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/mark3labs/mcp-go v1.1.0
