@@ -313,7 +313,6 @@ func (a mcpAdapter) Status(ctx context.Context) []command.MCPServerStatus {
 		out[i] = command.MCPServerStatus{
 			Name:      s.Name,
 			Transport: s.Transport,
-			Connected: s.Connected,
 			State:     s.State,
 			ToolCount: s.ToolCount,
 			Latency:   s.Latency,

@@ -22,7 +22,7 @@ func TestRegistryRegisterGetList(t *testing.T) {
 	_, ok = r.Get("ghost")
 	assert.False(t, ok)
 
-	names := r.Names()
+	names := commandNames(r)
 	assert.Equal(t, []string{"help", "model"}, names)
 
 	list := r.List()
@@ -41,7 +41,7 @@ func TestRegistryReplaceKeepsOrder(t *testing.T) {
 	require.Len(t, r.List(), 2)
 	help, _ := r.Get("help")
 	assert.Equal(t, "v2", help.Description)
-	assert.Equal(t, []string{"help", "model"}, r.Names())
+	assert.Equal(t, []string{"help", "model"}, commandNames(r))
 }
 
 func TestRegistryHandlerInvoked(t *testing.T) {

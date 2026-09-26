@@ -19,7 +19,6 @@ type MCPGroup struct {
 type MCPServerStatus struct {
 	Name      string
 	Transport string // stdio, http or sse
-	Connected bool
 	State     string // connected, disconnected, unresponsive, reconnecting (n)
 	ToolCount int
 	Latency   time.Duration

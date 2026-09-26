@@ -141,9 +141,9 @@ committing a partial answer. A deliberate `Close()` or cancelled context stays
 clean (invariant 3).
 
 `Index` is the content block index, pairing a start with its deltas and its end.
-`Accumulate(Stream)` builds the final `Message` from the end events, falling
-back to concatenating deltas for a block whose end never arrived, so an aborted
-stream still yields what was received.
+An `Accumulator` builds the final `Message`, falling back to concatenating
+deltas for a block whose end never arrived, so an aborted stream still yields
+what was received.
 
 `ScriptedProvider` and `SliceStream` are exported for exactly this reason: the
 agent loop's tests and compaction all need a fake provider, and several packages

@@ -127,7 +127,6 @@ func TestDo(t *testing.T) {
 		require.ErrorAs(t, err, &he)
 		assert.Equal(t, int64(1), hits.Load())
 		assert.Empty(t, *slept)
-		assert.Contains(t, string(he.Body), "bad")
 	})
 
 	t.Run("absurd_retry_after_fails_immediately", func(t *testing.T) {

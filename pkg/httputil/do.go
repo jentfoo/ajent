@@ -43,9 +43,7 @@ type callHooks struct {
 
 // Error is the non-2xx response a caller that supplied no ErrorFunc gets back.
 type Error struct {
-	Status     int
-	Body       []byte
-	RetryAfter time.Duration
+	Status int
 }
 
 func (e *Error) Error() string { return "httputil: http status " + strconv.Itoa(e.Status) }
@@ -155,12 +153,12 @@ func doAttempt(ctx context.Context, hc *http.Client, r Request, h callHooks, att
 	var errOut error
 	var retryable bool
 	if r.Error == nil {
-		errOut = &Error{Status: resp.StatusCode, Body: errBody, RetryAfter: retryAfter}
+		errOut = &Error{Status: resp.StatusCode}
 		retryable = ShouldRetryStatus(resp.StatusCode, retryAfter > 0)
 	} else {
 		e, ret := r.Error(resp.StatusCode, errBody, retryAfter)
 		if e == nil {
-			e = &Error{Status: resp.StatusCode, Body: errBody, RetryAfter: retryAfter}
+			e = &Error{Status: resp.StatusCode}
 		}
 		errOut, retryable = e, ret
 	}

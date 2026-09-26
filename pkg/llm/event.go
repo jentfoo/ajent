@@ -106,9 +106,6 @@ func (s *StopReason) UnmarshalText(data []byte) error {
 	return stopReasonNames.unmarshalText(data, s, "stop reason")
 }
 
-// ParseStop returns the stop reason named by s.
-func ParseStop(s string) (StopReason, bool) { return stopReasonNames.lookup(s) }
-
 // Usage is the provider reported token accounting for one response, to be aggregated by callers.
 type Usage struct {
 	Input      int `json:"input"`

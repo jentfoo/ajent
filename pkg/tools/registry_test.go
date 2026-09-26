@@ -208,18 +208,6 @@ func TestRegistryEnableIsAdditive(t *testing.T) {
 	assert.True(t, r.enabled("ls"))
 }
 
-func TestRegistrySourceLabelsGroups(t *testing.T) {
-	t.Parallel()
-
-	r := New()
-	r.Register(&fakeTool{name: "read"}, true)
-	r.RegisterFrom("filesystem-server", &fakeTool{name: "stat"}, false)
-
-	assert.Equal(t, SourceBuiltin, r.Source("read"))
-	assert.Equal(t, "filesystem-server", r.Source("stat"))
-	assert.Empty(t, r.Source("ghost"))
-}
-
 func TestRegistryTrackerExposedByBuiltins(t *testing.T) {
 	t.Parallel()
 
@@ -287,7 +275,6 @@ func TestGitToolsRegisteredDisabled(t *testing.T) {
 	for _, name := range []string{ToolGitStatus, ToolGitLog, ToolGitShow, ToolGitDiff} {
 		assert.NotContains(t, reg.Names(), name) // off by default like find and grep
 		assert.Contains(t, ReadOnlyBuiltins, name)
-		assert.Equal(t, SourceBuiltin, reg.Source(name))
 		assert.False(t, reg.ReadOnly(name)) // matched by name, not metadata
 	}
 

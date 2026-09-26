@@ -224,7 +224,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 					results[i-lo] = m
 					return
 				}
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 				head := make([]byte, sniffLen)
 				n, _ := io.ReadFull(f, head) // n < len(head) when the whole file fit
 				if binary(head[:n]) {
@@ -388,7 +388,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 
 	var b strings.Builder
 	stopped := false                         // true once the report filled and rg was cancelled early
-	cut := false                             // true once the budget is spent
+	var cut bool                             // true once the budget is spent
 	r := bufio.NewReaderSize(stdout, 64<<10) // no line-length cap; minified lines survive
 	switch {
 	case mode == grepCount:

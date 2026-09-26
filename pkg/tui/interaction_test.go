@@ -50,7 +50,7 @@ func TestUISelect(t *testing.T) {
 
 		result := make(chan int, 1)
 		go func() {
-			i, err := u.Select("Permission:", []Option{{Label: "Allow"}, {Label: "Deny"}})
+			i, err := u.SelectContext(t.Context(), "Permission:", []Option{{Label: "Allow"}, {Label: "Deny"}})
 			assert.NoError(t, err)
 			result <- i
 		}()
@@ -70,7 +70,7 @@ func TestUISelect(t *testing.T) {
 
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := u.Select("Pick:", []Option{{Label: "A"}, {Label: "B"}})
+			_, err := u.SelectContext(t.Context(), "Pick:", []Option{{Label: "A"}, {Label: "B"}})
 			errCh <- err
 		}()
 
@@ -85,7 +85,7 @@ func TestUISelect(t *testing.T) {
 
 		result := make(chan int, 1)
 		go func() {
-			i, _ := u.Select("Pick:", []Option{{Label: "A"}, {Label: "B"}, {Label: "C"}})
+			i, _ := u.SelectContext(t.Context(), "Pick:", []Option{{Label: "A"}, {Label: "B"}, {Label: "C"}})
 			result <- i
 		}()
 
@@ -100,7 +100,7 @@ func TestUISelect(t *testing.T) {
 
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := u.Select("Enable compaction?", []Option{{Label: "Yes"}, {Label: "No"}})
+			_, err := u.SelectContext(t.Context(), "Enable compaction?", []Option{{Label: "Yes"}, {Label: "No"}})
 			errCh <- err
 		}()
 
@@ -118,7 +118,7 @@ func TestUISelect(t *testing.T) {
 
 		done := make(chan struct{})
 		go func() {
-			_, _ = u.Select("Permission:", []Option{{Label: "Allow"}})
+			_, _ = u.SelectContext(t.Context(), "Permission:", []Option{{Label: "Allow"}})
 			close(done)
 		}()
 
@@ -136,7 +136,7 @@ func TestUISelect(t *testing.T) {
 
 		result := make(chan int, 1)
 		go func() {
-			i, _ := u.Select("Pick:", []Option{{Label: "A"}, {Label: "B"}})
+			i, _ := u.SelectContext(t.Context(), "Pick:", []Option{{Label: "A"}, {Label: "B"}})
 			result <- i
 		}()
 
@@ -150,7 +150,7 @@ func TestUISelect(t *testing.T) {
 
 	t.Run("empty_options_cancel", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
-		_, err := u.Select("Pick:", nil)
+		_, err := u.SelectContext(t.Context(), "Pick:", nil)
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
 }
@@ -162,7 +162,7 @@ func TestUIConfirm(t *testing.T) {
 
 	result := make(chan bool, 1)
 	go func() {
-		ok, _ := u.Confirm("Proceed?")
+		ok, _ := u.ConfirmContext(t.Context(), "Proceed?")
 		result <- ok
 	}()
 
@@ -180,7 +180,7 @@ func TestUIInputPrompt(t *testing.T) {
 
 		result := make(chan string, 1)
 		go func() {
-			s, err := u.Input("Name:", "your name")
+			s, err := u.InputContext(t.Context(), "Name:", "your name")
 			assert.NoError(t, err)
 			result <- s
 		}()
@@ -198,7 +198,7 @@ func TestUIInputPrompt(t *testing.T) {
 
 		result := make(chan string, 1)
 		go func() {
-			s, _ := u.Input("Name:", "")
+			s, _ := u.InputContext(t.Context(), "Name:", "")
 			result <- s
 		}()
 
@@ -315,7 +315,7 @@ func TestUIPick(t *testing.T) {
 
 		result := make(chan int, 1)
 		go func() {
-			i, err := u.Pick("Model", items, PickOptions{})
+			i, err := u.PickContext(t.Context(), "Model", items, PickOptions{})
 			assert.NoError(t, err)
 			result <- i
 		}()
@@ -333,7 +333,7 @@ func TestUIPick(t *testing.T) {
 
 		result := make(chan int, 1)
 		go func() {
-			i, _ := u.Pick("Model", items, PickOptions{})
+			i, _ := u.PickContext(t.Context(), "Model", items, PickOptions{})
 			result <- i
 		}()
 
@@ -354,7 +354,7 @@ func TestUIPick(t *testing.T) {
 		}
 		result := make(chan int, 1)
 		go func() {
-			i, _ := u.Pick("Rewind to", tagged, PickOptions{})
+			i, _ := u.PickContext(t.Context(), "Rewind to", tagged, PickOptions{})
 			result <- i
 		}()
 
@@ -371,7 +371,7 @@ func TestUIPick(t *testing.T) {
 
 		result := make(chan int, 1)
 		go func() {
-			i, _ := u.Pick("Model", items, PickOptions{Initial: 2})
+			i, _ := u.PickContext(t.Context(), "Model", items, PickOptions{Initial: 2})
 			result <- i
 		}()
 
@@ -386,7 +386,7 @@ func TestUIPick(t *testing.T) {
 
 		errCh := make(chan error, 1)
 		go func() {
-			_, err := u.Pick("Model", items, PickOptions{})
+			_, err := u.PickContext(t.Context(), "Model", items, PickOptions{})
 			errCh <- err
 		}()
 
@@ -402,7 +402,7 @@ func TestUIPick(t *testing.T) {
 	t.Run("counts_shown_and_total", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
-		go func() { _, _ = u.Pick("Model", items, PickOptions{}) }()
+		go func() { _, _ = u.PickContext(t.Context(), "Model", items, PickOptions{}) }()
 
 		waitFor(t, u, v, "3 of 3")
 		press(t, pw, "qwen")
@@ -422,7 +422,7 @@ func TestUIPick(t *testing.T) {
 		}
 		result := make(chan int, 1)
 		go func() {
-			i, _ := u.Pick("Model", many, PickOptions{})
+			i, _ := u.PickContext(t.Context(), "Model", many, PickOptions{})
 			result <- i
 		}()
 
@@ -443,7 +443,7 @@ func TestUIPick(t *testing.T) {
 		t.Cleanup(func() { _ = pw.Close() })
 		u := newTestUI(t, v, pr)
 
-		go func() { _, _ = u.Pick("Model", pickItemsOf(30), PickOptions{}) }()
+		go func() { _, _ = u.PickContext(t.Context(), "Model", pickItemsOf(30), PickOptions{}) }()
 
 		waitFor(t, u, v, "30 of 30")
 		assert.LessOrEqual(t, liveRowCount(u.snapshot(v)), 4)
@@ -457,7 +457,7 @@ func TestUIPick(t *testing.T) {
 		for i := range many {
 			many[i] = PickItem{Label: "model-" + strconv.Itoa(i)}
 		}
-		go func() { _, _ = u.Pick("Model", many, PickOptions{}) }()
+		go func() { _, _ = u.PickContext(t.Context(), "Model", many, PickOptions{}) }()
 
 		waitFor(t, u, v, "300 of 300")
 		waitFor(t, u, v, "more")
@@ -476,7 +476,7 @@ func TestUIPick(t *testing.T) {
 		items := []PickItem{{Label: "zai/glm-5.2"}, {Label: "openrouter/claude"}}
 		done := make(chan struct{})
 		go func() {
-			_, _ = u.Pick("Model", items, PickOptions{Silent: true})
+			_, _ = u.PickContext(t.Context(), "Model", items, PickOptions{Silent: true})
 			close(done)
 		}()
 
@@ -529,7 +529,7 @@ func TestUISelectAltMode(t *testing.T) {
 
 	result := make(chan int, 1)
 	go func() {
-		i, err := u.Select("Permission:", []Option{{Label: "Allow"}, {Label: "Deny"}})
+		i, err := u.SelectContext(t.Context(), "Permission:", []Option{{Label: "Allow"}, {Label: "Deny"}})
 		assert.NoError(t, err)
 		result <- i
 	}()
@@ -552,13 +552,13 @@ func TestInteractionQueue(t *testing.T) {
 		first := make(chan int, 1)
 		second := make(chan int, 1)
 		go func() {
-			i, _ := u.Select("First:", []Option{{Label: "A"}})
+			i, _ := u.SelectContext(t.Context(), "First:", []Option{{Label: "A"}})
 			first <- i
 		}()
 		waitFor(t, u, v, "First:")
 
 		go func() {
-			i, _ := u.Select("Second:", []Option{{Label: "B"}})
+			i, _ := u.SelectContext(t.Context(), "Second:", []Option{{Label: "B"}})
 			second <- i
 		}()
 
@@ -578,12 +578,12 @@ func TestInteractionQueue(t *testing.T) {
 
 		errs := make(chan error, 2)
 		go func() {
-			_, err := u.Select("First:", []Option{{Label: "A"}})
+			_, err := u.SelectContext(t.Context(), "First:", []Option{{Label: "A"}})
 			errs <- err
 		}()
 		waitFor(t, u, v, "First:")
 		go func() {
-			_, err := u.Select("Second:", []Option{{Label: "B"}})
+			_, err := u.SelectContext(t.Context(), "Second:", []Option{{Label: "B"}})
 			errs <- err
 		}()
 
@@ -616,7 +616,7 @@ func TestInteractionQueue(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		u.Close()
 
-		_, err := u.Select("Pick:", []Option{{Label: "A"}})
+		_, err := u.SelectContext(t.Context(), "Pick:", []Option{{Label: "A"}})
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
 }

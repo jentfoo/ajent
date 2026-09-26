@@ -46,8 +46,3 @@ func (r *Registry) List() []Command {
 	}
 	return out
 }
-
-// Names returns the registered command names in registration order, for command completion.
-func (r *Registry) Names() []string {
-	return append([]string(nil), r.order...)
-}

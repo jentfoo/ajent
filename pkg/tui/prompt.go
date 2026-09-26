@@ -61,11 +61,6 @@ type MultiPickOptions struct {
 	Filter      string // initial filter text
 }
 
-// Select presents options and returns the chosen index, or ErrCancelled on Esc.
-func (u *UI) Select(prompt string, options []Option) (int, error) {
-	return u.SelectContext(context.Background(), prompt, options)
-}
-
 // SelectContext is Select, abandoned when ctx ends.
 func (u *UI) SelectContext(ctx context.Context, prompt string, options []Option) (int, error) {
 	if len(options) == 0 {
@@ -78,20 +73,10 @@ func (u *UI) SelectContext(ctx context.Context, prompt string, options []Option)
 	return s.cursor, nil
 }
 
-// Confirm asks a yes or no question, defaulting to no on Esc.
-func (u *UI) Confirm(prompt string) (bool, error) {
-	return u.ConfirmContext(context.Background(), prompt)
-}
-
 // ConfirmContext is Confirm, abandoned when ctx ends.
 func (u *UI) ConfirmContext(ctx context.Context, prompt string) (bool, error) {
 	i, err := u.SelectContext(ctx, prompt, []Option{{Label: "Yes"}, {Label: "No"}})
 	return i == 0, err
-}
-
-// Input prompts for a line of text, returning ErrCancelled on Esc.
-func (u *UI) Input(label, placeholder string) (string, error) {
-	return u.InputContext(context.Background(), label, placeholder)
 }
 
 // InputContext is Input, abandoned when ctx ends.
@@ -101,12 +86,6 @@ func (u *UI) InputContext(ctx context.Context, label, placeholder string) (strin
 		return "", err
 	}
 	return s.value, nil
-}
-
-// Pick presents a list narrowed by typed text, returning the chosen index into
-// items, or ErrCancelled on Esc.
-func (u *UI) Pick(prompt string, items []PickItem, opts PickOptions) (int, error) {
-	return u.PickContext(context.Background(), prompt, items, opts)
 }
 
 // PickContext is Pick, abandoned when ctx ends.
@@ -123,14 +102,6 @@ func (u *UI) PickContext(ctx context.Context, prompt string, items []PickItem, o
 		return 0, err
 	}
 	return s.chosen, nil
-}
-
-// MultiPick presents a filterable multi-select list and returns the chosen
-// indexes, or ErrCancelled on Esc. Space/Tab toggle the highlighted row, ↑/↓
-// move, Enter confirms and Esc cancels; typed text narrows the filter.
-// Rows group under a dim header when PickItem.Group changes.
-func (u *UI) MultiPick(prompt string, items []PickItem, opts MultiPickOptions) ([]int, error) {
-	return u.MultiPickContext(context.Background(), prompt, items, opts)
 }
 
 // MultiPickContext is MultiPick, abandoned when ctx ends.

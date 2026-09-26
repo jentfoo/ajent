@@ -149,36 +149,8 @@ func TestUISetModel(t *testing.T) {
 	assert.Contains(t, screen, "subagents: 1") // segments survive a model change
 }
 
-func TestUISetTokens(t *testing.T) {
+func TestUISetStatusReplacesEverything(t *testing.T) {
 	t.Parallel()
-
-	t.Run("updates_usage_without_touching_the_model", func(t *testing.T) {
-		// a partial status update used to replace the whole struct, which put
-		// the model back to whatever the caller happened to hardcode
-		v := newVT(80, 12)
-		u := newTestUI(t, v, strings.NewReader(""))
-
-		u.SetModel("openrouter/z-ai/glm-5.2", "glm-5.2", 800000)
-		u.SetStatusSegment(Segment{Key: "agents", Text: "subagents: 1"})
-		u.SetTokens(4200)
-
-		screen := u.snapshot(v)
-		assert.Contains(t, screen, "openrouter/z-ai/glm-5.2")
-		assert.Contains(t, screen, "800k")
-		assert.Contains(t, screen, "subagents: 1")
-		assert.Contains(t, screen, "4.2k")
-	})
-
-	t.Run("repeated_updates_keep_the_model", func(t *testing.T) {
-		v := newVT(80, 12)
-		u := newTestUI(t, v, strings.NewReader(""))
-
-		u.SetModel("lmstudio/qwen", "qwen", 65536)
-		for i := range 5 {
-			u.SetTokens(1000 * (i + 1))
-		}
-		assert.Contains(t, u.snapshot(v), "lmstudio/qwen")
-	})
 
 	t.Run("set_status_still_replaces_everything", func(t *testing.T) {
 		v := newVT(80, 12)
@@ -365,7 +337,7 @@ func TestUIPlainInteraction(t *testing.T) {
 	t.Run("select_by_number", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("2\n"))
 
-		i, err := u.Select("Pick:", []Option{{Label: "A"}, {Label: "B"}})
+		i, err := u.SelectContext(t.Context(), "Pick:", []Option{{Label: "A"}, {Label: "B"}})
 		require.NoError(t, err)
 		assert.Equal(t, 1, i)
 	})
@@ -373,7 +345,7 @@ func TestUIPlainInteraction(t *testing.T) {
 	t.Run("input_takes_the_line", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("ajent\n"))
 
-		got, err := u.Input("Name:", "")
+		got, err := u.InputContext(t.Context(), "Name:", "")
 		require.NoError(t, err)
 		assert.Equal(t, "ajent", got)
 	})
@@ -381,7 +353,7 @@ func TestUIPlainInteraction(t *testing.T) {
 	t.Run("pick_takes_the_best_match", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("qwen\n"))
 
-		i, err := u.Pick("Model", []PickItem{
+		i, err := u.PickContext(t.Context(), "Model", []PickItem{
 			{Label: "anthropic/opus"}, {Label: "lmstudio/qwen"},
 		}, PickOptions{})
 		require.NoError(t, err)
@@ -391,21 +363,21 @@ func TestUIPlainInteraction(t *testing.T) {
 	t.Run("out_of_range_number_cancels", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("9\n"))
 
-		_, err := u.Select("Pick:", []Option{{Label: "A"}})
+		_, err := u.SelectContext(t.Context(), "Pick:", []Option{{Label: "A"}})
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
 
 	t.Run("no_match_cancels", func(t *testing.T) {
 		u, _ := newPlainUI(t, strings.NewReader("zzz\n"))
 
-		_, err := u.Pick("Model", []PickItem{{Label: "opus"}}, PickOptions{})
+		_, err := u.PickContext(t.Context(), "Model", []PickItem{{Label: "opus"}}, PickOptions{})
 		assert.ErrorIs(t, err, ErrCancelled)
 	})
 
 	t.Run("prompt_is_written_to_history", func(t *testing.T) {
 		u, v := newPlainUI(t, strings.NewReader("1\n"))
 
-		_, err := u.Select("Permission:", []Option{{Label: "Allow"}})
+		_, err := u.SelectContext(t.Context(), "Permission:", []Option{{Label: "Allow"}})
 		require.NoError(t, err)
 		assert.Contains(t, v.Screen(), "Permission:")
 	})

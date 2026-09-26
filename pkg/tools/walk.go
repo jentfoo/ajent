@@ -1,10 +1,7 @@
 package tools
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,29 +109,4 @@ func runQuiet(ctx context.Context, args ...string) string {
 		return ""
 	}
 	return strings.TrimSpace(out.String())
-}
-
-// runCaptured runs a command with a short timeout, returning trimmed stdout.
-// Exit status 1 is "no matches" for search tools and yields empty output; any
-// higher exit status returns stderr as an error so the model sees the cause.
-func runCaptured(ctx context.Context, name string, args ...string) (string, error) {
-	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(dctx, name, args...)
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err == nil {
-		return strings.TrimSpace(stdout.String()), nil
-	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 1 {
-		return "", nil // no matches
-	}
-	msg := strings.TrimSpace(stderr.String())
-	if msg == "" {
-		msg = err.Error()
-	}
-	return "", fmt.Errorf("%s: %s", name, msg)
 }

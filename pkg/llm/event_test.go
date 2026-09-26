@@ -130,20 +130,6 @@ func TestStopReasonString(t *testing.T) {
 	})
 }
 
-func TestParseStop(t *testing.T) {
-	t.Parallel()
-
-	got, ok := ParseStop("tool_use")
-	require.True(t, ok)
-	assert.Equal(t, StopToolUse, got)
-
-	_, ok = ParseStop("TOOL_USE") // case insensitive
-	require.True(t, ok)
-
-	_, ok = ParseStop("bogus")
-	assert.False(t, ok)
-}
-
 func TestUsageJSONTags(t *testing.T) {
 	t.Parallel()
 

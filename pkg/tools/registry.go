@@ -445,22 +445,6 @@ func allPresent(members []string, present map[string]bool) bool {
 	return true
 }
 
-// BySource returns every tool registered under source in declaration order,
-// regardless of state. The /tools grouping and the MCP manager use it to see a
-// server's full offering.
-func (r *Registry) BySource(source string) []agent.Tool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	var out []agent.Tool
-	for _, rt := range r.tools {
-		if rt.source == source {
-			out = append(out, rt.tool)
-		}
-	}
-	return out
-}
-
 // EnabledNames returns the currently enabled names registered under source. The
 // MCP manager captures this before re-registering a server so a live tool-list
 // refresh does not reset which tools are exposed.
@@ -529,18 +513,6 @@ func (r *Registry) ReadOnly(name string) bool {
 
 	rt, ok := r.findLocked(name)
 	return ok && rt.readOnly
-}
-
-// Source returns the registration source label for name, or empty when unknown.
-func (r *Registry) Source(name string) string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	rt, ok := r.findLocked(name)
-	if !ok {
-		return ""
-	}
-	return rt.source
 }
 
 // Tracker returns the read tracker shared by read/write/edit, or nil when none.

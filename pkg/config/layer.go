@@ -48,7 +48,7 @@ func (r Resolved) Source(key string) string { return r.src[key] }
 
 // Merge folds layers in order into one configuration: later layers win per leaf,
 // objects merge deeply, arrays and scalars replace. It is provenance tracking on
-// top of MergeObjects' semantics; call it instead when you need Explain.
+// top of the same deep-merge semantics; use it when you need Explain.
 func Merge(layers ...Layer) (Resolved, error) {
 	root := &val{k: kindObj, obj: &object{m: make(map[string]*val)}}
 	src := make(map[string]string)

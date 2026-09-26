@@ -192,7 +192,7 @@ func TestUIAsk(t *testing.T) {
 	t.Run("queues_behind_a_select", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
-		go func() { _, _ = u.Select("First:", []Option{{Label: "A"}}) }()
+		go func() { _, _ = u.SelectContext(t.Context(), "First:", []Option{{Label: "A"}}) }()
 		waitFor(t, u, v, "First:")
 
 		result := make(chan Answer, 1)

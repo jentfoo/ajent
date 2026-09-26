@@ -9,6 +9,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Accumulate drains s and returns the assembled assistant message. Test helper:
+// production drives an Accumulator directly when it also needs each event.
+func Accumulate(s Stream) (Message, Usage, error) {
+	var a Accumulator
+	for ev, ok := s.Next(); ok; ev, ok = s.Next() {
+		a.Add(ev)
+	}
+	err := s.Err()
+	if err == nil {
+		err = a.Err()
+	}
+	return a.Message(), a.Usage(), err
+}
+
 // textTurn is a complete assistant turn with thinking, text and one tool call.
 func textTurn() []Event {
 	return []Event{

@@ -239,7 +239,7 @@ func TestUIPickerCopy(t *testing.T) {
 			{Label: "agent: hi", Copy: "hi there"},
 		}
 		done := make(chan error, 1)
-		go func() { _, _ = u.Pick("Rewind to", items, PickOptions{}); done <- nil }()
+		go func() { _, _ = u.PickContext(t.Context(), "Rewind to", items, PickOptions{}); done <- nil }()
 
 		waitFor(t, u, v, "Rewind to")
 		press(t, pw, "\x18")
@@ -259,7 +259,7 @@ func TestUIPickerCopy(t *testing.T) {
 	t.Run("rows_without_payload_are_ignored", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 
-		go func() { _, _ = u.Pick("Rewind to", []PickItem{{Label: "user: hi"}}, PickOptions{}) }()
+		go func() { _, _ = u.PickContext(t.Context(), "Rewind to", []PickItem{{Label: "user: hi"}}, PickOptions{}) }()
 
 		waitFor(t, u, v, "Rewind to")
 		press(t, pw, "\x18")
@@ -281,7 +281,7 @@ func TestUIPickerCopy(t *testing.T) {
 			{Label: "agent: hi", Copy: "hi there"},
 		}
 		done := make(chan error, 1)
-		go func() { _, _ = u.Pick("Rewind to", items, PickOptions{}); done <- nil }()
+		go func() { _, _ = u.PickContext(t.Context(), "Rewind to", items, PickOptions{}); done <- nil }()
 
 		waitFor(t, u, v, "Rewind to")
 

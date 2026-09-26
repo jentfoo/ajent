@@ -8,22 +8,22 @@ import (
 // Media type constants reported by Sniff. png, jpeg, gif and webp can be
 // sent inline as-is; bmp and tiff are decode-only inputs that Prepare converts.
 const (
-	TypePNG  = "image/png"
-	TypeJPEG = "image/jpeg"
-	TypeGIF  = "image/gif"
-	TypeWebP = "image/webp"
-	TypeBMP  = "image/bmp"
-	TypeTIFF = "image/tiff"
+	typePNG  = "image/png"
+	typeJPEG = "image/jpeg"
+	typeGIF  = "image/gif"
+	typeWebP = "image/webp"
+	typeBMP  = "image/bmp"
+	typeTIFF = "image/tiff"
 )
 
 // sniffTypes maps the format names image.DecodeConfig reports onto media types.
 var sniffTypes = map[string]string{
-	"png":  TypePNG,
-	"jpeg": TypeJPEG,
-	"gif":  TypeGIF,
-	"webp": TypeWebP,
-	"bmp":  TypeBMP,
-	"tiff": TypeTIFF,
+	"png":  typePNG,
+	"jpeg": typeJPEG,
+	"gif":  typeGIF,
+	"webp": typeWebP,
+	"bmp":  typeBMP,
+	"tiff": typeTIFF,
 }
 
 // Sniff reports the media type of an image from its magic bytes, ok false for

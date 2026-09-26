@@ -40,11 +40,6 @@ func (d *FlexDuration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// MarshalJSON renders the duration as a millisecond count.
-func (d FlexDuration) MarshalJSON() ([]byte, error) {
-	return json.Marshal(int64(time.Duration(d) / time.Millisecond))
-}
-
 // FlexStrings is a config string list that also accepts a JSON boolean. A bare
 // true expands to "*" so every tool matches; false or absent yields nothing.
 type FlexStrings []string

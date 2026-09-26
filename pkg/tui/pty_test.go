@@ -292,7 +292,11 @@ func TestPTYSignalResize(t *testing.T) {
 	assert.Equal(t, 1, countRules(screen))
 	assert.Equal(t, 1, strings.Count(screen, "charlie"))
 	assert.Equal(t, 0, v.col)
-	assert.Equal(t, 34, u.Width())
+
+	u.mu.Lock()
+	w, _ := u.render.size()
+	u.mu.Unlock()
+	assert.Equal(t, 34, w)
 }
 
 func TestPTYSignalResizeReanchors(t *testing.T) {
@@ -327,7 +331,11 @@ func TestPTYSignalResizeReanchors(t *testing.T) {
 
 	assert.Equal(t, 1, countRules(v.Screen()))
 	assert.Contains(t, v.Line(v.h-1), "test")
-	assert.Equal(t, 48, u.Width())
+
+	u.mu.Lock()
+	w, _ := u.render.size()
+	u.mu.Unlock()
+	assert.Equal(t, 48, w)
 }
 
 func TestPTYTeardown(t *testing.T) {

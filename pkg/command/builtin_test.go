@@ -7,6 +7,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// commandNames returns the registered names in order, derived from List.
+func commandNames(r *Registry) []string {
+	cmds := r.List()
+	names := make([]string, len(cmds))
+	for i, c := range cmds {
+		names[i] = c.Name
+	}
+	return names
+}
+
 func TestRegisterBuiltinsInstallsAll(t *testing.T) {
 	t.Parallel()
 
@@ -16,7 +26,7 @@ func TestRegisterBuiltinsInstallsAll(t *testing.T) {
 	RegisterBuiltins(r, c)
 
 	want := []string{"help", "model", "reasoning", "usage", "copy", "compact", "tools", "session", "mcp", "agents", "settings", "update", "exit"}
-	assert.Equal(t, want, r.Names())
+	assert.Equal(t, want, commandNames(r))
 }
 
 func TestHelpPrintsCommandList(t *testing.T) {

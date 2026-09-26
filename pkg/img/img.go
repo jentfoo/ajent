@@ -83,7 +83,7 @@ func Prepare(data []byte) (Result, error) {
 	animated := animatedPNG(data, mediaType)
 	if !animated && withinLimits(cfg.Width, cfg.Height, len(data)) {
 		switch mediaType {
-		case TypePNG, TypeJPEG, TypeGIF, TypeWebP: // provider-accepted as-is
+		case typePNG, typeJPEG, typeGIF, typeWebP: // provider-accepted as-is
 			return Result{Data: data, MediaType: mediaType,
 				Width: cfg.Width, Height: cfg.Height, SrcWidth: cfg.Width, SrcHeight: cfg.Height,
 			}, nil
@@ -132,7 +132,7 @@ func withinLimits(w, h, n int) bool {
 // chunk. Left alone such a file would ride to the provider verbatim and some
 // reject the whole request over it, so it is re-encoded to its first frame.
 func animatedPNG(data []byte, mediaType string) bool {
-	if mediaType != TypePNG || len(data) < 8 {
+	if mediaType != typePNG || len(data) < 8 {
 		return false
 	}
 	for i := 8; i+8 <= len(data); {
@@ -164,14 +164,14 @@ func encodeFit(src image.Image, w, h int) (data []byte, mediaType string, fw, fh
 			cand = imaging.Resize(src, cw, ch, imaging.Lanczos)
 		}
 		if b, err := encodePNG(cand); err == nil && base64Fits(len(b)) {
-			return b, TypePNG, cw, ch, true
+			return b, typePNG, cw, ch, true
 		}
 		// jpeg keeps no alpha: composite over white first, so a fallback from
 		// png renders transparency as white rather than whatever rgb hid beneath
 		flat := imaging.Overlay(imaging.New(cw, ch, color.White), cand, image.Point{}, 1)
 		for _, q := range jpegQualities {
 			if b, err := encodeJPEG(flat, q); err == nil && base64Fits(len(b)) {
-				return b, TypeJPEG, cw, ch, true
+				return b, typeJPEG, cw, ch, true
 			}
 		}
 	}

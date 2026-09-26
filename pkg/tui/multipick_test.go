@@ -27,7 +27,7 @@ func TestMultiPickSelects(t *testing.T) {
 	result := make(chan []int, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		picked, err := u.MultiPick("Tools", items, MultiPickOptions{Placeholder: "filter"})
+		picked, err := u.MultiPickContext(t.Context(), "Tools", items, MultiPickOptions{Placeholder: "filter"})
 		errCh <- err
 		result <- picked
 	}()
@@ -65,7 +65,7 @@ func TestMultiPickSpaceTogglesSelection(t *testing.T) {
 	result := make(chan []int, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		picked, err := u.MultiPick("Tools", items, MultiPickOptions{})
+		picked, err := u.MultiPickContext(t.Context(), "Tools", items, MultiPickOptions{})
 		errCh <- err
 		result <- picked
 	}()
@@ -101,7 +101,7 @@ func TestMultiPickGroupHeaderShown(t *testing.T) {
 		{Label: "stat", Group: "mcp"},
 	}
 
-	go func() { _, _ = u.MultiPick("Tools", items, MultiPickOptions{}) }()
+	go func() { _, _ = u.MultiPickContext(t.Context(), "Tools", items, MultiPickOptions{}) }()
 
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "builtin") }, time.Second, testPoll)
 	assert.Contains(t, u.snapshot(v), "mcp")
@@ -122,7 +122,7 @@ func TestMultiPickHeaderTogglesGroup(t *testing.T) {
 	result := make(chan []int, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		picked, err := u.MultiPick("Tools", items, MultiPickOptions{})
+		picked, err := u.MultiPickContext(t.Context(), "Tools", items, MultiPickOptions{})
 		errCh <- err
 		result <- picked
 	}()
@@ -166,7 +166,7 @@ func TestMultiPickHeaderNeverInChosen(t *testing.T) {
 	result := make(chan []int, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		picked, err := u.MultiPick("Tools", items, MultiPickOptions{})
+		picked, err := u.MultiPickContext(t.Context(), "Tools", items, MultiPickOptions{})
 		errCh <- err
 		result <- picked
 	}()
@@ -196,7 +196,7 @@ func TestMultiPickEscCancels(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := u.MultiPick("Tools", []PickItem{{Label: "read"}}, MultiPickOptions{})
+		_, err := u.MultiPickContext(t.Context(), "Tools", []PickItem{{Label: "read"}}, MultiPickOptions{})
 		errCh <- err
 	}()
 

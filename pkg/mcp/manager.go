@@ -119,14 +119,6 @@ func (m *Manager) newServer(name string, cfg ServerConfig) *server {
 	}
 }
 
-// Source returns the grouping label for a server name.
-func (m *Manager) Source(name string) string {
-	if s := m.serverByName(name); s != nil {
-		return s.source
-	}
-	return "mcp: " + name
-}
-
 func (m *Manager) serverByName(name string) *server {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -606,7 +598,6 @@ func (m *Manager) serverStatus(ctx context.Context, name string) ServerStatus {
 		}
 		return st
 	}
-	st.Connected = true
 	pctx, pcancel := context.WithTimeout(ctx, pingTimeout)
 	defer pcancel()
 	start := time.Now()
@@ -626,7 +617,6 @@ func (m *Manager) serverStatus(ctx context.Context, name string) ServerStatus {
 type ServerStatus struct {
 	Name      string
 	Transport string
-	Connected bool
 	State     string
 	ToolCount int
 	Latency   time.Duration

@@ -176,20 +176,6 @@ func (a *Accumulator) Meta() StreamMeta { return a.meta }
 // Err returns the error carried on EventDone, if any.
 func (a *Accumulator) Err() error { return a.err }
 
-// Accumulate drains s and returns the assembled assistant message. Use an
-// Accumulator directly when the caller also needs each event.
-func Accumulate(s Stream) (Message, Usage, error) {
-	var a Accumulator
-	for ev, ok := s.Next(); ok; ev, ok = s.Next() {
-		a.Add(ev)
-	}
-	err := s.Err()
-	if err == nil {
-		err = a.Err()
-	}
-	return a.Message(), a.Usage(), err
-}
-
 // streamPump holds the shared event-pumping state every provider stream uses:
 // the Next loop, buffered events, terminal done/error flags and close semantics.
 // read decodes one frame into zero or more events; it is set by the embedding

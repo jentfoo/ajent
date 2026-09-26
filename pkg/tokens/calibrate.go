@@ -56,12 +56,3 @@ func (c *Calibrator) Factor(key string) float64 {
 	}
 	return 1
 }
-
-// Settled reports whether at least one sample has been recorded for key.
-func (c *Calibrator) Settled(key string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	f, ok := c.factors[key]
-	return ok && f > 0
-}

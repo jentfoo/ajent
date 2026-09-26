@@ -19,12 +19,12 @@ func TestRegisterCommands(t *testing.T) {
 	console := &uiConsole{reg: reg, st: &agent.State{}, tools: tools.New()}
 	baseline := command.NewRegistry()
 	command.RegisterBuiltins(baseline, console)
-	require.NotEmpty(t, baseline.Names())
+	require.NotEmpty(t, cmdNames(baseline))
 
 	t.Run("builtins_only", func(t *testing.T) {
 		cmds := command.NewRegistry()
 		command.RegisterBuiltins(cmds, console)
-		assert.Equal(t, baseline.Names(), cmds.Names())
+		assert.Equal(t, cmdNames(baseline), cmdNames(cmds))
 	})
 
 	t.Run("builtins_survive_extras", func(t *testing.T) {
@@ -37,13 +37,23 @@ func TestRegisterCommands(t *testing.T) {
 		} {
 			cmds.Register(c)
 		}
-		names := cmds.Names()
-		assert.Subset(t, names, baseline.Names())
+		names := cmdNames(cmds)
+		assert.Subset(t, names, cmdNames(baseline))
 		assert.Subset(t, names, []string{"plan", "plan-stop", "plan-status"})
 	})
 }
 
 func noopHandler(context.Context, string, command.Console) error { return nil }
+
+// cmdNames returns a registry's names in order, derived from List.
+func cmdNames(r *command.Registry) []string {
+	cmds := r.List()
+	names := make([]string, len(cmds))
+	for i, c := range cmds {
+		names[i] = c.Name
+	}
+	return names
+}
 
 func TestTurnRecorderLast(t *testing.T) {
 	t.Parallel()

@@ -40,8 +40,8 @@ func TestInitCommands(t *testing.T) {
 			cmds.Register(c)
 		}
 
-		assert.Subset(t, cmds.Names(), baseline.Names())
-		assert.Contains(t, cmds.Names(), "init")
+		assert.Subset(t, cmdNames(cmds), cmdNames(baseline))
+		assert.Contains(t, cmdNames(cmds), "init")
 	})
 }
 

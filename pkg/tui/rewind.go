@@ -3,7 +3,7 @@ package tui
 import "time"
 
 // defaultDoubleEscWindow is how close two idle Esc presses must be to count as
-// the rewind gesture when Options.DoubleEscWindow is left at zero.
+// the rewind gesture when no custom window has been set.
 const defaultDoubleEscWindow = 400 * time.Millisecond
 
 // escToken cancels a pending lone-Esc flush. *time.Timer satisfies it; tests may

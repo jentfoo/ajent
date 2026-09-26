@@ -58,9 +58,9 @@ func TestSniff(t *testing.T) {
 			data []byte
 			want string
 		}{
-			{"png", pngBytes(t, solid(4, 4)), TypePNG},
-			{"jpeg", jpegBytes(t, solid(4, 4), 80), TypeJPEG},
-			{"gif", gifBytes.Bytes(), TypeGIF},
+			{"png", pngBytes(t, solid(4, 4)), typePNG},
+			{"jpeg", jpegBytes(t, solid(4, 4), 80), typeJPEG},
+			{"gif", gifBytes.Bytes(), typeGIF},
 		} {
 			mt, ok := Sniff(c.data)
 			assert.True(t, ok, c.name)
@@ -80,7 +80,7 @@ func TestPreparePassthrough(t *testing.T) {
 	src := pngBytes(t, solid(120, 80))
 	res, err := Prepare(src)
 	require.NoError(t, err)
-	assert.Equal(t, TypePNG, res.MediaType)
+	assert.Equal(t, typePNG, res.MediaType)
 	assert.Equal(t, src, res.Data)
 	assert.Equal(t, 120, res.Width)
 	assert.Equal(t, 80, res.Height)
@@ -142,7 +142,7 @@ func TestPrepareConvertsUnsupportedFormat(t *testing.T) {
 	src := bmpBytes(t, 4, 3)
 	res, err := Prepare(src)
 	require.NoError(t, err)
-	assert.Equal(t, TypePNG, res.MediaType)
+	assert.Equal(t, typePNG, res.MediaType)
 	assert.Equal(t, 4, res.Width)
 	assert.Equal(t, 3, res.Height)
 	assert.False(t, res.Resized())
@@ -182,13 +182,13 @@ func TestPrepareConvertsAnimatedPNG(t *testing.T) {
 	src := apngBytes(t, solid(40, 30))
 	res, err := Prepare(src)
 	require.NoError(t, err)
-	assert.Equal(t, TypePNG, res.MediaType)
+	assert.Equal(t, typePNG, res.MediaType)
 	assert.Equal(t, 40, res.Width)
 	assert.Equal(t, 30, res.Height)
 	assert.True(t, res.Flattened)
 	assert.Contains(t, res.Note(), "flattened to its first frame")
 	assert.False(t, animatedPNG(res.Data, res.MediaType))
-	assert.False(t, animatedPNG(pngBytes(t, solid(4, 4)), TypePNG)) // plain png untouched
+	assert.False(t, animatedPNG(pngBytes(t, solid(4, 4)), typePNG)) // plain png untouched
 }
 
 func TestPrepareRejectsVastDimensions(t *testing.T) {
@@ -235,7 +235,7 @@ func TestPrepareJPEGFallbackFlattensAlpha(t *testing.T) {
 	}
 	res, err := Prepare(pngBytes(t, m))
 	require.NoError(t, err)
-	assert.Equal(t, TypeJPEG, res.MediaType)
+	assert.Equal(t, typeJPEG, res.MediaType)
 
 	decoded, err := jpeg.Decode(bytes.NewReader(res.Data))
 	require.NoError(t, err)

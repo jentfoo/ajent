@@ -117,13 +117,9 @@ func (v *branchView) verbatimCut(priorCut, minSteps, maxTokens int) int {
 
 	var cut, seen, acc = len(v.branch), 0, 0
 	for i := len(v.branch) - 1; i >= priorCut; i-- {
-		md, ok := v.message(i)
-		if !ok {
-			continue // unreadable entry carries no tokens and opens no step
-		}
-		acc += v.tokens(i) // acc == v.spanTokens(i, len(v.branch))
-		if md.Message.Role != llm.RoleAssistant {
-			continue
+		acc += v.tokens(i)
+		if !isStepStart(v.branch[i]) {
+			continue // an unreadable entry or a non-assistant message opens no step
 		}
 		seen++
 		if seen <= minSteps {

@@ -71,9 +71,6 @@ type Options struct {
 	Model      string
 	ModelShort string // collapse target for Model on a narrow status row
 	MaxTokens  int
-	// double-Esc rewind: two idle presses within DoubleEscWindow call OnRewind instead of ControlEscape
-	DoubleEscWindow time.Duration // window between two idle Esc presses; 0 = default
-	OnRewind        func()
 	// OnEdit is called with the current editor text (pastes expanded) whenever it
 	// changes, so a host can feed token accounting while the user composes. It runs
 	// on an internal goroutine, never under the UI lock.
@@ -249,12 +246,7 @@ func New(opts Options) (*UI, error) {
 	if opts.OnEdit != nil {
 		u.onEdit = opts.OnEdit
 	}
-	doubleEsc := opts.DoubleEscWindow
-	if doubleEsc <= 0 {
-		doubleEsc = defaultDoubleEscWindow
-	}
-	u.doubleEscWindow = doubleEsc
-	u.onRewind = opts.OnRewind
+	u.doubleEscWindow = defaultDoubleEscWindow
 	u.afterDelay = time.AfterFunc
 	if inl, ok := u.render.(*inlineRenderer); ok {
 		// only inline parks by row count
@@ -366,15 +358,6 @@ func (u *UI) CopySelection() (text string, ok bool) {
 	return text, text != ""
 }
 
-// Width returns the current terminal width in columns.
-func (u *UI) Width() int {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	w, _ := u.render.size()
-	return w
-}
-
 // Close restores the terminal, it is safe to call more than once.
 func (u *UI) Close() {
 	u.mu.Lock()
@@ -453,8 +436,7 @@ func (u *UI) Divider() {
 }
 
 // SetStatus replaces the whole status line, including the model and every
-// segment. To update one part use SetModel, SetTokens or SetStatusSegment,
-// which is almost always what a caller means.
+// segment. To update one part use SetModel or SetStatusSegment instead.
 func (u *UI) SetStatus(s Status) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -487,16 +469,6 @@ func (u *UI) SetContext(ci ContextInfo) {
 	u.status.Reserve = ci.Reserve
 	u.status.Compact = ci.Compact
 	u.status.Estimated = ci.Estimated
-	u.repaint()
-}
-
-// SetTokens updates the context usage count, leaving the model and its window
-// alone. The demo uses it; live sessions drive the bar through SetContext.
-func (u *UI) SetTokens(tokens int) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	u.status.Tokens = tokens
 	u.repaint()
 }
 

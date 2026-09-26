@@ -768,7 +768,8 @@ func TestNew(t *testing.T) {
 	t.Cleanup(u.Close)
 
 	assert.Equal(t, ModePlain, u.Mode())
-	assert.Equal(t, defaultWidth, u.Width())
+	w, _ := u.render.size()
+	assert.Equal(t, defaultWidth, w)
 
 	t.Run("input_reaches_messages", func(t *testing.T) {
 		_, err := inW.WriteString("  \nhello\n") // blank lines are skipped
@@ -1300,11 +1301,11 @@ func TestUIResizeGate(t *testing.T) {
 		u := newTestUI(t, v, strings.NewReader(""))
 		setResizing(u, true)
 
-		u.SetTokens(777) // a repaint trigger; held back while resizing
-		assert.NotContains(t, u.snapshot(v), "777")
+		u.SetStatus(Status{Tokens: 7700, MaxTokens: 10000}) // a repaint trigger; held back while resizing
+		assert.NotContains(t, u.snapshot(v), "7.7k")
 
 		u.resize()
-		assert.Contains(t, u.snapshot(v), "777")
+		assert.Contains(t, u.snapshot(v), "7.7k")
 		assert.False(t, u.resizing.Load())
 	})
 
