@@ -26,6 +26,12 @@ Merge is per-key: objects fold deeply, arrays and scalars replace wholesale.
 `Resolved.Explain(key)` returns the resolved value plus the layer that supplied
 it. That is the difference between a config system and a mystery.
 
+A `Set` is safe for concurrent use: settings are read while a turn runs (the
+prompt pump, mid-turn compaction) and written from key handlers on another
+goroutine (a permission mode cycle never waits for the turn). A mutex
+serializes layer writes and merge; each merged `Resolved` is immutable once
+built, so readers hold a stable snapshot across later writes.
+
 ## The schema
 
 The schema is a single typed settings root whose fields mirror the config

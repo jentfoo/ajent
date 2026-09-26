@@ -129,7 +129,7 @@ func TestCompactVerbatimBand(t *testing.T) {
 
 	t.Run("ceiling_extends_the_band", func(t *testing.T) {
 		branch := toolBranch(t, 10, 400)
-		one := spanTokens(branch, 19, len(branch))
+		one := newBranchView(branch).spanTokens(19, len(branch))
 
 		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: one * 4})
 		require.NoError(t, err)

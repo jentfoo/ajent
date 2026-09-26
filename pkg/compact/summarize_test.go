@@ -134,18 +134,19 @@ func TestFitPrompt(t *testing.T) {
 	t.Parallel()
 
 	entries := toolBranch(t, 20, 400)
+	view := newBranchView(entries) // exercises the same decode/token path production uses
 
 	t.Run("keeps_output_whole_when_it_fits", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 5000, MaxOutput: 10000}
-		prompt, kept, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
+		prompt, kept, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
 		assert.Contains(t, prompt, strings.Repeat("x ", 400))
-		assert.Equal(t, countMessages(entries), kept)
+		assert.Equal(t, view.countMessages(0, len(entries)), kept)
 	})
 
 	t.Run("clips_when_it_would_not_fit", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 6000, MaxOutput: 1000}
-		prompt, _, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
+		prompt, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
 		assert.NotContains(t, prompt, strings.Repeat("x ", 400), "a clip cut the output")
 		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode),
@@ -154,7 +155,7 @@ func TestFitPrompt(t *testing.T) {
 
 	t.Run("drops_oldest_when_even_the_smallest_busts", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 3000, MaxOutput: 256}
-		prompt, _, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
+		prompt, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "[earlier messages omitted]")
 		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode), promptBudget(model, maxOutOf(model)))
@@ -165,7 +166,7 @@ func TestFitPrompt(t *testing.T) {
 		// merge still carries the prior work, a rejected request carries nothing
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 2000, MaxOutput: 256}
 		prev := strings.Repeat("prior checkpoint detail ", 500)
-		prompt, _, err := fitPrompt(entries, prev, "", nil, model, maxOutOf(model))
+		prompt, _, err := view.fitPrompt(0, len(entries), prev, "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
 		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode), promptBudget(model, maxOutOf(model)))
 		assert.NotContains(t, prompt, prev, "the checkpoint was clipped, not sent whole")
@@ -175,7 +176,7 @@ func TestFitPrompt(t *testing.T) {
 	t.Run("unknown_window_applies_no_bound", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m"}
 		assert.Zero(t, promptBudget(model, 256))
-		prompt, _, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
+		prompt, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
 		assert.Contains(t, prompt, strings.Repeat("x ", 400))
 	})
@@ -184,7 +185,7 @@ func TestFitPrompt(t *testing.T) {
 		// a window so tiny that even dropping every entry cannot fit the empty
 		// transcript: fail rather than send a request the provider will reject.
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 1000, MaxOutput: 200}
-		_, _, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
+		_, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.Error(t, err)
 	})
 
@@ -193,7 +194,7 @@ func TestFitPrompt(t *testing.T) {
 		// than summarise an empty transcript.
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 1000, MaxOutput: 200}
 		prev := strings.Repeat("prior checkpoint detail ", 500)
-		_, _, err := fitPrompt(entries, prev, "", nil, model, maxOutOf(model))
+		_, _, err := view.fitPrompt(0, len(entries), prev, "", nil, model, maxOutOf(model))
 		require.Error(t, err)
 	})
 
@@ -201,9 +202,9 @@ func TestFitPrompt(t *testing.T) {
 		// when the drop loop fires, kept counts only what survived into the prompt,
 		// so Stats.Summarized stays honest.
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 3000, MaxOutput: 256}
-		_, kept, err := fitPrompt(entries, "", "", nil, model, maxOutOf(model))
+		_, kept, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.Less(t, kept, countMessages(entries))
+		assert.Less(t, kept, view.countMessages(0, len(entries)))
 	})
 
 	t.Run("empty_transcript_is_never_returned", func(t *testing.T) {
@@ -214,7 +215,7 @@ func TestFitPrompt(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 4000, MaxOutput: 256}
 		maxOut := maxOutOf(model)
 		assert.Greater(t, promptBudget(model, maxOut), 512) // genuinely mid-size, not the no-bound path
-		_, kept, err := fitPrompt(huge, "", "", nil, model, maxOut)
+		_, kept, err := newBranchView(huge).fitPrompt(0, len(huge), "", "", nil, model, maxOut)
 		require.Error(t, err)
 		assert.Zero(t, kept)
 	})

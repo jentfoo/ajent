@@ -299,7 +299,8 @@ func TestCompletionBatching(t *testing.T) {
 			return ok && s == StatusDone
 		}, 2*time.Second, 5*time.Millisecond)
 		m.Flush() // the turn start queued the batch into the interrupted turn
-		require.Len(t, c.deliveredTexts(), 1)
+		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 1 },
+			2*time.Second, 5*time.Millisecond)
 
 		m.Interrupted() // queued steer dropped; Delivered will never fire
 		m.Flush()       // the next turn start re-offers the pending batch

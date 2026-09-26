@@ -69,7 +69,7 @@ func TestIsGitTool(t *testing.T) {
 func TestToolSetView(t *testing.T) {
 	t.Parallel()
 
-	set := &toolSet{tools: childTools(fullSource(), true)}
+	set := newToolSet(childTools(fullSource(), true))
 	assert.Equal(t, []string{"read", "grep", "find", "ls", "git_log", "git_diff", "mcp_search"}, set.Names())
 
 	_, ok := set.Get("bash")

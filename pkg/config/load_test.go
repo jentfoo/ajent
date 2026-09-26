@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,6 +72,34 @@ func TestLoad(t *testing.T) {
 		assert.Empty(t, warns)
 		assert.NotNil(t, s.Settings())
 	})
+}
+
+func TestSetConcurrentAccess(t *testing.T) {
+	t.Setenv("AJENT_HOME", t.TempDir())
+	s, _, err := Load(Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+
+	// settings read while session overrides write, as the pump and key handlers do
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = s.Settings().Model
+			}
+		}()
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				assert.NoError(t, s.SetSession("model", fmt.Sprintf("p/m%d", i)))
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	require.NoError(t, s.SetSession("model", "p/final"))
+	assert.Equal(t, "p/final", s.Settings().Model)
 }
 
 func TestSave(t *testing.T) {

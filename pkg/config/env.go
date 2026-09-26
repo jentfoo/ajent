@@ -13,7 +13,7 @@ import (
 // to AJENT_REASONING_LEVEL. An unparseable number or bool is a warning, not an error.
 func EnvLayer(env func(string) string) (Layer, []string) {
 	var warns []string
-	data := []byte("{}")
+	root := &val{k: kindObj, obj: &object{m: make(map[string]*val)}}
 	for _, p := range scalarLeaves(reflect.TypeOf(Settings{}), "") {
 		name := "AJENT_" + strings.ToUpper(strings.ReplaceAll(p.path, ".", "_"))
 		v := env(name)
@@ -25,7 +25,15 @@ func EnvLayer(env func(string) string) (Layer, []string) {
 			warns = append(warns, fmt.Sprintf("%s=%q: %v", name, v, err))
 			continue
 		}
-		data, _ = SetKey(data, p.path, jv)
+		nv, err := valueNode(jv)
+		if err != nil {
+			continue // encodeScalar output always marshals
+		}
+		setPath(root.obj, splitPath(p.path), nv)
+	}
+	data, err := indentJSON(root.marshal())
+	if err != nil {
+		data = root.marshal()
 	}
 	return Layer{Name: "env", Data: data}, warns
 }

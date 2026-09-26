@@ -7,12 +7,14 @@ import (
 	"github.com/go-analyze/bulk"
 )
 
-// sedWrite reports whether command contains an in-place edit. Runs over the raw
+// sedWrite reports whether the scanned command contains an in-place edit. Runs over the raw
 // segments so quoted flags (sed "-i") are caught; scripts themselves are left to
 // sedReadSafe, which fails safe to the prompt path.
-func sedWrite(command string) bool {
-	s := scanCommand(command)
+func sedWrite(s Scan) bool {
 	for _, raw := range s.Raw {
+		if !strings.Contains(raw, "sed") { // no sed substring: cannot name the binary
+			continue
+		}
 		tokens := unwrapLaunchers(tokenizeRaw(raw))
 		if stripPath(firstToken(tokens)) != "sed" {
 			continue

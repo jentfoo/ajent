@@ -52,16 +52,25 @@ func childTools(src ToolSource, inRepo bool) []agent.Tool {
 
 // toolSet is a fixed read-only view over a child's resolved tools.
 type toolSet struct {
-	tools []agent.Tool
+	tools  []agent.Tool
+	byName map[string]agent.Tool
+}
+
+// newToolSet indexes resolved tools by name. First wins on a repeated name,
+// matching the parent registry's lookup.
+func newToolSet(resolved []agent.Tool) *toolSet {
+	byName := make(map[string]agent.Tool, len(resolved))
+	for _, t := range resolved {
+		if _, ok := byName[t.Name()]; !ok {
+			byName[t.Name()] = t
+		}
+	}
+	return &toolSet{tools: resolved, byName: byName}
 }
 
 func (t *toolSet) Get(name string) (agent.Tool, bool) {
-	for _, x := range t.tools {
-		if x.Name() == name {
-			return x, true
-		}
-	}
-	return nil, false
+	x, ok := t.byName[name]
+	return x, ok
 }
 
 func (t *toolSet) Schemas() []llm.ToolSchema {

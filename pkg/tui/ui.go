@@ -117,6 +117,17 @@ type UI struct {
 	streaming bool // a text block is partially buffered; show it live above input
 	textStart bool
 
+	// preview memos for the per-frame live block; keys cover every render input
+	// except the theme, so SetTheme clears both
+	streamKey   string
+	streamW     int
+	streamLines []histLine
+	streamOK    bool
+	thinkKey    string
+	thinkW      int
+	thinkRows   []string
+	thinkOK     bool
+
 	runs      []*toolRun // in-flight tool calls, oldest first; the newest drives the spinner color
 	busy      bool       // a turn is in flight; the status-bar glyph animates while set
 	spinner   int
@@ -313,6 +324,7 @@ func (u *UI) SetTheme(pal Palette) {
 	defer u.mu.Unlock()
 
 	u.theme = NewTheme(u.theme.Profile, pal)
+	u.streamOK, u.thinkOK = false, false // previews carry styled text
 	u.render.setTheme(u.theme)
 	u.repaint()
 }
@@ -420,6 +432,7 @@ func (u *UI) Reset() {
 	u.textStart = false
 	u.started = false // the next gap no longer needs a leading blank line
 	u.lastBlank = false
+	u.streamOK, u.thinkOK = false, false
 	u.deferred = nil // held-back commits belong to the dropped state
 	u.thinking = false
 	u.busy = false
@@ -671,7 +684,10 @@ func (u *UI) streamingRows(w int) []string {
 	if !u.streaming || strings.TrimSpace(u.textBuf) == "" {
 		return nil
 	}
-	lines := renderPreview(u.theme, w, u.textBuf)
+	lines := u.previewLines(w)
+	if lines == nil {
+		return nil
+	}
 	var out []string
 	if u.previewGap() {
 		out = append(out, "") // the separator writeMarkdown commits, or the block shifts down a row
@@ -686,6 +702,15 @@ func (u *UI) streamingRows(w int) []string {
 		}
 	}
 	return out
+}
+
+// previewLines renders the buffered markdown at w, memoized between deltas so
+// idle spinner frames skip the re-parse.
+func (u *UI) previewLines(w int) []histLine {
+	if !u.streamOK || u.streamKey != u.textBuf || u.streamW != w {
+		u.streamKey, u.streamW, u.streamLines, u.streamOK = u.textBuf, w, renderPreview(u.theme, w, u.textBuf), true
+	}
+	return u.streamLines
 }
 
 // previewGap reports whether committing the buffered block opens with a blank
@@ -714,11 +739,14 @@ func (u *UI) thinkingPreviewRows(w int) []string {
 	if len(runes) > thinkingPreviewRunes {
 		tail = string(runes[len(runes)-thinkingPreviewRunes:])
 	}
-	rows := u.wrapPreview(tail, w)
-	for i, r := range rows {
-		rows[i] = u.theme.Thinking.Wrap(r)
+	if !u.thinkOK || u.thinkKey != tail || u.thinkW != w { // re-wrapped between deltas only
+		rows := u.wrapPreview(tail, w)
+		for i, r := range rows {
+			rows[i] = u.theme.Thinking.Wrap(r)
+		}
+		u.thinkKey, u.thinkW, u.thinkRows, u.thinkOK = tail, w, rows, true
 	}
-	return rows
+	return u.thinkRows
 }
 
 // Output streams raw tool output for call id, committed a line at a time with no

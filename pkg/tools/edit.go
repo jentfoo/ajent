@@ -225,10 +225,11 @@ func applyEdits(t editTarget, orig string, ops []editOp) (editOutcome, error) {
 	var spans []matchSpan
 	var notes []string
 	var review bool
-	wrote := make([]string, len(ops)) // each single-site op's written text
+	wrote := make([]string, len(ops))        // each single-site op's written text
+	matcher := newEditMatcher(buf, t.Edited) // one canonical view for every op
 	for i := range ops {
 		op := &ops[i]
-		ms, tier := findMatches(buf, op.OldText, op.NewText, t.Edited)
+		ms, tier := matcher.find(op.OldText, op.NewText)
 		switch {
 		case len(ms) == 0:
 			return editOutcome{}, errors.New(missingError(i+1, t, op.OldText, buf, ops))

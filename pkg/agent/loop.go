@@ -349,8 +349,9 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	if err != nil {
 		return llm.Message{}, llm.Usage{}, 0, err
 	}
-	req := a.buildRequest()
-	predicted := tokens.EstimateRequest(req)
+	req := llm.Prepare(a.buildRequest()) // prepare once; providers re-run it as a no-op
+	// the request is already normalized, so estimate the prepared messages directly
+	predicted := tokens.EstimateFixed(req) + tokens.EstimateMessages(req.Messages)
 	// the system prompt and tool schemas are built into every request, so they
 	// must occupy context from the very first turn, not just after an exact report.
 	if t := a.state.Tokens; t != nil {

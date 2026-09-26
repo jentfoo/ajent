@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -302,9 +303,10 @@ func TestStartIDOrder(t *testing.T) {
 	}}
 	st := &agent.State{Model: llm.Model{ID: "parent", ContextWindow: 8000,
 		Caps: llm.Capabilities{ParallelTools: true}}}
+	resolved := m.Tools()
 	a := agent.New(st, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return parent, nil },
-		Tools:    &toolSet{tools: m.Tools()},
+		Tools:    &toolSet{tools: resolved, byName: bulk.SliceToIndexBy(agent.Tool.Name, resolved)},
 		OnToolBatch: func(_ context.Context, calls []agent.ToolCall) {
 			m.Reserve(calls)
 		},

@@ -16,7 +16,10 @@ func TestInputBlocksRideToRequest(t *testing.T) {
 	t.Parallel()
 
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("seen")}}}
-	st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+	// image-capable: the agent hands the provider a prepared request, so a
+	// caps-less model would see the image already downgraded before llm
+	st := &State{Model: llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}},
+		Reasoning: llm.ReasoningConfig{}}
 	a := newTestAgent(st, p, nil)
 
 	require.NoError(t, a.Prompt(t.Context(), Input{
@@ -48,7 +51,9 @@ func TestInputBlocksOnlyTurn(t *testing.T) {
 	t.Parallel()
 
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("seen")}}}
-	a := newTestAgent(nil, p, nil)
+	// image-capable so the prepared request still carries the block; see above
+	a := newTestAgent(&State{Model: llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}},
+		Reasoning: llm.ReasoningConfig{}}, p, nil)
 
 	// a blocks-only input is still a turn: the payload lands without text
 	require.NoError(t, a.Prompt(t.Context(), Input{Blocks: llm.BlockList{testImage}}))

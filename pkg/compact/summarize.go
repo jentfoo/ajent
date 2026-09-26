@@ -101,26 +101,25 @@ const minSummaryTokens = 8192 // a merged checkpoint is never amputated by a har
 // how many messages it covered; an empty summary with no error means there was
 // nothing new to fold. stubs are replacement markers for the span, applied so the
 // summariser reads what compaction already reduced rather than raw output.
-func summarise(ctx context.Context, branch []session.Entry, spanStart, end int, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (summary string, summarized int, err error) {
-	prev := priorSummary(branch)
+func summarise(ctx context.Context, v *branchView, spanStart, end int, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (summary string, summarized int, err error) {
+	prev := priorSummary(v.branch)
 	if spanStart < 0 {
 		spanStart = 0
 	}
-	if end > len(branch) {
-		end = len(branch)
+	if end > len(v.branch) {
+		end = len(v.branch)
 	}
 	if spanStart >= end { // nothing new to fold
 		return "", 0, nil
 	}
-	entries := branch[spanStart:end]
 
 	var span int
-	for _, e := range entries {
-		span += entryTokens(e)
+	for i := spanStart; i < end; i++ {
+		span += v.tokens(i)
 	}
 
 	maxOut := summarizeBudget(model, span, tokens.EstimateText(prev, tokens.KindProse))
-	prompt, kept, err := fitPrompt(entries, prev, opts.Instructions, stubs, model, maxOut)
+	prompt, kept, err := v.fitPrompt(spanStart, end, prev, opts.Instructions, stubs, model, maxOut)
 	if err != nil {
 		return "", 0, err
 	}
@@ -155,21 +154,10 @@ func priorSummary(branch []session.Entry) string {
 	return ""
 }
 
-// countMessages reports how many message entries a span holds, for the notice.
-func countMessages(entries []session.Entry) int {
-	var n int
-	for _, e := range entries {
-		if e.Type == session.TypeMessage {
-			n++
-		}
-	}
-	return n
-}
-
 // buildPrompt assembles one user message for the summariser: conversation tags,
 // a previous summary when merging, and any /compact focus instruction. dropped
 // notes inside the tags that the transcript is missing its oldest entries.
-func buildPrompt(entries []session.Entry, prev, instructions string, stubs []session.Stub, clip int, dropped bool) string {
+func buildPrompt(v *branchView, start, end int, prev, instructions string, stubs []session.Stub, clip int, dropped bool) string {
 	var b strings.Builder
 	b.WriteString("<conversation>\n")
 	if dropped {
@@ -179,7 +167,7 @@ func buildPrompt(entries []session.Entry, prev, instructions string, stubs []ses
 	for _, s := range stubs {
 		byCall[s.CallID] = s
 	}
-	serialise(&b, entries, byCall, clip)
+	serialise(&b, v, start, end, byCall, clip)
 	b.WriteString("</conversation>\n\n")
 
 	instr := initialInstruction
@@ -198,13 +186,10 @@ func buildPrompt(entries []session.Entry, prev, instructions string, stubs []ses
 // data rather than a live thread, substituting any stub for its result. Thinking
 // is left out entirely and tool output is clipped to clip runes (0 for no clip);
 // user and assistant prose is never clipped, being the semantic payload.
-func serialise(b *strings.Builder, entries []session.Entry, stubs map[string]session.Stub, clip int) {
-	for _, e := range entries {
-		if e.Type != session.TypeMessage {
-			continue
-		}
-		var md session.MessageData
-		if err := e.Decode(&md); err != nil {
+func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[string]session.Stub, clip int) {
+	for i := start; i < end; i++ {
+		md, ok := v.message(i)
+		if !ok {
 			continue
 		}
 		m := md.Message
@@ -273,7 +258,7 @@ func capCallInput(clip int) int {
 // fires near the top of the window, so a span with no structural compressibility
 // plus its summary can overflow, and an oversized request would fail the session
 // exactly when it most needs to shrink.
-func fitPrompt(entries []session.Entry, prev, instructions string, stubs []session.Stub, model llm.Model, maxOut int) (prompt string, kept int, err error) {
+func (v *branchView) fitPrompt(spanStart, end int, prev, instructions string, stubs []session.Stub, model llm.Model, maxOut int) (prompt string, kept int, err error) {
 	avail := promptBudget(model, maxOut)
 	fits := func(p string) bool {
 		return avail <= 0 || tokens.EstimateText(p, tokens.KindCode) <= avail
@@ -281,29 +266,29 @@ func fitPrompt(entries []session.Entry, prev, instructions string, stubs []sessi
 
 	tightest := clipLadder[len(clipLadder)-1]
 	for _, clip := range clipLadder { // the first rung keeps output whole
-		prompt = buildPrompt(entries, prev, instructions, stubs, clip, false)
+		prompt = buildPrompt(v, spanStart, end, prev, instructions, stubs, clip, false)
 		if fits(prompt) {
-			return prompt, countMessages(entries), nil // the common case returns on the first build
+			return prompt, v.countMessages(spanStart, end), nil // the common case returns on the first build
 		}
 	}
 
 	// even the tightest clip busts: drop the oldest entries before giving up,
 	// rather than send a request the provider will reject. Dropping must never
 	// empty the transcript into a "summary of nothing" prompt.
-	for len(entries) > 0 {
-		entries = entries[len(entries)/4+1:]
-		if len(entries) == 0 { // exhausted; fall through to the clipped-prior tail
+	for spanStart < end {
+		spanStart += (end-spanStart)/4 + 1
+		if spanStart >= end { // exhausted; fall through to the clipped-prior tail
 			break
 		}
-		prompt = buildPrompt(entries, prev, instructions, stubs, tightest, true)
+		prompt = buildPrompt(v, spanStart, end, prev, instructions, stubs, tightest, true)
 		if fits(prompt) {
-			return prompt, countMessages(entries), nil
+			return prompt, v.countMessages(spanStart, end), nil
 		}
 	}
 	if prev != "" { // a clipped checkpoint still merges; a rejected request does not
-		prompt = buildPrompt(entries, strutil.Clip(prev, max(avail/2, 256)), instructions, stubs, tightest, true)
+		prompt = buildPrompt(v, spanStart, end, strutil.Clip(prev, max(avail/2, 256)), instructions, stubs, tightest, true)
 		if fits(prompt) {
-			return prompt, countMessages(entries), nil
+			return prompt, v.countMessages(spanStart, end), nil
 		}
 	}
 	return "", 0, errors.New("summariser prompt does not fit the model window")

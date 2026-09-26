@@ -2,7 +2,6 @@ package tools
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -80,7 +79,51 @@ type match struct {
 // matches: a tier that finds several leaves the ambiguity for the caller to
 // reject rather than guessing which was meant.
 func findMatches(buf, old, replacement string, edited []lineRange) ([]match, matchTier) {
-	if ms := exactMatches(buf, old, replacement); len(ms) > 0 {
+	return newEditMatcher(buf, edited).find(old, replacement)
+}
+
+// editMatcher carries the canonical form of one apply's buffer, computed once
+// and shared by every op that needs a non-exact tier.
+type editMatcher struct {
+	buf    string
+	edited []lineRange
+
+	ready    bool
+	cbuf     string
+	cmap     []int
+	clines   []string
+	starts   []int
+	editedAt []int // prefix count of edited lines over clines
+}
+
+func newEditMatcher(buf string, edited []lineRange) *editMatcher {
+	return &editMatcher{buf: buf, edited: edited}
+}
+
+// canonicalize fills the shared canonical view on first non-exact use.
+func (m *editMatcher) canonicalize() {
+	if m.ready {
+		return
+	}
+	m.cbuf, m.cmap = canonical(m.buf)
+	m.clines = strings.Split(m.cbuf, "\n")
+	m.starts = lineStarts(m.clines)
+	m.editedAt = make([]int, len(m.clines)+1)
+	for _, r := range m.edited {
+		lo, hi := max(r.from, 0), min(r.to, len(m.clines))
+		for j := lo; j < hi; j++ {
+			m.editedAt[j+1] = 1 // rare; a per-line mark beats a prefix diff of ranges
+		}
+	}
+	for j := 1; j < len(m.editedAt); j++ {
+		m.editedAt[j] += m.editedAt[j-1]
+	}
+	m.ready = true
+}
+
+// find resolves old in the shared buffer, escalating tiers exactly as before.
+func (m *editMatcher) find(old, replacement string) ([]match, matchTier) {
+	if ms := exactMatches(m.buf, old, replacement); len(ms) > 0 {
 		return ms, tierExact
 	}
 	if old == replacement {
@@ -92,18 +135,18 @@ func findMatches(buf, old, replacement string, edited []lineRange) ([]match, mat
 	if strings.TrimSpace(cold) == "" { // folds to bare whitespace: matches every line boundary
 		return nil, tierExact
 	}
-	cbuf, cmap := canonical(buf)
+	m.canonicalize()
 	// skip canon when old==new under folding: matching rewrites already-correct
 	// text with itself, so let it fail instead. Indent below still runs.
 	if !canonEq(old, replacement) {
-		if ms := canonMatches(buf, cbuf, cmap, cold, old, replacement); len(ms) > 0 {
-			return preserveQuoted(buf, ms), tierCanon
+		if ms := canonMatches(m.buf, m.cbuf, m.cmap, cold, old, replacement); len(ms) > 0 {
+			return preserveQuoted(m.buf, ms), tierCanon
 		}
 	}
-	if ms := indentMatches(buf, cbuf, cmap, old, replacement); len(ms) > 0 {
-		return preserveQuoted(buf, ms), tierIndent
-	} else if ms := fuzzyMatches(buf, cbuf, cmap, old, replacement, edited); len(ms) > 0 {
-		return preserveQuoted(buf, ms), tierFuzzy
+	if ms := indentMatches(m.buf, m.cbuf, m.cmap, old, replacement); len(ms) > 0 {
+		return preserveQuoted(m.buf, ms), tierIndent
+	} else if ms := m.fuzzyMatches(old, replacement); len(ms) > 0 {
+		return preserveQuoted(m.buf, ms), tierFuzzy
 	}
 	return nil, tierExact
 }
@@ -231,7 +274,8 @@ func indentMatches(buf, cbuf string, cmap []int, old, replacement string) []matc
 // where replacement rewrites them, by at most fuzzyLineLimit characters each. It
 // returns none when no region qualifies, when the runner-up is nearly as close, or
 // when the region covers a line listed in edited.
-func fuzzyMatches(buf, cbuf string, cmap []int, old, replacement string, edited []lineRange) []match {
+func (m *editMatcher) fuzzyMatches(old, replacement string) []match {
+	cmap := m.cmap
 	cold, _ := canonical(old)
 	crep, _ := canonical(replacement)
 	oldLines := strings.Split(cold, "\n")
@@ -245,8 +289,7 @@ func fuzzyMatches(buf, cbuf string, cmap []int, old, replacement string, edited 
 		oldBody, repBody = canonLines(reindent(cold, base, "")), canonLines(reindent(crep, base, ""))
 	}
 
-	clines := strings.Split(cbuf, "\n")
-	starts := lineStarts(clines)
+	clines, starts := m.clines, m.starts
 	n := len(oldLines)
 
 	best, runner, at := fuzzyLineLimit+fuzzyRivalMargin+1, fuzzyLineLimit+fuzzyRivalMargin+1, -1
@@ -263,7 +306,7 @@ func fuzzyMatches(buf, cbuf string, cmap []int, old, replacement string, edited 
 		if !ok {
 			continue
 		}
-		if slices.ContainsFunc(edited, func(r lineRange) bool { return i < r.to && r.from < i+n }) {
+		if m.editedAt[i+n] > m.editedAt[i] {
 			continue // an earlier edit wrote here; healing could revert its work
 		}
 		if drift < best {
@@ -280,7 +323,7 @@ func fuzzyMatches(buf, cbuf string, cmap []int, old, replacement string, edited 
 	}
 	window := strings.Join(clines[at:at+n], "\n")
 	s, e := cmap[starts[at]], cmap[starts[at]+len(window)]
-	return []match{{s: s, e: e, repl: reindent(replacement, base, leadingWS(buf[s:]))}}
+	return []match{{s: s, e: e, repl: reindent(replacement, base, leadingWS(m.buf[s:]))}}
 }
 
 // fuzzyWindow returns the longest run by which window differs from old, given

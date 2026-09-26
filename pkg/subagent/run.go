@@ -69,7 +69,7 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 	src := m.opts.Tools
 	inRepo := src != nil && gitInWorkTree(ctx, m.opts.Env.Cwd)
 	if src != nil {
-		tools = &toolSet{tools: childTools(src, inRepo)}
+		tools = newToolSet(childTools(src, inRepo))
 	}
 
 	a := agent.New(state, agent.Options{

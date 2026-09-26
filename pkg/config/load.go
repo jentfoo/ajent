@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // ConfigFileName is the user and project preferences file.
@@ -39,6 +40,9 @@ type Set struct {
 	userPath  string
 	projPath  string
 	localPath string
+	mu        sync.Mutex // serializes layer writes and resolve; Resolved is immutable once built
+	resolved  Resolved   // memoized merge
+	valid     bool       // false after any layer mutation until the next resolve
 }
 
 // Load reads and merges every configuration layer for workspace. Warnings are
@@ -107,10 +111,17 @@ func (s *Set) layers() []Layer {
 	return []Layer{s.defaults, s.user, s.project, s.local, s.env, s.flags, s.session}
 }
 
-// resolve merges the current stack.
+// resolve returns the merged stack, rebuilt only after a layer changed. Safe
+// for concurrent use: settings are read while a turn runs and written by key
+// handlers on another goroutine.
 func (s *Set) resolve() Resolved {
-	r, _ := Merge(s.layers()...)
-	return r
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.valid {
+		s.resolved, _ = Merge(s.layers()...)
+		s.valid = true
+	}
+	return s.resolved
 }
 
 // Settings returns the merged configuration as typed settings.
@@ -131,16 +142,21 @@ func (s *Set) Source(key string) string { return s.resolve().Source(key) }
 
 // SetSession applies key for this session only, above every file layer.
 func (s *Set) SetSession(key string, value any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, err := SetKey(s.session.Data, key, value)
 	if err != nil {
 		return err
 	}
 	s.session = Layer{Name: "session", Data: data}
+	s.valid = false
 	return nil
 }
 
 // SeedSession folds resumed setting overrides into the session layer.
 func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data := s.session.Data
 	for k, v := range overrides {
 		if len(v) == 0 {
@@ -149,6 +165,7 @@ func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
 		data, _ = SetKey(data, k, v)
 	}
 	s.session = Layer{Name: "session", Data: data}
+	s.valid = false
 }
 
 // Save writes key into the user or project layer file and re-resolves. Warnings
@@ -181,7 +198,9 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	if err = WriteFileAtomic(path, out, SecretPerm); err != nil {
 		return warns, err
 	}
+	s.mu.Lock()
 	target.set(out)
+	s.mu.Unlock()
 	return warns, nil
 }
 
@@ -189,9 +208,9 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 func (s *Set) layerForSave(layer string) *fileLayer {
 	switch layer {
 	case "user":
-		return &fileLayer{path: s.userPath, set: func(d []byte) { s.user = Layer{Name: "user", Path: s.userPath, Data: d} }}
+		return &fileLayer{path: s.userPath, set: func(d []byte) { s.user = Layer{Name: "user", Path: s.userPath, Data: d}; s.valid = false }}
 	case "project":
-		return &fileLayer{path: s.projPath, set: func(d []byte) { s.project = Layer{Name: "project", Path: s.projPath, Data: d} }}
+		return &fileLayer{path: s.projPath, set: func(d []byte) { s.project = Layer{Name: "project", Path: s.projPath, Data: d}; s.valid = false }}
 	default:
 		return nil
 	}

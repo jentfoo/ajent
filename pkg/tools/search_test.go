@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -310,6 +311,101 @@ func TestGrepFallback(t *testing.T) {
 		out := textOf(res)
 		assert.Less(t, strings.Index(out, "alpha.txt"), strings.Index(out, "zeta.txt")) // deterministic order
 		assert.Contains(t, out, "alpha.txt:2")
+	})
+
+	// the match budget cuts across a scan window exactly as the sequential walk
+	// would: files after the cut never contribute, at any window position
+	t.Run("budget_cuts_across_windows", func(t *testing.T) {
+		testLimitsGate.Lock() // the bound in finalize reads the package limits
+		defer testLimitsGate.Unlock()
+		dir, policy := newSearchEnv(t)
+		const files = 24 // spans several windows at any worker-derived window size
+		for i := 1; i <= files; i++ {
+			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "hit\n")
+		}
+
+		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","limit":5}`)), nil)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		out := textOf(res)
+		for i := 1; i <= 5; i++ {
+			assert.Contains(t, out, fmt.Sprintf("f%02d.txt:1: hit", i))
+		}
+		assert.NotContains(t, out, "f06.txt")
+	})
+
+	// count mode spends the budget by match count, so a file inside the last
+	// budgeted window can be partially counted, and a spent budget is named
+	t.Run("count_mode_budget_across_windows", func(t *testing.T) {
+		testLimitsGate.Lock()
+		defer testLimitsGate.Unlock()
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "f01.txt", "hit\nhit\n")
+		mkfile(dir, "f02.txt", "hit\nhit\n")
+		mkfile(dir, "f03.txt", "hit\n")
+		for i := 4; i <= 30; i++ {
+			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "hit\n")
+		}
+
+		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), nil)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		out := textOf(res)
+		assert.Contains(t, out, "f01.txt:2")
+		assert.Contains(t, out, "f02.txt:2")
+		assert.Contains(t, out, "f03.txt:1")
+		assert.NotContains(t, out, "f04.txt")
+		assert.Contains(t, out, "result cap of 5 matches reached") // counts read as authoritative
+	})
+
+	// a count search under the budget stays silent, like content mode
+	t.Run("count_mode_under_budget_not_noted", func(t *testing.T) {
+		testLimitsGate.Lock()
+		defer testLimitsGate.Unlock()
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "f01.txt", "hit\nhit\n")
+
+		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), nil)
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, "f01.txt:2")
+		assert.NotContains(t, out, "result cap")
+	})
+
+	// a binary file holds no text matches; when one exists the result says so,
+	// so an empty or short search is never mistaken for complete coverage
+	t.Run("binary_file_noted_as_unsearched", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit\nhit\n")
+		if err := os.WriteFile(filepath.Join(dir, "blob.bin"), []byte("\x00\x01\x02hit"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), nil)
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		out := textOf(res)
+		assert.Contains(t, out, "a.txt:2")
+		assert.NotContains(t, out, "blob.bin") // the binary itself never emits a count
+		assert.Contains(t, out, "1 file(s) not searched (binary/unreadable); results may be incomplete")
+	})
+
+	// with no unsearchable files the coverage note stays silent: zero token tax
+	// on the common all-text search
+	t.Run("no_note_when_everything_searched", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit\n")
+
+		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit"}`)), nil)
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, "a.txt:1: hit")
+		assert.NotContains(t, out, "not searched")
 	})
 }
 

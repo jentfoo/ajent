@@ -29,7 +29,7 @@ func TestSedWrite(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, sedWrite(c.in))
+			assert.Equal(t, c.want, sedWrite(scanCommand(c.in)))
 		})
 	}
 }

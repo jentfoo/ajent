@@ -20,6 +20,7 @@ type Registry struct {
 	tools     []registeredTool // declaration order drives Names/Schemas
 	groups    []ToolGroup      // ordered; /tools collapses each onto one row
 	schema    []llm.ToolSchema // cached, invalidated by any state change
+	byName    map[string]int   // tool name -> tools index; first registration wins
 	guards    []Guard          // ordered; first non-allow wins inside Execute
 	asker     Asker            // consulted on ActionAsk, nil denies
 	tracker   *Tracker         // the read tracker shared by read/write/edit, nil when none
@@ -98,6 +99,13 @@ func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 		t = &boundTool{t: t, sessionID: r.sessionID}
 	}
 	r.tools = append(r.tools, registeredTool{tool: t, source: source, state: s})
+	name := t.Name()
+	if _, ok := r.byName[name]; !ok { // first registration wins, matching scan order
+		if r.byName == nil {
+			r.byName = make(map[string]int)
+		}
+		r.byName[name] = len(r.tools) - 1
+	}
 	r.schema = nil // schema cache is stale until rebuilt
 }
 
@@ -124,7 +132,29 @@ func (r *Registry) Unregister(source string) {
 	defer r.mu.Unlock()
 
 	r.tools = bulk.SliceFilter(func(rt registeredTool) bool { return rt.source != source }, r.tools)
+	r.rebuildIndexLocked()
 	r.schema = nil
+}
+
+// rebuildIndexLocked recomputes the name index. Callers must hold r.mu.
+func (r *Registry) rebuildIndexLocked() {
+	m := make(map[string]int, len(r.tools))
+	for i := range r.tools {
+		name := r.tools[i].tool.Name()
+		if _, ok := m[name]; !ok {
+			m[name] = i
+		}
+	}
+	r.byName = m
+}
+
+// findLocked returns the registered tool for name. Callers must hold r.mu.
+func (r *Registry) findLocked(name string) (registeredTool, bool) {
+	i, ok := r.byName[name]
+	if !ok {
+		return registeredTool{}, false
+	}
+	return r.tools[i], true
 }
 
 // AddGuard appends g to the guard chain. Guards run in registration order and
@@ -161,21 +191,19 @@ func (r *Registry) Preview(call agent.ToolCall) (Change, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, rt := range r.tools {
-		if rt.tool.Name() != call.Name {
-			continue
-		}
-		pv, ok := unwrap(rt.tool).(Previewer)
-		if !ok {
-			return Change{}, false
-		}
-		ch, err := pv.Preview(call)
-		if err != nil {
-			return Change{}, false
-		}
-		return ch, true
+	rt, found := r.findLocked(call.Name)
+	if !found {
+		return Change{}, false
 	}
-	return Change{}, false
+	pv, ok := unwrap(rt.tool).(Previewer)
+	if !ok {
+		return Change{}, false
+	}
+	ch, err := pv.Preview(call)
+	if err != nil {
+		return Change{}, false
+	}
+	return ch, true
 }
 
 // DryRun reports whether call would fail before running. Tools without a dry run
@@ -185,17 +213,15 @@ func (r *Registry) DryRun(call agent.ToolCall) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, rt := range r.tools {
-		if rt.tool.Name() != call.Name {
-			continue
-		}
-		d, ok := unwrap(rt.tool).(DryRunner)
-		if !ok {
-			return nil // cannot predict; do not skip the prompt on uncertainty
-		}
-		return d.DryRun(call)
+	rt, found := r.findLocked(call.Name)
+	if !found {
+		return nil // unknown tool: leave it to Execute's natural error path
 	}
-	return nil // unknown tool: leave it to Execute's natural error path
+	d, ok := unwrap(rt.tool).(DryRunner)
+	if !ok {
+		return nil // cannot predict; do not skip the prompt on uncertainty
+	}
+	return d.DryRun(call)
 }
 
 // guardSnapshot returns an immutable copy of the guards and asker under read
@@ -304,13 +330,11 @@ func (r *Registry) Get(name string) (agent.Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, rt := range r.tools {
-		if rt.state != StateEnabled || rt.tool.Name() != name {
-			continue
-		}
-		return &guardedTool{t: rt.tool, reg: r}, true
+	rt, ok := r.findLocked(name)
+	if !ok || rt.state != StateEnabled {
+		return nil, false
 	}
-	return nil, false
+	return &guardedTool{t: rt.tool, reg: r}, true
 }
 
 // Lookup returns a guard-wrapped tool by name regardless of enable state. Use
@@ -320,13 +344,11 @@ func (r *Registry) Get(name string) (agent.Tool, bool) {
 func (r *Registry) Lookup(name string) (agent.Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, rt := range r.tools {
-		if rt.tool.Name() != name {
-			continue
-		}
-		return &guardedTool{t: rt.tool, reg: r}, true
+	rt, ok := r.findLocked(name)
+	if !ok {
+		return nil, false
 	}
-	return nil, false
+	return &guardedTool{t: rt.tool, reg: r}, true
 }
 
 // Disabled returns currently disabled tools in declaration order, for the
@@ -374,6 +396,14 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 	for i := range r.tools {
 		sourceOf[r.tools[i].tool.Name()] = r.tools[i].source
 	}
+	ownerOf := make(map[string]*ToolGroup) // member name -> owning group, first wins
+	for i := range r.groups {
+		for _, m := range r.groups[i].Tools {
+			if _, ok := ownerOf[m]; !ok {
+				ownerOf[m] = &r.groups[i]
+			}
+		}
+	}
 	var rows []Row
 	covered := make(map[*ToolGroup]bool) // group already emitted as a row
 	seen := make(map[string]bool)        // tool names consumed by a group row
@@ -382,13 +412,7 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 		if seen[name] {
 			continue
 		}
-		var g *ToolGroup
-		for i := range r.groups { // find the owning group, if any
-			if slices.Contains(r.groups[i].Tools, name) {
-				g = &r.groups[i]
-				break
-			}
-		}
+		g := ownerOf[name]
 		switch {
 		case g == nil: // a plain tool stands alone
 			rows = append(rows, Row{Name: name, Source: sourceOf[name], Names: []string{name}})
@@ -503,12 +527,8 @@ func (r *Registry) ReadOnly(name string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, rt := range r.tools {
-		if rt.tool.Name() == name {
-			return rt.readOnly
-		}
-	}
-	return false
+	rt, ok := r.findLocked(name)
+	return ok && rt.readOnly
 }
 
 // Source returns the registration source label for name, or empty when unknown.
@@ -516,12 +536,11 @@ func (r *Registry) Source(name string) string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	for _, rt := range r.tools {
-		if rt.tool.Name() == name {
-			return rt.source
-		}
+	rt, ok := r.findLocked(name)
+	if !ok {
+		return ""
 	}
-	return ""
+	return rt.source
 }
 
 // Tracker returns the read tracker shared by read/write/edit, or nil when none.

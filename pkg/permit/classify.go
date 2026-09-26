@@ -52,10 +52,10 @@ func Classify(call agent.ToolCall, ro func(string) bool) Verdict {
 	}
 	if call.Name == tools.ToolBash {
 		command := bashCommand(call.Input)
-		if sedWrite(command) {
+		s := scanCommand(command) // one pass shared by both checks
+		if sedWrite(s) {
 			return VerdictReject // in-place write; guidance to use the edit tool
-		}
-		if allSegmentsReadOnly(scanCommand(command)) {
+		} else if allSegmentsReadOnly(s) {
 			return VerdictAllow
 		}
 	}

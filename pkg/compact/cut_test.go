@@ -29,42 +29,42 @@ func TestVerbatimCut(t *testing.T) {
 	t.Parallel()
 
 	t.Run("empty_branch_has_no_band", func(t *testing.T) {
-		assert.Equal(t, 0, verbatimCut(nil, 0, 2, 1000))
+		assert.Equal(t, 0, newBranchView(nil).verbatimCut(0, 2, 1000))
 	})
 
 	t.Run("no_step_returns_the_end", func(t *testing.T) {
 		branch := []session.Entry{userText("u1", "only a prompt")}
-		assert.Equal(t, len(branch), verbatimCut(branch, 0, 2, 1000))
+		assert.Equal(t, len(branch), newBranchView(branch).verbatimCut(0, 2, 1000))
 	})
 
 	t.Run("fewer_steps_than_the_floor", func(t *testing.T) {
 		branch := stepBranch(t, 1, 5)
-		assert.Equal(t, 0, verbatimCut(branch, 0, 2, 0))
+		assert.Equal(t, 0, newBranchView(branch).verbatimCut(0, 2, 0))
 	})
 
 	t.Run("floor_keeps_exactly_two_steps", func(t *testing.T) {
 		branch := stepBranch(t, 6, 5)
-		assert.Equal(t, 5, verbatimCut(branch, 0, 2, 0))
+		assert.Equal(t, 5, newBranchView(branch).verbatimCut(0, 2, 0))
 	})
 
 	t.Run("extension_stops_at_the_ceiling", func(t *testing.T) {
 		branch := stepBranch(t, 6, 200)
-		one := spanTokens(branch, 6, len(branch))
-		cut := verbatimCut(branch, 0, 2, one*4+one/2) // room for four steps, not five
+		one := newBranchView(branch).spanTokens(6, len(branch))
+		cut := newBranchView(branch).verbatimCut(0, 2, one*4+one/2) // room for four steps, not five
 		assert.Equal(t, 3, cut)
-		assert.LessOrEqual(t, spanTokens(branch, cut, len(branch)), one*4+one/2)
+		assert.LessOrEqual(t, newBranchView(branch).spanTokens(cut, len(branch)), one*4+one/2)
 	})
 
 	t.Run("oversized_floor_is_kept_anyway", func(t *testing.T) {
 		branch := stepBranch(t, 6, 400)
-		cut := verbatimCut(branch, 0, 2, 1) // ceiling below any single step
+		cut := newBranchView(branch).verbatimCut(0, 2, 1) // ceiling below any single step
 		assert.Equal(t, 5, cut)
-		assert.Greater(t, spanTokens(branch, cut, len(branch)), 1)
+		assert.Greater(t, newBranchView(branch).spanTokens(cut, len(branch)), 1)
 	})
 
 	t.Run("never_reaches_past_the_prior_cut", func(t *testing.T) {
 		branch := stepBranch(t, 6, 5)
-		assert.Equal(t, 5, verbatimCut(branch, 5, 4, 1<<20))
+		assert.Equal(t, 5, newBranchView(branch).verbatimCut(5, 4, 1<<20))
 	})
 
 	t.Run("pulls_in_the_adjacent_prompt", func(t *testing.T) {
@@ -74,7 +74,7 @@ func TestVerbatimCut(t *testing.T) {
 			userText("u2", "second ask"),
 			assistText("a2", "second answer"),
 		}
-		assert.Equal(t, 2, verbatimCut(branch, 0, 1, 0))
+		assert.Equal(t, 2, newBranchView(branch).verbatimCut(0, 1, 0))
 	})
 
 	t.Run("leaves_an_injected_prompt_behind", func(t *testing.T) {
@@ -84,7 +84,7 @@ func TestVerbatimCut(t *testing.T) {
 			injectedText("i1", "Sub-agent sub-3 completed."),
 			assistText("a2", "second answer"),
 		}
-		assert.Equal(t, 3, verbatimCut(branch, 0, 1, 0))
+		assert.Equal(t, 3, newBranchView(branch).verbatimCut(0, 1, 0))
 	})
 }
 
@@ -93,20 +93,20 @@ func TestChooseCut(t *testing.T) {
 
 	t.Run("advances_past_the_prior_cut", func(t *testing.T) {
 		branch := stepBranch(t, 8, 20)
-		cut, ok := chooseCut(branch, 0, 2, 0)
+		cut, ok := newBranchView(branch).chooseCut(0, 2, 0)
 		require.True(t, ok)
 		assert.Equal(t, 7, cut)
 	})
 
 	t.Run("declines_when_the_band_reaches_it", func(t *testing.T) {
 		branch := stepBranch(t, 8, 20)
-		_, ok := chooseCut(branch, 7, 2, 0)
+		_, ok := newBranchView(branch).chooseCut(7, 2, 0)
 		assert.False(t, ok)
 	})
 
 	t.Run("declines_without_a_step", func(t *testing.T) {
 		branch := []session.Entry{userText("u1", "only a prompt")}
-		_, ok := chooseCut(branch, 0, 2, 1<<20)
+		_, ok := newBranchView(branch).chooseCut(0, 2, 1<<20)
 		assert.False(t, ok)
 	})
 
@@ -116,7 +116,7 @@ func TestChooseCut(t *testing.T) {
 			assistText("a1", "one"),
 			assistText("a2", "two"),
 		}
-		_, ok := chooseCut(branch, 0, 2, 1<<20)
+		_, ok := newBranchView(branch).chooseCut(0, 2, 1<<20)
 		assert.False(t, ok)
 	})
 }
@@ -171,7 +171,7 @@ func TestVerbatimCutFuzz(t *testing.T) {
 		for _, priorCut := range []int{0, len(branch) / 3} {
 			for minSteps := 1; minSteps <= 4; minSteps++ {
 				for _, budget := range budgets {
-					cut := verbatimCut(branch, priorCut, minSteps, budget)
+					cut := newBranchView(branch).verbatimCut(priorCut, minSteps, budget)
 					where := func() string {
 						return "seed " + strconv.FormatInt(seed, 10) + " prior " + strconv.Itoa(priorCut) +
 							" steps " + strconv.Itoa(minSteps) + " budget " + strconv.Itoa(budget)
@@ -200,12 +200,12 @@ func TestVerbatimCutFuzz(t *testing.T) {
 						for firstStep < len(branch) && !isStepStart(branch[firstStep]) {
 							firstStep++
 						}
-						assert.LessOrEqual(t, spanTokens(branch, firstStep, len(branch)), budget,
+						assert.LessOrEqual(t, newBranchView(branch).spanTokens(firstStep, len(branch)), budget,
 							"%s busted the ceiling past the floor", where())
 					}
 
 					// a second pass over an unchanged branch never reopens folded history
-					assert.GreaterOrEqual(t, verbatimCut(branch, cut, minSteps, budget), cut,
+					assert.GreaterOrEqual(t, newBranchView(branch).verbatimCut(cut, minSteps, budget), cut,
 						"%s moved backwards on re-entry", where())
 				}
 			}

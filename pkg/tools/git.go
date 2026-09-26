@@ -475,14 +475,16 @@ func gitStatusLines(st git.Status, tracked []string) (lines []string, staged, un
 // nothing blocked beneath it, or leaves the path alone when none exists, so a
 // fresh directory reads as one `?? dir/` line like git status.
 func collapseUntracked(blocked map[string]struct{}, untracked []string) []string {
-	clean := func(dir string) bool { // nothing blocked under dir
-		prefix := dir + "/"
-		for p := range blocked {
-			if strings.HasPrefix(p, prefix) {
-				return false
-			}
+	// ancestor directories of every blocked path, for O(1) prefix lookups
+	blockedDirs := make(map[string]struct{}, len(blocked))
+	for p := range blocked {
+		for dir := filepath.Dir(p); dir != "." && dir != "/"; dir = filepath.Dir(dir) {
+			blockedDirs[dir] = struct{}{}
 		}
-		return true
+	}
+	clean := func(dir string) bool { // nothing blocked under dir
+		_, ok := blockedDirs[dir]
+		return !ok
 	}
 	var out []string
 	seen := make(map[string]struct{}, len(untracked))

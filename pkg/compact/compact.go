@@ -62,8 +62,9 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		priorCut, prior = 0, session.CompactionData{}
 	}
 
-	band, ok := chooseCut(branch, priorCut, minSteps, verbatimTokens)
-	if !ok || spanTokens(branch, priorCut, band) < minSpanTokens {
+	view := newBranchView(branch) // one decode/token cache shared by every stage
+	band, ok := view.chooseCut(priorCut, minSteps, verbatimTokens)
+	if !ok || view.spanTokens(priorCut, band) < minSpanTokens {
 		return nil, nil
 	}
 	firstKept := firstKeptID(branch, band)
@@ -77,7 +78,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	// superseded as a marker rather than as bytes.
 	stubs := spanStubs(branch, priorCut, band, opts.Cwd)
 
-	summary, nsum, err := summarise(ctx, branch, priorCut, band, stubs, model, run, opts)
+	summary, nsum, err := summarise(ctx, view, priorCut, band, stubs, model, run, opts)
 	if err != nil {
 		return nil, err
 	}

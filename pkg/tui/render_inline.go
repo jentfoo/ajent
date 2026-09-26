@@ -38,6 +38,11 @@ type inlineRenderer struct {
 	// walk, and with it the park, stays byte-identical to a full redraw.
 	base baseline
 
+	// compose scratch for one frame, grown to len(live) and reused; record
+	// copies out of them into the baseline
+	emitted []string
+	widths  []int
+
 	reanchored bool // a reflow lost the screen bottom; the next full draw pads back to it
 	anchorRow  int  // reported park row (1-based) the pad is measured from
 
@@ -57,6 +62,7 @@ type baseline struct {
 	drawn     bool     // a frame reached the terminal (eraseLive depends on this)
 	frames    int      // monotonic paint count; forces a full draw via diffFullEvery
 	prev      []string // emitted rows (post-caret) of the last written frame
+	prevRaw   []string // the live rows those emitted rows were computed from
 	prevWidth int      // width that frame was drawn at
 	forceFull bool     // commit/suspend/clearHistory: the on-screen block is gone; reanchor: the pad needs the full path
 }
@@ -64,7 +70,7 @@ type baseline struct {
 // invalidate marks the on-screen block as unknown so the next draw repaints it
 // whole. Used when committed history moved or another program owned the screen.
 func (b *baseline) invalidate() {
-	b.drawn, b.prev = false, nil
+	b.drawn, b.prev, b.prevRaw = false, nil, nil
 	b.forceFull = true
 }
 
@@ -164,16 +170,18 @@ func (r *inlineRenderer) canDiff() bool {
 		len(b.prev) == len(r.live) && b.frames%diffFullEvery != 0
 }
 
-// record updates the diff baseline once a frame reached the terminal.
+// record updates the diff baseline once a frame reached the terminal. It copies
+// so the compose scratch can be reused next frame.
 func (r *inlineRenderer) record(emitted []string, diff bool) {
 	b := &r.base
 	b.drawn = true
 	b.frames++
+	b.prev = append(b.prev[:0], emitted...)
+	b.prevRaw = append(b.prevRaw[:0], r.live...)
 	if diff {
-		b.prev = emitted
 		return // a diff never follows a reanchor: it sets forceFull, which canDiff rejects
 	}
-	b.prev, b.prevWidth, b.forceFull = emitted, r.t.width, false
+	b.prevWidth, b.forceFull = r.t.width, false
 	// the pad landed with this frame. On the commit path none was emitted, but
 	// the history that frame wrote moved the block, so the row it was measured
 	// from no longer describes where the block sits
@@ -183,24 +191,34 @@ func (r *inlineRenderer) record(emitted []string, diff bool) {
 // composeRows writes the live rows into b and returns the emitted rows to
 // record as the diff baseline. sanitizeRow keeps each row to exactly one
 // terminal row whatever a caller passed; truncation and the caret stay as they
-// were. The park counts only these rows at the width in force now.
+// were. The park counts only these rows at the width in force now. A row whose
+// raw input is unchanged from the baseline reuses its emitted form instead of
+// recomputing sanitize, truncate and width.
 func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 	if len(r.live) == 0 {
 		return nil
 	}
 	width := r.liveWidth()
-	emitted := make([]string, len(r.live))
-	widths := make([]int, len(r.live))
+	if cap(r.emitted) < len(r.live) {
+		r.emitted = make([]string, len(r.live))
+		r.widths = make([]int, len(r.live))
+	}
+	emitted, widths := r.emitted[:len(r.live)], r.widths[:len(r.live)]
+	prev, prevRaw := r.base.prev, r.base.prevRaw
 	for i, row := range r.live {
 		if i > 0 {
 			b.WriteString("\r\n")
+		}
+		if diff && i != r.caretRow && i < len(prevRaw) && prevRaw[i] == row {
+			emitted[i] = prev[i] // unchanged input at this width: nothing to recompute
+			continue
 		}
 		row = truncateDisplay(sanitizeRow(row), width)
 		if i == r.caretRow {
 			row = paintCaret(row, r.caretCol, width)
 		}
 		emitted[i], widths[i] = row, displayWidth(row)
-		if !diff || i >= len(r.base.prev) || r.base.prev[i] != row {
+		if !diff || i >= len(prev) || prev[i] != row {
 			b.WriteString(row)
 			if diff {
 				b.WriteString(eraseTail) // a shorter replacement leaves no tail

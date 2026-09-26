@@ -135,8 +135,8 @@ func hasImage(content BlockList) bool {
 // runs after the placeholder ladder so each result keeps its "(see attached image)"
 // text, and is idempotent: the second pass finds no images left in any result.
 func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
-	if caps.Dialect != DialectOpenAICompletions || !caps.Images {
-		return msgs
+	if caps.Dialect != DialectOpenAICompletions || !caps.Images || !hasImageBlock(msgs) {
+		return msgs // no image anywhere: the common path skips the per-message clones
 	}
 	out := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
