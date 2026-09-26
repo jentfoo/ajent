@@ -30,6 +30,7 @@ const (
 	keyKillToEnd
 	keyKillLine
 	keyKillWord
+	keyUndo // Ctrl+Y: restore the buffer of the last Clear or kill
 	keyInterrupt
 	keyEOF
 	keyRedraw
@@ -128,11 +129,12 @@ var controlKeys = map[byte]keyType{
 	0x0d: keyEnter,
 	0x0e: keyDown,
 	0x10: keyUp,
-	0x12: keyReverseSearch, // Ctrl+R
-	0x15: keyKillLine,
+	0x12: keyReverseSearch,  // Ctrl+R
+	0x15: keyKillLine,       // Ctrl+U
 	0x16: keyClipboardPaste, // Ctrl+V
 	0x17: keyKillWord,
 	0x18: keyPickerCopy, // Ctrl+X
+	0x19: keyUndo,       // Ctrl+Y
 	0x1a: keySuspend,
 	0x7f: keyBackspace,
 	0x09: keyTab,

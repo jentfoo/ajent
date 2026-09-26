@@ -212,7 +212,67 @@ func TestUIInputEditing(t *testing.T) {
 		require.NoError(t, err)
 		waitLine(1, promptFirst+"ab")
 	})
+
+	t.Run("ctrl_u_kills_line_then_ctrl_y_restores", func(t *testing.T) {
+		// buffer "ab", caret at the end: one left, then Ctrl+U kills to line start
+		_, err := io.WriteString(pw, "\x1b[D\x15")
+		require.NoError(t, err)
+		waitLine(1, promptFirst+"b")
+
+		_, err = io.WriteString(pw, "\x19") // Ctrl+Y restores the killed text
+		require.NoError(t, err)
+		waitLine(1, promptFirst+"ab")
+	})
 	require.NoError(t, pw.Close())
+}
+
+func TestUIUndo(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	t.Run("esc_clear_then_undo", func(t *testing.T) {
+		u.SetInput("hello world")
+		u.editor.pos = 5
+		pressKey(u, key{typ: keyEscape})
+		assert.Empty(t, u.editor.Value())
+		pressKey(u, key{typ: keyUndo})
+		assert.Equal(t, "hello world", u.editor.Value())
+		assert.Equal(t, 5, u.editor.pos)
+	})
+
+	t.Run("ctrl_c_clear_then_undo", func(t *testing.T) {
+		u.SetInput("draft text")
+		pressKey(u, key{typ: keyInterrupt})
+		assert.Empty(t, u.editor.Value())
+		pressKey(u, key{typ: keyUndo})
+		assert.Equal(t, "draft text", u.editor.Value())
+	})
+
+	t.Run("kill_to_end_then_undo", func(t *testing.T) {
+		u.SetInput("one two")
+		u.editor.pos = 4
+		pressKey(u, key{typ: keyKillToEnd})
+		assert.Equal(t, "one ", u.editor.Value())
+		pressKey(u, key{typ: keyUndo})
+		assert.Equal(t, "one two", u.editor.Value())
+		assert.Equal(t, 4, u.editor.pos)
+	})
+
+	t.Run("undo_without_removal_is_inert", func(t *testing.T) {
+		u.SetInput("")
+		pressKey(u, key{typ: keyUndo})
+		assert.Empty(t, u.editor.Value())
+	})
+
+	t.Run("edit_after_clear_drops_undo", func(t *testing.T) {
+		u.SetInput("hi")
+		pressKey(u, key{typ: keyEscape})
+		pressKey(u, key{typ: keyRune, text: "x"})
+		pressKey(u, key{typ: keyUndo})
+		assert.Equal(t, "x", u.editor.Value())
+	})
 }
 
 func TestUIModeCycle(t *testing.T) {

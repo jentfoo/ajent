@@ -343,6 +343,114 @@ func TestEditorKill(t *testing.T) {
 	})
 }
 
+func TestEditorUndo(t *testing.T) {
+	t.Parallel()
+
+	const wide = 60 // wide enough that short fixtures never wrap
+
+	t.Run("clear_restores_buffer_and_caret", func(t *testing.T) {
+		e := newEditorAt("hello world", 5)
+		e.Clear()
+		require.True(t, e.Undo())
+		assert.Equal(t, "hello world", e.Value())
+		assert.Equal(t, 5, e.pos)
+	})
+
+	t.Run("kill_to_end_restores", func(t *testing.T) {
+		e := newEditorAt("abcdef", 3)
+		e.KillToLineEnd(wide)
+		require.True(t, e.Undo())
+		assert.Equal(t, "abcdef", e.Value())
+		assert.Equal(t, 3, e.pos)
+	})
+
+	t.Run("kill_line_restores", func(t *testing.T) {
+		e := newEditorAt("abc\ndef", 6)
+		e.KillLine()
+		require.True(t, e.Undo())
+		assert.Equal(t, "abc\ndef", e.Value())
+		assert.Equal(t, 6, e.pos)
+	})
+
+	t.Run("kill_word_restores", func(t *testing.T) {
+		e := newEditorAt("one two ", 8)
+		e.KillWordBack()
+		require.True(t, e.Undo())
+		assert.Equal(t, "one two ", e.Value())
+		assert.Equal(t, 8, e.pos)
+	})
+
+	t.Run("noop_kill_keeps_snapshot", func(t *testing.T) {
+		// hammering kills on the emptied buffer must not lose the clear's snapshot
+		e := newEditorAt("keep", 4)
+		e.Clear()
+		e.KillToLineEnd(wide)
+		e.KillLine()
+		require.True(t, e.Undo())
+		assert.Equal(t, "keep", e.Value())
+	})
+
+	t.Run("repeat_clear_keeps_first", func(t *testing.T) {
+		e := newEditorAt("keep", 4)
+		e.Clear()
+		e.Clear() // already empty: no-op
+		require.True(t, e.Undo())
+		assert.Equal(t, "keep", e.Value())
+	})
+
+	t.Run("latest_kill_wins", func(t *testing.T) {
+		e := newEditorAt("one two ", 8)
+		e.KillWordBack()
+		e.KillWordBack()
+		require.True(t, e.Undo())
+		assert.Equal(t, "one ", e.Value())
+		assert.Equal(t, 4, e.pos)
+	})
+
+	t.Run("typing_drops_snapshot", func(t *testing.T) {
+		e := newEditorAt("hi", 2)
+		e.Clear()
+		e.Insert("x")
+		assert.False(t, e.Undo())
+		assert.Equal(t, "x", e.Value())
+	})
+
+	t.Run("backspace_drops_snapshot", func(t *testing.T) {
+		e := newEditorAt("a b", 3)
+		e.KillWordBack() // "a "
+		e.Backspace()    // "a"
+		assert.False(t, e.Undo())
+		assert.Equal(t, "a", e.Value())
+	})
+
+	t.Run("submit_drops_snapshot", func(t *testing.T) {
+		e := newEditorAt("hi", 2)
+		e.Submit()
+		assert.False(t, e.Undo())
+	})
+
+	t.Run("set_value_drops_snapshot", func(t *testing.T) {
+		e := newEditorAt("hi", 2)
+		e.Clear()
+		e.SetValue("recalled")
+		assert.False(t, e.Undo())
+	})
+
+	t.Run("restore_consumes_snapshot", func(t *testing.T) {
+		e := newEditorAt("hi", 2)
+		e.Clear()
+		require.True(t, e.Undo())
+		assert.False(t, e.Undo())
+		assert.Equal(t, "hi", e.Value())
+	})
+
+	t.Run("fresh_editor_is_noop", func(t *testing.T) {
+		e := &editor{}
+		assert.False(t, e.Undo())
+		assert.Empty(t, e.Value())
+	})
+}
+
 func TestEditorLineNavigation(t *testing.T) {
 	t.Parallel()
 

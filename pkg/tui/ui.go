@@ -1548,6 +1548,10 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.editor.KillLine()
 	case keyKillWord:
 		u.editor.KillWordBack()
+	case keyUndo:
+		if !u.editor.Undo() { // nothing to restore: no visual change
+			return nil, false, false
+		}
 	case keyRedraw:
 		// the fallthrough repaint redraws the live block; committed rows are the
 		// terminal's and stay exactly as they are

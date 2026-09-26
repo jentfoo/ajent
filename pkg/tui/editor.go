@@ -11,23 +11,32 @@ const (
 	inputHint   = "type a message"
 )
 
+// undoState is the buffer a destructive edit replaced, kept for Undo.
+type undoState struct {
+	cells []string
+	pos   int
+}
+
 // editor is the multi line input buffer. Positions are grapheme cluster indexes
 // so the cursor moves over emoji and combining marks as a unit.
 type editor struct {
 	cells   []string
 	pos     int
 	history []string
-	histIdx int    // len(history) while editing the live buffer
-	stash   string // live buffer held aside during history browsing
+	histIdx int        // len(history) while editing the live buffer
+	stash   string     // live buffer held aside during history browsing
+	undo    *undoState // set by Clear and the kills, consumed by Undo
 }
 
 // Value returns the current buffer contents.
 func (e *editor) Value() string { return strings.Join(e.cells, "") }
 
-// SetValue replaces the buffer and puts the cursor at the end.
+// SetValue replaces the buffer and puts the cursor at the end. A fill is not
+// a user edit, so any pending undo is dropped.
 func (e *editor) SetValue(s string) {
 	e.cells = graphemesOf(s)
 	e.pos = len(e.cells)
+	e.undo = nil
 }
 
 // SetValueAt replaces the buffer and puts the cursor on the cell holding byte
@@ -55,6 +64,7 @@ func (e *editor) Insert(s string) {
 	}
 	e.cells = slices.Insert(e.cells, e.pos, add...)
 	e.pos += len(add)
+	e.undo = nil // a later Ctrl+Y must not clobber freshly typed text
 }
 
 // Submit records the buffer in history, clears it, and returns what was entered.
@@ -66,10 +76,15 @@ func (e *editor) Submit() string {
 		}
 	}
 	e.Clear()
+	e.undo = nil // a sent line is not undoable
 	return v
 }
 
+// Clear empties the buffer, keeping the old contents for Undo.
 func (e *editor) Clear() {
+	if len(e.cells) > 0 { // clearing an empty buffer keeps an older snapshot
+		e.saveUndo()
+	}
 	e.cells = nil
 	e.pos = 0
 	e.histIdx = len(e.history)
@@ -78,6 +93,7 @@ func (e *editor) Clear() {
 
 func (e *editor) Backspace() {
 	if e.pos > 0 {
+		e.undo = nil
 		e.cells = slices.Delete(e.cells, e.pos-1, e.pos)
 		e.pos--
 	}
@@ -85,6 +101,7 @@ func (e *editor) Backspace() {
 
 func (e *editor) DeleteForward() {
 	if e.pos < len(e.cells) {
+		e.undo = nil
 		e.cells = slices.Delete(e.cells, e.pos, e.pos+1)
 	}
 }
@@ -139,6 +156,7 @@ func (e *editor) KillToLineEnd(width int) {
 	r := e.displayRow(starts, ends)
 	switch {
 	case ends[r] > e.pos: // content after the cursor: clear to the row's end
+		e.saveUndo()
 		from := e.pos
 		// Wrapping drops the space each row breaks on. Clearing a whole row leaves the
 		// breaks on both sides of it, so consume the leading one to avoid a double
@@ -150,8 +168,10 @@ func (e *editor) KillToLineEnd(width int) {
 		e.cells = slices.Delete(e.cells, from, ends[r]) // caret unmoved: content below joins at it
 	case e.lineStart(e.pos) != e.pos: // text before the cursor: nothing to clear
 	case e.pos < len(e.cells): // empty line: delete joins the line below at the caret
+		e.saveUndo()
 		e.cells = slices.Delete(e.cells, e.pos, e.pos+1) // cells[pos] is the newline
 	case e.pos > 0: // trailing empty line: join the line above
+		e.saveUndo()
 		e.cells = slices.Delete(e.cells, e.pos-1, e.pos)
 		e.pos = e.lineStart(e.pos - 1)
 	}
@@ -160,6 +180,10 @@ func (e *editor) KillToLineEnd(width int) {
 // KillLine removes from the start of the current line to the cursor.
 func (e *editor) KillLine() {
 	start := e.lineStart(e.pos)
+	if start == e.pos { // nothing before the caret on this line
+		return
+	}
+	e.saveUndo()
 	e.cells = slices.Delete(e.cells, start, e.pos)
 	e.pos = start
 }
@@ -167,8 +191,30 @@ func (e *editor) KillLine() {
 // KillWordBack removes the word before the cursor.
 func (e *editor) KillWordBack() {
 	start := e.wordStart()
+	if start == e.pos { // no word before the caret
+		return
+	}
+	e.saveUndo()
 	e.cells = slices.Delete(e.cells, start, e.pos)
 	e.pos = start
+}
+
+// saveUndo snapshots the buffer for Undo before a destructive edit.
+func (e *editor) saveUndo() {
+	e.undo = &undoState{cells: slices.Clone(e.cells), pos: e.pos}
+}
+
+// Undo restores the buffer saved by the last Clear or kill, reporting whether
+// anything was restored. One level deep: the restore consumes the snapshot,
+// and the next destructive edit replaces it.
+func (e *editor) Undo() bool {
+	if e.undo == nil {
+		return false
+	}
+	e.cells = e.undo.cells
+	e.pos = e.undo.pos
+	e.undo = nil
+	return true
 }
 
 // Up moves the caret to the visual row above at roughly the same column,

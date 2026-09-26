@@ -1149,7 +1149,12 @@ boundaries and reporting the caret's row/column within them. Wrapping is purely
 visual — `Value()` is untouched, so submitted input never gains newlines.
 Movement and editing keys respect those same visual rows: Home/End bound the
 current wrapped row rather than the logical line, matching ↑/↓; Ctrl+K kills
-only to that row's end.
+only to that row's end, Ctrl+U from the row's start to the caret. Clear and the
+kills keep a one-level snapshot that Ctrl+Y restores (Esc and Ctrl+C clear
+through the same `Clear`). Any other buffer change — typing, backspace, a
+programmatic fill, submit — drops the snapshot rather than letting a later
+restore clobber newer text, and a kill that removes nothing leaves an older
+snapshot alone, so hammering kills on the emptied buffer cannot lose the clear.
 
 The key table:
 
@@ -1165,6 +1170,8 @@ The key table:
 | Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`); inert everywhere else — it never reaches the editor or steals a keystroke from a dialog. The payload is the verbatim transcript content, not the row's display label (see `clipboard-copy-feature.md`) |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |
 | Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
+| Ctrl+U | remove from the start of the current line to the caret |
+| Ctrl+Y | restore what the last Ctrl+C/Esc clear or kill removed; one level deep, consumed by the restore, dropped by any later edit. Prompt/search/question overlays keep their own kill-line clears and do not undo |
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`). `←`/`→`, their word-wise forms and Home select the match too |
 | Shift+Tab, Shift+→ | out-of-band `ControlModeCycle` — never consumed by the editor or a dialog; the front end cycles the permission mode forward |
