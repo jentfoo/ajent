@@ -18,12 +18,23 @@ Feedback is welcome. Please open issues if you have any suggestions or comments.
 go install github.com/jentfoo/ajent@latest
 ```
 
+### Getting started
+
+For those that would prefer to test out `ajent` rather than read the docs, you can onboard quickly:
+1. Assuming go and your `~/go/bin` `PATH` are setup: `go install github.com/jentfoo/ajent@latest`
+2. Then run `ajent`. On first start it walks you through wiring up your first provider (alternatively refer to the configuration below to define `~/.ajent/models.json`).
+4. Try your first prompt to learn about features and how to use `ajent`:
+   ```
+   Review @docs/*design.md and provide a concise overview of the user
+   facing features and key combinations I should be aware of as a new user.
+   ```
+
 ## Design Philosophy
 
 You may like `ajent` if:
-* You care about copy and paste out of your terminal more than a pretty TUI.
-* You like permission choices that are basically "read anything", "write anything" or "do anything".
-* You use open models, which benefit from minimized context usage, flexible tool handling, and a variety of providers.
+  * You care about copy and paste out of your terminal more than a pretty TUI.
+  * You like permission choices that are basically "read anything", "write anything" or "do anything".
+  * You use open models, which benefit from minimized context usage, flexible tool handling, and a variety of providers.
 
 ### TUI
 
@@ -42,12 +53,11 @@ Tab support is available for file path completions, but our TUI favors a minimal
 ### Tool Barriers
 
 Our CLI agent attempts to balance autonomy and safety. This is done through a variety of permission modes:
-
-* **allow-read** (default) - Will automatically allow any read only tools or MCP tools which are marked as read only in their configuration. Any write or questionable bash operations will require user approval first.
-* **auto** - Still attempts to provide a read only experience by default, but will delegate to the agent to make decisions on bash commands and MCP/extension tool calls which are not automatically allowed.
-* **auto+write** - Auto-approves `write`, `edit` and bash operations that stay safely inside the working directory or temp directory; anything touching files elsewhere, system changes, bulk deletion or network access still requires approval.
-* **allow-all** - All operations allowed without human approval.
-* **block-all** - Nothing runs without explicit approval, reads included.
+  * **allow-read** (default) - Will automatically allow any read only tools or MCP tools which are marked as read only in their configuration. Any write or questionable bash operations will require user approval first.
+  * **auto** - Still attempts to provide a read only experience by default, but will delegate to the agent to make decisions on bash commands and MCP/extension tool calls which are not automatically allowed.
+  * **auto+write** - Auto-approves `write`, `edit` and bash operations that stay safely inside the working directory or temp directory; anything touching files elsewhere, system changes, bulk deletion or network access still requires approval.
+  * **allow-all** - All operations allowed without human approval.
+  * **block-all** - Nothing runs without explicit approval, reads included.
 
 Shift+Tab cycles the live mode for the session only (Shift+→ does the same; Shift+← steps back), so you can reach an adjacent mode without wrapping all the way around.
 
@@ -110,9 +120,8 @@ Per provider you can set:
 ### Models
 
 Models come from exactly two places, both under the provider they belong to:
-
-* **hand-written declarations** - your per-provider `models` list.
-* **provider discovery** - asking the provider for its model list. It fills any gaps in what you declared. A llama.cpp multi-model router (which reports nothing useful on `/props`) falls back to its OpenAI-compatible `/v1/models`, and any other server speaking chat-completions can be discovered the same way with `"discover": true`.
+  * **hand-written declarations** - your per-provider `models` list.
+  * **provider discovery** - asking the provider for its model list. It fills any gaps in what you declared. A llama.cpp multi-model router (which reports nothing useful on `/props`) falls back to its OpenAI-compatible `/v1/models`, and any other server speaking chat-completions can be discovered the same way with `"discover": true`.
 
 The minimal entry (if not using discovery) is just an id. Everything else has a sane default, so you typically only add one to pin something discovery got wrong (a name or context window).
 
@@ -136,15 +145,14 @@ The minimal entry (if not using discovery) is just an id. Everything else has a 
 ```
 
 Per model you can set:
-
-* `id` (required) - the identifier; also how overrides address it.
-* `name` / `aliases` - display name and extra names the registry resolves.
-* `reasoning` - a boolean: `true` enables reasoning with the model's resolved thinking format. There is no style-name form.
-* `input` - accepted modalities (`text`, `image`); defaults to text plus image when capabilities allow it.
-* `contextWindow` / `maxTokens` - input window and output cap in tokens.
-* `compat` - the capability overrides for this model: thinking format, tokenizer, cache-control encoding, parallel tool support, temperature, images, and so on. Every field is a pointer internally, so an override turns one quirk on without restating the others.
-* `thinkingLevelMap` / `thinkingBudgets` - how our seven reasoning levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) map to this provider's effort values and token budgets; a `null` entry omits the parameter for that level.
-* `samplingParams` / `headers` / `api` / `baseUrl` - opaque additions folded into the request body, per-request headers, or a dialect/endpoint override so one gateway can serve two dialects.
+  * `id` (required) - the identifier; also how overrides address it.
+  * `name` / `aliases` - display name and extra names the registry resolves.
+  * `reasoning` - a boolean: `true` enables reasoning with the model's resolved thinking format. There is no style-name form.
+  * `input` - accepted modalities (`text`, `image`); defaults to text plus image when capabilities allow it.
+  * `contextWindow` / `maxTokens` - input window and output cap in tokens.
+  * `compat` - the capability overrides for this model: thinking format, tokenizer, cache-control encoding, parallel tool support, temperature, images, and so on. Every field is a pointer internally, so an override turns one quirk on without restating the others.
+  * `thinkingLevelMap` / `thinkingBudgets` - how our seven reasoning levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) map to this provider's effort values and token budgets; a `null` entry omits the parameter for that level.
+  * `samplingParams` / `headers` / `api` / `baseUrl` - opaque additions folded into the request body, per-request headers, or a dialect/endpoint override so one gateway can serve two dialects.
 
 Reasoning retention is configured globally rather than per model (`reasoning.retain`, below) and applied only to what is sent; the transcript always keeps everything.
 
@@ -200,24 +208,23 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
 ```
 
 The top-level blocks:
-
-* `model` - the model a fresh session starts with. A `/model` change writes your most recent choice here, so it is remembered across restarts.
-* `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is hidden from view (`hide`). Shown by default; set `hide: true` to stop streaming it.
-* `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
-* `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff; permanent errors (bad request, no credentials) never retry.
-* `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them; a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.
-* `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, git, other, refInject, refTotal; `git` covers all four `git_*` readers).
-* `tools.shellCommands` - extra shell commands the `bash` tool description may advertise, alongside a built-in set (`ls`, `grep`, `find`, `diff`, `wc`). A name is advertised only if it exists on PATH and is not refused by `permissions.deniedCommands`.
-* `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; Shift+Tab or Shift+←/→ cycles it for the session only.
-* `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).
-* `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it; `threshold` is the default for the ones that do not.
-* `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.
-* `subagent.model` / `maxConcurrent` - a dedicated model for research sub-agents (empty inherits your session model) and how many may run at once (default 8).
-* `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers; an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
-* `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default; `/settings` can flip it for the session, and `AJENT_IMAGES_BLOCK=true` sets it for a single run.
-* `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.
-* `ui.color` - colour depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`; any other value names the depth outright, which is the way out if your terminal is classified badly — `256` turns on syntax highlighting where detection was too conservative, `none` turns colour off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
-* `disableUpdateCheck` - turn off the startup update-available notice. Off by default; a fork install or an offline machine that does not want to nag can set this once in the user layer.
+  * `model` - the model a fresh session starts with. A `/model` change writes your most recent choice here, so it is remembered across restarts.
+  * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is hidden from view (`hide`). Shown by default; set `hide: true` to stop streaming it.
+  * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
+  * `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff; permanent errors (bad request, no credentials) never retry.
+  * `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them; a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.
+  * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, git, other, refInject, refTotal; `git` covers all four `git_*` readers).
+  * `tools.shellCommands` - extra shell commands the `bash` tool description may advertise, alongside a built-in set (`ls`, `grep`, `find`, `diff`, `wc`). A name is advertised only if it exists on PATH and is not refused by `permissions.deniedCommands`.
+  * `permissions.mode` - the barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; Shift+Tab or Shift+←/→ cycles it for the session only.
+  * `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).
+  * `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it; `threshold` is the default for the ones that do not.
+  * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.
+  * `subagent.model` / `maxConcurrent` - a dedicated model for research sub-agents (empty inherits your session model) and how many may run at once (default 8).
+  * `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers; an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
+  * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default; `/settings` can flip it for the session, and `AJENT_IMAGES_BLOCK=true` sets it for a single run.
+  * `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.
+  * `ui.color` - colour depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`; any other value names the depth outright, which is the way out if your terminal is classified badly — `256` turns on syntax highlighting where detection was too conservative, `none` turns colour off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
+  * `disableUpdateCheck` - turn off the startup update-available notice. Off by default; a fork install or an offline machine that does not want to nag can set this once in the user layer.
 
 ### Command-line options
 
