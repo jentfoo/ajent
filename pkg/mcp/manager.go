@@ -62,8 +62,6 @@ type server struct {
 	c             *Client // nil while disconnected
 	logs          *ringLog
 	defs          []ToolDef     // last filtered tool list, for status/tool groups and drift compare
-	resources     []Resource    // discovered on connect, exposed to callers
-	prompts       []PromptDef   // discovered on connect, no UI yet
 	failures      int           // consecutive connect failures, for backoff and notices
 	down          bool          // a reconnect loop is active; suppresses the already-connected check
 	reopenKeep    *toolState    // live split captured at death, restored on reconnect
@@ -269,14 +267,6 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 		_ = c.Close()
 		return fmt.Errorf("mcp %s: discover: %w", name, err)
 	}
-	resources, rerr := c.Resources(dctx) // best effort; tools drive registration
-	if rerr != nil {
-		s.diag("resources/list failed: " + rerr.Error())
-	}
-	prompts, perr := c.Prompts(dctx)
-	if perr != nil {
-		s.diag("prompts/list failed: " + perr.Error())
-	}
 	// a reload may have removed or replaced this server while we were dialing;
 	// close the fresh client rather than leaking it into a stale object.
 	m.mu.Lock()
@@ -289,8 +279,6 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 	// drop anything registered under this source before bridging the fresh list
 	m.opts.Registrar.Unregister(s.source)
 	s.mu.Lock()
-	s.resources = resources
-	s.prompts = prompts
 	s.c = c
 	s.down = false // a reconnect loop succeeded; clear its state so future connects short-circuit again
 	s.reopenKeep = nil
@@ -367,22 +355,6 @@ func (s *server) defsSnapshot() []ToolDef {
 	defer s.mu.Unlock()
 
 	return slices.Clone(s.defs)
-}
-
-// resourcesSnapshot returns a copy of the server's discovered resources.
-func (s *server) resourcesSnapshot() []Resource {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return slices.Clone(s.resources)
-}
-
-// promptsSnapshot returns a copy of the server's discovered prompt templates.
-func (s *server) promptsSnapshot() []PromptDef {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return slices.Clone(s.prompts)
 }
 
 func has(set map[string]struct{}, k string) bool {
@@ -673,26 +645,6 @@ func (m *Manager) Logs(name string) []string {
 	return slices.Clone(s.logs.lines())
 }
 
-// ServerResources returns a connected server's discovered resources, or nil when
-// unknown.
-func (m *Manager) ServerResources(name string) []Resource {
-	s := m.serverByName(name)
-	if s == nil {
-		return nil
-	}
-	return slices.Clone(s.resourcesSnapshot())
-}
-
-// ServerPrompts returns a connected server's discovered prompt templates, or nil
-// when unknown.
-func (m *Manager) ServerPrompts(name string) []PromptDef {
-	s := m.serverByName(name)
-	if s == nil {
-		return nil
-	}
-	return slices.Clone(s.promptsSnapshot())
-}
-
 // closeTimeout bounds the whole shutdown sweep. Each disconnect is already
 // bounded by the client's own close grace; this is the backstop that keeps a
 // stalled one from holding the app open after the user asked to quit.
@@ -733,8 +685,6 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 	case mcp.MethodNotificationToolsListChanged:
 		s.diag("tools changed; re-discovering")
 		m.rediscan(ctx, s)
-	case mcp.MethodNotificationResourcesListChanged, mcp.MethodNotificationPromptsListChanged:
-		m.refreshCapabilities(ctx, s) // re-discover resources and prompts
 	case string(mcp.MethodNotificationProgress):
 		s.writeProgress(n.Params.AdditionalFields)
 	default:
@@ -750,8 +700,8 @@ const rediscoveryTimeout = 45 * time.Second
 // unresponsive instead of hanging the command.
 const pingTimeout = 2 * time.Second
 
-// discoverTimeout bounds one connect's capability discovery (tools/resources/
-// prompts) so an unresponsive server surfaces as a connect error instead of
+// discoverTimeout bounds one connect's tool discovery so an unresponsive server
+// surfaces as a connect error instead of
 // hanging the first-message load or /mcp reload that awaits it.
 const discoverTimeout = 45 * time.Second
 
@@ -798,29 +748,6 @@ func (m *Manager) rediscan(ctx context.Context, s *server) {
 		m.opts.Registrar.Unregister(s.source)
 		m.register(s, c, defs, keep)
 	}()
-}
-
-// refreshCapabilities re-discovers a server's resources and prompts after their
-// list_changed notifications. Failures are noted but never fatal.
-func (m *Manager) refreshCapabilities(ctx context.Context, s *server) {
-	c := s.client()
-	if c == nil {
-		return
-	}
-	resources, rerr := c.Resources(ctx)
-	prompts, perr := c.Prompts(ctx)
-	s.mu.Lock()
-	if rerr != nil {
-		s.diag("resources refresh failed: " + rerr.Error())
-	} else {
-		s.resources = resources
-	}
-	if perr != nil {
-		s.diag("prompts refresh failed: " + perr.Error())
-	} else {
-		s.prompts = prompts
-	}
-	s.mu.Unlock()
 }
 
 // client returns the server's live client, or nil when disconnected.

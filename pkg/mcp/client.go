@@ -37,30 +37,6 @@ type ToolDef struct {
 	ReadOnly    bool            `json:"readOnly,omitempty"`
 }
 
-// Resource is one resource a server exposes, in our own shape. Field names match
-// the MCP wire keys so discovery decodes directly onto it.
-type Resource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
-// PromptDef is one prompt template a server offers, in our own shape. Arguments
-// describe the variables prompts/get fills.
-type PromptDef struct {
-	Name        string      `json:"name"`
-	Title       string      `json:"title,omitempty"`
-	Description string      `json:"description,omitempty"`
-	Arguments   []PromptArg `json:"arguments,omitempty"`
-}
-
-// PromptArg is one argument of a prompt template.
-type PromptArg struct {
-	Name        string `json:"name"`
-	Required    bool   `json:"required,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
 // Client wraps one connected MCP server. It owns the transport lifecycle and the
 // raw-request seam extensions ride on, plus progress routing to live outputs.
 type Client struct {
@@ -288,69 +264,6 @@ func uniqueTools(defs []ToolDef, warn func(string)) []ToolDef {
 		seen[d.Name] = struct{}{}
 		return true
 	}, defs)
-}
-
-// resourcePage is one page of a resources/list response.
-type resourcePage struct {
-	Resources  []Resource `json:"resources"`
-	NextCursor string     `json:"nextCursor,omitempty"`
-}
-
-// promptPage is one page of a prompts/list response.
-type promptPage struct {
-	Prompts    []PromptDef `json:"prompts"`
-	NextCursor string      `json:"nextCursor,omitempty"`
-}
-
-// Resources lists the server's resources, following pagination. A failed or
-// unsupported listing returns an error; callers treat discovery as best effort.
-func (c *Client) Resources(ctx context.Context) ([]Resource, error) {
-	var out []Resource
-	var cursor string
-	for {
-		resp, err := c.sendRaw(ctx, string(mcp.MethodResourcesList), listToolParams(cursor))
-		if err != nil {
-			return out, fmt.Errorf("mcp %s: resources/list: %w", c.name, err)
-		}
-		if resp.Error != nil {
-			return out, fmt.Errorf("mcp %s: resources/list: %s", c.name, resp.Error.Message)
-		}
-		var page resourcePage
-		if err = json.Unmarshal(resp.Result, &page); err != nil {
-			return out, fmt.Errorf("mcp %s: resources/list decode: %w", c.name, err)
-		}
-		out = append(out, page.Resources...)
-		if page.NextCursor == "" {
-			break
-		}
-		cursor = page.NextCursor
-	}
-	return out, nil
-}
-
-// Prompts lists the server's prompt templates, following pagination.
-func (c *Client) Prompts(ctx context.Context) ([]PromptDef, error) {
-	var out []PromptDef
-	var cursor string
-	for {
-		resp, err := c.sendRaw(ctx, string(mcp.MethodPromptsList), listToolParams(cursor))
-		if err != nil {
-			return out, fmt.Errorf("mcp %s: prompts/list: %w", c.name, err)
-		}
-		if resp.Error != nil {
-			return out, fmt.Errorf("mcp %s: prompts/list: %s", c.name, resp.Error.Message)
-		}
-		var page promptPage
-		if err = json.Unmarshal(resp.Result, &page); err != nil {
-			return out, fmt.Errorf("mcp %s: prompts/list decode: %w", c.name, err)
-		}
-		out = append(out, page.Prompts...)
-		if page.NextCursor == "" {
-			break
-		}
-		cursor = page.NextCursor
-	}
-	return out, nil
 }
 
 // toolNameRe is the tightest tool-name pattern ajent's providers accept

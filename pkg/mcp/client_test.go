@@ -188,35 +188,6 @@ func TestRequestRawSeam(t *testing.T) {
 	assert.NotEmpty(t, resp)
 }
 
-func TestClientDiscovers(t *testing.T) {
-	t.Parallel()
-
-	// resources/list is fetched through the raw seam and mapped onto our own shape
-	t.Run("resources", func(t *testing.T) {
-		c, err := Connect(t.Context(), "fake", stdioConfig(t))
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = c.Close() })
-
-		rs, err := c.Resources(t.Context())
-		require.NoError(t, err)
-		require.Len(t, rs, 1)
-		assert.Equal(t, "fake://doc", rs[0].URI)
-		assert.Equal(t, "the doc", rs[0].Name)
-	})
-
-	t.Run("prompts", func(t *testing.T) {
-		c, err := Connect(t.Context(), "fake", stdioConfig(t))
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = c.Close() })
-
-		ps, err := c.Prompts(t.Context())
-		require.NoError(t, err)
-		require.Len(t, ps, 1)
-		assert.Equal(t, "summarize", ps[0].Name)
-		assert.Len(t, ps[0].Arguments, 1)
-	})
-}
-
 func TestParseTool(t *testing.T) {
 	t.Parallel()
 

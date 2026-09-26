@@ -31,8 +31,8 @@ boundary.
   front end or command layer arrives as narrow interfaces supplied by `pkg/app`.
   This keeps the dependency isolated so the library can be replaced behind one seam.
 - **mcp-go wire types never escape `pkg/mcp`.** The bridge emits our own
-  `agent.Tool`; discovery returns our own `ToolDef`/`Resource`/`PromptDef`. The
-  extension host sees only ajent's types, never a mcp-go struct.
+  `agent.Tool`; discovery returns our own `ToolDef`. The extension host sees only
+  ajent's types, never a mcp-go struct.
 - **A tool of unknown effect does not run in an unobserved agent.** Read-only
   marking (from `annotations.readOnlyHint` OR config globs) defaults to *not*
   read-only; the sub-agent tool set reads that registry metadata, so only an
@@ -182,9 +182,9 @@ package stays free of `pkg/tools`.
   fresh, preserving live enable state. It runs through `rediscan`, which
   serializes per server and bounds each pass with its own timeout so an
   unresponsive server surfaces an error rather than leaking a goroutine or
-  hanging. Resources/prompts changes trigger best-effort capability refresh on
-  reconnects; both paths are safe to do blocking I/O because notifications arrive
-  asynchronously from the client (see *Notifications never block mcp-go's reader*).
+  hanging. Discovery covers tools only; resources/prompts are not exposed.
+  Notifications arrive asynchronously from the client (see *Notifications never
+  block mcp-go's reader*).
 - **Disconnect / Reload.** `/mcp disconnect` closes and unregisters without
   removing the config. `Reload` re-reads `mcp.json`, disconnects removed servers
   and connects new ones, leaving the process running. Filter fields
@@ -196,7 +196,7 @@ package stays free of `pkg/tools`.
   reload or an automatic reconnect.
 
 **Lock ownership.** `server.mu` guards every mutable per-server field (client,
-failure counters, discovered defs/resources/prompts, config); `Manager.mu` only
+failure counters, discovered defs, config); `Manager.mu` only
 the `servers` map and first-load flag — one field, one lock. The notice sink is
 immutable: built with the server rather than installed on connect, so it needs
 no lock. An unreachable server is expected (offline or not yet started), so a

@@ -34,8 +34,8 @@ func TestJob(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("find the bug", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("find the bug", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
 		assert.Contains(t, j.Summary, "pkg/a.go:12")
@@ -46,8 +46,8 @@ func TestJob(t *testing.T) {
 		m := New(Options{Provider: p})
 		t.Cleanup(m.Close)
 
-		id := m.Start("boom", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("boom", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusError, j.Status)
 		require.Error(t, j.Err)
@@ -57,9 +57,9 @@ func TestJob(t *testing.T) {
 		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
 		t.Cleanup(m.Close)
 
-		id := m.Start("long", "")
+		id := m.start("long", "", "")
 		require.NoError(t, m.Stop(id))
-		j, ok := m.Poll(t.Context(), id)
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusAborted, j.Status)
 	})
@@ -78,7 +78,7 @@ func TestCompletionNotification(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("x", "")
+		id := m.start("x", "", "")
 		require.Eventually(t, func() bool { return c.noticeCount() == 1 }, 2*time.Second, 5*time.Millisecond)
 		assert.Equal(t, []string{"Sub-agent " + id + " completed"}, c.noticeTexts())
 
@@ -100,14 +100,14 @@ func TestCompletionNotification(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("x", "")
+		id := m.start("x", "", "")
 		type pollRes struct {
 			j  Job
 			ok bool
 		}
 		res := make(chan pollRes, 1)
 		go func() { // register the poller before the job can finish
-			j, ok := m.Poll(t.Context(), id)
+			j, ok, _ := m.poll(t.Context(), id)
 			res <- pollRes{j, ok}
 		}()
 		require.Eventually(t, func() bool { // the poller must be registered before release
@@ -143,7 +143,7 @@ func TestCompletionNotification(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("x", "")
+		id := m.start("x", "", "")
 		// completion alone offers nothing while the parent is idle: no timer exists
 		// to fire, so the ids wait for the next turn start
 		require.Eventually(t, func() bool {
@@ -174,7 +174,7 @@ func TestCompletionNotification(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id1 := m.Start("a", "")
+		id1 := m.start("a", "", "")
 		m.mu.Lock()
 		m.pending = []string{"sub-9", id1} // a second completion already queued but undelivered
 		m.mu.Unlock()
@@ -197,8 +197,8 @@ func TestCompletionNotification(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("x", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("x", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
 		m.Flush() // still no deliverer for an idle agent; nothing must start a turn
@@ -218,11 +218,16 @@ func TestCompletionBatching(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		ids := []string{m.Start("a", ""), m.Start("b", ""), m.Start("c", "")}
+		ids := []string{m.start("a", "", ""), m.start("b", "", ""), m.start("c", "", "")}
 		g.releaseAll()
-		require.Eventually(t, func() bool { return c.noticeCount() == 3 }, 2*time.Second, 5*time.Millisecond)
-		// the keyed notice accumulates: the last one names every completion
-		assert.Equal(t, "Sub-agents "+strings.Join(ids, ", ")+" completed", c.lastNotice())
+		// wait until every completion is enqueued; Boundary then must return them
+		// all in one input (per-id marks are only set once delivered)
+		require.Eventually(t, func() bool {
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return slices.Contains(m.pending, ids[0]) && slices.Contains(m.pending, ids[1]) &&
+				slices.Contains(m.pending, ids[2])
+		}, 10*time.Second, 5*time.Millisecond)
 
 		ins := m.Boundary()
 		require.Len(t, ins, 1)
@@ -241,8 +246,8 @@ func TestCompletionBatching(t *testing.T) {
 		m := New(Options{Provider: p})
 		t.Cleanup(m.Close)
 
-		id1 := m.Start("a", "")
-		id2 := m.Start("b", "")
+		id1 := m.start("a", "", "")
+		id2 := m.start("b", "", "")
 		for _, id := range []string{id1, id2} {
 			require.Eventually(t, func() bool {
 				s, ok := jobStatus(m, id)
@@ -250,7 +255,7 @@ func TestCompletionBatching(t *testing.T) {
 			}, 2*time.Second, 5*time.Millisecond)
 		}
 
-		_, ok := m.Poll(t.Context(), id1) // the model polls one result itself
+		_, ok, _ := m.poll(t.Context(), id1) // the model polls one result itself
 		require.True(t, ok)
 
 		ins := m.Boundary()
@@ -268,9 +273,9 @@ func TestCompletionBatching(t *testing.T) {
 		m := New(Options{Provider: p})
 		t.Cleanup(m.Close)
 
-		ids := []string{m.Start("a", ""), m.Start("b", "")}
+		ids := []string{m.start("a", "", ""), m.start("b", "", "")}
 		for _, id := range ids {
-			j, ok := m.Poll(t.Context(), id)
+			j, ok, _ := m.poll(t.Context(), id)
 			require.True(t, ok)
 			assert.Equal(t, StatusDone, j.Status)
 		}
@@ -293,10 +298,11 @@ func TestCompletionBatching(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("x", "")
-		require.Eventually(t, func() bool {
-			s, ok := jobStatus(m, id)
-			return ok && s == StatusDone
+		id := m.start("x", "", "")
+		require.Eventually(t, func() bool { // completion enqueued before the turn-start flush reads it
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return slices.Contains(m.pending, id)
 		}, 2*time.Second, 5*time.Millisecond)
 		m.Flush() // the turn start queued the batch into the interrupted turn
 		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 1 },
@@ -320,15 +326,15 @@ func TestCompletionBatching(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id1 := m.Start("a", "")
+		id1 := m.start("a", "", "")
 		g.releaseAll()
 		require.Eventually(t, func() bool { return c.noticeCount() == 1 }, 2*time.Second, 5*time.Millisecond)
 		assert.Equal(t, "Sub-agent "+id1+" completed", c.lastNotice())
 
-		_, ok := m.Poll(t.Context(), id1) // the model retrieves the result itself
+		_, ok, _ := m.poll(t.Context(), id1) // the model retrieves the result itself
 		require.True(t, ok)
 
-		id2 := m.Start("b", "")
+		id2 := m.start("b", "", "")
 		g.releaseAll()
 		require.Eventually(t, func() bool { return c.noticeCount() == 2 }, 2*time.Second, 5*time.Millisecond)
 		assert.Equal(t, "Sub-agent "+id2+" completed", c.lastNotice())
@@ -345,10 +351,11 @@ func TestCompletionBatching(t *testing.T) {
 		m.inFlight = []string{"sub-9"} // a mark for a job that no longer exists
 		m.mu.Unlock()
 
-		id := m.Start("x", "")
-		require.Eventually(t, func() bool {
-			s, ok := jobStatus(m, id)
-			return ok && s == StatusDone
+		id := m.start("x", "", "")
+		require.Eventually(t, func() bool { // completion enqueued before the boundary reads it
+			m.mu.Lock()
+			defer m.mu.Unlock()
+			return slices.Contains(m.pending, id)
 		}, 2*time.Second, 5*time.Millisecond)
 
 		ins := m.Boundary()
@@ -367,8 +374,8 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id := m.Start("slow", "")
-	j1, ok := m.Poll(t.Context(), id)
+	id := m.start("slow", "", "")
+	j1, ok, _ := m.poll(t.Context(), id)
 	assert.False(t, ok)
 	assert.Equal(t, StatusRunning, j1.Status)
 
@@ -381,7 +388,7 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 	assert.Contains(t, prog, "still running after")
 
 	close(d.release) // let the turn finish
-	j2, ok := m.Poll(t.Context(), id)
+	j2, ok, _ := m.poll(t.Context(), id)
 	require.True(t, ok)
 	assert.Equal(t, StatusDone, j2.Status)
 	assert.Contains(t, j2.Summary, "slow but done")
@@ -419,7 +426,7 @@ func TestReserve(t *testing.T) {
 		t.Cleanup(m.Close)
 
 		m.Reserve([]agent.ToolCall{{ID: "c1", Name: startToolName}})
-		assert.Equal(t, "sub-2", m.Start("host", ""))
+		assert.Equal(t, "sub-2", m.start("host", "", ""))
 		assert.Equal(t, "sub-1", m.start("a", "", "c1"))
 		assert.Equal(t, "sub-3", m.start("stray", "", "unknown-call"))
 	})
@@ -465,12 +472,12 @@ func TestPollPrefersResultOverTimeout(t *testing.T) {
 	m := New(Options{Provider: p, PollTimeout: time.Nanosecond}) // the timer is always ready
 	t.Cleanup(m.Close)
 
-	id := m.Start("x", "")
+	id := m.start("x", "", "")
 	j, ok := m.lookup(id)
 	require.True(t, ok)
 	<-j.done // finished before the poll registers; both select cases are ready
 
-	got, complete := m.Poll(t.Context(), id)
+	got, complete, _ := m.poll(t.Context(), id)
 	require.True(t, complete)
 	assert.Equal(t, StatusDone, got.Status)
 	assert.Contains(t, got.Summary, "done in time")
@@ -497,11 +504,11 @@ func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id := m.Start("x", "")
+	id := m.start("x", "", "")
 	close(release) // the provider turn returns; spawn reaches finish then blocks in Activity
 	<-entered      // status is done while close(done) has not yet run
 
-	j, ok := m.Poll(t.Context(), id) // timer fires inside the window and must claim
+	j, ok, _ := m.poll(t.Context(), id) // timer fires inside the window and must claim
 	assert.True(t, ok)
 	assert.Equal(t, StatusDone, j.Status)
 	assert.Contains(t, j.Summary, "done in time")
@@ -522,7 +529,7 @@ func TestOrphanedCompletionRecovered(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id := m.Start("x", "")
+	id := m.start("x", "", "")
 	j, ok := m.lookup(id)
 	require.True(t, ok)
 
@@ -558,7 +565,7 @@ func TestOnCompleteIgnoresRunningJob(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id := m.Start("x", "")
+	id := m.start("x", "", "")
 	j, ok := m.lookup(id)
 	require.True(t, ok)
 
@@ -580,14 +587,14 @@ func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 
 	var ids []string
 	for i := 0; i < total; i++ {
-		ids = append(ids, m.Start("job "+strconv.Itoa(i), ""))
+		ids = append(ids, m.start("job "+strconv.Itoa(i), "", ""))
 	}
 	// exactly max run at once proves the semaphore holds the rest queued
 	require.Eventually(t, func() bool { return g.active.Load() == int32(max) }, time.Second, 5*time.Millisecond)
 
 	g.releaseAll()
 	for _, id := range ids {
-		j, ok := m.Poll(t.Context(), id)
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
 	}
@@ -603,10 +610,10 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 		Provider: func(llm.Model) (llm.Provider, error) { return b, nil },
 		Activity: c.recordRow,
 	})
-	id := m.Start("long", "")
+	id := m.start("long", "", "")
 	m.Close() // must cancel and return promptly
 
-	j, ok := m.Poll(t.Context(), id)
+	j, ok, _ := m.poll(t.Context(), id)
 	require.True(t, ok)
 	assert.Equal(t, StatusAborted, j.Status)
 
@@ -628,12 +635,12 @@ func TestActivityRow(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("one", "")
+		id := m.start("one", "", "")
 		// the row appears immediately while the job is queued/running and pinned open
 		assert.Equal(t, "sub-1  one", c.rowText(id))
 
 		g.releaseAll()
-		m.Poll(t.Context(), id)
+		m.poll(t.Context(), id)
 		require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
 	})
 
@@ -660,8 +667,8 @@ func TestActivityRow(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("task", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("task", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		require.Equal(t, StatusDone, j.Status)
 
@@ -694,8 +701,8 @@ func TestActivityRow(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		m.Start("one", "")
-		m.Start("two", "") // queued behind the blocking first job
+		m.start("one", "", "")
+		m.start("two", "", "") // queued behind the blocking first job
 		// both jobs show a row: sub-1 is running/pinned open, sub-2 waits on the slot.
 		assert.Equal(t, "sub-1  one", c.rowText("sub-1"))
 		assert.Equal(t, "sub-2  two", c.rowText("sub-2"))
@@ -726,10 +733,10 @@ func TestStatusSegmentAndList(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id1 := m.Start("one", "")
-	m.Start("two", "")
+	id1 := m.start("one", "", "")
+	m.start("two", "", "")
 	g.releaseAll()
-	m.Poll(t.Context(), id1)
+	m.poll(t.Context(), id1)
 
 	jobs := m.List()
 	assert.Len(t, jobs, 2)
@@ -755,12 +762,12 @@ func TestStopAllCancelsEverything(t *testing.T) {
 	t.Cleanup(m.Close)
 	var ids []string
 	for i := 0; i < 3; i++ {
-		ids = append(ids, m.Start("x", ""))
+		ids = append(ids, m.start("x", "", ""))
 	}
 	n := m.StopAll()
 	assert.Equal(t, 3, n)
 	for _, id := range ids {
-		j, ok := m.Poll(t.Context(), id)
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusAborted, j.Status)
 	}
@@ -777,8 +784,8 @@ func TestChildSpendRollsIntoParentLedger(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id := m.Start("q", "")
-	j, ok := m.Poll(t.Context(), id)
+	id := m.start("q", "", "")
+	j, ok, _ := m.poll(t.Context(), id)
 	require.True(t, ok)
 	assert.Equal(t, StatusDone, j.Status)
 
@@ -803,11 +810,11 @@ func TestParentContextUnchangedByChild(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id := m.Start("q", "")
+	id := m.start("q", "", "")
 	require.Eventually(t, func() bool { return g.active.Load() == 1 }, time.Second, 5*time.Millisecond) // child streaming
 	before := parent.Context().Used
 	g.releaseAll()
-	_, ok := m.Poll(t.Context(), id)
+	_, ok, _ := m.poll(t.Context(), id)
 	require.True(t, ok)
 	assert.Equal(t, before, parent.Context().Used)
 }

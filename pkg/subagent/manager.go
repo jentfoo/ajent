@@ -93,14 +93,8 @@ func (m *Manager) Reserve(calls []agent.ToolCall) {
 	}
 }
 
-// Start launches one investigation and returns its id immediately. The job sits
-// StatusQueued until it takes a concurrency slot.
-func (m *Manager) Start(task, instructions string) string {
-	return m.start(task, instructions, "")
-}
-
-// start is Start for a job whose id may have been reserved by callID; an unknown
-// or empty callID takes the next number, so a host-driven start still works.
+// start launches one investigation whose id may have been reserved by callID; an
+// unknown or empty callID takes the next number, so a host-driven start still works.
 func (m *Manager) start(task, instructions, callID string) string {
 	var ledger *tokens.Accounting
 	if p := m.opts.Parent; p != nil { // one child ledger per job, set before the id is visible to pollers
@@ -198,17 +192,12 @@ func (m *Manager) releaseSlot(j *job) {
 	}
 }
 
-// Poll blocks until id completes, PollTimeout elapses, or ctx is cancelled. It
+// poll blocks until id completes, PollTimeout elapses, or ctx is cancelled. It
 // returns false when still running; an interrupted turn releases the poll at once.
-func (m *Manager) Poll(ctx context.Context, id string) (Job, bool) {
-	snap, complete, _ := m.poll(ctx, id)
-	return snap, complete
-}
-
-// poll is Poll plus whether this call shared its window with another. agent_poll
-// is ModeParallel, so a batch commits every tool header at dispatch and each
-// payload only as its own job finishes: a batched result lands detached from the
-// header naming it and has to say which sub-agent it came from.
+// agent_poll is ModeParallel, so a batch commits every tool header at dispatch and
+// each payload only as its own job finishes: a batched result lands detached from
+// the header naming it and has to say which sub-agent it came from. The third
+// result reports whether this call shared its window with another.
 func (m *Manager) poll(ctx context.Context, id string) (Job, bool, bool) {
 	m.enterPoll()
 	snap, complete := m.wait(ctx, id)
@@ -437,7 +426,9 @@ func (m *Manager) enqueue(id string) {
 // completing are dropped and never named, because the poll response already
 // carries their result.
 func (m *Manager) Boundary() []agent.Input {
+	m.mu.Lock()
 	ids := slices.Clone(m.pending)
+	m.mu.Unlock()
 
 	deliverable := m.take(ids)
 	if len(deliverable) == 0 {

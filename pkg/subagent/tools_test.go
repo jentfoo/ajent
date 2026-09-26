@@ -82,7 +82,7 @@ func TestAgentPoll(t *testing.T) {
 
 	t.Run("returns_summary_on_completion", func(t *testing.T) {
 		m, tools := toolsManager(t, nil, time.Second)
-		id := m.Start("x", "")
+		id := m.start("x", "", "")
 		res, err := exec(t, tools[1], map[string]any{"id": id})
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
@@ -102,7 +102,7 @@ func TestAgentPoll(t *testing.T) {
 	// a lone poll's payload lands directly under its own tool header, so naming it again would be noise
 	t.Run("lone_poll_display_is_bare", func(t *testing.T) {
 		m, tools := toolsManager(t, nil, time.Second)
-		id := m.Start("x", "")
+		id := m.start("x", "", "")
 		res, err := exec(t, tools[1], map[string]any{"id": id})
 		require.NoError(t, err)
 		assert.NotContains(t, res.Display, "results:")
@@ -120,7 +120,7 @@ func TestAgentPoll(t *testing.T) {
 		t.Cleanup(m.Close)
 		tools := m.Tools()
 
-		ids := []string{m.Start("a", ""), m.Start("b", "")}
+		ids := []string{m.start("a", "", ""), m.start("b", "", "")}
 		results := make([]agent.ToolResult, len(ids))
 		errs := make([]error, len(ids)) // collected here; asserted on the test goroutine
 		var wg sync.WaitGroup
@@ -159,7 +159,7 @@ func TestAgentPoll(t *testing.T) {
 	t.Run("timeout_reports_context_usage", func(t *testing.T) {
 		d := &delayedProvider{turn: summaryTurn("slow", llm.Usage{}), release: make(chan struct{})}
 		m, tools := toolsManager(t, d, 30*time.Millisecond)
-		id := m.Start("x", "")
+		id := m.start("x", "", "")
 		res, err := exec(t, tools[1], map[string]any{"id": id})
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
@@ -173,7 +173,7 @@ func TestAgentPoll(t *testing.T) {
 		b := &blockingProvider{}
 		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
 		t.Cleanup(m.Close)
-		id := m.Start("x", "")
+		id := m.start("x", "", "")
 		require.NoError(t, m.Stop(id))
 		res, err := exec(t, m.Tools()[1], map[string]any{"id": id})
 		require.NoError(t, err)
@@ -191,7 +191,7 @@ func TestAgentListEmptyAndPopulated(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "(no sub-agents)", textOf(res))
 
-	id := m.Start("x", "")
+	id := m.start("x", "", "")
 	res, err = exec(t, tools[2], map[string]any{})
 	require.NoError(t, err)
 	out := textOf(res)

@@ -27,8 +27,8 @@ func TestEmptySummary(t *testing.T) {
 		m := New(Options{Provider: p})
 		t.Cleanup(m.Close)
 
-		id := m.Start("q", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("q", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
 		assert.Contains(t, j.Summary, "the answer is 42")
@@ -43,8 +43,8 @@ func TestEmptySummary(t *testing.T) {
 		m := New(Options{Provider: p})
 		t.Cleanup(m.Close)
 
-		id := m.Start("q", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("q", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusError, j.Status)
 		require.ErrorIs(t, j.Err, errNoSummary)
@@ -60,8 +60,8 @@ func TestEmptySummary(t *testing.T) {
 		m := New(Options{Provider: p})
 		t.Cleanup(m.Close)
 
-		id := m.Start("q", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("q", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
 		assert.Contains(t, j.Summary, thinkingPreface)
@@ -92,8 +92,8 @@ func TestEmptySummary(t *testing.T) {
 		})
 		t.Cleanup(m.Close)
 
-		id := m.Start("q", "")
-		j, ok := m.Poll(t.Context(), id)
+		id := m.start("q", "", "")
+		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusError, j.Status)
 		require.ErrorIs(t, j.Err, errNoSummary)
@@ -107,9 +107,9 @@ func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
 	t.Cleanup(m.Close)
 
-	id := m.Start("q", "")
+	id := m.start("q", "", "")
 	require.NoError(t, m.Stop(id))
-	j, ok := m.Poll(t.Context(), id)
+	j, ok, _ := m.poll(t.Context(), id)
 	require.True(t, ok)
 	assert.Equal(t, StatusAborted, j.Status)
 }
@@ -125,8 +125,8 @@ func TestRunInheritsModel(t *testing.T) {
 	})
 	t.Cleanup(m.Close)
 
-	id := m.Start("q", "")
-	m.Poll(t.Context(), id)
+	id := m.start("q", "", "")
+	m.poll(t.Context(), id)
 
 	require.Eventually(t, func() bool { return len(sp.Requests()) > 0 }, time.Second, 5*time.Millisecond)
 	assert.Equal(t, "child-model", sp.Requests()[0].Model.ID)

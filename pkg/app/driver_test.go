@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -372,9 +373,27 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		}, 2*time.Second, 5*time.Millisecond)
 	}
 
+	startTask := func(t *testing.T, m *subagent.Manager) string {
+		t.Helper()
+		for _, tool := range m.Tools() { // spawn through the agent_start tool; no exported Start
+			if tool.Name() != "agent_start" {
+				continue
+			}
+			res, err := tool.Execute(context.Background(), agent.ToolCall{
+				Input: json.RawMessage(`{"task":"x","instructions":""}`),
+			}, nil)
+			require.NoError(t, err)
+			dets, ok := res.Details.(map[string]string)
+			require.True(t, ok, "start result missing details")
+			return dets["id"]
+		}
+		t.Fatal("agent_start not registered")
+		return ""
+	}
+
 	t.Run("abort_releases_marks", func(t *testing.T) {
 		mgr, delivered := newMgr()
-		id := mgr.Start("task", "")
+		id := startTask(t, mgr)
 		settle(t, mgr, id)
 
 		sink := subagentSink{mgr: mgr}
@@ -396,7 +415,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 
 	t.Run("clean_keeps_marks", func(t *testing.T) {
 		mgr, delivered := newMgr()
-		id := mgr.Start("task", "")
+		id := startTask(t, mgr)
 		settle(t, mgr, id)
 
 		sink := subagentSink{mgr: mgr}

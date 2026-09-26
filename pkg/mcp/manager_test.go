@@ -518,27 +518,6 @@ func mustState(fr *fakeRegistrar, name string) State {
 	return st
 }
 
-func TestManagerDiscoversResourcesAndPrompts(t *testing.T) {
-	t.Parallel()
-
-	fr := newFakeRegistrar()
-	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t)},
-	}, Options{Registrar: fr})
-	require.NoError(t, mgr.Connect(t.Context(), "fake"))
-	t.Cleanup(mgr.Close)
-
-	rs := mgr.ServerResources("fake")
-	require.Len(t, rs, 1)
-	assert.Equal(t, "the doc", rs[0].Name)
-
-	ps := mgr.ServerPrompts("fake")
-	require.Len(t, ps, 1)
-	assert.Equal(t, "summarize", ps[0].Name)
-	require.Len(t, ps[0].Arguments, 1)
-	assert.True(t, ps[0].Arguments[0].Required)
-}
-
 func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
