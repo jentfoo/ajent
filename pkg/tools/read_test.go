@@ -69,7 +69,26 @@ func TestRead(t *testing.T) {
 		assert.Contains(t, textOf(res), "binary")
 	})
 
-	t.Run("truncation_marker_names_next_offset", func(t *testing.T) {
+	t.Run("unbounded_read_marks_next_offset", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		var b strings.Builder
+		for i := 1; i <= 3000; i++ {
+			_, _ = fmt.Fprintf(&b, "line %d\n", i)
+		}
+		e.writeFile("big.txt", b.String())
+
+		res := e.readExec(t.Context(), `{"path":"big.txt"}`) // no limit: tool cuts at its bound
+		assert.False(t, res.IsError)
+		out := textOf(res)
+		// the Display header names exactly what was shown, even when cut short
+		assert.Contains(t, res.Display, fmt.Sprintf("big.txt:1-%d\n", ReadFileLimit().Lines))
+		assert.Contains(t, out, fmt.Sprintf("... truncated at line %d of 3000 (%d more); read again with offset=%d",
+			ReadFileLimit().Lines, 3000-ReadFileLimit().Lines, ReadFileLimit().Lines+1))
+	})
+
+	// an explicitly scoped window that is fully delivered is not truncation: the
+	// tool handed over exactly what was asked, so no offset nudge is needed
+	t.Run("scoped_read_has_no_marker", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		var b strings.Builder
 		for i := 1; i <= 3000; i++ {
@@ -80,9 +99,8 @@ func TestRead(t *testing.T) {
 		res := e.readExec(t.Context(), `{"path":"big.txt","limit":200}`)
 		assert.False(t, res.IsError)
 		out := textOf(res)
-		// the Display header names exactly what was shown, even when cut short
-		assert.Contains(t, res.Display, "big.txt:1-200\n")
-		assert.Contains(t, out, "... truncated at line 200 of 3000 (2800 more); read again with offset=201")
+		assert.Contains(t, out, "line 1")
+		assert.NotContains(t, out, "truncated at line") // full window, no paging hint
 	})
 
 	// a range wider than the limit is refused rather than silently paged
@@ -100,7 +118,8 @@ func TestRead(t *testing.T) {
 		assert.Contains(t, textOf(res), "page with offset")
 	})
 
-	// a window at the limit succeeds; the limit itself is not an error
+	// an explicitly scoped window that reaches EOF is complete; the limit itself
+	// is not truncation and carries no marker
 	t.Run("range_at_limit_ok", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		var b strings.Builder
@@ -111,7 +130,7 @@ func TestRead(t *testing.T) {
 
 		res := e.readExec(t.Context(), `{"path":"big.txt","limit":1000}`)
 		assert.False(t, res.IsError)
-		assert.Contains(t, textOf(res), "truncated at line 1000 of 1200")
+		assert.NotContains(t, textOf(res), "truncated at line")
 	})
 
 	t.Run("observes_tracker_for_ref_dedupe", func(t *testing.T) {

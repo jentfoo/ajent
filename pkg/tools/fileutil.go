@@ -96,12 +96,11 @@ func ReadBytes(m Measurement) int64 {
 	return m.Bytes + lines*numberedLinePrefix
 }
 
-// numberLines renders data as line-numbered text from the 1-based start line,
-// stopping at limit lines or maxBytes of rendered output (when positive); at
-// least one line is always emitted. It reports lastEmitted (the highest line
-// rendered), truncatedAt (the last line rendered when a bound cut the window,
-// zero when everything fit), and the file's total line count.
-func numberLines(data []byte, start, limit, maxBytes int) (out string, lastEmitted, truncatedAt, total int) {
+// numberLines renders line-numbered text from start for up to limit lines or
+// maxBytes (when positive); one line always emits. Reports lastEmitted,
+// truncatedAt when a bound cut the window, and total. An explicitLimit that is
+// reached counts as complete: leftover past it reports no truncation.
+func numberLines(data []byte, start, limit int, maxBytes int, explicitLimit bool) (out string, lastEmitted, truncatedAt, total int) {
 	lines := bytes.Split([]byte(normalizeToLF(string(data))), []byte{'\n'})
 	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 { // drop the element a trailing newline leaves
 		lines = lines[:len(lines)-1]
@@ -122,7 +121,7 @@ func numberLines(data []byte, start, limit, maxBytes int) (out string, lastEmitt
 	if start > total {
 		return "", 0, 0, total // offset past EOF
 	}
-	if end < total { // more lines remain past what was emitted
+	if end < total && !explicitLimit { // more lines remain past what was emitted
 		return b.String(), end, end, total
 	}
 	return b.String(), end, 0, total

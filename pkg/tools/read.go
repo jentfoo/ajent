@@ -82,6 +82,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		start = 1
 	}
 	n := p.Limit
+	explicitLimit := n > 0
 	if n <= 0 {
 		n = lim.Lines
 	}
@@ -91,7 +92,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 
 	t.tracker.Observe(full, data, info)
-	out, lastEmitted, truncatedAt, total := numberLines(data, start, n, lim.Bytes)
+	out, lastEmitted, truncatedAt, total := numberLines(data, start, n, lim.Bytes, explicitLimit)
 
 	var b strings.Builder
 	b.WriteString(out)
