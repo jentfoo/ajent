@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
@@ -83,13 +84,9 @@ func agentsCompletion(c Console) func(prefix string) []string {
 		verb, rest, hasSpace := strings.Cut(prefix, " ")
 		switch {
 		case !hasSpace:
-			out := make([]string, 0, 2)
-			for _, v := range []string{"list", "stop"} {
-				if verb == "" || strings.HasPrefix(v, verb) {
-					out = append(out, v)
-				}
-			}
-			return out
+			return bulk.SliceFilter(func(v string) bool {
+				return verb == "" || strings.HasPrefix(v, verb)
+			}, []string{"list", "stop"})
 		case verb == "stop":
 			ids := []string{"all"} // stop all is offered alongside job ids
 			jobs := a.List()

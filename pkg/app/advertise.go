@@ -26,11 +26,11 @@ func advertisedCommands(settings config.Settings, lookPath func(string) (string,
 	for i, cmd := range merged {
 		merged[i] = strings.TrimSpace(cmd)
 	}
-	candidates := bulk.SliceFilter(func(cmd string) bool { return cmd != "" }, merged)
+	candidates := bulk.SliceFilterInPlace(func(cmd string) bool { return cmd != "" }, merged)
 	candidates = bulk.SliceDifference(candidates, nil) // dedupe keeping first occurrence
 
 	var missing []string
-	kept := bulk.SliceFilter(func(cmd string) bool {
+	kept := bulk.SliceFilterInPlace(func(cmd string) bool {
 		if slices.Contains(settings.Tools.Enabled, cmd) {
 			return false
 		}

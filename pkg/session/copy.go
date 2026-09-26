@@ -96,7 +96,7 @@ func resultText(ti treeIndex, e Entry, m llm.Message) string {
 			break
 		}
 		chain = append(chain, md.Message)
-		need = bulk.SliceFilter(func(callID string) bool {
+		need = bulk.SliceFilterInPlace(func(callID string) bool {
 			return !messageHasCall(md.Message, callID)
 		}, need)
 	}

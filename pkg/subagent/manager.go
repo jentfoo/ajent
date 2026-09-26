@@ -287,10 +287,7 @@ func (m *Manager) claimResult(j *job) Job {
 // List returns a snapshot of every job, oldest id first.
 func (m *Manager) List() []Job {
 	m.mu.Lock()
-	ids := make([]string, 0, len(m.jobs))
-	for k := range m.jobs {
-		ids = append(ids, k)
-	}
+	ids := bulk.MapKeysSlice(m.jobs)
 	slices.Sort(ids)
 	out := make([]Job, 0, len(ids))
 	for _, id := range ids {

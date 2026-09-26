@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
@@ -34,20 +35,16 @@ func isGitTool(name string) bool {
 // repository: inRepo false withholds them, so git capability is never advertised
 // where it cannot apply.
 func childTools(src ToolSource, inRepo bool) []agent.Tool {
-	var out []agent.Tool
-	for _, t := range src.All() {
+	return bulk.SliceFilter(func(t agent.Tool) bool {
 		name := t.Name()
 		if strings.HasPrefix(name, "agent_") { // the bar applies last; nothing configures past it
-			continue
+			return false
 		}
-		if slices.Contains(readOnlyBuiltins, name) || src.ReadOnly(name) {
-			if isGitTool(name) && !inRepo { // repo-context gate
-				continue
-			}
-			out = append(out, t)
+		if !slices.Contains(readOnlyBuiltins, name) && !src.ReadOnly(name) {
+			return false
 		}
-	}
-	return out
+		return !isGitTool(name) || inRepo // repo-context gate
+	}, src.All())
 }
 
 // toolSet is a fixed read-only view over a child's resolved tools.

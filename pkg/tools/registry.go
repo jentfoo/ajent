@@ -131,7 +131,7 @@ func (r *Registry) Unregister(source string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.tools = bulk.SliceFilter(func(rt registeredTool) bool { return rt.source != source }, r.tools)
+	r.tools = bulk.SliceFilterInPlace(func(rt registeredTool) bool { return rt.source != source }, r.tools)
 	r.rebuildIndexLocked()
 	r.schema = nil
 }

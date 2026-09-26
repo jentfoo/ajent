@@ -151,10 +151,7 @@ func (m *Manager) Preload() {
 		m.mu.Unlock()
 		return
 	}
-	names := make([]string, 0, len(m.servers))
-	for n := range m.servers {
-		names = append(names, n)
-	}
+	names := bulk.MapKeysSlice(m.servers)
 	slices.Sort(names)
 	wg := &sync.WaitGroup{}
 	wg.Add(len(names)) // all Adds before publishing so a waiter never waits on an incomplete set
@@ -529,10 +526,7 @@ func (m *Manager) ServerNames() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	out := make([]string, 0, len(m.servers))
-	for n := range m.servers {
-		out = append(out, n)
-	}
+	out := bulk.MapKeysSlice(m.servers)
 	slices.Sort(out)
 	return out
 }

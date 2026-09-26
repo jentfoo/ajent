@@ -31,7 +31,7 @@ func (c *Controller) toolsFor(p Phase) []string {
 	if p == PhaseImplementing {
 		// the user's own working set, minus anything this workflow owns
 		own := bulk.SliceToSet(controlNames)
-		out := bulk.SliceFilter(func(n string) bool {
+		out := bulk.SliceFilterInPlace(func(n string) bool {
 			_, owned := own[n]
 			return !owned
 		}, slices.Clone(c.savedTools))

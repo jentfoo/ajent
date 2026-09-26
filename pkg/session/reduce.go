@@ -55,10 +55,7 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 	var stubs map[string]Stub
 	if r := cd.Reduce; r != nil {
 		dropped = bulk.SliceToSet(r.Drop)
-		stubs = make(map[string]Stub, len(r.Stubs))
-		for _, s := range r.Stubs {
-			stubs[s.CallID] = s
-		}
+		stubs = bulk.SliceToIndexBy(func(s Stub) string { return s.CallID }, r.Stubs)
 	}
 	stripThinking := cd.Reduce != nil && cd.Reduce.StripThinking
 

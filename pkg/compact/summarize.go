@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -163,10 +164,7 @@ func buildPrompt(v *branchView, start, end int, prev, instructions string, stubs
 	if dropped {
 		b.WriteString("[earlier messages omitted]\n")
 	}
-	byCall := make(map[string]session.Stub, len(stubs))
-	for _, s := range stubs {
-		byCall[s.CallID] = s
-	}
+	byCall := bulk.SliceToIndexBy(func(s session.Stub) string { return s.CallID }, stubs)
 	serialise(&b, v, start, end, byCall, clip)
 	b.WriteString("</conversation>\n\n")
 

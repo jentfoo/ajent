@@ -150,7 +150,7 @@ var flavorNames = enumNames[Flavor]{
 
 // flavorChoices are the flavor values a provider entry may name, in enum order.
 func flavorChoices() []string {
-	return bulk.SliceFilter(func(name string) bool { return name != "" && name != nameUnknown },
+	return bulk.SliceFilterInPlace(func(name string) bool { return name != "" && name != nameUnknown },
 		flavorNames.sorted())
 }
 

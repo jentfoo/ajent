@@ -180,7 +180,7 @@ func levelsFor(caps Capabilities) []Level {
 	if !caps.Reasoning {
 		return []Level{LevelOff}
 	}
-	return bulk.SliceFilter(func(l Level) bool {
+	return bulk.SliceFilterInPlace(func(l Level) bool {
 		v, ok := caps.LevelMap[l]
 		switch {
 		case ok && v == nil:

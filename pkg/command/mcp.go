@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/go-analyze/bulk"
 )
 
 // MCPGroup is one server's /tools group metadata, declared here so pkg/command
@@ -135,22 +137,13 @@ func mcpCompletion(c Console) func(prefix string) []string {
 		verb, rest, hasSpace := strings.Cut(prefix, " ")
 		switch {
 		case !hasSpace:
-			out := make([]string, 0, 5)
-			for _, v := range []string{"connect", "disconnect", "logs", "reload"} {
-				if verb == "" || strings.HasPrefix(v, verb) {
-					out = append(out, v)
-				}
-			}
-			return out
+			return bulk.SliceFilterInPlace(func(v string) bool {
+				return verb == "" || strings.HasPrefix(v, verb)
+			}, []string{"connect", "disconnect", "logs", "reload"})
 		case slices.Contains([]string{"connect", "disconnect", "logs"}, verb):
-			names := s.ServerNames()
-			var filtered []string
-			for _, n := range names {
-				if rest == "" || strings.HasPrefix(n, rest) {
-					filtered = append(filtered, n)
-				}
-			}
-			return filtered
+			return bulk.SliceFilterInPlace(func(n string) bool {
+				return rest == "" || strings.HasPrefix(n, rest)
+			}, s.ServerNames())
 		default:
 			return nil
 		}

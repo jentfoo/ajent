@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/rivo/uniseg"
 )
 
@@ -630,10 +631,7 @@ func (s *multiPickState) key(k key) (bool, error) {
 		if len(s.picks) == 0 {
 			return false, nil
 		}
-		s.chosen = make([]int, 0, len(s.selected))
-		for idx := range s.selected {
-			s.chosen = append(s.chosen, idx)
-		}
+		s.chosen = bulk.MapKeysSlice(s.selected)
 		slices.Sort(s.chosen)
 		return true, nil
 	case keyEscape, keyInterrupt:

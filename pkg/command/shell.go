@@ -197,12 +197,7 @@ func (s *Stager) Cancel() {
 // hold the next prompt hostage waiting for them.
 func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 	s.mu.Lock()
-	var included []*stageRun
-	for _, r := range s.runs {
-		if !r.excluded {
-			included = append(included, r)
-		}
-	}
+	included := bulk.SliceFilter(func(r *stageRun) bool { return !r.excluded }, s.runs)
 	s.mu.Unlock()
 
 	var out []agent.MessageInfo

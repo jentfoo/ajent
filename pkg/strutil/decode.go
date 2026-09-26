@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 // DecodeArgs unmarshals raw into v, returning an error written for the model
@@ -63,14 +65,9 @@ func stripIndices(field string) string {
 		return field
 	}
 	parts := strings.Split(field, ".")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "" && !strings.ContainsFunc(p, func(r rune) bool { return r < '0' || r > '9' }) {
-			continue
-		}
-		out = append(out, p)
-	}
-	return strings.Join(out, ".")
+	return strings.Join(bulk.SliceFilterInPlace(func(p string) bool {
+		return p == "" || strings.ContainsFunc(p, func(r rune) bool { return r < '0' || r > '9' })
+	}, parts), ".")
 }
 func rootElem(root reflect.Type) (reflect.Type, bool) {
 	for root.Kind() == reflect.Pointer {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -138,11 +139,12 @@ func filterPrefix(names []string, prefix string) []string {
 	if prefix == "" {
 		return names
 	}
-	var out []string
-	for _, n := range names {
-		if strings.HasPrefix(strings.ToLower(n), strings.ToLower(prefix)) {
-			out = append(out, n)
-		}
+	lower := strings.ToLower(prefix)
+	filtered := bulk.SliceFilterInPlace(func(n string) bool {
+		return strings.HasPrefix(strings.ToLower(n), lower)
+	}, names)
+	if len(filtered) == 0 { // preserve nil (not empty) for no match
+		return nil
 	}
-	return out
+	return filtered
 }

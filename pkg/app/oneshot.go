@@ -287,7 +287,7 @@ func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) [
 	names := bulk.SliceFilterInPlace(inScope, builtins)
 
 	// enabled non-builtins keep their state, narrowed to read-only under that scope
-	names = append(names, bulk.SliceFilter(func(name string) bool {
+	names = append(names, bulk.SliceFilterInPlace(func(name string) bool {
 		if _, ok := builtinSet[name]; ok {
 			return false
 		}
