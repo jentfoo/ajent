@@ -876,6 +876,155 @@ func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
 		system := m["system"].([]any)[0].(map[string]any)
 		assert.Equal(t, "ephemeral", system["cache_control"].(map[string]any)["type"])
 	})
+
+	t.Run("strict_schema_when_capable", func(t *testing.T) {
+		req := baseReq()
+		schema := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)
+		req.Model.Caps.SupportsStrictTools = true
+		req.Tools[0].Parameters = schema
+
+		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+		assert.Equal(t, true, tool["strict"])
+		// the rewrite makes every property required and closes the object
+		input := tool["input_schema"].(map[string]any)
+		assert.Equal(t, []any{"path"}, input["required"])
+		assert.Equal(t, false, input["additionalProperties"])
+	})
+
+	t.Run("strict_flag_absent_without_capability", func(t *testing.T) {
+		// the default caps leave SupportsStrictTools off and schemas untouched
+		tool := decode(t, buildBody(t, baseReq()))["tools"].([]any)[0].(map[string]any)
+		assert.NotContains(t, tool, "strict")
+	})
+
+	t.Run("deferred_tool_offers_defer_loading", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.ToolReferences = true
+		req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
+
+		var immediate, deferred map[string]any
+		for _, tool := range decode(t, buildBody(t, req))["tools"].([]any) {
+			switch m := tool.(map[string]any); m["name"] {
+			case "read":
+				immediate = m
+			case "read2":
+				deferred = m
+			}
+		}
+		assert.NotContains(t, immediate, "defer_loading")
+		assert.Equal(t, true, deferred["defer_loading"])
+	})
+
+	t.Run("all_deferred_promotes_to_immediate", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.ToolReferences = true
+		req.Tools[0].Deferred = true // the only tool, so nothing to reference later
+
+		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+		assert.NotContains(t, tool, "defer_loading")
+	})
+
+	t.Run("no_defer_loading_without_references", func(t *testing.T) {
+		req := baseReq()
+		req.Tools[0].Deferred = true // capable flag off, so nothing is offered deferred
+
+		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+		assert.NotContains(t, tool, "defer_loading")
+	})
+
+	t.Run("added_tools_become_message_references", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.ToolReferences = true
+		req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
+		req.Messages = []Message{
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "call_1", ToolName: "read2",
+				Content:        BlockList{TextBlock{Text: "ok"}},
+				AddedToolNames: []string{"read2"},
+			}}},
+		}
+
+		body := string(buildBody(t, req))
+		assert.Contains(t, body, `"type":"tool_reference","tool_name":"read2"`)
+	})
+
+	t.Run("non_deferred_tool_not_referenced", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.ToolReferences = true
+		req.Messages = []Message{
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "call_1", ToolName: "read", // read is not offered defer_loading
+				Content:        BlockList{TextBlock{Text: "ok"}},
+				AddedToolNames: []string{"read"},
+			}}},
+		}
+
+		body := string(buildBody(t, req))
+		assert.NotContains(t, body, "tool_reference")
+	})
+
+	t.Run("displaced_content_follows_references", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.ToolReferences = true
+		req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
+		req.Messages = []Message{
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "call_1", ToolName: "read2",
+				Content:        BlockList{TextBlock{Text: "payload"}},
+				AddedToolNames: []string{"read2"},
+			}}},
+		}
+
+		msgs, err := anthropicMessages(req, req.Model.Caps,
+			anthropicDeferredNames(req.Tools, req.Model.Caps))
+		require.NoError(t, err)
+		order := make([]string, 0, len(msgs[0].Content))
+		for _, b := range msgs[0].Content {
+			order = append(order, b.Type)
+		}
+		assert.Equal(t, []string{"tool_result", "text"}, order) // references in result, content after
+	})
+}
+
+func TestMakeStrictAnthropicSchema(t *testing.T) {
+	t.Parallel()
+
+	rewrittenOK := func(t *testing.T, raw string) map[string]any {
+		t.Helper()
+		out, ok := makeStrictAnthropicSchema(json.RawMessage(raw))
+		require.True(t, ok)
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(out, &m))
+		return m
+	}
+
+	t.Run("simple_object_is_rewritten", func(t *testing.T) {
+		in := rewrittenOK(t, `{"type":"object","properties":{"path":{"type":"string"}}}`)
+		assert.Equal(t, []any{"path"}, in["required"])
+		assert.Equal(t, false, in["additionalProperties"])
+	})
+
+	t.Run("optional_property_null_wrapped", func(t *testing.T) {
+		in := rewrittenOK(t, `{"type":"object",`+
+			`"properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"]}`)
+		props := in["properties"].(map[string]any)
+		assert.ElementsMatch(t, []any{"a", "b"}, in["required"])
+		// the optional property becomes a null union so required stays total
+		anyOf := props["b"].(map[string]any)["anyOf"].([]any)
+		assert.Len(t, anyOf, 2)
+	})
+
+	t.Run("union_object_rejected", func(t *testing.T) {
+		_, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
+			`"properties":{"x":{"anyOf":[{"type":"string"},{"type":"object"}]}}}`))
+
+		assert.False(t, ok)
+	})
+
+	t.Run("non_object_root_rejected", func(t *testing.T) {
+		_, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"string"}`))
+		assert.False(t, ok)
+	})
 }
 
 func TestAnthropicEmptySignatureReplay(t *testing.T) {
@@ -910,7 +1059,7 @@ func TestAnthropicEmptySignatureReplay(t *testing.T) {
 	t.Run("demoted_to_text_when_it_reaches_blocks", func(t *testing.T) {
 		// retention normally strips it first; if a block gets through it demotes
 		// to visible text rather than vanishing
-		blocks, err := anthropicBlocks(BlockList{ThinkingBlock{Text: "orphaned"}}, anthropic())
+		blocks, err := anthropicBlocks(BlockList{ThinkingBlock{Text: "orphaned"}}, anthropic(), nil, make(map[string]bool))
 		require.NoError(t, err)
 		require.Len(t, blocks, 1)
 		assert.Equal(t, antTypeText, blocks[0].Type)
@@ -1087,7 +1236,7 @@ func TestCompactionSummaryReachesTheModel(t *testing.T) {
 	summary := Text(RoleUser, "The conversation history before this point was compacted:\n<summary>\nthe goal\n</summary>")
 	req := Request{Model: anthropicModel(nil), Messages: []Message{summary, Text(RoleUser, "next")}}
 
-	msgs, err := anthropicMessages(req, req.Model.Caps)
+	msgs, err := anthropicMessages(req, req.Model.Caps, nil)
 	require.NoError(t, err)
 
 	var sb strings.Builder
@@ -1102,7 +1251,7 @@ func TestCompactionSummaryReachesTheModel(t *testing.T) {
 
 	// the same text as a system message would be dropped entirely
 	sysReq := Request{Model: anthropicModel(nil), Messages: []Message{Text(RoleSystem, "<summary>lost</summary>")}}
-	sysMsgs, err := anthropicMessages(sysReq, sysReq.Model.Caps)
+	sysMsgs, err := anthropicMessages(sysReq, sysReq.Model.Caps, nil)
 	require.NoError(t, err)
 	assert.Empty(t, sysMsgs)
 }

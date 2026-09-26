@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 // compatProfile is what one provider changes about the shared chat-completions
@@ -25,6 +27,11 @@ type compatProvider struct {
 	client  *httpClient
 	profile compatProfile
 }
+
+// deferredToolsKimi is the deferredToolsMode value activating Kimi's
+// dynamic-tool protocol: tools a result loads leave the top level list and are
+// re-offered by a system tool message at each load point.
+const deferredToolsKimi = "kimi"
 
 // Name returns the provider name.
 func (p *compatProvider) Name() string { return p.profile.name }
@@ -77,8 +84,9 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 	if req.Temperature != nil && caps.Temperature {
 		body.Temperature = req.Temperature
 	}
-	if len(req.Tools) > 0 {
-		body.Tools = compatTools(req.Tools, caps.SupportsStrict)
+	loaded := kimiLoadedTools(req, caps)
+	if len(loaded) > 0 {
+		body.Tools = &loaded
 		if caps.ToolChoice {
 			body.ToolChoice = compatToolChoice(req.ToolChoice)
 		}
@@ -89,6 +97,10 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 		if caps.ZaiToolStream {
 			body.ToolStream = ptrOf(true)
 		}
+	} else if len(req.Tools) > 0 && hasToolHistory(req.Messages) {
+		// every offered tool was loaded by a reference; the key stays present with
+		// an empty list for endpoints that require it once tool calls exist
+		body.Tools = &[]compatTool{}
 	}
 	applyThinking(&body, req) // runs after the max-tokens fields for its budget read
 	if caps.Store {
@@ -136,12 +148,66 @@ func marshalWithExtra(body compatRequest, extra map[string]json.RawMessage) ([]b
 	return json.Marshal(merged)
 }
 
+// kimiLoadedTools returns the top level tool list, dropping tools a result
+// loaded when kimi mode is on. Non-kimi models return it unchanged.
+func kimiLoadedTools(req Request, caps Capabilities) []compatTool {
+	if caps.DeferredTools != deferredToolsKimi {
+		return compatTools(req.Tools, caps.SupportsStrict)
+	}
+	deferred := bulk.SliceToSet(kimiLoadedNames(req.Messages))
+	tools := bulk.SliceFilter(func(t ToolSchema) bool {
+		_, ok := deferred[t.Name]
+		return !ok
+	}, req.Tools)
+	return compatTools(tools, caps.SupportsStrict)
+}
+
+// kimiLoadedNames returns every tool a result loaded in transcript order,
+// deduplicated. Names absent from the offered set are not filtered here; the
+// load point builder skips them.
+func kimiLoadedNames(msgs []Message) []string {
+	var out []string
+	seen := make(map[string]struct{})
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			tr, ok := b.(ToolResultBlock)
+			if !ok {
+				continue
+			}
+			for _, name := range tr.AddedToolNames {
+				if _, dup := seen[name]; !dup {
+					seen[name] = struct{}{}
+					out = append(out, name)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// hasToolHistory reports whether the transcript carries any tool call or result.
+func hasToolHistory(msgs []Message) bool {
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			switch b.(type) {
+			case ToolCallBlock, ToolResultBlock:
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // compatMessages flattens the content model onto chat-completions messages.
 func compatMessages(req Request, caps Capabilities) ([]compatMessage, error) {
 	msgs := req.Messages // already normalized by Prepare
 	out := make([]compatMessage, 0, len(msgs)+1)
 	// whether reasoning is on for this turn, which gates the empty replay field
 	on := caps.Reasoning && clampLevel(caps, req.Reasoning.Level) != LevelOff
+	var byName map[string]ToolSchema // kimi load-point lookup
+	if caps.DeferredTools == deferredToolsKimi {
+		byName = bulk.SliceToIndexBy(func(t ToolSchema) string { return t.Name }, req.Tools)
+	}
 
 	if len(req.System) > 0 {
 		role := roleSystem
@@ -156,8 +222,40 @@ func compatMessages(req Request, caps Capabilities) ([]compatMessage, error) {
 			return nil, err
 		}
 		out = append(out, converted...)
+		if byName != nil {
+			if load, ok := kimiLoadPoint(m, byName, caps); ok {
+				out = append(out, load)
+			}
+		}
 	}
 	return out, nil
+}
+
+// kimiLoadPoint renders the system message re-offering the tools a result batch
+// loaded, reported ok when at least one offered tool was loaded. The message
+// carries tools and no content, which is the shape Kimi accepts.
+func kimiLoadPoint(m Message, byName map[string]ToolSchema, caps Capabilities) (compatMessage, bool) {
+	var tools []ToolSchema
+	seen := make(map[string]struct{})
+	for _, b := range m.Content {
+		tr, ok := b.(ToolResultBlock)
+		if !ok {
+			continue
+		}
+		for _, name := range tr.AddedToolNames {
+			if _, dup := seen[name]; dup {
+				continue
+			}
+			seen[name] = struct{}{}
+			if t, ok := byName[name]; ok {
+				tools = append(tools, t)
+			}
+		}
+	}
+	if len(tools) == 0 {
+		return compatMessage{}, false
+	}
+	return compatMessage{Role: roleSystem, Tools: compatTools(tools, caps.SupportsStrict)}, true
 }
 
 // compatMessageFor converts one message, which may expand into several when it

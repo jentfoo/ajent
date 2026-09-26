@@ -9,6 +9,7 @@ const (
 	antTypeToolRes    = "tool_result"
 	antTypeThinking   = "thinking"
 	antTypeRedacted   = "redacted_thinking"
+	antTypeToolRef    = "tool_reference" // references a defer_loading tool, in a user message
 	antCacheEphemeral = "ephemeral"
 
 	// extended-thinking shape names the Messages API accepts
@@ -60,7 +61,9 @@ type antTool struct {
 	Name                string          `json:"name"`
 	Description         string          `json:"description,omitempty"`
 	InputSchema         json.RawMessage `json:"input_schema,omitempty"`
+	Strict              *bool           `json:"strict,omitempty"` // strict tool schemas
 	EagerInputStreaming *bool           `json:"eager_input_streaming,omitempty"`
+	DeferLoading        *bool           `json:"defer_loading,omitempty"` // load-on-demand tools
 	CacheControl        *antCache       `json:"cache_control,omitempty"`
 }
 
@@ -84,6 +87,7 @@ type antBlock struct {
 	Data         string          `json:"data,omitempty"`      // redacted_thinking payload
 	ID           string          `json:"id,omitempty"`
 	Name         string          `json:"name,omitempty"`
+	ToolName     string          `json:"tool_name,omitempty"` // tool_reference target
 	Input        json.RawMessage `json:"input,omitempty"`
 	ToolUseID    string          `json:"tool_use_id,omitempty"`
 	Content      []antBlock      `json:"content,omitempty"`

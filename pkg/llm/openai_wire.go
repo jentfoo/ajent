@@ -6,13 +6,21 @@ import (
 )
 
 const (
-	respTypeMessage    = "message"
-	respTypeFunction   = "function_call"
-	respTypeFuncOutput = "function_call_output"
-	respTypeReasoning  = "reasoning"
-	respInputText      = "input_text"
-	respOutputText     = "output_text"
-	respInputImage     = "input_image"
+	respTypeMessage        = "message"
+	respTypeFunction       = "function_call"
+	respTypeFuncOutput     = "function_call_output"
+	respTypeReasoning      = "reasoning"
+	respTypeAdditionalTls  = "additional_tools" // injects deferred tools mid-conversation
+	respTypeToolSearchCall = "tool_search_call"
+	// respTypeToolSearchOut is the client-supplied tool list answering a search call.
+	respTypeToolSearchOut = "tool_search_output"
+	// valueClient is the client-executed tool search execution mode.
+	valueClient     = "client"
+	statusCompleted = "completed"
+	respInputText   = "input_text"
+	respOutputText  = "output_text"
+	respInputImage  = "input_image"
+	respTypeCustom  = "custom" // grammar-constrained tool on openai responses
 	// respEncryptedInclude asks for the reasoning payload needed to replay a
 	// turn without the server storing it.
 	respEncryptedInclude = "reasoning.encrypted_content"
@@ -62,10 +70,15 @@ type respItem struct {
 	Role    string        `json:"role,omitempty"`
 	Content []respContent `json:"content,omitempty"`
 
-	ID        string `json:"id,omitempty"`
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	ID          string     `json:"id,omitempty"`
+	CallID      string     `json:"call_id,omitempty"`
+	Name        string     `json:"name,omitempty"`
+	Arguments   string     `json:"arguments,omitempty"`
+	Execution   *respExec  `json:"execution,omitempty"` // tool_search execution mode
+	Status      string     `json:"status,omitempty"`
+	Tools       []respTool `json:"tools,omitempty"` // additional_tools / tool_search_output payloads
+	SearchLimit *int       `json:"limit,omitempty"` // tool_search_call result cap
+	Query       string     `json:"query,omitempty"` // tool_search_call query text
 	// Output is a plain text string or an array of input_text/input_image parts
 	// when a tool result carries images the model accepts.
 	Output any `json:"output,omitempty"`
@@ -73,8 +86,7 @@ type respItem struct {
 	EncryptedContent string          `json:"encrypted_content,omitempty"`
 	Summary          []any           `json:"summary,omitempty"`
 	Phase            string          `json:"phase,omitempty"` // responses message phase
-	Status           string          `json:"status,omitempty"`
-	Raw              json.RawMessage `json:"-"` // verbatim item, for replay
+	Raw              json.RawMessage `json:"-"`               // verbatim item, for replay
 }
 
 // MarshalJSON returns the captured raw item verbatim when present so a reasoning
@@ -109,10 +121,25 @@ type respContent struct {
 
 // respTool is a tool definition. Unlike chat-completions it is flat, not nested under a function key.
 type respTool struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Type         string          `json:"type"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	Parameters   json.RawMessage `json:"parameters,omitempty"` // function tools
+	Format       *respToolFormat `json:"format,omitempty"`     // custom grammar tools
+	Strict       *bool           `json:"strict,omitempty"`     // explicit non-strict under the strict gate
+	DeferLoading *bool           `json:"defer_loading,omitempty"`
+}
+
+// respToolFormat is the constrained-sampling shape of a custom tool.
+type respToolFormat struct {
+	Type       string `json:"type"` // grammar
+	Syntax     string `json:"syntax,omitempty"`
+	Definition string `json:"definition,omitempty"`
+}
+
+// respExec names the deferred-tool search execution mode.
+type respExec struct {
+	Mode string `json:"type"` // client for tool_search
 }
 
 type respEvent struct {

@@ -76,7 +76,9 @@ func (t *toolSet) Get(name string) (agent.Tool, bool) {
 func (t *toolSet) Schemas() []llm.ToolSchema {
 	out := make([]llm.ToolSchema, len(t.tools))
 	for i, x := range t.tools {
-		out[i] = llm.ToolSchema{Name: x.Name(), Description: x.Description(), Parameters: x.Schema().Parameters}
+		schema := x.Schema()
+		out[i] = llm.ToolSchema{Name: x.Name(), Description: x.Description(),
+			Parameters: schema.Parameters, Deferred: schema.Deferred, Grammar: schema.Grammar}
 	}
 	return out
 }

@@ -294,7 +294,12 @@ func TestStagerStagedEstimate(t *testing.T) {
 		s.SetOnChange(func(est int) { mu.Lock(); got = append(got, est); mu.Unlock() })
 
 		s.Run("echo "+strings.Repeat("payload ", 200), false)
-		require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
+		// the report fires after done closes, so a report arriving implies the run ended
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(got) > 0
+		}, 3*time.Second, time.Millisecond)
 
 		mu.Lock()
 		last := got[len(got)-1]
@@ -323,7 +328,11 @@ func TestStagerStagedEstimate(t *testing.T) {
 		s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
 
 		s.Run("echo hi", false)
-		require.Eventually(t, func() bool { return !s.Pending() }, 3*time.Second, time.Millisecond)
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return last > 0 // the run's report must land before flush can clear it
+		}, 3*time.Second, time.Millisecond)
 		mu.Lock()
 		staged := last
 		mu.Unlock()

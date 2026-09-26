@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 // responsesProvider serves the OpenAI Responses API, falling back to the shared
@@ -79,7 +81,8 @@ func buildResponsesBody(req Request) ([]byte, error) {
 		body.Temperature = req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		body.Tools = responsesTools(req.Tools)
+		// deferred tools load via injected items, not the top-level list
+		body.Tools = responsesTools(immediateResponsesTools(req.Tools), caps)
 		if caps.ToolChoice {
 			body.ToolChoice = responsesToolChoice(req.ToolChoice)
 		}
@@ -118,14 +121,16 @@ func buildResponsesBody(req Request) ([]byte, error) {
 func responsesInput(req Request, caps Capabilities) ([]respItem, error) {
 	msgs := req.Messages // already normalized by Prepare
 	out := make([]respItem, 0, len(msgs))
+	schemaByName := bulk.SliceToIndexBy(func(t ToolSchema) string { return t.Name }, req.Tools)
+	// loaded tracks names already materialized by an earlier result this turn,
+	// so a repeated reference does not re-emit the same tool definition.
+	loaded := make(map[string]bool)
 
 	// msgIndex counts every converted message so fallback ids stay unique across
 	// turns; every message counts once.
 	var msgIndex int
 	for _, m := range msgs {
-		// mid-conversation system messages become input items rather than being
-		// dropped; the top-level prompt is handled as instructions
-		items, err := responsesItems(m, caps, msgIndex)
+		items, err := responsesItems(m, caps, schemaByName, loaded, msgIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +144,8 @@ func responsesInput(req Request, caps Capabilities) ([]respItem, error) {
 // carries reasoning, tool calls or tool results alongside text. Items follow
 // block order; a run of text is flushed as one message item whenever a non-text
 // block interrupts it and at the end of the message.
-func responsesItems(m Message, caps Capabilities, msgIndex int) ([]respItem, error) {
+func responsesItems(m Message, caps Capabilities, schemaByName map[string]ToolSchema,
+	loaded map[string]bool, msgIndex int) ([]respItem, error) {
 	var out []respItem
 	var content []respContent
 	var id, phase string
@@ -231,6 +237,9 @@ func responsesItems(m Message, caps Capabilities, msgIndex int) ([]respItem, err
 			callID, _, _ := strings.Cut(v.CallID, "|")
 			out = append(out, respItem{Type: respTypeFuncOutput, CallID: callID,
 				Output: toolResultOutput(caps, v.Content)})
+			if len(v.AddedToolNames) > 0 && (caps.SupportsAdditionalTools || caps.SupportsToolSearch) {
+				out = append(out, responsesAddedTools(v.AddedToolNames, schemaByName, loaded, caps)...)
+			}
 		}
 	}
 	flushMessage()
@@ -260,14 +269,79 @@ func toolResultOutput(caps Capabilities, blocks BlockList) any {
 	return parts
 }
 
-// responsesTools converts tool schemas to the flat Responses form.
-func responsesTools(tools []ToolSchema) []respTool {
-	out := make([]respTool, len(tools))
-	for i, t := range tools {
-		out[i] = respTool{Type: typeFunction, Name: t.Name,
-			Description: t.Description, Parameters: t.Parameters}
+// responsesAddedTools materializes the tools a result references. additional_tools
+// injects them directly; tool_search pairs a client-executed search call with its
+// deferred output so the model can load on demand.
+func responsesAddedTools(names []string, schemaByName map[string]ToolSchema,
+	loaded map[string]bool, caps Capabilities) []respItem {
+	var tools []respTool
+	var added []string
+	for _, name := range names {
+		if loaded[name] {
+			continue // already materialized this turn
+		}
+		t, ok := schemaByName[name]
+		// only load-on-demand tools are injected; an immediate one is already in the top list
+		if !ok || !t.Deferred {
+			continue
+		}
+		loaded[name] = true
+		added = append(added, name)
+		tools = append(tools, responsesLoadedTool(t, caps))
+	}
+	if len(tools) == 0 {
+		return nil
+	}
+	if !caps.SupportsToolSearch {
+		// message-anchored injection is the default when tool search is off
+		return []respItem{{Type: respTypeAdditionalTls, Role: roleDeveloper, Tools: tools}}
+	}
+	callID := "tool_load_" + shortHash(strings.Join(added, ","))
+	search := make([]respItem, 0, 2)
+	search = append(search, respItem{
+		Type: respTypeToolSearchCall, CallID: callID,
+		Execution: &respExec{Mode: valueClient}, Status: statusCompleted,
+		Query: strings.Join(added, " "), SearchLimit: ptrOf(len(tools)),
+	})
+	deferred := slices.Clone(tools)
+	for i := range deferred {
+		// the output lists them as load-on-demand so only a search materializes one
+		deferred[i].DeferLoading = ptrOf(true)
+	}
+	return append(search, respItem{Type: respTypeToolSearchOut, CallID: callID,
+		Execution: &respExec{Mode: valueClient}, Status: statusCompleted, Tools: deferred})
+}
+
+// responsesLoadedTool converts one tool schema to the responses wire shape,
+// shared by the top-level tools list and added-tools payloads.
+func responsesLoadedTool(t ToolSchema, caps Capabilities) respTool {
+	if caps.SupportsGrammarTools && t.Grammar != nil {
+		return respTool{Type: respTypeCustom, Name: t.Name, Description: t.Description,
+			Format: &respToolFormat{Type: "grammar", Syntax: t.Grammar.Syntax,
+				Definition: t.Grammar.Definition}}
+	}
+	out := respTool{Type: typeFunction, Name: t.Name, Description: t.Description,
+		Parameters: t.Parameters}
+	if caps.SupportsStrict {
+		// explicit non-strict mirrors the chat-completions compat shape
+		out.Strict = ptrOf(false)
 	}
 	return out
+}
+
+// responsesTools converts tool schemas to the flat Responses form, reusing the
+// same per-tool shape as added-tools payloads.
+func responsesTools(tools []ToolSchema, caps Capabilities) []respTool {
+	out := make([]respTool, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, responsesLoadedTool(t, caps))
+	}
+	return out
+}
+
+// immediateResponsesTools drops load-on-demand tools from the top-level list.
+func immediateResponsesTools(tools []ToolSchema) []ToolSchema {
+	return bulk.SliceFilter(func(t ToolSchema) bool { return !t.Deferred }, tools)
 }
 
 // responsesToolChoice renders the tool choice, nil when the default applies.

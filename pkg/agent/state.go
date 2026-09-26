@@ -91,4 +91,8 @@ type ToolResult struct {
 	// EndTurn stops the turn once this call's results are appended, with no
 	// further model call. Control tools set it to hand a phase over.
 	EndTurn bool
+	// AddedToolNames are the tools this result loads into the conversation from
+	// here on. Deferred-tool providers materialize their schemas at this point;
+	// others ignore it.
+	AddedToolNames []string
 }

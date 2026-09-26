@@ -733,6 +733,141 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, true, decode(t, body)["cache_prompt"])
 	})
+
+	// kimiDiscovery frames a turn whose search result loads the named tools.
+	kimiDiscovery := func(added ...string) []Message {
+		return []Message{
+			Text(RoleUser, "find tools"),
+			{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "c1", Name: "search", Input: json.RawMessage(`{}`)},
+			}},
+			{Role: RoleUser, Content: BlockList{
+				ToolResultBlock{CallID: "c1", Content: BlockList{TextBlock{Text: "found"}},
+					AddedToolNames: added},
+			}},
+			Text(RoleUser, "use it"),
+		}
+	}
+	kimiTools := func(names ...string) []ToolSchema {
+		out := make([]ToolSchema, len(names))
+		for i, n := range names {
+			out[i] = ToolSchema{Name: n, Description: "the " + n + " tool",
+				Parameters: json.RawMessage(`{"type":"object"}`)}
+		}
+		return out
+	}
+	funcName := func(t *testing.T, tool any) string {
+		t.Helper()
+		fn, ok := tool.(map[string]any)["function"].(map[string]any)
+		require.True(t, ok)
+		n, ok := fn["name"].(string)
+		require.True(t, ok)
+		return n
+	}
+
+	t.Run("kimi_load_point_reoffers_loaded_tool", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.DeferredTools = "kimi"
+		req.Tools = kimiTools("read", "deep")
+		req.Messages = kimiDiscovery("deep")
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+
+		m := decode(t, body)
+		topLevel := m["tools"].([]any)
+		require.Len(t, topLevel, 1) // the loaded tool leaves the top level
+		assert.Equal(t, "read", funcName(t, topLevel[0]))
+
+		var sys map[string]any
+		for _, raw := range m["messages"].([]any) {
+			mm := raw.(map[string]any)
+			if mm["role"] == "system" && mm["tools"] != nil {
+				sys = mm
+			}
+		}
+		require.NotNil(t, sys, "no system tool message after the load point")
+		assert.NotContains(t, sys, "content") // a bare system message with tools
+		loaded := sys["tools"].([]any)
+		require.Len(t, loaded, 1)
+		assert.Equal(t, "deep", funcName(t, loaded[0]))
+	})
+
+	t.Run("kimi_mode_off_keeps_all_tools", func(t *testing.T) {
+		req := baseReq() // DeferredTools unset
+		req.Tools = kimiTools("read", "deep")
+		req.Messages = kimiDiscovery("deep")
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+
+		m := decode(t, body)
+		assert.Len(t, m["tools"].([]any), 2)
+		for _, raw := range m["messages"].([]any) {
+			assert.NotContains(t, raw.(map[string]any), "tools")
+		}
+	})
+
+	t.Run("kimi_batch_shares_one_load_point", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.DeferredTools = "kimi"
+		req.Tools = kimiTools("read", "deep", "deeper")
+		req.Messages = []Message{
+			Text(RoleUser, "find tools"),
+			{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "c1", Name: "search", Input: json.RawMessage(`{}`)},
+				ToolCallBlock{ID: "c2", Name: "search", Input: json.RawMessage(`{}`)},
+			}},
+			{Role: RoleUser, Content: BlockList{
+				ToolResultBlock{CallID: "c1", Content: BlockList{TextBlock{Text: "a"}},
+					AddedToolNames: []string{"deeper"}},
+				ToolResultBlock{CallID: "c2", Content: BlockList{TextBlock{Text: "b"}},
+					AddedToolNames: []string{"deep", "deep"}},
+			}},
+		}
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+
+		msgs := decode(t, body)["messages"].([]any)
+		var names []string
+		for _, raw := range msgs {
+			mm := raw.(map[string]any)
+			if tools, ok := mm["tools"].([]any); ok {
+				for _, tool := range tools {
+					names = append(names, funcName(t, tool))
+				}
+			}
+		}
+		assert.Equal(t, []string{"deeper", "deep"}, names) // one message, first-seen order
+	})
+
+	t.Run("kimi_unknown_loaded_name_skipped", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.DeferredTools = "kimi"
+		req.Tools = kimiTools("read") // "ghost" was never offered
+		req.Messages = kimiDiscovery("ghost")
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+
+		m := decode(t, body)
+		require.Len(t, m["tools"].([]any), 1)
+		for _, raw := range m["messages"].([]any) {
+			assert.NotContains(t, raw.(map[string]any), "tools")
+		}
+	})
+
+	t.Run("kimi_all_loaded_keeps_empty_tools_param", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.DeferredTools = "kimi"
+		req.Tools = kimiTools("deep")
+		req.Messages = kimiDiscovery("deep")
+
+		body, err := buildCompatBody(req, compatProfile{})
+		require.NoError(t, err)
+		assert.Contains(t, string(body), `"tools":[]`)
+	})
 }
 
 func TestCompatUsageToUsage(t *testing.T) {

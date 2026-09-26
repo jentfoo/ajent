@@ -646,6 +646,162 @@ func TestBuildResponsesBody(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("grammar_tool_when_capable", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.SupportsGrammarTools = true
+		schema, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
+			`"properties":{"input":{"type":"string"}},"required":["input"]}`))
+		require.True(t, ok)
+		req.Tools = []ToolSchema{{
+			Name: "apply", Parameters: schema,
+			Grammar: &ToolGrammar{Syntax: "regex", Definition: `start`},
+		}}
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		tools := decode(t, body)["tools"].([]any)
+		require.Len(t, tools, 1)
+		tool := tools[0].(map[string]any)
+		assert.Equal(t, "custom", tool["type"])
+		format := tool["format"].(map[string]any)
+		assert.Equal(t, "grammar", format["type"])
+		assert.Equal(t, "regex", format["syntax"])
+	})
+
+	t.Run("grammar_tool_ignored_without_capability", func(t *testing.T) {
+		req := baseReq() // SupportsGrammarTools defaults off
+		schema, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
+			`"properties":{"input":{"type":"string"}},"required":["input"]}`))
+		require.True(t, ok)
+		req.Tools = []ToolSchema{{
+			Name: "apply", Parameters: schema,
+			Grammar: &ToolGrammar{Syntax: "regex", Definition: `start`},
+		}}
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		tools := decode(t, body)["tools"].([]any)
+		tool := tools[0].(map[string]any)
+		assert.Equal(t, "function", tool["type"]) // falls back to a plain function
+	})
+
+	t.Run("strict_false_when_capable", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.SupportsStrict = true
+		req.Tools = []ToolSchema{{Name: "read1"}}
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		tools := decode(t, body)["tools"].([]any)
+		require.Len(t, tools, 1)
+		assert.Equal(t, false, tools[0].(map[string]any)["strict"])
+	})
+
+	t.Run("strict_absent_by_default", func(t *testing.T) {
+		req := baseReq() // responses flavor defaults leave the strict gate off
+		req.Tools = []ToolSchema{{Name: "read1"}}
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		tools := decode(t, body)["tools"].([]any)
+		assert.NotContains(t, tools[0].(map[string]any), "strict")
+	})
+
+	t.Run("added_tools_as_additional_items", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.SupportsAdditionalTools = true
+		schema, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
+			`"properties":{}}`))
+		require.True(t, ok)
+		req.Tools = []ToolSchema{{"read2", "reads a file", schema, true, nil}}
+		req.Messages = append(req.Messages, Message{Role: RoleUser, Content: BlockList{
+			ToolResultBlock{CallID: "call_1|fc_1", ToolName: "read2",
+				Content: BlockList{TextBlock{Text: "ok"}}, AddedToolNames: []string{"read2"}},
+		}})
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		// deferred tools stay out of the top-level list; only the injected item carries them
+		_, hasTools := decode(t, body)["tools"]
+		assert.False(t, hasTools)
+
+		input := decode(t, body)["input"].([]any)
+		last := input[len(input)-1].(map[string]any)
+		assert.Equal(t, "additional_tools", last["type"])
+		addedTools := last["tools"].([]any)
+		require.Len(t, addedTools, 1)
+		assert.Equal(t, "read2", addedTools[0].(map[string]any)["name"])
+	})
+
+	t.Run("immediate_tool_not_reinjected", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.SupportsAdditionalTools = true
+		schema, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
+			`"properties":{}}`))
+		require.True(t, ok)
+		req.Tools = []ToolSchema{{"read2", "reads a file", schema, false, nil}}
+		req.Messages = append(req.Messages, Message{Role: RoleUser, Content: BlockList{
+			ToolResultBlock{CallID: "call_1|fc_1", ToolName: "read2",
+				Content: BlockList{TextBlock{Text: "ok"}}, AddedToolNames: []string{"read2"}},
+		}})
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		// an immediate tool is already top-level and must not be injected again
+		tools := decode(t, body)["tools"].([]any)
+		assert.Equal(t, "read2", tools[0].(map[string]any)["name"])
+		input := decode(t, body)["input"].([]any)
+		assert.Equal(t, "function_call_output", input[len(input)-1].(map[string]any)["type"])
+	})
+
+	t.Run("added_tools_use_client_search_when_capable", func(t *testing.T) {
+		req := baseReq()
+		req.Model.Caps.SupportsToolSearch = true
+		schema, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
+			`"properties":{}}`))
+		require.True(t, ok)
+		req.Tools = []ToolSchema{{"find2", "finds a file", schema, true, nil}}
+		req.Messages = append(req.Messages, Message{Role: RoleUser, Content: BlockList{
+			ToolResultBlock{CallID: "call_1|fc_1", ToolName: "find2",
+				Content: BlockList{TextBlock{Text: "ok"}}, AddedToolNames: []string{"find2"}},
+		}})
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		input := decode(t, body)["input"].([]any)
+		callItem := input[len(input)-2].(map[string]any)
+		outItem := input[len(input)-1].(map[string]any)
+		assert.Equal(t, "tool_search_call", callItem["type"])
+		assert.Equal(t, "client", callItem["execution"].(map[string]any)["type"])
+		assert.Equal(t, "tool_search_output", outItem["type"])
+	})
+
+	t.Run("added_tools_ignored_without_capability", func(t *testing.T) {
+		req := baseReq() // both deferred-tool caps default off
+		schema, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
+			`"properties":{}}`))
+		require.True(t, ok)
+		req.Tools = []ToolSchema{{"read3", "reads a file", schema, false, nil}}
+		req.Messages = append(req.Messages, Message{Role: RoleUser, Content: BlockList{
+			ToolResultBlock{CallID: "call_1|fc_1", ToolName: "read3",
+				Content: BlockList{TextBlock{Text: "ok"}}, AddedToolNames: []string{"read3"}},
+		}})
+
+		body, err := buildResponsesBody(req)
+		require.NoError(t, err)
+
+		// only the function_call_output is emitted; no tool payload follows
+		input := decode(t, body)["input"].([]any)
+		assert.Equal(t, "function_call_output", input[len(input)-1].(map[string]any)["type"])
+	})
 }
 
 func TestResponsesReplayRoundTrip(t *testing.T) {

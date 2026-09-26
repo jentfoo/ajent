@@ -89,6 +89,8 @@ type stubTool struct {
 	err      error
 	parallel bool
 	block    chan struct{}
+	deferred bool     // schema advertises defer_loading
+	added    []string // AddedToolNames its result loads
 
 	mu    sync.Mutex
 	calls []ToolCall
@@ -111,7 +113,9 @@ func (t *stubTool) Label(ToolCall) string {
 }
 func (t *stubTool) Description() string { return "test tool" }
 
-func (t *stubTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: t.name} }
+func (t *stubTool) Schema() llm.ToolSchema {
+	return llm.ToolSchema{Name: t.name, Deferred: t.deferred}
+}
 
 func (t *stubTool) Mode() ExecutionMode {
 	if t.parallel {
@@ -137,7 +141,7 @@ func (t *stubTool) Execute(ctx context.Context, call ToolCall, _ Output) (ToolRe
 	if err != nil {
 		return ToolResult{}, err
 	}
-	return ToolResult{Content: llm.BlockList{llm.TextBlock{Text: result}}}, nil
+	return ToolResult{Content: llm.BlockList{llm.TextBlock{Text: result}}, AddedToolNames: t.added}, nil
 }
 
 // mapSet is a simple in-memory tool set.
@@ -227,6 +231,37 @@ func TestLoopOneToolCall(t *testing.T) {
 	assert.Equal(t, "c1", tb.CallID)
 	assert.Equal(t, "bash", tb.ToolName) // set at the source for result-name providers
 	assert.False(t, tb.IsError)
+}
+
+func TestLoopAddedToolNames(t *testing.T) {
+	t.Parallel()
+
+	search := &stubTool{name: "search", result: "found", added: []string{"deep"}}
+	deep := &stubTool{name: "deep", deferred: true}
+	set := &mapSet{tools: map[string]Tool{"search": search, "deep": deep}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: toolCallEvents("c1", "search")},
+		{Events: textOnly("done")},
+	}}
+	catch := &resultCatcher{}
+	a := newTestAgent(nil, p, catch)
+	a.opts.Tools = set
+
+	err := a.Prompt(t.Context(), Input{Text: "load it"})
+	require.NoError(t, err)
+
+	// the appended result carries the load point
+	resultMsg := a.state.Messages[2]
+	tr, ok := resultMsg.Content[0].(llm.ToolResultBlock)
+	require.True(t, ok)
+	assert.Equal(t, []string{"deep"}, tr.AddedToolNames)
+
+	// the follow-up request offers deep with its deferred flag intact
+	reqs := p.Requests()
+	require.Len(t, reqs, 2)
+	idx := slices.IndexFunc(reqs[1].Tools, func(s llm.ToolSchema) bool { return s.Name == "deep" })
+	require.GreaterOrEqual(t, idx, 0)
+	assert.True(t, reqs[1].Tools[idx].Deferred)
 }
 
 func TestLoopParallelCalls(t *testing.T) {

@@ -20,6 +20,8 @@ const (
 	// betaFineGrainedTools streams tool input arguments in smaller deltas when
 	// eager streaming is off.
 	betaFineGrainedTools = "fine-grained-tool-streaming-2025-05-14"
+	// betaTools2025 enables message tool references for defer_loading tools.
+	betaTools2025 = "tools-2025-05-19"
 	// maxCacheBreakpoints is the API limit on cache_control markers.
 	maxCacheBreakpoints = 4
 	// longCacheTTL is the extended retention tier, for models that offer it.
@@ -121,7 +123,8 @@ func (p *anthropicProvider) CountTokens(ctx context.Context, req Request) (int, 
 func buildAnthropicBody(req Request) ([]byte, error) {
 	req = Prepare(req)
 	caps := req.Model.Caps
-	msgs, err := anthropicMessages(req, caps)
+	deferred := anthropicDeferredNames(req.Tools, caps)
+	msgs, err := anthropicMessages(req, caps, deferred)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +157,7 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 		body.System = []antBlock{{Type: antTypeText, Text: blocksText(req.System)}}
 	}
 	if len(req.Tools) > 0 {
-		body.Tools = anthropicTools(req.Tools, caps.EagerToolInputStreaming)
+		body.Tools = anthropicTools(req.Tools, caps, deferred)
 		body.ToolChoice = anthropicToolChoice(req.ToolChoice)
 	}
 
@@ -267,15 +270,18 @@ func levelBudget(l Level, maxOutput int) int {
 
 // anthropicMessages converts the content model, collapsing to the user and
 // assistant roles the API accepts.
-func anthropicMessages(req Request, caps Capabilities) ([]antMessage, error) {
+func anthropicMessages(req Request, caps Capabilities, deferred map[string]struct{}) ([]antMessage, error) {
 	msgs := req.Messages // already normalized by Prepare
 	out := make([]antMessage, 0, len(msgs))
+	// loaded dedups reference materialization across the whole request so a name
+	// listed by two results is not offered twice.
+	loaded := make(map[string]bool)
 
 	for _, m := range msgs {
 		if m.Role == RoleSystem {
 			continue // system is a top level field, never a message
 		}
-		blocks, err := anthropicBlocks(m.Content, caps)
+		blocks, err := anthropicBlocks(m.Content, caps, deferred, loaded)
 		if err != nil {
 			return nil, err
 		} else if len(blocks) == 0 {
@@ -296,9 +302,14 @@ func anthropicMessages(req Request, caps Capabilities) ([]antMessage, error) {
 	return out, nil
 }
 
-// anthropicBlocks converts content blocks to their wire form.
-func anthropicBlocks(blocks BlockList, caps Capabilities) ([]antBlock, error) {
+// anthropicBlocks converts content blocks to their wire form. deferred names the
+// tools offered load-on-demand and loaded tracks which have already been referenced
+// this request; both are unused for providers without tool references.
+func anthropicBlocks(blocks BlockList, caps Capabilities, deferred map[string]struct{},
+	loaded map[string]bool) ([]antBlock, error) {
 	out := make([]antBlock, 0, len(blocks))
+	// sibling content of reference-bearing results follows every tool_result block
+	var displaced []antBlock
 	for _, b := range blocks {
 		switch v := b.(type) {
 		case TextBlock:
@@ -327,13 +338,29 @@ func anthropicBlocks(blocks BlockList, caps Capabilities) ([]antBlock, error) {
 			}
 			out = append(out, antBlock{Type: antTypeToolUse, ID: v.ID, Name: v.Name, Input: input})
 		case ToolResultBlock:
-			nested, err := anthropicBlocks(v.Content, caps)
+			nested, err := anthropicBlocks(v.Content, caps, deferred, loaded)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, antBlock{
+			result := antBlock{
 				Type: antTypeToolRes, ToolUseID: v.CallID, Content: nested, IsError: v.IsError,
-			})
+			}
+			if len(deferred) > 0 && len(v.AddedToolNames) > 0 {
+				// only tools offered defer_loading are referenced, once each request
+				var refs []antBlock
+				for _, name := range v.AddedToolNames {
+					if _, ok := deferred[name]; !ok || loaded[name] {
+						continue // not deferred this request, or already materialized
+					}
+					loaded[name] = true
+					refs = append(refs, antBlock{Type: antTypeToolRef, ToolName: name})
+				}
+				if len(refs) > 0 {
+					result.Content = refs
+					displaced = append(displaced, nested...)
+				}
+			}
+			out = append(out, result)
 		case ImageBlock:
 			if !caps.Images {
 				return nil, errors.New("llm: model does not accept image input")
@@ -343,6 +370,9 @@ func anthropicBlocks(blocks BlockList, caps Capabilities) ([]antBlock, error) {
 				Data: base64.StdEncoding.EncodeToString(v.Data),
 			}})
 		}
+	}
+	if len(displaced) > 0 {
+		out = append(out, displaced...)
 	}
 	return out, nil
 }
@@ -354,6 +384,10 @@ func anthropicHeaders(req Request) map[string]string {
 	var values []string
 	if len(req.Tools) > 0 && !caps.EagerToolInputStreaming {
 		values = append(values, betaFineGrainedTools)
+	}
+	// message tool references are a beta feature until the API stabilizes them
+	if caps.ToolReferences {
+		values = append(values, betaTools2025)
 	}
 	// interleaving is built into the adaptive shape, so it is only requested for
 	// budget models that actually reason
@@ -419,12 +453,53 @@ func withSessionHeaders(base map[string]string, req Request) map[string]string {
 	return out
 }
 
-// anthropicTools converts tool schemas.
-func anthropicTools(tools []ToolSchema, eagerStreaming bool) []antTool {
+// anthropicDeferredNames returns the tool names offered load-on-demand this request.
+// Deferral needs at least one immediate (non-deferred) tool to reference later, so when
+// every offered tool is deferred they are all promoted and none is named here.
+func anthropicDeferredNames(tools []ToolSchema, caps Capabilities) map[string]struct{} {
+	if !caps.ToolReferences || len(tools) == 0 {
+		return nil
+	}
+	hasImmediate := false
+	for _, t := range tools {
+		if !t.Deferred {
+			hasImmediate = true
+			break
+		}
+	}
+	if !hasImmediate {
+		return map[string]struct{}{} // all promoted, so nothing is deferred
+	}
+	set := make(map[string]struct{}, 4)
+	for _, t := range tools {
+		if t.Deferred {
+			set[t.Name] = struct{}{}
+		}
+	}
+	return set
+}
+
+// anthropicTools converts tool schemas. Strict tools are rewritten to the strict
+// subset when supported; deferred tools offer defer_loading for later references.
+func anthropicTools(tools []ToolSchema, caps Capabilities, deferred map[string]struct{}) []antTool {
 	out := make([]antTool, len(tools))
 	for i, t := range tools {
-		out[i] = antTool{Name: t.Name, Description: t.Description, InputSchema: t.Parameters}
-		if eagerStreaming {
+		schema := t.Parameters
+		var strict bool
+		if caps.SupportsStrictTools && schema != nil {
+			// strict is an all-or-nothing opt in: one unserializable tool drops it
+			if rewritten, ok := makeStrictAnthropicSchema(schema); ok {
+				schema, strict = rewritten, true
+			}
+		}
+		out[i] = antTool{Name: t.Name, Description: t.Description, InputSchema: schema}
+		if strict {
+			out[i].Strict = ptrOf(true)
+		}
+		if _, ok := deferred[t.Name]; ok {
+			out[i].DeferLoading = ptrOf(true)
+		}
+		if caps.EagerToolInputStreaming {
 			out[i].EagerInputStreaming = ptrOf(true)
 		}
 	}

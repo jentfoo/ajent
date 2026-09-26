@@ -28,6 +28,21 @@ type ToolSchema struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"` // JSON Schema object
+	// Deferred marks a load-on-demand tool, declared by the tool's own Schema:
+	// its definition is offered with defer_loading and it only takes effect once
+	// a result's AddedToolNames loads it. Providers without deferred-tool
+	// support ignore the flag.
+	Deferred bool `json:"-"`
+	// Grammar requests grammar-constrained output on openai responses, declared
+	// by the tool's own Schema; empty when unused.
+	Grammar *ToolGrammar `json:"-"`
+}
+
+// ToolGrammar is a custom grammar for one tool's constrained sampling. Only the
+// openai responses dialect emits it, as a type "custom" tool format.
+type ToolGrammar struct {
+	Syntax     string // lark or regex
+	Definition string
 }
 
 // ToolChoice constrains which tool the model may call.

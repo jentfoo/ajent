@@ -531,10 +531,13 @@ func (r *Registry) Schemas() []llm.ToolSchema {
 		if rt.state != StateEnabled {
 			continue
 		}
+		schema := rt.tool.Schema()
 		out = append(out, llm.ToolSchema{
 			Name:        rt.tool.Name(),
 			Description: rt.tool.Description(),
-			Parameters:  rt.tool.Schema().Parameters,
+			Parameters:  schema.Parameters,
+			Deferred:    schema.Deferred,
+			Grammar:     schema.Grammar,
 		})
 	}
 	r.schema = out

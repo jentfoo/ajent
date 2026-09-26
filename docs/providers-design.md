@@ -104,6 +104,15 @@ require the reasoning-as-text shape, a tool-result name, an assistant reply
 between result turns and the next user message, or explicit non-strict tools,
 all driven by their capability gates.
 
+Tool definitions gate the same way: `ToolSchema.Deferred` and `.Grammar` and a
+result's `AddedToolNames` are builder inputs, never agent-loop state, and every
+dialect ignores them without its capability flag. The producer surface is the
+tool's own `Schema()` (registry and sub-agent toolsets pass `Deferred`/`Grammar`
+through) and `ToolResult.AddedToolNames`, which the loop copies onto the
+transcript block; no built-in tool declares either today. Kimi mode adds a
+chat-completions serialization: tools a result loaded leave the top level list
+and a bare system message re-offers their schemas at each load point.
+
 **Traps**: adapters never call the retention helpers directly; they go through
 `Prepare`, which must stay idempotent (the Responses fallback builds the same
 body twice in a session). A provider that genuinely never sends a
@@ -496,13 +505,65 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
 
 ## Provider notes
 
-| Provider | Worth knowing |
-|---|---|
-| anthropic | System is a top-level field, not a message. Tool results ride on **user** messages, never a tool role. Consecutive same-role messages must be merged. Temperature must be dropped when thinking is enabled, or the request 400s. Usage is split across events: input and cache numbers arrive at `message_start`, final totals with `output_tokens_details.thinking_tokens` only on the terminal `message_delta` (see invariant 12). `count_tokens` is exact but billed, so it is a method and never called automatically. |
-| openai | Responses API primary. Tools are flat, not nested under a `function` key. `max_output_tokens`, not `max_tokens`. Reasoning items replay by id, and statelessly only with `encrypted_content`, which requires asking for it via `include`. Falls back to chat-completions per model, decided from resolved capabilities rather than sniffed. A terminal `incomplete` stop is output-token truncation (`StopMaxTokens`) only when `incomplete_details.reason` says so; any other reason maps to `StopIncomplete`, so a content-filtered turn is not retried as though it ran out of room, and an absent reason keeps the safe truncation default. |
-| openrouter | Carries reasoning in a `reasoning` object rather than `reasoning_effort`. `reasoning_details` must be echoed back verbatim or a model routed to anthropic loses its signatures. Pricing fields in the discovery response are dropped. |
-| llama.cpp | Older builds reject an unknown `stream_options`, so stream usage starts off and discovery turns it on. `/tokenize` is exact, local and cheap, so it is the one tokenizer used freely. |
-| lm-studio | Header and idle bounds default to disabled for JIT loads. Tool support varies per loaded model, so it is a capability. |
+### anthropic
+
+- System is a top-level field, not a message.
+- Tool results ride on **user** messages, never a tool role; consecutive
+  same-role messages must be merged.
+- Temperature must be dropped when thinking is enabled, or the request 400s.
+- Usage is split across events: input and cache numbers arrive at
+  `message_start`, final totals with `output_tokens_details.thinking_tokens`
+  only on the terminal `message_delta` (see invariant 12).
+- `count_tokens` is exact but billed, so it is a method and never called
+  automatically.
+- Strict tools (`supportsStrictTools`) opt in per tool after rewriting the
+  schema to the strict subset; a tool that cannot be rewritten is sent
+  non-strict rather than failing the whole request.
+- Deferred tools ride a beta header: `defer_loading` definitions, and
+  `tool_reference` blocks replacing the result content they load, which cannot
+  share a block with it. Displaced content follows every tool_result; each name is
+  referenced at most once per request. When every offered tool would be deferred
+  there is nothing to reference later, so all are promoted to immediate.
+
+### openai
+
+- Responses API primary; tools are flat, not nested under a `function` key.
+  `max_output_tokens`, not `max_tokens`.
+- Reasoning items replay by id, and statelessly only with `encrypted_content`,
+  which requires asking for it via `include`.
+- Falls back to chat-completions per model, decided from resolved capabilities
+  rather than sniffed.
+- A terminal `incomplete` stop is output-token truncation (`StopMaxTokens`) only
+  when `incomplete_details.reason` says so; any other reason maps to
+  `StopIncomplete`, so a content-filtered turn is not retried as though it ran
+  out of room, and an absent reason keeps the safe truncation default.
+- Function tools carry explicit `strict: false` under the strict gate, and a
+  grammar turns one into a `custom` tool.
+- A result's `AddedToolNames` materialize right after its output: an
+  `additional_tools` item, or a client-executed
+  `tool_search_call`/`tool_search_output` pair with `defer_loading` tools when
+  search is capable; dedup is per request build, so a name loaded earlier in the
+  same request is not re-emitted. Load-on-demand tools stay out of the top-level
+  `tools` list (only immediate ones are offered there), and only deferred names are
+  injected, so a tool never appears twice.
+
+### openrouter
+
+- Carries reasoning in a `reasoning` object rather than `reasoning_effort`.
+- `reasoning_details` must be echoed back verbatim or a model routed to
+  anthropic loses its signatures.
+- Pricing fields in the discovery response are dropped.
+
+### llama.cpp
+
+- Older builds reject an unknown `stream_options`, so stream usage starts off
+  and discovery turns it on.
+- `/tokenize` is exact, local and cheap, so it is the one tokenizer used freely.
+
+### lm-studio
+
+- Header and idle bounds default to disabled for JIT loads.
+- Tool support varies per loaded model, so it is a capability.
 
 ## Invariants
 
@@ -624,8 +685,11 @@ payloads line up would leak one test's needs into unrelated tests.
   models that require it. `max_tokens` is inflated by the thinking budget first,
   capped at the model cap, so the reply keeps its full window. `display` is
   deliberately never sent.
-- **`deferredToolsMode` is accepted and not yet honoured.** It resolves onto
-  `Caps.DeferredTools` and nothing reads it; its only value is `"kimi"`.
+- **Do not reuse the `tools` key for kimi load points.** The re-offered schemas
+  ride a bare system message's own `tools` field; a chat-completions request
+  keeps `tools` as the immediate (never-loaded) set, and an empty list stays
+  present when everything was loaded, because some endpoints require the key
+  once tool calls exist in history.
 - **Do not overwrite an anthropic stream's accumulated usage with a single wire report.**
   Only `Usage.Merge` is correct there (invariant 12), and only there: the other
   dialects' input total is derived, so merging can inflate it.

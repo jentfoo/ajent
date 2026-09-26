@@ -634,7 +634,7 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 	done(res)
 	return llm.ToolResultBlock{
 		CallID: call.ID, ToolName: call.Name, Content: res.Content, IsError: res.IsError,
-		Display: res.Display, Details: res.Details,
+		Display: res.Display, Details: res.Details, AddedToolNames: res.AddedToolNames,
 	}, res.EndTurn && !res.IsError
 }
 

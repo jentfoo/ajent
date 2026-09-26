@@ -20,7 +20,7 @@ type compatRequest struct {
 	MaxTokens         *int               `json:"max_tokens,omitempty"`
 	MaxCompletion     *int               `json:"max_completion_tokens,omitempty"`
 	Temperature       *float64           `json:"temperature,omitempty"`
-	Tools             []compatTool       `json:"tools,omitempty"`
+	Tools             *[]compatTool      `json:"tools,omitempty"` // empty list is meaningful after kimi loads
 	ToolChoice        any                `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool              `json:"parallel_tool_calls,omitempty"`
 	ReasoningEffort   *string            `json:"reasoning_effort,omitempty"`
@@ -102,6 +102,9 @@ type compatMessage struct {
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 	Name             string           `json:"name,omitempty"`
 	ReasoningDetails json.RawMessage  `json:"reasoning_details,omitempty"`
+	// Tools re-offers deferred tools on a bare system message at a kimi load
+	// point; Kimi accepts the message without the standard content field.
+	Tools []compatTool `json:"tools,omitempty"`
 
 	// reasoning replay rides a provider-specific key (reasoning_content etc.),
 	// so it is injected in MarshalJSON rather than carried by a fixed tag.
