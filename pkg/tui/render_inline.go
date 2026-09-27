@@ -63,6 +63,7 @@ type baseline struct {
 	frames    int      // monotonic paint count; forces a full draw via diffFullEvery
 	prev      []string // emitted rows (post-caret) of the last written frame
 	prevRaw   []string // the live rows those emitted rows were computed from
+	prevCaret int      // index into prev that carried the painted caret last frame
 	prevWidth int      // width that frame was drawn at
 	forceFull bool     // commit/suspend/clearHistory: the on-screen block is gone; reanchor: the pad needs the full path
 }
@@ -176,6 +177,7 @@ func (r *inlineRenderer) record(emitted []string, diff bool) {
 	b := &r.base
 	b.drawn = true
 	b.frames++
+	b.prevCaret = r.caretRow // a later caret move re-emits the old row and erases its painted cursor
 	b.prev = append(b.prev[:0], emitted...)
 	b.prevRaw = append(b.prevRaw[:0], r.live...)
 	if diff {
@@ -209,7 +211,9 @@ func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 		if i > 0 {
 			b.WriteString("\r\n")
 		}
-		if diff && i != r.caretRow && i < len(prevRaw) && prevRaw[i] == row {
+		// Skip a row only when it held no caret this frame or last: a previously
+		// painted caret must be re-emitted without its reverse-video cell to erase it.
+		if diff && i != r.caretRow && i != r.base.prevCaret && i < len(prevRaw) && prevRaw[i] == row {
 			emitted[i] = prev[i] // unchanged input at this width: nothing to recompute
 			continue
 		}

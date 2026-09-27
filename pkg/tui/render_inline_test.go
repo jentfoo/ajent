@@ -308,6 +308,26 @@ func TestInlineDiff(t *testing.T) {
 	})
 }
 
+// TestInlineCaretMoveErasesOldPaint pins the regression where navigating a caret
+// between rows with unchanged content left a stale reverse-video cursor on the row
+// it left: the diff skipped re-emitting that row because its raw text matched, even
+// though it carried a painted caret in the previous frame.
+func TestInlineCaretMoveErasesOldPaint(t *testing.T) {
+	t.Parallel()
+
+	var buf strings.Builder
+	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+	rows := []string{"opt one", "opt two", "ctx"}
+	r.setLive(rows, 0, 4) // caret paints row 0
+	buf.Reset()
+
+	r.setLive(rows, 1, 2) // caret moves to row 1; row 0 must be re-emitted without its caret
+
+	// the old row is rewritten (so its reversed cell clears)
+	assert.Contains(t, buf.String(), "opt one")
+	assert.NotContains(t, buf.String(), "\x1b[7mo") // no stale reverse-video on 'o' of opt one
+}
+
 func TestInlineAbortsFrameOnResizeSignal(t *testing.T) {
 	t.Parallel()
 
