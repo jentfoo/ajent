@@ -205,6 +205,8 @@ type cancelPrompter struct {
 
 func newCancelPrompter() *cancelPrompter { return &cancelPrompter{} }
 
+func (p *cancelPrompter) Hold(context.Context) {}
+
 func (p *cancelPrompter) Open(string, string, []string) (permit.Dialog, error) {
 	d := &cancelFakeDialog{ch: make(chan int, 1)}
 	p.mu.Lock()

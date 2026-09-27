@@ -349,8 +349,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 		showPermissionIndicator(ui, barrier)
 		// the prompter and noter adapt tui and agent onto permit's narrow interfaces,
-		// note injection steers the running turn without stopping it.
-		barrier.SetPrompter(promptAdapter{ui})
+		// note injection steers the running turn without stopping it. Hold runs the
+		// typing gate's dialog hold, so an approval dialog never steals a draft's focus.
+		barrier.SetPrompter(promptAdapter{ui: ui, hold: gate.holdDialog})
 		barrier.SetNoter(func(note string) {
 			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
 		})

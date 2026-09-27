@@ -10,7 +10,17 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-type promptAdapter struct{ ui *tui.UI }
+type promptAdapter struct {
+	ui   *tui.UI
+	hold func(context.Context) // typing wait behind Hold, nil returns at once
+}
+
+// Hold defers dialogs while the user is typing a message.
+func (a promptAdapter) Hold(ctx context.Context) {
+	if a.hold != nil {
+		a.hold(ctx)
+	}
+}
 
 func (a promptAdapter) Open(prompt, subject string, options []string) (permit.Dialog, error) {
 	if a.ui.Mode() == tui.ModePlain { // nobody to ask in headless/piped mode

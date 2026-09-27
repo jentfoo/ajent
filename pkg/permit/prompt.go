@@ -25,6 +25,10 @@ const (
 // Prompter opens approval dialogs and asks for free-text reasons. The host
 // supplies a tui-backed implementation, nil meaning headless (no UI available).
 type Prompter interface {
+	// Hold waits out in-progress typing so the next Open never steals focus
+	// from a draft, returning early once ctx ends. Hosts without a typing
+	// signal return at once.
+	Hold(ctx context.Context)
 	Open(prompt, subject string, options []string) (Dialog, error)
 	Reason(ctx context.Context, label string) (string, bool)
 }

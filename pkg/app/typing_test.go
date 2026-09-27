@@ -281,3 +281,95 @@ func TestTypingGateSubmitted(t *testing.T) {
 	g.taken()
 	assert.False(t, g.inFlight)
 }
+
+// holdDialogIn runs the dialog hold in a goroutine and reports when it returns.
+func (g *typingGate) holdDialogIn(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	go func() { g.holdDialog(ctx); close(done) }()
+	return done
+}
+
+func TestTypingGateHoldDialog(t *testing.T) {
+	t.Parallel()
+
+	t.Run("idle_returns_at_once", func(t *testing.T) {
+		g := newTypingGate()      // idle window is an hour, nothing typed
+		g.holdDialog(t.Context()) // no draft, no wait
+	})
+
+	t.Run("draft_holds_then_releases", func(t *testing.T) {
+		g := newTypingGate()
+		var pending atomic.Int32
+		g.pending = func() int { return int(pending.Load()) }
+
+		g.edit("draft")
+		done := g.holdDialogIn(t.Context())
+		select {
+		case <-done:
+			t.Fatal("a visible draft must hold the dialog")
+		case <-time.After(50 * time.Millisecond):
+		}
+		pending.Store(1) // a queued prompt means typing is over
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a queued prompt must release the held dialog")
+		}
+	})
+
+	t.Run("clear_releases", func(t *testing.T) {
+		g := newTypingGate()
+		g.edit("draft")
+		done := g.holdDialogIn(t.Context())
+		select {
+		case <-done:
+			t.Fatal("a visible draft must hold the dialog")
+		default:
+		}
+		g.edit("") // Esc / backspace to empty releases at once
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("clearing the prompt did not release the held dialog")
+		}
+	})
+
+	t.Run("idle_window_releases", func(t *testing.T) {
+		g := newTypingGate()
+		g.idle = 40 * time.Millisecond
+		g.edit("draft")
+		select {
+		case <-g.holdDialogIn(t.Context()):
+		case <-time.After(2 * time.Second):
+			t.Fatal("the idle window must release the held dialog")
+		}
+	})
+
+	t.Run("context_cancel_releases", func(t *testing.T) {
+		g := newTypingGate()
+		ctx, cancel := context.WithCancel(t.Context())
+		g.edit("draft")
+		done := g.holdDialogIn(ctx)
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("a cancelled context did not release the held dialog")
+		}
+	})
+
+	// the dialog hold publishes its own label, distinct from the boundary hold's
+	t.Run("countdown_labels_approval", func(t *testing.T) {
+		g := newTypingGate()
+		g.idle = 40 * time.Millisecond
+		rec := &statusRecorder{}
+		g.status = rec.record
+
+		g.edit("draft")
+		<-g.holdDialogIn(t.Context())
+
+		require.NotZero(t, rec.count())
+		assert.Contains(t, rec.first(), "approval ")
+		assert.Empty(t, rec.last()) // the countdown segment is cleared on release
+	})
+}

@@ -65,7 +65,9 @@ unchanged for 10s since the last edit, or Enter submits. A mid-turn submit
 therefore delivers into the **current** step rather than behind another model
 call, within a bounded handoff grace so a just-submitted line still lands there;
 queued items release the hold at once. An idle submission is consumed before its
-own turn spawns, so step one never waits on that already-delivered line.
+own turn spawns, so step one never waits on that already-delivered line. The
+same gate also holds approval dialogs while a draft is composed; see
+`agent-loop-design.md` and `tui-design.md` for that surface.
 
 A workflow that needs to act on a submission before it becomes a turn hooks the
 pump through `planHooks.beforePrompt`, consulted **after** `q.offer` returns

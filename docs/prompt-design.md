@@ -503,10 +503,11 @@ is classified with one fresh-context request to the session's current model
 ask the same question (may this run unattended?) for the same one-word answer:
 `allow`, `deny` or `unsure`. One vocabulary means one normaliser and no
 per-prompt parsing anywhere downstream. Reasoning is off, so a verdict costs no
-thinking tokens; in auto modes a batch's prompt-classified calls are classified
-concurrently so any dialog resolves as soon as its verdict lands (see
-agent-loop-design.md), and a dialog the user answers without waiting cancels its
-in-flight request rather than paying for it. Verdicts normalise by scanning for
+thinking tokens; in auto modes each prompted call is classified concurrently
+with its typing hold and its dialog, so an allow verdict approves the call as
+soon as it lands (mid-typing included, see agent-loop-design.md), and a dialog
+the user answers without waiting cancels its in-flight request rather than
+paying for it. Verdicts normalise by scanning for
 the verdict words anywhere in the reply: an `allow`/`allowed` token yields
 approval, `deny`/`denied`/`denies` denial, and
 **both present (or neither) is unsure**. The asymmetry is deliberate: `deny` and

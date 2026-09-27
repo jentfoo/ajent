@@ -226,14 +226,14 @@ func (b *Barrier) Guard() tools.Guard {
 }
 
 // Prefetch starts classification for every call in a batch that will actually
-// reach the model classifier, warming the verdict cache so each dialog resolves
-// as soon as its verdict lands, including a lone eligible call, since serial
-// predecessors may run for a while before its dialog opens. It filters exactly
-// as the asker does: only auto-mode bash and non-write extension calls whose
-// static verdict is Ask and which are not already session-allowed go to the
-// model. Identical subjects launch one request. Launched goroutines observe ctx
-// (the turn's), so an abort stops them, and answering the dialog a request
-// fronts cancels it. Never blocks.
+// reach the model classifier, warming the verdict cache so the asker consumes a
+// ready verdict behind its typing hold instead of waiting on a fresh request,
+// including a lone eligible call, since serial predecessors may run for a while
+// before it asks. It filters exactly as the asker does: only auto-mode bash and
+// non-write extension calls whose static verdict is Ask and which are not
+// already session-allowed go to the model. Identical subjects launch one
+// request. Launched goroutines observe ctx (the turn's), so an abort stops them,
+// and answering the dialog a request fronts cancels it. Never blocks.
 func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 	if b.classifier == nil {
 		return
@@ -284,8 +284,46 @@ func (b *Barrier) cancelWarm(s Subject) {
 	}
 }
 
+// cachedVerdict returns a verdict already banked for s, ok false for a bare fn
+// classifier or a miss. It never blocks and never starts a request.
+func (b *Barrier) cachedVerdict(s Subject) (Class, bool) {
+	c, ok := b.classifier.(interface{ peek(Subject) (Class, bool) })
+	if !ok {
+		return ClassUnsure, false
+	}
+	return c.peek(s)
+}
+
+// holdForDialog waits out typing so the next Open never steals focus from a
+// draft, returning early on an allow verdict. It returns the unconsumed verdict
+// channel (nil once a verdict landed) and whether that verdict allows.
+// verdict may be nil, which never selects.
+func holdForDialog(ctx context.Context, p Prompter, verdict <-chan Class) (<-chan Class, bool) {
+	holdCtx, cancel := context.WithCancel(ctx)
+	defer cancel() // releases the hold when a verdict wins the race
+	held := make(chan struct{})
+	go func() { p.Hold(holdCtx); close(held) }()
+	for {
+		select {
+		case <-held: // typing settled, the dialog may open
+			select { // a verdict racing the pause settles here, not in a flash dialog
+			case c := <-verdict:
+				return nil, c == ClassAllow && ctx.Err() == nil
+			default:
+				return verdict, false
+			}
+		case c := <-verdict:
+			if c == ClassAllow && ctx.Err() == nil {
+				return nil, true
+			}
+			verdict = nil // deny/unsure needs a person, keep holding
+		}
+	}
+}
+
 // Asker resolves a guard's ask into allow or deny. It consults session allows,
-// opens an approval dialog, and in auto mode classifies bash concurrently.
+// holds the prompter while the user types, then opens an approval dialog. In the
+// auto modes a concurrent classification can approve the call without a dialog.
 func (b *Barrier) Asker() tools.Asker {
 	return func(ctx context.Context, call agent.ToolCall, _ tools.Decision) tools.Decision {
 		g := b.gateNow()
@@ -299,19 +337,49 @@ func (b *Barrier) Asker() tools.Asker {
 		if prompter == nil {
 			return tools.Deny(noUIReason)
 		}
-		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
-		if err != nil || dlg == nil {
-			return tools.Deny(noUIReason)
-		}
 
-		// the auto modes classify every prompted call concurrently with the dialog, an
-		// allow verdict resolving it open. A user answer cancels classification.
+		// the auto modes classify the call while the user types, the verdict racing
+		// the hold and the open dialog. A verdict Prefetch already banked answers
+		// synchronously (no goroutine), an allow running the tool without a draft.
 		var classifierCtx context.Context
 		cancel := func() {}
 		var subject Subject
+		var verdict <-chan Class
 		if b.classifyCall(m, call.Name) {
-			classifierCtx, cancel = context.WithCancel(ctx)
 			subject = classifySubject(m, call)
+			if c, ok := b.cachedVerdict(subject); ok {
+				// banked: allow approves at once, deny/unsure still needs a person
+				if c == ClassAllow && ctx.Err() == nil {
+					b.resolveNotice("once", true)
+					return allowDecision()
+				}
+			} else {
+				classifierCtx, cancel = context.WithCancel(ctx)
+				ch := make(chan Class, 1)
+				verdict = ch
+				go func() { ch <- b.classifier.Classify(classifierCtx, subject) }()
+			}
+		}
+		stop := func() { cancel(); b.cancelWarm(subject) }
+
+		// the hold defers the dialog while the user types; an allow verdict ends it
+		// at once, so an AI-approved tool runs mid-keystroke
+		var allowed bool
+		verdict, allowed = holdForDialog(ctx, prompter, verdict)
+		if allowed {
+			stop()
+			b.resolveNotice("once", true)
+			return allowDecision()
+		}
+		if ctx.Err() != nil { // aborted during the hold, nobody left to ask
+			stop()
+			return tools.Deny(noUIReason)
+		}
+
+		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
+		if err != nil || dlg == nil {
+			stop()
+			return tools.Deny(noUIReason)
 		}
 
 		b.mu.Lock()
@@ -325,12 +393,11 @@ func (b *Barrier) Asker() tools.Asker {
 			dlg.Resolve(int(optAllow))
 		}
 
-		if classifierCtx != nil && classifierCtx.Err() == nil {
+		if verdict != nil && classifierCtx.Err() == nil {
 			go func() {
 				// a user answer cancels the context, skipping both the resolve and its
 				// auto-allowed report so a denial is never claimed as auto-allowed.
-				if b.classifier.Classify(classifierCtx, subject) != ClassAllow ||
-					classifierCtx.Err() != nil { // user answered while classifying
+				if c := <-verdict; c != ClassAllow || classifierCtx.Err() != nil {
 					return
 				}
 				b.mu.Lock()
@@ -341,8 +408,7 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 
 		idx, werr := dlg.Wait(ctx)
-		cancel()              // the user answered or gave up, stop any in-flight classification
-		b.cancelWarm(subject) // and the prefetched request behind the same subject
+		stop() // the user answered or gave up, stop the classification and its prefetch
 
 		b.mu.Lock()
 		auto := pa.auto

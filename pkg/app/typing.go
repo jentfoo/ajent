@@ -14,7 +14,9 @@ const (
 )
 
 // typingGate holds a step boundary while the user is mid-message, so a prompt they
-// are still typing lands in this step instead of the next. Windows are fields so tests can shorten them.
+// are still typing lands in this step instead of the next. The boundary hold runs on
+// the loop goroutine, the dialog hold on tool goroutines dispatch serializes. Windows
+// are fields so tests can shorten them.
 type typingGate struct {
 	pending func() int               // queued steer items, nil-safe
 	status  func(text, short string) // status segment, empty text removes it
@@ -63,20 +65,32 @@ func (g *typingGate) taken() {
 }
 
 // hold is the AwaitInput hook: it waits at a step boundary while a draft is being
-// typed or a just-submitted line is still reaching the queue. ctx cancels on an interrupt.
+// typed or a just-submitted line is still reaching the queue, so a prompt typed
+// during the hold lands in this step. ctx cancels on an interrupt.
 func (g *typingGate) hold(ctx context.Context) {
+	g.holdWhile(ctx, "paused")
+}
+
+// holdDialog waits while the user is mid-message so an approval dialog opens only
+// once they pause, clear or submit. Same windows as hold, its own status label.
+func (g *typingGate) holdDialog(ctx context.Context) {
+	g.holdWhile(ctx, "approval")
+}
+
+// holdWhile is the shared hold loop. label names the published countdown segment,
+// the handoff grace stays silent.
+func (g *typingGate) holdWhile(ctx context.Context, label string) {
 	var shown bool      // published, cleared on exit so an unheld boundary repaints nothing
 	last := -1          // last displayed second, forces the first publish
 	var lastSession int // session the current countdown dedup is for
 	defer func() {
-		if !shown || g.status == nil {
-			return
+		if shown && g.status != nil {
+			g.status("", "")
 		}
-		g.status("", "")
 	}()
 
 	for {
-		// a queued prompt already lands at this boundary, whatever the editor says
+		// a queued prompt means typing is over, whatever the editor still shows
 		if g.pending != nil && g.pending() > 0 {
 			return
 		}
@@ -104,12 +118,13 @@ func (g *typingGate) hold(ctx context.Context) {
 			// no flash during the handoff grace: nothing should blink for 300ms
 			deadline = at.Add(g.handoff)
 		default:
-			return
+			return // nothing being typed
 		}
 
-		if !g.wait(ctx, deadline, countdown, &shown, &last) {
+		if !g.wait(ctx, deadline, countdown, label, &shown, &last) {
 			if !countdown {
-				// the handoff grace elapsed, it must never stall a later boundary too
+				// the handoff grace elapsed with nothing landing, it must never stall
+				// a later hold (a draft supersedes any handoff, so this is a real expiry)
 				g.mu.Lock()
 				g.inFlight = false
 				g.mu.Unlock()
@@ -120,9 +135,9 @@ func (g *typingGate) hold(ctx context.Context) {
 }
 
 // wait sleeps one poll step toward deadline. It publishes the remaining-seconds
-// status when counting down and republishes only as the displayed second changes,
-// it reports false once cancelled or the window elapsed.
-func (g *typingGate) wait(ctx context.Context, deadline time.Time, countdown bool, shown *bool, last *int) bool {
+// status under label when counting down and republishes only as the displayed
+// second changes, it reports false once cancelled or the window elapsed.
+func (g *typingGate) wait(ctx context.Context, deadline time.Time, countdown bool, label string, shown *bool, last *int) bool {
 	if ctx.Err() != nil {
 		return false
 	}
@@ -142,20 +157,20 @@ func (g *typingGate) wait(ctx context.Context, deadline time.Time, countdown boo
 	case <-timer.C:
 	}
 	if countdown && g.status != nil {
-		g.publishStatus(deadline, shown, last)
+		g.publishStatus(label, deadline, shown, last)
 	}
 	return true
 }
 
 // publishStatus shows the remaining idle seconds as a status segment, only when the
 // displayed second changes.
-func (g *typingGate) publishStatus(deadline time.Time, shown *bool, last *int) {
+func (g *typingGate) publishStatus(label string, deadline time.Time, shown *bool, last *int) {
 	secs := int((time.Until(deadline) + time.Second - 1) / time.Second)
 	if secs <= 0 || secs == *last { // never show 0, republish only on a second change
 		return
 	}
 	*last = secs
 	s := strconv.Itoa(secs)
-	g.status("paused "+s+"s", s+"s")
+	g.status(label+" "+s+"s", s+"s")
 	*shown = true
 }

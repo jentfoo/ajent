@@ -431,6 +431,20 @@ decides what it means (for approval, deny). Where no live block exists (plain
 mode) the handle's `Wait` reports `ErrNoUI`, and a caller can still resolve or
 close it harmlessly.
 
+The barrier raises its dialogs through this interaction layer only after the
+user pauses their editor draft: the prompter's `Hold` runs before `Open`, so
+while a message is being composed an approve/deny prompt waits (same
+idle/handoff windows as the step-boundary hold, its own `approval Ns`
+countdown segment) and opens only once the user pauses, clears or submits,
+never stealing focus from a draft.
+
+The typing delay gates **only the human prompt**, never AI decisions. In the
+auto modes the barrier classifies the call while its dialog is being held: an
+allow verdict ends the hold at once, mid-typing included, approving the tool
+without any dialog (and dismissing one once open). Only a call with no
+classifier, or a deny/unsure verdict that genuinely needs a person, waits out
+the pause before its dialog opens.
+
 Plain mode has no live block and `readLines` already owns stdin, so a prompt is
 written to history and the answer is taken from the message queue. Reading the
 same queue the caller reads is what makes it race free: a plain mode prompt is

@@ -129,6 +129,16 @@ func (c *cachedClassifier) Classify(ctx context.Context, s Subject) Class {
 	return ClassUnsure
 }
 
+// peek returns a verdict already banked for s, ok false on a miss or an entry
+// still in flight. It never blocks and never starts a request.
+func (c *cachedClassifier) peek(s Subject) (Class, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	v, ok := c.vals[s.key()]
+	return v, ok
+}
+
 // storeLocked records v under key at the LRU tail, evicting at capacity. Caller
 // holds the lock, only the key's in-flight leader storing.
 func (c *cachedClassifier) storeLocked(key string, v Class) {

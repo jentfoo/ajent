@@ -80,6 +80,25 @@ func TestCachedClassifierHitsCache(t *testing.T) {
 	assert.Equal(t, 1, fn.count())
 }
 
+func TestCachedClassifierPeek(t *testing.T) {
+	t.Parallel()
+
+	fn := &countingFn{verdict: ClassAllow}
+	c := NewCachedClassifier(fn.call)
+	s := Subject{Name: "bash", Args: "stat a"}
+
+	_, ok := c.peek(s)
+	assert.False(t, ok)        // an empty cache peeks empty
+	assert.Zero(t, fn.count()) // peek never invokes the model
+
+	// after serving a verdict it is visible without running the classifier again
+	assert.Equal(t, ClassAllow, c.Classify(t.Context(), s))
+	v, ok := c.peek(s)
+	assert.True(t, ok)
+	assert.Equal(t, ClassAllow, v)
+	assert.Equal(t, 1, fn.count())
+}
+
 func TestCachedClassifierDistinctCommandsMissCache(t *testing.T) {
 	t.Parallel()
 

@@ -379,6 +379,19 @@ it.
   message. It takes the turn's context, so `Interrupt` releases it; draining
   happens after it returns, so anything arriving during the hold lands in this
   same boundary. The interactive driver's typing hold supplies it. nil disables.
+
+  The same editor draft that feeds AwaitInput also delays raising approval
+  dialogs: a barrier holds its dialog until the user pauses their message,
+  clears, or submits (the prompter's `Hold`, driven by the driver's
+  `typingGate`), so an approve/deny prompt never steals focus from a draft
+  mid-keystroke. The hold takes the turn's context, so an interrupt still
+  cancels the wait and denies the call without opening a dialog.
+
+  The delay gates only the human prompt, never AI decisions: the auto modes
+  classify the call concurrently with the hold, and an allow verdict ends the
+  hold at once so the tool runs without waiting out the draft. Only a call that
+  genuinely needs a person (no classifier, or a deny/unsure verdict) waits for
+  typing to settle before its dialog opens.
 - **`Options.OnToolBatch`**, when set, runs on the loop goroutine at the top of
   `dispatch`, before any call runs, with one step's calls in message order and
   the turn's context (cancelled on abort). The parallel path races the calls

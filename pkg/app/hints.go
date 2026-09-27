@@ -118,9 +118,12 @@ func (b *hintBoard) ShowFor(text, short string, d time.Duration) *hintSlot {
 }
 
 // hintLine is one owner's view of the board, shaped like a plain status writer: an empty
-// text frees the line. Touched by its own goroutine only. The board itself is safe across them.
+// text frees the line. Safe for concurrent use: the typing gate's line is shared by the
+// loop goroutine's boundary hold and tool goroutines' dialog holds, which dispatch keeps
+// from overlapping but a guard flip mid-batch could still race.
 type hintLine struct {
 	b    *hintBoard
+	mu   sync.Mutex
 	slot *hintSlot
 }
 
@@ -138,6 +141,9 @@ func (l *hintLine) Set(text, short string) {
 	if l == nil {
 		return
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if text == "" {
 		l.slot.Free() // Free is nil-safe
 		l.slot = nil

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,15 +44,50 @@ func (d *fakeDialog) Resolve(index int) {
 
 func (d *fakeDialog) Close() {}
 
-// fakePrompter records dialogs and answers them via answerCh on demand.
+// fakePrompter records dialogs and answers them via answerCh on demand. A set
+// hold gate blocks Hold until it closes, so tests can model an active draft.
 type fakePrompter struct {
 	mu      sync.Mutex
-	err     error // when set, Open returns it before any dialog
+	err     error         // when set, Open returns it before any dialog
+	hold    chan struct{} // when set, Hold waits for it (or ctx end)
+	holds   int           // Hold invocations
 	dialogs []*fakeDialog
 	reasons map[string]string // label -> canned reason for Reason()
 }
 
 func newFakePrompter() *fakePrompter { return &fakePrompter{reasons: make(map[string]string)} }
+
+func (f *fakePrompter) Hold(ctx context.Context) {
+	f.mu.Lock()
+	f.holds++
+	h := f.hold
+	f.mu.Unlock()
+	if h == nil {
+		return
+	}
+	select {
+	case <-h:
+	case <-ctx.Done():
+	}
+}
+
+// holdCount reports how many times Hold was entered.
+func (f *fakePrompter) holdCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.holds
+}
+
+// beginHold installs a blocking hold gate and returns its release func.
+func (f *fakePrompter) beginHold() func() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.hold = make(chan struct{})
+	var once sync.Once
+	return func() { once.Do(func() { close(f.hold) }) }
+}
 
 func (f *fakePrompter) Open(prompt, subject string, options []string) (Dialog, error) {
 	f.mu.Lock()
@@ -799,6 +835,143 @@ func TestAskerAuto(t *testing.T) {
 
 		assert.Equal(t, tools.ActionAllow, got.Action)
 		assert.Equal(t, 1, cl.calls)
+	})
+}
+
+func TestAskerDialogHold(t *testing.T) {
+	t.Parallel()
+
+	// a prompted call waits out the hold, the dialog opening only once typing settles
+	t.Run("hold_defers_dialog", func(t *testing.T) {
+		p := newFakePrompter()
+		release := p.beginHold()
+		b := newTestBarrier(p)
+
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, t.Context(), "write", []byte(`{}`)) }()
+
+		require.Eventually(t, func() bool { return p.holdCount() == 1 }, time.Second, 10*time.Millisecond)
+		assert.Zero(t, p.count())
+
+		release()
+		waitDialog(t, p).answer(int(optAllow))
+		assert.Equal(t, tools.ActionAllow, (<-done).Action)
+	})
+
+	// an allow verdict ends the hold mid-typing, the tool running with no dialog
+	t.Run("allow_verdict_cuts_hold_short", func(t *testing.T) {
+		p := newFakePrompter()
+		release := p.beginHold() // held for the whole test, the verdict must not wait it out
+		defer release()
+		b := newTestBarrier(p)
+		b.SetMode(ModeAuto)
+		b.SetClassifier(&fakeClassifier{verdict: ClassAllow})
+
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)) }()
+
+		require.Eventually(t, func() bool { return p.holdCount() == 1 }, time.Second, 10*time.Millisecond)
+		select {
+		case got := <-done:
+			assert.Equal(t, tools.ActionAllow, got.Action)
+		case <-time.After(2 * time.Second):
+			t.Fatal("an allow verdict must end the hold without waiting for typing")
+		}
+		assert.Zero(t, p.count())
+	})
+
+	// a deny verdict keeps holding, its dialog waiting for the pause
+	t.Run("deny_verdict_keeps_holding", func(t *testing.T) {
+		p := newFakePrompter()
+		release := p.beginHold()
+		b := newTestBarrier(p)
+		b.SetMode(ModeAuto)
+		b.SetClassifier(&fakeClassifier{verdict: ClassDeny})
+
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"rm x"}`)) }()
+
+		require.Eventually(t, func() bool { return p.holdCount() == 1 }, time.Second, 10*time.Millisecond)
+		assert.Zero(t, p.count())
+
+		release() // typing settles, the dialog it needs may open
+		waitDialog(t, p).answer(int(optDeny))
+		assert.Equal(t, tools.ActionDeny, (<-done).Action)
+	})
+
+	// a verdict Prefetch already banked answers the call before any hold or dialog
+	t.Run("prefetched_verdict_skips_dialog", func(t *testing.T) {
+		p := newFakePrompter()
+		release := p.beginHold() // held for the whole test, the cached verdict must not wait it out
+		defer release()
+		b := newTestBarrier(p)
+		b.SetMode(ModeAuto)
+		var calls atomic.Int32
+		cl := NewCachedClassifier(func(context.Context, Subject) Class { calls.Add(1); return ClassAllow })
+		b.SetClassifier(cl)
+
+		call := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"stat f.txt"}`)}
+		b.Prefetch(t.Context(), []agent.ToolCall{call})
+		require.Eventually(t, func() bool { return calls.Load() == 1 }, // the prefetch banked its verdict
+			time.Second, 10*time.Millisecond)
+
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, t.Context(), "bash", call.Input) }()
+
+		select {
+		case got := <-done:
+			assert.Equal(t, tools.ActionAllow, got.Action)
+		case <-time.After(2 * time.Second):
+			t.Fatal("a banked verdict must approve without waiting for typing")
+		}
+		assert.Zero(t, p.count())
+		require.Zero(t, p.holdCount(), "a banked verdict must skip the hold entirely")
+		assert.Equal(t, int32(1), calls.Load())
+	})
+
+	// a banked deny still opens a dialog for the person; no classification is re-run
+	t.Run("banked_deny_still_dialogues", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrier(p)
+		b.SetMode(ModeAuto)
+		var calls atomic.Int32
+		cl := NewCachedClassifier(func(context.Context, Subject) Class { calls.Add(1); return ClassDeny })
+		b.SetClassifier(cl)
+
+		call := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"rm f.txt"}`)}
+		b.Prefetch(t.Context(), []agent.ToolCall{call})
+		require.Eventually(t, func() bool { return calls.Load() == 1 }, time.Second, 10*time.Millisecond)
+
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, t.Context(), "bash", call.Input) }()
+		waitDialog(t, p).answer(int(optDeny)) // the person still decides a deny
+
+		assert.Equal(t, tools.ActionDeny, (<-done).Action)
+		assert.Equal(t, int32(1), calls.Load(), "a banked deny must not re-run the model")
+	})
+
+	// an abort during the hold denies the call without opening a dialog
+	t.Run("abort_during_hold_denies", func(t *testing.T) {
+		p := newFakePrompter()
+		release := p.beginHold()
+		defer release()
+		b := newTestBarrier(p)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, ctx, "write", []byte(`{}`)) }()
+
+		require.Eventually(t, func() bool { return p.holdCount() == 1 }, time.Second, 10*time.Millisecond)
+		cancel()
+
+		select {
+		case got := <-done:
+			assert.Equal(t, tools.ActionDeny, got.Action)
+			assert.Equal(t, noUIReason, got.Reason)
+		case <-time.After(2 * time.Second):
+			t.Fatal("an abort must release the held dialog ask")
+		}
+		assert.Zero(t, p.count())
 	})
 }
 
