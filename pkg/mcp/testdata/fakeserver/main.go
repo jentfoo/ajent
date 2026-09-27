@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -106,8 +107,15 @@ func main() {
 			h = mcpserver.NewStreamableHTTPServer(srv,
 				mcpserver.WithStreamableHTTPProtocolVersions(mcp.ProtocolVersion20251125))
 		}
-		fmt.Fprintln(os.Stderr, "listening on", httpAddr)
-		if err := http.ListenAndServe(httpAddr, h); err != nil {
+		ln, err := net.Listen("tcp", httpAddr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "listen:", err)
+			os.Exit(1)
+		}
+		// report the actual bound address so tests can dial it (httpAddr may be :0)
+		fmt.Fprintln(os.Stderr, "listening on", ln.Addr())
+		handler := h
+		if err := http.Serve(ln, handler); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

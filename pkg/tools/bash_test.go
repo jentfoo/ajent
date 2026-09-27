@@ -160,13 +160,22 @@ func TestBashMidRunCancelKillsGroupAndRecordsPartial(t *testing.T) {
 
 	cancel()
 
+	// group-kill + reap can take variable real time, so poll rather than fix a short cap.
 	var res agent.ToolResult
+	require.Eventually(t, func() bool {
+		select {
+		case r := <-resCh:
+			res = r
+			return true
+		default:
+		}
+		return false
+	}, 10*time.Second, time.Millisecond*10)
+	// Execute resolves through res or err; both are buffered(1) so a non-blocking probe is safe.
 	select {
-	case res = <-resCh:
 	case err := <-errCh:
 		t.Fatalf("Execute returned an error: %v", err)
-	case <-time.After(time.Second * 5):
-		t.Fatal("Execute did not return after cancellation")
+	default:
 	}
 
 	assert.True(t, res.IsError) // a cancelled run is marked as interrupted

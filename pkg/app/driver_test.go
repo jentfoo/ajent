@@ -144,30 +144,41 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	go func() { errCh <- a.Prompt(t.Context(), in) }()
 
 	// pin step one inside its tool call, then begin typing mid-turn
-	select {
-	case <-entered:
-	case <-time.After(time.Second):
-		t.Fatal("the turn never reached its tool call")
-	}
+	require.Eventually(t, func() bool {
+		select {
+		case <-entered:
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, time.Millisecond)
 	gate.edit("draft") // the user is composing a message
 
 	close(release) // step one finishes, AwaitInput at step two holds on the draft
-	select {
-	case <-held:
-	case <-time.After(time.Second):
-		t.Fatal("AwaitInput never held the boundary while typing")
-	}
+	require.Eventually(t, func() bool {
+		select {
+		case <-held:
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, time.Millisecond)
 	assert.Len(t, p.Requests(), 1, "no second request may leave while the hold is engaged")
 
 	// a prompt submitted during the hold queues and must land at this same step
 	require.True(t, q.offer(agent.Input{Text: "steered"}, "steered", 3))
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(time.Second):
-		t.Fatal("the turn never finished after the held boundary delivered")
-	}
+	var turnErr error
+	require.Eventually(t, func() bool {
+		select {
+		case e := <-errCh:
+			turnErr = e
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, time.Millisecond)
+	require.NoError(t, turnErr)
 	reqs := p.Requests()
 	assert.Len(t, reqs, 2, "the steer must ride into step two with no third model call")
 

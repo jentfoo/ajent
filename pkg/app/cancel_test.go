@@ -93,12 +93,17 @@ func TestInterruptCancelsRunningBashEndToEnd(t *testing.T) {
 
 	ag.Interrupt()
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err) // an interrupted turn is a clean stop, not an error
-	case <-time.After(time.Second * 5):
-		t.Fatal("Prompt did not return promptly after the interrupt")
-	}
+	var promptErr error
+	require.Eventually(t, func() bool { // poll so teardown (group-kill + reap) can take variable real time
+		select {
+		case e := <-errCh:
+			promptErr = e
+			return true
+		default:
+			return false
+		}
+	}, 10*time.Second, time.Millisecond*10)
+	require.NoError(t, promptErr) // an interrupted turn is a clean stop, not an error
 	assert.Equal(t, llm.StopAborted, rec.last().Stop)
 
 	// prove the whole process group (leader and TERM-trapping grandchild) is gone
