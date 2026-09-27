@@ -138,9 +138,11 @@ records it via `recorder.SettingChange`, closing the old gap where a row called
 `SetSession` directly and the override silently vanished on resume
 (auto-compaction, tool limits). The bespoke `SetModel`/`SetReasoning` mutators
 keep their own paths. A permissions-mode row additionally applies its parsed
-mode to the live permission barrier and republishes the status segment. This is
+mode to the live permission barrier and republishes the status segment, which is
 what makes `/settings`'s Permissions enum row take effect rather than sitting
-inert, and it is also how a Shift+Tab cycle records itself for resume.
+inert. Permission mode is a per-run choice: it lives only on the barrier for this
+session and does not record a `setting_change`, so every start uses the resolved
+config default.
 
 `Started()` is owned by the pump: it flips true when the first prompt is
 dispatched, never on a command or a `!`.

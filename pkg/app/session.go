@@ -263,11 +263,12 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 		return nil, "", nil
 	}
 	head := resumeHead(r.w.Head(), entries)
-	// a session-scoped threshold must be stamped before state resolution so the
-	// trigger, the context bar and the band ceiling read one number after resume.
-	// The overrides come off the branch, not raw file order: a transcript with
-	// forks holds settings from siblings this head never saw.
-	set.SeedSession(session.SettingOverrides(session.Branch(entries, head)))
+	// stamp the threshold before state resolution so the trigger and context bar
+	// read one number after resume. permissions.mode is dropped (even when an older
+	// session recorded it) so a restart always starts from the configured default.
+	overrides := session.SettingOverrides(session.Branch(entries, head))
+	delete(overrides, "permissions.mode")
+	set.SeedSession(overrides)
 	applyImagesBlock(set) // a session saved with images blocked resumes blocked
 	resumed := set.Settings()
 	reg.SetCompactDefault(resumed.Compaction.Threshold) // models declaring none pick up the session default

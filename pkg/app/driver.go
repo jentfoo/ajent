@@ -329,8 +329,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// the permission barrier gates every tool call through static classification and
 	// an approval dialog. Read-only work runs free, but writes prompt unless allowed or
-	// blocked by mode. It starts from the resolved config default (a resume's session
-	// override included, since rebuild seeded it) so a restart restores the mode.
+	// blocked by mode. It starts from the resolved config default so a restart always
+	// uses the configured (or CLI-flagged) mode. In-session cycling never persists.
 	var barrier *permit.Barrier
 	if toolsReg != nil {
 		barrier = permit.NewBarrier(toolsReg.ReadOnly)
@@ -339,8 +339,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				barrier.SetMode(m)
 			}
 		}
-		// a CLI permission flag overrides the configured default and any resumed
-		// session setting for this invocation only, it never persists.
+		// a CLI permission flag overrides the configured default for this invocation
+		// only. It never persists and is not stored in any session.
 		switch scope {
 		case ToolScopeAllowAll:
 			barrier.SetMode(permit.ModeAllowAll)
@@ -468,9 +468,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 		showPermissionIndicator(ui, barrier)
 		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
-		// record a session override so Explain and Settings report (session) and a
-		// resume restores it. The config file is never rewritten.
-		_ = console.SetSessionSetting("permissions.mode", m.String())
 	}
 	watchControls(ui, hints, ag, q, stager, ictl, quit, onModeCycle)
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids

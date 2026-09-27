@@ -12,6 +12,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -270,6 +271,22 @@ func TestUIConsoleImagesBlockLiveFlip(t *testing.T) {
 	assert.True(t, tools.ImagesEnabled())
 	require.NoError(t, c.SetSessionSetting("images.block", true))
 	assert.False(t, tools.ImagesEnabled())
+}
+
+func TestUIConsolePermissionModeAppliesButNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	reg := tools.New()
+	reg.Register(&stubTool{name: "read"}, true)
+	barrier := permit.NewBarrier(reg.ReadOnly)
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+
+	c := &uiConsole{set: set, permit: barrier}
+	require.Equal(t, "allow-read", barrier.Mode().String())
+
+	require.NoError(t, c.SetSessionSetting("permissions.mode", "auto"))
+	assert.Equal(t, "auto", barrier.Mode().String()) // applied live
 }
 
 func ptrTo[T any](v T) *T { return &v }

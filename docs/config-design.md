@@ -60,10 +60,10 @@ an `-m` flag still outranks it, and a resumed session replays its own
 The permission block has a compiled-in default mode, so `Explain` on it resolves
 and reports `(default)`. The mode name is one of the barrier's modes (see
 `permit`); `AJENT_PERMISSIONS_MODE` binds for free through EnvLayer. It seeds a
-session's live barrier at startup, so a resumed session restores its cycled mode
-(rebuild replays session overrides before this). A `Shift+Tab` or `Shift+←/→`
-cycle, or `/settings`, records the change as a **session** override via
-`SetSessionSetting("permissions.mode", …)`, never rewriting the config file.
+session's live barrier at startup from the resolved config default, and a
+`Shift+Tab` or `Shift+←/→` cycle, or `/settings`, applies to that live barrier.
+The configured mode is authoritative on every start: a session resumes with its
+own transcript but starts from the configured (or default) permission mode.
 `/settings`'s Permissions row edits the persistent default instead, offering
 save to user/project layer like any other enum row.
 

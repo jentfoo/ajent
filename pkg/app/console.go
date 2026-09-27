@@ -124,8 +124,10 @@ func (c *uiConsole) SetSessionName(name string) error {
 	return c.rec.Rename(canonical)
 }
 
-// SetSessionSetting applies a dotted key as a session override and records it so a resume restores
-// it, mirroring ToolsChanged. permissions.mode also drives the live barrier and its status segment.
+// SetSessionSetting applies a dotted key as a session override and records it so a
+// resume restores it, mirroring ToolsChanged. permissions.mode is the exception: it
+// drives the live barrier but never records a setting_change entry, so a resumed
+// session always starts from the configured (or default) mode.
 func (c *uiConsole) SetSessionSetting(key string, value any) error {
 	if key == "permissions.mode" && c.permit != nil {
 		s := fmt.Sprint(value)
@@ -145,7 +147,9 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 			applyImagesBlock(c.set) // live flip, from the just-applied value
 		}
 	}
-	if c.rec != nil {
+	// permission mode is applied for this run only and never written to a
+	// setting_change entry, so it cannot be restored on resume.
+	if c.rec != nil && key != "permissions.mode" {
 		return c.rec.SettingChange(key, value)
 	}
 	return nil
