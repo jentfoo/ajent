@@ -9,13 +9,13 @@ import (
 
 // TestStreamingCommitKeepsOutput guards against premature-scroll corruption in
 // inline mode. Committing a completed markdown block mid-stream used to redraw the
-// stale live preview (still holding those just-committed rows) below the new history;
-// on a small terminal that ghost overflowed and pushed freshly committed lines into
+// stale live preview (still holding those just-committed rows) below the new history.
+// On a small terminal that ghost overflowed and pushed freshly committed lines into
 // scrollback before they had been read.
 func TestStreamingCommitKeepsOutput(t *testing.T) {
 	t.Parallel()
 
-	// the divider row costs one live-block line; height 7 keeps this on the same
+	// the divider row costs one live-block line. Height 7 keeps this on the same
 	// overflow boundary that 6 held before chrome was added.
 	v := newVT(20, 7)
 	u := newTestUI(t, v, strings.NewReader(""))
@@ -28,8 +28,8 @@ func TestStreamingCommitKeepsOutput(t *testing.T) {
 	}
 	assert.Empty(t, v.scrollback)
 
-	// closing a block commits both paragraphs mid-stream; the tail is one row of
-	// preview, since its reserved separator takes the other (previewGap)
+	// closing a block commits both paragraphs mid-stream, and the tail is one row of
+	// preview since its reserved separator takes the other (previewGap)
 	u.Text("\n\nthird para follows")
 
 	var lost []string
@@ -80,7 +80,7 @@ func TestThinkingCommitKeepsOutput(t *testing.T) {
 	assert.Contains(t, u.snapshot(v), "second para")
 
 	// completing another line commits mid-stream while the preview still holds rows.
-	// Only retired committed history may scroll; a leaked ghost/divider row would
+	// Only retired committed history may scroll. A leaked ghost/divider row would
 	// carry text that was never part of those lines (see TestStreamingCommitKeepsOutput).
 	u.Thinking("\nthird reasoning follows")
 

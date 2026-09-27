@@ -182,12 +182,12 @@ type File struct {
 type ProviderConfig struct {
 	API        Dialect           `json:"api,omitempty"`
 	Flavor     Flavor            `json:"flavor,omitempty"`
-	Name       string            `json:"name,omitempty"` // accepted for compatibility; not used
+	Name       string            `json:"name,omitempty"` // accepted for compatibility, not used
 	BaseURL    string            `json:"baseUrl,omitempty"`
 	APIKey     string            `json:"apiKey,omitempty"`
 	APIKeyEnv  string            `json:"apiKeyEnv,omitempty"`
-	OAuth      string            `json:"oauth,omitempty"`      // accepted for compatibility; not used
-	AuthHeader *bool             `json:"authHeader,omitempty"` // accepted for compatibility; not used
+	OAuth      string            `json:"oauth,omitempty"`      // accepted for compatibility, not used
+	AuthHeader *bool             `json:"authHeader,omitempty"` // accepted for compatibility, not used
 	Headers    map[string]string `json:"headers,omitempty"`
 	Timeouts   Timeouts          `json:"timeouts,omitzero"`
 	Retry      RetryPolicy       `json:"retry,omitzero"`
@@ -202,7 +202,7 @@ type ProviderConfig struct {
 }
 
 // Routing is openrouter's upstream provider preference. The four camelCase
-// fields are ajent's historical spellings; the snake_case ones mirror
+// fields are ajent's historical spellings, and the snake_case ones mirror
 // OpenRouterRouting so a drop-in file loads unchanged.
 type Routing struct {
 	Order          []string `json:"order,omitempty"`
@@ -235,7 +235,7 @@ type ModelConfig struct {
 	ContextWindow    *int              `json:"contextWindow,omitempty"`
 	MaxTokens        *int              `json:"maxTokens,omitempty"`
 	ContextReserve   *float64          `json:"contextReserve,omitempty"`   // fraction (<1) or absolute token count (>=1)
-	CompactThreshold *float64          `json:"compactThreshold,omitempty"` // where auto-compaction fires; fraction (<1) of window or absolute count (>=1)
+	CompactThreshold *float64          `json:"compactThreshold,omitempty"` // where auto-compaction fires: fraction (<1) of window or absolute count (>=1)
 	Compat           *Compat           `json:"compat,omitempty"`
 	LevelMap         map[Level]*string `json:"thinkingLevelMap,omitempty"`
 
@@ -265,7 +265,7 @@ type ModelOverride struct {
 // plus ajent extensions. Every scalar field is a pointer so an override turns
 // one quirk on without restating the rest.
 //
-// The dialect tag lists which dialects read a field; absent means every dialect
+// The dialect tag lists which dialects read a field. Absent means every dialect
 // honours it, which is where ajent's own extensions sit. compatWarnings reports
 // any set field whose dialect does not include the model's resolved dialect.
 type Compat struct {
@@ -301,7 +301,7 @@ type Compat struct {
 	RequiresThinkingAsText           *bool `json:"requiresThinkingAsText,omitempty" dialect:"openai-completions"`
 	SupportsOpenAIGrammarTools       *bool `json:"supportsOpenAIGrammarTools,omitempty" dialect:"openai-completions,openai-responses"`
 	SupportsThinkingTokenBudget      *bool `json:"supportsThinkingTokenBudget,omitempty" dialect:"openai-completions"`
-	// ThinkingTokenBudgetField is the canonical spelling; SupportsThinkingTokenBudget
+	// ThinkingTokenBudgetField is the canonical spelling. SupportsThinkingTokenBudget
 	// is the boolean alias for "thinking_token_budget".
 	ThinkingTokenBudgetField *string `json:"thinkingTokenBudgetField,omitempty" dialect:"openai-completions"`
 	ZaiToolStream            *bool   `json:"zaiToolStream,omitempty" dialect:"openai-completions"`

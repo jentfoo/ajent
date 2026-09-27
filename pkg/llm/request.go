@@ -20,7 +20,7 @@ type Request struct {
 	Temperature *float64 // nil uses the provider default
 	Reasoning   ReasoningConfig
 	Cache       CachePolicy
-	SessionID   string // session-affinity headers when supported; prompt_cache_key on openai
+	SessionID   string // session-affinity headers when supported, prompt_cache_key on openai
 }
 
 // ToolSchema is a tool as the model sees it.
@@ -28,13 +28,13 @@ type ToolSchema struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	Parameters  json.RawMessage `json:"parameters"` // JSON Schema object
-	// Deferred marks a load-on-demand tool, declared by the tool's own Schema:
-	// its definition is offered with defer_loading and it only takes effect once
+	// Deferred marks a load-on-demand tool, declared by the tool's own Schema.
+	// Its definition is offered with defer_loading and it only takes effect once
 	// a result's AddedToolNames loads it. Providers without deferred-tool
 	// support ignore the flag.
 	Deferred bool `json:"-"`
 	// Grammar requests grammar-constrained output on openai responses, declared
-	// by the tool's own Schema; empty when unused.
+	// by the tool's own Schema. Empty when unused.
 	Grammar *ToolGrammar `json:"-"`
 }
 
@@ -97,7 +97,7 @@ type ReasoningConfig struct {
 	Level  Level        `json:"level"`
 	Budget int          `json:"budget,omitempty"` // explicit token budget, overrides Level when positive
 	Retain RetainPolicy `json:"retain,omitempty"`
-	Hide   bool         `json:"hide,omitzero"` // true hides thinking from the UI; shown by default
+	Hide   bool         `json:"hide,omitzero"` // true hides thinking from the UI, shown by default
 }
 
 // Level is the requested reasoning depth. The standard seven levels let any
@@ -144,7 +144,7 @@ func allLevels() []Level {
 }
 
 // levelValue maps a non-off level onto the provider's effort value. An absent map
-// key sends the level name itself; an explicit null reports unsupported.
+// key sends the level name itself, and an explicit null reports unsupported.
 func levelValue(caps Capabilities, l Level) (string, bool) {
 	if v, ok := caps.LevelMap[l]; ok {
 		if v == nil {
@@ -155,8 +155,8 @@ func levelValue(caps Capabilities, l Level) (string, bool) {
 	return l.String(), true
 }
 
-// offValue maps the off level onto a provider value. An absent key uses def;
-// an explicit null reports that thinking cannot be turned off.
+// offValue maps the off level onto a provider value. An absent key uses def,
+// while an explicit null reports that thinking cannot be turned off.
 func offValue(caps Capabilities, def string) (string, bool) {
 	if v, ok := caps.LevelMap[LevelOff]; ok {
 		if v == nil {
@@ -174,7 +174,7 @@ func offSuppressed(caps Capabilities) bool {
 }
 
 // levelsFor returns the reasoning depths a model offers: only LevelOff when it
-// cannot reason; otherwise every level without a null entry, where xhigh and max
+// cannot reason, otherwise every level without a null entry where xhigh and max
 // are opt-in via an explicit non-null map entry.
 func levelsFor(caps Capabilities) []Level {
 	if !caps.Reasoning {
@@ -198,7 +198,7 @@ func levelsFor(caps Capabilities) []Level {
 // escalated: it always means no reasoning, even on a model that cannot stop.
 func clampLevel(caps Capabilities, l Level) Level {
 	if l == LevelOff {
-		return LevelOff // requesting off stays off; {off:null} emits nothing
+		return LevelOff // requesting off stays off, {off:null} emits nothing
 	}
 	supported := levelsFor(caps)
 	idx, found := slices.BinarySearch(supported, l)
@@ -208,8 +208,8 @@ func clampLevel(caps Capabilities, l Level) Level {
 	if idx < len(supported) { // next higher level
 		return supported[idx]
 	}
-	// highest below the request; off is always in levelsFor when reasoning,
-	// so this only fires for a non-reasoning model clamped by mistake
+	// highest below the request. Off is always in levelsFor when reasoning,
+	// so this only fires for a non-reasoning model clamped by mistake.
 	for i := len(supported) - 1; i >= 0; i-- {
 		if supported[i] != LevelOff {
 			return supported[i]
@@ -226,7 +226,7 @@ func ClampLevel(m Model, l Level) Level { return clampLevel(m.Caps, l) }
 
 // MaxOutputFor clamps an output cap to the tokens left in the window after input
 // and reserve. It returns the model's own cap when the window is unknown, and the
-// available window when no cap is set; never below one token.
+// available window when no cap is set, and never below one token.
 func MaxOutputFor(m Model, inputTokens int) int {
 	if m.ContextWindow <= 0 {
 		return m.MaxOutput // window unknown: the model cap stands
@@ -240,7 +240,7 @@ func MaxOutputFor(m Model, inputTokens int) int {
 }
 
 // RetainPolicy is how much thinking survives into later requests. It applies at
-// request build time only; the transcript always keeps everything.
+// request build time only, and the transcript always keeps everything.
 type RetainPolicy uint8
 
 const (

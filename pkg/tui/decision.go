@@ -33,7 +33,7 @@ type DecisionResult struct {
 type Decision struct {
 	u   *UI
 	st  *decisionState // nil when no dialog could be shown (plain mode or closed)
-	p   *pending       // enqueued interaction; nil until Wait is meaningful
+	p   *pending       // enqueued interaction, nil until Wait is meaningful
 	err error          // failure captured at OpenDecision time, returned by Wait
 }
 
@@ -44,13 +44,13 @@ type Decision struct {
 func (u *UI) OpenDecision(req DecisionRequest) *Decision {
 	d := &Decision{u: u}
 	if len(req.Options) == 0 || u.mode == ModePlain {
-		return d // no dialog can be shown; Wait reports ErrNoUI
+		return d // no dialog can be shown, so Wait reports ErrNoUI
 	}
 	st := &decisionState{prompt: req.Prompt, context: req.Context, options: slices.Clone(req.Options)}
 	d.st = st
 	p := newPending(st)
 	if err := u.enqueue(p); err != nil {
-		// enqueue only fails on a closed UI; report it as no one to ask (ErrNoUI),
+		// enqueue only fails on a closed UI, so report it as no one to ask (ErrNoUI),
 		// matching Ask, rather than the cancellation ErrCancelled uses for teardown.
 		d.err = ErrNoUI
 		return d
@@ -60,7 +60,7 @@ func (u *UI) OpenDecision(req DecisionRequest) *Decision {
 }
 
 // Wait blocks until the dialog resolves, ctx ends or the UI closes. Esc returns
-// ErrCancelled (the caller decides what that means; for approval it is deny).
+// ErrCancelled (the caller decides what that means. For approval it is deny).
 func (d *Decision) Wait(ctx context.Context) (DecisionResult, error) {
 	switch {
 	case d == nil || d.u == nil:
@@ -89,12 +89,12 @@ func (d *Decision) Resolve(index int) {
 	st := p.it.(*decisionState)
 	select {
 	case <-p.done:
-		return // someone else settled it; keep their result and summary
+		return // someone else settled it, keep their result and summary
 	default:
 	}
 	// only a winning resolver writes its own answer, before done closes so Wait sees it
 	st.result = DecisionResult{Index: index, External: true} // read only after done closes
-	if !p.resolve(nil) {                                     // a keystroke won concurrently; do not commit twice
+	if !p.resolve(nil) {                                     // a keystroke won concurrently, do not commit twice
 		return
 	}
 	d.u.commitDecision(p)
@@ -110,7 +110,7 @@ func (d *Decision) Close() {
 }
 
 // commitDecision writes the one-line summary, dequeues and repaints. Caller holds
-// the lock; only a winning resolver calls it.
+// the lock. Only a winning resolver calls it.
 func (u *UI) commitDecision(p *pending) {
 	if s := p.it.summary(u.theme); s != "" {
 		u.gap()
@@ -126,7 +126,7 @@ type decisionState struct {
 	context string
 	options []Option
 	cursor  int
-	result  DecisionResult // written under u.mu before resolve; read after done closes
+	result  DecisionResult // written under u.mu before resolve, read after done closes
 }
 
 func (s *decisionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
@@ -142,8 +142,8 @@ func (s *decisionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	}
 	out = append(out, ctxRows...)
 
-	// a dim marker reports the subject lines that were cut or did not fit; an option
-	// row wins when there is nothing to spare below it
+	// a dim marker reports the subject lines that were cut or did not fit. An option
+	// row wins when there is nothing to spare below it.
 	if cut > 0 && len(out) < maxRows-1 {
 		out = append(out, t.Dim.Wrap("…+"+strconv.Itoa(cut)+" lines"))
 	}

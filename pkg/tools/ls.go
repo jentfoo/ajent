@@ -104,8 +104,8 @@ func (t *lsTool) listMatches(pattern string, limit int) agent.ToolResult {
 	return agent.ToolResult{Content: llmBlock(text), Display: text}
 }
 
-// lsLimit narrows the bound's line axis to an explicit limit; the tool bound
-// stays the hard cap either way.
+// lsLimit narrows the bound's line axis to an explicit limit, the tool bound
+// staying the hard cap either way.
 func lsLimit(limit int) Limit {
 	lim := LsResultLimit()
 	if limit > 0 && limit < lim.Lines {

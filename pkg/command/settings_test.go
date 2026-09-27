@@ -22,7 +22,7 @@ func TestSettingsSectionOpensDirectly(t *testing.T) {
 	RegisterBuiltins(r, c)
 
 	// /settings reasoning jumps straight to the reasoning picker. Supported levels
-	// are [off, minimal, low, medium, high]; index 4 selects "high".
+	// are [off, minimal, low, medium, high], with index 4 selecting "high".
 	c.picks = []fakePick{{result: 4}}
 	cmd, _ := r.Get("settings")
 	require.NoError(t, cmd.Handler(t.Context(), "reasoning", c))
@@ -78,7 +78,7 @@ func TestSettingsRetentionRowEditsStateAndSaves(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// section jump lands on the retention row; Select picks "none" (index 0)
+	// section jump lands on the retention row, Select picking "none" (index 0)
 	c.selects = []int{0}
 
 	cmd, _ := r.Get("settings")
@@ -99,7 +99,7 @@ func TestSettingsCompactionRowSetsSessionKeys(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// menu opens, pick the Auto-compaction row (index 5); Confirm on; Input threshold
+	// menu opens, pick the Auto-compaction row (index 5), Confirm on, Input threshold
 	c.picks = []fakePick{{result: 5}}
 	c.confirms = []bool{true}
 	c.inputs = []string{"0.6"}
@@ -171,7 +171,7 @@ func TestSettingsModelRowHonoursSaveChoice(t *testing.T) {
 		c.commands = r
 		RegisterBuiltins(r, c)
 
-		// pick the Model row; applyModel picks beta; save prompt => project
+		// pick the Model row, applyModel picks beta, save prompt to project
 		c.picks = []fakePick{{result: 0}, {result: 1}}
 		c.selects = []int{2} // "save to project config"
 
@@ -190,7 +190,7 @@ func TestSettingsModelRowHonoursSaveChoice(t *testing.T) {
 		c.commands = r
 		RegisterBuiltins(r, c)
 
-		// pick the Model row; applyModel picks beta; save prompt => session only
+		// pick the Model row, applyModel picks beta, save prompt to session only
 		c.picks = []fakePick{{result: 0}, {result: 1}}
 		c.selects = []int{0} // "this session only"
 
@@ -209,7 +209,7 @@ func TestSettingsModelRowHonoursSaveChoice(t *testing.T) {
 func TestEnumRow(t *testing.T) {
 	// not parallel: the edit case uses Setenv which cannot run alongside parallel siblings
 
-	// a select records a session override; cancel leaves it untouched
+	// a select records a session override, cancel leaving it untouched
 	t.Run("edit_records_session_setting", func(t *testing.T) {
 		t.Setenv(config.EnvHome, t.TempDir())
 
@@ -221,7 +221,7 @@ func TestEnumRow(t *testing.T) {
 		assert.Equal(t, "Permissions mode", label)
 		assert.Contains(t, detail, "default")
 
-		// Select picks index 1 (auto); the row records it as a session override
+		// Select picks index 1 (auto), and the row records it as a session override
 		c.selects = []int{1}
 		changes, err := r.edit(t.Context(), c)
 		require.NoError(t, err)
@@ -256,7 +256,7 @@ func TestModelRow(t *testing.T) {
 		c := newFakeConsole(t)
 		r := modelRow("Sub-agent model", "subagent.model")
 
-		// picker returns beta (index 1); the row records it under its own key
+		// picker returns beta (index 1), and the row records it under its own key
 		c.picks = []fakePick{{result: 1}}
 		changes, err := r.edit(t.Context(), c)
 		require.NoError(t, err)
@@ -297,7 +297,7 @@ func TestIntRowRecordsAndValidatesSubagentConcurrency(t *testing.T) {
 	require.True(t, ok)
 	var got int
 	_ = json.Unmarshal(n, &got)
-	assert.Equal(t, 6, got) // a number, not a string; enumRow cannot store this
+	assert.Equal(t, 6, got) // a number, not a string, so enumRow cannot store this
 	assert.Equal(t, "session", srcName)
 }
 
@@ -366,7 +366,7 @@ func TestSettingsPermissionRowInMenu(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	// jump to the Permissions mode row by name; Select picks allow-read (index 1)
+	// jump to the Permissions mode row by name, Select picking allow-read (index 1)
 	c.picks = []fakePick{{result: 0}}
 	c.selects = []int{1}
 

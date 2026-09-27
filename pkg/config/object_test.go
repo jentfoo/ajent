@@ -49,7 +49,7 @@ func TestSetKey(t *testing.T) {
 	}
 
 	t.Run("preserves_key_order", func(t *testing.T) {
-		// a new key is appended after existing ones; unknown keys keep their place
+		// a new key is appended after existing ones, unknown keys keep their place
 		out, err := SetKey([]byte(`{"z":1,"a":{"b":2}}`), "m", 3)
 		require.NoError(t, err)
 		assert.Less(t, strings.Index(string(out), `"z"`), strings.Index(string(out), `"m"`))

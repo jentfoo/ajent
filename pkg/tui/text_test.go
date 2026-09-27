@@ -145,7 +145,7 @@ func TestSanitizeRow(t *testing.T) {
 		{name: "decsc_decrc_dropped", in: "\x1b7\x1b8x", want: "x"},
 		{name: "ind_nel_ri_dropped", in: "\x1bD\x1bE\x1bMx", want: "x"},
 		// splitANSI models two-byte escapes, so a charset designator's final
-		// byte survives as text; harmless, no escape reaches the terminal
+		// byte survives as text. Harmless, no escape reaches the terminal.
 		{name: "charset_dropped", in: "\x1b(Bx", want: "Bx"},
 		{name: "truncated_csi_dropped", in: "sub \x1b[12", want: "sub "},
 		{name: "truncated_osc_dropped", in: "sub \x1b]0;tit", want: "sub "},

@@ -13,7 +13,7 @@ import (
 
 // modelCommand resolves arg by name, or opens the picker when empty, and
 // persists the choice to the user layer so a fresh start keeps it. The registry
-// stays the single source of truth; Console.SetModel reflects the selection in
+// stays the single source of truth. Console.SetModel reflects the selection in
 // the status line, agent state and session record.
 func modelCommand(ctx context.Context, arg string, c Console) error {
 	changed, err := applyModel(ctx, arg, c)
@@ -58,8 +58,8 @@ func applyModel(ctx context.Context, arg string, c Console) (bool, error) {
 }
 
 // PickModel opens the model picker under title and returns the chosen model
-// without touching the session; callers apply it. current pre-selects a row by
-// key (empty for none); opts tune the pick, e.g. Silent when the caller will
+// without touching the session. Callers apply it. current pre-selects a row by
+// key (empty for none). opts tune the pick, e.g. Silent when the caller will
 // announce the change itself. It reports tui.ErrCancelled when dismissed.
 func PickModel(ctx context.Context, c Console, title, current string, opts tui.PickOptions) (llm.Model, error) {
 	models := c.Models().Models()
@@ -127,7 +127,7 @@ func reportResolveError(c Console, arg string, err error) {
 }
 
 // reasoningCommand sets the session reasoning level. With no argument it reports
-// the current choice; with a level it sets it and persists through the console.
+// the current choice. With a level it sets it and persists through the console.
 func reasoningCommand(ctx context.Context, arg string, c Console) error {
 	active := c.Models().Active()
 	supported := llm.LevelsFor(active)

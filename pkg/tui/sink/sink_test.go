@@ -113,7 +113,7 @@ func TestToolStartDisplay(t *testing.T) {
 func TestTurnEndFlushesThinking(t *testing.T) {
 	t.Parallel()
 
-	// an interrupt mid-thinking never delivers EventThinkingEnd; TurnEnd must flush
+	// an interrupt mid-thinking never delivers EventThinkingEnd, so TurnEnd must flush
 	t.Run("flushes_unterminated_partial", func(t *testing.T) {
 		h := newHeadless(t)
 		h.s.Thinking("unterminated partial")
@@ -141,7 +141,7 @@ func TestTurnEndFlushesThinking(t *testing.T) {
 func TestTurnEndFlushesText(t *testing.T) {
 	t.Parallel()
 
-	// an interrupt mid-reply never delivers EventTextEnd; TurnEnd must commit
+	// an interrupt mid-reply never delivers EventTextEnd, so TurnEnd must commit
 	// the tail so the preview cannot linger into the next turn.
 	t.Run("flushes_unterminated_tail", func(t *testing.T) {
 		h := newHeadless(t)

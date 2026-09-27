@@ -97,7 +97,7 @@ func spanStubs(branch []session.Entry, lo, band int, cwd string) []session.Stub 
 				}
 			}
 			if i >= band {
-				continue // detected for the rules above; never emitted into the band
+				continue // detected for the rules above, never emitted into the band
 			}
 
 			switch {
@@ -173,8 +173,8 @@ func superseded(ids []string, callID string) bool {
 }
 
 // writtenAfter reports whether any recorded write to a path occurs after branch
-// position at. Indices are appended in scan order, so the last is the largest;
-// only edits that precede a later wholesale rewrite get stubbed.
+// position at. Indices are appended in scan order, so the last is the largest.
+// Only edits that precede a later wholesale rewrite get stubbed.
 func writtenAfter(idx []int, at int) bool {
 	if len(idx) == 0 {
 		return false

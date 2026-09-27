@@ -15,10 +15,10 @@ const (
 )
 
 // Sink receives every event a turn produces. The interactive TUI adapts it onto
-// tui.UI; a headless caller can supply a JSON writer and a sub-agent a null sink.
+// tui.UI. A headless caller can supply a JSON writer and a sub-agent a null sink.
 type Sink interface {
 	TurnStart(TurnInfo)
-	// UserPrompt echoes a prompt's words. Live sessions echo at submission time;
+	// UserPrompt echoes a prompt's words. Live sessions echo at submission time,
 	// replay calls this so restored context shows each user message above its reply.
 	UserPrompt(text string)
 	Thinking(delta string)

@@ -70,7 +70,7 @@ func TestEnvLayerUnparseableWarns(t *testing.T) {
 			})
 			assert.Len(t, warns, 1)
 			assert.Contains(t, strings.Join(warns, "\n"), tc.wantSub)
-			// the bad value is skipped; the layer stays valid
+			// the bad value is skipped, the layer stays valid
 			assert.NotContains(t, string(l.Data), tc.skipKey)
 		})
 	}
@@ -82,7 +82,7 @@ func TestEnvLayerHomeCannotCollide(t *testing.T) {
 	vars := map[string]string{"AJENT_HOME": "/tmp/whatever"}
 	l, warns := EnvLayer(func(k string) string { return vars[k] })
 	assert.Empty(t, warns)
-	// no `home` key exists; the var is ignored entirely
+	// no `home` key exists, the var is ignored entirely
 	assert.NotContains(t, string(l.Data), "home")
 }
 
@@ -97,7 +97,7 @@ func TestEnvLayerKeepsOriginalCaseKeys(t *testing.T) {
 	l, warns := EnvLayer(func(k string) string { return vars[k] })
 	assert.Empty(t, warns)
 
-	// camelCase leaves bind at their exact-case path; no lowercased twin appears
+	// camelCase leaves bind at their exact-case path, no lowercased twin appears
 	var merged map[string]any
 	require.NoError(t, json.Unmarshal(l.Data, &merged))
 	agent := merged["agent"].(map[string]any)

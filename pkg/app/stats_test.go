@@ -195,7 +195,7 @@ func TestStatsBenchmarkDataPath(t *testing.T) {
 		assert.Equal(t, "edit", results[0]["name"])
 		assert.Equal(t, true, results[0]["error"]) // drives edit_fail
 
-		// the benchmark classifies the failure by substring; keep that parseable
+		// the benchmark classifies the failure by substring, keep that parseable
 		output, _ := results[0]["output"].(string)
 		assert.Contains(t, output, "no match for edit")
 

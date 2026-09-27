@@ -13,7 +13,7 @@ import (
 )
 
 // fakeBackend swaps every platform seam for an in-memory one and restores them
-// at cleanup. env answers writer display-variable lookups; nil means every
+// at cleanup. env answers writer display-variable lookups, nil meaning every
 // variable unset. Serial: swaps package vars.
 func fakeBackend(t *testing.T, list []writer, installed func(string) bool,
 	run func(_ context.Context, w writer, text string) error, isRemote bool, env func(string) string) *bytes.Buffer {
@@ -84,7 +84,7 @@ func TestCopy(t *testing.T) {
 			ok,
 			true, nil)
 
-		// the native write landed; the refused OSC 52 must not fail the copy
+		// the native write landed, so a refused OSC 52 must not fail the copy
 		require.NoError(t, Copy(t.Context(), strings.Repeat("x", maxEncoded)))
 		assert.Empty(t, out.String())
 	})

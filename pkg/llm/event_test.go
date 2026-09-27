@@ -124,7 +124,7 @@ func TestStopReasonString(t *testing.T) {
 		})
 	}
 
-	// the unmapped value falls back to "unknown" for logging; it has no wire form
+	// the unmapped value falls back to "unknown" for logging, since it has no wire form
 	t.Run("unknown_falls_back", func(t *testing.T) {
 		assert.Equal(t, "unknown", StopUnknown.String())
 	})

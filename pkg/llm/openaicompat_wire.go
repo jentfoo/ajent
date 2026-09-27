@@ -38,7 +38,7 @@ type compatRequest struct {
 	PromptCacheKey    string             `json:"prompt_cache_key,omitempty"`
 
 	// extra carries body keys whose name comes from configuration, folded in at
-	// marshal time; unexported so encoding/json skips it
+	// marshal time. Unexported so encoding/json skips it.
 	extra map[string]json.RawMessage
 }
 
@@ -103,7 +103,7 @@ type compatMessage struct {
 	Name             string           `json:"name,omitempty"`
 	ReasoningDetails json.RawMessage  `json:"reasoning_details,omitempty"`
 	// Tools re-offers deferred tools on a bare system message at a kimi load
-	// point; Kimi accepts the message without the standard content field.
+	// point. Kimi accepts the message without the standard content field.
 	Tools []compatTool `json:"tools,omitempty"`
 
 	// reasoning replay rides a provider-specific key (reasoning_content etc.),

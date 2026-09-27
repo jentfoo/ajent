@@ -67,8 +67,8 @@ func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		fmt.Fprintln(&b, relTo(root, m))
 	}
 
-	// an explicit limit narrows the shown head; the bound stays the hard cap and
-	// the spill always holds every match
+	// an explicit limit narrows the shown head, the bound staying the hard cap and
+	// the spill always holding every match
 	lim := FindResultLimit()
 	paging := "narrow the pattern"
 	if p.Limit > 0 && p.Limit < lim.Lines {
@@ -121,7 +121,7 @@ type fileEntry struct {
 }
 
 // matchGlob reports whether name matches pattern. A pattern with no path
-// separator matches the base name at any depth ("*.go" finds pkg/a.go); a
+// separator matches the base name at any depth ("*.go" finds pkg/a.go). A
 // pattern with separators matches the whole relative path, with ** spanning
 // any number of segments including zero ("**/*.go" also finds ./a.go).
 func matchGlob(pattern, name string) bool {

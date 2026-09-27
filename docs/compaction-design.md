@@ -251,9 +251,9 @@ Two guards keep the per-step trigger affordable:
 
 - **A fold attempt that reduces nothing latches automatic triggers off for the session**,
   cleared by `/compact`, a successful run, a model switch or a context-tree
-  jump; an interrupt never sets it. It is session state, not a write to
+  jump. An interrupt never sets it. It is session state, not a write to
   `compaction.auto`. Only a summariser call that bought nothing or a hard
-  failure latches it — never "nothing worth folding yet".
+  failure latches it, and "nothing worth folding yet" alone does not.
 - **A compaction that succeeds without clearing the point holds the step trigger until the turn boundary.**
   It cut as far as the band allows, so the next step would fold one more step
   for another summariser call; a run that clears the point holds nothing. The
@@ -273,9 +273,9 @@ Every compaction reports real numbers and is persisted as a `notice` entry so it
 replays on resume and marks the boundary in the transcript view: the before and
 after context sizes and how many messages were folded into the summary.
 
-A compaction announces itself when the summariser call starts — progress on the
-front end, not history: persisting it would replay a "compacting…" line beside
-the result it produced.
+A compaction announces itself as progress on the front end when the summariser
+call starts, not as history. Persisting it would replay a "compacting…" line
+beside the result it produced.
 
 The notice names only what changed in context. The reduction pass also replaces
 superseded and repeated results, but only in the transcript the summariser

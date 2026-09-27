@@ -28,7 +28,7 @@ func setVersionForTest(t *testing.T, v string) {
 func TestCheckUpdateNotice(t *testing.T) {
 	t.Parallel()
 
-	// fixed clock; no-op fetch used when the cached entry is still fresh
+	// fixed clock, no-op fetch used when the cached entry is still fresh
 	now := time.Unix(1_000_000, 0)
 	noFetch := func(context.Context) (string, error) { return "", errors.New("unexpected fetch") }
 	optsAt := func(fn func(context.Context) (string, error), at time.Time) UpdateCheckOptions {
@@ -103,7 +103,7 @@ func TestCheckUpdateNotice(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, msg)
 
-		// the stale tag is kept; a later run retries the fetch
+		// the stale tag is kept, a later run retries the fetch
 		var c UpdateCache
 		loadUpdateCache(path, &c)
 		assert.Equal(t, cached, c.Version)

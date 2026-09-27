@@ -77,7 +77,7 @@ func TestOnMessage(t *testing.T) {
 		a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { got = append(got, info) }}
 
 		require.NoError(t, a.Prompt(t.Context(), Input{Text: "run"}))
-		// the assistant tool-call message carries StopToolUse; user messages carry none
+		// the assistant tool-call message carries StopToolUse, user messages carry none
 		var found bool
 		for _, info := range got {
 			if _, ok := firstBlock(info.Message).(llm.ToolCallBlock); !ok {

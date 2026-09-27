@@ -24,7 +24,7 @@ func TestWriteReadHead(t *testing.T) {
 	t.Run("missing_and_corrupt_fallback", func(t *testing.T) {
 		cases := []struct {
 			name    string
-			content string // written to the sidecar; unset leaves it absent
+			content string // written to the sidecar, unset leaves it absent
 		}{
 			{name: "no_sidecar"},
 			{name: "garbage_json", content: "not json"},

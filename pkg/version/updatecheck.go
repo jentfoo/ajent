@@ -40,10 +40,10 @@ type UpdateCache struct {
 // UpdateCheckOptions injects the seams CheckUpdateNotice needs to be tested.
 type UpdateCheckOptions struct {
 	Now   func() time.Time                          // defaults to time.Now
-	Fetch func(ctx context.Context) (string, error) // latest remote tag; nil uses GitHub API
+	Fetch func(ctx context.Context) (string, error) // latest remote tag, nil uses GitHub API
 }
 
-// checkTimeout bounds the whole startup notice lookup; the fetch inside it is
+// checkTimeout bounds the whole startup notice lookup, and the fetch inside it is
 // bounded separately by fetchTimeout.
 const checkTimeout = 10 * time.Second
 
@@ -52,7 +52,7 @@ const checkTimeout = 10 * time.Second
 func CheckForUpdate(notify func(string)) {
 	path, err := config.CachePath(UpdateCacheFileName)
 	if err != nil {
-		return // no home dir; nothing to cache or compare
+		return // no home dir, nothing to cache or compare
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), checkTimeout)
 	defer cancel()
@@ -82,7 +82,7 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 	var c UpdateCache
 	loadUpdateCache(cacheFile, &c)
 
-	// refresh a stale cached tag; on failure keep the old value and still compare
+	// refresh a stale cached tag, on failure keep the old value and still compare
 	// against it, so going offline past the TTL does not hide a known update.
 	if now().Sub(time.Unix(c.CheckedAt, 0)) > remoteVersionTTL {
 		latest, err := fetch(ctx)
@@ -94,11 +94,11 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 		} else {
 			c.Version = latest
 			c.CheckedAt = now().Unix()
-			_ = saveUpdateCache(cacheFile, c) // best effort; a failed write keeps the old cache
+			_ = saveUpdateCache(cacheFile, c) // best effort, a failed write keeps the old cache
 		}
 	}
 
-	// only real builds are worth nagging about; dev is always behind by design
+	// only real builds are worth nagging about, dev is always behind by design
 	if Version == "" || Version == "dev" {
 		return "", nil
 	}
@@ -116,11 +116,11 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 		return "", nil
 	}
 	c.NoticedAt = now().Unix()
-	_ = saveUpdateCache(cacheFile, c) // best effort; a failed write only skips the next dedupe
+	_ = saveUpdateCache(cacheFile, c) // best effort, a failed write only skips the next dedupe
 	return fmt.Sprintf("update available: ajent %s → %s (run /update or --update)", Version, remote.String()), nil
 }
 
-// loadUpdateCache reads the update cache; any failure yields a zero value.
+// loadUpdateCache reads the update cache, any failure yielding a zero value.
 func loadUpdateCache(path string, c *UpdateCache) {
 	data, err := os.ReadFile(path)
 	if err != nil {

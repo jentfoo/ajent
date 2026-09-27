@@ -8,7 +8,7 @@ import (
 )
 
 // sedWrite reports whether the scanned command contains an in-place edit. Runs over the raw
-// segments so quoted flags (sed "-i") are caught; scripts themselves are left to
+// segments so quoted flags (sed "-i") are caught, scripts themselves left to
 // sedReadSafe, which fails safe to the prompt path.
 func sedWrite(s Scan) bool {
 	for _, raw := range s.Raw {
@@ -43,8 +43,8 @@ var (
 // sedBoolFlags match read-only short-flag clusters to skip when validating.
 var sedBoolFlagRe = regexp.MustCompile(`^-[nErsuz]+$`)
 
-// sedLongReadFlags are the read-only long forms; anything else starting with a
-// dash (-f/--file, --, unknown) fails safe to prompt.
+// sedLongReadFlags are the read-only long forms, anything else starting with a
+// dash (-f/--file, --, unknown) failing safe to prompt.
 var sedLongReadFlags = bulk.SliceToSet([]string{
 	"--quiet", "--silent", "--posix", "--regexp-extended", "--separate",
 	"--null-data", "--unbuffered", "--sandbox",
@@ -106,7 +106,7 @@ func sedAfterAddress(cmd string) string {
 }
 
 // parseSedSubst validates an s/pat/rep/flags substitution. Flags are restricted
-// to [gpiImM0-9]; w and e fail by design.
+// to [gpiImM0-9], w and e failing by design.
 func parseSedSubst(cmd string) bool {
 	n := len(cmd)
 	if n < 3 || cmd[0] != 's' {
@@ -137,7 +137,7 @@ func parseSedSubst(cmd string) bool {
 	return true
 }
 
-// parseSedTranslit validates a y/.../.../ transliteration; no flags allowed.
+// parseSedTranslit validates a y/.../.../ transliteration, no flags allowed.
 func parseSedTranslit(cmd string) bool {
 	n := len(cmd)
 	if n < 3 || cmd[0] != 'y' {
@@ -152,7 +152,7 @@ func parseSedTranslit(cmd string) bool {
 		return false
 	}
 	d3 := sedScanToDelim(cmd, d2+1, delim)
-	// the command ends at the third delimiter; no flags permitted
+	// the command ends at the third delimiter, no flags permitted
 	return d3 >= 0 && d3 == n-1
 }
 
@@ -191,14 +191,14 @@ func sedReadSafe(raw string) bool {
 				// attached -escript value
 				scripts = append(scripts, tok[2:])
 			case sedBoolFlagRe.MatchString(tok) || isSedLongReadFlag(tok):
-				// read-only flag; skip
+				// read-only flag, skip
 			default:
 				// -f/--file (script unverifiable), --, unknown flags => prompt
 				return false
 			}
 			continue
 		}
-		// first non-flag token is the positional script when none seen yet; later ones are input files
+		// first non-flag token is the positional script when none seen yet, later ones are input files
 		if len(scripts) == 0 && !positional {
 			scripts = append(scripts, tok)
 			positional = true

@@ -74,7 +74,7 @@ func TestClassify(t *testing.T) {
 		{"wget never readonly", "", "wget http://x/f", nil, VerdictPrompt},
 		{"nc never readonly", "", "nc host 80", nil, VerdictPrompt},
 		// find unsafe actions prompt even though find is read-only by name
-		{"find -delete prompts", "find", `{}`, []string{"find"}, VerdictAllow}, // tool form; shell handled below
+		{"find -delete prompts", "find", `{}`, []string{"find"}, VerdictAllow}, // tool form, shell handled below
 	}
 
 	for _, c := range cases {
@@ -130,7 +130,7 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
-	// write marked read-only must still prompt; only declared metadata for non-built-in names is trusted
+	// write marked read-only must still prompt, only declared metadata for non-built-in names trusted
 	t.Run("ignores_read_only_mark_for_builtins_not_in_list", func(t *testing.T) {
 		assert.Equal(t, VerdictPrompt, Classify(call("write", `{}`), roSet([]string{"write"})))
 	})

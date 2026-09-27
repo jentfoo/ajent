@@ -56,7 +56,7 @@ func scripted(turns []llm.ScriptedTurn) (func(llm.Model) (llm.Provider, error), 
 	return func(llm.Model) (llm.Provider, error) { return p, nil }, p
 }
 
-// blockingProvider blocks every Stream until ctx is cancelled; used for abort and
+// blockingProvider blocks every Stream until ctx is cancelled, used for abort and
 // shutdown tests where the turn must be pinned in flight.
 type blockingProvider struct{}
 
@@ -66,7 +66,7 @@ func (b *blockingProvider) Stream(ctx context.Context, _ llm.Request) (llm.Strea
 	return nil, ctx.Err()
 }
 
-// gatedProvider holds each stream open until releaseAll; it counts how many runs at once.
+// gatedProvider holds each stream open until releaseAll, counting how many runs at once.
 type gatedProvider struct {
 	mu      sync.Mutex
 	gates   []chan struct{}
@@ -90,7 +90,7 @@ func (g *gatedProvider) Stream(ctx context.Context, _ llm.Request) (llm.Stream, 
 
 	rel := make(chan struct{})
 	g.mu.Lock()
-	if g.release != nil { // a previous release closed the shared gate; proceed now
+	if g.release != nil { // a previous release closed the shared gate, proceed now
 		close(rel)
 	} else {
 		g.gates = append(g.gates, rel)
@@ -108,7 +108,7 @@ func (g *gatedProvider) Stream(ctx context.Context, _ llm.Request) (llm.Stream, 
 // releaseAll closes every held gate so all in-flight streams proceed.
 func (g *gatedProvider) releaseAll() {
 	g.mu.Lock()
-	if g.release != nil { // already released once; nothing new to do
+	if g.release != nil { // already released once, nothing new to do
 		g.mu.Unlock()
 		return
 	}
@@ -173,7 +173,7 @@ type capture struct {
 	rows     []string // "key|text" pairs from Activity
 	ranks    []int    // rank published alongside each row, index-aligned with rows
 	notices  []string
-	delivers []agent.Input // inputs offered to Deliver; Delivered run by caller
+	delivers []agent.Input // inputs offered to Deliver, Delivered run by caller
 }
 
 func newCapture() *capture { return &capture{} }

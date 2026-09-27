@@ -34,8 +34,8 @@ func shadeRow(st Style, text string, w int) string {
 	return b.String()
 }
 
-// maxActivityRows caps how many activity text rows are shown; overflow becomes
-// a single dim "+N more" line, so the block never grows past maxActivityBudget.
+// maxActivityRows caps how many activity text rows are shown, with overflow
+// becoming a single dim "+N more" line so the block never grows past maxActivityBudget.
 // A single hidden row takes the indicator's line and is listed instead.
 const (
 	maxActivityRows   = 4
@@ -151,7 +151,7 @@ func (u *UI) queuedRows(w, budget int) []string {
 			break
 		}
 		label := u.queued[i]
-		// a queued message can be multi-line; only its first line fits one shaded row
+		// a queued message can be multi-line, so only its first line fits one shaded row
 		if first, _, ok := strings.Cut(label, "\n"); ok {
 			label = first
 		}

@@ -5,10 +5,10 @@ import (
 )
 
 const (
-	// InterruptedText is the result content for work abandoned by an interrupt;
+	// InterruptedText is the result content for work abandoned by an interrupt,
 	// tools that observe cancellation reuse it so the transcript reads consistently.
 	InterruptedText = "interrupted by user"
-	// StepLimitText marks calls never run because the turn hit its step limit; a
+	// StepLimitText marks calls never run because the turn hit its step limit, a
 	// clean cap, not an interrupt, and the transcript says which one happened.
 	StepLimitText = "not run: the turn hit its step limit"
 )

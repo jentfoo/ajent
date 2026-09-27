@@ -30,14 +30,14 @@ type Barrier struct {
 	prompter   Prompter
 	noter      Noter
 	classifier Classifier
-	notice     func(string)               // transient UI notices (auto-allow); nil = none
-	dryRun     func(agent.ToolCall) error // registry-backed; nil means cannot predict
+	notice     func(string)               // transient UI notices (auto-allow), nil = none
+	dryRun     func(agent.ToolCall) error // registry-backed, nil means cannot predict
 	ro         func(string) bool
-	safe       func(agent.ToolCall) bool // config-declared safe commands; nil = none
-	deny       func(agent.ToolCall) bool // config-declared denied commands; nil = none
-	scope      writeScope                // auto+write's writable roots; zero allows nothing
+	safe       func(agent.ToolCall) bool // config-declared safe commands, nil = none
+	deny       func(agent.ToolCall) bool // config-declared denied commands, nil = none
+	scope      writeScope                // auto+write's writable roots, zero allows nothing
 
-	preview func(agent.ToolCall) string // enhanced dialog subject; nil = raw arguments
+	preview func(agent.ToolCall) string // enhanced dialog subject, nil = raw arguments
 
 	allows          map[string]bool               // session allows by allowSessionKey
 	compoundAllowed bool                          // broad grant covering any compound command
@@ -53,7 +53,7 @@ type pendingAsk struct {
 }
 
 // NewBarrier builds a barrier with read-only metadata lookup ro. It starts in
-// allow-read; set prompter/classifier before use.
+// allow-read, setting prompter/classifier before use.
 func NewBarrier(ro func(string) bool) *Barrier {
 	return &Barrier{
 		mode:   ModeAllowRead,
@@ -63,7 +63,7 @@ func NewBarrier(ro func(string) bool) *Barrier {
 	}
 }
 
-// SetPrompter installs the approval-dialog source; nil means headless.
+// SetPrompter installs the approval-dialog source, nil meaning headless.
 func (b *Barrier) SetPrompter(p Prompter) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -88,7 +88,7 @@ func (b *Barrier) SetClassifier(c Classifier) {
 }
 
 // SetNotice installs a callback for transient status notices such as an
-// auto-allowed classification; typically the UI's Notify. nil silences them.
+// auto-allowed classification, typically the UI's Notify. nil silences them.
 func (b *Barrier) SetNotice(n func(string)) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -116,7 +116,7 @@ func (b *Barrier) SetPreview(p func(agent.ToolCall) string) {
 
 // SetSafeCommands installs config-declared safe commands: exact tool names or
 // bash command lines that skip the approval prompt. write/edit can never be
-// listed (they always prompt); an empty list clears any prior set.
+// listed (they always prompt), an empty list clearing any prior set.
 func (b *Barrier) SetSafeCommands(cmds []string) {
 	var fn func(agent.ToolCall) bool
 	if len(cmds) > 0 {
@@ -145,7 +145,7 @@ func (b *Barrier) SetDeniedCommands(cmds []string) {
 }
 
 // SetWriteRoots installs the directories auto+write may write to without a
-// prompt; unset means every write prompts, as in every other mode.
+// prompt, unset meaning every write prompts as in every other mode.
 func (b *Barrier) SetWriteRoots(cwd string, extra ...string) {
 	s := newWriteScope(cwd, extra...)
 	b.mu.Lock()
@@ -217,8 +217,8 @@ func (b *Barrier) resetSessionAllowsLocked() {
 	b.compoundAllowed = false
 }
 
-// Guard returns the static gate: user-initiated and allow-all always permit;
-// rejections deny with guidance; block-all asks even for reads. Never blocks.
+// Guard returns the static gate: user-initiated and allow-all always permit,
+// rejections deny with guidance, and block-all asks even for reads. Never blocks.
 func (b *Barrier) Guard() tools.Guard {
 	return func(ctx context.Context, call agent.ToolCall) tools.Decision {
 		return b.gateNow().staticVerdict(ctx, call)
@@ -267,9 +267,9 @@ func (b *Barrier) startWarm(ctx context.Context, s Subject) {
 	b.mu.Unlock()
 	go func() {
 		defer cancel()
-		b.classifier.Classify(wctx, s) // warms the LRU; unsure is never cached
+		b.classifier.Classify(wctx, s) // warms the LRU, unsure never cached
 		b.mu.Lock()
-		delete(b.warm, key) // only the owner removes; startWarm never overwrites
+		delete(b.warm, key) // only the owner removes, startWarm never overwrites
 		b.mu.Unlock()
 	}()
 }
@@ -304,8 +304,8 @@ func (b *Barrier) Asker() tools.Asker {
 			return tools.Deny(noUIReason)
 		}
 
-		// the auto modes classify every prompted call concurrently with the dialog; an
-		// allow verdict resolves it open. A user answer cancels classification.
+		// the auto modes classify every prompted call concurrently with the dialog, an
+		// allow verdict resolving it open. A user answer cancels classification.
 		var classifierCtx context.Context
 		cancel := func() {}
 		var subject Subject
@@ -320,14 +320,14 @@ func (b *Barrier) Asker() tools.Asker {
 		mNow := b.mode // same-lock capture so a concurrent SetMode/Cycle is ordered against registration
 		b.mu.Unlock()
 
-		// a Shift+Tab landed between Open and registration; re-evaluate under the new mode.
+		// a Shift+Tab landed between Open and registration, so re-evaluate under the new mode.
 		if mNow != m && b.gateFor(mNow).staticVerdict(ctx, call).Action == tools.ActionAllow {
 			dlg.Resolve(int(optAllow))
 		}
 
 		if classifierCtx != nil && classifierCtx.Err() == nil {
 			go func() {
-				// a user answer cancels the context; skip both the resolve and its
+				// a user answer cancels the context, skipping both the resolve and its
 				// auto-allowed report so a denial is never claimed as auto-allowed.
 				if b.classifier.Classify(classifierCtx, subject) != ClassAllow ||
 					classifierCtx.Err() != nil { // user answered while classifying
@@ -336,12 +336,12 @@ func (b *Barrier) Asker() tools.Asker {
 				b.mu.Lock()
 				pa.auto = true // set before Resolve so Wait's return already sees it
 				b.mu.Unlock()
-				dlg.Resolve(int(optAllow)) // first resolver wins; a keystroke beats this
+				dlg.Resolve(int(optAllow)) // first resolver wins, a keystroke beats this
 			}()
 		}
 
 		idx, werr := dlg.Wait(ctx)
-		cancel()              // the user answered or gave up; stop any in-flight classification
+		cancel()              // the user answered or gave up, stop any in-flight classification
 		b.cancelWarm(subject) // and the prefetched request behind the same subject
 
 		b.mu.Lock()
@@ -429,9 +429,9 @@ func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
 }
 
 // sessionAllowed checks the in-memory allow sets for a call. The returned string
-// is empty when no grant matched; ok distinguishes a match from none. A named grant
-// covers a plain command and any compound whose non-readonly heads are all granted;
-// only a complex (unidentifiable) compound falls back to the broad grant.
+// is empty when no grant matched, ok distinguishing a match from none. A named grant
+// covers a plain command and any compound whose non-readonly heads are all granted,
+// only a complex (unidentifiable) compound falling back to the broad grant.
 func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	cmd := bashCommand(call.Input)
 	if call.Name != tools.ToolBash || !compound(cmd) { // plain command or non-bash tool
@@ -452,7 +452,7 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	}
 	for _, h := range heads {
 		if !b.allows["bash:"+h] {
-			// a named head missing; the broad grant may still cover this compound.
+			// a named head missing, the broad grant may still cover this compound.
 			return "", b.compoundAllowed
 		}
 	}
@@ -468,7 +468,7 @@ func (b *Barrier) noteAllowed(call agent.ToolCall, note string) {
 }
 
 // noteDenied injects a denial reason as a user message so the model sees why a
-// call was refused, mirroring allow-with-note; an empty reason injects nothing.
+// call was refused, mirroring allow-with-note, an empty reason injecting nothing.
 func (b *Barrier) noteDenied(call agent.ToolCall, reason string) {
 	if b.noter == nil || strings.TrimSpace(reason) == "" {
 		return
@@ -604,7 +604,7 @@ func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Deci
 		if call.Name == "edit" && g.dryRun != nil && g.dryRun(call) != nil {
 			return tools.Allow(call)
 		}
-		// a config-declared safe command skips the prompt; otherwise ask. A hard
+		// a config-declared safe command skips the prompt, otherwise ask. A hard
 		// reject above is never overridable, so sed -i stays refused.
 		if g.safe == nil || !g.safe(call) {
 			return askDecision()
@@ -623,7 +623,7 @@ func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Deci
 // trimmed command line matched as a token-boundary prefix, so "git" covers every
 // git invocation and "git stash" its subcommands. A compound line is refused when
 // any of its components matches, so wrapping in `cd ... &&` never escapes the gate.
-// Unlike SafeMatches it may also name core writers; denying one is a legitimate safety gate.
+// Unlike SafeMatches it may also name core writers, denying one being a legitimate safety gate.
 func DenyMatches(call agent.ToolCall, cmds []string) bool {
 	for _, e := range cmds {
 		e = strings.TrimSpace(e)
@@ -690,12 +690,12 @@ func SafeMatches(call agent.ToolCall, cmds []string) bool {
 }
 
 // safeBashLine reports whether a bash line is covered by configured entries. A single
-// command matches on the token-boundary prefix of its trimmed text; a compound (control
-// operators or substitution) instead requires every component to be either a listed entry
+// command matches on the token-boundary prefix of its trimmed text, while a compound (control
+// operators or substitution) requires every component to be either a listed entry
 // or verifiably read-only, so "make lint" can never smuggle in an appended write.
 func safeBashLine(cmd string, cmds []string) bool {
 	s := scanCommand(cmd)
-	if s.HasUnsafeOp { // > ` $( <( defeat analysis; fail to the prompt path
+	if s.HasUnsafeOp { // > ` $( <( defeat analysis, fail to the prompt path
 		return false
 	}
 	if !s.HasSplitOp && len(s.Segments) <= 1 {
@@ -747,7 +747,7 @@ func commandHasPrefix(cmd, prefix string) bool {
 	if rest == "" {
 		return true
 	}
-	switch rest[0] { // a boundary ends the matched token; a letter continues it
+	switch rest[0] { // a boundary ends the matched token, a letter continues it
 	case ' ', '\t', ';', '|', '&', '<', '>':
 		return true
 	default:
@@ -782,5 +782,5 @@ func promptText(m Mode, name string) string {
 // allowDecision builds an allow decision (no reason needed).
 func allowDecision() tools.Decision { return tools.Decision{Action: tools.ActionAllow} }
 
-// askDecision asks for approval; the asker resolves it into allow or deny.
+// askDecision asks for approval, the asker resolving it into allow or deny.
 func askDecision() tools.Decision { return tools.Decision{Action: tools.ActionAsk} }

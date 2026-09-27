@@ -120,7 +120,7 @@ func TestControllerPersistLocked(t *testing.T) {
 	last := f.persisted[len(f.persisted)-1]
 	assert.Equal(t, PhaseImplementing, last.Phase)
 	assert.Equal(t, "edited plan", last.ApprovedPlan) // the approved text, not the draft
-	assert.Empty(t, last.DraftPlan)                   // gate passed; no draft lingers
+	assert.Empty(t, last.DraftPlan)                   // gate passed, no draft lingers
 	assert.Equal(t, plannerModel.Key(), last.Planner)
 	assert.Equal(t, []string{"read", "write", "edit", "bash"}, last.SavedTools)
 }

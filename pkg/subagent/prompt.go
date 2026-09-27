@@ -6,8 +6,8 @@ import (
 )
 
 // childBuiltinTools names the built-in read-only tools advertised to a child.
-// The four git readers are present only inside a work tree; advertising them
-// elsewhere invites calls that no tool answers.
+// The four git readers are present only inside a work tree, advertising them
+// elsewhere inviting calls that no tool answers.
 func childBuiltinTools(inRepo bool) string {
 	list := "read, grep, find, ls"
 	if inRepo {
@@ -34,7 +34,7 @@ func childContract(inRepo bool) string {
 }
 
 // continueNudge asks a child whose final message carried only thinking to emit
-// its summary as plain text; bounded by maxContinueAttempts.
+// its summary as plain text, bounded by maxContinueAttempts.
 const continueNudge = `Continue. Your previous message had no summary text (only internal reasoning). Now output the final, self-contained summary as plain text with no tool calls.`
 
 // taskPrompt assembles a child's first input from the delegated investigation

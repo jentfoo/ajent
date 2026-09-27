@@ -24,7 +24,7 @@ const (
 )
 
 // runTurns drains the follow-up queue, running one turn per queued input until
-// nothing is left. Prompt hands in a single initial input; steering and
+// nothing is left. Prompt hands in a single initial input. Steering and
 // follow-ups arrive on the queues while it runs.
 func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 	a.mu.Lock()
@@ -59,7 +59,7 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 		// a real turn boundary: the compact hook decides whether an automatic fold
 		// fires. Step boundaries fire it too, mid-turn. The per-turn state reset runs
 		// unconditionally so an errored turn cannot leave stalled/warned armed for the
-		// next one; only the summariser call stays gated on a clean end.
+		// next one, but only the summariser call stays gated on a clean end.
 		a.mu.Lock()
 		idle = !a.running
 		a.mu.Unlock()
@@ -108,7 +108,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
-		return nil // a turn owns the agent; queued inputs drain after it
+		return nil // a turn owns the agent, queued inputs drain after it
 	}
 	a.running = true
 	turnCtx, cancel := context.WithCancel(ctx)
@@ -150,7 +150,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 
 	// the increment lives at the body's end so a recovery retry reruns the same step
 	for step := 1; ; {
-		// AwaitInput may hold this boundary while the user finishes a message; input
+		// AwaitInput may hold this boundary while the user finishes a message, so input
 		// arriving during the wait lands at this same step.
 		if a.opts.AwaitInput != nil {
 			a.opts.AwaitInput(turnCtx)
@@ -229,7 +229,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		if maxSteps > 0 && step >= maxSteps {
 			sink.Notice("turn hit the "+strconv.Itoa(maxSteps)+" step limit", LevelWarn)
 			result.Stop = llm.StopMaxTokens // loop ran out, treat as a hard stop
-			// answer this message's tool_use so the next request stays well formed;
+			// answer this message's tool_use so the next request stays well formed,
 			// the cap is not an interrupt, so it gets its own marker text
 			a.appendToolResults(msg, nil, StepLimitText)
 			break
@@ -239,13 +239,13 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		a.appendToolResults(msg, results, InterruptedText)
 
 		if turnCtx.Err() != nil {
-			// interrupted during tool execution; the fill marked the gaps
+			// interrupted during tool execution, the fill marked the gaps
 			sink.Notice(InterruptedText, LevelInfo)
 			result.Stop = llm.StopAborted
 			break
 		}
 		if endTurn {
-			// a control tool handed the turn over; nothing more streams after its result
+			// a control tool handed the turn over, nothing more streams after its result
 			result.Stop = llm.StopEndTurn
 			break
 		}
@@ -296,7 +296,7 @@ func (a *Agent) normalizeInputs(inputs []Input) []Input {
 // appendSteer adds queued steering inputs as user messages at a step boundary.
 // Input.Before lands ahead of the user's text and Input.After behind it, so a
 // rewind onto that text drops the context it asked for along with it. It is the
-// only append path for turn input; its callers (runTurn and drainSteer) run the
+// only append path for turn input, and its callers (runTurn and drainSteer) run the
 // Options.NormalizeInput seam before handing inputs over.
 func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 	for _, in := range inputs {
@@ -315,7 +315,7 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 		}
 		if len(blocks) > 0 {
 			a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}, Injected: in.Injected})
-			// injected steers have no submission echo; surface them live like replay does
+			// injected steers have no submission echo, surface them live like replay does
 			if in.Injected && !llm.OnlyToolResults(blocks) {
 				a.sink.UserPrompt(in.Text)
 			}
@@ -349,7 +349,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	if err != nil {
 		return llm.Message{}, llm.Usage{}, 0, err
 	}
-	req := llm.Prepare(a.buildRequest()) // prepare once; providers re-run it as a no-op
+	req := llm.Prepare(a.buildRequest()) // prepare once, providers re-run it as a no-op
 	// the request is already normalized, so estimate the prepared messages directly
 	predicted := tokens.EstimateFixed(req) + tokens.EstimateMessages(req.Messages)
 	// the system prompt and tool schemas are built into every request, so they
@@ -358,7 +358,7 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 		t.SetBase(tokens.EstimateFixed(req)) // replaced, so it self-corrects any seeded floor
 	}
 	keepThink := llm.ResolveRetain(a.state.Reasoning.Retain, a.state.Model.Caps) != llm.RetainNone
-	// report the ledger only for the outcome the caller sees; a retried attempt's
+	// report the ledger only for the outcome the caller sees, a retried attempt's
 	// partial usage never lands, its streamed output already moved the bar
 	report := func(usage llm.Usage) {
 		if t := a.state.Tokens; t != nil && !needsRecount(a.state.Model.Caps, usage) {
@@ -484,7 +484,7 @@ func (a *Agent) buildRequest() llm.Request {
 }
 
 // forward maps one event onto sink calls and ledger updates. Block boundaries
-// come from the end events; deltas stream through so rendering and assembly share
+// come from the end events, deltas stream through so rendering and assembly share
 // a loop.
 func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Event) {
 	t := a.state.Tokens
@@ -492,7 +492,7 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 	case llm.EventToolCallStart:
 		sink.ToolProgress(prog.start(ev.ToolCallID, ev.Index, ev.ToolName))
 	case llm.EventToolCallDelta:
-		// arguments stream as partial JSON; report the size so a long write shows
+		// arguments stream as partial JSON, report the size so a long write shows
 		// movement rather than nothing until the call is complete
 		if p, ok := prog.delta(ev.ToolCallID, ev.Index, ev.Text); ok {
 			sink.ToolProgress(p)
@@ -513,7 +513,7 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 		if t != nil && keepThink {
 			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
 		}
-		a.syncContext(false) // the live bucket grew; repaint when it moves enough
+		a.syncContext(false) // the live bucket grew, repaint when it moves enough
 	case llm.EventTextDelta:
 		sink.Text(ev.Text)
 		if t != nil {
@@ -553,14 +553,14 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 		ordered[i] = callFrom(c)
 	}
 	if fn := a.opts.OnToolBatch; fn != nil {
-		// the last point the batch is still in message order; the parallel path below
+		// the last point the batch is still in message order, the parallel path below
 		// scrambles the order the calls reach any shared state in. ctx cancels on abort,
 		// so anything launched here (permission prefetch) stops with the turn.
 		fn(ctx, ordered)
 	}
 	parallel := a.state.Model.Caps.ParallelTools && allParallel(a.opts.Tools, calls)
 	if s, ok := a.opts.Tools.(Serializer); ok && parallel {
-		// block-all asks even read-only tools; their dialogs must open in submission
+		// block-all asks even read-only tools, their dialogs must open in submission
 		// order, so a batch that would prompt runs serially instead of racing them.
 		parallel = !s.MustSerialize(ordered)
 	}
@@ -585,7 +585,7 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 
 	for i, c := range calls {
 		if ctx.Err() != nil {
-			break // a cancelled batch leaves the rest unanswered; abort fills them
+			break // a cancelled batch leaves the rest unanswered, abort fills them
 		}
 		out[i], ends[i] = a.runTool(ctx, sink, callFrom(c))
 	}
@@ -661,7 +661,7 @@ func (a *Agent) modelOrigin() *llm.Origin {
 // session can persist it as the loop appends it.
 func (a *Agent) append(info MessageInfo) {
 	// an assistant response is stamped with its producing model so cross-model history
-	// can be degraded correctly on the next request; user and tool messages stay bare.
+	// can be degraded correctly on the next request, user and tool messages stay bare.
 	if info.Message.Role == llm.RoleAssistant && info.Stop != llm.StopUnknown {
 		n := info.Message
 		n.Origin = a.modelOrigin()

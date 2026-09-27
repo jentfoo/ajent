@@ -53,7 +53,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		e1, err := w.Append(TypeMessage, MessageData{Message: llmText("one")})
 		require.NoError(t, err)
 
-		// no SetHead; Sync alone must record the appended head
+		// no SetHead, Sync alone must record the appended head
 		require.NoError(t, w.Sync())
 
 		id, ok := readHead(p)
@@ -74,7 +74,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		w.SetHead(e1.ID) // fork back to one
 		require.NoError(t, w.Close())
 
-		// the file tail is e2, but the cursor points at e1; a reopen must resume from e1
+		// the file tail is e2 but the cursor points at e1, so a reopen must resume from e1
 		w2, oerr := Open(p)
 		require.NoError(t, oerr)
 		assert.Equal(t, e1.ID, w2.Head())

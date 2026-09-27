@@ -219,7 +219,7 @@ func TestReasoningConfigUnmarshal(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(`{"hide":true}`), &hidden))
 	assert.True(t, hidden.Hide)
 
-	// a legacy setting_change wrote "show"; it is now ignored
+	// a legacy setting_change wrote "show", and it is now ignored
 	var stale ReasoningConfig
 	require.NoError(t, json.Unmarshal([]byte(`{"level":"high","show":false}`), &stale))
 	assert.Equal(t, LevelHigh, stale.Level)

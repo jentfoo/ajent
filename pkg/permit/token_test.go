@@ -39,7 +39,7 @@ func TestTokenizeRawDoubleQuoteEscapes(t *testing.T) {
 		in   string
 		want []string
 	}{
-		// inside double quotes only \" \\ \$ \` are escapes; others stay literal
+		// inside double quotes only \" \\ \$ \` are escapes, others staying literal
 		{`escaped dollar`, `echo "a\$b"`, []string{"echo", "a$b"}},
 		// \. and \/ before non-escape chars survive verbatim so sed regexes hold
 		{`literal backslash kept`, `sed "s/\./\//g"`,
@@ -83,7 +83,7 @@ func TestUnwrapLaunchers(t *testing.T) {
 			[]string{"rm", "-rf", "/"}},
 		{"timeout attached", []string{"timeout", "--signal=TERM", "30s", "git", "status"},
 			[]string{"git", "status"}},
-		// sudo must not unwrap; it changes privilege
+		// sudo must not unwrap, it changing privilege
 		{"sudo stays", []string{"sudo", "ls"}, []string{"sudo", "ls"}},
 		{"env stays", []string{"env", "FOO=1", "cmd"}, []string{"env", "FOO=1", "cmd"}},
 		// xargs/nice/stdbuf are not launchers and must never unwrap

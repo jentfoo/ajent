@@ -45,7 +45,7 @@ func TestAssemble(t *testing.T) {
 			return append([]llm.Message{{Role: llm.RoleSystem, Content: llm.BlockList{llm.TextBlock{Text: "b"}}}}, ms...)
 		}
 		out := assemble(s, []Transform{nil, first, nil, second})
-		require.Len(t, out, 3) // b then a prepended in order; the original stays last
+		require.Len(t, out, 3) // b then a prepended in order, the original stays last
 		assert.Equal(t, "b", systemText(out[0]))
 		assert.Equal(t, "a", systemText(out[1]))
 	})

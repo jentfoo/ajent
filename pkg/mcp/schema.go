@@ -10,7 +10,7 @@ import (
 	"github.com/go-analyze/bulk"
 )
 
-// maxSchemaDepth bounds recursion; discovery runs pre-turn, so a pathological
+// maxSchemaDepth bounds recursion. Discovery runs pre-turn, so a pathological
 // schema must fail fast rather than burn CPU.
 const maxSchemaDepth = 64
 
@@ -81,7 +81,7 @@ func nodeDefect(path string, node map[string]any, depth int) string {
 	}
 	if v, ok := node["required"]; ok && v != nil {
 		if _, isBool := v.(bool); isBool {
-			// draft-03 boolean form; providers ignore it, so judge legacy dialects leniently
+			// draft-03 boolean form, providers ignore it, so judge legacy dialects leniently
 		} else {
 			names, ok := v.([]any)
 			if !ok {
@@ -129,7 +129,7 @@ func itemsDefect(path string, v any, depth int) string {
 
 // schemaAt validates one schema position: an object walked in full, or a
 // boolean schema (always/never applies). Boolean forms are spec-mandated and
-// tolerated by the providers; flagged for a real-request fixture if one ever
+// tolerated by the providers, flagged for a real-request fixture if one ever
 // rejects them.
 func schemaAt(path string, v any, depth int) string {
 	if depth > maxSchemaDepth {
@@ -226,7 +226,7 @@ func knownType(name string) bool {
 	return false
 }
 
-// schemaPath renders a node's location for defect messages; the root has none.
+// schemaPath renders a node's location for defect messages, and the root has none.
 func schemaPath(path, seg string) string {
 	if path == "" {
 		return seg

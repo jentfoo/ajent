@@ -17,7 +17,7 @@ type readParams struct {
 }
 
 // readTool reads a file with line numbers so edit and the model agree on positions.
-// An image file reads as an image block on a vision model; a text-only model is
+// An image file reads as an image block on a vision model, while a text-only model is
 // refused with today's note so it does not waste a read.
 type readTool struct {
 	policy  PathPolicy
@@ -45,7 +45,7 @@ func (t *readTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: S
 
 func (t *readTool) Mode() agent.ExecutionMode { return agent.ModeParallel }
 
-// selfBounding: read bounds its own window and pages with offset; no spill.
+// selfBounding: read bounds its own window and pages with offset, no spill.
 func (*readTool) selfBounding() {}
 
 // Execute reads path, observing it in the tracker and returning line-numbered
@@ -102,7 +102,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 	content := b.String()
 
-	// Display shows which section was read; Content stays the bare block so the
+	// Display shows which section was read. Content stays the bare block so the
 	// model reads no path it already supplied.
 	display := content
 	if lastEmitted > 0 {
@@ -116,7 +116,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 }
 
 // readImage fits one image file and returns it as model content. A rejected
-// image becomes an error result naming why; a fitted one carries the sizing
+// image becomes an error result naming why, while a fitted one carries the sizing
 // note so answers stay honest against the source pixels.
 func (t *readTool) readImage(full string, data []byte) (agent.ToolResult, error) {
 	blocks, err := FitImage(data)

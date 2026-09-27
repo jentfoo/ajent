@@ -21,7 +21,7 @@ const (
 	// for it must match the terminal's: a disagreement would wrap a rule that
 	// was meant to fit exactly. "─" is East Asian Ambiguous, which uniseg and
 	// effectively all emulators in their default configuration measure as one
-	// column; rules are drawn a column short of the edge so they never enter
+	// column. Rules are drawn a column short of the edge so they never enter
 	// the deferred-wrap state.
 	ruleChar       = "─"
 	maxTableWidth  = 120
@@ -73,7 +73,7 @@ func (r mdRenderer) blocks(n ast.Node, src []byte) []histLine {
 			out = append(out, histLine{table: r.buildTable(c, src)})
 			continue
 		} else if c.Kind() == ast.KindThematicBreak {
-			// a rule is drawn to fit the width it is laid at; retain intent and
+			// a rule is drawn to fit the width it is laid at, retaining intent and
 			// style so re-laying (on resize) reproduces commit exactly.
 			if len(out) > 0 {
 				out = append(out, histLine{})
@@ -124,7 +124,7 @@ func (r mdRenderer) block(n ast.Node, src []byte) (string, lineFlow) {
 	case ast.KindList:
 		return r.list(n.(*ast.List), src), flowWrap
 	case ast.KindThematicBreak:
-		// top-level breaks are handled in blocks() as a histLine{rule}; this
+		// top-level breaks are handled in blocks() as a histLine{rule}. This
 		// path covers nested ones (inside a list or quote), which stay baked at
 		// width because they cannot carry the intent through the string return.
 		w := max(r.width, minRuleWidth)
@@ -158,8 +158,8 @@ func (r mdRenderer) codeBlock(n ast.Node, src []byte) string {
 		styled = highlight(r.theme, lang, body)
 	}
 	if len(styled) != len(lines) {
-		// row accounting is exact; a block that lexed to a different row count than
-		// it was written with is one we do not understand
+		// row accounting is exact. A block that lexed to a different row count than
+		// it was written with is one we do not understand.
 		styled = nil
 	}
 	for i, line := range lines {
@@ -216,7 +216,7 @@ type mdTable struct {
 }
 
 // buildTable walks a GFM table node into its structured form. Cells are fully
-// styled here; layout only measures and pads them.
+// styled here, and layout only measures and pads them.
 func (r mdRenderer) buildTable(n ast.Node, src []byte) *mdTable {
 	t := &mdTable{}
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
@@ -254,7 +254,7 @@ func (r mdRenderer) buildTable(n ast.Node, src []byte) *mdTable {
 }
 
 // layoutTable renders the table at width: column widths come from content and are
-// shrunk (long cells wrapped) when they exceed it; a separator runs between rows.
+// shrunk (long cells wrapped) when they exceed it, with a separator running between rows.
 func layoutTable(t *mdTable, width int) []string {
 	cols := len(t.header)
 	if cols == 0 || t.align == nil {
@@ -331,7 +331,7 @@ func shrinkColumns(nat []int, avail int) []int {
 				bi = i
 			}
 		}
-		if bi < 0 { // every column is at its floor; accept the overflow and clip later
+		if bi < 0 { // every column is at its floor, accept the overflow and clip later
 			break
 		}
 		w[bi]--
@@ -382,7 +382,7 @@ func tableRowGroup(cells [][]string, w []int, al []mdAlign) []string {
 }
 
 // padLine pads s to width columns honoring a column alignment. Styling is already
-// baked into s; the appended spaces are plain.
+// baked into s, and the appended spaces are plain.
 func padLine(s string, w int, a mdAlign) string {
 	sw := displayWidth(s)
 	if sw >= w {

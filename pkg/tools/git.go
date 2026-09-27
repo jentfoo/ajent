@@ -90,7 +90,7 @@ type gitSide struct {
 }
 
 // gitBlobSide reads path out of a tree. A missing entry or submodule yields
-// nil with no error; a read failure returns the error, so a broken object is
+// nil with no error, while a read failure returns the error so a broken object is
 // never misread as a deletion.
 func gitBlobSide(t *object.Tree, path string) (*gitSide, error) {
 	if t == nil {
@@ -244,7 +244,7 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 			continue
 		}
 		if from == nil && to == nil {
-			continue // gone from both snapshots; nothing to show
+			continue // gone from both snapshots, nothing to show
 		}
 		writeGitFileDiff(&b, from, to)
 	}
@@ -429,7 +429,7 @@ func shortHash(h plumbing.Hash) string {
 
 // gitStatusLines renders st as git short-format lines sorted by path, plus a
 // counts summary. Both-sides-unmodified entries (Preload artifacts) are
-// skipped; a directory whose contents are all untracked collapses to one
+// skipped. A directory whose contents are all untracked collapses to one
 // `?? dir/` line, and the untracked count follows the lines shown. tracked
 // names HEAD's files: status omits clean entries, so they must come separately.
 func gitStatusLines(st git.Status, tracked []string) (lines []string, staged, unstaged, untracked int) {
@@ -505,7 +505,7 @@ func collapseUntracked(blocked map[string]struct{}, untracked []string) []string
 	return out
 }
 
-// headTreePaths lists every path in HEAD's tree; empty before any commit.
+// headTreePaths lists every path in HEAD's tree, empty before any commit.
 func headTreePaths(r *git.Repository) ([]string, error) {
 	c, err := gitCommit(r, "HEAD")
 	if err != nil {

@@ -165,16 +165,16 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 	case ResumePick:
 		list, lerr := store.List(cwd)
 		if len(list) == 0 || errors.Is(lerr, session.ErrNoSessions) {
-			return fresh("") // nothing saved yet; start one
+			return fresh("") // nothing saved yet, start one
 		} else if lerr != nil {
 			return nil, lerr
 		}
 		picked, perr := -1, error(nil)
-		if pick != nil { // no UI means we cannot choose; fall back to fresh
+		if pick != nil { // no UI means we cannot choose, fall back to fresh
 			picked, perr = pick(list)
 		}
 		if errors.Is(perr, tui.ErrCancelled) || picked < 0 {
-			return fresh("") // cancelled the resume; start new rather than stall
+			return fresh("") // cancelled the resume, start new rather than stall
 		} else if perr != nil {
 			return nil, perr
 		}
@@ -441,7 +441,7 @@ func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registr
 		}
 	})
 	// this deliberately overwrites what switchState seeded, so the base is measured
-	// again here against the fork's model; BaseEstimate takes the lock WithState held
+	// again here against the fork's model, BaseEstimate takes the lock WithState held
 	if ledger != nil {
 		ledger.SetBase(r.baseEstimate(ag))
 	}
@@ -498,7 +498,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	items := make([]tui.PickItem, len(tree))
 	for i, row := range tree {
 		tag, mark := roleTag(row.Kind)
-		// Guide draws the branch ("├──", "└──", continuation bars); a flat trunk has none.
+		// Guide draws the branch ("├──", "└──", continuation bars), but a flat trunk has none.
 		// Off shades the rows no longer in context, so an abandoned fork recedes.
 		items[i] = tui.PickItem{
 			Label: row.Guide + rewindBody(row),
@@ -509,7 +509,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		}
 	}
 	// a large session would repaint every retained line on each arrow press in alt
-	// mode; defer that until the message is chosen.
+	// mode, defer that until the message is chosen.
 	if len(tree) >= rewindDeferThreshold {
 		ui.SetDeferHistory(true)
 		defer ui.SetDeferHistory(false)
@@ -533,7 +533,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		return
 	}
 	if r.discardStaged != nil {
-		r.discardStaged() // staged against the branch just left; not this one's to carry
+		r.discardStaged() // staged against the branch just left, not this one's to carry
 	}
 	r.restoreForkModel(ui, ag, reg, saveModel)
 

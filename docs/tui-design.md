@@ -154,10 +154,10 @@ The package separates the public API, state machine and key handling (`ui.go`)
 from two renderers behind one interface: inline (the terminal owns wrapping,
 reflow and scrollback) and alt (we own them). Everything above that layer is
 shared by all modes, so a new kind of output is almost always work in `ui.go`
-plus one renderer-agnostic file and touches no renderer. The rest — markdown and
-diff rendering, width-aware text/wrap/ansi primitives, the editor buffer, key
-decoding, palettes, status and activity rows, dialogs — are behaviour this
-document specifies, not a layout to memorise.
+plus one renderer-agnostic file and touches no renderer. The rest, which covers
+markdown and diff rendering, width-aware text/wrap/ansi primitives, the editor
+buffer, key decoding, palettes, status and activity rows, and dialogs, is
+behaviour this document specifies rather than a layout to memorise.
 
 The demo driving this is not part of this package: `ajent-demo` (the root module
 built with the `demo` tag) spawns a standalone OpenAI-compatible model server in
@@ -398,7 +398,7 @@ then waits on a result channel; the input goroutine checks for an active
 interaction before the editor sees a key. `Select` and `Pick` commit a one-line
 summary of the chosen row; approval dialogs (`OpenDecision`) and answered
 questions (`Ask`) echo nothing, because permit's barrier logs its own
-descriptive outcome notice — echoing the prompt plus label would duplicate it.
+descriptive outcome notice. Echoing the prompt plus label would duplicate it.
 The same rule lets a `Pick` opt out via `Silent`, which `/model` sets so the
 picker does not commit its own summary. Interactions **queue in arrival order**
 rather than being refused, because parallel tool calls will each want to ask
@@ -407,8 +407,8 @@ Resolution is race-safe: a cancellation racing a keystroke settles on whichever
 arrived first (only the winner commits its summary or dequeues), and `Close`
 resolves everything outstanding with `ErrCancelled`. A caller must trust that
 settle rather than assume its own branch won, because when ctx and answer are
-both ready Go selects at random — an answer given in the same instant survives.
-Only a resolution **with nil error** commits — a cancelled interaction records
+both ready Go selects at random. An answer given in the same instant survives.
+Only a resolution **with nil error** commits. A cancelled interaction records
 nothing, because the row under the cursor is not a choice the user made. An
 agent-initiated question is the deliberate exception: Esc is
 *declined to answer*, resolved normally, so the decline is recorded.
@@ -416,7 +416,7 @@ agent-initiated question is the deliberate exception: Esc is
 An **approval dialog** (`OpenDecision`) is an interaction with a caller-held
 handle: `Wait` blocks for the answer, `Resolve(index)` settles it from the
 caller, and `Close` abandons it. The first to resolve wins (whether that is a
-keystroke or an external resolver — the permission classifier or a mode cycle),
+keystroke or an external resolver such as the permission classifier or a mode cycle),
 and the loser reads nothing. The subject is shown above numbered options, elided
 to a bounded number of lines except the first line, which always survives
 however long it is, so a single long command is never dropped whole; subject
@@ -475,7 +475,7 @@ for what happened and avoids duplicating the dialog's prompt-and-label echo.
 
 A lone `Esc` is indistinguishable from the start of a longer escape sequence
 until more bytes arrive or enough time passes, so it is held for a short timeout
-before being reported — without that there is no cancel key at all. The timer is
+before being reported. Without that there is no cancel key at all. The timer is
 not armed while an in-progress paste sits in the buffer (a paste body can
 legitimately stall mid-arrival); when it does fire on a truncated sequence the
 whole remaining buffer is dropped rather than re-decoded as runes, so only a
@@ -934,7 +934,7 @@ The following rules keep that true:
    is arbitrary text that may carry newlines, tabs or escape sequences. Every
    boundary sanitizes it: folds line breaks and tabs to single spaces, drops the
    remaining C0/DEL/C1 controls, and keeps only complete non-private SGR from
-   the escapes — a cursor-motion sequence would move the park inside the block,
+   the escapes. A cursor-motion sequence would move the park inside the block,
    and a truncated escape could swallow the park as parameters. Keeping SGR is
    why styled tool output still reads; zero-width escapes are exactly why this
    is row accounting rather than cosmetics.
@@ -964,7 +964,7 @@ The following rules keep that true:
    committed rows; nothing closes this without predicting signal delivery.
 5. **The live block never exceeds the screen.** A block taller than the screen
    is not erasable: drawing it scrolls, pushing its top rows into scrollback
-   where no erase can reach them — one stranded copy per redraw, compounding
+   where no erase can reach them, each redraw stranding another unreachable copy
    (what a long reply streaming into a short terminal used to do). Every
    producer budgets itself against remaining rows; the streaming preview yields
    hardest since only its height follows content rather than the terminal,
@@ -977,8 +977,8 @@ The following rules keep that true:
    signal stream proves nothing (the ioctl reports size before the reflow
    finishes). So after a burst it holds drawing until two barriers clear: a DSR
    status reply proving the reflow finished (with a grace for terminals that
-   never answer), then one more quiet grace so no new signal arrived during it —
-   during continuous fast resizing every grace is invalidated and nothing emits
+   never answer), then one more quiet grace so no new signal arrived during it.
+   During continuous fast resizing every grace is invalidated and nothing emits
    until a genuine pause. Both are generation-checked, so an older burst's reply
    or timer can never release a draw. `Close` flushes whatever is still
    deferred, so a burst overlapping the end of a turn cannot swallow committed
@@ -991,27 +991,27 @@ The following rules keep that true:
    invalidation set by commit/ suspend/resume/clearHistory, and periodically as
    a safety net. The severity asymmetry is why this is acceptable: a stale row
    inside the live block sits in erasable territory (healed next redraw) whereas
-   a stranded row above it is committed content nothing can reach — diff
+   a stranded row above it is committed content nothing can reach. Diff
    staleness self-heals; stranding does not.
 8. **The park is ground truth until a shrink retires it.** Every rule above
    assumes the parked cursor still marks the block's top, which holds through
    any reflow of the block itself (the cursor rides its cell). A *shrink* breaks
    it: narrowing rewraps history into more rows or a shorter screen holds fewer,
    and either way the park can retire into scrollback, leaving the terminal to
-   clamp the cursor onto what is left — the block ends mid-screen with space no
-   erase reclaims. So the settled redraw queries a cursor-position report ahead
+   clamp the cursor onto what is left, so the block ends mid-screen with space
+   no erase reclaims. So the settled redraw queries a cursor-position report ahead
    of its status barrier; when the reported row plus the block's height ends
-   above the last screen row it re-anchors, padding with newlines (a read, not
-   an address — invariant 1) measured from the reported row so the pad never
-   displaces committed output. Only a *shrink* re-anchors: a grow rewraps into
-   fewer rows and takes none away.
+   above the last screen row it re-anchors, padding with newlines as a read (a
+   write to an address would land blind). Per invariant 1) it measures from the
+   reported row so the pad never displaces committed output. Only a *shrink*
+   re-anchors: a grow rewraps into fewer rows and takes none away.
 
    Three guards keep that correct. Both dimensions count, so a corner drag that
    widens but shortens is still a shrink, and an equal-size settle re-anchors too
    since its burst may have narrowed then dragged back. The reply must be one this
    settle asked for: a report left over from an earlier burst is no longer true
    (replies carry no identity, so a superseded reply the reader decodes after this
-   probe's drain still passes). And a pad lives exactly one draw — every settle
+   probe's drain still passes). And a pad lives exactly one draw. Every settle
    re-decides, passing a row of zero when it has no usable evidence, because a pad
    raised by an abandoned frame applied against moved geometry is the overshoot
    that scrolls committed history away; commit/suspend/clearHistory clear it for
@@ -1023,7 +1023,7 @@ The following rules keep that true:
    which invariant 2 forbids.
 
    This fixes the on-screen anchor only; rows retired into scrollback stay
-   unreachable — inline cannot erase scrollback without destroying the session,
+   unreachable. Inline cannot erase scrollback without destroying the session,
    which is the accepted price of native scrollback.
 
 ### Why inline does not re-render committed history on resize
@@ -1031,9 +1031,9 @@ The following rules keep that true:
 The relative erase keeps every rule above true: on a settled size change,
 `resize()` just picks up the new size and the next ordinary frame erases from
 the parked cursor. It deliberately does **not** re-lay committed history (code,
-lists, quotes, diffs, tables, rules) at the new width — three designs tried to
-and each corrupted a real terminal: a full viewport redraw destroyed whatever
-was above the session; an absolute repaint of visible rows worked at screen
+lists, quotes, diffs, tables, rules) at the new width. Three designs were
+tried and each corrupted a real terminal: a full viewport redraw destroyed
+whatever was above the session; an absolute repaint of visible rows worked at screen
 bottom but corrupted scrollback once scrolled up (an absolute write lands on
 whichever rows are currently displayed); and a relative climb bounded by emitted
 rows fixed the scrolled case but broke on **widening**, when real emulators pull
@@ -1044,9 +1044,9 @@ The lesson is load-bearing:
 **we cannot know where committed rows sit after an emulator reflow.** Only the
 live block's top (the parked cursor) is ground truth, so inline leaves every
 committed line exactly as it landed and never rewrites one. The way structural
-content still gets full-form fidelity is to hand wrapping to the emulator in the
-first place — every text line goes out as a single logical line, so it reflows
-like `cat` output — while genuinely two-dimensional content (tables, rules)
+content still gets full-form fidelity by handing wrapping to the emulator: every
+text line goes out as a single logical line, so it reflows like `cat` output,
+while genuinely two-dimensional content (tables, rules)
 keeps its hard layout and committed width until it scrolls away. Alt mode exists
 for full resize fidelity: it owns a viewport and re-lays everything.
 
@@ -1085,8 +1085,8 @@ opens alt mode with history repainting deferred: while the cursor moves, only
 the live block is redrawn and committed rows stay exactly as they were. This
 keeps arrow-key navigation over many messages from re-emitting every retained
 line per keystroke; the restored context still replays once on selection (the
-full `Reset` + `Replay` below). Any change to history itself — a commit, a
-resize, or a live-row count shift that would move it — falls back to a full
+full `Reset` + `Replay` below). Any change to history itself, whether a commit,
+a resize or a live-row count shift that would move it, falls back to a full
 paint, so deferral only ever skips frames where committed content is genuinely
 unchanged.
 
@@ -1133,7 +1133,7 @@ terminal.
 SS3 (`ESC O <x>`) maps only a safe subset: the four arrows plus Home, End and
 keypad Enter; `p`-`y` are deliberately absent because tcell reads them as
 PC-keypad navigation rather than digits. A bare `CSI R` is a cursor report here
-while it is F3 elsewhere — there is no F-key type, so the parameterless branch
+while it is F3 elsewhere. There is no F-key type, so the parameterless branch
 stays ignored.
 
 Mouse reporting is deliberately not enabled: it would buy wheel events at the
@@ -1146,13 +1146,13 @@ programmatic fill parks the caret at the end (all recall paths), one variant
 translating a byte offset for callers with byte-indexed positions (the Ctrl+R
 match). It owns its own layout: wrapping the buffer into display rows on word
 boundaries and reporting the caret's row/column within them. Wrapping is purely
-visual — `Value()` is untouched, so submitted input never gains newlines.
+visual and leaves `Value()` untouched, so submitted input never gains newlines.
 Movement and editing keys respect those same visual rows: Home/End bound the
 current wrapped row rather than the logical line, matching ↑/↓; Ctrl+K kills
 only to that row's end, Ctrl+U from the row's start to the caret. Clear and the
 kills keep a one-level snapshot that Ctrl+Y restores (Esc and Ctrl+C clear
-through the same `Clear`). Any other buffer change — typing, backspace, a
-programmatic fill, submit — drops the snapshot rather than letting a later
+through the same `Clear`). Any other buffer change (typing, backspace,
+a programmatic fill or submit) drops the snapshot rather than letting a later
 restore clobber newer text, and a kill that removes nothing leaves an older
 snapshot alone, so hammering kills on the emptied buffer cannot lose the clear.
 
@@ -1167,7 +1167,7 @@ The key table:
 | Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Ctrl+V | paste an image from the clipboard as an `[image #N]` token (`ControlClipboardImage`). Readers are `xclip`/`wl-paste` (Linux), `pngpaste` (macOS), PowerShell (Windows). Kitty's own paste binding takes the key first when `ctrl+v` is mapped in `kitty.conf`, and kitty pastes text only |
-| Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`); inert everywhere else — it never reaches the editor or steals a keystroke from a dialog. The payload is the verbatim transcript content, not the row's display label (see `clipboard-copy-feature.md`) |
+| Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`); inert everywhere else, so it never reaches the editor or steals a keystroke from a dialog. The payload is the verbatim transcript content, not the row's display label (see `clipboard-copy-feature.md`) |
 | Alt+↑ | recall the newest queued message into the editor — emitted as `ControlRecallQueued` |
 | Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
 | Ctrl+U | remove from the start of the current line to the caret |
@@ -1194,7 +1194,7 @@ is what let a `\r` in a pasted file submit the prompt mid-paste.
 Keys that resolve to nothing are emitted as control events so the host decides
 their meaning. Shift+Tab and Shift+←/→ are special: they reach the control
 channel even while an interaction or overlay owns the keyboard, because changing
-a permission mode with a prompt already on screen must work — and the front end
+a permission mode with a prompt already on screen must work. The front end
 maps them onto cycling the barrier forward or back, which re-evaluates any open
 approval dialog under the new mode. Ctrl+X is out-of-band the same way while an
 interaction owns the keyboard (`ControlCopySelection`); idle it is swallowed.
@@ -1229,7 +1229,7 @@ already takes. A horizontal caret key moves from that offset.
 Plain ↑/↓ are **cursor-first** for multi-line prompts rather than always
 recalling history: they move the caret across visual rows keeping roughly the
 same column, clamping to a shorter line. Only at the buffer's edges do they
-touch history — on the first display row an Up moves mid-text back to the
+touch history. On the first display row an Up moves mid-text back to the
 prompt's start and only a press already sitting on the very first character
 recalls older, symmetrically for Down on the last row. So scrolling history from
 an edited line takes two presses: one to reach the boundary, one to scroll.
@@ -1289,7 +1289,7 @@ regressions pin that inline never emits an absolute cursor address.
 The pty harness is for end-to-end checks: Linux opens `/dev/ptmx`, runs the UI
 against the slave and drives a real emulator from the master. Almost everything
 is real (raw mode, keystrokes crossing the kernel, termios restore); only the
-origin of SIGWINCH is synthetic — the slave is not a controlling terminal so
+origin of SIGWINCH is synthetic. The slave is not a controlling terminal so
 nothing is delivered and the test raises it on itself. The resize path needs no
 sleep: the emulator counts outgoing DSR probes, the test writes the status reply
 into the master, then waits for the settled redraw.

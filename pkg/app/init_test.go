@@ -148,7 +148,7 @@ func TestInitControllerStart(t *testing.T) {
 func TestInitWatch(t *testing.T) {
 	t.Parallel()
 
-	// touch sets path's mtime explicitly; two writes can share a coarse timestamp.
+	// touch sets path's mtime explicitly, two writes can share a coarse timestamp.
 	touch := func(t *testing.T, path string, at time.Time) {
 		t.Helper()
 
@@ -177,7 +177,7 @@ func TestInitWatch(t *testing.T) {
 		var got []string
 		w := &initWatch{notify: func(msg string, _ tui.Level) { got = append(got, msg) }}
 		w.arm(path)
-		w.TurnEnd(agent.TurnResult{}) // the barrier refused; the file never changed
+		w.TurnEnd(agent.TurnResult{}) // the barrier refused, the file never changed
 		assert.Empty(t, got)
 	})
 
@@ -188,7 +188,7 @@ func TestInitWatch(t *testing.T) {
 		var got []string
 		w := &initWatch{notify: func(msg string, _ tui.Level) { got = append(got, msg) }}
 		w.arm(path)
-		// a turn already running when the survey landed ends first and wrote nothing;
+		// a turn already running when the survey landed ends first and wrote nothing,
 		// disarming here lost the notice entirely
 		w.TurnEnd(agent.TurnResult{})
 		assert.Empty(t, got)
@@ -224,7 +224,7 @@ type initHarness struct {
 	ctl  *initController
 	pump chan pumpLine
 
-	// held blocks agent_poll until the test releases it; polling closes once to
+	// held blocks agent_poll until the test releases it, and polling closes once to
 	// announce that a survey really reached its spawn step.
 	held    chan struct{}
 	polling chan struct{}
@@ -373,7 +373,7 @@ func TestPromptInput(t *testing.T) {
 
 		assert.Equal(t, "distill this", in.Text)
 		assert.True(t, in.Injected)
-		assert.True(t, in.Prepared)    // assembled by its sender; the seam must not re-expand
+		assert.True(t, in.Prepared)    // assembled by its sender, the seam must not re-expand
 		assert.Equal(t, "/init", echo) // a label, not the whole instruction
 		assert.Equal(t, 1, armed)      // armed as it becomes a turn
 		// staged shell results still land ahead of the survey's own pairs
@@ -403,9 +403,9 @@ func TestPromptInput(t *testing.T) {
 		assert.Contains(t, in.Text, "@a.go")
 		assert.Equal(t, in.Text, echo) // a typed prompt echoes itself
 		assert.False(t, in.Injected)
-		assert.True(t, in.Prepared) // expanded here; the seam must not re-expand
+		assert.True(t, in.Prepared) // expanded here, the seam must not re-expand
 		assert.Positive(t, pending) // the read is sized before it lands
-		// staged shell results ride ahead; the @ read lands behind the message
+		// staged shell results ride ahead, the @ read lands behind the message
 		assert.Equal(t, staged, in.Before)
 		require.NotNil(t, in.After)
 		assert.Equal(t, []string{"ref-1-a.go"}, callIDs(in.After(t.Context())))
@@ -434,7 +434,7 @@ func TestSubmitEstimate(t *testing.T) {
 
 	withBefore := text
 	withBefore.Before = []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, strings.Repeat("payload ", 200))}}
-	// injected pairs are the larger half of a survey; the bucket must count them
+	// injected pairs are the larger half of a survey, the bucket must count them
 	assert.Greater(t, submitEstimate(withBefore, 0), textOnly)
 
 	// @ reads have not run yet, so their measured size is carried in separately

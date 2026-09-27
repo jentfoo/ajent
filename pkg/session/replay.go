@@ -9,7 +9,7 @@ import (
 
 // ReplayOptions controls how a resume is condensed onto the sink.
 type ReplayOptions struct {
-	Thinking bool // off by default; thinking is noise on resume
+	Thinking bool // off by default, thinking is noise on resume
 }
 
 // Replay echoes the branch's committed history onto sink: user prompts render
@@ -19,7 +19,7 @@ type ReplayOptions struct {
 func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 	var cur llm.Model
 	var turnOpen bool
-	// per-turn accumulators; reset each time a real user prompt opens a turn so
+	// per-turn accumulators, reset each time a real user prompt opens a turn so
 	// every TurnEnd reports only that turn's usage and final stop reason.
 	var turnUsage llm.Usage
 	lastStop := llm.StopUnknown
@@ -32,8 +32,8 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 		turnOpen = false
 	}
 
-	// open tool calls, keyed by call ID; headers are not committed until each
-	// result arrives so a header renders directly above its body, as live output does.
+	// open tool calls keyed by call ID, headers committed only once each
+	// result arrives so a header renders directly above its body as live output does.
 	pending := make(map[string]agent.ToolCall)
 	for _, e := range branch {
 		switch e.Type {
@@ -91,7 +91,7 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 							sink.EndThinking()
 						}
 					case llm.ToolCallBlock:
-						// labels on resume are a follow-up; replay falls back to the bare name.
+						// labels on resume are a follow-up, so replay falls back to the bare name
 						pending[blk.ID] = agent.ToolCall{ID: blk.ID, Name: blk.Name, Input: blk.Input}
 					}
 				}
@@ -124,7 +124,7 @@ func replayInjected(id, text string, sink agent.Sink) {
 
 // foldResults resolves every tool result in content against pending calls. Each
 // header is committed only here, directly above its body, so replay interleaves a
-// call's label and output the way live streaming does; the sink's completion hook
+// call's label and output the way live streaming does. The sink's completion hook
 // commits the body through its own output-head / collapse rules to keep history bounded.
 func foldResults(pending map[string]agent.ToolCall, content llm.BlockList, sink agent.Sink) {
 	for _, b := range content {

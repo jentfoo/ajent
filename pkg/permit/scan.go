@@ -7,9 +7,9 @@ import (
 
 // Scan is the result of one left-to-right pass over a shell command.
 type Scan struct {
-	// Segments split on unquoted control operators; quoted regions collapse to "".
+	// Segments split on unquoted control operators, quoted regions collapsing to "".
 	Segments []string
-	// Raw is the index-aligned verbatim counterpart of Segments; sed/awk/rg/sort read it.
+	// Raw is the index-aligned verbatim counterpart of Segments, sed/awk/rg/sort reading it.
 	Raw []string
 	// HasSplitOp reports any &&, ||, |, ;, & or newline outside quotes.
 	HasSplitOp bool
@@ -58,7 +58,7 @@ func scanCommand(command string) Scan {
 	var hasSplitOp, hasUnsafeOp bool
 
 	pushSegment := func() {
-		// keyed on the collapsed trim so Segments/Raw stay index-aligned; rawBuf
+		// keyed on the collapsed trim so Segments/Raw stay index-aligned, and rawBuf
 		// always resets so stale verbatim text never leaks forward.
 		collapsed := strings.TrimSpace(buf.String())
 		if collapsed != "" {
@@ -114,7 +114,7 @@ func scanCommand(command string) Scan {
 				}
 			}
 			if !closed {
-				hasUnsafeOp = true // unterminated quote; bash would reject the tail anyway
+				hasUnsafeOp = true // unterminated quote, bash would reject the tail anyway
 			}
 			buf.WriteString(`""`)
 			rawBuf.WriteString(command[start:i])
@@ -134,7 +134,7 @@ func scanCommand(command string) Scan {
 			}
 		}
 
-		// /dev/null redirects discard output; must precede the `>`/`&` branches so
+		// /dev/null redirects discard output, and must precede the `>`/`&` branches so
 		// &>/dev/null is neither split nor flagged unsafe.
 		if nullLen := matchNullRedirect(command, i); nullLen > 0 {
 			rawBuf.WriteString(command[i : i+nullLen])
@@ -147,7 +147,7 @@ func scanCommand(command string) Scan {
 			hasUnsafeOp = true
 		case '$':
 			if i+1 < n && command[i+1] == '(' {
-				// $(...) expands and executes; treat as unsafe
+				// $(...) expands and executes, treat as unsafe
 				hasUnsafeOp = true
 				buf.WriteString("$(")
 				rawBuf.WriteString("$(")
@@ -220,8 +220,8 @@ func compound(command string) bool {
 }
 
 // allSegmentsReadOnly reports whether every collapsed segment is verifiably
-// read-only. Pipelines are tolerated (splitOp alone isn't fatal); an unsafe op
-// disqualifies outright, and each segment must clear find flags plus the
+// read-only. Pipelines are tolerated (splitOp alone isn't fatal), an unsafe op
+// disqualifying outright, and each segment must clear find flags plus the
 // sed/git/allowlist checks.
 func allSegmentsReadOnly(s Scan) bool {
 	if s.HasUnsafeOp || len(s.Segments) == 0 {

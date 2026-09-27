@@ -85,7 +85,7 @@ func TestMultiStepTurnDoesNotMultiplyContext(t *testing.T) {
 	require.NotEmpty(t, catch.states)
 	finalState := catch.states[len(catch.states)-1]
 	assert.False(t, finalState.Estimated)
-	// each step reports Input=per; the final context must sit near per, never
+	// each step reports Input=per, so the final context must sit near per, never
 	// five times it (the old bug summed every step's usage).
 	assert.Less(t, finalState.Used, 3*per)
 }

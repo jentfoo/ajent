@@ -22,7 +22,7 @@ type AgentJob struct {
 // pkg/command does not import pkg/subagent.
 type Agents interface {
 	List() []AgentJob
-	Stop(id string) error // cancel one job; finished ones return an error
+	Stop(id string) error // cancel one running job, done jobs already errored
 	StopAll() int         // cancel every in-flight job, returns how many
 }
 

@@ -67,7 +67,7 @@ func (u *UI) nextImageID() uint32 {
 	return u.imgSeq
 }
 
-// maxTrackedImages bounds the placement registry; dropping the oldest frees
+// maxTrackedImages bounds the placement registry. Dropping the oldest frees
 // its terminal-side data through the deletion sequence.
 const maxTrackedImages = 32
 

@@ -26,9 +26,9 @@ func (w recWriter) Write(p []byte) (int, error) {
 }
 
 // hasCursorTo reports whether s contains an absolute cursor address. The only
-// finals that position absolutely are 'H' and 'f', with or without parameters;
-// relative motion is 'A' (up) plus \r, and inline's other sequences end in 'h',
-// 'l', 'J', 'K' or 'm'. Inline mode must never emit an absolute address.
+// finals that position absolutely are 'H' and 'f', with or without parameters.
+// Relative motion is 'A' (up) plus \r, and inline's other sequences end in
+// 'h', 'l', 'J', 'K' or 'm'. Inline mode must never emit an absolute address.
 func hasCursorTo(s string) bool {
 	for i := 0; i+1 < len(s); i++ {
 		if s[i] != esc[0] || s[i+1] != '[' {
@@ -48,8 +48,8 @@ func hasCursorTo(s string) bool {
 // TestInlineNeverAbsolute pins invariant 1 as an emitted-stream property: inline
 // mode never issues an absolute cursor address, even across a resize (both narrow
 // and wide), because we cannot know where our committed rows sit after emulator
-// reflow. The only anchor is the parked cursor, which the terminal tracks for us;
-// everything else must be relative.
+// reflow. The only anchor is the parked cursor, which the terminal tracks for us.
+// Everything else must be relative.
 func TestInlineNeverAbsolute(t *testing.T) {
 	t.Parallel()
 
@@ -203,12 +203,12 @@ func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 	r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 	r.commit([]histLine{{text: line, flow: flowWrap}})
 
-	// narrow: the emulator wrapped it into more than one row; nothing was hard-broken by us
+	// narrow: the emulator wrapped it into more than one row, nothing was hard-broken by us
 	assert.True(t, strings.HasPrefix(v.Line(0), "146 + Level 148:"), v.Line(0))
 	require.NotEmpty(t, strings.TrimSpace(v.Line(1)))
 
 	// widen: the emulator rejoins that one logical line into its full form. We only
-	// resize; never redraw committed history, so whatever is on screen is exactly
+	// resize, never redrawing committed history, so whatever is on screen is exactly
 	// what the emulator's own reflow made of our single emitted line.
 	v.setSize(120, 4) // wide enough that the whole line fits on one row
 	r.resize()
@@ -226,7 +226,7 @@ func TestInlineUnalignedFlowReflowsOnWiden(t *testing.T) {
 // continuation we used to indent (hangWidth > 0: code, lists, quotes) goes out as
 // a single logical line: the terminal wraps it flush-left, reflows it on resize,
 // and copies it whole. Hard-breaking it kept the alignment but froze the line at
-// commit width; that is the corruption-seam the user sees when widening.
+// commit width. That is the corruption-seam the user sees when widening.
 func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 	t.Parallel()
 
@@ -238,7 +238,7 @@ func TestInlineAlignedFlowReflowsOnWiden(t *testing.T) {
 	r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 	r.commit([]histLine{{text: line, flow: flowWrap}})
 
-	// narrow: the emulator wrapped it flush-left; nothing was hard-broken by us
+	// narrow: the emulator wrapped it flush-left, and nothing was hard-broken by us
 	assert.True(t, strings.HasPrefix(v.Line(0), "    return fmt.Sprintf"), v.Line(0))
 
 	// widen: the emulator rejoins the one logical line into its full form
@@ -292,7 +292,7 @@ func TestInlineDiff(t *testing.T) {
 		assert.Contains(t, out, "draft text")
 	})
 
-	// the single erase-below used to cover a block that grew or shrank; the diff cannot, so it falls back
+	// the single erase-below used to cover a block that grew or shrank, the diff cannot so it falls back
 	t.Run("falls_back_on_row_count_change", func(t *testing.T) {
 		var buf strings.Builder
 		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
@@ -321,7 +321,7 @@ func TestInlineCaretMoveErasesOldPaint(t *testing.T) {
 	r.setLive(rows, 0, 4) // caret paints row 0
 	buf.Reset()
 
-	r.setLive(rows, 1, 2) // caret moves to row 1; row 0 must be re-emitted without its caret
+	r.setLive(rows, 1, 2) // caret moves to row 1, so row 0 must be re-emitted without its caret
 
 	// the old row is rewritten (so its reversed cell clears)
 	assert.Contains(t, buf.String(), "opt one")
@@ -513,7 +513,7 @@ func TestInlineReanchor(t *testing.T) {
 		r.sigGen, r.drawGen = sig.Load, draw.Load
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 
-		sig.Add(1) // a burst is in flight; the frame will be abandoned
+		sig.Add(1) // a burst is in flight, and the frame will be abandoned
 		r.reanchor(1, true)
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 
@@ -600,8 +600,8 @@ func TestInlineRendererResize(t *testing.T) {
 		r.commit([]histLine{{text: "committed output", flow: flowReflow}})
 		r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
 
-		// the divider now spans two rows on the narrower grid; the next erase
-		// has to climb both or it strands one above the redrawn block
+		// the divider now spans two rows on the narrower grid. The next erase
+		// has to climb both or it strands one above the redrawn block.
 		v.setSize(20, 10)
 		r.resize()
 		r.setLive([]string{strings.Repeat(ruleChar, 19), "❯ x", "ctx"}, 1, 2)
@@ -620,8 +620,8 @@ func TestInlineRendererResize(t *testing.T) {
 		})
 		r.setLive([]string{strings.Repeat(ruleChar, 39), "❯ x", "ctx"}, 1, 2)
 
-		// whatever the emulator's reflow makes of those rows is the truth; a
-		// redraw at the new width must leave every one of them alone
+		// whatever the emulator's reflow makes of those rows is the truth. A
+		// redraw at the new width must leave every one of them alone.
 		v.setSize(20, 12)
 		reflowed := []string{v.Line(0), v.Line(1), v.Line(2), v.Line(3), v.Line(4), v.Line(5)}
 
@@ -673,7 +673,7 @@ func TestInlineRendererResize(t *testing.T) {
 		r.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }
 		r.commit([]histLine{{text: "kept"}})
 
-		// each miss used to leave another divider behind; drive many draws
+		// each miss used to leave another divider behind, so drive many draws
 		// across many widths and assert nothing ever piles up
 		for _, w := range []int{40, 17, 33, 9, 26, 40} {
 			v.setSize(w, 10)
@@ -739,7 +739,7 @@ func TestInlineRendererResizeRace(t *testing.T) {
 	r.setLive([]string{strings.Repeat(ruleChar, 39), "\u276f x", "ctx"}, 1, 2)
 
 	// the terminal has already reflowed, but the size read that composes the
-	// frame has not caught up; the one the park takes has
+	// frame has not caught up. The one the park takes has.
 	var reads int
 	r.t.sizeFn = func() (int, int, error) {
 		if reads++; reads == 1 {
@@ -759,7 +759,7 @@ func TestInlineRendererResizeRace(t *testing.T) {
 	assert.Equal(t, "committed history", v.Line(0))
 }
 
-// relayout lays histLine values out at width w via their own rows() method; that is
+// relayout lays histLine values out at width w via their own rows() method. That is
 // the path alt mode uses to rebuild its viewport on resize. It lets a test compare
 // "committed at A, re-laid at B" against "freshly rendered at B". Inline mode does
 // not use it (it never re-renders committed history), but the retained-intent rule

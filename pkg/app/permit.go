@@ -77,7 +77,7 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 		return permit.ClassUnsure // an MCP call needs its tool metadata to be judged
 	}
 	m := a.model()
-	if m.ID == "" { // no model configured; nothing to classify with
+	if m.ID == "" { // no model configured, nothing to classify with
 		return permit.ClassUnsure
 	}
 	p, err := a.providerFor(m)
@@ -104,7 +104,7 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 		System:    llm.BlockList{llm.TextBlock{Text: sys}},
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: userMsg}}}},
 		MaxTokens: classifyBudget(m),
-		// constant prompt re-sent per gated call; needs SessionID on openai
+		// constant prompt re-sent per gated call, needs SessionID on openai
 		Cache:     llm.CachePolicy{Enabled: true},
 		SessionID: a.session,
 	}

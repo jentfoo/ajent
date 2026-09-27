@@ -19,7 +19,7 @@ const placeholder = "(sub-agent produced no output)"
 // contract up front instead of by trial.
 const sharedToolHint = "A sub-agent has no session context: pass file paths and key facts, not content (it can read files itself). It is read-only (the built-in reader tools such as read, grep, find, ls plus any MCP tool marked read-only; inside a git work tree also the four git_* history readers); anything needing write, edit or shell must be done directly. Its final message is the entire return value."
 
-// startToolName is the tool a batch reserves ordered ids for; see Manager.Reserve.
+// startToolName is the tool a batch reserves ordered ids for (see Manager.Reserve).
 const startToolName = "agent_start"
 
 // startTool spawns a background investigation.
@@ -125,7 +125,7 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	var res agent.ToolResult
 	status := j.statusOf()
 	switch {
-	case ctx.Err() != nil: // the turn was interrupted; release promptly and let abort fill this call
+	case ctx.Err() != nil: // the turn was interrupted, release promptly and let abort fill this call
 		res = agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "poll interrupted"}}}
 	case !complete:
 		res = result(j.pollProgress())
@@ -133,7 +133,7 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		res, status = result("sub-agent "+j.id+" aborted"), snap.Status
 	case snap.Status == StatusError && snap.Err != nil:
 		res, status = resultErr(snap.Err.Error()), snap.Status
-	default: // done with a summary; the blank case is impossible, so this is belt-and-braces
+	default: // done with a summary, the blank case is impossible so this is belt-and-braces
 		out := strings.TrimSpace(snap.Summary)
 		if out == "" {
 			out = placeholder
@@ -186,7 +186,7 @@ func (t *listTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output
 	var b strings.Builder
 	b.WriteString("id\tstatus\telapsed\n")
 	for _, j := range jobs {
-		// a finished job's elapsed freezes at its end time; only live ones keep counting
+		// a finished job's elapsed freezes at its end time, only live ones keep counting
 		elapsed := time.Since(j.Started)
 		if !j.Ended.IsZero() {
 			elapsed = j.Ended.Sub(j.Started)

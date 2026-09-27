@@ -153,7 +153,7 @@ func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
 
 	c.SetModel(llm.Model{Provider: "p", ID: "picked"})
 
-	// the change lands as a session override only; no config layer is written.
+	// the change lands as a session override only, so no config layer is written.
 	assert.NoFileExists(t, userCfg)
 	rv, src, ok := set.Explain("model")
 	require.True(t, ok)

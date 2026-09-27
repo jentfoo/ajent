@@ -34,7 +34,7 @@ func sortTmpFlag(tok string) bool {
 // sortReadOnly reports whether a sort invocation is verifiably free of file
 // overwrites and command execution. -o/--output writes an arbitrary path,
 // --compress-program runs a command, and -T/--temporary-directory writes scratch
-// files outside TMPDIR; everything else (plain f, -u, -r, -n, -S) is read-only.
+// files outside TMPDIR, everything else (plain f, -u, -r, -n, -S) being read-only.
 func sortReadOnly(tokens []string) bool {
 	return !slices.ContainsFunc(tokens, func(t string) bool {
 		return sortWriteFlag(t) || strings.HasPrefix(t, "--compress-program") ||

@@ -37,7 +37,7 @@ func TestParseLlamaProps(t *testing.T) {
 	t.Run("missing_model_path_is_a_router", func(t *testing.T) {
 		got, err := parseLlamaProps([]byte(`{"default_generation_settings":{"n_ctx":2048}}`))
 		require.NoError(t, err)
-		assert.Empty(t, got) // nothing to name; discovery falls back to /v1/models
+		assert.Empty(t, got) // nothing to name, so discovery falls back to /v1/models
 	})
 
 	t.Run("none_model_path_is_a_router", func(t *testing.T) {

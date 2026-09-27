@@ -31,7 +31,7 @@ func (r *Recorder) Message(info agent.MessageInfo) {
 
 // Sink wraps next so notices persist and the file is fsynced at each turn end.
 // Write failures surface as a notice through the wrapped sink rather than
-// failing the turn; a broken disk should not end the conversation.
+// failing the turn, so a broken disk should not end the conversation.
 func (r *Recorder) Sink(next agent.Sink) agent.Sink {
 	return &recordingSink{next: next, rec: r}
 }
@@ -47,7 +47,7 @@ func (r *Recorder) Rename(name string) error {
 	return err
 }
 
-// SettingChange persists one setting value; the caller owns any in-memory update.
+// SettingChange persists one setting value, while the caller owns any in-memory update.
 func (r *Recorder) SettingChange(key string, value any) error {
 	raw, err := json.Marshal(value)
 	if err != nil {
@@ -91,7 +91,7 @@ func (s *recordingSink) Context(c tokens.ContextState) {
 	s.next.Context(c)
 }
 
-// Notice persists the notice, then forwards it; persistence failures surface as
+// Notice persists the notice then forwards it, persistence failures surfacing as
 // an error-level notice through the wrapped sink.
 func (s *recordingSink) Notice(msg string, level agent.Level) {
 	if _, err := s.rec.w.Append(TypeNotice, NoticeData{Message: msg, Level: level}); err != nil {
@@ -100,7 +100,7 @@ func (s *recordingSink) Notice(msg string, level agent.Level) {
 	s.next.Notice(msg, level)
 }
 
-// TurnEnd fsyncs the transcript at a turn boundary; a failure surfaces as an
+// TurnEnd fsyncs the transcript at a turn boundary, a failure surfacing as an
 // error-level notice rather than ending the turn.
 func (s *recordingSink) TurnEnd(r agent.TurnResult) {
 	if err := s.rec.w.Sync(); err != nil {

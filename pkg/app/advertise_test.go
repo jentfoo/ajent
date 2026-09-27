@@ -111,7 +111,7 @@ func TestBuiltinTools(t *testing.T) {
 			desc = s.Description
 		}
 	}
-	// the bogus name warns; diff is real everywhere and lands in the description
+	// the bogus name warns, but diff is real everywhere and lands in the description
 	assert.Contains(t, desc, "Example available commands:")
 	assert.Contains(t, desc, "diff")
 	assert.Len(t, warns, 1)

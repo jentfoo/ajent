@@ -40,7 +40,7 @@ func (e *editor) SetValue(s string) {
 }
 
 // SetValueAt replaces the buffer and puts the cursor on the cell holding byte
-// offset off; a negative or past-the-end offset lands at the end.
+// offset off. A negative or past-the-end offset lands at the end.
 func (e *editor) SetValueAt(s string, off int) {
 	e.SetValue(s)
 	if off < 0 {
@@ -150,7 +150,7 @@ func (e *editor) LineEnd(width int) {
 // (the wrapped line on screen), leaving the caret where it was. An already-
 // empty line is removed like Delete: the newline in front of the caret goes,
 // the line below joins at the caret, and the caret stays put. A trailing empty
-// line joins the one above instead; a non-empty row tail is a no-op.
+// line joins the one above instead. A non-empty row tail is a no-op.
 func (e *editor) KillToLineEnd(width int) {
 	starts, ends := e.layout(width)
 	r := e.displayRow(starts, ends)
@@ -242,7 +242,7 @@ func (e *editor) Down(width int) bool {
 }
 
 // PageUp moves the caret up step visual rows, snapping onto the first display
-// row (the buffer's start) once reached; on that row it settles at the row's
+// row (the buffer's start) once reached. On that row it settles at the row's
 // start. It reports false only when already there.
 func (e *editor) PageUp(width, step int) bool {
 	starts, ends := e.layout(width)
@@ -265,7 +265,7 @@ func (e *editor) PageUp(width, step int) bool {
 }
 
 // PageDown moves the caret down step visual rows, snapping onto the last display
-// row (the buffer's end) once reached; on that row it settles at the row's end.
+// row (the buffer's end) once reached. On that row it settles at the row's end.
 // It reports false only when already there.
 func (e *editor) PageDown(width, step int) bool {
 	starts, ends := e.layout(width)
@@ -364,7 +364,7 @@ func (e *editor) layoutAt(width, firstW, contW int) (starts, ends []int) {
 
 	// Rows as cell ranges: row k renders cells[starts[k]:ends[k]]. Breaks fall on
 	// word boundaries (trailing spaces dropped) so a word wraps whole to the next
-	// line; explicit newlines and too-wide tokens still split.
+	// line, while explicit newlines and too-wide tokens still split.
 	starts = append(starts, 0)
 	var i int
 	for i < len(cells) {
@@ -393,7 +393,7 @@ func (e *editor) layoutAt(width, firstW, contW int) (starts, ends []int) {
 		switch {
 		case end < len(cells) && cells[end] == "\n":
 			ends = append(ends, end)
-			next = end + 1 // explicit newline ends the row; the \n is not rendered
+			next = end + 1 // explicit newline ends the row, so the \n is not rendered
 		case overflow && lastSpace >= 0:
 			// wrap at the trailing space: drop it and start the next word fresh
 			ends = append(ends, lastSpace)
@@ -442,7 +442,7 @@ func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, 
 // view lays the editor into display rows of at most width columns: marker on
 // the first row, cont indenting continuations, hint filling an empty buffer.
 // shell drops the glyph when cells[0] is "!" (the prompt editor). It returns the
-// zero based cursor offset within those rows; wrapping is purely visual and
+// zero based cursor offset within those rows. Wrapping is purely visual and
 // Value() gains no newlines.
 func (e *editor) view(t Theme, width, maxRows int, marker, cont, hint string, shell bool) (rows []string, curRow, curCol int) {
 	leadBang := shell && len(e.cells) > 0 && e.cells[0] == "!" // the literal `!` serves as the marker
@@ -460,7 +460,7 @@ func (e *editor) view(t Theme, width, maxRows int, marker, cont, hint string, sh
 		var line strings.Builder
 		switch {
 		case k == 0 && leadBang:
-			// the literal `!` in cells[0] is already content; no glyph needed
+			// the literal `!` in cells[0] is already content, so no glyph needed
 		case k == 0:
 			line.WriteString(marker)
 		default:

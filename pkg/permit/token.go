@@ -82,7 +82,7 @@ var (
 
 // unwrapLaunchers strips side-effect-free launcher prefixes (nohup, timeout) so
 // classification sees the wrapped command. sudo/env/xargs/nice/stdbuf change
-// privilege or environment and are never unwrapped; a confused parse returns
+// privilege or environment and are never unwrapped, a confused parse returning
 // the original tokens to fail safe toward prompting.
 func unwrapLaunchers(tokens []string) []string {
 	cmd := stripPath(firstToken(tokens))

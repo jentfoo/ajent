@@ -128,7 +128,7 @@ func TestBuildSystem(t *testing.T) {
 			strings.Index(tb.Text, "<project_context>"))
 	})
 
-	// a non-empty override replaces the opening sentence and guidelines only;
+	// a non-empty override replaces the opening sentence and guidelines only,
 	// environment facts still follow so tools keep their context.
 	t.Run("override_replaces_guidance", func(t *testing.T) {
 		env := Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}

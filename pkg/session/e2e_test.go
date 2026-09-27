@@ -100,7 +100,7 @@ func TestCrashResumeRebuildsState(t *testing.T) {
 	a.Interrupt()
 	require.NoError(t, <-done)
 
-	// crash: close without a graceful final state; reopen from the file alone
+	// crash: close without a graceful final state, reopen from the file alone
 	require.NoError(t, w.Close())
 
 	entries, warns, rerr := Read(p)

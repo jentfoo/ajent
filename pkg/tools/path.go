@@ -26,7 +26,7 @@ func argPath(p string) string {
 
 // Resolve returns the canonical absolute form of path, folding symlinks in its
 // longest existing prefix so read/write/edit agree on one tracker key. A leading
-// ~ or ~/ expands to the user's home directory; other relative paths are taken
+// ~ or ~/ expands to the user's home directory, and other relative paths are taken
 // from Cwd. Nothing is refused.
 func (p PathPolicy) Resolve(path string) (string, error) {
 	path = trimRefPrefix(path)
@@ -44,7 +44,7 @@ func (p PathPolicy) Resolve(path string) (string, error) {
 		candidate = cleanAbs(base, path)
 	}
 	resolved, ok := evalPrefix(candidate)
-	if !ok { // nothing exists yet; the cleaned absolute is still a fine key
+	if !ok { // nothing exists yet, the cleaned absolute is still a fine key
 		return candidate, nil
 	}
 	return resolved, nil

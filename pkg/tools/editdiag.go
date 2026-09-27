@@ -62,7 +62,7 @@ func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
 
 	text, line, ok := closestBlock(old, buf)
 	if !ok {
-		// the diagnosis above already says what to do; nothing close is worth offering
+		// the diagnosis above already says what to do, so nothing close is worth offering
 		return head
 	}
 	if d := soleDifference(old, text); d != "" {
@@ -130,7 +130,7 @@ func diagnoseNoMatch(old, buf string) []string {
 		if stripSpace(buf) == "" {
 			return []string{"the file appears empty or whitespace-only"}
 		}
-		// the words genuinely differ; a retry needs exact text, not an approximation
+		// the words genuinely differ, a retry needing exact text rather than an approximation
 		return []string{"your oldText appears nowhere in this file, read the file and copy it exactly"}
 	}
 }
@@ -233,7 +233,7 @@ outer:
 		break
 	}
 	if match < 0 {
-		return nil // lines don't align word-for-word; fall back to the generic note
+		return nil // lines don't align word-for-word, fall back to the generic note
 	}
 
 	// one complaint per distinct difference, naming the lines it was found on:
@@ -305,7 +305,7 @@ func whitespaceRuns(line string) []string {
 
 // whitespaceIssue names the first gap where oldLine and fileLine space their words
 // differently, empty when they agree. Both must carry identical stripped content,
-// which makes a gap the only thing that can differ; the file is ground truth.
+// which makes a gap the only thing that can differ, with the file as ground truth.
 func whitespaceIssue(oldLine, fileLine string) string {
 	want, have := whitespaceRuns(oldLine), whitespaceRuns(fileLine)
 	for i := 0; i < len(want) && i < len(have); i++ {
@@ -390,7 +390,7 @@ func closestBlock(old, buf string) (text string, line int, ok bool) {
 		}
 	}
 	if best < 0 || bestScore < minBlockSimilarity {
-		return "", 0, false // nothing here resembles it; say so rather than point at a decoy
+		return "", 0, false // nothing here resembles it, say so rather than point at a decoy
 	}
 	end := min(best+len(oldLines), len(fileLines))
 	return strings.Join(fileLines[best:end], "\n"), best + 1, true
@@ -427,7 +427,7 @@ func anchorCandidates(oldLines, fileLines []string) []int {
 
 // tokenCandidates shortlists lines sharing a word with old, for a fragment that
 // sits inside its line and so has no whole-line anchor. Token overlap filters
-// only; blockSimilarity still decides which candidate wins.
+// only, while blockSimilarity still decides which candidate wins.
 func tokenCandidates(old string, fileLines []string) []int {
 	tokens := strings.Fields(old)
 	if len(tokens) == 0 {

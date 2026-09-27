@@ -28,7 +28,7 @@ type histLine struct {
 
 // EditorHistory persists every submitted editor message for one workspace in its
 // sessions directory. Appends are immediate and atomic under the OS, so they are
-// safe from concurrent agents on the same workspace; compaction rewrites with
+// safe from concurrent agents on the same workspace, compaction rewriting with
 // last-writer-wins because losing at most a few recall entries is cheaper than a lock.
 type EditorHistory struct {
 	path         string
@@ -38,7 +38,7 @@ type EditorHistory struct {
 
 	mu         sync.Mutex
 	added      []histLine // appends not yet durable (write failed), capped at maxHistoryLines
-	compacting bool       // a compaction goroutine is in flight; don't start another
+	compacting bool       // a compaction goroutine is in flight, don't start another
 }
 
 // NewEditorHistory returns the workspace's editor-history store inside its session dir.
@@ -60,7 +60,7 @@ func (h *EditorHistory) Append(msg string) { h.append(msg, false) }
 func (h *EditorHistory) AppendHidden(msg string) { h.append(msg, true) }
 
 // append writes msg durably and offers it for recall. Blank and secret-prefixed
-// messages are skipped; a failed write keeps the line recallable this session.
+// messages are skipped, a failed write keeping the line recallable this session.
 func (h *EditorHistory) append(msg string, hidden bool) {
 	if h == nil || msg == "" { // nil receiver keeps callers free of guards
 		return
@@ -73,7 +73,7 @@ func (h *EditorHistory) append(msg string, hidden bool) {
 
 	f, err := os.OpenFile(h.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, config.SecretPerm)
 	if err == nil {
-		// a single short write is atomic under the OS; two agents never interleave bytes
+		// a single short write is atomic under the OS, two agents never interleave bytes
 		if _, werr := f.Write(encodeHistLine(l)); werr != nil {
 			err = werr
 		}
@@ -143,9 +143,9 @@ func (h *EditorHistory) Compact() {
 	var lines []histLine
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		// nothing on disk yet; compaction is just the local appends
+		// nothing on disk yet, compaction is just the local appends
 	case err != nil:
-		return // cannot read current state; leave the file alone
+		return // cannot read current state, leave the file alone
 	default:
 		for _, row := range strings.Split(string(data), "\n") {
 			if l, ok := decodeHistLine(row); ok {
@@ -153,11 +153,11 @@ func (h *EditorHistory) Compact() {
 			}
 		}
 	}
-	// queued appends ride along; they leave the queue only once durably written
+	// queued appends ride along, leaving the queue only once durably written
 	lines = append(lines, h.added...)
 
 	out := normalize(lines, h.secretPrefix)
-	if len(out) == 0 { // nothing to persist; don't create a phantom empty file
+	if len(out) == 0 { // nothing to persist, don't create a phantom empty file
 		return
 	}
 	var buf bytes.Buffer
@@ -172,7 +172,7 @@ func (h *EditorHistory) Compact() {
 
 // encodeHistLine marshals one message to a single physical row so multi-line turns
 // round-trip whole. Hidden rows persist as an object so their exclusion survives a
-// restart and compaction; visible rows stay bare JSON strings (hand-edit friendly).
+// restart and compaction, visible rows staying bare JSON strings (hand-edit friendly).
 func encodeHistLine(l histLine) []byte {
 	var b []byte //nolint:prealloc // both branches reassign b via json.Marshal
 	if l.hidden {
@@ -187,7 +187,7 @@ func encodeHistLine(l histLine) []byte {
 }
 
 // readHistLines decodes every row of path back to its message and hidden flag.
-// A missing or unreadable file yields nil; blank rows are skipped.
+// A missing or unreadable file yields nil. Blank rows are skipped.
 func readHistLines(path string) []histLine {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -226,7 +226,7 @@ func decodeHistLine(row string) (histLine, bool) {
 
 // normalize trims CRs, drops blank/secret lines, keeps each text's newest occurrence,
 // then caps at maxHistoryLines from the newest. A text stays visible when any copy was
-// typed; purely hidden texts stay excluded.
+// typed, purely hidden texts staying excluded.
 func normalize(lines []histLine, secretPrefix string) []histLine {
 	var clean []histLine
 	for _, l := range lines {
@@ -236,7 +236,7 @@ func normalize(lines []histLine, secretPrefix string) []histLine {
 		}
 	}
 
-	// keep each text's newest occurrence; a text is recallable when any copy was typed.
+	// keep each text's newest occurrence, recallable when any copy was typed.
 	newestPos := make(map[string]int, len(clean))
 	visibleSet := make(map[string]struct{}, len(clean)) // texts with at least one visible copy
 	for i, l := range clean {

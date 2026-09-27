@@ -349,7 +349,7 @@ func TestDiscover(t *testing.T) {
 		cache, warnings := Discover(t.Context(), f, nil, opts())
 		assert.Empty(t, warnings)
 		require.Contains(t, cache, "lutra")
-		// a plain OpenAI server reports no status; every listed model stays available
+		// a plain OpenAI server reports no status, every listed model stays available
 		assert.Len(t, cache["lutra"].Models, 3)
 		assert.Equal(t, 1, hits) // served at /v1/models once, not /v1/v1/models
 	})
@@ -387,7 +387,7 @@ func TestDiscover(t *testing.T) {
 		cache, warnings := Discover(t.Context(), f, nil, opts())
 		assert.Empty(t, warnings)
 		require.Contains(t, cache, "llamacpp")
-		// only the loaded model surfaces; unloaded router entries are dropped
+		// only the loaded model surfaces, and unloaded router entries are dropped
 		models := cache["llamacpp"].Models
 		require.Len(t, models, 1)
 		assert.Equal(t, "unsloth/GLM-5.3-Flash-GGUF:Q6_K_XL", models[0].ID)
@@ -401,7 +401,7 @@ func TestDiscover(t *testing.T) {
 		if testing.Short() {
 			t.Skip("-short mode")
 		}
-		// a dead server fails every endpoint; only the primary is tried once its own
+		// a dead server fails every endpoint. Only the primary is tried once its own
 		// retry ladder is spent, rather than doubling it on /v1/models
 		var trips atomic.Int32
 		tr := roundTripperFunc(func(_ *http.Request) (*http.Response, error) {
@@ -420,8 +420,8 @@ func TestDiscover(t *testing.T) {
 	})
 
 	t.Run("http_failure_retries_the_next_candidate", func(t *testing.T) {
-		// a reachable server that answers unhelpfully still falls through; the first
-		// failure is the one reported when neither candidate yields models
+		// a reachable server that answers unhelpfully still falls through. The first
+		// failure is the one reported when neither candidate yields models.
 		var trips atomic.Int32
 		tr := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			trips.Add(1)

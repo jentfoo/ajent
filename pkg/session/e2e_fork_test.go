@@ -50,7 +50,7 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 	require.NoError(t, w.Sync())
 	tip2 := forkA.ID
 
-	// crash without a graceful close; reopen from disk
+	// crash without a graceful close, reopen from disk
 	require.NoError(t, w.Close())
 
 	entries, _, rerr := Read(p)
@@ -65,7 +65,7 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 	assert.Equal(t, llm.Text(llm.RoleUser, "first"), st.Messages[0])
 	assert.Equal(t, llm.Text(llm.RoleUser, "fork prompt"), st.Messages[1])
 
-	// both chains remain as tips; switching to tip1 restores the old context exactly
+	// both chains remain as tips, switching to tip1 restoring the old context exactly
 	assert.ElementsMatch(t, []string{tip1, tip2}, tipIDs(entries))
 
 	stOld, _ := State(Branch(entries, tip1), resolve)

@@ -73,7 +73,7 @@ func TestToolStartParallelCalls(t *testing.T) {
 	doneB := s.ToolStart(agent.ToolCall{ID: "c2", Name: "grep"}, `grep "New" pkg`)
 	assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
 
-	doneA(agent.ToolResult{}) // b still runs; its label stays on the row
+	doneA(agent.ToolResult{}) // b still runs, its label stays on the row
 	assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
 
 	doneB(agent.ToolResult{}) // the last one out restores the idle line
@@ -112,7 +112,7 @@ func TestSinkText(t *testing.T) {
 		for _, d := range []string{"first line ", "scrolled\nsecond ", "line grows"} {
 			s.Text(d)
 		}
-		// the first completed line is gone; only the active one remains on screen
+		// the first completed line is gone, only the active one remains on screen
 		require.Eventually(t, func() bool { return c.rowText("sub-9") == "sub-9  second line grows" }, time.Second, 5*time.Millisecond)
 
 		s.TurnEnd(agent.TurnResult{}) // next turn starts a fresh line, row stays live

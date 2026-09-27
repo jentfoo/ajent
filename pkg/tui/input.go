@@ -59,7 +59,7 @@ type key struct {
 	text    string // literal text for keyRune and keyPaste, payload for keyColorReport
 	row     int    // reported cursor row for keyCursorReport, cell height for keyCellSize
 	col     int    // cell width for keyCellSize
-	partial bool   // keyPaste delivered at maxPasteLen; its tail is still arriving
+	partial bool   // keyPaste delivered at maxPasteLen, its tail is still arriving
 }
 
 const (
@@ -69,7 +69,7 @@ const (
 	maxControlLen = 1024 // a CSI longer than this without a final byte is dropped as truncated
 )
 
-// maxPasteLen bounds an unterminated paste; on reaching it the body so far is
+// maxPasteLen bounds an unterminated paste. On reaching it the body so far is
 // delivered rather than held forever. Far above tcell's cap because applyKey
 // turns anything over pasteThreshold into a placeholder, so large pastes are supported.
 const maxPasteLen = 4 << 20
@@ -179,7 +179,7 @@ func decodeEscape(b []byte, pasteFrom int) (key, int, bool) {
 			return key{}, 0, false // SS3 is a fixed three bytes
 		}
 		if b[2] == escByte {
-			return key{typ: keyIgnore}, 2, true // ESC aborts; leave it for the next decode
+			return key{typ: keyIgnore}, 2, true // ESC aborts, leave it for the next decode
 		}
 		return key{typ: ss3Key(b[2])}, 3, true
 	case 0x0d, 0x0a:
@@ -199,7 +199,7 @@ func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 	i := 2
 	for i < len(b) && b[i] != escByte && (b[i] < 0x40 || b[i] > 0x7e) {
 		if i >= maxControlLen {
-			return key{typ: keyIgnore}, i, true // cap reached; resync at the next byte
+			return key{typ: keyIgnore}, i, true // cap reached, resync at the next byte
 		}
 		i++
 	}
@@ -207,7 +207,7 @@ func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 		return key{}, 0, false // incomplete: wait for the final byte
 	}
 	if b[i] == escByte {
-		return key{typ: keyIgnore}, i, true // ESC aborts; resync at the next byte
+		return key{typ: keyIgnore}, i, true // ESC aborts, resync at the next byte
 	}
 	params, final, n := string(b[2:i]), b[i], i+1
 
@@ -226,7 +226,7 @@ func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 		}
 		return key{typ: keyCursorReport, row: v}, n, true
 	case 't':
-		// window-manipulation reports; only the cell-size answer (CSI 6;h;w t)
+		// window-manipulation reports. Only the cell-size answer (CSI 6;h;w t)
 		// is consumed. Fields are height then width per the report format.
 		f := strings.Split(params, ";")
 		if len(f) != 3 || f[0] != "6" {
@@ -258,7 +258,7 @@ func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 }
 
 // decodeOSC decodes an OSC reply, terminated by BEL or ST. Only the OSC 11
-// background answer is reported; every other OSC is swallowed so a reply to a
+// background answer is reported. Every other OSC is swallowed so a reply to a
 // query we never made cannot leak into the editor as runes.
 func decodeOSC(b []byte) (key, int, bool) {
 	for i := 2; i < len(b); i++ {
@@ -269,11 +269,11 @@ func decodeOSC(b []byte) (key, int, bool) {
 			if i+1 >= len(b) {
 				return key{}, 0, false // ST may still be forming
 			} else if b[i+1] != '\\' {
-				return key{typ: keyIgnore}, i, true // ESC aborts; resync at that byte
+				return key{typ: keyIgnore}, i, true // ESC aborts, resync at that byte
 			}
 			return oscKey(string(b[2:i])), i + 2, true
 		case i >= maxControlLen:
-			return key{typ: keyIgnore}, i, true // cap reached; resync at the next byte
+			return key{typ: keyIgnore}, i, true // cap reached, resync at the next byte
 		}
 	}
 	return key{}, 0, false // incomplete: wait for the terminator
@@ -297,11 +297,11 @@ func decodeAPC(b []byte) (key, int, bool) {
 			if i+1 >= len(b) {
 				return key{}, 0, false // ST may still be forming
 			} else if b[i+1] != '\\' {
-				return key{typ: keyIgnore}, i, true // ESC aborts; resync at that byte
+				return key{typ: keyIgnore}, i, true // ESC aborts, resync at that byte
 			}
 			return key{typ: keyIgnore}, i + 2, true
 		case i >= maxControlLen:
-			return key{typ: keyIgnore}, i, true // cap reached; resync at the next byte
+			return key{typ: keyIgnore}, i, true // cap reached, resync at the next byte
 		}
 	}
 	return key{}, 0, false // incomplete: wait for the terminator
@@ -325,7 +325,7 @@ func decodeTilde(b []byte, params string, n int, pasteFrom int) (key, int, bool)
 		end := bytes.Index(b[n+pasteFrom:], pasteEndBytes)
 		if end < 0 {
 			if len(b)-n >= maxPasteLen {
-				// deliver the capped body; partial tells the reader its tail is still in flight
+				// deliver the capped body, partial tells the reader its tail is still in flight
 				return key{typ: keyPaste, text: string(b[n:]), partial: true}, len(b), true
 			}
 			return key{}, 0, false // wait for more of the body
@@ -339,7 +339,7 @@ func decodeTilde(b []byte, params string, n int, pasteFrom int) (key, int, bool)
 
 // modifier bits in tcell's CSI parameter encoding (the value is 1 + bitmask).
 const (
-	modShift = 1 << iota // shift: never promotes word movement; claims ←/→ as mode controls
+	modShift = 1 << iota // shift: never promotes word movement, claims ←/→ as mode controls
 	modAlt               // alt: Alt+↑ recalls, and with ctrl promotes to word movement
 	modCtrl              // ctrl: promotes arrows to word movement
 	modMeta              // meta: modeled but unused here
@@ -460,7 +460,7 @@ type readResult struct {
 }
 
 // run decodes until the source ends, then closes keys. A genuine Ctrl+D byte
-// (0x04) is decoded as keyEOF; a closed input stream emits no keystroke: readers
+// (0x04) is decoded as keyEOF, and a closed input stream emits no keystroke: readers
 // stop on the channel close alone, so an external EOF never races with typed
 // input as an editing key.
 //
@@ -488,7 +488,7 @@ func (r *inputReader) run() {
 
 	var buf []byte
 	var pasteScanned int   // bytes of an in-progress paste body already known to hold no terminator
-	var pasteOverflow bool // a capped paste was delivered; its tail is dropped up to the terminator
+	var pasteOverflow bool // a capped paste was delivered, its tail dropped up to the terminator
 	timer := r.newTimer()
 
 	for {
@@ -497,7 +497,7 @@ func (r *inputReader) run() {
 				var done bool
 				buf, done = dropPasteTail(buf)
 				if !done {
-					break // still inside the capped body; nothing here decodes as a key
+					break // still inside the capped body, nothing here decodes as a key
 				}
 				pasteOverflow = false
 			}
@@ -532,7 +532,7 @@ func (r *inputReader) run() {
 			buf = append(buf, res.data...)
 			if res.err != nil {
 				r.flush(buf) // deliver undecoded runes read up to the close
-				return       // defer closes keys; stream end emits no editing keystroke
+				return       // defer closes keys, stream end emits no editing keystroke
 			}
 		case <-pendingEsc:
 			if len(buf) == 1 {
@@ -577,7 +577,7 @@ func (r *inputReader) emit(k key) {
 
 // sendLatest leaves ch holding the newest value, dropping an older one to make room: a cursor
 // report is a position, and only the last one is true. Bounded (one drain, one retry) so the
-// reader never spins. Single writer only; a second would need its own lock.
+// reader never spins. Single writer only, so a second would need its own lock.
 func sendLatest(ch chan int, v int) {
 	select {
 	case ch <- v:

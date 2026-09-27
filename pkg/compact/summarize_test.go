@@ -17,7 +17,7 @@ import (
 func TestSummarizeBudget(t *testing.T) {
 	t.Parallel()
 
-	base := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000} // compacts at 160k; reserve 40k
+	base := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000} // compacts at 160k, reserve 40k
 	cases := []struct {
 		name string
 		mod  llm.Model

@@ -1,6 +1,6 @@
 package strutil
 
-// ESC starts an escape sequence; BEL terminates an OSC string.
+// ESC starts an escape sequence, BEL terminates an OSC string.
 const (
 	escByte = 0x1b
 	belByte = 0x07
@@ -15,7 +15,7 @@ func StripANSI(s string) string {
 
 // ANSIFilter strips ANSI escape sequences from concatenated chunks, carrying its
 // position between calls so a sequence split at a chunk boundary cannot leak. The
-// zero value is ready to use; not safe for concurrent use.
+// zero value is ready to use, not safe for concurrent use.
 type ANSIFilter struct {
 	state ansiState
 }

@@ -122,7 +122,7 @@ func TestAgentPoll(t *testing.T) {
 
 		ids := []string{m.start("a", "", ""), m.start("b", "", "")}
 		results := make([]agent.ToolResult, len(ids))
-		errs := make([]error, len(ids)) // collected here; asserted on the test goroutine
+		errs := make([]error, len(ids)) // collected here, asserted on the test goroutine
 		var wg sync.WaitGroup
 		for i, id := range ids {
 			call := agent.ToolCall{ID: "c" + strconv.Itoa(i), Name: "agent_poll",
@@ -144,7 +144,7 @@ func TestAgentPoll(t *testing.T) {
 		require.NoError(t, errors.Join(errs...))
 		for i, res := range results {
 			assert.Equal(t, ids[i]+" results:\n", res.Display[:len(ids[i])+len(" results:\n")])
-			// only the human-facing copy is tagged; the model asked for this id
+			// only the human-facing copy is tagged, as the model asked for this id
 			assert.NotContains(t, textOf(res), "results:")
 		}
 	})

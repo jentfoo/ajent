@@ -41,7 +41,7 @@ func (d *FlexDuration) UnmarshalJSON(b []byte) error {
 }
 
 // FlexStrings is a config string list that also accepts a JSON boolean. A bare
-// true expands to "*" so every tool matches; false or absent yields nothing.
+// true expands to "*" so every tool matches, and false or absent yields nothing.
 type FlexStrings []string
 
 // UnmarshalJSON decodes an array of globs, a single glob, or a boolean.

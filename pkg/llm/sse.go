@@ -45,7 +45,7 @@ type SSEReader struct {
 
 // NewSSEReader reads frames from r. maxFrame bounds both a single line and the
 // data one frame accumulates, so an unterminated stream cannot grow without
-// limit; zero uses DefaultMaxFrame.
+// limit. Zero uses DefaultMaxFrame.
 func NewSSEReader(r io.Reader, maxFrame int) *SSEReader {
 	if maxFrame <= 0 {
 		maxFrame = DefaultMaxFrame
@@ -73,7 +73,7 @@ func (r *SSEReader) Close() error {
 // blocks carrying no data are consumed rather than returned, so a frame is
 // never empty.
 //
-// A blocked Next unblocks only when the underlying reader does; wire ctx to it,
+// A blocked Next unblocks only when the underlying reader does, so wire ctx to it,
 // which http.NewRequestWithContext does.
 func (r *SSEReader) Next(ctx context.Context) (Frame, error) {
 	if r.err != nil {

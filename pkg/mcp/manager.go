@@ -26,7 +26,7 @@ const (
 	StateEnabled               // in the prompt and callable
 )
 
-// Registrar is what a server registers its bridged tools into; declaring it
+// Registrar is what a server registers its bridged tools into, declaring it
 // here keeps pkg/mcp free of pkg/tools.
 type Registrar interface {
 	RegisterState(source string, t agent.Tool, s State)
@@ -63,27 +63,27 @@ type server struct {
 	logs          *ringLog
 	defs          []ToolDef     // last filtered tool list, for status/tool groups and drift compare
 	failures      int           // consecutive connect failures, for backoff and notices
-	down          bool          // a reconnect loop is active; suppresses the already-connected check
+	down          bool          // a reconnect loop is active, suppresses the already-connected check
 	reopenKeep    *toolState    // live split captured at death, restored on reconnect
-	rediscovering bool          // a list_changed re-discovery is in flight; coalesces bursts
+	rediscovering bool          // a list_changed re-discovery is in flight, coalesces bursts
 	connecting    bool          // a connect attempt is in flight (single-flight)
 	connectCh     chan struct{} // closed when that attempt settles, waking waiters
 	connectErr    error         // the settled attempt's outcome, read by waiters after ch closes
 
-	notice func(string, bool) // notice sink over the manager's Options; immutable, so no lock
+	notice func(string, bool) // notice sink over the manager's Options, immutable, so no lock
 	warned map[string]bool    // surfaced warnings, so repeated discovery stays in /mcp logs only
 
-	mu sync.Mutex // sole guard for every mutable field above; m.mu covers only the servers map
+	mu sync.Mutex // sole guard for every mutable field above, m.mu covers only the servers map
 }
 
 // Manager supervises every configured MCP server's lifecycle.
 type Manager struct {
 	opts Options
 
-	ctx    context.Context // long-lived for reconnect loops; canceled on Close
+	ctx    context.Context // long-lived for reconnect loops, canceled on Close
 	cancel context.CancelFunc
 
-	mu      sync.Mutex // guards servers and loaded only; per-server state lives under server.mu
+	mu      sync.Mutex // guards servers and loaded only, per-server state lives under server.mu
 	servers map[string]*server
 	preload *sync.WaitGroup // in-flight background dials from Preload, waited on at first message
 
@@ -125,10 +125,10 @@ func (m *Manager) serverByName(name string) *server {
 
 // LoadOnFirstMessage returns once every server has connected and registered its
 // tools, so the caller can build a prompt that includes them. It blocks on any
-// background Preload still dialing; config-disabled servers register as StateDisabled
+// background Preload still dialing, config-disabled servers register as StateDisabled
 // (visible and toggleable in /tools). Safe to call more than once: it never re-dials.
 func (m *Manager) LoadOnFirstMessage(ctx context.Context) {
-	m.Preload() // start if not already running; idempotent, never re-dials
+	m.Preload() // start if not already running, idempotent, never re-dials
 	w := m.preloadWG()
 	if w == nil {
 		return
@@ -137,13 +137,13 @@ func (m *Manager) LoadOnFirstMessage(ctx context.Context) {
 	go func() { w.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-ctx.Done(): // caller gave up on waiting; dials keep running in the background
+	case <-ctx.Done(): // caller gave up on waiting, dials keep running in the background
 	}
 	m.updateStatus() // publish the active/discovered ratio once settled
 }
 
 // Preload starts connecting and registering every server concurrently, exactly
-// once. It returns immediately; LoadOnFirstMessage waits for completion before a
+// once. It returns immediately, so LoadOnFirstMessage waits for completion before a
 // prompt is built. Dials run on m.ctx so they outlive any caller's context.
 func (m *Manager) Preload() {
 	m.mu.Lock()
@@ -159,7 +159,7 @@ func (m *Manager) Preload() {
 	m.mu.Unlock()
 
 	for _, name := range names {
-		go func() { // errors surface via notice/status; single-flight per server
+		go func() { // errors surface via notice/status, single-flight per server
 			defer wg.Done()
 			if s := m.serverByName(name); s != nil {
 				_ = m.connect(m.ctx, name)
@@ -169,7 +169,7 @@ func (m *Manager) Preload() {
 }
 
 // Connect dials and registers a server's tools. Idempotent for an already
-// connected server; concurrent calls for one server share a single connect.
+// connected server. Concurrent calls for one server share a single connect.
 func (m *Manager) Connect(ctx context.Context, name string) error {
 	return m.connect(ctx, name)
 }
@@ -197,7 +197,7 @@ func (s *server) finishConnect(err error) {
 	s.connectCh = nil
 }
 
-// connect runs one dial per server at a time; callers that arrive while another
+// connect runs one dial per server at a time. Callers that arrive while another
 // is in flight share its outcome instead of starting their own.
 func (m *Manager) connect(ctx context.Context, name string) error {
 	s := m.serverByName(name)
@@ -205,7 +205,7 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 		return fmt.Errorf("no MCP server %q", name)
 	}
 	run, done := s.claimConnect()
-	if !run { // another attempt is in flight; share its outcome
+	if !run { // another attempt is in flight, share its outcome
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -239,7 +239,7 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 
 	c, err := m.connectClient(ctx, name, s.config())
 	if err != nil {
-		// an unreachable server is expected (offline or not yet started); keep the
+		// an unreachable server is expected (offline or not yet started), keep the
 		// reason out of notices, so it appears only in /mcp logs and the status ratio.
 		s.diag("connect failed: " + err.Error())
 		m.updateStatus() // this server contributes nothing to the ratio until it connects
@@ -264,7 +264,7 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 		_ = c.Close()
 		return fmt.Errorf("mcp %s: discover: %w", name, err)
 	}
-	// a reload may have removed or replaced this server while we were dialing;
+	// a reload may have removed or replaced this server while we were dialing,
 	// close the fresh client rather than leaking it into a stale object.
 	m.mu.Lock()
 	live := m.servers[name] == s
@@ -277,11 +277,11 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 	m.opts.Registrar.Unregister(s.source)
 	s.mu.Lock()
 	s.c = c
-	s.down = false // a reconnect loop succeeded; clear its state so future connects short-circuit again
+	s.down = false // a reconnect loop succeeded, clear its state so future connects short-circuit again
 	s.reopenKeep = nil
 	s.failures = 0
 	s.mu.Unlock()
-	m.register(s, c, defs, keep) // register never fails; it logs and continues
+	m.register(s, c, defs, keep) // register never fails, it logs and continues
 	go m.watchServer(s)
 	// m.ctx, not the caller's: notification refresh outlives whoever connected
 	c.OnNotification(func(n mcp.JSONRPCNotification) { m.onNotification(m.ctx, s, n) })
@@ -291,7 +291,7 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 
 // register bridges live defs into the registry under s.source. keep holds a
 // source's pre-refresh enable/disable split, so re-registration restores exactly
-// what was exposed rather than resetting it; tools not in keep follow defaults.
+// what was exposed rather than resetting it. Tools not in keep follow defaults.
 func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState) {
 	cfg := s.config()
 	defs = filterTools(defs, cfg.Tools, cfg.ExcludeTools)
@@ -306,7 +306,7 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 	for _, d := range defs {
 		n := s.name + "__" + d.Name
 		tool := Bridge(s.name, d, c, BridgeOptions{ReadOnly: d.ReadOnly, Timeout: dur})
-		st := StateDisabled // known but inactive by default; config-off or a restored subset leaves the rest off
+		st := StateDisabled // known but inactive by default, config-off or a restored subset leaves the rest off
 		if !disabledByCfg && restore == nil {
 			st = StateEnabled // fully-enabled, fresh server exposes everything
 		} else if has(restore, n) {
@@ -443,7 +443,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 	m.mu.Unlock()
 
 	// sweep removed servers concurrently (each close bounded by its grace), matching
-	// Close; a stalled one never blocks the others.
+	// Close, so a stalled one never blocks the others.
 	var wg sync.WaitGroup
 	for _, s := range dropped { // by pointer: it is out of the map already
 		wg.Go(func() {
@@ -473,7 +473,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 }
 
 // applyConfig replaces a server's config. A disconnected server picks it up whole
-// on its next connect; a connected one re-registers any tool-filter change against
+// on its next connect. A connected one re-registers any tool-filter change against
 // the running process, and is left running with a notice when the transport itself
 // changed, since restarting it would abort calls in flight.
 func (m *Manager) applyConfig(ctx context.Context, s *server, sc ServerConfig) {
@@ -481,7 +481,7 @@ func (m *Manager) applyConfig(ctx context.Context, s *server, sc ServerConfig) {
 	old, c := s.cfg, s.c
 	s.cfg = sc
 	if configChanged(old, sc) {
-		s.warned = nil // an edit may fix or re-break a tool; each state deserves a fresh notice
+		s.warned = nil // an edit may fix or re-break a tool, so each state deserves a fresh notice
 	}
 	s.mu.Unlock()
 	if c == nil { // the next connect picks the new config up whole
@@ -557,7 +557,7 @@ func (m *Manager) serverStatus(ctx context.Context, name string) ServerStatus {
 	s.mu.Unlock()
 	st.ToolCount = len(s.defsSnapshot()) // last discovered (filtered) tool count
 	if c == nil {
-		if down { // a reconnect loop is running; report progress rather than disconnected
+		if down { // a reconnect loop is running, report progress rather than disconnected
 			st.State = fmt.Sprintf("reconnecting (%d)", failures)
 		} else {
 			st.State = "disconnected"
@@ -640,7 +640,7 @@ func (m *Manager) Logs(name string) []string {
 }
 
 // closeTimeout bounds the whole shutdown sweep. Each disconnect is already
-// bounded by the client's own close grace; this is the backstop that keeps a
+// bounded by the client's own close grace, this is the backstop that keeps a
 // stalled one from holding the app open after the user asked to quit.
 const closeTimeout = time.Second
 
@@ -671,7 +671,7 @@ func (m *Manager) Close() {
 
 // onNotification routes a server notification to discovery or progress output.
 // The client dispatches notifications asynchronously (see Client.OnNotification), so
-// this never runs on mcp-go's transport reader goroutine; it may still do blocking I/O
+// this never runs on mcp-go's transport reader goroutine. It may still do blocking I/O
 // safely. list_changed re-discovery is further serialized per server and given its own
 // bounded context so bursts cannot race the registry nor a dead server hang forever.
 func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNotification) {
@@ -705,7 +705,7 @@ const discoverTimeout = 45 * time.Second
 // pass is running is coalesced, since the in-flight pass reads the current tool set anyway.
 func (m *Manager) rediscan(ctx context.Context, s *server) {
 	s.mu.Lock()
-	if s.rediscovering { // a refresh already in flight; it sees the latest state
+	if s.rediscovering { // a refresh already in flight, it sees the latest state
 		s.mu.Unlock()
 		return
 	}
@@ -791,7 +791,7 @@ func (m *Manager) watchServer(s *server) {
 	}
 	br := bufio.NewReader(r)
 	for {
-		line, err := br.ReadBytes('\n') // one log entry per line; unbounded so nothing is dropped
+		line, err := br.ReadBytes('\n') // one log entry per line, unbounded so nothing is dropped
 		if len(line) > 0 {
 			text := strings.TrimRight(strings.TrimSuffix(string(line), "\n"), "\r")
 			if text != "" {
@@ -810,7 +810,7 @@ const maxReconnectWait = 30 * time.Second
 
 // reconnect marks a stdio server's death and retries with capped exponential backoff until it is
 // back, the manager closes, or a manual disconnect/connect resolves it. Tools are deregistered
-// while down so the model never calls into a dead process; on success connect() re-registers them
+// while down so the model never calls into a dead process. On success connect() re-registers them
 // restoring the pre-death enabled set.
 func (m *Manager) reconnect(s *server) {
 	keep := m.captureLive(s.source) // registrar call stays off s.mu
@@ -891,7 +891,7 @@ func (s *server) sawWarn(msg string) bool {
 	return false
 }
 
-// diag records a line only in /mcp logs; routine diagnostics stay out of history.
+// diag records a line only in /mcp logs, so routine diagnostics stay out of history.
 func (s *server) diag(msg string) {
 	s.logs.add(fmt.Sprintf("[%s] %s", time.Now().Format("15:04:05"), msg))
 }
@@ -903,14 +903,14 @@ func (m *Manager) RefreshStatus() { m.updateStatus() }
 // updateStatus recomputes and pushes the ratio <active>/<discovered> across every
 // configured server, or clears the segment when none are configured. Active is how
 // many real MCP tools are currently presented to the agent (minus any disabled by
-// config or /tools); discovered is how many are registered.
+// config or /tools), and discovered is how many are registered.
 func (m *Manager) updateStatus() {
 	if m.opts.Status == nil {
 		return
 	}
 	names := m.ServerNames()
 	if len(names) == 0 {
-		m.opts.Status("", "") // nothing configured; clear any stale segment
+		m.opts.Status("", "") // nothing configured, clear any stale segment
 		return
 	}
 	var active, discovered int

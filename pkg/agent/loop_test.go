@@ -306,7 +306,7 @@ func TestLoopToolFailureContinues(t *testing.T) {
 		recovery string
 	}{
 		{"tool_errors", map[string]Tool{"bash": &stubTool{name: "bash", err: errors.New("boom")}}, "recovered"},
-		// model calls a tool that is not in the set; loop must keep going
+		// model calls a tool that is not in the set, loop must keep going
 		{"unknown_tool", map[string]Tool{}, "ok"},
 	}
 
@@ -385,7 +385,7 @@ func TestLoopMaxSteps(t *testing.T) {
 	// a finite cap trips the loop, ending cleanly rather than as an error
 	t.Run("step_limit_trips", func(t *testing.T) {
 		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash"}}}
-		// every turn ends with a tool call that produces no text; the loop spins
+		// every turn ends with a tool call that produces no text, the loop spins
 		var turns []llm.ScriptedTurn
 		for i := 0; i < 5; i++ {
 			turns = append(turns, llm.ScriptedTurn{Events: toolCallEvents("c", "bash")})
@@ -569,7 +569,7 @@ func TestLoopFollowUpRunsAfterTurn(t *testing.T) {
 		"turn one must be in flight before the follow-up is queued")
 
 	assert.True(t, a.FollowUp(Input{Text: "two"}))
-	close(block) // let turn one finish; the loop then drains the follow-up
+	close(block) // let turn one finish, the loop then drains the follow-up
 
 	require.NoError(t, <-errCh)
 	// turn one: the tool-call assistant message and its closing reply
@@ -611,7 +611,7 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 	assert.True(t, a.Steer(Input{Text: "steered!"}))
 	// an injected steer surfaces live (no submission echo) while the typed one stays silent
 	assert.True(t, a.Steer(Input{Text: "Allowed with note: keep it", Injected: true}))
-	close(block) // release the tool; the next step boundary drains the steers
+	close(block) // release the tool, the next step boundary drains the steers
 
 	require.NoError(t, <-errCh)
 	var foundSteer bool
@@ -701,7 +701,7 @@ func TestLoopAwaitInput(t *testing.T) {
 		}
 		assert.Len(t, p.Requests(), 1)
 
-		a.Interrupt() // cancels the turn context; a held wait releases via ctx.Done
+		a.Interrupt() // cancels the turn context, a held wait releases via ctx.Done
 		select {
 		case err := <-errCh:
 			require.NoError(t, err) // an interrupted hold is a clean abort, not a failure

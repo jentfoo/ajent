@@ -36,7 +36,7 @@ const customProviderName = "custom"
 // providerSetupChoices is the wizard menu in onboarding order: the local
 // servers, the custom URL row, then the hosted providers. Regional catalogue
 // flavors (the -cn and token-plan variants) stay configurable in models.json
-// but are not listed; the menu holds one row per vendor.
+// but are not listed. The menu holds one row per vendor.
 var providerSetupChoices = []setupChoice{
 	{name: "llamacpp", label: "llama.cpp server", local: true},
 	{name: "lmstudio", label: "LM Studio", local: true},
@@ -216,7 +216,7 @@ func setupCredentials(ctx context.Context, c Console, choice setupChoice) (llm.P
 // setupModels settles the provider's models: discovery when the endpoint can be
 // asked, otherwise one manually entered id for hosted providers. The probe
 // result returns with the file so the caller can seed the discovery cache.
-// Dismissing the model step keeps the entry; any discovered model is one
+// Dismissing the model step keeps the entry, with any discovered model one
 // /model away.
 func setupModels(ctx context.Context, c Console, choice setupChoice, cfg llm.ProviderConfig) (llm.File, llm.CacheEntry, error) {
 	var file llm.File
@@ -256,7 +256,7 @@ func setupModels(ctx context.Context, c Console, choice setupChoice, cfg llm.Pro
 			defaultModel = id
 		}
 	default:
-		// the server is simply not up yet; startup discovery fills the list
+		// the server is simply not up yet, startup discovery fills the list
 		c.Notify("models are discovered once the server is reachable", levelInfo)
 	}
 

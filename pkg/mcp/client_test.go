@@ -196,7 +196,7 @@ func TestParseTool(t *testing.T) {
 		name    string
 		raw     string
 		ok      bool
-		schema  string // expected InputSchema; empty asserts rejection
+		schema  string // expected InputSchema, empty asserts rejection
 		wantSub string // expected substring of the warning
 	}{
 		{

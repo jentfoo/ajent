@@ -27,7 +27,7 @@ type Tool interface {
 }
 
 // Output is a running tool's display channel. Writes stream to the UI as they
-// arrive; Diff commits a rendered file change.
+// arrive, Diff commits a rendered file change.
 type Output interface {
 	io.Writer
 	Diff(path, before, after string)
@@ -43,7 +43,7 @@ type ToolSet interface {
 // Serializer optionally reports whether a batch must run one at a time because
 // one or more calls would open an approval dialog. Parallel dispatch races the
 // dialogs against each other, so prompt order could differ from submission
-// order; a ToolSet whose guard chain may ask implements this to keep them in lockstep.
+// order. A ToolSet whose guard chain may ask implements this to keep them in lockstep.
 type Serializer interface {
 	MustSerialize(calls []ToolCall) bool
 }

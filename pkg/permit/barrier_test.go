@@ -36,7 +36,7 @@ func (d *fakeDialog) Wait(ctx context.Context) (int, error) {
 	}
 }
 
-// Resolve settles the dialog from a caller; only the first wins.
+// Resolve settles the dialog from a caller, only the first winning.
 func (d *fakeDialog) Resolve(index int) {
 	d.resolved.Do(func() { d.ch <- index })
 }
@@ -179,13 +179,13 @@ func TestGuardModeMatrix(t *testing.T) {
 		{"read_reject", ModeAllowRead, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
 		{"read_unverifiable", ModeAllowRead, bashCall("stat f"), tools.ActionAsk},
 
-		// auto+write keeps every other mode's bar; write scope is covered separately.
+		// auto+write keeps every other mode's bar, write scope covered separately.
 		{"autowrite_readonly", ModeAutoWrite, bashCall("ls -la"), tools.ActionAllow},
 		{"autowrite_unscoped_write", ModeAutoWrite, call("write", `{"path":"/etc/hosts"}`), tools.ActionAsk},
 		{"autowrite_reject", ModeAutoWrite, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
 		{"autowrite_unverifiable", ModeAutoWrite, bashCall("stat f"), tools.ActionAsk},
 
-		// block-all asks reads and writes alike; sed stays a hard deny.
+		// block-all asks reads and writes alike, sed staying a hard deny.
 		{"block_readonly", ModeBlockAll, bashCall("ls -la"), tools.ActionAsk},
 		{"block_write", ModeBlockAll, call("write", `{}`), tools.ActionAsk},
 		{"block_reject", ModeBlockAll, bashCall(`sed -i s/a/b/ f`), tools.ActionDeny},
@@ -204,7 +204,7 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBarrier(newFakePrompter())
-	// a bash line and an MCP tool name; write/edit can never be listed.
+	// a bash line and an MCP tool name, write/edit never listable.
 	b.SetSafeCommands([]string{"git status", "mcp__list", "write"})
 
 	cases := []struct {
@@ -216,7 +216,7 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 		// an unverifiable bash line named verbatim auto-runs in allow-read/auto.
 		{"safe_bash_read", ModeAllowRead, bashCall("git status"), tools.ActionAllow},
 		{"safe_bash_auto", ModeAuto, bashCall("git status"), tools.ActionAllow},
-		// whitespace is tolerated; a different command still prompts.
+		// whitespace is tolerated, a different command still prompting.
 		{"safe_bash_padded", ModeAllowRead, bashCall("  git status "), tools.ActionAllow},
 		{"unsafe_bash_prompt", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
 		// an exact MCP tool name auto-runs without needing registry metadata.
@@ -275,7 +275,7 @@ func TestGuardSafeMatchesBashCommandComponents(t *testing.T) {
 	t.Parallel()
 
 	// a compound line matches when every component is either the listed entry or
-	// verifiably read-only; wrapping in cd/pipe no longer defeats the safe match.
+	// verifiably read-only, wrapping in cd/pipe no longer defeating the safe match.
 	b := newTestBarrier(newFakePrompter())
 	b.SetSafeCommands([]string{"make lint"})
 	d := b.Guard()(t.Context(), bashCall("cd /tmp && make lint 2>&1 | tail -5"))
@@ -325,7 +325,7 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 	t.Parallel()
 
 	b := newTestBarrier(newFakePrompter())
-	// a bash line and an MCP tool name; a core writer may also be denied
+	// a bash line and an MCP tool name, and a core writer may also be denied
 	b.SetDeniedCommands([]string{"git stash", "mcp__danger", "write"})
 
 	cases := []struct {
@@ -337,7 +337,7 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		// a configured bash prefix denies in every mode, even allow-all
 		{"deny_git_stash_allow_all", ModeAllowAll, bashCall("git stash"), tools.ActionDeny},
 		{"deny_git_stash_subcommand", ModeAuto, bashCall("git stash push -m x"), tools.ActionDeny},
-		// whitespace is tolerated; a different command still asks
+		// whitespace is tolerated, a different command still asking
 		{"deny_padded", ModeAllowRead, bashCall("  git stash "), tools.ActionDeny},
 		{"unlisted_bash_prompts", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
 		// an exact tool name denies regardless of registry metadata
@@ -354,7 +354,7 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 		})
 	}
 
-	// a user's own ! line runs regardless of config denial; the human owns that shell
+	// a user's own ! line runs regardless of config denial, the human owning that shell
 	ctx := tools.WithUserInitiated(t.Context())
 	d := b.Guard()(ctx, bashCall("git stash"))
 	assert.Equal(t, tools.ActionAllow, d.Action)
@@ -563,7 +563,7 @@ func TestAskerSessionGrants(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// a piped command takes the broad grant; derive its display index from the actions
+		// a piped command takes the broad grant, deriving its display index from the actions
 		displayIdx := slices.Index(optionActions("cat a | sort"), int(optAllowCompound))
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"cat a | sort"}`), displayIdx)
 		assert.Equal(t, tools.ActionAllow, got.Action)
@@ -596,7 +596,7 @@ func TestAskerSessionGrants(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// ifconfig is the one non-readonly head; read-only `head` doesn't count, so the
+		// ifconfig is the one non-readonly head, read-only `head` not counting so the
 		// dialog offers per-name memory and answering it remembers bash:ifconfig.
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"ifconfig | head -n 10"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
@@ -621,8 +621,8 @@ func TestAskerSessionGrants(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// three distinct non-readonly heads (rm, mkdir, touch) defeat per-name memory; the
-		// dialog offers the broad grant instead.
+		// three distinct non-readonly heads (rm, mkdir, touch) defeat per-name memory, the
+		// dialog offering the broad grant instead.
 		displayIdx := slices.Index(optionActions("rm a && mkdir b && touch c"), int(optAllowCompound))
 		require.NotEqual(t, -1, displayIdx)
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm a && mkdir b && touch c"}`), displayIdx)
@@ -642,7 +642,7 @@ func TestAskerSessionGrants(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// rm and mkdir are the two non-readonly heads; answering allow-for-session adds both
+		// rm and mkdir are the two non-readonly heads, answering allow-for-session adding both
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build && mkdir dir"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
@@ -683,7 +683,7 @@ func TestAskerAuto(t *testing.T) {
 		assert.Equal(t, tools.ActionAllow, got.Action)
 	})
 
-	// a write verdict must not resolve; a user keystroke still decides
+	// a write verdict must not resolve, a user keystroke still deciding
 	t.Run("write_verdict_keeps_dialog_waiting", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -695,14 +695,14 @@ func TestAskerAuto(t *testing.T) {
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
-		// the write verdict must not resolve; a user keystroke still decides
+		// the write verdict must not resolve, a user keystroke still deciding
 		waitDialog(t, p).answer(int(optDeny))
 		<-done
 
 		assert.Equal(t, tools.ActionDeny, got.Action)
 	})
 
-	// a confident write (rm) is still classified in auto mode; a readonly verdict resolves the dialog open
+	// a confident write (rm) is still classified in auto mode, a readonly verdict resolving the dialog open
 	t.Run("classifies_clear_write_and_approves_on_read_only", func(t *testing.T) {
 		b := NewBarrier(noRO)
 		b.SetMode(ModeAuto)
@@ -711,8 +711,8 @@ func TestAskerAuto(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassAllow}
 		b.SetClassifier(cl)
 
-		// a confident write (rm) is still classified in auto mode; a readonly verdict
-		// resolves the dialog open without a keystroke.
+		// a confident write (rm) is still classified in auto mode, a readonly verdict
+		// resolving the dialog open without a keystroke.
 		var got tools.Decision
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build"}`)); close(done) }()
@@ -736,7 +736,7 @@ func TestAskerAuto(t *testing.T) {
 			runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 			close(done)
 		}()
-		<-done // the classifier resolves allow; no keystroke needed
+		<-done // the classifier resolves allow, no keystroke needed
 
 		require.Eventually(t, func() bool { return len(n.all()) == 1 }, time.Second, 10*time.Millisecond)
 		assert.Equal(t, "Tool auto allowed", n.all()[0])
@@ -753,7 +753,7 @@ func TestAskerAuto(t *testing.T) {
 
 		go runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		d := waitDialog(t, p)
-		d.answer(int(optDeny)) // the user decides; no auto-allow notice fires
+		d.answer(int(optDeny)) // the user decides, no auto-allow notice fires
 		require.Empty(t, n.all())
 	})
 
@@ -866,7 +866,7 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 		assert.Equal(t, tools.ActionAllow, got.Action)
 	})
 
-	// block-all still prompts writes; the dialog stays open
+	// block-all still prompts writes, the dialog staying open
 	t.Run("into_block_all_leaves_write_dialog_waiting", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
@@ -876,7 +876,7 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 		go func() { got = runAsk(b, t.Context(), "write", []byte(`{}`)); close(done) }()
 		_ = waitDialog(t, p)
 
-		b.SetMode(ModeBlockAll) // block-all still prompts writes; dialog stays open
+		b.SetMode(ModeBlockAll) // block-all still prompts writes, dialog stays open
 
 		waitDialog(t, p).answer(int(optDeny))
 		<-done
@@ -1012,7 +1012,7 @@ func TestClassifyCall(t *testing.T) {
 		{"allow_read_never", ModeAllowRead, tools.ToolBash, false},
 		{"block_all_never", ModeBlockAll, tools.ToolBash, false},
 
-		// a core writer is decided statically; the model never gets to call one read-only
+		// a core writer is decided statically, the model never getting to call one read-only
 		{"auto_write", ModeAuto, "write", false},
 		{"auto_edit", ModeAuto, "edit", false},
 		{"autowrite_write", ModeAutoWrite, "write", false},
@@ -1108,7 +1108,7 @@ func TestPrevResetsSessionAllows(t *testing.T) {
 	assert.Equal(t, tools.ActionAllow, covered.Action)
 	assert.Equal(t, before, p.count())
 
-	b.Prev() // auto → allow-read; the grant does not cross the mode change
+	b.Prev() // auto → allow-read, the grant not crossing the mode change
 
 	var denied tools.Decision
 	done := make(chan struct{})
@@ -1197,10 +1197,10 @@ func TestPrefetch(t *testing.T) {
 	}{
 		// two unverifiable bash calls: both are classified
 		{"two_prompt_bash", ModeAuto, []agent.ToolCall{bashCall("rm -rf build"), bashCall("git push origin main")}, nil, 2},
-		// built-in read-only tools resolve statically; the model is never asked
+		// built-in read-only tools resolve statically, the model never being asked
 		{"read_only_skipped", ModeAuto, []agent.ToolCall{bashCall("ls -la"), bashCall("grep foo bar.c")}, nil, 0},
-		// make lint is Ask by default but listed safe; the two unlisted prompt
-		// commands still go. Only those two are sent.
+		// make lint is Ask by default but listed safe, the two unlisted prompt
+		// commands still going. Only those two are sent.
 		{"safe_command_skipped", ModeAuto, []agent.ToolCall{bashCall("make lint"), bashCall("rm f"), bashCall("git push origin main")}, []string{"make lint"}, 2},
 		// a lone eligible call is prefetched too: serial predecessors may run for a
 		// while before its dialog opens.
@@ -1256,7 +1256,7 @@ func TestPrefetchCancellation(t *testing.T) {
 		stopped := make(chan struct{})
 		b.SetClassifier(NewCachedClassifier((&blockingClassifier{cancel: stopped}).Classify))
 
-		// the turn stays live past the answer; only the answer may stop the request
+		// the turn stays live past the answer, only the answer stopping the request
 		turnCtx, turnCancel := context.WithCancel(t.Context())
 		t.Cleanup(turnCancel)
 		b.Prefetch(turnCtx, []agent.ToolCall{bashCall("rm build")})
@@ -1276,7 +1276,7 @@ func TestPrefetchCancellation(t *testing.T) {
 				return false
 			}
 		}, time.Second, 10*time.Millisecond)
-		assert.NoError(t, turnCtx.Err()) // the turn never aborted; the answer stopped it
+		assert.NoError(t, turnCtx.Err()) // the turn never aborted, the answer stopped it
 	})
 }
 

@@ -20,8 +20,8 @@ const (
 	defaultMaxIdleConnsPerHost = 8
 )
 
-// Timeouts bound one request. A nil field takes the package default; an
-// explicit zero disables that bound.
+// Timeouts bound one request. A nil field takes the package default, an
+// explicit zero disabling that bound.
 type Timeouts struct {
 	Connect, TLS, Header, Idle, Total *time.Duration
 }
@@ -39,17 +39,17 @@ type LogEvent struct {
 }
 
 // Options configures the client New returns. Only bounds the transport itself
-// enforces belong here; the rest of a call is described by Request.
+// enforces belong here, the rest of a call described by Request.
 type Options struct {
 	Timeouts  Timeouts
-	Transport http.RoundTripper // test seam; bypasses the shared client cache
+	Transport http.RoundTripper // test seam, bypasses the shared client cache
 }
 
 var clientCache sync.Map // map[transportKey]*http.Client
 
 // transportKey is the resolved bounds that decide whether a pool can be shared.
 // A dialer cannot carry two timeouts, so any provider configuring its own splits
-// off a transport; the sharing is real for the defaults every cloud provider takes.
+// off a transport, and the sharing is real for the defaults every cloud provider takes.
 type transportKey struct {
 	connect, tls, header time.Duration
 }

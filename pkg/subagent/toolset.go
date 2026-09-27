@@ -21,7 +21,7 @@ type ToolSource interface {
 var readOnlyBuiltins = []string{"read", "grep", "find", "ls", "git_status", "git_log", "git_show", "git_diff"}
 
 // gitToolNames are the read-only built-ins that need a repository at the
-// child's cwd; they are withheld when the cwd is not inside a work tree.
+// child's cwd, withheld when the cwd is not inside a work tree.
 var gitToolNames = []string{"git_status", "git_log", "git_show", "git_diff"}
 
 // isGitTool reports whether name is one of the repo-gated git readers.
@@ -37,7 +37,7 @@ func isGitTool(name string) bool {
 func childTools(src ToolSource, inRepo bool) []agent.Tool {
 	return bulk.SliceFilter(func(t agent.Tool) bool {
 		name := t.Name()
-		if strings.HasPrefix(name, "agent_") { // the bar applies last; nothing configures past it
+		if strings.HasPrefix(name, "agent_") { // the bar applies last, nothing configures past it
 			return false
 		}
 		if !slices.Contains(readOnlyBuiltins, name) && !src.ReadOnly(name) {

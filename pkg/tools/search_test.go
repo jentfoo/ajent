@@ -375,8 +375,8 @@ func TestGrepFallback(t *testing.T) {
 		assert.NotContains(t, out, "result cap")
 	})
 
-	// a binary file holds no text matches; when one exists the result says so,
-	// so an empty or short search is never mistaken for complete coverage
+	// a binary file holds no text matches. When one exists the result says so,
+	// an empty or short search never being mistaken for complete coverage
 	t.Run("binary_file_noted_as_unsearched", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.txt", "hit\nhit\n")

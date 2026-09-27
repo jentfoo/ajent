@@ -43,7 +43,7 @@ func TestModelCommand(t *testing.T) {
 		c.commands = r
 		RegisterBuiltins(r, c)
 
-		// pick index 1; the default active (alpha at index 0) pre-selects that row
+		// pick index 1, the default active (alpha at index 0) pre-selecting that row
 		c.picks = []fakePick{{result: 1}}
 		cmd, _ := r.Get("model")
 		require.NoError(t, cmd.Handler(t.Context(), "", c))

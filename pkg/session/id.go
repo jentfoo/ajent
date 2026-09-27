@@ -15,7 +15,7 @@ var clock = func() time.Time { return time.Now().UTC() }
 var (
 	mu       sync.Mutex
 	lastMS   int64
-	randTail [10]byte // re-seeded per advancing millisecond; incremented within one
+	randTail [10]byte // re-seeded per advancing millisecond, incremented within one
 )
 
 // NewID returns a 26-char Crockford ULID: a 48-bit millisecond timestamp plus

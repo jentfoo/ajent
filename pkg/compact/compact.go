@@ -11,18 +11,18 @@ import (
 // Options configures one compaction pass over a branch.
 type Options struct {
 	Cwd          string           // canonical path base for superseded read/edit detection
-	Instructions string           // /compact <instructions>; appended to the summary prompt
+	Instructions string           // /compact <instructions>, appended to the summary prompt
 	Retain       llm.RetainPolicy // session retention policy, for measurement
 	Base         int              // fixed request overhead (system block + tool schemas), added to every measure
 	Resolve      func(string) (llm.Model, error)
-	MinSteps     int // recent steps kept verbatim however large; 0 uses defaultMinSteps
-	// VerbatimTokens caps the band past that floor; 0 uses a tenth of the compaction point.
+	MinSteps     int // recent steps kept verbatim however large, 0 uses defaultMinSteps
+	// VerbatimTokens caps the band past that floor. 0 uses a tenth of the compaction point.
 	VerbatimTokens int
 }
 
 const (
-	defaultMinSteps        = 2    // recent steps always kept verbatim; twin of defaultVerbatimDivisor
-	defaultVerbatimDivisor = 10   // band ceiling divisor on the compaction point; twin of defaultMinSteps
+	defaultMinSteps        = 2    // recent steps always kept verbatim, twin of defaultVerbatimDivisor
+	defaultVerbatimDivisor = 10   // band ceiling divisor on the compaction point, twin of defaultMinSteps
 	maxVerbatimSteps       = 8    // upper bound, matching the /settings minSteps row of 1..8
 	minVerbatimTokens      = 1024 // floor, so an unknown window still keeps a modest band
 	minSpanTokens          = 1024 // below this a summary cannot pay for itself
@@ -38,7 +38,7 @@ type Result struct {
 }
 
 // RunPrompt performs one summarisation model call and returns its assistant text.
-// It is wired by the driver to a real provider stream; nil disables compaction.
+// It is wired by the driver to a real provider stream. Nil disables compaction.
 type RunPrompt func(ctx context.Context, run llm.Request) (string, error)
 
 // Compact folds everything before the verbatim band into a checkpoint. Both ends
@@ -47,7 +47,7 @@ type RunPrompt func(ctx context.Context, run llm.Request) (string, error)
 // nil result means nothing worth doing changed.
 func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run RunPrompt, opts Options) (*Result, error) {
 	if run == nil {
-		return nil, nil // no summariser wired; there is no other way to reduce
+		return nil, nil // no summariser wired, there is no other way to reduce
 	}
 	minSteps, verbatimTokens := resolveVerbatim(model, opts)
 
@@ -68,7 +68,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		return nil, nil
 	}
 	firstKept := firstKeptID(branch, band)
-	if firstKept == "" { // the band opens on an assistant message; providers reject otherwise
+	if firstKept == "" { // the band opens on an assistant message, providers reject otherwise
 		return nil, errors.New("compact: a cut needs a kept message entry")
 	}
 
@@ -86,7 +86,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	res := &Result{
 		Before: before, Summary: summary, FirstKeptEntryID: firstKept,
 		// the recorded plan is inert by construction, so it carries only what the
-		// notice needs; claiming stub work here would describe context that never changed
+		// notice needs, claiming stub work here would describe context that never changed
 		Reduce: session.Reduce{Stats: session.Stats{Summarized: nsum}},
 	}
 	cd := session.CompactionData{Summary: summary, FirstKeptEntryID: firstKept, Reduce: &res.Reduce}
@@ -130,7 +130,7 @@ func finish(res *Result) (*Result, error) {
 
 // resolveVerbatim returns the band bounds: opts' overrides when set, else two
 // steps and a tenth of the model's compaction point. Every trigger uses the same
-// band; a manual run is not an instruction to keep less recent work.
+// band. A manual run is not an instruction to keep less recent work.
 func resolveVerbatim(model llm.Model, opts Options) (steps, tokens int) {
 	steps = min(opts.MinSteps, maxVerbatimSteps)
 	if steps <= 0 {

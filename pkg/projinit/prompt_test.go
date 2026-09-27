@@ -25,10 +25,10 @@ func TestDistillPrompts(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			assert.True(t, strings.HasPrefix(prompt, distillHeader))
 			assert.True(t, strings.HasSuffix(prompt, distillRules))
-			// brevity is the requirement; the file is read on every turn
+			// brevity is the requirement, and the file is read on every turn
 			assert.Contains(t, prompt, "clear and concise")
 			assert.Contains(t, prompt, "brevity is a feature")
-			// every claim traces to the survey; nothing is invented
+			// every claim traces to the survey, nothing is invented
 			assert.Contains(t, prompt, "Every claim must trace to something in the survey above")
 			assert.Contains(t, prompt, "Never invent commands, conventions or code-style rules")
 			// the write goes through the normal tool, so the barrier gates it

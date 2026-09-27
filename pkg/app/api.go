@@ -65,7 +65,7 @@ type HeadlessOptions struct {
 // RunOptions carries the parsed command line into app.Run.
 type RunOptions struct {
 	Model      string
-	Render     string // ui.render override; "auto" means unset
+	Render     string // ui.render override, "auto" means unset
 	System     string // --system: replaces ajent's default prose guidance when non-empty
 	Prompt     string
 	Output     string // OutputText or OutputJSON

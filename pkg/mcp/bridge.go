@@ -17,11 +17,11 @@ const maxCallTimeout = 10 * time.Minute
 // BridgeOptions configures how one bridged tool behaves.
 type BridgeOptions struct {
 	ReadOnly bool          // from annotations or config globs
-	Timeout  time.Duration // per-call cap; zero uses defaultCallTimeout
+	Timeout  time.Duration // per-call cap, zero uses defaultCallTimeout
 }
 
 // bridgeTool adapts a remote MCP tool to agent.Tool. Names are namespaced
-// server__tool so separate servers cannot collide; the model sees that name.
+// server__tool so separate servers cannot collide, the name the model sees.
 type bridgeTool struct {
 	name     string  // server__tool, stable in the transcript
 	label    string  // bare tool name for the UI when unambiguous
@@ -55,7 +55,7 @@ func (b *bridgeTool) Label(_ agent.ToolCall) string {
 
 func (b *bridgeTool) Description() string { return b.def.Description }
 
-// Schema returns the server's own JSON schema; name and description are filled by
+// Schema returns the server's own JSON schema, name and description filled by
 // the registry when it builds the tool block.
 func (b *bridgeTool) Schema() llm.ToolSchema {
 	return llm.ToolSchema{Parameters: b.def.InputSchema}

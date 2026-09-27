@@ -15,19 +15,19 @@ const modulePath = "github.com/jentfoo/ajent@latest"
 // installed a newer version, or failed.
 type UpdateResult struct {
 	Current   string // build version before the attempt (Version)
-	Latest    string // resolved @latest version; "" when resolution failed
+	Latest    string // resolved @latest version, "" when resolution failed
 	Installed bool   // true only after go install succeeded with a newer version
 	Err       error  // non-nil on any resolve or install failure
 }
 
 // SelfUpdate resolves the latest published ajent and, when it differs from the
-// running build, reinstalls via `go install`. It never panics; failures come back
+// running build, reinstalls via `go install`. It never panics, and failures come back
 // in Err. The current version is Version.
 func SelfUpdate(ctx context.Context) UpdateResult {
 	return selfUpdateWith(ctx, Version, updateCmds{})
 }
 
-// updateCmds are the two external commands a self-update runs; zero values use
+// updateCmds are the two external commands a self-update runs, and zero values use
 // the real `go` invocations. Tests swap them for fakes to avoid network and PATH.
 type updateCmds struct {
 	resolve func(context.Context) (string, error)
@@ -57,7 +57,7 @@ func (u updateCmds) installLatest(ctx context.Context) error {
 	return nil
 }
 
-// selfUpdateWith is the pure decision core SelfUpdate wraps; current and cmds are
+// selfUpdateWith is the pure decision core SelfUpdate wraps, with current and cmds
 // injectable so tests exercise every branch without a real go toolchain.
 func selfUpdateWith(ctx context.Context, current string, cmds updateCmds) UpdateResult {
 	if current == "" {

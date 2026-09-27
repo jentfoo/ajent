@@ -19,7 +19,7 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 	text := strings.TrimSpace(in.Text)
 	switch {
 	case c.phase == PhasePlanning && !in.Injected && !c.goalCaptured && text != "":
-		// the contract rides as its own block so the echoed line stays the goal;
+		// the contract rides as its own block so the echoed line stays the goal.
 		// appendSteer emits Text before Blocks, keeping goal then contract
 		c.goalCaptured = true
 		c.persistLocked()
@@ -29,7 +29,7 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 	case c.phase == PhaseAwaitingPlan && !in.Injected && text != "":
 		// whatever the user submits is the plan of record, edits included
 		c.approvedPlan = text
-		c.draftPlan = "" // gate passed; no draft to restore
+		c.draftPlan = "" // gate passed, no draft to restore
 		in.Text = c.beginImplementationLocked()
 		in.Injected = true
 		return in, true
@@ -69,7 +69,7 @@ func (c *Controller) Advance(ctx context.Context, last agent.TurnResult) (agent.
 			return c.retryImplementationLocked()
 		}
 		c.retries = 0
-		// a stopped implementor is a finished implementor, dev_review or not; but the
+		// a stopped implementor is a finished implementor, dev_review or not. But the
 		// reviewer must still hear what it did, so an unreported round falls back to
 		// its closing message. Read before the fork replaces the context.
 		if pending != nil && pending.to == PhaseReviewing {
@@ -185,7 +185,7 @@ func (c *Controller) stalledReviewerLocked(ctx context.Context) (agent.Input, bo
 		optContinue = "Keep reviewing"
 	)
 	if c.h.Ask == nil {
-		return agent.Input{}, false // no way to ask; leave the user in the review
+		return agent.Input{}, false // no way to ask, leave the user in the review
 	}
 	choice, err := c.h.Ask(ctx, "The review ended without a verdict. What now?",
 		[]string{optRevise, optComplete, optContinue})

@@ -46,8 +46,8 @@ func UserPath(name string) (string, error) {
 }
 
 // Home returns the resolved ajent configuration directory path without creating
-// it. It honours AJENT_HOME and otherwise resolves <home>/.ajent; callers that
-// only probe for a file's existence use this to avoid an empty-dir side effect.
+// it. It honours AJENT_HOME and otherwise resolves <home>/.ajent, so callers that
+// only probe for a file's existence avoid an empty-dir side effect.
 func Home() (string, error) {
 	return resolveDir(osEnv, osHome)
 }

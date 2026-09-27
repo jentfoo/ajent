@@ -67,7 +67,7 @@ type job struct {
 	summary  string
 	err      error
 	pollers  int
-	consumed bool // result delivery handled (by a poll or a steer); suppresses later offers
+	consumed bool // result delivery handled (by a poll or a steer), suppresses later offers
 }
 
 // snapshot copies the public fields under lock.
@@ -148,7 +148,7 @@ func (j *job) finished() bool {
 	}
 }
 
-// terminal reports whether a final status is recorded; finish sets it before
+// terminal reports whether a final status is recorded. finish sets it before
 // close(j.done), so the timeout branch checks it to avoid reporting running.
 func (j *job) terminal() bool {
 	j.mu.Lock()

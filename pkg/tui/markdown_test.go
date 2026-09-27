@@ -72,7 +72,7 @@ func TestRenderMarkdown(t *testing.T) {
 
 	t.Run("thematic_break_is_a_rule", func(t *testing.T) {
 		// a break retains its intent (rule + style), not the width it was parsed
-		// at; laying out at any later width draws to that width.
+		// at. Laying out at any later width draws to that width.
 		for _, src := range []string{"---", "----", "***"} {
 			lines := renderMarkdown(plain, 40, src)
 			require.Len(t, lines, 1)
@@ -249,7 +249,7 @@ func TestRenderMarkdownDocument(t *testing.T) {
 	}
 
 	// the fenced block is highlighted, so its bytes belong to chroma rather than to
-	// a theme role; assert the text and that it carries color, not the exact SGR
+	// a theme role. Assert the text and that it carries color, not the exact SGR
 	code := "  func f() int { return 1 }"
 	require.Contains(t, strutil.StripANSI(out), code)
 	for _, line := range strings.Split(out, "\n") {

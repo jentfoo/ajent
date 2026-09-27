@@ -11,7 +11,7 @@ import (
 
 // rewindSetup returns a UI with the double-Esc gesture enabled and idle, plus
 // its input writer. The window is set wide so two lone Esc presses are always
-// within it; tests that need an elapsing window use a short one explicitly.
+// within it. Tests that need an elapsing window use a short one explicitly.
 func rewindSetup(t *testing.T) (*UI, io.Writer) {
 	t.Helper()
 
@@ -81,7 +81,7 @@ func TestDoubleEsc(t *testing.T) {
 		}
 
 		// escPending above already proves the first lone Esc was fully decoded and
-		// armed the gesture; a fresh press now lands as an independent keyEscape.
+		// armed the gesture, so a fresh press now lands as an independent keyEscape.
 		feedEscape(t, pw) // second Esc -> rewind
 		select {
 		case <-rewound:

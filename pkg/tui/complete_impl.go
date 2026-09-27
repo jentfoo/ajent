@@ -6,14 +6,14 @@ import (
 )
 
 // completionOverlay is the candidate list drawn above the editor, in either of two
-// presentations. A menu is live while typing and owns ↑/↓/Enter/Tab; the tab-driven
+// presentations. A menu is live while typing and owns ↑/↓/Enter/Tab. The tab-driven
 // form holds no selection, consumes no keys and is cleared by the next keystroke.
 type completionOverlay struct {
 	menu   bool
 	items  []Completion
 	start  int  // grapheme index the accepted Text replaces, up to the cursor
-	cursor int  // highlighted index, menu only; what Tab accepts
-	moved  bool // selection navigated via ↑/↓; only then does Enter accept it
+	cursor int  // highlighted index, menu only, what Tab accepts
+	moved  bool // selection navigated via ↑/↓, and only then does Enter accept it
 }
 
 // completionGap separates packed candidate columns.
@@ -55,7 +55,7 @@ func (o *completionOverlay) key(k key, u *UI) (consume, submit bool) {
 		o.move(1)
 		return true, false
 	case keyTab:
-		// accept now; a following Enter just submits
+		// accept now, a following Enter just submits
 		if len(o.items) > 0 {
 			o.applyCurrent(u)
 			o.moved = false
@@ -150,7 +150,7 @@ func (o *completionOverlay) columnRows(t Theme, width, maxRows int) ([]string, i
 }
 
 // fitRows returns how many of total fit in maxRows rows of perRow, plus the
-// remainder; an overflow reserves a whole row for the "N more" line.
+// remainder. An overflow reserves a whole row for the "N more" line.
 func fitRows(total, maxRows, perRow int) (shown, more int) {
 	if total <= maxRows*perRow {
 		return total, 0

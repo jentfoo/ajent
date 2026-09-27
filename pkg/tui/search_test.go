@@ -149,7 +149,7 @@ func TestMatchSpans(t *testing.T) {
 
 	assert.Nil(t, matchSpans("anything", "")) // empty query highlights nothing
 	assert.Equal(t, [][2]int{{0, 3}}, matchSpans("Fix the loop", "fix"))
-	// case-insensitive across the whole text; non-overlapping occurrences in order
+	// case-insensitive across the whole text, with non-overlapping occurrences in order.
 	// second word starts at index 10 (r=10..y=14)
 	assert.Equal(t, [][2]int{{0, 5}, {6, 11}}, matchSpans("retry RETRY again", "RETRY"))
 	// lowering İ changes the byte length, so the spans no longer index the original

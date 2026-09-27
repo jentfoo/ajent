@@ -112,7 +112,7 @@ func (m *editMatcher) canonicalize() {
 	for _, r := range m.edited {
 		lo, hi := max(r.from, 0), min(r.to, len(m.clines))
 		for j := lo; j < hi; j++ {
-			m.editedAt[j+1] = 1 // rare; a per-line mark beats a prefix diff of ranges
+			m.editedAt[j+1] = 1 // rare, a per-line mark beats a prefix diff of ranges
 		}
 	}
 	for j := 1; j < len(m.editedAt); j++ {
@@ -160,7 +160,7 @@ func preserveQuoted(buf string, ms []match) []match {
 		csite, smap := canonical(site)
 		crepl, rmap := canonical(m.repl)
 		if csite == crepl {
-			continue // the edit exists to change what the folding ignores; write it whole
+			continue // the edit exists to change what the folding ignores, write it whole
 		}
 		p, s := commonAffixes(csite, crepl)
 		if p == 0 && s == 0 {
@@ -307,7 +307,7 @@ func (m *editMatcher) fuzzyMatches(old, replacement string) []match {
 			continue
 		}
 		if m.editedAt[i+n] > m.editedAt[i] {
-			continue // an earlier edit wrote here; healing could revert its work
+			continue // an earlier edit wrote here, so healing could revert its work
 		}
 		if drift < best {
 			best, runner, at = drift, best, i
@@ -352,7 +352,7 @@ func fuzzyWindow(old, rep, window []string) (int, bool) {
 			return 0, false // rep leaves this line alone, so applying would revert it
 		}
 		if trimIndent(old[j]) == trimIndent(window[j]) {
-			return 0, false // an irregular indent; the indent tier proves that or refuses it
+			return 0, false // an irregular indent, the indent tier proves that or refuses it
 		}
 		p, s := commonAffixes(old[j], window[j])
 		ae, be := len(old[j])-s, len(window[j])-s
@@ -364,7 +364,7 @@ func fuzzyWindow(old, rep, window []string) (int, bool) {
 			return 0, false // the drift is in the part of the line rep leaves alone
 		}
 		// the span checks above are measured on old, but the apply writes rep over
-		// window; punctuation only window holds would be deleted unnoticed
+		// window. Punctuation only window holds would be deleted unnoticed
 		if t := trailingPunct(window[j]); t != "" && !strings.HasSuffix(rep[j], t) {
 			return 0, false
 		}
@@ -453,7 +453,7 @@ func driftRun(a, b string) (string, string, bool) {
 // runeStart reports whether i begins a rune in s, or is its end.
 func runeStart(s string, i int) bool { return i >= len(s) || utf8.RuneStart(s[i]) }
 
-// maxDriftQuotes bounds how many differing runs one note names; past a few the
+// maxDriftQuotes bounds how many differing runs one note names. Past a few the
 // diff says more than another quotation.
 const maxDriftQuotes = 3
 
@@ -593,7 +593,7 @@ func sharedIndent(lines []string, base string) bool {
 	return true
 }
 
-// reindent swaps base for prefix on every non-blank line of s; blank lines
+// reindent swaps base for prefix on every non-blank line of s. Blank lines
 // stay empty and lines lacking base keep their own indentation.
 func reindent(s, base, prefix string) string {
 	lines := strings.Split(s, "\n")
@@ -644,7 +644,7 @@ func tierNote(idx int, tier matchTier, old, matched string) string {
 		return fmt.Sprintf("edit %d: applied after shifting indentation; the file indents this block with %s where your text used %s, and the file's indentation was kept",
 			idx, have, want)
 	case tierCanon:
-		// a lookalike survives a trailing trim; stripSpace would fold it away
+		// a lookalike survives a trailing trim, but stripSpace would fold it away
 		if stripTrailingWS(old) == stripTrailingWS(matched) {
 			return fmt.Sprintf("edit %d: applied after ignoring trailing whitespace; your oldText did not match the file byte for byte",
 				idx)

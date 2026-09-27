@@ -13,9 +13,8 @@ import (
 // streaming response does not repaint the row per token.
 const deltaFlush = 150 * time.Millisecond
 
-// maxBuf caps how much raw streamed text one row accumulates; on overflow only
-// the head is kept (the display always shows a clean first portion of the line,
-// never jumping to its tail), and tui.SetActivity elides it to window width.
+// maxBuf caps how much raw streamed text one row accumulates, keeping on overflow
+// only a clean head so the display never jumps to its tail, and tui.SetActivity then elides it to window width.
 const maxBuf = 2048
 
 // Which stream owns buf: thinking reasoning or assistant text. They alternate
@@ -32,20 +31,20 @@ const (
 // a "thinking..." line, elided to a single line. The row lives as long as the job
 // does. Manager.spawn clears the row on every terminal path, so a child that runs
 // a second turn never blinks out of the list. Nothing it emits ever reaches
-// committed history; it feeds Options.Activity only.
+// committed history, feeding only Options.Activity.
 type childSink struct {
 	agent.NopSink
 	id   string // row key, e.g. sub-2
-	rank int    // job number; the row's stable place in the activity list
+	rank int    // job number, the row's stable place in the activity list
 	pub  func(key, text string, rank int)
 
 	mu      sync.Mutex
-	timer   *time.Timer // pending coalesced flush; nil when none armed
+	timer   *time.Timer // pending coalesced flush, or nil when none armed
 	lastPub time.Time   // last publish wall clock, for delta throttling
-	text    string      // newest desired row (full line incl. id prefix); "" clears
+	text    string      // newest desired row (full line incl. id prefix), empty to clear
 	buf     string      // accumulated deltas of the current in-progress line
-	src     stream      // which stream owns buf; switching resets it
-	calls   int         // child tool calls in flight; the row falls back at zero
+	src     stream      // owning stream of buf, reset on switch
+	calls   int         // in-flight child tool calls, idle fallback at zero
 	idle    string      // row to restore once the last in-flight call ends
 }
 
@@ -53,7 +52,7 @@ func newChildSink(id string, rank int, pub func(key, text string, rank int)) *ch
 	return &childSink{id: id, rank: rank, pub: pub}
 }
 
-// set records the newest desired row. force publishes immediately; otherwise it is
+// set records the newest desired row. force publishes immediately, otherwise it is
 // coalesced onto a short tick so thinking/text deltas do not repaint per token.
 func (s *childSink) set(text string, force bool) {
 	s.mu.Lock()
@@ -66,7 +65,7 @@ func (s *childSink) set(text string, force bool) {
 	switch {
 	case force || now.Sub(s.lastPub) >= deltaFlush:
 		s.flushLocked(now)
-	case s.timer != nil: // a flush is already armed; it will pick up the latest text
+	case s.timer != nil: // a flush is already armed and picks up the latest text
 	default:
 		delay := deltaFlush - now.Sub(s.lastPub)
 		s.timer = time.AfterFunc(delay, func() {
@@ -96,9 +95,9 @@ func (s *childSink) flushLocked(now time.Time) {
 // line, otherwise an early finisher would erase a sibling still running.
 func (s *childSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
 	s.mu.Lock()
-	if s.calls == 0 { // first of a batch; remember what the row showed before it
+	if s.calls == 0 { // first of a batch, so remember what the row showed before it
 		s.idle = s.text
-		if s.idle == "" { // no coalesced line yet; fall back to the idle text
+		if s.idle == "" { // no coalesced line yet, fall back to the idle text
 			s.idle = thinkingRow(s.id)
 		}
 	}
@@ -122,18 +121,18 @@ func (s *childSink) ToolStart(call agent.ToolCall, label string) func(agent.Tool
 // as Text does, so a child's chain-of-thought is surfaced rather than collapsed.
 func (s *childSink) Thinking(delta string) { s.accumulate(delta, streamThinking) }
 
-// Text accumulates streaming deltas onto the current in-progress line; see accumulate.
+// Text accumulates streaming deltas onto the current in-progress line (see accumulate).
 func (s *childSink) Text(delta string) { s.accumulate(delta, streamText) }
 
 // accumulate appends delta to the current in-progress line for src, scrolling past
-// completed newlines and publishing only its head; switching streams starts fresh.
+// completed newlines and publishing only its head, reset on a stream switch.
 func (s *childSink) accumulate(delta string, src stream) {
 	s.mu.Lock()
 	if s.src != src { // a thinking block ended / text began: show the new content
 		s.buf = ""
 		s.src = src
 	}
-	if delta != "" { // deltas arrive per token; append, capping the running line
+	if delta != "" { // deltas arrive per token, so append while capping the running line
 		b := s.buf + delta
 		// scroll per line: drop everything before the last newline so we show only
 		// the current in-progress line (completed lines scroll past)

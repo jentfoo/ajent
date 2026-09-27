@@ -28,7 +28,7 @@ func TestCompactionResumeRebuildsReducedContext(t *testing.T) {
 	appendMsg(llm.Text(llm.RoleUser, "first ask"))
 	appendMsg(llm.Text(llm.RoleAssistant, "first reply"))
 
-	// turn two is kept; its tool result is stubbed by the reduce plan
+	// turn two is kept, its tool result stubbed by the reduce plan
 	firstKept := appendMsg(llm.Text(llm.RoleUser, "second ask"))
 	appendMsg(llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
 		llm.ToolCallBlock{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)},

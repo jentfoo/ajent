@@ -19,7 +19,7 @@ type serializeSet struct {
 
 func (s *serializeSet) MustSerialize([]ToolCall) bool { return s.must }
 
-// blockStub blocks its Execute until released; aStarted closes once it is running,
+// blockStub blocks its Execute until released, and aStarted closes once it is running,
 // so the test knows when the first call is in flight.
 type blockStub struct {
 	stubTool
@@ -47,7 +47,7 @@ func (t *blockStub) Execute(ctx context.Context, call ToolCall, out Output) (Too
 // TestDispatchHonorsSerializer asserts a ToolSet that reports it must serialize is
 // dispatched one call at a time even when every tool is ModeParallel and the model
 // supports parallel tools. The second call cannot start while the first is in
-// flight; only serial dispatch satisfies this, which keeps approval dialogs open in
+// flight. Only serial dispatch satisfies this, which keeps approval dialogs open in
 // submission order.
 func TestDispatchHonorsSerializer(t *testing.T) {
 	t.Parallel()

@@ -21,7 +21,7 @@ func TestLimitsFrom(t *testing.T) {
 		Read:  config.Limit{Bytes: 4096},
 		Other: config.Limit{Lines: 50},
 	})
-	// each configured axis copies straight through; unset axes stay zero here,
+	// each configured axis copies straight through, unset axes staying zero here,
 	// and ApplyLimits fills them from the package defaults at startup.
 	assert.Equal(t, Limit{Lines: 10}, l.Bash)
 	assert.Equal(t, Limit{Bytes: 4096}, l.Read)
@@ -103,7 +103,7 @@ func TestBound(t *testing.T) {
 			b := Bound(tc.in, Limit{Bytes: 100})
 			assert.True(t, b.Truncated)
 			runes := []rune(b.Text)
-			// cut to the rune budget, not bytes; a byte-bound cut would stop at ~667
+			// cut to the rune budget, not bytes, a byte-bound cut stopping at ~667
 			assert.Len(t, runes, MaxLineRunes)
 		})
 	}
@@ -126,8 +126,8 @@ func TestBound(t *testing.T) {
 func TestTruncateOutput(t *testing.T) {
 	t.Parallel()
 
-	// the under-budget text is returned trimmed of its trailing newline; the
-	// bool stays false so a byte-identical caller can branch on it
+	// the under-budget text is returned trimmed of its trailing newline, the
+	// bool staying false so a byte-identical caller can branch on it
 	t.Run("under_bound_unchanged", func(t *testing.T) {
 		in := strings.Repeat("line\n", 5)
 		out, cut := truncateOutput("sess", "t", in, Limit{Lines: 10}, "")
@@ -258,7 +258,7 @@ func TestWriterSpillsAtBound(t *testing.T) {
 		assert.Equal(t, 3, n)
 		assert.Equal(t, "abcd\n", kept.String())
 
-		// now over budget; the spill file holds head + overflow
+		// now over budget, with the spill file holding head + overflow
 		n, err = w.Write([]byte("ef"))
 		require.NoError(t, err)
 		assert.Equal(t, 2, n)
@@ -324,7 +324,7 @@ func TestWriterSpillsAtBound(t *testing.T) {
 		bw.Flush()
 
 		lines, bytes_ := bw.Total()
-		assert.Equal(t, 5, lines) // every input line; a trailing newline adds no line
+		assert.Equal(t, 5, lines) // every input line, a trailing newline adds no line
 		assert.Equal(t, len("one\ntwo\n")+len("three\nfour\nfive\n"), bytes_)
 	})
 }
@@ -341,7 +341,7 @@ func TestApplyLimitsNonZeroFields(t *testing.T) {
 	}
 	t.Cleanup(func() { ApplyLimits(orig) })
 
-	// only the set dimension changes; a zero field keeps its default
+	// only the set dimension changes, a zero field keeping its default
 	const bashLines = 12 // distinct from the compiled-in defaults below
 	const readBytes = 9001
 	ApplyLimits(Limits{Bash: Limit{Lines: bashLines}, Read: Limit{Bytes: readBytes}})

@@ -30,7 +30,7 @@ type altRenderer struct {
 
 	// deferHistory leaves committed rows on screen while only live rows change.
 	deferHistory bool
-	historyDirty bool // commit/resize/clear set it; the next full render clears it
+	historyDirty bool // commit/resize/clear set it, the next full render clears it
 	lastLiveRows int  // live-row count of the last frame, to detect a shift
 }
 
@@ -88,7 +88,7 @@ func (r *altRenderer) commit(lines []histLine) {
 }
 
 // clearHistory drops every retained line so a rewind can redraw just the
-// current session state; alt owns its scrollback and repaints from scratch.
+// current session state. Alt owns its scrollback and repaints from scratch.
 func (r *altRenderer) clearHistory() {
 	r.lines = nil
 	r.wrapped = nil
@@ -112,7 +112,7 @@ func (r *altRenderer) resize() {
 }
 
 // probe is a no-op: alt re-paints every cell it owns on each frame, so a draw
-// that raced a reflow is fully repaired by the next one; no barrier needed.
+// that raced a reflow is fully repaired by the next one. No barrier needed.
 func (r *altRenderer) probe() {}
 
 // reanchor is a no-op: alt bottom-aligns the block on every paint, so a lost

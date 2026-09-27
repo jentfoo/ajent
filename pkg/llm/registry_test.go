@@ -307,7 +307,7 @@ func TestMergeModels(t *testing.T) {
 
 	t.Run("override_on_an_excluded_id_warns", func(t *testing.T) {
 		// "c" is discovered but the declared list is the whole list, so the
-		// override is inert; silence here would look like it applied
+		// override is inert, and silence here would look like it applied
 		_, w := mergeModels(declared, discovered, map[string]ModelOverride{"c": {Name: "X"}})
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], `modelOverrides "c" is not in models`)

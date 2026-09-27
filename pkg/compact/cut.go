@@ -128,13 +128,13 @@ func (v *branchView) verbatimCut(priorCut, minSteps, maxTokens int) int {
 			cut = i
 			continue
 		}
-		if acc > maxTokens { // maxTokens is always > 0; resolveVerbatim floors it
+		if acc > maxTokens { // maxTokens is always > 0, resolveVerbatim floors it
 			break
 		}
 		cut = i
 	}
 	if cut >= len(v.branch) {
-		return cut // no step in the region; there is no band to widen
+		return cut // no step in the region, there is no band to widen
 	}
 	return v.withLivePrompt(cut, priorCut)
 }

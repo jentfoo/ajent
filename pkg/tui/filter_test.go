@@ -100,7 +100,7 @@ func TestVerbatimScore(t *testing.T) {
 	})
 
 	t.Run("best_of_repeated_hits", func(t *testing.T) {
-		// the mid-word hit comes first; the boundary hit later still wins
+		// the mid-word hit comes first, and the boundary hit later still wins
 		best, ok := verbatimScore("xopus/opus", "opus")
 		require.True(t, ok)
 		assert.Equal(t, boundaryBonus-6, best)

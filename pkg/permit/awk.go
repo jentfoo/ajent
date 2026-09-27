@@ -8,7 +8,7 @@ import (
 	"github.com/go-analyze/bulk"
 )
 
-// awkInertLongFlags are long options with no exec or write surface; anything else starting
+// awkInertLongFlags are long options with no exec or write surface. Anything else starting
 // with a dash (-f/--file, --profile, --pretty-print, -W, unknown) fails safe to the prompt path.
 var awkInertLongFlags = bulk.SliceToSet([]string{
 	"--posix", "--traditional", "--re-interval", "--lint", "--lint-old",
@@ -45,7 +45,7 @@ func awkAttachedValue(tok string) bool {
 
 // awkRegexOpens reports whether a slash at the current scan position opens an
 // operand-position regex constant rather than division. Mirrors awk's lexer: only
-// after an operator, opening bracket/comma/semicolon/backslash or nothing yet;
+// after an operator, opening bracket/comma/semicolon/backslash or nothing yet.
 // "return" and "in" also put it in operand position.
 func awkRegexOpens(out string) bool {
 	i := len(out) - 1
@@ -82,7 +82,7 @@ func awkStripStrings(script string) string {
 		if ch == '\\' && i+1 < n {
 			b.WriteByte(ch)
 			b.WriteByte(script[i+1])
-			i += 2 // \X skips two outside quotes; keeps \" visible to later checks
+			i += 2 // \X skips two outside quotes, keeps \" visible to later checks
 			continue
 		}
 		if ch == '"' || ch == '\'' {
@@ -102,7 +102,7 @@ func awkStripStrings(script string) string {
 			continue
 		}
 		if ch == '/' && awkRegexOpens(b.String()) {
-			i++ // consume the opening slash; an unterminated one rescan its contents below
+			i++ // consume the opening slash, an unterminated one rescan its contents below
 			end := -1
 			for k := i; k < n; k++ {
 				if script[k] == '\\' && k+1 < n {
@@ -148,7 +148,7 @@ func awkKeywordAt(code string, i int, kw string) bool {
 
 // awkScriptReadSafe reports whether the collected script text is verifiably free
 // of exec and file-write vectors. False positives (prompting a safe call) are
-// acceptable; false negatives are not.
+// acceptable, false negatives are not.
 func awkScriptReadSafe(script string) bool {
 	code := awkStripStrings(script)
 	if awkSystemCallRe.MatchString(code) || awkGetlinePipeRe.MatchString(code) ||
@@ -200,7 +200,7 @@ func awkReadSafe(raw string) bool {
 					return false // value flag needs a value
 				}
 			case awkAttachedValue(tok):
-				// field separators and assignments cannot execute; skip the value
+				// field separators and assignments cannot execute, skip the value
 			case tok == "-e" || tok == "--expression":
 				j++
 				if j >= len(tokens) {
@@ -218,7 +218,7 @@ func awkReadSafe(raw string) bool {
 			}
 			continue
 		}
-		// first non-flag token is the positional script when none seen yet; later ones are input files
+		// first non-flag token is the positional script when none seen yet, later ones are input files
 		if len(scripts) == 0 && !positional {
 			scripts = append(scripts, tok)
 			positional = true

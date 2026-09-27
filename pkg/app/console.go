@@ -168,7 +168,7 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 	}
 	c.st.Model = m // compactor.run reads the threshold from here
 	if t := c.st.Tokens; t != nil {
-		t.SetWindow(m) // keeps every context term; SetModel would blank the bar
+		t.SetWindow(m) // keeps every context term, SetModel would blank the bar
 		cs := t.Context()
 		c.ui.SetContext(tui.ContextInfo{
 			Used:      cs.Used,
@@ -193,7 +193,7 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	}
 
 	// keep the stored reasoning override untouched so a temporary switch does not lose
-	// the user's choice; recompute only the live effective level for display (buildRequest
+	// the user's choice. Recompute only the live effective level for display (buildRequest
 	// already clamps requests) from the raw preference, restoring it on switching back.
 	if c.set != nil {
 		lvl := llm.LevelMedium
@@ -259,7 +259,7 @@ func (c *uiConsole) ToolsChanged() {
 	if c.tools == nil {
 		return
 	}
-	// the dotted config key; applySetting still accepts the legacy "tools" alias
+	// the dotted config key, applySetting still accepts the legacy "tools" alias
 	names := c.tools.Names()
 	if c.set != nil {
 		_ = c.set.SetSession("tools.enabled", names)
@@ -267,7 +267,7 @@ func (c *uiConsole) ToolsChanged() {
 	if c.rec != nil {
 		_ = c.rec.SettingChange("tools.enabled", names)
 	}
-	// /tools changed which MCP tools are enabled; republish the status ratio
+	// /tools changed which MCP tools are enabled, republish the status ratio
 	if c.mcp.m != nil {
 		c.mcp.RefreshStatus()
 	}
@@ -281,7 +281,7 @@ func (c *uiConsole) ToolsChanged() {
 func (c *uiConsole) Started() bool { return *c.started }
 
 // Compact reduces the session context toward the compaction threshold. An empty
-// instructions string runs an unguided pass; refused while a turn streams.
+// instructions string runs an unguided pass, refused while a turn streams.
 func (c *uiConsole) Compact(ctx context.Context, instructions string) error {
 	if c.comp == nil {
 		c.ui.Notify("compaction needs an open session", tui.LevelWarn)

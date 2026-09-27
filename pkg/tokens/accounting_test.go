@@ -86,7 +86,7 @@ func TestAccountingUnreportedTurnIsEstimated(t *testing.T) {
 	assert.Equal(t, 1, a.TurnsCount())
 	assert.Equal(t, 1, a.EstimatedTurns())
 
-	// spend totals stay zero for an unreported response; context stays at zero too
+	// spend totals stay zero for an unreported response, context stays at zero too
 	assert.Zero(t, a.Context().Used)
 }
 
@@ -98,7 +98,7 @@ func TestAccountingChildRollsUpSpendNotContext(t *testing.T) {
 
 	child := parent.Child()
 	in, out := 2000, 300
-	// child spends on its own context; the parent must not see that used
+	// child spends on its own context, the parent must not see that used
 	child.Response(key, llm.Usage{Input: in, Output: out}, 1500, true)
 
 	assert.Zero(t, parent.Context().Used) // child's context is its own
@@ -175,7 +175,7 @@ func TestAccountingSetBase(t *testing.T) {
 		// an exact snapshot already includes system and schemas, so the base drops out
 		exact := 4000
 		a.SetBase(base)
-		a.Partial(llm.Usage{Input: exact}) // snaps promptExact; pending cleared
+		a.Partial(llm.Usage{Input: exact}) // snaps promptExact, pending cleared
 		assert.Equal(t, exact, a.Context().Used)
 	})
 
@@ -192,10 +192,10 @@ func TestAccountingSetBase(t *testing.T) {
 		a := New(llm.Model{ID: "m1", Provider: "p"})
 		exact := 5000
 		a.SetBase(900)
-		a.Partial(llm.Usage{Input: exact}) // promptExact set; base covered
+		a.Partial(llm.Usage{Input: exact}) // promptExact set, base covered
 		assert.Equal(t, exact, a.Context().Used)
 
-		// compaction reseeds to a message-only estimate (promptExact back to zero);
+		// compaction reseeds to a message-only estimate (promptExact back to zero),
 		// the fixed overhead is owed again on top of it.
 		resAfter := 2000
 		a.Reseed(resAfter)
@@ -223,7 +223,7 @@ func TestAccountingSetSubmit(t *testing.T) {
 	t.Run("submit_counts_once", func(t *testing.T) {
 		sub := 250
 		a.SetSubmit(sub)
-		// only the submitted bucket carries it; re-setting does not double count.
+		// only the submitted bucket carries it, re-setting does not double count.
 		assert.Equal(t, sub, a.Context().Used)
 		a.SetSubmit(sub)
 		assert.Equal(t, sub, a.Context().Used)
@@ -232,7 +232,7 @@ func TestAccountingSetSubmit(t *testing.T) {
 	t.Run("cleared_on_delivery", func(t *testing.T) {
 		sub := 300
 		a.SetSubmit(sub)
-		a.Add(sub) // the message lands; pending now owns it
+		a.Add(sub) // the message lands, pending now owns it
 		assert.Equal(t, sub*2, a.Context().Used)
 		a.SetSubmit(0) // Delivered clears submit so pending alone counts
 		assert.Equal(t, sub, a.Context().Used)
@@ -352,7 +352,7 @@ func TestAccountingUnreportedResponseKeepsEstimate(t *testing.T) {
 	a.Response(m.Key(), llm.Usage{}, 6200, true)
 	after := a.Context().Used
 	assert.Greater(t, after, 1200)
-	assert.Equal(t, before-400, after) // only live is dropped; append re-adds the message
+	assert.Equal(t, before-400, after) // only live is dropped, append re-adds the message
 	assert.True(t, a.Context().Estimated)
 }
 
@@ -456,7 +456,7 @@ func TestAccountingRecordSpend(t *testing.T) {
 
 	a.RecordSpend(m.Key(), llm.Usage{Input: 50000, Output: 400})
 	// every appended message is a recorded entry, so a user echo or tool result
-	// arrives here too; counting those as turns made /usage report a 5-step session
+	// arrives here too, and counting those as turns made /usage report a 5-step session
 	// as 15+ turns once it had been compacted
 	a.RecordSpend(m.Key(), llm.Usage{})
 

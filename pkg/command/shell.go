@@ -27,11 +27,11 @@ type Stager struct {
 	mu       sync.Mutex
 	runs     []*stageRun // submission order
 	nextID   int
-	onChange func(est int) // reports the staged token estimate as it moves; nil until wired
+	onChange func(est int) // reports the staged token estimate as it moves, nil before wiring
 }
 
 // stageRun is one staged shell command. Its finished result becomes one user
-// message in Flush; an excluded run's output goes nowhere.
+// message in Flush. An excluded run's output goes nowhere.
 type stageRun struct {
 	id       string
 	cmd      string
@@ -78,7 +78,7 @@ func (s *Stager) reportStaged() {
 }
 
 // Run starts cmd executing immediately. A disabled bash tool is a refusal
-// notice rather than a run, matching the /tools widening rule; an empty command
+// notice rather than a run, matching the /tools widening rule. An empty command
 // produces a notice and runs nothing. Run never blocks on the command itself.
 // An excluded run (`!!`) still displays but its output never reaches context or
 // the transcript.
@@ -95,7 +95,7 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	s.mu.Lock()
 	s.nextID++
 	id := fmt.Sprintf("shell-%d", s.nextID)
-	// a `!` line is the human's own shell; mark it so the permission gate exempts it.
+	// a `!` line is the human's own shell, mark it so the permission gate exempts it
 	runCtx, cancel := context.WithCancel(tools.WithUserInitiated(context.Background()))
 	label := "! " + strutil.FirstLine(cmd)
 	if excluded {
@@ -150,7 +150,7 @@ func (s *Stager) startTool(call agent.ToolCall, label string) func(agent.ToolRes
 
 // fullToolStarter is implemented by sinks that can mark a staged shell command's
 // streamed output for full (untruncated) display. The base agent.Sink collapses
-// tool history to its head; user-initiated `!`/`!!` shells show everything.
+// tool history to its head, while user-initiated `!`/`!!` shells show everything.
 type fullToolStarter interface {
 	ToolStartFull(call agent.ToolCall, label string) func(agent.ToolResult)
 }
@@ -215,8 +215,8 @@ func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 		s.removeRun(r)
 	}
 
-	// included runs are all consumed; drop finished excluded ones outright and keep
-	// still-running ones so Pending/Cancel keep tracking them.
+	// included runs are all consumed, dropping finished excluded ones outright and
+	// keeping still-running ones so Pending/Cancel keep tracking them.
 	s.mu.Lock()
 	s.runs = bulk.SliceFilterInPlace(func(r *stageRun) bool { return !r.excluded || !isDone(r.done) }, s.runs)
 	s.mu.Unlock()

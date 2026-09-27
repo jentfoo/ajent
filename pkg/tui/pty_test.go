@@ -17,13 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The vt emulator approximates reflow; a real pty is the reference for the
+// The vt emulator approximates reflow. A real pty is the reference for the
 // terminal lifecycle. The kernel owns the size reports and the line discipline
 // owns the bytes, so raw mode, keystroke transport, size and teardown are all
 // real here. Only the origin of SIGWINCH is not: the slave is not a controlling
 // terminal, so the kernel delivers nothing and the test raises the signal on
 // itself, which drives the whole real watchSignals chain. Keep this rig to the
-// cases the emulator cannot reach; the emulator carries the broad coverage.
+// cases the emulator cannot reach, since the emulator carries the broad coverage.
 //
 // None of these tests may call t.Parallel: signal.Notify is process wide, so two
 // live UIs would answer each other's SIGWINCH. Only a UI built through New runs
@@ -50,7 +50,7 @@ func openPTY(t *testing.T) (*os.File, *os.File) {
 	return master, slave
 }
 
-// ptyWinsize matches struct winsize from termbits; syscall no longer exports it.
+// ptyWinsize matches struct winsize from termbits. Syscall no longer exports it.
 type ptyWinsize struct {
 	Row, Col, Xpixel, Ypixel uint16
 }
@@ -92,7 +92,7 @@ func pumpPTY(master *os.File, v *vt, wait time.Duration) (string, error) {
 }
 
 // drainPTY reads everything the UI has written so far into the emulator. The
-// deadline ends the read; writes are synchronous, so this is deterministic.
+// deadline ends the read, and writes are synchronous so this is deterministic.
 func drainPTY(t *testing.T, master *os.File, v *vt) {
 	t.Helper()
 

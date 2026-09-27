@@ -26,7 +26,7 @@ const (
 type ColorProfile int
 
 const (
-	// ColorAuto defers to detection; it is never the profile a Theme is built for.
+	// ColorAuto defers to detection. It is never the profile a Theme is built for.
 	ColorAuto ColorProfile = iota
 	ColorNone
 	ColorBasic
@@ -114,8 +114,8 @@ type Palette struct {
 }
 
 // palettes are the built-in color sets in display order. The first dark and
-// first light entry are the conservative defaults; the rest trade contrast for
-// a calmer, warmer or lower-saturation feel.
+// first light entry are the conservative defaults, with the rest trading contrast
+// for a calmer, warmer or lower-saturation feel.
 var palettes = []Palette{
 	{Name: "dark", Tone: ToneDark, codeStyle: "monokai", hues: roleHues{
 		thinking: hue{245, attrFgBlue}, user: hue{75, attrFgCyan}, accent: hue{213, attrFgMagenta},
@@ -145,8 +145,8 @@ var palettes = []Palette{
 		diffAdd: hue{108, attrFgGreen}, diffDel: hue{131, attrFgRed}, diffHunk: hue{66, attrFgCyan},
 		userTag: hue{103, attrFgBlue}, assist: hue{144, attrFgYellow}, activityBG: 237,
 	}},
-	// light fallbacks avoid basic cyan, which washes out on a white background;
-	// warn keeps basic yellow because light themes render it as a dark olive
+	// light fallbacks avoid basic cyan, which washes out on a white background.
+	// Warn keeps basic yellow because light themes render it as a dark olive.
 	{Name: "light", Tone: ToneLight, codeStyle: "github", hues: roleHues{
 		thinking: hue{240, attrFgBlue}, user: hue{25, attrFgBlue}, accent: hue{90, attrFgMagenta},
 		heading: hue{20, attrFgBlue}, code: hue{94, attrFgMagenta}, link: hue{26, attrFgBlue},
@@ -245,10 +245,10 @@ type Theme struct {
 	Code          Style
 	Link          Style
 	Quote         Style
-	Spinner       Style // static resting frame at idle; dim so any color means work is in flight
+	Spinner       Style // static resting frame at idle, dim so any color means work is in flight
 	SpinnerWait   Style // request sent, nothing streaming back yet
 	SpinnerTool   Style // a tool or command is running
-	SpinnerStream Style // model output arriving; thinking and text alike
+	SpinnerStream Style // model output arriving, thinking and text alike
 	Divider       Style // full-width solid band marking restored-context boundaries
 	Activity      Style // live sub-agent status rows: dim on a subtle background
 	UserTag       Style // "user" role tag in the rewind tree picker
@@ -311,10 +311,10 @@ func NewTheme(p ColorProfile, pal Palette) Theme {
 	t.SpinnerWait = styleFg(h.thinking) // bare hue: Thinking's dim+italic would erase a braille glyph
 	t.SpinnerTool = styleFg(h.heading)
 	t.SpinnerStream = styleFg(h.accent) // today's spinner color
-	// the divider is a solid full-width band; reverse video swaps default fg/bg
+	// the divider is a solid full-width band. Reverse video swaps default fg/bg
 	// per cell into an inverted block that reads as thick and obvious in scrollback.
 	t.Divider = style(attrReverse)
-	// activity rows sit in the live block above the prompt; a soft background sets
+	// activity rows sit in the live block above the prompt. A soft background sets
 	// them apart from committed output. Basic terminals lack a usable shade.
 	if p >= Color256 {
 		t.Activity = style(attrDim, 48, 5, h.activityBG)
@@ -327,7 +327,7 @@ func NewTheme(p ColorProfile, pal Palette) Theme {
 	t.DiffAdd = styleFg(h.diffAdd)
 	t.DiffDel = styleFg(h.diffDel)
 	// @@ range markers get their own hue, distinct from the add/del/context trio,
-	// so a hunk boundary reads as a separator; dimmed like Thinking so it recedes
+	// so a hunk boundary reads as a separator, dimmed like Thinking so it recedes
 	t.DiffHunk = styleFg(h.diffHunk, attrDim)
 	t.DiffFile = styleFg(h.heading, attrBold)
 	t.UserTag = styleFg(h.userTag)

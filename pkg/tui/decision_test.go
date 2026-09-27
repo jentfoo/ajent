@@ -32,7 +32,7 @@ func TestUIDecisionRenders(t *testing.T) {
 	}
 
 	t.Run("shows_subject_and_numbered_options", func(t *testing.T) {
-		// the divider row costs one live-block line; a taller screen keeps both
+		// the divider row costs one live-block line. A taller screen keeps both
 		// numbered options on it.
 		u, v, _ := tallUI(t)
 		d := u.OpenDecision(req)
@@ -60,7 +60,7 @@ func TestUIDecisionRenders(t *testing.T) {
 	})
 
 	t.Run("wrapped_line_cut_by_height", func(t *testing.T) {
-		// long enough that a 12 row screen cannot show it all; how many rows the
+		// long enough that a 12 row screen cannot show it all. How many rows the
 		// subject gets follows the cap, so only the marker's presence is pinned
 		u, v, _ := interactionUI(t)
 		d := u.OpenDecision(DecisionRequest{Prompt: "P", Context: strings.Repeat("x", 600),
@@ -198,9 +198,9 @@ func TestUIDecisionExternalResolve(t *testing.T) {
 		require.NoError(t, <-errCh)
 		assert.Equal(t, DecisionResult{Index: 0}, <-resCh)
 
-		d.Resolve(1) // already settled; must not double-commit
-		// a resolved decision commits no echo line (permit logs its own outcome);
-		// the late Resolve stays a no-op and never repaints one.
+		d.Resolve(1) // already settled, must not double-commit
+		// a resolved decision commits no echo line (permit logs its own outcome).
+		// The late Resolve stays a no-op and never repaints one.
 		assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "Go? Yes")
 	})
 
@@ -313,7 +313,7 @@ func TestUIDecisionSummary(t *testing.T) {
 
 	assert.Equal(t, DecisionResult{Index: 1}, <-resCh)
 
-	// no echo line is committed; permit reports the outcome as a descriptive notice
+	// no echo line is committed, since permit reports the outcome as a descriptive notice
 	assert.NotContains(t, strutil.StripANSI(u.snapshot(v)), "Approve edit?")
 }
 

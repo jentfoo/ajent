@@ -81,7 +81,7 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		comp := NewCompleter(r, c, idx)
 
-		// cursor sits on the @ (a break precedes it) with nothing after; no path to complete
+		// cursor sits on the @ (a break precedes it) with nothing after, so no path to complete
 		_, items := comp.Complete(" @", 1)
 		assert.Empty(t, items)
 	})
@@ -110,7 +110,7 @@ func TestCompleter(t *testing.T) {
 		assert.Contains(t, strings.Join(labels, "|"), "beta")
 	})
 
-	// pos is a grapheme-cell index; start must come back as cells.
+	// pos is a grapheme-cell index, start coming back as cells
 	t.Run("path_non_ascii_cell_indexes", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "é.go"), []byte("x"), 0o600))

@@ -31,17 +31,17 @@ type Options struct {
 	Provider            func(llm.Model) (llm.Provider, error)
 	Model               func() llm.Model           // configured child model, else the session's
 	Reasoning           func() llm.ReasoningConfig // inherited from the parent
-	Parent              func() *tokens.Accounting  // parent ledger; Child() per job
+	Parent              func() *tokens.Accounting  // parent ledger, one child per job
 	Tools               ToolSource                 // nil disables a child's tool set entirely
 	Env                 agent.Environment
 	ProjectInstructions []agent.ProjectInstruction
 
-	// Activity publishes one keyed row; an empty text removes it. rank is the
+	// Activity publishes one keyed row, removed by empty text. rank is the
 	// job number, so rows hold a stable place regardless of publish order.
 	Activity func(key, text string, rank int) // nil disables activity rows
 	Notice   func(msg string)                 // keyed UI notice for completions
 	Status   func(text, short string)
-	Deliver  func(agent.Input) bool // steer into a running parent turn; false when idle
+	Deliver  func(agent.Input) bool // steers into a running parent turn, false when idle
 
 	MaxConcurrent int           // 0 -> defaultMaxConcurrent
 	PollTimeout   time.Duration // 0 -> defaultPollTimeout
@@ -51,16 +51,16 @@ type Options struct {
 // completion notification and shutdown.
 type Manager struct {
 	opts Options
-	sem  chan struct{} // buffered to MaxConcurrent; send acquires a slot
+	sem  chan struct{} // buffer of size MaxConcurrent, one slot per send
 
 	wg sync.WaitGroup
 
 	mu          sync.Mutex
 	jobs        map[string]*job
 	pending     []string       // completed ids not yet delivered into the parent context
-	inFlight    []string       // ids a queued steer names; cleared when it lands or is dropped
+	inFlight    []string       // ids a queued steer names, cleared when it lands or drops
 	noticeBatch []string       // completions since the last delivered steer, for the keyed notice
-	count       int            // id counter; ids are sub-N
+	count       int            // id counter, ids read as sub-N
 	reserved    map[string]int // agent_start call id -> its number, from the ordered batch
 	polling     int            // Poll calls in flight, for spotting a simultaneous batch
 	batched     bool           // two polls have overlapped since the group last emptied
@@ -79,11 +79,11 @@ func New(opts Options) *Manager {
 // order the model asked for them. agent_start is ModeParallel, so without this
 // the goroutines race for the counter and the task submitted last can become
 // sub-1. A batch supersedes the previous one, dropping reservations whose call
-// never ran (an interrupted turn); the ids they held are simply skipped.
+// never ran (an interrupted turn), and the ids they held are simply skipped.
 func (m *Manager) Reserve(calls []agent.ToolCall) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	clear(m.reserved) // a batch supersedes the last; a stale entry would misnumber
+	clear(m.reserved) // a batch supersedes the last, since a stale entry would misnumber
 	for _, c := range calls {
 		if c.Name != startToolName || c.ID == "" {
 			continue
@@ -93,8 +93,8 @@ func (m *Manager) Reserve(calls []agent.ToolCall) {
 	}
 }
 
-// start launches one investigation whose id may have been reserved by callID; an
-// unknown or empty callID takes the next number, so a host-driven start still works.
+// start launches one investigation whose id may have been reserved by callID, an
+// unknown or empty callID taking the next number so a host-driven start still works.
 func (m *Manager) start(task, instructions, callID string) string {
 	var ledger *tokens.Accounting
 	if p := m.opts.Parent; p != nil { // one child ledger per job, set before the id is visible to pollers
@@ -142,7 +142,7 @@ func (m *Manager) start(task, instructions, callID string) string {
 func (m *Manager) spawn(j *job) {
 	acquired := m.acquireSlot(j)
 	defer func() {
-		if acquired { // only a holder may free one; otherwise we exceed MaxConcurrent
+		if acquired { // only a holder may free one, or we exceed MaxConcurrent
 			m.releaseSlot(j)
 		}
 		m.wg.Done()
@@ -150,7 +150,7 @@ func (m *Manager) spawn(j *job) {
 	var sum string
 	var err error
 	switch {
-	case !acquired: // cancelled while queued; never ran
+	case !acquired: // cancelled while queued, so it never ran
 		j.finish(StatusAborted, "", nil)
 	default:
 		j.markRunning()
@@ -192,8 +192,8 @@ func (m *Manager) releaseSlot(j *job) {
 	}
 }
 
-// poll blocks until id completes, PollTimeout elapses, or ctx is cancelled. It
-// returns false when still running; an interrupted turn releases the poll at once.
+// poll blocks until id completes, PollTimeout elapses, or ctx is cancelled,
+// returning false while still running so an interrupted turn releases the poll at once.
 // agent_poll is ModeParallel, so a batch commits every tool header at dispatch and
 // each payload only as its own job finishes: a batched result lands detached from
 // the header naming it and has to say which sub-agent it came from. The third
@@ -229,7 +229,7 @@ func (m *Manager) leavePoll() bool {
 	return batched
 }
 
-// wait blocks on one job for the poll timeout; see Poll.
+// wait blocks on one job for the poll timeout (see Poll).
 func (m *Manager) wait(ctx context.Context, id string) (Job, bool) {
 	j, ok := m.lookup(id)
 	if !ok {
@@ -262,14 +262,14 @@ func (m *Manager) wait(ctx context.Context, id string) (Job, bool) {
 	case <-j.done:
 		return m.claimResult(j), true
 	case <-timer.C:
-		// finish sets the status before close(done); a timer in that window must claim
+		// finish sets the status before close(done), so a timer in that window must claim
 		if j.finished() || j.terminal() {
 			return m.claimResult(j), true
 		}
-		return j.snapshot(), false // still running; caller reads progress for the payload
+		return j.snapshot(), false // still running, caller reads progress for the payload
 	case <-ctx.Done():
 		// an interrupted turn discards the tool result, so claiming here would lose
-		// the summary; the deferred orphan check re-arms delivery instead.
+		// the summary and defer to the orphan check that re-arms delivery instead.
 		return Job{}, false
 	}
 }
@@ -280,7 +280,7 @@ func (m *Manager) claimResult(j *job) Job {
 	j.mu.Lock()
 	j.consumed = true
 	j.mu.Unlock()
-	m.claim(j.id) // the poll response carries the result; no steer may repeat it
+	m.claim(j.id) // poll response carries the result, no steer may repeat it
 	return j.snapshot()
 }
 
@@ -300,7 +300,7 @@ func (m *Manager) List() []Job {
 }
 
 // Stop cancels one job by id (accepts sub-2 or bare 2). A queued or running job is
-// aborted; a finished one returns an error.
+// aborted, and a finished one returns an error.
 func (m *Manager) Stop(id string) error {
 	j, ok := m.lookup(id)
 	if !ok {
@@ -319,7 +319,7 @@ func (m *Manager) StopAll() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var n int // only in-flight jobs are actually cancelled; finished ones are not counted
+	var n int // only in-flight jobs are actually cancelled, finished ones are not counted
 	for _, j := range m.jobs {
 		s := j.statusOf()
 		if s == StatusQueued || s == StatusRunning {
@@ -352,7 +352,7 @@ func (m *Manager) Close() {
 	defer timer.Stop()
 	select {
 	case <-done:
-	case <-timer.C: // jobs may be stuck on a slow provider; do not block shutdown
+	case <-timer.C: // jobs may be stuck on a slow provider, do not block shutdown
 	}
 	m.mu.Lock()
 	rows := make([]activityKey, 0, len(m.jobs))
@@ -382,12 +382,12 @@ func (m *Manager) Tools() []agent.Tool {
 // unless a poll is waiting or already consumed it. Aborts are silent. Delivery
 // is batched at the next step boundary (Boundary) or turn start (Flush).
 func (m *Manager) onComplete(j *job) {
-	if !j.finished() { // a poll left while the job is still running; nothing to deliver
+	if !j.finished() { // a poll left while the job is still running, nothing to deliver
 		return
 	}
 	j.mu.Lock()
 	status := j.status
-	pollers := j.pollers // a registered poller carries the result; a steer would waste tokens
+	pollers := j.pollers // a registered poller carries the result, a steer would waste tokens
 	consumed := j.consumed
 	id := j.id
 	j.mu.Unlock()
@@ -486,7 +486,7 @@ func (m *Manager) take(ids []string) []string {
 func (m *Manager) noticeInput(ids []string) agent.Input {
 	return agent.Input{
 		Text:     completionNotice(ids),
-		Injected: true, // a system notice, not a typed prompt; excluded from recall
+		Injected: true, // a system notice rather than a typed prompt, excluded from recall
 		Delivered: func() {
 			m.mu.Lock()
 			m.pending = dropIDs(m.pending, ids)
@@ -502,7 +502,7 @@ func byJobNumber(a, b string) int {
 	return cmp.Compare(numberOf(a), numberOf(b))
 }
 
-// numberOf reads the digits after the sub- prefix; unparseable ids sort first.
+// numberOf reads the digits after the sub- prefix, sorting unparseable ids first.
 func numberOf(id string) int {
 	n, _ := strconv.Atoi(strings.TrimPrefix(id, "sub-"))
 	return n
@@ -562,7 +562,7 @@ func completionNotice(ids []string) string {
 	}
 }
 
-// publishStatus recomputes and pushes the status segment; empty clears it.
+// publishStatus recomputes and pushes the status segment, empty clears it.
 func (m *Manager) publishStatus() {
 	fn := m.opts.Status
 	if fn == nil {

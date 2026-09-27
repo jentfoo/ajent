@@ -192,12 +192,12 @@ package stays free of `pkg/tools`.
   re-registering the source with its live enabled set preserved; connection fields
   (`command`, `args`, `env`, `url`, `headers`, `transport`) take effect only on
   the server's **next connect**. A reconnect also re-reads stored config, so a death
-  silently adopts the new endpoint whichever comes first — `/mcp disconnect` +
+  silently adopts the new endpoint whichever comes first: `/mcp disconnect` +
   reload or an automatic reconnect.
 
 **Lock ownership.** `server.mu` guards every mutable per-server field (client,
 failure counters, discovered defs, config); `Manager.mu` only
-the `servers` map and first-load flag — one field, one lock. The notice sink is
+the `servers` map and first-load flag, under its single lock. The notice sink is
 immutable: built with the server rather than installed on connect, so it needs
 no lock. An unreachable server is expected (offline or not yet started), so a
 dial failure stays in `/mcp logs` only rather than surfacing as a notice; the
@@ -225,8 +225,8 @@ into nothing. A failure counter tracks consecutive connect failures for the
 status path.
 
 A stdio child's stderr is streamed to `/mcp logs` one line per entry
-(`bufio.Reader`, no fixed cap), so a long or newline-less line is never dropped
-— only an actual EOF or read error marks the child as exited and triggers
+(`bufio.Reader`, no fixed cap), so a long or newline-less line is never dropped.
+Only an actual EOF or read error marks the child as exited and triggers
 reconnection.
 
 

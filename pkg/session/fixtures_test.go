@@ -13,7 +13,7 @@ import (
 
 // The committed corpus in testdata/branches. Every other test in this package
 // writes a transcript and reads it back inside one run, so a renamed JSON field
-// would move both sides together and pass; these fixtures were written by an
+// would move both sides together and pass. These fixtures were written by an
 // earlier build and never change, which is what makes them able to fail.
 
 func fixtureModel(key string) (llm.Model, error) {
@@ -202,5 +202,5 @@ func TestFixtureState(t *testing.T) {
 	assert.Len(t, st.Messages, 33)
 	assert.Equal(t, "claude-opus-4-5", st.Model.ID)
 	assert.Equal(t, llm.ReasoningConfig{Level: llm.LevelMedium, Retain: llm.RetainLastTurn},
-		st.Reasoning) // the fixture's stale "show":true is ignored; shown by default
+		st.Reasoning) // the fixture's stale "show":true is ignored, shown by default
 }

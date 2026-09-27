@@ -10,7 +10,7 @@ import (
 )
 
 // State rebuilds agent state from a branch, resolving model switches through
-// resolve. A failure to resolve is a warning, never an error; the caller falls
+// resolve. A failure to resolve is a warning, never an error. The caller falls
 // back to its registry's active model.
 func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.State, []string) {
 	var st agent.State
@@ -34,7 +34,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 		case TypeMessage:
 			var md MessageData
 			if err := e.Decode(&md); err != nil {
-				continue // already warned by ContextMessages; ledger just skips it
+				continue // already warned by ContextMessages, ledger just skips it
 			}
 			if rewritten {
 				// spend counts every message, including ones the cut removed: those
@@ -57,7 +57,7 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 			st.Tokens.SetModel(resolved)
 			st.Model = resolved
 		case TypeSession:
-			// seed the active model from session start; a later model_change overrides it
+			// seed the active model from session start, overridable later by model_change
 			var sd SessionData
 			if err := e.Decode(&sd); err != nil || sd.Model == "" {
 				continue
@@ -107,7 +107,7 @@ func NewestCompaction(branch []Entry) (cd CompactionData, idx int, found bool) {
 }
 
 // rebuildUsage folds one message's recorded usage into the ledger under key. A
-// provider report snaps the exact terms; later messages without one stay as an
+// provider report snaps the exact terms, while later messages without one stay as an
 // estimate so /usage reconciles with what was actually sent. It is only reached on
 // a branch no compaction rewrote, where the recorded prompt is still what the next
 // request will carry.
@@ -121,7 +121,7 @@ func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
 	}
 	// prediction unknown on rebuild, so calibration stays unseeded. keepThink is
 	// true because the resolved retention of the turn that produced this usage is
-	// not recorded; leaving the reported output whole is the conservative read.
+	// not recorded, leaving the reported output whole as the conservative read.
 	t.Response(key, md.Usage, 0, true)
 }
 

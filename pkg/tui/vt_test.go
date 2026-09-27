@@ -141,7 +141,7 @@ func (v *vt) apply(params string, final rune) {
 		}
 		return def
 	}
-	// only cursor motion clears a pending wrap; SGR and the erasers must not,
+	// only cursor motion clears a pending wrap. SGR and the erasers must not,
 	// or an exact-width row followed by styling stops deferring
 	switch final {
 	case 'H', 'f':
@@ -244,7 +244,7 @@ func (v *vt) put(r rune) {
 		return
 	}
 	if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-		return // C0, DEL and C1 print nothing; 0x9b is CSI before this
+		return // C0, DEL and C1 print nothing, 0x9b is CSI before this
 	}
 	if uniseg.StringWidth(string(r)) == 0 {
 		return // zero-width runes attach to the prior cell: no advance, no wrap
@@ -301,8 +301,8 @@ func (v *vt) reverseIndex() {
 // setSize changes the grid size, reflowing soft-wrapped rows the way an
 // emulator does on resize: continuation rows join their logical line and
 // re-wrap at the new width, overflow retires to scrollback, and the cursor
-// rides its cell. Growing adds blank rows at the bottom; it does not pull rows
-// back from scrollback (some emulators do; the renderer must cope with both).
+// rides its cell. Growing adds blank rows at the bottom but does not pull
+// rows back from scrollback (some emulators do, so the renderer must cope with both).
 func (v *vt) setSize(w, h int) {
 	if w <= 0 || h <= 0 || (w == v.w && h == v.h) {
 		return

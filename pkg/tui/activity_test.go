@@ -32,7 +32,7 @@ func TestShadeRow(t *testing.T) {
 		th := NewTheme(Color256, DefaultPalette())
 
 		const w = 41
-		text := "sub-2  grep pattern" // 21 columns; the rest is trailing shade blanks
+		text := "sub-2  grep pattern" // 21 columns, the rest is trailing shade blanks
 		short := shadeRow(th.Activity, text, w)
 		assert.Equal(t, th.Activity.Open()+text+strings.Repeat(" ", w-1-displayWidth(text))+sgrReset,
 			short)
@@ -169,7 +169,7 @@ func TestUIActivity(t *testing.T) {
 		}
 
 		screen := u.snapshot(v)
-		// all five rows listed, each on its own line; no "more" indicator
+		// all five rows listed, each on its own line, with no "more" indicator
 		for i := range 5 {
 			assert.Contains(t, screen, "row "+string(rune('0'+i)))
 		}
@@ -184,7 +184,7 @@ func TestUIActivity(t *testing.T) {
 		}
 
 		screen := u.snapshot(v)
-		// four listed plus a dim +2 more; the last two are hidden
+		// four listed plus a dim +2 more, the last two are hidden
 		for i := range 4 {
 			assert.Contains(t, screen, "row "+string(rune('0'+i)))
 		}
@@ -208,7 +208,7 @@ func TestUIActivity(t *testing.T) {
 		u := newTestUI(t, v, strings.NewReader(""))
 
 		u.SetActivity("agent-1", "transient work")
-		// committing a line flushes the live block; activity stays out of scrollback
+		// committing a line flushes the live block, keeping activity out of scrollback
 		u.Notify("committed note", LevelInfo)
 
 		assert.Contains(t, u.snapshot(v), "! committed note")

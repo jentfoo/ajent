@@ -109,7 +109,7 @@ func TestCompatProviderStream(t *testing.T) {
 		require.NoError(t, err)
 		events := collect(t, s)
 
-		// reasoning_content is read before reasoning; chutes sends both fields
+		// reasoning_content is read before reasoning, since chutes sends both fields
 		assert.Equal(t, "preferred", thinkingOf(events))
 	})
 
@@ -124,7 +124,7 @@ func TestCompatProviderStream(t *testing.T) {
 		msg, _, err := Accumulate(s)
 		require.NoError(t, err)
 		// interleaved regions become distinct blocks in stream order, each with its
-		// own text and field; nothing duplicates or inherits the other's metadata.
+		// own text and field. Nothing duplicates or inherits the other's metadata.
 		assert.Equal(t, BlockList{
 			ThinkingBlock{Text: "first region", Field: "reasoning_content"},
 			TextBlock{Text: "visible answer"},
@@ -238,7 +238,7 @@ func TestCompatProviderStream(t *testing.T) {
 		srv, _ := sseServer(t, "compat/usage_only.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
-		// the fixture never sends a finish_reason; that is fine for providers which
+		// the fixture never sends a finish_reason. That is fine for providers which
 		// declare they do not support one (the cache fields are what this tests)
 		s, err := p.Stream(t.Context(), Request{Model: compatModel(func(c *Capabilities) {
 			c.SupportsFinishReason = false
@@ -684,7 +684,7 @@ func TestBuildCompatBody(t *testing.T) {
 
 	t.Run("non_deepseek_replay_override_forces_empty", func(t *testing.T) {
 		// requiresReplayReasoningOnAssistantMessages drives the empty echo for any
-		// model, not just deepseek; detection supplies it for deepseek by default
+		// model, not just deepseek. Detection supplies it for deepseek by default.
 		req := baseReq()
 		req.Model.Caps.Thinking = ThinkingOpenAI // a non-deepseek format
 		req.Reasoning = ReasoningConfig{Level: LevelHigh, Retain: RetainAll}

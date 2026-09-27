@@ -186,7 +186,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 			Tokens: 68200, MaxTokens: 200000,
 			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}, {Key: "b", Text: "subagents: 2"}},
 		}
-		got := s.rows(plain, 70) // full model overflows; the short one still fits one row
+		got := s.rows(plain, 70) // full model overflows, the short one still fits one row
 		assert.Len(t, got, 1)
 		assert.Contains(t, got[0], "glm-5.2") // the model shortens, never vanishes
 		assert.NotContains(t, got[0], "openrouter")
@@ -232,7 +232,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 			Tokens: 68200, MaxTokens: 200000,
 			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}},
 		}
-		got := s.rows(plain, 31) // fixed plus full model overflows; the short one fits
+		got := s.rows(plain, 31) // fixed plus full model overflow, the short one fits
 		assert.Len(t, got, 2)
 		assert.Contains(t, got[0], "glm-5.2") // the model shortens, not the token count
 		assert.NotContains(t, got[0], "openrouter")
@@ -251,7 +251,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 	})
 
 	t.Run("priority_drops_lowest_first", func(t *testing.T) {
-		// both short forms together overflow row two; the lower-priority one drops
+		// both short forms together overflow row two, the lower-priority one drops
 		s := Status{
 			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
 			Segments: []Segment{
@@ -270,7 +270,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 	})
 
 	t.Run("tie_drops_later_insertion_first", func(t *testing.T) {
-		// equal priorities; the later insertion is dropped first (drop-last rule)
+		// equal priorities, so the later insertion is dropped first (drop-last rule)
 		s := Status{
 			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
 			Segments: []Segment{
@@ -289,7 +289,7 @@ func TestStatusSegmentDropOrder(t *testing.T) {
 	})
 
 	t.Run("short_form_used_when_full_does_not_fit", func(t *testing.T) {
-		// the single segment overflows row two at full text; its short form is used
+		// the single segment overflows row two at full text, its short form is used
 		s := Status{
 			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
 			Segments: []Segment{{Key: "a", Text: "plan-reviewing-in-progress-long", Short: "pr"}},

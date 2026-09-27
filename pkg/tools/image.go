@@ -40,7 +40,7 @@ const imagesDisabledText = "(Image reading is disabled.)"
 
 // FitImage turns one user-supplied image payload into model content: an image
 // block plus, when the fit changed the image, a coordinate-mapping note. An
-// image that cannot fit returns an error; callers surface FitImageError.
+// image that cannot fit returns an error, which callers surface via FitImageError.
 func FitImage(data []byte) (llm.BlockList, error) {
 	if !ImagesEnabled() {
 		return llm.BlockList{llm.TextBlock{Text: imagesDisabledText}}, nil
@@ -72,7 +72,7 @@ func FitImageError(err error) string {
 
 // NormalizeImageBlocks rewrites every image block inside a tool result, once,
 // at its entry into history, so one oversized result cannot poison every later
-// request. A block Prepare cannot fit is kept with a note beside it; bytes no
+// request. A block Prepare cannot fit is kept with a note beside it. Bytes no
 // decoder accepts at several times the ceiling become the note alone.
 func NormalizeImageBlocks(content llm.BlockList) llm.BlockList {
 	// fast path: results rarely carry images, and this runs on every tool result
@@ -108,7 +108,7 @@ func NormalizeImageBlocks(content llm.BlockList) llm.BlockList {
 // normalizedImage fits one tool-result image, reporting the block to keep, a
 // companion note when anything changed or went wrong, and whether the block is
 // not the input verbatim. Failure keeps the original block with the reason
-// beside it; success keeps the fitted encoding.
+// beside it. Success keeps the fitted encoding.
 func normalizedImage(blk llm.ImageBlock) (keep llm.Block, note string, changed bool) {
 	res, err := img.Prepare(blk.Data)
 	if err != nil {

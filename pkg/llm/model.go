@@ -26,14 +26,14 @@ type Model struct {
 	// BaseURL is the resolved endpoint serving this model, which may differ from
 	// its provider's when the model entry overrides it.
 	BaseURL string
-	// ContextWindow is the full input window in tokens; 0 when unknown.
+	// ContextWindow is the full input window in tokens, 0 when unknown.
 	ContextWindow int
 	MaxOutput     int
 	// ContextReserve is the fraction (or absolute count, >= 1) of the window held
 	// back for a response. Values < 1 are fractions of ContextWindow.
 	ContextReserve float64
 	// CompactThreshold is where an automatic compaction fires: a fraction (<1)
-	// or absolute token count (>=1) of ContextWindow; 0 uses the default 0.8.
+	// or absolute token count (>=1) of ContextWindow. 0 uses the default 0.8.
 	CompactThreshold float64
 	Input            []Modality
 	Caps             Capabilities      // resolved from dialect, provider then model compat
@@ -43,7 +43,7 @@ type Model struct {
 // Key returns the canonical provider/id identifier.
 func (m Model) Key() string { return m.Provider + "/" + m.ID }
 
-// ShortName is the part of Key after the last slash; falls back to Key when it has none.
+// ShortName is the part of Key after the last slash, falling back to Key when it has none.
 func (m Model) ShortName() string {
 	if i := strings.LastIndexByte(m.Key(), '/'); i >= 0 && i+1 < len(m.Key()) {
 		return m.Key()[i+1:]
@@ -63,7 +63,7 @@ func (m Model) Display() string {
 }
 
 // Reserve returns the tokens held back from m's window for its response. A value >= 1 is an
-// absolute token count; a value in (0,1) is a fraction of the window; anything else uses the
+// absolute token count, and a value in (0,1) is a fraction of the window. Anything else uses the
 // default fraction. It clamps to at most 90% of the window, and to at least one token.
 func (m Model) Reserve() int {
 	window := m.ContextWindow

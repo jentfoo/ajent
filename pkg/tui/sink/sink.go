@@ -16,12 +16,12 @@ import (
 //
 // Concurrency: ToolStart, ToolOutput, Diff and the done hook may be called from
 // parallel tool goroutines, and a staged `!` shell streams alongside an agent
-// turn; *tui.UI serializes them and keys each call's output by its ID. busy is
-// only touched from the loop goroutine (TurnStart/TurnEnd) and must stay that way.
+// turn. *tui.UI serializes them all and keys each call's output by its ID.
+// busy is only touched from the loop goroutine (TurnStart/TurnEnd) and must stay that way.
 type Sink struct {
 	ui    *tui.UI
-	busy  func() // clears the working spinner; nil while idle
-	image bool   // image blocks draw via the terminal protocol; replay turns this off
+	busy  func() // clears the working spinner, nil while idle
+	image bool   // image blocks draw via the terminal protocol, not during replay
 }
 
 // New returns a sink that drives ui.
@@ -51,8 +51,8 @@ func (s *Sink) TurnStart(agent.TurnInfo) {
 }
 
 // UserPrompt echoes a prompt's words as committed history. Live sessions call
-// ui.UserEcho at submission time; replay uses this so restored context shows each
-// user message above its reply.
+// ui.UserEcho at submission time, while replay uses this so restored context
+// shows each user message above its reply.
 func (s *Sink) UserPrompt(text string) { s.ui.UserEcho(text) }
 
 // Thinking streams reasoning output.
@@ -143,7 +143,7 @@ func progressRow(p agent.ToolProgress) string {
 func (s *Sink) Diff(path, before, after string) { s.ui.Diff(path, before, after) }
 
 // Usage is kept on the interface for pass-through sinks but no longer drives the
-// bar; Context does. It renders nothing here.
+// bar, which Context does instead. It renders nothing here.
 func (s *Sink) Usage(llm.Usage) {}
 
 // Context updates the context bar from the ledger's snapshot.

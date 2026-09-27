@@ -125,7 +125,7 @@ func TestRewindStateRebuild(t *testing.T) {
 	assert.Contains(t, ids, tipOld)
 	assert.Contains(t, ids, forkA.ID)
 
-	// only the new chain is active; the abandoned old reply is not
+	// only the new chain is active, the abandoned old reply is not
 	assert.False(t, slices.ContainsFunc(tree, func(tr session.TreeRow) bool {
 		return tr.ID == tipOld && tr.Active
 	}))
@@ -277,7 +277,7 @@ func TestOpenSessionModes(t *testing.T) {
 	require.NoError(t, err)
 	firstPath := seed.Path()
 
-	// capture the seed's id while it is still the only session; a later
+	// capture the seed's id while it is still the only session, a later
 	// newest-first listing cannot be trusted once other sessions share its
 	// second-granularity timestamp.
 	seedList, err := store.List(ws)
@@ -291,7 +291,7 @@ func TestOpenSessionModes(t *testing.T) {
 	}
 
 	// The seed-relative assertions below run while the seed is still the only
-	// session; ResumeNewSession and the cancelled resume each create a newer file,
+	// session, ResumeNewSession and the cancelled resume each create a newer file,
 	// so they come last to keep "latest" pointing at the seed above.
 
 	// --continue: reuse the most recent transcript (the seed, still alone)
@@ -382,7 +382,7 @@ func TestOpenSessionByName(t *testing.T) {
 	require.NoError(t, rerr)
 	assert.Equal(t, "fix-parser", session.NameOf(entries))
 
-	// the same name reopens it; a different one starts its own transcript
+	// the same name reopens it, a different one starts its own transcript
 	resumed, err := openSession(store, ResumeSessionName, ws, "fix-parser", "p/a", nil)
 	require.NoError(t, err)
 	assert.Equal(t, created.Path(), resumed.Path())
@@ -397,7 +397,7 @@ func TestOpenSessionByName(t *testing.T) {
 	assert.Equal(t, created.Path(), byResume.Path())
 
 	// a name that only reaches a session by id is refused rather than resuming one
-	// the user never named; the guard lives in openSession, not just its caller
+	// the user never named, the guard lives in openSession, not just its caller
 	list, lerr := store.List(ws)
 	require.NoError(t, lerr)
 	require.NotEmpty(t, list)
@@ -411,7 +411,7 @@ func TestResumeByID(t *testing.T) {
 	ws := t.TempDir()
 	store := session.StoreAt(filepath.Join(ws, "root"))
 
-	// two distinct saved sessions; resume the older one by id
+	// two distinct saved sessions, resume the older one by id
 	_, err := store.Create(ws, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
 	older, err := store.Create(ws, session.SessionData{Version: session.Version()})

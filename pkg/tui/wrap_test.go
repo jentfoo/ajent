@@ -47,8 +47,8 @@ func TestWrapLine(t *testing.T) {
 	})
 
 	t.Run("zero_width_never_stalls", func(t *testing.T) {
-		// a lone combining mark is its own cluster measuring nothing; the loop has
-		// to advance on cell count, not on columns consumed
+		// a lone combining mark is its own cluster measuring nothing. The loop has
+		// to advance on cell count, not on columns consumed.
 		rows := wrapLine("\u0301\u0301\u0301abc", 1)
 		require.NotEmpty(t, rows)
 		assert.Equal(t, "\u0301\u0301\u0301abc", strings.Join(rows, ""))

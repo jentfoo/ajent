@@ -134,7 +134,7 @@ func TestCompletionNotification(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s1", llm.Usage{})}})
 		m := New(Options{
 			Provider: p,
-			Deliver: func(in agent.Input) bool { // parent idle; ids stay pending
+			Deliver: func(in agent.Input) bool { // parent idle, ids stay pending
 				c.mu.Lock()
 				c.delivers = append(c.delivers, in)
 				c.mu.Unlock()
@@ -155,7 +155,7 @@ func TestCompletionNotification(t *testing.T) {
 		m.Flush() // a turn-start observer offers pending completions
 		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 1 }, 2*time.Second, 5*time.Millisecond)
 
-		m.Flush() // still undelivered (idle); the next turn start offers again
+		m.Flush() // still undelivered (idle), the next turn start offers again
 		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 2 }, 2*time.Second, 5*time.Millisecond)
 	})
 
@@ -179,7 +179,7 @@ func TestCompletionNotification(t *testing.T) {
 		m.pending = []string{"sub-9", id1} // a second completion already queued but undelivered
 		m.mu.Unlock()
 
-		m.offer([]string{id1}) // delivers naming only id1; its confirm clears just that id
+		m.offer([]string{id1}) // delivers naming only id1, its confirm clears just that id
 		mu.Lock()
 		require.Len(t, delivered, 1)
 		in := delivered[0]
@@ -201,7 +201,7 @@ func TestCompletionNotification(t *testing.T) {
 		j, ok, _ := m.poll(t.Context(), id)
 		require.True(t, ok)
 		assert.Equal(t, StatusDone, j.Status)
-		m.Flush() // still no deliverer for an idle agent; nothing must start a turn
+		m.Flush() // still no deliverer for an idle agent, nothing must start a turn
 	})
 }
 
@@ -220,7 +220,7 @@ func TestCompletionBatching(t *testing.T) {
 
 		ids := []string{m.start("a", "", ""), m.start("b", "", ""), m.start("c", "", "")}
 		g.releaseAll()
-		// wait until every completion is enqueued; Boundary then must return them
+		// wait until every completion is enqueued, Boundary then returning them
 		// all in one input (per-id marks are only set once delivered)
 		require.Eventually(t, func() bool {
 			m.mu.Lock()
@@ -232,7 +232,7 @@ func TestCompletionBatching(t *testing.T) {
 		ins := m.Boundary()
 		require.Len(t, ins, 1)
 		assert.Contains(t, ins[0].Text, strings.Join(ids, ", "))
-		// ids are now in flight; a second boundary pull sends nothing (per-id marks)
+		// ids are now in flight, a second boundary pull sends nothing (per-id marks)
 		assert.Empty(t, m.Boundary())
 	})
 
@@ -282,7 +282,7 @@ func TestCompletionBatching(t *testing.T) {
 		assert.Empty(t, m.Boundary())
 	})
 
-	// an interrupt drops a queued steer without its Delivered; the marks must
+	// an interrupt drops a queued steer without its Delivered, the marks needing to
 	// release so the next turn start can re-offer the same ids
 	t.Run("interrupt_reoffers_dropped_batch", func(t *testing.T) {
 		c := newCapture()
@@ -308,7 +308,7 @@ func TestCompletionBatching(t *testing.T) {
 		require.Eventually(t, func() bool { return len(c.deliveredTexts()) == 1 },
 			2*time.Second, 5*time.Millisecond)
 
-		m.Interrupted() // queued steer dropped; Delivered will never fire
+		m.Interrupted() // queued steer dropped, Delivered will never fire
 		m.Flush()       // the next turn start re-offers the pending batch
 		txts := c.deliveredTexts()
 		require.Len(t, txts, 2)
@@ -431,8 +431,8 @@ func TestReserve(t *testing.T) {
 		assert.Equal(t, "sub-3", m.start("stray", "", "unknown-call"))
 	})
 
-	// an interrupted turn leaves reservations nothing will claim; the next batch
-	// drops them and their numbers are simply skipped
+	// an interrupted turn leaves reservations nothing will claim, the next batch
+	// dropping them and their numbers simply skipped
 	t.Run("new_batch_supersedes", func(t *testing.T) {
 		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }})
 		t.Cleanup(m.Close)
@@ -458,7 +458,7 @@ func TestPollBatchDetection(t *testing.T) {
 	assert.True(t, m.leavePoll())
 	assert.True(t, m.leavePoll())
 
-	m.enterPoll() // the group emptied; the mark must not leak into the next poll
+	m.enterPoll() // the group emptied, the mark must not leak into the next poll
 	assert.False(t, m.leavePoll())
 }
 
@@ -475,7 +475,7 @@ func TestPollPrefersResultOverTimeout(t *testing.T) {
 	id := m.start("x", "", "")
 	j, ok := m.lookup(id)
 	require.True(t, ok)
-	<-j.done // finished before the poll registers; both select cases are ready
+	<-j.done // finished before the poll registers, both select cases are ready
 
 	got, complete, _ := m.poll(t.Context(), id)
 	require.True(t, complete)
@@ -505,7 +505,7 @@ func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
 	t.Cleanup(m.Close)
 
 	id := m.start("x", "", "")
-	close(release) // the provider turn returns; spawn reaches finish then blocks in Activity
+	close(release) // the provider turn returns, spawn reaches finish then blocks in Activity
 	<-entered      // status is done while close(done) has not yet run
 
 	j, ok, _ := m.poll(t.Context(), id) // timer fires inside the window and must claim
@@ -513,7 +513,7 @@ func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
 	assert.Equal(t, StatusDone, j.Status)
 	assert.Contains(t, j.Summary, "done in time")
 
-	close(unblock) // let spawn reach close(done); cleanup can proceed
+	close(unblock) // let spawn reach close(done), cleanup can proceed
 }
 
 func TestOrphanedCompletionRecovered(t *testing.T) {
@@ -538,7 +538,7 @@ func TestOrphanedCompletionRecovered(t *testing.T) {
 	j.mu.Unlock()
 
 	close(release)
-	<-j.done // completes while the poller is still counted; onComplete stays silent
+	<-j.done // completes while the poller is still counted, onComplete stays silent
 	assert.Zero(t, c.noticeCount())
 
 	j.mu.Lock() // the poll departs without the result, as Poll's defer does
@@ -569,7 +569,7 @@ func TestOnCompleteIgnoresRunningJob(t *testing.T) {
 	j, ok := m.lookup(id)
 	require.True(t, ok)
 
-	m.onComplete(j) // the job has not finished; nothing to deliver
+	m.onComplete(j) // the job has not finished, nothing to deliver
 	assert.Zero(t, c.noticeCount())
 	assert.Empty(t, m.Boundary())
 }
@@ -654,7 +654,7 @@ func TestActivityRow(t *testing.T) {
 			{Type: llm.EventDone, StopReason: llm.StopToolUse},
 		}
 		p, _ := scripted([]llm.ScriptedTurn{
-			{Events: thinkingOnlyTurn()}, // no text; the run nudges for a summary
+			{Events: thinkingOnlyTurn()}, // no text, the run nudges for a summary
 			{Events: toolTurn},
 			{Events: summaryTurn("final", llm.Usage{})},
 		})
@@ -707,7 +707,7 @@ func TestActivityRow(t *testing.T) {
 		assert.Equal(t, "sub-1  one", c.rowText("sub-1"))
 		assert.Equal(t, "sub-2  two", c.rowText("sub-2"))
 
-		// cancel the queued second job; its row must still be cleared even though it never ran.
+		// cancel the queued second job, its row still cleared even though it never ran.
 		require.NoError(t, m.Stop("sub-2"))
 		require.Eventually(t, func() bool { return c.rowText("sub-2") == "" }, time.Second, 5*time.Millisecond)
 	})

@@ -23,14 +23,14 @@ type Reasoning struct {
 	Level  string `json:"level,omitempty"`  // llm.Level name
 	Retain string `json:"retain,omitempty"` // llm.RetainPolicy name
 	Budget int    `json:"budget,omitempty"`
-	Hide   bool   `json:"hide,omitzero"` // true hides thinking from the UI; shown by default
+	Hide   bool   `json:"hide,omitzero"` // true hides thinking from the UI, shown by default
 }
 
 // Agent configures the turn loop. MaxSteps optionally caps one turn's
-// tool-calling iterations; absent or <= 0 (the zero value) means unlimited.
+// tool-calling iterations, and absent or <= 0 (the zero value) means unlimited.
 type Agent struct {
 	MaxSteps    int `json:"maxSteps,omitempty"`
-	TurnRetries int `json:"turnRetries,omitempty"` // failed model call re-requests; <= 0 takes the default
+	TurnRetries int `json:"turnRetries,omitempty"` // failed model call re-requests, <= 0 takes the default
 	// SystemPrompt replaces ajent's default prose guidance when set.
 	// Environment facts, project instructions and snippets still follow.
 	SystemPrompt string `json:"systemPrompt,omitempty"`
@@ -60,7 +60,7 @@ type ToolLimits struct {
 	RefTotal  Limit `json:"refTotal,omitzero"`
 }
 
-// Limit bounds one tool's output; a zero field means that dimension is unbounded.
+// Limit bounds one tool's output. A zero field means that dimension is unbounded.
 type Limit struct {
 	Lines int `json:"lines,omitempty"`
 	Bytes int `json:"bytes,omitempty"`
@@ -80,7 +80,7 @@ type Compaction struct {
 
 // Subagent configures research sub-agents.
 type Subagent struct {
-	Model         string `json:"model,omitempty"` // llm model key; empty inherits the session model
+	Model         string `json:"model,omitempty"` // llm model key, empty inherits the session model
 	MaxConcurrent int    `json:"maxConcurrent,omitempty"`
 }
 
@@ -110,7 +110,7 @@ type Permissions struct {
 // literal rather than struct zero values lets Explain report "(default)" as an
 // ordinary source and mirrors today's constants exactly.
 // Its compaction minSteps/verbatimFraction (2 / 0.1) twin pkg/compact's
-// defaultMinSteps/defaultVerbatimDivisor; the two must agree.
+// defaultMinSteps/defaultVerbatimDivisor, and the two must agree.
 const defaultsJSON = `{
   "reasoning": { "level": "medium", "retain": "wholeTurn" },
   "tools": {

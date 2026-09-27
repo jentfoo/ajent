@@ -18,7 +18,7 @@ type Result struct {
 }
 
 // mapCallResult converts an mcp CallToolResult into our own Result. Images
-// pass through as image blocks when they carry bytes, else a short placeholder;
+// pass through as image blocks when they carry bytes, else a short placeholder,
 // the registry's result normalization bounds and gates whatever lands. Audio
 // and the rest map to plain text.
 func mapCallResult(r *mcp.CallToolResult) Result {

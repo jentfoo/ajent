@@ -14,8 +14,8 @@ import (
 // does not import pkg/mcp. The host's uiConsole returns the real manager.
 type MCPServers interface {
 	ServerNames() []string
-	// LoadOnFirstMessage connects and registers every server in full, exactly once;
-	// the driver calls it just before assembling the user's first message.
+	// LoadOnFirstMessage connects and registers every server in full, exactly once.
+	// The driver calls it just before assembling the user's first message.
 	LoadOnFirstMessage(ctx context.Context)
 	Status(ctx context.Context) []MCPServerStatus
 	Connect(ctx context.Context, name string) error
@@ -59,7 +59,7 @@ type Console interface {
 
 	// Models returns the live model registry, the single source of truth for the active model.
 	Models() *llm.Registry
-	// State returns the live agent state; handlers read and mutate it directly.
+	// State returns the live agent state. Handlers read and mutate it directly.
 	State() *agent.State
 	// Tools returns the live tool registry, the single source of truth for the
 	// enabled set.

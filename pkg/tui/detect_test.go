@@ -121,7 +121,7 @@ func TestDetectTone(t *testing.T) {
 		t.Cleanup(func() { _ = pw.Close() })
 		u, _ := newRecordingUI(t, pr)
 		swapEnv(t, nil)
-		// fire the deadline inline; nothing will ever answer this reader
+		// fire the deadline inline, nothing will ever answer this reader
 		u.afterDelay = func(_ time.Duration, fn func()) *time.Timer {
 			fn()
 			return time.NewTimer(time.Hour)
@@ -142,7 +142,7 @@ func TestDetectTone(t *testing.T) {
 
 // newReplyUI builds a UI whose input is fed on demand via the returned pipe
 // writer. DetectTone's wall-clock deadline is neutralized so a reply-based test
-// waits for its answer instead of racing a timer; closing pw on cleanup unblocks
+// waits for its answer instead of racing a timer, and closing pw on cleanup unblocks
 // it even when no answer arrives.
 func newReplyUI(tb testing.TB) (*UI, *io.PipeWriter, *strings.Builder) {
 	tb.Helper()

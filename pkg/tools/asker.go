@@ -7,7 +7,7 @@ import (
 )
 
 // Asker resolves a guard's ActionAsk into a final allow or deny. The permission
-// layer registers one; with none registered an ask denies.
+// layer registers one, and with none registered an ask denies.
 type Asker func(ctx context.Context, call agent.ToolCall, d Decision) Decision
 
 // SetAsker registers the asker consulted when a guard returns ActionAsk. With

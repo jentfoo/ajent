@@ -203,7 +203,7 @@ func TestPromptIndexPrompts(t *testing.T) {
 		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "one")})
 		require.NoError(t, aerr)
 
-		pIdx := NewPromptIndex(s, ws) // default now hook; first scan sets a real-time expiry
+		pIdx := NewPromptIndex(s, ws) // default now hook, first scan sets a real-time expiry
 		assert.Equal(t, []string{"one"}, promptTexts(pIdx.Prompts()))
 
 		// an older file is added after the cache warmed, then a now bump refreshes

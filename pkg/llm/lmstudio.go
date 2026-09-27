@@ -5,7 +5,7 @@ import (
 	"slices"
 )
 
-// decorateLMStudio is a no-op today; lm-studio speaks plain chat-completions and
+// decorateLMStudio is a no-op today. Lm-studio speaks plain chat-completions and
 // its quirks are carried by capabilities rather than request fields.
 func decorateLMStudio(_ *compatRequest, _ Request) {}
 

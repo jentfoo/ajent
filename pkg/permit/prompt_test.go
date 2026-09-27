@@ -13,14 +13,14 @@ func TestBuildOptions(t *testing.T) {
 
 	cases := []struct {
 		in       string
-		wantLen  int    // exactly four options either way; only the session option differs
+		wantLen  int    // exactly four options either way, only the session option differs
 		expect   string // expected session-option text, "" if broad/plain (asserted via compound flag)
 		compound bool   // expect the broad compound grant (no per-name memory)
 	}{
 		{"ls -la", 4, "Allow `ls` for session", false},
 		{"/usr/bin/ifconfig eth0", 4, "Allow `ifconfig` for session", false}, // path stripped
 		{"git status", 4, "Allow `git` for session", false},
-		// a compound with one non-readonly head names it; read-only segments don't count
+		// a compound with one non-readonly head names it, read-only segments not counting
 		{"ifconfig | head -n 10", 4, "Allow `ifconfig` for session", false},
 		{"rm build && ls", 4, "Allow `rm` for session", false}, // ls is read-only, so only rm governs
 		// a repeated head collapses into one grant (git add && git commit)
@@ -128,7 +128,7 @@ func TestWorkspaceClassifierSystemVerbatim(t *testing.T) {
 	assert.Contains(t, p, "You decide whether a single shell command may run unattended")
 	assert.Contains(t, p, `"allow": the command only reads or inspects anywhere, or it changes things inside the workspace`)
 
-	// reading never needs approval, except credentials; only writes are confined
+	// reading never needs approval, except credentials, only writes being confined
 	assert.Contains(t, p, "Reading never needs approval")
 	assert.Contains(t, p, `inspecting a file, directory, process or path anywhere`)
 	assert.Contains(t, p, "security-sensitive credentials and secrets")
@@ -144,7 +144,7 @@ func TestWorkspaceClassifierSystemVerbatim(t *testing.T) {
 	assert.Contains(t, p, "within the current working directory or /tmp")
 	assert.Contains(t, p, "assume it resolves inside /work/proj")
 
-	// every prompt answers allow/deny; the read-only vocabulary is gone
+	// every prompt answers allow/deny, the read-only vocabulary gone
 	for _, sys := range []string{p, ClassifierSystem, MCPClassifierSystem("t", "d", "{}")} {
 		assert.NotContains(t, sys, "readonly")
 	}

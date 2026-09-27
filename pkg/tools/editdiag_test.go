@@ -10,7 +10,7 @@ import (
 )
 
 // decoyFile holds two near-identical functions. Line scoring picks the earlier
-// one (its lines share more tokens); only whole-block scoring reaches the later,
+// one (its lines share more tokens). Only whole-block scoring reaches the later,
 // correct region.
 const decoyFile = "package main\n\nfunc oldGreet(name string) string {\n" +
 	"\tif name == \"\" {\n\t\treturn \"hi\"\n\t}\n\treturn name\n}\n\n" +

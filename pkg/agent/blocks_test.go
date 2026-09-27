@@ -9,7 +9,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// testImage is a tiny payload; block transport, not encoding, is under test.
+// testImage is a tiny payload, block transport, not encoding, is under test.
 var testImage = llm.ImageBlock{MediaType: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}}
 
 func TestInputBlocksRideToRequest(t *testing.T) {
@@ -51,7 +51,7 @@ func TestInputBlocksOnlyTurn(t *testing.T) {
 	t.Parallel()
 
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("seen")}}}
-	// image-capable so the prepared request still carries the block; see above
+	// image-capable so the prepared request still carries the block, see above
 	a := newTestAgent(&State{Model: llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}},
 		Reasoning: llm.ReasoningConfig{}}, p, nil)
 

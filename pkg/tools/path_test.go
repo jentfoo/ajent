@@ -32,7 +32,7 @@ func TestResolve(t *testing.T) {
 
 		p := PathPolicy{Cwd: cwd}
 		abs, err := p.Resolve(filepath.Join(outside, "secret.txt"))
-		require.NoError(t, err) // no containment; any absolute path resolves
+		require.NoError(t, err) // no containment, any absolute path resolves
 		assert.Equal(t, filepath.Join(outside, "secret.txt"), abs)
 	})
 
@@ -133,7 +133,7 @@ func TestResolve(t *testing.T) {
 		assert.Equal(t, filepath.Join(cwd, "@"), abs) // no path follows the @
 	})
 
-	// empty Cwd uses os.Getwd; a relative path joins onto it
+	// empty Cwd uses os.Getwd, with a relative path joining onto it
 	t.Run("empty_cwd_falls_back_to_getwd", func(t *testing.T) {
 		p := PathPolicy{}
 		abs, err := p.Resolve("somefile.txt")

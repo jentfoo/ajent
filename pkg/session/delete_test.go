@@ -90,7 +90,7 @@ func TestDeleteSession(t *testing.T) {
 
 func TestDeleteOldSessions(t *testing.T) {
 	// every unnamed session is past a cutoff in the future, so these cases exercise
-	// the prompt and the sweep; which sessions qualify is TestStoreStale's job.
+	// the prompt and the sweep, which sessions qualify being TestStoreStale's job.
 	future := time.Now().UTC().Add(time.Hour)
 
 	t.Run("confirmed_removes_stale", func(t *testing.T) {

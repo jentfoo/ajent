@@ -148,7 +148,7 @@ func TestCompletionMenu(t *testing.T) {
 		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /model") }, time.Second, testPoll)
 	})
 
-	// Tab takes the highlight whole; a following Enter only submits
+	// Tab takes the highlight whole, and a following Enter only submits
 	t.Run("tab_accepts_then_enter_submits", func(t *testing.T) {
 		u, _, pw := open(t)
 
@@ -310,7 +310,7 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 	t.Cleanup(func() { _ = pw.Close() })
 	u := newTestUI(t, v, pr)
 
-	// a source blocking until the test releases it; typing must stay responsive
+	// a source blocking until the test releases it, typing must stay responsive
 	g := &gatedAsync{queries: make(chan string), answers: make(chan []Completion)}
 	u.SetCompleter(g)
 
@@ -346,7 +346,7 @@ type gatedAsync struct {
 func (g *gatedAsync) Style(string, int) CompleteStyle { return CompleteStyle{Async: true} }
 func (g *gatedAsync) Complete(text string, pos int) (int, []Completion) {
 	g.queries <- text
-	return 1, <-g.answers // start past @; the test drives delivery timing
+	return 1, <-g.answers // start past @, so the test drives delivery timing
 }
 
 func TestFlashRuleOnSpentTab(t *testing.T) {

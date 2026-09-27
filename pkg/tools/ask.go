@@ -22,7 +22,7 @@ type askParams struct {
 }
 
 // askUserTool puts a decision that is genuinely the user's back to them.
-// Registered off by default; a workflow that wants it enables it.
+// Registered off by default, enabled when a workflow wants it.
 type askUserTool struct {
 	ask AskFunc
 }

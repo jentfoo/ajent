@@ -95,7 +95,7 @@ Invariants:
 
 - **Once per call.** The render sits before the guard loop, so a re-asking asker
   cannot print the change twice. What is rendered once stays in the record,
-  followed by the denial summary or the error when the call was refused — a mode
+  followed by the denial summary or the error when the call was refused. A mode
   like `allow-all`, which never prompts, would otherwise show nothing at all.
 - A `Preview` error (bad arguments, unreadable file) renders nothing and lets
   `Execute` surface its own error. Tools must therefore not rely on the render
@@ -217,7 +217,7 @@ String replacement against an in-memory buffer, written once at the end so a
 multi-edit batch is all-or-nothing. One shared apply path serves both `Execute`
 and `DryRun`, preceded by an order-independent validation pass (empty or
 duplicated old text) so nothing fails after any write. Every op's span resolves
-against the **original** buffer, never another edit's output — edits cannot
+against the **original** buffer, never another edit's output. Edits cannot
 cascade, and overlapping spans across ops are rejected.
 
 A match ladder resolves each `oldText` through four tiers: exact byte-for-byte,
@@ -289,8 +289,8 @@ difference with the lines it covers. The message ends with the closest text
 verbatim for copying: chosen by whole-block agreement over per-line token
 overlap (which previously landed hints outside the intended block), rendered
 untrimmed without a line gutter since position lives in the header and it must
-be reproduced byte for byte. Below a similarity floor nothing is offered at all
-— admitting no close match beats naming a decoy.
+be reproduced byte for byte. Below a similarity floor nothing is offered at
+all. Admitting no close match beats naming a decoy.
 
 One further signal rides on that message: when the closest text differs in one
 quotable run, it is named rather than left as two strings to be compared by eye,
@@ -312,8 +312,8 @@ imports `pkg/tui`), bounded by `Elide`. The added side is the model's own text
 and the removed side names what the file actually held, so it makes a non-exact
 match explain itself. It rides only when there is reason to check the result: a
 match tier fired, one edit landed on several sites, or the apply duplicated text
-— its written text (as reindented, when a tier shifted it) now occurring
-elsewhere in the file, or a written line repeating its neighbour. An edit
+where its written text (as reindented, when a tier shifted it) now occurs
+elsewhere in the file, or where a written line repeats its neighbour. An edit
 matched byte-exactly and landed where aimed returns the summary alone: the diff
 would only restate arguments the model just sent, and extra tokens become text
 for the next `oldText` to be modelled on.
@@ -362,8 +362,8 @@ Off-by-default extras for no-shell agents.
   filenames stay usable), falling back to a bounded Go walk when git is
   unavailable or yields nothing. A search never leaves its root: the listing is
   scoped to `Path`, and results are sorted newest first.
-- `grep`: searches file contents for a pattern in three modes — `files`, `content`
-  (line numbers plus optional context lines) and `count`. Enumeration stops at the
+- `grep`: searches file contents for a pattern in three modes (`files`, `content`
+  (line numbers plus optional context lines) and `count`). Enumeration stops at the
   default match cap with a named note, never silently; surfaces stderr from an
   underlying tool as an error.
 - Both spill their complete result when the bound cuts it, so the model can page

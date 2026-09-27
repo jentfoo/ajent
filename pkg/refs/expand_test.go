@@ -376,7 +376,7 @@ func TestExpand(t *testing.T) {
 		first := x.Expand("list @sub")
 		require.Len(t, injected(t, first), 2)
 
-		// an added entry changes the listing; @ must list again
+		// an added entry changes the listing, @ must list again
 		require.NoError(t, os.WriteFile(filepath.Join(sub, "a.txt"), []byte("x"), 0o600))
 		second := x.Expand("list @sub")
 		assert.Equal(t, []string{"ref-2-ls-sub"}, toolCallIDs(injected(t, second)))
@@ -393,7 +393,7 @@ func TestExpand(t *testing.T) {
 		agent.InjectPair(t.Context(), tool, agent.NopSink{},
 			agent.ToolCall{ID: "agent-ls", Name: "ls", Input: []byte(`{"path":"sub"}`)}, "ls sub")
 
-		// the agent listing observed the dir; a following @ is deduped
+		// the agent listing observed the dir, a following @ deduped
 		res := x.Expand("list @sub")
 		assert.Empty(t, injected(t, res))
 	})

@@ -21,7 +21,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// clipboardTimeout bounds one clipboard probe; a hung backend degrades to a
+// clipboardTimeout bounds one clipboard probe, so a hung backend degrades to a
 // silent no-op like every other clipboard failure.
 const clipboardTimeout = 3 * time.Second
 
@@ -101,7 +101,7 @@ func (s *imageSlots) store(data []byte) (token, rejected string) {
 }
 
 // refile files blocks under a fresh slot and returns its token, so recalled or
-// aborted queue items keep their images; their original slots were consumed at
+// aborted queue items keep their images. Their original slots were consumed at
 // submission. Empty blocks return "".
 func (s *imageSlots) refile(blocks llm.BlockList) string {
 	if len(blocks) == 0 {
@@ -182,7 +182,7 @@ func captureClipboardImage(ctx context.Context) (token, notice string) {
 		}
 	}
 	if !installed {
-		clipNoBackend.Store(true) // nothing installs mid-session; one notice is enough
+		clipNoBackend.Store(true) // nothing installs mid-session, one notice is enough
 		return "", "no clipboard image reader on PATH (tried " + strings.Join(tried, ", ") + ")"
 	}
 	return "", ""

@@ -25,7 +25,7 @@ func TestEstimateText(t *testing.T) {
 		tol  float64
 	}{
 		// 43 bytes sits on a half-token boundary at the prose ratio, so rounding decides
-		// it; one token either way is within what a ratio heuristic can promise.
+		// it, and one token either way is within what a ratio heuristic can promise.
 		{"prose_sentence", "the quick brown fox jumps over the lazy dog", KindProse, 10, 1},
 		{"short_prose", "hello world", KindProse, 3, 1},
 		{"go_source", "package main\nfunc f(x int) (int, error) {\n\treturn x * 2, nil\n}\n", KindCode, 20, 6},
@@ -33,7 +33,7 @@ func TestEstimateText(t *testing.T) {
 		{"minified_json", `[{"name":"x"},{"name":"y"}]`, KindJSON, 12, 4},
 		// non-ASCII runes count exactly (one each), so tol < 1 enforces equality
 		{"cjk_one_token_per_rune", "\u4f60\u597d\u4e16\u754c\uff0c\u4eca\u5929\u6c14\u5f88\u597d\u3002", KindProse, 11, 0.1},
-		// astral (emoji) pairs cost two; the trailing U+2728 is BMP and costs one
+		// astral (emoji) pairs cost two, the trailing U+2728 is BMP and costs one
 		{"astral_pairs_cost_two", "🎉🚀🔥✨", KindProse, 7, 0.5},
 	}
 	for _, tc := range tests {
@@ -59,7 +59,7 @@ func TestEstimateBytes(t *testing.T) {
 func TestEstimateBlocksToolResultIsCode(t *testing.T) {
 	t.Parallel()
 
-	// a read result is a file; its text uses the denser code ratio (3.2 bytes/token),
+	// a read result is a file, and its text uses the denser code ratio (3.2 bytes/token),
 	// so identical prose costs more tokens inside a tool result than as prose.
 	txt := "the quick brown fox jumps over the lazy dog"
 	inResult := estimateBlocks(llm.BlockList{llm.ToolResultBlock{
@@ -246,7 +246,7 @@ func TestImageTokens(t *testing.T) {
 	png := buf.Bytes()
 
 	t.Run("dimensions_beat_byte_size", func(t *testing.T) {
-		// the same pixels compress differently; cost must follow area, not bytes
+		// the same pixels compress differently, cost must follow area, not bytes
 		small := imageTokens(llm.ImageBlock{Data: png})
 		padded := imageTokens(llm.ImageBlock{Data: append(append([]byte{}, png...), make([]byte, 1<<20)...)})
 		assert.Equal(t, small, padded)

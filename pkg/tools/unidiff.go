@@ -10,7 +10,7 @@ import (
 const diffContext = 3
 
 // unifiedDiff renders a plain unified diff of before and after, empty when
-// they match. fromName and toName label the ---/+++ headers; a single-path
+// they match. fromName and toName label the ---/+++ headers, while a single-path
 // change passes the same name twice. pkg/tools never imports pkg/tui, so this
 // drives go-udiff directly rather than reusing the theme-coupled renderer
 // there. The edit tool and the git_* readers share it.

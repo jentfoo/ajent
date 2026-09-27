@@ -11,7 +11,7 @@ import (
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
-// queueUI is the narrow TUI surface the steer queue needs; *tui.UI satisfies it.
+// queueUI is the narrow TUI surface the steer queue needs, *tui.UI satisfies it.
 type queueUI interface {
 	SetQueued(texts []string)
 	PrependInput(text string)
@@ -27,7 +27,7 @@ type queueUI interface {
 // tui.UI lock.
 type steerQueue struct {
 	ui     queueUI
-	submit func(est int) // SetSubmit(sum) while anything is pending; nil-safe in main
+	submit func(est int) // SetSubmit(sum) while anything is pending, nil-safe in main
 	clear  func()        // SetSubmit(0) once the batch and its reads have landed
 
 	mu       sync.Mutex
@@ -48,13 +48,13 @@ func newSteerQueue(ui queueUI, submit func(int), clear func()) *steerQueue {
 }
 
 // offer is the pump entry. When a drain goroutine runs it queues the item and
-// returns true; otherwise it marks draining and returns false so the caller
+// returns true, otherwise it marks draining and returns false so the caller
 // spawns the single drain goroutine with this input.
 func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.draining {
-		s.draining = true // a turn is about to run; later offers queue
+		s.draining = true // a turn is about to run, later offers queue
 		return false
 	}
 	s.items = append(s.items, steerItem{input: in, label: label, est: est})
@@ -67,7 +67,7 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 // newline, Before blocks and After resolvers chained in submit order. A
 // provenance change starts a new input, so a mixed user + system batch keeps
 // per-item attribution on the transcript rows instead of one OR-ed flag. The
-// final run clears accounting once everything behind it has landed; each run
+// final run clears accounting once everything behind it has landed. Each run
 // echoes its labels as its message lands. Blocks concatenate in queue order
 // across a run's items, so the joined message need not match any one label.
 func (s *steerQueue) join() []agent.Input {
@@ -108,7 +108,7 @@ func (s *steerQueue) join() []agent.Input {
 	for i, r := range runs {
 		r.in.After = joinAfter(r.afters)
 		if label := strings.Join(r.labels, "\n"); label != "" {
-			joined := label // captured for the closure; landed takes no lock
+			joined := label // captured for the closure, landed takes no lock
 			blocks := r.in.Blocks
 			r.in.Delivered = func() { s.landed(joined, blocks) }
 		}
@@ -186,7 +186,7 @@ func (s *steerQueue) take() ([]agent.Input, bool) {
 	defer s.mu.Unlock()
 
 	if len(s.items) == 0 {
-		s.draining = false // the drain goroutine is done; the next submit starts one
+		s.draining = false // the drain goroutine is done, the next submit starts one
 		return nil, false
 	}
 	return s.join(), true
@@ -254,7 +254,7 @@ func (s *steerQueue) abort() {
 }
 
 // refreshLocked re-renders the queued rows and keeps the submit bucket in step.
-// Caller holds q.mu; UI calls happen under it (queue→UI lock order).
+// Caller holds q.mu, UI calls happen under it (queue→UI lock order).
 func (s *steerQueue) refreshLocked() {
 	if s.ui != nil {
 		labels := make([]string, len(s.items))

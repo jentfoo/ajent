@@ -17,8 +17,8 @@ import (
 // changes it. edit returns the config keys/values a change persists so the save
 // prompt can copy them to a file layer.
 //
-// unavailable reports why the row cannot be edited right now, or "" when it can;
-// an unavailable row renders grayed out and its editor explains itself if entered.
+// unavailable reports why the row cannot be edited right now, or "" when it can.
+// An unavailable row renders grayed out and its editor explains itself if entered.
 type settingsRow struct {
 	name   string
 	render func(c Console) (label, detail string)
@@ -33,8 +33,8 @@ type settingChange struct {
 	value any
 }
 
-// settingsCommand shows or edits configuration. No section opens the full menu;
-// a section name jumps straight to that row's editor.
+// settingsCommand shows or edits configuration. No section opens the full menu.
+// A section name jumps straight to that row's editor.
 func settingsCommand(ctx context.Context, arg string, c Console) error {
 	return runSettings(ctx, c, strings.TrimSpace(arg))
 }
@@ -50,8 +50,8 @@ func settingsCompletion(c Console) func(prefix string) []string {
 	}
 }
 
-// runSettings drives the menu loop. A section jumps to one row then returns; an
-// empty section reopens after every edit until cancelled.
+// runSettings drives the menu loop. A section jumps to one row then returns.
+// An empty section reopens after every edit until cancelled.
 func runSettings(ctx context.Context, c Console, section string) error {
 	if section != "" {
 		for i := range allRows() {
@@ -84,7 +84,7 @@ func runSettings(ctx context.Context, c Console, section string) error {
 		}
 		err = editRow(ctx, c, &rows[picked])
 		if errorsIsCancelled(err) {
-			continue // Esc leaves the row; reopen the menu on it
+			continue // Esc leaves the row, reopening the menu on it
 		} else if err != nil {
 			c.Notify("settings: "+err.Error(), levelWarn)
 		}
@@ -111,7 +111,7 @@ func (r *settingsRow) disabledReason(c Console) string {
 }
 
 // savePrompt asks where a just-applied session override should persist. The
-// editor already SetSession; this only copies to a file layer when chosen.
+// editor already SetSession. This only copies to a file layer when chosen.
 func savePrompt(ctx context.Context, c Console, changes ...settingChange) {
 	idx, err := c.Select(ctx, "Save change",
 		[]tui.Option{
@@ -344,8 +344,8 @@ func rowCompaction(c Console) (string, string) {
 		fmt.Sprintf("%s, %s  (%s)", boolWord(auto), thr, orDefault(asrc))
 }
 
-// editModel applies a pick through the model picker without persisting; the
-// save-to-layer choice is offered by editRow's prompt.
+// editModel applies a pick through the model picker without persisting.
+// The save-to-layer choice is offered by editRow's prompt.
 func editModel(ctx context.Context, c Console) ([]settingChange, error) {
 	if _, err := applyModel(ctx, "", c); err != nil {
 		return nil, err
@@ -361,7 +361,7 @@ func editReasoning(ctx context.Context, c Console) ([]settingChange, error) {
 	if err != nil || c.State() == nil {
 		return nil, err
 	}
-	// persist the level as a dotted leaf; SetReasoning already updated state.
+	// persist the level as a dotted leaf, SetReasoning having updated state
 	level := c.State().Reasoning.Level.String()
 	_ = c.SetSessionSetting("reasoning.level", level)
 	return []settingChange{{key: "reasoning.level", value: level}}, nil
@@ -430,7 +430,7 @@ func editTools(ctx context.Context, c Console) ([]settingChange, error) {
 
 // editCompaction toggles auto-compaction and sets its threshold. The input is
 // gathered and validated before anything applies: valid values are a fraction in
-// (0,1) of the window or an absolute token count >= 1; anything else aborts the
+// (0,1) of the window or an absolute token count >= 1. Anything else aborts the
 // whole edit with no session settings recorded.
 func editCompaction(ctx context.Context, c Console) ([]settingChange, error) {
 	on, err := c.Confirm(ctx, "Enable automatic compaction?")
@@ -447,7 +447,7 @@ func editCompaction(ctx context.Context, c Console) ([]settingChange, error) {
 		if ierr != nil {
 			return nil, ierr
 		}
-		// Enter on the placeholder keeps the current threshold; anything else must be a positive number.
+		// enter on the placeholder keeps the current threshold, but anything else must be a positive number
 		if in != "" {
 			f, perr := strconv.ParseFloat(strings.TrimSpace(in), 64)
 			if perr != nil || f <= 0 {

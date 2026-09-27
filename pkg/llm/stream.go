@@ -12,7 +12,7 @@ import (
 //
 // Next blocks until the next event. It returns false at end of stream, after
 // which Err reports any failure. Close is safe to call from another goroutine
-// and unblocks a blocked Next; a deliberate Close leaves Err nil.
+// and unblocks a blocked Next. A deliberate Close leaves Err nil.
 type Stream interface {
 	Next() (Event, bool)
 	Err() error
@@ -21,7 +21,7 @@ type Stream interface {
 
 // CloseOnDone closes s as soon as ctx finishes, so a blocked Next unblocks and
 // buffered events are abandoned rather than drained. The returned stop function
-// ends the watch; call it once the stream is drained or deliberately closed.
+// ends the watch, so call it once the stream is drained or deliberately closed.
 func CloseOnDone(ctx context.Context, s Stream) (stop func()) {
 	var once sync.Once
 	done := make(chan struct{})
@@ -178,7 +178,7 @@ func (a *Accumulator) Err() error { return a.err }
 
 // streamPump holds the shared event-pumping state every provider stream uses:
 // the Next loop, buffered events, terminal done/error flags and close semantics.
-// read decodes one frame into zero or more events; it is set by the embedding
+// read decodes one frame into zero or more events, and it is set by the embedding
 // stream, which keeps all decode-specific state on itself.
 type streamPump struct {
 	pending []Event

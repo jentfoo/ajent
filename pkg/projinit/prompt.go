@@ -19,7 +19,7 @@ Read the Makefile or equivalent build file, any CI configuration (.github/workfl
 
 Report exactly which commands build the project, run its tests and lint it, and what each one expects: toolchains and versions, environment variables, generated files, and any setup step that must run first. Name the file each command came from.` + summaryTail
 
-	// codeTaskFmt takes one disjoint slice of the tree; another agent covers the rest.
+	// codeTaskFmt takes one disjoint slice of the tree, and another agent covers the rest.
 	codeTaskFmt = `Survey this slice of the repository: %s
 
 Stay inside those paths. Another sub-agent covers the rest of the tree.

@@ -141,7 +141,7 @@ func TestSurvey(t *testing.T) {
 		r := New(Options{Cwd: dir, Registry: newRegistry(t, dir, start, pollStub())})
 
 		_, err := r.Survey(t.Context())
-		// a refused spawn is not a missing tool; the notice must not say otherwise
+		// a refused spawn is not a missing tool, the notice must not say otherwise
 		require.ErrorIs(t, err, ErrNoneStarted)
 		require.NotErrorIs(t, err, ErrNoSubAgents)
 		assert.Contains(t, err.Error(), "denied by user")
@@ -157,7 +157,7 @@ func TestSurvey(t *testing.T) {
 		second, err := r.Survey(t.Context())
 		require.NoError(t, err)
 
-		// Before stays in State; a repeated tool_use id 400s every later request
+		// Before stays in State, so a repeated tool_use id 400s every later request
 		seen := bulk.SliceToSet(callIDs(agent.BeforeMessages(first.Before)))
 		ids := callIDs(agent.BeforeMessages(second.Before))
 		require.NotEmpty(t, ids)
@@ -184,7 +184,7 @@ func TestSurvey(t *testing.T) {
 	t.Run("without_read", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md")
-		// an empty registry has no read; drafting blind could overwrite a file the model never saw
+		// an empty registry has no read, drafting blind could overwrite a file the model never saw
 		_, err := New(Options{Cwd: dir, Registry: tools.New()}).Survey(t.Context())
 		require.ErrorIs(t, err, ErrNoRead)
 	})
@@ -229,7 +229,7 @@ func TestTerminal(t *testing.T) {
 func TestRunOf(t *testing.T) {
 	t.Parallel()
 
-	// runOf extracts the integer between init- and the next dash; a foreign or
+	// runOf extracts the integer between init- and the next dash, while a foreign or
 	// malformed id carries no run number at all. Each want is the same run value
 	// passed to callID, so it cannot drift from what was minted.
 	run := int64(7)

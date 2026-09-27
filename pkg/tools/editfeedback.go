@@ -28,7 +28,7 @@ func editReport(path string, count int, o editOutcome) string {
 	return b.String()
 }
 
-// dupCheckMin is the shortest newText worth counting repeats of; shorter text
+// dupCheckMin is the shortest newText worth counting repeats of. Shorter text
 // appears everywhere, so warning trains the model to ignore warnings.
 const dupCheckMin = 24
 

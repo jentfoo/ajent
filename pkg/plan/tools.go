@@ -23,7 +23,7 @@ const (
 
 // controlTool records one phase transition. Validation failures come back as
 // error results rather than Go errors, so the model corrects itself inside the
-// same turn; only a recorded transition ends the turn.
+// same turn. Only a recorded transition ends the turn.
 type controlTool struct {
 	c      *Controller
 	name   string

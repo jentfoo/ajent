@@ -11,7 +11,7 @@ import (
 )
 
 // MCPGroup is one server's /tools group metadata, declared here so pkg/command
-// does not import pkg/mcp. Source keys the grouping; Label is the rendered header.
+// does not import pkg/mcp. Source keys the grouping, Label the rendered header.
 type MCPGroup struct {
 	Source string // "mcp: <name>", the /tools grouping key
 	Label  string // full header text shown above the server's tools

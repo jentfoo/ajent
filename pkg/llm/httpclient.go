@@ -13,7 +13,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/version"
 )
 
-// Timeouts bound one request. An unset field takes the dialect default; an
+// Timeouts bound one request. An unset field takes the dialect default, and an
 // explicit "0s" disables that bound, which is what a lm-studio endpoint needs
 // while it loads a model just in time.
 type Timeouts struct {

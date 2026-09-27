@@ -14,7 +14,7 @@ func TestCalibrator(t *testing.T) {
 		c := NewCalibrator()
 		const key = "p/m"
 
-		// feed a steady 2x undercount; the factor settles at exactly that ratio
+		// feed a steady 2x undercount, the factor settles at exactly that ratio
 		for i := 0; i < 20; i++ {
 			c.Feed(key, 1000, 2000)
 		}
@@ -62,7 +62,7 @@ func TestCalibrator(t *testing.T) {
 		settled := c.Factor("k")
 		require.InDelta(t, 1.1, settled, 0.001)
 
-		// a provider that reported nothing is not evidence the estimate ran high; before
+		// a provider that reported nothing is not evidence the estimate ran high, and before
 		// this guard each such turn decayed the factor (1.1, 0.77, 0.539, ...) until every
 		// estimate for the model came out far too small.
 		c.Feed("k", 1000, 0)

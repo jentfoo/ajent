@@ -161,7 +161,7 @@ func TestKittyTransmit(t *testing.T) {
 		data := make([]byte, imagePayloadChunk) // 4096 bytes -> 5462 base64 bytes -> two chunks
 		seq := kittyTransmit(9, data, 10, 5)
 		assert.Equal(t, 2, strings.Count(seq, "\x1b_G"))
-		// control keys ride the first chunk only; the continuation is bare m
+		// control keys ride the first chunk only, so the continuation is bare m
 		assert.Contains(t, seq, "a=T,f=100,q=2,C=1,i=9,c=10,r=5,m=1;")
 		assert.Contains(t, seq, "\x1b_Gm=0;")
 		assert.NotContains(t, seq, "a=p")
@@ -229,7 +229,7 @@ func TestIsImageLine(t *testing.T) {
 
 func TestCellSizeReport(t *testing.T) {
 	t.Run("decode and apply", func(t *testing.T) {
-		// CSI 6;20;10 t answers a CSI 16 t query: height 20, width 10
+		// CSI 6;20;10 t answers a CSI 16 t query, height 20, width 10
 		k, n, ok := decodeKey([]byte("\x1b[6;20;10t"))
 		require.True(t, ok)
 		assert.Equal(t, keyCellSize, k.typ)

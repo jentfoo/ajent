@@ -110,7 +110,7 @@ func TestApplyThinkingRegressionPins(t *testing.T) {
 	})
 
 	t.Run("empty_reasoning_content_when_level_on", func(t *testing.T) {
-		// detection sets ReplayReasoning for deepseek; it drives the empty echo
+		// detection sets ReplayReasoning for deepseek, which drives the empty echo
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek, ReplayReasoning: true}
 		m := thinkingModel(caps)
 		body, err := buildCompatBody(Request{
@@ -144,7 +144,7 @@ func TestApplyThinkingRegressionPins(t *testing.T) {
 
 	t.Run("max_clamps_to_mapped_xhigh_not_bare_high", func(t *testing.T) {
 		// a provider that genuinely accepts xhigh gets its mapped value when max
-		// is requested; it never falls through to an unmapped bare "high"
+		// is requested, never falling through to an unmapped bare "high"
 		caps := Capabilities{Reasoning: true, Thinking: ThinkingOpenAI,
 			SupportsReasoningEffort: true}
 		v := "deep"

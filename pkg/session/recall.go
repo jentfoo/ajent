@@ -17,7 +17,7 @@ func NewRecallIndex(s *Store, workspace string, hist *EditorHistory) *RecallInde
 
 // Lines returns every recallable line for the workspace, newest first and
 // deduplicated so each text keeps its most recent occurrence. A typed line that was
-// also a recorded prompt carries the prompt's timestamp; otherwise At is zero.
+// also a recorded prompt carries the prompt's timestamp, otherwise At is zero.
 func (r *RecallIndex) Lines() []Prompt {
 	prompts := r.prompts.Prompts()
 	at := make(map[string]time.Time, len(prompts))
@@ -33,7 +33,7 @@ func (r *RecallIndex) Lines() []Prompt {
 		out = append(out, Prompt{Text: txt, At: at[txt]}) // zero time when never recorded
 		seen[txt] = struct{}{}
 	}
-	if r.hist != nil { // typed lines are the complete current record; list them first
+	if r.hist != nil { // typed lines are the complete current record, list them first
 		for _, txt := range r.hist.Recent() {
 			addTyped(txt)
 		}

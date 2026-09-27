@@ -23,8 +23,8 @@ type TreeRow struct {
 	Depth  int    // how many forks sit above this node (0 = on the trunk)
 	Kind   RowKind
 	Label  string
-	Active bool   // on the current head's path; abandoned forks are not
-	Guide  string // box-drawing branch prefix, e.g. "├── ", "│   └── "; empty for flat rows
+	Active bool   // on the current head's path, abandoned forks are not
+	Guide  string // box-drawing branch prefix like "├── ", empty for flat rows
 }
 
 // treeIndex links entries for tree walks: entries by id, and each entry's
@@ -105,7 +105,7 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 			visit(c)
 		}
 	}
-	// every root (usually just the session line) starts a tree; orphans too
+	// every root (usually just the session line) starts a tree, orphans too
 	for _, e := range entries {
 		switch e.ParentID {
 		case "":
@@ -195,8 +195,8 @@ func dispLast(kids []string, id string) bool {
 
 // RewindTarget maps selecting one row onto the new branch head and editor
 // pre-fill. A user message rewinds to its parent (so its text can be edited or
-// re-sent); an assistant, tool-result or compaction entry stays as its own head;
-// a compaction rewinds past it so context returns to just before the reduction.
+// re-sent). An assistant, tool-result or compaction entry stays as its own head,
+// while a compaction rewinds past it so context returns to just before the reduction.
 func RewindTarget(entries []Entry, rowID string) (head, fill string, ok bool) {
 	for i := range entries {
 		e := entries[i]
@@ -275,7 +275,7 @@ func rowFor(e Entry) *treeRowInfo {
 	case TypeCompaction:
 		var cd CompactionData
 		if err := e.Decode(&cd); err != nil || (cd.Before == 0 && cd.After == 0) {
-			return nil // unreadable or not yet measured; nothing to label
+			return nil // unreadable or not yet measured, nothing to label
 		}
 		lbl := "compaction: " + strutil.FormatTokens(cd.Before) + " → " + strutil.FormatTokens(cd.After)
 		if cd.Summary != "" {

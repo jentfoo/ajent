@@ -32,7 +32,7 @@ type editParams struct {
 // about it, so a diagnostic can say why the text no longer matches.
 type editTarget struct {
 	Path   string      // the model-supplied path, for messages
-	Edited []lineRange // lines this session already wrote; tierFuzzy will not heal them
+	Edited []lineRange // lines this session already wrote, so tierFuzzy will not heal them
 }
 
 // editTool applies string edits to a single file, all-or-nothing. The array
@@ -53,7 +53,7 @@ type editOutcome struct {
 	after  string   // LF-space result
 	final  []byte   // bytes to write, original line endings preserved
 	notes  []string // why the result may not be what was asked for
-	// review gates the result diff; set when a tier fired, several sites were
+	// review gates the result diff. It is set when a tier fired, several sites were
 	// hit, or the apply duplicated text.
 	review bool
 	edited []lineRange // lines this apply wrote, in the rebuilt text
@@ -125,7 +125,7 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		return resultErr(err.Error()), nil
 	}
 
-	// The file is re-read here; a stale or changed file simply fails to match in applyEdits.
+	// The file is re-read here. A stale or changed file simply fails to match in applyEdits.
 	data, err := os.ReadFile(full)
 	if err != nil {
 		return resultErr("edit: " + err.Error()), nil
@@ -169,7 +169,7 @@ func decodeEditParams(raw json.RawMessage) (editParams, error) {
 	p := editParams{Path: shim.Path}
 	body := unquoteJSON(shim.Edits)
 	switch firstByte(body) {
-	case 0: // absent or null; the empty-edits check reports it
+	case 0: // absent or null, the empty-edits check reports it
 		return p, nil
 	case '{': // a lone edit where an array is declared
 		var op editOp
@@ -347,7 +347,7 @@ type matchSpan struct {
 // keep their exact line endings, with each replacement adopting the ending of
 // the line it starts on. A mixed-ending file keeps its mix outside the edits.
 func rebuild(orig, buf string, spans []matchSpan) []byte {
-	// one walk records each line's start in both spaces plus its ending;
+	// one walk records each line's start in both spaces plus its ending.
 	// normalizeToLF only deletes the \r of a CRLF pair, so bytes map one-to-one
 	// inside a line and line starts just shift by the pairs before them
 	var starts, nstarts []int
@@ -390,7 +390,7 @@ func rebuild(orig, buf string, spans []matchSpan) []byte {
 	for _, sp := range spans {
 		l := lineAt(sp.s)
 		out.WriteString(orig[last:toOrig(l, sp.s)])
-		// the replacement adopts the ending of the line it starts on; a
+		// the replacement adopts the ending of the line it starts on. A
 		// terminator-less last line borrows the one before it
 		if l == len(crlfs)-1 && !terminated && l > 0 {
 			l--

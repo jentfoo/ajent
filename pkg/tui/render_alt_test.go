@@ -253,7 +253,7 @@ func TestAltRendererDeferHistory(t *testing.T) {
 		commitText(r, "one", "two")
 		assert.Contains(t, screenAll(v), "one")
 
-		// live shrinks by one row; history re-anchors bottom-aligned.
+		// live shrinks by one row, history re-anchors bottom-aligned
 		r.setLive([]string{"❯ "}, 5, 1)
 		s := screenAll(v)
 		assert.Contains(t, s, "one")

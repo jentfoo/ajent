@@ -90,7 +90,7 @@ type respItem struct {
 }
 
 // MarshalJSON returns the captured raw item verbatim when present so a reasoning
-// block replays byte-identical; otherwise it encodes the fields.
+// block replays byte-identical. Otherwise it encodes the fields.
 func (i respItem) MarshalJSON() ([]byte, error) {
 	if len(i.Raw) > 0 {
 		return i.Raw, nil

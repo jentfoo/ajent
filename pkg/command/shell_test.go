@@ -94,7 +94,7 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 		"both staged commands must start immediately")
 
 	// budget clears the bash tool's 5s WaitDelay ceiling so a slow CI runner
-	// (throttled login-shell startup) doesn't flake; a genuine hang still fails.
+	// (throttled login-shell startup) doesn't flake, a genuine hang still failing.
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 2)
@@ -252,7 +252,7 @@ func TestStagerPrefersFullToolStart(t *testing.T) {
 
 	s, sink := newShellStager(t)
 	full := &fullSinkForShell{recordingSinkForShell: sink}
-	s.sink = full // the stager's sink is fixed at construction; swap to a fuller one
+	s.sink = full // the stager's sink is fixed at construction, swap to a fuller one
 	s.Run("echo hi", false)
 
 	require.Eventually(t, func() bool {

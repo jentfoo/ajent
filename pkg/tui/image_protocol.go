@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// cellSizeQuery asks the terminal for one cell's pixel size (CSI 16 t); the
+// cellSizeQuery asks the terminal for one cell's pixel size (CSI 16 t). The
 // reply arrives as CSI 6;<height>;<width> t on the input stream.
 const cellSizeQuery = csi + "16t"
 

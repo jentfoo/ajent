@@ -1,7 +1,7 @@
 // Package img fits user-supplied images to what vision providers accept: it
 // decodes png, jpeg, gif, webp, bmp and tiff, downscales to the inline limits
 // rather than rejecting, and re-encodes to png or jpeg. It is the only place
-// the x/image dependencies are imported; callers deal in bytes and results.
+// the x/image dependencies are imported, so callers deal in bytes and results.
 // The webp registration mirrors the one in pkg/llm, which reads image headers
 // without decoding. Decode, EXIF orientation and resampling use stdlib plus
 // golang.org/x/image/draw only.
@@ -70,7 +70,7 @@ func (r Result) Resized() bool { return r.Width != r.SrcWidth || r.Height != r.S
 
 // Prepare fits data to the inline limits: at most MaxPixels per axis and a
 // base64 encoding no longer than MaxBase64Bytes. An image already within both
-// passes through unchanged; everything else is downscaled and re-encoded until
+// passes through unchanged, and everything else is downscaled and re-encoded until
 // it fits, or ErrIrreducible when even the last rung would not. EXIF
 // orientation is applied whenever an image is re-encoded, so a camera shot
 // that needed fitting comes out upright. An animated png loses its animation
@@ -162,7 +162,7 @@ func jpegOrientation(data []byte) int {
 		return 0
 	}
 
-	// walk the segment table until the APP1 EXIF block; other APP1 payloads
+	// walk the segment table until the APP1 EXIF block, but other APP1 payloads
 	// (XMP and friends) keep the walk going
 	i := 2 // past SOI
 	for i+4 <= len(data) {

@@ -21,7 +21,7 @@ const (
 	gitFlagSort      = "--sort"
 )
 
-// readOnlyCommands are verifiably side-effect-free; a matching head is auto-allowed.
+// readOnlyCommands are verifiably side-effect-free, a matching head being auto-allowed.
 // Commands with an exec or write form (sed, git, awk, rg, sort) are not here:
 // they are verified per invocation in their own checkers instead.
 var readOnlyCommands = bulk.SliceToSet([]string{
@@ -30,7 +30,7 @@ var readOnlyCommands = bulk.SliceToSet([]string{
 	"date", "od",
 })
 
-// workspaceWriteCommand is the flag grammar of one bounded directory command;
+// workspaceWriteCommand is the flag grammar of one bounded directory command,
 // keeping the kinds separate lets an unknown flag fail closed.
 type workspaceWriteCommand struct {
 	boolFlags     []string // take no value

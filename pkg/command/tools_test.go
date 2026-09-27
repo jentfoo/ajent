@@ -18,7 +18,7 @@ func TestToolsCommand(t *testing.T) {
 	// before the first prompt, a free multi-select can enable any tool
 	t.Run("free_select_before_started", func(t *testing.T) {
 		c := newFakeConsole(t)
-		// register a couple of tools; ls is disabled by default
+		// register a couple of tools, with ls disabled by default
 		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
 		c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
 		r := NewRegistry()
@@ -45,7 +45,7 @@ func TestToolsCommand(t *testing.T) {
 		c.commands = r
 		RegisterBuiltins(r, c)
 
-		// only disabled tools offered; pick ls (index 0 of disabled slice)
+		// only disabled tools offered, pick ls (index 0 of disabled slice)
 		c.multiPicks = []fakeMultiPick{{result: []int{0}}}
 		cmd, _ := r.Get("tools")
 		require.NoError(t, cmd.Handler(t.Context(), "", c))

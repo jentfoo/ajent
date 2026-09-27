@@ -62,7 +62,7 @@ type planHarness struct {
 }
 
 // newPlanHarness wires the workflow over a real session and agent. Only the
-// picker and the UI-facing seams are stubbed; Fork is the production path.
+// picker and the UI-facing seams are stubbed. Fork is the production path.
 func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *planHarness {
 	t.Helper()
 
@@ -209,7 +209,7 @@ func TestPlanWorkflowEndToEnd(t *testing.T) {
 	require.Equal(t, []string{"drafted plan"}, h.editor)
 	assert.Contains(t, h.ctl.Status(), "awaiting plan")
 
-	// the user edits before submitting; that text is the plan of record
+	// the user edits before submitting, that text is the plan of record
 	h.prompt(t, "edited plan")
 
 	require.Len(t, h.impl.Requests(), 1)

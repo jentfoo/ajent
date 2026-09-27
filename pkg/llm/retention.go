@@ -60,7 +60,7 @@ func replayable(t ThinkingBlock, caps Capabilities) bool {
 	case DialectOpenAIResponses:
 		return t.ItemID != "" || len(t.Item) > 0
 	}
-	// a compat block with an originating field replays back to that field; this
+	// a compat block with an originating field replays back to that field. This
 	// replaces the deepseek-only replay gate once the source-field round trip lands.
 	if t.Field != "" {
 		return true

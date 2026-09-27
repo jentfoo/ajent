@@ -160,7 +160,7 @@ func TestNewTheme(t *testing.T) {
 			assert.Equal(t, "text", th.Activity.Wrap("text"))
 		}
 	})
-	// the dark palette is what every existing user sees; it must not drift
+	// the dark palette is what every existing user sees, so it must not drift
 	t.Run("dark_palette_unchanged", func(t *testing.T) {
 		th := NewTheme(Color256, DefaultPalette())
 		expected := map[string]string{

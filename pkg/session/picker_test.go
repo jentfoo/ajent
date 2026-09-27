@@ -38,7 +38,7 @@ func TestTreeRows(t *testing.T) {
 		}
 	})
 
-	// every pickable kind shows up in pre-order with a collapsed label; the session entry never does
+	// every pickable kind shows up in pre-order with a collapsed label, the session entry never doing so
 	t.Run("mixed_entry_kinds", func(t *testing.T) {
 		entries := []Entry{
 			sessionOnly("root"),
@@ -76,7 +76,7 @@ func TestTreeRows(t *testing.T) {
 			pickMsg("u2", "u1", llm.Text(llm.RoleUser, "unrelated fork")),
 			pickAssistText("a2", "u2", "the other reply"))
 
-		// head is a2; u1 and u2 are active, a1 is an abandoned fork
+		// head is a2, u1 and u2 are active, a1 is an abandoned fork
 		tree := TreeRows(forked, "a2")
 		require.Len(t, tree, 4) // u1 + (a1 | u2,a2)
 
@@ -89,7 +89,7 @@ func TestTreeRows(t *testing.T) {
 		for _, r := range tree {
 			depth[r.ID], guide[r.ID], active[r.ID] = r.Depth, r.Guide, r.Active
 		}
-		// both siblings of the fork sit at depth 1 together; the shared root stays flat
+		// both siblings of the fork sit at depth 1 together, the shared root stays flat
 		assert.Equal(t, 0, depth["u1"])
 		assert.Equal(t, 1, depth["a1"])
 		assert.Equal(t, 1, depth["u2"])
@@ -101,7 +101,7 @@ func TestTreeRows(t *testing.T) {
 		assert.Equal(t, "└── ", guide["u2"])
 		assert.Equal(t, "    ", guide["a2"])
 
-		// u2 is the last/newest sibling -> └──; a1 is not live
+		// u2 is the last/newest sibling -> └──, a1 is not live
 		assert.True(t, active["u1"] && active["u2"] && active["a2"])
 		assert.False(t, active["a1"])
 	})
@@ -145,7 +145,7 @@ func TestTreeRowLabelsAndKinds(t *testing.T) {
 		name string
 		in   Entry
 		kind RowKind
-		sub  string // substring expected in Label; empty means no row
+		sub  string // substring expected in Label, empty means no row
 	}{
 		{"user_text", pickMsg("a", "", llm.Text(llm.RoleUser, "hello world")), RowUser, "user: hello"},
 		{"assistant_text", pickAssistText("b", "", "the fix is here"), RowAssistant, "assistant: the fix"},

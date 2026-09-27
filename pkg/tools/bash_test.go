@@ -111,7 +111,7 @@ func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
 	}
 	t.Parallel()
 
-	// a subshell starts a grandchild that sleeps; on timeout the whole group
+	// a subshell starts a grandchild that sleeps. On timeout the whole group
 	// (including the grandchild) must be killed.
 	r := newBash(t, `{"command":"sleep 300 & echo $! > pid.txt; wait","timeout":1}`)
 	assert.False(t, r.res.IsError)
@@ -134,7 +134,7 @@ func TestBashMidRunCancelKillsGroupAndRecordsPartial(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	dir := t.TempDir()
-	// a TERM-trapping child proves a leader-only SIGTERM would leak it; the group
+	// a TERM-trapping child proves a leader-only SIGTERM would leak it. The group
 	// SIGKILL must take it down with the parent.
 	cmd := fmt.Sprintf(`echo started; echo $$ > %s/pid.txt; sh -c 'trap "" TERM; sleep 30'; echo finished`, dir)
 	env := toolEnv{cwd: dir, tracker: NewTracker(), policy: PathPolicy{Cwd: dir}}
@@ -246,7 +246,7 @@ func TestBashEnvironment(t *testing.T) {
 	})
 
 	// a sequence split over two writes arrives as two chunks: still no leak. The
-	// sleep keeps them separate reads; coalesced they would strip just the same.
+	// sleep keeps them separate reads, but coalesced they would strip just the same.
 	t.Run("strips_ansi_split_across_chunks", func(t *testing.T) {
 		r := newBash(t, `{"command":"printf '\\033[3'; sleep 0.2; printf '1mred\\033[m done'"}`)
 		assert.False(t, r.res.IsError)

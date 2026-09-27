@@ -184,8 +184,8 @@ when set, ends the turn cleanly with a notice once hit, not as an error. The cap
 is configurable: the `agent.maxSteps` config key (see config-design.md) is read
 once at startup; absent or non-positive means unlimited.
 
-A step counts one model reply. Recovery — a stream re-request or the overflow
-compact-retry — reruns within the step and never advances it, so `MaxSteps` and
+A step counts one model reply. Recovery, whether a stream re-request or the
+overflow compact-retry, reruns within the step and never advances it, so `MaxSteps` and
 `TurnResult.Steps` count replies, not attempts. When the cap fires with calls
 still unanswered, it fills one in with its own marker,
 `not run: the turn hit its step limit`, not `interrupted by user`: the turn was
@@ -269,8 +269,8 @@ Dispatch rules:
 - **Prompts force serial.** A `ToolSet` may implement the optional `Serializer`
   interface (`MustSerialize(calls)`); when it reports true for a batch, dispatch
   runs serially even though every tool is parallel. block-all asks read-only
-  tools too, and their dialogs must open in submission order — racing them
-  across goroutines would scramble prompt order against the calls' message
+  tools too, and their dialogs must open in submission order. Racing them across
+  goroutines would scramble prompt order against the calls' message
   order.
 - **Bounded parallelism.** A semaphore channel and a `sync.WaitGroup` cap
   in-flight calls at the host's CPU count. An `errgroup` was considered but

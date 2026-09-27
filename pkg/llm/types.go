@@ -38,7 +38,7 @@ var BlockTypes = []BlockType{
 }
 
 // Origin records which provider, dialect and model produced a message. It is
-// populated on rebuild for identity comparisons; it never reaches the transcript.
+// populated on rebuild for identity comparisons, and never reaches the transcript.
 type Origin struct {
 	Provider string
 	Dialect  Dialect

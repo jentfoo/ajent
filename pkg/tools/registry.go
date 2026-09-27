@@ -18,10 +18,10 @@ import (
 type Registry struct {
 	mu        sync.RWMutex
 	tools     []registeredTool // declaration order drives Names/Schemas
-	groups    []ToolGroup      // ordered; /tools collapses each onto one row
+	groups    []ToolGroup      // ordered, /tools collapses each onto one row
 	schema    []llm.ToolSchema // cached, invalidated by any state change
-	byName    map[string]int   // tool name -> tools index; first registration wins
-	guards    []Guard          // ordered; first non-allow wins inside Execute
+	byName    map[string]int   // tool name -> tools index, first registration wins
+	guards    []Guard          // ordered, first non-allow wins inside Execute
 	asker     Asker            // consulted on ActionAsk, nil denies
 	tracker   *Tracker         // the read tracker shared by read/write/edit, nil when none
 	sessionID string           // names the spill directory for the generic output bound
@@ -45,7 +45,7 @@ type registeredTool struct {
 	tool     agent.Tool
 	source   string // who registered it, for /tools grouping
 	state    State
-	readOnly bool // safe to expose to a sub-agent; default is not
+	readOnly bool // safe to expose to a sub-agent, default is not
 }
 
 // ToolGroup presents several physical tools as one toggleable row in /tools that
@@ -53,14 +53,14 @@ type registeredTool struct {
 // agent_list) shown once under the "subagents" label instead of three rows.
 type ToolGroup struct {
 	Name   string   // picker label, e.g. "subagents"
-	Source string   // grouping header; SourceBuiltin sorts it with the core tools
+	Source string   // grouping header, SourceBuiltin sorts it with the core tools
 	Tools  []string // member tool names, all enabled or disabled together
 }
 
 // Row is one toggleable /tools entry: a single tool name or an entire ToolGroup
 // collapsed into one row that carries every physical member.
 type Row struct {
-	Name   string   // picker label; a tool name, or the group's display name
+	Name   string   // picker label, a tool name or the group's display name
 	Source string   // grouping header (SourceBuiltin or an MCP server source)
 	Names  []string // physical tool names this row toggles
 }
@@ -83,7 +83,7 @@ func (r *Registry) Register(t agent.Tool, defaultEnabled bool) {
 
 // RegisterFrom adds t to the registry under source, enabled when defaultEnabled
 // is true. Source groups the tool in /tools (builtin, an MCP server name, an
-// extension name); order of registration drives Names and Schemas.
+// extension name). Order of registration drives Names and Schemas.
 func (r *Registry) RegisterFrom(source string, t agent.Tool, defaultEnabled bool) {
 	r.RegisterState(source, t, boolState(defaultEnabled))
 }
@@ -110,7 +110,7 @@ func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 }
 
 // RegisterGroup records g as one toggleable /tools row over its member tools.
-// Members must already be registered; the group is presentation plus shared state,
+// Members must already be registered. The group is presentation plus shared state,
 // never a registration of new tools. Duplicate names replace the earlier entry.
 func (r *Registry) RegisterGroup(g ToolGroup) {
 	r.mu.Lock()
@@ -219,7 +219,7 @@ func (r *Registry) DryRun(call agent.ToolCall) error {
 	}
 	d, ok := unwrap(rt.tool).(DryRunner)
 	if !ok {
-		return nil // cannot predict; do not skip the prompt on uncertainty
+		return nil // cannot predict, do not skip the prompt on uncertainty
 	}
 	return d.DryRun(call)
 }
@@ -249,7 +249,7 @@ func (r *Registry) MustSerialize(calls []agent.ToolCall) bool {
 			switch d := guard(context.Background(), call); d.Action {
 			case ActionAllow:
 				continue
-			default: // first non-allow wins inside Execute; an Ask is what prompts
+			default: // first non-allow wins inside Execute, an Ask is what prompts
 				return d.Action == ActionAsk
 			}
 		}
@@ -287,8 +287,8 @@ func (r *Registry) expandGroupNamesLocked(want map[string]struct{}) {
 	}
 }
 
-// SetEnabled replaces the enabled set with names. Unknown names are ignored;
-// currently enabled tools not listed become disabled. Use Enable to widen the
+// SetEnabled replaces the enabled set with names. Unknown names are ignored,
+// and currently enabled tools not listed become disabled. Use Enable to widen the
 // set within a session instead.
 func (r *Registry) SetEnabled(names []string) {
 	r.mu.Lock()
@@ -308,7 +308,7 @@ func (r *Registry) SetEnabled(names []string) {
 
 // Enable additively enables the named tools from either state, leaving others
 // untouched. Unknown names are ignored. The enabled set only widens within a
-// session, so this is the /tools path after the first prompt; SetEnabled is the
+// session, so this is the /tools path after the first prompt. SetEnabled is the
 // free-selection path before it.
 func (r *Registry) Enable(names []string) {
 	r.mu.Lock()
@@ -324,8 +324,8 @@ func (r *Registry) Enable(names []string) {
 	r.schema = nil
 }
 
-// Get returns a guard-wrapped callable tool by name. Only enabled tools answer;
-// disabled ones do not. Use Lookup when a caller needs the tool regardless of state.
+// Get returns a guard-wrapped callable tool by name. Only enabled tools answer,
+// while disabled ones do not. Use Lookup when a caller needs the tool regardless of state.
 func (r *Registry) Get(name string) (agent.Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -338,7 +338,7 @@ func (r *Registry) Get(name string) (agent.Tool, bool) {
 }
 
 // Lookup returns a guard-wrapped tool by name regardless of enable state. Use
-// Get when the call should respect the enabled set (agent-initiated calls); a
+// Get when the call should respect the enabled set (agent-initiated calls). A
 // user-explicit @dir listing or ! shell command runs through Lookup so a
 // disabled tool still serves the direct request.
 func (r *Registry) Lookup(name string) (agent.Tool, bool) {
@@ -381,7 +381,7 @@ func (r *Registry) All() []agent.Tool {
 
 // Units collapses offered tools into toggleable /tools rows: a registered group
 // whose every member is present in offered becomes one row carrying all members,
-// so the sub-agent trio toggles together; otherwise each tool stays its own row.
+// so the sub-agent trio toggles together. Otherwise each tool stays its own row.
 // A partially-offered group (e.g. widen mode after a non-atomic change) falls back
 // to per-member rows rather than silently enabling missing tools.
 func (r *Registry) Units(offered []agent.Tool) []Row {
@@ -417,7 +417,7 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 		case g == nil: // a plain tool stands alone
 			rows = append(rows, Row{Name: name, Source: sourceOf[name], Names: []string{name}})
 			seen[name] = true
-		case covered[g]: // already emitted as one row; skip its remaining members
+		case covered[g]: // already emitted as one row, skip its remaining members
 		default:
 			members := g.Tools
 			if allPresent(members, present) {
@@ -493,7 +493,7 @@ func (r *Registry) AllNames(source string) []string {
 }
 
 // MarkReadOnly records that the named tools are safe to publish read-only. Unknown
-// names are ignored; the mark lives on the (source, tool) pair and is dropped with
+// names are ignored. The mark lives on the (source, tool) pair and is dropped with
 // an Unregister. The sub-agent bridge filters its published set on this metadata.
 func (r *Registry) MarkReadOnly(names []string) {
 	want := bulk.SliceToSet(names)
@@ -594,7 +594,7 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 		if d.Action == ActionAllow {
 			continue
 		}
-		// Ask consults the asker when registered; an unresolved or re-ask result
+		// Ask consults the asker when registered. An unresolved or re-ask result
 		// refuses like a plain denial.
 		if d.Action != ActionAsk || asker == nil {
 			return denied(d.Reason)
@@ -618,7 +618,7 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 // denied builds an error result carrying the denial's reason. Reasons are already
 // self-framing ("refused ...", "permission required ..."), so no prefix is added.
 func denied(reason string) (agent.ToolResult, error) {
-	if strings.TrimSpace(reason) == "" { // guards always carry a reason; stay safe anyway
+	if strings.TrimSpace(reason) == "" { // guards always carry a reason, stay safe anyway
 		reason = "permission required"
 	}
 	return agent.ToolResult{
@@ -628,8 +628,8 @@ func denied(reason string) (agent.ToolResult, error) {
 }
 
 // SelfBounding marks a tool that bounds its own model-visible output (the
-// built-ins do; read pages with offset instead of spilling). The registry
-// wraps every other registered tool with the generic bound; the unexported
+// built-ins do, reading pages with offset instead of spilling). The registry
+// wraps every other registered tool with the generic bound. The unexported
 // method keeps the marker pkg-local.
 type SelfBounding interface {
 	agent.Tool
@@ -655,7 +655,7 @@ func (b *boundTool) Mode() agent.ExecutionMode {
 }
 
 // Execute delegates and then bounds the result's text content. Content that is
-// not plain text (images, empty) passes through untouched; Display, Details,
+// not plain text (images, empty) passes through untouched. Display, Details,
 // IsError and EndTurn are preserved as the inner tool set them.
 func (b *boundTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	res, err := b.t.Execute(ctx, c, out)
@@ -664,7 +664,7 @@ func (b *boundTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Out
 	}
 	joined, ok := res.Content.AsText()
 	if !ok {
-		return res, nil // not boundable without rewriting meaning; leave it whole
+		return res, nil // not boundable without rewriting meaning, leave it whole
 	}
 	bounded, truncated := truncateOutput(b.sessionID, b.t.Name(), joined, OtherLimit(), "")
 	if !truncated {

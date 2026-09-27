@@ -23,7 +23,7 @@ type Question struct {
 	Options []Option
 }
 
-// Answer is a question's outcome; Declined is set when the user pressed Esc,
+// Answer is a question's outcome. Declined is set when the user pressed Esc,
 // Chat when they typed the reply in Text instead of choosing an option.
 type Answer struct {
 	Text     string
@@ -33,7 +33,7 @@ type Answer struct {
 }
 
 // Ask puts a question to the user, queueing behind any interaction already
-// waiting. A declined answer is a normal result, not an error; ErrNoUI means no
+// waiting. A declined answer is a normal result, not an error. ErrNoUI means no
 // terminal can reach the user, so the caller must decide the policy itself.
 func (u *UI) Ask(ctx context.Context, q Question) (Answer, error) {
 	u.mu.Lock()
@@ -44,7 +44,7 @@ func (u *UI) Ask(ctx context.Context, q Question) (Answer, error) {
 	}
 	st := &questionState{text: q.Text, options: slices.Clone(q.Options), chatIndex: -1}
 	if len(st.options) > 0 && u.mode != ModePlain {
-		// plain mode has no row to type into; there any non-numeric line is the reply
+		// plain mode has no row to type into, so there any non-numeric line is the reply
 		st.chatIndex = len(st.options)
 		st.options = append(st.options, Option{Label: chatOptionLabel, Detail: chatOptionDetail})
 	}
@@ -71,7 +71,7 @@ type questionState struct {
 	chatting  bool // typing a reply instead of choosing an option
 	cursor    int  // option cursor when options are offered
 	answer    editor
-	width     int  // last render width; line navigation needs it
+	width     int  // last render width, line navigation needs it
 	declined  bool // Esc: declined to answer, a normal result
 }
 
@@ -92,8 +92,8 @@ func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 			list, hidden = s.optionBlock(t, width, budget-1)
 		}
 		out = append(out, list...)
-		// under two rows there is no room for both an option and its marker; the
-		// option reads first so a truncated list stays navigable
+		// under two rows there is no room for both an option and its marker. The
+		// option reads first so a truncated list stays navigable.
 		if hidden > 0 && len(out) < maxRows {
 			out = append(out, t.Dim.Wrap(selectIndent+moreLabel(hidden)))
 		}
@@ -170,7 +170,7 @@ func (s *questionState) optionBlock(t Theme, width, budget int) ([]string, int) 
 	return out, len(s.options) - (end - start)
 }
 
-// textLines splits the prompt into rows; blank lines are dropped so a long
+// textLines splits the prompt into rows. Blank lines are dropped so a long
 // question does not burn live-block height on empty separators.
 func (s *questionState) textLines() []string {
 	lines := splitLines(s.text)
@@ -229,12 +229,12 @@ func (s *questionState) key(k key) (bool, error) {
 	case keyWordRight:
 		s.answer.WordRight()
 	case keyUp:
-		// move up a visual row; already on the first, jump to the buffer start
+		// move up a visual row, already on the first jump to the buffer start
 		if !s.answer.Up(s.width) && s.answer.pos > 0 {
 			s.answer.pos = 0
 		}
 	case keyDown:
-		// move down a visual row; already on the last, jump to the buffer end
+		// move down a visual row, already on the last jump to the buffer end
 		if !s.answer.Down(s.width) && s.answer.pos < len(s.answer.cells) {
 			s.answer.pos = len(s.answer.cells)
 		}
@@ -263,7 +263,7 @@ func (s *questionState) choose(i int) bool {
 
 func (s *questionState) summary(t Theme) string {
 	if s.declined {
-		// a declined ask is worth recording; an answered one echoes nothing because
+		// a declined ask is worth recording. An answered one echoes nothing because
 		// the caller logs its own outcome.
 		return t.Dim.Wrap(noticeMarker + " question declined")
 	}

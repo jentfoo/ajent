@@ -9,10 +9,10 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 )
 
-// Writer appends entries to one JSONL file with line-atomic writes; Sync fsyncs at turn boundaries.
+// Writer appends entries to one JSONL file with line-atomic writes, fsyncing at turn boundaries.
 type Writer struct {
 	f      *os.File // nil for Discard
-	path   string   // transcript file; empty for Discard, drives HEAD persistence
+	path   string   // transcript file, empty for Discard, drives HEAD persistence
 	head   string   // last appended entry id (or the rewind target after SetHead)
 	closed bool     // further appends error after Close
 
@@ -105,7 +105,7 @@ func (w *Writer) Head() string {
 }
 
 // SetHead rewinds to id so later appends branch from it. The transcript keeps
-// both histories; nothing is deleted, and the new tip becomes the persisted
+// both histories and nothing is deleted, while the new tip becomes the persisted
 // cursor. An empty id starts a new root and drops the cursor instead.
 func (w *Writer) SetHead(id string) {
 	w.mu.Lock()
@@ -117,7 +117,7 @@ func (w *Writer) SetHead(id string) {
 }
 
 // persistHeadLocked records the branch cursor so resume continues from here.
-// Caller holds the lock; no-op on Discard writers whose path is empty.
+// Caller holds the lock, and it is a no-op on Discard writers whose path is empty.
 func (w *Writer) persistHeadLocked() error {
 	if w.path == "" {
 		return nil
@@ -139,7 +139,7 @@ func (w *Writer) Sync() error {
 	return errors.Join(w.persistHeadLocked(), w.f.Sync())
 }
 
-// Close releases the underlying file. Idempotent; safe on Discard writers.
+// Close releases the underlying file. Idempotent and safe on Discard writers.
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()

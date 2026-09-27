@@ -45,7 +45,7 @@ func main() {
 	for i := range tools {
 		name := fmt.Sprintf("tool_%02d", i)
 		h := func(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if slow { // block until the client cancels; used for the timeout test
+			if slow { // block until the client cancels, used for the timeout test
 				<-ctx.Done()
 				return &mcp.CallToolResult{}, nil
 			}

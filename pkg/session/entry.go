@@ -31,7 +31,7 @@ func Version() int { return sessionVersion }
 // Entry is one line of the transcript, linked to its parent for branching.
 type Entry struct {
 	ID       string          `json:"id"`
-	ParentID string          `json:"parentId,omitempty"` // previous head this entry branches from; empty = root
+	ParentID string          `json:"parentId,omitempty"` // previous head this entry branches from, empty = root
 	Type     Type            `json:"type"`
 	TS       int64           `json:"ts"`             // unix milliseconds
 	Data     json.RawMessage `json:"data,omitempty"` // opaque payload whose shape follows Type

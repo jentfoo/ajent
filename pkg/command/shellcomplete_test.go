@@ -51,7 +51,7 @@ func TestShellComplete(t *testing.T) {
 		assert.Empty(t, items)
 	})
 
-	// a bare ! offers nothing; every command on the system is not a useful list
+	// a bare ! offers nothing, every command on the system is not a useful list
 	t.Run("empty_command_token", func(t *testing.T) {
 		comp := newShellCompleter(t, "pkg")
 

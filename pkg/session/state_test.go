@@ -160,7 +160,7 @@ func TestStateLedger(t *testing.T) {
 	})
 
 	// after a compaction, the rebuilt ledger's context terms reflect only surviving
-	// messages; never the entries dropped by a cut. A reported turn before the cut must not inflate Used on
+	// messages, never the entries dropped by a cut. A reported turn before the cut must not inflate Used on
 	// resume/rewind, or threshold auto-compaction would fire immediately even though context was just reduced.
 	t.Run("ignores_summarized_away_messages", func(t *testing.T) {
 		branch := append([]Entry(nil),
@@ -181,7 +181,7 @@ func TestStateLedger(t *testing.T) {
 		stFull, _ := State(fullBranch, resolveModel)
 
 		// skipping summarized-away entries must lower Used below what the full (uncut)
-		// ledger reports; without the fix both would carry a0's 4000+1000 exact terms.
+		// ledger reports, without which both would carry a0's 4000+1000 exact terms.
 		assert.Less(t, stCompact.Tokens.Context().Used, stFull.Tokens.Context().Used)
 	})
 

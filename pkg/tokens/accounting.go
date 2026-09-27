@@ -11,7 +11,7 @@ import (
 //
 // Used = promptExact + outputExact + factor*(pending+live+composing+staged+submitted),
 // where the estimate terms are raw and scaled by the calibration factor at read
-// time; they reset on each Response.
+// time. They reset on each Response.
 type Accounting struct {
 	mu sync.Mutex
 
@@ -24,7 +24,7 @@ type Accounting struct {
 	live        float64 // raw estimate of the response currently streaming
 	composing   float64 // raw estimate of text being typed but not yet sent
 	staged      float64 // raw estimate of `!` shell output waiting to ride the next prompt
-	submitted   float64 // sent text not yet appended to a message; cleared when it lands
+	submitted   float64 // sent text not yet appended to a message, cleared when it lands
 	base        float64 // constant request overhead: system prompt + tool schemas
 
 	total      llm.Usage            // cumulative billed input/output across the session
@@ -50,7 +50,7 @@ func (a *Accounting) SetModel(m llm.Model) {
 
 	a.model = m
 	a.promptExact, a.outputExact = 0, 0
-	a.pending, a.live = 0, 0 // composing and staged stay; neither is a context term yet
+	a.pending, a.live = 0, 0 // composing and staged stay, neither is a context term yet
 }
 
 // SetWindow rebases the ledger onto m's window and reserve, keeping every context
@@ -96,7 +96,7 @@ func (a *Accounting) SetSubmit(est int) {
 
 // SetBase replaces the estimate of the constant request overhead: the system
 // prompt and tool schemas that ride with every request but carry no provider
-// report of their own. Messages are excluded; callers account those as they append.
+// report of their own. Messages are excluded. Callers account those as they append.
 func (a *Accounting) SetBase(est int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -182,7 +182,7 @@ func (a *Accounting) Stream(est int) {
 }
 
 // Rebase replaces the exact context term with a count from the provider's
-// tokenizer, clearing both estimate buckets; used covers everything appended so far.
+// tokenizer, clearing both estimate buckets. Used covers everything appended so far.
 func (a *Accounting) Rebase(used int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -319,7 +319,7 @@ func (a *Accounting) ByModel() map[string]llm.Usage {
 	return out
 }
 
-// Child returns a nested ledger sharing this session's calibrator; its spend rolls
+// Child returns a nested ledger sharing this session's calibrator. Its spend rolls
 // up to the parent while it keeps its own context.
 func (a *Accounting) Child() *Accounting {
 	a.mu.Lock()

@@ -1057,7 +1057,7 @@ func TestAnthropicEmptySignatureReplay(t *testing.T) {
 	})
 
 	t.Run("demoted_to_text_when_it_reaches_blocks", func(t *testing.T) {
-		// retention normally strips it first; if a block gets through it demotes
+		// retention normally strips it first. If a block gets through it demotes
 		// to visible text rather than vanishing
 		blocks, err := anthropicBlocks(BlockList{ThinkingBlock{Text: "orphaned"}}, anthropic(), nil, make(map[string]bool))
 		require.NoError(t, err)
@@ -1167,7 +1167,7 @@ func TestThinkingBudget(t *testing.T) {
 	})
 
 	t.Run("unsupported_level_clamps_down", func(t *testing.T) {
-		// xhigh is opt-in; without a map entry it clamps to high before the budget lookup
+		// xhigh is opt-in, without a map entry it clamps to high before the budget lookup
 		r := req(LevelXHigh, 0, 8000)
 		assert.Equal(t, r.Model.Caps.Budgets[LevelHigh],
 			thinkingBudget(r.Model.Caps, LevelHigh, r.Reasoning.Budget, 64000))

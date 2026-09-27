@@ -95,9 +95,9 @@ entry.
 The user gate at **AwaitingPlan** is the point of the workflow: `dev_implement`
 hands off to nobody. The plan lands in the editor to read, edit, rewrite or
 abandon, and the next submitted prompt is what the implementor receives. Only a
-non-injected (typed) submission clears the gate; injected context — a staged `!`
-flush, a permission-barrier note, a sub-agent completion steer — is never
-captured as approval, mirroring the Planning phase guard.
+non-injected (typed) submission clears the gate; injected context is never
+captured as approval, whether a staged `!` flush, a permission-barrier note or
+a sub-agent completion steer. This mirrors the Planning phase guard.
 
 **The implementor's report always reaches the reviewer.** The reviewer sees none
 of the implementation branch, so `dev_review`'s `summary` is required. An empty

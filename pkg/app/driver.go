@@ -34,7 +34,7 @@ const (
 // Driver runs the real agent loop: it builds an Agent over the registry and
 // drives turns from submitted messages, steering mid-turn input into the running
 // turn rather than starting a second one. sessMode decides whether this run starts
-// fresh or resumes a saved transcript; sessTarget names it for the id and name modes.
+// fresh or resumes a saved transcript, and sessTarget names it for the id and name modes.
 func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, args []string, scope ToolScope) string {
 	providers := llm.NewProviders(reg)
 	rc := llm.ReasoningFrom(set.Settings().Reasoning, active)
@@ -48,7 +48,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// can open the context-tree picker and rewind onto an earlier point.
 	var modelKey string
 	if active.ID != "" {
-		modelKey = active.Key() // a modelless start stays unstamped; "/" would warn on resume
+		modelKey = active.Key() // a modelless start stays unstamped, "/" would warn on resume
 	}
 	rec := newSession(ui, sessMode, sessTarget, modelKey)
 	if rec == nil {
@@ -72,11 +72,11 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	// the compactor is wired lazily so the agent options can close over it before
-	// the *Agent it needs exists; it is assigned once, right after agent.New.
+	// the *Agent it needs exists, and it is assigned once, right after agent.New.
 	var comp *compactor
 	env := agent.DetectEnvironment()
 	// user-global instructions layer before the project's, so the more specific
-	// cwd file comes later in context; an unresolvable home is skipped silently.
+	// cwd file comes later in context. An unresolvable home is skipped silently.
 	globalDir, _ := config.Home()
 	proj, perr := agent.LoadProjectInstructions(globalDir, env.Cwd)
 	if perr != nil {
@@ -86,14 +86,14 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		Sinks:               []agent.Sink{sink},
 		Env:                 env,
 		ProjectInstructions: proj,
-		SystemPrompt:        set.Settings().Agent.SystemPrompt, // config or --system; replaces default guidance
+		SystemPrompt:        set.Settings().Agent.SystemPrompt, // config or --system, replaces default guidance
 		Tools:               toolsReg,
 		Provider: func(m llm.Model) (llm.Provider, error) {
 			return providers.ProviderFor(m)
 		},
 		Compact: func(ctx context.Context, reason agent.CompactReason) (bool, error) {
 			if comp == nil {
-				return false, nil // recording is off; nothing to compact
+				return false, nil // recording is off, nothing to compact
 			}
 			return comp.run(ctx, reason, "")
 		},
@@ -111,7 +111,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		opts.OnMessage = []func(agent.MessageInfo){rec.rec.Message}
 		rec.rebuild(set, ui, reg, st, toolsReg)
 	}
-	// a resumed session restores its enabled tool set; unknown names are ignored.
+	// a resumed session restores its enabled tool set, unknown names are ignored.
 	if toolsReg != nil && len(st.Tools) > 0 {
 		toolsReg.SetEnabled(st.Tools)
 	}
@@ -129,7 +129,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 	}
 	// once a submitted prompt and everything behind it lands in state, pending owns
-	// its tokens; the submit bucket must clear so they are never counted twice.
+	// its tokens. The submit bucket must clear so they are never counted twice.
 	settled := func() {
 		if st.Tokens != nil && len(editSinks) > 0 {
 			st.Tokens.SetSubmit(0)
@@ -158,7 +158,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// take the line and hand it back to a still-held boundary when it releases.
 	gate.status = hints.Line().Set
 	// the editor's in-progress text feeds accounting so the context bar grows as you
-	// type or paste, then clears once submitted (the buffer empties); it is also the
+	// type or paste, then clears once submitted (the buffer empties), and it is also the
 	// typing signal the boundary hold reads.
 	ui.SetOnEdit(func(text string) {
 		gate.edit(text)
@@ -204,7 +204,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		})
 		for _, t := range sag.Tools() {
 			// builtin source so /tools sorts the trio up front with core tools
-			toolsReg.RegisterFrom(tools.SourceBuiltin, t, true) // enabled by default; /tools toggles
+			toolsReg.RegisterFrom(tools.SourceBuiltin, t, true) // enabled by default, /tools toggles
 		}
 		// the trio toggles together in /tools under one "subagents" row.
 		toolsReg.RegisterGroup(tools.ToolGroup{
@@ -223,7 +223,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	turnRec := &turnRecorder{}
 	opts.Sinks = append(opts.Sinks, turnRec)
 
-	// /init's write lands inside a normal turn; this watches for it so the driver
+	// /init's write lands inside a normal turn, and this watches for it so the driver
 	// can say the new file only applies on the next start.
 	initSeen := &initWatch{notify: ui.Notify}
 	opts.Sinks = append(opts.Sinks, initSeen)
@@ -235,7 +235,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	opts.AwaitInput = gate.hold
 	// OnToolBatch hands each step's calls (in message order) to sub-agent id
 	// reservation and permission prefetch. The barrier is built later, so it is
-	// reached through a forward reference assigned in its setup block below; nil
+	// reached through a forward reference assigned in its setup block below, and nil
 	// until then means no classification to prefetch.
 	var batchPrefetch func(context.Context, []agent.ToolCall)
 	opts.OnToolBatch = func(ctx context.Context, calls []agent.ToolCall) {
@@ -275,7 +275,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	started := len(st.Messages) > 0
 
 	// seed the constant request overhead (system + AGENTS.md) so the bar is honest
-	// from startup; tool schemas join only once the block is committed, since until
+	// from startup. Tool schemas join only once the block is committed, since until
 	// then /tools can still take one away. The pump re-seeds at the first prompt,
 	// when MCP servers have connected and their schemas are in the registry, and
 	// Agent.stream's own SetBase replaces this floor once a turn actually starts.
@@ -296,7 +296,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		rec.resumeAuto = comp.resumeAuto
 	}
 
-	// the prompt is at rest until a turn starts; double-Esc rewinds from here
+	// the prompt is at rest until a turn starts, double-Esc rewinds from here
 	ui.SetIdle(true)
 
 	showReasoningIndicator(ui, set, st)
@@ -323,12 +323,12 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			Status:    func(text, short string) { ui.SetStatusSegment(segment(segMCP, text, short)) },
 		})
 		// dial every server in the background now so spawn + discovery hide behind
-		// typing; LoadOnFirstMessage waits for these before a prompt is built.
+		// typing. LoadOnFirstMessage waits for these before a prompt is built.
 		mgr.Preload()
 	}
 
 	// the permission barrier gates every tool call through static classification and
-	// an approval dialog. Read-only work runs free; writes prompt unless allowed or
+	// an approval dialog. Read-only work runs free, but writes prompt unless allowed or
 	// blocked by mode. It starts from the resolved config default (a resume's session
 	// override included, since rebuild seeded it) so a restart restores the mode.
 	var barrier *permit.Barrier
@@ -340,7 +340,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 		}
 		// a CLI permission flag overrides the configured default and any resumed
-		// session setting for this invocation only; it never persists.
+		// session setting for this invocation only, it never persists.
 		switch scope {
 		case ToolScopeAllowAll:
 			barrier.SetMode(permit.ModeAllowAll)
@@ -348,14 +348,14 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			barrier.SetMode(permit.ModeAuto)
 		}
 		showPermissionIndicator(ui, barrier)
-		// the prompter and noter adapt tui and agent onto permit's narrow interfaces;
+		// the prompter and noter adapt tui and agent onto permit's narrow interfaces,
 		// note injection steers the running turn without stopping it.
 		barrier.SetPrompter(promptAdapter{ui})
 		barrier.SetNoter(func(note string) {
 			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
 		})
 		// auto mode classifies unverifiable shell commands with a fresh-context model
-		// call, cached per exact command; the verdict never enters the session.
+		// call, cached per exact command, and the verdict never enters the session.
 		// auto+write's writable roots: the gate path-scopes write/edit against them and
 		// the classifier prompt names the same two, so both judge by one rule.
 		wcwd, wtmp := config.Cwd(), os.TempDir()
@@ -370,7 +370,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		barrier.SetWriteRoots(wcwd, wtmp)
 		barrier.SetNotice(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 		// config-declared safe commands (exact MCP tool names or verbatim bash lines)
-		// auto-allow as read-only in allow-read/auto; write/edit can never be listed.
+		// auto-allow as read-only in allow-read/auto, but write/edit can never be listed.
 		barrier.SetSafeCommands(set.Settings().Permissions.SafeCommands)
 		// config-declared denied commands refuse outright without prompting, every mode.
 		barrier.SetDeniedCommands(set.Settings().Permissions.DeniedCommands)
@@ -387,13 +387,13 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		toolsReg.AddGuard(barrier.Guard())
 		toolsReg.SetAsker(barrier.Asker())
 		// a batch's prompt-classified calls are classified concurrently ahead of
-		// their dialogs, so later commands in the batch resolve fast; an abort cancels.
+		// their dialogs, so later commands in the batch resolve fast, and an abort cancels.
 		batchPrefetch = barrier.Prefetch
 	}
 
 	// the command registry, shell stager and @ expander own the single dispatch path
-	// for submitted lines. Commands run inline; shell lines stage and flush ahead of
-	// the next prompt; prompts expand @ refs and steer the agent.
+	// for submitted lines. Commands run inline. Shell lines stage and flush ahead of
+	// the next prompt. Prompts expand @ refs and steer the agent.
 	cmds := command.NewRegistry()
 	stager := command.NewStager(toolsReg, sink)
 	// `!` output is context the next prompt will carry, so the bar counts it from
@@ -414,7 +414,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		started: &started, quit: quit, permit: barrier,
 	}
 	console.refreshBase = func() {
-		// BaseEstimate reports 0 while a turn owns State; that turn's own SetBase
+		// BaseEstimate reports 0 while a turn owns State, and that turn's own SetBase
 		// picks a widened tool block up at its next step, so skip rather than zero it
 		if est := ag.BaseEstimate(started); est > 0 {
 			st.Tokens.SetBase(est)
@@ -432,13 +432,13 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		console.sess = rec
 		console.comp = comp
 	}
-	// the plan workflow needs a transcript to branch and a registry to scope;
+	// the plan workflow needs a transcript to branch and a registry to scope,
 	// without either it is simply absent and nothing else changes.
 	ctl := newPlanController(planDeps{
 		rec: rec, ag: ag, reg: reg, st: st, ui: ui, console: console, toolsReg: toolsReg, q: q,
 	})
 	hooks := planHooksFor(ctl, turnRec)
-	// the survey needs the tool registry to run read and agent_* through; without
+	// the survey needs the tool registry to run read and agent_* through. Without
 	// one /init is simply absent, like the plan workflow without a transcript.
 	ictl := newInitController(initDeps{
 		cwd: config.Cwd(), toolsReg: toolsReg, sink: sink, ag: ag,
@@ -452,7 +452,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		cmds.Register(c)
 	}
 	if ctl != nil && comp != nil {
-		// automatic compaction inside a phase keeps its own focus; an explicit
+		// automatic compaction inside a phase keeps its own focus, but an explicit
 		// /compact <instructions> still wins.
 		comp.focus = ctl.Focus
 	}
@@ -469,7 +469,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		showPermissionIndicator(ui, barrier)
 		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
 		// record a session override so Explain and Settings report (session) and a
-		// resume restores it; the config file is never rewritten.
+		// resume restores it. The config file is never rewritten.
 		_ = console.SetSessionSetting("permissions.mode", m.String())
 	}
 	watchControls(ui, hints, ag, q, stager, ictl, quit, onModeCycle)
@@ -490,11 +490,11 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
 
 	// Ctrl+R and ↑/↓ recall this workspace's typed lines merged with recorded
-	// prompts; every submitted line also lands in the editor-history file now.
+	// prompts. Every submitted line also lands in the editor-history file now.
 	var hist *session.EditorHistory
 	if store := promptStore(rec); store != nil {
 		hist, _ = session.NewEditorHistory(store, config.Cwd(), secretPrefix)
-		defer hist.Compact() // bounded rewrite at exit; last writer wins under concurrency
+		defer hist.Compact() // bounded rewrite at exit, last writer wins under concurrency
 		idx := session.NewRecallIndex(store, config.Cwd(), hist)
 		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
 	}
@@ -580,7 +580,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		wg.Wait()
 	}()
 
-	// an abandoned session with no conversation is worthless to resume; drop it and
+	// an abandoned session with no conversation is worthless to resume, drop it and
 	// return empty so main skips the "to resume this session" hint.
 	finish := func(r *sessRec) string {
 		if r != nil && r.empty() {
@@ -600,7 +600,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			line := command.ParseLine(msg)
 			var blocks []llm.Block
 			if line.Kind == command.KindPrompt {
-				// image tokens become blocks; the recorded line keeps them, so
+				// image tokens become blocks, and the recorded line keeps them, so
 				// recall restores the text an image rode in on. Orphaned tokens
 				// (slot consumed earlier) drop here with a notice.
 				var notices []string
@@ -612,7 +612,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			if line.Kind == command.KindCommand {
 				hist.AppendHidden(msg) // slash commands stay durable yet excluded from ↑/↓ and Ctrl+R
 			} else {
-				hist.Append(msg) // every prompt and !shell line recorded for recall; nil-safe
+				hist.Append(msg) // every prompt and !shell line recorded for recall, nil-safe
 			}
 			switch line.Kind {
 			case command.KindShell:
@@ -666,7 +666,7 @@ func watchControls(ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue,
 }
 
 func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
-	// armed is when the first Ctrl+C landed; quitHint fires to retire the hint
+	// armed is when the first Ctrl+C landed, and quitHint fires to retire the hint
 	// that advertises the window, keeping the gesture and the hint the same
 	// length. The window is measured from armed, not from the timer, so a press
 	// arriving as the timer fires cannot lose the arm to select's coin flip.
@@ -737,7 +737,7 @@ func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *
 					continue
 				}
 				if !armed.IsZero() && time.Since(armed) < doublePressWindow { // inside the promised window
-					// teardown still has to run; say so rather than leaving the
+					// teardown still has to run, say so rather than leaving the
 					// "again to quit" hint up, which reads as a press that missed
 					hints.Request("quitting…", "")
 					close(quit)

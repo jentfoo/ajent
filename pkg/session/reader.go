@@ -8,7 +8,7 @@ import (
 )
 
 // Read parses every complete line of a transcript into entries, tolerating
-// garbage. A trailing partial write is skipped silently; an unparseable middle
+// garbage. A trailing partial write is skipped silently, while an unparseable middle
 // line becomes a warning and never makes the session unopenable. Only a newer
 // major format version is a hard error.
 func Read(path string) ([]Entry, []string, error) {
@@ -35,7 +35,7 @@ func Read(path string) ([]Entry, []string, error) {
 				warns = append(warns, fmt.Sprintf("line %d: %s", n, warn))
 			}
 		} else if rerr == nil && len(line) > 0 {
-			break // a final line with no newline is a partial write; skip silently
+			break // a final line with no newline is a partial write, skip silently
 		}
 		if rerr != nil {
 			break // EOF or read error
@@ -70,7 +70,7 @@ func versionErr(entries []Entry) error {
 }
 
 // Branch returns the chain from head back to its root by walking parentID through an
-// id index. It is the only read path anything else uses; never raw file order.
+// id index. It is the only read path anything else uses, never raw file order.
 func Branch(entries []Entry, head string) []Entry {
 	if head == "" || len(entries) == 0 {
 		return nil

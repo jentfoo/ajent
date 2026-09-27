@@ -15,7 +15,7 @@ const (
 	// minThinkingBudget is the smallest budget the Messages API accepts.
 	minThinkingBudget = 1024
 	// betaInterleavedThinking enables interleaved thinking, which streams each
-	// thought as it happens; without it thoughts arrive only at message_stop.
+	// thought as it happens. Without it thoughts arrive only at message_stop.
 	betaInterleavedThinking = "interleaved-thinking-2025-05-14"
 	// betaFineGrainedTools streams tool input arguments in smaller deltas when
 	// eager streaming is off.
@@ -137,7 +137,7 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 		maxTokens = req.Model.MaxOutput
 	}
 	// the thinking budget eats into max_tokens, so it is inflated to keep a full
-	// answer window; adaptive models replace the budget with an effort instead
+	// answer window. Adaptive models replace the budget with an effort instead.
 	var budget int
 	if on && !caps.ForceAdaptiveThinking {
 		maxTokens += levelBudgetFor(req, level)
@@ -304,7 +304,7 @@ func anthropicMessages(req Request, caps Capabilities, deferred map[string]struc
 
 // anthropicBlocks converts content blocks to their wire form. deferred names the
 // tools offered load-on-demand and loaded tracks which have already been referenced
-// this request; both are unused for providers without tool references.
+// this request. Both are unused for providers without tool references.
 func anthropicBlocks(blocks BlockList, caps Capabilities, deferred map[string]struct{},
 	loaded map[string]bool) ([]antBlock, error) {
 	out := make([]antBlock, 0, len(blocks))
@@ -480,7 +480,7 @@ func anthropicDeferredNames(tools []ToolSchema, caps Capabilities) map[string]st
 }
 
 // anthropicTools converts tool schemas. Strict tools are rewritten to the strict
-// subset when supported; deferred tools offer defer_loading for later references.
+// subset when supported, and deferred tools offer defer_loading for later references.
 func anthropicTools(tools []ToolSchema, caps Capabilities, deferred map[string]struct{}) []antTool {
 	out := make([]antTool, len(tools))
 	for i, t := range tools {
@@ -702,7 +702,7 @@ func (s *anthropicStream) onBlockStart(ev antEvent) []Event {
 	}
 	s.blocks[ev.Index] = b
 
-	// interleaved thinking seeds a partial signature at start; deltas append to it
+	// interleaved thinking seeds a partial signature at start, and deltas append to it
 	if ev.ContentBlock.Signature != nil {
 		b.signature = *ev.ContentBlock.Signature
 	}
@@ -770,8 +770,8 @@ func (s *anthropicStream) onMessageDelta(ev antEvent) []Event {
 	if ev.Usage == nil {
 		return nil
 	}
-	// every report covers the whole response; thinking and cache numbers may
-	// arrive only here, so what message_start reported must survive
+	// every report covers the whole response. Thinking and cache numbers may
+	// arrive only here, so what message_start reported must survive.
 	s.usage.Merge(ev.Usage.toUsage())
 	return []Event{{Type: EventUsage, Usage: s.usage}}
 }

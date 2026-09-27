@@ -11,7 +11,7 @@ import (
 type userInitiatedKey struct{}
 
 // WithUserInitiated returns ctx marked as carrying a user-initiated call. The
-// stager marks its context; the permit guard reads it to skip gating.
+// stager marks its context, and the permit guard reads it to skip gating.
 func WithUserInitiated(ctx context.Context) context.Context {
 	return context.WithValue(ctx, userInitiatedKey{}, true)
 }
@@ -38,7 +38,7 @@ type Decision struct {
 }
 
 // Guard vets a tool call before it runs. The permission layer registers the
-// barrier; core registers none by default so an agent runs unguarded unless configured.
+// barrier, while core registers none by default so an agent runs unguarded unless configured.
 type Guard func(ctx context.Context, call agent.ToolCall) Decision
 
 // Allow is a guard that always permits its calls.

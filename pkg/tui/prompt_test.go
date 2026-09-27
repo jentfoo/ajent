@@ -181,7 +181,7 @@ func TestPickStateRows(t *testing.T) {
 		s.refilter()
 
 		rows, _, _ := s.rows(th, 40, 6)
-		require.Len(t, rows, 3) // header and filter plus the no-matches line; it fits the cap
+		require.Len(t, rows, 3) // header and filter plus the no-matches line, it fits the cap
 		assert.Contains(t, strutil.StripANSI(rows[2]), "no matches")
 	})
 }
@@ -292,7 +292,7 @@ func TestUIPickerCopy(t *testing.T) {
 		first, ok := u.CopySelection()
 		require.True(t, ok)
 
-		// navigate to row 1 and press ctrl+x again; resolve immediately.
+		// navigate to row 1 and press ctrl+x again, resolve immediately
 		press(t, pw, "\x1b[B")
 		waitFor(t, u, v, "> agent: hi")
 		press(t, pw, "\x18")
@@ -300,7 +300,7 @@ func TestUIPickerCopy(t *testing.T) {
 		second, ok := u.CopySelection()
 		require.True(t, ok)
 
-		// the two resolutions stayed distinct; a driver that re-resolved at write
+		// the two resolutions stayed distinct. A driver that re-resolved at write
 		// time (after both presses and navigation) would collapse them to row 1.
 		assert.Equal(t, "hello world", first)
 		assert.Equal(t, "hi there", second)

@@ -51,7 +51,7 @@ func (r *statusRecorder) last() string {
 	return r.calls[len(r.calls)-1]
 }
 
-// newTypingGate builds a gate with short windows so tests stay deterministic; the
+// newTypingGate builds a gate with short windows so tests stay deterministic, and the
 // idle window is wide by default so only an explicit release or cancel ends a hold.
 func newTypingGate() *typingGate {
 	return &typingGate{
@@ -193,7 +193,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.handoff = time.Hour
 
 		// the pump may resolve a submitted line before the async empty edit is
-		// delivered; that late clear must not arm a fresh handoff
+		// delivered, that late clear must not arm a fresh handoff
 		g.edit("hello")
 		g.submitted()
 		g.taken()
@@ -245,7 +245,7 @@ func TestTypingGateEdit(t *testing.T) {
 	assert.False(t, g.inFlight)
 	assert.True(t, g.at.After(at))
 
-	g.edit("") // a real submit: ends the session; arming is submitted()'s job
+	g.edit("") // a real submit: ends the session, arming is submitted()'s job
 	assert.Empty(t, g.draft)
 	assert.False(t, g.inFlight)
 	sess := g.session

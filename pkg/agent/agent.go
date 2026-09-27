@@ -13,10 +13,10 @@ import (
 type CompactReason uint8
 
 const (
-	CompactManual    CompactReason = iota // /compact; the caller asks directly, not via the hook
-	CompactThreshold                      // a turn boundary; the hook decides whether to act
+	CompactManual    CompactReason = iota // /compact, the caller asks directly, not via the hook
+	CompactThreshold                      // a turn boundary, the hook decides whether to act
 	CompactOverflow                       // a request exceeded the window and must shrink before retry
-	CompactStep                           // a step boundary inside a running turn; the hook decides whether to act
+	CompactStep                           // a step boundary inside a running turn, the hook decides whether to act
 )
 
 // MidTurn reports whether r fires from the turn goroutine, where the loop owns
@@ -31,21 +31,21 @@ type Options struct {
 	Sinks               []Sink                                // fanned out in registration order
 	Tools               ToolSet                               // nil disables tool calling entirely
 	Env                 Environment                           // OS facts layered into the system prompt
-	ProjectInstructions []ProjectInstruction                  // AGENTS.md content; loaded once at startup
+	ProjectInstructions []ProjectInstruction                  // AGENTS.md content, loaded once at startup
 	SystemSnippets      []string                              // extra system blocks, appended after project instructions
 	SystemPrompt        string                                // replaces the default opening sentence and guidelines when non-empty
 	Transforms          []Transform                           // applied in assembly order, nil entries skipped
 	OnMessage           []func(MessageInfo)                   // called per appended message, in registration order
-	OnSettled           []func(context.Context)               // agent drained and idle; observers may queue work
+	OnSettled           []func(context.Context)               // agent drained and idle, observers may queue work
 	// OnBoundary, when set, is called on the loop goroutine at each step boundary
 	// (the point steering drains), just before the next model call. Returned inputs
 	// are appended as user messages at this same boundary, so a host can hand over
 	// queued prompts with no extra step of latency. It must be cheap and never
-	// block; nil disables.
+	// block, nil disables.
 	OnBoundary func() []Input
 	// AwaitInput, when set, is called on the loop goroutine at the top of each step,
 	// before any input drains, and may block while the user finishes a message. ctx is
-	// the turn's, so an interrupt releases it; nil disables.
+	// the turn's, so an interrupt releases it. Nil disables.
 	AwaitInput func(ctx context.Context)
 	// NormalizeInput, when set, rewrites every input once at its append point so a
 	// steered, follow-up or host-supplied input gets the handling a fresh prompt
@@ -58,8 +58,8 @@ type Options struct {
 	// calls against each other, so this is the only ordered view of a batch a host
 	// gets: it is where ordered identity (a sub-agent id) must be reserved and
 	// where per-call work such as permission classification can be started ahead.
-	// The context is the turn's; it cancels on abort, so anything launched here
-	// must observe it. It must be cheap and never block; nil disables.
+	// The context is the turn's and cancels on abort, so anything launched here
+	// must observe it. It must be cheap and never block, nil disables.
 	OnToolBatch func(context.Context, []ToolCall)
 	// Compact reduces the live context at a turn or step boundary, or after an
 	// overflow, reporting whether anything changed. It never runs mid-stream.
@@ -67,11 +67,11 @@ type Options struct {
 	// TurnBoundary is called once per real turn end, success or failure, so
 	// per-turn trigger state re-arms before the next turn's step boundaries.
 	TurnBoundary func()
-	// MaxSteps caps one turn's tool-calling iterations; <= 0 (the zero value)
+	// MaxSteps caps one turn's tool-calling iterations, <= 0 (the zero value)
 	// means unlimited, leaving compaction and the context window as the bounds.
 	MaxSteps int
 	// TurnRetries bounds how often a failed model call within a step is
-	// re-requested; <= 0 (the zero value) takes the loop default of 4.
+	// re-requested, <= 0 (the zero value) takes the loop default of 4.
 	TurnRetries int
 	SessionID   string // session-affinity headers on requests that support them
 }
@@ -85,20 +85,20 @@ type Agent struct {
 	sink  Sink // resolved once from opts.Sinks so runTurn reads one field
 
 	ctxLast   int       // last emitted Used, for throttling Context emits
-	ctxLastAt time.Time // when that emit happened; drives the interval throttle
+	ctxLastAt time.Time // when that emit happened, drives the interval throttle
 
-	retrySleep func(context.Context, time.Duration) error // stream backoff; test seam
+	retrySleep func(context.Context, time.Duration) error // stream backoff, test seam
 
 	mu       sync.Mutex
 	running  bool
-	settling int // depth of OnSettled notification; observers may queue work while >0
+	settling int // depth of OnSettled notification, observers may queue work while >0
 	steer    []Input
 	follow   []Input
 	cancel   context.CancelFunc
 }
 
 // New returns an agent bound to state. Sinks are resolved once into a single
-// fan-out so the loop always emits on one field; with none supplied events go nowhere.
+// fan-out so the loop always emits on one field, and events go nowhere with none supplied.
 func New(state *State, opts Options) *Agent {
 	a := &Agent{state: state, opts: opts, retrySleep: sleepCtx}
 	switch len(opts.Sinks) {
@@ -113,7 +113,7 @@ func New(state *State, opts Options) *Agent {
 }
 
 // Running reports whether a turn is in flight. It is advisory for steering, not
-// a lock; callers that need ordering use Prompt's completion.
+// a lock, so callers that need ordering use Prompt's completion.
 func (a *Agent) Running() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -142,7 +142,7 @@ func (a *Agent) BaseEstimate(tools bool) int {
 
 // Steer queues input to be injected into the running turn at its next step
 // boundary, or reports false when idle. It does not cancel the in-flight model
-// call; FollowUp is for the impatient case.
+// call, FollowUp is for the impatient case.
 func (a *Agent) Steer(in Input) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -168,7 +168,7 @@ func (a *Agent) FollowUp(in Input) bool {
 }
 
 // Interrupt cancels the running turn and drops anything queued. It is safe to
-// call at any time; an idle agent ignores it.
+// call at any time, an idle agent ignores it.
 func (a *Agent) Interrupt() {
 	a.mu.Lock()
 	cancel := a.cancel

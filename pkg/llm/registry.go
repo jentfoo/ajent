@@ -29,7 +29,7 @@ type Registry struct {
 	active   Model
 	hasModel bool
 	// compactDefault is the compaction threshold applied to models that declare
-	// none of their own; declaredCompact remembers which ones did, so re-applying a
+	// none of their own, and declaredCompact remembers which ones did. Re-applying a
 	// new default cannot mistake a previous default for a declaration.
 	compactDefault  float64
 	declaredCompact map[string]struct{}
@@ -160,7 +160,7 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 		for _, a := range m.Aliases {
 			key := strings.ToLower(a)
 			if _, isDup := r.dupAlias[key]; isDup {
-				continue // already reported; never re-add so it cannot silently resolve
+				continue // already reported, never re-add so it cannot silently resolve
 			}
 			if prev, ok := r.byAlias[key]; ok && prev != i {
 				delete(r.byAlias, key)

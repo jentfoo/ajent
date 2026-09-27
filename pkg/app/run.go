@@ -18,7 +18,7 @@ import (
 // Run carries the parsed command line through config load, model resolution and
 // either a headless turn or the interactive driver. It returns an exit code.
 func Run(o RunOptions) int {
-	// the flag layer outranks every file layer; -m/--render stop being ad hoc
+	// the flag layer outranks every file layer, -m/--render stop being ad hoc
 	flagLayer := config.Layer{Name: "flag"}
 	if o.Model != "" {
 		var err error
@@ -131,7 +131,7 @@ func Run(o RunOptions) int {
 
 	go func() {
 		if len(reg.ProviderNames()) == 0 {
-			return // nothing configured yet; the setup wizard owns the first provider
+			return // nothing configured yet, the setup wizard owns the first provider
 		}
 		notify := func(msg string, warn bool) { ui.Notify(msg, levelOf(warn)) }
 		if added := reg.RefreshModels(notify); added > 0 {

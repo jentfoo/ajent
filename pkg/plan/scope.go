@@ -7,7 +7,7 @@ import (
 )
 
 // readOnlyBase is what the planner and reviewer investigate with. Neither is given
-// write or edit; bash stays gated by the permission barrier as everywhere else.
+// write or edit, and bash stays gated by the permission barrier as everywhere else.
 // The git readers let a planner inspect history without shell.
 var readOnlyBase = []string{"read", "grep", "find", "ls", "bash",
 	"git_status", "git_log", "git_show", "git_diff"}
@@ -24,7 +24,7 @@ var controlNames = []string{
 }
 
 // toolsFor returns the enabled tool names for p. The implementor keeps the set
-// the user had at /plan plus the one tool that signals completion; the planner
+// the user had at /plan plus the one tool that signals completion, while the planner
 // and reviewer get read-only investigation and their own control tools.
 // Caller holds mu.
 func (c *Controller) toolsFor(p Phase) []string {

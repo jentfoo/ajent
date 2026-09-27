@@ -13,7 +13,7 @@ type Verdict uint8
 
 const (
 	VerdictAllow  Verdict = iota // verifiably read-only, runs without a prompt
-	VerdictReject                // hard refusal with guidance; no dialog
+	VerdictReject                // hard refusal with guidance, no dialog
 	VerdictPrompt                // needs approval or model classification
 )
 
@@ -39,13 +39,13 @@ func bashCommand(input json.RawMessage) string {
 
 // Classify statically sorts a call into allow / reject / prompt using declared
 // metadata and the shell analyser. Session allows, mode and the model classifier
-// live above it; there is no name-prefix auto-approval.
+// live above it, there being no name-prefix auto-approval.
 func Classify(call agent.ToolCall, ro func(string) bool) Verdict {
 	if _, ok := builtinReadOnly[call.Name]; ok {
 		return VerdictAllow
 	}
-	// declared metadata only ever auto-allows non-built-in (MCP/extension) tools;
-	// a core write tool prompts regardless of what the registry claims.
+	// declared metadata only ever auto-allows non-built-in (MCP/extension) tools,
+	// a core write tool prompting regardless of what the registry claims.
 	_, isWrite := coreWriteTools[call.Name]
 	if !isWrite && ro != nil && ro(call.Name) {
 		return VerdictAllow // MCP readOnlyHint or config globs
@@ -54,7 +54,7 @@ func Classify(call agent.ToolCall, ro func(string) bool) Verdict {
 		command := bashCommand(call.Input)
 		s := scanCommand(command) // one pass shared by both checks
 		if sedWrite(s) {
-			return VerdictReject // in-place write; guidance to use the edit tool
+			return VerdictReject // in-place write, guidance to use the edit tool
 		} else if allSegmentsReadOnly(s) {
 			return VerdictAllow
 		}

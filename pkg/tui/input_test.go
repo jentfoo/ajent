@@ -459,7 +459,7 @@ func TestDecodeKeyPasteFrom(t *testing.T) {
 	})
 
 	t.Run("terminator_straddles_boundary", func(t *testing.T) {
-		// run keeps the last len(pasteEnd)-1 body bytes re-scannable; a terminator
+		// run keeps the last len(pasteEnd)-1 body bytes re-scannable. A terminator
 		// split across reads must still be found from that resume offset.
 		first := []byte(pasteStart + "abc" + pasteEnd[:len(pasteEnd)-1]) // partial terminator
 		scanned := max(len(first)-len(pasteStart)-len(pasteEnd)+1, 0)
@@ -527,7 +527,7 @@ func TestInputReaderBounded(t *testing.T) {
 		_, err := io.WriteString(pw, "\x1b["+filler+"\r")
 		require.NoError(t, err)
 
-		assert.Equal(t, key{typ: keyEnter}, <-r.keys) // only Enter lands; filler is ignored
+		assert.Equal(t, key{typ: keyEnter}, <-r.keys) // only Enter lands, filler is ignored
 	})
 }
 

@@ -193,7 +193,7 @@ func TestPrepareKeepsAspect(t *testing.T) {
 
 func TestPrepareConvertsUnsupportedFormat(t *testing.T) {
 	t.Parallel()
-	// bmp has no stdlib encoder; hand-build a minimal 24-bit one
+	// bmp has no stdlib encoder, hand-build a minimal 24-bit one
 	src := bmpBytes(t, 4, 3)
 	res, err := Prepare(src)
 	require.NoError(t, err)
@@ -328,7 +328,7 @@ func TestPrepareAppliesExifOrientation(t *testing.T) {
 	res, err := Prepare(src)
 	require.NoError(t, err)
 	assert.NotEmpty(t, res.MediaType)
-	// oriented source is 300 wide x 2000 tall; the shrink keeps that aspect
+	// oriented source is 300 wide x 2000 tall, the shrink keeps that aspect
 	assert.LessOrEqual(t, res.Width, MaxPixels)
 	assert.LessOrEqual(t, res.Height, MaxPixels)
 	assert.InDelta(t,

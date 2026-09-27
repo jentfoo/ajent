@@ -34,7 +34,7 @@ func TestMultiPickSelects(t *testing.T) {
 
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Tools") }, time.Second, testPoll)
 
-	// the cursor opens on the builtin header; down moves to read (row 1)
+	// the cursor opens on the builtin header, and down moves to read (row 1)
 	press(t, pw, "\x1b[B\t") // read
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll)
 	// navigate past ls and the mcp header to stat (row 4) and toggle it
@@ -71,7 +71,7 @@ func TestMultiPickSpaceTogglesSelection(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "Tools") }, time.Second, testPoll)
 
-	press(t, pw, " ") // no groups here: the cursor is already on read; space selects it
+	press(t, pw, " ") // no groups here: the cursor is already on read, so space selects it
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll)
 	// a typed letter still narrows the filter (space does not become part of it)
 	press(t, pw, "ls")
@@ -90,7 +90,7 @@ func TestMultiPickSpaceTogglesSelection(t *testing.T) {
 func TestMultiPickGroupHeaderShown(t *testing.T) {
 	t.Parallel()
 
-	// the divider row costs one live-block line; a taller screen shows both groups
+	// the divider row costs one live-block line, a tall screen shows both groups
 	v := newVT(80, 14)
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
@@ -128,7 +128,7 @@ func TestMultiPickHeaderTogglesGroup(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "builtin") }, time.Second, testPoll)
-	// the cursor starts on the builtin header; space selects the whole group
+	// the cursor starts on the builtin header, and space selects the whole group
 	press(t, pw, "\t")
 	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "[x] read") }, time.Second, testPoll)
 
@@ -153,7 +153,7 @@ func TestMultiPickHeaderTogglesGroup(t *testing.T) {
 func TestMultiPickHeaderNeverInChosen(t *testing.T) {
 	t.Parallel()
 
-	// the divider row costs one live-block line; a taller screen keeps both groups
+	// the divider row costs one live-block line, a tall screen keeps both groups
 	v := newVT(80, 14)
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })

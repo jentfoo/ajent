@@ -10,9 +10,9 @@ const defaultCompactFraction = 0.8
 // response and estimated while one streams or between responses.
 type ContextState struct {
 	Used      int // tokens the next request's input occupies
-	Window    int // the model's raw context window; 0 when unknown
+	Window    int // the model's raw context window, 0 when unknown
 	Reserve   int // tokens held back from Window for the response
-	Compact   int // where an automatic compaction would fire; 0 when unset
+	Compact   int // where an automatic compaction would fire, 0 when unset
 	Estimated bool
 }
 

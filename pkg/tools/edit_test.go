@@ -111,7 +111,7 @@ func TestApplyEditsValidation(t *testing.T) {
 		{"rejects_empty_edits_list", "x\n", `[]`, "at least one entry"}, // doomed, so never prompts
 		{"rejects_empty_old_text", "x\n", `[{"oldText":"","newText":"y"}]`, "empty oldText"},
 		{"rejects_noop_when_present", "same\n", `[{"oldText":"same","newText":"same"}]`, "identical"}, // changes nothing
-		// absent oldText is a match failure, not a no-op; the model needs the file's text
+		// absent oldText is a match failure, not a no-op, so the model needs the file's text
 		{"noop_absent_reports_no_match", "x\n", `[{"oldText":"same","newText":"same"}]`, "no match for edit 1"},
 		{"rejects_duplicate_old_text", "one two\n", `[{"oldText":"one","newText":"1"},{"oldText":"one","newText":"2"}]`, "repeat the same oldText"},
 		{"rejects_overlapping_regions", "abcdef\n", `[{"oldText":"bcd","newText":"X"},{"oldText":"cde","newText":"Y"}]`, "target overlapping regions in a.txt"},
@@ -140,7 +140,7 @@ func TestEditDryRun(t *testing.T) {
 	t.Run("missing_file_is_will_fail", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		err := e.editDryRun(`{"path":"nope.txt","edits":[{"oldText":"a","newText":"b"}]}`)
-		assert.Error(t, err) // missing file counts as doomed; skip the prompt
+		assert.Error(t, err) // missing file counts as doomed, skip the prompt
 	})
 
 	// a dry run never writes to disk
@@ -280,7 +280,7 @@ func TestEditFailure(t *testing.T) {
 
 		res := e.editExec(t.Context(),
 			`{"path":"a.txt","edits":[{"oldText":"one","newText":"uno"},{"oldText":"missing","newText":"nope"}]}`)
-		assert.True(t, res.IsError) // second edit's old text is missing; batch must not apply
+		assert.True(t, res.IsError) // second edit's old text is missing, so the batch must not apply
 
 		data, err := os.ReadFile(filepath.Join(e.cwd, "a.txt"))
 		require.NoError(t, err)
@@ -366,7 +366,7 @@ func TestEditMixedEndingsFollowNeighborhood(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "aaa\r\nb1\nb2\n", string(data))
 
-	// an edit on the CRLF line writes CRLF; the untouched LF line stays LF
+	// an edit on the CRLF line writes CRLF, the untouched LF line stays LF
 	require.NoError(t, os.WriteFile(p, []byte("aaa\r\nbbb\n"), 0o644))
 	res = e.editExec(t.Context(),
 		`{"path":"mix.txt","edits":[{"oldText":"aaa","newText":"a1\na2"}]}`)

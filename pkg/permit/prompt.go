@@ -23,14 +23,14 @@ const (
 )
 
 // Prompter opens approval dialogs and asks for free-text reasons. The host
-// supplies a tui-backed implementation; nil means headless (no UI available).
+// supplies a tui-backed implementation, nil meaning headless (no UI available).
 type Prompter interface {
 	Open(prompt, subject string, options []string) (Dialog, error)
 	Reason(ctx context.Context, label string) (string, bool)
 }
 
 // Dialog is an open approval dialog. Wait blocks for the answer, Resolve settles
-// it from the caller (the mode-change path), Close abandons it; first wins.
+// it from the caller (the mode-change path), Close abandons it, first wins.
 type Dialog interface {
 	Wait(ctx context.Context) (int, error)
 	Resolve(index int)
@@ -43,8 +43,8 @@ type Dialog interface {
 type Noter func(note string)
 
 // dialogOption indexes one choice in an approval prompt. A command with a single
-// identifiable head offers per-name session memory; only a complex compound (no
-// reliable single command) replaces it with the strictly-greater broad grant, so
+// identifiable head offers per-name session memory, only a complex compound (no
+// reliable single command) replacing it with the strictly-greater broad grant so
 // exactly four options are shown either way.
 const (
 	optAllow         = iota // this call only
@@ -54,7 +54,7 @@ const (
 	optDeny                 // refuse with an optional reason
 )
 
-// plainLabels serve tool-name session memory for non-shell calls; a bash line with
+// plainLabels serve tool-name session memory for non-shell calls, while a bash line with
 // nameable heads gets its own per-command label instead.
 var plainLabels = []string{
 	"Allow",
@@ -80,7 +80,7 @@ func optionsFor(command string) (labels []string, actions []int) {
 		return []string{"Allow", "Allow with note", namedLabels, "Deny"},
 			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
 	}
-	if compound(command) { // complex; only the broad grant reliably covers it
+	if compound(command) { // complex, only the broad grant reliably covers it
 		return slices.Clone(compoundLabels),
 			[]int{optAllow, optAllowNote, optAllowCompound, optDeny}
 	}
@@ -164,7 +164,7 @@ func compoundGoverningHeads(command string) ([]string, bool) {
 
 // allowSessionKey names what an "allow for session" remembers: the command name
 // (bash:<head>) for shell commands, the tool name otherwise. Compound calls are
-// never keyed this way; they take the broad grant instead.
+// never keyed this way, taking the broad grant instead.
 func allowSessionKey(call agent.ToolCall) string {
 	if call.Name != tools.ToolBash {
 		return call.Name

@@ -151,9 +151,9 @@ dispatched, never on a command or a `!`.
 |---|---|
 | `/help` | markdown list of commands and keybindings through `Console.Print` |
 | `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown; sub-agent spend called out when nonzero) |
-| `/copy` | copy the last agent response to the clipboard — text plus tool call/result JSON verbatim — through the shared writer (see `clipboard-copy-feature.md`); no agent messages yet is a notice, not an error |
+| `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim; no agent messages yet is a notice, not an error |
 | `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it; a no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
-| `/reasoning [level]` | report, or set/clear the level for capable models; a model offering zero levels reports "no reasoning options available", one level (only off) reports "only <level> available for this model" — neither opens a picker |
+| `/reasoning [level]` | report, or set/clear the level for capable models; a model offering zero levels reports "no reasoning options available", one level (only off) reports "only <level> available for this model". Neither case opens a picker |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/session [name]` | report the session's name, or set it; an invalid or conflicting name is a notice (see `session-design.md`) |
 | `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (see `config-design.md`); rows come in three kinds, an enum (a string from a fixed set), a model picker, and an integer with min/max validation (sub-agent concurrency, since an enum stores a string that won't unmarshal into an int field), covering permission modes and sub-agent settings; a row whose choice is currently impossible (Reasoning on a single-option model) renders grayed out with the reason in its detail |

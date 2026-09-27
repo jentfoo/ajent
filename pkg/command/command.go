@@ -9,7 +9,7 @@ type Command struct {
 	Args        string // usage hint, e.g. "<optional-instructions>"
 	// Complete returns argument candidates for prefix, or nil when none.
 	Complete func(prefix string) []string
-	// Handler runs the command; long work belongs on a goroutine.
+	// Handler runs the command, with long work on a goroutine.
 	Handler func(ctx context.Context, args string, c Console) error
 }
 
@@ -22,8 +22,8 @@ type Registry struct {
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry { return &Registry{byName: make(map[string]Command)} }
 
-// Register adds or replaces a command by name. Last write wins, letting callers
-// widen a built-in; registration order is preserved for /help and completion.
+// Register adds or replaces a command by name, last write winning to let
+// callers widen a built-in while keeping registration order for /help.
 func (r *Registry) Register(cmd Command) {
 	if _, exists := r.byName[cmd.Name]; !exists {
 		r.order = append(r.order, cmd.Name)

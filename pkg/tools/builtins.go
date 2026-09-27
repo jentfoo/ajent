@@ -35,7 +35,7 @@ const ToolAskUser = "ask_user"
 
 // Options configures the built-in tool set.
 type Options struct {
-	Cwd       string // base for relative paths; empty uses os.Getwd
+	Cwd       string // base for relative paths, empty uses os.Getwd
 	SessionID string // names the bash spill directory
 	// ShellCommands lists common commands for the bash description's examples,
 	// already filtered by the caller against PATH, deny rules and enabled tools.

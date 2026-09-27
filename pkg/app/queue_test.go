@@ -65,7 +65,7 @@ func TestSteerQueuePending(t *testing.T) {
 	q := newSteerQueue(fake, nil, nil)
 
 	assert.Equal(t, 0, q.pending())
-	q.offer(agent.Input{Text: "seed"}, "one", 1) // starts the drain; not queued
+	q.offer(agent.Input{Text: "seed"}, "one", 1) // starts the drain, not queued
 	assert.Equal(t, 0, q.pending())
 
 	require.True(t, q.offer(agent.Input{Text: "a"}, "alpha", 2))
@@ -86,7 +86,7 @@ func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 
 	inA := agent.Input{Text: "first", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleUser}}}}
 	inB := agent.Input{Text: "second", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleAssistant}}}}
-	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 	require.True(t, q.offer(inA, "label one", 3))
 	require.True(t, q.offer(inB, "label two", 4))
 
@@ -114,7 +114,7 @@ func TestSteerQueueDeliveredEchoesImages(t *testing.T) {
 		Text:   "look",
 		Blocks: llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: pngBuf.Bytes()}},
 	}
-	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 	require.True(t, q.offer(in, "look", 2))
 
 	out := q.pull()
@@ -132,7 +132,7 @@ func TestSteerQueueJoinSplitsProvenance(t *testing.T) {
 	fake := &fakeQueueUI{}
 	q := newSteerQueue(fake, nil, func() {})
 
-	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 	require.True(t, q.offer(agent.Input{Text: "user text"}, "typed", 1))
 	require.True(t, q.offer(agent.Input{Text: "system notice", Injected: true}, "notice", 1))
 	require.True(t, q.offer(agent.Input{Text: "more user text"}, "typed two", 1))
@@ -162,7 +162,7 @@ func TestSteerQueueJoinChainsAftersPerRun(t *testing.T) {
 		}
 	}
 
-	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 	require.True(t, q.offer(agent.Input{Text: "a", After: after("read a")}, "a", 1))
 	require.True(t, q.offer(agent.Input{Text: "sys", Injected: true, After: after("read sys")}, "sys", 1))
 
@@ -192,9 +192,9 @@ func TestJoinAfter(t *testing.T) {
 			}
 		}
 
-		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "a", After: after("read a")}, "a", 1))
-		require.True(t, q.offer(agent.Input{Text: "b"}, "b", 1)) // no reads; must not break the chain
+		require.True(t, q.offer(agent.Input{Text: "b"}, "b", 1)) // no reads, must not break the chain
 		require.True(t, q.offer(agent.Input{Text: "c", After: after("read c")}, "c", 1))
 
 		out := q.pull()
@@ -214,9 +214,9 @@ func TestSteerQueueJoinPreservesPrepared(t *testing.T) {
 	fake := &fakeQueueUI{}
 	q := newSteerQueue(fake, nil, func() {})
 
-	// every queued item is pump-expanded (Prepared); the runs must stay so the
+	// every queued item is pump-expanded (Prepared), and the runs must stay so the
 	// append seam never re-expands an annotate-only reference at delivery
-	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 	require.True(t, q.offer(agent.Input{Text: "see @big.bin", Prepared: true}, "typed", 1))
 	require.True(t, q.offer(agent.Input{Text: "sys", Injected: true, Prepared: true}, "sys", 1))
 
@@ -233,7 +233,7 @@ func TestSteerQueueJoinMixedPrepared(t *testing.T) {
 	q := newSteerQueue(fake, nil, func() {})
 
 	// a run is prepared only when every item in it is, so raw text still expands
-	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain; not queued
+	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 	require.True(t, q.offer(agent.Input{Text: "expanded", Prepared: true}, "a", 1))
 	require.True(t, q.offer(agent.Input{Text: "raw @a.go"}, "b", 1))
 
@@ -249,7 +249,7 @@ func TestSteerQueueTake(t *testing.T) {
 	fake := &fakeQueueUI{}
 	q := newSteerQueue(fake, nil, nil)
 
-	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain; not queued
+	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 	require.True(t, q.draining)
 	assert.True(t, q.offer(agent.Input{Text: "a"}, "alpha", 1))
 	assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 2))
@@ -288,7 +288,7 @@ func TestSteerQueueRecall(t *testing.T) {
 	var refreshes int // submit-bucket updates on each pop
 	q := newSteerQueue(fake, func(int) { refreshes++ }, func() {})
 
-	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain; not queued
+	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 	assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 5))
 	assert.True(t, q.offer(agent.Input{Text: "c"}, "gamma", 7))
 
@@ -311,7 +311,7 @@ func TestSteerQueueAbortRecoversAll(t *testing.T) {
 	var cleared int
 	q := newSteerQueue(fake, func(int) {}, func() { cleared++ })
 
-	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain; not queued
+	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 	assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 2))
 	assert.True(t, q.offer(agent.Input{Text: "c"}, "gamma", 3))
 

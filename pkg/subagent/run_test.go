@@ -21,7 +21,7 @@ func TestEmptySummary(t *testing.T) {
 	// a thinking-only final message is followed by one nudge and then the real summary
 	t.Run("nudges_then_summarises", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{
-			{Events: thinkingOnlyTurn()}, // no text; triggers a nudge
+			{Events: thinkingOnlyTurn()}, // no text, triggers a nudge
 			{Events: summaryTurn("the answer is 42", llm.Usage{})},
 		})
 		m := New(Options{Provider: p})
@@ -37,7 +37,7 @@ func TestEmptySummary(t *testing.T) {
 	// a bounded retry gives up: short reasoning fails rather than reporting done
 	t.Run("short_thinking_fails", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{
-			{Events: thinkingOnlyTurn()}, // no text; triggers a nudge
+			{Events: thinkingOnlyTurn()}, // no text, triggers a nudge
 			{Events: thinkingOnlyTurn()}, // still nothing usable after the one nudge
 		})
 		m := New(Options{Provider: p})
@@ -54,7 +54,7 @@ func TestEmptySummary(t *testing.T) {
 	t.Run("long_thinking_is_summary", func(t *testing.T) {
 		think := strings.Repeat("reasoning ", 30) // ~300 chars, past minThinkingSummary
 		p, _ := scripted([]llm.ScriptedTurn{
-			{Events: thinkingOnlyTurn()},  // no text; triggers a nudge
+			{Events: thinkingOnlyTurn()},  // no text, triggers a nudge
 			{Events: thinkingTurn(think)}, // still no text, but sizable reasoning
 		})
 		m := New(Options{Provider: p})

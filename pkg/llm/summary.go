@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// ErrTruncated reports a response the provider stopped at its output token cap;
-// its text is partial and must never be persisted or acted on.
+// ErrTruncated reports a response the provider stopped at its output token cap.
+// Its text is partial and must never be persisted or acted on.
 var ErrTruncated = errors.New("generation stopped at the output token cap: the response is incomplete")
 
 // RunSummary drives one model call through an accumulator and returns its
@@ -30,7 +30,7 @@ func RunSummary(ctx context.Context, p Provider, req Request) (string, Usage, er
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", Usage{}, err // deliberate close leaves st.Err nil; never return partial text
+		return "", Usage{}, err // deliberate close leaves st.Err nil, never return partial text
 	}
 	if err := st.Err(); err != nil {
 		return "", Usage{}, err

@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-// writeTimeout bounds one native writer; a hung backend degrades to trying the
+// writeTimeout bounds one native writer, a hung backend degrading to trying the
 // next one instead of stalling the copy.
 const writeTimeout = 3 * time.Second
 
@@ -29,11 +29,11 @@ const maxEncoded = 100_000
 type writer struct {
 	name string   // executable looked up on PATH
 	args []string // arguments making it read clipboard text from stdin
-	env  []string // display variables it needs; any one set suffices
+	env  []string // display variables it needs, any one set suffices
 }
 
 // writers lists the native writers for the running platform, best first. The
-// platform's own tool leads so the terminal cannot race the write; clip.exe
+// platform's own tool leads so the terminal cannot race the write. clip.exe
 // closes the Linux list for WSL interop. A var so tests inject fakes.
 var writers = func() []writer {
 	switch runtime.GOOS {
@@ -42,7 +42,7 @@ var writers = func() []writer {
 			{"pbcopy", nil, nil},
 		}
 	case "windows":
-		// Set-Clipboard is the native API; clip is the slim fallback
+		// Set-Clipboard is the native API, clip is the slim fallback
 		return []writer{
 			{"powershell.exe", []string{"-NoProfile", "-Command", "$input | Set-Clipboard"}, nil},
 			{"clip", nil, nil},
@@ -132,7 +132,7 @@ func Copy(ctx context.Context, text string) error {
 		tried = append(tried, w.name)
 		if runWriter(ctx, w, text) == nil {
 			if remote() {
-				_ = writeOSC52(text) // best effort; the native write already landed
+				_ = writeOSC52(text) // best effort, the native write already landed
 			}
 			return nil
 		}

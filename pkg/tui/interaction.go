@@ -131,10 +131,10 @@ func (u *UI) routeKey(k key) {
 		return
 	}
 	// resolve before committing so an external resolver that won the race is not
-	// double-committed or dequeued; only the winner writes history.
+	// double-committed or dequeued. Only the winner writes history.
 	won := p.resolve(err)
 	if won {
-		// a cancelled interaction records nothing; the never-made choice is not history
+		// a cancelled interaction records nothing, since the never-made choice is not history
 		if s := p.it.summary(u.theme); err == nil && s != "" {
 			u.gap()
 			u.commit(s, flowWrap)

@@ -6,7 +6,7 @@ import (
 )
 
 // Media type constants reported by Sniff. png, jpeg, gif and webp can be
-// sent inline as-is; bmp and tiff are decode-only inputs that Prepare converts.
+// sent inline as-is, but bmp and tiff are decode-only inputs that Prepare converts.
 const (
 	typePNG  = "image/png"
 	typeJPEG = "image/jpeg"

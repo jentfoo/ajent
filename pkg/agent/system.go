@@ -42,12 +42,12 @@ type ProjectInstruction struct {
 
 // agentsFileName is the single instruction file ajent recognises in each source
 // directory. Discovery covers only the launch cwd and the user-global config
-// dir; ancestor walking is not supported.
+// dir, ancestor walking is not supported.
 const agentsFileName = "AGENTS.md"
 
 // LoadProjectInstructions reads <dir>/AGENTS.md from each of dirs, in order,
 // returning a provenance-marked instruction per existing file (global first,
-// then project). Empty dirs and absent files are skipped; nil means none were found.
+// then project). Empty dirs and absent files are skipped, nil means none were found.
 // A read error other than a file being absent is returned for callers to surface.
 func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 	var proj []ProjectInstruction
@@ -69,7 +69,7 @@ func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 }
 
 // buildSystem returns the system blocks. override replaces ajent's default prose
-// guidance (opening sentence and guidelines); environment facts, project
+// guidance (opening sentence and guidelines). Environment facts, project
 // instructions and snippets still follow.
 func buildSystem(env Environment, proj []ProjectInstruction, snippets []string, override string) llm.BlockList {
 	var b strings.Builder
@@ -118,7 +118,7 @@ func identityLine() string {
 }
 
 // buildEnvironmentFacts appends the working directory, platform and date.
-// Empty values are omitted rather than emitted as "unknown"; shell, git status
+// Empty values are omitted rather than emitted as "unknown". Shell, git status
 // and a directory listing are deliberately absent, since the listing would vary
 // whenever the workspace changes, and the model discovers files with its tools.
 func buildEnvironmentFacts(b *strings.Builder, env Environment) {

@@ -14,7 +14,7 @@ const (
 // Line is a classified submitted line.
 type Line struct {
 	Kind Kind
-	Rest string // the line after any escape handling and prefix; for commands, the name+args
+	Rest string // the line after escape handling and prefix, for commands the name+args
 	// Excluded marks a `!!` shell run: executed and displayed but kept out of
 	// model context and the transcript.
 	Excluded bool
@@ -33,7 +33,7 @@ func ParseLine(s string) Line {
 	if strings.HasPrefix(s, "//") {
 		return Line{Kind: KindPrompt, Rest: s[1:]}
 	}
-	// `!!x` runs x but keeps it out of context; `!x` stages x onto context
+	// `!!x` runs x but keeps it out of context, `!x` stages x onto context
 	if strings.HasPrefix(s, "!!") {
 		return Line{Kind: KindShell, Rest: s[2:], Excluded: true}
 	}
@@ -47,7 +47,7 @@ func ParseLine(s string) Line {
 }
 
 // SplitCommand splits a command line's rest into name and argument. The name is
-// lowercased; the argument keeps its original case, trimmed of surrounding
+// lowercased, while the argument keeps its original case, trimmed of surrounding
 // whitespace. An empty name (e.g. a bare `/`) classifies as no command.
 func SplitCommand(rest string) (name, arg string, ok bool) {
 	name, arg, _ = strings.Cut(rest, " ")

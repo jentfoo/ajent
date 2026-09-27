@@ -79,7 +79,7 @@ func filePrompts(path string) []Prompt {
 		return nil
 	}
 	var prompts []Prompt
-	for i := len(entries) - 1; i >= 0; i-- { // append-only: reverse is newest first
+	for i := len(entries) - 1; i >= 0; i-- { // append-only, reverse is newest first
 		e := entries[i]
 		if e.Type != TypeMessage {
 			continue

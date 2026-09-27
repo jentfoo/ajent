@@ -145,7 +145,7 @@ func sliceUnits(files []string, n int) []unit {
 	return us
 }
 
-// group buckets the files under prefix by their next path segment; those sitting
+// group buckets the files under prefix by their next path segment. Those sitting
 // directly in prefix collapse into one unit rather than a scatter of singletons.
 func group(files []string, prefix string) []unit {
 	counts := make(map[string]int)

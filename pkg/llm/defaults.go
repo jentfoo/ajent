@@ -13,7 +13,7 @@ const (
 	fieldMaxOutputTokens = "max_output_tokens"
 	fieldReasoning       = "reasoning"
 	fieldReasoningConten = "reasoning_content"
-	// vLLM's spelling; selected by the supportsThinkingTokenBudget alias.
+	// vLLM's spelling, selected by the supportsThinkingTokenBudget alias.
 	fieldThinkingTokenBudget = "thinking_token_budget"
 	thinkOpenTag             = "<think>"
 	thinkCloseTag            = "</think>"
@@ -31,7 +31,7 @@ type flavorDefault struct {
 }
 
 // chatCaps is the generic chat-completions baseline shared by the hosted
-// OpenAI-compatible flavors; vendor detection layers quirks over it.
+// OpenAI-compatible flavors. Vendor detection layers quirks over it.
 func chatCaps() Capabilities {
 	return Capabilities{
 		Dialect:                 DialectOpenAICompletions,
@@ -62,7 +62,7 @@ func zaiCaps() Capabilities {
 }
 
 // anthropicCaps is the Messages-API baseline for anthropic-compatible hosted
-// endpoints; they speak the wire shape but not anthropic's cache or tokenizer.
+// endpoints. They speak the wire shape but not anthropic's cache or tokenizer.
 func anthropicCaps() Capabilities {
 	return Capabilities{
 		Dialect:         DialectAnthropic,
@@ -114,7 +114,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Thinking:        ThinkingOpenAI,
 			ReasoningReplay: true,
 			PromptCache:     true,
-			// api.openai.com accepts the routing key; generic openai-compatible
+			// api.openai.com accepts the routing key, while generic openai-compatible
 			// endpoints opt in via supportsExplicitPromptCacheMode
 			SupportsExplicitPromptCache: true,
 			Tokenizer:                   TokenizerLocalEstimate,
@@ -128,7 +128,7 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			ToolChoice:                  true,
 		},
 	},
-	// z.ai serves GLM over chat-completions; the coding-plan endpoints share the
+	// z.ai serves GLM over chat-completions. The coding-plan endpoints share the
 	// wire format of the general one, so only the base URL differs.
 	FlavorZAI: {
 		dialect:   DialectOpenAICompletions,
@@ -511,7 +511,7 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.SystemAsRole = orBool(c.SystemAsRole, o.SupportsSystemRole)
 	c.Temperature = orBool(c.Temperature, o.SupportsTemperature)
 	c.ParallelTools = orBool(c.ParallelTools, o.SupportsParallelTools)
-	// supportsStreamUsage is ajent's historical name; supportsUsageInStreaming is canonical
+	// supportsStreamUsage is ajent's historical name, while supportsUsageInStreaming is canonical
 	c.StreamUsage = orBool(orBool(c.StreamUsage, o.SupportsUsageInStreaming), o.SupportsStreamUsage)
 	c.ToolChoice = orBool(c.ToolChoice, o.SupportsToolChoice)
 	c.Store = orBool(c.Store, o.SupportsStore)
@@ -521,7 +521,7 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.ReasoningReplay = orBool(c.ReasoningReplay, o.RequiresReasoningReplay)
 	c.ReplayReasoning = orBool(c.ReplayReasoning, o.RequiresReasoningContent)
 
-	// supportsReasoningEffort is a pure gate now; it never picks the encoding.
+	// supportsReasoningEffort is a pure gate, it never picks the encoding
 	c.SupportsReasoningEffort = orBool(c.SupportsReasoningEffort, o.SupportsReasoningEffort)
 	c.SupportsFinishReason = orBool(c.SupportsFinishReason, o.SupportsFinishReason)
 	c.SupportsStrict = orBool(c.SupportsStrict, o.SupportsStrictMode)

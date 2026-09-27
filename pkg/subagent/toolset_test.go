@@ -15,7 +15,7 @@ func fullSource() *fakeSource {
 		tools: []agent.Tool{
 			&fakeTool{name: "read"},
 			&fakeTool{name: "grep"},
-			&fakeTool{name: "find"}, // registered disabled in the parent; must still reach a child
+			&fakeTool{name: "find"}, // registered disabled in the parent, must still reach a child
 			&fakeTool{name: "ls"},
 			&fakeTool{name: "git_log"}, // repo-gated git reader
 			&fakeTool{name: "git_diff"},
@@ -41,7 +41,7 @@ func TestChildTools(t *testing.T) {
 	}
 
 	src = &fakeSource{tools: []agent.Tool{&fakeTool{name: "bash"}, roTool("read")}}
-	// read is builtin-read-only so it survives; bash does not
+	// read is builtin-read-only so it survives, bash does not
 	assert.Equal(t, []string{"read"}, toolNames(childTools(src, true)))
 }
 

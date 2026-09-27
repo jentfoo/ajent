@@ -84,7 +84,7 @@ func TestCandidates(t *testing.T) {
 	})
 
 	t.Run("absolute_path_keeps_root_slash", func(t *testing.T) {
-		dir := t.TempDir() // workspace root; a sibling lives alongside it
+		dir := t.TempDir() // workspace root, a sibling lives alongside it
 		writeTree(t, dir, "main.go")
 		parent := filepath.Dir(dir)
 		baseName := filepath.Base(dir)

@@ -36,7 +36,7 @@ type injection struct {
 	name  string // read or ls
 	id    string
 	path  string          // as written, what the call is given
-	full  string          // resolved, for the land-time tracker re-check; empty for a glob ls
+	full  string          // resolved for the land-time tracker re-check, empty for a glob ls
 	input json.RawMessage // the call's arguments, marshalled at plan time
 	body  int64           // expected result bytes, for the submit reserve
 }
@@ -65,15 +65,15 @@ type Expander struct {
 	policy  tools.PathPolicy
 	tracker *tools.Tracker
 	run     atomic.Int64 // numbers each Expand so its call ids stay unique
-	// vision reports whether the active model reads images; image references
-	// are only injected when it does. nil means never.
+	// vision reports whether the active model reads images. Image references
+	// are only injected when it does, nil meaning never.
 	vision func() bool
 }
 
 // NewExpander returns an expander backed by reg. read/ls run through the sink so
 // their display order matches the transcript order. policy resolves @ paths to
-// the same keys read/write/edit use. vision reports whether the active model
-// reads images; nil means never.
+// the same keys read/write/edit use, vision reporting whether the active model
+// reads images, nil meaning never.
 func NewExpander(reg *tools.Registry, sink agent.Sink, policy tools.PathPolicy, vision func() bool) *Expander {
 	var tracker *tools.Tracker
 	if reg != nil {
@@ -149,7 +149,7 @@ func (x *Expander) Expand(text string) Result {
 		seen[key] = struct{}{}
 		return true
 	}
-	// splice back to front so earlier offsets stay valid; the plan is reversed
+	// splice back to front so earlier offsets stay valid, the plan reversed
 	// afterwards so references land in forward transcript order.
 	out := text
 	for i := len(refs) - 1; i >= 0; i-- {
@@ -157,7 +157,7 @@ func (x *Expander) Expand(text string) Result {
 		// wildcard reference: list matching files via ls so the model sees which
 		// paths matched before choosing what to read.
 		if tools.HasGlob(ref.Path) {
-			if keep("ls:" + ref.Path) { // patterns never resolve; dedupe as written
+			if keep("ls:" + ref.Path) { // patterns never resolve, dedupe as written
 				plan = append(plan, lsCall(run, ref.Path, ""))
 			}
 			continue
@@ -184,8 +184,8 @@ func (x *Expander) Expand(text string) Result {
 			continue
 		}
 		if m.Kind == tools.KindImage {
-			// a vision model gets the picture itself through the read tool; a
-			// text-only one keeps today's annotation so the reference stays visible
+			// a vision model gets the picture itself through the read tool, a
+			// text-only one keeping today's annotation so the reference stays visible
 			if x.vision == nil || !x.vision() {
 				out = splice(out, ref, annotate(ref, m))
 				continue
@@ -213,7 +213,7 @@ func (x *Expander) Expand(text string) Result {
 		// within cap: content is injected now (or already present this session),
 		// so an absorbed size claim from a prior larger measurement must not survive
 		out = stripNote(out, ref)
-		// dedupe against an unchanged read this session; the literal stays bare
+		// dedupe against an unchanged read this session, the literal staying bare
 		if x.tracker != nil && x.tracker.Unchanged(full) {
 			continue
 		}

@@ -12,7 +12,7 @@ import (
 )
 
 // entry is one path under the directory being completed. Directories keep
-// completing with a trailing /; files are leaves.
+// completing with a trailing /, files being leaves.
 type entry struct {
 	path  string // absolute
 	isDir bool
@@ -22,7 +22,7 @@ type entry struct {
 // cursor, never walking the workspace tree: typing @ offers the cwd's immediate
 // children and drilling through a trailing / re-lists one level at a time. A
 // query is cheap (one ReadDir), so completion stays responsive however large or
-// slow the filesystem; callers may run it off the UI lock.
+// slow the filesystem. Callers may run it off the UI lock.
 type Index struct {
 	root string
 }
@@ -35,8 +35,8 @@ func NewIndex(root string) *Index {
 
 // Candidates returns paths matching query for an @ reference, ranked by (a)
 // already in the conversation, (b) recent mtime, (c) fuzzy score. Only the
-// directory under the cursor is listed, so `dir/` descends one level per step;
-// directories come back with a trailing `/`, and a `~`, `./` or absolute query
+// directory under the cursor is listed, so `dir/` descends one level per step,
+// directories coming back with a trailing `/`, and a `~`, `./` or absolute query
 // keeps its leading form. VCS and dependency directories are skipped.
 func (idx *Index) Candidates(query string, inConversation func(path string) bool) []tui.Completion {
 	return idx.candidates(query, inConversation, true)
@@ -93,7 +93,7 @@ func (idx *Index) candidates(query string, inConversation func(path string) bool
 			continue
 		}
 		name := strings.TrimPrefix(fr, dir)
-		// offer immediate children only; deeper paths are reached by drilling
+		// offer immediate children only, deeper paths reached by drilling
 		if name == "" || strings.ContainsRune(name, filepath.Separator) {
 			continue
 		}

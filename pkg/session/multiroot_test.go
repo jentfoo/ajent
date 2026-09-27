@@ -42,7 +42,7 @@ func TestBranchAcrossRoots(t *testing.T) {
 	st, warns := State(implBranch, resolveModel)
 	assert.Empty(t, warns)
 	assert.Equal(t, "p/impl-model", st.Model.ID) // resolveModel echoes the recorded key
-	require.Len(t, st.Messages, 1)               // only the kickoff; the trunk is unreachable
+	require.Len(t, st.Messages, 1)               // only the kickoff, the trunk is unreachable
 	assert.Equal(t, "kickoff", textOf(st.Messages[0]))
 
 	var got customPayload

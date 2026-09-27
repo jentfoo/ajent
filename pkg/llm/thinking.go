@@ -13,7 +13,7 @@ const (
 
 // applyThinking dispatches reasoning on or off onto the wire shape for
 // caps.Thinking. It runs after max-tokens fields are set in buildCompatBody so
-// the vLLM thinking_token_budget can read them; it writes nothing when reasoning
+// the vLLM thinking_token_budget can read them, and it writes nothing when reasoning
 // is unsupported or this request has none.
 func applyThinking(body *compatRequest, req Request) {
 	caps := req.Model.Caps
@@ -39,8 +39,8 @@ func applyThinking(body *compatRequest, req Request) {
 			body.EnableThinking = ptrOf(false)
 		}
 	case ThinkingQwenChatTemplate:
-		// the two core keys carry the level; configured kwargs add on top without
-		// overriding them so a user cannot break the toggle
+		// the two core keys carry the level. Configured kwargs add on top without
+		// overriding them so a user cannot break the toggle.
 		kw := map[string]any{"enable_thinking": on, "preserve_thinking": true}
 		for k, v := range chatTemplateValues(caps.ChatTemplateKwargs, caps, lvl) {
 			if _, core := kw[k]; !core {
@@ -150,7 +150,7 @@ func applyThinkingTokenBudget(body *compatRequest, req Request, lvl Level, on bo
 }
 
 // chatTemplateValues resolves configured template additions onto the kwargs a
-// provider expects. Literal scalars pass through; every object that is not
+// provider expects. Literal scalars pass through, and every object that is not
 // $var:"thinking.enabled" routes through the reasoning effort map.
 // omitWhenOff drops an object while reasoning is off. It returns nil when nothing survives.
 func chatTemplateValues(vals map[string]json.RawMessage, caps Capabilities, l Level) map[string]any {
@@ -210,7 +210,7 @@ const (
 	ThinkingAntLing
 	// ThinkingAnthropic is the Messages budget shape, an ajent extension.
 	ThinkingAnthropic
-	// ThinkingThinkTags sends no request parameter; reasoning is parsed back
+	// ThinkingThinkTags sends no request parameter, since reasoning is parsed back
 	// out of content with inline tags. An ajent extension for local models.
 	ThinkingThinkTags
 )

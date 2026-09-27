@@ -31,7 +31,7 @@ func TestStatusRows(t *testing.T) {
 
 	t.Run("context_survives_narrow_width", func(t *testing.T) {
 		s := Status{Model: "opus-5", Tokens: 68200, MaxTokens: 200000}
-		// the fixed part alone overflows; row one is clipped to width and stays single
+		// the fixed part alone overflows, row one is clipped to width and stays single
 		assert.Equal(t, []string{"▓▓▓▓░░░░░░ 68.2k/200k"}, single(s, 21))
 	})
 
@@ -89,7 +89,7 @@ func TestStatusRows(t *testing.T) {
 			{Key: "hint", Text: "again to quit", Short: "again", Order: 70, Priority: -1},
 			{Key: "plan", Text: "planning now", Short: "plan", Order: 50, Priority: 2},
 		}}
-		want := "m · plan · again to quit" // the positive one collapses; the negative holds
+		want := "m · plan · again to quit" // the positive one collapses, the negative holds
 		assert.Equal(t, []string{want}, single(s, displayWidth(want)))
 	})
 
@@ -105,7 +105,7 @@ func TestStatusRows(t *testing.T) {
 	})
 
 	t.Run("model_collapses_before_higher_priorities", func(t *testing.T) {
-		// reasoning yields first, then the long model label; plan keeps its full text
+		// reasoning yields first, then the long model label, plan keeps its full text
 		s := Status{Model: "opus-very-long-name", ModelShort: "opus", Segments: []Segment{
 			{Key: "reasoning", Text: "xhigh", Short: "xh", Order: 20, Priority: 0},
 			{Key: "plan", Text: "planning now", Short: "plan", Order: 50, Priority: 2},

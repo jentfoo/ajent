@@ -71,7 +71,7 @@ func (s *searchOverlay) key(k key) searchAction {
 	case keyReverseSearch:
 		s.cursor = wrapIndex(s.cursor+1, len(s.matches)) // older match
 		return searchStay
-	// Enter and the first Escape both select the highlighted match; a second
+	// Enter and the first Escape both select the highlighted match. A second
 	// Escape (now that the overlay is closed) clears via the editor's own handler.
 	case keyEnter, keyEscape:
 		if _, ok := s.current(); ok {
@@ -100,7 +100,7 @@ func matchSpans(text, q string) [][2]int {
 	}
 	lower := strings.ToLower(text)
 	if len(lower) != len(text) {
-		return nil // lowering moved the byte offsets; a shifted highlight is worse than none
+		return nil // lowering moved the byte offsets, so a shifted highlight is worse than none
 	}
 	var spans [][2]int
 	for i := 0; ; {
@@ -168,7 +168,7 @@ func (s *searchOverlay) rows(t Theme, width, maxRows int) []string {
 	return out
 }
 
-// highlightLine emphasizes every query occurrence in one text line; a no-op on plain.
+// highlightLine emphasizes every query occurrence in one text line. A no-op on plain.
 func highlightLine(t Theme, text, q string) string {
 	if q == "" {
 		return text

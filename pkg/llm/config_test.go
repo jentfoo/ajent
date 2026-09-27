@@ -287,8 +287,8 @@ func TestDialectUnmarshalText(t *testing.T) {
 	})
 
 	t.Run("unsupported_is_not_an_error", func(t *testing.T) {
-		// some configs name protocols ajent cannot speak; failing on one would cost
-		// the user every other provider in the file
+		// some configs name protocols ajent cannot speak. Failing on one would cost
+		// the user every other provider in the file.
 		var got Dialect
 		require.NoError(t, got.UnmarshalText([]byte("google-generative-ai")))
 		assert.Equal(t, DialectUnknown, got)

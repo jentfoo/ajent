@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// Layer is one configuration source at a precedence position. Name identifies
-// the layer for Explain ("default", "user", ...); Path names its file when it has
-// one; Data holds its raw JSON.
+// Layer is one configuration source at a precedence position. Name identifies the
+// layer for Explain ("default", "user", ...), Path names its file when it has
+// one, and Data holds its raw JSON.
 type Layer struct {
 	Name string
 	Path string
@@ -46,9 +46,9 @@ func (r Resolved) Explain(key string) (json.RawMessage, string, bool) {
 // Source returns the layer name that supplied key's value.
 func (r Resolved) Source(key string) string { return r.src[key] }
 
-// Merge folds layers in order into one configuration: later layers win per leaf,
+// Merge folds layers in order into one configuration. Later layers win per leaf,
 // objects merge deeply, arrays and scalars replace. It is provenance tracking on
-// top of the same deep-merge semantics; use it when you need Explain.
+// top of the same deep-merge semantics, so use it when you need Explain.
 func Merge(layers ...Layer) (Resolved, error) {
 	root := &val{k: kindObj, obj: &object{m: make(map[string]*val)}}
 	src := make(map[string]string)

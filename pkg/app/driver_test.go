@@ -117,7 +117,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 		poll:    5 * time.Millisecond,
 		pending: q.pending,
 	}
-	// status is the only place a held boundary signals; non-empty text means engaged
+	// status is the only place a held boundary signals, non-empty text means engaged
 	gate.status = func(text, short string) {
 		if text == "" {
 			return
@@ -138,7 +138,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	})
 
 	in := agent.Input{Text: "start"}
-	q.offer(in, "start", 0) // starts the drain; not queued
+	q.offer(in, "start", 0) // starts the drain, not queued
 	gate.taken()            // runPump clears any handoff before spawning a turn
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), in) }()
@@ -151,7 +151,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	}
 	gate.edit("draft") // the user is composing a message
 
-	close(release) // step one finishes; AwaitInput at step two holds on the draft
+	close(release) // step one finishes, AwaitInput at step two holds on the draft
 	select {
 	case <-held:
 	case <-time.After(time.Second):
@@ -353,7 +353,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 	t.Parallel()
 
 	newMgr := func() (*subagent.Manager, *atomic.Int32) {
-		var delivered atomic.Int32 // steers accepted by Deliver; Delivered never fires
+		var delivered atomic.Int32 // steers accepted by Deliver, Delivered never fires
 		mgr := subagent.New(subagent.Options{
 			Provider: func(llm.Model) (llm.Provider, error) {
 				return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("summary")}}}, nil
@@ -375,7 +375,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 
 	startTask := func(t *testing.T, m *subagent.Manager) string {
 		t.Helper()
-		for _, tool := range m.Tools() { // spawn through the agent_start tool; no exported Start
+		for _, tool := range m.Tools() { // spawn through the agent_start tool, no exported Start
 			if tool.Name() != "agent_start" {
 				continue
 			}
@@ -397,11 +397,11 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		settle(t, mgr, id)
 
 		sink := subagentSink{mgr: mgr}
-		// the completed job is queued just after StatusDone publishes; flush until its
+		// the completed job is queued just after StatusDone publishes, flush until its
 		// steer lands so this never races enqueue.
 		require.Eventually(t, func() bool {
 			if delivered.Load() == 0 {
-				mgr.Flush() // steer accepted; the mark is now in flight
+				mgr.Flush() // steer accepted, the mark is now in flight
 			}
 			return delivered.Load() >= 1
 		}, 2*time.Second, 5*time.Millisecond)
@@ -421,13 +421,13 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 		sink := subagentSink{mgr: mgr}
 		require.Eventually(t, func() bool {
 			if delivered.Load() == 0 {
-				mgr.Flush() // steer accepted; the mark is now in flight
+				mgr.Flush() // steer accepted, the mark is now in flight
 			}
 			return delivered.Load() >= 1
 		}, 2*time.Second, 5*time.Millisecond)
 
 		sink.TurnEnd(agent.TurnResult{Stop: llm.StopEndTurn}) // no release
-		mgr.Flush()                                           // still in flight; nothing may re-offer
+		mgr.Flush()                                           // still in flight, nothing may re-offer
 		assert.EqualValues(t, 1, delivered.Load())
 	})
 }
@@ -629,7 +629,7 @@ func TestClassifierAdapterRequestUsesFreshContextNoReasoning(t *testing.T) {
 		}
 	}
 	assert.Contains(t, sys.String(), `"allow"`)
-	// the classifier never reasons; off stays off whatever the model supports
+	// the classifier never reasons, off stays off whatever the model supports
 	assert.Equal(t, llm.ClampLevel(model, llm.LevelOff), r.Reasoning.Level)
 }
 

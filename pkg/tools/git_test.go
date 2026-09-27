@@ -166,7 +166,7 @@ func TestGitStatusLines(t *testing.T) {
 		"n.txt": {Staging: git.Untracked, Worktree: git.Untracked},
 		"c.txt": {Staging: git.Unmodified, Worktree: git.Unmodified}, // Preload artifact
 		"r.txt": {Staging: git.Renamed, Worktree: git.Unmodified, Extra: "old.txt"},
-		"d.txt": {Staging: git.Untracked, Worktree: git.Untracked}, // under tracked dir/ — no collapse
+		"d.txt": {Staging: git.Untracked, Worktree: git.Untracked}, // under tracked dir/, no collapse
 	}
 	lines, staged, unstaged, untracked := gitStatusLines(st, []string{"dir/file.bin"})
 	assert.Equal(t, 2, staged)

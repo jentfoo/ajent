@@ -97,7 +97,7 @@ func TestUIAsk(t *testing.T) {
 		}
 		go func() { _, _ = u.Ask(t.Context(), Question{Text: many.String()}) }()
 
-		waitFor(t, u, v, "… +") // the marker names the hidden lines; its count follows the cap
+		waitFor(t, u, v, "… +") // the marker names the hidden lines, its count follows the cap
 		// the live block stays inside its share of a 12 row screen, divider included
 		require.Eventually(t, func() bool {
 			return liveRowCount(u.snapshot(v)) <= 8

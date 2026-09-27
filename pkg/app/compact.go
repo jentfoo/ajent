@@ -28,19 +28,19 @@ type compactor struct {
 	notify      func(msg string, level agent.Level)
 	busy        func() func()
 	providerFor func(llm.Model) (llm.Provider, error)
-	// focus supplies a caller's summariser instructions for automatic runs; an
+	// focus supplies a caller's summariser instructions for automatic runs, but an
 	// explicit /compact <instructions> still wins. nil leaves runs unguided.
 	focus func() string
 	// cfg supplies live compaction settings so a /settings edit takes effect on the
-	// next run; nil means the built-in defaults with automatic reduction on.
+	// next run, and nil means the built-in defaults with automatic reduction on.
 	cfg func() config.Compaction
 	// autoDisabled latches the automatic triggers off once a real fold attempt could
-	// not reduce; only a summariser call or a hard failure sets it, never "nothing
+	// not reduce. Only a summariser call or a hard failure sets it, never "nothing
 	// worth folding yet". Atomic because automatic runs land on the turn goroutine
 	// and /compact on the console's.
 	autoDisabled atomic.Bool
 	// stalled holds the step trigger for the rest of a turn whose compaction
-	// succeeded without clearing the point; the turn boundary re-arms it.
+	// succeeded without clearing the point, and the turn boundary re-arms it.
 	stalled atomic.Bool
 	warned  atomic.Bool // one reminder per turn, reset at the turn boundary
 }
@@ -88,8 +88,8 @@ func (c *compactor) compaction() config.Compaction {
 }
 
 // run performs one compaction for reason, returning whether anything changed. A manual run refuses
-// while a turn streams; an automatic run only acts when Used has crossed the model's compaction
-// point; step and overflow runs fire mid-turn from the turn's own goroutine.
+// while a turn streams. An automatic run only acts when Used has crossed the model's compaction
+// point. Step and overflow runs fire mid-turn from the turn's own goroutine.
 func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instructions string) (bool, error) {
 	if !reason.MidTurn() && c.ag != nil && c.ag.Running() {
 		c.notify("compaction refused: press Esc to stop the turn first", agent.LevelWarn)
@@ -113,7 +113,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 			return false, nil // not at the compaction point yet
 		}
 		if c.stalled.Load() {
-			return false, nil // this turn already cut as far as it can; retry at its boundary
+			return false, nil // this turn already cut as far as it can, retry at its boundary
 		}
 		if c.autoDisabled.Load() {
 			if !c.warned.Swap(true) {
@@ -129,7 +129,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	if err != nil || len(entries) == 0 {
 		return false, nil
 	}
-	// plan against the live head, not the file tail; they differ after a rewind
+	// plan against the live head, not the file tail (they differ after a rewind)
 	branch := session.Branch(entries, c.rec.w.Head())
 
 	provider, perr := c.providerFor(model)
@@ -138,12 +138,12 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		return false, perr
 	}
 	// a decline is only evidence this session cannot reduce once a fold was really
-	// attempted; declining before this ran means there is nothing worth folding yet
+	// attempted, and declining before this ran means there is nothing worth folding yet
 	var attempted bool
 	run := func(ctx context.Context, req llm.Request) (string, error) {
 		attempted = true
 		// the summariser call is the slow part, and a step run stalls a turn the user
-		// is watching; a free decline never reaches here, so this cannot cry wolf
+		// is watching, and a free decline never reaches here, so this cannot cry wolf
 		c.notify("compacting "+strutil.FormatTokens(c.used())+"…", agent.LevelInfo)
 		text, usage, serr := llm.RunSummary(ctx, provider, req)
 		if t := c.st.Tokens; t != nil && serr == nil {
@@ -161,7 +161,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 	if base == 0 {
 		if t := c.st.Tokens; t != nil {
-			base = t.Base() // mid-turn BaseEstimate reports 0; the ledger holds the real value
+			base = t.Base() // mid-turn BaseEstimate reports 0, the ledger holds the real value
 		}
 	}
 	if instructions == "" && c.focus != nil {
@@ -207,7 +207,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 
 	// rebuild from the persisted transcript and swap the context into the live
 	// state so every holder sees the reduced messages. A failed re-read must not
-	// empty the live agent; the persisted entry applies on the next rebuild.
+	// empty the live agent. The persisted entry applies on the next rebuild.
 	entries2, _, rerr := session.Read(path)
 	if rerr != nil {
 		c.notify("compaction recorded but the state rebuild failed", agent.LevelWarn)
@@ -242,7 +242,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	c.resumeAuto() // this session still reduces
 	if autoReason(reason) && c.overPoint(model) {
 		// the best cut available did not clear the point, so the next step would fold
-		// one more step for another whole summariser call; wait for the turn boundary
+		// one more step for another whole summariser call, wait for the turn boundary
 		c.stalled.Store(true)
 	}
 	return true, nil

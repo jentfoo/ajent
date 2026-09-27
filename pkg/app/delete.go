@@ -13,12 +13,12 @@ import (
 // DeleteOptions names what --delete and --delete-old act on: one target by
 // name or id, or the stale-session sweep over OldDays.
 type DeleteOptions struct {
-	Target  string // --delete <name|id>; empty runs the sweep instead
+	Target  string // --delete <name|id>, empty runs the sweep instead
 	OldDays int    // --delete-old window in days
 }
 
 // RunDelete removes saved sessions per --delete or --delete-old and returns
-// the process exit code. Progress goes to out; in answers the sweep's confirmation.
+// the process exit code. Progress goes to out. In answers the sweep's confirmation.
 func RunDelete(out io.Writer, in io.Reader, o DeleteOptions) int {
 	store, err := session.NewStore()
 	if err == nil {

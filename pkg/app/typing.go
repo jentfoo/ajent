@@ -16,8 +16,8 @@ const (
 // typingGate holds a step boundary while the user is mid-message, so a prompt they
 // are still typing lands in this step instead of the next. Windows are fields so tests can shorten them.
 type typingGate struct {
-	pending func() int               // queued steer items; nil-safe
-	status  func(text, short string) // status segment; empty text removes it
+	pending func() int               // queued steer items, nil-safe
+	status  func(text, short string) // status segment, empty text removes it
 	idle    time.Duration            // unchanged draft resumes the boundary after this
 	handoff time.Duration            // grace for a submitted line to reach the queue
 	poll    time.Duration            // hold re-check interval
@@ -29,7 +29,7 @@ type typingGate struct {
 	session  int       // incremented on each clear, so a retype restarts the countdown
 }
 
-// edit records a draft change. A clear ends the typing session; a visible draft
+// edit records a draft change. A clear ends the typing session, a visible draft
 // supersedes any handoff wait.
 func (g *typingGate) edit(text string) {
 	g.mu.Lock()
@@ -38,7 +38,7 @@ func (g *typingGate) edit(text string) {
 	case text != "":
 		g.inFlight = false
 	case g.draft != "":
-		g.session++ // a clear ends one session; retyping begins another
+		g.session++ // a clear ends one session, retyping begins another
 	}
 	g.draft = text
 	g.at = time.Now()
@@ -65,8 +65,8 @@ func (g *typingGate) taken() {
 // hold is the AwaitInput hook: it waits at a step boundary while a draft is being
 // typed or a just-submitted line is still reaching the queue. ctx cancels on an interrupt.
 func (g *typingGate) hold(ctx context.Context) {
-	var shown bool      // published; cleared on exit so an unheld boundary repaints nothing
-	last := -1          // last displayed second; forces the first publish
+	var shown bool      // published, cleared on exit so an unheld boundary repaints nothing
+	last := -1          // last displayed second, forces the first publish
 	var lastSession int // session the current countdown dedup is for
 	defer func() {
 		if !shown || g.status == nil {
@@ -94,7 +94,7 @@ func (g *typingGate) hold(ctx context.Context) {
 		case draft != "":
 			deadline = at.Add(g.idle)
 			countdown = true // only a visible draft shows the countdown
-			// a clear ended the previous session; retyping must republish its own
+			// a clear ended the previous session, retyping must republish its own
 			// countdown, even when the remaining seconds match what was shown before
 			if session != lastSession {
 				last = -1
@@ -109,18 +109,18 @@ func (g *typingGate) hold(ctx context.Context) {
 
 		if !g.wait(ctx, deadline, countdown, &shown, &last) {
 			if !countdown {
-				// the handoff grace elapsed; it must never stall a later boundary too
+				// the handoff grace elapsed, it must never stall a later boundary too
 				g.mu.Lock()
 				g.inFlight = false
 				g.mu.Unlock()
 			}
-			return // cancelled or window elapsed; defer clears a published segment
+			return // cancelled or window elapsed, defer clears a published segment
 		}
 	}
 }
 
 // wait sleeps one poll step toward deadline. It publishes the remaining-seconds
-// status when counting down and republishes only as the displayed second changes;
+// status when counting down and republishes only as the displayed second changes,
 // it reports false once cancelled or the window elapsed.
 func (g *typingGate) wait(ctx context.Context, deadline time.Time, countdown bool, shown *bool, last *int) bool {
 	if ctx.Err() != nil {
@@ -128,7 +128,7 @@ func (g *typingGate) wait(ctx context.Context, deadline time.Time, countdown boo
 	}
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
-		return false // the window elapsed; let the boundary resume
+		return false // the window elapsed, let the boundary resume
 	}
 	poll := g.poll
 	if poll <= 0 {
@@ -151,7 +151,7 @@ func (g *typingGate) wait(ctx context.Context, deadline time.Time, countdown boo
 // displayed second changes.
 func (g *typingGate) publishStatus(deadline time.Time, shown *bool, last *int) {
 	secs := int((time.Until(deadline) + time.Second - 1) / time.Second)
-	if secs <= 0 || secs == *last { // never show 0; republish only on a second change
+	if secs <= 0 || secs == *last { // never show 0, republish only on a second change
 		return
 	}
 	*last = secs

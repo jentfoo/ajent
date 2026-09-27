@@ -175,7 +175,7 @@ func TestStepHookReducesContextMidTurn(t *testing.T) {
 			if r != CompactStep || swapped || len(a.state.Messages) == 0 {
 				return false, nil
 			}
-			// WithState refuses on the turn goroutine; the compactor writes directly
+			// WithState refuses on the turn goroutine, the compactor writes directly
 			assert.False(t, a.WithState(func(*State) {}))
 			a.state.Messages = []llm.Message{llm.Text(llm.RoleUser, "<summary>")}
 			swapped = true

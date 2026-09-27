@@ -40,13 +40,13 @@ const (
 	flowWrap                   // carries alignment: alt wraps it keeping the hanging indent, inline emits it whole like prose
 )
 
-// histLine is one committed logical line. text never contains a newline;
+// histLine is one committed logical line, and text never contains a newline.
 // commitHist enforces that by construction (splitHistLines).
 type histLine struct {
 	text    string
 	flow    lineFlow
-	table   *mdTable   // non-nil for a markdown table; laid out fresh at each width
-	image   *histImage // non-nil for a terminal image; emitted verbatim, never re-wrapped
+	table   *mdTable   // non-nil for a markdown table, laid out fresh at each width
+	image   *histImage // non-nil for a terminal image, emitted verbatim never re-wrapped
 	rule    bool       // true: a horizontal rule drawn to fit the width it is laid at
 	divider bool       // true: a solid full-width band marking a session boundary
 	style   Style      // styling re-applied when rendering a rule or divider (or empty)
@@ -69,7 +69,7 @@ func (l histLine) rows(width int) []string {
 		return layoutTable(l.table, width)
 	case l.rule:
 		// a rule is drawn to fit whatever width it is laid at, not the one it
-		// was committed with; style is re-applied so re-laying matches commit.
+		// was committed with. Style is re-applied so re-laying matches commit.
 		txt := strings.Repeat(ruleChar, max(width, minRuleWidth))
 		if l.style.Open() != "" {
 			txt = l.style.Wrap(txt)
@@ -77,7 +77,7 @@ func (l histLine) rows(width int) []string {
 		return []string{txt}
 	case l.divider:
 		// a solid full-width band, re-filled at the width it is laid at so
-		// resize reproduces commit; style carries the background that makes it read.
+		// resize reproduces commit. Style carries the background that makes it read.
 		return []string{dividerRow(l.style, max(width, minRuleWidth))}
 	case l.image != nil:
 		// the protocol sequence where the mode draws images, else the
@@ -164,11 +164,11 @@ type renderer interface {
 	start(inFd int) error
 	commit(lines []histLine)
 	setLive(rows []string, caretRow, caretCol int)
-	clearHistory() // drop retained lines where the mode owns scrollback (alt); no-op elsewhere
+	clearHistory() // drop retained lines where the mode owns scrollback (alt), no-op elsewhere
 	resize()
-	setTheme(t Theme)               // recolor what the mode draws itself; committed bytes are untouched
+	setTheme(t Theme)               // recolor what the mode draws itself, committed bytes are untouched
 	probe()                         // ask the terminal for a status reply, a barrier against mid-reflow draws
-	reanchor(row int, started bool) // take the reported park row; pad the next full draw when the block lost the screen bottom
+	reanchor(row int, started bool) // take the reported park row and pad the next full draw when the block lost the screen bottom
 	query(seq string)               // write a terminal query verbatim, for replies read off the input stream
 	scroll(lines int) bool          // false when the mode has no viewport of its own
 	suspend(inFd int)               // hand the terminal back to another program
@@ -178,7 +178,7 @@ type renderer interface {
 }
 
 // ResolveMode returns the paint mode to use. Multiplexers do not reflow their
-// buffers on resize, so they get the alternate screen; everything else keeps the
+// buffers on resize, so they get the alternate screen. Everything else keeps the
 // terminal's native scrollback.
 func ResolveMode(want Mode, env func(string) string, isTTY bool) Mode {
 	if !isTTY || env("TERM") == "" || env("TERM") == "dumb" {
@@ -292,14 +292,14 @@ type plainRenderer struct {
 	out io.Writer
 }
 
-func (p *plainRenderer) clearHistory()   {} // plain prints lines; nothing retained
+func (p *plainRenderer) clearHistory()   {} // plain prints lines, nothing retained
 func (p *plainRenderer) start(int) error { return nil }
 
 func (p *plainRenderer) commit(lines []histLine) {
 	var b strings.Builder
 	for _, l := range lines {
 		if l.structured() {
-			// rows() lays intent out as text; plain's ColorNone theme means a
+			// rows() lays intent out as text. Plain's ColorNone theme means a
 			// rule's style is empty, so no SGR leaks into a pipe
 			for _, row := range l.rows(defaultWidth) {
 				b.WriteString(row)
@@ -316,8 +316,8 @@ func (p *plainRenderer) commit(lines []histLine) {
 func (p *plainRenderer) setLive([]string, int, int) {}
 func (p *plainRenderer) resize()                    {}
 func (p *plainRenderer) setTheme(Theme)             {} // plain never colors anything
-func (p *plainRenderer) probe()                     {} // plain draws nothing; no barrier needed
-func (p *plainRenderer) reanchor(int, bool)         {} // plain never addresses rows; nothing to re-anchor
+func (p *plainRenderer) probe()                     {} // plain draws nothing, no barrier needed
+func (p *plainRenderer) reanchor(int, bool)         {} // plain never addresses rows, nothing to re-anchor
 func (p *plainRenderer) query(string)               {} // a pipe has no terminal to ask
 func (p *plainRenderer) scroll(int) bool            { return false }
 func (p *plainRenderer) suspend(int)                {}

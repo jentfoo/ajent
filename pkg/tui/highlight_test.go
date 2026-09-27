@@ -88,7 +88,7 @@ func TestHighlight(t *testing.T) {
 	})
 
 	t.Run("no_newline_within_a_row", func(t *testing.T) {
-		// a histLine is one terminal row; a break inside a styled span would corrupt
+		// a histLine is one terminal row, and a break inside a styled span would corrupt
 		// the layout and cannot be trimmed off afterwards
 		for _, row := range highlight(th, "go", "s := `multi\nline`\nx := 1") {
 			assert.NotContains(t, row, "\n")

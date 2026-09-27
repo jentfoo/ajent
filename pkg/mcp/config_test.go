@@ -149,7 +149,7 @@ func TestValidateServer(t *testing.T) {
 func TestValidateServerName(t *testing.T) {
 	t.Parallel()
 
-	cfg := ServerConfig{Command: "x"} // connection fields are valid; the name is under test
+	cfg := ServerConfig{Command: "x"} // connection fields are valid, the name is under test
 	require.NoError(t, validateServer("github", cfg))
 
 	cases := []struct {

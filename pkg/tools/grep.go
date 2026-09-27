@@ -112,13 +112,13 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		switch {
 		case blockMode && cut:
 			// context rides whole blocks bounded by the output limit, never an exact match
-			// count; a cut means matches beyond GrepResult went unseen even under an explicit
+			// count. A cut means matches beyond GrepResult went unseen even under an explicit
 			// max, so always name it.
 			note = resultCapNote(GrepResultLimit().Lines)
-		case mode == grepCount || (cut && p.Limit <= 0): // budget spent; mirror the fallback's note
+		case mode == grepCount || (cut && p.Limit <= 0): // budget spent, mirror the fallback's note
 			note = resultCapNote(max)
 		}
-		if warn != "" { // rg warned about paths it could not read; mirror the fallback's note
+		if warn != "" { // rg warned about paths it could not read, mirror the fallback's note
 			note = joinNotes(note, "rg: "+strutil.FirstLine(warn))
 		}
 		// Display mirrors the model-visible text
@@ -177,7 +177,7 @@ func (p grepParams) compile() (*regexp.Regexp, error) {
 const maxGrepWorkers = 8
 
 // goSearch walks cwd with the compiled matcher when rg is unavailable. Scans
-// run concurrently in walk order; the assembled output matches the sequential
+// run concurrently in walk order. The assembled output matches the sequential
 // walk byte for byte, budget included.
 func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode string, re *regexp.Regexp, max int) agent.ToolResult {
 	type fileMatch struct {
@@ -185,7 +185,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 		hits []grepHit
 		ends []int // ends[i]: exclusive hits index at match i's context block end
 		n    int
-		skip bool // inspected but binary or unreadable; can hold no matches
+		skip bool // inspected but binary or unreadable, can hold no matches
 	}
 	var paths []string
 	for _, path := range repoFiles(ctx, cwd) { // .gitignore semantics on the fallback too
@@ -220,7 +220,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 				var m fileMatch
 				f, err := os.Open(path)
 				if err != nil {
-					m.skip = true // inspected but unreadable; report it as not searched
+					m.skip = true // inspected but unreadable, report it as not searched
 					results[i-lo] = m
 					return
 				}
@@ -228,7 +228,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 				head := make([]byte, sniffLen)
 				n, _ := io.ReadFull(f, head) // n < len(head) when the whole file fit
 				if binary(head[:n]) {
-					m.skip = true // inspected but unsearchable; report it as not searched
+					m.skip = true // inspected but unsearchable, report it as not searched
 					results[i-lo] = m
 					return
 				}
@@ -237,12 +237,12 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 				case n < len(head): // whole file fit in the sniff window: no remainder to read
 					data = head[:n]
 				default:
-					// a text file continues on the same handle; binaries never load past the
+					// a text file continues on the same handle. Binaries never load past the
 					// sniff, so a big binary is rejected without its full bytes ever allocated.
 					var buf bytes.Buffer // accumulates head + remainder into one backing array
 					buf.Write(head)
 					if _, rerr := io.Copy(&buf, f); rerr != nil {
-						m.skip = true // inspected but unreadable; report it as not searched
+						m.skip = true // inspected but unreadable, report it as not searched
 						results[i-lo] = m
 						return
 					}
@@ -273,7 +273,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 			}
 			n := m.n
 			if mode != grepFiles && remaining > 0 && n > remaining {
-				n = remaining // trim to the shared budget; files mode spends one per file
+				n = remaining // trim to the shared budget, files mode spends one per file
 			}
 			switch mode {
 			case grepCount:
@@ -317,7 +317,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 	trimmed := strings.TrimRight(b.String(), "\n")
 	note := capNote(trimmed, p.Limit, max, mode)
 	if mode == grepCount && remaining <= 0 {
-		note = resultCapNote(max) // the budget was spent; a trimmed count reads as authoritative
+		note = resultCapNote(max) // the budget was spent, so a trimmed count reads as authoritative
 	}
 	if skipped > 0 { // only when something could not be searched: results may miss matches there
 		n := fmt.Sprintf("%d file(s) not searched (binary/unreadable); results may be incomplete", skipped)
@@ -330,7 +330,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 // note, when non-empty, rides after the bounded text and its footer, so the
 // bound never cuts it.
 func (t *grepTool) finalize(out, note string) agent.ToolResult {
-	out = normalizeToLF(out) // rg and go paths both carry \r on CRLF files; LF-only to the model
+	out = normalizeToLF(out) // rg and go paths both carry \r on CRLF files, LF-only to the model
 	text, _ := truncateOutput(t.sessionID, ToolGrep, out, GrepResultLimit(), "")
 	if note != "" {
 		text += "\n" + note
@@ -344,8 +344,8 @@ func rgOnPath() bool { return lookPath("rg") }
 // runRg streams ripgrep output until the report is complete, then cancels rg
 // so a deep tree with many matches does not keep scanning. Returns the result,
 // whether the budget was spent (cut), any benign stderr warning (warn) to mirror
-// the fallback's incomplete-coverage note, and any failure; exit status 1 means
-// "no matches" but an early cancel ignores whatever exit code follows.
+// the fallback's incomplete-coverage note, and any failure. Exit status 1 means
+// "no matches", while an early cancel ignores whatever exit code follows.
 func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) (string, bool, string, error) {
 	args := []string{"--no-heading", "--color=never"}
 	switch mode {
@@ -371,7 +371,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 		args = append(args, "--glob", p.Glob)
 	}
 	if mode != grepCount {
-		args = append(args, "-m", strconv.Itoa(max)) // per-file bound; the stream stops globally
+		args = append(args, "-m", strconv.Itoa(max)) // per-file bound, the stream stops globally
 	}
 	args = append(args, "--", p.Pattern, cwd)
 
@@ -389,7 +389,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 	var b strings.Builder
 	stopped := false                         // true once the report filled and rg was cancelled early
 	var cut bool                             // true once the budget is spent
-	r := bufio.NewReaderSize(stdout, 64<<10) // no line-length cap; minified lines survive
+	r := bufio.NewReaderSize(stdout, 64<<10) // no line-length cap, minified lines survive
 	switch {
 	case mode == grepCount:
 		kept := 0 // matches shown across trimmed counts
@@ -404,7 +404,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 			if rerr != nil {  // rg finished naturally
 				break
 			}
-			if cut { // a further file would be withheld whole; stop scanning the tree
+			if cut { // a further file would be withheld whole, stop scanning the tree
 				stopped = true
 				_ = cmd.Cancel()
 				break
@@ -413,7 +413,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 	case blockMode:
 		// rg never marks context vs matched lines, so a strict line cut mid-block
 		// would leave dangling context. Bound the stream by the output limit and
-		// cancel there instead; finalize then names anything beyond GrepResult.
+		// cancel there instead. Finalize then names anything beyond GrepResult.
 		lim := GrepResultLimit()
 		for {
 			ln, rerr := r.ReadString('\n')
@@ -432,7 +432,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 			}
 		}
 	default: // content without context, or files: every line is one match
-		var lines int // kept output lines; each equals a match here
+		var lines int // kept output lines, each equals a match here
 		for {
 			ln, rerr := r.ReadString('\n')
 			if ln != "" {
@@ -451,7 +451,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 		}
 	}
 
-	waitErr := cmd.Wait() // reap; a cancelled run always reports an error, handled below
+	waitErr := cmd.Wait() // reap, an error on every cancelled run, handled below
 	var warn string       // benign stderr (partial-coverage warnings) to surface like the fallback does
 	if !stopped && waitErr != nil {
 		var ee *exec.ExitError

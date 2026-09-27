@@ -1,7 +1,7 @@
 // Package mcp is the Model Context Protocol client: it connects to stdio and
 // network MCP servers declared in mcp.json, bridges their tools into agent.Tool,
 // and supervises each server's lifecycle. The protocol layer delegates to
-// github.com/mark3labs/mcp-go; what we own here is config, namespacing, enable
+// github.com/mark3labs/mcp-go. What we own here is config, namespacing, enable
 // state, progress mapping and process supervision.
 package mcp
 
@@ -16,12 +16,12 @@ import (
 )
 
 // ServerConfig is one server declaration from mcp.json. Exactly one of Command
-// and URL selects the transport; the rest tune lifecycle and filtering.
+// and URL selects the transport. The rest tune lifecycle and filtering.
 type ServerConfig struct {
 	Command      string            `json:"command,omitempty"`
 	Args         []string          `json:"args,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
-	Transport    string            `json:"transport,omitempty"` // "http", "stdio" or legacy "sse"; inferred when absent
+	Transport    string            `json:"transport,omitempty"` // "http", "stdio" or legacy "sse", inferred when absent
 	URL          string            `json:"url,omitempty"`
 	Headers      map[string]string `json:"headers,omitempty"`
 	Enabled      *bool             `json:"enabled,omitempty"`
@@ -42,7 +42,7 @@ type ToolFilter struct {
 	Deny  []string `json:"deny,omitempty"`
 }
 
-// Transport kinds a server may declare or infer. stdio runs a command; http and
+// Transport kinds a server may declare or infer. stdio runs a command, http and
 // sse dial a url.
 const (
 	TransportStdio = "stdio"
@@ -70,7 +70,7 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 
 	for name, cfg := range merged {
 		if err := validateServerName(name); err != nil {
-			// a bad key must not disable every server; the owner renames it
+			// a bad key must not disable every server, the owner renames it
 			warnings = append(warnings, err.Error()+"; skipped")
 			delete(merged, name)
 			continue
@@ -224,7 +224,7 @@ func validateServer(name string, cfg ServerConfig) error {
 		return fmt.Errorf("server %q: unknown transport %q, want stdio, http or sse", name, cfg.Transport)
 	}
 	t := transportKind(cfg)
-	switch t { // stdio needs a command; http/sse need a url
+	switch t { // stdio needs a command, http/sse need a url
 	case TransportStdio:
 		if cfg.Command == "" {
 			return fmt.Errorf("server %q: transport %q requires a command", name, t)

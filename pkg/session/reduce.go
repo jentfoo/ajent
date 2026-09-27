@@ -38,7 +38,7 @@ type Stats struct {
 // applying cd's cut point and structural reductions. Warnings name entries it
 // could not use. When resolve is non-nil each assistant message is stamped with
 // the model that produced it (walking session and model_change entries) so cross-
-// model degradation can act on resume; a nil resolve leaves messages unstamped.
+// model degradation can act on resume, a nil resolve leaving messages unstamped.
 func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (llm.Model, error)) ([]llm.Message, []string) {
 	var msgs []llm.Message
 	var warns []string
@@ -109,9 +109,9 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 		}
 		reduced := applyReduce(md.Message, stripThinking, stubs)
 		// stripping thinking can leave an assistant message with no content at all (it
-		// held only thinking blocks); providers reject empty assistant messages. Drop such
-		// entries only when we actually stripped; a pre-existing empty assistant is left
-		// as recorded so resume keeps exactly the context it had.
+		// held only thinking blocks). Providers reject empty assistant messages, so drop such
+		// entries only when we actually stripped, leaving a pre-existing empty assistant as
+		// recorded to resume keeps exactly the context it had.
 		if stripThinking && md.Message.Role == llm.RoleAssistant && len(reduced.Content) == 0 {
 			continue
 		}
@@ -177,7 +177,7 @@ func applyReduce(m llm.Message, stripThinking bool, stubs map[string]Stub) llm.M
 		out = append(out, b)
 	}
 	if !changed {
-		return m // nothing was touched; reuse the caller's message
+		return m // nothing was touched, reuse the caller's message
 	}
 	return llm.Message{Role: m.Role, Content: out}
 }

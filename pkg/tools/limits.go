@@ -13,7 +13,7 @@ import (
 )
 
 // Limit bounds one tool's output. A zero field means that dimension is
-// unbounded; whichever bound is reached first truncates.
+// unbounded. Whichever bound is reached first truncates.
 type Limit struct {
 	Lines int
 	Bytes int
@@ -24,16 +24,16 @@ type Limit struct {
 var (
 	limitsMu    sync.RWMutex                           // guards every bound below together
 	bashOutput  = Limit{Lines: 200, Bytes: 64 << 10}   // rest of the stream spills to disk
-	readFile    = Limit{Lines: 1000, Bytes: 128 << 10} // native paging via offset; never spills
+	readFile    = Limit{Lines: 1000, Bytes: 128 << 10} // native paging via offset, never spills
 	findResult  = Limit{Lines: 100, Bytes: 16 << 10}
 	grepResult  = Limit{Lines: 100, Bytes: 16 << 10}
 	lsResult    = Limit{Lines: 100, Bytes: 16 << 10}
 	gitOutput   = Limit{Lines: 100, Bytes: 16 << 10}
 	otherOutput = Limit{Lines: 200, Bytes: 64 << 10} // MCP and any tool without its own bound
-	// refInject bounds a single @file injected in full; above either axis the
-	// reference is annotated with its shape instead so the model reads it explicitly.
+	// refInject bounds a single @file injected in full, above either axis the
+	// reference being annotated with its shape instead so the model reads it explicitly.
 	refInject = Limit{Lines: 500, Bytes: 128 << 10}
-	// refTotal caps total bytes for one message's references; once reached the rest
+	// refTotal caps total bytes for one message's references, and once reached the rest
 	// annotate rather than silently dropping a file.
 	refTotal = Limit{Bytes: 128 << 10}
 )
@@ -60,11 +60,11 @@ func GitResultLimit() Limit { return limitRead(&gitOutput) }
 // the sub-agent trio, plan tools and any extension.
 func OtherLimit() Limit { return limitRead(&otherOutput) }
 
-// RefInjectLimit bounds a single @file injected in full; above either axis the
-// reference is annotated with its shape instead.
+// RefInjectLimit bounds a single @file injected in full, above either axis the
+// reference being annotated with its shape instead.
 func RefInjectLimit() Limit { return limitRead(&refInject) }
 
-// RefTotalLimit caps total bytes injected for one message; once reached the rest
+// RefTotalLimit caps total bytes injected for one message, and once reached the rest
 // annotate so no reference is silently lost.
 func RefTotalLimit() Limit { return limitRead(&refTotal) }
 
@@ -180,7 +180,7 @@ func Bound(s string, l Limit) Bounded {
 	}
 
 	b.Truncated = true
-	if len(kept) == 0 { // no complete line fit; cut the first alone on the rune
+	if len(kept) == 0 { // no complete line fit, cut the first alone on the rune
 		// budget alone. A byte-bound cut of one overlong line (a minified file)
 		// would leave the model a useless sliver, so MaxLineRunes is a floor here
 		kept = []string{capLine(strutil.FirstLine(s))}
@@ -207,7 +207,7 @@ func truncationNote(b Bounded, spillPath, paging string) string {
 
 // truncateOutput bounds out to lim, returning the kept text with a footer
 // naming the spill file holding the complete output. The bool reports whether
-// anything was cut. kind names the spill file; paging, when non-empty, names
+// anything was cut. kind names the spill file, and paging, when non-empty, names
 // the tool's own way to continue.
 func truncateOutput(sessionID, kind, out string, lim Limit, paging string) (string, bool) {
 	b := Bound(out, lim)
@@ -244,7 +244,7 @@ func capText(s string) string {
 // Elide returns s bounded by l and whether anything was dropped. When truncated,
 // content is kept from both ends with an ellipsis marker so the model still sees
 // the head (which usually carries errors) and the tail result. Text within the
-// bound is returned whole and uncapped; only retained lines of a truncated
+// bound is returned whole and uncapped. Only retained lines of a truncated
 // result are capped at MaxLineRunes, so one minified line cannot eat the budget.
 // Head+tail survival is for compaction's structural reduction only, while tool
 // output uses Bound.
@@ -398,7 +398,7 @@ func overBudget(s string, l Limit) bool {
 
 const elideMarker = "\n... [truncated]\n"
 
-// elidedText keeps the head and tail of s within l with a marker between; each
+// elidedText keeps the head and tail of s within l with a marker between. Each
 // retained line is capped so one overlong line cannot consume a whole allowance.
 func elidedText(s string, l Limit) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
@@ -439,7 +439,7 @@ const maxInt = int(^uint(0) >> 1)
 // splitBudget divides the byte budget between head and tail.
 func splitBudget(l Limit) (head, tail int) {
 	if l.Bytes <= 0 {
-		return maxInt / 2, maxInt / 2 // effectively unbounded; line cap governs
+		return maxInt / 2, maxInt / 2 // effectively unbounded, line cap governs
 	}
 	return l.Bytes / 2, l.Bytes - l.Bytes/2
 }

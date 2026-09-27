@@ -39,7 +39,7 @@ func TestFindUnsafeFlags(t *testing.T) {
 	}{
 		{"find . -exec rm {} ;", true},
 		{"find . -delete", true},
-		// -fprint and -fprintf are distinct patterns; neither matches the other
+		// -fprint and -fprintf are distinct patterns, neither matching the other
 		{"find . -fprint out.txt", true},
 		{"find . -fprintf f %p\\n", true},
 		{"find . -fls log", true},

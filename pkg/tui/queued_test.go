@@ -38,7 +38,7 @@ func TestUIQueued(t *testing.T) {
 		u.SetQueued(labels)
 
 		screen := u.snapshot(v)
-		// four listed plus a dim +2 more; the last two are hidden
+		// four listed plus a dim +2 more, the last two are hidden
 		for i := range 4 {
 			assert.Contains(t, screen, userMarker+"row "+strconv.Itoa(i))
 		}
@@ -132,7 +132,7 @@ func TestUIAltUpEmitsRecallQueued(t *testing.T) {
 	u.mu.Unlock()
 
 	assert.Nil(t, submit)
-	assert.False(t, dirty) // no repaint here; the driver updates via SetInput/PrependInput
+	assert.False(t, dirty) // no repaint here, the driver updates via SetInput/PrependInput
 	assert.False(t, quit)
 
 	select {

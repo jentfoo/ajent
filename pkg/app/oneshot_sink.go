@@ -70,7 +70,7 @@ func newTextSink(out, errw io.Writer) *textSink {
 }
 
 // Text streams a delta, holding trailing whitespace back until content follows.
-// A model routinely emits a blank block before a tool call; printing those runs
+// A model routinely emits a blank block before a tool call, so printing those runs
 // verbatim would scatter empty lines through the output, while dropping them
 // outright would flatten the paragraph breaks inside real prose.
 func (s *textSink) Text(delta string) {
@@ -118,7 +118,7 @@ func (s *textSink) endLineLocked() {
 	}
 }
 
-// ToolProgress records a call's target so ToolStart can name it; tools whose
+// ToolProgress records a call's target so ToolStart can name it, and tools whose
 // label is just their name carry no detail of their own.
 func (s *textSink) ToolProgress(p agent.ToolProgress) {
 	if p.Path == "" {

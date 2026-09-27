@@ -41,7 +41,7 @@ func Measure(path string) (Measurement, error) {
 	// classify from a bounded sniff, never the whole file
 	kind, err := sniffKind(path)
 	if err != nil {
-		// a read failure still yields the byte size; the model sees the path
+		// a read failure still yields the byte size, so the model sees the path
 		m.Kind = KindText
 		return m, nil
 	}
@@ -50,11 +50,11 @@ func Measure(path string) (Measurement, error) {
 		return m, nil
 	}
 	if info.Size() > MeasureCeiling {
-		return m, nil // too big to count lines; bytes already set
+		return m, nil // too big to count lines, bytes already set
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return m, nil // stat said it existed; treat a vanishing read as no lines
+		return m, nil // stat said it existed, treat a vanishing read as no lines
 	}
 	m.Lines = countLines(string(data))
 	return m, nil

@@ -10,7 +10,7 @@ import (
 
 // gitReadonlySubcommands are read-only for every flag except the ones checked
 // in gitReadOnly (--output, --ext-diff). Only commands with no write form at
-// all belong here; anything with a mutating mode lives below as an explicit
+// all belong here, anything with a mutating mode living below as an explicit
 // checker so its specific invocation can be verified.
 var gitReadonlySubcommands = bulk.SliceToSet([]string{
 	"status", "log", "diff", "show", "blame", "shortlog", "describe",
@@ -27,8 +27,8 @@ var gitReadonlySubcommands = bulk.SliceToSet([]string{
 	"diff-index",
 	"verify-tag",    // verify tag signature, print result
 	"verify-commit", // verify commit signature, print result
-	"verify-pack",   // validate pack files; reports only
-	"cherry",        // show commits missing upstream; no write form
+	"verify-pack",   // validate pack files, reports only
+	"cherry",        // show commits missing upstream, no write form
 	"check-ref-format",
 	"show-ref", // list refs (update-ref is the writer)
 })
@@ -48,7 +48,7 @@ var gitActionActions = map[string]map[string]struct{}{
 }
 
 // isGitExecOrWriteToken reports whether t makes git write a file or run a
-// command: --output writes; the rest hand the blob to a config-named command.
+// command: --output writes, the rest handing the blob to a config-named command.
 func isGitExecOrWriteToken(t string) bool {
 	return strings.HasPrefix(t, "--output") || t == "--ext-diff" ||
 		t == "--textconv" || t == "--filters"
@@ -100,7 +100,7 @@ func gitReadOnlyPositionals(args []string, shortFlags string, longFlags map[stri
 	for i := 0; i < len(args); i++ {
 		t := args[i]
 		if t == "--" {
-			return nil, false // rest is positional by fiat; too loose to verify
+			return nil, false // rest is positional by fiat, too loose to verify
 		}
 		if !strings.HasPrefix(t, "-") || t == "-" {
 			positionals = append(positionals, t)
@@ -159,7 +159,7 @@ func isGitBranchReadOnly(args []string) bool {
 	if len(positionals) == 0 {
 		return true // bare `git branch` lists
 	}
-	// a name is a filter pattern in list mode; anywhere else it creates
+	// a name is a filter pattern in list mode, but anywhere else it creates
 	return hasGitFlag(args, "l", "--list")
 }
 
@@ -188,7 +188,7 @@ func isGitTagReadOnly(args []string) bool {
 		return true // bare `git tag` lists
 	}
 	// names are patterns under -l/-n (-n implies listing), tags-to-check under
-	// --verify; a name in any other mode creates a tag.
+	// --verify, a name in any other mode creating a tag.
 	return hasGitFlag(args, "l", "--list") ||
 		hasGitFlag(args, "n", "-n") ||
 		hasGitFlag(args, "v", "--verify")
@@ -246,7 +246,7 @@ func isGitConfigReadOnly(args []string) bool {
 }
 
 // gitActionReadOnly reports whether a subcommand's first non-flag argument is a
-// read-only action; no positional falls back to the default display form.
+// read-only action, no positional falling back to the default display form.
 func gitActionReadOnly(sub string, args []string) bool {
 	allowed := gitActionActions[sub]
 	if len(allowed) == 0 {
@@ -263,7 +263,7 @@ func gitActionReadOnly(sub string, args []string) bool {
 }
 
 // gitReadOnly reports whether tokens name a verifiably read-only git call.
-// Pre-subcommand flags outside the tiny allowlist disqualify; in particular -c
+// Pre-subcommand flags outside the tiny allowlist disqualify, in particular -c
 // can set pager.log=<cmd> that git executes. Flags that write a file or run a
 // command are rejected globally and per subcommand, and subcommands with both
 // read and write forms (branch/tag/config/remote/reflog/worktree) are verified
@@ -272,7 +272,7 @@ func gitReadOnly(tokens []string) bool {
 	j := 1
 	for j < len(tokens) {
 		if tokens[j] == "-C" {
-			j += 2 // -C requires a separate path token; consume it
+			j += 2 // -C requires a separate path token, consume it
 			continue
 		}
 		if _, ok := gitPreSubcommandFlags[tokens[j]]; !ok {

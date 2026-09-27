@@ -19,7 +19,7 @@ const (
 )
 
 // probeFile reads up to the whole of path, reporting its kind and size info. A
-// NUL byte in the first 8 kB marks binary; a known image signature marks an image.
+// NUL byte in the first 8 kB marks binary, while a known image signature marks an image.
 func probeFile(path string) (data []byte, info os.FileInfo, kind fileKind, err error) {
 	info, err = os.Stat(path)
 	if err != nil {
@@ -97,7 +97,7 @@ func ReadBytes(m Measurement) int64 {
 }
 
 // numberLines renders line-numbered text from start for up to limit lines or
-// maxBytes (when positive); one line always emits. Reports lastEmitted,
+// maxBytes (when positive), always emitting one line. Reports lastEmitted,
 // truncatedAt when a bound cut the window, and total. An explicitLimit that is
 // reached counts as complete: leftover past it reports no truncation.
 func numberLines(data []byte, start, limit int, maxBytes int, explicitLimit bool) (out string, lastEmitted, truncatedAt, total int) {
@@ -157,7 +157,7 @@ func normalizeToLF(s string) string {
 }
 
 // restoreLineEndings rewrites LF to ending so a write matches the document's
-// existing line ending; ending is always "\r\n" or "\n".
+// existing line ending, always "\r\n" or "\n".
 func restoreLineEndings(s, ending string) string {
 	if ending == "\r\n" && strings.Contains(s, "\n") {
 		return strings.ReplaceAll(s, "\n", "\r\n")

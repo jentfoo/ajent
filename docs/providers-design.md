@@ -363,12 +363,12 @@ variable, then an error naming what to set.
 When the driver starts with zero providers configured, `command.ProviderSetup`
 (pkg/command) walks through the flavor catalogue: pick a provider, add a key or
 server URL, settle the models, write the file. The menu leads with the local
-servers and the custom URL row, then the hosted flavors — one row per vendor,
-so regional catalogue variants (`-cn`, token-plan regions) stay reachable
-through `models.json` but are not listed. The wizard is a thin caller over the
-package's own pieces — `ProbeProvider` for one discovery pass (`ProbeAll` for
+servers and the custom URL row, then the hosted flavors (one per vendor), so
+regional catalogue variants (`-cn`, token-plan regions) stay reachable through
+`models.json` but are not listed. The wizard is a thin caller over the
+package's own pieces: `ProbeProvider` for one discovery pass (`ProbeAll` for
 the custom row, whose server family is unknown), `SaveUserFile` for the write,
-`Registry.Load` for the in-place reload — so it adds no provider machinery of
+and `Registry.Load` for the in-place reload. It adds no provider machinery of
 its own. Its rule is the catalogue's: models come from discovery or from an id
 the user declared, never a compiled-in table, and the write merges over the
 existing file so setup only ever adds. A local server URL pasted without a path
@@ -730,8 +730,8 @@ Adding a provider that speaks chat-completions:
    provider uses. That the assertions differ only in content, never in shape, is
    the real proof that normalisation worked.
 
-A provider whose auth is not an env-var API key — OAuth device flows, cloud
-account credentials, per-model gateways — stays configuration-only: no flavor,
+A provider whose auth is not an env-var API key (OAuth device flows, cloud
+account credentials, per-model gateways) stays configuration-only: no flavor,
 no wizard row, since `models.json` cannot express it.
 
 A genuinely new **dialect** is a new `Dialect`, a `*_wire.go`, an adapter

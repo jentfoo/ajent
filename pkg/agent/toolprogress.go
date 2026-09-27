@@ -46,7 +46,7 @@ func (t *toolProgress) start(id string, index int, name string) ToolProgress {
 }
 
 // resolve names the call an event belongs to. Providers pair a start with its
-// deltas and end by block index; the id is only repeated on some of them.
+// deltas and end by block index, the id is only repeated on some of them.
 func (t *toolProgress) resolve(id string, index int) string {
 	if _, ok := t.calls[id]; ok {
 		return id
@@ -131,7 +131,7 @@ func (c *lineEscapeCounter) count(s string) {
 
 // targetKeys are the argument names that identify what a call acts on, tried in
 // order. Looking them up by name rather than position matters because argument
-// order is not guaranteed; a marshalled Go map sorts its keys, so a write's long
+// order is not guaranteed, a marshalled Go map sorts its keys, so a write's long
 // "content" commonly streams ahead of its "path".
 var targetKeys = []string{"path", "file_path", "file", "pattern", "command"}
 

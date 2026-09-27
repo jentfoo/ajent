@@ -7,7 +7,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// clipboardWrite is the shared clipboard write path; a var so tests fake the backend.
+// clipboardWrite is the shared clipboard write path, a var so tests fake the backend.
 var clipboardWrite = clipboard.Copy
 
 // CopyClipboard writes text through the shared clipboard writer.

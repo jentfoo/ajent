@@ -22,7 +22,7 @@ type pumpLine struct {
 	// to the turn's input after the text.
 	blocks []llm.Block
 	// input is an already-assembled prompt (the /init survey and its tool pairs)
-	// re-entering the pump; it skips @ expansion and carries rest as a short label.
+	// re-entering the pump, and it skips @ expansion and carries rest as a short label.
 	input *agent.Input
 	// onTurn runs as that input becomes a turn, so the sender can observe the turn
 	// its work produced rather than guessing when it lands.
@@ -55,7 +55,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 				continue
 			}
 			// MCP servers load eagerly so the pre-first-prompt /tools picker and /mcp
-			// list already show them; LoadOnFirstMessage is idempotent (runs once).
+			// list already show them, and LoadOnFirstMessage is idempotent (runs once).
 			if console.mcp.m != nil && (name == "tools" || name == "mcp") {
 				console.mcp.LoadOnFirstMessage(ctx)
 			}
@@ -70,7 +70,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 				continue
 			}
 			// connect every MCP server in full, once, so its tools exist before this
-			// (the first) turn is assembled; /tools or /mcp changes made up to now hold
+			// (the first) turn is assembled, and /tools or /mcp changes made up to now hold
 			if console.mcp.m != nil {
 				console.mcp.LoadOnFirstMessage(ctx)
 			}
@@ -84,9 +84,9 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 			est := submitEstimate(in, pending)
 			if q.offer(in, echo, est) {
 				if gate != nil {
-					gate.taken() // queued: pending() releases the hold; no handoff left to wait for
+					gate.taken() // queued: pending() releases the hold, no handoff left to wait for
 				}
-				continue // queued as a dimmed row; the echo lands at delivery
+				continue // queued as a dimmed row, the echo lands at delivery
 			}
 			// only reached with no drain running, so a workflow may branch here
 			if hooks.beforePrompt != nil {
@@ -105,7 +105,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 			submitPrompt(st, editSinks, est, pushContext)
 			in.Settled = settled
 			if gate != nil {
-				gate.taken() // the submitted line starts its own turn; no handoff to wait for
+				gate.taken() // the submitted line starts its own turn, no handoff to wait for
 			}
 			startDrain(ctx, ui, recording, ag, q, []agent.Input{in}, started, hooks)
 		}
@@ -116,7 +116,7 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 	if line.input != nil {
 		in := *line.input
 		in.Before = append(before, in.Before...)
-		in.Prepared = true // assembled by its sender; the append seam must not re-expand
+		in.Prepared = true // assembled by its sender, the append seam must not re-expand
 		if line.onTurn != nil {
 			line.onTurn() // this turn writes, not the one running when the sender finished
 		}
@@ -132,8 +132,8 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 		Before:   before,
 		After:    res.Run,
 		Injected: line.injected,
-		Prepared: true, // expanded here; the append seam must not re-expand
-	}, submittedEcho(line.rest), res.Est // "" unless a real prompt; commands and shell lines are not echoed here
+		Prepared: true, // expanded here, the append seam must not re-expand
+	}, submittedEcho(line.rest), res.Est // "" unless a real prompt, commands and shell lines are not echoed here
 }
 
 func submitEstimate(in agent.Input, pending int) int {
@@ -159,7 +159,7 @@ func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent
 				}
 			}
 			if err != nil {
-				q.stopDrain() // leave items queued as rows; do not hammer a failing provider
+				q.stopDrain() // leave items queued as rows, do not hammer a failing provider
 				break
 			}
 			next, ok := q.take()

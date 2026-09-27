@@ -41,7 +41,7 @@ func TestScanOperatorsInsideQuotesAreInert(t *testing.T) {
 	}{
 		{`semicolon in double`, `echo "a;b"`, false, false},
 		{"redirect in single", "echo 'x > y'", false, false},
-		// $() inside double quotes expands and executes; unsafe but not a split
+		// $() inside double quotes expands and executes, unsafe but not a split
 		{"subst in double", `echo "$(pwd)"`, false, true},
 	}
 	for _, c := range cases {
@@ -66,7 +66,7 @@ func TestScanRedirects(t *testing.T) {
 		{`dev null discards`, "ls > /dev/null", false, false},
 		{"amp dev null not split", "cmd &>/dev/null", false, false},
 		{"stderr merge", "cmd 2>&1", false, false},
-		// bare 2>&1 discards; the & in 2>&12 reads as a background operator
+		// bare 2>&1 discards, the & in 2>&12 reading as a background operator
 		{"fd twelve is a real target", "cmd 2>&12", true, true},
 		{"word digit not eaten", "cat file1> /dev/null", false, false},
 	}
@@ -232,7 +232,7 @@ func FuzzScan(f *testing.F) {
 	f.Add("cat file1> /dev/null")
 	f.Fuzz(func(t *testing.T, in string) {
 		s := scanCommand(in)
-		// never panic on arbitrary bytes; segments and raw stay index-aligned
+		// never panic on arbitrary bytes, segments and raw staying index-aligned
 		assert.Len(t, s.Raw, len(s.Segments))
 	})
 }

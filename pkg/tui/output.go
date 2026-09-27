@@ -17,7 +17,7 @@ const outputHeadLines = 10
 // appended: two calls streaming at once each own a row.
 const outputKey = "tool-output:"
 
-// toolRun is one in-flight tool call's render state; the head belongs to the
+// toolRun is one in-flight tool call's render state. The head belongs to the
 // call, since calls stream concurrently.
 type toolRun struct {
 	id   string
@@ -30,12 +30,12 @@ type toolRun struct {
 // When full is set the cap is bypassed: every line reaches history. The stager
 // enables it for user-initiated `!`/`!!` shells, whose output must be shown whole.
 type outputHead struct {
-	buf   lineBuffer // whole lines only; never splits an escape sequence
+	buf   lineBuffer // whole lines only, never splits an escape sequence
 	shown int        // head lines already committed
 	lines int        // lines seen in total
 	chars int        // runes seen past the head, for the summary count
 	bytes int        // bytes seen past the head, for a live activity row
-	full  bool       // show every line; no collapse or summary
+	full  bool       // show every line, no collapse or summary
 }
 
 // add appends s and returns any whole lines to commit, capped at the head. The

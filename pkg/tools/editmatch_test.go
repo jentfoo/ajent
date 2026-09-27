@@ -47,9 +47,9 @@ func TestFindMatchesTiers(t *testing.T) {
 	cases := []struct {
 		name     string
 		buf, old string
-		new      string // defaults to "REPL"; indent cases must share oldText's base
+		new      string // defaults to "REPL", indent cases must share oldText's base
 		wantTier matchTier
-		wantText string // the file text the match covers; empty means no match
+		wantText string // the file text the match covers, empty means no match
 	}{
 		{
 			name: "exact", buf: "var x = 1\n", old: "x = 1",
@@ -86,7 +86,7 @@ func TestFindMatchesTiers(t *testing.T) {
 			wantTier: tierIndent, wantText: "\tfoo()\n\tbar()",
 		},
 		{
-			// nested tabs vs spaces is not a uniform shift; refuse and let the
+			// nested tabs vs spaces is not a uniform shift, so refuse and let the
 			// diagnostics explain it rather than reformat the block
 			name: "nested_tab_space_refused",
 			buf:  "func f() {\n\tif x {\n\t\ty()\n\t}\n}\n",
@@ -166,8 +166,8 @@ func TestFuzzyApplyMatchesExactApply(t *testing.T) {
 	replacement := "    if msg == \"\" {\n        return fallback\n    }"
 
 	// each case is a perturbation of exact paired with the replacement a model
-	// sending that perturbation would write; every one must land on the same span
-	// and produce the same file
+	// sending that perturbation would write, every one landing on the same span
+	// and producing the same file
 	dedented := "if msg == \"\" {\n    return fallback\n}"
 	cases := []struct {
 		name     string
@@ -229,7 +229,7 @@ func TestFuzzyNoteNamesTheDifference(t *testing.T) {
 	indent, err := applyEdits(editTarget{Path: "a.go"}, "func f() {\n\tcall()\n}\n",
 		[]editOp{{OldText: "call()", NewText: "call(ctx)"}})
 	require.NoError(t, err)
-	assert.Empty(t, indent.notes) // a bare substring matches exactly; no shift involved
+	assert.Empty(t, indent.notes) // a bare substring matches exactly, no shift involved
 
 	shifted, err := applyEdits(editTarget{Path: "a.go"}, "func f() {\n\ta()\n\tb()\n}\n",
 		[]editOp{{OldText: "a()\nb()", NewText: "a()\nc()"}})
@@ -254,7 +254,7 @@ func TestFindMatchesRefusesToFoldTheEdit(t *testing.T) {
 	t.Parallel()
 
 	t.Run("dash_near_miss_refused", func(t *testing.T) {
-		// the file already holds the hyphen here; the em dash the model quoted is
+		// the file already holds the hyphen here, and the em dash the model quoted is
 		// somewhere else, so this must fail rather than report a no-op success
 		ms, _ := findMatches("title - subtitle\n", "title — subtitle", "title - subtitle", nil)
 		assert.Empty(t, ms)
@@ -414,7 +414,7 @@ func TestFindMatchesRefusesBlankOldText(t *testing.T) {
 	ms, _ := findMatches("a\n\nb\n", "   \n  ", "   \n  //Z", nil)
 	assert.Empty(t, ms)
 
-	// a zero-width rune hides inside whitespace-only oldText; it folds to bare newlines
+	// a zero-width rune hides inside whitespace-only oldText, folding to bare newlines
 	ms, _ = findMatches("a\n b\n\nc\n", " \u200b\n", "x", nil) // canon tier would match every line boundary
 	assert.Empty(t, ms)
 	ms, _ = findMatches("a\nb\n", "\ufeff ", "x", nil)
@@ -456,8 +456,8 @@ func TestFuzzyMatches(t *testing.T) {
 	const file = "package p\n\nconst (\n\tqueueDepth      = 1024\n\tbatchSize       = 512\n)\n"
 
 	t.Run("heals_a_mistyped_value", func(t *testing.T) {
-		// the model dropped the leading tab as well as mistyping the value; both
-		// heal in one pass and the file's indentation is kept
+		// the model dropped the leading tab as well as mistyping the value, both
+		// healing in one pass and keeping the file's indentation
 		ms, tier := findMatches(file, "queueDepth      = 256", "queueDepth      = 4096", nil)
 		require.Len(t, ms, 1)
 		assert.Equal(t, tierFuzzy, tier)
@@ -520,7 +520,7 @@ func TestFuzzyMatches(t *testing.T) {
 	})
 
 	t.Run("refuses_without_anchoring_context", func(t *testing.T) {
-		// "bar" and "foo" share nothing; with no context either side, any short
+		// "bar" and "foo" share nothing, so with no context either side any short
 		// string would heal onto any other
 		ms, _ := findMatches("foo", "bar", "baz", nil)
 		assert.Empty(t, ms)
@@ -570,7 +570,7 @@ func TestFuzzyMatches(t *testing.T) {
 	})
 
 	t.Run("matches_with_large_margin", func(t *testing.T) {
-		// winner drifts 1 against a rival at 5; the margin must not touch this
+		// winner drifts 1 against a rival at 5, so the margin must not touch this
 		ms, tier := findMatches("x = 1244\nx = 56789\n", "x = 1234", "x = 9999", nil)
 		require.Len(t, ms, 1)
 		assert.Equal(t, tierFuzzy, tier)
@@ -578,7 +578,7 @@ func TestFuzzyMatches(t *testing.T) {
 	})
 
 	t.Run("refuses_noop_heal", func(t *testing.T) {
-		// a heal writing nothing still reports success; catch it before
+		// a heal writing nothing still reports success, so catch it before
 		// the model believes the correction landed
 		src := "func slug(s string) string {\n\tif len(s) > 40 {\n\t\ts = s[:40]\n\t}\n\treturn s\n}\n"
 		_, err := applyEdits(editTarget{Path: "a.go"}, src,
@@ -597,8 +597,8 @@ func TestFuzzyMatches(t *testing.T) {
 	})
 
 	t.Run("preserves_prefix_over_slice", func(t *testing.T) {
-		// the replacement's indent is a lookalike of oldText's base; swapping
-		// the prefix would cut mid-rune, so the line keeps its own bytes
+		// the replacement's indent is a lookalike of oldText's base, and swapping
+		// the prefix would cut mid-rune so the line keeps its own bytes
 		o, err := applyEdits(editTarget{Path: "a.go"}, "\tcall(9234)\n",
 			[]editOp{{OldText: " call(1234)", NewText: "\u00a0call(5678)"}})
 		require.NoError(t, err)

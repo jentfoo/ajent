@@ -50,7 +50,7 @@ func TestTracker(t *testing.T) {
 		info, _ := os.Stat(path)
 		tr.Observe(path, data, info)
 
-		// modify the file in place; size changes so Unchanged reports false
+		// modify the file in place, size changes so Unchanged reports false
 		changed := []byte("hello\nworld\nmore")
 		require.NoError(t, os.WriteFile(path, changed, 0o644))
 		assert.False(t, tr.Unchanged(path))

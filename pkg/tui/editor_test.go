@@ -160,7 +160,7 @@ func TestEditorMovement(t *testing.T) {
 func TestEditorPageMovement(t *testing.T) {
 	t.Parallel()
 
-	const wide = 60 // no wrapping; each logical line is its own visual row
+	const wide = 60 // no wrapping, each logical line is its own visual row
 
 	// "one\ntwo\nthree": rows start at [0,4,8], end boundaries at [3,7,13].
 	t.Run("page_up_clamps_to_head", func(t *testing.T) {
@@ -230,8 +230,8 @@ func TestEditorKill(t *testing.T) {
 	})
 
 	t.Run("wrapped_row_clears_only_to_row_end", func(t *testing.T) {
-		// "hello world" at width 9 wraps to [hello][world]; killing from the first
-		// row clears only that row, never the wrapped remainder below
+		// "hello world" at width 9 wraps to [hello][world]. Killing from the first
+		// row clears only that row, never the wrapped remainder below.
 		e := newEditorAt("hello world", 2)
 		e.KillToLineEnd(9)
 		assert.Equal(t, "he world", e.Value())
@@ -258,8 +258,8 @@ func TestEditorKill(t *testing.T) {
 	})
 
 	t.Run("wrapped_far_left_follows_content_up", func(t *testing.T) {
-		// "ab cdefg hi" at width 9 wraps to [ab][cdefg][hi]; clearing the middle row
-		// lets "hi" fit on the first, and the caret follows it there
+		// "ab cdefg hi" at width 9 wraps to [ab][cdefg][hi]. Clearing the middle row
+		// lets "hi" fit on the first, and the caret follows it there.
 		e := newEditorAt("ab cdefg hi", 3)
 		e.KillToLineEnd(9)
 		assert.Equal(t, "ab hi", e.Value())
@@ -276,7 +276,7 @@ func TestEditorKill(t *testing.T) {
 	})
 
 	t.Run("wrapped_far_left_last_row_keeps_end", func(t *testing.T) {
-		// far-left of the final wrapped row has nothing below to pull up; caret stays
+		// far-left of the final wrapped row has nothing below to pull up. The caret stays
 		// at the end like a mid-line kill.
 		e := newEditorAt("hello world foo", 12)
 		e.KillToLineEnd(9)
@@ -486,7 +486,7 @@ func TestEditorLineNavigation(t *testing.T) {
 	})
 
 	t.Run("up_walks_wrapped_rows_same_column", func(t *testing.T) {
-		// "one two three" wraps to rows [one][two][three] at width 7; the caret on
+		// "one two three" wraps to rows [one][two][three] at width 7. The caret on
 		// row one ('o' of "two") moves up to row zero keeping its within-row column.
 		e := newEditorAt("one two three", 6)
 		require.True(t, e.Up(7))

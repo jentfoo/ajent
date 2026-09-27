@@ -140,7 +140,7 @@ func stripDefaults(s *chroma.Style) *chroma.Style {
 		e.NoInherit = true
 		return e
 	})
-	// prose and whitespace belong to the terminal's own foreground; whitespace has
+	// prose and whitespace belong to the terminal's own foreground. Whitespace has
 	// no glyph to color at all once backgrounds are gone, and styles built for a
 	// web page set it against theirs (github paints it white)
 	blank := chroma.StyleEntry{NoInherit: true}

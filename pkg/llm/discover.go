@@ -109,7 +109,7 @@ const openAIModelsPath = "/v1/models"
 // resolveDiscoveryPath joins a discovery endpoint onto a provider's base URL,
 // collapsing a /v1 prefix the base already carries. The OpenAI model list lives at
 // "/v1/models" on a bare host and at "/models" relative to a base that ends in
-// "/v1"; asking for both produces a 404.
+// "/v1". Asking for both produces a 404.
 func resolveDiscoveryPath(basePath, path string) string {
 	if strings.HasPrefix(path, "/v1/") && hasV1Suffix(basePath) {
 		return strings.TrimPrefix(path, "/v1")
@@ -129,7 +129,7 @@ type discoveryCandidate struct {
 	parse modelParser
 }
 
-// discoverySpec lists a flavor's endpoints in order; the first that yields usable
+// discoverySpec lists a flavor's endpoints in order. The first that yields usable
 // models wins, so an unhelpful native response falls back to /v1/models.
 type discoverySpec struct {
 	candidates []discoveryCandidate
@@ -186,7 +186,7 @@ var discoverySpecs = map[Flavor]discoverySpec{
 		{path: "/api/v0/models", parse: parseLMStudioModels},
 		{path: openAIModelsPath, parse: parseOpenAIModels},
 	}},
-	// llama.cpp reports one loaded model via /props; in router mode that is
+	// llama.cpp reports one loaded model via /props. In router mode that is
 	// useless, so fall back to the OpenAI-compatible list.
 	FlavorLlamaCpp: {candidates: []discoveryCandidate{
 		{path: "/props", parse: parseLlamaProps},
@@ -310,7 +310,7 @@ func discoverOne(ctx context.Context, name string, cfg ProviderConfig, flavor Fl
 		if err == nil && len(e.Models) > 0 {
 			return e, nil
 		}
-		// an unreachable server fails every endpoint; do not double the retry ladder
+		// an unreachable server fails every endpoint, do not double the retry ladder
 		if ctx.Err() != nil || (err != nil && serverDown(err)) {
 			return prev, err
 		}
@@ -330,7 +330,7 @@ func discoverOne(ctx context.Context, name string, cfg ProviderConfig, flavor Fl
 func serverDown(err error) bool {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		return false // the server answered; a sibling endpoint may behave differently
+		return false // the server answered, a sibling endpoint may behave differently
 	}
 	var netErr net.Error
 	return errors.As(err, &netErr)

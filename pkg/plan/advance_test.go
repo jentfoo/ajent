@@ -77,7 +77,7 @@ func TestControllerBeforePrompt(t *testing.T) {
 		handOff(t, c, "draft plan")
 		_, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "staged flush", Injected: true})
 
-		assert.False(t, ok) // the gate is untouched; nothing becomes approved
+		assert.False(t, ok) // the gate is untouched, nothing becomes approved
 		assert.Equal(t, PhaseAwaitingPlan, c.phase)
 		assert.Empty(t, c.approvedPlan)
 	})

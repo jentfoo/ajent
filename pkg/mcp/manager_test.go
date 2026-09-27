@@ -160,7 +160,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 			"fake": {Command: srv},
 		}, Options{Registrar: fr})
 
-		// nothing is registered before the first message; no process spawned yet
+		// nothing is registered before the first message, no process spawned yet
 		assert.Empty(t, fr.AllNames("mcp: fake"))
 		require.Nil(t, mgr.serverByName("fake").client())
 		t.Cleanup(mgr.Close)
@@ -189,7 +189,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 
 		mgr.LoadOnFirstMessage(t.Context())
 
-		// disconnect is a manual act; LoadOnFirstMessage must not reconnect it again
+		// disconnect is a manual act, so LoadOnFirstMessage must not reconnect it again
 		mgr.Disconnect("fake")
 		before := len(fr.AllNames("mcp: fake"))
 		mgr.LoadOnFirstMessage(t.Context())
@@ -202,7 +202,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 func TestPreload(t *testing.T) {
 	t.Parallel()
 
-	// Preload connects and registers every server in the background; LoadOnFirstMessage
+	// Preload connects and registers every server in the background, so LoadOnFirstMessage
 	// then finds them already present instead of dialing again.
 	t.Run("registers_in_background", func(t *testing.T) {
 		srv := buildFakeServer(t)
@@ -337,7 +337,7 @@ func TestDialAbortsWhenServerRemoved(t *testing.T) {
 		return s.connecting // the dial holds the slot while startup delay blocks it
 	}, time.Second, 10*time.Millisecond)
 
-	// remove the server from the map mid-dial; dial must not install its client
+	// remove the server from the map mid-dial, dial must not install its client
 	mgr.mu.Lock()
 	delete(mgr.servers, "fake")
 	mgr.mu.Unlock()
@@ -475,7 +475,7 @@ func TestRegisterPreservesLiveDisabled(t *testing.T) {
 		{Name: "b", InputSchema: jsonRawObject},
 	}
 
-	// first registration exposes everything; the user then turns b off via /tools
+	// first registration exposes everything, the user then turns b off via /tools
 	mgr.register(s, nil, defs, nil)
 	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
 	fr.set("srv__b", StateDisabled)
@@ -500,7 +500,7 @@ func TestRegisterLiveDisabledBeatsRestore(t *testing.T) {
 		{Name: "b", InputSchema: jsonRawObject},
 	}
 
-	// a prior registration enabled both, then the user disabled b; Restore still names it
+	// a prior registration enabled both, then the user disabled b, and Restore still names it
 	mgr.register(s, nil, defs, &toolState{
 		enabled:  map[string]struct{}{"srv__a": {}},
 		disabled: map[string]struct{}{"srv__b": {}},
@@ -529,7 +529,7 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	_, ok := fr.toolByName("fake__tool_00")
 	require.True(t, ok) // connected and registered before the notification fires
 
-	// trigger_listchanged responds AND emits list_changed; rediscovery must complete.
+	// trigger_listchanged responds AND emits list_changed, so rediscovery must complete.
 	s := mgr.serverByName("fake")
 	rc := s.client()
 	require.NotNil(t, rc)
@@ -537,7 +537,7 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
 
-	// the async rediscovery re-registers within a short window; wait until it has fully
+	// the async rediscovery re-registers within a short window, and wait until it has fully
 	// settled (no pass in flight) so Close below cannot race its Unregister+Register.
 	require.Eventually(t, func() bool {
 		s.mu.Lock()
@@ -560,7 +560,7 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 var jsonRawObject = []byte(`{"type":"object","properties":{}}`)
 
 func TestReload(t *testing.T) {
-	// reload reads mcp.json, so each case owns a workspace and AJENT_HOME; no t.Parallel
+	// reload reads mcp.json, so each case owns a workspace and AJENT_HOME, no t.Parallel
 
 	cmd := buildFakeServer(t)
 	cfgJSON := func(extra string) string {
@@ -668,7 +668,7 @@ func TestReconnectAfterDeath(t *testing.T) {
 
 	fr.set("fake__tool_01", StateDisabled) // the user turned it off via /tools
 
-	// kill the child through its own trigger_die tool; Execute returns an error
+	// kill the child through its own trigger_die tool, and Execute returns an error
 	// result (transport failure) rather than a Go error.
 	tool, ok := fr.toolByName("fake__trigger_die")
 	require.True(t, ok)
@@ -733,7 +733,7 @@ func TestManagerClose(t *testing.T) {
 
 		mgr.Close()
 
-		// every disconnect was entered concurrently; a stalled one never blocks the others
+		// every disconnect was entered concurrently, so a stalled one never blocks the others
 		assert.Len(t, br.entered, len(names))
 	})
 }

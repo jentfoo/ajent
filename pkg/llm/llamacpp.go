@@ -42,7 +42,7 @@ func parseLlamaProps(body []byte) ([]ModelConfig, error) {
 	if err := json.Unmarshal(body, &p); err != nil {
 		return nil, err
 	}
-	// a router reports no loaded model path; nothing here is worth naming
+	// a router reports no loaded model path, so nothing here is worth naming
 	if p.ModelPath == "" || p.ModelPath == valueNone {
 		return nil, nil
 	}
@@ -113,7 +113,7 @@ func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, err
 	for _, m := range req.Messages {
 		text.WriteString(countBlocks(m.Content))
 	}
-	// tool schemas ride in the request and occupy real tokens; count them once
+	// tool schemas ride in the request and occupy real tokens. Count them once
 	// when present (an empty list adds nothing to what a no-tool prompt sends).
 	if len(req.Tools) > 0 {
 		if schemas, err := json.Marshal(compatTools(req.Tools, req.Model.Caps.SupportsStrict)); err == nil {
@@ -141,7 +141,7 @@ func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, err
 }
 
 // openAIModels is the standard chat-completions /v1/models response. The status
-// and meta fields are optional extras llama.cpp routers attach; other servers omit
+// and meta fields are optional extras llama.cpp routers attach, while other servers omit
 // them, in which case every listed model stays available.
 type openAIModels struct {
 	Data []struct {
@@ -162,7 +162,7 @@ type openAIModels struct {
 // parseOpenAIModels turns the standard /v1/models list into model entries. It is
 // the common denominator every chat-completions server speaks, so it backs up a
 // flavor whose own endpoint cannot describe what is loaded (a llama.cpp router). A
-// router marks models it has not yet swapped in as unloaded; those are dropped so
+// router marks models it has not yet swapped in as unloaded. Those are dropped so
 // only actually-available models surface. Its meta.n_ctx carries the real context
 // window, which beats configuration for that field.
 func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
@@ -176,7 +176,7 @@ func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 		if d.ID == "" {
 			continue
 		}
-		// a plain OpenAI server reports no status; only an explicit unloaded drops it
+		// a plain OpenAI server reports no status, and only an explicit unloaded drops it
 		if d.Status.Value == "unloaded" {
 			continue
 		}

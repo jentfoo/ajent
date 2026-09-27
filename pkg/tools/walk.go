@@ -70,11 +70,11 @@ func repoFiles(ctx context.Context, root string) []string {
 				continue
 			}
 			p := filepath.Join(root, f)
-			if !withinRoot(root, p) { // older git still emits ../; never leave scope
+			if !withinRoot(root, p) { // older git still emits ../, never leave scope
 				continue
 			}
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() { // -c lists deleted-but-tracked files
-				if _, dup := seen[p]; dup { // unmerged entries repeat; git --deduplicate is 2.31+
+				if _, dup := seen[p]; dup { // unmerged entries repeat, git --deduplicate is 2.31+
 					continue
 				}
 				seen[p] = struct{}{}

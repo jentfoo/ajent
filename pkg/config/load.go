@@ -16,13 +16,13 @@ const ConfigFileName = "config.json"
 // LocalConfigFileName is the gitignored per-workspace override file.
 const LocalConfigFileName = "config.local.json"
 
-// Options configures Load. Workspace roots the project layers; Env resolves
-// AJENT_* variables (nil uses os.Getenv); Flags is a caller built layer that wins
-// over everything except session overrides.
+// Options configures Load. Workspace roots the project layers, Env resolves
+// AJENT_* variables (nil uses os.Getenv), and Flags is a caller built layer that
+// wins over everything except session overrides.
 type Options struct {
 	Workspace string
 	Env       func(string) string
-	Flags     Layer // name "flag"; empty Data means no flags were set
+	Flags     Layer // name "flag", empty Data means no flags were set
 }
 
 // Set is the resolved configuration for one workspace. It answers typed settings,
@@ -34,13 +34,13 @@ type Set struct {
 	local    Layer
 	env      Layer
 	flags    Layer
-	session  Layer // mutable; above every file layer
+	session  Layer // mutable, above every file layer
 
 	workspace string
 	userPath  string
 	projPath  string
 	localPath string
-	mu        sync.Mutex // serializes layer writes and resolve; Resolved is immutable once built
+	mu        sync.Mutex // serializes layer writes and resolve, so Resolved stays immutable once built
 	resolved  Resolved   // memoized merge
 	valid     bool       // false after any layer mutation until the next resolve
 }
@@ -169,7 +169,7 @@ func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
 }
 
 // Save writes key into the user or project layer file and re-resolves. Warnings
-// report content that saving will drop (comments); errors are write failures.
+// report content that saving will drop (comments), while errors are write failures.
 func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	target := s.layerForSave(layer)
 	if target == nil {
@@ -223,7 +223,7 @@ type fileLayer struct {
 }
 
 // loadFile reads and validates one config file into relaxed data. A missing file
-// returns (nil, nil); warnings cover unknown and duplicate keys.
+// returns (nil, nil). Warnings cover unknown and duplicate keys.
 func loadFile(path string) ([]byte, []string, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

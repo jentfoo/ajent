@@ -28,7 +28,7 @@ const processedTools = "I have processed the tool results."
 // downgraded, foreign reasoning degraded to text or dropped, retention applied,
 // tool-call ids made legal and unanswered calls answered. Every request path
 // passes through it so the estimator and the wire never disagree about what is
-// sent. It is idempotent; calling it twice yields an identical message list.
+// sent. It is idempotent, so calling it twice yields an identical message list.
 func Prepare(req Request) Request {
 	caps := req.Model.Caps
 	target := Origin{Provider: req.Model.Provider, Dialect: caps.Dialect, Model: req.Model.ID}
@@ -51,7 +51,7 @@ func Prepare(req Request) Request {
 
 // downgradeImages replaces image blocks with a placeholder when the model does
 // not accept them, collapsing consecutive placeholders to one. Assistant content
-// is untouched; user images and nested tool-result images each get their own text.
+// is untouched, while user images and nested tool-result images each get their own text.
 func downgradeImages(msgs []Message, caps Capabilities) []Message {
 	if caps.Images || !hasImageBlock(msgs) {
 		return msgs
@@ -161,7 +161,7 @@ func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
 		m.Content = content
 		out = append(out, m)
 		if len(images) > 0 {
-			// a user message carries the images with the tool-result lead-in text;
+			// a user message carries the images with the tool-result lead-in text.
 			// RequiresAssistantAfterToolResult then places its bridge ahead of it in repairTurns.
 			attach := make([]Block, 1, len(images)+1)
 			attach[0] = TextBlock{Text: "Attached image(s) from tool result:"}
@@ -311,7 +311,7 @@ const (
 	callForeignEndpoint                 // different provider or dialect
 )
 
-// originForeign reports whether a message's provenance differs from target; nil
+// originForeign reports whether a message's provenance differs from target. Nil
 // (unknown) counts as foreign.
 func originForeign(o *Origin, target Origin) bool {
 	return o == nil || *o != target
@@ -413,7 +413,7 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 		}
 
 		// some chat-completions providers need an assistant reply between a tool-result
-		// turn and the next user message; every message recomputes whether it is one
+		// turn and the next user message. Every message recomputes whether it is one
 		if caps.RequiresAssistantAfterToolResult && lastWasResults && m.Role == RoleUser {
 			out = append(out, Text(RoleAssistant, processedTools))
 		}
@@ -467,7 +467,7 @@ func normalizeCallID(id string, caps Capabilities, provider string, kind callKin
 			}
 			return cutID(sanitizeID(callID), 31) + "_" + shortHash(id)[:8]
 		}
-		// openai caps a bare tool_call_id; other providers accept longer ids verbatim
+		// openai caps a bare tool_call_id, while other providers accept longer ids verbatim
 		if provider == providerOpenAI && len(id) > maxCompatCallID {
 			return cutID(sanitizeID(id), maxCompatCallID)
 		}
@@ -485,7 +485,7 @@ func responsesCallID(id string, kind callKind) string {
 	case callForeignEndpoint:
 		// the raw unsanitized item id is what gets hashed
 		return normalizeIDPart(callID) + "|fc_" + shortHash(itemID)
-	default: // same endpoint; a non-fc or cross-model id is prefixed then dropped at
+	default: // same endpoint, a non-fc or cross-model id is prefixed then dropped at
 		// emit time, so dropping here makes the wire result identical to that shape
 		if !strings.HasPrefix(itemID, "fc_") || kind == callForeignModel {
 			return normalizeIDPart(callID)
@@ -534,7 +534,7 @@ func cutID(s string, n int) string {
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
 
 // shortHash returns an FNV-64a base36 digest of s, for ids that must be bounded and stable within
-// ajent. Only determinism matters here; the exact hash function is free to change.
+// ajent. Only determinism matters here, and the exact hash function is free to change.
 func shortHash(s string) string {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(s))

@@ -382,7 +382,7 @@ reported read-only), the poll timeout payload, delivery confirmation with
 re-offer on interrupt, and child spend (visible in totals, never moving the
 parent's context bar). The empty-summary recovery is pinned: nudge -> summary;
 an empty nudge falls back to sizable thinking as the summary, else `StatusError`
-(`errNoSummary`) — and mid-investigation tool-turn reasoning is excluded by the
+(`errNoSummary`). Mid-investigation tool-turn reasoning is excluded by the
 tool-call boundary.
 
 ## Invariants

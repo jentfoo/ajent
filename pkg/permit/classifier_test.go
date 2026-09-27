@@ -99,7 +99,7 @@ func TestCachedClassifierSeparatesRuleSets(t *testing.T) {
 
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f"})
 	assert.Equal(t, 1, fn.count())
-	// the same command under auto+write asks a different question; never the cached one
+	// the same command under auto+write asks a different question, never the cached one
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
 	assert.Equal(t, 2, fn.count())
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
@@ -114,7 +114,7 @@ func TestCachedClassifierNeverStoresUnsure(t *testing.T) {
 
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 1, fn.count())
-	// unsure is transient and never cached; the same subject runs the model again
+	// unsure is transient and never cached, so the same subject runs the model again
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
 	assert.Equal(t, 2, fn.count())
 
@@ -125,7 +125,7 @@ func TestCachedClassifierNeverStoresUnsure(t *testing.T) {
 }
 
 // gatedFn holds each classification open until released or its context ends,
-// counting starts; the leading fails calls answer unsure, the rest verdict.
+// counting starts, the leading fails calls answer unsure, the rest verdict.
 type gatedFn struct {
 	release chan struct{}
 	verdict Class
@@ -193,7 +193,7 @@ func TestCachedClassifierInFlight(t *testing.T) {
 		for range callers {
 			go func() { res <- c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f"}) }()
 		}
-		// one leader runs; the rest join it instead of issuing their own request
+		// one leader runs, the rest joining it instead of issuing their own request
 		require.Eventually(t, func() bool { return fn.startedN() == 1 }, time.Second, 5*time.Millisecond)
 		close(fn.release)
 
@@ -226,7 +226,7 @@ func TestCachedClassifierInFlight(t *testing.T) {
 	})
 
 	t.Run("retries_after_failed_leader", func(t *testing.T) {
-		// the first call answers unsure (a cancelled leader); the retry gets allow
+		// the first call answers unsure (a cancelled leader), so the retry gets allow
 		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow, fails: 1}
 		c := NewCachedClassifier(fn.call)
 		subj := Subject{Name: "bash", Args: "rm f"}
@@ -261,7 +261,7 @@ func TestCachedClassifierEvictsLeastRecentlyUsedAtCap(t *testing.T) {
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "c"}) // forces an eviction
 
 	assert.Equal(t, 3, fn.count()) // a,b,c each classified once
-	// b was evicted and must run the model again; a survived via recency touch.
+	// b was evicted and must run the model again, a surviving via recency touch.
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
 	assert.Equal(t, 4, fn.count())
 }

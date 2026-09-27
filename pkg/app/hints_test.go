@@ -122,7 +122,7 @@ func TestHintBoardShowFor(t *testing.T) {
 	b.ShowFor("cancelled shell command", "", 20*time.Millisecond)
 	require.Equal(t, []string{"cancelled shell command"}, rec.last())
 
-	// the notice expires on its own and the older claim wins the line again; a Set from
+	// the notice expires on its own and the older claim wins the line again, and a Set from
 	// that holder then paints, proving it still owns a live slot
 	require.Eventually(t, func() bool { return rec.last()[0] == "paused 9s" }, time.Second, time.Millisecond,
 		"an expired notice must release the line to the older claim")

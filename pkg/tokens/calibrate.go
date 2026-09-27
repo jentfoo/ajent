@@ -7,7 +7,7 @@ const calibrateAlpha = 0.3
 
 // Calibrator maintains a per-model correction factor that scales raw estimates
 // toward the provider's own counts. Each response feeds it (predicted, reported)
-// prompt sizes; the smoothed ratio then multiplies future estimates at read time,
+// prompt sizes. The smoothed ratio then multiplies future estimates at read time,
 // so a late correction fixes numbers already accumulated.
 type Calibrator struct {
 	mu      sync.Mutex
@@ -19,7 +19,7 @@ type Calibrator struct {
 func NewCalibrator() *Calibrator { return &Calibrator{} }
 
 // Feed records one (predicted, reported) prompt pair for key and updates the
-// smoothed factor. The first sample seeds the factor directly; later ones are an
+// smoothed factor. The first sample seeds the factor directly, and later ones are an
 // EWMA so no single outlier can swing a settled value.
 func (c *Calibrator) Feed(key string, predicted, reported int) {
 	// a provider that reported nothing is not evidence the estimate was too high:

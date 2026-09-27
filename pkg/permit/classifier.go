@@ -16,13 +16,13 @@ type Class uint8
 
 const (
 	ClassAllow  Class = iota // safe to auto-allow under the rule set it was judged by
-	ClassDeny                // writes or otherwise unsafe; keep the dialog open
-	ClassUnsure              // garbled or failed response; never cached
+	ClassDeny                // writes or otherwise unsafe, keep the dialog open
+	ClassUnsure              // garbled or failed response, never cached
 )
 
 // Subject is one call sent to the model classifier in the auto modes.
 type Subject struct {
-	Name       string // tool name; the shell tool for shell calls
+	Name       string // tool name, shell for shell calls
 	Args       string // bash command text, or elided JSON arguments for other tools
 	Cwd        string // shell working directory when the call declares one
 	AllowWrite bool   // judge under auto+write's workspace rules rather than read-only
@@ -46,13 +46,13 @@ type Classifier interface {
 // classCacheMax bounds the session LRU so it stays cheap and forgets old commands.
 const classCacheMax = 500
 
-// ClassifierFn is one uncached classification; the host supplies the model call.
+// ClassifierFn is one uncached classification, the host supplying the model call.
 type ClassifierFn func(ctx context.Context, s Subject) Class
 
 // cachedClassifier wraps an uncached classifier with a session-scoped LRU keyed
 // by subject identity (tool + exact payload). Concurrent identical subjects share
 // one in-flight request, so batch prefetch and the dialogs it fronts never issue
-// duplicate model calls. unsure verdicts are never stored; they are usually
+// duplicate model calls. unsure verdicts are never stored, being usually
 // transient (an abort, missing auth, an API error).
 type cachedClassifier struct {
 	fn ClassifierFn
@@ -60,7 +60,7 @@ type cachedClassifier struct {
 	mu       sync.Mutex
 	max      int                       // cache cap, classCacheMax for production use
 	vals     map[string]Class          // subject key -> verdict
-	order    []string                  // least-recently-used first; the tail is most recent
+	order    []string                  // least-recently-used first, tail most recent
 	inflight map[string]*inflightClass // subject key -> running call joiners wait on
 }
 
@@ -83,7 +83,7 @@ func newCachedClassifierMax(fn ClassifierFn, max int) *cachedClassifier {
 }
 
 // Classify serves a cached verdict, joins an identical in-flight call, or leads
-// it with fn. A joiner whose context ends takes unsure; one handed a failed
+// it with fn. A joiner whose context ends takes unsure, and one handed a failed
 // (cancelled) leader retries while its own context lives, so a cancelled
 // predecessor never decides for a caller still waiting.
 func (c *cachedClassifier) Classify(ctx context.Context, s Subject) Class {
@@ -121,7 +121,7 @@ func (c *cachedClassifier) Classify(ctx context.Context, s Subject) Class {
 			if fl.class != ClassUnsure {
 				return fl.class
 			}
-			// the predecessor failed on a dead context; lead (or join) again ourselves
+			// the predecessor failed on a dead context, lead (or join) again ourselves
 		case <-ctx.Done():
 			return ClassUnsure
 		}
@@ -130,10 +130,10 @@ func (c *cachedClassifier) Classify(ctx context.Context, s Subject) Class {
 }
 
 // storeLocked records v under key at the LRU tail, evicting at capacity. Caller
-// holds the lock; only the key's in-flight leader stores.
+// holds the lock, only the key's in-flight leader storing.
 func (c *cachedClassifier) storeLocked(key string, v Class) {
 	if _, ok := c.vals[key]; ok {
-		touch(c.order, key) // already present; refresh recency only
+		touch(c.order, key) // already present, refresh recency only
 		return
 	}
 	if len(c.order) >= c.max {
@@ -164,7 +164,7 @@ var classNegators = map[string]bool{
 }
 
 // NormalizeClass maps a classifier reply to a verdict by the marker words it
-// contains anywhere: one direction yields its class; both or neither is unsure.
+// contains anywhere: one direction yields its class, both or neither being unsure.
 // Only an unambiguous approval can fail open, so any conflict keeps the dialog
 // open and a negator shadowing a verdict word ("can't allow") counts for nothing.
 func NormalizeClass(text string) Class {

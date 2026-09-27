@@ -4,11 +4,11 @@ package permit
 type Mode uint8
 
 const (
-	ModeAllowAll  Mode = iota // no gate; every call runs
+	ModeAllowAll  Mode = iota // no gate, every call runs
 	ModeAllowRead             // verifiably read-only calls run, everything else prompts (default)
 	ModeAuto                  // allow-read plus model classification of unverifiable shell and MCP/extension tool calls
 	ModeAutoWrite             // auto plus writes confined to the workspace roots
-	ModeBlockAll              // nothing writes or reads without a prompt; ! lines exempt
+	ModeBlockAll              // nothing writes or reads without a prompt, ! lines exempt
 )
 
 // ParseMode maps the config string to its Mode. The empty value means default.

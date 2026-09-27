@@ -24,7 +24,7 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	b.WriteString("# Usage\n")
 
 	cs := t.Context()
-	// prefer the state's declared window; fall back to what accounting reports
+	// prefer the state's declared window, falling back to what accounting reports
 	window := st.Model.ContextWindow
 	if window <= 0 {
 		window = cs.Window
@@ -32,7 +32,7 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	budget := cs.Budget()
 
 	// fill against the compaction threshold when one is configured, so the number
-	// matches the status bar; fall back to the response-safe budget otherwise.
+	// matches the status bar, falling back to the response-safe budget otherwise.
 	denom := cs.Compact
 	if denom <= 0 {
 		denom = budget

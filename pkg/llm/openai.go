@@ -91,8 +91,8 @@ func buildResponsesBody(req Request) ([]byte, error) {
 		}
 	}
 	if caps.Dialect == DialectOpenAIResponses && caps.Reasoning {
-		// the responses dialect stays ungated by SupportsReasoningEffort;
-		// it clamps internally like every encoder so a bare build is self-contained
+		// the responses dialect stays ungated by SupportsReasoningEffort. It
+		// clamps internally like every encoder so a bare build is self-contained.
 		level := clampLevel(caps, req.Reasoning.Level)
 		if on := level != LevelOff; on {
 			if effort, ok := levelValue(caps, level); ok && effort != "" {
@@ -102,12 +102,12 @@ func buildResponsesBody(req Request) ([]byte, error) {
 				body.Include = []string{respEncryptedInclude}
 			}
 		} else if e, ok := offValue(caps, valueNone); ok {
-			// explicit off still names an effort so the model stops thinking;
-			// {off:null} suppresses the key entirely
+			// explicit off still names an effort so the model stops thinking.
+			// {off:null} suppresses the key entirely.
 			body.Reasoning = &respReasoning{Effort: e}
 		}
 	}
-	// replay rides the encrypted payload, never server-side state; the key is
+	// replay rides the encrypted payload, never server-side state. The key is
 	// first-class on this dialect so it is always accepted
 	body.Store = ptrOf(false)
 	if req.Cache.Enabled && req.SessionID != "" && caps.SupportsExplicitPromptCache {
@@ -127,7 +127,7 @@ func responsesInput(req Request, caps Capabilities) ([]respItem, error) {
 	loaded := make(map[string]bool)
 
 	// msgIndex counts every converted message so fallback ids stay unique across
-	// turns; every message counts once.
+	// turns. Every message counts once.
 	var msgIndex int
 	for _, m := range msgs {
 		items, err := responsesItems(m, caps, schemaByName, loaded, msgIndex)
@@ -142,7 +142,7 @@ func responsesInput(req Request, caps Capabilities) ([]respItem, error) {
 
 // responsesItems converts one message, which expands into several items when it
 // carries reasoning, tool calls or tool results alongside text. Items follow
-// block order; a run of text is flushed as one message item whenever a non-text
+// block order. A run of text is flushed as one message item whenever a non-text
 // block interrupts it and at the end of the message.
 func responsesItems(m Message, caps Capabilities, schemaByName map[string]ToolSchema,
 	loaded map[string]bool, msgIndex int) ([]respItem, error) {
@@ -270,7 +270,7 @@ func toolResultOutput(caps Capabilities, blocks BlockList) any {
 }
 
 // responsesAddedTools materializes the tools a result references. additional_tools
-// injects them directly; tool_search pairs a client-executed search call with its
+// injects them directly, while tool_search pairs a client-executed search call with its
 // deferred output so the model can load on demand.
 func responsesAddedTools(names []string, schemaByName map[string]ToolSchema,
 	loaded map[string]bool, caps Capabilities) []respItem {
@@ -281,7 +281,7 @@ func responsesAddedTools(names []string, schemaByName map[string]ToolSchema,
 			continue // already materialized this turn
 		}
 		t, ok := schemaByName[name]
-		// only load-on-demand tools are injected; an immediate one is already in the top list
+		// only load-on-demand tools are injected, since an immediate one is already in the top list
 		if !ok || !t.Deferred {
 			continue
 		}
@@ -392,7 +392,7 @@ func parseTextSignature(sig string) (id, phase string) {
 	return id, phase
 }
 
-// shortenTextID hashes an overlong message id so replays stay bounded; ids at or
+// shortenTextID hashes an overlong message id so replays stay bounded. Ids at or
 // under the limit pass through unchanged.
 func shortenTextID(id string) string {
 	if len(id) > maxReplayTextID {
@@ -494,7 +494,7 @@ func (s *responsesStream) readFrame() []Event {
 	case "response.output_text.delta":
 		return s.onDelta(ev, EventTextDelta)
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-		// reasoning_text is the inline content form; summary_text streams the
+		// reasoning_text is the inline content form, while summary_text streams the
 		// condensed version. Both feed the thinking block.
 		return s.onDelta(ev, EventThinkingDelta)
 	case "response.reasoning_summary_part.done":
@@ -615,8 +615,8 @@ func (s *responsesStream) onItemDone(ev respEvent) []Event {
 			args = ev.Item.Arguments
 		}
 		input, err := finishToolInput(args)
-		// the item id pairs with the tool result for same-model reasoning reuse;
-		// it is appended only when present so bare ids stay unchanged
+		// the item id pairs with the tool result for same-model reasoning reuse.
+		// It is appended only when present so bare ids stay unchanged.
 		toolID := it.callID
 		if ev.Item != nil && strings.HasPrefix(ev.Item.ID, "fc_") {
 			toolID = it.callID + "|" + ev.Item.ID
@@ -637,8 +637,8 @@ func (s *responsesStream) onCompleted(ev respEvent) []Event {
 			s.incomplete = d.Reason
 		}
 		// azure can omit reasoning.encrypted_content from output_item.done and give
-		// it only in response.completed.output; re-emit any thinking block that was
-		// missing one before EventDone so stateless replay keeps working
+		// it only in response.completed.output, so re-emit any thinking block that was
+		// missing one before EventDone to keep stateless replay working
 		for _, item := range ev.Response.Output {
 			if item.Type != respTypeReasoning || item.EncryptedContent == "" {
 				continue
@@ -660,7 +660,7 @@ func (s *responsesStream) onCompleted(ev respEvent) []Event {
 }
 
 // respStopReason maps a terminal response status. An incomplete stop is
-// output-token truncation only when the API says so; other reasons (content
+// output-token truncation only when the API says so, since other reasons (content
 // filter) are not truncation and must not be retried as one.
 func respStopReason(status string, sawToolCall bool, incompleteReason string) StopReason {
 	switch status {

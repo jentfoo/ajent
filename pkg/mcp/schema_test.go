@@ -14,7 +14,7 @@ func TestSchemaDefect(t *testing.T) {
 	tests := []struct {
 		name   string
 		schema string
-		want   string // "" means sound; otherwise a substring of the defect
+		want   string // "" means sound, otherwise a substring of the defect
 	}{
 		{name: "bare_object", schema: `{"type":"object"}`, want: ""},
 		{

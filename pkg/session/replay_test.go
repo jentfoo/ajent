@@ -164,7 +164,7 @@ func TestReplay(t *testing.T) {
 		cases := []struct {
 			name    string
 			enabled bool
-			wantIn  []string // expected when enabled; absent means suppressed
+			wantIn  []string // expected when enabled, absent means suppressed
 		}{
 			{"suppressed_by_default", false, nil},
 			{"present_when_enabled", true, []string{"thinking", "end_thinking"}},

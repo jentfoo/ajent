@@ -15,7 +15,7 @@ const (
 )
 
 // Positions of the pieces the block owns. Segments carry their own Order set by the
-// front end, so they always follow these; the numbers leave room in between.
+// front end, so they always follow these, with the numbers leaving room in between.
 const (
 	orderSpinner = -30 // leftmost: the working glyph
 	orderContext = -20 // bar plus used/total
@@ -35,29 +35,29 @@ const (
 type Segment struct {
 	Key   string
 	Text  string
-	Short string // used when the full text does not fit; falls back to Text
+	Short string // used when the full text does not fit, falls back to Text
 
-	Order    int // display position, ascending; ties keep insertion order
-	Priority int // collapse and drop step: 0 goes first, then 1, 2…; negative goes last
+	Order    int // display position, ascending. Ties keep insertion order.
+	Priority int // collapse and drop step: 0 goes first, then 1, 2…, negative last
 }
 
 // Status is the state rendered on the line below the input field.
 type Status struct {
-	Spinner    string // the working glyph, first element (bottom-left corner); static at rest
+	Spinner    string // the working glyph, first element (bottom-left corner), static at rest
 	Model      string // full model label
 	ModelShort string // short model label, taken once every lower-priority piece has collapsed
-	Tokens     int    // context usage count; drives the bar against Budget()
-	MaxTokens  int    // the model's window; 0 renders no bar
+	Tokens     int    // context usage count, drives the bar against Budget()
+	MaxTokens  int    // the model's window, 0 renders no bar
 	Reserve    int    // tokens held back from MaxTokens for a response
-	Compact    int    // where an auto-compaction fires; when set, the bar fills against it
-	Estimated  bool   // Used includes an estimate; prefixes the count with ~
+	Compact    int    // where an auto-compaction fires. When set, the bar fills against it.
+	Estimated  bool   // Used includes an estimate, prefixes the count with ~
 	Segments   []Segment
 }
 
 // part is one rendered status piece: where it sits and what shortening it costs.
 type part struct {
 	order int    // display position, ascending
-	coll  int    // collapse step; neverCollapse (or no short form) means it keeps full text
+	coll  int    // collapse step. neverCollapse (or no short form) means it keeps full text.
 	full  string // already styled
 	short string // already styled, empty when there is nothing to collapse to
 }
@@ -92,7 +92,7 @@ func (s Status) rows(t Theme, width int) []string {
 }
 
 // parts lists every piece in display order: the fixed part, the model, then segments by
-// their Order. Sorting is stable so equal orders keep insertion order; a segment removed
+// their Order. Sorting is stable so equal orders keep insertion order. A segment removed
 // between paints therefore cannot drag its neighbours around.
 func (s Status) parts(t Theme) []part {
 	parts := s.fixedParts(t)
@@ -124,7 +124,7 @@ func (s Status) fixedParts(t Theme) []part {
 		return parts
 	}
 	// bar fills to where an auto-compact would fire when that is known, else to
-	// the response-safe budget (window−reserve); count shows used vs the real window.
+	// the response-safe budget (window−reserve). Count shows used vs the real window.
 	budget := s.Compact
 	if budget <= 0 {
 		budget = s.MaxTokens - s.Reserve
@@ -155,7 +155,7 @@ func (s Status) modelText(t Theme) string {
 	return t.Dim.Wrap(s.Model)
 }
 
-// modelTextShort returns the wrapped short label; without one there is nothing to
+// modelTextShort returns the wrapped short label. Without one there is nothing to
 // collapse to, so the full label stands at any width.
 func (s Status) modelTextShort(t Theme) string {
 	if s.ModelShort == "" || s.Model == "" {
@@ -274,7 +274,7 @@ func joinStatus(parts []string, t Theme) string {
 func (u *UI) SetStatusSegment(seg Segment) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	seg.Text = sanitizeRow(seg.Text) // arbitrary caller text; keep SGR only
+	seg.Text = sanitizeRow(seg.Text) // arbitrary caller text, keep SGR only
 	seg.Short = sanitizeRow(seg.Short)
 
 	for i := range u.status.Segments {

@@ -13,7 +13,7 @@ import (
 const filterPlaceholder = "filter"
 
 // toolsCommand widens the enabled set. Before the first prompt the picker lists
-// every registered tool and the selection is free; after it only disabled tools
+// every registered tool and the selection is free. After it only disabled tools
 // are offered, since the tool block the model has already seen is not retractable.
 func toolsCommand(ctx context.Context, _ string, c Console) error {
 	reg := c.Tools()
@@ -27,8 +27,8 @@ func toolsCommand(ctx context.Context, _ string, c Console) error {
 	return toolsWidenOnly(ctx, c, reg)
 }
 
-// toolsFreeSelect lists every tool with the current set preselected; the
-// selection is free to enable or disable anything ahead of the first prompt.
+// toolsFreeSelect lists every tool with the current set preselected.
+// The selection is free to enable or disable anything ahead of the first prompt.
 func toolsFreeSelect(ctx context.Context, c Console, reg *tools.Registry) error {
 	all := reg.All()
 	rows := reg.Units(all)
@@ -48,7 +48,7 @@ func toolsFreeSelect(ctx context.Context, c Console, reg *tools.Registry) error 
 	return nil
 }
 
-// toolsWidenOnly lists only disabled tools; selecting enables them. Nothing can
+// toolsWidenOnly lists only disabled tools, and selecting enables them. Nothing can
 // be turned off again for the rest of the session.
 func toolsWidenOnly(ctx context.Context, c Console, reg *tools.Registry) error {
 	disabled := reg.Disabled()
@@ -83,8 +83,8 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 	enabled := bulk.SliceToSet(reg.Names())
 	labels := mcpGroupLabels(c)
 
-	// group by source so MultiPick emits a header when the group changes; stable
-	// sort keeps declaration order within a source (builtins up front, ahead of MCP)
+	// group by source so MultiPick emits a header when the group changes, stable
+	// sort keeping declaration order within a source (builtins up front, ahead of MCP)
 	slices.SortStableFunc(rows, func(a, b tools.Row) int {
 		sa, sb := a.Source, b.Source
 		if sa == sb {

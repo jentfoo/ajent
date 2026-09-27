@@ -118,8 +118,8 @@ It is persisted beside its transcript at `<transcript>.head`, written atomically
 on every `SetHead` and at turn boundaries.
 
 **One cursor per transcript, never per directory.** A directory holds every
-session for a workspace, so a shared cursor can only remember one of them — and
-two ajent instances in one workspace overwrite each other's. A sidecar cannot be
+session for a workspace, so a shared cursor can only remember one of them.
+Two ajent instances in one workspace overwrite each other's. A sidecar cannot be
 claimed by a sibling, so no session and no concurrent process can steer another.
 
 Forking onto a new root removes the cursor rather than writing one, so it can
@@ -311,7 +311,7 @@ transcript by name or id (`--resume <id|name>`), or create-or-resume by name
 |---|---|
 | *(no flag)* | always a brand-new transcript; the previous one is untouched and stays resumable by id or picker |
 | `--continue` | auto-resumes the most recent session's leaf, no prompt; starts fresh if none exists. The "just get back to work" path |
-| `--resume` | lists saved sessions (newest first) in a picker — first user prompt, started time, model, message count — and resumes the chosen root's leaf; cancelling or an empty list falls back to fresh |
+| `--resume` | lists saved sessions (newest first) in a picker showing the first user prompt, started time, model and message count, then resumes the chosen root's leaf; cancelling or an empty list falls back to fresh |
 | `--resume <id\|name>` | reopens that exact saved transcript directly by name, full id or unique id prefix; fails fast with a clear error if nothing matches |
 | `--session <name>` | resumes the session with that name, or creates one carrying it when the name is new. The repeatable path: the same command starts the work and returns to it |
 

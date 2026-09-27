@@ -119,7 +119,7 @@ func TestInputBeforeMarkedInjected(t *testing.T) {
 	err := a.Prompt(t.Context(), Input{Before: before, Text: "next?"})
 	require.NoError(t, err)
 
-	// the Before message and the typed prompt both land; only the former is injected
+	// the Before message and the typed prompt both land, only the former is injected
 	var gotInjected *MessageInfo
 	for i := range infos {
 		tb, ok := infos[i].Message.Content[0].(llm.TextBlock)

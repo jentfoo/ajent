@@ -182,7 +182,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		require.Len(t, msg.Content, 1)
 		think, ok := msg.Content[0].(ThinkingBlock)
 		require.True(t, ok)
-		// inline reasoning_text deltas feed the thinking block; summary_part.done
+		// inline reasoning_text deltas feed the thinking block, and summary_part.done
 		// inserts a separator between them
 		assert.Equal(t, "step one \n\nstep two", think.Text)
 	})
@@ -201,7 +201,7 @@ func TestResponsesProviderStream(t *testing.T) {
 		think, ok := msg.Content[0].(ThinkingBlock)
 		require.True(t, ok)
 		assert.Equal(t, "pondering ", think.Text)
-		// the done event carried no payload; response.completed supplied it and
+		// the done event carried no payload. response.completed supplied it and
 		// the accumulator replaced the earlier block in place
 		assert.Equal(t, "ENC-LATE", think.Encrypted)
 		assert.Contains(t, string(think.Item), `"encrypted_content":"ENC-LATE"`)
@@ -411,7 +411,7 @@ func TestBuildResponsesBody(t *testing.T) {
 	})
 
 	t.Run("extra_body_folds_in_sampling_params", func(t *testing.T) {
-		// sampling params ride ExtraBody; on the Responses dialect they are the only
+		// sampling params ride ExtraBody. On the Responses dialect they are the only
 		// temperature/top_p channel since the agent never sets Request.Temperature.
 		req := baseReq()
 		req.Model.Caps.ExtraBody = map[string]json.RawMessage{"top_k": json.RawMessage(`40`)}
@@ -430,7 +430,7 @@ func TestBuildResponsesBody(t *testing.T) {
 
 	t.Run("level_off_names_the_none_effort", func(t *testing.T) {
 		// reasoning:{effort:"none"} is sent for off so the model stops
-		// thinking; only {off:null} suppresses the key entirely
+		// thinking. Only {off:null} suppresses the key entirely.
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelOff}
 
@@ -451,8 +451,8 @@ func TestBuildResponsesBody(t *testing.T) {
 	})
 
 	t.Run("unsupported_level_clamps_internally", func(t *testing.T) {
-		// xhigh is opt-in; a bare build clamps to high so the encoder never sends
-		// an unmapped level even when no agent pre-clamped it
+		// xhigh is opt-in. A bare build clamps to high so the encoder never sends
+		// an unmapped level even when no agent pre-clamped it.
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelXHigh}
 
@@ -727,7 +727,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		body, err := buildResponsesBody(req)
 		require.NoError(t, err)
 
-		// deferred tools stay out of the top-level list; only the injected item carries them
+		// deferred tools stay out of the top-level list, so only the injected item carries them
 		_, hasTools := decode(t, body)["tools"]
 		assert.False(t, hasTools)
 
@@ -798,7 +798,7 @@ func TestBuildResponsesBody(t *testing.T) {
 		body, err := buildResponsesBody(req)
 		require.NoError(t, err)
 
-		// only the function_call_output is emitted; no tool payload follows
+		// only the function_call_output is emitted, no tool payload follows
 		input := decode(t, body)["input"].([]any)
 		assert.Equal(t, "function_call_output", input[len(input)-1].(map[string]any)["type"])
 	})
@@ -911,7 +911,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 	})
 
 	t.Run("distinct_signed_texts_stay_separate", func(t *testing.T) {
-		// commentary and final answer are separate output items; each keeps its own
+		// commentary and final answer are separate output items, each keeping its own
 		// id and phase across the replay rather than collapsing into one message
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
 			TextBlock{Text: "commentary", Signature: encodeTextSignature("msg_c", "commentary")},

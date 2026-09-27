@@ -23,10 +23,10 @@ type Completer interface {
 
 // CompleteStyle is how a context's candidates are presented. Menu re-queries on
 // every keystroke under the UI lock, so a menu context's Complete must return
-// promptly and must not re-enter the UI; Async is the escape hatch for one that
+// promptly and must not re-enter the UI. Async is the escape hatch for one that
 // cannot.
 type CompleteStyle struct {
-	Menu  bool // live list while typing; ↑/↓ select and Tab accepts
+	Menu  bool // live list while typing, with ↑/↓ selecting and Tab accepting
 	Async bool // query off the key loop, for a source that may block
 }
 
@@ -43,8 +43,8 @@ type StyledCompleter interface {
 // second implementation.
 func MatchScore(text, query string) (int, bool) { return matchScore(text, query) }
 
-// SetCompleter installs the Tab completion source; nil disables completion.
-// Only inline and alt modes complete; plain mode has no live block.
+// SetCompleter installs the Tab completion source. Nil disables completion.
+// Only inline and alt modes complete, since plain mode has no live block.
 func (u *UI) SetCompleter(c Completer) {
 	u.mu.Lock()
 	defer u.mu.Unlock()

@@ -25,7 +25,7 @@ type Phase uint8
 const (
 	PhaseIdle Phase = iota
 	PhasePlanning
-	PhaseAwaitingPlan // the plan is in the editor; the user's next submit starts work
+	PhaseAwaitingPlan // the plan is in the editor, and the user's next submit starts work
 	PhaseImplementing
 	PhaseReviewing
 	PhaseDone
@@ -53,7 +53,7 @@ func (p Phase) String() string {
 func (p Phase) active() bool { return p != PhaseIdle && p != PhaseDone }
 
 // Host is the driver-supplied surface a workflow drives. The host wires each
-// field; a nil field disables that capability rather than panicking.
+// field. A nil field disables that capability rather than panicking.
 type Host struct {
 	PickModel   func(ctx context.Context, title string) (llm.Model, bool)
 	ActiveModel func() llm.Model
@@ -113,7 +113,7 @@ type Controller struct {
 	execSummary    string
 	goalCaptured   bool
 
-	planTip   string // hand-off point; review round 1 forks here
+	planTip   string // hand-off point, where review round 1 forks
 	reviewTip string // tip of the review branch, for later rounds
 
 	retries   int
@@ -207,7 +207,7 @@ func (c *Controller) Start(ctx context.Context, prefill string) string {
 }
 
 // Stop cancels the workflow and restores the model and tool set found at Start.
-// A running turn is aborted first; its boundary completes the restore.
+// A running turn is aborted first. Its boundary completes the restore.
 func (c *Controller) Stop() {
 	c.mu.Lock()
 	if !c.phase.active() {

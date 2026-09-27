@@ -14,21 +14,21 @@ import (
 
 // Input is one user turn: free text, extra content blocks, and the synthetic
 // messages that frame it. Before is context that predates the message (staged
-// shell results, a project survey); After is context the message asked for, so
+// shell results, a project survey), After is context the message asked for, so
 // it is resolved when the message lands and a rewind past it drops both.
 type Input struct {
 	Text      string
 	Blocks    llm.BlockList                       // extra content, appended after Text when non-empty
 	Before    []MessageInfo                       // appended ahead of this input, in transcript order
-	After     func(context.Context) []llm.Message // appended behind it once it lands; nil is the normal case
-	Delivered func()                              // called once the message lands, ahead of After; nil is the normal case
-	Settled   func()                              // called once After has landed too; nil is the normal case
-	Injected  bool                                // system-injected context (not a typed prompt); excluded from recall
-	Prepared  bool                                // the host's submit pipeline already ran; Options.NormalizeInput skips it
+	After     func(context.Context) []llm.Message // appended behind it once it lands, nil is the normal case
+	Delivered func()                              // called once the message lands, ahead of After, nil is the normal case
+	Settled   func()                              // called once After has landed too, nil is the normal case
+	Injected  bool                                // system-injected context (not a typed prompt), excluded from recall
+	Prepared  bool                                // the host's submit pipeline already ran, Options.NormalizeInput skips it
 }
 
 // State is the in-memory projection of a session. It is owned by the loop
-// goroutine; only Agent.mu guards the queue and running flag, never this.
+// goroutine. Only Agent.mu guards the queue and running flag, never this.
 type State struct {
 	Messages  []llm.Message
 	Model     llm.Model
@@ -51,7 +51,7 @@ type TurnResult struct {
 	Stop  llm.StopReason
 	Usage llm.Usage
 	Steps int
-	Err   error // transport or context failure; tool errors are results not this
+	Err   error // transport or context failure, tool errors are results not this
 }
 
 // MessageInfo is one appended message and what the stream reported with it.
@@ -84,7 +84,7 @@ type ToolCall struct {
 type ToolResult struct {
 	Content llm.BlockList // what the model sees
 	// Display is what history shows. A tool either streams to agent.Output or sets
-	// this, never both; otherwise its head renders twice.
+	// this, never both, otherwise its head renders twice.
 	Display string
 	Details any // structured detail for extensions and the transcript
 	IsError bool
@@ -92,7 +92,7 @@ type ToolResult struct {
 	// further model call. Control tools set it to hand a phase over.
 	EndTurn bool
 	// AddedToolNames are the tools this result loads into the conversation from
-	// here on. Deferred-tool providers materialize their schemas at this point;
+	// here on. Deferred-tool providers materialize their schemas at this point,
 	// others ignore it.
 	AddedToolNames []string
 }

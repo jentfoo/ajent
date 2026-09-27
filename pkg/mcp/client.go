@@ -44,12 +44,12 @@ type Client struct {
 	cfg  ServerConfig
 
 	c    *mcpclient.Client
-	cmd  *exec.Cmd // stdio child for process-group kill; nil for network servers
+	cmd  *exec.Cmd // stdio child for process-group kill, nil for network servers
 	tran string    // "stdio", "http" or "sse"
 
 	onWarn func(string)
 
-	negotiated string             // negotiated protocol version; ""-era values gate applyEra
+	negotiated string             // negotiated protocol version, ""-era values gate applyEra
 	clientInfo mcp.Implementation // repeated in every modern request's _meta
 
 	rawSeq atomic.Int64 // raw-request id counter, seeded to rawSeqBase
@@ -63,7 +63,7 @@ type Client struct {
 // rawAttemptTimeout bounds one raw-seam request so a dropped or reset response cannot hang discovery.
 const rawAttemptTimeout = 15 * time.Second
 
-// rawRetries resends a single request after transport-level failures; mcp-go's stdio can drop a line under load.
+// rawRetries resends a single request after transport-level failures, since mcp-go's stdio can drop a line under load.
 const rawRetries = 2
 
 // rawSeqBase offsets raw-seam ids into a space mcp-go's own counter (from 1, +1 per
@@ -184,7 +184,7 @@ func (c *Client) spawnStdio(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("mcp %s: spawn %q: %w", c.name, c.cfg.Command, err)
 	}
-	c.cmd = cmd // captured by the command func; used for process-group kill
+	c.cmd = cmd // captured by the command func, used for process-group kill
 	c.c = cl
 	return nil
 }
@@ -292,7 +292,7 @@ func parseTool(raw json.RawMessage, server string, readOnly FlexStrings) (def To
 	if wire.Name == "" || len(wire.InputSchema) == 0 {
 		return def, false, fmt.Sprintf("tool %q has no name or input schema; skipped", wire.Name)
 	}
-	// providers reject names outside this charset on every request; the MCP spec
+	// providers reject names outside this charset on every request, and the MCP spec
 	// requires the same pattern, so a miss is the server's defect
 	if !toolNameRe.MatchString(wire.Name) {
 		return def, false, fmt.Sprintf("tool %q has a name outside [a-zA-Z0-9_-]{1,64}; skipped", wire.Name)
@@ -314,7 +314,7 @@ func parseTool(raw json.RawMessage, server string, readOnly FlexStrings) (def To
 	if wire.Annotations != nil && wire.Annotations.ReadOnlyHint != nil {
 		def.ReadOnly = *wire.Annotations.ReadOnlyHint
 	}
-	for _, pat := range readOnly { // config globs mark additional tools read-only; "*" marks all
+	for _, pat := range readOnly { // config globs mark additional tools read-only, "*" marks all
 		if pathMatch(pat, def.Name) {
 			def.ReadOnly = true
 		}
@@ -359,7 +359,7 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage, ou
 // OnNotification registers a handler for server notifications (progress,
 // tools/list_changed). Handlers are invoked asynchronously: mcp-go delivers
 // notifications on its transport's single reader goroutine, so doing blocking I/O
-// inside a handler would deadlock stdio; the reader is what returns those
+// inside a handler would deadlock stdio, since the reader is what returns those
 // responses. Dispatching each notification to its own goroutine keeps that
 // invariant at this boundary for every current and future handler.
 func (c *Client) OnNotification(h func(mcp.JSONRPCNotification)) {
@@ -433,11 +433,11 @@ func (c *Client) sendRaw(ctx context.Context, method string, params any) (*trans
 }
 
 // sendRawAttempts sends one request up to retries resends. Each attempt is bounded by
-// rawAttemptTimeout; a fresh ID per attempt keeps late responses from misrouting.
+// rawAttemptTimeout, and a fresh ID per attempt keeps late responses from misrouting.
 func (c *Client) sendRawAttempts(ctx context.Context, method string, params any, retries int) (*transport.JSONRPCResponse, error) {
 	var lastErr error
 	for range retries + 1 {
-		if err := ctx.Err(); err != nil { // caller budget exhausted; stop early
+		if err := ctx.Err(); err != nil { // caller budget exhausted, stop early
 			return nil, err
 		}
 		params, header := c.applyEra(method, params)
@@ -451,7 +451,7 @@ func (c *Client) sendRawAttempts(ctx context.Context, method string, params any,
 		})
 		cancel()
 		if err == nil {
-			return resp, nil // a JSON-RPC error response is not a transport failure; no retry
+			return resp, nil // a JSON-RPC error response is not a transport failure, no retry
 		}
 		lastErr = err
 	}
@@ -467,7 +467,7 @@ func (c *Client) applyEra(method string, params any) (any, http.Header) {
 	fields := map[string]json.RawMessage{}
 	if params != nil {
 		if b, err := json.Marshal(params); err == nil {
-			_ = json.Unmarshal(b, &fields) // params are plain maps; failures below leave them unstamped
+			_ = json.Unmarshal(b, &fields) // params are plain maps, failures below leave them unstamped
 		}
 	}
 	meta := map[string]any{}
@@ -476,7 +476,7 @@ func (c *Client) applyEra(method string, params any) (any, http.Header) {
 	}
 	meta[mcp.MetaKeyProtocolVersion] = c.negotiated
 	meta[mcp.MetaKeyClientInfo] = c.clientInfo
-	meta[mcp.MetaKeyClientCapabilities] = mcp.ClientCapabilities{} // required on every modern request; we declare none
+	meta[mcp.MetaKeyClientCapabilities] = mcp.ClientCapabilities{} // required on every modern request, we declare none
 	if _, ok := meta["progressToken"]; !ok {
 		meta["progressToken"] = c.rawSeq.Load() // ties notifications to the request that caused them
 	}
@@ -518,7 +518,7 @@ func (c *Client) Request(ctx context.Context, method string, params any) (json.R
 
 // Handle installs a handler for an incoming server-to-client request method, or
 // removes it when h is nil. Handlers accumulate across calls. mcp-go's own
-// handlers are replaced after Start; ping is re-implemented.
+// handlers are replaced after Start, and ping is re-implemented.
 func (c *Client) Handle(method string, h func(ctx context.Context, params json.RawMessage) (any, error)) {
 	bidir, ok := c.c.GetTransport().(transport.BidirectionalInterface)
 	if !ok {

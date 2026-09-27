@@ -97,12 +97,12 @@ func RunHeadless(o HeadlessOptions) int {
 		Sinks:               []agent.Sink{drain},
 		Env:                 env,
 		ProjectInstructions: proj,
-		SystemPrompt:        o.Set.Settings().Agent.SystemPrompt, // config or --system; replaces default guidance
+		SystemPrompt:        o.Set.Settings().Agent.SystemPrompt, // config or --system, replaces default guidance
 		Tools:               toolsReg,
 		Provider:            providerFor,
 		Compact: func(ctx context.Context, reason agent.CompactReason) (bool, error) {
 			if comp == nil {
-				return false, nil // recording is off; nothing to compact
+				return false, nil // recording is off, nothing to compact
 			}
 			return comp.run(ctx, reason, "")
 		},
@@ -154,7 +154,7 @@ func RunHeadless(o HeadlessOptions) int {
 		opts.Sinks = append(opts.Sinks, stats)
 	}
 	opts.Sinks = append(opts.Sinks, subagentSink{mgr: sag})
-	// headless runs have no queued prompts; the boundary hook serves completions
+	// headless runs have no queued prompts, so the boundary hook serves completions
 	// alone, deciding membership when the message lands so polls are never duplicated
 	opts.OnBoundary = sag.Boundary
 
@@ -265,7 +265,7 @@ func headlessOutcome(err error, res agent.TurnResult, answer string) (string, in
 }
 
 // headlessTools returns the tool names to enable for scope, then applies the allow and deny
-// adjustments. Built-in names follow the scope regardless of tools.enabled; every other source
+// adjustments. Built-in names follow the scope regardless of tools.enabled, and every other source
 // keeps its registered state, so a server disabled in mcp.json stays off.
 func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) []string {
 	inScope := func(name string) bool {

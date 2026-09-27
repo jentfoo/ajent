@@ -98,14 +98,14 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 			body.ToolStream = ptrOf(true)
 		}
 	} else if len(req.Tools) > 0 && hasToolHistory(req.Messages) {
-		// every offered tool was loaded by a reference; the key stays present with
+		// every offered tool was loaded by a reference, so the key stays present with
 		// an empty list for endpoints that require it once tool calls exist
 		body.Tools = &[]compatTool{}
 	}
 	applyThinking(&body, req) // runs after the max-tokens fields for its budget read
 	if caps.Store {
-		// store:false opts out of server-side storage; gated because not every
-		// completions endpoint accepts the key, unlike the responses dialect
+		// store:false opts out of server-side storage, gated because not every
+		// completions endpoint accepts the key unlike the responses dialect
 		body.Store = ptrOf(false)
 	}
 	applyVercelGateway(&body, caps.VercelGatewayRouting)
@@ -163,8 +163,8 @@ func kimiLoadedTools(req Request, caps Capabilities) []compatTool {
 }
 
 // kimiLoadedNames returns every tool a result loaded in transcript order,
-// deduplicated. Names absent from the offered set are not filtered here; the
-// load point builder skips them.
+// deduplicated. Names absent from the offered set are not filtered here, since
+// the load point builder skips them.
 func kimiLoadedNames(msgs []Message) []string {
 	var out []string
 	seen := make(map[string]struct{})
@@ -309,8 +309,8 @@ func compatMessageFor(m Message, caps Capabilities, on bool) ([]compatMessage, e
 		}
 	}
 
-	// reasoning replay rides the configured field or a surviving block's own source;
-	// an empty field is forced only when this turn reasons, which keeps deepseek-style
+	// reasoning replay rides the configured field or a surviving block's own source.
+	// An empty field is forced only when this turn reasons, which keeps deepseek-style
 	// models in thinking mode across turns.
 	if len(thinkingTexts) > 0 {
 		if msg.reasoningField = resolveReasonField(m, caps); msg.reasoningField != "" {
@@ -318,7 +318,7 @@ func compatMessageFor(m Message, caps Capabilities, on bool) ([]compatMessage, e
 		}
 	} else if on && m.Role == RoleAssistant {
 		// force an empty reasoning field so a model stays in thinking mode across
-		// turns; this defaults on for deepseek via detection and is user-overridable.
+		// turns. This defaults on for deepseek via detection and is user-overridable.
 		// think-tags models never get it: they parse tags from content, not fields.
 		if caps.ReplayReasoning {
 			msg.reasoningField = resolveReasonField(m, caps)
@@ -514,8 +514,8 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	st := s.st
 	var events []Event
 
-	// the first non-empty of reasoning_content, reasoning, reasoning_text wins;
-	// chutes.ai sends the same text in two fields and this order picks the right one.
+	// the first non-empty of reasoning_content, reasoning, reasoning_text wins.
+	// Chutes.ai sends the same text in two fields and this order picks the right one.
 	reasoning, field := deltaReasonText(c.Delta)
 	if field != "" {
 		st.reasonField = field
@@ -647,8 +647,8 @@ func (s *compatStream) finish(cause error) []Event {
 		stop = StopError
 		s.err = cause
 	} else if stop == StopUnknown {
-		// no finish reason arrived: infer for providers that never send one, or an
-		// interrupted stream; otherwise a truncated stream is surfaced as an error.
+		// no finish reason arrived: infer for providers that never send one or an
+		// interrupted stream. Otherwise a truncated stream is surfaced as an error.
 		if !st.caps.SupportsFinishReason || s.ctx.Err() != nil {
 			if st.tools != nil {
 				stop = StopToolUse

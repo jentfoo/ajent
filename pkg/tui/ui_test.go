@@ -46,7 +46,7 @@ func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 		msgs:     make(chan string),
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
-		// afterDelay is the probe-timeout seam; tests override it per case
+		// afterDelay is the probe-timeout seam. Tests override it per case.
 		afterDelay: time.AfterFunc,
 	}
 	if inl, ok := u.render.(*inlineRenderer); ok {
@@ -57,7 +57,7 @@ func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 	go u.reader.run()
 	go u.readKeys()
 	go u.watchStatus()
-	u.mu.Lock() // a key may already be decoding; serialize with readKeys
+	u.mu.Lock() // a key may already be decoding, serialize with readKeys
 	u.repaint()
 	u.mu.Unlock()
 	tb.Cleanup(u.Close)
@@ -359,7 +359,7 @@ func TestUIHistory(t *testing.T) {
 	})
 
 	t.Run("block_follows_the_last_line", func(t *testing.T) {
-		// the committed transcript ends at row 11; divider on 12, input then status
+		// the committed transcript ends at row 11, divider on 12, input then status
 		assert.Contains(t, v.Line(13), promptFirst)
 		assert.Contains(t, v.Line(14), "0/1k · test")
 	})
@@ -371,7 +371,7 @@ func TestThinkingStreamsLive(t *testing.T) {
 	v := newVT(60, 20)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	// first delta: the marker commits; the partial stays as a live preview above input
+	// first delta: the marker commits, and the partial stays as a live preview above input
 	u.Thinking("reasoning so f")
 	assert.Equal(t, "✻ thinking", v.Line(0))
 	screen := u.snapshot(v)
@@ -381,7 +381,7 @@ func TestThinkingStreamsLive(t *testing.T) {
 	require.NotEqual(t, -1, previewAt)
 	assert.Less(t, previewAt, promptAt)
 
-	// a newline commits the completed line; only the pending tail stays in the preview
+	// a newline commits the completed line, so only the pending tail stays in the preview
 	u.Thinking("ar\nnext partial")
 	screen = u.snapshot(v)
 	assert.Contains(t, screen, "reasoning so far")
@@ -432,16 +432,16 @@ func TestUIToolStart(t *testing.T) {
 
 	done := u.ToolStart("c1", "bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
-	// no separate spinner row above the input; a running tool keeps the glyph animated.
+	// no separate spinner row above the input. A running tool keeps the glyph animated.
 	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
 	assert.True(t, strings.HasPrefix(strutil.StripANSI(statusRow), spinnerFrames[0]))
-	// the running tool name and command stay out of the status bar; only the header carries them
+	// the running tool name and command stay out of the status bar, only the header carries them
 	assert.NotContains(t, strutil.StripANSI(statusRow), "bash")
 	assert.NotContains(t, strutil.StripANSI(statusRow), "go test ./...")
 
 	done("ok  0.4s")
 
-	// the result is a short Display; it commits as-is (no indent) under its header.
+	// the result is a short Display, it commits as-is (no indent) under its header
 	assert.Equal(t, "ok  0.4s", v.Line(1))
 	assert.Contains(t, v.Line(3), promptFirst)
 }
@@ -452,7 +452,7 @@ func TestUIBusy(t *testing.T) {
 	v := newVT(40, 10)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	// a bare glyph sits at the left of the status line even when idle; no label.
+	// a bare glyph sits at the left of the status line even when idle, with no label.
 	assert.NotContains(t, u.snapshot(v), "working")
 	assert.Contains(t, u.snapshot(v), spinnerFrames[0])
 
@@ -467,7 +467,7 @@ func TestUIBusy(t *testing.T) {
 	// a running tool keeps the busy glyph animated but adds no label to the line
 	doneTool := u.ToolStart("c1", "bash", "bash: go test ./...")
 	assert.Equal(t, "⏺ bash: go test ./...", v.Line(0))
-	statusRow := u.line(v, 3) // committed header on row 0; live block starts at row 1: divider, then input and status
+	statusRow := u.line(v, 3) // committed header on row 0, live block starts at row 1: divider, then input and status
 	assert.NotContains(t, strutil.StripANSI(statusRow), "bash")
 	doneTool("ok  0.4s")
 
@@ -740,7 +740,7 @@ func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 	v := newVT(50, 30)
 	u := newTestUI(t, v, strings.NewReader(""))
 
-	// a non-streaming tool (read) sets Display; the done hook elides it
+	// a non-streaming tool (read) sets Display, the done hook elides it
 	var b strings.Builder
 	for i := 1; i <= 30; i++ {
 		fmt.Fprintf(&b, "%6d\tline %d\n", i, i)
@@ -750,7 +750,7 @@ func TestUIDisplayGetsHeadAndSummary(t *testing.T) {
 
 	screen := u.snapshot(v)
 	assert.Equal(t, "⏺ read big.txt", v.Line(0))
-	// head shows the numbered lines; past it a single summary row
+	// head shows the numbered lines, and past it a single summary row
 	for i := 1; i <= outputHeadLines; i++ {
 		assert.Contains(t, screen, fmt.Sprintf("%6d    line %d", i, i)) // tab renders as spaces
 	}
@@ -835,7 +835,7 @@ func TestNew(t *testing.T) {
 		_, err := inW.WriteString("  \nhello\n") // blank lines are skipped
 		require.NoError(t, err)
 
-		// drain messages so the pump never blocks; assert on what lands
+		// drain messages so the pump never blocks, assert on what lands
 		var got atomic.Value
 		go func() {
 			for msg := range u.Messages() {
@@ -965,7 +965,7 @@ func TestUISearchOverlay(t *testing.T) {
 
 	t.Run("typing_narrows", func(t *testing.T) {
 		searchPress(u, key{typ: keyRune, text: "retry"})
-		// the header shows the query and detail; the full match renders below it
+		// the header shows the query and detail, the full match renders below it
 		assert.Contains(t, strutil.StripANSI(v.Line(1)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
 		assert.Contains(t, v.Line(2), "fix the retry loop")
 	})
@@ -1051,7 +1051,7 @@ func TestUISearchArrowCommits(t *testing.T) {
 			items := []SearchItem{{Text: tc.prompt}, {Text: tc.older}}
 			u.SetHistorySearch(func() []SearchItem { return items })
 
-			// type a filter so there is something to select; with an empty query nothing shows.
+			// type a filter so there is something to select, with an empty query nothing shows
 			searchPress(u, key{typ: keyReverseSearch})
 			u.waitOpenSearch(t)
 			searchPress(u, key{typ: keyRune, text: "ne"}) // narrows to the newest prompt
@@ -1077,7 +1077,7 @@ func TestUISearchArrowCommits(t *testing.T) {
 			assert.Equal(t, tc.prompt, u.editor.Value()) // second up recalls without a visible change
 			submit = searchPress(u, key{typ: keyUp})
 			assert.Nil(t, submit)
-			assert.Equal(t, 0, u.editor.pos) // recalled text again ends at its caret; Up reaches the start first
+			assert.Equal(t, 0, u.editor.pos) // recalled text again ends at its caret, Up reaches the start first
 			submit = searchPress(u, key{typ: keyUp})
 			assert.Nil(t, submit)
 			assert.Equal(t, tc.older, u.editor.Value())
@@ -1100,7 +1100,7 @@ func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
 	})
 
 	// plain ↑ is cursor-first: each recall fills the field with its caret at the
-	// end, so stepping older takes two presses; one Up reaches the start of the
+	// end, so stepping older takes two presses. One Up reaches the start of the
 	// recalled line (moving nothing else), a second recalls the next entry.
 	submit := searchPress(u, key{typ: keyUp})
 	assert.Nil(t, submit)
@@ -1116,14 +1116,14 @@ func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
 	searchPress(u, key{typ: keyUp})
 	assert.Equal(t, "first", u.editor.Value())
 
-	// at the oldest there is nothing more to recall; Up just moves within it.
+	// at the oldest there is nothing more to recall. Up just moves within it.
 	searchPress(u, key{typ: keyUp}) // caret to start of "first"
 	assert.Equal(t, "first", u.editor.Value())
 	assert.Equal(t, 0, u.editor.pos)
 	searchPress(u, key{typ: keyUp})
 	assert.Equal(t, "first", u.editor.Value())
 
-	// ↓ is cursor-first too: the caret sits at the start of "first"; one Down moves
+	// ↓ is cursor-first too: the caret sits at the start of "first". One Down moves
 	// it back to the end before further Downs return newer toward the live draft.
 	searchPress(u, key{typ: keyDown})
 	assert.Equal(t, "first", u.editor.Value())
@@ -1147,7 +1147,7 @@ func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
 		}
 	}() // drain submissions so the loop keeps running
 
-	// type and submit a message; it is recorded into editor history live
+	// type and submit a message, it is recorded into editor history live.
 	_, err := io.WriteString(pw, "last sent")
 	require.NoError(t, err)
 	_, err = io.WriteString(pw, "\r") // enter submits
@@ -1201,7 +1201,7 @@ func (u *UI) waitOpenSearch(t *testing.T) {
 }
 
 func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
-	const wide = 40 // no wrapping; each logical line is its own visual row
+	const wide = 40 // no wrapping, each logical line is its own visual row
 
 	press := func(u *UI, k key) { pressKey(u, k) }
 	// point editorWidth at the emulator so arrow movement sees a stable width
@@ -1241,7 +1241,7 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 		u.SetHistorySearch(func() []SearchItem {
 			return []SearchItem{{Text: "prior prompt"}}
 		})
-		press(u, key{typ: keyUp}) // still at pos 0; now the recall list exists
+		press(u, key{typ: keyUp}) // still at pos 0, now the recall list exists
 		assert.Equal(t, "prior prompt", editorVal(u))
 	})
 
@@ -1266,7 +1266,7 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 		press(u, key{typ: keyDown})
 		assert.Equal(t, len("hello world"), editorPos(u))
 
-		// with a recall list installed, an Up at the start recalls newer; a Down then
+		// with a recall list installed, an Up at the start recalls newer. A Down then
 		// returns toward (and finally restores) the held live draft.
 		u.SetHistorySearch(func() []SearchItem {
 			return []SearchItem{{Text: "next prompt"}}
@@ -1327,7 +1327,7 @@ func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
 		got = append(got, text)
 	})
 
-	// a large paste is stored under a placeholder; the editor holds the tiny marker
+	// a large paste is stored under a placeholder, the editor holds the tiny marker
 	big := strings.Repeat("a", 3000)
 	u.mu.Lock()
 	ph := pastePlaceholder(big, 1)
@@ -1361,7 +1361,7 @@ func TestUIResizeGate(t *testing.T) {
 		u := newTestUI(t, v, strings.NewReader(""))
 		setResizing(u, true)
 
-		u.SetStatus(Status{Tokens: 7700, MaxTokens: 10000}) // a repaint trigger; held back while resizing
+		u.SetStatus(Status{Tokens: 7700, MaxTokens: 10000}) // a repaint trigger, held back while resizing
 		assert.NotContains(t, u.snapshot(v), "7.7k")
 
 		u.resize()
@@ -1481,7 +1481,7 @@ func TestThinkingResize(t *testing.T) {
 		screen := u.snapshot(v)
 		assert.Contains(t, screen, "reasoning")
 
-		v.setSize(20, 12) // reflows; then the settled signal arrives
+		v.setSize(20, 12) // reflows, then the settled signal arrives
 		u.resize()
 		screen = u.snapshot(v)
 		assert.Contains(t, screen, "reasoning")
@@ -1565,7 +1565,7 @@ func TestUIResizeStorm(t *testing.T) {
 	for _, w := range []int{20, 33, 15, 40, 26} {
 		v.setSize(w, 12)
 		u.mu.Lock()
-		u.resizing.Store(true) // the SIGWINCH arrived; the burst is in flight
+		u.resizing.Store(true) // the SIGWINCH arrived, and the burst is in flight
 		u.mu.Unlock()
 		u.SetActivity("write", "writing \u4e16\u754c notes.go \x1b[2B streaming") // gated: draws nothing
 		u.resize()                                                                // the debounce settled
@@ -1597,7 +1597,7 @@ func TestUIHoldsDrawingFromTheSignal(t *testing.T) {
 	u.Text("alpha bravo charlie delta echo ")
 	before := u.snapshot(v)
 
-	u.sigGen.Add(1) // SIGWINCH seen; holdForResize still queued on u.mu
+	u.sigGen.Add(1) // SIGWINCH seen, holdForResize still queued on u.mu
 	u.Text("foxtrot golf hotel india juliet ")
 	assert.Equal(t, before, u.snapshot(v))
 
@@ -1807,7 +1807,7 @@ func TestUIResizeProbeGatesTheRedraw(t *testing.T) {
 
 	v.setSize(30, 12)
 	u.holdForResize() // the SIGWINCH arrived
-	u.probeResize()   // the burst settled; the redraw waits on the terminal
+	u.probeResize()   // the burst settled, and the redraw waits on the terminal
 
 	assert.Equal(t, 1, v.dsrCount)
 	assert.Equal(t, 2, countRules(u.snapshot(v)))
@@ -1838,7 +1838,7 @@ func TestUIResizeProbeTimeoutSettles(t *testing.T) {
 	require.NotNil(t, fire)
 	assert.Equal(t, 2, countRules(u.snapshot(v)))
 
-	fire() // the terminal never answered; the grace expired
+	fire() // the terminal never answered, so the grace expired
 	assert.Equal(t, 2, countRules(u.snapshot(v)))
 	fire() // the quiet grace elapsed
 	assert.Equal(t, 1, countRules(u.snapshot(v)))
@@ -1905,7 +1905,7 @@ func TestUIResizeDrawGraceCancelledBySignal(t *testing.T) {
 	v.setSize(30, 12)
 	u.holdForResize()
 	u.probeResize()
-	u.probeAnswered() // the terminal caught up; the quiet grace starts
+	u.probeAnswered() // the terminal caught up, and the quiet grace starts
 	u.holdForResize() // but a new resize begins before the draw goes out
 	fire()            // the grace elapses
 
@@ -1948,7 +1948,7 @@ func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 		fire := captureGrace(u)
 
 		u.Print(strings.Repeat(words, 4))
-		u.Text(strings.Repeat(words, 8)) // an unclosed block; the preview takes the rest of the rows
+		u.Text(strings.Repeat(words, 8)) // an unclosed block, so the preview takes the rest of the rows
 
 		// maximize: the block ends above the bottom, but widening never re-anchors.
 		// the dead band is cosmetic and the pad would be visible churn
@@ -1959,7 +1959,7 @@ func TestUIRestoreReanchorsTheBlock(t *testing.T) {
 		assert.Equal(t, 2, v.row)
 
 		// restore: the reflow overflows the screen and the terminal clamps the
-		// park onto the top row; the settled redraw pads the block back
+		// park onto the top row. The settled redraw pads the block back.
 		v.setSize(80, 24)
 		u.holdForResize()
 		settleProbe(u, 1)
@@ -2011,7 +2011,7 @@ func TestUIBlockEndsAtScreenBottom(t *testing.T) {
 
 			v.setSize(width, 24)
 			u.holdForResize()
-			settleProbe(u, 1) // the reflow overflows the screen; the park is clamped
+			settleProbe(u, 1) // the reflow overflows the screen, so the park is clamped
 			fire()
 
 			block := len(u.render.(*inlineRenderer).live)
@@ -2260,7 +2260,7 @@ func TestUIResponsiveResize(t *testing.T) {
 		u.sigGen.Add(1)
 		u.resizing.Store(true)
 		u.holdForResize()
-		u.Text("mid burst ") // gated; deferred with any commit
+		u.Text("mid burst ") // gated, deferred with any commit
 		settle(u)
 
 		v.setSize(80, 24)

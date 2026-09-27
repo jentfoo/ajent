@@ -270,7 +270,7 @@ func TestRunHeadless(t *testing.T) {
 				{Events: devCallTurn("c1", "bash", `{"command":"echo hello"}`)},
 				{Events: textTurn("that was refused")},
 			})
-		assert.Equal(t, ExitOK, code) // a denial is a tool result; the turn adapts
+		assert.Equal(t, ExitOK, code) // a denial is a tool result, the turn adapts
 
 		lines := decodeLines(t, out)
 		var result map[string]any

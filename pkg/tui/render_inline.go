@@ -17,11 +17,11 @@ import "strings"
 //
 //   - every text line (`flowReflow` and `flowWrap` alike: prose, code, lists,
 //     quotes, diffs, tool output) goes out as one logical line, exactly like
-//     cat. The terminal wraps it and reflows it on resize in both directions;
-//     selections carry no fake continuation indents (a hard break from us
+//     cat. The terminal wraps it and reflows it on resize in both directions.
+//     Selections carry no fake continuation indents (a hard break from us
 //     would freeze the line at commit width and fragment copies.
 //   - only genuinely two-dimensional content (tables, rules) is laid out at
-//     commit width and keeps it; wrapping a table would garble it outright.
+//     commit width and keeps it, since wrapping a table would garble it outright.
 //
 // The live block, whose top is the parked cursor the terminal tracks through
 // reflow, is always redrawn at the current width. Alt mode exists for full resize
@@ -38,12 +38,12 @@ type inlineRenderer struct {
 	// walk, and with it the park, stays byte-identical to a full redraw.
 	base baseline
 
-	// compose scratch for one frame, grown to len(live) and reused; record
-	// copies out of them into the baseline
+	// compose scratch for one frame, grown to len(live) and reused. Record
+	// copies out of them into the baseline.
 	emitted []string
 	widths  []int
 
-	reanchored bool // a reflow lost the screen bottom; the next full draw pads back to it
+	reanchored bool // a reflow lost the screen bottom, so the next full draw pads back to it
 	anchorRow  int  // reported park row (1-based) the pad is measured from
 
 	// sigGen reads the UI's resize-signal generation, drawGen the generation the
@@ -55,17 +55,17 @@ type inlineRenderer struct {
 
 // baseline is the bookkeeping for row-diffing against the frame on screen.
 // A width change reflows rows we did not write, a count change is what the full
-// erase covers, and an invalidation means the block itself is gone; each makes
+// erase covers, and an invalidation means the block itself is gone. Each makes
 // the next draw fall back to today's full erase-and-redraw. The periodic full
 // redraw bounds how long a stale row can linger in erasable territory.
 type baseline struct {
 	drawn     bool     // a frame reached the terminal (eraseLive depends on this)
-	frames    int      // monotonic paint count; forces a full draw via diffFullEvery
+	frames    int      // monotonic paint count, forces a full draw via diffFullEvery
 	prev      []string // emitted rows (post-caret) of the last written frame
 	prevRaw   []string // the live rows those emitted rows were computed from
 	prevCaret int      // index into prev that carried the painted caret last frame
 	prevWidth int      // width that frame was drawn at
-	forceFull bool     // commit/suspend/clearHistory: the on-screen block is gone; reanchor: the pad needs the full path
+	forceFull bool     // commit/suspend/clearHistory: the on-screen block is gone, reanchor needs the pad to take the full path
 }
 
 // invalidate marks the on-screen block as unknown so the next draw repaints it
@@ -76,8 +76,8 @@ func (b *baseline) invalidate() {
 }
 
 // diffFullEvery forces a whole-block redraw every so many frames. A stale row
-// inside the live block is erasable territory that the next full frame heals;
-// this bounds how long a diff miss can linger.
+// inside the live block is erasable territory that the next full frame heals.
+// This bounds how long a diff miss can linger.
 const diffFullEvery = 64
 
 func (r *inlineRenderer) start(inFd int) error { return r.resume(inFd) }
@@ -105,7 +105,7 @@ func (r *inlineRenderer) size() (int, int) {
 // liveWidth is how wide a live row may be drawn. One column short of the
 // terminal on purpose: a row that fills the last column leaves the cursor in the
 // deferred-wrap state, and emulators disagree on whether the line is then marked
-// as continued; that decides whether a resize reflows it into the next row or
+// as continued. That decides whether a resize reflows it into the next row or
 // not. Staying off the last column makes reflow predictable everywhere.
 func (r *inlineRenderer) liveWidth() int { return max(r.t.width-1, 1) }
 
@@ -117,7 +117,7 @@ func (r *inlineRenderer) liveWidth() int { return max(r.t.width-1, 1) }
 // and clear downward": nothing counts how many rows the block occupies, so
 // nothing can miscount them. That is what makes it immune to the emulator
 // reflowing the block, to a glyph the terminal measures wider than we do, and to
-// a resize racing the draw; those failures used to strand a divider once per miss,
+// a resize racing the draw. Those failures used to strand a divider once per miss,
 // compounding. A reflow leaves the cursor on the first cell of its
 // logical line, which is the cell we parked on.
 func (r *inlineRenderer) eraseLive() string {
@@ -163,7 +163,7 @@ func (r *inlineRenderer) paint() {
 
 // canDiff reports whether unchanged rows may be skipped: a frame is on screen,
 // drawn at this width with this many rows, and nothing invalidated it. A width
-// change is the only thing that reflows rows we did not write; a count change
+// change is the only thing that reflows rows we did not write, and a count change
 // is what the full erase was covering.
 func (r *inlineRenderer) canDiff() bool {
 	b := &r.base
@@ -192,7 +192,7 @@ func (r *inlineRenderer) record(emitted []string, diff bool) {
 
 // composeRows writes the live rows into b and returns the emitted rows to
 // record as the diff baseline. sanitizeRow keeps each row to exactly one
-// terminal row whatever a caller passed; truncation and the caret stay as they
+// terminal row whatever a caller passed. Truncation and the caret stay as they
 // were. The park counts only these rows at the width in force now. A row whose
 // raw input is unchanged from the baseline reuses its emitted form instead of
 // recomputing sanitize, truncate and width.
@@ -235,7 +235,7 @@ func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 	// width in force right now, re-read so a resize landing mid-frame is
 	// accounted for before the count is taken). A skipped row never descended
 	// anything beyond its boundary, so it counts as one regardless of how the
-	// emulator has reflowed it since; the cursor returns exactly to where the
+	// emulator has reflowed it since. The cursor returns exactly to where the
 	// previous frame parked, which is the block's top.
 	r.t.refreshSize()
 	var climb int
@@ -285,7 +285,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 	for _, l := range lines {
 		switch {
 		case l.structured():
-			// structured content arrives as intent (markdown.go), not baked text;
+			// structured content arrives as intent (markdown.go), not baked text.
 			// rows() lays it out at the width in force, so a later re-lay at any
 			// other width (alt mode) reproduces commit exactly. One column short
 			// of the edge, the same precaution as live rows: a full-width row
@@ -308,7 +308,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 		// so the next paint rebuilds the block from the current row.
 		b.WriteString(endSync)
 		r.t.write(b.String())
-		r.reanchored = false // this frame's history moved the block; the row is stale
+		r.reanchored = false // this frame's history moved the block, so the row is stale
 		r.base.invalidate()
 		return
 	}
@@ -320,7 +320,7 @@ func (r *inlineRenderer) commit(lines []histLine) {
 	r.record(emitted, false)
 }
 
-// clearHistory clears the live block; committed scrollback belongs to the
+// clearHistory clears the live block. Committed scrollback belongs to the
 // terminal in this mode and cannot be erased. The UI resets its own buffers.
 func (r *inlineRenderer) clearHistory() {
 	r.t.write(r.eraseLive())
@@ -329,22 +329,22 @@ func (r *inlineRenderer) clearHistory() {
 	r.reanchored = false // the block it was measured against is gone
 }
 
-// resize picks up the new terminal size; nothing needs redrawing here. The next
-// ordinary draw erases from the cursor parked on the block's first row, which
-// the reflow carried along with its cell, so no size is baked into the erase at
-// all. Committed lines are the terminal's, exactly like cat output: they reflow
+// resize picks up the new terminal size, with nothing needing redrawing here.
+// The next ordinary draw erases from the cursor parked on the block's first row,
+// which the reflow carried along with its cell, so no size is baked into the
+// erase at all. Committed lines are the terminal's, exactly like cat output: they reflow
 // however the emulator reflows them and are never re-rendered.
 func (r *inlineRenderer) resize() { r.t.refreshSize() }
 
-// probe asks the terminal where the cursor is and for a status reply; the
+// probe asks the terminal where the cursor is and for a status reply. The
 // replies prove the terminal processed the settled reflow. The status reply
-// releases the barrier; the cursor reply measures where the reflow left the park.
+// releases the barrier, and the cursor reply measures where the reflow left the park.
 func (r *inlineRenderer) probe() { r.t.write(cursorQuery + statusQuery) }
 
 // reanchor takes the CPR-reported cursor row (1-based) and arms the next full
 // draw to pad the block back to the screen bottom when the reflow left it
 // ending above the last row. A fresh session (started false) owns the top and
-// is left alone; a row of zero means no usable evidence. Every path clears the
+// is left alone, while a row of zero means no usable evidence. Every path clears the
 // pad, since one left pending would be measured against a grid that has moved.
 func (r *inlineRenderer) reanchor(row int, started bool) {
 	r.reanchored, r.anchorRow = false, 0

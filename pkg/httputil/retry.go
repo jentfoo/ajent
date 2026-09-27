@@ -13,7 +13,7 @@ const (
 	defaultBase     = 500 * time.Millisecond
 	defaultMax      = 30 * time.Second
 	defaultJitter   = 0.3
-	// cap on an honoured Retry-After; beyond it the request fails
+	// cap on an honoured Retry-After, beyond it the request fails
 	maxRetryAfter = time.Minute
 )
 

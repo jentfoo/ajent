@@ -99,7 +99,7 @@ const minSummaryTokens = 8192 // a merged checkpoint is never amputated by a har
 
 // summarise folds the message entries in [spanStart, end) into a checkpoint with
 // run, merging any previous summary on the branch. It returns the summary text and
-// how many messages it covered; an empty summary with no error means there was
+// how many messages it covered. An empty summary with no error means there was
 // nothing new to fold. stubs are replacement markers for the span, applied so the
 // summariser reads what compaction already reduced rather than raw output.
 func summarise(ctx context.Context, v *branchView, spanStart, end int, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (summary string, summarized int, err error) {
@@ -182,8 +182,8 @@ func buildPrompt(v *branchView, start, end int, prev, instructions string, stubs
 
 // serialise flattens message entries to a text transcript the summariser reads as
 // data rather than a live thread, substituting any stub for its result. Thinking
-// is left out entirely and tool output is clipped to clip runes (0 for no clip);
-// user and assistant prose is never clipped, being the semantic payload.
+// is left out entirely and tool output is clipped to clip runes (0 for no clip).
+// User and assistant prose is never clipped, being the semantic payload.
 func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[string]session.Stub, clip int) {
 	for i := start; i < end; i++ {
 		md, ok := v.message(i)
@@ -275,7 +275,7 @@ func (v *branchView) fitPrompt(spanStart, end int, prev, instructions string, st
 	// empty the transcript into a "summary of nothing" prompt.
 	for spanStart < end {
 		spanStart += (end-spanStart)/4 + 1
-		if spanStart >= end { // exhausted; fall through to the clipped-prior tail
+		if spanStart >= end { // exhausted, fall through to the clipped-prior tail
 			break
 		}
 		prompt = buildPrompt(v, spanStart, end, prev, instructions, stubs, tightest, true)
@@ -283,7 +283,7 @@ func (v *branchView) fitPrompt(spanStart, end int, prev, instructions string, st
 			return prompt, v.countMessages(spanStart, end), nil
 		}
 	}
-	if prev != "" { // a clipped checkpoint still merges; a rejected request does not
+	if prev != "" { // a clipped checkpoint still merges, while a rejected request does not
 		prompt = buildPrompt(v, spanStart, end, strutil.Clip(prev, max(avail/2, 256)), instructions, stubs, tightest, true)
 		if fits(prompt) {
 			return prompt, v.countMessages(spanStart, end), nil

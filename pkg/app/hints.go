@@ -7,11 +7,11 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// hintBoard arbitrates the single "hint" status segment. Holders own slots; only the most
+// hintBoard arbitrates the single "hint" status segment. Holders own slots. Only the most
 // recently requested live slot renders, so a newer hint takes the line from an older one
-// and hands it back when freed. Safe for concurrent use; a nil board is a no-op.
+// and hands it back when freed. Safe for concurrent use. A nil board is a no-op.
 type hintBoard struct {
-	set   func(text, short string) // status writer; nil drops every update
+	set   func(text, short string) // status writer, nil drops every update
 	mu    sync.Mutex
 	seq   int         // request counter, order of arrival
 	live  []*hintSlot // active slots, oldest first
@@ -19,7 +19,7 @@ type hintBoard struct {
 	clean bool        // shown is current
 }
 
-// newHintBoard returns a board writing through set. Tests inject a recorder; production
+// newHintBoard returns a board writing through set. Tests inject a recorder, production
 // uses uiHintBoard.
 func newHintBoard(set func(text, short string)) *hintBoard {
 	return &hintBoard{set: set}
@@ -42,7 +42,7 @@ type hintSlot struct {
 	id    int
 	text  string
 	short string
-	stop  func() // pending expiry, stopped when freed early; nil unless timed
+	stop  func() // pending expiry, stopped when freed early, nil unless timed
 }
 
 // Request takes a slot showing text, newer than every slot held so far. nil for an empty
@@ -81,7 +81,7 @@ func (s *hintSlot) Set(text, short string) {
 }
 
 // Free releases the claim, handing the line to the next most recently requested live slot.
-// Idempotent; freeing a masked slot changes nothing shown.
+// Idempotent, freeing a masked slot changes nothing shown.
 func (s *hintSlot) Free() {
 	if s == nil || s.b == nil {
 		return
@@ -118,7 +118,7 @@ func (b *hintBoard) ShowFor(text, short string, d time.Duration) *hintSlot {
 }
 
 // hintLine is one owner's view of the board, shaped like a plain status writer: an empty
-// text frees the line. Touched by its own goroutine only; the board itself is safe across them.
+// text frees the line. Touched by its own goroutine only. The board itself is safe across them.
 type hintLine struct {
 	b    *hintBoard
 	slot *hintSlot

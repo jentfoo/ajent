@@ -311,7 +311,7 @@ func TestProviderSetup(t *testing.T) {
 
 		require.NoError(t, ProviderSetup(t.Context(), c))
 
-		// the model itself is applied by the driver; the wizard leaves the
+		// the model itself is applied by the driver, and the wizard leaves the
 		// registry pointing at the written default
 		assert.Equal(t, "zai/glm-5", c.Models().Active().Key())
 	})

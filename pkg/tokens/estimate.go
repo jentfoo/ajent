@@ -66,7 +66,7 @@ func EstimateBytes(n int64, kind Kind) int {
 	return int(math.Round(float64(n) / ratio))
 }
 
-// EstimateText estimates the token count of text under kind. ASCII bytes divide by the ratio;
+// EstimateText estimates the token count of text under kind. ASCII bytes divide by the ratio,
 // each non-ASCII rune counts one token, plus one more for astral (emoji) pairs above U+FFFF.
 func EstimateText(text string, kind Kind) int {
 	var ascii int64
@@ -179,7 +179,7 @@ func EstimateMessages(msgs []llm.Message) int {
 // counted as context. A zero Model skips Prepare: with no capabilities to
 // normalize against it would degrade every message as foreign and downgrade every
 // image, which is a worse guess than the raw messages. Fixed request overhead is
-// excluded; callers hold that separately.
+// excluded. Callers hold that separately.
 func EstimateFor(m llm.Model, retain llm.RetainPolicy, msgs []llm.Message) int {
 	if m.ID == "" {
 		return EstimateMessages(msgs)
@@ -197,7 +197,7 @@ func EstimateFor(m llm.Model, retain llm.RetainPolicy, msgs []llm.Message) int {
 // bytes of result content under kind. Callers reserve this before running the
 // call, so it must stay in step with what EstimateMessages bills for the same
 // pair once it lands. The result side counts no tool name because agent.InjectPair
-// leaves it unset; llm.Prepare fills it in at request build time, which is past
+// leaves it unset. llm.Prepare fills it in at request build time, which is past
 // what the ledger bills.
 func EstimateToolPair(call llm.ToolCallBlock, body int64, kind Kind) int {
 	return 2*messageOverhead + estimateToolCall(call) +

@@ -266,7 +266,7 @@ func TestStoreStale(t *testing.T) {
 		assert.Empty(t, stale)
 	})
 
-	// a restored backup carries old entries but a fresh mtime; the later half wins so it is not swept
+	// a restored backup carries old entries but a fresh mtime, so the later half wins and is not swept
 	t.Run("fresh_mtime_keeps_it", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		ws := t.TempDir()
@@ -403,7 +403,7 @@ func TestReadInfo(t *testing.T) {
 		rootTip, rerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "kickoff")})
 		require.NoError(t, rerr)
 
-		// SetHead("") dropped the cursor sidecar; re-persist a head on the new root so
+		// SetHead("") dropped the cursor sidecar, re-persist a head on the new root so
 		// tail recovery lands there and Branch never reaches line 1.
 		w.SetHead(rootTip.ID)
 		require.NoError(t, w.Close())

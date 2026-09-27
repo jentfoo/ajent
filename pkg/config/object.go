@@ -137,7 +137,7 @@ func indentJSON(data []byte) ([]byte, error) {
 }
 
 // SetKey returns data with the dotted key set to value, preserving unknown keys
-// and key order; missing intermediate objects are created.
+// and key order, while missing intermediate objects are created.
 func SetKey(data []byte, key string, value any) ([]byte, error) {
 	root, err := parseNode(data)
 	if err != nil {

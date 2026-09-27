@@ -16,7 +16,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// agentsFileName is the instruction file /init writes; the survey watches its
+// agentsFileName is the instruction file /init writes, and the survey watches its
 // mtime so the "applies on next start" notice only follows a real write.
 const agentsFileName = "AGENTS.md"
 
@@ -98,7 +98,7 @@ func (c *initController) start(ctx context.Context) {
 			c.deps.notify("init: "+err.Error(), tui.LevelWarn)
 		default:
 			// the label is what a queued row shows and what Esc recovers into the
-			// editor; re-submitting it simply runs /init again.
+			// editor. Re-submitting it simply runs /init again.
 			c.deps.pump <- pumpLine{
 				kind: command.KindPrompt, rest: "/init", input: &in, onTurn: c.armWatch,
 			}
@@ -164,7 +164,7 @@ func initCommands(ctl *initController) []command.Command {
 }
 
 // initWatch notices the turn that writes AGENTS.md, so the driver can say it only
-// applies on the next start. Project instructions are read once at startup; there
+// applies on the next start. Project instructions are read once at startup, so there
 // is no mid-session reload.
 type initWatch struct {
 	agent.NopSink
@@ -199,7 +199,7 @@ func (w *initWatch) TurnEnd(agent.TurnResult) {
 	}
 	now := modTime(path)
 	if now.IsZero() || now.Equal(prev) {
-		return // nothing written yet; keep watching
+		return // nothing written yet, keep watching
 	}
 	w.mu.Lock()
 	w.path = ""

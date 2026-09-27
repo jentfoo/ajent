@@ -162,7 +162,7 @@ func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
 	kept := appendSteps(t, w, 6)
 	appendText(t, w, llm.RoleUser, "another")
 	appendText(t, w, llm.RoleAssistant, strings.Repeat("Vending Machine. ", 200))
-	w.SetHead(kept.ID) // rewind past the second turn; the old tail stays in the file
+	w.SetHead(kept.ID) // rewind past the second turn, the old tail stays in the file
 
 	did, err := c.run(t.Context(), agent.CompactManual, "")
 	require.NoError(t, err)
@@ -367,7 +367,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 		var notices []string
 		c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
 		appendText(t, w, llm.RoleUser, "read me a short story")
-		appendSteps(t, w, 2) // the band swallows the branch; chooseCut declines for free
+		appendSteps(t, w, 2) // the band swallows the branch, chooseCut declines for free
 		st.Tokens.Add(7000)
 
 		did, err := c.run(t.Context(), agent.CompactStep, "")
@@ -549,7 +549,7 @@ func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 		require.NoError(t, err)
 	}
 	// a settled calibrator overestimates raw estimates and a large ledger base sits
-	// on top; both must apply to the reseed exactly as they do to every estimate.
+	// on top. Both must apply to the reseed exactly as they do to every estimate.
 	predicted := tokens.EstimateMessages(msgs)
 	st.Tokens.SetBase(9000)
 	st.Tokens.Response("test/m", llm.Usage{Input: predicted * 4, Output: 100}, predicted*2, true)
@@ -597,7 +597,7 @@ func (s *blockingStream) Next() (llm.Event, bool) {
 		s.pos++
 		ev := s.events[i]
 		s.mu.Unlock()
-		return ev, true // deliver events immediately; hold the pull open after them
+		return ev, true // deliver events immediately, hold the pull open after them
 	}
 	// no more events and not closed: block until Close abandons the stream
 	done := s.done
@@ -632,7 +632,7 @@ func (s *blockingStream) Close() error {
 }
 
 // blockingProvider serves one turn through a blockingStream. onCreate reports the
-// stream to its owner; onClosed is signalled when the stream closes.
+// stream to its owner, and onClosed is signalled when the stream closes.
 type blockingProvider struct {
 	turn     []llm.Event
 	onCreate chan *blockingStream
@@ -844,7 +844,7 @@ func TestEndTurnClearsStalled(t *testing.T) {
 	appendSteps(t, w, 12)
 	st.Tokens.Add(7000)
 
-	// the mid-turn compact left the point crossed and stalled armed; the next step
+	// the mid-turn compact left the point crossed and stalled armed, so the next step
 	// in that same turn is held off without attempting a fold.
 	c.stalled.Store(true)
 	did, err := c.run(t.Context(), agent.CompactStep, "")

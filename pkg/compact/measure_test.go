@@ -41,7 +41,7 @@ func TestMeasureOriginStampsThinking(t *testing.T) {
 
 	assert.Greater(t, stamped, nilr)
 
-	// the resolver stamps each assistant message with its producing origin; a
+	// the resolver stamps each assistant message with its producing origin. A
 	// measurement that ran without it would see every one as foreign.
 	msgs, _ := session.ContextMessages(branch, session.CompactionData{}, resolve)
 	for _, m := range msgs {

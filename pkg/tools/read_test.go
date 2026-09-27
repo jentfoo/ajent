@@ -24,7 +24,7 @@ func TestRead(t *testing.T) {
 		out := textOf(res)
 		assert.Contains(t, out, "     1\tline one") // line-numbered output
 		assert.Contains(t, out, "     2\tline two")
-		// Display adds a section header naming the file and range; Content stays bare.
+		// Display adds a section header naming the file and range, while content stays bare.
 		assert.Equal(t, res.Display, "a.txt:1-2\n"+textOf(res))
 	})
 
@@ -41,8 +41,8 @@ func TestRead(t *testing.T) {
 		out := textOf(res)
 		assert.Contains(t, out, "     2\tline 2")
 		assert.NotContains(t, out, "line 5") // limit respected
-		// Display mirrors the line-numbered block (no truncation marker); paging honored,
-		// with a header naming the exact range read.
+		// Display mirrors the line-numbered block (no truncation marker), with paging honored
+		// via a header naming the exact range read.
 		assert.Contains(t, res.Display, "big.txt:2-4\n")
 		assert.Contains(t, res.Display, "     2\tline 2")
 		assert.NotContains(t, res.Display, "... truncated at line 5")
@@ -118,7 +118,7 @@ func TestRead(t *testing.T) {
 		assert.Contains(t, textOf(res), "page with offset")
 	})
 
-	// an explicitly scoped window that reaches EOF is complete; the limit itself
+	// an explicitly scoped window that reaches EOF is complete, so the limit itself
 	// is not truncation and carries no marker
 	t.Run("range_at_limit_ok", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())

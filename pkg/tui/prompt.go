@@ -39,12 +39,12 @@ type PickItem struct {
 	Label    string   // primary text
 	Detail   string   // dim trailing text
 	Terms    []string // extra strings the filter matches, not displayed
-	Group    string   // source label; a dim header is emitted when it changes
+	Group    string   // source label, a dim header is emitted when it changes
 	Tag      string   // optional short role word rendered colored before Label
-	Mark     ItemMark // colors Tag; MarkNone leaves Tag uncolored and opts out of shading
+	Mark     ItemMark // colors Tag, MarkNone leaves Tag uncolored and opts out of shading
 	Off      bool     // off the active branch (rewind tree): the whole row renders faint
 	Disabled bool     // cannot be chosen now: the whole row stays gray, even under the cursor
-	Copy     string   // clipboard payload for ctrl+x; empty opts the row out
+	Copy     string   // clipboard payload for ctrl+x, empty opts the row out
 }
 
 // PickOptions tunes a Pick.
@@ -383,7 +383,7 @@ func padTag(tag string, col int) string {
 	return strings.Repeat(" ", col-displayWidth(tag)+1)
 }
 
-// offMarker marks the active chain with "*" only when color is unavailable; with
+// offMarker marks the active chain with "*" only when color is unavailable. With
 // color the saturated/faint split carries it, and no glyph is spent on it.
 func offMarker(t Theme, it PickItem) string {
 	if t.Profile != ColorNone || it.Mark == MarkNone {
@@ -395,7 +395,7 @@ func offMarker(t Theme, it PickItem) string {
 }
 
 // markStyle returns the palette style for a role tag, faint when the row is off
-// the active branch; MarkNone is a no-op.
+// the active branch. MarkNone is a no-op.
 func markStyle(t Theme, it PickItem) Style {
 	switch it.Mark {
 	case MarkUser:
@@ -450,7 +450,7 @@ func windowFor(cursor, total, rows int) (start, end int) {
 
 // listSection renders items 0..total-1 into at most room rows with row(), scrolling
 // to keep cursor visible. Rows that do not fit end in a dim footer naming them,
-// which takes one of those same rows; an empty list renders no matches.
+// which takes one of those same rows. An empty list renders no matches.
 func listSection(t Theme, cursor, total, room int, row func(i int) string) []string {
 	switch {
 	case room <= 0:
@@ -498,11 +498,11 @@ func trimLastCluster(s string) string {
 // be toggled in one keypress.
 type pickRow struct {
 	group string // non-empty only for a header row
-	item  int    // index into items; negative marks a header
+	item  int    // index into items, negative marks a header
 }
 
 // multiPickState is a multi-select list narrowed by a live filter. Space/Tab
-// toggle the highlighted row, Enter confirms, Esc cancels; typed text (other
+// toggle the highlighted row, Enter confirms, Esc cancels. Typed text (other
 // than space) narrows the filter. Rows group under a navigable checkbox header
 // when PickItem.Group changes between matches.
 type multiPickState struct {
@@ -609,7 +609,7 @@ func (s *multiPickState) key(k key) (bool, error) {
 		s.cursor = min(max(len(s.picks)-1, 0), s.cursor+pickPage)
 	case keyRune:
 		if k.text == " " {
-			s.toggleCurrent() // space selects/deselects; it never narrows the filter
+			s.toggleCurrent() // space selects/deselects, it never narrows the filter
 			return false, nil
 		}
 		s.filter += k.text

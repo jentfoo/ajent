@@ -43,7 +43,7 @@ func oneLine(s string) string {
 // and tabs fold to single spaces, other control bytes drop, and of the escape
 // sequences only complete non-private SGR survives. A cursor-motion or screen
 // escape in caller text moves the cursor in ways no row count predicted, so
-// the park lands inside the block and the next erase strands its top row; a
+// the park lands inside the block and the next erase strands its top row. A
 // truncated escape would swallow the park sequence as parameters. Runs at the
 // public boundary, in shadeRow and in the renderers, so it must be idempotent.
 func sanitizeRow(s string) string {
@@ -100,7 +100,7 @@ func foldControls(s string) string {
 }
 
 // isControl reports the C0, DEL and C1 code points, which a terminal acts on
-// rather than prints (xterm decodes U+009B and treats it as CSI; uniseg calls
+// rather than prints (xterm decodes U+009B and treats it as CSI, while uniseg calls
 // it zero width).
 func isControl(r rune) bool {
 	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)

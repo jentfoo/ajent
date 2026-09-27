@@ -241,7 +241,7 @@ func TestNormalizeCallID(t *testing.T) {
 	caps := func(d Dialect) Capabilities { return Capabilities{Dialect: d} }
 
 	t.Run("anthropic_sanitizes_and_caps", func(t *testing.T) {
-		// every non [a-zA-Z0-9_-] rune maps to an underscore; a long id is capped
+		// every non [a-zA-Z0-9_-] rune maps to an underscore, and a long id is capped
 		assert.Equal(t, "a_b_1_", normalizeCallID("a+b/1=", caps(DialectAnthropic), "p", callForeignEndpoint))
 		long := strings.Repeat("x", 100)
 		out := normalizeCallID(long, caps(DialectAnthropic), "p", callForeignEndpoint)
@@ -514,8 +514,8 @@ func TestRepairTurns(t *testing.T) {
 	})
 
 	t.Run("orphan_after_tool_result_bridged", func(t *testing.T) {
-		// an unanswered call flushed before a plain user turn synthesizes results;
-		// those still need the assistant bridge under RequiresAssistantAfterToolResult
+		// an unanswered call flushed before a plain user turn synthesizes results.
+		// Those still need the assistant bridge under RequiresAssistantAfterToolResult.
 		mc := Model{Provider: "p", ID: "m", Caps: Capabilities{
 			RequiresAssistantAfterToolResult: true,
 		}}

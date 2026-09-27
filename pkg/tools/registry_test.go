@@ -231,20 +231,20 @@ func TestRegistryDryRun(t *testing.T) {
 		reg, _ := newEditRegistry(dir)
 
 		c := agent.ToolCall{ID: "c", Name: "edit", Input: json.RawMessage(`{"path":"a.txt","edits":[{"oldText":"missing","newText":"x"}]}`)}
-		require.Error(t, reg.DryRun(c)) // edit implements DryRunner; a doomed call errors
+		require.Error(t, reg.DryRun(c)) // edit implements DryRunner, a doomed call errors
 
 		c.Input = json.RawMessage(`{"path":"a.txt","edits":[{"oldText":"hello","newText":"hi"}]}`)
 		require.NoError(t, reg.DryRun(c))
 	})
 
-	// a non-dry tool cannot predict; never skip a prompt on uncertainty
+	// a non-dry tool cannot predict, never skipping the prompt on uncertainty
 	t.Run("nil_for_non_dry_tool", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		reg := New()
 		reg.Register(&readTool{policy: e.policy, tracker: e.tracker}, true)
 
 		c := agent.ToolCall{ID: "c", Name: "read", Input: json.RawMessage(`{"path":"x"}`)}
-		assert.NoError(t, reg.DryRun(c)) // cannot predict; never skip a prompt on uncertainty
+		assert.NoError(t, reg.DryRun(c)) // cannot predict, never skip a prompt on uncertainty
 	})
 
 	t.Run("nil_for_unknown_tool", func(t *testing.T) {
@@ -328,7 +328,7 @@ func TestRegistryUnitsPartialGroupFallsBack(t *testing.T) {
 		Tools:  []string{"agent_start", "agent_poll"},
 	})
 
-	// only agent_poll is disabled and offered; the group is not fully present
+	// only agent_poll is disabled and offered, the group is not fully present
 	rows := r.Units(r.Disabled())
 	require.Len(t, rows, 2) // ls + a lone agent_poll row
 	var sawPoll bool
@@ -582,7 +582,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		return out
 	}
 
-	// oversized text spills and the footer names the file; fields survive
+	// oversized text spills and the footer names the file, fields surviving
 	t.Run("oversized_result_spills", func(t *testing.T) {
 		var b strings.Builder
 		for i := 0; i < OtherLimit().Lines+50; i++ {
@@ -615,8 +615,8 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		assert.Equal(t, "one\ntwo", joined)
 	})
 
-	// non-text content cannot be rebuilt faithfully, so it stays whole; an
-	// image block that is not a decodable image is kept with a note beside it
+	// non-text content cannot be rebuilt faithfully, so it stays whole, an
+	// image block that is not a decodable image kept with a note beside it
 	t.Run("non_text_content_untouched", func(t *testing.T) {
 		res := exec(agent.ToolResult{
 			Content: llm.BlockList{llm.ImageBlock{Data: []byte{1}}},

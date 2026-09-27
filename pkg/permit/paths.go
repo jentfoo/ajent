@@ -15,11 +15,11 @@ import (
 // writeScope is where auto+write may write without a prompt.
 type writeScope struct {
 	cwd   string   // relative paths resolve against this directory
-	roots []string // canonicalized roots; a path must land under one
+	roots []string // canonicalized roots, a path must land under one
 }
 
 // newWriteScope canonicalises cwd and each extra root, dropping any that fail. Roots resolve
-// like call paths, so a root matches its symlinked form; a zero scope allows nothing.
+// like call paths, so a root matches its symlinked form, a zero scope allowing nothing.
 func newWriteScope(cwd string, extra ...string) writeScope {
 	s := writeScope{cwd: cwd}
 	for _, r := range append([]string{cwd}, extra...) {
@@ -47,7 +47,7 @@ func callPath(input json.RawMessage) string {
 	return p.Path
 }
 
-// bashCwd extracts the working directory a bash call declares; empty when absent.
+// bashCwd extracts the working directory a bash call declares, empty when absent.
 // The shell runs there, so it rebases every relative path in the command.
 func bashCwd(input json.RawMessage) string {
 	var p struct {
@@ -89,7 +89,7 @@ func (s writeScope) allows(call agent.ToolCall) bool {
 }
 
 // rebase returns the scope a command declaring cwd runs under. An empty cwd keeps
-// the session directory; anything outside the roots is refused outright.
+// the session directory, anything outside the roots being refused outright.
 func (s writeScope) rebase(cwd string) (writeScope, bool) {
 	if cwd == "" {
 		return s, true
@@ -139,7 +139,7 @@ func (s writeScope) inScope(p string) bool {
 const maxCdSegments = 4
 
 // allowsCommand reports whether a bash line only reads or makes bounded
-// directory changes inside the scope; redirects and substitution fail closed.
+// directory changes inside the scope, redirects and substitution failing closed.
 // A cd moves the baseline later relative paths resolve against, so both the
 // old and new directory stay candidates.
 func (s writeScope) allowsCommand(cmd string) bool {
@@ -167,7 +167,7 @@ func (s writeScope) allowsCommand(cmd string) bool {
 }
 
 // cdTargets returns the directories a cd segment may land in, resolved against
-// every baseline already possible; ok is false when any lands outside the scope
+// every baseline already possible, ok being false when any lands outside the scope
 // or the target cannot be named (a bare cd goes home, cd - is unknowable).
 func (s writeScope) cdTargets(bases []string, raw string) ([]string, bool) {
 	toks := tokenizeRaw(raw)
@@ -243,7 +243,7 @@ func (s writeScope) segmentWritesInScope(bases []string, seg, raw string) bool {
 			return false
 		}
 		// -p walks up removing empty ancestors, so the highest one it reaches must
-		// be in scope too; everything between sits under it
+		// be in scope too, everything between sitting under it
 		if ancestors && !s.inScopeFrom(bases, topComponent(p)) {
 			return false
 		}

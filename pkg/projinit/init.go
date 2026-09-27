@@ -41,7 +41,7 @@ type Options struct {
 // Runner performs project surveys.
 type Runner struct {
 	opts Options
-	runs atomic.Int64 // call ids carry it; a second survey must not reuse the first's
+	runs atomic.Int64 // call ids carry it, so a second survey must not reuse the first's
 }
 
 // New returns a Runner over opts.
@@ -228,7 +228,7 @@ func terminal(res agent.ToolResult) bool {
 const initPrefix = "init-"
 
 // callID names one survey call. The run number keeps a second /init from reusing
-// the first's ids; Input.Before stays in State and a repeated tool_use 400s later requests.
+// the first's ids, since Input.Before stays in State and a repeated tool_use 400s later requests.
 func callID(run int64, stage, suffix string) string {
 	return fmt.Sprintf("%s%d-%s-%s", initPrefix, run, stage, suffix)
 }

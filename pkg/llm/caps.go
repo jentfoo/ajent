@@ -17,7 +17,7 @@ type Capabilities struct {
 	ReasoningField  string // delta field carrying reasoning text, compat dialect
 	ReplayReasoning bool   // echo reasoning_content on assistant messages
 
-	// per-level override of the provider's effort value; nil omits it, absent uses the default
+	// per-level override of the provider's effort value. Nil omits it, absent uses the default.
 	LevelMap map[Level]*string
 
 	PromptCache bool
@@ -54,13 +54,13 @@ type Capabilities struct {
 	ToolReferences                   bool
 	SupportsAdditionalTools          bool // responses message-anchored additional_tools
 	SupportsToolSearch               bool // client-executed tool search for deferred tools
-	SupportsExplicitPromptCache      bool // supportsExplicitPromptCacheMode; gates openai prompt_cache_key
+	SupportsExplicitPromptCache      bool // supportsExplicitPromptCacheMode, gates openai prompt_cache_key
 	ZaiToolStream                    bool
 	SessionAffinity                  bool // send session-affinity headers
 
 	SessionAffinityFormat string                     // header format when SessionAffinity is set
 	DeferredTools         string                     // deferred tool serialization mode
-	ThinkingBudgetField   string                     // request key capping reasoning tokens; empty disables
+	ThinkingBudgetField   string                     // request key capping reasoning tokens, empty disables
 	ChatTemplateKwargs    map[string]json.RawMessage // chat_template_kwargs additions
 	ChatTemplateArgs      map[string]json.RawMessage // baseten chat_template_args additions
 	OpenRouterRouting     json.RawMessage            // verbatim openrouter provider routing

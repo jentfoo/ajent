@@ -29,8 +29,8 @@ const (
 	previewElided = "•••"
 	// resize events arrive in bursts while dragging, only rebuild once it settles
 	resizeSettle = 80 * time.Millisecond
-	// after a settled burst the redraw waits on the terminal's status reply;
-	// a terminal that never answers gets this much grace before we draw anyway
+	// after a settled burst the redraw waits on the terminal's status reply.
+	// A terminal that never answers gets this much grace before we draw anyway.
 	resizeProbeTimeout = 300 * time.Millisecond
 	// after the reply, the draw waits one more quiet grace: a SIGWINCH already
 	// in flight (or delivered late to a busy goroutine) invalidates it, so a
@@ -43,18 +43,18 @@ const (
 	thinkingPreviewRunes = 8192
 )
 
-// clockwise frames; ⠦ (bottom-left) leads so idle rests at bottom-left
+// clockwise frames, with ⠦ (bottom-left) leading so idle rests at bottom-left
 var spinnerFrames = []string{"⠦", "⠧", "⠇", "⠏", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴"}
 
 // Control is an out-of-band key the caller decides the meaning of. The editor
-// does not consume these; the TUI front end maps them onto agent control calls.
+// does not consume these, and the TUI front end maps them onto agent control calls.
 type Control uint8
 
 const (
 	ControlEscape Control = iota
 	ControlInterrupt
 	ControlEOF
-	ControlModeCycle      // Shift+Tab or Shift+→; meaning belongs to the front end
+	ControlModeCycle      // Shift+Tab or Shift+→, meaning belongs to the front end
 	ControlRecallQueued   // Alt+↑: recall the newest queued prompt into the editor
 	ControlClipboardImage // Ctrl+V: probe the clipboard for an image
 	ControlModeCycleBack  // Shift+←: like ControlModeCycle, one mode the other way
@@ -111,11 +111,11 @@ type UI struct {
 	thinkBuf  lineBuffer
 	thinking  bool
 	textBuf   string
-	streaming bool // a text block is partially buffered; show it live above input
+	streaming bool // a text block is partially buffered, show it live above input
 	textStart bool
 
-	// preview memos for the per-frame live block; keys cover every render input
-	// except the theme, so SetTheme clears both
+	// preview memos for the per-frame live block. Keys cover every render input
+	// except the theme, so SetTheme clears both.
 	streamKey   string
 	streamW     int
 	streamLines []histLine
@@ -125,13 +125,13 @@ type UI struct {
 	thinkRows   []string
 	thinkOK     bool
 
-	runs      []*toolRun // in-flight tool calls, oldest first; the newest drives the spinner color
-	busy      bool       // a turn is in flight; the status-bar glyph animates while set
+	runs      []*toolRun // in-flight tool calls, oldest first, the newest drives the spinner color
+	busy      bool       // a turn is in flight, the status-bar glyph animates while set
 	spinner   int
 	spinnerCh chan struct{}
 
 	// input-change notification for token accounting while composing
-	onEdit       func(string) // never invoked under u.mu; see editNotify
+	onEdit       func(string) // never invoked under u.mu, see editNotify
 	editCh       chan string  // coalescing buffer (size 1, latest wins)
 	lastNotified string       // last text handed to onEdit, so cursor moves do not refire
 
@@ -139,14 +139,14 @@ type UI struct {
 	doubleEscWindow time.Duration
 	onRewind        func()
 	idle            bool // host marks true while awaiting prompt, false during a turn
-	escPending      bool // first idle Esc seen; waiting for a second within the window
+	escPending      bool // first idle Esc seen, waiting for a second within the window
 	rewTimer        escToken
 	afterDelay      func(time.Duration, func()) *time.Timer // time.AfterFunc unless overridden in tests
 
 	act        *pending // interaction owning the live block
 	queue      []*pending
 	activity   []activityRow // transient keyed rows above the input, insertion order
-	queued     []string      // pending prompts awaiting a steer boundary; oldest first
+	queued     []string      // pending prompts awaiting a steer boundary, oldest first
 	noticeKey  string        // keyed notice still collapsible in the live block
 	noticeText string
 
@@ -159,7 +159,7 @@ type UI struct {
 
 	// plain ↑/↓ browse the same recorded-prompt list that Ctrl+R searches (see
 	// SetHistorySearch), so arrows recall prompts without opening the overlay.
-	prompts   []string // newest-first prompt texts; nil falls back to editor history
+	prompts   []string // newest-first prompt texts, nil falls back to editor history
 	promptIdx int      // -1 at the live buffer, else index of the recalled prompt
 	stashP    string   // live draft held aside while browsing recorded prompts
 
@@ -172,7 +172,7 @@ type UI struct {
 	// A resize burst holds back all drawing: while SIGWINCHs are still arriving
 	// the emulator is mid-reflow, and a frame whose size reads disagree with
 	// the emulator's grid under-parks the cursor, stranding rows (a duplicated
-	// divider) that no later erase can reach. resizing gates repaint; commits
+	// divider) that no later erase can reach. resizing gates repaint, and commits
 	// buffer in deferred until the burst settles (see resize). Even the settled
 	// redraw waits on a status-probe barrier (probeResize): the ioctl reports
 	// the new size before the emulator has finished reflowing to it, so a quiet
@@ -182,11 +182,11 @@ type UI struct {
 	// the lock let a whole frame go out after the reflow had started.
 	resizing atomic.Bool
 	deferred []histLine
-	// resizeSeq counts SIGWINCHs; probeSeq is the burst generation the newest
+	// resizeSeq counts SIGWINCHs, and probeSeq is the burst generation the newest
 	// probe belongs to. A reply (or timeout) starts the draw grace only when
-	// they still match, and the draw itself re-checks them; a newer signal at
+	// they still match, and the draw itself re-checks them. A newer signal at
 	// either point means another reflow is in flight. probesOut counts probes
-	// still unanswered; replies carry no identity, so only the last one in
+	// still unanswered, since replies carry no identity: only the last one in
 	// flight can release the barrier.
 	resizeSeq int
 	probeSeq  int
@@ -202,8 +202,8 @@ type UI struct {
 	settledH int
 
 	// sigGen is bumped the instant a resize signal arrives, before holdForResize
-	// contends for the lock; drawGen is the generation the settled redraw last
-	// caught up with; holdGen is the last generation holdForResize sequenced
+	// contends for the lock. drawGen is the generation the settled redraw last
+	// caught up with, and holdGen is the last generation holdForResize sequenced
 	// under the lock. The draw path abandons any frame written while sigGen and
 	// drawGen differ: landing it would park by a row count taken on the old
 	// grid, the classic stranding miss. A settle only clears the gate while
@@ -269,7 +269,7 @@ func New(opts Options) (*UI, error) {
 	u.safeGo(u.watchStatus)
 	if u.images != ImageNone {
 		u.safeGo(u.watchCells)
-		// ask once; the answer sizes every image this session draws
+		// ask once, and the answer sizes every image this session draws
 		u.render.query(cellSizeQuery)
 	}
 	if opts.OnEdit != nil {
@@ -370,11 +370,11 @@ func (u *UI) Close() {
 	u.stopSpinner()
 	u.cancelRewindLocked()
 	u.cancelInteractions()
-	u.pastes = nil // the session is over; nothing can expand them now
+	u.pastes = nil // the session is over, nothing can expand them now
 	if u.editCh != nil {
 		ch := u.editCh
 		u.editCh = nil // handleKey's nil guard drops further edits instead of sending on a closed channel
-		close(ch)      // ends drainEdits; its range loop exits cleanly
+		close(ch)      // ends drainEdits, its range loop exits cleanly
 	}
 	close(u.done)
 	if len(u.deferred) > 0 {
@@ -396,9 +396,9 @@ func (u *UI) SetDeferHistory(v bool) {
 }
 
 // Reset drops rendered state so a rewind can redraw just the current session.
-// Where the renderer owns scrollback (alt mode) committed lines go too; inline
-// keeps the terminal's own scrollback but our buffers and live block reset. The
-// next Replay paints the restored branch fresh.
+// Where the renderer owns scrollback (alt mode) committed lines go too, and
+// inline keeps the terminal's own scrollback but our buffers and live block reset.
+// The next Replay paints the restored branch fresh.
 func (u *UI) Reset() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -419,7 +419,7 @@ func (u *UI) Reset() {
 	u.deferred = nil // held-back commits belong to the dropped state
 	u.thinking = false
 	u.busy = false
-	u.activity = nil // transient rows are live-block only; a reset drops them
+	u.activity = nil // transient rows are live-block only, a reset drops them
 	u.noticeText = ""
 	u.render.clearHistory()
 }
@@ -451,7 +451,7 @@ type ContextInfo struct {
 	Used      int
 	Window    int
 	Reserve   int
-	Compact   int // where an auto-compaction would fire; 0 when unset
+	Compact   int // where an auto-compaction would fire, 0 when unset
 	Estimated bool
 }
 
@@ -485,7 +485,7 @@ func (u *UI) SetInput(text string) {
 }
 
 // SetQueued replaces the dimmed pending-prompt rows shown above the input,
-// oldest first. The driver (steer queue) owns the list; empty clears.
+// oldest first. The driver (steer queue) owns the list, and empty clears.
 func (u *UI) SetQueued(texts []string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -522,7 +522,7 @@ func (u *UI) UserEcho(text string) {
 	u.gap()
 	// flowReflow, not flowWrap: pre-wrapping it here would freeze the message at
 	// the width it was sent at, and the terminal could never reflow it again.
-	// Explicit newlines keep their continuation indent; soft wraps are the
+	// Explicit newlines keep their continuation indent. Soft wraps are the
 	// terminal's, exactly like the rest of committed output.
 	u.commit(indentLines(u.theme.User.Wrap(text), u.theme.User.Wrap(userMarker), userContinue), flowReflow)
 }
@@ -562,7 +562,7 @@ func (u *UI) Image(im Image) {
 
 // streamDelta runs one buffered delta through a commit: completed units drop from
 // the live preview before they commit, so commit does not redraw them as a stale
-// ghost below history; an uncompleted tail grows in place instead.
+// ghost below history. An uncompleted tail grows in place instead.
 func (u *UI) streamDelta(committed, grew bool, commit func()) {
 	if committed {
 		u.repaint() // drop the just-committed rows from r.live before they redraw below history
@@ -574,7 +574,7 @@ func (u *UI) streamDelta(committed, grew bool, commit func()) {
 }
 
 // endStream commits a stream's remainder and clears its preview. Caller has emptied
-// the buffer and cleared the flag; repaint drops the stale rows from r.live before
+// the buffer and cleared the flag, then repaint drops the stale rows from r.live before
 // commit redraws them.
 func (u *UI) endStream(rest string, commit func(string)) {
 	if rest != "" {
@@ -612,9 +612,9 @@ func (u *UI) EndThinking() {
 		func(r string) { u.commit(styleLines(u.theme.Thinking, r), flowReflow) })
 }
 
-// Text streams assistant output. Complete markdown blocks commit to history;
-// the partial remainder renders live above the input so a reply appears word by
-// word instead of only at block boundaries.
+// Text streams assistant output. Complete markdown blocks commit to history,
+// and the partial remainder renders live above the input so a reply appears word
+// by word instead of only at block boundaries.
 func (u *UI) Text(delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -624,7 +624,7 @@ func (u *UI) Text(delta string) {
 	done, rest := splitCompleteBlocks(u.textBuf)
 	u.textBuf = rest
 	committed := len(done) > 0
-	// a partial block still streams; it is recomposed after a commit too, so its
+	// a partial block still streams, and it is recomposed after a commit too so its
 	// preview reserves the separator that commit just made necessary
 	grew := len(rest) > 0
 	u.streamDelta(committed, grew,
@@ -666,8 +666,8 @@ func (u *UI) streamingRows(w int) []string {
 	}
 	for _, l := range lines {
 		if l.structured() {
-			// structured lines carry no text; lay them out or the preview
-			// shows a blank row until the block commits
+			// structured lines carry no text. Lay them out or the preview
+			// shows a blank row until the block commits.
 			out = append(out, l.rows(w)...)
 		} else {
 			out = append(out, u.wrapPreview(l.text, w)...)
@@ -723,7 +723,7 @@ func (u *UI) thinkingPreviewRows(w int) []string {
 
 // Output streams raw tool output for call id, committed a line at a time with no
 // markdown parsing, so log and test output keep their exact shape. Only the first
-// few lines reach history; past that an activity row counts the rest as it runs.
+// few lines reach history, and past that an activity row counts the rest as it runs.
 func (u *UI) Output(id, delta string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -738,7 +738,7 @@ func (u *UI) Output(id, delta string) {
 }
 
 // SetOutputFull marks call id's streamed head to show every line, bypassing
-// the four-line collapse; ending the call clears it.
+// the four-line collapse. Ending the call clears it.
 func (u *UI) SetOutputFull(id string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -746,8 +746,8 @@ func (u *UI) SetOutputFull(id string) {
 	u.runLocked(id).head.full = true
 }
 
-// EndOutput flushes and closes the calls a turn owns, the turn-end safety net;
-// a full-mode call is left alone, since it outlives the turn.
+// EndOutput flushes and closes the calls a turn owns, the turn-end safety net.
+// A full-mode call is left alone, since it outlives the turn.
 func (u *UI) EndOutput() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -828,13 +828,13 @@ func (u *UI) Diff(path, before, after string) {
 }
 
 // ToolStart commits call id's tool header to history. The running tool keeps the
-// status-bar glyph animated and colored (SpinnerTool) while it runs; no separate
-// spinner row is drawn above the input, and the tool name rides only on the
+// status-bar glyph animated and colored (SpinnerTool) while it runs, with no
+// separate spinner row drawn above the input: the tool name rides only on the
 // committed header. The returned function clears it and commits result, which may
 // be empty when output was already streamed.
 func (u *UI) ToolStart(id, name, label string) func(result string) {
 	u.mu.Lock()
-	label = sanitizeRow(label) // feeds the committed header; name is short and trusted
+	label = sanitizeRow(label) // feeds the committed header, since name is short and trusted
 	u.runLocked(id).name = name
 	u.gap()
 	u.commit(u.theme.Accent.Wrap(toolMarker)+" "+u.theme.Dim.Wrap(label), flowReflow)
@@ -852,7 +852,7 @@ func (u *UI) ToolStart(id, name, label string) func(result string) {
 		u.endRunLocked(id)
 		if strings.TrimSpace(result) != "" {
 			// a non-streaming tool's Display gets the identical head-plus-summary treatment.
-			var h outputHead // add returns whole lines; flush picks up any trailing partial
+			var h outputHead // add returns whole lines, flush picks up any trailing partial
 			head := styleLines(u.theme.Dim, h.add(result))
 			head += styleLines(u.theme.Dim, h.flush())
 			if head != "" {
@@ -860,7 +860,7 @@ func (u *UI) ToolStart(id, name, label string) func(result string) {
 			}
 			u.commitSummary(&h)
 		}
-		// a busy turn keeps its glyph animated; tool color comes from syncSpinnerLocked
+		// a busy turn keeps its glyph animated, tool color comes from syncSpinnerLocked
 		u.syncSpinnerLocked()
 		u.repaint()
 	}
@@ -937,7 +937,7 @@ func (u *UI) commitHist(lines []histLine) {
 	u.started = true
 	if u.resizing.Load() {
 		// commit erases the live block too, so it waits out the burst with
-		// repaints; resize flushes these in order once the size settles
+		// repaints. Resize flushes these in order once the size settles.
 		u.deferred = append(u.deferred, lines...)
 		return
 	}
@@ -962,7 +962,7 @@ func (u *UI) repaint() {
 	w, h := u.render.size()
 	// The live block is composed one column short of the terminal. A row that
 	// fills the last column leaves the cursor in the deferred-wrap state, and
-	// emulators disagree on whether that marks the line as continued; that is
+	// emulators disagree on whether that marks the line as continued. That is
 	// what decides how a resize reflows it. Composing narrow (rather than
 	// truncating at draw time) means nothing is cut off the editor or a dialog.
 	if w > 1 {
@@ -973,7 +973,7 @@ func (u *UI) repaint() {
 	st := u.status
 	frame := spinnerFrames[u.spinner%len(spinnerFrames)]
 	if !u.busy && u.toolLabel() == "" {
-		frame = spinnerFrames[0] // static resting frame when idle; bottom-left of the cell
+		frame = spinnerFrames[0] // static resting frame when idle, bottom-left of the cell
 	}
 	st.Spinner = u.spinnerStyleLocked().Wrap(frame)
 	statusRows := st.rows(u.theme, w)
@@ -982,8 +982,8 @@ func (u *UI) repaint() {
 	if u.noticeText != "" {
 		rows = append(rows, u.noticeText)
 	}
-	// In-progress reasoning streams live above the input, above the reply preview;
-	// it yields by the same room rule, so only the tail rows render.
+	// In-progress reasoning streams live above the input, above the reply preview.
+	// It yields by the same room rule, so only the tail rows render.
 	if tr := u.thinkingPreviewRows(w); len(tr) > 0 {
 		room := h - len(rows) - 1 - len(statusRows) - 1 // divider, status, input
 		if room < len(tr) {
@@ -1009,7 +1009,7 @@ func (u *UI) repaint() {
 		rows = append(rows, sr...)
 	}
 	// a narrow rule atop the prompt area sets it apart from committed and streamed
-	// output; row accounting stays exact because this is one more real row here.
+	// output. Row accounting stays exact because this is one more real row here.
 	if w > 0 {
 		style := u.theme.Dim
 		if u.ruleFlash {
@@ -1019,11 +1019,11 @@ func (u *UI) repaint() {
 	}
 	offset := len(rows)
 
-	// an active history search rides above the editor like completion; the two are
+	// an active history search rides above the editor like completion. The two are
 	// mutually exclusive by construction (opening one clears the other).
 	if u.search != nil {
-		// a history search needs more room than completion so the full prompt reads;
-		// the input keeps its own share below.
+		// a history search needs more room than completion so the full prompt reads,
+		// and the input keeps its own share below.
 		searchRows := u.search.rows(u.theme, w, max(4, (h-1)*2/3))
 		rows = append(rows, searchRows...)
 		offset += len(searchRows)
@@ -1057,7 +1057,7 @@ func (u *UI) repaint() {
 	offset += len(queuedR)
 
 	// an interaction takes the input's place while it is active, so the editor
-	// keeps whatever was typed and shows it again once the prompt resolves; the
+	// keeps whatever was typed and shows it again once the prompt resolves. The
 	// status rows below it are reserved here so its own cap stays exact.
 	var curRow, curCol int
 	if u.act != nil {
@@ -1075,7 +1075,7 @@ func (u *UI) repaint() {
 	// Last line of defence on the block's height. Every producer above budgets
 	// itself, but a floor (search, completion) or an unlucky width can still
 	// push the total past the screen, and a block taller than the screen scrolls
-	// as it is drawn; that strands the previous frame's rows above it, one
+	// as it is drawn. That strands the previous frame's rows above it, one
 	// copy per redraw, somewhere no erase can reach. Drop from the top, which is
 	// the oldest streamed text, and carry the caret with it.
 	caret := offset + curRow
@@ -1202,7 +1202,7 @@ func (u *UI) Insert(text string) {
 
 // SetOnEdit installs an input-change callback after construction, for hosts that
 // build their accounting state later than Options (e.g. main's driver). It may be
-// called again to swap the callback; drainEdits reads it per iteration so the new
+// called again to swap the callback. drainEdits reads it per iteration so the new
 // one takes effect immediately.
 func (u *UI) SetOnEdit(fn func(string)) {
 	if fn == nil {
@@ -1224,7 +1224,7 @@ func (u *UI) SetOnEdit(fn func(string)) {
 
 // notifyEditLocked hands the current editor text to OnEdit when it changed since
 // the last notification. Caller holds the lock and must have confirmed editCh is
-// non-nil; Close clears it before closing so a send here never hits a closed channel.
+// non-nil, and Close clears it before closing so a send here never hits a closed channel.
 func (u *UI) notifyEditLocked(text string) {
 	if u.onEdit == nil || text == u.lastNotified {
 		return
@@ -1232,7 +1232,7 @@ func (u *UI) notifyEditLocked(text string) {
 	u.lastNotified = text
 	select {
 	case u.editCh <- text:
-	default: // a newer edit is already queued; drop this one (latest wins)
+	default: // a newer edit is already queued, drop this one (latest wins)
 	}
 }
 
@@ -1251,7 +1251,7 @@ func (u *UI) drainEdits() {
 }
 
 // SetHistorySearch installs the Ctrl+R reverse history search source. fn runs off
-// the key loop; nil disables the gesture.
+// the key loop, and nil disables the gesture.
 func (u *UI) SetHistorySearch(fn func() []SearchItem) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -1277,8 +1277,8 @@ func (u *UI) openSearchLocked() {
 }
 
 // acceptSearchLocked fills the editor with the highlighted match (when there is
-// one), caret on the matched text, and closes the overlay. It does not submit; the
-// caller decides whether to fall through so a key like ↑/↓ can then browse history
+// one), caret on the matched text, and closes the overlay. It does not submit.
+// The caller decides whether to fall through so a key like ↑/↓ can then browse history
 // from that point. Caller holds the lock.
 func (u *UI) acceptSearchLocked() {
 	if it, ok := u.search.current(); ok {
@@ -1290,7 +1290,7 @@ func (u *UI) acceptSearchLocked() {
 // ensurePromptNavLocked lazily loads the recorded-prompt list for plain ↑/↓ once,
 // so arrows scroll the same set Ctrl+R searches. A nil or empty source leaves
 // prompts nil, in which case arrows fall back to editor history navigation.
-// Caller holds the lock; the provider is TTL-cached upstream so this is cheap after
+// Caller holds the lock, and the provider is TTL-cached upstream so this is cheap after
 // a first load and never scans per keystroke.
 func (u *UI) ensurePromptNavLocked() {
 	if u.historySearch == nil || u.prompts != nil {
@@ -1303,7 +1303,7 @@ func (u *UI) ensurePromptNavLocked() {
 	}
 	if len(ps) > 0 {
 		u.prompts = ps
-		u.promptIdx = -1 // at the live buffer; first ↑ recalls the newest prompt
+		u.promptIdx = -1 // at the live buffer, first ↑ recalls the newest prompt
 	} else {
 		u.prompts = nil // no recorded prompts: keep editor-history fallback active
 	}
@@ -1413,11 +1413,11 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	}
 	// an open history search consumes keys ahead of the editor. Up
 	// and Down select: they commit the highlighted prompt into the field, close the
-	// overlay, but do not scroll on this same press; subsequent arrows browse.
+	// overlay, but do not scroll on this same press. Subsequent arrows browse.
 	if u.search != nil {
 		switch k.typ {
 		case keyUp, keyDown:
-			u.acceptSearchLocked() // select + close only; no navigation here
+			u.acceptSearchLocked() // select + close only, no navigation here
 			return nil, true, false
 		default:
 			switch act := u.search.key(k); act {
@@ -1436,8 +1436,8 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			}
 		}
 	}
-	// a menu consumes Tab/↑/↓/Enter/Esc before the editor; a Tab-driven listing
-	// only takes Esc, and every other key clears it on the way out below
+	// a menu consumes Tab/↑/↓/Enter/Esc before the editor, and a Tab-driven listing
+	// only takes Esc. Every other key clears it on the way out below.
 	if u.completion != nil && u.completion.accept(k) {
 		consume, doSubmit := u.completion.key(k, u)
 		if k.typ == keyEscape {
@@ -1473,7 +1473,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		text := strings.ReplaceAll(k.text, "\r", "\n")
 		if len(text) > pasteThreshold {
 			// large paste: store the content and insert a placeholder so the input
-			// block stays small; the placeholder is expanded before sending.
+			// block stays small. The placeholder is expanded before sending.
 			u.pasteSeq++
 			placeholder := pastePlaceholder(text, u.pasteSeq)
 			u.pastes = append(u.pastes, pasteEntry{placeholder: placeholder, content: text})
@@ -1520,7 +1520,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		if !u.editor.Up(u.editorWidth()) {
 			// already on the first visual row.
 			if u.editor.pos > 0 {
-				// mid-text: jump to the prompt's beginning; a second Up recalls history
+				// mid-text: jump to the prompt's beginning, and a second Up recalls history
 				u.editor.pos = 0
 			} else if !u.promptPrev() { // at the very start (or empty): recall older
 				u.editor.HistoryPrev() // fall back when no recorded list exists
@@ -1532,7 +1532,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		if !u.editor.Down(u.editorWidth()) {
 			// already on the last visual row.
 			if u.editor.pos < len(u.editor.cells) {
-				// mid-text: jump to the prompt's end; a second Down recalls next
+				// mid-text: jump to the prompt's end, and a second Down recalls next
 				u.editor.pos = len(u.editor.cells)
 			} else if !u.promptNext() { // at the very end (or empty): recall newer
 				u.editor.HistoryNext()
@@ -1553,8 +1553,8 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			return nil, false, false
 		}
 	case keyRedraw:
-		// the fallthrough repaint redraws the live block; committed rows are the
-		// terminal's and stay exactly as they are
+		// the fallthrough repaint redraws the live block. Committed rows are the
+		// terminal's and stay exactly as they are.
 		u.render.resize()
 	case keyPageUp:
 		if u.mode == ModeInline {
@@ -1572,7 +1572,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		}
 	case keyEscape:
 		if u.editor.Value() != "" {
-			// Esc clears the buffer rather than rewinding; drop any half-armed
+			// Esc clears the buffer rather than rewinding, dropping any half-armed
 			// gesture so its deferred lone-Esc cannot fire after this press.
 			u.cancelRewindLocked()
 			u.editor.Clear()
@@ -1647,8 +1647,8 @@ func (u *UI) readLines() {
 // terminal after the process is continued. Drawing never happens mid-burst:
 // every frame emitted while the emulator is still reflowing risks parking the
 // cursor against a grid that no longer exists, stranding a row no erase can
-// reach. A long drag freezes the live block until it pauses; cheap, since the
-// emulator is busy mangling the screen then anyway.
+// reach. A long drag freezes the live block until it pauses, which is cheap
+// because the emulator is busy mangling the screen then anyway.
 func (u *UI) watchSignals() {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGWINCH, syscall.SIGCONT)
@@ -1677,7 +1677,7 @@ func (u *UI) watchSignals() {
 			timer.Reset(resizeSettle)
 		case <-timer.C:
 			// A SIGWINCH queued behind this timer read means the burst is still
-			// going; keep debouncing rather than redraw mid-reflow.
+			// going. Keep debouncing rather than redraw mid-reflow.
 			var pending bool
 		drain:
 			for {
@@ -1702,14 +1702,14 @@ func (u *UI) watchSignals() {
 }
 
 // holdForResize gates drawing until the burst settles. Only inline can be
-// corrupted by an erase landing mid-reflow; alt owns its screen and plain has
+// corrupted by an erase landing mid-reflow. Alt owns its screen and plain has
 // none, so neither should pay the hold.
 func (u *UI) holdForResize() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
 	u.resizing.Store(u.mode == ModeInline)
-	u.holdGen.Store(u.sigGen.Load()) // every bump so far is sequenced; settles may clear
+	u.holdGen.Store(u.sigGen.Load()) // every bump so far is sequenced, settles may clear
 	u.resizeSeq++
 }
 
@@ -1732,7 +1732,7 @@ func (u *UI) probeResize() {
 	u.probeSeq = u.resizeSeq
 	u.probesOut++
 	gen := u.probeSeq
-	u.cursorRow() // drop replies to superseded probes; what remains answers this one
+	u.cursorRow() // drop replies to superseded probes, what remains answers this one
 	u.cprPending = true
 	u.render.probe()
 	u.afterSafe(resizeProbeTimeout, func() { u.probeTimedOut(gen) })
@@ -1745,7 +1745,7 @@ func (u *UI) probeTimedOut(gen int) {
 	defer u.mu.Unlock()
 
 	if u.probesOut == 0 || gen != u.probeSeq {
-		return // a newer burst owns the barrier; its own timeout releases it
+		return // a newer burst owns the barrier, its own timeout releases it
 	}
 	u.probesOut = 0
 	u.settleProbedLocked(gen)
@@ -1766,7 +1766,7 @@ func (u *UI) settleProbedLocked(gen int) {
 
 // drawSettled runs the settled redraw once the draw grace elapsed without a
 // newer SIGWINCH. During continuous fast resizing every grace is invalidated
-// before it fires, so no frame is emitted until a genuine pause; frames and
+// before it fires, so no frame is emitted until a genuine pause. Frames and
 // reflows never share the wire, which is what strands a divider.
 func (u *UI) drawSettled(gen int) {
 	u.mu.Lock()
@@ -1791,13 +1791,13 @@ func (u *UI) probeAnswered() {
 	}
 	u.probesOut--
 	if u.probesOut > 0 {
-		return // answers a superseded probe; the newest is still in flight
+		return // answers a superseded probe, the newest is still in flight
 	}
 	u.settleProbedLocked(u.probeSeq)
 }
 
 // cursorRow drains the terminal's cursor reports, returning the newest row and
-// whether one arrived; the closed-channel branch is defensive, since a drain
+// whether one arrived. The closed-channel branch is defensive, since a drain
 // that ignored a close would spin. Caller holds the lock.
 func (u *UI) cursorRow() (int, bool) {
 	if u.reader == nil {
@@ -1838,14 +1838,14 @@ func (u *UI) resize() {
 }
 
 // settleResizeLocked redraws once the terminal size has settled: the renderer
-// picks up the new size (alt re-lays and repaints its whole viewport; inline
+// picks up the new size (alt re-lays and repaints its whole viewport, while inline
 // just re-reads it and redraws the live block), the live block is recomposed
 // (which also drops any deferred rows from its preview, the Text/EndText ghost
 // invariant), then held-back commits flush above it. Caller holds the lock.
 func (u *UI) settleResizeLocked() {
 	gen := u.sigGen.Load() // one read: a bump between check and store must leave the gate up
 	if gen != u.holdGen.Load() {
-		return // a signal bumped mid-settle; its own burst redraws
+		return // a signal bumped mid-settle, its own burst redraws
 	}
 	u.resizing.Store(false)
 	u.drawGen.Store(gen) // drawing is caught up with every signal so far
@@ -1860,8 +1860,8 @@ func (u *UI) settleResizeLocked() {
 	u.render.resize()
 	// the reply may predate the reflow, so it is a best guess: the renderer
 	// decides against its own geometry whether the block lost the screen bottom.
-	// Draining is unconditional so a stale report never accumulates; acting on
-	// one needs a probe of our own behind it. Every settle re-decides, passing a
+	// Draining is unconditional so a stale report never accumulates, while acting
+	// on one needs a probe of our own behind it. Every settle re-decides, passing a
 	// row of zero when it has no usable evidence: a pad the last settle raised
 	// may still be pending on a frame the gate abandoned, and it can only be
 	// applied against the geometry it was measured on.

@@ -11,7 +11,7 @@ type ImageProtocol uint8
 const protocolNone = "none"
 
 const (
-	// ImageNone renders placeholders; no protocol detected or images forced off.
+	// ImageNone renders placeholders, when no protocol detected or images forced off.
 	ImageNone ImageProtocol = iota
 	// ImageKitty is the kitty graphics protocol with placement deletion.
 	ImageKitty

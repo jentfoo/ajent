@@ -30,11 +30,11 @@ const (
 	maxBashTimeout     = 10 * time.Minute
 )
 
-// ToolBash is the built-in shell tool's name; its command feeds the permission classifier.
+// ToolBash is the built-in shell tool's name, feeding its command to the permission classifier.
 const ToolBash = "bash"
 
 // ShellExamples is the base set of common commands the bash description may
-// list as examples; callers filter it against PATH, deny rules and enabled tools.
+// list as examples, callers filtering it against PATH, deny rules and enabled tools.
 var ShellExamples = []string{ToolLs, ToolGrep, ToolFind, "diff", "wc"}
 
 // bashTool runs one non-login bash -c process per call. A fresh shell each time
@@ -42,8 +42,8 @@ var ShellExamples = []string{ToolLs, ToolGrep, ToolFind, "diff", "wc"}
 type bashTool struct {
 	policy        PathPolicy
 	sessionID     string   // names the spill directory for long output
-	limit         Limit    // zero means BashOutput; overridable for tests
-	shellExamples []string // common commands the description may name; startup-fixed
+	limit         Limit    // zero means BashOutput, overridable for tests
+	shellExamples []string // common commands the description may name, startup-fixed
 }
 
 var _ agent.Tool = (*bashTool)(nil)
@@ -51,8 +51,8 @@ var _ agent.Tool = (*bashTool)(nil)
 func (t *bashTool) Name() string { return ToolBash }
 
 // Label returns a one-line summary of the command, bounded so a pathological
-// one-liner cannot flood the header. The header wraps it; the status bar, which
-// gets one row, truncates it to the width in force.
+// one-liner cannot flood the header. The header wraps it, while the status bar,
+// which gets one row, truncates it to the width in force.
 func (t *bashTool) Label(call agent.ToolCall) string {
 	var p bashParams
 	if err := decode(call.Input, &p); err != nil {
@@ -137,7 +137,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	w := Writer(&head, lim, spill).(*boundedWriter)
 
 	// hand os/exec our writers so its copy goroutines feed both streams into one
-	// lock-protected sink; Wait joins those copies before returning, which avoids
+	// lock-protected sink. Wait joins those copies before returning, which avoids
 	// racing descriptor cleanup against a manual pipe read. A grandchild that
 	// outlives bash keeps the pipes open and stalls those copiers, so we sweep the
 	// whole process group when done waiting instead of hanging.
@@ -146,11 +146,11 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	cmd.Stdout = sink
 	cmd.Stderr = sink
 	// backstop for a backgrounded child that holds the pipes open after bash
-	// exits normally; without it os/exec would wait on those copiers forever.
+	// exits normally. Without it os/exec would wait on those copiers forever.
 	cmd.WaitDelay = 5 * time.Second
 
 	if err := cmd.Start(); err != nil {
-		if runCtx.Err() != nil { // cancelled before launch; the loop aborts this turn
+		if runCtx.Err() != nil { // cancelled before launch, the loop aborts this turn
 			return resultErr(agent.InterruptedText), nil
 		}
 		return resultErr("bash: " + err.Error()), nil
@@ -184,7 +184,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	captured := normalizeToLF(head.String()) // model-visible text is LF-only
 	truncated := w.Truncated() || overlongLine(captured)
 	if truncated {
-		// cap every kept line at MaxLineRunes like read/grep; the spill holds the
+		// cap every kept line at MaxLineRunes like read/grep. The spill holds the
 		// full stream, so capping is lossless.
 		captured = capText(captured)
 		if !w.Truncated() { // only an overlong line triggered this: no file yet,

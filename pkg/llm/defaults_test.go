@@ -347,7 +347,7 @@ func TestFlavorDefaults(t *testing.T) {
 	})
 
 	t.Run("anthropic_defaults_eager_streaming_and_tool_cache", func(t *testing.T) {
-		// both default on; an unset entry must behave the same
+		// both default on, an unset entry must behave the same
 		caps := flavorDefaults[FlavorAnthropic].caps
 		assert.True(t, caps.EagerToolInputStreaming)
 		assert.True(t, caps.CacheControlOnTools)
@@ -392,8 +392,8 @@ func TestFlavorDefaults(t *testing.T) {
 	})
 
 	t.Run("hosted_chat_completions_flavors_reason_by_default", func(t *testing.T) {
-		// a hosted openai-completions family's models reason by default; discovery
-		// cannot say so from the /v1/models list, so the flavor baseline carries it.
+		// a hosted openai-completions family's models reason by default, since discovery
+		// cannot say so from the /v1/models list. The flavor baseline carries it.
 		for _, f := range []Flavor{
 			FlavorDeepSeek, FlavorTogether, FlavorGroq, FlavorMistral,
 			FlavorMoonshotAI, FlavorGoogle, FlavorCerebras, FlavorNVIDIA,

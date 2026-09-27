@@ -6,7 +6,7 @@ import "time"
 // the rewind gesture when no custom window has been set.
 const defaultDoubleEscWindow = 400 * time.Millisecond
 
-// escToken cancels a pending lone-Esc flush. *time.Timer satisfies it; tests may
+// escToken cancels a pending lone-Esc flush. *time.Timer satisfies it, and tests may
 // substitute their own to avoid wall-clock timing.
 type escToken interface {
 	Stop() bool
