@@ -150,12 +150,12 @@ func TestDiffSummary(t *testing.T) {
 	t.Parallel()
 
 	t.Run("counts_both_sides", func(t *testing.T) {
-		assert.Equal(t, "x.go +2 -1 (shown above)",
+		assert.Equal(t, "x.go +2 -1",
 			DiffSummary("x.go", "a\nb\nc\n", "a\nB\nc\nd\n"))
 	})
 
 	t.Run("new_file_is_all_additions", func(t *testing.T) {
-		assert.Equal(t, "x.go +2 -0 (shown above)", DiffSummary("x.go", "", "a\nb\n"))
+		assert.Equal(t, "x.go +2 -0", DiffSummary("x.go", "", "a\nb\n"))
 	})
 
 	t.Run("identical_is_empty", func(t *testing.T) {
@@ -165,7 +165,7 @@ func TestDiffSummary(t *testing.T) {
 	t.Run("matches_render_header", func(t *testing.T) {
 		before, after := numberedFile(20), strings.Replace(numberedFile(20), "L10\n", "TEN\n", 1)
 		header, _, _ := strings.Cut(RenderDiff(NewTheme(ColorNone, DefaultPalette()), "x.go", before, after), "\n")
-		assert.Equal(t, header+" (shown above)", DiffSummary("x.go", before, after))
+		assert.Equal(t, header, DiffSummary("x.go", before, after))
 	})
 }
 

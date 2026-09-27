@@ -29,7 +29,7 @@ func DiffSummary(path, before, after string) string {
 	if !ok {
 		return ""
 	}
-	return fmt.Sprintf("%s +%d -%d (shown above)", path, added, removed)
+	return fmt.Sprintf("%s +%d -%d", path, added, removed)
 }
 
 // RenderDiff returns a colorized, line numbered unified diff of before and
