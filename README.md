@@ -23,7 +23,7 @@ go install github.com/jentfoo/ajent@latest
 For those that would prefer to test out `ajent` rather than read the docs, you can onboard quickly:
 1. Assuming go and your `~/go/bin` `PATH` are setup: `go install github.com/jentfoo/ajent@latest`
 2. Then run `ajent`. On first start it walks you through wiring up your first provider (alternatively refer to the configuration below to define `~/.ajent/models.json`).
-4. Try your first prompt to learn about features and how to use `ajent`:
+3. Try your first prompt to learn about features and how to use `ajent`:
    ```
    Review @docs/*design.md and provide a concise overview of the user
    facing features and key combinations I should be aware of as a new user.
@@ -46,7 +46,7 @@ Our agent simplifies the TUI in order to provide a terminal native output. Every
 
 Copying things out is easy: `/copy` puts the last agent reply on your clipboard, and `ctrl+x` copies whatever message you're highlighting in the rewind picker. It works with the copy tool built into most operating systems, and over SSH or Mosh it uses a standard terminal trick instead; if nothing's available, ajent tells you exactly what to install.
 
-Tab support is available for file path completions, but our TUI favors a minimal form that is more conductive to power users. No notice of files available until you hit tab twice failing to complete a path.
+Tab support is available for file path completions, but our TUI favors a minimal form that is more conducive to power users. No notice of files available until you hit tab twice failing to complete a path.
 
 <img width="640" height="91" alt="files tab completion" src="https://github.com/user-attachments/assets/65ba1fb8-2577-4df1-8af4-9bbea10b5b3d" />
 
