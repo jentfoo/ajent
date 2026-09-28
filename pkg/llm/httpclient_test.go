@@ -25,6 +25,7 @@ func testClient(t *testing.T, url string) *httpClient {
 		provider: "testprov",
 		baseURL:  url,
 		headers:  map[string]string{"Authorization": "Bearer " + testAPIKey},
+		retry:    RetryPolicy{Attempts: 1}, // no real retry sleeps in failure-path tests
 	})
 	require.NoError(t, err)
 	return c

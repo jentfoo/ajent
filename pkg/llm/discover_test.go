@@ -411,12 +411,12 @@ func TestDiscover(t *testing.T) {
 		o := opts()
 		o.Transport = tr
 		f := File{Providers: map[string]ProviderConfig{
-			"llamacpp": {BaseURL: "http://127.0.0.1:9"},
+			"llamacpp": {BaseURL: "http://127.0.0.1:9", Retry: RetryPolicy{Attempts: 1}},
 		}}
 
 		_, warnings := Discover(t.Context(), f, nil, o)
 		require.Len(t, warnings, 1)
-		assert.Equal(t, 4, int(trips.Load())) // the primary's full ladder, no fallback
+		assert.Equal(t, 1, int(trips.Load())) // primary tried once, no fallback
 	})
 
 	t.Run("http_failure_retries_the_next_candidate", func(t *testing.T) {
@@ -433,7 +433,7 @@ func TestDiscover(t *testing.T) {
 		o := opts()
 		o.Transport = tr
 		f := File{Providers: map[string]ProviderConfig{
-			"llamacpp": {BaseURL: "http://127.0.0.1:9"},
+			"llamacpp": {BaseURL: "http://127.0.0.1:9", Retry: RetryPolicy{Attempts: 1}},
 		}}
 		prev := map[string]CacheEntry{"llamacpp": {Models: []ModelConfig{{ID: "cached"}}}}
 
