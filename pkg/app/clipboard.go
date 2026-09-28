@@ -16,8 +16,8 @@ func (c *uiConsole) CopyClipboard(ctx context.Context, text string) error {
 }
 
 // copyText writes one payload to the clipboard, returning the notice to show.
-func copyText(text string) (string, tui.Level, bool) {
-	if err := clipboardWrite(context.Background(), text); err != nil {
+func copyText(ctx context.Context, text string) (string, tui.Level, bool) {
+	if err := clipboardWrite(ctx, text); err != nil {
 		return err.Error(), tui.LevelError, true
 	}
 	return "copied to the clipboard", tui.LevelInfo, true

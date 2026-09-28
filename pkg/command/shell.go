@@ -23,6 +23,7 @@ import (
 type Stager struct {
 	reg  *tools.Registry
 	sink agent.Sink
+	root context.Context // derived per-run contexts, cancelled on shutdown
 
 	mu       sync.Mutex
 	runs     []*stageRun // submission order
@@ -45,9 +46,10 @@ type stageRun struct {
 }
 
 // NewStager returns a stager that runs commands through reg's bash tool and
-// streams output to sink like an agent-initiated bash call.
-func NewStager(reg *tools.Registry, sink agent.Sink) *Stager {
-	return &Stager{reg: reg, sink: sink}
+// streams output to sink like an agent-initiated bash call. Every staged run is
+// derived from root, so a cancelled root stops in-flight `!` commands.
+func NewStager(root context.Context, reg *tools.Registry, sink agent.Sink) *Stager {
+	return &Stager{root: root, reg: reg, sink: sink}
 }
 
 // SetOnChange registers the hook told how many tokens the staged results now
@@ -95,8 +97,9 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	s.mu.Lock()
 	s.nextID++
 	id := fmt.Sprintf("shell-%d", s.nextID)
-	// a `!` line is the human's own shell, mark it so the permission gate exempts it
-	runCtx, cancel := context.WithCancel(tools.WithUserInitiated(context.Background()))
+	// a `!` line is the human's own shell, mark it so the permission gate exempts it.
+	// Derived from the stager root (appRoot) so shutdown cancels in-flight runs.
+	runCtx, cancel := context.WithCancel(tools.WithUserInitiated(s.root))
 	label := "! " + strutil.FirstLine(cmd)
 	if excluded {
 		label = "!! " + strutil.FirstLine(cmd)

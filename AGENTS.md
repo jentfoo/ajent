@@ -18,23 +18,23 @@ make lint         # gofmt changed files, then golangci-lint + go vet
 `docs/*-design.md` captures **architecture and design decisions**, not a mirror of the
 codebase. Each covers one package boundary or cross-cutting concern and records the **why**
 behind how things are shaped: ownership rules, cache-stability requirements, ordering
-guarantees, precedence. Read these as invariants that must hold when you change code — read
-the doc for a package before working in it, treat its stated constraints as tests to satisfy,
-and update it only when your change alters one of those decisions or adds a new architectural
+guarantees, precedence. Read these as invariants that must hold when you change code. Read
+the doc for a package before working in it and treat its stated constraints as tests to satisfy,
+updating only when your change alters one of those decisions or adds a new architectural
 one. Implementation details (function bodies, struct fields, wiring) belong in the code and its
 comments, not here.
 
 The docs build on each other: `agent-loop-design.md` is the core (tools,
 sessions and compaction all depend on it), and several reference the prompt surfaces
-collected in `prompt-design.md`. When a change crosses boundaries, read — and if
-needed update — every document that names the affected package.
+collected in `prompt-design.md`. When a change crosses boundaries, read (and if needed
+update) every document that names the affected package.
 
 The README carries the other half of the contract: what **new users** must know to
 get started. It covers model setup (`~/.ajent/models.json`), the important
 `config.json` options, common flags, and general patterns (like slash commands) that
 make everything else discoverable on their own. It highlights what a newcomer needs,
-not every function or feature — those live in `--help`, `/commands`, and the design
-docs. Update it when you introduce something new users need to find; don't grow it
+not every function or feature. Those live in `--help`, `/commands`, and the design
+docs. Update it when you introduce something new users need to find. Don't grow it
 into a reference mirroring either surface.
 
 | Document | Package(s) / scope | What it contains |
@@ -85,9 +85,9 @@ app      -> everything except httputil; nothing imports it (the only wiring laye
 
 ### Outbound HTTP (`pkg/httputil`)
 
-Every outbound request goes through this one hardened leaf package; it knows nothing
+Every outbound request goes through this one hardened leaf package. It knows nothing
 about providers and owns all hardening (no redirects, env proxies, explicit pool bounds,
-credential redaction). MCP traffic is not on this client — mcp-go owns its own transports.
+credential redaction). MCP traffic is not on this client. mcp-go owns its own transports.
 
 ### The turn loop (`pkg/agent`)
 
@@ -96,11 +96,11 @@ mid-turn steering and follow-up are separate paths, never a second concurrent pr
 
 Invariants worth memorising:
 
-- Assembling messages from state is **pure** — compaction and plan projection transform
+- Assembling messages from state is **pure**. Compaction and plan projection transform
   the assembled list, never `State`.
 - The system block stays **cache-stable** across requests in a session (only day-granular
   date and project-instruction reloads may differ).
-- On abort every unanswered tool call gets an error result; a dangling one breaks the next
+- On abort every unanswered tool call gets an error result. A dangling one breaks the next
   request permanently. Tool errors are results appended in **call order**, not Go errors.
 - Parallel dispatch only when every call allows it and the model supports it.
 
@@ -113,22 +113,22 @@ normalisation pass means what is counted is what is sent.
 ### Sessions and compaction
 
 The transcript is the source of truth: append-only JSONL forming a **tree** via parent ids,
-never deleted — rewinding forks from an earlier point. Compaction folds everything before a
+never deleted. Rewinding forks from an earlier point. Compaction folds everything before a
 verbatim band into one checkpoint recorded on a `compaction` entry and replayed on every
-rebuild; only the newest applies, so each run recomputes cumulatively.
+rebuild. Only the newest applies, so each run recomputes cumulatively.
 
 ### Front end and dispatch
 
 `pkg/app` is the only wiring layer (nothing imports it). It classifies each line as prompt /
 `/command` / `!shell`, feeds ordering to a single **prompt pump** goroutine, and sends shell
 lines straight to a non-blocking stager. A one-shot (`-p`) run wires the same loop onto a
-stdout drain instead of the TUI — its safety model is the tool set (gate at allow-all, scope
+stdout drain instead of the TUI. Its safety model is the tool set (gate at allow-all, scope
 flags decide what's offered), not the permission barrier. Exit codes are `app.ExitOK`/`ExitUsage`/
 `ExitTurn`: 0 answer, 1 usage/setup error, 2 failed turn.
 
 ### Permission barrier (`pkg/permit`)
 
-The tool gate classifies every call and prompts for approval; it imports only agent/tools,
+The tool gate classifies every call and prompts for approval. It imports only agent/tools,
 never tui, so headless stays free. Only **verifiably read-only** actions run without
 approval: built-in readers by name, declared-read-only tools (MCP hint / config globs),
 bash through a quote-aware analyser. Network commands are never read-only.
@@ -158,6 +158,18 @@ Quick navigation from concern → package (read the matching design doc first). 
 - **`pkg/tools`** — tool registry + built-ins (read/write/edit/bash/grep/find/diff/ask), guard chain, path policy, per-tool limits.
 - **`pkg/tui`** — no-framework terminal UI: paint layers, scrollback survival, markdown/highlight rendering.
 - **`pkg/version`** — version string + self-update.
+
+### Context lifecycle
+
+Three tiers, not one pattern. **App-owned root**: `pkg/app` derives a context from background,
+cancelled on quit and every return path. It feeds the prompt pump, staged shells via the stager's
+root, setup probes and clipboard reads. **Owned root + explicit cancel** for components that tear
+down themselves (`Close`). The MCP manager `m.ctx` keeps reconnect outliving transient callers,
+and per-job sub-agent contexts are reached through the manager's handles. **Self-bounded one-shots**
+with a timeout need no parent, such as shell completion, model refresh and update check.
+Synchronous guard probes in `tools.MustSerialize` / `permit` stay bare background on purpose,
+since inheriting caller state could carry the user-initiated exemption. Derive from an existing
+root rather than adding fresh `context.Background()`. When a new one is genuinely needed, comment why.
 
 ## Code Style
 

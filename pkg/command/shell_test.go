@@ -1,6 +1,7 @@
 package command
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -59,7 +60,7 @@ func newShellStager(t *testing.T) (*Stager, *recordingSinkForShell) {
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "shelltest"})
 	require.NoError(t, err)
 	sink := &recordingSinkForShell{}
-	return NewStager(reg, sink), sink
+	return NewStager(context.Background(), reg, sink), sink
 }
 
 func TestStagerRefusesDisabledBash(t *testing.T) {
@@ -69,7 +70,7 @@ func TestStagerRefusesDisabledBash(t *testing.T) {
 	require.NoError(t, err)
 	reg.SetEnabled([]string{"read", "write", "edit"}) // bash off
 	sink := &recordingSinkForShell{}
-	s := NewStager(reg, sink)
+	s := NewStager(context.Background(), reg, sink)
 
 	s.Run("echo hi", false)
 	sink.mu.Lock()

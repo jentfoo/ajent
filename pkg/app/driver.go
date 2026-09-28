@@ -303,6 +303,18 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	quit := make(chan struct{})
 
+	// one app-lifetime root ties every derived operation (the prompt pump, staged
+	// shell runs, setup probes) to process shutdown. cancel fires when quit does,
+	// and again on any return path via the defer, so tool work dies with the app.
+	appRoot, stopApp := context.WithCancel(context.Background())
+	defer stopApp()
+	go func() {
+		select {
+		case <-quit:
+			stopApp()
+		case <-appRoot.Done():
+		}
+	}()
 	// MCP servers bridge their remote tools into the registry and are supervised by
 	// a manager. Every server connects in full, eagerly, just before the user's
 	// first message.
@@ -396,7 +408,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// for submitted lines. Commands run inline. Shell lines stage and flush ahead of
 	// the next prompt. Prompts expand @ refs and steer the agent.
 	cmds := command.NewRegistry()
-	stager := command.NewStager(toolsReg, sink)
+	stager := command.NewStager(appRoot, toolsReg, sink)
 	// `!` output is context the next prompt will carry, so the bar counts it from
 	// the moment the command finishes rather than waiting for a submission
 	stager.SetOnChange(func(est int) {
@@ -470,7 +482,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		showPermissionIndicator(ui, barrier)
 		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
 	}
-	watchControls(ui, hints, ag, q, stager, ictl, quit, onModeCycle)
+	watchControls(appRoot, ui, hints, ag, q, stager, ictl, quit, onModeCycle)
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
 		rec.started = &started
@@ -510,25 +522,16 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	// a first start with no palette chosen picks one before any output exists
 	if ui.Mode() != tui.ModePlain {
-		if terr := command.ThemeSetup(context.Background(), console); terr != nil {
+		if terr := command.ThemeSetup(appRoot, console); terr != nil {
 			ui.Notify("theme: "+terr.Error(), tui.LevelWarn)
 		}
 	}
 
 	// a first start with nothing configured walks through the first provider
+	// (the probe and prompts abandon when the user quits mid-setup, so the exit is
+	// never held up by a discovery pass). It rides appRoot, which cancels on quit.
 	if len(reg.ProviderNames()) == 0 {
-		// the probe and prompts abandon when the user quits mid-setup, so the
-		// exit is never held up by a discovery pass
-		wizardCtx, cancelWizard := context.WithCancel(context.Background())
-		defer cancelWizard()
-		go func() {
-			select {
-			case <-quit:
-				cancelWizard()
-			case <-wizardCtx.Done():
-			}
-		}()
-		if err := command.ProviderSetup(wizardCtx, console); err != nil {
+		if err := command.ProviderSetup(appRoot, console); err != nil {
 			if errors.Is(err, tui.ErrCancelled) {
 				ui.Notify("provider setup skipped; add one to ~/.ajent/"+llm.ModelsFileName, tui.LevelInfo)
 			} else {
@@ -545,7 +548,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		ui.Notify("no model configured; use /model to pick one", tui.LevelWarn)
 	}
 
-	go runPump(context.Background(),
+	go runPump(appRoot,
 		pump, ag, console, stager, expander, rec != nil, ui, &started,
 		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks)
 
@@ -659,11 +662,11 @@ const (
 	hintNoticeTTL = 6 * time.Second
 )
 
-func watchControls(ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
-	go controlLoop(ui, ui.Controls(), hints, ag, q, stager, initCtl, quit, onModeCycle)
+func watchControls(ctx context.Context, ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
+	go controlLoop(ctx, ui, ui.Controls(), hints, ag, q, stager, initCtl, quit, onModeCycle)
 }
 
-func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
+func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
 	// armed is when the first Ctrl+C landed, and quitHint fires to retire the hint
 	// that advertises the window, keeping the gesture and the hint the same
 	// length. The window is measured from armed, not from the timer, so a press
@@ -686,7 +689,7 @@ func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *
 			case tui.ControlClipboardImage:
 				// off the control loop: a slow backend must not delay interrupts
 				go func() {
-					token, notice := captureClipboardImage(context.Background())
+					token, notice := captureClipboardImage(ctx)
 					switch {
 					case notice != "":
 						ui.Notify(notice, tui.LevelWarn)
@@ -704,7 +707,7 @@ func controlLoop(ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *
 					continue // a stale ctrl+x outlived its picker: silent no-op
 				}
 				go func() {
-					notice, level, ok := copyText(text)
+					notice, level, ok := copyText(ctx, text)
 					if ok {
 						ui.Notify(notice, level)
 					}

@@ -21,7 +21,7 @@ func TestCopyText(t *testing.T) {
 		clipboardWrite = func(_ context.Context, text string) error { got = append(got, text); return nil }
 		t.Cleanup(func() { clipboardWrite = real })
 
-		notice, level, ok := copyText("payload")
+		notice, level, ok := copyText(context.Background(), "payload")
 		assert.True(t, ok)
 		assert.Equal(t, "copied to the clipboard", notice)
 		assert.Equal(t, tui.LevelInfo, level)
@@ -33,7 +33,7 @@ func TestCopyText(t *testing.T) {
 		clipboardWrite = func(context.Context, string) error { return errors.New("no clipboard writer on PATH") }
 		t.Cleanup(func() { clipboardWrite = real })
 
-		notice, level, ok := copyText("payload")
+		notice, level, ok := copyText(context.Background(), "payload")
 		assert.True(t, ok)
 		assert.Equal(t, "no clipboard writer on PATH", notice)
 		assert.Equal(t, tui.LevelError, level)
