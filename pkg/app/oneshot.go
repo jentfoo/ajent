@@ -220,7 +220,7 @@ func RunHeadless(o HeadlessOptions) int {
 		notify(n, agent.LevelWarn)
 	}
 	err := ag.Prompt(ctx, agent.Input{
-		Text: expanded.Text, After: expanded.Run, Injected: true, Prepared: true,
+		Text: expanded.Text, After: expanded.Run, Prepared: true,
 	})
 	answer := llm.FinalAnswer(st.Messages)
 	res := drain.result()
