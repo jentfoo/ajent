@@ -13,7 +13,7 @@ const (
 	// minIntralineSimilarity is the fraction of a line that must be unchanged before
 	// word level emphasis is worth showing instead of a whole line replacement
 	minIntralineSimilarity = 0.5
-	// spans closer together than this are merged to avoid speckled highlights
+	// edits closer together than this are joined to avoid speckled highlights
 	minSpanGap = 4
 	// minGutter is the narrowest the line number column gets
 	minGutter = 2
@@ -207,49 +207,61 @@ func renderDiffRun(t Theme, gw int, dels, adds []diffRow) []string {
 // intralineSpans returns the changed byte ranges within before and within after.
 // Both are nil when the lines are too dissimilar for word level emphasis to help.
 func intralineSpans(before, after string) (delSpans, addSpans [][2]int) {
-	edits := udiff.Strings(before, after)
+	edits := mergeCloseEdits(before, udiff.Strings(before, after))
 	if len(edits) == 0 {
 		return nil, nil
 	}
 	slices.SortFunc(edits, func(a, b udiff.Edit) int { return a.Start - b.Start })
 
-	var changed int
 	var oldPos, newPos int
 	for _, e := range edits {
 		newPos += e.Start - oldPos
 		if e.End > e.Start {
 			delSpans = append(delSpans, [2]int{e.Start, e.End})
-			changed += e.End - e.Start
 		}
 		if len(e.New) > 0 {
 			addSpans = append(addSpans, [2]int{newPos, newPos + len(e.New)})
-			changed += len(e.New)
 		}
 		newPos += len(e.New)
 		oldPos = e.End
 	}
-	if total := len(before) + len(after); total == 0 ||
-		float64(total-changed)/float64(total) < minIntralineSimilarity {
+	// Gate on post-merge coverage: a joined gap highlights unchanged bytes too,
+	// so pre-merge counts would let a chain of tiny edits pass as a minor tweak.
+	total := len(before) + len(after)
+	if total == 0 || float64(total-spanBytes(delSpans)-spanBytes(addSpans))/float64(total) <
+		minIntralineSimilarity {
 		return nil, nil
 	}
-	return mergeSpans(delSpans), mergeSpans(addSpans)
+	return delSpans, addSpans
 }
 
-// mergeSpans joins spans separated by less than minSpanGap unchanged bytes.
-func mergeSpans(spans [][2]int) [][2]int {
-	if len(spans) < 2 {
-		return spans
-	}
-	out := append(make([][2]int, 0, len(spans)), spans[0])
-	for _, s := range spans[1:] {
-		last := &out[len(out)-1]
-		if s[0]-last[1] < minSpanGap {
-			last[1] = s[1]
-		} else {
-			out = append(out, s)
+// mergeCloseEdits joins edits separated by less than minSpanGap unchanged bytes
+// so a stray byte or two between changes still renders as one span. The gap is
+// absorbed on both sides at once: joining spans per side instead would
+// highlight bytes the other side still shows as unchanged.
+func mergeCloseEdits(before string, edits []udiff.Edit) []udiff.Edit {
+	out := make([]udiff.Edit, 0, len(edits))
+	for _, e := range edits {
+		i := len(out) - 1
+		// two bare insertions stay apart, there is no gap to absorb
+		if i >= 0 && e.Start-out[i].End < minSpanGap &&
+			(out[i].Start != out[i].End || e.Start != e.End) {
+			out[i].New += before[out[i].End:e.Start] + e.New
+			out[i].End = e.End
+			continue
 		}
+		out = append(out, e)
 	}
 	return out
+}
+
+// spanBytes sums the bytes covered by each span.
+func spanBytes(spans [][2]int) int {
+	var n int
+	for _, s := range spans {
+		n += s[1] - s[0]
+	}
+	return n
 }
 
 // applySpans styles the change marker and content with base, switching to emph

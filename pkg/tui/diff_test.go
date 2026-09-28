@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	udiff "github.com/aymanbagabas/go-udiff"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 )
@@ -136,6 +137,20 @@ func TestRenderDiff(t *testing.T) {
 		assert.NotContains(t, out, th.DiffAddWord.Open())
 	})
 
+	t.Run("merge_cascade_not_emphasized", func(t *testing.T) {
+		th := NewTheme(Color256, DefaultPalette())
+		out := RenderDiff(th, "x.go", "a(b)c(d)e(f)g(h)\n", "a(X)c(Y)e(Z)g(W)\n")
+		assert.NotContains(t, out, th.DiffAddWord.Open())
+		assert.NotContains(t, out, th.DiffDelWord.Open())
+	})
+
+	t.Run("emphasis_kept_for_small_gaps", func(t *testing.T) {
+		th := NewTheme(Color256, DefaultPalette())
+		out := RenderDiff(th, "x.go", "x := m[i][j]\n", "x := m[a][b]\n")
+		assert.Contains(t, out, th.DiffAddWord.Open())
+		assert.Contains(t, out, th.DiffDelWord.Open())
+	})
+
 	t.Run("no_background_shading", func(t *testing.T) {
 		th := NewTheme(Color256, DefaultPalette())
 		out := RenderDiff(th, "x.go", "short\nsecond\n", "a much longer line\nsecond\n")
@@ -196,6 +211,20 @@ func TestIntralineSpans(t *testing.T) {
 		assert.Nil(t, add)
 	})
 
+	t.Run("close_spans_merge_with_gap", func(t *testing.T) {
+		del, add := intralineSpans("x := m[i][j]", "x := m[a][b]")
+		assert.Equal(t, [][2]int{{7, 11}}, del)
+		assert.Equal(t, [][2]int{{7, 11}}, add)
+	})
+
+	t.Run("merge_cascade_gated_out", func(t *testing.T) {
+		// each gap join adds unchanged bytes; chained joins rewrite most of the
+		// line and must fall back to whole line coloring
+		del, add := intralineSpans("a(b)c(d)e(f)g(h)", "a(X)c(Y)e(Z)g(W)")
+		assert.Nil(t, del)
+		assert.Nil(t, add)
+	})
+
 	t.Run("spans_within_bounds", func(t *testing.T) {
 		before, after := "func retry(n int) error {", "func retry(ctx context.Context, n int) error {"
 		del, add := intralineSpans(before, after)
@@ -208,23 +237,32 @@ func TestIntralineSpans(t *testing.T) {
 	})
 }
 
-func TestMergeSpans(t *testing.T) {
+func TestMergeCloseEdits(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		input    [][2]int
-		expected [][2]int
+		name   string
+		before string
+		edits  []udiff.Edit
+		want   []udiff.Edit
 	}{
-		{"empty", nil, nil},
-		{"single", [][2]int{{1, 3}}, [][2]int{{1, 3}}},
-		{"close_merged", [][2]int{{1, 3}, {5, 8}}, [][2]int{{1, 8}}},
-		{"far_kept", [][2]int{{1, 3}, {20, 25}}, [][2]int{{1, 3}, {20, 25}}},
-		{"chain_merged", [][2]int{{0, 2}, {3, 5}, {6, 9}}, [][2]int{{0, 9}}},
+		{"no_edits", "abc", nil, []udiff.Edit{}},
+		{"single_kept", "abc", []udiff.Edit{{Start: 1, End: 2, New: "X"}},
+			[]udiff.Edit{{Start: 1, End: 2, New: "X"}}},
+		{"close_gap_joined", "a(b)c(d)", []udiff.Edit{{Start: 2, End: 3, New: "X"}, {Start: 6, End: 7, New: "Y"}},
+			[]udiff.Edit{{Start: 2, End: 7, New: "X)c(Y"}}},
+		{"wide_gap_kept", "a(b)c(d)", []udiff.Edit{{Start: 2, End: 3, New: "X"}, {Start: 7, End: 8, New: "Y"}},
+			[]udiff.Edit{{Start: 2, End: 3, New: "X"}, {Start: 7, End: 8, New: "Y"}}},
+		{"bare_inserts_kept_apart", "ab", []udiff.Edit{{Start: 0, End: 0, New: "X"}, {Start: 1, End: 1, New: "Y"}},
+			[]udiff.Edit{{Start: 0, End: 0, New: "X"}, {Start: 1, End: 1, New: "Y"}}},
+		{"chain_joined", "a(b)c(d)e(f)", []udiff.Edit{{Start: 2, End: 3, New: "X"}, {Start: 4, End: 5, New: "Y"}, {Start: 6, End: 7, New: "Z"}},
+			[]udiff.Edit{{Start: 2, End: 7, New: "X)Y(Z"}}},
+		{"deletions_joined", "a(b)c(d)", []udiff.Edit{{Start: 2, End: 3, New: ""}, {Start: 6, End: 7, New: ""}},
+			[]udiff.Edit{{Start: 2, End: 7, New: ")c("}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, mergeSpans(tc.input))
+			assert.Equal(t, tc.want, mergeCloseEdits(tc.before, tc.edits))
 		})
 	}
 }
