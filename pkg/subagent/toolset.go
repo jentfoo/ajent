@@ -24,20 +24,30 @@ var readOnlyBuiltins = []string{"read", "grep", "find", "ls", "git_status", "git
 // child's cwd, withheld when the cwd is not inside a work tree.
 var gitToolNames = []string{"git_status", "git_log", "git_show", "git_diff"}
 
+// childBarred names tools no child may resolve regardless of read-only metadata or
+// enable state. ask_user mutates nothing yet needs an interactive endpoint a sub-agent
+// has no right to reach; the parent still auto-runs it without approval under allow-read.
+var childBarred = bulk.SliceToSet([]string{"ask_user"})
+
+// isChildBarred reports whether name must never reach a child.
+func isChildBarred(name string) bool {
+	_, ok := childBarred[name]
+	return ok
+}
+
 // isGitTool reports whether name is one of the repo-gated git readers.
 func isGitTool(name string) bool {
 	return slices.Contains(gitToolNames, name)
 }
 
 // childTools returns the read-only tools a child may call: the read-only built-ins
-// plus any registry-marked read-only tool, never agent_*. Parent enable state is
-// ignored so find/grep/ls reach even a disabled parent. The git readers need a
-// repository: inRepo false withholds them, so git capability is never advertised
-// where it cannot apply.
+// plus any registry-marked read-only tool, never agent_* or childBarred. Parent enable state is
+// ignored so find/grep/ls reach even a disabled parent. The git readers need a repository:
+// inRepo false withholds them, so git capability is never advertised where it cannot apply.
 func childTools(src ToolSource, inRepo bool) []agent.Tool {
 	return bulk.SliceFilter(func(t agent.Tool) bool {
 		name := t.Name()
-		if strings.HasPrefix(name, "agent_") { // the bar applies last, nothing configures past it
+		if strings.HasPrefix(name, "agent_") || isChildBarred(name) { // structural bar: nothing configures past it
 			return false
 		}
 		if !slices.Contains(readOnlyBuiltins, name) && !src.ReadOnly(name) {

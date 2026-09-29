@@ -23,8 +23,9 @@ func fullSource() *fakeSource {
 			&fakeTool{name: "write"}, // write tool, not marked read-only
 			roTool("mcp_search"),     // MCP tool marked read-only
 			roTool("agent_start"),    // must be barred structurally even if reported read-only
+			roTool("ask_user"),       // read-only but interactive: barred like agent_*
 		},
-		readOnly: map[string]bool{"mcp_search": true, "agent_start": true},
+		readOnly: map[string]bool{"mcp_search": true, "agent_start": true, "ask_user": true},
 	}
 }
 
@@ -37,7 +38,7 @@ func TestChildTools(t *testing.T) {
 	for _, tl := range childTools(src, true) {
 		name := tl.Name()
 		assert.NotContains(t, []string{"bash", "write", "edit"}, name)
-		assert.False(t, slices.Contains([]string{"agent_start", "agent_poll", "agent_list"}, name))
+		assert.False(t, slices.Contains([]string{"agent_start", "agent_poll", "agent_list", "ask_user"}, name))
 	}
 
 	src = &fakeSource{tools: []agent.Tool{&fakeTool{name: "bash"}, roTool("read")}}
