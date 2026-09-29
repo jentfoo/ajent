@@ -113,6 +113,13 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	a.running = true
 	turnCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
+	// fold pre-start steer in atomically with claiming the turn, so input Steer'd
+	// after Running() lands at a step boundary (drainSteer), not with the prompt.
+	promptInputs := append([]Input(nil), input)
+	if len(a.steer) > 0 {
+		promptInputs = append(promptInputs, a.steer...)
+	}
+	a.steer = nil
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
@@ -135,14 +142,6 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	var overflowRetried bool // at most one compaction retry per turn
 	result := TurnResult{Stop: llm.StopUnknown, Usage: llm.Usage{}}
 
-	a.mu.Lock()
-	promptInputs := append([]Input(nil), input)
-	if len(a.steer) > 0 {
-		// steering queued before the turn began rides along with the prompt
-		promptInputs = append(promptInputs, a.steer...)
-	}
-	a.steer = nil
-	a.mu.Unlock()
 	// normalize before TurnStart so the sink sees the input as it will land
 	promptInputs = a.normalizeInputs(promptInputs)
 
