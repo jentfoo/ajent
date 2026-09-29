@@ -11,10 +11,13 @@ import (
 	"strings"
 
 	"github.com/go-analyze/bulk"
+	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/storage/filesystem"
 )
 
 // errNotGit reports that path is not inside a git work tree.
@@ -26,11 +29,29 @@ var errNoCommits = errors.New("repository has no commits yet")
 // git_* engine: go-git, in process only. No subprocess, never exec of the git
 // binary, so filters, hooks and pagers in a hostile work tree cannot run.
 
-// openGitRepo opens the repository containing path.
+// sharedGitCache bounds object reads across every repository a tool opens.
+// Object hashes are content-addressed, so one process-wide LRU is safe to share
+// between repos and calls: the same hash always names identical bytes. On slow
+// filesystems this turns repeated log/show/diff walks into in-memory hits.
+var sharedGitCache = cache.NewObjectLRU(128 * cache.MiByte)
+
+// openGitRepo opens the repository containing path with the process-shared
+// object cache, so a turn's several git_* calls on one repo read each object
+// from disk once instead of per call.
 func openGitRepo(path string) (*git.Repository, error) {
-	r, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
-	if errors.Is(err, git.ErrRepositoryNotExists) {
-		r, err = git.PlainOpen(path) // bare repositories have no .git to detect
+	dotRoot, wtRoot := findDotGit(path)
+	if dotRoot == "" { // not under any .git: treat path itself as a bare repository
+		dotRoot = path
+	}
+	s := filesystem.NewStorage(osfs.New(dotRoot), sharedGitCache)
+	var (
+		r   *git.Repository
+		err error
+	)
+	if wtRoot != "" {
+		r, err = git.Open(s, osfs.New(wtRoot))
+	} else { // bare: no work tree
+		r, err = git.Open(s, nil)
 	}
 	if errors.Is(err, git.ErrRepositoryNotExists) {
 		return nil, errNotGit
@@ -39,6 +60,41 @@ func openGitRepo(path string) (*git.Repository, error) {
 		return nil, err
 	}
 	return r, nil
+}
+
+// findDotGit walks up from path looking for a .git entry (directory or a
+// "gitdir:" pointer file), returning the real object directory and work-tree
+// root. An empty dotRoot means nothing was found.
+func findDotGit(path string) (dotRoot, wtRoot string) {
+	p := path
+	for {
+		gp := filepath.Join(p, ".git")
+		fi, err := os.Stat(gp)
+		switch {
+		case err == nil && fi.IsDir():
+			return gp, p
+		case err == nil: // linked worktree or submodule pointer file
+			b, rerr := os.ReadFile(gp)
+			if rerr != nil {
+				break
+			}
+			line := strings.TrimSpace(strings.SplitN(string(b), "\n", 2)[0])
+			target := strings.TrimPrefix(line, "gitdir: ")
+			if target == line { // not a gitdir pointer; treat as not found
+				break
+			}
+			if filepath.IsAbs(target) {
+				return target, p
+			}
+			return filepath.Join(p, target), p
+		}
+		next := filepath.Dir(p)
+		if next == p { // reached filesystem root without finding .git
+			break
+		}
+		p = next
+	}
+	return "", ""
 }
 
 // gitWorktree returns the work tree of r, naming bare repositories clearly.
