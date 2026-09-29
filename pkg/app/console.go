@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/jentfoo/ajent/pkg/mcp"
 
@@ -348,19 +347,11 @@ func (a agentsAdapter) List() []command.AgentJob {
 	src := a.m.List()
 	out := make([]command.AgentJob, len(src))
 	for i, j := range src {
-		elapsed := time.Duration(0)
-		if !j.Started.IsZero() {
-			end := j.Ended
-			if end.IsZero() {
-				end = time.Now()
-			}
-			elapsed = end.Sub(j.Started)
-		}
 		out[i] = command.AgentJob{
 			ID:      j.ID,
 			Status:  j.Status.String(),
 			Task:    j.Task,
-			Elapsed: elapsed,
+			Elapsed: j.Elapsed(), // queue wait for queued/aborted-before-run, else active runtime
 		}
 	}
 	return out

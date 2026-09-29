@@ -569,30 +569,35 @@ func (m *Manager) publishStatus() {
 		return
 	}
 	m.mu.Lock()
-	var running, done int
-	var oldest time.Duration
+	var running, queued, done int
+	var oldest time.Duration // oldest live job's full age: queue wait plus active runtime
 	for _, j := range m.jobs {
 		s, started := j.runningSince()
 		switch s {
-		case StatusQueued, StatusRunning:
+		case StatusQueued:
+			queued++
+		case StatusRunning:
 			running++
-			if !started.IsZero() {
-				if d := time.Since(started); d > oldest {
-					oldest = d
-				}
-			}
 		case StatusDone:
 			done++
+		default: // terminal, not live
+			continue
+		}
+		if d := time.Since(started); d > oldest { // started is stamped for every live job
+			oldest = d
 		}
 	}
 	m.mu.Unlock()
 
-	if running == 0 && done == 0 {
+	if running == 0 && queued == 0 && done == 0 {
 		fn("", "")
 		return
 	}
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "subagents: %d running", running)
+	if queued > 0 {
+		_, _ = fmt.Fprintf(&b, ", %d queued", queued)
+	}
 	if oldest > 0 {
 		_, _ = fmt.Fprintf(&b, " (oldest %s)", strutil.Elapsed(oldest))
 	}
@@ -600,8 +605,8 @@ func (m *Manager) publishStatus() {
 		_, _ = fmt.Fprintf(&b, ", %d done", done)
 	}
 	var short string
-	if running > 0 {
-		short = fmt.Sprintf("sub %d", running)
+	if live := running + queued; live > 0 { // the short segment counts every live job
+		short = fmt.Sprintf("sub %d", live)
 	}
 	fn(b.String(), short)
 }
@@ -622,19 +627,31 @@ func (m *Manager) reasoning() llm.ReasoningConfig {
 	return llm.ReasoningConfig{}
 }
 
-// pollProgress reads a still-running job's elapsed and child context usage for the timeout payload.
+// pollProgress reads a still-pending job's wait or active runtime and child context
+// usage for the timeout payload.
 func (j *job) pollProgress() string {
 	j.mu.Lock()
-	elapsed := time.Since(j.started).Round(time.Second)
+	status := j.status
 	id := j.id
+	var elapsed time.Duration
+	switch status {
+	case StatusQueued: // never activated, waiting on the semaphore
+		elapsed = queueWait(j.started, j.ended)
+	default: // running; active runtime since it took a slot
+		elapsed = runTime(j.activated, j.ended)
+	}
 	j.mu.Unlock()
 
+	verb := "still running after"
+	if status == StatusQueued {
+		verb = "queued for"
+	}
 	var used, win int
 	if t := j.tokens; t != nil {
 		c := t.Context()
 		used, win = c.Used, c.Window
 	}
-	s := fmt.Sprintf("sub-agent %s still running after %s", id, strutil.Elapsed(elapsed))
+	s := fmt.Sprintf("sub-agent %s %s %s", id, verb, strutil.Elapsed(elapsed))
 	switch {
 	case win > 0:
 		return s + fmt.Sprintf(", context %d/%d tokens used", used, win)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -95,7 +94,9 @@ func (t *pollTool) Label(call agent.ToolCall) string {
 }
 
 func (t *pollTool) Description() string {
-	return "Wait for a sub-agent to complete and return its summary. When it has finished, returns the final summary as the only text content; on an error or abort that is reported instead. On timeout reports still-running plus elapsed time and the child's context usage against its model window, so you can judge whether to keep waiting. Accepts id like sub-2 or bare 2."
+	return "Wait for a sub-agent to complete and return its summary. When it has " +
+		"finished, returns the final summary as the only text content; on an error or " +
+		"abort that is reported instead. Accepts id like sub-2 or bare 2."
 }
 
 func (t *pollTool) Schema() llm.ToolSchema {
@@ -171,7 +172,9 @@ func (t *listTool) Label(agent.ToolCall) string {
 	return "sub-agent: list"
 }
 func (t *listTool) Description() string {
-	return "List every sub-agent with its id, status and elapsed time. Returns one row per job as tab-separated columns, or '(no sub-agents)' when none exist."
+	return "List every sub-agent with its id, status and elapsed time. Elapsed is " +
+		"queue wait for queued jobs, active runtime otherwise, frozen once finished. " +
+		"Returns one row per job as tab-separated columns, or '(no sub-agents)' when none exist."
 }
 func (t *listTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: paramsSchema("", nil)} }
 func (t *listTool) Mode() agent.ExecutionMode {
@@ -186,12 +189,9 @@ func (t *listTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output
 	var b strings.Builder
 	b.WriteString("id\tstatus\telapsed\n")
 	for _, j := range jobs {
-		// a finished job's elapsed freezes at its end time, only live ones keep counting
-		elapsed := time.Since(j.Started)
-		if !j.Ended.IsZero() {
-			elapsed = j.Ended.Sub(j.Started)
-		}
-		_, _ = fmt.Fprintf(&b, "%s\t%s\t%s\n", j.ID, j.Status, strutil.Elapsed(elapsed))
+		// queued (and aborted-before-running) rows report queue wait, everything else
+		// active runtime; finished ones freeze at their end time via Job.Elapsed.
+		_, _ = fmt.Fprintf(&b, "%s\t%s\t%s\n", j.ID, j.Status, strutil.Elapsed(j.Elapsed()))
 	}
 	return result(b.String()), nil
 }

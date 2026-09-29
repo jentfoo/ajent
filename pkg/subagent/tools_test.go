@@ -169,6 +169,28 @@ func TestAgentPoll(t *testing.T) {
 		assert.Equal(t, map[string]string{"id": id, "status": "running"}, res.Details)
 	})
 
+	t.Run("queued_poll_reports_wait", func(t *testing.T) {
+		g := &gatedProvider{}
+		m := New(Options{MaxConcurrent: 1, Provider: func(llm.Model) (llm.Provider, error) { return g, nil }, PollTimeout: 30 * time.Millisecond})
+		t.Cleanup(m.Close)
+
+		_ = m.start("occupies the only slot", "", "")
+		id := m.start("queued behind it", "", "")
+		require.Eventually(t, func() bool { return g.active.Load() == 1 }, time.Second, time.Millisecond)
+
+		snap, _, _ := m.poll(t.Context(), id)
+		assert.Equal(t, StatusQueued, snap.Status)
+		prog := ""
+		m.mu.Lock()
+		if jj := m.jobs[normalizeID(id)]; jj != nil {
+			prog = jj.pollProgress()
+		}
+		m.mu.Unlock()
+		assert.Contains(t, prog, "queued for")
+
+		g.releaseAll() // let both finish so Close is clean
+	})
+
 	t.Run("aborted", func(t *testing.T) {
 		b := &blockingProvider{}
 		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})

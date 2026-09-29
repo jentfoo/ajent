@@ -73,7 +73,12 @@ keeps running.
 
 A job carries a status from a small enum: queued, running, done, error, aborted.
 The public snapshot callers read pairs that with an id (`sub-N`), a shortened
-task label, start/end times, the summary paragraph and any terminal error.
+task label, start/activation/end times, the summary paragraph and any terminal
+error. `started` stamps submission (the moment it queues) and `activated` when it
+first takes a concurrency slot, so **queue wait and active runtime stay separate**:
+`Job.Elapsed()` shows queue time for a job that never activated (still queued, or
+aborted before it ran) and active runtime otherwise, frozen at end. This is why
+the elapsed column means what its status says.
 
 Ids are `sub-N` from a manager counter, handed out
 **in the order the model asked for the agents**. `agent_start` is
@@ -197,7 +202,8 @@ is the entire return value.
 - **`agent_start(task, instructions?)`** returns a job id immediately and tells
   the model to poll for it; several may run in one batch. `agent_poll(id)`
   returns the summary (or an error / `aborted`) when done, and on timeout reports
-  still-running. Every poll result is tagged with `Details{"id","status"}` so a
+  still-running, or *queued* with its wait time if a job is still behind the
+  concurrency cap. Every poll result is tagged with `Details{"id","status"}` so a
   host-driven poller can distinguish still-running from terminal without matching
   the payload prose; that detail is invisible to the model.
 
