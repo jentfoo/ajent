@@ -213,17 +213,13 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 	var ledger *tokens.Accounting
 	ag.WithState(func(st *agent.State) {
 		st.Model = m
-		if st.Tokens != nil {
-			st.Tokens.SetModel(m)
-			st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
-			ledger = st.Tokens
-		}
+		st.Tokens.SetModel(m)
+		st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
+		ledger = st.Tokens
 	})
 	// this deliberately overwrites what switchState seeded, so the base is measured
 	// again here against the fork's model, BaseEstimate takes the lock WithState held
-	if ledger != nil {
-		ledger.SetBase(r.baseEstimate(ag))
-	}
+	ledger.SetBase(r.baseEstimate(ag))
 	pushSwitchedContext(ui, ledger)
 	syncModelUI(ui, reg, m)
 	if moved {

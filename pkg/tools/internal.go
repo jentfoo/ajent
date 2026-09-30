@@ -33,18 +33,3 @@ func fileInfo(path string) os.FileInfo {
 	}
 	return info
 }
-
-// discard is an Output that drops everything, used when no sink is attached so a
-// tool never dereferences a nil interface.
-type discard struct{}
-
-func (discard) Write(p []byte) (int, error) { return len(p), nil }
-func (discard) Diff(string, string, string) {}
-
-// ensureOutput returns out or a discarding Output when it is nil.
-func ensureOutput(out agent.Output) agent.Output {
-	if out == nil {
-		return discard{}
-	}
-	return out
-}

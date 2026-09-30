@@ -223,7 +223,7 @@ type termState struct {
 	fd            int
 	raw           *term.State
 	width, height int
-	sizeFn        func() (int, int, error) // nil keeps the current size, used by tests
+	sizeFn        func() (int, int, error) // current terminal size, wired by newTermState
 }
 
 func newTermState(out io.Writer, fd int) *termState {
@@ -240,9 +240,7 @@ func newTermState(out io.Writer, fd int) *termState {
 
 // refreshSize re-reads the terminal size, keeping the last value on failure.
 func (t *termState) refreshSize() {
-	if t.sizeFn == nil {
-		return
-	} else if w, h, err := t.sizeFn(); err == nil && w > 0 && h > 0 {
+	if w, h, err := t.sizeFn(); err == nil && w > 0 && h > 0 {
 		t.width, t.height = w, h
 	}
 }

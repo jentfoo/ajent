@@ -79,9 +79,7 @@ func (s *childSink) set(text string, force bool) {
 
 // flushLocked publishes the newest row and arms nothing further. Caller holds mu.
 func (s *childSink) flushLocked(now time.Time) {
-	if s.pub != nil {
-		s.pub(s.id, s.text, s.rank)
-	}
+	s.pub(s.id, s.text, s.rank)
 	s.lastPub = now
 	if s.timer != nil {
 		s.timer.Stop()

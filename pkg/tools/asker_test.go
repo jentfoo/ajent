@@ -53,7 +53,7 @@ func TestGuardedToolExecuteWithAsker(t *testing.T) {
 			tool, ok := r.Get("bash")
 			require.True(t, ok)
 
-			res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), nil)
+			res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 			require.NoError(t, err) // a denial is a result, not an error
 			if tc.wantRun {
 				assert.False(t, res.IsError)
@@ -86,7 +86,7 @@ func TestAskerReceivesGuardDecision(t *testing.T) {
 	tool, ok := r.Get("bash")
 	require.True(t, ok)
 
-	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), nil)
+	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 
 	assert.False(t, res.IsError) // guard asked but asker overrode to allow
@@ -110,7 +110,7 @@ func TestSetAskerNilRestoresDenial(t *testing.T) {
 	tool, ok := r.Get("bash")
 	require.True(t, ok)
 
-	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), nil)
+	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 
 	assert.True(t, res.IsError) // asker gone, so the Ask denies again

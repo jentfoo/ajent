@@ -56,7 +56,7 @@ func BenchmarkDrawLive(b *testing.B) {
 
 	b.Run("spinner_tick", func(b *testing.B) {
 		w := &countWriter{}
-		r := &inlineRenderer{t: &termState{out: w, fd: -1, width: 120, height: 40}}
+		r := newTestInlineAt(w, 120, 40)
 		r.setLive(slices.Clone(base), 1, 5)
 		start := w.n
 		b.ResetTimer()
@@ -69,7 +69,7 @@ func BenchmarkDrawLive(b *testing.B) {
 	})
 	b.Run("one_keystroke", func(b *testing.B) {
 		w := &countWriter{}
-		r := &inlineRenderer{t: &termState{out: w, fd: -1, width: 120, height: 40}}
+		r := newTestInlineAt(w, 120, 40)
 		r.setLive(slices.Clone(base), 1, 5)
 		start := w.n
 		b.ResetTimer()
@@ -80,7 +80,7 @@ func BenchmarkDrawLive(b *testing.B) {
 	})
 	b.Run("full_block_change", func(b *testing.B) {
 		w := &countWriter{}
-		r := &inlineRenderer{t: &termState{out: w, fd: -1, width: 120, height: 40}}
+		r := newTestInlineAt(w, 120, 40)
 		r.setLive(slices.Clone(base), 1, 5)
 		start := w.n
 		b.ResetTimer()

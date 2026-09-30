@@ -371,15 +371,13 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 	})
 	// both of these need the agent lock WithState holds, so they run after it, not
 	// inside the closure.
-	if ledger != nil {
-		if rebuilt.Model.ID == "" && live.ID != "" {
-			// the branch named no model of its own: frame what the rebuild measured
-			// against the live one rather than leaving a zero window, which would
-			// rescale the bar off the compaction threshold onto the raw context size
-			ledger.SetWindow(live)
-		}
-		ledger.SetBase(r.baseEstimate(ag))
+	if rebuilt.Model.ID == "" && live.ID != "" {
+		// the branch named no model of its own: frame what the rebuild measured
+		// against the live one rather than leaving a zero window, which would
+		// rescale the bar off the compaction threshold onto the raw context size
+		ledger.SetWindow(live)
 	}
+	ledger.SetBase(r.baseEstimate(ag))
 	pushSwitchedContext(ui, ledger)
 	return nil
 }
@@ -393,7 +391,7 @@ func (r *sessRec) baseEstimate(ag *agent.Agent) int {
 }
 
 func pushSwitchedContext(ui *tui.UI, t *tokens.Accounting) {
-	if ui == nil || t == nil {
+	if ui == nil {
 		return
 	}
 	cs := t.Context()
@@ -435,17 +433,13 @@ func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registr
 	var ledger *tokens.Accounting
 	ag.WithState(func(st *agent.State) {
 		st.Model = m
-		if st.Tokens != nil {
-			st.Tokens.SetModel(m)
-			st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
-			ledger = st.Tokens
-		}
+		st.Tokens.SetModel(m)
+		st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
+		ledger = st.Tokens
 	})
 	// this deliberately overwrites what switchState seeded, so the base is measured
 	// again here against the fork's model, BaseEstimate takes the lock WithState held
-	if ledger != nil {
-		ledger.SetBase(r.baseEstimate(ag))
-	}
+	ledger.SetBase(r.baseEstimate(ag))
 	pushSwitchedContext(ui, ledger)
 	syncModelUI(ui, reg, m)
 }

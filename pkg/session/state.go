@@ -112,9 +112,6 @@ func NewestCompaction(branch []Entry) (cd CompactionData, idx int, found bool) {
 // a branch no compaction rewrote, where the recorded prompt is still what the next
 // request will carry.
 func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
-	if t == nil {
-		return
-	}
 	if tokens.Zero(md.Usage) { // unreported provider: estimate the message instead of exact terms
 		t.Add(tokens.EstimateMessages([]llm.Message{md.Message}))
 		return

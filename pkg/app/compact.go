@@ -51,12 +51,9 @@ func autoReason(r agent.CompactReason) bool {
 	return r == agent.CompactThreshold || r == agent.CompactStep
 }
 
-// used returns the ledger's current context occupancy, or 0 when there is none.
+// used returns the ledger's current context occupancy.
 func (c *compactor) used() int {
-	if t := c.st.Tokens; t != nil {
-		return t.Context().Used
-	}
-	return 0
+	return c.st.Tokens.Context().Used
 }
 
 // overPoint reports whether context has crossed m's compaction point.
@@ -146,10 +143,10 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		// is watching, and a free decline never reaches here, so this cannot cry wolf
 		c.notify("compacting "+strutil.FormatTokens(c.used())+"…", agent.LevelInfo)
 		text, usage, serr := llm.RunSummary(ctx, provider, req)
-		if t := c.st.Tokens; t != nil && serr == nil {
+		if serr == nil {
 			// spend-only: the summariser's prompt is not this session's context, so a
 			// failed compaction must not leave the bar at its (much larger) size
-			t.Spend(model.Key(), usage)
+			c.st.Tokens.Spend(model.Key(), usage)
 		}
 		return text, serr
 	}
@@ -160,9 +157,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		base = c.ag.BaseEstimate(true)
 	}
 	if base == 0 {
-		if t := c.st.Tokens; t != nil {
-			base = t.Base() // mid-turn BaseEstimate reports 0, the ledger holds the real value
-		}
+		base = c.st.Tokens.Base() // mid-turn BaseEstimate reports 0, the ledger holds the real value
 	}
 	if instructions == "" && c.focus != nil {
 		instructions = c.focus() // a plan phase keeps its own focus across auto-compaction
@@ -229,15 +224,14 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		c.rec.onSwitch(rebuilt.Messages)
 	}
 
-	if t := c.st.Tokens; t != nil {
-		// the reseed stays an estimate: pending carries the reduced messages only
-		// (After already counts base, so it is subtracted back) and the ledger's own
-		// base rides on top exactly once. The calibrator's factor still applies and
-		// the bar keeps its ~ marker, unlike Rebase, which is reserved for exact
-		// tokenizer counts.
-		t.Reseed(max(0, res.After-base))
-		c.sink.Context(t.Context())
-	}
+	t := c.st.Tokens
+	// the reseed stays an estimate: pending carries the reduced messages only
+	// (After already counts base, so it is subtracted back) and the ledger's own
+	// base rides on top exactly once. The calibrator's factor still applies and
+	// the bar keeps its ~ marker, unlike Rebase, which is reserved for exact
+	// tokenizer counts.
+	t.Reseed(max(0, res.After-base))
+	c.sink.Context(t.Context())
 	c.sink.Notice(reportLine(res), agent.LevelInfo)
 	c.resumeAuto() // this session still reduces
 	if autoReason(reason) && c.overPoint(model) {

@@ -47,8 +47,7 @@ type inlineRenderer struct {
 	anchorRow  int  // reported park row (1-based) the pad is measured from
 
 	// sigGen reads the UI's resize-signal generation, drawGen the generation the
-	// live block is settled at. A frame is safe only while they agree. Both nil
-	// never aborts.
+	// live block is settled at. A frame is safe only while they agree.
 	sigGen  func() uint64
 	drawGen func() uint64
 }
@@ -254,16 +253,13 @@ func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 // generation is the resize-signal generation drawing is settled at, the
 // baseline a frame is judged against.
 func (r *inlineRenderer) generation() uint64 {
-	if r.drawGen == nil {
-		return 0
-	}
 	return r.drawGen()
 }
 
 // stale reports whether a signal arrived that gen has not been settled for:
 // the baseline is the settled generation, never one captured as the frame starts.
 func (r *inlineRenderer) stale(gen uint64) bool {
-	return r.sigGen != nil && r.sigGen() != gen
+	return r.sigGen() != gen
 }
 
 // commit writes history above the live block, laying each line out according to

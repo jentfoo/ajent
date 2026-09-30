@@ -12,12 +12,6 @@ import (
 // @ reference or a project survey), so truncation, display and tracking follow the
 // one path an agent-run tool takes.
 func InjectPair(ctx context.Context, tool Tool, sink Sink, call ToolCall, label string) ([]llm.Message, ToolResult) {
-	if tool == nil {
-		return nil, ToolResult{}
-	}
-	if sink == nil {
-		sink = NopSink{}
-	}
 	out := NewOutput(sink, call.ID)
 	done := sink.ToolStart(call, label)
 	res, err := tool.Execute(ctx, call, out)

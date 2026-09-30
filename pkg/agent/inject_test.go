@@ -50,15 +50,6 @@ func TestInjectPair(t *testing.T) {
 		require.True(t, ok)
 		assert.True(t, rb.IsError)
 	})
-
-	t.Run("nil_tool_and_sink", func(t *testing.T) {
-		msgs, res := InjectPair(t.Context(), nil, nil, call(), "read main.go")
-		assert.Nil(t, msgs)
-		assert.Equal(t, ToolResult{}, res)
-
-		msgs, _ = InjectPair(t.Context(), &stubTool{name: "read", result: "body"}, nil, call(), "read main.go")
-		assert.Len(t, msgs, 2) // a nil sink falls back to NopSink rather than panicking
-	})
 }
 
 // textOf joins the text blocks of a result's content.

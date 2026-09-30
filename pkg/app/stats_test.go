@@ -15,6 +15,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 func TestStatsSinkCounts(t *testing.T) {
@@ -29,7 +30,7 @@ func TestStatsSinkCounts(t *testing.T) {
 	record("edit", true)
 	record("edit", false)
 
-	got := s.collect(nil, 2*time.Second)
+	got := s.collect(tokens.New(llm.Model{}), 2*time.Second)
 	assert.Equal(t, map[string]int{"read": 1, "edit": 3}, got.Calls)
 	assert.Equal(t, map[string]int{"edit": 1}, got.Failed) // only the failure counts
 	assert.InDelta(t, 2.0, got.Seconds, 0.001)

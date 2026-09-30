@@ -29,12 +29,13 @@ type Input struct {
 
 // State is the in-memory projection of a session. It is owned by the loop
 // goroutine. Only Agent.mu guards the queue and running flag, never this.
+// New seeds Tokens when a host leaves it unset.
 type State struct {
 	Messages  []llm.Message
 	Model     llm.Model
 	Reasoning llm.ReasoningConfig
-	Tools     []string // active tool names, in declaration order
-	Tokens    *tokens.Accounting
+	Tools     []string           // active tool names, in declaration order
+	Tokens    *tokens.Accounting // spend ledger, always present once bound to an Agent
 }
 
 // Transform rewrites an assembled message list before it is sent, never by mutating State.

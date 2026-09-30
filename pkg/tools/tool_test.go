@@ -28,19 +28,19 @@ func newToolEnv(cwd string) *toolEnv {
 // readExec executes the read tool with raw args.
 func (e *toolEnv) readExec(ctx context.Context, args string) agent.ToolResult {
 	c := agent.ToolCall{ID: "c", Name: "read", Input: json.RawMessage(args)}
-	res, _ := (&readTool{policy: e.policy, tracker: e.tracker}).Execute(ctx, c, nil)
+	res, _ := (&readTool{policy: e.policy, tracker: e.tracker}).Execute(ctx, c, agent.NewOutput(agent.NopSink{}, "c"))
 	return res
 }
 
 func (e *toolEnv) writeExec(ctx context.Context, args string) agent.ToolResult {
 	c := agent.ToolCall{ID: "c", Name: "write", Input: json.RawMessage(args)}
-	res, _ := (&writeTool{policy: e.policy, tracker: e.tracker}).Execute(ctx, c, nil)
+	res, _ := (&writeTool{policy: e.policy, tracker: e.tracker}).Execute(ctx, c, agent.NewOutput(agent.NopSink{}, "c"))
 	return res
 }
 
 func (e *toolEnv) editExec(ctx context.Context, args string) agent.ToolResult {
 	c := agent.ToolCall{ID: "c", Name: "edit", Input: json.RawMessage(args)}
-	res, _ := (&editTool{policy: e.policy, tracker: e.tracker}).Execute(ctx, c, nil)
+	res, _ := (&editTool{policy: e.policy, tracker: e.tracker}).Execute(ctx, c, agent.NewOutput(agent.NopSink{}, "c"))
 	return res
 }
 

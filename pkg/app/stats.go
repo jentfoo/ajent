@@ -66,11 +66,9 @@ func (s *statsSink) collect(acct *tokens.Accounting, elapsed time.Duration) sess
 	}
 	s.mu.Unlock()
 
-	if acct != nil {
-		st.Turns = acct.TurnsCount()
-		st.Usage = acct.Total()
-		st.ByModel = acct.ByModel()
-	}
+	st.Turns = acct.TurnsCount()
+	st.Usage = acct.Total()
+	st.ByModel = acct.ByModel()
 	return st
 }
 

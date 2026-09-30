@@ -25,6 +25,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/subagent"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -107,7 +108,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	}}
 
 	fakeUI := &fakeQueueUI{}
-	q := newSteerQueue(fakeUI, nil, nil)
+	q := newSteerQueue(fakeUI, func(int) {}, func() {})
 
 	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
 	held := make(chan struct{}, 1)
@@ -229,7 +230,7 @@ func TestControlLoop(t *testing.T) {
 		quit = make(chan struct{})
 		cycled = make(chan bool, 4)
 		ag := agent.New(&agent.State{}, agent.Options{})
-		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, &steerQueue{}, command.NewStager(context.Background(), nil, nil), nil, quit,
+		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), command.NewStager(context.Background(), nil, nil), nil, quit,
 			func(back bool) { cycled <- back })
 		return controls, quit, cycled
 	}
@@ -369,7 +370,11 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 			Provider: func(llm.Model) (llm.Provider, error) {
 				return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("summary")}}}, nil
 			},
-			Deliver: func(agent.Input) bool { delivered.Add(1); return true },
+			Model:     func() llm.Model { return llm.Model{} },
+			Reasoning: func() llm.ReasoningConfig { return llm.ReasoningConfig{} },
+			Parent:    func() *tokens.Accounting { return tokens.New(llm.Model{}) },
+			Notice:    func(string) {},
+			Deliver:   func(agent.Input) bool { delivered.Add(1); return true },
 		})
 		t.Cleanup(mgr.Close)
 		return mgr, &delivered
@@ -392,7 +397,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 			}
 			res, err := tool.Execute(context.Background(), agent.ToolCall{
 				Input: json.RawMessage(`{"task":"x","instructions":""}`),
-			}, nil)
+			}, agent.NewOutput(agent.NopSink{}, "c"))
 			require.NoError(t, err)
 			dets, ok := res.Details.(map[string]string)
 			require.True(t, ok, "start result missing details")
@@ -465,7 +470,7 @@ func TestMCPConfigDisabledToolsEnableViaSlashTools(t *testing.T) {
 	var disabled bool
 	mgr := mcp.New(map[string]mcp.ServerConfig{
 		"fake": {Command: buildFakeMCPServer(t), Enabled: &disabled},
-	}, mcp.Options{Registrar: registryAdapter{reg}})
+	}, mcp.Options{Registrar: registryAdapter{reg}, Notice: func(string, bool) {}})
 
 	// first-message load registers every fake tool as disabled (config-off default)
 	mgr.LoadOnFirstMessage(t.Context())
@@ -498,6 +503,7 @@ func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
 		"fake": {Command: buildFakeMCPServer(t), Enabled: &disabled},
 	}, mcp.Options{
 		Registrar: registryAdapter{reg},
+		Notice:    func(string, bool) {},
 		Restore:   []string{"read", "fake__tool_00"}, // persisted from a prior session
 	})
 
@@ -533,7 +539,7 @@ func TestGuardRegisteredAgainstRegistry(t *testing.T) {
 
 	res, err := g.Execute(t.Context(), agent.ToolCall{
 		ID: "c1", Name: "write", Input: []byte(`{}`),
-	}, nil)
+	}, agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err) // a denial is an error result, not a Go error
 	assert.True(t, res.IsError)
 }
@@ -564,7 +570,7 @@ func TestPromptAdapterPlainModeReportsNoUI(t *testing.T) {
 		_ = outW.Close()
 	})
 
-	a := promptAdapter{ui: ui}
+	a := promptAdapter{ui: ui, hold: func(context.Context) {}}
 	_, err = a.Open("Allow?", "cmd", []string{"Allow"})
 	assert.ErrorIs(t, err, tui.ErrNoUI)
 }
@@ -678,9 +684,10 @@ func TestClassifierAdapterClassifiesMCPCallWithMetadata(t *testing.T) {
 func TestClassifierAdapterUnknownMCPSafelyUnsure(t *testing.T) {
 	t.Parallel()
 
-	adapter := classifierAdapter{ // no schema lookup wired at all
+	adapter := classifierAdapter{ // no MCP metadata: an MCP call cannot be judged
 		providerFor: func(llm.Model) (llm.Provider, error) { return nil, nil },
 		model:       func() llm.Model { return llm.Model{ID: "p/m"} },
+		schema:      func(string) (llm.ToolSchema, bool) { return llm.ToolSchema{}, false },
 	}
 	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "srv__list", Args: `{}`}))
 

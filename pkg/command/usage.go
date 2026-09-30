@@ -14,10 +14,6 @@ import (
 // usageCommand renders the session's token ledger as markdown through Console.Print.
 func usageCommand(_ context.Context, _ string, c Console) error {
 	st := c.State()
-	if st == nil || st.Tokens == nil {
-		c.Notify("no accounting available", levelWarn)
-		return nil
-	}
 	t := st.Tokens
 
 	var b strings.Builder

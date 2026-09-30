@@ -27,7 +27,7 @@ type queueUI interface {
 // tui.UI lock.
 type steerQueue struct {
 	ui     queueUI
-	submit func(est int) // SetSubmit(sum) while anything is pending, nil-safe in main
+	submit func(est int) // SetSubmit(sum) while anything is pending
 	clear  func()        // SetSubmit(0) once the batch and its reads have landed
 
 	mu       sync.Mutex
@@ -139,9 +139,6 @@ func joinAfter(afters []func(context.Context) []llm.Message) func(context.Contex
 // landed echoes the delivered labels and images on the loop goroutine. It must
 // not take q.mu (Delivered can fire inside drainSteer).
 func (s *steerQueue) landed(labels string, blocks llm.BlockList) {
-	if s.ui == nil {
-		return
-	}
 	if labels != "" {
 		s.ui.UserEcho(labels)
 	}
@@ -153,9 +150,7 @@ func (s *steerQueue) landed(labels string, blocks llm.BlockList) {
 // settled releases the submit reserve once the batch and everything behind it has
 // been accounted. Same locking rule as landed.
 func (s *steerQueue) settled() {
-	if s.clear != nil {
-		s.clear() // SetSubmit(0): pending owns the text and its reads now
-	}
+	s.clear() // SetSubmit(0): pending owns the text and its reads now
 }
 
 // pending reports how many prompts are queued for the next boundary.
@@ -214,7 +209,7 @@ func (s *steerQueue) recall() bool {
 	last := s.items[i]
 	s.items = s.items[:i]
 	label := restoredLabel(last)
-	if s.ui != nil && label != "" {
+	if label != "" {
 		s.ui.PrependInput(label)
 	}
 	s.refreshLocked()
@@ -247,29 +242,25 @@ func (s *steerQueue) abort() {
 		labels[i] = restoredLabel(it)
 	}
 	s.items = nil
-	if s.ui != nil && len(labels) > 0 {
-		s.ui.PrependInput(strings.Join(labels, "\n"))
-	}
+	s.ui.PrependInput(strings.Join(labels, "\n"))
 	s.refreshLocked()
 }
 
 // refreshLocked re-renders the queued rows and keeps the submit bucket in step.
 // Caller holds q.mu, UI calls happen under it (queue→UI lock order).
 func (s *steerQueue) refreshLocked() {
-	if s.ui != nil {
-		labels := make([]string, len(s.items))
-		for i, it := range s.items {
-			labels[i] = it.label
-		}
-		s.ui.SetQueued(labels)
+	labels := make([]string, len(s.items))
+	for i, it := range s.items {
+		labels[i] = it.label
 	}
+	s.ui.SetQueued(labels)
 	var sum int
 	for _, it := range s.items {
 		sum += it.est
 	}
-	if sum > 0 && s.submit != nil {
+	if sum > 0 {
 		s.submit(sum) // SetSubmit replaces, so re-pushing the running total is safe
-	} else if s.clear != nil {
+	} else {
 		s.clear() // nothing pending: clear the submit bucket
 	}
 }

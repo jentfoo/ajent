@@ -6,12 +6,8 @@ import (
 
 // Normalize expands @ references in one steered or follow-up input the way the
 // pump expands a fresh prompt. Notices surface through warn. Inputs with
-// assembled context (Before, Blocks or After) pass through unexpanded, with a nil
-// expander passing anything through.
+// assembled context (Before, Blocks or After) pass through unexpanded.
 func Normalize(x *Expander, in agent.Input, warn func(string)) agent.Input {
-	if x == nil {
-		return in
-	}
 	if in.Text == "" || len(in.Before) > 0 || len(in.Blocks) > 0 || in.After != nil {
 		return in
 	}

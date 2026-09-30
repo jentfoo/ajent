@@ -17,11 +17,14 @@ import (
 func TestNormalize(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nil_expander_passthrough", func(t *testing.T) {
+	t.Run("nil_registry_passthrough", func(t *testing.T) {
 		t.Parallel()
 
 		in := agent.Input{Text: "see @a.go"}
-		assert.Equal(t, in, Normalize(nil, in, func(string) {}))
+		x := NewExpander(nil, agent.NopSink{}, tools.PathPolicy{}, nil)
+		got := Normalize(x, in, func(string) {})
+		assert.Equal(t, in.Text, got.Text) // unexpanded, but marked prepared
+		assert.True(t, got.Prepared)
 	})
 
 	t.Run("expands_like_fresh_prompt", func(t *testing.T) {

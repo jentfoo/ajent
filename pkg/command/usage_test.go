@@ -75,20 +75,4 @@ func TestUsageCommand(t *testing.T) {
 		assert.Contains(t, c.prints[0], "input")
 		assert.Contains(t, c.prints[0], "output")
 	})
-
-	// no accounting configured notifies
-	t.Run("with_no_ledger_notifies", func(t *testing.T) {
-		c := newFakeConsole(t)
-		r := NewRegistry()
-		c.commands = r
-		RegisterBuiltins(r, c)
-
-		c.state.Tokens = nil // no accounting configured
-
-		cmd, ok := r.Get("usage")
-		require.True(t, ok)
-		require.NoError(t, cmd.Handler(t.Context(), "", c))
-
-		assert.True(t, c.noticeContains("no accounting available"))
-	})
 }

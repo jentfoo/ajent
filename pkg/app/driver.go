@@ -120,7 +120,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// submission via settled. editSinks may be empty before a session is set up.
 	editSinks := opts.Sinks // may be empty before a session is set up
 	pushContext := func() {
-		if st.Tokens == nil || len(editSinks) == 0 {
+		if len(editSinks) == 0 {
 			return
 		}
 		c := st.Tokens.Context()
@@ -131,7 +131,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// once a submitted prompt and everything behind it lands in state, pending owns
 	// its tokens. The submit bucket must clear so they are never counted twice.
 	settled := func() {
-		if st.Tokens != nil && len(editSinks) > 0 {
+		if len(editSinks) > 0 {
 			st.Tokens.SetSubmit(0)
 			pushContext()
 		}
@@ -162,7 +162,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// typing signal the boundary hold reads.
 	ui.SetOnEdit(func(text string) {
 		gate.edit(text)
-		if st.Tokens == nil || len(editSinks) == 0 {
+		if len(editSinks) == 0 {
 			return
 		}
 		st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
@@ -412,7 +412,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// `!` output is context the next prompt will carry, so the bar counts it from
 	// the moment the command finishes rather than waiting for a submission
 	stager.SetOnChange(func(est int) {
-		if st.Tokens == nil || len(editSinks) == 0 {
+		if len(editSinks) == 0 {
 			return
 		}
 		st.Tokens.SetStaged(est)

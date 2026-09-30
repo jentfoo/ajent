@@ -37,9 +37,9 @@ func (discardOutput) Diff(string, string, string)     {}
 func toolsManager(t *testing.T, d *delayedProvider, timeout time.Duration) (*Manager, []agent.Tool) {
 	t.Helper()
 
-	opts := Options{
+	opts := wired(Options{
 		PollTimeout: timeout,
-	}
+	})
 	if d != nil {
 		opts.Provider = func(llm.Model) (llm.Provider, error) { return d, nil }
 	} else {
@@ -113,10 +113,10 @@ func TestAgentPoll(t *testing.T) {
 	// payload only as its job finishes, so a batched result has to name its agent.
 	t.Run("batched_poll_display_names_agent", func(t *testing.T) {
 		g := &gatedProvider{} // held open so both polls overlap
-		m := New(Options{
+		m := New(wired(Options{
 			Provider:    func(llm.Model) (llm.Provider, error) { return g, nil },
 			PollTimeout: time.Second,
-		})
+		}))
 		t.Cleanup(m.Close)
 		tools := m.Tools()
 
@@ -171,12 +171,15 @@ func TestAgentPoll(t *testing.T) {
 
 	t.Run("queued_poll_reports_wait", func(t *testing.T) {
 		g := &gatedProvider{}
-		m := New(Options{MaxConcurrent: 1, Provider: func(llm.Model) (llm.Provider, error) { return g, nil }, PollTimeout: 30 * time.Millisecond})
+		m := New(wired(Options{MaxConcurrent: 1, Provider: func(llm.Model) (llm.Provider, error) { return g, nil }, PollTimeout: 30 * time.Millisecond}))
 		t.Cleanup(m.Close)
 
-		_ = m.start("occupies the only slot", "", "")
+		first := m.start("occupies the only slot", "", "")
+		require.Eventually(t, func() bool { // the slot holder must be running before the second start
+			j, ok := m.lookup(first)
+			return ok && j.snapshot().Status == StatusRunning
+		}, time.Second, time.Millisecond)
 		id := m.start("queued behind it", "", "")
-		require.Eventually(t, func() bool { return g.active.Load() == 1 }, time.Second, time.Millisecond)
 
 		snap, _, _ := m.poll(t.Context(), id)
 		assert.Equal(t, StatusQueued, snap.Status)
@@ -193,7 +196,7 @@ func TestAgentPoll(t *testing.T) {
 
 	t.Run("aborted", func(t *testing.T) {
 		b := &blockingProvider{}
-		m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
+		m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
 		t.Cleanup(m.Close)
 		id := m.start("x", "", "")
 		require.NoError(t, m.Stop(id))
@@ -302,7 +305,7 @@ func TestStartIDOrder(t *testing.T) {
 	t.Parallel()
 
 	g := &gatedProvider{}
-	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return g, nil }})
+	m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return g, nil }}))
 	t.Cleanup(m.Close)
 
 	// one assistant message asking for three sub-agents, in order a, b, c

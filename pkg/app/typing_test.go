@@ -55,6 +55,8 @@ func (r *statusRecorder) last() string {
 // idle window is wide by default so only an explicit release or cancel ends a hold.
 func newTypingGate() *typingGate {
 	return &typingGate{
+		pending: func() int { return 0 },
+		status:  func(string, string) {},
 		idle:    time.Hour,
 		handoff: 30 * time.Millisecond,
 		poll:    5 * time.Millisecond,

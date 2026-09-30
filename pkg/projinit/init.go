@@ -27,7 +27,7 @@ var (
 )
 
 // Options configures a Runner. Registry supplies the real read and agent_* tools,
-// Sink renders their calls into history as the loop would.
+// Sink renders their calls into history as the loop would, Notify reports progress.
 type Options struct {
 	Cwd      string
 	Registry *tools.Registry
@@ -98,7 +98,6 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 		return agent.Input{}, startError(failed)
 	}
 	r.notify("init: surveying the project with "+strconv.Itoa(len(ids))+" sub-agents", agent.LevelInfo)
-
 	before = append(before, r.pollAll(ctx, poll, ids, run)...)
 	if err := ctx.Err(); err != nil {
 		return agent.Input{}, err
@@ -206,11 +205,9 @@ func (r *Runner) pollOne(ctx context.Context, tool agent.Tool, id string, run in
 	return nil
 }
 
-// notify reports progress when the host supplied a sink for it.
+// notify reports survey progress to the host.
 func (r *Runner) notify(msg string, level agent.Level) {
-	if r.opts.Notify != nil {
-		r.opts.Notify(msg, level)
-	}
+	r.opts.Notify(msg, level)
 }
 
 // terminal reports whether a poll result names a finished job. An unrecognised or

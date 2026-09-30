@@ -141,7 +141,7 @@ func TestCommitRendersImagePlaceholder(t *testing.T) {
 	t.Run("inline sequence goes out verbatim", func(t *testing.T) {
 		t.Parallel()
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r := newTestInlineAt(recWriter{&buf}, 40, 12)
 		r.commit([]histLine{{image: &histImage{seq: "\x1b_Ga=T,f=100\x1b\\", rows: 2, text: "[image]"}}})
 		assert.Contains(t, buf.String(), "\x1b_Ga=T,f=100\x1b\\")
 	})
@@ -176,7 +176,7 @@ func TestImageLine(t *testing.T) {
 			mode:   ModeInline,
 			images: protocol,
 			imgIDs: make(map[uint32]int),
-			render: &inlineRenderer{t: &termState{out: io.Discard, fd: -1, width: 120, height: 60}},
+			render: newTestInlineAt(io.Discard, 120, 60),
 		}
 	}
 

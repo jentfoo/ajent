@@ -72,7 +72,7 @@ func newRecordingUI(tb testing.TB, in io.Reader) (*UI, *strings.Builder) {
 	var out strings.Builder
 	u := &UI{
 		theme:      NewTheme(ColorNone, DefaultPalette()),
-		render:     &inlineRenderer{t: &termState{out: &out, fd: -1, width: 80, height: 24}},
+		render:     newTestInlineAt(&out, 80, 24),
 		mode:       ModeInline,
 		in:         in,
 		inFd:       -1,
@@ -480,7 +480,7 @@ func TestUISpinnerPhaseColor(t *testing.T) {
 	var out strings.Builder
 	u := &UI{
 		theme:      NewTheme(Color256, DefaultPalette()),
-		render:     &inlineRenderer{t: &termState{out: &out, fd: -1, width: 80, height: 24}},
+		render:     newTestInlineAt(&out, 80, 24),
 		mode:       ModeInline,
 		status:     Status{Model: "test", MaxTokens: 1000},
 		in:         strings.NewReader(""),
@@ -2194,7 +2194,7 @@ func newResponsiveUI(tb testing.TB, v *vt) (*UI, *respVT) {
 	term := &respVT{v: v, pw: pw}
 	u := &UI{
 		theme:      NewTheme(ColorNone, DefaultPalette()),
-		render:     &inlineRenderer{t: &termState{out: term, fd: -1, width: v.w, height: v.h}},
+		render:     newTestInlineAt(term, v.w, v.h),
 		mode:       ModeInline,
 		status:     Status{Model: "test", MaxTokens: 1000},
 		in:         pr,

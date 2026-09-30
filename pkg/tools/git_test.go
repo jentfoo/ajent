@@ -19,7 +19,7 @@ import (
 // runGitTool executes one git tool call and returns the model text.
 func runGitTool(t *testing.T, tl agent.Tool, input string) (string, bool) {
 	t.Helper()
-	res, err := tl.Execute(t.Context(), callWith([]byte(input)), nil)
+	res, err := tl.Execute(t.Context(), callWith([]byte(input)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 	return textOf(res), res.IsError
 }

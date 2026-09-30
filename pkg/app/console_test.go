@@ -26,12 +26,10 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	reg.Register(&stubTool{name: "read"}, true)
 	reg.Register(&stubTool{name: "bash"}, false)
 
-	// unwired console must not panic on the no-op path
-	assert.NotPanics(t, func() { (&uiConsole{tools: reg}).ToolsChanged() })
-
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{tools: reg, set: set}
+	started := false
+	c := &uiConsole{tools: reg, set: set, started: &started, refreshBase: func() {}}
 
 	assert.NotPanics(t, func() { c.ToolsChanged() })
 
@@ -73,7 +71,9 @@ func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 	tk.Add(tokens.EstimateMessages(st.Messages)) // the live ledger already tracks them
 	require.Greater(t, tk.Context().Used, 1)
 
-	c := &uiConsole{ui: ui, reg: reg, st: st}
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
 	// switching to a smaller window must not leave Used at zero.
 	c.SetModel(llm.Model{ID: "p/small", ContextWindow: 8000})
 
@@ -109,7 +109,9 @@ func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 	trPath := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(trPath, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, reg: reg, st: st, rec: session.NewRecorder(w)}
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, rec: session.NewRecorder(w)}
 
 	// re-selecting the same model must not record a change.
 	c.SetModel(active)
@@ -251,7 +253,9 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	used := tk.Context().Used
 	require.Greater(t, used, 1)
 
-	c := &uiConsole{ui: ui, reg: reg, st: st}
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
 	require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
 
 	assert.InDelta(t, 0.5, c.st.Model.CompactThreshold, 1e-09)

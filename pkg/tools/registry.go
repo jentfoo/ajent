@@ -584,7 +584,7 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 	// per guard, and in every mode including the ones that never prompt.
 	if pv, ok := unwrap(g.t).(Previewer); ok {
 		if ch, err := pv.Preview(c); err == nil {
-			ensureOutput(out).Diff(ch.Path, ch.Before, ch.After)
+			out.Diff(ch.Path, ch.Before, ch.After)
 		}
 	}
 

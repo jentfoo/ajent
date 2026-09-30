@@ -203,9 +203,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 			_, _ = a.recount(turnCtx)
 			// record the turn even though there is no provider report, so /usage's
 			// count and estimated-footnote reflect what actually ran.
-			if t := a.state.Tokens; t != nil {
-				t.EstimatedTurn(a.state.Model.Key())
-			}
+			a.state.Tokens.EstimatedTurn(a.state.Model.Key())
 		}
 		a.syncContext(true)
 		result.Steps = step
@@ -353,15 +351,13 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 	predicted := tokens.EstimateFixed(req) + tokens.EstimateMessages(req.Messages)
 	// the system prompt and tool schemas are built into every request, so they
 	// must occupy context from the very first turn, not just after an exact report.
-	if t := a.state.Tokens; t != nil {
-		t.SetBase(tokens.EstimateFixed(req)) // replaced, so it self-corrects any seeded floor
-	}
+	a.state.Tokens.SetBase(tokens.EstimateFixed(req)) // replaced, so it self-corrects any seeded floor
 	keepThink := llm.ResolveRetain(a.state.Reasoning.Retain, a.state.Model.Caps) != llm.RetainNone
 	// report the ledger only for the outcome the caller sees, a retried attempt's
 	// partial usage never lands, its streamed output already moved the bar
 	report := func(usage llm.Usage) {
-		if t := a.state.Tokens; t != nil && !needsRecount(a.state.Model.Caps, usage) {
-			t.Response(a.state.Model.Key(), usage, predicted, keepThink)
+		if !needsRecount(a.state.Model.Caps, usage) {
+			a.state.Tokens.Response(a.state.Model.Key(), usage, predicted, keepThink)
 		}
 	}
 	retries := a.opts.TurnRetries
@@ -465,10 +461,7 @@ func (a *Agent) buildRequest() llm.Request {
 	}
 	reasoning := a.state.Reasoning
 	reasoning.Level = llm.ClampLevel(a.state.Model, reasoning.Level)
-	var used int
-	if t := a.state.Tokens; t != nil {
-		used = t.Context().Used // 0 when the ledger is nil or empty
-	}
+	used := a.state.Tokens.Context().Used // 0 when the ledger is empty
 	return llm.Request{
 		Model:     a.state.Model,
 		System:    buildSystem(a.opts.Env, a.opts.ProjectInstructions, a.opts.SystemSnippets, a.opts.SystemPrompt),
@@ -496,9 +489,7 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 		if p, ok := prog.delta(ev.ToolCallID, ev.Index, ev.Text); ok {
 			sink.ToolProgress(p)
 		}
-		if t != nil {
-			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
-		}
+		t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
 		a.syncContext(false)
 	case llm.EventToolCallEnd:
 		if p, ok := prog.end(ev.ToolCallID, ev.Index); ok {
@@ -509,15 +500,13 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 		if !a.state.Reasoning.Hide {
 			sink.Thinking(ev.Text)
 		}
-		if t != nil && keepThink {
+		if keepThink {
 			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
 		}
 		a.syncContext(false) // the live bucket grew, repaint when it moves enough
 	case llm.EventTextDelta:
 		sink.Text(ev.Text)
-		if t != nil {
-			t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
-		}
+		t.Stream(tokens.EstimateText(ev.Text, tokens.KindProse))
 		a.syncContext(false)
 	case llm.EventThinkingEnd:
 		if !a.state.Reasoning.Hide {
@@ -529,9 +518,7 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 		a.syncContext(true)
 	case llm.EventUsage:
 		sink.Usage(ev.Usage)
-		if t != nil {
-			t.Partial(ev.Usage)
-		}
+		t.Partial(ev.Usage)
 	}
 }
 
@@ -673,8 +660,8 @@ func (a *Agent) append(info MessageInfo) {
 	}
 	// messages without a provider report occupy context only as an estimate. An
 	// assistant response that reported usage is already counted in outputExact.
-	if t := a.state.Tokens; t != nil && info.Usage == (llm.Usage{}) {
-		t.Add(tokens.EstimateMessages([]llm.Message{info.Message}))
+	if info.Usage == (llm.Usage{}) {
+		a.state.Tokens.Add(tokens.EstimateMessages([]llm.Message{info.Message}))
 	}
 }
 
@@ -683,9 +670,6 @@ func (a *Agent) append(info MessageInfo) {
 // ends and turn boundaries.
 func (a *Agent) syncContext(force bool) {
 	t := a.state.Tokens
-	if t == nil {
-		return
-	}
 	cs := t.Context()
 	moved := cs.Used - a.ctxLast
 	if moved < 0 {

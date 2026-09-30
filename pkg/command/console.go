@@ -59,7 +59,8 @@ type Console interface {
 
 	// Models returns the live model registry, the single source of truth for the active model.
 	Models() *llm.Registry
-	// State returns the live agent state. Handlers read and mutate it directly.
+	// State returns the live agent state, always carrying a token ledger.
+	// Handlers read and mutate it directly.
 	State() *agent.State
 	// Tools returns the live tool registry, the single source of truth for the
 	// enabled set.

@@ -12,14 +12,12 @@ import (
 
 type promptAdapter struct {
 	ui   *tui.UI
-	hold func(context.Context) // typing wait behind Hold, nil returns at once
+	hold func(context.Context) // typing wait behind Hold
 }
 
 // Hold defers dialogs while the user is typing a message.
 func (a promptAdapter) Hold(ctx context.Context) {
-	if a.hold != nil {
-		a.hold(ctx)
-	}
+	a.hold(ctx)
 }
 
 func (a promptAdapter) Open(prompt, subject string, options []string) (permit.Dialog, error) {
@@ -76,16 +74,13 @@ func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 type classifierAdapter struct {
 	providerFor func(llm.Model) (llm.Provider, error)
 	model       func() llm.Model
-	schema      func(name string) (llm.ToolSchema, bool) // nil: no MCP metadata available
+	schema      func(name string) (llm.ToolSchema, bool) // MCP tool metadata lookup
 	cwd         string
 	tmp         string
 	session     string
 }
 
 func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permit.Class {
-	if a.schema == nil && !s.IsShell() {
-		return permit.ClassUnsure // an MCP call needs its tool metadata to be judged
-	}
 	m := a.model()
 	if m.ID == "" { // no model configured, nothing to classify with
 		return permit.ClassUnsure

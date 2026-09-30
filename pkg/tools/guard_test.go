@@ -54,7 +54,7 @@ func TestGuardVerdict(t *testing.T) {
 			tool, ok := r.Get("bash")
 			require.True(t, ok)
 
-			res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), nil)
+			res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 			require.NoError(t, err) // a denial is a result, not an error
 			if tc.wantRun {
 				assert.False(t, res.IsError)
@@ -80,7 +80,7 @@ func TestGuardChainFirstNonAllowWins(t *testing.T) {
 	tool, ok := r.Get("bash")
 	require.True(t, ok)
 
-	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), nil)
+	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 	assert.True(t, res.IsError)
 	assert.Contains(t, textOf(res), "second guard")
@@ -99,7 +99,7 @@ func TestGuardDeniedCallLeavesFileOnDiskUntouched(t *testing.T) {
 	tool, ok := r.Get("write")
 	require.True(t, ok)
 
-	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{"path":"`+path+`","content":"changed"}`)), nil)
+	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{"path":"`+path+`","content":"changed"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 	assert.True(t, res.IsError)
 

@@ -66,9 +66,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 	if err != nil {
 		return resultErr("ls: " + err.Error()), nil
 	}
-	if t.tracker != nil {
-		t.tracker.ObserveDir(full, entries)
-	}
+	t.tracker.ObserveDir(full, entries)
 
 	var b strings.Builder
 	for _, e := range entries {

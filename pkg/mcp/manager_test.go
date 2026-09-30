@@ -148,6 +148,15 @@ func sourceOf(name string) string {
 	return ""
 }
 
+// wired fills the notice hook production wiring always supplies. A test
+// overrides only what it exercises on the returned struct.
+func wired(base Options) Options {
+	if base.Notice == nil {
+		base.Notice = func(string, bool) {}
+	}
+	return base
+}
+
 func TestLoadOnFirstMessage(t *testing.T) {
 	t.Parallel()
 
@@ -158,7 +167,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: srv},
-		}, Options{Registrar: fr})
+		}, wired(Options{Registrar: fr}))
 
 		// nothing is registered before the first message, no process spawned yet
 		assert.Empty(t, fr.AllNames("mcp: fake"))
@@ -184,7 +193,7 @@ func TestLoadOnFirstMessage(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: srv},
-		}, Options{Registrar: fr})
+		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
 
 		mgr.LoadOnFirstMessage(t.Context())
@@ -209,7 +218,7 @@ func TestPreload(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: srv, Args: []string{"-startup-delay=500ms"}},
-		}, Options{Registrar: fr})
+		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
 
 		mgr.Preload() // non-blocking
@@ -224,7 +233,7 @@ func TestPreload(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: srv, Args: []string{"-startup-delay=500ms"}},
-		}, Options{Registrar: fr})
+		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
 
 		mgr.Preload()
@@ -246,7 +255,7 @@ func TestConfigDisabledServer(t *testing.T) {
 		var disabled bool
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: srv, Enabled: &disabled},
-		}, Options{Registrar: fr})
+		}, wired(Options{Registrar: fr}))
 
 		t.Cleanup(mgr.Close)
 		mgr.LoadOnFirstMessage(t.Context())
@@ -266,10 +275,10 @@ func TestConfigDisabledServer(t *testing.T) {
 	t.Run("honours_restored_enablement", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		var disabled bool
-		mgr := New(nil, Options{
+		mgr := New(nil, wired(Options{
 			Registrar: fr,
 			Restore:   []string{"fake__tool_01"}, // enabled via /tools in the prior session
-		})
+		}))
 		s := mgr.newServer("fake", ServerConfig{Enabled: &disabled})
 
 		defs := []ToolDef{
@@ -324,7 +333,7 @@ func TestDialAbortsWhenServerRemoved(t *testing.T) {
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
 		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=1s"}},
-	}, Options{Registrar: fr})
+	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
 
 	errCh := make(chan error, 1)
@@ -351,7 +360,7 @@ func TestConcurrentConnectsShareOneClient(t *testing.T) {
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
 		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=1s"}},
-	}, Options{Registrar: fr})
+	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
 
 	// a gate releases every goroutine together so they all arrive while the first
@@ -381,7 +390,7 @@ func TestBadSchemaNeverRegistered(t *testing.T) {
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
 		"fake": {Command: srv, Args: []string{"-bad-schema"}},
-	}, Options{Registrar: fr})
+	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
 
 	mgr.LoadOnFirstMessage(t.Context())
@@ -407,10 +416,10 @@ func TestRepeatedBadSchemaStaysQuiet(t *testing.T) {
 	var notices []string
 	mgr := New(map[string]ServerConfig{
 		"fake": {Command: srv, Args: []string{"-bad-schema"}},
-	}, Options{
+	}, wired(Options{
 		Registrar: fr,
 		Notice:    func(msg string, warn bool) { notices = append(notices, msg) },
-	})
+	}))
 	t.Cleanup(mgr.Close)
 
 	mgr.LoadOnFirstMessage(t.Context())
@@ -451,7 +460,7 @@ func TestRegisterMarksReadOnlyTools(t *testing.T) {
 	t.Parallel()
 
 	fr := newFakeRegistrar()
-	mgr := New(nil, Options{Registrar: fr})
+	mgr := New(nil, wired(Options{Registrar: fr}))
 	s := mgr.newTestServer("srv")
 
 	defs := []ToolDef{
@@ -468,7 +477,7 @@ func TestRegisterPreservesLiveDisabled(t *testing.T) {
 	t.Parallel()
 
 	fr := newFakeRegistrar()
-	mgr := New(nil, Options{Registrar: fr})
+	mgr := New(nil, wired(Options{Registrar: fr}))
 	s := mgr.newTestServer("srv")
 	defs := []ToolDef{
 		{Name: "a", InputSchema: jsonRawObject},
@@ -493,7 +502,7 @@ func TestRegisterLiveDisabledBeatsRestore(t *testing.T) {
 	t.Parallel()
 
 	fr := newFakeRegistrar()
-	mgr := New(nil, Options{Registrar: fr, Restore: []string{"srv__a", "srv__b"}})
+	mgr := New(nil, wired(Options{Registrar: fr, Restore: []string{"srv__a", "srv__b"}}))
 	s := mgr.newTestServer("srv")
 	defs := []ToolDef{
 		{Name: "a", InputSchema: jsonRawObject},
@@ -522,7 +531,7 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
 		"fake": stdioConfig(t, "-notify-list-changed"),
-	}, Options{Registrar: fr})
+	}, wired(Options{Registrar: fr}))
 
 	require.NoError(t, mgr.Connect(t.Context(), "fake"))
 	t.Cleanup(mgr.Close)
@@ -576,7 +585,7 @@ func TestReload(t *testing.T) {
 		require.NoError(t, err)
 
 		fr := newFakeRegistrar()
-		mgr := New(servers, Options{Registrar: fr, Workspace: ws})
+		mgr := New(servers, wired(Options{Registrar: fr, Workspace: ws}))
 		t.Cleanup(mgr.Close)
 		mgr.LoadOnFirstMessage(t.Context())
 		return mgr, fr, ws
@@ -658,7 +667,7 @@ func TestReconnectAfterDeath(t *testing.T) {
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
 		"fake": {Command: buildFakeServer(t), Args: []string{"-die"}},
-	}, Options{Registrar: fr})
+	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
 
 	// disable one tool so the restored enabled set is a strict subset, not everything
@@ -672,7 +681,7 @@ func TestReconnectAfterDeath(t *testing.T) {
 	// result (transport failure) rather than a Go error.
 	tool, ok := fr.toolByName("fake__trigger_die")
 	require.True(t, ok)
-	_, err := tool.Execute(t.Context(), agent.ToolCall{ID: "die", Name: tool.Name()}, nil)
+	_, err := tool.Execute(t.Context(), agent.ToolCall{ID: "die", Name: tool.Name()}, agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err) // a dead transport is a result, never an abort
 
 	// the server's tools drop out while it reconnects
@@ -705,7 +714,7 @@ func TestManagerClose(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
 			"fake": {Command: srv},
-		}, Options{Registrar: fr})
+		}, wired(Options{Registrar: fr}))
 		mgr.LoadOnFirstMessage(t.Context())
 		require.NotEmpty(t, fr.AllNames("mcp: fake"))
 
@@ -729,7 +738,7 @@ func TestManagerClose(t *testing.T) {
 		for _, n := range names {
 			servers[n] = ServerConfig{Command: srv}
 		}
-		mgr := New(servers, Options{Registrar: br})
+		mgr := New(servers, wired(Options{Registrar: br}))
 
 		mgr.Close()
 

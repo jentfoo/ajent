@@ -38,7 +38,7 @@ func submittedEcho(msg string) string {
 }
 
 func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func()) {
-	if st.Tokens == nil || len(editSinks) == 0 {
+	if len(editSinks) == 0 {
 		return
 	}
 	st.Tokens.SetSubmit(est)

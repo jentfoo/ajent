@@ -181,7 +181,7 @@ func call(t *testing.T, c *Controller, name, args string) agent.ToolResult {
 			continue
 		}
 		res, err := tool.Execute(t.Context(), agent.ToolCall{
-			Name: name, Input: json.RawMessage(args)}, nil)
+			Name: name, Input: json.RawMessage(args)}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err) // control tools never fail a turn
 		return res
 	}

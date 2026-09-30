@@ -322,14 +322,13 @@ func parseTool(raw json.RawMessage, server string, readOnly FlexStrings) (def To
 	return def, true, ""
 }
 
-// Call invokes a tool with raw arguments and maps the result content.
+// Call invokes a tool with raw arguments and maps the result content. Progress
+// deltas stream to out.
 func (c *Client) Call(ctx context.Context, name string, args json.RawMessage, out agent.Output) (Result, error) {
 	c.mu.Lock()
 	token := c.nextID
 	c.nextID++
-	if out != nil {
-		c.output[token] = out
-	}
+	c.output[token] = out
 	c.mu.Unlock()
 
 	var arguments any

@@ -40,7 +40,7 @@ type uiConsole struct {
 	quit    chan struct{}
 
 	// refreshBase re-measures the constant request overhead and republishes the
-	// bar, for the changes that resize the tool block between turns. Nil disables it.
+	// bar, for the changes that resize the tool block between turns.
 	refreshBase func()
 
 	toneOnce sync.Once // the background query costs a round trip and cannot change
@@ -135,16 +135,14 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 			showPermissionIndicator(c.ui, c.permit)
 		}
 	}
-	if key == "compaction.threshold" && c.reg != nil {
+	if key == "compaction.threshold" {
 		c.applyCompactThreshold(value)
 	}
-	if c.set != nil {
-		if err := c.set.SetSession(key, value); err != nil {
-			return err
-		}
-		if key == "images.block" {
-			applyImagesBlock(c.set) // live flip, from the just-applied value
-		}
+	if err := c.set.SetSession(key, value); err != nil {
+		return err
+	}
+	if key == "images.block" {
+		applyImagesBlock(c.set) // live flip, from the just-applied value
 	}
 	// permission mode is applied for this run only and never written to a
 	// setting_change entry, so it cannot be restored on resume.
@@ -162,31 +160,27 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 		return
 	}
 	c.reg.SetCompactDefault(f)
-	if c.st == nil {
-		return
-	}
 	m, err := c.reg.Resolve(c.st.Model.Key())
 	if err != nil {
 		return
 	}
 	c.st.Model = m // compactor.run reads the threshold from here
-	if t := c.st.Tokens; t != nil {
-		t.SetWindow(m) // keeps every context term, SetModel would blank the bar
-		cs := t.Context()
-		c.ui.SetContext(tui.ContextInfo{
-			Used:      cs.Used,
-			Window:    cs.Window,
-			Reserve:   cs.Reserve,
-			Compact:   cs.Compact,
-			Estimated: cs.Estimated,
-		})
-	}
+	t := c.st.Tokens
+	t.SetWindow(m) // keeps every context term, SetModel would blank the bar
+	cs := t.Context()
+	c.ui.SetContext(tui.ContextInfo{
+		Used:      cs.Used,
+		Window:    cs.Window,
+		Reserve:   cs.Reserve,
+		Compact:   cs.Compact,
+		Estimated: cs.Estimated,
+	})
 }
 
 func (c *uiConsole) SetModel(m llm.Model) {
 	// picking the already-active model is a no-op: nothing to rebase, record or
 	// announce, so a stray /model does not spam the history with an unchanged line.
-	if c.st != nil && m.Key() == c.st.Model.Key() {
+	if m.Key() == c.st.Model.Key() {
 		return
 	}
 	c.reg.SetActive(m)
@@ -198,42 +192,34 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	// keep the stored reasoning override untouched so a temporary switch does not lose
 	// the user's choice. Recompute only the live effective level for display (buildRequest
 	// already clamps requests) from the raw preference, restoring it on switching back.
-	if c.set != nil {
-		lvl := llm.LevelMedium
-		if parsed, ok := llm.ParseLevel(c.set.Settings().Reasoning.Level); ok {
-			lvl = parsed
-		}
-		c.st.Reasoning.Level = llm.ClampLevel(m, lvl)
-		showReasoningIndicator(c.ui, c.set, c.st)
+	lvl := llm.LevelMedium
+	if parsed, ok := llm.ParseLevel(c.set.Settings().Reasoning.Level); ok {
+		lvl = parsed
 	}
+	c.st.Reasoning.Level = llm.ClampLevel(m, lvl)
+	showReasoningIndicator(c.ui, c.set, c.st)
 
 	// rebase the ledger's window and reserve onto the new model so a mid-session
 	// /model rescales the bar immediately rather than on the next turn.
 	t := c.st.Tokens
-	if t != nil {
-		t.SetModel(m) // drops every context term for the new window/reserve
-	}
+	t.SetModel(m) // drops every context term for the new window/reserve
 	c.ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
-	if t != nil {
-		// SetModel zeroed the ledger, so Used would read empty regardless of real
-		// occupancy. Remeasure against the actual in-memory messages: a switch to a
-		// smaller window must reflect that it now overflows, or threshold auto-compaction
-		// could never fire on this model.
-		t.Reseed(tokens.EstimateFor(m, c.st.Reasoning.Retain, c.st.Messages))
-		cs := t.Context()
-		c.ui.SetContext(tui.ContextInfo{
-			Used:      cs.Used,
-			Window:    cs.Window,
-			Reserve:   cs.Reserve,
-			Compact:   cs.Compact,
-			Estimated: cs.Estimated,
-		})
-	}
+	// SetModel zeroed the ledger, so Used would read empty regardless of real
+	// occupancy. Remeasure against the actual in-memory messages: a switch to a
+	// smaller window must reflect that it now overflows, or threshold auto-compaction
+	// could never fire on this model.
+	t.Reseed(tokens.EstimateFor(m, c.st.Reasoning.Retain, c.st.Messages))
+	cs := t.Context()
+	c.ui.SetContext(tui.ContextInfo{
+		Used:      cs.Used,
+		Window:    cs.Window,
+		Reserve:   cs.Reserve,
+		Compact:   cs.Compact,
+		Estimated: cs.Estimated,
+	})
 	// record a session override so Explain and Settings report (session). The
 	// user-layer persist is the direct /model command's job, not this apply.
-	if c.set != nil {
-		_ = c.set.SetSession("model", m.Key())
-	}
+	_ = c.set.SetSession("model", m.Key())
 	c.ui.Notify("model: "+m.Key(), tui.LevelInfo)
 
 	if c.rec != nil {
@@ -245,11 +231,9 @@ func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
 	c.st.Reasoning = rc
 	// persist granular dotted leaves so every choice survives: marshalling the
 	// whole config would drop retain "none" and show false under omitempty.
-	if c.set != nil {
-		_ = c.set.SetSession("reasoning.level", rc.Level.String())
-		_ = c.set.SetSession("reasoning.hide", rc.Hide)
-		_ = c.set.SetSession("reasoning.retain", rc.Retain.String())
-	}
+	_ = c.set.SetSession("reasoning.level", rc.Level.String())
+	_ = c.set.SetSession("reasoning.hide", rc.Hide)
+	_ = c.set.SetSession("reasoning.retain", rc.Retain.String())
 	// keep the status indicator in step with a non-default level.
 	c.ui.SetStatusSegment(segment(segReasoning, levelOrEmpty(rc), ""))
 	c.ui.Notify("reasoning: "+rc.Level.String(), tui.LevelInfo)
@@ -264,9 +248,7 @@ func (c *uiConsole) ToolsChanged() {
 	}
 	// the dotted config key, applySetting still accepts the legacy "tools" alias
 	names := c.tools.Names()
-	if c.set != nil {
-		_ = c.set.SetSession("tools.enabled", names)
-	}
+	_ = c.set.SetSession("tools.enabled", names)
 	if c.rec != nil {
 		_ = c.rec.SettingChange("tools.enabled", names)
 	}
@@ -276,7 +258,7 @@ func (c *uiConsole) ToolsChanged() {
 	}
 	// a wider tool block occupies context immediately, not at the next turn. Before
 	// the block is committed schemas are not in the base at all, so nothing to redo.
-	if c.refreshBase != nil && c.Started() {
+	if c.Started() {
 		c.refreshBase()
 	}
 }
@@ -393,9 +375,6 @@ func levelOrEmpty(rc llm.ReasoningConfig) string {
 // showReasoningIndicator shows the reasoning level in the status bar when it
 // differs from the resolved default, clearing it otherwise.
 func showReasoningIndicator(ui *tui.UI, set *config.Set, st *agent.State) {
-	if ui == nil || st == nil {
-		return
-	}
 	var text string
 	if d, _, ok := set.Explain("reasoning.level"); ok && string(d) != `"medium"` {
 		text = st.Reasoning.Level.String() // an explicit config choice stays visible even when clamped

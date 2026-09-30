@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func TestLs(t *testing.T) {
@@ -20,8 +22,8 @@ func TestLs(t *testing.T) {
 		mkfile(dir, "a.txt", "y")
 		mkfile(dir, "sub/inner.txt", "z")
 
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{}`)), nil)
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		lines := strings.Split(out, "\n")
@@ -33,8 +35,8 @@ func TestLs(t *testing.T) {
 		mkfile(dir, ".hidden", "x")
 		mkfile(dir, "visible.txt", "y")
 
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{}`)), nil)
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.Contains(t, textOf(res), ".hidden")
 	})
@@ -45,7 +47,7 @@ func TestLs(t *testing.T) {
 
 		tracker := NewTracker()
 		res, err := (&lsTool{policy: policy, tracker: tracker}).Execute(t.Context(),
-			callWith([]byte(`{}`)), nil)
+			callWith([]byte(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.NotEmpty(t, textOf(res))
 
@@ -63,8 +65,8 @@ func TestLs(t *testing.T) {
 			mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 		}
 
-		res, err := (&lsTool{policy: policy, sessionID: "ls-test"}).Execute(t.Context(),
-			callWith([]byte(`{"limit":2}`)), nil)
+		res, err := (&lsTool{policy: policy, sessionID: "ls-test", tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Contains(t, out, "2/5 lines shown")
@@ -83,16 +85,16 @@ func TestLs(t *testing.T) {
 		mkfile(dir, "a.md", "y")
 		mkfile(dir, "skip.txt", "z")
 
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"path":"*.md"}`)), nil)
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"*.md"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.Equal(t, []string{"a.md", "b.md"}, strings.Split(textOf(res), "\n"))
 	})
 
 	t.Run("wildcard_no_match_is_error", func(t *testing.T) {
 		_, policy := newSearchEnv(t)
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"path":"*.rs"}`)), nil)
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"*.rs"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
 	})
@@ -103,8 +105,8 @@ func TestLs(t *testing.T) {
 			mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 		}
 
-		res, err := (&lsTool{policy: policy, sessionID: "ls-test"}).Execute(t.Context(),
-			callWith([]byte(`{"path":"*.txt","limit":2}`)), nil)
+		res, err := (&lsTool{policy: policy, sessionID: "ls-test", tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"*.txt","limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Contains(t, out, "2/5 lines shown") // the whole match set is counted
@@ -113,16 +115,16 @@ func TestLs(t *testing.T) {
 
 	t.Run("missing_dir_is_error", func(t *testing.T) {
 		_, policy := newSearchEnv(t)
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"path":"nope"}`)), nil)
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"nope"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
 	})
 
 	t.Run("malformed_args_is_error", func(t *testing.T) {
 		_, policy := newSearchEnv(t)
-		res, err := (&lsTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`not json`)), nil)
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`not json`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
 	})

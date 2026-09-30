@@ -24,7 +24,7 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()}, // no text, triggers a nudge
 			{Events: summaryTurn("the answer is 42", llm.Usage{})},
 		})
-		m := New(Options{Provider: p})
+		m := New(wired(Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -40,7 +40,7 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()}, // no text, triggers a nudge
 			{Events: thinkingOnlyTurn()}, // still nothing usable after the one nudge
 		})
-		m := New(Options{Provider: p})
+		m := New(wired(Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -57,7 +57,7 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()},  // no text, triggers a nudge
 			{Events: thinkingTurn(think)}, // still no text, but sizable reasoning
 		})
-		m := New(Options{Provider: p})
+		m := New(wired(Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -85,11 +85,11 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()}, // the turn after the tool call is empty
 			{Events: thinkingOnlyTurn()}, // nudge response still short and empty
 		})
-		m := New(Options{
+		m := New(wired(Options{
 			Provider: p,
 			Tools: &fakeSource{tools: []agent.Tool{&fakeTool{name: "read", result: "ok"}},
 				readOnly: map[string]bool{"read": true}},
-		})
+		}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -104,7 +104,7 @@ func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 	t.Parallel()
 
 	b := &blockingProvider{}
-	m := New(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }})
+	m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
 	t.Cleanup(m.Close)
 
 	id := m.start("q", "", "")
@@ -119,10 +119,10 @@ func TestRunInheritsModel(t *testing.T) {
 
 	_, sp := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
 	p := func(llm.Model) (llm.Provider, error) { return sp, nil }
-	m := New(Options{
+	m := New(wired(Options{
 		Provider: p,
 		Model:    func() llm.Model { return llm.Model{ID: "child-model"} },
-	})
+	}))
 	t.Cleanup(m.Close)
 
 	id := m.start("q", "", "")

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // testEnv is a fixed environment so system prompt tests are deterministic.
@@ -799,11 +800,11 @@ func TestBuildRequest(t *testing.T) {
 		assert.LessOrEqual(t, req.MaxTokens, 200000) // never exceeds the window
 	})
 
-	t.Run("nil_ledger_full_cap", func(t *testing.T) {
+	t.Run("empty_ledger_full_cap", func(t *testing.T) {
 		st3 := &State{
 			Model:     m,
 			Reasoning: llm.ReasoningConfig{Level: llm.LevelHigh},
-			Tokens:    nil, // no accounting configured
+			Tokens:    tokens.New(m), // nothing recorded yet
 		}
 		a3 := newTestAgent(st3, nil, NopSink{})
 		req := a3.buildRequest()

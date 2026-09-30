@@ -491,7 +491,7 @@ func TestGuardedToolPreviewOrdering(t *testing.T) {
 		tool, e := guardedEdit(t)
 		e.writeFile("a.txt", "hello world\n")
 		e.readExec(t.Context(), `{"path":"a.txt"}`)
-		_, err := tool.Execute(t.Context(), editCall("a.txt", "world", "ajent"), nil)
+		_, err := tool.Execute(t.Context(), editCall("a.txt", "world", "ajent"), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 	})
 }
@@ -577,7 +577,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		r.Register(&stubTool{name: "srv__dump", res: res}, true)
 		tool, ok := r.Get("srv__dump")
 		require.True(t, ok)
-		out, err := tool.Execute(t.Context(), callWith([]byte(`{}`)), nil)
+		out, err := tool.Execute(t.Context(), callWith([]byte(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		return out
 	}

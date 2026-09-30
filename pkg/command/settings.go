@@ -358,7 +358,7 @@ func editModel(ctx context.Context, c Console) ([]settingChange, error) {
 // editReasoning delegates to the reasoning picker.
 func editReasoning(ctx context.Context, c Console) ([]settingChange, error) {
 	err := reasoningCommand(ctx, "", c)
-	if err != nil || c.State() == nil {
+	if err != nil {
 		return nil, err
 	}
 	// persist the level as a dotted leaf, SetReasoning having updated state

@@ -10,6 +10,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 
@@ -95,9 +96,11 @@ func newFakeConsole(tb testing.TB) *fakeConsole {
 		Env:       func(string) string { return "" },
 	})
 	require.NoError(tb, err)
+	state := &agent.State{Model: reg.Active(), Reasoning: llm.ReasoningConfig{Level: llm.LevelMedium, Hide: false}}
+	state.Tokens = tokens.New(state.Model)
 	return &fakeConsole{
 		models:   reg,
-		state:    &agent.State{Model: reg.Active(), Reasoning: llm.ReasoningConfig{Level: llm.LevelMedium, Hide: false}},
+		state:    state,
 		tools:    tr,
 		commands: NewRegistry(),
 		settings: cfg,

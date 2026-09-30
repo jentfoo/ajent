@@ -20,7 +20,7 @@ func TestBridge(t *testing.T) {
 		require.NoError(t, err)
 		b := Bridge("fake", defs[0], c, BridgeOptions{})
 
-		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "1", Name: b.Name()}, nil)
+		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "1", Name: b.Name()}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		text, ok := res.Content.AsText()
@@ -61,7 +61,7 @@ func TestBridge(t *testing.T) {
 		require.NoError(t, err)
 		b := Bridge("fake", defs[0], c, BridgeOptions{Timeout: 1}) // 1ns, instantly exceeded
 
-		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, nil)
+		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err) // transport failure is a result, not a Go error
 		assert.True(t, res.IsError)
 	})

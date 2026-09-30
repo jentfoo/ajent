@@ -11,7 +11,7 @@ import (
 // newTestAlt returns an alt renderer painting into v.
 func newTestAlt(v *vt) *altRenderer {
 	return &altRenderer{
-		t:     &termState{out: v, fd: -1, width: v.w, height: v.h},
+		t:     newTestTermState(v, v.w, v.h),
 		theme: NewTheme(ColorNone, DefaultPalette()),
 	}
 }
@@ -87,7 +87,8 @@ func TestAltRendererResizeReflows(t *testing.T) {
 	require.Equal(t, long, v.Line(3))
 
 	narrow := newVT(24, 6)
-	r.t.out, r.t.width, r.t.height = narrow, narrow.w, narrow.h
+	r.t.out = narrow
+	r.t.pinSize(narrow.w, narrow.h)
 	r.resize()
 
 	assert.Equal(t, "the retry helper loops a", narrow.Line(2))
@@ -95,7 +96,8 @@ func TestAltRendererResizeReflows(t *testing.T) {
 
 	t.Run("and_back_again", func(t *testing.T) {
 		wide := newVT(60, 6)
-		r.t.out, r.t.width, r.t.height = wide, wide.w, wide.h
+		r.t.out = wide
+		r.t.pinSize(wide.w, wide.h)
 		r.resize()
 		assert.Equal(t, long, wide.Line(3))
 	})
@@ -185,7 +187,8 @@ func TestAltRendererTableReflows(t *testing.T) {
 	wideRows := layoutTable(hl.table, r.t.width)
 
 	narrow := newVT(20, 10)
-	r.t.out, r.t.width, r.t.height = narrow, narrow.w, narrow.h
+	r.t.out = narrow
+	r.t.pinSize(narrow.w, narrow.h)
 	r.resize()
 
 	narrowRows := layoutTable(hl.table, r.t.width)

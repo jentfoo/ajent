@@ -98,9 +98,13 @@ type Agent struct {
 }
 
 // New returns an agent bound to state. Sinks are resolved once into a single
-// fan-out so the loop always emits on one field, and events go nowhere with none supplied.
+// fan-out so the loop always emits on one field, events go nowhere with none
+// supplied, and a state without a ledger gets an empty one.
 func New(state *State, opts Options) *Agent {
 	a := &Agent{state: state, opts: opts, retrySleep: sleepCtx}
+	if state.Tokens == nil {
+		state.Tokens = tokens.New(state.Model)
+	}
 	switch len(opts.Sinks) {
 	case 0:
 		a.sink = NopSink{}
@@ -237,8 +241,6 @@ func (a *Agent) recount(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if t := a.state.Tokens; t != nil {
-		t.Rebase(n)
-	}
+	a.state.Tokens.Rebase(n)
 	return n, nil
 }

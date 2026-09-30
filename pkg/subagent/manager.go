@@ -26,7 +26,9 @@ const (
 )
 
 // Options configures a sub-agent Manager. The func-typed fields are supplied
-// at wiring time, so this package never imports pkg/tui or pkg/tools.
+// at wiring time, so this package never imports pkg/tui or pkg/tools. Model,
+// Reasoning, Parent, Notice and Deliver are required; Tools, Activity and
+// Status are optional.
 type Options struct {
 	Provider            func(llm.Model) (llm.Provider, error)
 	Model               func() llm.Model           // configured child model, else the session's
@@ -96,10 +98,7 @@ func (m *Manager) Reserve(calls []agent.ToolCall) {
 // start launches one investigation whose id may have been reserved by callID, an
 // unknown or empty callID taking the next number so a host-driven start still works.
 func (m *Manager) start(task, instructions, callID string) string {
-	var ledger *tokens.Accounting
-	if p := m.opts.Parent; p != nil { // one child ledger per job, set before the id is visible to pollers
-		ledger = p().Child()
-	}
+	ledger := m.opts.Parent().Child() // one child ledger per job, set before the id is visible to pollers
 	m.mu.Lock()
 	num, ok := m.reserved[callID]
 	if ok {
@@ -412,9 +411,7 @@ func (m *Manager) enqueue(id string) {
 	}
 	batch := slices.Clone(m.noticeBatch)
 	m.mu.Unlock()
-	if fn := m.opts.Notice; fn != nil {
-		fn(noticeText(batch))
-	}
+	m.opts.Notice(noticeText(batch))
 }
 
 // Boundary returns one batched completion input for the step boundary, or nil.
@@ -443,7 +440,7 @@ func (m *Manager) offer(ids []string) {
 		return
 	}
 	in := m.noticeInput(deliverable)
-	if fn := m.opts.Deliver; fn == nil || !fn(in) {
+	if !m.opts.Deliver(in) {
 		m.mu.Lock()
 		m.inFlight = dropIDs(m.inFlight, deliverable)
 		m.mu.Unlock()
@@ -613,18 +610,12 @@ func (m *Manager) publishStatus() {
 
 // model returns the configured child model or the session's current one.
 func (m *Manager) model() llm.Model {
-	if fn := m.opts.Model; fn != nil {
-		return fn()
-	}
-	return llm.Model{}
+	return m.opts.Model()
 }
 
 // reasoning inherits the parent's reasoning configuration verbatim.
 func (m *Manager) reasoning() llm.ReasoningConfig {
-	if fn := m.opts.Reasoning; fn != nil {
-		return fn()
-	}
-	return llm.ReasoningConfig{}
+	return m.opts.Reasoning()
 }
 
 // pollProgress reads a still-pending job's wait or active runtime and child context
@@ -646,11 +637,8 @@ func (j *job) pollProgress() string {
 	if status == StatusQueued {
 		verb = "queued for"
 	}
-	var used, win int
-	if t := j.tokens; t != nil {
-		c := t.Context()
-		used, win = c.Used, c.Window
-	}
+	c := j.tokens.Context()
+	used, win := c.Used, c.Window
 	s := fmt.Sprintf("sub-agent %s %s %s", id, verb, strutil.Elapsed(elapsed))
 	switch {
 	case win > 0:

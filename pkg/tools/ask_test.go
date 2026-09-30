@@ -17,7 +17,7 @@ func askCall(t *testing.T, tool *askUserTool, params askParams) agent.ToolResult
 
 	raw, err := json.Marshal(params)
 	require.NoError(t, err)
-	res, err := tool.Execute(t.Context(), agent.ToolCall{Name: "ask_user", Input: raw}, nil)
+	res, err := tool.Execute(t.Context(), agent.ToolCall{Name: "ask_user", Input: raw}, agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err) // a question never fails a turn
 	return res
 }

@@ -89,7 +89,6 @@ func (*bashTool) selfBounding() {}
 // Execute streams command output to out while teeing a bounded head/tail copy,
 // spilling the excess to disk so the model can read it back.
 func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
-	out = ensureOutput(out)
 	var p bashParams
 	if err := decode(call.Input, &p); err != nil {
 		return resultErr("bad args: " + err.Error()), nil

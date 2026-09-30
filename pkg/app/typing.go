@@ -18,7 +18,7 @@ const (
 // the loop goroutine, the dialog hold on tool goroutines dispatch serializes. Windows
 // are fields so tests can shorten them.
 type typingGate struct {
-	pending func() int               // queued steer items, nil-safe
+	pending func() int               // queued steer items
 	status  func(text, short string) // status segment, empty text removes it
 	idle    time.Duration            // unchanged draft resumes the boundary after this
 	handoff time.Duration            // grace for a submitted line to reach the queue
@@ -84,14 +84,14 @@ func (g *typingGate) holdWhile(ctx context.Context, label string) {
 	last := -1          // last displayed second, forces the first publish
 	var lastSession int // session the current countdown dedup is for
 	defer func() {
-		if shown && g.status != nil {
+		if shown {
 			g.status("", "")
 		}
 	}()
 
 	for {
 		// a queued prompt means typing is over, whatever the editor still shows
-		if g.pending != nil && g.pending() > 0 {
+		if g.pending() > 0 {
 			return
 		}
 
@@ -156,7 +156,7 @@ func (g *typingGate) wait(ctx context.Context, deadline time.Time, countdown boo
 		return false
 	case <-timer.C:
 	}
-	if countdown && g.status != nil {
+	if countdown {
 		g.publishStatus(label, deadline, shown, last)
 	}
 	return true

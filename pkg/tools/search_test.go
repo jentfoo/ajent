@@ -38,7 +38,7 @@ func TestFind(t *testing.T) {
 		mkfile(dir, "b.txt", "y")
 
 		res, err := (&findTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"*.go"}`)), nil)
+			callWith([]byte(`{"pattern":"*.go"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Contains(t, out, "a.go")
@@ -52,7 +52,7 @@ func TestFind(t *testing.T) {
 		mkfile(dir, "pkg/tools/nested.go", "y")
 
 		res, err := (&findTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"*.go"}`)), nil)
+			callWith([]byte(`{"pattern":"*.go"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Contains(t, out, "top.go")
@@ -67,7 +67,7 @@ func TestFind(t *testing.T) {
 		mkfile(dir, "sub/skip.txt", "z")
 
 		res, err := (&findTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"**/*.go"}`)), nil)
+			callWith([]byte(`{"pattern":"**/*.go"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Contains(t, out, "root.go") // ** spans zero segments too
@@ -82,7 +82,7 @@ func TestFind(t *testing.T) {
 			mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 		}
 		res, err := (&findTool{policy: policy, sessionID: "find-test"}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"*.txt","limit":2}`)), nil)
+			callWith([]byte(`{"pattern":"*.txt","limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Equal(t, 3, strings.Count(out, ".txt")) // head + footer's spill name
@@ -98,7 +98,7 @@ func TestFind(t *testing.T) {
 	t.Run("empty_pattern_rejected", func(t *testing.T) {
 		_, policy := newSearchEnv(t)
 		res, err := (&findTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"  "}`)), nil)
+			callWith([]byte(`{"pattern":"  "}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
 	})
@@ -109,7 +109,7 @@ func TestFind(t *testing.T) {
 		mkfile(dir, "a.md", "x")
 
 		res, err := (&findTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"*.rs"}`)), nil)
+			callWith([]byte(`{"pattern":"*.rs"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		assert.Empty(t, textOf(res))
@@ -121,7 +121,7 @@ func TestFind(t *testing.T) {
 			mkfile(dir, "f"+string(rune('a'+i))+".txt", "")
 		}
 		res, err := (&findTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"*.txt"}`)), nil)
+			callWith([]byte(`{"pattern":"*.txt"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.LessOrEqual(t, strings.Count(out, ".txt"), FindResultLimit().Lines)
@@ -130,7 +130,7 @@ func TestFind(t *testing.T) {
 	t.Run("malformed_args_is_error", func(t *testing.T) {
 		_, policy := newSearchEnv(t)
 		res, err := (&findTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`not json`)), nil)
+			callWith([]byte(`not json`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
 	})
@@ -145,7 +145,7 @@ func TestGrep(t *testing.T) {
 		mkfile(dir, "a.txt", "hello world\nfoo bar\n")
 
 		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"world"}`)), nil)
+			callWith([]byte(`{"pattern":"world"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
@@ -156,7 +156,7 @@ func TestGrep(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.txt", "one one two\n")
 		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"one","mode":"count"}`)), nil)
+			callWith([]byte(`{"pattern":"one","mode":"count"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		// the count is matching lines, not occurrences: "one one two\n" matches once
@@ -170,7 +170,7 @@ func TestGrep(t *testing.T) {
 		mkfile(dir, "miss.txt", "nothing")
 
 		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"needle","mode":"files"}`)), nil)
+			callWith([]byte(`{"pattern":"needle","mode":"files"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
@@ -181,7 +181,7 @@ func TestGrep(t *testing.T) {
 	t.Run("invalid_mode_is_error", func(t *testing.T) {
 		_, policy := newSearchEnv(t)
 		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"x","mode":"bogus"}`)), nil)
+			callWith([]byte(`{"pattern":"x","mode":"bogus"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
 	})
@@ -196,7 +196,7 @@ func TestGrep(t *testing.T) {
 			"go-only":  {policy: policy, forceGo: true},
 		} {
 			res, err := tool.Execute(t.Context(),
-				callWith([]byte(`{"pattern":"[unclosed"}`)), nil)
+				callWith([]byte(`{"pattern":"[unclosed"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 			require.NoError(t, err, name)
 			assert.True(t, res.IsError, name)
 			assert.Contains(t, textOf(res), "unclosed", name)
@@ -211,7 +211,7 @@ func TestGrep(t *testing.T) {
 			mkfile(dir, "min.txt", "needle "+strings.Repeat("y", MaxLineRunes+500)+"\n")
 
 			res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
-				callWith([]byte(`{"pattern":"needle"}`)), nil)
+				callWith([]byte(`{"pattern":"needle"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 			require.NoError(t, err)
 			assert.False(t, res.IsError)
 			out := textOf(res)
@@ -233,7 +233,7 @@ func TestGrepFallbackHonoursShapeParams(t *testing.T) {
 	tool := &grepTool{policy: policy, forceGo: true}
 
 	assertGrepResult := func(args string) agent.ToolResult {
-		res, err := tool.Execute(t.Context(), callWith([]byte(args)), nil)
+		res, err := tool.Execute(t.Context(), callWith([]byte(args)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		return res
 	}
@@ -274,7 +274,7 @@ func TestGrepDefaultCapNamed(t *testing.T) {
 		"go-only":  {policy: PathPolicy{Cwd: "."}, forceGo: true},
 	} {
 		res, err := tool.Execute(t.Context(),
-			callWith([]byte(`{"pattern":"func ","glob":"*.go","mode":"files"}`)), nil)
+			callWith([]byte(`{"pattern":"func ","glob":"*.go","mode":"files"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err, name)
 		assert.Contains(t, textOf(res), "result cap of 3 matches reached", name)
 	}
@@ -289,7 +289,7 @@ func TestGrepFallback(t *testing.T) {
 		mkfile(dir, "a.txt", "before\nmatch here\nafter\n")
 
 		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"match","context":1}`)), nil)
+			callWith([]byte(`{"pattern":"match","context":1}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
@@ -305,7 +305,7 @@ func TestGrepFallback(t *testing.T) {
 		mkfile(dir, "alpha.txt", "hit\nhit\n") // two matching lines
 
 		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit","mode":"count"}`)), nil)
+			callWith([]byte(`{"pattern":"hit","mode":"count"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
@@ -325,7 +325,7 @@ func TestGrepFallback(t *testing.T) {
 		}
 
 		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit","limit":5}`)), nil)
+			callWith([]byte(`{"pattern":"hit","limit":5}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
@@ -349,7 +349,7 @@ func TestGrepFallback(t *testing.T) {
 		}
 
 		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), nil)
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
@@ -368,7 +368,7 @@ func TestGrepFallback(t *testing.T) {
 		mkfile(dir, "f01.txt", "hit\nhit\n")
 
 		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), nil)
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Contains(t, out, "f01.txt:2")
@@ -385,7 +385,7 @@ func TestGrepFallback(t *testing.T) {
 		}
 
 		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), nil)
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":5}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
@@ -401,7 +401,7 @@ func TestGrepFallback(t *testing.T) {
 		mkfile(dir, "a.txt", "hit\n")
 
 		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit"}`)), nil)
+			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
 		assert.Contains(t, out, "a.txt:1: hit")
@@ -434,7 +434,7 @@ func TestFindGitRepoUsableNonAsciiPath(t *testing.T) {
 	gitInit(t, dir)
 
 	res, err := (&findTool{policy: policy}).Execute(t.Context(),
-		callWith([]byte(`{"pattern":"caf*.go"}`)), nil)
+		callWith([]byte(`{"pattern":"caf*.go"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 	out := textOf(res)
 
@@ -453,7 +453,7 @@ func TestGrepFallbackSkipsGitIgnored(t *testing.T) {
 	gitInit(t, dir)
 
 	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-		callWith([]byte(`{"pattern":"needle"}`)), nil)
+		callWith([]byte(`{"pattern":"needle"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 	out := textOf(res)
 
@@ -468,7 +468,7 @@ func TestGrepFallbackCrlfStripsTrailingCarriage(t *testing.T) {
 	mkfile(dir, "a.txt", "match here\r\nother line\r\n")
 
 	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-		callWith([]byte(`{"pattern":"match"}`)), nil)
+		callWith([]byte(`{"pattern":"match"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 	assert.False(t, res.IsError)
 	out := textOf(res)
@@ -496,7 +496,7 @@ func TestFindScopedInsideGitRepo(t *testing.T) {
 	nestedRoot := filepath.Join(dir, "root", "nested")
 	policy := PathPolicy{Cwd: nestedRoot}
 	res, err := (&findTool{policy: policy}).Execute(t.Context(),
-		callWith([]byte(`{"pattern":"*.go"}`)), nil)
+		callWith([]byte(`{"pattern":"*.go"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 
 	out := textOf(res)
@@ -515,7 +515,7 @@ func TestGrepFallbackScopedInsideGitRepo(t *testing.T) {
 	nestedRoot := filepath.Join(dir, "root", "nested")
 	policy := PathPolicy{Cwd: nestedRoot}
 	res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
-		callWith([]byte(`{"pattern":"needle"}`)), nil)
+		callWith([]byte(`{"pattern":"needle"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 
 	out := textOf(res)

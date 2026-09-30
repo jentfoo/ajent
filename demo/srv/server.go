@@ -50,10 +50,7 @@ func (s *Server) URL() string { return "http://" + s.ln.Addr().String() }
 
 // Close shuts the server down.
 func (s *Server) Close() error {
-	if s.http != nil {
-		return s.http.Close()
-	}
-	return nil
+	return s.http.Close()
 }
 
 // handleModels reports the single advertised model, either base-URL convention.

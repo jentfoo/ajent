@@ -45,13 +45,14 @@ type toolState struct {
 	disabled map[string]struct{}
 }
 
-// Options configures the manager with adapters from the front end.
+// Options configures the manager with adapters from the front end. Registrar
+// and Notice are required; Status is optional.
 type Options struct {
 	Registrar Registrar
-	Notice    func(msg string, warn bool)
-	Status    func(text, short string) // status segment texts, empty text clears it
-	Restore   []string                 // persisted tools.enabled names to honour on connect
-	Workspace string                   // for re-reading mcp.json on /mcp reload
+	Notice    func(msg string, warn bool) // user-visible notices, prefixed per server
+	Status    func(text, short string)    // status segment texts, empty text clears it
+	Restore   []string                    // persisted tools.enabled names to honour on connect
+	Workspace string                      // for re-reading mcp.json on /mcp reload
 }
 
 // server is one configured server and its live client (nil when disconnected).
@@ -110,9 +111,7 @@ func (m *Manager) newServer(name string, cfg ServerConfig) *server {
 		source: "mcp: " + name,
 		logs:   newRingLog(200),
 		notice: func(msg string, warn bool) {
-			if m.opts.Notice != nil {
-				m.opts.Notice("mcp "+name+": "+msg, warn)
-			}
+			m.opts.Notice("mcp "+name+": "+msg, warn)
 		},
 	}
 }
@@ -418,9 +417,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 		return err
 	}
 	for _, w := range warns {
-		if m.opts.Notice != nil {
-			m.opts.Notice("mcp: "+w, true)
-		}
+		m.opts.Notice("mcp: "+w, true)
 	}
 	cfg := servers // whole map replaces the previous view by name
 
@@ -916,7 +913,7 @@ func (m *Manager) updateStatus() {
 	var active, discovered int
 	for _, name := range names {
 		s := m.serverByName(name)
-		if s == nil || m.opts.Registrar == nil {
+		if s == nil {
 			continue
 		}
 		registered := m.opts.Registrar.AllNames(s.source)

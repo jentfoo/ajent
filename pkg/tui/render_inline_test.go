@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -9,9 +10,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestTermState pins a termState to w x h with the size source wired, as
+// production constructors do. A test simulating a resize updates the pinned
+// size and the size source together via pinSize, mirroring refreshSize.
+func newTestTermState(out io.Writer, w, h int) *termState {
+	t := &termState{out: out, fd: -1}
+	t.pinSize(w, h)
+	return t
+}
+
+// pinSize fixes the terminal size the state reports, keeping the size source
+// and the cached width/height in step.
+func (t *termState) pinSize(w, h int) {
+	t.width, t.height = w, h
+	t.sizeFn = func() (int, int, error) { return w, h, nil }
+}
+
 // newTestInline returns an inline renderer painting into v.
 func newTestInline(v *vt) *inlineRenderer {
-	return &inlineRenderer{t: &termState{out: v, fd: -1, width: v.w, height: v.h}}
+	return newTestInlineAt(v, v.w, v.h)
+}
+
+// newTestInlineAt returns an inline renderer painting into out at w x h, its
+// generation hooks wired as New does.
+func newTestInlineAt(out io.Writer, w, h int) *inlineRenderer {
+	r := &inlineRenderer{t: newTestTermState(out, w, h)}
+	var sig, draw atomic.Uint64
+	r.sigGen, r.drawGen = sig.Load, draw.Load
+	return r
 }
 
 // recWriter captures raw escape bytes so a test can assert on what a renderer
@@ -55,7 +81,7 @@ func TestInlineNeverAbsolute(t *testing.T) {
 
 	for _, width := range []int{25, 80} { // narrow and wide both stay relative
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r := newTestInlineAt(recWriter{&buf}, 40, 12)
 		for range 15 {
 			r.commit([]histLine{{text: "line", flow: flowReflow}})
 		}
@@ -261,7 +287,7 @@ func TestInlineDiff(t *testing.T) {
 	// so the wire bytes for the untouched rows vanish. The cursor walk and the park stay byte-identical to a full redraw.
 	t.Run("skips_unchanged_rows", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r := newTestInlineAt(recWriter{&buf}, 40, 12)
 		rows := []string{"draft text", "mid row", "third row", "status"}
 		r.setLive(rows, 1, 2)
 		require.Contains(t, buf.String(), "draft text")
@@ -281,11 +307,11 @@ func TestInlineDiff(t *testing.T) {
 	// only the width can reflow rows the diff did not write, so a width change redraws the whole block
 	t.Run("falls_back_on_width_change", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r := newTestInlineAt(recWriter{&buf}, 40, 12)
 		r.setLive([]string{"draft text", "ctx"}, 1, 1)
 
 		buf.Reset()
-		r.t.width = 30
+		r.t.pinSize(30, 12)
 		r.setLive([]string{"draft text", "ctx"}, 1, 1)
 		out := buf.String()
 		assert.Contains(t, out, eraseBelow)
@@ -295,7 +321,7 @@ func TestInlineDiff(t *testing.T) {
 	// the single erase-below used to cover a block that grew or shrank, the diff cannot so it falls back
 	t.Run("falls_back_on_row_count_change", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r := newTestInlineAt(recWriter{&buf}, 40, 12)
 		r.setLive([]string{"draft text", "ctx"}, 0, 2)
 
 		buf.Reset()
@@ -316,7 +342,7 @@ func TestInlineCaretMoveErasesOldPaint(t *testing.T) {
 	t.Parallel()
 
 	var buf strings.Builder
-	r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+	r := newTestInlineAt(recWriter{&buf}, 40, 12)
 	rows := []string{"opt one", "opt two", "ctx"}
 	r.setLive(rows, 0, 4) // caret paints row 0
 	buf.Reset()
@@ -361,7 +387,7 @@ func TestInlineReanchor(t *testing.T) {
 
 	t.Run("pads_to_the_bottom_in_newlines", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r := newTestInlineAt(recWriter{&buf}, 80, 24)
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 		buf.Reset()
 
@@ -377,7 +403,7 @@ func TestInlineReanchor(t *testing.T) {
 
 	t.Run("pads_when_stranded_mid_screen", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r := newTestInlineAt(recWriter{&buf}, 80, 24)
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 		buf.Reset()
 
@@ -449,7 +475,7 @@ func TestInlineReanchor(t *testing.T) {
 
 	t.Run("no_pad_when_block_reaches_bottom", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r := newTestInlineAt(recWriter{&buf}, 80, 24)
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 		buf.Reset()
 
@@ -485,7 +511,7 @@ func TestInlineReanchor(t *testing.T) {
 
 	t.Run("no_pad_on_fresh_session", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r := newTestInlineAt(recWriter{&buf}, 80, 24)
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 		buf.Reset()
 
@@ -497,7 +523,7 @@ func TestInlineReanchor(t *testing.T) {
 
 	t.Run("no_pad_when_live_is_empty", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 80, height: 24}}
+		r := newTestInlineAt(recWriter{&buf}, 80, 24)
 		r.reanchor(1, true)
 
 		r.setLive(nil, 0, 0)
@@ -522,7 +548,7 @@ func TestInlineReanchor(t *testing.T) {
 
 	t.Run("commit_clears_the_flag", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 20, height: 8}}
+		r := newTestInlineAt(recWriter{&buf}, 20, 8)
 		r.setLive([]string{"❯ x", "ctx"}, 0, 2)
 		r.reanchor(1, true)
 		buf.Reset()
@@ -535,11 +561,11 @@ func TestInlineReanchor(t *testing.T) {
 
 	t.Run("forces_a_full_draw", func(t *testing.T) {
 		var buf strings.Builder
-		r := &inlineRenderer{t: &termState{out: recWriter{&buf}, fd: -1, width: 40, height: 12}}
+		r := newTestInlineAt(recWriter{&buf}, 40, 12)
 		r.setLive([]string{"draft", "ctx"}, 0, 2)
 		buf.Reset()
 
-		r.t.height = 20 // a height-only change would otherwise take the diff path
+		r.t.pinSize(40, 20) // a height-only change would otherwise take the diff path
 		r.reanchor(1, true)
 		r.setLive([]string{"draft", "ctx"}, 0, 2)
 

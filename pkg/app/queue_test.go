@@ -62,7 +62,7 @@ func TestSteerQueuePending(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, nil)
+	q := newSteerQueue(fake, func(int) {}, func() {})
 
 	assert.Equal(t, 0, q.pending())
 	q.offer(agent.Input{Text: "seed"}, "one", 1) // starts the drain, not queued
@@ -108,7 +108,7 @@ func TestSteerQueueDeliveredEchoesImages(t *testing.T) {
 	require.NoError(t, png.Encode(&pngBuf, image.NewRGBA(image.Rect(0, 0, 4, 4))))
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, func() {})
+	q := newSteerQueue(fake, func(int) {}, func() {})
 
 	in := agent.Input{
 		Text:   "look",
@@ -130,7 +130,7 @@ func TestSteerQueueJoinSplitsProvenance(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, func() {})
+	q := newSteerQueue(fake, func(int) {}, func() {})
 
 	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 	require.True(t, q.offer(agent.Input{Text: "user text"}, "typed", 1))
@@ -155,7 +155,7 @@ func TestSteerQueueJoinChainsAftersPerRun(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, func() {})
+	q := newSteerQueue(fake, func(int) {}, func() {})
 	after := func(text string) func(context.Context) []llm.Message {
 		return func(context.Context) []llm.Message {
 			return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: text}}}}
@@ -212,7 +212,7 @@ func TestSteerQueueJoinPreservesPrepared(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, func() {})
+	q := newSteerQueue(fake, func(int) {}, func() {})
 
 	// every queued item is pump-expanded (Prepared), and the runs must stay so the
 	// append seam never re-expands an annotate-only reference at delivery
@@ -230,7 +230,7 @@ func TestSteerQueueJoinMixedPrepared(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, func() {})
+	q := newSteerQueue(fake, func(int) {}, func() {})
 
 	// a run is prepared only when every item in it is, so raw text still expands
 	q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
@@ -247,7 +247,7 @@ func TestSteerQueueTake(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, nil)
+	q := newSteerQueue(fake, func(int) {}, func() {})
 
 	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 	require.True(t, q.draining)
@@ -268,7 +268,7 @@ func TestSteerQueueStopDrainKeepsItems(t *testing.T) {
 	t.Parallel()
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, nil, nil)
+	q := newSteerQueue(fake, func(int) {}, func() {})
 
 	q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain
 	require.True(t, q.draining)
