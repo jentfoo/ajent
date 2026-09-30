@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -201,6 +202,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				return ag.Steer(in)
 			},
 			MaxConcurrent: set.Settings().Subagent.MaxConcurrent,
+			PollTimeout: subagentPollWait(set, func(msg string) {
+				ui.Notify(msg, tui.LevelWarn)
+			}),
 		})
 		for _, t := range sag.Tools() {
 			// builtin source so /tools sorts the trio up front with core tools
@@ -653,6 +657,21 @@ func resolveSubAgentModel(set *config.Set, reg *llm.Registry, st *agent.State) l
 		}
 	}
 	return st.Model
+}
+
+// subagentPollWait resolves subagent.maxPollWait for the manager's poll
+// timeout; zero falls back to pkg/subagent's built-in default.
+func subagentPollWait(set *config.Set, warn func(string)) time.Duration {
+	raw := set.Settings().Subagent.MaxPollWait
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		warn(fmt.Sprintf("unknown subagent.maxPollWait %q, using the built-in default", raw))
+		return 0
+	}
+	return d
 }
 
 const (

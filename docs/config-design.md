@@ -119,11 +119,19 @@ has no `AJENT_*` binding.
 
 ### Subagent
 
-The `subagent` block ships a compiled-in `maxConcurrent` default; `model` is
-deliberately left out so `Explain` on it reports `(default)` and an empty value
-means inherit the session model. Both keys bind for free through EnvLayer's
-reflection (`AJENT_SUBAGENT_MODEL`, `AJENT_SUBAGENT_MAXCONCURRENT`) and are
-edited from `/settings`. Per `## The rule` below, `subagent.model` is a plain
+The `subagent` block ships compiled-in `maxConcurrent` and `maxPollWait`
+defaults; `model` is deliberately left out so `Explain` on it reports
+`(default)` and an empty value means inherit the session model. All three bind
+for free through EnvLayer's reflection (`AJENT_SUBAGENT_MODEL`,
+`AJENT_SUBAGENT_MAXCONCURRENT`, `AJENT_SUBAGENT_MAXPOLLWAIT`), but only the
+first two are edited from `/settings`. `maxPollWait` is startup-time
+configuration like `agent.maxSteps`: pkg/app builds the sub-agent manager once,
+so a session override could never reach a live poll window. It is a Go duration
+string (`"20m"`, `"90s"`); an unparseable or negative value is a startup
+warning that falls back to the compiled-in default, which twins pkg/subagent's
+`defaultPollTimeout`.
+
+Per `## The rule` below, `subagent.model` is a plain
 string key, resolved against the model registry by the caller, never an llm
 import here.
 

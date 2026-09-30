@@ -144,6 +144,9 @@ func RunHeadless(o HeadlessOptions) int {
 			return ag.Steer(in)
 		},
 		MaxConcurrent: o.Set.Settings().Subagent.MaxConcurrent,
+		PollTimeout: subagentPollWait(o.Set, func(msg string) {
+			notify(msg, agent.LevelWarn)
+		}),
 	})
 	defer sag.Close()
 	for _, t := range sag.Tools() {

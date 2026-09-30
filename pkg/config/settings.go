@@ -82,6 +82,10 @@ type Compaction struct {
 type Subagent struct {
 	Model         string `json:"model,omitempty"` // llm model key, empty inherits the session model
 	MaxConcurrent int    `json:"maxConcurrent,omitempty"`
+	// MaxPollWait is how long one agent_poll blocks before reporting the job
+	// still running: a Go duration string ("20m", "90s"), empty takes the
+	// built-in default. Read once when pkg/app builds the manager.
+	MaxPollWait string `json:"maxPollWait,omitempty"`
 }
 
 // UI configures the terminal surface.
@@ -110,7 +114,8 @@ type Permissions struct {
 // literal rather than struct zero values lets Explain report "(default)" as an
 // ordinary source and mirrors today's constants exactly.
 // Its compaction minSteps/verbatimFraction (2 / 0.1) twin pkg/compact's
-// defaultMinSteps/defaultVerbatimDivisor, and the two must agree.
+// defaultMinSteps/defaultVerbatimDivisor, and the two must agree. The subagent
+// maxPollWait ("10m") likewise twins pkg/subagent's defaultPollTimeout.
 const defaultsJSON = `{
   "reasoning": { "level": "medium", "retain": "wholeTurn" },
   "tools": {
@@ -127,7 +132,7 @@ const defaultsJSON = `{
   },
   "permissions": { "mode": "allow-read" },
   "compaction": { "auto": true, "threshold": 0.8, "minSteps": 2, "verbatimFraction": 0.1 },
-  "subagent": { "maxConcurrent": 8 },
+  "subagent": { "maxConcurrent": 8, "maxPollWait": "10m" },
   "ui": { "render": "auto", "color": "auto", "theme": "dark" }
 }`
 

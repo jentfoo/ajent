@@ -320,9 +320,12 @@ when the child model differs.
 ### Configuration (`pkg/config`)
 
 The `subagent` block lives in `config-design.md`: `model` (empty inherits the
-session model) and `maxConcurrent` (compiled-in default from `pkg/config`), both
-bound for free through env reflection. Here it sizes the manager's semaphore;
-`/settings` edits it.
+session model), `maxConcurrent` and `maxPollWait` (compiled-in defaults from
+`pkg/config`, the latter a Go duration string sizing how long one `agent_poll`
+blocks before reporting still-running), all bound for free through env
+reflection. Here the first two size the manager's semaphore and poll timeout;
+`/settings` edits `model` and `maxConcurrent`, while `maxPollWait` is
+startup-time like `agent.maxSteps` because the manager is built once.
 
 ## Front-end wiring (`pkg/app` / `console.go`)
 

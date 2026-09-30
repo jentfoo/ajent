@@ -358,6 +358,48 @@ func TestResolveSubAgentModel(t *testing.T) {
 	assert.Equal(t, "session", got.ID) // inherited when subagent.model is empty
 }
 
+func TestSubagentPollWait(t *testing.T) {
+	// t.Setenv forbids t.Parallel, and a temp AJENT_HOME hides the real user config layer
+	t.Setenv(config.EnvHome, t.TempDir())
+
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	var warns []string
+	warn := func(msg string) { warns = append(warns, msg) }
+
+	// unset resolves the compiled-in default silently
+	assert.Equal(t, 10*time.Minute, subagentPollWait(set, warn))
+	assert.Empty(t, warns)
+
+	t.Run("empty_takes_builtin", func(t *testing.T) {
+		warns = nil
+		require.NoError(t, set.SetSession("subagent.maxPollWait", ""))
+		assert.Zero(t, subagentPollWait(set, warn)) // manager applies its own default
+		assert.Empty(t, warns)
+	})
+
+	t.Run("parses_duration", func(t *testing.T) {
+		warns = nil
+		require.NoError(t, set.SetSession("subagent.maxPollWait", "20m"))
+		assert.Equal(t, 20*time.Minute, subagentPollWait(set, warn))
+		assert.Empty(t, warns)
+	})
+
+	t.Run("rejects_garbage", func(t *testing.T) {
+		warns = nil
+		require.NoError(t, set.SetSession("subagent.maxPollWait", "soon"))
+		assert.Zero(t, subagentPollWait(set, warn))
+		assert.Len(t, warns, 1)
+	})
+
+	t.Run("rejects_negative", func(t *testing.T) {
+		warns = nil
+		require.NoError(t, set.SetSession("subagent.maxPollWait", "-5m"))
+		assert.Zero(t, subagentPollWait(set, warn))
+		assert.Len(t, warns, 1)
+	})
+}
+
 // TestSubagentSinkTurnEnd pins the TurnEnd release: an aborted turn clears a
 // queued batch's in-flight marks so the next Flush re-offers it, while a clean
 // StopEndTurn leaves them set (no duplicate on a normal turn).
