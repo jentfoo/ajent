@@ -132,6 +132,68 @@ func TestInputBeforeMarkedInjected(t *testing.T) {
 	assert.True(t, gotInjected.Replayed) // the mark survives appendSteer stamping Injected
 }
 
+func TestInputBeforeOnlyFiresDelivery(t *testing.T) {
+	t.Parallel()
+
+	before := []MessageInfo{
+		{Message: llm.Message{Role: llm.RoleUser,
+			Content: llm.BlockList{llm.TextBlock{Text: "User Ran: echo hi"}}}},
+	}
+
+	t.Run("prompt_batch_tail", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		var delivered, settled bool
+		err := a.PromptBatch(t.Context(), []Input{
+			{Text: "go"},
+			{Before: before, Delivered: func() { delivered = true }, Settled: func() { settled = true }},
+		})
+		require.NoError(t, err)
+		assert.True(t, delivered)
+		assert.True(t, settled)
+
+		// the Before lands and no blank user turn rides along for the bare input
+		require.Len(t, a.state.Messages, 3)
+		for _, m := range a.state.Messages {
+			assert.NotEmpty(t, m.Content)
+		}
+	})
+
+	t.Run("steered_midturn", func(t *testing.T) {
+		block := make(chan struct{})
+		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "bash")},
+			{Events: textOnly("done")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "start"}) }()
+		require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+		// wait past the pre-start steer fold so the steer drains at the boundary
+		require.Eventually(t, func() bool { return len(p.Requests()) == 1 }, defaultTimeout, pollInterval)
+
+		var delivered, settled bool
+		assert.True(t, a.Steer(Input{
+			Before:    before,
+			Delivered: func() { delivered = true },
+			Settled:   func() { settled = true },
+		}))
+		close(block)
+		require.NoError(t, <-errCh)
+		assert.True(t, delivered)
+		assert.True(t, settled)
+
+		// echo, tool call, tool result, the Before message, then the reply
+		require.Len(t, a.state.Messages, 5)
+		tb, ok := a.state.Messages[3].Content[0].(llm.TextBlock)
+		require.True(t, ok)
+		assert.Equal(t, "User Ran: echo hi", tb.Text)
+	})
+}
+
 func TestNewOutputForwardsToSink(t *testing.T) {
 	t.Parallel()
 

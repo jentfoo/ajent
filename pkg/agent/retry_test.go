@@ -104,6 +104,32 @@ func TestStreamRetryClosesOpenThinking(t *testing.T) {
 	require.NotEqual(t, -1, endIdx)
 	require.NotEqual(t, -1, noticeIdx)
 	assert.Less(t, endIdx, noticeIdx)
+
+	// a hidden region never reaches the sink, so the retry close must not
+	// leak an EndThinking, the only path that bypassed the Hide gate
+	t.Run("hidden_stays_hidden", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			failTurn(retryableErr(), []llm.Event{
+				{Type: llm.EventThinkingStart, Index: 0},
+				{Type: llm.EventThinkingDelta, Index: 0, Text: "hmm"},
+			}),
+			{Events: textOnly("done")},
+		}}
+		sink := &recordingSink{}
+		a := newTestAgent(&State{
+			Model:     llm.Model{ID: "test"},
+			Reasoning: llm.ReasoningConfig{Hide: true},
+		}, p, sink)
+		noWaitAgent(a)
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+
+		for _, c := range sink.calls {
+			assert.NotEqual(t, "thinking", c)
+			assert.NotEqual(t, "end_thinking", c)
+		}
+		assert.Contains(t, sink.calls, "text") // the retry still streams its answer
+	})
 }
 
 func TestStreamRetryExhausts(t *testing.T) {

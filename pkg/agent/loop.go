@@ -307,8 +307,8 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 		}
 		// extra content rides after the text when both are present (Input contract)
 		blocks = append(blocks, in.Blocks...)
-		if len(blocks) == 0 && in.After == nil {
-			continue // an empty steer would inject a blank user turn
+		if len(blocks) == 0 && len(in.Before) == 0 && in.After == nil {
+			continue // a fully-empty input carries nothing to deliver
 		}
 		if len(blocks) > 0 {
 			a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}, Injected: in.Injected})
@@ -423,7 +423,8 @@ func (a *Agent) streamOnce(ctx context.Context, sink Sink, provider llm.Provider
 	for ev, ok := st.Next(); ok; ev, ok = st.Next() {
 		switch ev.Type {
 		case llm.EventThinkingStart:
-			open.thinking = true
+			// hidden reasoning never reaches the sink, so it is not an open block
+			open.thinking = !a.state.Reasoning.Hide
 		case llm.EventThinkingEnd:
 			open.thinking = false
 		case llm.EventTextStart:
