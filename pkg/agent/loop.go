@@ -544,6 +544,14 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 		// so anything launched here (permission prefetch) stops with the turn.
 		fn(ctx, ordered)
 	}
+	// no tool set: the parallel gate would dereference it, answer via runTool
+	if a.opts.Tools == nil {
+		out := make([]llm.ToolResultBlock, len(ordered))
+		for i, c := range ordered {
+			out[i], _ = a.runTool(ctx, sink, c)
+		}
+		return out, false
+	}
 	parallel := a.state.Model.Caps.ParallelTools && allParallel(a.opts.Tools, calls)
 	if s, ok := a.opts.Tools.(Serializer); ok && parallel {
 		// block-all asks even read-only tools, their dialogs must open in submission

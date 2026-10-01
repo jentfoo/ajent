@@ -334,6 +334,34 @@ func TestLoopToolFailureContinues(t *testing.T) {
 			assert.Equal(t, tc.recovery, tb2.Text)
 		})
 	}
+
+	// a tool_use batch with no tools at all must answer every call, not panic
+	// in the parallel gate that dereferences the nil set
+	t.Run("no_tools", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: append(threeToolCalls(), doneEvent())},
+			{Events: textOnly("ok")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.state.Model.Caps.ParallelTools = true // the nil set must not reach the gate
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+
+		var results []llm.ToolResultBlock
+		for _, blk := range a.state.Messages[2].Content {
+			if tr, ok := blk.(llm.ToolResultBlock); ok {
+				results = append(results, tr)
+			}
+		}
+		require.Len(t, results, 3)
+		for i, tr := range results {
+			assert.True(t, tr.IsError)
+			assert.Equal(t, string(rune('1'+i)), tr.CallID) // call order preserved
+			tb, ok := tr.Content[0].(llm.TextBlock)
+			require.True(t, ok)
+			assert.Equal(t, "no tools configured", tb.Text)
+		}
+	})
 }
 
 func TestLoopMalformedArgsFailsCall(t *testing.T) {
