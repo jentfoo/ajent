@@ -595,7 +595,7 @@ func (m *Manager) publishStatus() {
 	if queued > 0 {
 		_, _ = fmt.Fprintf(&b, ", %d queued", queued)
 	}
-	if oldest > 0 {
+	if running > 0 && oldest > 0 { // age note only while something is actively running
 		_, _ = fmt.Fprintf(&b, " (oldest %s)", strutil.Elapsed(oldest))
 	}
 	if done > 0 {
