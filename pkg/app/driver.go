@@ -432,6 +432,15 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		rec.discardStaged = stager.Discard
 	}
 	pump := make(chan pumpLine, 16)
+	// send queues a line for the pump. The pump is never closed: runPump exits via
+	// appRoot, so the arm drops the line once shutdown cancels it instead of blocking
+	// on a full channel no one drains.
+	send := func(line pumpLine) {
+		select {
+		case pump <- line:
+		case <-appRoot.Done():
+		}
+	}
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		started: &started, quit: quit, permit: barrier,
@@ -566,7 +575,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		initial := strings.Join(args, " ")
 		hist.AppendHidden(initial) // durable in the workspace store yet excluded from ↑/↓ and Ctrl+R
 		// echo and accounting happen in the pump like every other prompt.
-		pump <- pumpLine{kind: command.KindPrompt, rest: initial, injected: true}
+		send(pumpLine{kind: command.KindPrompt, rest: initial, injected: true})
 	}
 
 	// teardown runs on the way out of a quit the user just asked for, so the two
@@ -605,8 +614,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		select {
 		case msg, ok := <-ui.Messages():
 			if !ok {
-				close(pump)
-				return finish(rec) // UI closed
+				return finish(rec) // UI closed; runPump exits via appRoot
 			}
 			line := command.ParseLine(msg)
 			var blocks []llm.Block
@@ -629,15 +637,14 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			case command.KindShell:
 				stager.Run(line.Rest, line.Excluded)
 			case command.KindCommand:
-				pump <- pumpLine{kind: command.KindCommand, rest: line.Rest}
+				send(pumpLine{kind: command.KindCommand, rest: line.Rest})
 			default:
 				// arm the handoff here, where the line certainly left the editor: the
 				// async edit notification cannot re-arm after the pump resolves it
 				gate.submitted()
-				pump <- pumpLine{kind: command.KindPrompt, rest: line.Rest, blocks: blocks}
+				send(pumpLine{kind: command.KindPrompt, rest: line.Rest, blocks: blocks})
 			}
 		case <-quit:
-			close(pump)
 			return finish(rec)
 		}
 	}

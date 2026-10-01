@@ -45,69 +45,79 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 	push()
 }
 
+// runPump serves submitted lines until ctx (appRoot) is canceled. The pump
+// channel is never closed, so senders never race a close.
 func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
-	for line := range pump {
-		switch line.kind {
-		case command.KindCommand:
-			name, arg, ok := command.SplitCommand(line.rest)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case line, ok := <-pump:
 			if !ok {
-				console.Notify("unknown command /"+line.rest, tui.LevelWarn)
-				continue
+				return
 			}
-			// MCP servers load eagerly so the pre-first-prompt /tools picker and /mcp
-			// list already show them, and LoadOnFirstMessage is idempotent (runs once).
-			if console.mcp.m != nil && (name == "tools" || name == "mcp") {
-				console.mcp.LoadOnFirstMessage(ctx)
-			}
-			cmd, ok := console.commands.Get(name)
-			if !ok {
-				console.Notify("unknown command /"+name, tui.LevelWarn)
-				continue
-			}
-			_ = cmd.Handler(ctx, arg, console)
-		case command.KindPrompt:
-			if line.input == nil && strings.TrimSpace(line.rest) == "" && len(line.blocks) == 0 {
-				continue
-			}
-			// connect every MCP server in full, once, so its tools exist before this
-			// (the first) turn is assembled, and /tools or /mcp changes made up to now hold
-			if console.mcp.m != nil {
-				console.mcp.LoadOnFirstMessage(ctx)
-			}
-			// flush staged shell results ahead of the message, waiting for any
-			// in-flight command to finish first
-			before := stager.Flush(ctx)
+			switch line.kind {
+			case command.KindCommand:
+				name, arg, ok := command.SplitCommand(line.rest)
+				if !ok {
+					console.Notify("unknown command /"+line.rest, tui.LevelWarn)
+					continue
+				}
+				// MCP servers load eagerly so the pre-first-prompt /tools picker and /mcp
+				// list already show them, and LoadOnFirstMessage is idempotent (runs once).
+				if console.mcp.m != nil && (name == "tools" || name == "mcp") {
+					console.mcp.LoadOnFirstMessage(ctx)
+				}
+				cmd, ok := console.commands.Get(name)
+				if !ok {
+					console.Notify("unknown command /"+name, tui.LevelWarn)
+					continue
+				}
+				_ = cmd.Handler(ctx, arg, console)
+			case command.KindPrompt:
+				if line.input == nil && strings.TrimSpace(line.rest) == "" && len(line.blocks) == 0 {
+					continue
+				}
+				// connect every MCP server in full, once, so its tools exist before this
+				// (the first) turn is assembled, and /tools or /mcp changes made up to now hold
+				if console.mcp.m != nil {
+					console.mcp.LoadOnFirstMessage(ctx)
+				}
+				// flush staged shell results ahead of the message, waiting for any
+				// in-flight command to finish first
+				before := stager.Flush(ctx)
 
-			in, echo, pending := promptInput(line, before, expander, func(n string) {
-				console.Notify(n, tui.LevelWarn)
-			})
-			est := submitEstimate(in, pending)
-			if q.offer(in, echo, est) {
+				in, echo, pending := promptInput(line, before, expander, func(n string) {
+					console.Notify(n, tui.LevelWarn)
+				})
+				est := submitEstimate(in, pending)
+				if q.offer(in, echo, est) {
+					if gate != nil {
+						gate.taken() // queued: pending() releases the hold, no handoff left to wait for
+					}
+					continue // queued as a dimmed row, the echo lands at delivery
+				}
+				// only reached with no drain running, so a workflow may branch here
+				if hooks.beforePrompt != nil {
+					if wrapped, ok := hooks.beforePrompt(ctx, in); ok {
+						in = wrapped
+						est = submitEstimate(in, pending)
+					}
+				}
+				if echo != "" {
+					ui.UserEcho(echo)
+				}
+				if imgs := tuisink.Images(line.blocks); len(imgs) > 0 {
+					ui.UserImages(imgs)
+				}
+				seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
+				submitPrompt(st, editSinks, est, pushContext)
+				in.Settled = settled
 				if gate != nil {
-					gate.taken() // queued: pending() releases the hold, no handoff left to wait for
+					gate.taken() // the submitted line starts its own turn, no handoff to wait for
 				}
-				continue // queued as a dimmed row, the echo lands at delivery
+				startDrain(ctx, ui, recording, ag, q, []agent.Input{in}, started, hooks)
 			}
-			// only reached with no drain running, so a workflow may branch here
-			if hooks.beforePrompt != nil {
-				if wrapped, ok := hooks.beforePrompt(ctx, in); ok {
-					in = wrapped
-					est = submitEstimate(in, pending)
-				}
-			}
-			if echo != "" {
-				ui.UserEcho(echo)
-			}
-			if imgs := tuisink.Images(line.blocks); len(imgs) > 0 {
-				ui.UserImages(imgs)
-			}
-			seedToolsOnce.Do(func() { st.Tokens.SetBase(ag.BaseEstimate(true)); pushContext() })
-			submitPrompt(st, editSinks, est, pushContext)
-			in.Settled = settled
-			if gate != nil {
-				gate.taken() // the submitted line starts its own turn, no handoff to wait for
-			}
-			startDrain(ctx, ui, recording, ag, q, []agent.Input{in}, started, hooks)
 		}
 	}
 }

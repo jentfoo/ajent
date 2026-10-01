@@ -139,6 +139,32 @@ func TestInitControllerStart(t *testing.T) {
 		assert.NotEmpty(t, spawned) // abort stops these by id, never StopAll
 	})
 
+	t.Run("quit_mid_poll_never_panics", func(t *testing.T) {
+		h := newInitHarness(t)
+		h.hold()
+		root, cancel := context.WithCancel(t.Context())
+		h.ctl.start(root)
+		h.awaitPolling(t)
+
+		// the Ctrl+D path quits without aborting the survey
+		cancel()
+		close(h.held) // release the poll; the survey unwinds on cancellation
+		require.Eventually(t, func() bool { return !h.ctl.running() }, 5*time.Second, time.Millisecond)
+		assert.Empty(t, h.pump) // a cancelled survey never reaches the model
+	})
+
+	t.Run("submit_drops_after_shutdown", func(t *testing.T) {
+		h := newInitHarness(t)
+		for i := 0; i < cap(h.pump); i++ { // fill so a naive send would block forever
+			h.pump <- pumpLine{kind: command.KindCommand, rest: "filler"}
+		}
+		root, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		require.NotPanics(t, func() { h.ctl.submit(root, agent.Input{Text: "late result"}) })
+		assert.Len(t, h.pump, cap(h.pump)) // the late survey result never joined
+	})
+
 	t.Run("nil_controller_never_aborts", func(t *testing.T) {
 		var ctl *initController
 		assert.False(t, ctl.abort())

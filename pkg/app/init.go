@@ -77,6 +77,9 @@ func (c *initController) start(ctx context.Context) {
 		c.deps.notify("init refused: press Esc to stop the turn first", tui.LevelWarn)
 		return
 	}
+	// captured before WithCancel: an abort must not silence the handoff, only
+	// shutdown (root undone) may
+	root := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	c.mu.Lock()
 	if c.cancel != nil {
@@ -97,13 +100,22 @@ func (c *initController) start(ctx context.Context) {
 		case err != nil:
 			c.deps.notify("init: "+err.Error(), tui.LevelWarn)
 		default:
-			// the label is what a queued row shows and what Esc recovers into the
-			// editor. Re-submitting it simply runs /init again.
-			c.deps.pump <- pumpLine{
-				kind: command.KindPrompt, rest: "/init", input: &in, onTurn: c.armWatch,
-			}
+			c.submit(root, in)
 		}
 	}()
+}
+
+// submit hands the finished survey to the pump as an ordinary turn, dropping it
+// once root is canceled (pump shutdown).
+func (c *initController) submit(root context.Context, in agent.Input) {
+	// the label is what a queued row shows and what Esc recovers into the
+	// editor. Re-submitting it simply runs /init again.
+	select {
+	case c.deps.pump <- pumpLine{
+		kind: command.KindPrompt, rest: "/init", input: &in, onTurn: c.armWatch,
+	}:
+	case <-root.Done():
+	}
 }
 
 // abort ends a running survey and stops the children it spawned, reporting
