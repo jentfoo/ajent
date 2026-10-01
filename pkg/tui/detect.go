@@ -26,9 +26,7 @@ func (u *UI) DetectTone() Tone {
 		return ToneUnknown
 	}
 
-	u.mu.Lock()
-	u.render.query(backgroundQuery + attrsQuery)
-	u.mu.Unlock()
+	u.queryTone()
 
 	expired := make(chan struct{})
 	deadline := u.afterSafe(toneQueryTimeout, func() { close(expired) })
@@ -47,6 +45,16 @@ func (u *UI) DetectTone() Tone {
 			return ToneUnknown
 		}
 	}
+}
+
+// queryTone writes the tone probes. Scoped here because the reply arrives on
+// reader.colors, so holding mu across DetectTone's wait would stall the UI for
+// the whole probe timeout.
+func (u *UI) queryTone() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	u.render.query(backgroundQuery + attrsQuery)
 }
 
 // toneFromEnv classifies COLORFGBG ("fg;bg" or "fg;default;bg"), which several

@@ -283,13 +283,25 @@ func New(opts Options) (*UI, error) {
 // guard wraps fn so a panic restores the terminal before it unwinds.
 func (u *UI) guard(fn func()) func() {
 	return func() {
-		defer func() {
-			if p := recover(); p != nil {
-				u.Close()
-				panic(p)
-			}
-		}()
+		defer u.recoverClosed()
 		fn()
+	}
+}
+
+// guardArg is guard for a one-argument callback, such as a ToolStart done hook
+// a caller runs on its own goroutine.
+func guardArg[A any](u *UI, fn func(A)) func(A) {
+	return func(a A) {
+		defer u.recoverClosed()
+		fn(a)
+	}
+}
+
+// recoverClosed recovers a panic after restoring the terminal, then re-raises it.
+func (u *UI) recoverClosed() {
+	if p := recover(); p != nil {
+		u.Close()
+		panic(p)
 	}
 }
 
@@ -834,6 +846,8 @@ func (u *UI) Diff(path, before, after string) {
 // be empty when output was already streamed.
 func (u *UI) ToolStart(id, name, label string) func(result string) {
 	u.mu.Lock()
+	defer u.mu.Unlock()
+
 	label = sanitizeRow(label) // feeds the committed header, since name is short and trusted
 	u.runLocked(id).name = name
 	u.gap()
@@ -841,9 +855,8 @@ func (u *UI) ToolStart(id, name, label string) func(result string) {
 	u.spinner = 0
 	u.syncSpinnerLocked()
 	u.repaint()
-	u.mu.Unlock()
 
-	return func(result string) {
+	return guardArg(u, func(result string) {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 
@@ -863,7 +876,7 @@ func (u *UI) ToolStart(id, name, label string) func(result string) {
 		// a busy turn keeps its glyph animated, tool color comes from syncSpinnerLocked
 		u.syncSpinnerLocked()
 		u.repaint()
-	}
+	})
 }
 
 // Busy makes the status-bar glyph animate for as long as a turn is in flight, so
@@ -871,13 +884,14 @@ func (u *UI) ToolStart(id, name, label string) func(result string) {
 // function returns it to its static resting frame.
 func (u *UI) Busy() func() {
 	u.mu.Lock()
+	defer u.mu.Unlock()
+
 	u.busy = true
 	u.spinner = 0
 	u.syncSpinnerLocked()
 	u.repaint()
-	u.mu.Unlock()
 
-	return func() {
+	return u.guard(func() {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		if !u.busy {
@@ -886,7 +900,7 @@ func (u *UI) Busy() func() {
 		u.busy = false
 		u.syncSpinnerLocked()
 		u.repaint()
-	}
+	})
 }
 
 // writeMarkdown renders and commits complete markdown blocks. Caller holds the lock.

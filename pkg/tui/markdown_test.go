@@ -52,6 +52,8 @@ func TestRenderMarkdown(t *testing.T) {
 		{"blocks_separated", "one\n\ntwo", "one\n\ntwo\n"},
 		{"bullet_list", "- a\n- b", "• a\n• b\n"},
 		{"ordered_list_start", "3. a\n4. b", "3. a\n4. b\n"},
+		{"ordered_list_pads_past_nine", "1. a\n2. b\n3. c\n4. d\n5. e\n6. f\n7. g\n8. h\n9. i\n10. j",
+			"1.  a\n2.  b\n3.  c\n4.  d\n5.  e\n6.  f\n7.  g\n8.  h\n9.  i\n10. j\n"},
 		{"nested_list_indent", "- a\n  - b", "• a\n  • b\n"},
 		{"task_list", "- [x] done\n- [ ] open", "• [x] done\n• [ ] open\n"},
 		{"blockquote", "> quoted", "▏ quoted\n"},
@@ -427,6 +429,21 @@ func TestRuleCharSingleColumn(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, 1, displayWidth(ruleChar))
+}
+
+func TestOrderedListMarkerAlignment(t *testing.T) {
+	t.Parallel()
+
+	plain := NewTheme(ColorNone, DefaultPalette())
+
+	t.Run("nested_indent_uses_widest_marker", func(t *testing.T) {
+		// nested content under item 1 indents to the "10." column, not the "1." one
+		src := "1. first\n   - sub\n2. b\n3. c\n4. d\n5. e\n6. f\n7. g\n8. h\n9. i\n10. j"
+		lines := renderMarkdown(plain, 60, src)
+		require.Greater(t, len(lines), 1)
+		assert.Equal(t, "1.  first", lines[0].text)
+		assert.Equal(t, "    "+bulletMarker+"sub", lines[1].text)
+	})
 }
 
 func TestMarkdownGlyphWidths(t *testing.T) {

@@ -3,7 +3,6 @@ package tui
 import (
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
@@ -33,8 +32,7 @@ type outputHead struct {
 	buf   lineBuffer // whole lines only, never splits an escape sequence
 	shown int        // head lines already committed
 	lines int        // lines seen in total
-	chars int        // runes seen past the head, for the summary count
-	bytes int        // bytes seen past the head, for a live activity row
+	bytes int        // hidden line content bytes (newlines excluded), summary and activity row
 	full  bool       // show every line, no collapse or summary
 }
 
@@ -61,7 +59,6 @@ func (h *outputHead) commit(whole string) string {
 			b.WriteByte('\n')
 			h.shown++
 		} else {
-			h.chars += utf8.RuneCountInString(ln)
 			h.bytes += len(ln)
 		}
 	}
@@ -75,7 +72,7 @@ func (h *outputHead) hidden() int { return max(0, h.lines-h.shown) }
 // summary returns the collapse line for whatever was hidden, "" when nothing.
 func (h *outputHead) summary() string {
 	if n := h.hidden(); n > 0 {
-		return "… +" + strconv.Itoa(n) + " lines, " + strutil.FormatTokens(h.chars) + " chars"
+		return "… +" + strconv.Itoa(n) + " lines, " + strutil.HumanSize(int64(h.bytes))
 	}
 	return ""
 }

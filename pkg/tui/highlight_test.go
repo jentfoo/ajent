@@ -130,6 +130,41 @@ func TestHighlight(t *testing.T) {
 	})
 }
 
+func TestSplitStyledLines(t *testing.T) {
+	t.Parallel()
+
+	red := csi + "31m"
+
+	t.Run("final_row_closes_style", func(t *testing.T) {
+		// chroma makes no promise of a trailing reset, and inline mode emits rows raw
+		rows := splitStyledLines(red + "x := 1")
+		require.Len(t, rows, 1)
+		assert.True(t, strings.HasSuffix(rows[0], sgrReset), rows[0])
+	})
+
+	t.Run("intermediate_rows_keep_their_style", func(t *testing.T) {
+		rows := splitStyledLines(red + "one\ntwo")
+		require.Len(t, rows, 2)
+		assert.True(t, strings.HasSuffix(rows[0], sgrReset), rows[0])
+		assert.True(t, strings.HasPrefix(rows[1], red), rows[1])
+		assert.True(t, strings.HasSuffix(rows[1], sgrReset), rows[1])
+	})
+
+	t.Run("trailing_break_no_empty_row", func(t *testing.T) {
+		assert.Equal(t, []string{"a"}, splitStyledLines("a\n"))
+	})
+
+	t.Run("trailing_break_open_style_no_artifact_row", func(t *testing.T) {
+		// the reopened style on a dropped tail must not become a styles-only row
+		rows := splitStyledLines(red + "a\n")
+		assert.Equal(t, []string{red + "a" + sgrReset}, rows)
+	})
+
+	t.Run("empty_input_no_rows", func(t *testing.T) {
+		assert.Nil(t, splitStyledLines(""))
+	})
+}
+
 // hasEmptySpan reports a style opened and closed with no text between it, the
 // artifact a colored whitespace or newline token leaves behind.
 func hasEmptySpan(row string) bool {

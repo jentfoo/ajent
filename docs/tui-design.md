@@ -490,10 +490,21 @@ for what happened and avoids duplicating the dialog's prompt-and-label echo.
 A lone `Esc` is indistinguishable from the start of a longer escape sequence
 until more bytes arrive or enough time passes, so it is held for a short timeout
 before being reported. Without that there is no cancel key at all. The timer is
-not armed while an in-progress paste sits in the buffer (a paste body can
-legitimately stall mid-arrival); when it does fire on a truncated sequence the
-whole remaining buffer is dropped rather than re-decoded as runes, so only a
-genuine lone `Esc` is reported.
+armed whenever the buffer starts with `Esc`, including a sequence still
+mid-delivery. That placement is deliberate: waiting indefinitely for an
+incomplete CSI or OSC would let a stalled `ESC [` absorb every later keystroke
+as parameter bytes, silently swallowing keys. The timeout drop at worst resyncs
+into one visible stray rune. The cost is that a real sequence split across two
+reads farther apart than the timeout loses its head, which only a terminal
+already broken past input decoding produces. The timer is not armed while an
+in-progress paste sits in the buffer, since a paste body can legitimately stall
+mid-arrival. When it does fire on a truncated sequence the whole remaining
+buffer is dropped rather than re-decoded as runes, so only a genuine lone `Esc`
+is reported.
+
+`ESC <byte>` with an unrecognized second byte consumes the `Esc` alone so the
+second byte decodes on its own: Alt+printable lands as a plain rune, and
+Esc-then-letter does not eat the first typed character.
 
 A closed input stream emits no editing keystroke; only the literal EOF byte
 decodes to an end-of-file key, so an external EOF never races with typed text or
@@ -563,9 +574,11 @@ Tool output reaches history through one mechanism shared by streamed `bash`
 output and a finished tool's `Display`, so both render identically instead of
 one flooding scrollback while the other shows nothing. An `outputHead` commits
 only the first few whole lines (the head); everything past it is counted, not
-shown, and collapses into one dim indented summary row naming the elided size at
-call end. The head uses a `lineBuffer`, so an escape sequence or partial line is
-never split across the boundary.
+shown, and collapses into one dim indented summary row naming the elided line
+count and byte size at call end. Sizes go through `strutil.HumanSize`, never
+`strutil.FormatTokens`, for the same reason the activity rows do: a size on a
+collapse row must not read as a token count. The head uses a `lineBuffer`, so
+an escape sequence or partial line is never split across the boundary.
 
 - **Streaming** (`UI.Output`) feeds the head incrementally; while more than the
   head is pending it also refreshes a transient keyed activity row (keyed by the
@@ -658,7 +671,7 @@ Supported elements:
 | Paragraph | unwrapped, soft breaks become spaces so it reflows |
 | Fenced / indented code | indented, dim language label, syntax highlighted where the palette and colour depth allow, otherwise the flat code style |
 | Blockquote | a narrow prefix, dim italic body |
-| List | bulleted or ordered, nested by indent, tight and loose |
+| List | bulleted or ordered, nested by indent, tight and loose. Ordered markers pad to the widest numeral so the column stays aligned past 9 |
 | Task list | checked/unchecked checkboxes |
 | Thematic break | rule drawn to the width in force, one column short of the edge |
 | GFM table | our own layout: cells wrapped to their column, rows separated, re-laid out at each width (alt mode) and terminal-reflowed (inline) |
@@ -702,6 +715,9 @@ tracks the theme rather than fighting it. The rules that must hold:
   `splitStyledLines` closes and reopens the active SGR at every line break: a
   token spanning lines (a raw string, a block comment) must not leave a row
   without its own styling, and a newline must never sit inside a styled span.
+  The last row closes the style as well, since chroma does not promise a
+  trailing reset and an open SGR would bleed color into whatever follows the
+  block.
 - **Token backgrounds and the style's base foreground are stripped**
   (`stripDefaults`). A block carries no shade of its own, so a token background
   reads as a stray band; and dropping the base foreground leaves punctuation and

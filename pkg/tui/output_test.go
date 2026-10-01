@@ -26,13 +26,14 @@ func TestOutputHead(t *testing.T) {
 		var h outputHead
 		var out strings.Builder
 		for i := 1; i <= 12; i++ {
-			out.WriteString(h.add("0123456789\n")) // 10 ascii runes each past the head
+			out.WriteString(h.add("0123456789\n")) // 10 bytes each past the head
 		}
 		assert.Equal(t, "0123456789\n0123456789\n0123456789\n0123456789\n"+
 			"0123456789\n0123456789\n0123456789\n0123456789\n"+
 			"0123456789\n0123456789\n", out.String())
 		assert.Equal(t, 2, h.hidden())
-		assert.Contains(t, h.summary(), "+2 lines")
+		// bytes, never a token-style count: a size on the collapse row must not read as tokens
+		assert.Equal(t, "… +2 lines, 20b", h.summary())
 	})
 
 	t.Run("partial_line_flush", func(t *testing.T) {

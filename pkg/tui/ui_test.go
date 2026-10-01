@@ -918,6 +918,31 @@ func TestAfterSafePanicRestoresTerminal(t *testing.T) {
 	assert.True(t, u.closed) // Close ran before the re-panic unwound
 }
 
+// boomCommit forces the commit path to fail, so a panic can be raised inside a
+// u.mu-locked region.
+type boomCommit struct{ renderer }
+
+func (boomCommit) commit([]histLine) { panic("boom") }
+
+func TestUIToolStartDonePanicRestoresTerminal(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(40, 10)
+	u := newTestUI(t, v, strings.NewReader(""))
+	done := u.ToolStart("c1", "bash", "bash: x")
+
+	u.mu.Lock()
+	u.render = boomCommit{u.render}
+	u.mu.Unlock()
+
+	// the done hook runs on a caller goroutine: its panic must restore the
+	// terminal and not deadlock on a held lock
+	require.PanicsWithValue(t, "boom", func() { done("line\n") })
+	assert.True(t, u.closed)       // Close ran before the re-panic unwound
+	assert.True(t, u.mu.TryLock()) // the deferred unlock released mu, a held lock would fail fast
+	u.mu.Unlock()
+}
+
 func TestUIReadLines(t *testing.T) {
 	t.Parallel()
 

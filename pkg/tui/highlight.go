@@ -80,7 +80,16 @@ func splitStyledLines(s string) []string {
 			text = text[i+1:]
 		}
 	}
-	return append(out, b.String())
+	// close any open style on the final row, and emit no row for a trailing break
+	tail := b.String()
+	trailing := len(out) > 0 && tail == active // only the reopened style: nothing to show
+	if tail != "" && !trailing {
+		if active != "" {
+			tail += sgrReset // an open SGR would bleed into whatever follows the block
+		}
+		out = append(out, tail)
+	}
+	return out
 }
 
 // formatterFor returns the chroma formatter for the profile, nil below Color256.

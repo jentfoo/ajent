@@ -184,6 +184,12 @@ func (r mdRenderer) list(l *ast.List, src []byte) string {
 	if num == 0 {
 		num = 1
 	}
+	// pad every marker to the widest one so the numeral column stays aligned once
+	// the count crosses into double digits
+	markerW := displayWidth(bulletMarker)
+	if l.IsOrdered() {
+		markerW = displayWidth(strconv.Itoa(num+l.ChildCount()-1) + ". ")
+	}
 	var items []string
 	for c := l.FirstChild(); c != nil; c = c.NextSibling() {
 		marker := bulletMarker
@@ -192,7 +198,8 @@ func (r mdRenderer) list(l *ast.List, src []byte) string {
 			num++
 		}
 		body := strings.Join(r.blockTexts(c, src), sep)
-		indent := strings.Repeat(" ", displayWidth(marker))
+		indent := strings.Repeat(" ", markerW)
+		marker += strings.Repeat(" ", markerW-displayWidth(marker))
 		items = append(items, indentLines(body, r.theme.Accent.Wrap(marker), indent))
 	}
 	return strings.Join(items, sep)

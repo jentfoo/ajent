@@ -191,7 +191,8 @@ func decodeEscape(b []byte, pasteFrom int) (key, int, bool) {
 	case 0x7f:
 		return key{typ: keyKillWord}, 2, true
 	default:
-		return key{typ: keyIgnore}, 2, true
+		// unrecognized prefix: drop the Esc, decode the second byte on its own
+		return key{typ: keyIgnore}, 1, true
 	}
 }
 

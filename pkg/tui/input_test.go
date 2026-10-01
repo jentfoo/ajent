@@ -74,7 +74,7 @@ func TestDecodeKey(t *testing.T) {
 		{"alt_b_word_left", "\x1bb", key{typ: keyWordLeft}, 2},
 		{"alt_f_word_right", "\x1bf", key{typ: keyWordRight}, 2},
 		{"alt_backspace", "\x1b\x7f", key{typ: keyKillWord}, 2},
-		{"unknown_escape", "\x1bZ", key{typ: keyIgnore}, 2},
+		{"unknown_escape_consumes_esc_only", "\x1bZ", key{typ: keyIgnore}, 1},
 		{"unknown_csi", "\x1b[9Z", key{typ: keyIgnore}, 4},
 		{"cursor_report", "\x1b[12;40R", key{typ: keyCursorReport, row: 12}, 8},
 		{"malformed_report", "\x1b[;R", key{typ: keyIgnore}, 4},
@@ -363,6 +363,18 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, key{typ: keyRune, text: "x"}, <-r.keys)
 		require.NoError(t, pw.Close())
 	})
+
+	t.Run("alt_printable_lands_as_rune", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
+
+		// Meta held while typing: the Esc is dropped and the letter still arrives
+		_, err := io.WriteString(pw, "\x1bj")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyRune, text: "j"}, <-r.keys)
+		require.NoError(t, pw.Close())
+	})
 }
 
 func TestCSIModifier(t *testing.T) {
@@ -412,6 +424,7 @@ func TestDecodeKeyResync(t *testing.T) {
 	}{
 		{"esc_aborts_partial_csi", "\x1b[1;5\x1b[A", []keyType{keyIgnore, keyUp}},
 		{"esc_aborts_partial_ss3", "\x1bO\x1b[C", []keyType{keyIgnore, keyRight}},
+		{"alt_letter_falls_through", "\x1bzx", []keyType{keyIgnore, keyRune, keyRune}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
