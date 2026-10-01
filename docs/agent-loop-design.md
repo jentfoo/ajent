@@ -237,7 +237,16 @@ Interruption is cancellation, not draining:
 - Tools receive the cancelled turn context; a tool that observes cancellation
   (e.g. `bash`) records its partial output as an **error result** marked
   `interrupted by user`, appended in call order. `abortResults` keeps those real
-results over the synthetic ones it fills in for calls that never returned.
+  results over the synthetic ones it fills in for calls that never returned.
+  A tool that only propagates the cancellation error gets the same marker: when
+  the turn context is cancelled and the tool's error is `context.Canceled`,
+  `runTool` fills the empty error content with `interrupted by user` instead of
+  the raw transport text.
+- **Abort stops the batch.** Both dispatch paths check the turn context before
+  each launch, so a cancelled batch never starts new calls — parallel and serial
+  behave the same. Calls already running run to completion (a goroutine cannot
+  be killed); their results stand over synthetic fills, and `dispatch` returns
+  only once every launched call has finished.
 - Step- and overflow-boundary compaction runs under the turn's own context, so
   an interrupt aborts it. Turn-boundary compaction keeps the outer context.
 - On abort the partial assistant message from the Accumulator is still appended,

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"runtime"
@@ -566,6 +567,9 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 		sem := make(chan struct{}, runtime.NumCPU())
 		var wg sync.WaitGroup
 		for i, c := range calls {
+			if ctx.Err() != nil {
+				break // a cancelled batch leaves the rest unanswered, abort fills them
+			}
 			wg.Add(1)
 			go func(i int, c llm.ToolCallBlock) {
 				defer wg.Done()
@@ -616,12 +620,17 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 	}
 	// an erroring tool with empty content still hands the model something to see
 	if res.IsError && err != nil {
+		fill := err.Error()
+		if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+			// a tool that only propagates the abort reads as the interrupt, not transport noise
+			fill = InterruptedText
+		}
 		switch {
 		case len(res.Content) == 0:
-			res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
+			res.Content = llm.BlockList{llm.TextBlock{Text: fill}}
 		case len(res.Content) == 1:
 			if tb, ok := res.Content[0].(llm.TextBlock); ok && tb.Text == "" {
-				tb.Text = err.Error()
+				tb.Text = fill
 				res.Content[0] = tb
 			}
 		}
