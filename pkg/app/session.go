@@ -113,10 +113,13 @@ func CheckSessionTarget(mode ResumeMode, target string) error {
 	return nil
 }
 
-func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string) *sessRec {
+// newSession opens the run's transcript. A returned error is an open failure
+// the caller must surface, never a fall-back-to-fresh signal; implicit modes
+// that legitimately start fresh return a writer with a nil error.
+func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string) (*sessRec, error) {
 	store, err := session.NewStore()
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	cwd := config.Cwd()
 	var pick func([]session.Info) (int, error)
@@ -125,9 +128,9 @@ func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string) *sessRec {
 	}
 	w, err := openSession(store, mode, cwd, target, modelKey, pick)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return &sessRec{store: store, w: w, rec: session.NewRecorder(w)}
+	return &sessRec{store: store, w: w, rec: session.NewRecorder(w)}, nil
 }
 
 func openSession(store *session.Store, mode ResumeMode, cwd string, target, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, error) {

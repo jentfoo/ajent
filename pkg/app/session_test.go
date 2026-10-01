@@ -61,9 +61,6 @@ func readEntriesRewind(t *testing.T, p string) []session.Entry {
 	return e
 }
 
-// TestRewindStateRebuild drives a transcript, rewinds onto an earlier message,
-// and verifies the rebuilt agent state carries exactly that branch's context.
-// This is the heart of "double-Esc opens the context tree".
 func TestRewindStateRebuild(t *testing.T) {
 	t.Parallel()
 

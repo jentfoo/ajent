@@ -66,7 +66,17 @@ func RunHeadless(o HeadlessOptions) int {
 	}
 
 	// recording keeps -p composable: a follow-up --continue rejoins this transcript
-	rec := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key())
+	rec, serr := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key())
+	if serr != nil && o.SessMode != ResumeNewSession {
+		// an explicit resume target that cannot open must not silently start fresh
+		_, _ = fmt.Fprintf(errw, "ajent: session: %v\n", serr)
+		return ExitUsage
+	}
+	if serr != nil {
+		// a fresh start that cannot record still runs: a one-shot is unattended,
+		// and persistence failures degrade to "not recorded", never fail the run
+		notify("session: "+serr.Error(), agent.LevelWarn)
+	}
 	if rec == nil {
 		notify("session recording disabled", agent.LevelWarn)
 	}
@@ -125,6 +135,11 @@ func RunHeadless(o HeadlessOptions) int {
 		if st.Model.ID != "" {
 			o.Reg.SetActive(st.Model) // the branch may name a model resolveActiveModel never saw
 		}
+	}
+	if stats != nil {
+		// a resumed ledger already carries prior spend, so fix the baseline before
+		// the first turn and the summary reports only this invocation's work
+		stats.baseline(st.Tokens)
 	}
 
 	var ag *agent.Agent

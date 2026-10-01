@@ -36,6 +36,43 @@ func TestStatsSinkCounts(t *testing.T) {
 	assert.InDelta(t, 2.0, got.Seconds, 0.001)
 }
 
+func TestStatsSinkBaseline(t *testing.T) {
+	t.Parallel()
+
+	key := "p/m"
+	m := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+	acct := tokens.New(m)
+
+	s := newStatsSink()
+
+	t.Run("no_baseline_reports_full_ledger", func(t *testing.T) {
+		// RecordSpend mirrors the resume rebuild, which folds prior turns in with counts
+		acct.RecordSpend(key, llm.Usage{Input: 100, Output: 10})
+		acct.RecordSpend(key, llm.Usage{Input: 30, Output: 5})
+
+		got := s.collect(acct, time.Second)
+		assert.Equal(t, 2, got.Turns)
+		assert.Equal(t, llm.Usage{Input: 130, Output: 15}, got.Usage)
+	})
+
+	t.Run("baseline_subtracts_resumed_totals", func(t *testing.T) {
+		s.baseline(acct) // a resume restored 2 turns / 130 in / 15 out
+
+		acct.RecordSpend(key, llm.Usage{Input: 200, Output: 20})
+		got := s.collect(acct, time.Second)
+		assert.Equal(t, 1, got.Turns)
+		assert.Equal(t, llm.Usage{Input: 200, Output: 20}, got.Usage)
+		assert.Equal(t, map[string]llm.Usage{key: {Input: 200, Output: 20}}, got.ByModel)
+	})
+
+	t.Run("untouched_models_drop_out", func(t *testing.T) {
+		s.baseline(acct)
+
+		got := s.collect(acct, time.Second)
+		assert.Empty(t, got.ByModel) // the resumed model did no work this run
+	})
+}
+
 func TestThousands(t *testing.T) {
 	t.Parallel()
 
@@ -123,6 +160,33 @@ func usageTextTurn(in, out int, text string) []llm.Event {
 }
 
 func TestStatsBenchmarkDataPath(t *testing.T) {
+	t.Run("resumed_summary_reports_this_run_only", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("AJENT_HOME", t.TempDir())
+
+		code, _, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "first", Output: OutputJSON, Stats: true}, "",
+			[]llm.ScriptedTurn{{Events: usageTextTurn(1000, 100, "one")}})
+		require.Equal(t, ExitOK, code)
+
+		_, out, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "second", Output: OutputJSON, Stats: true, SessMode: ResumeContinue}, "",
+			[]llm.ScriptedTurn{{Events: usageTextTurn(2000, 50, "two")}})
+
+		var summary map[string]any
+		for _, l := range decodeLines(t, out) {
+			if l["type"] == "summary" {
+				summary = l
+			}
+		}
+		require.NotNil(t, summary)
+		assert.Equal(t, 1, jsonInt(t, summary, "turns")) // this run's turn, not the branch's 2
+		usage, ok := summary["usage"].(map[string]any)
+		require.True(t, ok)
+		assert.EqualValues(t, 2000, usage["input"]) // not 1000 restored + 2000 this run
+		assert.EqualValues(t, 50, usage["output"])
+	})
+
 	find := func(lines []map[string]any, typ string) []map[string]any {
 		var out []map[string]any
 		for _, l := range lines {

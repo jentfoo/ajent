@@ -23,10 +23,21 @@ type statsSink struct {
 	mu     sync.Mutex
 	calls  map[string]int
 	failed map[string]int
+	// base is the resumed ledger's pre-run totals, subtracted in collect so the
+	// summary reports only this invocation's work
+	base statsBaseline
 }
 
 func newStatsSink() *statsSink {
 	return &statsSink{calls: make(map[string]int), failed: make(map[string]int)}
+}
+
+// baseline records the ledger's totals before the run's first turn, so collect
+// can subtract what a resume restored. Safe to skip: the zero value subtracts nothing.
+func (s *statsSink) baseline(acct *tokens.Accounting) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.base = newStatsBaseline(acct)
 }
 
 // ToolStart records the call, returning the hook that records how it ended.
@@ -55,10 +66,11 @@ type sessionStats struct {
 	ByModel map[string]llm.Usage `json:"byModel,omitempty"`
 }
 
-// collect snapshots the run's totals. The token side is already tallied by the
-// accounting ledger, so this only reads it.
+// collect snapshots the run's totals: tool counts from the sink, spend and
+// turns from the ledger minus the baseline a resume restored.
 func (s *statsSink) collect(acct *tokens.Accounting, elapsed time.Duration) sessionStats {
 	s.mu.Lock()
+	base := s.base
 	st := sessionStats{
 		Seconds: elapsed.Round(time.Millisecond).Seconds(),
 		Calls:   maps.Clone(s.calls),
@@ -66,10 +78,49 @@ func (s *statsSink) collect(acct *tokens.Accounting, elapsed time.Duration) sess
 	}
 	s.mu.Unlock()
 
-	st.Turns = acct.TurnsCount()
-	st.Usage = acct.Total()
-	st.ByModel = acct.ByModel()
+	st.Turns = acct.TurnsCount() - base.turns
+	st.Usage = usageDelta(acct.Total(), base.usage)
+	st.ByModel = usageByModelDelta(acct.ByModel(), base.byModel)
 	return st
+}
+
+// statsBaseline captures a resumed ledger's totals before the run's first turn.
+type statsBaseline struct {
+	turns   int
+	usage   llm.Usage
+	byModel map[string]llm.Usage
+}
+
+func newStatsBaseline(acct *tokens.Accounting) statsBaseline {
+	var b statsBaseline
+	b.turns = acct.TurnsCount()
+	b.usage = acct.Total()
+	b.byModel = acct.ByModel()
+	return b
+}
+
+// usageDelta subtracts base term-wise, floored at zero since ledger terms only grow.
+func usageDelta(cur, base llm.Usage) llm.Usage {
+	return llm.Usage{
+		Input:      max(0, cur.Input-base.Input),
+		Output:     max(0, cur.Output-base.Output),
+		CacheRead:  max(0, cur.CacheRead-base.CacheRead),
+		CacheWrite: max(0, cur.CacheWrite-base.CacheWrite),
+		Reasoning:  max(0, cur.Reasoning-base.Reasoning),
+	}
+}
+
+// usageByModelDelta subtracts base per model key, dropping keys with nothing
+// left so a model this run never used stays out of the summary.
+func usageByModelDelta(cur, base map[string]llm.Usage) map[string]llm.Usage {
+	out := make(map[string]llm.Usage, len(cur))
+	for k, u := range cur {
+		d := usageDelta(u, base[k])
+		if d != (llm.Usage{}) {
+			out[k] = d
+		}
+	}
+	return out
 }
 
 // writeStats renders the summary as prose, one prefixed line at a time, so a

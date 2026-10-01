@@ -180,7 +180,9 @@ func headlessHarness(t *testing.T, o HeadlessOptions, projectCfg string, turns [
 	t.Helper()
 
 	t.Chdir(t.TempDir())
-	t.Setenv("AJENT_HOME", t.TempDir())
+	if os.Getenv("AJENT_HOME") == "" { // a test may pre-set it to break the session store
+		t.Setenv("AJENT_HOME", t.TempDir())
+	}
 	if projectCfg != "" {
 		require.NoError(t, os.MkdirAll(".ajent", 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(".ajent", "config.json"), []byte(projectCfg), 0o600))
@@ -210,6 +212,26 @@ func loadTestConfig(t *testing.T) *config.Set {
 }
 
 func TestRunHeadless(t *testing.T) {
+	t.Run("fresh_store_failure_degrades_to_no_recording", func(t *testing.T) {
+		// sessions exists as a file, so store.Create cannot make a transcript
+		home := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(home, "sessions"), nil, 0o644))
+		t.Setenv("AJENT_HOME", home)
+
+		code, out, errw := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText}, "",
+			[]llm.ScriptedTurn{{Events: textTurn("all done")}})
+		assert.Equal(t, ExitOK, code) // an unattended run still answers
+		assert.Equal(t, "all done\n", out)
+		assert.Contains(t, errw, "session recording disabled")
+	})
+
+	t.Run("explicit_target_failure_exits_usage", func(t *testing.T) {
+		code, _, errw := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, SessMode: ResumeID, SessTarget: "nope"}, "", nil)
+		assert.Equal(t, ExitUsage, code)
+		assert.Contains(t, errw, "ajent: session:")
+	})
+
 	t.Run("text_answer_exits_zero", func(t *testing.T) {
 		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("all done")}})

@@ -51,9 +51,15 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	if active.ID != "" {
 		modelKey = active.Key() // a modelless start stays unstamped, "/" would warn on resume
 	}
-	rec := newSession(ui, sessMode, sessTarget, modelKey)
+	rec, serr := newSession(ui, sessMode, sessTarget, modelKey)
 	if rec == nil {
-		ui.Notify("session recording disabled; Esc will not rewind", tui.LevelWarn)
+		msg := "session recording disabled; Esc will not rewind"
+		if serr != nil {
+			// an explicit resume target that cannot open must not read as a
+			// routine no-recording run
+			msg = "session open failed: " + serr.Error() + "; recording disabled, Esc will not rewind"
+		}
+		ui.Notify(msg, tui.LevelWarn)
 	}
 
 	sink := tuisink.New(ui)
