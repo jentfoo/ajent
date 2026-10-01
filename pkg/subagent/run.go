@@ -52,6 +52,8 @@ func gitInWorkTree(ctx context.Context, cwd string) bool {
 func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 	model := m.model() // resolved at spawn so /settings applies to the next job
 	ledger := j.tokens // child ledger created at Start, reused here and by poll payloads
+	// Child() pins the parent's model; rebase so window/reserve follow the child's own
+	ledger.SetWindow(model)
 
 	sink := newChildSink(j.id, j.num, func(key, text string, rank int) {
 		if fn := m.opts.Activity; fn != nil {

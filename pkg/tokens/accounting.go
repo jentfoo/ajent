@@ -54,9 +54,9 @@ func (a *Accounting) SetModel(m llm.Model) {
 }
 
 // SetWindow rebases the ledger onto m's window and reserve, keeping every context
-// term. Unlike SetModel it does not drop them: it is for a rebuild that resolved
-// no model of its own, where the live model is the right frame for context the
-// rebuild has already measured.
+// term. Unlike SetModel it does not drop them: it fits a rebuild that resolved no
+// model of its own, or a child ledger whose model resolves after Child() pinned
+// the parent's.
 func (a *Accounting) SetWindow(m llm.Model) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

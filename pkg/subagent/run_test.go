@@ -13,6 +13,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 func TestEmptySummary(t *testing.T) {
@@ -117,11 +118,13 @@ func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 func TestRunInheritsModel(t *testing.T) {
 	t.Parallel()
 
-	_, sp := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
+	child := llm.Model{Provider: "test", ID: "child-model", ContextWindow: 8000}
+	_, sp := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{Input: 100, Output: 10})}})
 	p := func(llm.Model) (llm.Provider, error) { return sp, nil }
 	m := New(wired(Options{
 		Provider: p,
-		Model:    func() llm.Model { return llm.Model{ID: "child-model"} },
+		Model:    func() llm.Model { return child },
+		Parent:   func() *tokens.Accounting { return tokens.New(llm.Model{ContextWindow: 200000}) },
 	}))
 	t.Cleanup(m.Close)
 
@@ -130,6 +133,15 @@ func TestRunInheritsModel(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(sp.Requests()) > 0 }, time.Second, 5*time.Millisecond)
 	assert.Equal(t, "child-model", sp.Requests()[0].Model.ID)
+
+	// the ledger is pinned to the parent's model at Child(); run must rebase it so
+	// window/reserve follow the child's own model
+	lj, ok := m.lookup(id)
+	require.True(t, ok)
+	c := lj.tokens.Context()
+	assert.Equal(t, child.ContextWindow, c.Window)
+	assert.Equal(t, child.Reserve(), c.Reserve)
+	assert.Equal(t, tokens.CompactAt(child), c.Compact)
 }
 
 func TestGitInWorkTree(t *testing.T) {
