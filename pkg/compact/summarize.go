@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/go-analyze/bulk"
@@ -182,8 +183,9 @@ func buildPrompt(v *branchView, start, end int, prev, instructions string, stubs
 
 // serialise flattens message entries to a text transcript the summariser reads as
 // data rather than a live thread, substituting any stub for its result. Thinking
-// is left out entirely and tool output is clipped to clip runes (0 for no clip).
-// User and assistant prose is never clipped, being the semantic payload.
+// is left out entirely and tool output is clipped to clip runes (math.MaxInt
+// for no clip). User and assistant prose is never clipped, being the semantic
+// payload.
 func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[string]session.Stub, clip int) {
 	for i := start; i < end; i++ {
 		md, ok := v.message(i)
@@ -195,7 +197,7 @@ func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[stri
 		case llm.RoleUser:
 			for _, blk := range m.Content {
 				if tr, ok := blk.(llm.ToolResultBlock); ok {
-					_, _ = fmt.Fprintf(b, "[Tool result]: %s\n", clipTo(stubbedText(tr, stubs), clip))
+					_, _ = fmt.Fprintf(b, "[Tool result]: %s\n", strutil.Clip(stubbedText(tr, stubs), clip))
 				}
 			}
 			if t := userPlain(m); t != "" {
@@ -209,7 +211,7 @@ func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[stri
 						b.WriteString("[Assistant]: " + c.Text + "\n")
 					}
 				case llm.ToolCallBlock:
-					_, _ = fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, clipTo(string(c.Input), capCallInput(clip)))
+					_, _ = fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, strutil.Clip(string(c.Input), capCallInput(clip)))
 				}
 			}
 		default:
@@ -229,23 +231,15 @@ func stubbedText(tr llm.ToolResultBlock, stubs map[string]session.Stub) string {
 	return text
 }
 
-// clipLadder is tried in order until the transcript fits the model window. Zero
-// keeps tool output whole, which is the normal outcome: serialisation already
-// compresses a branch several-fold before any clipping.
-var clipLadder = []int{0, 8192, 4096, 2048, 1024, 512}
-
-// clipTo truncates to n runes, or returns s whole when n is not positive.
-func clipTo(s string, n int) string {
-	if n <= 0 {
-		return s
-	}
-	return strutil.Clip(s, n)
-}
+// clipLadder is tried in order until the transcript fits the model window.
+// MaxInt keeps tool output whole, which is the normal outcome: serialisation
+// already compresses a branch several-fold before any clipping.
+var clipLadder = []int{math.MaxInt, 8192, 4096, 2048, 1024, 512}
 
 // capCallInput bounds a tool call's JSON input, which is argument shape rather
 // than output and never needs the full allowance.
 func capCallInput(clip int) int {
-	if clip <= 0 || clip > 512 {
+	if clip > 512 {
 		return 512
 	}
 	return clip

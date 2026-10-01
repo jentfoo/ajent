@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -169,4 +170,7 @@ func TestDisplayOf(t *testing.T) {
 		llm.ImageBlock{MediaType: "image/png", Data: []byte("12345")},
 	}}
 	assert.Equal(t, "chart follows [image 5b]", displayOf(res))
+
+	long := Result{Blocks: []llm.Block{llm.TextBlock{Text: strings.Repeat("x", 2000)}}}
+	assert.Len(t, []rune(displayOf(long)), 1000) // the ellipsis sits inside the cap
 }

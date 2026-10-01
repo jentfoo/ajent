@@ -30,27 +30,37 @@ func FormatTokens(n int) string {
 	}
 }
 
-// Clip returns s truncated to at most n runes, appending an ellipsis when cut.
+// Clip returns s truncated to at most n runes total: when s is cut, the
+// last rune of the budget becomes an ellipsis. Returns s whole when s fits,
+// and "" when n <= 0.
 func Clip(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	r := []rune(s)
 	if len(r) <= n {
 		return s
 	}
-	return string(r[:n]) + "…"
+	if n == 1 {
+		return "…"
+	}
+	return string(r[:n-1]) + "…"
 }
 
 // HumanSize abbreviates a byte count as 259b, 3.5kb or 1.2mb: binary units,
-// one decimal place, trailing .0 dropped.
+// one decimal place, trailing .0 dropped. Units switch on the rounded value, so
+// a quantity never renders as 1024kb (which equals 1mb).
 func HumanSize(n int64) string {
 	const (
 		kb = 1024.0
 		mb = 1024.0 * 1024.0
 	)
+	f := float64(n)
 	switch {
-	case float64(n) >= mb:
-		return trimZero(strconv.FormatFloat(float64(n)/mb, 'f', 1, 64)) + "mb"
-	case float64(n) >= kb:
-		return trimZero(strconv.FormatFloat(float64(n)/kb, 'f', 1, 64)) + "kb"
+	case f >= mb || f/kb >= kb-0.05: // a half-step below 1mb rounds up to 1024kb
+		return trimZero(strconv.FormatFloat(f/mb, 'f', 1, 64)) + "mb"
+	case f >= kb:
+		return trimZero(strconv.FormatFloat(f/kb, 'f', 1, 64)) + "kb"
 	default:
 		return strconv.FormatInt(n, 10) + "b"
 	}

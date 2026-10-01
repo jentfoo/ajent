@@ -171,6 +171,12 @@ func TestFailedStub(t *testing.T) {
 			Content: llm.BlockList{llm.TextBlock{Text: strings.Repeat("e", 200)}}}
 		assert.Less(t, len([]rune(failedStub("bash", tr))), 120)
 	})
+
+	t.Run("clip_respects_the_80_rune_cap", func(t *testing.T) {
+		tr := llm.ToolResultBlock{CallID: "c1", IsError: true,
+			Content: llm.BlockList{llm.TextBlock{Text: strings.Repeat("e", 200)}}}
+		assert.Len(t, []rune(failedStub("bash", tr)), len("[tool bash failed: ")+80+len("]"))
+	})
 }
 
 func TestSpanStubsScale(t *testing.T) {

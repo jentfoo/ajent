@@ -656,7 +656,7 @@ func shortLabel(text string) string {
 	if len([]rune(line)) <= maxLabelLen {
 		return line
 	}
-	return strutil.Clip(line, maxLabelLen-1) // the ellipsis takes one rune of the budget
+	return strutil.Clip(line, maxLabelLen)
 }
 
 // normalizeID accepts sub-2 or bare 2.

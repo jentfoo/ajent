@@ -73,9 +73,12 @@ func TestClip(t *testing.T) {
 		want string
 	}{
 		{"", 4, ""},
-		{"abcde", 5, "abcde"},      // at the limit: unchanged
-		{"abcdef", 4, "abcd…"},     // cut appends an ellipsis rune
-		{"héllo wörld", 3, "hél…"}, // truncates on a rune boundary
+		{"abcde", 5, "abcde"},     // at the limit: unchanged
+		{"abcdef", 4, "abc…"},     // cut: the ellipsis fills the last rune of the budget
+		{"héllo wörld", 3, "hé…"}, // truncates on a rune boundary
+		{"abcdef", 1, "…"},        // a one-rune budget holds only the ellipsis
+		{"abcdef", 0, ""},         // zero width clips to nothing
+		{"abcdef", -1, ""},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, Clip(tc.in, tc.n))
@@ -109,6 +112,10 @@ func TestHumanSize(t *testing.T) {
 		{259, "259b"},
 		{3686, "3.6kb"},
 		{1024 * 1200, "1.2mb"},
+		{1024*1024 - 512, "1023.5kb"}, // just below 1mb stays in kb
+		{1048524, "1023.9kb"},         // last value whose kb rendering stays under 1024
+		{1048575, "1mb"},              // a kb rendering of 1024kb becomes 1mb
+		{1024 * 1024, "1mb"},
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, HumanSize(tc.in))

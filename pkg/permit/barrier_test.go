@@ -1222,6 +1222,11 @@ func TestClassifySubject(t *testing.T) {
 		assert.Equal(t, "mcp__x", s.Name)
 		assert.False(t, s.AllowWrite) // the workspace rules are shell-only
 	})
+
+	t.Run("args_respect_the_500_rune_cap", func(t *testing.T) {
+		s := classifySubject(ModeAuto, call("mcp__x", `{"a":"`+strings.Repeat("x", 600)+`"}`))
+		assert.Len(t, []rune(s.Args), maxClassifierArgs)
+	})
 }
 
 func TestCycleAdvancesModesInOrder(t *testing.T) {
