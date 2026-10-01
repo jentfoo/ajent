@@ -89,6 +89,26 @@ func app1Jpeg(src []byte, payloads ...[]byte) []byte {
 	return out.Bytes()
 }
 
+// inflatedCount returns a valid exif payload with the IFD count field raised
+// past the entries the block actually holds.
+func inflatedCount(bo binary.ByteOrder, orient uint16) []byte {
+	p := exifPayload(bo, orient)
+	bo.PutUint16(p[14:16], 0xffff) // the count sits at TIFF offset 8
+	return p
+}
+
+// overrunPayload builds an "Exif\0\0" APP1 payload claiming 0xffff IFD
+// entries while only tail bytes follow the first, non-orientation entry: a
+// parser that trusts the count must slice past the end of the block.
+func overrunPayload(tail int) []byte {
+	p := []byte("Exif\x00\x00")
+	p = append(p, 'M', 'M', 0x00, 0x2a, 0x00, 0x00, 0x00, 0x08)
+	p = append(p, 0xff, 0xff)
+	p = append(p, 0x01, 0x0e, 0x00, 0x03) // ImageDescription, not the orientation tag
+	p = append(p, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00)
+	return append(p, make([]byte, tail)...)
+}
+
 func putU16(buf *bytes.Buffer, bo binary.ByteOrder, v uint16) {
 	var b [2]byte
 	bo.PutUint16(b[:], v)
@@ -322,20 +342,45 @@ func TestPrepareAppliesExifOrientation(t *testing.T) {
 	}
 	t.Parallel()
 
-	// a wide jpeg tagged rotate-90: after orientation the honest source size
-	// swaps axes, and the re-encoded result reflects the rotated bounds.
-	src := exifJpeg(t, jpegBytes(t, solid(2600, 300), 95), 8) // 8 = rotate 90 ccw
-	res, err := Prepare(src)
-	require.NoError(t, err)
-	assert.NotEmpty(t, res.MediaType)
-	// oriented source is 300 wide x 2000 tall, the shrink keeps that aspect
-	assert.LessOrEqual(t, res.Width, MaxPixels)
-	assert.LessOrEqual(t, res.Height, MaxPixels)
-	assert.InDelta(t,
-		float64(300)/float64(2600), float64(res.SrcWidth)/float64(res.SrcHeight), 0.01)
+	t.Run("rotates_and_swaps_source", func(t *testing.T) {
+		// a wide jpeg tagged rotate-90: after orientation the honest source
+		// size swaps axes, and the re-encoded result reflects the rotated bounds.
+		src := exifJpeg(t, jpegBytes(t, solid(2600, 300), 95), 8) // 8 = rotate 90 ccw
+		res, err := Prepare(src)
+		require.NoError(t, err)
+		assert.NotEmpty(t, res.MediaType)
+		// oriented source is 300 wide x 2000 tall, the shrink keeps that aspect
+		assert.LessOrEqual(t, res.Width, MaxPixels)
+		assert.LessOrEqual(t, res.Height, MaxPixels)
+		assert.InDelta(t,
+			float64(300)/float64(2600), float64(res.SrcWidth)/float64(res.SrcHeight), 0.01)
 
-	// the raw tag read itself must surface rotate-90 and refuse nonsense
-	assert.Equal(t, orientationRotate90, jpegOrientation(src))
+		// the raw tag read itself must surface rotate-90 and refuse nonsense
+		assert.Equal(t, orientationRotate90, jpegOrientation(src))
+	})
+
+	t.Run("malformed_exif_still_fits", func(t *testing.T) {
+		// an oversized jpeg wearing a crafted EXIF block: the count claims far
+		// more entries than the payload holds, which must not panic the fitter
+		src := app1Jpeg(jpegBytes(t, solid(2600, 300), 95), overrunPayload(10))
+		res, err := Prepare(src)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, res.Width, MaxPixels)
+		assert.LessOrEqual(t, res.Height, MaxPixels)
+		// the unreadable orientation must leave the honest source size unswapped
+		assert.Equal(t, 2600, res.SrcWidth)
+		assert.Equal(t, 300, res.SrcHeight)
+	})
+
+	t.Run("malformed_exif_to_png", func(t *testing.T) {
+		src := app1Jpeg(jpegBytes(t, solid(8, 6), 80), overrunPayload(10))
+		b, ok := ToPNG(src)
+		require.True(t, ok)
+		m, err := png.Decode(bytes.NewReader(b))
+		require.NoError(t, err)
+		assert.Equal(t, 8, m.Bounds().Dx())
+		assert.Equal(t, 6, m.Bounds().Dy())
+	})
 }
 
 func TestJPEGOrientation(t *testing.T) {
@@ -361,11 +406,28 @@ func TestJPEGOrientation(t *testing.T) {
 		{"orientation_out_of_range", app1Jpeg(fake, exifPayload(binary.LittleEndian, 9)), 0},
 		{"ifd_outside_block", app1Jpeg(fake, append(exifPayload(binary.LittleEndian, 1)[:8], 0xff, 0xff, 0xff, 0xff, 0x00, 0x01)), 0},
 		{"segment_size_overrun", []byte{0xff, 0xd8, 0xff, 0xe1, 0xff, 0xff, 'E', 'x', 'i', 'f'}, 0},
+		{"inflated_count_valid_tag", app1Jpeg(fake, inflatedCount(binary.LittleEndian, orientationRotate90)), orientationRotate90},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			assert.Equal(t, c.want, jpegOrientation(c.data))
 		})
 	}
+
+	// every truncation of a valid payload must return without panicking
+	t.Run("truncated_payload_sweep", func(t *testing.T) {
+		payload := exifPayload(binary.LittleEndian, orientationRotate90)
+		for i := range payload {
+			jpegOrientation(app1Jpeg(fake, payload[:i]))
+		}
+	})
+
+	// an inflated count with only a few trailing bytes once sliced past the
+	// block end; every tail width down to the panic window must fail softly
+	t.Run("count_overrun_sweep", func(t *testing.T) {
+		for tail := range 32 {
+			jpegOrientation(app1Jpeg(fake, overrunPayload(tail)))
+		}
+	})
 }
 
 func TestFixOrientation(t *testing.T) {

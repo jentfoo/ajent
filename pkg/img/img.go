@@ -216,11 +216,11 @@ func exifOrientation(p []byte) (int, bool) {
 	}
 
 	count := int(bo.Uint16(tiff[off : off+2]))
-	for n := range count { // each IFD entry is a fixed twelve bytes
+	// each IFD entry is a fixed twelve bytes; a crafted or truncated count can
+	// claim more entries than the block holds, so clamp before slicing
+	count = min(count, (len(tiff)-(off+2))/12)
+	for n := range count {
 		e := tiff[off+2+n*12:]
-		if len(e) < 10 {
-			return 0, false
-		}
 		if bo.Uint16(e[:2]) != orientationTag {
 			continue
 		}
