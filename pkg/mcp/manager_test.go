@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -536,6 +538,61 @@ func TestFailedDialReconnects(t *testing.T) {
 		require.Never(t, func() bool {
 			return s.client() != nil || len(fr.AllNames("mcp: fake")) > 0
 		}, 1500*time.Millisecond, 25*time.Millisecond)
+	})
+
+	// a superseded loop generation must exit on wake without dialing: a disconnect
+	// clears down underneath a loop parked in backoff, so a failed dial after it
+	// spawns a second loop and only the newest generation may keep retrying
+	t.Run("superseded_loop_exits", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: "unused"}, // the dial seam below fails first
+		}, wired(Options{Registrar: fr}))
+		t.Cleanup(mgr.Close)
+
+		var dials atomic.Int32
+		mgr.connectClient = func(context.Context, string, ServerConfig) (*Client, error) {
+			dials.Add(1)
+			return nil, errors.New("unreachable")
+		}
+		s := mgr.serverByName("fake")
+		s.mu.Lock()
+		s.down = true
+		s.loopSeq = 1
+		s.mu.Unlock()
+		go mgr.reconnectLoop(s, 1)
+
+		s.mu.Lock() // a newer loop claims the server before the parked one wakes
+		s.loopSeq = 2
+		s.mu.Unlock()
+		require.Never(t, func() bool { return dials.Load() > 0 },
+			2*time.Second, 25*time.Millisecond)
+	})
+
+	// the full interleaving that once stacked loops: disconnect lands between two
+	// failed dials, parking the first loop while down is clear, and the second
+	// failure spawns a replacement. Only one backoff chain may dial from there.
+	t.Run("disconnect_between_failed_dials_keeps_one_loop", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: "unused"},
+		}, wired(Options{Registrar: fr}))
+		t.Cleanup(mgr.Close)
+
+		var dials atomic.Int32
+		mgr.connectClient = func(context.Context, string, ServerConfig) (*Client, error) {
+			dials.Add(1)
+			return nil, errors.New("unreachable")
+		}
+
+		require.Error(t, mgr.Connect(t.Context(), "fake")) // starts the first loop
+		mgr.Disconnect("fake")                             // parks it with down cleared
+		require.Error(t, mgr.Connect(t.Context(), "fake")) // spawns the replacement
+
+		// one loop dials at its 1s wake; a duplicate would push the count past the
+		// two user dials plus that single retry before the 2s second attempt
+		require.Never(t, func() bool { return dials.Load() > 3 },
+			2500*time.Millisecond, 25*time.Millisecond)
 	})
 }
 

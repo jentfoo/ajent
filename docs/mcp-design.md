@@ -242,6 +242,13 @@ Network servers never do (see above). The initialize handshake is bounded too
 surfaces as a connect error instead of holding the single-flight slot and every
 waiter behind it forever.
 
+Each reconnect loop is stamped with a per-server generation (`server.loopSeq`,
+bumped at every spawn, by a death as well as `retryDial`). A disconnect clears
+`down` underneath a loop parked in backoff, so the `down` check cannot see it
+and a later failed dial would otherwise spawn a second chain alongside it; a
+loop that wakes to find itself superseded exits without dialing, so at most one
+backoff chain retries a server at any time.
+
 ## Registry integration (`pkg/tools/registry.go`)
 
 MCP mutates the registry from notification goroutines while the loop reads it,

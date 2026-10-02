@@ -67,6 +67,7 @@ type server struct {
 	failures      int           // consecutive connect failures, for backoff and notices
 	down          bool          // a reconnect loop is active, suppresses the already-connected check
 	discSeq       int           // bumped by each explicit disconnect, stale snapshots abort in-flight dials
+	loopSeq       int           // bumped per reconnect-loop spawn, so a newer loop supersedes a parked older one
 	reopenKeep    *toolState    // live split captured at death, restored on reconnect
 	rediscovering bool          // a list_changed re-discovery is in flight, coalesces bursts
 	connecting    bool          // a connect attempt is in flight (single-flight)
@@ -895,23 +896,29 @@ func (m *Manager) reconnect(s *server) {
 	s.down = true
 	s.failures = 1
 	s.c = nil
+	s.loopSeq++ // a death supersedes any parked loop from an earlier failed first dial
+	gen := s.loopSeq
 	s.mu.Unlock()
 	_ = c.Close() // sweep the dead child's process group
 	m.opts.Registrar.Unregister(s.source)
 	m.updateStatus() // a dead server's tools drop out of the ratio while it is down
 	s.note("server exited; reconnecting", true)
-	m.reconnectLoop(s)
+	m.reconnectLoop(s, gen)
 }
 
 // reconnectLoop retries a down server with capped exponential backoff until it is
 // back, the manager closes, or a manual connect, disconnect or reload removal
-// resolves it.
-func (m *Manager) reconnectLoop(s *server) {
+// resolves it. gen is the loopSeq value captured when this loop was spawned: once
+// a newer loop exists this one exits rather than double-dialing alongside it.
+func (m *Manager) reconnectLoop(s *server, gen int) {
 	for attempt := 2; ; attempt++ {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-time.After(reconnectDelay(attempt - 1)):
+		}
+		if s.loopSuperseded(gen) {
+			return
 		}
 		// pin intent before the settled check, so a disconnect racing past it cannot
 		// be reverted by this loop's own dial
@@ -925,13 +932,17 @@ func (m *Manager) reconnectLoop(s *server) {
 		if err := m.connectSince(m.ctx, s.name, s, disc); err == nil {
 			return // connect re-registered tools and started a fresh watcher
 		}
+		if s.loopSuperseded(gen) { // a spawn landed while this loop was dialing
+			return
+		}
 	}
 }
 
 // retryDial starts the reconnect loop for a stdio server whose dial failed, so
 // one that is offline or not yet installed comes up on its own. Skipped when the
 // failure came from an explicit disconnect or reload removal, or a loop already
-// owns the server.
+// owns the server. The spawn supersedes any older loop parked in backoff: a
+// disconnect cleared down underneath it, so the down check cannot see it.
 func (m *Manager) retryDial(name string, s *server, disc int) {
 	if m.dropped(name, s) { // removal racing this check self-heals: settled drops the loop
 		return
@@ -948,8 +959,18 @@ func (m *Manager) retryDial(name string, s *server, disc int) {
 	}
 	s.down = true
 	s.failures = 1
+	s.loopSeq++
+	gen := s.loopSeq
 	s.mu.Unlock()
-	go m.reconnectLoop(s)
+	go m.reconnectLoop(s, gen)
+}
+
+// loopSuperseded reports whether a newer reconnect loop has claimed the server,
+// so this generation must exit rather than double-dial alongside it.
+func (s *server) loopSuperseded(gen int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loopSeq != gen
 }
 
 // settled reports whether some other path (manual connect or disconnect, or a
