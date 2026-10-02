@@ -15,6 +15,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // writeTimeout bounds one native writer, a hung backend degrading to trying the
@@ -111,11 +113,18 @@ var remote = func() bool {
 // stdout receives the OSC 52 fallback. A var so tests capture the sequence.
 var stdout io.Writer = os.Stdout
 
+// stdoutIsTTY reports whether fd 1 is an interactive terminal, the only place
+// an emitted OSC 52 can be interpreted. A var so tests fake the check.
+var stdoutIsTTY = func() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
+
 // Copy writes text to the system clipboard, returning an error with install
 // guidance on total failure. Success means a native writer verifiably
-// accepted the payload, or on a remote session that the OSC 52 fallback was
-// emitted. There OSC 52 also accompanies a native success, since a forwarded
-// display can accept a write that never reaches the user's machine.
+// accepted the payload, or on a remote session with a terminal on stdout that
+// the OSC 52 fallback was emitted. There OSC 52 also accompanies a native
+// success, since a forwarded display can accept a write that never reaches the
+// user's machine.
 func Copy(ctx context.Context, text string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -131,13 +140,18 @@ func Copy(ctx context.Context, text string) error {
 		}
 		tried = append(tried, w.name)
 		if runWriter(ctx, w, text) == nil {
-			if remote() {
+			if remote() && stdoutIsTTY() {
 				_ = writeOSC52(text) // best effort, the native write already landed
 			}
 			return nil
 		}
 	}
 	if remote() {
+		if !stdoutIsTTY() {
+			// non-terminal stdout can never interpret OSC 52, so the bytes
+			// would only corrupt the redirected stream
+			return errors.New("clipboard unavailable: remote session but stdout is not a terminal, OSC 52 cannot reach any clipboard")
+		}
 		return writeOSC52(text)
 	}
 	return nativeError(tried, displayless)
