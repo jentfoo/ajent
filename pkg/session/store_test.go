@@ -115,7 +115,7 @@ func TestStoreList(t *testing.T) {
 		hh, hherr := NewEditorHistory(s, ws, "")
 		require.NoError(t, hherr)
 		hh.Append("/model")
-		require.NoError(t, writeHead(w.Path(), txID)) // the branch cursor sidecar
+		require.NoError(t, writeHead(w.Path(), txID, 0)) // the branch cursor sidecar
 
 		list, lerr := s.List(ws)
 		require.NoError(t, lerr)

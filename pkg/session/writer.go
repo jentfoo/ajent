@@ -14,6 +14,7 @@ type Writer struct {
 	f      *os.File // nil for Discard
 	path   string   // transcript file, empty for Discard, drives HEAD persistence
 	head   string   // last appended entry id (or the rewind target after SetHead)
+	n      int      // entry count, persisted with the cursor to spot unsynced appends
 	closed bool     // further appends error after Close
 
 	mu sync.Mutex
@@ -35,7 +36,8 @@ func Create(path string, d SessionData) (*Writer, error) {
 	return w, nil
 }
 
-// Open reopens an existing file for append and recovers the head from its tail.
+// Open reopens an existing file for append and recovers the head from its
+// persisted cursor or the tail.
 func Open(path string) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -46,7 +48,7 @@ func Open(path string) (*Writer, error) {
 		_ = f.Close()
 		return nil, rerr
 	}
-	return &Writer{f: f, path: path, head: headFor(path, e)}, nil
+	return &Writer{f: f, path: path, head: headFor(path, e), n: len(e)}, nil
 }
 
 // Discard returns a writer with no file so callers stay branch-free.
@@ -85,6 +87,7 @@ func (w *Writer) Append(typ Type, data any) (Entry, error) {
 		}
 	}
 	w.head = e.ID
+	w.n++
 	return e, nil
 }
 
@@ -124,11 +127,11 @@ func (w *Writer) persistHeadLocked() error {
 	} else if w.head == "" {
 		return removeHead(w.path) // a new root has no branch to point at
 	}
-	return writeHead(w.path, w.head)
+	return writeHead(w.path, w.head, w.n)
 }
 
-// Sync flushes the file at a turn boundary and records the current head,
-// returning any cursor and fsync failure together.
+// Sync fsyncs the file at a turn boundary, then records the current head.
+// Data flushes first so the cursor never names an entry that is not durable.
 func (w *Writer) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -136,7 +139,7 @@ func (w *Writer) Sync() error {
 	if w.closed || w.f == nil {
 		return nil
 	}
-	return errors.Join(w.persistHeadLocked(), w.f.Sync())
+	return errors.Join(w.f.Sync(), w.persistHeadLocked())
 }
 
 // Close releases the underlying file. Idempotent and safe on Discard writers.

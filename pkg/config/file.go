@@ -52,6 +52,25 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 		return err
 	} else if err = f.Close(); err != nil {
 		return err
+	} else if err = os.Rename(tmp, path); err != nil {
+		return err
 	}
-	return os.Rename(tmp, path)
+	return syncDir(dir)
+}
+
+// syncDir fsyncs a directory so a rename into it survives a power loss.
+// Windows cannot fsync directory handles, so it is a no-op there.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err = d.Sync(); err != nil {
+		_ = d.Close()
+		return err
+	}
+	return d.Close()
 }

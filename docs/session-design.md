@@ -85,13 +85,13 @@ id becomes the head only *after* a successful write; an append that fails to hit
 disk never advances the cursor.
 
 - **Create** makes a fresh file and writes its `session` entry first.
-- **Open** reopens an existing file for append and recovers the head from its
-  tail.
+- **Open** reopens an existing file for append and recovers the head from the
+  persisted cursor or the tail (see the branch cursor below).
 - **Discard** returns a writer with no backing file, so callers stay
   branch-free.
-- **Sync** flushes at a turn boundary *and* persists the current head; it is
-  never called by `Append`. A cursor that could not be written surfaces as an
-  error rather than silently continuing.
+- **Sync** flushes at a turn boundary *and* persists the current head, data
+  before cursor; it is never called by `Append`. A cursor that could not be
+  written surfaces as an error rather than silently continuing.
 - **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
   transcript keeps both histories (nothing is deleted) and the new tip becomes
   the head.
@@ -102,7 +102,10 @@ Two boundaries matter, and they are deliberately different:
 
 1. **Per message.** The recorder wires `agent.Options.OnMessage` to append one
    `message` entry as soon as the loop produces it (`Recorder.Message`), so every
-   completed step is already on disk before the next begins.
+   completed step is already on disk before the next begins. Durability here is
+   crash-consistent, not fsync-strong: the writes land in the file, but a crash
+   before the turn's `Sync` leaves the cursor behind, and reopen recovers the
+   appended entries from the file tail instead.
 2. **Per turn.** Each `TurnEnd` fsyncs and records the head cursor, so resume
    continues from exactly where work left off.
 
@@ -115,7 +118,8 @@ should degrade to "not recorded", not kill the agent.
 The one mutable piece of an otherwise append-only design is the branch cursor:
 the entry id where work continues after a fork, which is what a rewind updates.
 It is persisted beside its transcript at `<transcript>.head`, written atomically
-on every `SetHead` and at turn boundaries.
+(with the containing directory fsynced) on every `SetHead` and at turn
+boundaries, together with the transcript's entry count at write time.
 
 **One cursor per transcript, never per directory.** A directory holds every
 session for a workspace, so a shared cursor can only remember one of them.
@@ -127,6 +131,13 @@ never point back at the branch just abandoned. `headFor` falls back to tail
 recovery when a cursor is missing, corrupt, or names an id the file no longer
 holds, so a lost cursor degrades to "continue from the end" instead of losing
 the branch.
+
+**Stale cursors lose to the tail.** The count in the cursor tells a crash apart
+from a fork: a file that grew past the counted length in one unbroken parent
+chain holds appends that landed after the last `Sync`, so the tail resumes and
+no unsynced turn is lost. Growth that breaks the chain is a rewind or fork, and
+the cursor wins. Sync flushes transcript data before persisting the cursor, so
+a trusted cursor never names an entry that is not durable.
 
 ## The store
 
@@ -397,12 +408,15 @@ its entry stays on disk, freeing the old name to create a duplicate.
 `Info.ID/Started/Model` share that rationale: they identify the file (the
 `session` entry in raw order), not any branch.
 
-**3. The live head wins over the file tail.** They agree only until the first
-fork. After a rewind, or a plan workflow that leaves the cursor on the review
-branch while the tail is an implementation entry, the tail belongs to a
-different branch. Resume and rebuild prefer the writer's head and fall back to
-the tail only when it no longer resolves. The cursor is per transcript, so a
-sibling session can never answer this question for another.
+**3. The live head wins over the file tail, except after a crash between
+Syncs.** They agree only until the first fork. After a rewind, or a plan
+workflow that leaves the cursor on the review branch while the tail is an
+implementation entry, the tail belongs to a different branch. Resume and
+rebuild prefer the writer's head and fall back to the tail only when it no
+longer resolves. One exception: a file that grew past the cursor's recorded
+count in one unbroken parent chain holds appends made after the last `Sync`, so
+the tail wins and no unsynced turn is skipped. The cursor is per transcript, so
+a sibling session can never answer this question for another.
 
 **4. The head advances only on success.** An append updates the cursor after a
 successful write; an fsync records it at turn boundaries. A lost or corrupt
