@@ -2,6 +2,8 @@ package command
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -374,4 +376,82 @@ func TestStagerDiscard(t *testing.T) {
 // blockText builds a single-text-block list.
 func blockText(text string) llm.BlockList {
 	return llm.BlockList{llm.TextBlock{Text: text}}
+}
+
+// capturingBash records the input JSON each staged call hands the bash tool,
+// optionally blocking so a run stays pending until released or cancelled.
+type capturingBash struct {
+	mu    sync.Mutex
+	input []string
+	user  bool // whether the latest Execute saw a user-initiated context
+	block chan struct{}
+}
+
+func (b *capturingBash) Name() string                { return tools.ToolBash }
+func (b *capturingBash) Label(agent.ToolCall) string { return "bash: ..." }
+func (b *capturingBash) Description() string         { return "test tool" }
+func (b *capturingBash) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: tools.ToolBash} }
+func (b *capturingBash) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+
+func (b *capturingBash) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
+	b.mu.Lock()
+	b.input = append(b.input, string(call.Input))
+	b.user = tools.IsUserInitiated(ctx)
+	b.mu.Unlock()
+	if b.block != nil {
+		select {
+		case <-b.block:
+		case <-ctx.Done():
+		}
+	}
+	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "ok"}}}, nil
+}
+
+func (b *capturingBash) calls() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return slices.Clone(b.input)
+}
+
+func (b *capturingBash) sawUserInitiated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.user
+}
+
+func TestStagerTimeoutReachesBashInput(t *testing.T) {
+	t.Parallel()
+
+	fake := &capturingBash{}
+	reg := tools.New()
+	reg.Register(fake, true)
+	s := NewStager(context.Background(), reg, &recordingSinkForShell{})
+
+	var p map[string]any
+	decodeLast := func() {
+		calls := fake.calls()
+		require.NotEmpty(t, calls)
+		require.NoError(t, json.Unmarshal([]byte(calls[len(calls)-1]), &p))
+	}
+
+	// the default zero ceiling runs uncapped: no timeout key at all, so the
+	// model-facing two-minute default never applies to a user's own shell
+	s.Run("echo one", false)
+	require.Eventually(t, func() bool { return len(fake.calls()) == 1 }, time.Second, time.Millisecond)
+	decodeLast()
+	assert.Equal(t, "echo one", p["command"])
+	assert.NotContains(t, p, "timeout")
+	// the user-initiated mark is what keeps the tool from applying the
+	// model-facing default on the empty timeout
+	assert.True(t, fake.sawUserInitiated())
+
+	// an explicit ceiling rounds up to whole seconds
+	s.SetTimeout(1500 * time.Millisecond)
+	s.Run("echo two", false)
+	require.Eventually(t, func() bool { return len(fake.calls()) == 2 }, time.Second, time.Millisecond)
+	decodeLast()
+	assert.Equal(t, "echo two", p["command"])
+	require.InDelta(t, 2, p["timeout"], 0)
 }

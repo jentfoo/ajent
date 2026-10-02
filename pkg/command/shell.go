@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-analyze/bulk"
 
@@ -24,6 +25,8 @@ type Stager struct {
 	reg  *tools.Registry
 	sink agent.Sink
 	root context.Context // derived per-run contexts, cancelled on shutdown
+
+	timeout time.Duration // per-run ceiling, zero runs uncapped
 
 	mu       sync.Mutex
 	runs     []*stageRun // submission order
@@ -50,6 +53,16 @@ type stageRun struct {
 // derived from root, so a cancelled root stops in-flight `!` commands.
 func NewStager(root context.Context, reg *tools.Registry, sink agent.Sink) *Stager {
 	return &Stager{root: root, reg: reg, sink: sink}
+}
+
+// SetTimeout caps how long each staged run may take, zero (the default) runs
+// uncapped so a long human command is never force-killed by the model-facing
+// default.
+func (s *Stager) SetTimeout(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.timeout = d
 }
 
 // SetOnChange registers the hook told how many tokens the staged results now
@@ -97,6 +110,7 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	s.mu.Lock()
 	s.nextID++
 	id := fmt.Sprintf("shell-%d", s.nextID)
+	timeout := s.timeout
 	// a `!` line is the human's own shell, mark it so the permission gate exempts it.
 	// Derived from the stager root (appRoot) so shutdown cancels in-flight runs.
 	runCtx, cancel := context.WithCancel(tools.WithUserInitiated(s.root))
@@ -115,8 +129,12 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	s.runs = append(s.runs, run)
 	s.mu.Unlock()
 
-	input, _ := json.Marshal(map[string]any{"command": cmd})
-	call := agent.ToolCall{ID: id, Name: tools.ToolBash, Input: input}
+	input := stageInput{Command: cmd}
+	if timeout > 0 { // seconds, rounded up
+		input.Timeout = int((timeout + time.Second - 1) / time.Second)
+	}
+	encoded, _ := json.Marshal(input)
+	call := agent.ToolCall{ID: id, Name: tools.ToolBash, Input: encoded}
 	out := agent.NewOutput(s.sink, id)
 	done := s.startTool(call, run.label)
 
@@ -140,6 +158,13 @@ func (s *Stager) Run(cmd string, excluded bool) {
 		}()
 		s.reportStaged() // the output is now context the next prompt will carry
 	}()
+}
+
+// stageInput is the JSON the stager hands the bash tool, mirroring the
+// model-facing schema while letting a user run name its own timeout.
+type stageInput struct {
+	Command string `json:"command"`
+	Timeout int    `json:"timeout,omitempty"`
 }
 
 // startTool opens the run's header and stream on sink, preferring a full-display

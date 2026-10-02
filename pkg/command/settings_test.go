@@ -159,6 +159,22 @@ func TestEditCompaction(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, changes)
 	})
+
+	// NaN and ±Inf parse cleanly and pass naive range checks, so they must be
+	// rejected explicitly before they can poison a live session setting
+	t.Run("non_finite_aborts_with_zero_changes", func(t *testing.T) {
+		for _, bad := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf"} {
+			c := newFakeConsole(t)
+			c.confirms = []bool{true}
+			c.inputs = []string{bad}
+
+			changes, err := row.edit(t.Context(), c)
+			require.NoError(t, err)
+			assert.Empty(t, changes)
+			_, srcName, _ := c.settings.Explain("compaction.threshold")
+			assert.NotEqual(t, "session", srcName) // nothing recorded
+		}
+	})
 }
 
 func TestSettingsModelRowHonoursSaveChoice(t *testing.T) {
@@ -344,6 +360,23 @@ func TestFloatRowRecordsAndValidatesVerbatimFraction(t *testing.T) {
 
 	t.Run("rejects_out_of_range", func(t *testing.T) {
 		for _, bad := range []string{"0", "0.9", "nope"} {
+			c := newFakeConsole(t)
+			r := floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5)
+
+			c.inputs = []string{bad}
+			changes, err := r.edit(t.Context(), c)
+			require.NoError(t, err)
+			assert.Empty(t, changes)
+			assert.True(t, c.noticeContains("must be between"))
+			_, srcName, _ := c.settings.Explain("compaction.verbatimFraction")
+			assert.NotEqual(t, "session", srcName)
+		}
+	})
+
+	// NaN and ±Inf parse cleanly and pass naive range checks, so they must be
+	// rejected explicitly
+	t.Run("rejects_non_finite", func(t *testing.T) {
+		for _, bad := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf"} {
 			c := newFakeConsole(t)
 			r := floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5)
 

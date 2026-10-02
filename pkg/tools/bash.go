@@ -30,6 +30,22 @@ const (
 	maxBashTimeout     = 10 * time.Minute
 )
 
+// bashTimeout resolves a run's ceiling from the requested seconds and whether
+// the call is user-initiated. Model calls default to the documented two minutes
+// and cap at the maximum; a user's own run may name any ceiling or none at all.
+func bashTimeout(requested time.Duration, userRun bool) time.Duration {
+	if requested <= 0 {
+		if userRun {
+			return 0 // uncapped, cancellation still applies
+		}
+		return defaultBashTimeout
+	}
+	if !userRun && requested > maxBashTimeout {
+		return maxBashTimeout
+	}
+	return requested
+}
+
 // ToolBash is the built-in shell tool's name, feeding its command to the permission classifier.
 const ToolBash = "bash"
 
@@ -106,14 +122,14 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		cwd = resolved
 	}
 
-	timeout := time.Duration(p.Timeout) * time.Second
-	if timeout <= 0 {
-		timeout = defaultBashTimeout
+	timeout := bashTimeout(time.Duration(p.Timeout)*time.Second, IsUserInitiated(ctx))
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, timeout)
+	} else {
+		runCtx, cancel = context.WithCancel(ctx) // uncapped: only cancellation ends it
 	}
-	if timeout > maxBashTimeout {
-		timeout = maxBashTimeout
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, "bash", "-c", p.Command)

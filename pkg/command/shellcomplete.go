@@ -38,7 +38,7 @@ func (c *Completer) shellComplete(ctx completeCtx) (int, []tui.Completion) {
 	if ctx.pos < ctx.start {
 		return ctx.pos, nil
 	}
-	tokStart := tokenStart(ctx.cells, ctx.pos, ctx.start)
+	tokStart := shellTokenStart(ctx.cells, ctx.pos, ctx.start)
 	token := ctx.spanText(tokStart)
 
 	// a first word holding `/` is a path, as bash treats `./script`
@@ -65,6 +65,17 @@ func shellCmdStart(cells []string) int {
 		return 2
 	}
 	return 1
+}
+
+// shellTokenStart returns the first cell of the shell token ending at pos,
+// never scanning back past from. Shell separators end a token too, so each
+// piped or grouped segment completes on its own.
+func shellTokenStart(cells []string, pos, from int) int {
+	for pos > from && !isTokenBreakCell(cells[pos-1]) &&
+		!slices.Contains(cmdSeparators, cells[pos-1]) {
+		pos--
+	}
+	return pos
 }
 
 // isCmdPosition reports whether the token at start begins a command, i.e. only

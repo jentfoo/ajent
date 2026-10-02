@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -206,7 +207,7 @@ func floatRow(name, key string, min, max float64) settingsRow {
 			return nil, err
 		}
 		f, perr := strconv.ParseFloat(strings.TrimSpace(in), 64)
-		if perr != nil || f < min || f > max {
+		if perr != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < min || f > max {
 			c.Notify(fmt.Sprintf("%s must be between %g and %g", name, min, max), levelWarn)
 			return nil, nil
 		}
@@ -450,7 +451,7 @@ func editCompaction(ctx context.Context, c Console) ([]settingChange, error) {
 		// enter on the placeholder keeps the current threshold, but anything else must be a positive number
 		if in != "" {
 			f, perr := strconv.ParseFloat(strings.TrimSpace(in), 64)
-			if perr != nil || f <= 0 {
+			if perr != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
 				c.Notify("threshold must be a number greater than zero", levelWarn)
 				return nil, nil // abort the whole edit before any setting changes apply
 			}

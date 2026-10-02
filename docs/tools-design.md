@@ -353,6 +353,12 @@ does not: an exit code, or `signal: <name>` for a death by any other signal. The
 kill we send adds nothing beyond its own note. The environment forces
 non-interactive settings (no pagers, no terminal prompts, no colour).
 
+The timeout ceiling follows the caller: model calls default to two minutes and
+cap at the maximum declared in the schema, while a user-initiated run (a staged
+`!` line, marked by `WithUserInitiated`) may name any explicit ceiling through
+the stager or none at all — the human can see and interrupt their own command,
+so it is never force-killed by the model-facing default.
+
 ### find / grep / ls (`find.go`, `grep.go`, `ls.go`)
 
 Off-by-default extras for no-shell agents.

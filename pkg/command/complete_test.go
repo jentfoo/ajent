@@ -110,6 +110,23 @@ func TestCompleter(t *testing.T) {
 		assert.Contains(t, strings.Join(labels, "|"), "beta")
 	})
 
+	// any run of break cells past the name is skipped, matching dispatch's
+	// whitespace handling
+	t.Run("args_after_multiple_breaks", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, nil)
+
+		for _, line := range []string{"/reasoning  me", "/reasoning\tme"} {
+			n := len(tui.GraphemeCells(line))
+			start, items := comp.Complete(line, n)
+			assert.Equal(t, n-2, start, line) // replacement starts past both break cells
+			assert.Contains(t, labelsOf(items), "medium", line)
+		}
+	})
+
 	// pos is a grapheme-cell index, start coming back as cells
 	t.Run("path_non_ascii_cell_indexes", func(t *testing.T) {
 		dir := t.TempDir()

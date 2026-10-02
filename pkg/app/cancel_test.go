@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -16,9 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/tools"
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 // devBashCallTurn scripts a turn whose only output is one bash tool call.
@@ -286,4 +289,83 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 // askCancel drives one barrier asker call and returns its decision.
 func askCancel(b *permit.Barrier, ctx context.Context, input string) tools.Decision {
 	return b.Asker()(ctx, agent.ToolCall{ID: "c", Name: "bash", Input: []byte(input)}, tools.Decision{Action: tools.ActionAsk})
+}
+
+// TestControlInterruptCancelsStagedShell pins a turn mid-tool so ag.Running()
+// holds, stages a real sleeping shell beside it, and drives one interrupt
+// control through the loop: the interrupt must reach the staged run too, not
+// only the turn.
+func TestControlInterruptCancelsStagedShell(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		control tui.Control
+	}{
+		{"ctrl_c", tui.ControlInterrupt},
+		{"escape", tui.ControlEscape},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inR, inW, err := os.Pipe()
+			require.NoError(t, err)
+			outR, outW, err := os.Pipe()
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_ = inR.Close()
+				_ = inW.Close()
+				_ = outR.Close()
+			})
+			go func() { _, _ = io.Copy(io.Discard, outR) }() // status writes must not fill the pipe
+			ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+			require.NoError(t, err)
+			t.Cleanup(ui.Close)
+
+			reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "ctrl-staged"})
+			require.NoError(t, err)
+			release := make(chan struct{})
+			entered := make(chan struct{})
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: mainToolTurn()}}}
+			st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+			ag := agent.New(st, agent.Options{
+				Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+				Tools:    singleToolSet{tool: holdBash{release: release, entered: entered}},
+				Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+			})
+
+			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+			stager.Run("sleep 30", false)
+			require.True(t, stager.Pending())
+
+			quit := make(chan struct{})
+			controls := make(chan tui.Control, 4)
+			go controlLoop(context.Background(), ui, controls,
+				newHintBoard(func(string, string) {}), ag,
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), stager, nil, quit, nil)
+
+			errCh := make(chan error, 1)
+			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()
+			<-entered // the turn is pinned in its tool call, so ag.Running() holds
+
+			controls <- tc.control
+			require.Eventually(t, func() bool { return !stager.Pending() },
+				5*time.Second, time.Millisecond, "the staged shell must be cancelled")
+
+			// the cancelled command still stages its partial result, marked interrupted
+			msgs := stager.Flush(t.Context())
+			require.Len(t, msgs, 1)
+			tb, ok := msgs[0].Message.Content[0].(llm.TextBlock)
+			require.True(t, ok)
+			assert.Contains(t, tb.Text, "User Ran: sleep 30")
+			assert.Contains(t, tb.Text, agent.InterruptedText)
+
+			// the turn itself aborts cleanly
+			close(release)
+			select {
+			case err := <-errCh:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("turn did not finish")
+			}
+		})
+	}
 }

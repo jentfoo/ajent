@@ -352,3 +352,27 @@ func TestBuiltinsShellCommands(t *testing.T) {
 	}
 	assert.Contains(t, desc, "Example available commands: diff, wc")
 }
+
+func TestBashTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		requested time.Duration
+		userRun   bool
+		want      time.Duration
+	}{
+		{"model_default", 0, false, defaultBashTimeout},
+		{"user_uncapped", 0, true, 0},
+		{"model_within_max", 30 * time.Second, false, 30 * time.Second},
+		{"model_clamped", time.Hour, false, maxBashTimeout},
+		{"user_explicit_any_ceiling", time.Hour, true, time.Hour},
+		{"negative_model_default", -5 * time.Second, false, defaultBashTimeout},
+		{"negative_user_uncapped", -5 * time.Second, true, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, bashTimeout(tc.requested, tc.userRun))
+		})
+	}
+}

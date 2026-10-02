@@ -67,12 +67,13 @@ func TestShellComplete(t *testing.T) {
 		assert.Contains(t, labelsOf(items), "echo")
 	})
 
-	// a separator restarts the command position mid-line
+	// a separator restarts the command position mid-line, with or without
+	// padding spaces around the operator
 	t.Run("command_names_after_pipe", func(t *testing.T) {
 		requireBash(t)
 		comp := newShellCompleter(t, "pkg")
 
-		for _, line := range []string{"!ls | ech", "!ls && ech", "!ls; ech"} {
+		for _, line := range []string{"!ls | ech", "!ls && ech", "!ls; ech", "!ls|ech", "!ls&&ech", "!ls;ech", "!(ech"} {
 			_, items := comp.Complete(line, len(line))
 			assert.Contains(t, labelsOf(items), "echo", line)
 		}
@@ -99,18 +100,18 @@ func TestIsCmdPosition(t *testing.T) {
 		{"after_space", "! ls", true},
 		{"second_word", "!ls foo", false},
 		{"after_pipe", "!ls | gr", true},
+		{"after_pipe_unpadded", "!ls|gr", true},
 		{"after_and", "!ls && gr", true},
+		{"after_and_unpadded", "!ls&&gr", true},
 		{"after_semicolon", "!ls; gr", true},
+		{"after_semicolon_unpadded", "!ls;gr", true},
 		{"after_subshell", "!(gr", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cells := tui.GraphemeCells(c.line)
 			from := shellCmdStart(cells)
-			start := len(cells)
-			for start > from && !isTokenBreakCell(cells[start-1]) {
-				start--
-			}
+			start := shellTokenStart(cells, len(cells), from)
 			assert.Equal(t, c.want, isCmdPosition(cells, from, start))
 		})
 	}

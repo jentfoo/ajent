@@ -41,7 +41,11 @@ func agentsCommand(_ context.Context, arg string, c Console) error {
 	case "", "list":
 		agentsList(c, a)
 	case "stop":
-		if rest == "" || rest == "all" {
+		if rest == "" {
+			c.Notify("usage: /agents stop <id|all>", levelWarn)
+			return nil
+		}
+		if rest == "all" {
 			n := a.StopAll()
 			c.Notify(fmt.Sprintf("stopped %d sub-agent(s)", n), levelInfo)
 			return nil

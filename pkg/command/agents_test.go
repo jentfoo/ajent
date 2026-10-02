@@ -87,6 +87,16 @@ func TestAgentsCommand(t *testing.T) {
 		assert.True(t, c.noticeContains("already finished"))
 	})
 
+	// bare stop refuses to guess: only an explicit `all` bulk-stops
+	t.Run("stop_bare_warns_usage", func(t *testing.T) {
+		c, a := agentsConsole(t)
+		err := agentsCommand(t.Context(), "stop", c)
+		require.NoError(t, err)
+		assert.True(t, c.noticeContains("usage: /agents stop <id|all>"))
+		assert.Zero(t, a.stopsAll)
+		assert.Empty(t, a.stopped)
+	})
+
 	t.Run("stop_all_cancels_every_job", func(t *testing.T) {
 		c, a := agentsConsole(t)
 		err := agentsCommand(t.Context(), "stop all", c)

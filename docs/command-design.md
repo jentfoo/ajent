@@ -287,7 +287,9 @@ disabled `bash` is a refusal notice), mints a call id, opens the display with
 reuses the whole `bash` path (streaming, ANSI stripping, output cap, spill file,
 process-group kill) with no second implementation. It wraps its context in
 `tools.WithUserInitiated`, so a staged `!` line is exempt from every permission
-mode: this is the human's own shell, not the model's.
+mode: this is the human's own shell, not the model's. It also never inherits
+the model-facing timeout default: the stager's ceiling is its own (zero runs
+uncapped), so a long human command like a build is not silently killed.
 
 The display differs from an agent bash call in one way: because the output is
 the user's own, it must be shown whole. The stager type-asserts its sink for a

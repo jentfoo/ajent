@@ -749,6 +749,9 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 				case ag.Running():
 					q.abort() // queued messages return to the editor, joined with newlines
 					ag.Interrupt()
+					if stager.Pending() {
+						stager.Cancel() // a staged shell runs beside the turn, stop it too
+					}
 				case initCtl.abort(): // a minutes-long /init survey is escapable too
 				case stager.Pending():
 					stager.Cancel() // Esc cancels an in-flight staged shell command
@@ -757,6 +760,9 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 				if ag.Running() {
 					q.abort()
 					ag.Interrupt()
+					if stager.Pending() {
+						stager.Cancel() // a staged shell runs beside the turn, stop it too
+					}
 					continue
 				}
 				if initCtl.abort() {

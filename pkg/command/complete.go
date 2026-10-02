@@ -135,7 +135,10 @@ func (c *Completer) commandArgComplete(ctx completeCtx) (int, []tui.Completion) 
 	if !ok || cmd.Complete == nil {
 		return ctx.pos, nil
 	}
-	argStart := nameEnd + 1 // skip the space after the command name
+	argStart := nameEnd // skip every break past the name, dispatch allows any whitespace
+	for argStart < ctx.pos && isTokenBreakCell(ctx.cells[argStart]) {
+		argStart++
+	}
 	return offer(argStart, ctx.pos, textCompletions(cmd.Complete(ctx.spanText(argStart))))
 }
 
