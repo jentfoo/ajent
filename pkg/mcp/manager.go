@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -65,6 +66,7 @@ type server struct {
 	defs          []ToolDef     // last filtered tool list, for status/tool groups and drift compare
 	failures      int           // consecutive connect failures, for backoff and notices
 	down          bool          // a reconnect loop is active, suppresses the already-connected check
+	discSeq       int           // bumped by each explicit disconnect, stale snapshots abort in-flight dials
 	reopenKeep    *toolState    // live split captured at death, restored on reconnect
 	rediscovering bool          // a list_changed re-discovery is in flight, coalesces bursts
 	connecting    bool          // a connect attempt is in flight (single-flight)
@@ -203,26 +205,41 @@ func (m *Manager) connect(ctx context.Context, name string) error {
 	if s == nil {
 		return fmt.Errorf("no MCP server %q", name)
 	}
-	run, done := s.claimConnect()
-	if !run { // another attempt is in flight, share its outcome
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-done:
-			s.mu.Lock()
-			err := s.connectErr
-			s.mu.Unlock()
-			return err
+	return m.connectSince(ctx, name, s, s.discSnapshot())
+}
+
+// connectSince is connect with a caller-captured disconnect snapshot, so a
+// reconnect loop can pin its intent before verifying it still owns the server.
+// A shared dial preempted by a disconnect that predates this request is retried
+// on the caller's own.
+func (m *Manager) connectSince(ctx context.Context, name string, s *server, disc int) error {
+	for {
+		run, done := s.claimConnect()
+		if !run { // another attempt is in flight, share its outcome
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-done:
+				s.mu.Lock()
+				err := s.connectErr
+				s.mu.Unlock()
+				if errors.Is(err, errDisconnectedMidDial) && s.discSnapshot() == disc && !m.dropped(name, s) {
+					continue // the preemption came from a disconnect before this request
+				}
+				return err
+			}
 		}
+		err := m.dial(ctx, name, s, disc)
+		s.finishConnect(err)
+		return err
 	}
-	err := m.dial(ctx, name, s)
-	s.finishConnect(err)
-	return err
 }
 
 // dial opens the transport, discovers capabilities, then installs it and
-// registers tools. Only a single-flight winner runs it (see connect).
-func (m *Manager) dial(ctx context.Context, name string, s *server) error {
+// registers tools. Only a single-flight winner runs it (see connect). disc is the
+// explicit-disconnect count captured when the dial was requested: one landing after
+// it preempts the install instead of being reverted by it.
+func (m *Manager) dial(ctx context.Context, name string, s *server, disc int) error {
 	s.mu.Lock()
 	already := !s.down && s.c != nil && s.failures == 0
 	s.mu.Unlock()
@@ -242,6 +259,11 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 		// reason out of notices, so it appears only in /mcp logs and the status ratio.
 		s.diag("connect failed: " + err.Error())
 		m.updateStatus() // this server contributes nothing to the ratio until it connects
+		m.retryDial(name, s, disc)
+		return err
+	}
+	if err := m.preempted(name, s, disc); err != nil {
+		_ = c.Close() // the user's disconnect or a reload removal wins, drop the client
 		return err
 	}
 	c.SetNotice(func(msg string) {
@@ -259,18 +281,21 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 	defer dcancel()
 	defs, err := c.Tools(dctx)
 	if err != nil {
-		s.note(err.Error(), true)
+		if s.sawWarn(err.Error()) { // retries re-report one defect, repeats stay in /mcp logs
+			s.diag(err.Error())
+		} else {
+			s.note(err.Error(), true)
+		}
 		_ = c.Close()
+		m.retryDial(name, s, disc)
 		return fmt.Errorf("mcp %s: discover: %w", name, err)
 	}
-	// a reload may have removed or replaced this server while we were dialing,
-	// close the fresh client rather than leaking it into a stale object.
-	m.mu.Lock()
-	live := m.servers[name] == s
-	m.mu.Unlock()
-	if !live {
+	// a reload may have removed or replaced this server while we were dialing, and a
+	// /mcp disconnect may have landed too: close the fresh client rather than
+	// leaking it into a stale object or reverting the user's act.
+	if err := m.preempted(name, s, disc); err != nil {
 		_ = c.Close()
-		return fmt.Errorf("mcp %s: server removed during connect", name)
+		return err
 	}
 	// drop anything registered under this source before bridging the fresh list
 	m.opts.Registrar.Unregister(s.source)
@@ -281,11 +306,60 @@ func (m *Manager) dial(ctx context.Context, name string, s *server) error {
 	s.failures = 0
 	s.mu.Unlock()
 	m.register(s, c, defs, keep) // register never fails, it logs and continues
+	// a disconnect or removal that landed while we installed still wins: tear the
+	// fresh registration back out rather than leaving tools live against it
+	if err := m.preempted(name, s, disc); err != nil {
+		m.disconnect(s)
+		return err
+	}
 	go m.watchServer(s)
 	// m.ctx, not the caller's: notification refresh outlives whoever connected
 	c.OnNotification(func(n mcp.JSONRPCNotification) { m.onNotification(m.ctx, s, n) })
 	s.diag("connected (" + c.Transport() + ")")
 	return nil
+}
+
+// discSnapshot reads the explicit-disconnect count under the server lock.
+func (s *server) discSnapshot() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.discSeq
+}
+
+// disconnectSince reports whether an explicit disconnect landed after snapshot
+// disc, so the dial that captured it must not install a client.
+func (s *server) disconnectSince(disc int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.discSeq != disc
+}
+
+// errDisconnectedMidDial and errRemovedMidDial mark a dial abandoned because an
+// explicit disconnect or a reload removal landed after it started.
+var (
+	errDisconnectedMidDial = errors.New("disconnected during connect")
+	errRemovedMidDial      = errors.New("server removed during connect")
+)
+
+// preempted reports why a dial must abandon its fresh client: an explicit
+// /mcp disconnect landed since it captured disc, or a reload removed or replaced
+// the server object. Nil when the dial may install.
+func (m *Manager) preempted(name string, s *server, disc int) error {
+	if s.disconnectSince(disc) {
+		return fmt.Errorf("mcp %s: %w", name, errDisconnectedMidDial)
+	}
+	if m.dropped(name, s) {
+		return fmt.Errorf("mcp %s: %w", name, errRemovedMidDial)
+	}
+	return nil
+}
+
+// dropped reports whether a reload removed or replaced this server object in
+// the manager's map.
+func (m *Manager) dropped(name string, s *server) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.servers[name] != s
 }
 
 // register bridges live defs into the registry under s.source. keep holds a
@@ -399,6 +473,7 @@ func (m *Manager) disconnect(s *server) {
 	c := s.c
 	s.c = nil
 	s.down = false // stop any in-flight reconnect loop for this server
+	s.discSeq++    // a dial still in flight must close its client, not install it
 	s.reopenKeep = nil
 	s.mu.Unlock()
 	if c != nil {
@@ -805,10 +880,9 @@ func (m *Manager) watchServer(s *server) {
 // maxReconnectWait caps the exponential backoff between reconnection attempts.
 const maxReconnectWait = 30 * time.Second
 
-// reconnect marks a stdio server's death and retries with capped exponential backoff until it is
-// back, the manager closes, or a manual disconnect/connect resolves it. Tools are deregistered
-// while down so the model never calls into a dead process. On success connect() re-registers them
-// restoring the pre-death enabled set.
+// reconnect marks a stdio server's death and begins the retry loop. Tools are
+// deregistered while down so the model never calls into a dead process. On success
+// connect() re-registers them restoring the pre-death enabled set.
 func (m *Manager) reconnect(s *server) {
 	keep := m.captureLive(s.source) // registrar call stays off s.mu
 	s.mu.Lock()
@@ -826,28 +900,64 @@ func (m *Manager) reconnect(s *server) {
 	m.opts.Registrar.Unregister(s.source)
 	m.updateStatus() // a dead server's tools drop out of the ratio while it is down
 	s.note("server exited; reconnecting", true)
+	m.reconnectLoop(s)
+}
 
+// reconnectLoop retries a down server with capped exponential backoff until it is
+// back, the manager closes, or a manual connect, disconnect or reload removal
+// resolves it.
+func (m *Manager) reconnectLoop(s *server) {
 	for attempt := 2; ; attempt++ {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-time.After(reconnectDelay(attempt - 1)):
 		}
+		// pin intent before the settled check, so a disconnect racing past it cannot
+		// be reverted by this loop's own dial
+		disc := s.discSnapshot()
 		if m.settled(s) { // a manual /mcp connect or disconnect resolved it meanwhile
 			return
 		}
 		s.mu.Lock()
 		s.failures = attempt
 		s.mu.Unlock()
-		if err := m.connect(m.ctx, s.name); err == nil {
+		if err := m.connectSince(m.ctx, s.name, s, disc); err == nil {
 			return // connect re-registered tools and started a fresh watcher
 		}
 	}
 }
 
-// settled reports whether some other path (manual connect or disconnect) has taken
-// the server out of the reconnect loop.
+// retryDial starts the reconnect loop for a stdio server whose dial failed, so
+// one that is offline or not yet installed comes up on its own. Skipped when the
+// failure came from an explicit disconnect or reload removal, or a loop already
+// owns the server.
+func (m *Manager) retryDial(name string, s *server, disc int) {
+	if m.dropped(name, s) { // removal racing this check self-heals: settled drops the loop
+		return
+	}
+	if transportKind(s.config()) != TransportStdio {
+		return
+	}
+	// one critical section: a disconnect landing after a separate check could set
+	// down back to true here and reconnect a server the user just cut off
+	s.mu.Lock()
+	if s.discSeq != disc || s.down {
+		s.mu.Unlock()
+		return
+	}
+	s.down = true
+	s.failures = 1
+	s.mu.Unlock()
+	go m.reconnectLoop(s)
+}
+
+// settled reports whether some other path (manual connect or disconnect, or a
+// reload removing the server) has taken the server out of the reconnect loop.
 func (m *Manager) settled(s *server) bool {
+	if m.dropped(s.name, s) {
+		return true
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

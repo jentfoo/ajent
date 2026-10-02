@@ -65,4 +65,19 @@ func TestBridge(t *testing.T) {
 		require.NoError(t, err) // transport failure is a result, not a Go error
 		assert.True(t, res.IsError)
 	})
+
+	t.Run("transport_failure_sets_display", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+		defs, err := c.Tools(t.Context())
+		require.NoError(t, err)
+		b := Bridge("fake", defs[0], c, BridgeOptions{Timeout: 1}) // 1ns, instantly exceeded
+
+		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
+		assert.NotEmpty(t, res.Display) // history renders the failure, not a blank row
+		assert.Contains(t, res.Display, "mcp error")
+	})
 }

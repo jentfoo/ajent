@@ -63,6 +63,12 @@ type Client struct {
 // rawAttemptTimeout bounds one raw-seam request so a dropped or reset response cannot hang discovery.
 const rawAttemptTimeout = 15 * time.Second
 
+// initTimeout bounds the initialize handshake and its transport start, so a
+// server that accepts the connection but never answers surfaces as a connect
+// error instead of hanging the dial and every waiter sharing it. A var so tests
+// can tighten it.
+var initTimeout = 45 * time.Second
+
 // rawRetries resends a single request after transport-level failures, since mcp-go's stdio can drop a line under load.
 const rawRetries = 2
 
@@ -143,11 +149,13 @@ func transportKind(cfg ServerConfig) string {
 
 // init negotiates the protocol version, naming ours and the server's on a mismatch.
 func (c *Client) init(ctx context.Context) error {
-	if err := c.c.Start(ctx); err != nil {
+	ictx, cancel := context.WithTimeout(ctx, initTimeout)
+	defer cancel()
+	if err := c.c.Start(ictx); err != nil {
 		return fmt.Errorf("mcp %s: start: %w", c.name, err)
 	}
 	c.clientInfo = mcp.Implementation{Name: "ajent", Version: version.Version}
-	res, err := c.c.Initialize(ctx, mcp.InitializeRequest{
+	res, err := c.c.Initialize(ictx, mcp.InitializeRequest{
 		Params: mcp.InitializeParams{ClientInfo: c.clientInfo},
 	})
 	if err != nil {
@@ -439,11 +447,14 @@ func (c *Client) sendRawAttempts(ctx context.Context, method string, params any,
 		if err := ctx.Err(); err != nil { // caller budget exhausted, stop early
 			return nil, err
 		}
-		params, header := c.applyEra(method, params)
+		// one id per attempt, threaded into the request and its default progress
+		// token together: the token must equal the id and stay unique under concurrency
+		id := c.rawSeq.Add(1)
+		params, header := c.applyEra(method, params, id)
 		aCtx, cancel := context.WithTimeout(ctx, rawAttemptTimeout)
 		resp, err := c.c.GetTransport().SendRequest(aCtx, transport.JSONRPCRequest{
 			JSONRPC: mcp.JSONRPC_VERSION,
-			ID:      mcp.NewRequestId(c.rawSeq.Add(1)),
+			ID:      mcp.NewRequestId(id),
 			Method:  method,
 			Params:  params,
 			Header:  header,
@@ -458,8 +469,9 @@ func (c *Client) sendRawAttempts(ctx context.Context, method string, params any,
 }
 
 // applyEra returns params and headers carrying the metadata protocol 2026-07-28
-// requires on every request. Legacy connections are returned unchanged.
-func (c *Client) applyEra(method string, params any) (any, http.Header) {
+// requires on every request. id seeds the default progress token, so it matches
+// the request it rides on. Legacy connections are returned unchanged.
+func (c *Client) applyEra(method string, params any, id int64) (any, http.Header) {
 	if !mcp.IsModernProtocol(c.negotiated) {
 		return params, nil
 	}
@@ -477,7 +489,7 @@ func (c *Client) applyEra(method string, params any) (any, http.Header) {
 	meta[mcp.MetaKeyClientInfo] = c.clientInfo
 	meta[mcp.MetaKeyClientCapabilities] = mcp.ClientCapabilities{} // required on every modern request, we declare none
 	if _, ok := meta["progressToken"]; !ok {
-		meta["progressToken"] = c.rawSeq.Load() // ties notifications to the request that caused them
+		meta["progressToken"] = id // ties notifications to the request that caused them
 	}
 	if b, err := json.Marshal(meta); err == nil {
 		fields["_meta"] = b

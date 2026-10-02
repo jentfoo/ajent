@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,6 +57,75 @@ func TestRawSeqBase(t *testing.T) {
 	_, err = c.Tools(t.Context())
 	require.NoError(t, err)
 	assert.Greater(t, c.rawSeq.Load(), int64(rawSeqBase)) // list calls advance it, still disjoint
+}
+
+// TestConnectInitTimeout is serial: it tightens the package-wide initTimeout.
+func TestConnectInitTimeout(t *testing.T) {
+	prev := initTimeout
+	initTimeout = 250 * time.Millisecond
+	t.Cleanup(func() { initTimeout = prev })
+
+	start := time.Now()
+	c, err := Connect(t.Context(), "fake", stdioConfig(t, "-hang-init"))
+	require.Error(t, err) // the bound fires, the caller's context has no deadline
+	assert.Nil(t, c)
+	require.ErrorContains(t, err, "initialize")
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+func TestRawIDProgressTokenCorrelation(t *testing.T) {
+	t.Parallel()
+
+	c, err := Connect(t.Context(), "fakehttp", ServerConfig{URL: startHTTP(t)})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	require.True(t, mcp.IsModernProtocol(c.negotiated)) // era stamping is active here
+
+	// typed calls ride mcp-go's own ids from one, raw ids must stay disjoint from
+	// them however the two interleave
+	res, err := c.Call(t.Context(), "tool_00", json.RawMessage(`{}`), nil)
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+
+	const workers = 8
+	const each = 50
+	type stamp struct {
+		id     int64
+		params json.RawMessage
+	}
+	stamps := make([]stamp, 0, workers*each)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Go(func() {
+			for range each {
+				id := c.rawSeq.Add(1)
+				params, _ := c.applyEra(string(mcp.MethodToolsList), map[string]any{"cursor": "x"}, id)
+				mu.Lock()
+				stamps = append(stamps, stamp{id: id, params: mustJSON(params)})
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+
+	require.Len(t, stamps, workers*each)
+	ids := make(map[int64]struct{}, len(stamps))
+	tokens := make(map[int64]struct{}, len(stamps))
+	for _, s := range stamps {
+		var p struct {
+			Meta struct {
+				Token int64 `json:"progressToken"`
+			} `json:"_meta"`
+		}
+		require.NoError(t, json.Unmarshal(s.params, &p))
+		assert.Greater(t, s.id, int64(rawSeqBase)) // never collides with a typed id
+		assert.Equal(t, s.id, p.Meta.Token, "progress token must equal its request id")
+		ids[s.id] = struct{}{}
+		tokens[p.Meta.Token] = struct{}{}
+	}
+	assert.Len(t, ids, workers*each)    // one unique id per request
+	assert.Len(t, tokens, workers*each) // and one unique default token
 }
 
 func TestHandle(t *testing.T) {
@@ -127,7 +197,7 @@ func TestLegacyServerCompat(t *testing.T) {
 	assert.Equal(t, mcp.LATEST_LEGACY_PROTOCOL_VERSION, c.negotiated)
 
 	// raw-seam requests stay byte-identical to the pre-1.0 wire: no _meta, no headers
-	params, header := c.applyEra(string(mcp.MethodToolsList), map[string]any{"cursor": "x"})
+	params, header := c.applyEra(string(mcp.MethodToolsList), map[string]any{"cursor": "x"}, c.rawSeq.Add(1))
 	assert.Equal(t, map[string]any{"cursor": "x"}, params)
 	assert.Nil(t, header)
 

@@ -26,6 +26,7 @@ func main() {
 	var legacyOnly bool            // serve only legacy protocol versions, for client fallback tests
 	var startupDelay time.Duration // block before serving so connects overlap in single-flight tests
 	var badSchema bool             // expose one tool whose input schema is structurally malformed
+	var hangInit bool              // never serve, so the client's initialize hangs until cancelled
 	flag.StringVar(&httpAddr, "http", "", "serve over Streamable HTTP on this address")
 	flag.BoolVar(&slow, "slow", false, "block each tool call until cancelled")
 	flag.IntVar(&tools, "tools", 3, "number of generated echo tools to expose")
@@ -35,7 +36,14 @@ func main() {
 	flag.BoolVar(&badSchema, "bad-schema", false, "expose a tool with a malformed input schema")
 	var die bool // expose a trigger_die tool that exits the process, for reconnect tests
 	flag.BoolVar(&die, "die", false, "expose a trigger_die tool that exits the server")
+	flag.BoolVar(&hangInit, "hang-init", false, "hold the transport open without ever answering")
 	flag.Parse()
+
+	if hangInit { // stay alive without serving, so the client's initialize never resolves
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
 
 	if startupDelay > 0 { // hold the init handshake open so concurrent connects overlap
 		time.Sleep(startupDelay)

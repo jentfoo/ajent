@@ -3,6 +3,10 @@ package mcp
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -352,6 +356,187 @@ func TestDialAbortsWhenServerRemoved(t *testing.T) {
 	mgr.mu.Unlock()
 
 	require.ErrorContains(t, <-errCh, "server removed during connect")
+}
+
+func TestDisconnectDuringDial(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=750ms"}},
+	}, wired(Options{Registrar: fr}))
+	t.Cleanup(mgr.Close)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- mgr.Connect(t.Context(), "fake") }()
+
+	s := mgr.serverByName("fake")
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.connecting
+	}, 2*time.Second, 5*time.Millisecond)
+
+	// the explicit disconnect lands while the dial is still mid-handshake
+	mgr.Disconnect("fake")
+
+	select {
+	case err := <-errCh:
+		require.ErrorContains(t, err, "disconnected during connect")
+	case <-time.After(10 * time.Second):
+		t.Fatal("dial never settled after disconnect")
+	}
+
+	// the disconnect must survive: no client, no tools, no stealth reconnect loop
+	s.mu.Lock()
+	down, connecting := s.down, s.connecting
+	s.mu.Unlock()
+	assert.False(t, down)
+	assert.False(t, connecting)
+	assert.Empty(t, fr.AllNames("mcp: fake"))
+	require.Never(t, func() bool {
+		return s.client() != nil || len(fr.AllNames("mcp: fake")) > 0
+	}, 1500*time.Millisecond, 25*time.Millisecond)
+
+	// a later manual connect works: the mid-dial disconnect poisons nothing
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	assert.NotEmpty(t, fr.AllNames("mcp: fake"))
+}
+
+func TestConnectAfterMidDialDisconnect(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=750ms"}},
+	}, wired(Options{Registrar: fr}))
+	t.Cleanup(mgr.Close)
+
+	first := make(chan error, 1)
+	go func() { first <- mgr.Connect(t.Context(), "fake") }()
+	s := mgr.serverByName("fake")
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.connecting
+	}, 2*time.Second, 5*time.Millisecond)
+	mgr.Disconnect("fake")
+
+	// a connect requested after that disconnect coalesces onto the doomed dial,
+	// it must not inherit the older request's preemption
+	second := make(chan error, 1)
+	go func() { second <- mgr.Connect(t.Context(), "fake") }()
+
+	select {
+	case err := <-first:
+		require.ErrorContains(t, err, "disconnected during connect")
+	case <-time.After(10 * time.Second):
+		t.Fatal("first dial never settled")
+	}
+	select {
+	case err := <-second:
+		require.NoError(t, err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("second connect never settled")
+	}
+	assert.NotNil(t, s.client())
+	assert.NotEmpty(t, fr.AllNames("mcp: fake"))
+}
+
+func TestFailedDialReconnects(t *testing.T) {
+	t.Parallel()
+
+	// a stdio server that is offline or not yet installed comes back on its own:
+	// the failed dial starts the same capped-backoff loop a death would
+	t.Run("stdio_starts_reconnect_loop", func(t *testing.T) {
+		srv := buildFakeServer(t) // built up front so the loop finds it on the first retry
+		missing := filepath.Join(t.TempDir(), "not-yet")
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: missing},
+		}, wired(Options{Registrar: fr}))
+		t.Cleanup(mgr.Close)
+
+		require.Error(t, mgr.Connect(t.Context(), "fake"))
+
+		s := mgr.serverByName("fake")
+		s.mu.Lock()
+		down, failures := s.down, s.failures
+		s.mu.Unlock()
+		assert.True(t, down)
+		assert.Equal(t, 1, failures)
+
+		// /mcp reports the retry rather than a dead-looking server
+		rows := mgr.Status(t.Context())
+		require.Len(t, rows, 1)
+		assert.Equal(t, fmt.Sprintf("reconnecting (%d)", failures), rows[0].State)
+
+		// the server appearing on disk is enough: the loop brings it up and registers
+		require.NoError(t, os.Symlink(srv, missing))
+		require.Eventually(t, func() bool {
+			return len(fr.AllNames("mcp: fake")) > 0
+		}, 15*time.Second, 50*time.Millisecond)
+		assert.NotNil(t, s.client())
+	})
+
+	// network servers have no death supervision, a failed dial must not invent it
+	t.Run("network_never_supervised", func(t *testing.T) {
+		// a port that just closed: connects fail fast without leaving the manager
+		var lc net.ListenConfig
+		ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := ln.Addr().(*net.TCPAddr).Port
+		require.NoError(t, ln.Close())
+
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"net": {URL: fmt.Sprintf("http://127.0.0.1:%d/mcp", port)},
+		}, wired(Options{Registrar: fr}))
+		t.Cleanup(mgr.Close)
+
+		require.Error(t, mgr.Connect(t.Context(), "net"))
+
+		s := mgr.serverByName("net")
+		s.mu.Lock()
+		down := s.down
+		s.mu.Unlock()
+		assert.False(t, down)
+	})
+
+	// a disconnect must survive a dial failure pinned to the pre-disconnect
+	// snapshot: the stale check and the down flag are one critical section, so
+	// retryDial can never flip a just-disconnected server back to down
+	t.Run("disconnect_survives_stale_dial_failure", func(t *testing.T) {
+		srv := buildFakeServer(t)
+		missing := filepath.Join(t.TempDir(), "not-yet")
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: missing},
+		}, wired(Options{Registrar: fr}))
+		t.Cleanup(mgr.Close)
+
+		require.Error(t, mgr.Connect(t.Context(), "fake")) // starts the loop
+		s := mgr.serverByName("fake")
+		s.mu.Lock()
+		down := s.down
+		s.mu.Unlock()
+		require.True(t, down)
+
+		mgr.Disconnect("fake") // stops the loop and bumps discSeq
+
+		// a dial failure arriving with the pre-disconnect snapshot must be refused
+		// even once the server is back on disk
+		mgr.retryDial("fake", s, 0)
+		require.NoError(t, os.Symlink(srv, missing))
+
+		s.mu.Lock()
+		down = s.down
+		s.mu.Unlock()
+		assert.False(t, down)
+		require.Never(t, func() bool {
+			return s.client() != nil || len(fr.AllNames("mcp: fake")) > 0
+		}, 1500*time.Millisecond, 25*time.Millisecond)
+	})
 }
 
 func TestConcurrentConnectsShareOneClient(t *testing.T) {

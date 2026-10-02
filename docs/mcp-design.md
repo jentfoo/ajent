@@ -115,7 +115,10 @@ handlers, so nothing is lost); handlers accumulate, so a second method never
 drops the first. Raw sends are bounded per attempt (`rawAttemptTimeout`) and the
 idempotent list calls resend on transport failures; a dropped stdio line must
 not fail discovery, but an unresponsive server still surfaces as an error, never
-a hang. The raw seam sits below mcp-go's own request stamping, so it must carry
+a hang. Each attempt draws **one** id from the raw counter and threads it into
+both the JSON-RPC id and the default `_meta.progressToken`, so a token always
+equals the id of the request that carried it and stays unique under concurrency.
+The raw seam sits below mcp-go's own request stamping, so it must carry
 the era itself: on a connection negotiated to protocol 2026-07-28 every request
 needs per-request `_meta` and mirrored `Mcp-*` headers (added by `applyEra`;
 legacy connections stay unstamped, matching the pre-1.0 wire), and `Ping` no-ops
@@ -148,7 +151,9 @@ permissions, token accounting and the sub-agent treat it like any built-in.
 - **Mode** — serial unless read-only, which may run parallel with other reads.
 - **Timeout** — per-call cap from config, clamped to a max. A call that exceeds
   it (or fails on transport) becomes an error result plus a notice so the turn
-  continues rather than aborting; the model adapts.
+  continues and the model adapts. An error result carries the same one-line
+  `Display` a success does, so history never renders an errored MCP call as a
+  blank row.
 - **Output** — remote progress maps onto the same output writer as a built-in,
   so a bridged call's incremental output streams where its caller renders it, and
   the tool-layer cap keeps it from flooding the model. See `tools-design.md`.
@@ -208,9 +213,11 @@ runs for a server at a time, and any path that wants it while another is in
 flight shares that after instead of starting its own. Without this the reconnect
 backoff, `/mcp reload` eager-connect and a manual `/mcp connect` can all target
 the same dead server at once and each spawn its own client, leaking every
-loser's stdio process and watcher goroutine (see *Reconnection*). A dial in
-flight when `Reload` removes the server closes its fresh client rather than
-installing into a stale object.
+loser's stdio process and watcher goroutine (see *Reconnection*). A dial still
+in flight when `Reload` removes the server, or when `/mcp disconnect` lands,
+drops its fresh client rather than installing it: an explicit user act is never
+reverted by a dial that started before it, even one that already registered.
+A connect requested after that act is not bound by it and dials on its own.
 
 Network servers have no death supervision: `watchServer` only supervises a stdio
 child's stderr, so a dead HTTP or SSE server is noticed on the next call rather
@@ -227,8 +234,13 @@ status path.
 A stdio child's stderr is streamed to `/mcp logs` one line per entry
 (`bufio.Reader`, no fixed cap), so a long or newline-less line is never dropped.
 Only an actual EOF or read error marks the child as exited and triggers
-reconnection.
-
+reconnection. A stdio server failing its **first** dial (Preload, `/mcp reload`
+or the initial connect against a server that is offline or not yet installed)
+enters the same capped-backoff loop a death would, so it comes up on its own.
+Network servers never do (see above). The initialize handshake is bounded too
+(`initTimeout`), so a server that accepts its transport but never answers
+surfaces as a connect error instead of holding the single-flight slot and every
+waiter behind it forever.
 
 ## Registry integration (`pkg/tools/registry.go`)
 
