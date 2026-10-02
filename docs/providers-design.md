@@ -84,6 +84,16 @@ sent:
 - **Image downgrade** when the model cannot read images: an image becomes a text
   placeholder instead of failing the request. Consecutive placeholders collapse
   to one; assistant content is untouched.
+- **Inline thinking recovery** for reasoning chat-completions models: when a
+  turn desyncs mid stream the reasoning tail can arrive on the content channel
+  still carrying its close tag. `Prepare` splits such text back into thinking
+  and text blocks, with a close tag that has no opening tag opening the region
+  at the previous boundary. Servers that render history through the model chat
+  template parse those markers themselves, and one stray tag makes them re-emit
+  the message for every later assistant turn, multiplying the real prompt far
+  past what the estimator counted. Recovered blocks then flow through the normal
+  retention, degradation and replay handling, so each model keeps or drops the
+  reasoning as it needs. The transcript stays verbatim.
 - **Cross-model degradation** keyed on each message's `Origin` (provider +
   dialect + model, stamped at append and rebuild, never written to the
   transcript). A message whose origin differs from the target is untrusted:

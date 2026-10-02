@@ -25,15 +25,17 @@ const noResult = "No result provided"
 const processedTools = "I have processed the tool results."
 
 // Prepare returns req with its messages normalized for the target model: images
-// downgraded, foreign reasoning degraded to text or dropped, retention applied,
-// tool-call ids made legal and unanswered calls answered. Every request path
-// passes through it so the estimator and the wire never disagree about what is
-// sent. It is idempotent, so calling it twice yields an identical message list.
+// downgraded, leaked inline reasoning split back into thinking blocks, foreign
+// reasoning degraded to text or dropped, retention applied, tool-call ids made
+// legal and unanswered calls answered. Every request path passes through it so
+// the estimator and the wire never disagree about what is sent. It is
+// idempotent, so calling it twice yields an identical message list.
 func Prepare(req Request) Request {
 	caps := req.Model.Caps
 	target := Origin{Provider: req.Model.Provider, Dialect: caps.Dialect, Model: req.Model.ID}
 
 	msgs := downgradeImages(req.Messages, caps)
+	msgs = splitInlineThinking(msgs, caps)
 	msgs = normalizeContent(msgs, req.Reasoning.Retain, caps, target)
 	msgs = splitToolResultImages(msgs, caps) // B4: compat carries tool images separately
 	msgs = repairTurns(msgs, caps)
@@ -47,6 +49,122 @@ func Prepare(req Request) Request {
 	}
 	req.Messages = msgs
 	return req
+}
+
+// splitInlineThinking recovers reasoning that leaked into an assistant text
+// block: chat-completions models mark reasoning with inline tags, and when a
+// turn desyncs mid stream the tail plus its close tag can arrive on the content
+// channel. Servers that render history through the model chat template read
+// those markers themselves, and one stray tag makes them re-emit the message for
+// every later assistant turn, multiplying the prompt far past what the
+// estimator counted. The recovered block then flows through the normal
+// retention, degradation and replay handling, so each model gets what it needs.
+// The transcript itself stays verbatim, only the request copy is restructured.
+func splitInlineThinking(msgs []Message, caps Capabilities) []Message {
+	if caps.Dialect != DialectOpenAICompletions || !caps.Reasoning {
+		return msgs
+	}
+	open, close := thinkTagsFor(caps)
+	var out []Message
+	for i, m := range msgs {
+		if m.Role != RoleAssistant || !hasThinkMarker(m.Content, open, close) {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(msgs)
+		}
+		// the channel this turn's reasoning arrived on is the channel the recovered
+		// tail belongs to: a surviving sibling block carries its delta field, and the
+		// configured field is the fallback when the whole turn leaked
+		field := caps.ReasoningField
+		for _, b := range m.Content {
+			if tb, ok := b.(ThinkingBlock); ok && tb.Field != "" {
+				field = tb.Field
+			}
+		}
+		content := make(BlockList, 0, len(m.Content)+2)
+		for _, b := range m.Content {
+			if tb, ok := b.(TextBlock); ok {
+				content = append(content, splitThinkText(tb.Text, open, close, field)...)
+				continue
+			}
+			content = append(content, b)
+		}
+		m.Content = content
+		out[i] = m
+	}
+	if out == nil {
+		return msgs
+	}
+	return out
+}
+
+// thinkTagsFor resolves the inline reasoning markers for a model, falling back
+// to the conventional think tags when the capability carries none.
+func thinkTagsFor(caps Capabilities) (open, close string) {
+	if caps.ThinkOpen != "" && caps.ThinkClose != "" {
+		return caps.ThinkOpen, caps.ThinkClose
+	}
+	return thinkOpenTag, thinkCloseTag
+}
+
+// hasThinkMarker reports whether any text block carries an inline marker.
+func hasThinkMarker(content BlockList, open, close string) bool {
+	for _, b := range content {
+		if tb, ok := b.(TextBlock); ok {
+			if strings.Contains(tb.Text, open) || strings.Contains(tb.Text, close) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// splitThinkText splits one text at its reasoning markers, returning the
+// regions as thinking and text blocks in order. A close tag with no opening tag
+// opens the region at the previous boundary, which is how a reasoning tail that
+// leaked into the text channel reads: the opening tag sits further back, before
+// reasoning already recorded as its own block. field rides the recovered block
+// so providers that replay thinking send it back on the right channel.
+func splitThinkText(text, open, close, field string) BlockList {
+	type region struct {
+		thinking bool
+		text     string
+	}
+	var regions []region
+	var inside bool
+	for text != "" {
+		tag, at := nextThinkTag(text, open, close)
+		if at < 0 {
+			regions = append(regions, region{inside, text})
+			break
+		}
+		if head := text[:at]; head != "" {
+			// a close with no open opens the region implicitly
+			regions = append(regions, region{inside || tag == close, head})
+		}
+		inside = tag == open
+		text = text[at+len(tag):]
+	}
+
+	out := make(BlockList, 0, len(regions))
+	for _, r := range regions {
+		if r.thinking {
+			out = append(out, ThinkingBlock{Text: r.text, Field: field})
+		} else {
+			out = append(out, TextBlock{Text: r.text})
+		}
+	}
+	return out
+}
+
+// nextThinkTag finds whichever marker occurs first, returning it and its offset.
+func nextThinkTag(text, open, close string) (string, int) {
+	tag, at := open, strings.Index(text, open)
+	if j := strings.Index(text, close); j >= 0 && (at < 0 || j < at) {
+		tag, at = close, j
+	}
+	return tag, at
 }
 
 // downgradeImages replaces image blocks with a placeholder when the model does

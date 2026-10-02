@@ -680,3 +680,179 @@ func TestPrepareToolImageBridgePlacement(t *testing.T) {
 	assert.Equal(t, RoleUser, out[2].Role)
 	assert.Contains(t, out[3].Content[0].(TextBlock).Text, "what do you see")
 }
+
+func TestSplitInlineThinking(t *testing.T) {
+	t.Parallel()
+
+	compat := Capabilities{Dialect: DialectOpenAICompletions, Reasoning: true}
+
+	t.Run("stray_close_recovers_reasoning_region", func(t *testing.T) {
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "reasoning leaked</think>visible answer"},
+		}}}
+		out := splitInlineThinking(in, compat)
+		require.Len(t, out[0].Content, 2)
+		assert.Equal(t, ThinkingBlock{Text: "reasoning leaked"}, out[0].Content[0])
+		assert.Equal(t, TextBlock{Text: "visible answer"}, out[0].Content[1])
+	})
+
+	t.Run("paired_tags_split_in_order", func(t *testing.T) {
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "before<think>quiet</think>after"},
+		}}}
+		out := splitInlineThinking(in, compat)
+		require.Len(t, out[0].Content, 3)
+		assert.Equal(t, TextBlock{Text: "before"}, out[0].Content[0])
+		assert.Equal(t, ThinkingBlock{Text: "quiet"}, out[0].Content[1])
+		assert.Equal(t, TextBlock{Text: "after"}, out[0].Content[2])
+	})
+
+	t.Run("field_rides_recovered_thinking", func(t *testing.T) {
+		caps := Capabilities{Dialect: DialectOpenAICompletions, Reasoning: true,
+			ReasoningField: "reasoning_content"}
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "leaked</think>answer"},
+		}}}
+		out := splitInlineThinking(in, caps)
+		assert.Equal(t, "reasoning_content", out[0].Content[0].(ThinkingBlock).Field)
+	})
+
+	t.Run("inherits_sibling_block_field", func(t *testing.T) {
+		// a partial leak: the head arrived on a delta field and carries it, so the
+		// recovered tail rejoins the same channel even with no configured field
+		caps := Capabilities{Dialect: DialectOpenAICompletions, Reasoning: true}
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			ThinkingBlock{Text: "head", Field: "reasoning_content"},
+			TextBlock{Text: "tail</think>answer"},
+		}}}
+		out := splitInlineThinking(in, caps)
+		require.Len(t, out[0].Content, 3)
+		assert.Equal(t, "reasoning_content", out[0].Content[1].(ThinkingBlock).Field)
+		assert.Equal(t, TextBlock{Text: "answer"}, out[0].Content[2])
+	})
+
+	t.Run("marker_only_text_drops_block", func(t *testing.T) {
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "</think>"},
+			ToolCallBlock{ID: "c1", Name: "read"},
+		}}}
+		out := splitInlineThinking(in, compat)
+		require.Len(t, out[0].Content, 1)
+		_, ok := out[0].Content[0].(ToolCallBlock)
+		assert.True(t, ok)
+	})
+
+	t.Run("leaves_other_roles_and_dialects", func(t *testing.T) {
+		user := Message{Role: RoleUser, Content: BlockList{TextBlock{Text: "what does </think> mean"}}}
+		for _, tc := range []struct {
+			name string
+			caps Capabilities
+		}{
+			{"anthropic_dialect", Capabilities{Dialect: DialectAnthropic, Reasoning: true}},
+			{"responses_dialect", Capabilities{Dialect: DialectOpenAIResponses, Reasoning: true}},
+			{"non_reasoning_model", Capabilities{Dialect: DialectOpenAICompletions}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				out := splitInlineThinking([]Message{user}, tc.caps)
+				assert.Equal(t, user, out[0])
+			})
+		}
+	})
+
+	t.Run("honors_configured_tags", func(t *testing.T) {
+		caps := Capabilities{Dialect: DialectOpenAICompletions, Reasoning: true,
+			ThinkOpen: "<reasoning>", ThinkClose: "</reasoning>"}
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "<reasoning>x</reasoning>y"},
+		}}}
+		out := splitInlineThinking(in, caps)
+		require.Len(t, out[0].Content, 2)
+		assert.Equal(t, ThinkingBlock{Text: "x"}, out[0].Content[0])
+		assert.Equal(t, TextBlock{Text: "y"}, out[0].Content[1])
+	})
+
+	t.Run("prepare_drops_recovered_thinking_per_retention", func(t *testing.T) {
+		// a model that neither replays thinking nor accepts it inline: the
+		// recovered region must leave the wire copy entirely
+		m := Model{Provider: "sloth", ID: "glm", Caps: compat}
+		in := sameOrigin(m, []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "part one</think>part two"},
+		}}})
+		out := Prepare(Request{Model: m, Messages: in, Reasoning: ReasoningConfig{Retain: RetainAll}}).Messages
+		require.Len(t, out, 1)
+		require.Len(t, out[0].Content, 1)
+		assert.Equal(t, TextBlock{Text: "part two"}, out[0].Content[0])
+	})
+
+	t.Run("prepare_replays_recovered_thinking_on_field", func(t *testing.T) {
+		// a deepseek-style model that requires reasoning back on assistant
+		// messages keeps the recovered region under its field
+		m := Model{Provider: "deepseek", ID: "r1", Caps: Capabilities{
+			Dialect: DialectOpenAICompletions, Reasoning: true, ReasoningReplay: true,
+			ReasoningField: "reasoning_content",
+		}}
+		in := sameOrigin(m, []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "part one</think>part two"},
+		}}})
+		out := Prepare(Request{Model: m, Messages: in, Reasoning: ReasoningConfig{Retain: RetainAll}}).Messages
+		require.Len(t, out, 1)
+		require.Len(t, out[0].Content, 2)
+		assert.Equal(t, "part one", out[0].Content[0].(ThinkingBlock).Text)
+		assert.Equal(t, "reasoning_content", out[0].Content[0].(ThinkingBlock).Field)
+		assert.Equal(t, TextBlock{Text: "part two"}, out[0].Content[1])
+	})
+
+	t.Run("prepare_is_idempotent_and_input_kept", func(t *testing.T) {
+		m := Model{Provider: "sloth", ID: "glm", Caps: compat}
+		in := sameOrigin(m, []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "part one</think>part two"},
+		}}})
+		want := slices.Clone(in)
+		want[0].Content = slices.Clone(want[0].Content)
+
+		req := Request{Model: m, Messages: in, Reasoning: ReasoningConfig{Retain: RetainAll}}
+		once := Prepare(req)
+		twice := Prepare(Prepare(req))
+		assert.Equal(t, once.Messages, twice.Messages)
+		assert.Equal(t, want[0].Content, in[0].Content) // caller blocks untouched
+	})
+}
+
+func TestCompatWireCarriesNoThinkMarkers(t *testing.T) {
+	t.Parallel()
+
+	// the incident shape: a sibling thinking block carries the delta field, the
+	// reasoning tail leaked into text still holding its close tag
+	poison := []Message{
+		Text(RoleUser, "go"),
+		{Role: RoleAssistant, Content: BlockList{
+			ThinkingBlock{Text: "head", Field: "reasoning_content"},
+			TextBlock{Text: "tail of the reasoning</think>the actual answer"},
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{}`)},
+		}},
+		{Role: RoleUser, Content: BlockList{
+			ToolResultBlock{CallID: "c1", ToolName: "read", Content: BlockList{TextBlock{Text: "file"}}},
+		}},
+	}
+
+	for name, caps := range map[string]Capabilities{
+		"tags_configured": func() Capabilities {
+			c := compatModel(nil).Caps
+			c.ThinkOpen, c.ThinkClose = thinkOpenTag, thinkCloseTag
+			return c
+		}(),
+		"tags_defaulted":  compatModel(func(c *Capabilities) { c.ThinkOpen, c.ThinkClose = "", "" }).Caps,
+		"replay_provider": compatModel(func(c *Capabilities) { c.ReasoningReplay = true }).Caps,
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := compatModel(func(c *Capabilities) { *c = caps })
+			body, err := buildCompatBody(Request{
+				Model: m, Messages: poison,
+				Reasoning: ReasoningConfig{Level: LevelHigh, Retain: RetainAll},
+			}, compatProfile{})
+			require.NoError(t, err)
+			assert.NotContains(t, string(body), "<think>")
+			assert.NotContains(t, string(body), "</think>")
+		})
+	}
+}
