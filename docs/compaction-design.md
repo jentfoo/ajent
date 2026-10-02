@@ -144,7 +144,9 @@ floor outranks the ceiling: a band that shrank below the live work would leave
 the agent re-reading what it just did, and every turn would compact again
 immediately. The ceiling counts only the kept steps' own messages, not the
 system block, tool schemas or the summary, because the cut is chosen before
-anything that depends on it.
+anything that depends on it. Those messages are sized through the session's
+retain policy, the same rule every other measure applies, so thinking retention
+would drop never stops the band from extending.
 
 When the entry immediately before the band is a real user prompt (typed, not
 system-injected), the band extends to include it. Otherwise a mid-turn
@@ -202,10 +204,13 @@ tool calls named by their argument and results inlined. This is what makes "do
 NOT continue the conversation" hold and sidesteps tool-pairing validation on the
 summarisation request entirely.
 
-A single merged call covers the span from the prior cut to the band. One call
-degrades better on the small local models `ajent` supports than any split-turn
-scheme would, and the `<summary>` user-message re-injection is what keeps a cut
-that lands mid-turn valid.
+A single merged call covers the span from the prior cut to the band. When even
+the tightest clip leaves the prompt over the model window, the oldest entries
+are dropped from the prompt and folded in first by a chained call, so no message
+is cut from context without reaching the summary; a span that cannot be covered
+even that way fails the run. One call degrades better on the small local models
+`ajent` supports than any split-turn scheme would, and the `<summary>`
+user-message re-injection is what keeps a cut that lands mid-turn valid.
 
 The summariser's own usage folds into the session ledger so `/usage` counts it.
 The stream is driven with `llm.Accumulator`, the same as the agent loop; a
@@ -338,6 +343,8 @@ the new entry's own position and drop everything between the two.
 prior compaction applied, never against the raw branch. Measuring against the
 raw branch made invariant 0 unenforceable: a plan that reopened folded history
 still compared favourably to a context the session had not sent in a long time.
+A prior cut missing from the branch means the effective context is
+unrecoverable, so the run fails rather than silently rebasing onto raw.
 
 **6. On rebuild, context and spend come from different places.** A compaction
 rewrites what the branch sends, so the prompt sizes recorded against its

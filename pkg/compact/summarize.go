@@ -103,7 +103,7 @@ const minSummaryTokens = 8192 // a merged checkpoint is never amputated by a har
 // how many messages it covered. An empty summary with no error means there was
 // nothing new to fold. stubs are replacement markers for the span, applied so the
 // summariser reads what compaction already reduced rather than raw output.
-func summarise(ctx context.Context, v *branchView, spanStart, end int, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (summary string, summarized int, err error) {
+func summarise(ctx context.Context, v *branchView, spanStart, end int, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (string, int, error) {
 	prev := priorSummary(v.branch)
 	if spanStart < 0 {
 		spanStart = 0
@@ -114,32 +114,52 @@ func summarise(ctx context.Context, v *branchView, spanStart, end int, stubs []s
 	if spanStart >= end { // nothing new to fold
 		return "", 0, nil
 	}
+	return summariseRegion(ctx, v, spanStart, end, prev, stubs, model, run, opts)
+}
 
-	var span int
-	for i := spanStart; i < end; i++ {
-		span += v.tokens(i)
-	}
+// summariseRegion folds [start, end) into a checkpoint, walking left to right
+// with one run call per chunk that fits, chaining each summary into the next as
+// prev. It returns the final summary and how many messages the chain covered, so
+// nothing is cut from context without reaching the summary.
+func summariseRegion(ctx context.Context, v *branchView, start, end int, prev string, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (string, int, error) {
+	var kept int
+	merge := prev
+	for from := start; from < end; {
+		span := v.spanTokens(from, end)
+		maxOut := summarizeBudget(model, span, tokens.EstimateText(merge, tokens.KindProse))
+		plan, err := v.fitPrompt(from, end, merge, opts.Instructions, stubs, model, maxOut)
+		if err != nil {
+			return "", 0, err
+		}
+		if plan.from > from {
+			// the oldest chunk does not fit alongside the rest: fold it in first
+			var nsum int
+			if merge, nsum, err = summariseRegion(ctx, v, from, plan.from, merge, stubs, model, run, opts); err != nil {
+				return "", 0, err
+			}
+			kept += nsum
+			from = plan.from
+			continue
+		}
 
-	maxOut := summarizeBudget(model, span, tokens.EstimateText(prev, tokens.KindProse))
-	prompt, kept, err := v.fitPrompt(spanStart, end, prev, opts.Instructions, stubs, model, maxOut)
-	if err != nil {
-		return "", 0, err
+		prompt := buildPrompt(v, from, end, plan.prev, opts.Instructions, stubs, plan.clip, from > start)
+		req := llm.Request{
+			Model:     model,
+			System:    llm.BlockList{llm.TextBlock{Text: summarizerSystem}},
+			Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: prompt}}}},
+			MaxTokens: maxOut,
+		}
+		out, err := run(ctx, req)
+		if err != nil {
+			return "", 0, err
+		}
+		summary := strings.TrimSpace(out)
+		if summary == "" {
+			return "", 0, errors.New("summariser returned an empty summary; retry, or if context usage is low skip compaction")
+		}
+		return summary, kept + v.countMessages(from, end), nil
 	}
-	req := llm.Request{
-		Model:     model,
-		System:    llm.BlockList{llm.TextBlock{Text: summarizerSystem}},
-		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: prompt}}}},
-		MaxTokens: maxOut,
-	}
-	out, err := run(ctx, req)
-	if err != nil {
-		return "", 0, err
-	}
-	summary = strings.TrimSpace(out)
-	if summary == "" {
-		return "", 0, errors.New("summariser returned an empty summary; retry, or if context usage is low skip compaction")
-	}
-	return summary, kept, nil
+	return merge, kept, nil // unreachable: every pass either returns or advances from
 }
 
 // priorSummary returns the newest summary recorded on the branch, for merging.
@@ -245,45 +265,57 @@ func capCallInput(clip int) int {
 	return clip
 }
 
-// fitPrompt builds the summariser prompt at the largest clip that leaves room for
-// a maxOut-token reply. Clipping is a safety valve, not a default: compaction
-// fires near the top of the window, so a span with no structural compressibility
-// plus its summary can overflow, and an oversized request would fail the session
-// exactly when it most needs to shrink.
-func (v *branchView) fitPrompt(spanStart, end int, prev, instructions string, stubs []session.Stub, model llm.Model, maxOut int) (prompt string, kept int, err error) {
+// fitPlan is the sizing fitPrompt settled on.
+type fitPlan struct {
+	clip int    // serialisation clip for the span
+	from int    // span start after any oldest-entry drop
+	prev string // prior summary to merge, clipped when nothing else fits
+}
+
+// fitPrompt sizes the summariser prompt: the largest clip that leaves room for a
+// maxOut-token reply, dropping the oldest entries and finally clipping prev when
+// even the tightest clip busts. from never reaches end, so the transcript the
+// summariser reads is never empty.
+func (v *branchView) fitPrompt(spanStart, end int, prev, instructions string, stubs []session.Stub, model llm.Model, maxOut int) (fitPlan, error) {
 	avail := promptBudget(model, maxOut)
 	fits := func(p string) bool {
 		return avail <= 0 || tokens.EstimateText(p, tokens.KindCode) <= avail
 	}
 
-	tightest := clipLadder[len(clipLadder)-1]
 	for _, clip := range clipLadder { // the first rung keeps output whole
-		prompt = buildPrompt(v, spanStart, end, prev, instructions, stubs, clip, false)
-		if fits(prompt) {
-			return prompt, v.countMessages(spanStart, end), nil // the common case returns on the first build
+		if fits(buildPrompt(v, spanStart, end, prev, instructions, stubs, clip, false)) {
+			return fitPlan{clip: clip, from: spanStart, prev: prev}, nil
 		}
 	}
 
 	// even the tightest clip busts: drop the oldest entries before giving up,
-	// rather than send a request the provider will reject. Dropping must never
-	// empty the transcript into a "summary of nothing" prompt.
-	for spanStart < end {
-		spanStart += (end-spanStart)/4 + 1
-		if spanStart >= end { // exhausted, fall through to the clipped-prior tail
-			break
-		}
-		prompt = buildPrompt(v, spanStart, end, prev, instructions, stubs, tightest, true)
-		if fits(prompt) {
-			return prompt, v.countMessages(spanStart, end), nil
-		}
+	// rather than send a request the provider will reject.
+	tightest := clipLadder[len(clipLadder)-1]
+	if from, ok := v.dropToFit(spanStart, end, prev, instructions, stubs, tightest, fits); ok {
+		return fitPlan{clip: tightest, from: from, prev: prev}, nil
 	}
 	if prev != "" { // a clipped checkpoint still merges, while a rejected request does not
-		prompt = buildPrompt(v, spanStart, end, strutil.Clip(prev, max(avail/2, 256)), instructions, stubs, tightest, true)
-		if fits(prompt) {
-			return prompt, v.countMessages(spanStart, end), nil
+		clipped := strutil.Clip(prev, max(avail/2, 256))
+		if from, ok := v.dropToFit(spanStart, end, clipped, instructions, stubs, tightest, fits); ok {
+			return fitPlan{clip: tightest, from: from, prev: clipped}, nil
 		}
 	}
-	return "", 0, errors.New("summariser prompt does not fit the model window")
+	return fitPlan{}, errors.New("summariser prompt does not fit the model window")
+}
+
+// dropToFit advances the span start a quarter of the remainder at a time until
+// the survivors-only prompt fits, false when nothing would be left to summarise.
+func (v *branchView) dropToFit(start, end int, prev, instructions string, stubs []session.Stub, clip int, fits func(string) bool) (int, bool) {
+	for from := start; from < end; {
+		from += (end-from)/4 + 1
+		if from >= end { // exhausted: dropping everything is not a summary
+			return 0, false
+		}
+		if fits(buildPrompt(v, from, end, prev, instructions, stubs, clip, true)) {
+			return from, true
+		}
+	}
+	return 0, false
 }
 
 // promptBudget reports how many tokens the summariser user message may occupy:

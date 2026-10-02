@@ -13,6 +13,10 @@ type branchView struct {
 	state  []msgState
 	msgs   []session.MessageData
 	toks   []int
+
+	retain        llm.RetainPolicy // band-ceiling retention; zero counts thinking
+	keepFrom      int              // branch index of the newest turn-opening user message
+	lastAssistant int              // branch index of the newest assistant message
 }
 
 type msgState uint8
@@ -24,11 +28,30 @@ const (
 )
 
 func newBranchView(branch []session.Entry) *branchView {
-	return &branchView{
+	v := &branchView{
 		branch: branch,
 		state:  make([]msgState, len(branch)),
 		msgs:   make([]session.MessageData, len(branch)),
 		toks:   make([]int, len(branch)),
+	}
+	v.setRetain(llm.RetainAll)
+	return v
+}
+
+// setRetain sets the band-ceiling retention policy, resolving the turn bounds
+// Prepare's retention uses.
+func (v *branchView) setRetain(retain llm.RetainPolicy) {
+	v.retain = retain
+	v.keepFrom, v.lastAssistant = -1, -1
+	for i := range v.branch {
+		if isStepStart(v.branch[i]) {
+			v.lastAssistant = i
+			continue
+		}
+		if md, ok := v.message(i); ok && md.Message.Role == llm.RoleUser &&
+			!llm.OnlyToolResults(md.Message.Content) {
+			v.keepFrom = i
+		}
 	}
 }
 
@@ -74,6 +97,37 @@ func (v *branchView) spanTokens(lo, hi int) int {
 	return n
 }
 
+// sentTokens estimates entry i as the request carries it: thinking the retain
+// policy drops is excluded, matching the Prepare pass on every measure.
+func (v *branchView) sentTokens(i int) int {
+	n := v.tokens(i)
+	md, ok := v.message(i)
+	if !ok || retainsThinking(v.retain, i, v.keepFrom, v.lastAssistant) {
+		return n
+	}
+	for _, blk := range md.Message.Content {
+		if th, ok := blk.(llm.ThinkingBlock); ok {
+			n -= tokens.EstimateBlocks(llm.BlockList{th})
+		}
+	}
+	return n
+}
+
+// retainsThinking reports whether entry i's thinking survives retention,
+// mirroring llm's per-message rule in branch-index space.
+func retainsThinking(policy llm.RetainPolicy, i, keepFrom, lastAssistant int) bool {
+	switch policy {
+	case llm.RetainLastTurn:
+		return i == lastAssistant
+	case llm.RetainWholeTurn:
+		return i >= keepFrom
+	case llm.RetainAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // countMessages reports how many message entries a span holds, for the notice.
 func (v *branchView) countMessages(lo, hi int) int {
 	var n int
@@ -117,7 +171,7 @@ func (v *branchView) verbatimCut(priorCut, minSteps, maxTokens int) int {
 
 	var cut, seen, acc = len(v.branch), 0, 0
 	for i := len(v.branch) - 1; i >= priorCut; i-- {
-		acc += v.tokens(i)
+		acc += v.sentTokens(i)
 		if !isStepStart(v.branch[i]) {
 			continue // an unreadable entry or a non-assistant message opens no step
 		}

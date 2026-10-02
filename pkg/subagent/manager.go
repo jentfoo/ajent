@@ -546,16 +546,17 @@ func noticeText(ids []string) string {
 	return "Sub-agents " + strings.Join(ids, ", ") + " completed"
 }
 
-// completionNotice is the steer text naming completed sub-agents.
+// completionNotice is the steer text naming completed sub-agents. The [system]
+// prefix marks generated context, so the model never reads it as operator speech.
 func completionNotice(ids []string) string {
 	switch len(ids) {
 	case 0:
 		return ""
 	case 1:
 		id := ids[0]
-		return "Sub-agent " + id + " completed. Call agent_poll with id " + id + " to retrieve the summary."
+		return "[system] Sub-agent " + id + " completed. Call agent_poll with id " + id + " to retrieve the summary."
 	default:
-		return fmt.Sprintf("Sub-agents %s completed. Poll each for its summary.", strings.Join(ids, ", "))
+		return fmt.Sprintf("[system] Sub-agents %s completed. Poll each for its summary.", strings.Join(ids, ", "))
 	}
 }
 

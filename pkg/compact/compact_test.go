@@ -266,6 +266,17 @@ func TestCompactRecompaction(t *testing.T) {
 		assert.NotEmpty(t, res.Summary)
 	})
 
+	t.Run("missing_prior_cut_is_error", func(t *testing.T) {
+		// a corrupt or rewound transcript whose newest compaction names a kept entry
+		// the branch does not hold: fail rather than measure against the raw branch
+		branch := toolBranch(t, 8, 400)
+		branch = append(branch, compactEntry("comp", "a checkpoint", "gone"))
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+		require.Error(t, err)
+		assert.Nil(t, res)
+	})
+
 	t.Run("declines_when_nothing_new_happened", func(t *testing.T) {
 		branch := toolBranch(t, 8, 400)
 		branch = append(branch, compactEntry("comp", "a checkpoint", "a7"))

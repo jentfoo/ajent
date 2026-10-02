@@ -2,6 +2,7 @@ package compact
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,7 +12,6 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
-	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 func TestSummarizeBudget(t *testing.T) {
@@ -138,27 +138,26 @@ func TestFitPrompt(t *testing.T) {
 
 	t.Run("keeps_output_whole_when_it_fits", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 5000, MaxOutput: 10000}
-		prompt, kept, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
+		plan, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.Contains(t, prompt, strings.Repeat("x ", 400))
-		assert.Equal(t, view.countMessages(0, len(entries)), kept)
+		assert.Equal(t, 0, plan.from)
+		assert.Equal(t, clipLadder[0], plan.clip)
 	})
 
 	t.Run("clips_when_it_would_not_fit", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 6000, MaxOutput: 1000}
-		prompt, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
+		plan, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.NotContains(t, prompt, strings.Repeat("x ", 400), "a clip cut the output")
-		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode),
-			promptBudget(model, maxOutOf(model)))
+		assert.Equal(t, 0, plan.from)
+		assert.Equal(t, clipLadder[len(clipLadder)-1], plan.clip)
 	})
 
 	t.Run("drops_oldest_when_even_the_smallest_busts", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 3000, MaxOutput: 256}
-		prompt, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
+		plan, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.Contains(t, prompt, "[earlier messages omitted]")
-		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode), promptBudget(model, maxOutOf(model)))
+		assert.Positive(t, plan.from)
+		assert.Less(t, plan.from, len(entries))
 	})
 
 	t.Run("clips_a_previous_summary_as_a_last_resort", func(t *testing.T) {
@@ -166,26 +165,25 @@ func TestFitPrompt(t *testing.T) {
 		// merge still carries the prior work, a rejected request carries nothing
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 2000, MaxOutput: 256}
 		prev := strings.Repeat("prior checkpoint detail ", 500)
-		prompt, _, err := view.fitPrompt(0, len(entries), prev, "", nil, model, maxOutOf(model))
+		plan, err := view.fitPrompt(0, len(entries), prev, "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.LessOrEqual(t, tokens.EstimateText(prompt, tokens.KindCode), promptBudget(model, maxOutOf(model)))
-		assert.NotContains(t, prompt, prev, "the checkpoint was clipped, not sent whole")
-		assert.Contains(t, prompt, "prior checkpoint detail")
+		assert.NotEqual(t, prev, plan.prev, "the checkpoint was clipped, not sent whole")
+		assert.Contains(t, plan.prev, "prior checkpoint detail")
 	})
 
 	t.Run("unknown_window_applies_no_bound", func(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m"}
 		assert.Zero(t, promptBudget(model, 256))
-		prompt, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
+		plan, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.NoError(t, err)
-		assert.Contains(t, prompt, strings.Repeat("x ", 400))
+		assert.Equal(t, 0, plan.from)
 	})
 
 	t.Run("nothing_fits_with_no_prior_is_error", func(t *testing.T) {
 		// a window so tiny that even dropping every entry cannot fit the empty
 		// transcript: fail rather than send a request the provider will reject.
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 1000, MaxOutput: 200}
-		_, _, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
+		_, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
 		require.Error(t, err)
 	})
 
@@ -194,17 +192,8 @@ func TestFitPrompt(t *testing.T) {
 		// than summarise an empty transcript.
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 1000, MaxOutput: 200}
 		prev := strings.Repeat("prior checkpoint detail ", 500)
-		_, _, err := view.fitPrompt(0, len(entries), prev, "", nil, model, maxOutOf(model))
+		_, err := view.fitPrompt(0, len(entries), prev, "", nil, model, maxOutOf(model))
 		require.Error(t, err)
-	})
-
-	t.Run("kept_excludes_dropped_entries", func(t *testing.T) {
-		// when the drop loop fires, kept counts only what survived into the prompt,
-		// so Stats.Summarized stays honest.
-		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 3000, MaxOutput: 256}
-		_, kept, err := view.fitPrompt(0, len(entries), "", "", nil, model, maxOutOf(model))
-		require.NoError(t, err)
-		assert.Less(t, kept, view.countMessages(0, len(entries)))
 	})
 
 	t.Run("empty_transcript_is_never_returned", func(t *testing.T) {
@@ -215,9 +204,8 @@ func TestFitPrompt(t *testing.T) {
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 4000, MaxOutput: 256}
 		maxOut := maxOutOf(model)
 		assert.Greater(t, promptBudget(model, maxOut), 512) // genuinely mid-size, not the no-bound path
-		_, kept, err := newBranchView(huge).fitPrompt(0, len(huge), "", "", nil, model, maxOut)
+		_, err := newBranchView(huge).fitPrompt(0, len(huge), "", "", nil, model, maxOut)
 		require.Error(t, err)
-		assert.Zero(t, kept)
 	})
 }
 
@@ -228,4 +216,38 @@ func maxOutOf(m llm.Model) int {
 		return m.MaxOutput
 	}
 	return m.Reserve()
+}
+
+func TestSummariseDroppedRegion(t *testing.T) {
+	t.Parallel()
+
+	// a window small enough that even the tightest clip busts: the drop path
+	// fires, and the dropped oldest region must reach the checkpoint by a second
+	// chained call instead of being cut from context unsummarised.
+	branch := toolBranch(t, 12, 400)
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 2500, MaxOutput: 512}
+
+	var prompts []string
+	run := func(_ context.Context, req llm.Request) (string, error) {
+		prompts = append(prompts, textOf(req.Messages[0]))
+		return "## Goal\npart " + strconv.Itoa(len(prompts)), nil
+	}
+	res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.NotEmpty(t, prompts)
+
+	// the deepest call covers the oldest region whole; every later call knows
+	// history precedes it and chains through the merge path
+	assert.Contains(t, prompts[0], "output 1")
+	assert.NotContains(t, prompts[0], "[earlier messages omitted]")
+	last := prompts[len(prompts)-1]
+	assert.Contains(t, last, "[earlier messages omitted]")
+	assert.Contains(t, last, "<previous-summary>")
+
+	band := slices.IndexFunc(branch, func(e session.Entry) bool { return e.ID == res.FirstKeptEntryID })
+	require.Positive(t, band)
+	assert.Equal(t, newBranchView(branch).countMessages(0, band), res.Reduce.Stats.Summarized,
+		"every folded message is counted, dropped ones included")
+	assert.Less(t, res.After, res.Before)
 }

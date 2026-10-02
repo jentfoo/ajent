@@ -213,9 +213,15 @@ func TestCompactorAnnouncesStart(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
 
 	t.Run("announces_before_summarising", func(t *testing.T) {
-		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-			{Events: textStream("## Goal\nthe lighthouse story")},
-		}}
+		// several turns: the summariser prompt can chain across calls when the
+		// span only fits by dropping its oldest entries
+		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
+			turns := make([]llm.ScriptedTurn, 4)
+			for i := range turns {
+				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+			}
+			return turns
+		}()}
 		c, st, w := testCompactor(t, model, sp)
 		c.cfg = func() config.Compaction {
 			return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
@@ -357,9 +363,15 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 	// a session with nothing worth folding yet is not a session that cannot reduce:
 	// latching there would disable automatic compaction as history was still arriving.
 	t.Run("nothing_to_fold_yet_never_latches", func(t *testing.T) {
-		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-			{Events: textStream("## Goal\nthe lighthouse story")},
-		}}
+		// several turns: the summariser prompt can chain across calls when the
+		// span only fits by dropping its oldest entries
+		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
+			turns := make([]llm.ScriptedTurn, 4)
+			for i := range turns {
+				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+			}
+			return turns
+		}()}
 		c, st, w := testCompactor(t, model, sp)
 		c.cfg = func() config.Compaction {
 			return config.Compaction{Auto: true, MinSteps: 8, VerbatimFraction: 0.9}
@@ -452,9 +464,15 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 	})
 
 	t.Run("success_clears_the_latch", func(t *testing.T) {
-		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-			{Events: textStream("## Goal\nthe lighthouse story")},
-		}}
+		// several turns: the summariser prompt can chain across calls when the
+		// span only fits by dropping its oldest entries
+		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
+			turns := make([]llm.ScriptedTurn, 4)
+			for i := range turns {
+				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+			}
+			return turns
+		}()}
 		c, st, w := testCompactor(t, model, sp)
 		c.cfg = func() config.Compaction {
 			return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
@@ -533,9 +551,13 @@ func (c *ctxSink) TurnEnd(agent.TurnResult)        {}
 
 func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
-	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: textStream("## Goal\nuser wanted a story about lighthouses")},
-	}}
+	// several turns: the summariser prompt can chain across calls when the span
+	// only fits by dropping its oldest entries
+	turns := make([]llm.ScriptedTurn, 4)
+	for i := range turns {
+		turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nuser wanted a story about lighthouses")}
+	}
+	sp := &llm.ScriptedProvider{Turns: turns}
 	c, st, w := testCompactor(t, model, sp)
 
 	msgs := []llm.Message{llm.Text(llm.RoleUser, "read me a short story")}
@@ -751,9 +773,15 @@ func TestCompactorAutoSetting(t *testing.T) {
 	setup := func(t *testing.T, auto bool) (*compactor, *session.Writer) {
 		t.Helper()
 
-		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-			{Events: textStream("## Goal\nthe lighthouse story")},
-		}}
+		// several turns: the summariser prompt can chain across calls when the
+		// span only fits by dropping its oldest entries
+		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
+			turns := make([]llm.ScriptedTurn, 4)
+			for i := range turns {
+				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+			}
+			return turns
+		}()}
 		c, st, w := testCompactor(t, model, sp)
 		// a tail of a tenth of the compaction point, so a non-forced run has an
 		// older turn to fold rather than declining

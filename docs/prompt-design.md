@@ -415,12 +415,13 @@ reader can already see.
 - **Output is clipped only when it must be.** The transcript is built whole
   first; a clip is applied only if it would not fit alongside the reply,
   stepping down toward smaller sizes and finally dropping the oldest entries.
-  Compaction fires near the top of the window, so an unclipped span plus its
-  summary can overflow, and an oversized request would fail the session exactly
-  when it most needs to shrink. If nothing fits (even with the previous summary
-  clipped down), compaction fails with an error rather than sending a request
-  the provider will reject or summarising an empty transcript; an unknown window
-  applies no bound.
+  Dropped entries are folded into the checkpoint by their own chained call, so
+  nothing the cut removes goes unsummarised; if even a chunk cannot fit, the
+  run fails with an error rather than sending a request the provider will
+  reject or summarising an empty transcript. Compaction fires near the top of
+  the window, so an unclipped span plus its summary can overflow, and an
+  oversized request would fail the session exactly when it most needs to
+  shrink. An unknown window applies no bound.
 
 ### User guidance
 
@@ -596,6 +597,18 @@ with no tool calls, then a placeholder rather than looping.
 
 The task prompt is `Task:\n<task>` with an optional `Extra instructions:` block
 prepended when the caller supplied them.
+
+**Completion steer.** When an investigation finishes unpolled, one batched
+notice is injected at the next step or turn boundary as an injected user
+message, prefixed `[system]` so the model reads it as generated context rather
+than operator speech:
+
+```
+[system] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.
+```
+
+The keyed UI notice naming the same completions is front-end text only and
+carries no prefix.
 
 ---
 

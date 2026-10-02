@@ -849,3 +849,21 @@ func jobStatus(m *Manager, id string) (Status, bool) {
 	}
 	return j.statusOf(), true
 }
+
+func TestCompletionNotice(t *testing.T) {
+	t.Parallel()
+
+	t.Run("single_names_the_poll", func(t *testing.T) {
+		assert.Equal(t, "[system] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.",
+			completionNotice([]string{"sub-1"}))
+	})
+
+	t.Run("batch_names_each", func(t *testing.T) {
+		assert.Equal(t, "[system] Sub-agents sub-1, sub-2 completed. Poll each for its summary.",
+			completionNotice([]string{"sub-1", "sub-2"}))
+	})
+
+	t.Run("empty_is_blank", func(t *testing.T) {
+		assert.Empty(t, completionNotice(nil))
+	})
+}

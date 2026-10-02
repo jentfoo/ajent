@@ -88,6 +88,64 @@ func TestVerbatimCut(t *testing.T) {
 	})
 }
 
+func TestSentTokens(t *testing.T) {
+	t.Parallel()
+
+	// thinking-heavy steps: each assistant message carries deliberation far heavier
+	// than its visible text
+	branch := func() []session.Entry {
+		out := []session.Entry{userText("u1", "start")}
+		for i := 1; i <= 6; i++ {
+			out = append(out, msg("a"+strconv.Itoa(i), llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+				llm.ThinkingBlock{Text: strings.Repeat("deliberating ", 300)},
+				llm.TextBlock{Text: "step " + strconv.Itoa(i)},
+			}}))
+		}
+		return out
+	}()
+
+	t.Run("retain_none_drops_thinking", func(t *testing.T) {
+		v := newBranchView(branch)
+		v.setRetain(llm.RetainNone)
+		assert.Less(t, v.sentTokens(1), v.tokens(1))
+	})
+
+	t.Run("retain_all_counts_thinking", func(t *testing.T) {
+		v := newBranchView(branch) // the zero view counts everything
+		assert.Equal(t, v.tokens(1), v.sentTokens(1))
+	})
+
+	t.Run("retain_last_keeps_only_the_newest", func(t *testing.T) {
+		v := newBranchView(branch)
+		v.setRetain(llm.RetainLastTurn)
+		assert.Less(t, v.sentTokens(1), v.tokens(1))
+		assert.Equal(t, v.tokens(6), v.sentTokens(6))
+	})
+}
+
+func TestVerbatimCutRetain(t *testing.T) {
+	t.Parallel()
+
+	// with thinking dropped by the policy the same ceiling affords more steps, so
+	// the band extends further back than a raw estimate would allow
+	branch := []session.Entry{userText("u1", "start")}
+	for i := 1; i <= 6; i++ {
+		branch = append(branch, msg("a"+strconv.Itoa(i), llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+			llm.ThinkingBlock{Text: strings.Repeat("deliberating ", 300)},
+			llm.TextBlock{Text: "step " + strconv.Itoa(i)},
+		}}))
+	}
+
+	raw := newBranchView(branch)
+	sent := newBranchView(branch)
+	sent.setRetain(llm.RetainNone)
+	one := raw.spanTokens(6, len(branch)) // one step's full weight, thinking included
+
+	cut := raw.verbatimCut(0, 2, one*4)
+	assert.Equal(t, 3, cut)                           // raw thinking consumes the ceiling after four steps
+	assert.Equal(t, 0, sent.verbatimCut(0, 2, one*4)) // sent-size steps all fit
+}
+
 func TestChooseCut(t *testing.T) {
 	t.Parallel()
 

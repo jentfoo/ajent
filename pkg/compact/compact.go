@@ -58,11 +58,14 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		prior = normalisePrior(branch, prior, priorIdx)
 	}
 	priorCut := session.CutIndex(branch, prior)
-	if priorCut < 0 { // an unlocatable prior cut degrades to the raw branch
-		priorCut, prior = 0, session.CompactionData{}
+	if priorCut < 0 { // a missing cut means the effective context is unrecoverable
+		return nil, errors.New("compact: prior compaction's kept entry is missing from the branch")
 	}
 
 	view := newBranchView(branch) // one decode/token cache shared by every stage
+	// resolve against caps like Prepare does, so the ceiling grades the policy
+	// the wire actually applies
+	view.setRetain(llm.ResolveRetain(opts.Retain, model.Caps))
 	band, ok := view.chooseCut(priorCut, minSteps, verbatimTokens)
 	if !ok || view.spanTokens(priorCut, band) < minSpanTokens {
 		return nil, nil
