@@ -29,6 +29,8 @@ func (t *endTool) Mode() ExecutionMode {
 	return ModeSerial
 }
 
+func (t *endTool) Close() {}
+
 func (t *endTool) Execute(context.Context, ToolCall, Output) (ToolResult, error) {
 	return ToolResult{
 		Content: llm.BlockList{llm.TextBlock{Text: "recorded"}},

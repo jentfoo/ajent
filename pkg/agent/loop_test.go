@@ -125,6 +125,8 @@ func (t *stubTool) Mode() ExecutionMode {
 	return ModeSerial
 }
 
+func (t *stubTool) Close() {}
+
 func (t *stubTool) Execute(ctx context.Context, call ToolCall, _ Output) (ToolResult, error) {
 	t.mu.Lock()
 	t.calls = append(t.calls, call)

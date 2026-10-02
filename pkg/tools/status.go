@@ -39,6 +39,7 @@ func (t *gitStatusTool) Schema() llm.ToolSchema {
 func (t *gitStatusTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *gitStatusTool) Close() {}
 
 // selfBounding: git_status bounds and spills its own results.
 func (*gitStatusTool) selfBounding() {}

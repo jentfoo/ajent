@@ -65,6 +65,7 @@ func (t *grepTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: S
 func (t *grepTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *grepTool) Close() {}
 
 // selfBounding: grep bounds and spills its own results.
 func (*grepTool) selfBounding() {}

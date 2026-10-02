@@ -44,6 +44,7 @@ func (t *gitShowTool) Schema() llm.ToolSchema {
 func (t *gitShowTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *gitShowTool) Close() {}
 
 // selfBounding: git_show bounds and spills its own results.
 func (*gitShowTool) selfBounding() {}

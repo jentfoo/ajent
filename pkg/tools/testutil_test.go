@@ -38,6 +38,7 @@ func (f *fakeTool) Label(agent.ToolCall) string {
 func (f *fakeTool) Description() string       { return "test tool" }
 func (f *fakeTool) Schema() llm.ToolSchema    { return llm.ToolSchema{Name: f.name} }
 func (f *fakeTool) Mode() agent.ExecutionMode { return f.mode }
+func (f *fakeTool) Close()                    {}
 func (f *fakeTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
 }
@@ -54,6 +55,7 @@ func (t *recordingTool) Label(agent.ToolCall) string {
 func (t *recordingTool) Description() string       { return "" }
 func (t *recordingTool) Schema() llm.ToolSchema    { return llm.ToolSchema{Name: "bash"} }
 func (t *recordingTool) Mode() agent.ExecutionMode { return agent.ModeSerial }
+func (t *recordingTool) Close()                    {}
 func (t *recordingTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
 	t.done = true
 	return agent.ToolResult{}, nil

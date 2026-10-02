@@ -240,6 +240,7 @@ func RunHeadless(o HeadlessOptions) int {
 	err := ag.Prompt(ctx, agent.Input{
 		Text: expanded.Text, After: expanded.Run, Prepared: true,
 	})
+	toolsReg.Close() // kill background commands so none outlives the run
 	answer := llm.FinalAnswer(st.Messages)
 	res := drain.result()
 	status, code := headlessOutcome(err, res, answer)

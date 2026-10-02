@@ -38,6 +38,7 @@ func (s *stubTool) Label(agent.ToolCall) string { return s.name + " ..." }
 func (s *stubTool) Description() string         { return "test tool" }
 func (s *stubTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: s.name} }
 func (s *stubTool) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+func (s *stubTool) Close()                      {}
 func (s *stubTool) Execute(_ context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
 }
@@ -53,6 +54,7 @@ func (holdBash) Label(agent.ToolCall) string { return "bash: ..." }
 func (holdBash) Description() string         { return "test tool" }
 func (holdBash) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: tools.ToolBash} }
 func (holdBash) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+func (holdBash) Close()                      {}
 
 func (t holdBash) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	if t.entered != nil {

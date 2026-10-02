@@ -375,6 +375,7 @@ func (t *initStub) Label(agent.ToolCall) string { return t.name }
 func (t *initStub) Description() string         { return "stub" }
 func (t *initStub) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: t.name} }
 func (t *initStub) Mode() agent.ExecutionMode   { return agent.ModeParallel }
+func (t *initStub) Close()                      {}
 func (t *initStub) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return t.run(ctx, call), nil
 }

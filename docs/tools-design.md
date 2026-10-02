@@ -50,6 +50,11 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   (`SelfBounding`) is wrapped at registration to keep model-visible content
   bound. Read-only marking for MCP comes from `annotations.readOnlyHint` or config
   globs; the permission barrier uses this metadata (see "Read-only" below).
+- **`Close` teardown** — `Close` sits on `agent.Tool` itself rather than an
+  optional interface, so teardown fans out without type assertions. The registry
+  exposes `Close()` and `pkg/app` calls it on every run's exit paths. The owning
+  decision: a tool that starts long-lived processes (background bash) owns their
+  cleanup, so shutdown stays uniform no matter which tools are registered.
 
 ### Sub-agent tool set and preview seams
 
@@ -352,6 +357,24 @@ stays a distinct non-error result. Its status line names only what that note
 does not: an exit code, or `signal: <name>` for a death by any other signal. The
 kill we send adds nothing beyond its own note. The environment forces
 non-interactive settings (no pagers, no terminal prompts, no colour).
+
+#### Background runs
+
+`background: true` detaches the command from the call entirely: the tool starts
+it, returns the pid and the two log file paths (separate stdout and stderr files
+under the session's spill directory) at once, and the model reviews output with
+`tail` and stops the run with `kill` using the reported pid. The description
+tells the model to reach for it only when a call must outlive its own turn
+(a long-running server or watcher).
+
+The run keeps its own process group, and its lifetime is owned by a dedicated
+**background root context** on the tool, never the calling turn's context, so an
+interrupt or timeout cannot kill it. A stopped run, whether by natural exit,
+`kill` or shutdown, appends a stopped note naming the status to both log files so
+a later tail sees the end. `Close` sits on `agent.Tool` itself, and the
+registry's `Close` fans out to every tool, so agent shutdown cancels the root
+and every background group is killed. The temp log files are deliberately left
+behind: they are small and they are the record.
 
 The timeout ceiling follows the caller: model calls default to two minutes and
 cap at the maximum declared in the schema, while a user-initiated run (a staged

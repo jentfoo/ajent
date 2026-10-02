@@ -392,6 +392,7 @@ func (b *capturingBash) Label(agent.ToolCall) string { return "bash: ..." }
 func (b *capturingBash) Description() string         { return "test tool" }
 func (b *capturingBash) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: tools.ToolBash} }
 func (b *capturingBash) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+func (b *capturingBash) Close()                      {}
 
 func (b *capturingBash) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	b.mu.Lock()

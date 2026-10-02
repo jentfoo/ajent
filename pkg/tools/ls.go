@@ -41,6 +41,7 @@ func (t *lsTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: Sch
 func (t *lsTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *lsTool) Close() {}
 
 // selfBounding: ls bounds and spills its own results.
 func (*lsTool) selfBounding() {}

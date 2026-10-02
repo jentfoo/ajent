@@ -108,6 +108,7 @@ func (t *editTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: S
 func (t *editTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
+func (t *editTool) Close() {}
 
 // selfBounding: edit feedback is bounded by its own Elide pass.
 func (*editTool) selfBounding() {}

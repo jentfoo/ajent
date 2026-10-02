@@ -69,6 +69,8 @@ func (b *bridgeTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
+func (b *bridgeTool) Close() {}
+
 // Execute calls the remote tool, mapping progress to out and a transport failure
 // to an error result so the turn continues rather than aborting.
 func (b *bridgeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {

@@ -29,6 +29,8 @@ func (t *blockingTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
+func (t *blockingTool) Close() {}
+
 // Execute blocks until ctx is done, then returns an empty result.
 func (t *blockingTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	if t.entered != nil {

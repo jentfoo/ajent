@@ -59,6 +59,7 @@ func (t *writeTool) Schema() llm.ToolSchema {
 func (t *writeTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
+func (t *writeTool) Close() {}
 
 // selfBounding: write's feedback is bounded by its own Elide pass.
 func (*writeTool) selfBounding() {}

@@ -376,3 +376,118 @@ func TestBashTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestBashBackground(t *testing.T) {
+	t.Parallel()
+
+	// a background call returns at once with the pid and both log paths
+	t.Run("returns_pid_and_log_paths", func(t *testing.T) {
+		dir := t.TempDir()
+		r := newBash(t, fmt.Sprintf(`{"command":"cd %s && echo hi; echo boom >&2","background":true}`, dir))
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		assert.Regexp(t, `started in background, pid \d+`, out)
+		assert.Regexp(t, `stdout log: \S+bash-stdout`, out)
+		assert.Regexp(t, `stderr log: \S+bash-stderr`, out)
+		// the tool came back without waiting, so the result must not hold the
+		// command's own output
+		assert.NotContains(t, out, "hi")
+	})
+
+	// output lands in the named files and the stop note follows a natural exit
+	t.Run("logs_capture_output_and_stop_note", func(t *testing.T) {
+		r := newBash(t, `{"command":"echo hi; echo boom >&2; exit 7","background":true}`)
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		outPath := regexp.MustCompile(`stdout log: (\S+)`).FindStringSubmatch(out)
+		errPath := regexp.MustCompile(`stderr log: (\S+)`).FindStringSubmatch(out)
+		require.Len(t, outPath, 2)
+		require.Len(t, errPath, 2)
+
+		require.Eventually(t, func() bool {
+			data, err := os.ReadFile(outPath[1])
+			return err == nil && strings.Contains(string(data), "ajent: background process stopped")
+		}, 5*time.Second, 10*time.Millisecond, "process must exit and be reaped")
+		data, err := os.ReadFile(outPath[1])
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "hi")
+		assert.Contains(t, string(data), "(exit status 7)")
+		edata, err := os.ReadFile(errPath[1])
+		require.NoError(t, err)
+		assert.Contains(t, string(edata), "boom")
+		assert.Contains(t, string(edata), "ajent: background process stopped")
+	})
+
+	// a process killed by the reported pid gets the same stopped note
+	t.Run("kill_reported_pid_leaves_stop_note", func(t *testing.T) {
+		r := newBash(t, `{"command":"sleep 30","background":true}`)
+		assert.False(t, r.res.IsError)
+		out := textOf(r.res)
+		pid := regexp.MustCompile(`pid (\d+)`).FindStringSubmatch(out)
+		outPath := regexp.MustCompile(`stdout log: (\S+)`).FindStringSubmatch(out)
+		require.Len(t, pid, 2)
+		require.Len(t, outPath, 2)
+
+		n, err := strconv.Atoi(pid[1])
+		require.NoError(t, err)
+		require.NoError(t, syscall.Kill(n, syscall.SIGTERM))
+
+		assertEventuallyGone(t, n)
+		require.Eventually(t, func() bool {
+			data, err := os.ReadFile(outPath[1])
+			return err == nil && strings.Contains(string(data), "ajent: background process stopped")
+		}, 5*time.Second, 10*time.Millisecond)
+		data, err := os.ReadFile(outPath[1])
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "(signal: terminated)")
+	})
+
+	// a long-running command must still be alive right after the call returns
+	t.Run("outlives_the_call", func(t *testing.T) {
+		r := newBash(t, `{"command":"sleep 30","background":true}`)
+		assert.False(t, r.res.IsError)
+		pid := regexp.MustCompile(`pid (\d+)`).FindStringSubmatch(textOf(r.res))
+		require.Len(t, pid, 2)
+		n, err := strconv.Atoi(pid[1])
+		require.NoError(t, err)
+		assert.NoError(t, syscall.Kill(n, 0), "process must still be running after the call returns")
+		t.Cleanup(func() { _ = syscall.Kill(n, syscall.SIGKILL) })
+	})
+}
+
+// TestBashBackgroundCloseKills proves agent shutdown (the tool's Close) kills
+// every background command still running, including grandchildren.
+func TestBashBackgroundCloseKills(t *testing.T) {
+	t.Parallel()
+
+	if testing.Short() {
+		t.Skip("-short mode")
+	}
+
+	dir := t.TempDir()
+	// a TERM-trapping child proves the group kill sweeps beyond the leader
+	cmd := fmt.Sprintf(`echo $$ > %s/pid.txt; sh -c 'trap "" TERM; sleep 300'`, dir)
+	env := toolEnv{cwd: dir, tracker: NewTracker(), policy: PathPolicy{Cwd: dir}}
+	tool := &bashTool{policy: env.policy, sessionID: "close-test"}
+	c := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":` + strconv.Quote(cmd) + `,"background":true}`)}
+	res, err := tool.Execute(t.Context(), c, &captureOutput{})
+	require.NoError(t, err)
+	assert.False(t, res.IsError)
+
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(dir + "/pid.txt")
+		return err == nil && len(strings.TrimSpace(string(data))) > 0
+	}, 5*time.Second, 10*time.Millisecond, "the command must be running before Close")
+	data, err := os.ReadFile(dir + "/pid.txt")
+	require.NoError(t, err)
+	pid, aerr := strconv.Atoi(strings.TrimSpace(string(data)))
+	require.NoError(t, aerr)
+
+	tool.Close()
+
+	assertEventuallyGone(t, pid)
+	require.Eventually(t, func() bool {
+		err := syscall.Kill(-pid, 0)
+		return err != nil && errors.Is(err, syscall.ESRCH)
+	}, time.Second*2, time.Millisecond*30, "the whole process group must be gone")
+}

@@ -57,6 +57,7 @@ func (fakeRead) Schema() llm.ToolSchema {
 	return llm.ToolSchema{Name: "read", Parameters: []byte(`{}`)}
 }
 func (fakeRead) Mode() ExecutionMode { return ModeParallel }
+func (fakeRead) Close()              {}
 func (fakeRead) Execute(context.Context, ToolCall, Output) (ToolResult, error) {
 	return ToolResult{}, nil
 }

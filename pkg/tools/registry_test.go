@@ -562,6 +562,7 @@ func (s *stubTool) Schema() llm.ToolSchema { return llm.ToolSchema{Name: s.name}
 func (s *stubTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (s *stubTool) Close() {}
 func (s *stubTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
 	return s.res, nil
 }

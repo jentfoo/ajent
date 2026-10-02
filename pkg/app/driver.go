@@ -590,6 +590,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				sag.Close() // cancel every running investigation and wait briefly
 			}()
 		}
+		toolsReg.Close() // kill background commands so none outlives the run
 		if mgr != nil {
 			wg.Add(1)
 			go func() {

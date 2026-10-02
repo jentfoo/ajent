@@ -88,6 +88,8 @@ func (t *noopTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
 
+func (t *noopTool) Close() {}
+
 // Execute returns an empty result immediately.
 func (t *noopTool) Execute(_ context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "ok"}}}, nil

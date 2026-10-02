@@ -31,6 +31,7 @@ func (t *stubTool) Label(agent.ToolCall) string { return t.name }
 func (t *stubTool) Description() string         { return "stub" }
 func (t *stubTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: t.name} }
 func (t *stubTool) Mode() agent.ExecutionMode   { return agent.ModeParallel }
+func (t *stubTool) Close()                      {}
 func (t *stubTool) Execute(_ context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	t.mu.Lock()
 	t.calls = append(t.calls, call)

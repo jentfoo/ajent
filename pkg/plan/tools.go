@@ -41,6 +41,7 @@ func (t *controlTool) Label(agent.ToolCall) string { return t.label }
 func (t *controlTool) Description() string         { return t.desc }
 func (t *controlTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Parameters: t.params} }
 func (t *controlTool) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+func (t *controlTool) Close()                      {}
 
 // Execute records the transition and hands the turn over, or explains why it could not.
 func (t *controlTool) Execute(_ context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {

@@ -49,6 +49,7 @@ func (t *gitDiffTool) Schema() llm.ToolSchema {
 func (t *gitDiffTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *gitDiffTool) Close() {}
 
 // selfBounding: git_diff bounds and spills its own results.
 func (*gitDiffTool) selfBounding() {}

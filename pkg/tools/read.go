@@ -44,6 +44,7 @@ func (t *readTool) Description() string {
 func (t *readTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: SchemaOf[readParams]()} }
 
 func (t *readTool) Mode() agent.ExecutionMode { return agent.ModeParallel }
+func (t *readTool) Close()                    {}
 
 // selfBounding: read bounds its own window and pages with offset, no spill.
 func (*readTool) selfBounding() {}

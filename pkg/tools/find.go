@@ -42,6 +42,7 @@ func (t *findTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: S
 func (t *findTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *findTool) Close() {}
 
 // selfBounding: find bounds and spills its own results.
 func (*findTool) selfBounding() {}

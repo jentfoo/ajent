@@ -59,6 +59,7 @@ func (t *gitLogTool) Schema() llm.ToolSchema {
 func (t *gitLogTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *gitLogTool) Close() {}
 
 // selfBounding: git_log bounds and spills its own results.
 func (*gitLogTool) selfBounding() {}

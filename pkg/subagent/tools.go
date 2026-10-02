@@ -52,6 +52,7 @@ func (t *startTool) Schema() llm.ToolSchema {
 }
 
 func (t *startTool) Mode() agent.ExecutionMode { return agent.ModeParallel }
+func (t *startTool) Close()                    {}
 
 // startParams is the model-facing arguments shape.
 type startParams struct {
@@ -106,6 +107,7 @@ func (t *pollTool) Schema() llm.ToolSchema {
 }
 
 func (t *pollTool) Mode() agent.ExecutionMode { return agent.ModeParallel }
+func (t *pollTool) Close()                    {}
 
 // pollParams is the model-facing arguments shape.
 type pollParams struct {
@@ -180,6 +182,7 @@ func (t *listTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: p
 func (t *listTool) Mode() agent.ExecutionMode {
 	return agent.ModeParallel
 }
+func (t *listTool) Close() {}
 
 func (t *listTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	jobs := t.m.List()

@@ -20,9 +20,10 @@ import (
 
 // bashParams is the model-facing parameter block for bash.
 type bashParams struct {
-	Command string `json:"command"`
-	Timeout int    `json:"timeout,omitempty" desc:"seconds before the whole process group is killed; default 120, max 600"`
-	Cwd     string `json:"cwd,omitempty" desc:"working directory; defaults to the session cwd"`
+	Command    string `json:"command"`
+	Timeout    int    `json:"timeout,omitempty" desc:"seconds before the whole process group is killed; default 120, max 600"`
+	Cwd        string `json:"cwd,omitempty" desc:"working directory; defaults to the session cwd"`
+	Background bool   `json:"background,omitempty" desc:"run detached: start the command and return at once with its pid and log file paths for later review; the timeout does not apply; only use when necessary"`
 }
 
 const (
@@ -57,9 +58,12 @@ var ShellExamples = []string{ToolLs, ToolGrep, ToolFind, "diff", "wc"}
 // keeps cd and state from confusing later calls.
 type bashTool struct {
 	policy        PathPolicy
-	sessionID     string   // names the spill directory for long output
+	sessionID     string   // names the spill and background-log directory
 	limit         Limit    // zero means BashOutput, overridable for tests
 	shellExamples []string // common commands the description may name, startup-fixed
+	bgOnce        sync.Once
+	bgCtx         context.Context // root for background commands, cancelled by Close
+	bgStop        context.CancelFunc
 }
 
 var _ agent.Tool = (*bashTool)(nil)
@@ -102,6 +106,15 @@ func (t *bashTool) Mode() agent.ExecutionMode {
 // selfBounding: bash bounds and spills its own stream.
 func (*bashTool) selfBounding() {}
 
+// ownProcessGroup puts the run in its own group so a kill sweeps grandchildren too.
+func ownProcessGroup(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	} else {
+		cmd.SysProcAttr.Setpgid = true
+	}
+}
+
 // Execute streams command output to out while teeing a bounded head/tail copy,
 // spilling the excess to disk so the model can read it back.
 func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
@@ -113,13 +126,14 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 		return resultErr("bash needs a non-empty command"), nil
 	}
 
-	cwd := p.Cwd
-	if cwd == "" {
-		cwd = t.policy.Cwd
-	} else if resolved, err := t.policy.Resolve(cwd); err != nil {
-		return resultErr(err.Error()), nil
-	} else {
-		cwd = resolved
+	cwd, res, ok := t.resolveCwd(p.Cwd)
+	if !ok {
+		return res, nil
+	}
+	if p.Background {
+		// the run must not inherit the turn context: a cancelled turn or timeout
+		// may not kill it, only agent shutdown does (see ensureBg)
+		return t.executeBackground(t.ensureBg(), cwd, p) //nolint:contextcheck
 	}
 
 	timeout := bashTimeout(time.Duration(p.Timeout)*time.Second, IsUserInitiated(ctx))
@@ -136,11 +150,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	cmd.Dir = cwd
 	cmd.Env = bashEnv()
 	// own process group: a timeout kill then sweeps grandchildren too
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	} else {
-		cmd.SysProcAttr.Setpgid = true
-	}
+	ownProcessGroup(cmd)
 
 	lim := t.limit
 	if lim == (Limit{}) {
@@ -212,6 +222,19 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}
 
 	return agent.ToolResult{Content: llmBlock(statusText + captured), IsError: interrupted}, nil
+}
+
+// resolveCwd resolves the call's cwd override against the policy; ok=false
+// when res carries the error result.
+func (t *bashTool) resolveCwd(cwd string) (string, agent.ToolResult, bool) {
+	if cwd == "" {
+		return t.policy.Cwd, agent.ToolResult{}, true
+	}
+	resolved, err := t.policy.Resolve(cwd)
+	if err != nil {
+		return "", resultErr(err.Error()), false
+	}
+	return resolved, agent.ToolResult{}, true
 }
 
 // syncSink writes sanitized output to both the live stream and the capture,

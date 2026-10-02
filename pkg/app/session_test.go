@@ -38,6 +38,7 @@ func (noopRewindTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name:
 func (noopRewindTool) Mode() agent.ExecutionMode {
 	return agent.ModeSerial
 }
+func (noopRewindTool) Close() {}
 func (noopRewindTool) Execute(_ context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
 }

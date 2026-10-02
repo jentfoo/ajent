@@ -30,6 +30,8 @@ func (t *fakeTool) Mode() agent.ExecutionMode {
 	return t.mode
 }
 
+func (t *fakeTool) Close() {}
+
 // Execute returns a canned result or error.
 func (t *fakeTool) Execute(ctx context.Context, _ agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	if t.err != nil {

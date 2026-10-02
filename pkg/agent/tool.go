@@ -24,6 +24,7 @@ type Tool interface {
 	Schema() llm.ToolSchema
 	Mode() ExecutionMode
 	Execute(ctx context.Context, call ToolCall, out Output) (ToolResult, error)
+	Close() // release process-level resources at teardown; no-op for most tools
 }
 
 // Output is a running tool's display channel. Writes stream to the UI as they

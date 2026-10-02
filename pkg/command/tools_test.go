@@ -76,6 +76,7 @@ func (f *fakeToolAdapter) Label(agent.ToolCall) string { return f.name }
 func (f *fakeToolAdapter) Description() string         { return "test" }
 func (f *fakeToolAdapter) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: f.name} }
 func (f *fakeToolAdapter) Mode() agent.ExecutionMode   { return agent.ModeParallel }
+func (f *fakeToolAdapter) Close()                      {}
 func (f *fakeToolAdapter) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
 }

@@ -206,6 +206,18 @@ func (r *Registry) Preview(call agent.ToolCall) (Change, bool) {
 	return ch, true
 }
 
+// Close tears down every registered tool, in declaration order. pkg/app calls it
+// on each run's exit paths so a background process never outlives the agent that
+// started it.
+func (r *Registry) Close() {
+	r.mu.RLock()
+	tools := slices.Clone(r.tools)
+	r.mu.RUnlock()
+	for _, rt := range tools {
+		rt.tool.Close()
+	}
+}
+
 // DryRun reports whether call would fail before running. Tools without a dry run
 // (or an unknown name) report nil, so a caller only skips a prompt on a definite
 // failure rather than guessing.
@@ -573,6 +585,7 @@ func (g *guardedTool) Label(c agent.ToolCall) string {
 func (g *guardedTool) Description() string       { return g.t.Description() }
 func (g *guardedTool) Schema() llm.ToolSchema    { return g.t.Schema() }
 func (g *guardedTool) Mode() agent.ExecutionMode { return g.t.Mode() }
+func (g *guardedTool) Close()                    {}
 
 // Execute vets the call through every guard, then delegates to the wrapped tool.
 // A denial becomes an error result carrying its reason and nothing touches disk.
@@ -653,6 +666,7 @@ func (b *boundTool) Schema() llm.ToolSchema { return b.t.Schema() }
 func (b *boundTool) Mode() agent.ExecutionMode {
 	return b.t.Mode()
 }
+func (b *boundTool) Close() {}
 
 // Execute delegates and then bounds the result's text content. Content that is
 // not plain text (images, empty) passes through untouched. Display, Details,

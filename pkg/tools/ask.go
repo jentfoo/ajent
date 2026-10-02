@@ -52,6 +52,7 @@ func (t *askUserTool) Schema() llm.ToolSchema {
 
 // Mode is serial: a question owns the terminal until it is answered.
 func (t *askUserTool) Mode() agent.ExecutionMode { return agent.ModeSerial }
+func (t *askUserTool) Close()                    {}
 
 // selfBounding: the answer is operator speech, never an output dump to cut.
 func (*askUserTool) selfBounding() {}
