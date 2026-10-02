@@ -218,9 +218,55 @@ func TestResponsesProviderStream(t *testing.T) {
 		require.NoError(t, err)
 		events := collect(t, s)
 
+		// the fallback appends the provider default like any other endpoint
 		assert.Equal(t, "/chat/completions", req.Path)
 		assert.Equal(t, "Hello world", textOf(events))
 	})
+}
+
+func TestResponsesFallbackToolResultImages(t *testing.T) {
+	t.Parallel()
+
+	// a responses-dialect model riding the compat fallback must carry its
+	// tool-result images onto the wire, not drop them while estimating them
+	srv, req := sseServer(t, "compat/text.sse")
+	p := newResponsesTestProvider(t, srv.URL)
+	m := responsesModel(func(c *Capabilities) {
+		c.MaxTokensField = fieldMaxCompletion
+		c.Images = true
+	})
+
+	s, err := p.Stream(t.Context(), Request{Model: m, Messages: []Message{{
+		Role: RoleUser,
+		Content: BlockList{ToolResultBlock{CallID: "c1", Content: BlockList{
+			ImageBlock{MediaType: "image/png", Data: []byte{1}},
+		}}},
+	}}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	assert.Equal(t, "/chat/completions", req.Path)
+	var body struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content any    `json:"content"`
+		} `json:"messages"`
+	}
+	require.NoError(t, json.Unmarshal(req.Body, &body))
+	require.Len(t, body.Messages, 2)
+
+	tool := body.Messages[0]
+	assert.Equal(t, "tool", tool.Role)
+	assert.Equal(t, "(see attached image)", tool.Content)
+
+	attach := body.Messages[1]
+	assert.Equal(t, "user", attach.Role)
+	parts, ok := attach.Content.([]any)
+	require.True(t, ok)
+	require.Len(t, parts, 2)
+	assert.Equal(t, "Attached image(s) from tool result:", parts[0].(map[string]any)["text"])
+	img := parts[1].(map[string]any)["image_url"].(map[string]any)
+	assert.Contains(t, img["url"], "data:image/png;base64,")
 }
 
 func TestResponsesStreamTruncated(t *testing.T) {

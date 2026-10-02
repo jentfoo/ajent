@@ -29,7 +29,7 @@ func newOpenRouterTestProvider(t *testing.T, url string, routing *Routing) *comp
 	c, err := newHTTPClient(clientOptions{provider: "openrouter", baseURL: url})
 	require.NoError(t, err)
 	return &compatProvider{client: c, profile: profileFor("openrouter", FlavorOpenRouter,
-		ProviderConfig{Routing: routing})}
+		url, ProviderConfig{Routing: routing})}
 }
 
 func TestOpenRouterStream(t *testing.T) {
@@ -74,7 +74,7 @@ func TestOpenRouterStream(t *testing.T) {
 			Model:     m,
 			Messages:  sameOrigin(m, []Message{Text(RoleUser, "q"), msg}),
 			Reasoning: ReasoningConfig{Retain: RetainAll},
-		}, profileFor("openrouter", FlavorOpenRouter, ProviderConfig{}))
+		}, profileFor("openrouter", FlavorOpenRouter, "https://openrouter.ai/api/v1", ProviderConfig{}))
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"sig-abc"`)
 		assert.Contains(t, string(body), `"reasoning_details"`)

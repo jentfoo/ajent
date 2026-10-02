@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"strings"
 )
 
 // ProviderOptions configures provider construction.
@@ -53,6 +54,12 @@ func NewProvider(name string, cfg ProviderConfig, flavor Flavor, opts ProviderOp
 		applyAuthHeader(headers, flavor, key)
 	}
 
+	// local servers pin the OpenAI tree under /v1, so a base carrying the prefix
+	// is normalized away before the chat path spells it out
+	if dialect == DialectOpenAICompletions && localChatBase(name, flavor, baseURL) {
+		baseURL = stripV1Suffix(baseURL)
+	}
+
 	client, err := newHTTPClient(clientOptions{
 		provider:  name,
 		baseURL:   baseURL,
@@ -72,7 +79,7 @@ func NewProvider(name string, cfg ProviderConfig, flavor Flavor, opts ProviderOp
 	case DialectOpenAIResponses:
 		return newResponsesProvider(name, client), nil
 	case DialectOpenAICompletions:
-		return &compatProvider{client: client, profile: profileFor(name, flavor, cfg)}, nil
+		return &compatProvider{client: client, profile: profileFor(name, flavor, baseURL, cfg)}, nil
 	default:
 		return nil, fmt.Errorf("llm: provider %s has no api dialect", name)
 	}
@@ -122,12 +129,30 @@ func mergeTimeouts(def, cfg Timeouts) Timeouts {
 	return out
 }
 
-// profileFor returns the chat-completions profile for a flavor.
-func profileFor(name string, flavor Flavor, cfg ProviderConfig) compatProfile {
-	p := compatProfile{name: name, classify: compatClassifier(name, flavor)}
+// localChatPath is the chat endpoint of a local server's pinned /v1 tree.
+const localChatPath = "/v1/chat/completions"
+
+// profileFor returns the chat-completions profile for an endpoint. Detection
+// wins over the configured flavor, so an entry keyed arbitrarily still gets the
+// decorators, delta hooks and classifier its endpoint implies, and its base
+// appends the default path verbatim. Only the local server flavors pin their
+// chat path.
+func profileFor(name string, flavor Flavor, baseURL string, cfg ProviderConfig) compatProfile {
+	p := compatProfile{name: name}
+	if isOpenRouterEndpoint(name, baseURL) {
+		return compatProfile{
+			name:     name,
+			classify: compatClassifier(name, FlavorOpenRouter),
+			decorate: decorateOpenRouter(cfg.Routing),
+			extra:    openRouterExtra,
+		}
+	}
+	if localChatBase(name, flavor, baseURL) {
+		p.path = localChatPath
+	}
+	p.classify = compatClassifier(name, flavor)
 	switch flavor {
 	case FlavorLlamaCpp:
-		p.path = "/v1/chat/completions"
 		p.decorate = decorateLlamaCpp
 	case FlavorOpenRouter:
 		p.decorate = decorateOpenRouter(cfg.Routing)
@@ -136,4 +161,22 @@ func profileFor(name string, flavor Flavor, cfg ProviderConfig) compatProfile {
 		p.decorate = decorateLMStudio
 	}
 	return p
+}
+
+// localChatFlavor reports the local servers whose OpenAI tree sits under a
+// fixed /v1 prefix however the base was written.
+func localChatFlavor(flavor Flavor) bool {
+	return flavor == FlavorLlamaCpp || flavor == FlavorLMStudio
+}
+
+// localChatBase reports whether the chat path pins the /v1 prefix, so the base
+// must drop its own trailing /v1 first.
+func localChatBase(name string, flavor Flavor, baseURL string) bool {
+	return localChatFlavor(flavor) && !isOpenRouterEndpoint(name, baseURL)
+}
+
+// stripV1Suffix drops a trailing /v1 from a base URL, so a path that spells the
+// prefix out never doubles up.
+func stripV1Suffix(baseURL string) string {
+	return strings.TrimSuffix(strings.TrimRight(baseURL, "/"), "/v1")
 }

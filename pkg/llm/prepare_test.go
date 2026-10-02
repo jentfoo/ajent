@@ -393,6 +393,20 @@ func TestDowngradeImages(t *testing.T) {
 		assert.Equal(t, toolImageOmitted, out[0].Content[0].(ToolResultBlock).Content[0].(TextBlock).Text)
 	})
 
+	t.Run("assistant_image_becomes_placeholder", func(t *testing.T) {
+		// every builder rejects a surviving image, so a resumed assistant image
+		// downgrades like any other instead of failing the request
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "here"},
+			img(),
+		}}}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		assert.Equal(t, BlockList{
+			TextBlock{Text: "here"},
+			TextBlock{Text: imageOmitted},
+		}, out[0].Content)
+	})
+
 	t.Run("image_capable_model_untouched", func(t *testing.T) {
 		mc := m
 		mc.Caps.Images = true
@@ -627,6 +641,17 @@ func TestPrepareToolResultImageSplit(t *testing.T) {
 		require.Len(t, out, 1)
 		tr := out[0].Content[0].(ToolResultBlock)
 		assert.True(t, hasImage(tr.Content)) // image stayed put for responses
+	})
+
+	t.Run("responses_fallback_splits_like_compat", func(t *testing.T) {
+		// the fallback body is chat-completions, so the split must run for it too
+		m := imgMsg(DialectOpenAIResponses, true)
+		m.Caps.MaxTokensField = fieldMaxCompletion
+		out := Prepare(Request{Model: m, Messages: []Message{toolImage}}).Messages
+		require.Len(t, out, 2)
+		assert.Equal(t, RoleUser, out[1].Role)
+		_, ok := out[1].Content[1].(ImageBlock)
+		assert.True(t, ok)
 	})
 
 	t.Run("no_split_without_image_capability", func(t *testing.T) {

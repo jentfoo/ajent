@@ -354,6 +354,39 @@ func TestDiscover(t *testing.T) {
 		assert.Equal(t, 1, hits) // served at /v1/models once, not /v1/v1/models
 	})
 
+	t.Run("lmstudio_native_list_anchors_at_the_server_root", func(t *testing.T) {
+		// the native list lives outside the /v1 prefix, so a base carrying /v1 must
+		// not be asked for /v1/api/v1/models and lose the loaded context length
+		var hits int
+		srv := discoveryServer(t, "/api/v1/models", "lmstudio/models-v1.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{
+			"lmstudio": {BaseURL: srv.URL + "/v1"},
+		}}
+
+		cache, warnings := Discover(t.Context(), f, nil, opts())
+		assert.Empty(t, warnings)
+		require.Contains(t, cache, "lmstudio")
+		models := cache["lmstudio"].Models
+		require.Len(t, models, 2)
+		require.NotNil(t, models[0].ContextWindow)
+		assert.Equal(t, 4096, *models[0].ContextWindow) // the native metadata survived
+		assert.Equal(t, 1, hits)
+	})
+
+	t.Run("llamacpp_props_anchors_at_the_server_root", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/props", "llamacpp/props.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{
+			"llamacpp": {BaseURL: srv.URL + "/v1"},
+		}}
+
+		cache, warnings := Discover(t.Context(), f, nil, opts())
+		assert.Empty(t, warnings)
+		require.Contains(t, cache, "llamacpp")
+		assert.Len(t, cache["llamacpp"].Models, 1)
+		assert.Equal(t, 1, hits)
+	})
+
 	t.Run("generic_without_opt_in_is_skipped", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"lutra": {BaseURL: "http://127.0.0.1:1"},
@@ -614,6 +647,30 @@ func TestProbeProvider(t *testing.T) {
 		// the native list carries the loaded context length the OpenAI list lacks
 		require.NotNil(t, entry.Models[0].ContextWindow)
 		assert.Equal(t, 4096, *entry.Models[0].ContextWindow)
+		assert.Equal(t, []string{"/api/v1/models"}, hits)
+	})
+
+	t.Run("probe_all_roots_native_lists_under_a_v1_base", func(t *testing.T) {
+		var hits []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			hits = append(hits, r.URL.Path)
+			if r.URL.Path == "/api/v1/models" {
+				data, err := os.ReadFile(filepath.Join("testdata", "lmstudio", "models-v1.json"))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				_, _ = w.Write(data)
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		t.Cleanup(srv.Close)
+
+		entry, err := ProbeAll(t.Context(),
+			ProviderConfig{BaseURL: srv.URL + "/v1"}, DiscoverOptions{Env: envOff})
+		require.NoError(t, err)
+		assert.Len(t, entry.Models, 2)
 		assert.Equal(t, []string{"/api/v1/models"}, hits)
 	})
 

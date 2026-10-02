@@ -27,6 +27,20 @@ sixth of that shape is small and self-contained. The flavor catalogue leans on
 that: a hosted provider with an env-var key on one of the three dialects is one
 `flavorDefaults` entry away from support, and the setup wizard lists them all.
 
+A compat profile (decorators, delta hooks, classifier, endpoint path) resolves
+from the **same detection the capabilities use**, before falling back to the
+configured flavor. An entry keyed as anything at all that points at
+`openrouter.ai` therefore keeps openrouter's decorators, its `reasoning_details`
+capture and its classifier, exactly as its detected capabilities already claim.
+
+The endpoint path appends `/chat/completions` to the base URL **verbatim**, the
+convention of a hosted OpenAI-compatible endpoint, so a base written elsewhere
+with its full path drops in unchanged. The local server flavors (llama.cpp,
+lm-studio) are the pinned exception. Their OpenAI tree sits under a fixed `/v1`,
+so a base carrying a trailing `/v1` drops it and the chat path spells the
+prefix out. Both spellings of the server URL (`http://host:8080` and
+`http://host:8080/v1`) hit `/v1/chat/completions` exactly once.
+
 The rule `pkg/config ↛ pkg/llm` (see `config-design.md`) is why `models.json`
 decodes in `pkg/llm/config.go` rather than in `pkg/config`.
 
@@ -83,7 +97,8 @@ sent:
 
 - **Image downgrade** when the model cannot read images: an image becomes a text
   placeholder instead of failing the request. Consecutive placeholders collapse
-  to one; assistant content is untouched.
+  to one, and every role downgrades the same way, so a transcript-resumed
+  assistant image never reaches a builder that would reject it.
 - **Inline thinking recovery** for reasoning chat-completions models: when a
   turn desyncs mid stream the reasoning tail can arrive on the content channel
   still carrying its close tag. `Prepare` splits such text back into thinking
@@ -255,10 +270,12 @@ reproducing a hardcoded remap through configuration. A compat-dialect block with
 a non-empty `Field` is replayable regardless of policy.
 
 **Tool-result images split out on chat-completions.** When the model accepts
-images (`DialectOpenAICompletions && caps.Images`), `Prepare` moves image blocks
-after the placeholder ladder runs, so the result keeps its pointer to the
-attached image text part and the following user message carries them as text +
-`image_url` parts, optionally preceded by an assistant bridge when
+images and its body is built by the shared chat-completions builder
+(`usesCompatBody`: the dialect itself, or a Responses model riding the
+chat-completions fallback selected by `max_completion_tokens`), `Prepare` moves
+image blocks after the placeholder ladder runs, so the result keeps its pointer
+to the attached image text part and the following user message carries them as
+text + `image_url` parts, optionally preceded by an assistant bridge when
 `requiresAssistantAfterToolResult`. Anthropic and Responses keep images inside
 the tool result, which is the convention there.
 
@@ -436,7 +453,12 @@ through that list, and only when `discover: true` opts in.
 The discovery path is resolved against the provider's base URL, collapsing a
 `/v1` prefix the base already carries: a server configured as `http://host/v1`
 serves its model list at `/models`, so asking for both would hit
-`.../v1/v1/models` and 404.
+`.../v1/v1/models` and 404. The native local endpoints (`/api/v1/models`,
+`/api/v0/models`, `/props`) anchor at the **server root** instead, since they
+sit outside the OpenAI-compatible prefix: a base carrying `/v1` is asked for
+`http://host/api/v1/models`, never `http://host/v1/api/v1/models`, which is
+what keeps lm-studio's loaded-context-length metadata on the winning endpoint
+instead of two wasted 404s.
 
 The endpoints themselves are the touchpoints to extend when adding another
 server: the hosted catalogue's `/models`, lm-studio's `/api/v1/models` (and

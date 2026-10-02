@@ -123,10 +123,27 @@ func hasV1Suffix(p string) bool {
 	return p == "v1" || strings.HasSuffix(p, "/v1")
 }
 
+// rootedClient returns a client view whose base drops a trailing /v1, so a
+// native root endpoint resolves at the server root. Shares c's transport,
+// headers and identity; returns c unchanged when the base carries no /v1.
+func rootedClient(c *httpClient) *httpClient {
+	if !hasV1Suffix(c.base.Path) {
+		return c
+	}
+	root := *c
+	u := *c.base
+	u.Path = strings.TrimSuffix(u.Path, "/v1")
+	u.RawPath = ""
+	root.base = &u
+	return &root
+}
+
 // discoveryCandidate is one endpoint a flavor can be asked for its model list.
 type discoveryCandidate struct {
 	path  string
 	parse modelParser
+	// root: a native endpoint at the server root, never under the base's /v1 prefix
+	root bool
 }
 
 // discoverySpec lists a flavor's endpoints in order. The first that yields usable
@@ -144,9 +161,9 @@ var (
 	// probeAllSpec: every known list endpoint, native local lists first for their
 	// loaded-model context length
 	probeAllSpec = discoverySpec{candidates: []discoveryCandidate{
-		{path: "/api/v1/models", parse: parseLMStudioV1Models},
-		{path: "/api/v0/models", parse: parseLMStudioModels},
-		{path: "/props", parse: parseLlamaProps},
+		{path: "/api/v1/models", parse: parseLMStudioV1Models, root: true},
+		{path: "/api/v0/models", parse: parseLMStudioModels, root: true},
+		{path: "/props", parse: parseLlamaProps, root: true},
 		{path: openAIModelsPath, parse: parseOpenAIModels},
 		{path: "/models", parse: parseOpenAIModels},
 	}}
@@ -182,14 +199,14 @@ var discoverySpecs = map[Flavor]discoverySpec{
 	FlavorXiaomiAMS:   openAIListSpec,
 	// LM Studio 0.4 moved its native list to /api/v1, older builds serve /api/v0
 	FlavorLMStudio: {candidates: []discoveryCandidate{
-		{path: "/api/v1/models", parse: parseLMStudioV1Models},
-		{path: "/api/v0/models", parse: parseLMStudioModels},
+		{path: "/api/v1/models", parse: parseLMStudioV1Models, root: true},
+		{path: "/api/v0/models", parse: parseLMStudioModels, root: true},
 		{path: openAIModelsPath, parse: parseOpenAIModels},
 	}},
 	// llama.cpp reports one loaded model via /props. In router mode that is
 	// useless, so fall back to the OpenAI-compatible list.
 	FlavorLlamaCpp: {candidates: []discoveryCandidate{
-		{path: "/props", parse: parseLlamaProps},
+		{path: "/props", parse: parseLlamaProps, root: true},
 		{path: openAIModelsPath, parse: parseOpenAIModels},
 	}},
 	FlavorGeneric: openAIListSpec,
@@ -268,6 +285,16 @@ func Discover(ctx context.Context, f File, cache map[string]CacheEntry, opts Dis
 	return out, warnings
 }
 
+// candidateEndpoint resolves one candidate onto a client. Root candidates drop
+// a base /v1 first, so a native endpoint anchors at the server root; the path
+// then collapses onto whatever prefix remains.
+func candidateEndpoint(c *httpClient, cand discoveryCandidate) (*httpClient, string) {
+	if cand.root {
+		c = rootedClient(c)
+	}
+	return c, resolveDiscoveryPath(c.base.Path, cand.path)
+}
+
 // discoverOne builds a client for a provider and refreshes its entry, trying each
 // candidate endpoint until one yields usable models. An unreachable server fails
 // fast rather than walking the rest of the list.
@@ -306,7 +333,8 @@ func discoverOne(ctx context.Context, name string, cfg ProviderConfig, flavor Fl
 	}
 	var lastErr error
 	for _, cand := range spec.candidates {
-		e, err := discoverProvider(ctx, client, resolveDiscoveryPath(client.base.Path, cand.path), cand.parse, prev, now)
+		c, path := candidateEndpoint(client, cand)
+		e, err := discoverProvider(ctx, c, path, cand.parse, prev, now)
 		if err == nil && len(e.Models) > 0 {
 			return e, nil
 		}

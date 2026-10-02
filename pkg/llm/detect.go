@@ -2,6 +2,13 @@ package llm
 
 import "strings"
 
+// isOpenRouterEndpoint reports whether an endpoint is openrouter, keyed on the
+// provider name or base URL. Shared by capability detection and the compat
+// profile so both agree on what the endpoint is, whatever key names it.
+func isOpenRouterEndpoint(provider, baseURL string) bool {
+	return provider == openRouterAffinityFormat || strings.Contains(baseURL, "openrouter.ai")
+}
+
 // detectCompat derives the quirks it auto-detects for a chat-completions
 // provider from its name and base URL, returning a sparse Compat that layers
 // under configured compat blocks. It returns a zero Compat when no vendor family
@@ -18,7 +25,7 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 		strings.Contains(baseURL, "api.together.ai") || strings.Contains(baseURL, "api.together.xyz")
 	isMoonshot := provider == "moonshotai" || provider == "moonshotai-cn" ||
 		strings.Contains(baseURL, "api.moonshot.")
-	isOpenRouter := provider == openRouterAffinityFormat || strings.Contains(baseURL, "openrouter.ai")
+	isOpenRouter := isOpenRouterEndpoint(provider, baseURL)
 	isCFWorkersAI := provider == "cloudflare-workers-ai" || strings.Contains(baseURL, "api.cloudflare.com")
 	isCFGateway := provider == "cloudflare-ai-gateway" || strings.Contains(baseURL, "gateway.ai.cloudflare.com")
 	isNvidia := provider == "nvidia" || strings.Contains(baseURL, "integrate.api.nvidia.com")

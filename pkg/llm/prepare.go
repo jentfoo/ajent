@@ -168,8 +168,8 @@ func nextThinkTag(text, open, close string) (string, int) {
 }
 
 // downgradeImages replaces image blocks with a placeholder when the model does
-// not accept them, collapsing consecutive placeholders to one. Assistant content
-// is untouched, while user images and nested tool-result images each get their own text.
+// not accept them, collapsing consecutive placeholders to one. Every role gets
+// the same placeholder, so a resumed assistant image never fails the request.
 func downgradeImages(msgs []Message, caps Capabilities) []Message {
 	if caps.Images || !hasImageBlock(msgs) {
 		return msgs
@@ -180,11 +180,7 @@ func downgradeImages(msgs []Message, caps Capabilities) []Message {
 		for _, b := range m.Content {
 			switch v := b.(type) {
 			case ImageBlock:
-				if m.Role == RoleAssistant {
-					content = append(content, b)
-				} else {
-					content = appendPlaceholder(content, imageOmitted)
-				}
+				content = appendPlaceholder(content, imageOmitted)
 			case ToolResultBlock:
 				if hasImage(v.Content) {
 					v.Content = downgradeBlocks(v.Content, toolImageOmitted)
@@ -250,10 +246,11 @@ func hasImage(content BlockList) bool {
 
 // splitToolResultImages moves images out of compat tool results into a following
 // user message, since chat-completions cannot carry them inside the tool role. It
-// runs after the placeholder ladder so each result keeps its "(see attached image)"
-// text, and is idempotent: the second pass finds no images left in any result.
+// gates on usesCompatBody so a responses model riding the compat fallback splits
+// too. It runs after the placeholder ladder so each result keeps its "(see attached
+// image)" text, and is idempotent: the second pass finds no images left in any result.
 func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
-	if caps.Dialect != DialectOpenAICompletions || !caps.Images || !hasImageBlock(msgs) {
+	if !usesCompatBody(caps) || !caps.Images || !hasImageBlock(msgs) {
 		return msgs // no image anywhere: the common path skips the per-message clones
 	}
 	out := make([]Message, 0, len(msgs))

@@ -36,6 +36,17 @@ const deferredToolsKimi = "kimi"
 // Name returns the provider name.
 func (p *compatProvider) Name() string { return p.profile.name }
 
+// usesCompatBody reports whether caps build through the shared chat-completions
+// body: the dialect itself, or a responses model riding the max_completion_tokens
+// fallback. The split pass and the estimator gate on it together, so tool-result
+// images reach the wire exactly when they are counted.
+func usesCompatBody(caps Capabilities) bool {
+	if caps.Dialect == DialectOpenAICompletions {
+		return true
+	}
+	return caps.Dialect == DialectOpenAIResponses && caps.MaxTokensField == fieldMaxCompletion
+}
+
 // Stream sends a request and returns its normalized event stream.
 func (p *compatProvider) Stream(ctx context.Context, req Request) (Stream, error) {
 	body, err := buildCompatBody(req, p.profile)

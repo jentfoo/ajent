@@ -25,12 +25,12 @@ type responsesProvider struct {
 // newResponsesProvider returns a Responses API provider with a chat-completions
 // fallback for models that lack it.
 func newResponsesProvider(name string, client *httpClient) *responsesProvider {
+	// the fallback rides the endpoint's own chat-completions profile
+	profile := profileFor(name, FlavorOpenAI, client.base.String(), ProviderConfig{})
 	return &responsesProvider{
-		client: client,
-		name:   name,
-		fallback: &compatProvider{client: client, profile: compatProfile{
-			name: name, classify: compatClassifier(name, FlavorOpenAI),
-		}},
+		client:   client,
+		name:     name,
+		fallback: &compatProvider{client: client, profile: profile},
 	}
 }
 
@@ -40,7 +40,7 @@ func (p *responsesProvider) Name() string { return p.name }
 // Stream sends a request and returns its normalized event stream. The dialect
 // is chosen per model from the resolved capabilities, not sniffed at runtime.
 func (p *responsesProvider) Stream(ctx context.Context, req Request) (Stream, error) {
-	if req.Model.Caps.MaxTokensField == fieldMaxCompletion {
+	if usesCompatBody(req.Model.Caps) {
 		return p.fallback.Stream(ctx, req) // this model speaks chat-completions
 	}
 	body, err := buildResponsesBody(req)
