@@ -606,10 +606,10 @@ an escape sequence or partial line is never split across the boundary.
   (`SpinnerTool`); a run created by output arriving ahead of its header does not
   alter it.
 - **Full mode**: user-initiated `!`/`!!` shells are the one exception to the
-  head-plus-summary rule. The stager opens them through `Sink.ToolStartFull` (an
-  optional capability it type-asserts on its sink), which calls `SetOutputFull`
-  for the call id *before* `ToolStart`, so output racing the header is never
-  capped; the head is created on demand by whichever arrives first. With
+  head-plus-summary rule. The stager opens them through `Sink.ToolStart` with
+  `full` set, which calls `SetOutputFull` for the call id *before* the header is
+  drawn, so output racing the header is never capped; the head is created on
+  demand by whichever arrives first. With
   `outputHead.full` set, every line is committed to history and no summary or
   activity row appears: the human sees everything they ran. The flag lives for
   one call: ending it drops the `toolRun`, so an agent bash call alongside it

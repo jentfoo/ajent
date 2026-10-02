@@ -68,7 +68,7 @@ func TestToolStartDisplay(t *testing.T) {
 	// the resolved label drives the header
 	t.Run("uses_label_in_header", func(t *testing.T) {
 		h := newHeadless(t)
-		_ = h.s.ToolStart(agent.ToolCall{Name: "bash"}, "bash: go test ./...")
+		_ = h.s.ToolStart(agent.ToolCall{Name: "bash"}, "bash: go test ./...", false)
 		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "bash: go test ./...") },
 			2*time.Second, time.Millisecond)
 	})
@@ -76,7 +76,7 @@ func TestToolStartDisplay(t *testing.T) {
 	// a successful completion commits its Display string to history
 	t.Run("completion_commits_display_on_success", func(t *testing.T) {
 		h := newHeadless(t)
-		done := h.s.ToolStart(agent.ToolCall{Name: "edit"}, "")
+		done := h.s.ToolStart(agent.ToolCall{Name: "edit"}, "", false)
 		res := agent.ToolResult{Content: llm.BlockList{}, Display: "applied 1 edit to main.go"}
 		assert.NotPanics(t, func() { done(res) })
 		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "applied 1 edit to main.go") },
@@ -86,7 +86,7 @@ func TestToolStartDisplay(t *testing.T) {
 	// an errored completion surfaces its message
 	t.Run("completion_error_shows_message", func(t *testing.T) {
 		h := newHeadless(t)
-		done := h.s.ToolStart(agent.ToolCall{Name: "bash"}, "")
+		done := h.s.ToolStart(agent.ToolCall{Name: "bash"}, "", false)
 		res := agent.ToolResult{
 			Content: llm.BlockList{llm.TextBlock{Text: "command not found"}},
 			IsError: true,
@@ -99,7 +99,7 @@ func TestToolStartDisplay(t *testing.T) {
 	// a completion with no Display commits nothing extra
 	t.Run("completion_no_display_commits_nothing_extra", func(t *testing.T) {
 		h := newHeadless(t)
-		done := h.s.ToolStart(agent.ToolCall{Name: "read"}, "")
+		done := h.s.ToolStart(agent.ToolCall{Name: "read"}, "", false)
 		res := agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "data"}}}
 		assert.NotPanics(t, func() { done(res) })
 

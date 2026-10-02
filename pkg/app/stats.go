@@ -41,7 +41,7 @@ func (s *statsSink) baseline(acct *tokens.Accounting) {
 }
 
 // ToolStart records the call, returning the hook that records how it ended.
-func (s *statsSink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResult) {
+func (s *statsSink) ToolStart(call agent.ToolCall, _ string, _ bool) func(agent.ToolResult) {
 	s.mu.Lock()
 	s.calls[call.Name]++
 	s.mu.Unlock()

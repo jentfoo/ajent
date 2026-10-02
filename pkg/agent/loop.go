@@ -610,7 +610,7 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 	}
 
 	out := NewOutput(sink, call.ID)
-	done := sink.ToolStart(call, tool.Label(call))
+	done := sink.ToolStart(call, tool.Label(call), false)
 	res, err := tool.Execute(ctx, call, out)
 	if res.Content == nil {
 		res.Content = llm.BlockList{}

@@ -292,13 +292,11 @@ the model-facing timeout default: the stager's ceiling is its own (zero runs
 uncapped), so a long human command like a build is not silently killed.
 
 The display differs from an agent bash call in one way: because the output is
-the user's own, it must be shown whole. The stager type-asserts its sink for a
-`ToolStartFull` capability (implemented by the TUI sink) and uses it when
-present, failing back to plain `ToolStart`. That sets full mode on the output
-head so every line reaches history instead of collapsing under the
-head-plus-summary rule (see `tui-design.md`). The model-side bytes are
-unchanged: context still carries whatever the bash tool returns, cap marker
-included.
+the user's own, it must be shown whole. The stager calls `ToolStart` with `full`
+set, so the sink puts the output head in full mode and every line reaches
+history instead of collapsing under the head-plus-summary rule (see
+`tui-design.md`). The model-side bytes are unchanged: context still carries
+whatever the bash tool returns, cap marker included.
 
 **Staging onto context.** The command text and its result are *not* sent to the
 model immediately. They sit in the pending slot ahead of the next user message.

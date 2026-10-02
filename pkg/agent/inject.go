@@ -13,7 +13,7 @@ import (
 // one path an agent-run tool takes.
 func InjectPair(ctx context.Context, tool Tool, sink Sink, call ToolCall, label string) ([]llm.Message, ToolResult) {
 	out := NewOutput(sink, call.ID)
-	done := sink.ToolStart(call, label)
+	done := sink.ToolStart(call, label, false)
 	res, err := tool.Execute(ctx, call, out)
 	if res.Content == nil {
 		res.Content = llm.BlockList{}

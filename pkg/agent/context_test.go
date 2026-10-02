@@ -24,7 +24,7 @@ func (c *ctxCatcher) Thinking(string)    {}
 func (c *ctxCatcher) EndThinking()       {}
 func (c *ctxCatcher) Text(string)        {}
 func (c *ctxCatcher) EndText()           {}
-func (c *ctxCatcher) ToolStart(ToolCall, string) func(ToolResult) {
+func (c *ctxCatcher) ToolStart(ToolCall, string, bool) func(ToolResult) {
 	return func(ToolResult) {}
 }
 func (c *ctxCatcher) ToolOutput(string, string)   {}

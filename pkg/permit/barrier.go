@@ -287,7 +287,7 @@ func (b *Barrier) cancelWarm(s Subject) {
 // cachedVerdict returns a verdict already banked for s, ok false for a bare fn
 // classifier or a miss. It never blocks and never starts a request.
 func (b *Barrier) cachedVerdict(s Subject) (Class, bool) {
-	c, ok := b.classifier.(interface{ peek(Subject) (Class, bool) })
+	c, ok := b.classifier.(*cachedClassifier)
 	if !ok {
 		return ClassUnsure, false
 	}

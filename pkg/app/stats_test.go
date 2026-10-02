@@ -23,7 +23,7 @@ func TestStatsSinkCounts(t *testing.T) {
 
 	s := newStatsSink()
 	record := func(name string, failed bool) {
-		s.ToolStart(agent.ToolCall{ID: "c", Name: name}, name)(agent.ToolResult{IsError: failed})
+		s.ToolStart(agent.ToolCall{ID: "c", Name: name}, name, false)(agent.ToolResult{IsError: failed})
 	}
 	record("read", false)
 	record("edit", false)

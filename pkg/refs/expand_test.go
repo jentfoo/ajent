@@ -31,7 +31,7 @@ func (s *sinkCapturer) Thinking(string)          {}
 func (s *sinkCapturer) EndThinking()             {}
 func (s *sinkCapturer) Text(string)              {}
 func (s *sinkCapturer) EndText()                 {}
-func (s *sinkCapturer) ToolStart(_ agent.ToolCall, label string) func(agent.ToolResult) {
+func (s *sinkCapturer) ToolStart(_ agent.ToolCall, label string, _ bool) func(agent.ToolResult) {
 	s.starts = append(s.starts, label)
 	return func(agent.ToolResult) {}
 }

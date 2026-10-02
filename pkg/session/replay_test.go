@@ -25,7 +25,7 @@ func (s *replaySink) EndText()                   { s.calls = append(s.calls, "en
 
 // ToolStart records the call and captures its completion hook. The label is kept
 // separately so an injected block, which carries no tool name, is still checkable.
-func (s *replaySink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
+func (s *replaySink) ToolStart(call agent.ToolCall, label string, _ bool) func(agent.ToolResult) {
 	s.labels = append(s.labels, label)
 	s.calls = append(s.calls, "tool:"+call.Name)
 	return func(res agent.ToolResult) {

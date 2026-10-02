@@ -167,20 +167,10 @@ type stageInput struct {
 	Timeout int    `json:"timeout,omitempty"`
 }
 
-// startTool opens the run's header and stream on sink, preferring a full-display
-// variant when the sink offers one so `!`/`!!` output is never collapsed.
+// startTool opens the run's header and stream on sink with full display, so
+// `!`/`!!` output is never collapsed to its head.
 func (s *Stager) startTool(call agent.ToolCall, label string) func(agent.ToolResult) {
-	if fs, ok := s.sink.(fullToolStarter); ok {
-		return fs.ToolStartFull(call, label)
-	}
-	return s.sink.ToolStart(call, label)
-}
-
-// fullToolStarter is implemented by sinks that can mark a staged shell command's
-// streamed output for full (untruncated) display. The base agent.Sink collapses
-// tool history to its head, while user-initiated `!`/`!!` shells show everything.
-type fullToolStarter interface {
-	ToolStartFull(call agent.ToolCall, label string) func(agent.ToolResult)
+	return s.sink.ToolStart(call, label, true)
 }
 
 // Discard cancels every still-running staged command and drops all staged

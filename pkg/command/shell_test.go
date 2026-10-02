@@ -22,6 +22,7 @@ import (
 type recordingSinkForShell struct {
 	mu      sync.Mutex
 	starts  int
+	full    bool
 	outputs []string
 	notices []string
 	done    []agent.ToolResult
@@ -33,9 +34,10 @@ func (r *recordingSinkForShell) Thinking(string)          {}
 func (r *recordingSinkForShell) EndThinking()             {}
 func (r *recordingSinkForShell) Text(string)              {}
 func (r *recordingSinkForShell) EndText()                 {}
-func (r *recordingSinkForShell) ToolStart(_ agent.ToolCall, _ string) func(agent.ToolResult) {
+func (r *recordingSinkForShell) ToolStart(_ agent.ToolCall, _ string, full bool) func(agent.ToolResult) {
 	r.mu.Lock()
 	r.starts++
+	r.full = full
 	r.mu.Unlock()
 	return func(res agent.ToolResult) { r.mu.Lock(); r.done = append(r.done, res); r.mu.Unlock() }
 }
@@ -236,32 +238,16 @@ func TestStagerFlushKeepsInFlightCancellable(t *testing.T) {
 	assert.Contains(t, resultText(got.msgs[0].Message.Content), "interrupted by user")
 }
 
-// fullSinkForShell records whether ToolStartFull was chosen for a staged run.
-type fullSinkForShell struct {
-	*recordingSinkForShell
-	fullStarts int
-}
-
-func (f *fullSinkForShell) ToolStartFull(_ agent.ToolCall, _ string) func(agent.ToolResult) {
-	f.mu.Lock()
-	f.fullStarts++
-	f.starts++
-	f.mu.Unlock()
-	return func(res agent.ToolResult) { f.mu.Lock(); f.done = append(f.done, res); f.mu.Unlock() }
-}
-
-func TestStagerPrefersFullToolStart(t *testing.T) {
+func TestStagerRequestsFullToolStart(t *testing.T) {
 	t.Parallel()
 
 	s, sink := newShellStager(t)
-	full := &fullSinkForShell{recordingSinkForShell: sink}
-	s.sink = full // the stager's sink is fixed at construction, swap to a fuller one
 	s.Run("echo hi", false)
 
 	require.Eventually(t, func() bool {
-		full.mu.Lock()
-		defer full.mu.Unlock()
-		return !s.Pending() && full.fullStarts == 1
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		return !s.Pending() && sink.starts == 1 && sink.full
 	}, time.Second, time.Millisecond)
 }
 

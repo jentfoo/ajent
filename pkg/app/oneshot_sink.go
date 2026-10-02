@@ -130,7 +130,7 @@ func (s *textSink) ToolProgress(p agent.ToolProgress) {
 	s.paths[p.CallID] = p.Path
 }
 
-func (s *textSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
+func (s *textSink) ToolStart(call agent.ToolCall, label string, full bool) func(agent.ToolResult) {
 	if strings.TrimSpace(label) == "" {
 		label = call.Name
 	}
@@ -280,7 +280,7 @@ func (s *jsonSink) EndText() {
 	s.text.Reset()
 }
 
-func (s *jsonSink) ToolStart(call agent.ToolCall, _ string) func(agent.ToolResult) {
+func (s *jsonSink) ToolStart(call agent.ToolCall, _ string, _ bool) func(agent.ToolResult) {
 	s.mu.Lock()
 	s.emit(jsonEvent{Type: "tool_call", ID: call.ID, Name: call.Name, Input: call.Input})
 	s.mu.Unlock()

@@ -37,7 +37,7 @@ func TestToolStart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newCapture()
 			s := newChildSink(tc.id, numberOf(tc.id), c.recordRow)
-			done := s.ToolStart(tc.call, tc.label)
+			done := s.ToolStart(tc.call, tc.label, false)
 			assert.Equal(t, tc.wantRow, c.rowText(tc.id))
 			done(agent.ToolResult{})
 			// a broken helper must not mask it: assert the literal idle line.
@@ -67,10 +67,10 @@ func TestToolStartParallelCalls(t *testing.T) {
 	s.set(thinkingRow(s.id), true)
 
 	doneA := s.ToolStart(agent.ToolCall{ID: "c1", Name: "read",
-		Input: json.RawMessage(`{"path":"a.go"}`)}, "read")
+		Input: json.RawMessage(`{"path":"a.go"}`)}, "read", false)
 	assert.Equal(t, "sub-2  read a.go", c.rowText("sub-2"))
 
-	doneB := s.ToolStart(agent.ToolCall{ID: "c2", Name: "grep"}, `grep "New" pkg`)
+	doneB := s.ToolStart(agent.ToolCall{ID: "c2", Name: "grep"}, `grep "New" pkg`, false)
 	assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
 
 	doneA(agent.ToolResult{}) // b still runs, its label stays on the row

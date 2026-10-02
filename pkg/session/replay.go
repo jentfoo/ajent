@@ -119,7 +119,7 @@ func replayInjected(id, text string, sink agent.Sink) {
 		return
 	}
 	body = strings.TrimLeft(body, "\n") // the blank line separating label from body
-	sink.ToolStart(agent.ToolCall{ID: id}, label)(agent.ToolResult{Display: body})
+	sink.ToolStart(agent.ToolCall{ID: id}, label, false)(agent.ToolResult{Display: body})
 }
 
 // foldResults resolves every tool result in content against pending calls. Each
@@ -136,7 +136,7 @@ func foldResults(pending map[string]agent.ToolCall, content llm.BlockList, sink 
 		if !ok2 {
 			continue
 		}
-		sink.ToolStart(call, call.Name)(agent.ToolResult{Content: tr.Content, Display: toolBody(tr), IsError: tr.IsError})
+		sink.ToolStart(call, call.Name, false)(agent.ToolResult{Content: tr.Content, Display: toolBody(tr), IsError: tr.IsError})
 		delete(pending, tr.CallID)
 	}
 }

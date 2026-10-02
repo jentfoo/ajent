@@ -79,8 +79,8 @@ func (s *recordingSink) EndThinking()               { s.next.EndThinking() }
 func (s *recordingSink) Text(d string)              { s.next.Text(d) }
 func (s *recordingSink) EndText()                   { s.next.EndText() }
 
-func (s *recordingSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
-	return s.next.ToolStart(call, label)
+func (s *recordingSink) ToolStart(call agent.ToolCall, label string, full bool) func(agent.ToolResult) {
+	return s.next.ToolStart(call, label, full)
 }
 
 func (s *recordingSink) ToolOutput(id, d string)           { s.next.ToolOutput(id, d) }

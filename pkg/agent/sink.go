@@ -25,7 +25,9 @@ type Sink interface {
 	EndThinking()
 	Text(delta string)
 	EndText()
-	ToolStart(call ToolCall, label string) func(ToolResult)
+	// ToolStart opens a tool call's header. full marks a call whose streamed
+	// output must be shown in full rather than collapsed to its head.
+	ToolStart(call ToolCall, label string, full bool) func(ToolResult)
 	ToolOutput(callID, delta string)
 	// ToolProgress reports a call the model is still streaming, so a long set of
 	// arguments shows movement before the call can run.
@@ -77,10 +79,10 @@ func (f *fanoutSink) EndText() {
 }
 
 // ToolStart returns a closure that calls every member's done in order.
-func (f *fanoutSink) ToolStart(call ToolCall, label string) func(ToolResult) {
+func (f *fanoutSink) ToolStart(call ToolCall, label string, full bool) func(ToolResult) {
 	done := make([]func(ToolResult), 0, len(f.sinks))
 	for _, s := range f.sinks {
-		if d := s.ToolStart(call, label); d != nil {
+		if d := s.ToolStart(call, label, full); d != nil {
 			done = append(done, d)
 		}
 	}
@@ -136,7 +138,7 @@ func (NopSink) Thinking(string)    {}
 func (NopSink) EndThinking()       {}
 func (NopSink) Text(string)        {}
 func (NopSink) EndText()           {}
-func (NopSink) ToolStart(call ToolCall, label string) func(ToolResult) {
+func (NopSink) ToolStart(call ToolCall, label string, full bool) func(ToolResult) {
 	return func(ToolResult) {}
 }
 func (NopSink) ToolOutput(string, string)   {}

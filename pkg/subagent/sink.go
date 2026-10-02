@@ -91,7 +91,7 @@ func (s *childSink) flushLocked(now time.Time) {
 // "read" are bare words). Child tools run in parallel, so the fallback is counted
 // rather than captured per call: only the last call to finish restores the idle
 // line, otherwise an early finisher would erase a sibling still running.
-func (s *childSink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
+func (s *childSink) ToolStart(call agent.ToolCall, label string, full bool) func(agent.ToolResult) {
 	s.mu.Lock()
 	if s.calls == 0 { // first of a batch, so remember what the row showed before it
 		s.idle = s.text

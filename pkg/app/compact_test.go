@@ -539,7 +539,7 @@ func (c *ctxSink) Thinking(string)               {}
 func (c *ctxSink) EndThinking()                  {}
 func (c *ctxSink) Text(string)                   {}
 func (c *ctxSink) EndText()                      {}
-func (c *ctxSink) ToolStart(agent.ToolCall, string) func(agent.ToolResult) {
+func (c *ctxSink) ToolStart(agent.ToolCall, string, bool) func(agent.ToolResult) {
 	return func(agent.ToolResult) {}
 }
 func (c *ctxSink) ToolOutput(string, string)       {}

@@ -36,7 +36,7 @@ func TestSinkFanout(t *testing.T) {
 	t.Run("tool_done_calls_every_closure", func(t *testing.T) {
 		var one, two recordingSink
 		fan := &fanoutSink{sinks: []Sink{&one, &two}}
-		done := fan.ToolStart(ToolCall{Name: "bash"}, "")
+		done := fan.ToolStart(ToolCall{Name: "bash"}, "", false)
 		assert.NotNil(t, done)
 		done(ToolResult{})
 

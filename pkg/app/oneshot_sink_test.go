@@ -74,7 +74,7 @@ func TestTextSink(t *testing.T) {
 		s := newTextSink(&out, &errw)
 		s.Text("\n\n") // what a model emits before a tool call
 		s.EndText()
-		s.ToolStart(agent.ToolCall{ID: "c1", Name: "ls"}, "ls")(agent.ToolResult{})
+		s.ToolStart(agent.ToolCall{ID: "c1", Name: "ls"}, "ls", false)(agent.ToolResult{})
 		s.Text("\n")
 		s.EndText()
 		s.Text("done")
@@ -102,11 +102,11 @@ func TestTextSink(t *testing.T) {
 
 		// a bare label takes the target from the call's streamed arguments
 		s.ToolProgress(agent.ToolProgress{CallID: "c1", Name: "read", Path: "notes.go"})
-		s.ToolStart(agent.ToolCall{ID: "c1", Name: "read"}, "read")(agent.ToolResult{})
+		s.ToolStart(agent.ToolCall{ID: "c1", Name: "read"}, "read", false)(agent.ToolResult{})
 
 		// a label already carrying its own detail is left alone
 		s.ToolProgress(agent.ToolProgress{CallID: "c2", Name: "bash", Path: "ls -la"})
-		done := s.ToolStart(agent.ToolCall{ID: "c2", Name: "bash"}, "bash: ls -la")
+		done := s.ToolStart(agent.ToolCall{ID: "c2", Name: "bash"}, "bash: ls -la", false)
 		done(agent.ToolResult{IsError: true, Content: llm.BlockList{llm.TextBlock{Text: "refused"}}})
 
 		assert.Empty(t, out.String()) // stdout stays the model's prose alone
@@ -134,7 +134,7 @@ func TestJSONSink(t *testing.T) {
 
 		s.TurnStart(agent.TurnInfo{Model: llm.Model{Provider: "p", ID: "m"}})
 		call := agent.ToolCall{ID: "c1", Name: "read", Input: []byte(`{"path":"x.go"}`)}
-		done := s.ToolStart(call, "read x.go")
+		done := s.ToolStart(call, "read x.go", false)
 		s.ToolOutput("c1", "file body")
 		done(agent.ToolResult{})
 		s.Text("the ")
@@ -169,7 +169,7 @@ func TestJSONSink(t *testing.T) {
 		var out bytes.Buffer
 		s := newJSONSink(&out)
 
-		done := s.ToolStart(agent.ToolCall{ID: "c1", Name: "bash"}, "bash")
+		done := s.ToolStart(agent.ToolCall{ID: "c1", Name: "bash"}, "bash", false)
 		done(agent.ToolResult{IsError: true, Content: llm.BlockList{llm.TextBlock{Text: "refused"}}})
 		s.Notice("heads up", agent.LevelWarn)
 		s.finish(statusEmpty, ExitTurn, "")

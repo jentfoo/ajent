@@ -70,8 +70,12 @@ func (s *Sink) EndText() { s.ui.EndText() }
 // ToolStart maps a tool call onto the TUI spinner and returns the completion
 // hook that reports how it ended. Incremental output is streamed separately via
 // ToolOutput, so only an error, a Display string or image blocks need extra
-// rendering here.
-func (s *Sink) ToolStart(call agent.ToolCall, label string) func(agent.ToolResult) {
+// rendering here. A full call's streamed output is shown in full rather than
+// collapsed to its head.
+func (s *Sink) ToolStart(call agent.ToolCall, label string, full bool) func(agent.ToolResult) {
+	if full {
+		s.ui.SetOutputFull(call.ID) // set first: output racing the header must not be capped
+	}
 	if strings.TrimSpace(label) == "" {
 		label = call.Name
 	}
@@ -99,14 +103,6 @@ func (s *Sink) commitImages(label string, blocks llm.BlockList) {
 		im.Label = label
 		s.ui.Image(im)
 	}
-}
-
-// ToolStartFull is ToolStart for a call whose streamed output must be shown in
-// full rather than collapsed to its head. The stager uses it for user-initiated
-// `!`/`!!` shells so the human sees everything they ran.
-func (s *Sink) ToolStartFull(call agent.ToolCall, label string) func(agent.ToolResult) {
-	s.ui.SetOutputFull(call.ID) // set first: output racing the header must not be capped
-	return s.ToolStart(call, label)
 }
 
 // ToolOutput streams raw tool output a chunk at a time.
