@@ -4,12 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
+	"math"
 	"time"
 )
 
 // jsonNull is the literal for an absent JSON value, compared against RawMessage.
 const jsonNull = "null"
+
+// maxFlexMS bounds the millisecond form of a FlexDuration so converting it to a
+// time.Duration cannot overflow int64 nanoseconds.
+const maxFlexMS = float64(math.MaxInt64 / time.Millisecond)
 
 // FlexDuration is a config duration that accepts either a JSON number of
 // milliseconds (the common MCP client convention) or a Go duration string like
@@ -22,8 +26,11 @@ func (d *FlexDuration) UnmarshalJSON(b []byte) error {
 		*d = 0
 		return nil
 	}
-	s := strings.Trim(string(b), `"`)
-	if s != string(b) { // quoted: a Go duration string
+	if b[0] == '"' { // quoted: a Go duration string
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return errors.New("timeout must be a millisecond number or duration string")
+		}
 		dur, err := time.ParseDuration(s)
 		if err != nil {
 			return fmt.Errorf("invalid timeout %q", s)
@@ -35,8 +42,10 @@ func (d *FlexDuration) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &ms); err != nil {
 		return errors.New("timeout must be a millisecond number or duration string")
 	}
-	dur := time.Duration(ms) * time.Millisecond
-	*d = FlexDuration(dur)
+	if ms < 0 || ms >= maxFlexMS {
+		return fmt.Errorf("timeout %v ms out of range, want 0 to %d", ms, int64(maxFlexMS))
+	}
+	*d = FlexDuration(time.Duration(int64(ms)) * time.Millisecond)
 	return nil
 }
 
@@ -50,23 +59,37 @@ func (f *FlexStrings) UnmarshalJSON(b []byte) error {
 		*f = nil
 		return nil
 	}
-	s := strings.Trim(string(b), `"`)
-	switch s {
+	switch string(b) { // bare tokens only; a quoted "true"/"false" is a glob
 	case "true":
 		*f = []string{"*"} // mark every tool read-only
 		return nil
-	case "false", jsonNull:
+	case "false":
 		*f = nil
 		return nil
 	}
-	if string(b) == s { // unquoted non-boolean: an array of globs
+	const shape = "readOnly must be a bool or a list of tool name globs"
+	switch b[0] {
+	case '[':
 		var list []string
 		if err := json.Unmarshal(b, &list); err != nil {
-			return errors.New("readOnly must be a bool or a list of tool name globs")
+			return errors.New(shape)
 		}
 		*f = list
-		return nil
+	case '"':
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return errors.New(shape)
+		}
+		*f = []string{s}
+	default:
+		return errors.New(shape)
 	}
-	*f = []string{s} // a single quoted glob
 	return nil
+}
+
+// MarshalJSON renders a config duration as a millisecond count. Test support:
+// configuration files are read-only so production never writes one, but round-trip
+// tests need the numeric-ms encoding to stay faithful (the internal value is ns).
+func (d FlexDuration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(int64(time.Duration(d) / time.Millisecond))
 }
