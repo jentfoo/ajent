@@ -215,35 +215,41 @@ func TestPickItemRowRoleTags(t *testing.T) {
 	t.Parallel()
 
 	th := NewTheme(Color256, DefaultPalette())
+	lay := pickLayout{tagCol: 5, marked: true}
 
 	t.Run("user_tag_hue", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "the question"}, false, 80, 5)
+		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "the question"}, false, 80, lay)
 		assert.Equal(t, selectIndent+th.UserTag.Wrap("user")+"  "+Style{}.Wrap("the question"), row)
 	})
 
 	t.Run("agent_tag_hue", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Tag: "agent", Mark: MarkAssistant, Label: "a reply"}, false, 80, 5)
+		row := pickItemRow(th, PickItem{Tag: "agent", Mark: MarkAssistant, Label: "a reply"}, false, 80, lay)
 		assert.Equal(t, selectIndent+th.Assist.Wrap("agent")+" "+Style{}.Wrap("a reply"), row)
 	})
 
 	t.Run("tool_tag_hue", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Tag: "tool", Mark: MarkTool, Label: "[ls] docs/"}, false, 80, 5)
+		row := pickItemRow(th, PickItem{Tag: "tool", Mark: MarkTool, Label: "[ls] docs/"}, false, 80, lay)
 		assert.Equal(t, selectIndent+th.ToolTag.Wrap("tool")+"  "+Style{}.Wrap("[ls] docs/"), row)
 	})
 
 	t.Run("off_branch_faint", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "abandoned", Off: true}, false, 80, 5)
+		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "abandoned", Off: true}, false, 80, lay)
 		assert.Equal(t, selectIndent+th.UserTagOff.Wrap("user")+"  "+th.Dim.Wrap("abandoned"), row)
 	})
 
 	t.Run("selected_accents_body", func(t *testing.T) {
-		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "picked"}, true, 80, 5)
+		row := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "picked"}, true, 80, lay)
 		assert.Equal(t, selectMarker+th.UserTag.Wrap("user")+"  "+th.Accent.Wrap("picked"), row)
 	})
 
-	t.Run("no_tag_plain_label", func(t *testing.T) { // every other picker: unchanged
-		row := pickItemRow(th, PickItem{Label: "a model"}, false, 80, 0)
-		assert.Equal(t, selectIndent+th.Dim.Wrap("a model"), row)
+	t.Run("untagged_dims_among_tags", func(t *testing.T) {
+		row := pickItemRow(th, PickItem{Label: "an untagged row"}, false, 80, pickLayout{marked: true})
+		assert.Equal(t, selectIndent+th.Dim.Wrap("an untagged row"), row)
+	})
+
+	t.Run("unmarked_list_stays_plain", func(t *testing.T) { // gray is reserved for disabled rows
+		row := pickItemRow(th, PickItem{Label: "a model"}, false, 80, pickLayout{})
+		assert.Equal(t, selectIndent+Style{}.Wrap("a model"), row)
 	})
 }
 
@@ -264,7 +270,7 @@ func TestPickItemRowAlignment(t *testing.T) {
 
 	want := -1
 	for _, it := range items {
-		row := strutil.StripANSI(pickItemRow(th, it, false, 80, col))
+		row := strutil.StripANSI(pickItemRow(th, it, false, 80, pickLayout{tagCol: col, marked: true}))
 		guide := strings.Index(row, it.Label)
 		require.GreaterOrEqual(t, guide, 0)
 		if want < 0 {
@@ -279,26 +285,29 @@ func TestPickItemRowNoColorMarksActive(t *testing.T) {
 
 	th := NewTheme(ColorNone, DefaultPalette())
 
-	live := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "in context"}, false, 80, 4)
-	off := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "abandoned", Off: true}, false, 80, 4)
+	live := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "in context"}, false, 80, pickLayout{tagCol: 4, marked: true})
+	off := pickItemRow(th, PickItem{Tag: "user", Mark: MarkUser, Label: "abandoned", Off: true}, false, 80, pickLayout{tagCol: 4, marked: true})
 	assert.Equal(t, selectIndent+"* user in context", live)
 	assert.Equal(t, selectIndent+"  user abandoned", off)
 	assert.Equal(t, displayWidth(live)-len("in context"), displayWidth(off)-len("abandoned"))
 
-	// lists with no tags keep their plain rendering, gutter included
-	plain := pickItemRow(th, PickItem{Label: "a model"}, false, 80, 0)
+	// lists with no tags keep their gutter-free rendering and a plain body
+	plain := pickItemRow(th, PickItem{Label: "a model"}, false, 80, pickLayout{})
 	assert.Equal(t, selectIndent+"a model", plain)
 }
 
 func TestPickItemDisabledStaysGrayUnderCursor(t *testing.T) {
 	t.Parallel()
 
-	th := NewTheme(ColorNone, DefaultPalette())
+	th := NewTheme(Color256, DefaultPalette())
 
-	// a disabled row renders dim like an untagged one even when it is the cursor,
-	// so no accent suggests the locked setting can be chosen.
-	dim := pickItemRow(th, PickItem{Label: "Reasoning", Disabled: true}, false, 80, 0)
-	assert.Equal(t, selectIndent+"Reasoning", dim)
+	// a disabled row keeps its dim body under the cursor so no accent suggests
+	// the locked setting can be chosen; an editable one accents as always.
+	dim := pickItemRow(th, PickItem{Label: "Reasoning", Disabled: true}, true, 80, pickLayout{})
+	assert.Equal(t, selectMarker+th.Dim.Wrap("Reasoning"), dim)
+
+	cur := pickItemRow(th, PickItem{Label: "Model"}, true, 80, pickLayout{})
+	assert.Equal(t, selectMarker+th.Accent.Wrap("Model"), cur)
 }
 
 func TestUIPick(t *testing.T) {

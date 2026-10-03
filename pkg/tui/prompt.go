@@ -262,9 +262,9 @@ func (s *pickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 		shown = t.Dim.Wrap(s.placeholder)
 	}
 	filterRow := t.User.Wrap(userMarker) + shown
-	tagCol := tagColumn(s.items)
+	lay := pickLayout{tagCol: tagColumn(s.items), marked: hasMarks(s.items)}
 	list := listSection(t, s.cursor, len(s.matches), maxRows-pickerChrome, func(i int) string {
-		return pickItemRow(t, s.items[s.matches[i]], i == s.cursor, width, tagCol)
+		return pickItemRow(t, s.items[s.matches[i]], i == s.cursor, width, lay)
 	})
 	return append([]string{header, filterRow}, list...), 1,
 		displayWidth(t.User.Wrap(userMarker)) + displayWidth(s.filter)
@@ -349,15 +349,15 @@ func optionRows(t Theme, o Option, selected bool, width int) []string {
 
 // pickItemRow renders one Pick row: a cursor marker, an optional role tag colored
 // independently of selection so the row kind reads at a glance, then the label
-// and detail. tagCol is the width every row reserves for its tag, so labels that
-// draw a tree line up in one column whatever their tag.
-func pickItemRow(t Theme, it PickItem, selected bool, width, tagCol int) string {
+// and detail. lay holds the per-list facts every row shares; its tag column keeps
+// labels that draw a tree lined up whatever their tag.
+func pickItemRow(t Theme, it PickItem, selected bool, width int, lay pickLayout) string {
 	marker := selectIndent
 	if selected {
 		marker = selectMarker
 	}
-	line := marker + offMarker(t, it) + markStyle(t, it).Wrap(it.Tag) + padTag(it.Tag, tagCol) +
-		bodyStyle(t, it, selected).Wrap(it.Label)
+	line := marker + offMarker(t, it) + markStyle(t, it).Wrap(it.Tag) + padTag(it.Tag, lay.tagCol) +
+		bodyStyle(t, it, selected, lay.marked).Wrap(it.Label)
 	if it.Detail != "" {
 		line += t.Dim.Wrap("  " + it.Detail)
 	}
@@ -381,6 +381,19 @@ func padTag(tag string, col int) string {
 		return ""
 	}
 	return strings.Repeat(" ", col-displayWidth(tag)+1)
+}
+
+// pickLayout is the per-list render context every row of one picker shares.
+type pickLayout struct {
+	tagCol int  // width tags pad to, zero when no row carries a tag
+	marked bool // some row carries a mark, so untagged rows dim
+}
+
+// hasMarks reports whether any item carries a role mark. Only lists that mix
+// marked rows in shade their untagged ones; a list without marks renders every
+// body plain so dim there reads as locked (Disabled) rather than default.
+func hasMarks(items []PickItem) bool {
+	return slices.ContainsFunc(items, func(it PickItem) bool { return it.Mark != MarkNone })
 }
 
 // offMarker marks the active chain with "*" only when color is unavailable. With
@@ -418,16 +431,17 @@ func markStyle(t Theme, it PickItem) Style {
 	}
 }
 
-// bodyStyle shades a row's label: an untagged or disabled row stays dim, the
-// cursor row accents unless it is disabled, and among tagged rows the ones still
-// in context read plain while abandoned branches recede to dim.
-func bodyStyle(t Theme, it PickItem, selected bool) Style {
+// bodyStyle shades a row's label: the cursor row accents unless it is disabled,
+// rows off the active branch recede to dim, and untagged ones dim when the list
+// mixes tagged rows in. A list with no marked rows keeps editable bodies plain,
+// so gray there reads as locked rather than default.
+func bodyStyle(t Theme, it PickItem, selected, anyMarked bool) Style {
 	switch {
 	case it.Disabled:
 		return t.Dim // a disabled row stays gray even under the cursor
 	case selected:
 		return t.Accent
-	case it.Mark == MarkNone || it.Off:
+	case it.Off || (anyMarked && it.Mark == MarkNone):
 		return t.Dim
 	default:
 		return Style{}

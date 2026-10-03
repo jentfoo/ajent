@@ -387,6 +387,11 @@ chosen right now: its body stays dim even under the cursor, so no accent ever
 suggests the locked option is selectable. `/settings` uses this for rows whose
 choice is impossible on the active model (Reasoning with a single level).
 
+Body shade is otherwise decided per list. Where some rows carry a `Mark`, as in
+the rewind tree, untagged ones dim so they do not read as one of the kinds; a
+list with no marked rows at all renders every editable body plain, reserving
+gray for disabled rows so locked and available options read apart at a glance.
+
 Queued pending-prompt rows (`SetQueued`) sit above an active interaction like
 any other live-block content: they yield first on a short terminal
 (activity-style) and are driver-owned, so `Reset()` does not clear them: the
