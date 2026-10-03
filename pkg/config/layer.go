@@ -78,13 +78,22 @@ func foldVal(dst *object, over *object, path string, name string, src map[string
 		ov := over.m[k]
 		switch {
 		case !ov.isObject():
+			if ok && dv.isObject() {
+				prefix := childPath + "." // replaced subtree leaves no stale paths
+				for p := range src {
+					if strings.HasPrefix(p, prefix) {
+						delete(src, p)
+					}
+				}
+			}
 			dst.m[k] = ov // scalar or array replaces wholesale
 			src[childPath] = name
 		case ok && dv.isObject():
 			foldVal(dv.obj, ov.obj, childPath, name, src)
 		default:
 			fresh := &val{k: kindObj, obj: &object{m: make(map[string]*val)}}
-			dst.m[k] = fresh // a scalar being replaced by an object adopts it
+			dst.m[k] = fresh      // a scalar being replaced by an object adopts it
+			src[childPath] = name // the whole value now comes from this layer
 			foldVal(fresh.obj, ov.obj, childPath, name, src)
 		}
 	}

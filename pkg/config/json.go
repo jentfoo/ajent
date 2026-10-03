@@ -85,7 +85,29 @@ func JSONError(path string, data []byte, err error) error {
 	}
 	line, col, text := locate(data, offset)
 	return fmt.Errorf("%s:%d:%d: %w\n    %s\n    %s^",
-		path, line, col, err, text, strings.Repeat(" ", max(col-1, 0)))
+		path, line, col, err, redactSecretLine(text), strings.Repeat(" ", max(col-1, 0)))
+}
+
+// secretKeys are JSON keys whose values must never appear in echoed source lines.
+var secretKeys = []string{"apiKey", "token", "secret"}
+
+// redactedMask is what a secret value is replaced with.
+const redactedMask = `[redacted]`
+
+// redactSecretLine masks the value when a line sets a known-secret key, so a
+// malformed file's echoed source cannot leak credentials into logs.
+func redactSecretLine(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := line[:len(line)-len(trimmed)]
+	for _, key := range secretKeys {
+		if !strings.HasPrefix(trimmed, `"`+key+`"`) {
+			continue
+		}
+		if colon := strings.Index(trimmed, ":"); colon >= 0 {
+			return indent + trimmed[:colon+1] + " " + redactedMask
+		}
+	}
+	return line
 }
 
 // jsonErrorOffset returns the byte offset an encoding/json error carries.

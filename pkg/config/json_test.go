@@ -107,6 +107,28 @@ func TestJSONError(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, JSONError("m.json", data, err), err)
 	})
+
+	t.Run("secret_value_is_redacted", func(t *testing.T) {
+		data := []byte("{\n  \"apiKey\": \"sk-super-secret\" @oops\n}")
+		var v map[string]any
+		err := json.Unmarshal(data, &v)
+		require.Error(t, err)
+
+		got := JSONError("models.json", data, err).Error()
+		assert.Contains(t, got, "models.json:2:")
+		assert.NotContains(t, got, "sk-super-secret")
+		assert.Contains(t, got, `"apiKey": [redacted]`)
+	})
+
+	t.Run("non_secret_lines_are_untouched", func(t *testing.T) {
+		data := []byte("{\n  \"tokenfile\": \"keep me\" @oops\n}")
+		var v map[string]any
+		err := json.Unmarshal(data, &v)
+		require.Error(t, err)
+
+		got := JSONError("m.json", data, err).Error()
+		assert.Contains(t, got, `"tokenfile": "keep me"`)
+	})
 }
 
 func TestLocate(t *testing.T) {

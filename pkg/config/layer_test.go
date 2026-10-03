@@ -99,3 +99,51 @@ func TestMergeEmptyLayerSkipped(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, `"medium"`, string(v))
 }
+
+func TestMergeSourceProvenance(t *testing.T) {
+	t.Parallel()
+
+	t.Run("object_valued_key_has_source", func(t *testing.T) {
+		r, err := Merge(
+			Layer{Name: "default", Data: []byte(`{}`)},
+			Layer{Name: "user", Data: []byte(`{"agent":{"model":"x"}}`)},
+		)
+		require.NoError(t, err)
+
+		_, src, ok := r.Explain("agent")
+		require.True(t, ok)
+		assert.Equal(t, "user", src)
+		assert.Equal(t, "user", r.Source("agent"))
+	})
+
+	t.Run("scalar_replaced_by_object", func(t *testing.T) {
+		r, err := Merge(
+			Layer{Name: "default", Data: []byte(`{"agent":"old"}`)},
+			Layer{Name: "user", Data: []byte(`{"agent":{"model":"x"}}`)},
+		)
+		require.NoError(t, err)
+
+		_, src, ok := r.Explain("agent")
+		require.True(t, ok)
+		assert.Equal(t, "user", src)
+		assert.Equal(t, "user", r.Source("agent.model"))
+	})
+
+	t.Run("replaced_subtree_prunes_stale_sources", func(t *testing.T) {
+		r, err := Merge(
+			Layer{Name: "default", Data: []byte(`{"a":{"b":1,"c":{"d":2}}}`)},
+			Layer{Name: "user", Data: []byte(`{"a":[2,3]}`)},
+		)
+		require.NoError(t, err)
+
+		_, src, ok := r.Explain("a")
+		require.True(t, ok)
+		assert.Equal(t, "user", src)
+		_, _, ok = r.Explain("a.b")
+		assert.False(t, ok)
+		assert.Empty(t, r.Source("a.b"))
+		_, _, ok = r.Explain("a.c.d")
+		assert.False(t, ok)
+		assert.Empty(t, r.Source("a.c.d"))
+	})
+}
