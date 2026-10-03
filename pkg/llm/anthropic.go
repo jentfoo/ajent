@@ -666,7 +666,6 @@ func (s *anthropicStream) readFrame() []Event {
 			msg = ev.Error.Message
 			typ = ev.Error.Type
 		}
-		s.terminal = true
 		return s.finish(&APIError{Provider: s.provider, Code: typ, Message: msg,
 			Retryable: typ == "overloaded_error"})
 	default:

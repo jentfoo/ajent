@@ -13,10 +13,10 @@ func TestFlexDurationUnmarshal(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name   string
-		raw    string
-		want   time.Duration
-		wanErr bool
+		name    string
+		raw     string
+		want    time.Duration
+		wantErr bool
 	}{
 		{"milliseconds", "600000", 10 * time.Minute, false},
 		{"fractional_ms", "1500.75", 1500 * time.Millisecond, false},
@@ -37,7 +37,7 @@ func TestFlexDurationUnmarshal(t *testing.T) {
 
 			var d FlexDuration
 			err := json.Unmarshal([]byte(tc.raw), &d)
-			if tc.wanErr {
+			if tc.wantErr {
 				require.Error(t, err)
 				return
 			}
@@ -59,10 +59,10 @@ func TestFlexStringsUnmarshal(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name   string
-		raw    string
-		want   []string
-		wanErr bool
+		name    string
+		raw     string
+		want    []string
+		wantErr bool
 	}{
 		{"bare_true", "true", []string{"*"}, false},
 		{"bare_false", "false", nil, false},
@@ -85,7 +85,7 @@ func TestFlexStringsUnmarshal(t *testing.T) {
 
 			var f FlexStrings
 			err := json.Unmarshal([]byte(tc.raw), &f)
-			if tc.wanErr {
+			if tc.wantErr {
 				require.Error(t, err)
 				return
 			}
