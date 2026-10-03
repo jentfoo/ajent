@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -39,10 +40,9 @@ type Barrier struct {
 
 	preview func(agent.ToolCall) string // enhanced dialog subject, nil = raw arguments
 
-	allows          map[string]bool               // session allows by allowSessionKey
-	compoundAllowed bool                          // broad grant covering any compound command
-	open            []*pendingAsk                 // live dialogs, re-evaluated on mode change
-	warm            map[string]context.CancelFunc // prefetched classifications by subject key
+	allows map[string]bool               // session allows by allowSessionKey
+	open   []*pendingAsk                 // live dialogs, re-evaluated on mode change
+	warm   map[string]context.CancelFunc // prefetched classifications by subject key
 }
 
 // pendingAsk tracks one open approval dialog so a mode change can resolve it.
@@ -214,7 +214,6 @@ func (b *Barrier) rotate(m Mode) Mode {
 // carries one gate level's approvals into another. Caller holds the lock.
 func (b *Barrier) resetSessionAllowsLocked() {
 	clear(b.allows)
-	b.compoundAllowed = false
 }
 
 // Guard returns the static gate: user-initiated and allow-all always permit,
@@ -428,7 +427,7 @@ func (b *Barrier) Asker() tools.Asker {
 // resolveChoice maps a dialog answer to an allow/deny decision and applies its
 // side effects (session memory, note injection). displayIdx is the position in
 // the rendered option list, translated through optionActions so Deny on a plain
-// command (where the compound grant was dropped) still refuses.
+// command (whose list drops the session option) still refuses.
 func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displayIdx int, auto bool) tools.Decision {
 	actions := optionActions(bashCommand(call.Input))
 	if displayIdx >= 0 && displayIdx < len(actions) {
@@ -454,12 +453,6 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 			}
 			b.resolveNotice("session", auto)
 			return allowDecision()
-		case optAllowCompound:
-			b.mu.Lock()
-			b.compoundAllowed = true
-			b.mu.Unlock()
-			b.resolveNotice("session", false) // only the named grant is auto-resolved, never the broad one
-			return allowDecision()
 		}
 	}
 	// default and any out-of-range answer refuse, prompting for a reason when one is available.
@@ -477,8 +470,8 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 }
 
 // allowSessionKeys returns the keys an "allow for session" remembers: the tool name,
-// or one "bash:<name>" per identifiable non-readonly command. (nil,false) when only
-// the broad grant applies.
+// or one "bash:<name>" per identifiable non-readonly command. (nil,false) when the
+// line offers no session memory (redirect/substitution, unnameable head).
 func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
 	if call.Name != tools.ToolBash {
 		return []string{call.Name}, true // tool name for non-bash
@@ -496,8 +489,9 @@ func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
 
 // sessionAllowed checks the in-memory allow sets for a call. The returned string
 // is empty when no grant matched, ok distinguishing a match from none. A named grant
-// covers a plain command and any compound whose non-readonly heads are all granted,
-// only a complex (unidentifiable) compound falling back to the broad grant.
+// covers a plain command and any compound whose non-readonly heads are all granted;
+// a line no grant can cover (redirect/substitution, unnameable head) never matches,
+// so it re-prompts every time.
 func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	cmd := bashCommand(call.Input)
 	if call.Name != tools.ToolBash || !compound(cmd) { // plain command or non-bash tool
@@ -509,17 +503,18 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 		return key, b.allows[key]
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	heads, ok := compoundGoverningHeads(cmd)
 	if !ok || len(heads) == 0 {
-		return "", b.compoundAllowed // unidentifiable: only the broad grant covers it
+		return "", false // unidentifiable: no grant can cover it, re-prompt
 	}
+
+	b.mu.Lock()
+	granted := maps.Clone(b.allows)
+	b.mu.Unlock()
+
 	for _, h := range heads {
-		if !b.allows["bash:"+h] {
-			// a named head missing, the broad grant may still cover this compound.
-			return "", b.compoundAllowed
+		if !granted["bash:"+h] {
+			return "", false // an ungranted head: re-prompt
 		}
 	}
 	return "session", true // every governing command is granted by name

@@ -46,16 +46,14 @@ type Dialog interface {
 // stopping the turn.
 type Noter func(note string)
 
-// dialogOption indexes one choice in an approval prompt. A command with a single
-// identifiable head offers per-name session memory, only a complex compound (no
-// reliable single command) replacing it with the strictly-greater broad grant so
-// exactly four options are shown either way.
+// dialogOption indexes one choice in an approval prompt. A bash line with
+// identifiable heads offers per-name session memory, only a line no grant can
+// cover (redirect/substitution, unnameable head) dropping that option.
 const (
-	optAllow         = iota // this call only
-	optAllowNote            // allow and inject a steering note
-	optAllowSession         // remember by command/tool name for the session
-	optAllowCompound        // broad grant covering any compound command (complex compounds)
-	optDeny                 // refuse with an optional reason
+	optAllow        = iota // this call only
+	optAllowNote           // allow and inject a steering note
+	optAllowSession        // remember by command/tool name for the session
+	optDeny                // refuse with an optional reason
 )
 
 // plainLabels serve tool-name session memory for non-shell calls, while a bash line with
@@ -67,12 +65,11 @@ var plainLabels = []string{
 	"Deny",
 }
 
-// compoundLabels replace per-name memory with the broad grant: a complex compound's
-// command cannot be named, so only the broad form is offered.
-var compoundLabels = []string{
+// bareLabels serve a line no session grant can cover (redirect, substitution,
+// unnameable head): allowing it never generalizes, so no memory option is offered.
+var bareLabels = []string{
 	"Allow",
 	"Allow with note",
-	"Allow compound for session",
 	"Deny",
 }
 
@@ -80,13 +77,12 @@ var compoundLabels = []string{
 // index-aligned so resolveChoice maps a rendered choice back to its opt constant.
 func optionsFor(command string) (labels []string, actions []int) {
 	if names, ok := sessionNames(command); ok && len(names) > 0 {
-		namedLabels := namedSessionLabel(names)
-		return []string{"Allow", "Allow with note", namedLabels, "Deny"},
+		return []string{"Allow", "Allow with note", namedSessionLabel(names), "Deny"},
 			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
 	}
-	if compound(command) { // complex, only the broad grant reliably covers it
-		return slices.Clone(compoundLabels),
-			[]int{optAllow, optAllowNote, optAllowCompound, optDeny}
+	if compound(command) { // redirect/substitution: no grant could cover a future line
+		return slices.Clone(bareLabels),
+			[]int{optAllow, optAllowNote, optDeny}
 	}
 	// no head to name and not compound (non-bash tool): plain per-name memory.
 	return slices.Clone(plainLabels),
@@ -105,19 +101,41 @@ func optionActions(command string) []int {
 	return actions
 }
 
-// namedSessionLabel renders the allow-for-session option for one or two commands:
-// "Allow `ifconfig` for session" / "Allow `rm` and `mkdir` for session". The bash
-// tool prefix is dropped since only shell commands reach here.
+// namedSessionLabel renders the allow-for-session option over the named commands:
+// "Allow `ifconfig` for session" / "Allow `rm` and `mkdir` for session", lists past
+// three eliding into "and N more". The bash tool prefix is dropped since only
+// shell commands reach here.
 func namedSessionLabel(names []string) string {
-	if len(names) == 2 {
-		return fmt.Sprintf("Allow `%s` and `%s` for session", names[0], names[1])
+	const maxShown = 3
+	shown, more := names, 0
+	if len(names) > maxShown {
+		shown, more = names[:maxShown], len(names)-maxShown
 	}
-	return fmt.Sprintf("Allow `%s` for session", names[0])
+	var b strings.Builder
+	b.WriteString("Allow ")
+	for i, n := range shown { // 1-3 names: `a`, `a` and `b`, `a`, `b` and `c`
+		switch {
+		case i == 0:
+		case i == len(shown)-1:
+			b.WriteString(" and ")
+		default:
+			b.WriteString(", ")
+		}
+		b.WriteString("`")
+		b.WriteString(n)
+		b.WriteString("`")
+	}
+	if more > 0 { // parenthetical keeps the single "and" of the join unambiguous
+		fmt.Fprintf(&b, " (+%d more)", more)
+	}
+	b.WriteString(" for session")
+	return b.String()
 }
 
 // sessionNames returns the distinct non-readonly command names an "allow for
-// session" would remember for a bash line. (nil,false) when no reliable name list
-// exists (a sub-shell/redirect or three or more commands), so only the broad grant applies.
+// session" would remember for a bash line, read-only segments never counting.
+// (nil,false) when no reliable name list exists (a sub-shell/redirect or an
+// unnameable head), so the dialog offers no session memory at all.
 func sessionNames(command string) ([]string, bool) {
 	s := scanCommand(command)
 	if !s.HasSplitOp && len(s.Segments) <= 1 { // a single simple command
@@ -131,7 +149,7 @@ func sessionNames(command string) ([]string, bool) {
 		return []string{h}, true
 	}
 	heads, ok := compoundGoverningHeads(command)
-	if !ok || len(heads) == 0 || len(heads) > 2 { // sub-shell or many commands: broad grant only
+	if !ok || len(heads) == 0 { // sub-shell or nothing nameable: no session memory
 		return nil, false
 	}
 	return heads, true
@@ -167,8 +185,8 @@ func compoundGoverningHeads(command string) ([]string, bool) {
 }
 
 // allowSessionKey names what an "allow for session" remembers: the command name
-// (bash:<head>) for shell commands, the tool name otherwise. Compound calls are
-// never keyed this way, taking the broad grant instead.
+// (bash:<head>) for shell commands, the tool name otherwise. Lines no grant can
+// cover are never keyed this way, offering no session memory instead.
 func allowSessionKey(call agent.ToolCall) string {
 	if call.Name != tools.ToolBash {
 		return call.Name

@@ -12,35 +12,35 @@ func TestBuildOptions(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		in       string
-		wantLen  int    // exactly four options either way, only the session option differs
-		expect   string // expected session-option text, "" if broad/plain (asserted via compound flag)
-		compound bool   // expect the broad compound grant (no per-name memory)
+		in      string
+		wantLen int    // four options when session memory exists, three otherwise
+		expect  string // expected session-option text, "" when memory is not offered
 	}{
-		{"ls -la", 4, "Allow `ls` for session", false},
-		{"/usr/bin/ifconfig eth0", 4, "Allow `ifconfig` for session", false}, // path stripped
-		{"git status", 4, "Allow `git` for session", false},
+		{"ls -la", 4, "Allow `ls` for session"},
+		{"/usr/bin/ifconfig eth0", 4, "Allow `ifconfig` for session"}, // path stripped
+		{"git status", 4, "Allow `git` for session"},
 		// a compound with one non-readonly head names it, read-only segments not counting
-		{"ifconfig | head -n 10", 4, "Allow `ifconfig` for session", false},
-		{"rm build && ls", 4, "Allow `rm` for session", false}, // ls is read-only, so only rm governs
+		{"ifconfig | head -n 10", 4, "Allow `ifconfig` for session"},
+		{"rm build && ls", 4, "Allow `rm` for session"}, // ls is read-only, so only rm governs
 		// a repeated head collapses into one grant (git add && git commit)
-		{"git add x && git commit -m y", 4, "Allow `git` for session", false},
+		{"git add x && git commit -m y", 4, "Allow `git` for session"},
 		// two distinct non-readonly heads name both in the option
-		{"rm build && mkdir dir", 4, "Allow `rm` and `mkdir` for session", false},
-		// three or more commands defeat per-name memory -> broad grant
-		{"rm a && mkdir b && touch c", 4, "", true},
-		// redirect/substitution is not a simple command -> broad grant
-		{"echo hi > out.txt", 4, "", true},
+		{"rm build && mkdir dir", 4, "Allow `rm` and `mkdir` for session"},
+		// three or more heads still grant per name, past three eliding into "and N more"
+		{"rm a && mkdir b && touch c", 4, "Allow `rm`, `mkdir` and `touch` for session"},
+		{"rm a && mkdir b && touch c && chmod +x d", 4, "Allow `rm`, `mkdir` and `touch` (+1 more) for session"},
+		// redirect/substitution offers no session memory: it could never cover a future line
+		{"echo hi > out.txt", 3, ""},
 	}
 	for _, c := range cases {
 		opts := buildOptions(c.in)
 		assert.Len(t, opts, c.wantLen, c.in)
 		actions := optionActions(c.in) // labels and actions stay aligned
-		_ = actions
-		if c.compound {
-			assert.Contains(t, opts[optAllowSession], "compound")
-		} else if c.expect != "" {
-			assert.Equal(t, c.expect, opts[optAllowSession])
+		assert.Len(t, actions, c.wantLen, c.in)
+		if c.expect != "" {
+			assert.Equal(t, c.expect, opts[optAllowSession], c.in)
+		} else {
+			assert.Equal(t, "Deny", opts[len(opts)-1], c.in)
 		}
 	}
 }
