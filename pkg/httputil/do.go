@@ -129,6 +129,9 @@ func doAttempt(ctx context.Context, hc *http.Client, r Request, h callHooks, att
 	start := h.now()
 	resp, err := hc.Do(req)
 	if err != nil {
+		// the raw *url.Error would render the credentialed URL verbatim, and the
+		// same value feeds the LogEvent below, so both paths see the redacted form
+		redactErrURL(err, req.URL)
 		emit(r.Log, LogEvent{Name: r.Name, Method: r.Method, URL: redactURL(req.URL),
 			Header: redactHeaders(req.Header), Attempt: attemptNum,
 			Duration: h.now().Sub(start), Err: err})
@@ -148,7 +151,7 @@ func doAttempt(ctx context.Context, hc *http.Client, r Request, h callHooks, att
 		return resp, 0, nil
 	}
 
-	errBody := readErrorBody(resp)
+	errBody := readErrorBody(resp, secretValues(req.Header))
 	retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), h.now())
 	var errOut error
 	var retryable bool

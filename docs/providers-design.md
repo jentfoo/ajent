@@ -648,9 +648,15 @@ enriches, never adds or removes.
 **10. Credentials never reach a log or an error.** Redaction happens inside
 `pkg/httputil` before the hook is called, so a hook cannot leak by forgetting.
 Masked: `Authorization`, `X-Api-Key`, `Api-Key`, `Proxy-Authorization`,
-`Cookie`, `Set-Cookie`, `X-Goog-Api-Key`, `Openai-Organization`, the `key`,
-`api_key` and `access_token` query parameters, and the truncated error body,
-which some providers echo the key into.
+`Cookie`, `Set-Cookie`, `X-Goog-Api-Key`, `Openai-Organization`; URL
+credentials — userinfo is dropped and query parameters are matched
+case-insensitively against separators-stripped names (`key`, `apikey`,
+`token`, `accesstoken`, `auth`, `secret`, `signature`); and the truncated
+error body, which some providers echo the key into — both literal request
+credential values and common key shapes (`sk-…`, `AIza…`, `Bearer …`).
+Transport errors get the same treatment: the `*url.Error` URL is rewritten to
+its redacted form before the error leaves the package, so what a caller prints
+agrees with the LogEvent.
 
 **11. `sse.go` knows no dialect.** No JSON, no vendor names, one const for the
 `[DONE]` sentinel and a method to report it, with the policy left to the caller.

@@ -299,6 +299,39 @@ func TestDo(t *testing.T) {
 		}
 	})
 
+	t.Run("transport_error_redacts_url_in_error", func(t *testing.T) {
+		r, hc, _, logs := testRequest(t, "http://127.0.0.1:1") // nothing listens, dial fails
+		r.Retry.Attempts = 1
+		r.URL += "?api_key=" + testAPIKey
+		_, err := Do(t.Context(), hc, r)
+		require.Error(t, err)
+
+		assert.NotContains(t, err.Error(), testAPIKey)
+		assert.Contains(t, err.Error(), redactedQuery)
+		for _, ev := range *logs {
+			assert.NotContains(t, ev.URL, testAPIKey)
+		}
+	})
+
+	t.Run("error_body_scrubs_echoed_key", func(t *testing.T) {
+		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `{"error":"invalid key `+testAPIKey+`"}`)
+		})
+
+		r, hc, _, _ := testRequest(t, srv.URL)
+		var got string
+		r.Error = func(_ int, body []byte, _ time.Duration) (error, bool) {
+			got = string(body)
+			return context.Canceled, false
+		}
+		_, err := Do(t.Context(), hc, r)
+		require.ErrorIs(t, err, context.Canceled)
+
+		assert.NotContains(t, got, testAPIKey)
+		assert.Contains(t, got, redactedMask)
+	})
+
 	t.Run("total_timeout_outlives_the_call", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "streamed")
