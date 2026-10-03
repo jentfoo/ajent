@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -1280,5 +1283,96 @@ func TestParseAnthropicModels(t *testing.T) {
 	t.Run("malformed_body_errors", func(t *testing.T) {
 		_, err := parseAnthropicModels([]byte(`not json`))
 		assert.Error(t, err)
+	})
+}
+
+func TestAnthropicProviderStreamTruncation(t *testing.T) {
+	t.Parallel()
+
+	// drain replays a fixture to EventDone and returns the partial text, stop
+	// reason and terminal error.
+	drain := func(t *testing.T, fixture string) (string, StopReason, error) {
+		t.Helper()
+
+		srv, _ := sseServer(t, fixture)
+		p := newAnthropicTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		var events []Event
+		for ev, ok := s.Next(); ok; ev, ok = s.Next() {
+			events = append(events, ev)
+		}
+		done := events[len(events)-1]
+		require.Equal(t, EventDone, done.Type)
+		return textOf(events), done.StopReason, done.Err
+	}
+
+	t.Run("eof_without_message_stop", func(t *testing.T) {
+		text, stop, err := drain(t, "anthropic/truncated.sse")
+		assert.Equal(t, "Hello there", text) // the partial is still delivered
+		require.ErrorIs(t, err, ErrStreamTruncated)
+		assert.Equal(t, StopError, stop)
+	})
+
+	t.Run("stop_reason_does_not_mask_truncation", func(t *testing.T) {
+		_, stop, err := drain(t, "anthropic/truncated_after_delta.sse")
+		require.ErrorIs(t, err, ErrStreamTruncated) // a message_delta stop_reason is not a terminal frame
+		assert.Equal(t, StopError, stop)
+	})
+}
+
+func TestAnthropicStreamFinish(t *testing.T) {
+	t.Parallel()
+
+	// bareStream returns a stream over an empty body, so finish can be driven
+	// directly without a server.
+	bareStream := func(t *testing.T) *anthropicStream {
+		t.Helper()
+
+		return newAnthropicStream(t.Context(),
+			&http.Response{Body: io.NopCloser(strings.NewReader(""))}, "anthropic")
+	}
+
+	t.Run("terminal_frame_is_clean", func(t *testing.T) {
+		s := bareStream(t)
+		s.terminal = true
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+		assert.Equal(t, StopEndTurn, done.StopReason)
+	})
+
+	t.Run("clean_eof_without_terminal_is_truncation", func(t *testing.T) {
+		s := bareStream(t)
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.ErrorIs(t, done.Err, ErrStreamTruncated)
+		assert.Equal(t, StopError, done.StopReason)
+	})
+
+	t.Run("deliberate_close_stays_clean", func(t *testing.T) {
+		s := bareStream(t)
+		require.NoError(t, s.Close())
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+		assert.Equal(t, StopEndTurn, done.StopReason) // unknown stop is normalized
+	})
+
+	t.Run("cancelled_context_stays_clean", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		s := newAnthropicStream(ctx,
+			&http.Response{Body: io.NopCloser(strings.NewReader(""))}, "anthropic")
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
 	})
 }

@@ -608,6 +608,9 @@ type anthropicStream struct {
 	blocks map[int]*antOpenBlock
 	usage  Usage
 	stop   StopReason
+	// terminal records that a terminal frame arrived, since a clean body EOF
+	// is indistinguishable from message_stop at the read layer
+	terminal bool
 }
 
 // antOpenBlock is a content block being streamed.
@@ -654,6 +657,7 @@ func (s *anthropicStream) readFrame() []Event {
 	case "message_delta":
 		return s.onMessageDelta(ev)
 	case "message_stop":
+		s.terminal = true
 		return s.finish(io.EOF)
 	case "error":
 		msg := "stream error"
@@ -662,6 +666,7 @@ func (s *anthropicStream) readFrame() []Event {
 			msg = ev.Error.Message
 			typ = ev.Error.Type
 		}
+		s.terminal = true
 		return s.finish(&APIError{Provider: s.provider, Code: typ, Message: msg,
 			Retryable: typ == "overloaded_error"})
 	default:
@@ -785,11 +790,24 @@ func (s *anthropicStream) finish(cause error) []Event {
 
 	stop := s.stop
 	var streamErr error
-	if cause != nil && !errors.Is(cause, io.EOF) {
+	switch {
+	case cause != nil && !errors.Is(cause, io.EOF):
 		streamErr = cause
 		stop = StopError
 		s.err = cause
-	} else if stop == StopUnknown {
+	case !s.terminal:
+		// EOF with no terminal frame is a truncated stream unless the caller
+		// deliberately closed or cancelled it.
+		if s.isClosed() || s.ctx.Err() != nil {
+			if stop == StopUnknown {
+				stop = StopEndTurn
+			}
+			return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage}}
+		}
+		streamErr = ErrStreamTruncated
+		stop = StopError
+		s.err = streamErr
+	case stop == StopUnknown:
 		stop = StopEndTurn
 	}
 	return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr}}
