@@ -111,6 +111,40 @@ func TestEnvLayerKeepsOriginalCaseKeys(t *testing.T) {
 	assert.InDelta(t, float64(1000), refInject["lines"], 0)
 }
 
+func TestEnvLayerAliases(t *testing.T) {
+	t.Parallel()
+
+	t.Run("documented_spelling_binds", func(t *testing.T) {
+		l, warns := EnvLayer(loadEnv(map[string]string{"AJENT_AGENT_SYSTEM_PROMPT": "doc text"}))
+		assert.Empty(t, warns)
+
+		var st Settings
+		require.NoError(t, json.Unmarshal(l.Data, &st))
+		assert.Equal(t, "doc text", st.Agent.SystemPrompt)
+	})
+
+	t.Run("mechanical_spelling_still_binds", func(t *testing.T) {
+		l, warns := EnvLayer(loadEnv(map[string]string{"AJENT_AGENT_SYSTEMPROMPT": "mech text"}))
+		assert.Empty(t, warns)
+
+		var st Settings
+		require.NoError(t, json.Unmarshal(l.Data, &st))
+		assert.Equal(t, "mech text", st.Agent.SystemPrompt)
+	})
+
+	t.Run("mechanical_spelling_wins", func(t *testing.T) {
+		l, warns := EnvLayer(loadEnv(map[string]string{
+			"AJENT_AGENT_SYSTEMPROMPT":  "mech text",
+			"AJENT_AGENT_SYSTEM_PROMPT": "doc text",
+		}))
+		assert.Empty(t, warns)
+
+		var st Settings
+		require.NoError(t, json.Unmarshal(l.Data, &st))
+		assert.Equal(t, "mech text", st.Agent.SystemPrompt)
+	})
+}
+
 func TestEnvLayerOverridesDefaultWithProvenance(t *testing.T) {
 	t.Parallel()
 

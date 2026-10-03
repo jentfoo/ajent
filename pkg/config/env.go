@@ -10,12 +10,16 @@ import (
 
 // EnvLayer returns the layer bound from AJENT_* variables, one per scalar key
 // the schema declares. Var names derive from the dotted path: reasoning.level maps
-// to AJENT_REASONING_LEVEL. An unparseable number or bool is a warning, not an error.
+// to AJENT_REASONING_LEVEL, and paths in envAliases also bind their documented
+// spelling. An unparseable number or bool is a warning, not an error.
 func EnvLayer(env func(string) string) (Layer, []string) {
 	var warns []string
 	root := &val{k: kindObj, obj: &object{m: make(map[string]*val)}}
 	for _, p := range scalarLeaves(reflect.TypeOf(Settings{}), "") {
 		name := "AJENT_" + strings.ToUpper(strings.ReplaceAll(p.path, ".", "_"))
+		if alt, ok := envAliases[p.path]; ok && env(name) == "" {
+			name = alt // the mechanical spelling wins when both are set
+		}
 		v := env(name)
 		if v == "" {
 			continue
@@ -36,6 +40,12 @@ func EnvLayer(env func(string) string) (Layer, []string) {
 		data = root.marshal()
 	}
 	return Layer{Name: "env", Data: data}, warns
+}
+
+// envAliases pins documented spellings that differ from the mechanical
+// derivation; the mechanical name keeps binding and takes precedence.
+var envAliases = map[string]string{
+	"agent.systemPrompt": "AJENT_AGENT_SYSTEM_PROMPT",
 }
 
 // leafPath is one scalar schema key and its Go kind.

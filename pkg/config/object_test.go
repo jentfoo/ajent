@@ -55,6 +55,15 @@ func TestSetKey(t *testing.T) {
 		assert.Less(t, strings.Index(string(out), `"z"`), strings.Index(string(out), `"m"`))
 	})
 
+	t.Run("duplicate_key_round_trips_once", func(t *testing.T) {
+		// a source file that repeats a key keeps the last value; the key must
+		// not be emitted twice on Save
+		root, err := parseNode([]byte(`{"a":1,"a":2}`))
+		require.NoError(t, err)
+		out := root.marshal()
+		assert.Equal(t, `{"a":2}`, string(out))
+	})
+
 	t.Run("unserializable_value_errors", func(t *testing.T) {
 		// a value json.Marshal rejects surfaces as an error rather than corrupting the layer
 		_, err := SetKey([]byte(`{}`), "a", make(chan int))

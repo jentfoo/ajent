@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
+
+	"github.com/go-analyze/bulk"
 )
 
 // ConfigFileName is the user and project preferences file.
@@ -153,12 +156,16 @@ func (s *Set) SetSession(key string, value any) error {
 	return nil
 }
 
-// SeedSession folds resumed setting overrides into the session layer.
+// SeedSession folds resumed setting overrides into the session layer. Keys
+// apply in sorted order so shared object subtrees keep a stable shape across runs.
 func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data := s.session.Data
-	for k, v := range overrides {
+	keys := bulk.MapKeysSlice(overrides)
+	slices.Sort(keys)
+	for _, k := range keys {
+		v := overrides[k]
 		if len(v) == 0 {
 			continue
 		}

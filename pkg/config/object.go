@@ -64,7 +64,11 @@ func readVal(dec *json.Decoder) (*val, error) {
 				if err != nil {
 					return nil, err
 				}
-				o.keys = append(o.keys, key)
+				// a source file may repeat a key; keep the last value without
+				// appending it twice, so Save emits it once
+				if _, ok := o.m[key]; !ok {
+					o.keys = append(o.keys, key)
+				}
 				o.m[key] = child
 			}
 			_, _ = dec.Token() // the closing '}'

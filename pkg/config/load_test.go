@@ -102,6 +102,47 @@ func TestSetConcurrentAccess(t *testing.T) {
 	assert.Equal(t, "p/final", s.Settings().Model)
 }
 
+func TestSeedSession(t *testing.T) {
+	t.Run("seeds_sorted_keys", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", t.TempDir())
+		s, _, err := Load(Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+
+		overrides := map[string]json.RawMessage{
+			"reasoning.budget": json.RawMessage(`512`),
+			"reasoning.hide":   json.RawMessage(`true`),
+			"reasoning.level":  json.RawMessage(`"high"`),
+			"model":            json.RawMessage(`"p/m"`),
+		}
+		s.SeedSession(overrides)
+		got := s.resolve().Bytes()
+
+		// a second Set folds the same overrides; the merged bytes must match byte for byte
+		s2, _, err := Load(Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		s2.SeedSession(overrides)
+		assert.Equal(t, string(got), string(s2.resolve().Bytes()))
+
+		st := s.Settings()
+		assert.Equal(t, "p/m", st.Model)
+		assert.Equal(t, 512, st.Reasoning.Budget)
+		assert.True(t, st.Reasoning.Hide)
+		assert.Equal(t, "high", st.Reasoning.Level)
+	})
+
+	t.Run("skips_empty_overrides", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", t.TempDir())
+		s, _, err := Load(Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+
+		s.SeedSession(map[string]json.RawMessage{"model": json.RawMessage(`"p/m"`), "agent.maxSteps": {}})
+		assert.Equal(t, "p/m", s.Settings().Model)
+
+		_, _, ok := s.Explain("agent.maxSteps")
+		assert.False(t, ok)
+	})
+}
+
 func TestSave(t *testing.T) {
 	t.Run("writes_and_reresolves", func(t *testing.T) {
 		home := t.TempDir()
