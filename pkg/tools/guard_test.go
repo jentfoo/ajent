@@ -159,3 +159,44 @@ func TestMustSerializeAnyPromptingCall(t *testing.T) {
 	})
 	assert.True(t, r.MustSerialize(prompting))
 }
+
+func TestMustSerializeDenyThenAsk(t *testing.T) {
+	t.Parallel()
+
+	asker := func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }
+	ask := func(context.Context, agent.ToolCall) Decision {
+		return Decision{Action: ActionAsk, Reason: "needs approval"}
+	}
+
+	// a denied call resolves without prompting even though a later guard would ask:
+	// first non-allow wins inside Execute for that call alone
+	t.Run("denied_call_resolves_alone", func(t *testing.T) {
+		r := New()
+		r.Register(&recordingTool{}, true)
+		r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Deny("refused") })
+		r.AddGuard(ask)
+		r.SetAsker(asker)
+		assert.False(t, r.MustSerialize([]agent.ToolCall{callWith(json.RawMessage(`{}`))}))
+	})
+
+	// a denial earlier in the batch must not mask a later call's ask: read-only
+	// siblings would otherwise race ahead while an approval dialog is pending
+	t.Run("later_ask_serializes_batch", func(t *testing.T) {
+		r := New()
+		r.Register(&recordingTool{}, true)
+		r.AddGuard(func(_ context.Context, c agent.ToolCall) Decision { // deny only the first call
+			if string(c.Input) == `"first"` {
+				return Deny("refused")
+			}
+			return Allow(callWith(nil))
+		})
+		r.AddGuard(ask)
+		r.SetAsker(asker)
+
+		calls := []agent.ToolCall{
+			callWith(json.RawMessage(`"first"`)),
+			callWith(json.RawMessage(`{}`)),
+		}
+		assert.True(t, r.MustSerialize(calls)) // the second call still prompts
+	})
+}

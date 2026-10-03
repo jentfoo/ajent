@@ -251,19 +251,24 @@ func (r *Registry) guardSnapshot() ([]Guard, Asker) {
 // (probed on a bare context: these are model calls, so the user-initiated
 // exemption never applies): a Deny resolves without prompting and an unguarded
 // Ask refuses, so only an Ask with an asker registered forces serial execution.
+// A denial ends its own call's scan but not the batch's, since later calls can
+// still prompt.
 func (r *Registry) MustSerialize(calls []agent.ToolCall) bool {
-	if len(r.guards) == 0 || r.asker == nil {
+	guards, asker := r.guardSnapshot()
+	if len(guards) == 0 || asker == nil {
 		return false // no gate: nothing can prompt
 	}
-	guards, _ := r.guardSnapshot()
 	for _, call := range calls {
 		for _, guard := range guards {
-			switch d := guard(context.Background(), call); d.Action {
-			case ActionAllow:
+			d := guard(context.Background(), call)
+			if d.Action == ActionAllow {
 				continue
-			default: // first non-allow wins inside Execute, an Ask is what prompts
-				return d.Action == ActionAsk
 			}
+			// first non-allow wins inside Execute, an Ask is what prompts
+			if d.Action == ActionAsk {
+				return true
+			}
+			break // denied: this call won't prompt; keep scanning other calls
 		}
 	}
 	return false
@@ -668,23 +673,36 @@ func (b *boundTool) Mode() agent.ExecutionMode {
 }
 func (b *boundTool) Close() {}
 
-// Execute delegates and then bounds the result's text content. Content that is
-// not plain text (images, empty) passes through untouched. Display, Details,
-// IsError and EndTurn are preserved as the inner tool set them.
+// Execute delegates and then bounds each text block's model-visible content.
+// Bounding runs per block so one non-text block cannot disable it for the whole
+// result: images and other blocks pass through untouched, and a text block
+// within the bound stays byte-identical. Display, Details, IsError and EndTurn
+// are preserved as the inner tool set them.
 func (b *boundTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	res, err := b.t.Execute(ctx, c, out)
 	if err != nil || len(res.Content) == 0 {
 		return res, err
 	}
-	joined, ok := res.Content.AsText()
-	if !ok {
-		return res, nil // not boundable without rewriting meaning, leave it whole
+	var bounded llm.BlockList
+	var cut bool
+	for _, blk := range res.Content {
+		tb, ok := blk.(llm.TextBlock)
+		if !ok {
+			bounded = append(bounded, blk) // not boundable without rewriting meaning
+			continue
+		}
+		text, truncated := truncateOutput(b.sessionID, b.t.Name(), tb.Text, OtherLimit(), "")
+		if !truncated {
+			bounded = append(bounded, blk) // within the bound: block stays byte-identical
+			continue
+		}
+		bounded = append(bounded, llm.TextBlock{Text: text})
+		cut = true
 	}
-	bounded, truncated := truncateOutput(b.sessionID, b.t.Name(), joined, OtherLimit(), "")
-	if !truncated {
-		return res, nil // within the bound: original blocks stay byte-identical
+	if !cut {
+		return res, nil // nothing dropped: original blocks stay byte-identical
 	}
-	res.Content = llm.BlockList{llm.TextBlock{Text: bounded}}
+	res.Content = bounded
 	return res, nil
 }
 

@@ -628,6 +628,39 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		assert.IsType(t, llm.ImageBlock{}, res.Content[0]) // image block preserved, not rewritten
 	})
 
+	// one non-text block must not disable bounding for the text beside it:
+	// the oversized text spills on its own while the image rides along whole
+	t.Run("mixed_image_text_bounds_per_block", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < OtherLimit().Lines+50; i++ {
+			b.WriteString("row\n")
+		}
+		res := exec(agent.ToolResult{Content: llm.BlockList{
+			llm.ImageBlock{Data: []byte{1}},
+			llm.TextBlock{Text: b.String()},
+		}})
+
+		require.NotEmpty(t, res.Content)
+		img, ok := res.Content[0].(llm.ImageBlock) // image first, untouched by the bound
+		require.True(t, ok)
+		assert.Equal(t, []byte{1}, img.Data)
+
+		var parts []string
+		for _, blk := range res.Content { // join the text blocks (the note included)
+			if tb, isText := blk.(llm.TextBlock); isText {
+				parts = append(parts, tb.Text)
+			}
+		}
+		text := strings.Join(parts, "")
+		assert.Contains(t, text, "truncated: 200/250 lines shown")
+		assert.Less(t, len(text), len(b.String())) // the oversized body did not pass through whole
+		m := regexp.MustCompile(`@([^;\s]+)`).FindStringSubmatch(text)
+		require.NotNil(t, m)
+		dat, err := os.ReadFile(m[1])
+		require.NoError(t, err)
+		assert.Equal(t, b.String(), string(dat)) // spill holds that block's complete text
+	})
+
 	// a self-bounding tool is never double-bounded by the registry
 	t.Run("self_bounding_tool_unwrapped", func(t *testing.T) {
 		r := New()
