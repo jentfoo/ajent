@@ -43,8 +43,9 @@ last in the filter so no configuration can reach past it.
 
 The manager is configured by func fields supplied by `pkg/app`, mirroring
 `permit.Barrier`: how to build a provider and resolve the child model/reasoning,
-the parent ledger (for per-job `Child()` spend), the read-only tool source, env
-and project instructions; UI callbacks for activity rows, keyed notices and the
+the parent ledger (for per-job `Child()` spend), the read-only tool source, env,
+project instructions, and a context root (`Options.Root`) that seeds job contexts;
+UI callbacks for activity rows, keyed notices and the
 status segment; a delivery hook that steers into a running parent turn; and the
 concurrency cap plus poll timeout. Its surface is lifecycle operations:
 construct, start (returning an id immediately), poll by id (`false` while still
@@ -53,16 +54,26 @@ three tools, and close.
 
 Concurrency model:
 
-- **One goroutine per job**, a cancellable context per job, and a buffered-channel
-  semaphore sized to the concurrency cap. A queued job waits until it takes a slot.
-- The waitgroup add happens **before** the spawn goroutine launches so shutdown's
-  wait never races a pending add; each goroutine finishes with its done signal and
-  cleanup in one place.
+- **One goroutine per job**, a cancellable context per job derived from a
+  manager-owned root (mirroring `mcp.Manager`: cancelled on `Close`, seeded via
+  `Options.Root` when the host supplies one, so process shutdown reaches jobs
+  directly), and a buffered-channel semaphore sized to the concurrency cap. A
+  queued job waits until it takes a slot. A job's cancel always fires when it
+  reaches a terminal state, so the root holds no finished-job registrations.
+- The waitgroup add happens **under the registry lock before** the spawn
+  goroutine launches, so shutdown's wait never races a pending add; each
+  goroutine finishes with its done signal and cleanup in one place.
 - One lock guards the job registry plus delivery state (completed ids awaiting a
   delivery message, and ids an already-queued steer names), while each job keeps its
   own status snapshot under its own per-job lock so polls do not contend with it.
+- **A start after shutdown aborts in place.** Once the manager root is cancelled,
+  `start` registers the job terminal without spawning: no goroutine outlives the
+  manager and no waitgroup add can land during `Wait`. The manager root being the
+  only source of truth keeps this race check to one read (`m.ctx.Err()`).
 
-**Shutdown.** `Close` calls `StopAll`, then waits on the waitgroup with a short
+**Shutdown.** `Close` cancels the manager root first, so any late-starting or
+still-registered job dies with the manager regardless of where `StopAll`'s
+snapshot lands, then calls `StopAll` and waits on the waitgroup with a short
 bound before clearing activity rows and the status segment, so a job stuck on a
 slow provider cannot block exit forever. An interrupted turn is cheaper:
 `agent_poll` selects over `j.done`, its timeout timer and the caller's context,

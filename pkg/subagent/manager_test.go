@@ -1,6 +1,7 @@
 package subagent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -774,6 +775,90 @@ func TestStatusSegmentAndList(t *testing.T) {
 	}
 	mu.Unlock()
 	assert.True(t, found)
+}
+
+// TestClose pins the owned-root shutdown contract: cancellation lands
+// synchronously from Close or a canceled root, and a start landing after
+// shutdown registers aborted without spawning.
+func TestClose(t *testing.T) {
+	t.Parallel()
+
+	provider := func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }
+
+	t.Run("cancels_jobs_immediately", func(t *testing.T) {
+		m := New(wired(Options{Provider: provider}))
+		id := m.start("long", "", "")
+		j, ok := m.lookup(id)
+		require.True(t, ok)
+
+		m.Close()
+		select { // cancellation is synchronous, no bounded-wait needed to observe it
+		case <-j.ctx.Done():
+		default:
+			assert.Fail(t, "job context still live after Close")
+		}
+	})
+
+	// a root seeded by the host cascades into jobs without waiting on Close
+	t.Run("root_cancel_reaches_jobs", func(t *testing.T) {
+		root, stop := context.WithCancel(context.Background())
+		m := New(wired(Options{Provider: provider, Root: root}))
+		t.Cleanup(m.Close)
+		id := m.start("long", "", "")
+		j, ok := m.lookup(id)
+		require.True(t, ok)
+
+		stop()
+		select {
+		case <-j.ctx.Done():
+		default:
+			assert.Fail(t, "root cancellation did not reach the job")
+		}
+	})
+
+	// a start landing after shutdown aborts in place: no goroutine, no waitgroup Add
+	t.Run("start_after_close_aborts", func(t *testing.T) {
+		m := New(wired(Options{Provider: provider}))
+		m.Close()
+
+		id := m.start("late", "", "")
+		j, ok := m.lookup(id)
+		require.True(t, ok)
+		assert.Equal(t, StatusAborted, j.statusOf())
+	})
+
+	// the driver window between an app-root cancel and Close: same in-place abort,
+	// so no job goroutine can appear once the host root is dead
+	t.Run("start_after_root_cancel_aborts", func(t *testing.T) {
+		root, stop := context.WithCancel(context.Background())
+		m := New(wired(Options{Provider: provider, Root: root}))
+		t.Cleanup(m.Close)
+		stop()
+
+		id := m.start("late", "", "")
+		j, ok := m.lookup(id)
+		require.True(t, ok)
+		select {
+		case <-j.done:
+		default:
+			assert.Fail(t, "aborted job not done")
+		}
+		assert.Equal(t, StatusAborted, j.statusOf())
+	})
+
+	// start's Add-under-lock against Close's Wait; -race reports unsynchronized use
+	t.Run("start_racing_close", func(t *testing.T) {
+		m := New(wired(Options{Provider: provider}))
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			m.Close()
+		}()
+		for i := 0; i < 50; i++ {
+			m.start("x", "", "")
+		}
+		<-closed
+	})
 }
 
 func TestStopAllCancelsEverything(t *testing.T) {

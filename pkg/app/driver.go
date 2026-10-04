@@ -177,6 +177,21 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	})
 	var ag *agent.Agent
 
+	quit := make(chan struct{})
+
+	// one app-lifetime root ties every derived operation (the prompt pump, staged
+	// shell runs, setup probes) to process shutdown. cancel fires when quit does,
+	// and again on any return path via the defer, so tool work dies with the app.
+	appRoot, stopApp := context.WithCancel(context.Background())
+	defer stopApp()
+	go func() {
+		select {
+		case <-quit:
+			stopApp()
+		case <-appRoot.Done():
+		}
+	}()
+
 	// sub-agent investigations fan read-only work into throwaway child agents,
 	// each a fresh headless loop whose only return value is a final summary.
 	var sag *subagent.Manager
@@ -191,6 +206,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			Tools:               toolsReg,
 			Env:                 env,
 			ProjectInstructions: proj,
+			Root:                appRoot, // job contexts die with the app root, not only at Close
 
 			Activity: func(key, text string, rank int) {
 				if ui != nil {
@@ -312,20 +328,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	showReasoningIndicator(ui, set, st)
 
-	quit := make(chan struct{})
-
-	// one app-lifetime root ties every derived operation (the prompt pump, staged
-	// shell runs, setup probes) to process shutdown. cancel fires when quit does,
-	// and again on any return path via the defer, so tool work dies with the app.
-	appRoot, stopApp := context.WithCancel(context.Background())
-	defer stopApp()
-	go func() {
-		select {
-		case <-quit:
-			stopApp()
-		case <-appRoot.Done():
-		}
-	}()
 	// MCP servers bridge their remote tools into the registry and are supervised by
 	// a manager. Every server connects in full, eagerly, just before the user's
 	// first message.

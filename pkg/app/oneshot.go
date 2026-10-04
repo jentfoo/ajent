@@ -151,6 +151,7 @@ func RunHeadless(o HeadlessOptions) int {
 		Tools:               toolsReg,
 		Env:                 env,
 		ProjectInstructions: proj,
+		Root:                ctx, // job contexts die with the run's signal-notified root
 		Notice:              func(msg string) { notify(msg, agent.LevelInfo) },
 		Deliver: func(in agent.Input) bool {
 			if ag == nil || !ag.Running() {

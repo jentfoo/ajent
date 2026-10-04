@@ -164,8 +164,10 @@ Quick navigation from concern → package (read the matching design doc first). 
 Three tiers, not one pattern. **App-owned root**: `pkg/app` derives a context from background,
 cancelled on quit and every return path. It feeds the prompt pump, staged shells via the stager's
 root, setup probes and clipboard reads. **Owned root + explicit cancel** for components that tear
-down themselves (`Close`). The MCP manager `m.ctx` keeps reconnect outliving transient callers,
-and per-job sub-agent contexts are reached through the manager's handles. **Self-bounded one-shots**
+down themselves (`Close`). The MCP manager `m.ctx` keeps reconnect outliving transient callers;
+the sub-agent manager seeds its job-root from the host (`Options.Root`, app-root or the headless
+signal context) and cancels it in `Close`. Per-job sub-agent contexts are reached through the
+manager's handles. **Self-bounded one-shots**
 with a timeout need no parent, such as shell completion, model refresh and update check.
 Synchronous guard probes in `tools.MustSerialize` / `permit` stay bare background on purpose,
 since inheriting caller state could carry the user-initiated exemption. Derive from an existing

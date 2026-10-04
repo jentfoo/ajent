@@ -38,6 +38,10 @@ type Options struct {
 	Env                 agent.Environment
 	ProjectInstructions []agent.ProjectInstruction
 
+	// Root seeds the manager's context root: every job derives from it and Close
+	// cancels it, so process shutdown reaches jobs directly. nil means background.
+	Root context.Context
+
 	// Activity publishes one keyed row, removed by empty text. rank is the
 	// job number, so rows hold a stable place regardless of publish order.
 	Activity func(key, text string, rank int) // nil disables activity rows
@@ -54,7 +58,11 @@ type Options struct {
 // completion notification and shutdown.
 type Manager struct {
 	opts Options
-	sem  chan struct{} // buffer of size MaxConcurrent, one slot per send
+
+	ctx    context.Context // root for every job's context, canceled on Close
+	cancel context.CancelFunc
+
+	sem chan struct{} // buffer of size MaxConcurrent, one slot per send
 
 	wg sync.WaitGroup
 
@@ -74,8 +82,14 @@ func New(opts Options) *Manager {
 	if opts.MaxConcurrent <= 0 {
 		opts.MaxConcurrent = defaultMaxConcurrent
 	}
-	return &Manager{opts: opts, sem: make(chan struct{}, opts.MaxConcurrent),
+	root := opts.Root
+	if root == nil {
+		root = context.Background()
+	}
+	m := &Manager{opts: opts, sem: make(chan struct{}, opts.MaxConcurrent),
 		jobs: map[string]*job{}, reserved: map[string]int{}}
+	m.ctx, m.cancel = context.WithCancel(root)
+	return m
 }
 
 // Reserve hands out an id number for every agent_start in one tool batch, in the
@@ -109,7 +123,9 @@ func (m *Manager) start(task, instructions, callID string) string {
 		num = m.count
 	}
 	id := "sub-" + strconv.Itoa(num)
-	ctx, cancel := context.WithCancel(context.Background())
+	// derived from the manager root, so Close and an app-root cancel reach every
+	// job even where StopAll's snapshot missed it
+	ctx, cancel := context.WithCancel(m.ctx)
 	j := &job{
 		id:           id,
 		num:          num,
@@ -122,15 +138,24 @@ func (m *Manager) start(task, instructions, callID string) string {
 		tokens:       ledger,
 	}
 	m.jobs[id] = j
+	j.setQueued(time.Now())
+	if m.ctx.Err() != nil { // shutdown already ran (Close or an app-root cancel): register
+		// aborted without a goroutine, so the WaitGroup can never race its Add against
+		// Close's Wait; every Add before this point happened under mu ahead of any Wait
+		j.finish(StatusAborted, "", nil)
+		close(j.done)
+		cancel() // parent already cancelled, but drop the registration for uniformity
+		m.mu.Unlock()
+		return id
+	}
+	m.wg.Add(1) // before the goroutine and under mu, so Close's Wait never races a pending Add
 	m.mu.Unlock()
 
-	j.setQueued(time.Now())
 	// show the job immediately: rows render above the prompt even while queued,
 	// before the child's turn emits anything (childSink publishes only on output).
 	if fn := m.opts.Activity; fn != nil {
 		fn(j.id, rowLine(id, j.label), j.num)
 	}
-	m.wg.Add(1) // before the goroutine so Close's Wait never races a pending Add
 	go m.spawn(j)
 	m.publishStatus()
 	return id
@@ -145,6 +170,7 @@ func (m *Manager) spawn(j *job) {
 		if acquired { // only a holder may free one, or we exceed MaxConcurrent
 			m.releaseSlot(j)
 		}
+		j.cancel() // drop the root registration; jobs deriving from m.ctx hold it until cancelled
 		m.wg.Done()
 	}()
 	var sum string
@@ -345,6 +371,9 @@ func (m *Manager) Flush() {
 // Close cancels every job and waits briefly for them to stop, then clears the
 // activity rows and status segment.
 func (m *Manager) Close() {
+	// cancel first: any late-starting or still-registered job dies with the manager
+	// regardless of where StopAll's snapshot lands
+	m.cancel()
 	m.StopAll()
 	done := make(chan struct{})
 	go func() { m.wg.Wait(); close(done) }()
