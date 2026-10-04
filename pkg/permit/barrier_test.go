@@ -1220,6 +1220,21 @@ func (c *blockingClassifier) Classify(ctx context.Context, s Subject) Class {
 	return ClassUnsure
 }
 
+// gatedClassifier holds its verdict until released, modelling a slow review.
+type gatedClassifier struct {
+	release chan struct{}
+	verdict Class
+}
+
+func (c *gatedClassifier) Classify(ctx context.Context, s Subject) Class {
+	select {
+	case <-c.release:
+		return c.verdict
+	case <-ctx.Done():
+		return ClassUnsure
+	}
+}
+
 func TestSetModeResolvesOpenDialog(t *testing.T) {
 	t.Parallel()
 
@@ -1271,6 +1286,60 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 		waitDialog(t, p).answer(int(optDeny))
 		<-done
 		assert.Equal(t, tools.ActionDeny, got.Action)
+	})
+
+	// leaving auto mid-dialog cancels the pending verdict, the user deciding again
+	t.Run("leaving_auto_cancels_pending_verdict", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrier(p)
+		cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
+		b.SetClassifier(cl)
+		b.SetMode(ModeAuto)
+
+		var got tools.Decision
+		done := make(chan struct{})
+		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f"}`)); close(done) }()
+		d := waitDialog(t, p)
+
+		b.Prev()          // shift+left: auto -> allow-read mid-dialog
+		close(cl.release) // the allow verdict lands after the mode change
+
+		require.Never(t, func() bool { // a cancelled verdict must not settle it
+			select {
+			case <-d.ch:
+				return true
+			default:
+				return false
+			}
+		}, 100*time.Millisecond, 5*time.Millisecond)
+
+		d.answer(int(optDeny))
+		<-done
+		assert.Equal(t, tools.ActionDeny, got.Action)
+	})
+
+	// a mode change during the typing hold drops the racing verdict entirely
+	t.Run("mode_change_during_hold_drops_verdict", func(t *testing.T) {
+		p := newFakePrompter()
+		releaseHold := p.beginHold()
+		defer releaseHold()
+		b := newTestBarrier(p)
+		cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
+		b.SetClassifier(cl)
+		b.SetMode(ModeAuto)
+
+		done := make(chan tools.Decision, 1)
+		go func() {
+			done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f"}`))
+		}()
+		require.Eventually(t, func() bool { return p.holdCount() == 1 }, time.Second, 10*time.Millisecond)
+
+		b.Prev()          // shift+left while the user types
+		releaseHold()     // typing settles, the dialog may open
+		close(cl.release) // the allow verdict lands with the dialog open
+
+		waitDialog(t, p).answer(int(optDeny)) // only a person decides now
+		assert.Equal(t, tools.ActionDeny, (<-done).Action)
 	})
 }
 

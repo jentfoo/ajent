@@ -31,6 +31,14 @@ func TestBuildOptions(t *testing.T) {
 		{"rm a && mkdir b && touch c && chmod +x d", 4, "Allow `rm`, `mkdir` and `touch` (+1 more) for session"},
 		// redirect/substitution offers no session memory: it could never cover a future line
 		{"echo hi > out.txt", 3, ""},
+		// a here-document body is data: only the reading command is named, the python
+		// inside never read as commands
+		{"python - <<'EOF'\nimport importlib.metadata as md\nprint(\"mcp\", md.version(\"mcp\"))\nEOF\n", 4, "Allow `python` for session"},
+		// an unquoted delimiter keeps expansion alive, so no grant can cover the line
+		{"python - <<EOF\nprint($(x))\nEOF", 3, ""},
+		// control keywords are not command names, so such a line has no head to grant
+		{"if [ -f x ]; then rm y; fi", 3, ""},
+		{"for f in *.md; do head -20 \"$f\"; done", 3, ""},
 	}
 	for _, c := range cases {
 		opts := buildOptions(c.in)

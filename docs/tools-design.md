@@ -134,7 +134,11 @@ scope-checked and everything it can reach sits under that. The
 line is exempt in every permission mode; it is the human's shell, not the
 model's. Shell commands are name-trusted only when they have no exec or write
 form; `awk`, `rg` and `sort` are verified per invocation like sed. Anything
-unverifiable prompts.
+unverifiable prompts. Here-document bodies are the reading command's data,
+never shell, so they neither contribute command names (a python script inside
+`<<'EOF'` names only `python`) nor match deny entries; an unquoted delimiter
+keeps expansion alive, so a body carrying `$(` or a backtick fails unsafe like
+any other substitution.
 
 ### Headless: the tool set is the gate
 

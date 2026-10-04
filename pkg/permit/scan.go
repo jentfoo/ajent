@@ -47,8 +47,97 @@ func matchNullRedirect(command string, i int) int {
 	return consumed
 }
 
+// heredoc captures one pending here-document: its terminator word, whether the
+// delimiter was quoted (a quoted delimiter disables expansion in the body) and
+// whether the <<- form strips body tabs.
+type heredoc struct {
+	delim  string
+	quoted bool
+	tabs   bool
+}
+
+// parseHeredocMarker returns the here-document pending after the << or <<- at i
+// and the index just past its marker, ok false when no delimiter word follows.
+func parseHeredocMarker(command string, i int) (hd heredoc, next int, ok bool) {
+	j := i + 2
+	if j < len(command) && command[j] == '-' {
+		hd.tabs = true
+		j++
+	}
+	for j < len(command) && (command[j] == ' ' || command[j] == '\t') {
+		j++
+	}
+	if j >= len(command) || command[j] == '\n' || command[j] == ';' {
+		return hd, 0, false // no delimiter word follows: not a here-document
+	}
+	var b strings.Builder
+	if q := command[j]; q == '\'' || q == '"' {
+		hd.quoted = true
+		j++
+		for j < len(command) && command[j] != q && command[j] != '\n' {
+			b.WriteByte(command[j])
+			j++
+		}
+		if j >= len(command) || command[j] != q {
+			return hd, 0, false // unterminated quote: fail toward no heredoc
+		}
+		j++
+	} else {
+		for j < len(command) && isWordChar(command[j]) {
+			b.WriteByte(command[j])
+			j++
+		}
+	}
+	hd.delim = b.String()
+	if hd.delim == "" {
+		return hd, 0, false
+	}
+	return hd, j, true
+}
+
+// consumeHeredocBodies skips the pending docs' bodies starting at pos, returning
+// the index after the last terminator. Body lines are the reading command's data,
+// never shell, so they contribute no segments. An unquoted delimiter leaves
+// expansion alive, so a body carrying $( or ` reports unsafe, as does a missing
+// terminator.
+func consumeHeredocBodies(command string, pos int, docs []heredoc) (next int, unsafe bool) {
+	for _, d := range docs {
+		var terminated bool
+		i := pos
+		for i < len(command) {
+			j := strings.IndexByte(command[i:], '\n')
+			var line string
+			if j < 0 {
+				line = command[i:]
+				i = len(command)
+			} else {
+				line = command[i : i+j]
+				i += j + 1
+			}
+			cand := line
+			if d.tabs {
+				cand = strings.TrimLeft(cand, "\t")
+			}
+			if cand == d.delim {
+				terminated = true
+				break
+			}
+			if !d.quoted && (strings.Contains(line, "$(") || strings.Contains(line, "`")) {
+				unsafe = true // the body expands, substitution executes shell
+			}
+		}
+		if !terminated {
+			return len(command), true // bash stops reading at EOF, fail safe
+		}
+		pos = i
+	}
+	return pos, unsafe
+}
+
 // scanCommand walks command once tracking quote state so shell operators inside
-// string literals are never mistaken for control flow. Branch order is load-bearing.
+// string literals are never mistaken for control flow. Here-document bodies are
+// skipped as the reading command's data, never shell. Branch order is
+// load-bearing.
 func scanCommand(command string) Scan {
 	var segments, raw []string
 	buf := strings.Builder{}
@@ -56,6 +145,8 @@ func scanCommand(command string) Scan {
 	var i int
 	n := len(command)
 	var hasSplitOp, hasUnsafeOp bool
+	var heredocs []heredoc
+	var depth int // open (, $( or <( nesting: a << inside is a shift, not a marker
 
 	pushSegment := func() {
 		// keyed on the collapsed trim so Segments/Raw stay index-aligned, and rawBuf
@@ -142,6 +233,43 @@ func scanCommand(command string) Scan {
 			continue
 		}
 
+		// paren nesting so arithmetic shifts ($((1<<2))) never read as markers
+		if ch == '(' {
+			depth++
+		} else if ch == ')' && depth > 0 {
+			depth--
+		}
+
+		// <<< here-string: feeds a literal word on stdin, never a here-document.
+		// Handled ahead of << so the marker branch cannot start at its second <.
+		if ch == '<' && i+2 < n && command[i+1] == '<' && command[i+2] == '<' {
+			buf.WriteString("<<<")
+			rawBuf.WriteString("<<<")
+			i += 3
+			continue
+		}
+
+		// here-document marker: the body is data, never shell, so it must not become
+		// segments. <<< here-strings stay excluded: their word is scanned normally.
+		if ch == '<' && depth == 0 && i+1 < n && command[i+1] == '<' {
+			if hd, next, ok := parseHeredocMarker(command, i); ok {
+				heredocs = append(heredocs, hd)
+				marker := "<<"
+				if hd.tabs {
+					marker += "-"
+				}
+				if hd.quoted {
+					marker += `""` // collapsed form keeps quote state invisible to callers
+				} else {
+					marker += hd.delim
+				}
+				buf.WriteString(marker)
+				rawBuf.WriteString(command[i:next])
+				i = next
+				continue
+			}
+		}
+
 		switch ch {
 		case '>', '`':
 			hasUnsafeOp = true
@@ -149,6 +277,7 @@ func scanCommand(command string) Scan {
 			if i+1 < n && command[i+1] == '(' {
 				// $(...) expands and executes, treat as unsafe
 				hasUnsafeOp = true
+				depth++
 				buf.WriteString("$(")
 				rawBuf.WriteString("$(")
 				i += 2
@@ -158,6 +287,7 @@ func scanCommand(command string) Scan {
 			if i+1 < n && command[i+1] == '(' {
 				// process substitution executes its contents to feed the read
 				hasUnsafeOp = true
+				depth++
 				buf.WriteString("<(")
 				rawBuf.WriteString("<(")
 				i += 2
@@ -178,7 +308,16 @@ func scanCommand(command string) Scan {
 		if ch == '|' || ch == ';' || ch == '\n' || ch == '&' {
 			hasSplitOp = true
 			pushSegment()
-			i++
+			if ch == '\n' && len(heredocs) > 0 {
+				var hu bool
+				i, hu = consumeHeredocBodies(command, i+1, heredocs)
+				if hu {
+					hasUnsafeOp = true
+				}
+				heredocs = heredocs[:0]
+			} else {
+				i++
+			}
 			continue
 		}
 		if ch == '>' || ch == '`' {
@@ -194,6 +333,9 @@ func scanCommand(command string) Scan {
 	}
 
 	pushSegment()
+	if len(heredocs) > 0 {
+		hasUnsafeOp = true // dangling marker, bash reads stdin unboundedly
+	}
 	return Scan{Segments: segments, Raw: raw, HasSplitOp: hasSplitOp, HasUnsafeOp: hasUnsafeOp}
 }
 

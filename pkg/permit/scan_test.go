@@ -224,6 +224,46 @@ func TestScannerCorpus(t *testing.T) {
 	}
 }
 
+func TestScanHeredocs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		in       string
+		segments []string
+		unsafe   bool
+	}{
+		// the body is data: python inside a quoted delimiter is never a command
+		{"quoted body is data", "python - <<'EOF'\nimport importlib.metadata as md\nprint(\"mcp\", md.version(\"mcp\"))\nEOF\n", []string{`python - <<""`}, false},
+		{"unquoted body clean", "python - <<EOF\nprint(1)\nEOF", []string{"python - <<EOF"}, false},
+		// an unquoted delimiter expands, so substitution in the body is unsafe
+		{"unquoted body subst", "python - <<EOF\nprint($(rm x))\nEOF", []string{"python - <<EOF"}, true},
+		{"unquoted body backtick", "python - <<EOF\nprint(`id`)\nEOF", []string{"python - <<EOF"}, true},
+		// a quoted delimiter keeps the body literal, substitution inert
+		{"quoted body subst inert", "python - <<'EOF'\nprint($(rm x))\nEOF", []string{`python - <<""`}, false},
+		{"quoted delimiter spaces", "cat <<\"E O F\"\nx\nE O F", []string{`cat <<""`}, false},
+		// body then later commands: only shell lines become segments
+		{"body precedes later commands", "python - <<'EOF'\nimport md\nEOF\necho done\ncd /tmp && python - <<'EOF'\nprint(1)\nEOF\n", []string{`python - <<""`, "echo done", "cd /tmp", `python - <<""`}, false},
+		{"tab stripped terminator", "cmd <<-END\n\tbody\n\tEND\necho done", []string{"cmd <<-END", "echo done"}, false},
+		{"two markers one line", "cat <<A <<B\na1\nA\nb1\nB", []string{"cat <<A <<B"}, false},
+		{"terminator must be whole line", "cat <<E\nEOFX\nE", []string{"cat <<E"}, false},
+		{"missing terminator unsafe", "python - <<'EOF'\nimport md", []string{`python - <<""`}, true},
+		{"dangling marker unsafe", "if :; then cat <<E; fi", []string{"if :", "then cat <<E", "fi"}, true},
+		// <<< is a here-string, its word scanned normally
+		{"here string not heredoc", "grep -f <<< x", []string{"grep -f <<< x"}, false},
+		// << inside arithmetic is a shift, never a marker (the $( itself is unsafe)
+		{"shift inside arithmetic", "echo $((1<<2)) && rm -rf /", []string{"echo $((1<<2))", "rm -rf /"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := scanCommand(c.in)
+			assert.Equal(t, c.segments, s.Segments)
+			assert.Equal(t, c.unsafe, s.HasUnsafeOp)
+			assert.Len(t, s.Raw, len(s.Segments))
+		})
+	}
+}
+
 func FuzzScan(f *testing.F) {
 	f.Add("ls")
 	f.Add(`echo "$(pwd)"`)

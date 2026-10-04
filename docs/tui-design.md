@@ -1231,8 +1231,10 @@ their meaning. Shift+Tab and Shift+←/→ are special: they reach the control
 channel even while an interaction or overlay owns the keyboard, because changing
 a permission mode with a prompt already on screen must work. The front end
 maps them onto cycling the barrier forward or back, which re-evaluates any open
-approval dialog under the new mode. Ctrl+X is out-of-band the same way while an
-interaction owns the keyboard (`ControlCopySelection`); idle it is swallowed.
+approval dialog under the new mode and cancels any classification the old mode
+still had racing it, so the user answers by hand. Ctrl+X is out-of-band the same
+way while an interaction owns the keyboard (`ControlCopySelection`); idle it is
+swallowed.
 
 The clipboard split follows Ctrl+V's image read: `pkg/tui` reports the gesture
 and exposes the highlighted row's payload, never spawning a backend; the write

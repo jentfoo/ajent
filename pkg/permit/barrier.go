@@ -47,9 +47,10 @@ type Barrier struct {
 
 // pendingAsk tracks one open approval dialog so a mode change can resolve it.
 type pendingAsk struct {
-	call agent.ToolCall
-	dlg  Dialog
-	auto bool // an allow verdict resolved this dialog (auto mode)
+	call       agent.ToolCall
+	dlg        Dialog
+	auto       bool   // an allow verdict resolved this dialog (auto mode)
+	cancelAuto func() // stops a racing classification, nil when none runs
 }
 
 // NewBarrier builds a barrier with read-only metadata lookup ro. It starts in
@@ -189,7 +190,9 @@ func (b *Barrier) Mode() Mode {
 }
 
 // SetMode swaps the live mode and re-evaluates any open dialog under it: a call
-// the new mode would allow outright is resolved as allow. Never rewrites config.
+// the new mode would allow outright is resolved as allow, while a mode change
+// away from the deciding auto mode cancels its racing classification so the
+// user decides. Never rewrites config.
 func (b *Barrier) SetMode(m Mode) {
 	b.mu.Lock()
 	old := b.mode
@@ -203,12 +206,7 @@ func (b *Barrier) SetMode(m Mode) {
 	if old == m || len(opens) == 0 {
 		return
 	}
-	g := b.gateFor(m)
-	for _, pa := range opens {
-		if g.staticVerdict(context.Background(), pa.call).Action == tools.ActionAllow {
-			pa.dlg.Resolve(int(optAllow))
-		}
-	}
+	b.reevaluateOpens(m, opens)
 }
 
 // Cycle advances to the next mode in order and re-evaluates open dialogs.
@@ -227,13 +225,33 @@ func (b *Barrier) rotate(m Mode) Mode {
 	opens := slices.Clone(b.open)
 	b.mu.Unlock()
 
+	b.reevaluateOpens(m, opens)
+	return m
+}
+
+// reevaluateOpens settles dialogs still open after a mode change: the new mode's
+// static verdict may allow one outright, and any racing auto classification is
+// cancelled since the mode that launched it no longer decides.
+func (b *Barrier) reevaluateOpens(m Mode, opens []*pendingAsk) {
+	b.mu.Lock()
+	cancels := make([]func(), 0, len(opens))
+	for _, pa := range opens {
+		if pa.cancelAuto != nil {
+			cancels = append(cancels, pa.cancelAuto)
+			pa.cancelAuto = nil
+		}
+	}
+	b.mu.Unlock()
+	for _, cancel := range cancels {
+		cancel()
+	}
+
 	g := b.gateFor(m)
 	for _, pa := range opens {
 		if g.staticVerdict(context.Background(), pa.call).Action == tools.ActionAllow {
 			pa.dlg.Resolve(int(optAllow))
 		}
 	}
-	return m
 }
 
 // resetSessionAllowsLocked clears granted session memory so a mode change never
@@ -374,7 +392,7 @@ func (b *Barrier) Asker() tools.Asker {
 			subject = classifySubject(m, call)
 			if c, ok := b.cachedVerdict(subject); ok {
 				// banked: allow approves at once, deny/unsure still needs a person
-				if c == ClassAllow && ctx.Err() == nil {
+				if c == ClassAllow && ctx.Err() == nil && b.Mode() == m {
 					b.resolveNotice("once", true)
 					return allowDecision()
 				}
@@ -391,6 +409,12 @@ func (b *Barrier) Asker() tools.Asker {
 		// at once, so an AI-approved tool runs mid-keystroke
 		var allowed bool
 		verdict, allowed = holdForDialog(ctx, prompter, verdict)
+		if (verdict != nil || allowed) && b.Mode() != m {
+			// a mode change since the snapshot: the racing (or winning) verdict no
+			// longer speaks for the gate, so only a person or the new mode may allow
+			stop()
+			verdict, allowed = nil, false
+		}
 		if allowed {
 			stop()
 			b.resolveNotice("once", true)
@@ -413,9 +437,20 @@ func (b *Barrier) Asker() tools.Asker {
 
 		b.mu.Lock()
 		pa := &pendingAsk{call: call, dlg: dlg}
+		if verdict != nil && classifierCtx.Err() == nil {
+			pa.cancelAuto = cancel // registered with the dialog so SetMode cannot miss it
+		}
 		b.open = append(b.open, pa)
-		mNow := b.mode // same-lock capture so a concurrent SetMode/Cycle is ordered against registration
+		mNow := b.mode                             // same-lock capture so a concurrent SetMode/Cycle is ordered against registration
+		stale := mNow != m && pa.cancelAuto != nil // SetMode swept before this dialog existed
+		if stale {
+			pa.cancelAuto = nil
+		}
 		b.mu.Unlock()
+
+		if stale {
+			cancel() // the mode that launched the verdict no longer decides
+		}
 
 		// a Shift+Tab landed between Open and registration, so re-evaluate under the new mode.
 		if mNow != m && b.gateFor(mNow).staticVerdict(ctx, call).Action == tools.ActionAllow {

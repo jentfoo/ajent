@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 // tokenizeRaw splits a raw segment on unquoted whitespace, stripping quote
@@ -126,18 +128,32 @@ func firstToken(tokens []string) string {
 // envAssignRe matches a leading KEY=VALUE environment assignment.
 var envAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
+// shellKeywords are control-flow words, never command names: a segment headed by
+// one is shell syntax whose inner commands vary, so it has no nameable head.
+var shellKeywords = bulk.SliceToSet([]string{
+	"if", "then", "elif", "else", "fi", "do", "done", "while", "until",
+	"for", "case", "esac", "in", "select", "function", "time", "{", "}", "!",
+})
+
 // headOf returns the command name a segment runs after unwrapping launchers, or
 // ("",false) when none can be named reliably. A leading VAR= assignment is never
 // stripped: PATH/LD_PRELOAD/BASH_ENV/ENV, plus any other var a binary reads, can
-// what the head actually executes, so such a segment has no trustworthy name and
-// must fail closed (never read-only, never matches an existing grant).
+// hijack what the head actually executes, so such a segment has no trustworthy name
+// and must fail closed (never read-only, never matches an existing grant). A shell
+// keyword head likewise names nothing.
 func headOf(seg string) (string, bool) {
 	toks := segmentTokens(seg)
 	if len(toks) == 0 || envAssignRe.MatchString(firstToken(toks)) {
 		return "", false
 	}
 	h := stripPath(firstToken(toks))
-	return h, h != ""
+	if h == "" {
+		return "", false
+	}
+	if _, kw := shellKeywords[h]; kw {
+		return "", false
+	}
+	return h, true
 }
 
 // segmentTokens returns the effective head-walkable tokens of a collapsed segment.
