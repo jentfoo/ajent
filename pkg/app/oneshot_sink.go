@@ -139,7 +139,7 @@ func (s *textSink) ToolStart(call agent.ToolCall, label string, full bool) func(
 		label += ": " + path
 	}
 	delete(s.paths, call.ID)
-	_, _ = fmt.Fprintf(s.errw, "ajent: tool: %s\n", label)
+	_, _ = fmt.Fprintf(s.errw, "tool: %s\n", label)
 	s.mu.Unlock()
 
 	return func(res agent.ToolResult) {
@@ -152,7 +152,7 @@ func (s *textSink) ToolStart(call agent.ToolCall, label string, full bool) func(
 		if reason == "" {
 			reason = "failed"
 		}
-		_, _ = fmt.Fprintf(s.errw, "ajent: tool failed: %s: %s\n", call.Name, reason)
+		_, _ = fmt.Fprintf(s.errw, "tool failed: %s: %s\n", call.Name, reason)
 	}
 }
 
@@ -160,7 +160,7 @@ func (s *textSink) Notice(msg string, level agent.Level) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, _ = fmt.Fprintf(s.errw, "ajent: %s: %s\n", levelName(level), msg)
+	_, _ = fmt.Fprintf(s.errw, "%s: %s\n", levelName(level), msg)
 }
 
 func (s *textSink) TurnEnd(r agent.TurnResult) {
@@ -183,7 +183,7 @@ func (s *textSink) summary(st sessionStats) {
 	defer s.mu.Unlock()
 
 	s.endLineLocked()
-	writeStats(s.errw, "ajent: ", st)
+	writeStats(s.errw, "", st)
 }
 
 // finish only closes a partial line, for a turn that ended mid-block: the answer

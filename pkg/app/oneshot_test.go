@@ -229,7 +229,7 @@ func TestRunHeadless(t *testing.T) {
 		code, _, errw := headlessHarness(t,
 			HeadlessOptions{Prompt: "hi", Output: OutputText, SessMode: ResumeID, SessTarget: "nope"}, "", nil)
 		assert.Equal(t, ExitUsage, code)
-		assert.Contains(t, errw, "ajent: session:")
+		assert.Contains(t, errw, "session:")
 	})
 
 	t.Run("text_answer_exits_zero", func(t *testing.T) {
@@ -314,7 +314,7 @@ func TestRunHeadless(t *testing.T) {
 			})
 		assert.Equal(t, ExitOK, code)
 		assert.Equal(t, "let me check\nall done\n", out) // prose from both steps, in order
-		assert.Contains(t, errw, "ajent: tool: ")        // progress never touches stdout
+		assert.Contains(t, errw, "tool: ")               // progress never touches stdout
 	})
 
 	t.Run("expands_at_references", func(t *testing.T) {

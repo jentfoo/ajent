@@ -34,10 +34,10 @@ func RunHeadless(o HeadlessOptions) int {
 		errw = os.Stderr
 	}
 	for _, w := range o.Warnings {
-		_, _ = fmt.Fprintln(errw, "ajent:", w)
+		_, _ = fmt.Fprintln(errw, w)
 	}
 	if o.Active.ID == "" {
-		_, _ = fmt.Fprintln(errw, "ajent: no model configured; set one with -m or in config.json")
+		_, _ = fmt.Fprintln(errw, "no model configured; set one with -m or in config.json")
 		return ExitUsage
 	}
 
@@ -48,7 +48,7 @@ func RunHeadless(o HeadlessOptions) int {
 		drain = newTextSink(out, errw)
 	}
 	notify := func(msg string, level agent.Level) {
-		_, _ = fmt.Fprintf(errw, "ajent: %s: %s\n", levelName(level), msg)
+		_, _ = fmt.Fprintf(errw, "%s: %s\n", levelName(level), msg)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(),
@@ -69,7 +69,7 @@ func RunHeadless(o HeadlessOptions) int {
 	rec, serr := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key())
 	if serr != nil && o.SessMode != ResumeNewSession {
 		// an explicit resume target that cannot open must not silently start fresh
-		_, _ = fmt.Fprintf(errw, "ajent: session: %v\n", serr)
+		_, _ = fmt.Fprintf(errw, "session: %v\n", serr)
 		return ExitUsage
 	}
 	if serr != nil {
@@ -83,10 +83,10 @@ func RunHeadless(o HeadlessOptions) int {
 
 	// ask_user has nobody to ask, so it is left without an Ask func and excluded from every scope below
 	toolsReg, terr := builtinTools(o.Set, o.Reg, nil, func(msg string) {
-		_, _ = fmt.Fprintln(errw, "ajent:", msg)
+		_, _ = fmt.Fprintln(errw, msg)
 	})
 	if terr != nil {
-		_, _ = fmt.Fprintln(errw, "ajent:", terr)
+		_, _ = fmt.Fprintln(errw, terr)
 		return ExitUsage
 	}
 
@@ -248,7 +248,7 @@ func RunHeadless(o HeadlessOptions) int {
 	status, code := headlessOutcome(err, res, answer)
 	if status != statusOK {
 		// text output prints nothing without an answer, so say why on stderr
-		_, _ = fmt.Fprintln(errw, "ajent:", outcomeReason(err, res))
+		_, _ = fmt.Fprintln(errw, outcomeReason(err, res))
 	}
 	if stats != nil {
 		drain.summary(stats.collect(st.Tokens, time.Since(started)))

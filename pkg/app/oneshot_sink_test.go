@@ -110,8 +110,8 @@ func TestTextSink(t *testing.T) {
 		done(agent.ToolResult{IsError: true, Content: llm.BlockList{llm.TextBlock{Text: "refused"}}})
 
 		assert.Empty(t, out.String()) // stdout stays the model's prose alone
-		assert.Equal(t, "ajent: tool: read: notes.go\najent: tool: bash: ls -la\n"+
-			"ajent: tool failed: bash: refused\n", errw.String())
+		assert.Equal(t, "tool: read: notes.go\ntool: bash: ls -la\n"+
+			"tool failed: bash: refused\n", errw.String())
 	})
 
 	t.Run("notices_to_stderr", func(t *testing.T) {
@@ -121,7 +121,7 @@ func TestTextSink(t *testing.T) {
 		s.finish(statusEmpty, ExitTurn, "")
 
 		assert.Empty(t, out.String()) // no prose, nothing printed
-		assert.Equal(t, "ajent: warn: careful\n", errw.String())
+		assert.Equal(t, "warn: careful\n", errw.String())
 	})
 }
 
