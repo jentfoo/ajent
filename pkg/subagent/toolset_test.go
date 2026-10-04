@@ -57,6 +57,33 @@ func TestChildToolsGitGate(t *testing.T) {
 	}
 }
 
+func TestIsChildBarred(t *testing.T) {
+	t.Parallel()
+
+	t.Run("barred_names", func(t *testing.T) {
+		for _, name := range []string{"ask_user",
+			"dev_implement", "dev_review", "dev_revise", "dev_complete"} {
+			assert.True(t, isChildBarred(name))
+		}
+	})
+
+	t.Run("admitted_names", func(t *testing.T) {
+		assert.False(t, isChildBarred("read"))
+		assert.False(t, isChildBarred("agent_start")) // barred by the agent_ prefix instead
+	})
+
+	// the parent marks dev_* read-only, so only this bar keeps them from children
+	t.Run("child_tools_filter", func(t *testing.T) {
+		src := &fakeSource{
+			tools: []agent.Tool{&fakeTool{name: "read"},
+				roTool("dev_implement"), roTool("dev_review"), roTool("dev_revise"), roTool("dev_complete")},
+			readOnly: map[string]bool{"dev_implement": true, "dev_review": true,
+				"dev_revise": true, "dev_complete": true},
+		}
+		assert.Equal(t, []string{"read"}, toolNames(childTools(src, true)))
+	})
+}
+
 func TestIsGitTool(t *testing.T) {
 	t.Parallel()
 
