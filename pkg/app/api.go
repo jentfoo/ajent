@@ -5,6 +5,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/permit"
 )
 
 // Exit codes a script can branch on. They are the same for text and json output.
@@ -20,15 +21,38 @@ const (
 	OutputJSON = "json"
 )
 
-// ToolScope is which tools a headless run offers the model. The scope is the
-// gate: the barrier runs at allow-all, so nothing the model can see is refused.
+// ToolScope picks this invocation's permission posture: which tools a headless
+// run offers the model, and the barrier mode its permission flag starts. A
+// scope that names no mode leaves the configured default alone interactively,
+// and runs allow-all headless where no dialog can settle a prompt and the
+// offered tool set carries the gate.
 type ToolScope uint8
 
 const (
-	ToolScopeDefault  ToolScope = iota // every built-in but bash
-	ToolScopeAllowAll                  // every built-in, bash included
-	ToolScopeReadOnly                  // verifiably read-only tools only
+	ToolScopeDefault   ToolScope = iota // every built-in but bash; startup mode from config
+	ToolScopeAllowAll                   // everything incl. bash; starts at allow-all
+	ToolScopeReadOnly                   // verifiably read-only tools only; starts at auto
+	ToolScopeAuto                       // every built-in but the core writers; starts at auto
+	ToolScopeAutoWrite                  // everything incl. bash; starts at auto+write
 )
+
+// barrierMode maps a scope onto the barrier mode its permission flag starts in,
+// ok false when the scope names none and leaves the configured default alone.
+func (s ToolScope) barrierMode() (permit.Mode, bool) {
+	switch s {
+	case ToolScopeAllowAll:
+		return permit.ModeAllowAll, true
+	case ToolScopeReadOnly:
+		// the offered set asks nothing, so auto never classifies unattended
+		return permit.ModeAuto, true
+	case ToolScopeAuto:
+		return permit.ModeAuto, true
+	case ToolScopeAutoWrite:
+		return permit.ModeAutoWrite, true
+	default:
+		return permit.ModeAllowRead, false
+	}
+}
 
 // ResumeMode says what this run should do with saved sessions.
 type ResumeMode int

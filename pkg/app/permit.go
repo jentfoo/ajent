@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -69,6 +72,46 @@ func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 		sch.Description = t.Description()
 		return sch, true
 	}
+}
+
+// autoClassifier builds the barrier's cached model classifier over the current
+// model and MCP tool metadata.
+func autoClassifier(providerFor func(llm.Model) (llm.Provider, error), model func() llm.Model,
+	schema func(name string) (llm.ToolSchema, bool), sessionID string) permit.Classifier {
+	return permit.NewCachedClassifier(classifierAdapter{
+		providerFor: providerFor,
+		model:       model,
+		schema:      schema,
+		cwd:         config.Cwd(),
+		tmp:         os.TempDir(),
+		session:     sessionID,
+	}.Classify)
+}
+
+// barrierDeps carries what one front end supplies to the shared barrier wiring.
+type barrierDeps struct {
+	reg      *tools.Registry
+	provider func(llm.Model) (llm.Provider, error)
+	model    func() llm.Model
+	session  string
+	notify   func(msg string, level agent.Level)
+	safe     []string
+	denied   []string
+}
+
+// wireBarrier installs the decision inputs both front ends share: classifier,
+// write roots, config safe/deny lists, dry-run, notices and the guard/asker
+// hookup. Mode, session grants, prompter, noter and preview stay with the
+// caller, since those differ by front end.
+func wireBarrier(b *permit.Barrier, d barrierDeps) {
+	b.SetClassifier(autoClassifier(d.provider, d.model, toolSchema(d.reg), d.session))
+	b.SetWriteRoots(config.Cwd(), os.TempDir())
+	b.SetSafeCommands(d.safe)
+	b.SetDeniedCommands(d.denied)
+	b.SetDryRun(d.reg.DryRun)
+	b.SetNotice(func(msg string) { d.notify(msg, agent.LevelInfo) })
+	d.reg.AddGuard(b.Guard())
+	d.reg.SetAsker(b.Asker())
 }
 
 type classifierAdapter struct {

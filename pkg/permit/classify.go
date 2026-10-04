@@ -25,6 +25,12 @@ var builtinReadOnly = bulk.SliceToSet(tools.ReadOnlyBuiltins)
 // a config glob or annotation were to mark them read-only by mistake.
 var coreWriteTools = bulk.SliceToSet([]string{"write", "edit"})
 
+// IsCoreWriter reports whether name is a core built-in write tool.
+func IsCoreWriter(name string) bool {
+	_, ok := coreWriteTools[name]
+	return ok
+}
+
 // bashCommand extracts the command field from a bash tool call, returning empty
 // when it cannot be decoded so classification fails safe to the prompt path.
 func bashCommand(input json.RawMessage) string {

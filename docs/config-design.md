@@ -92,13 +92,19 @@ hits it: a human's own staged `!` line owns its shell and always runs.
 ### Permissions and tools in a one-shot run
 
 `-p` does not write any permission or tool key into the flag layer. Its
-`--allow-all` / `--read-only` / `--allow-tools` / `--deny-tools` flags choose
-the *offered tool set* rather than a gate, so there is no key for them to set
-and `Explain` keeps reporting the file's own values. A headless run therefore:
+permission flags choose how a headless run settles a call, and `--allow-tools`
+seeds the barrier's session-allow memory as well (see `tools-design.md` "Headless
+auto scopes"), so there is no key for them to set and `Explain` keeps reporting
+the file's own values. A headless run therefore:
 
-- ignores `permissions.mode` and runs the barrier at `allow-all`, since no dialog
-  can be opened; the scope flags are what limit what the model may call, so a
-  narrower set is expressed as offered tools rather than a permission change.
+- runs at allow-all unless a permission flag says otherwise, since nothing else
+  could settle a prompt. The scope flags limit what the model may call, so a
+  narrower policy is expressed as offered tools rather than a mode change.
+- `--allow-auto` / `--allow-autowrite` run the barrier in that mode instead and
+  settle prompts with final model classifications (see `tools-design.md`
+  "Headless auto scopes"). The `permissions.mode` key itself is still never
+  read. `safeCommands` and `deniedCommands` apply as configured, exactly as
+  interactive.
 
 The flag surface itself lives in `flags.go`; per the README contract every scope
 flag also has its entry there. See `tools-design.md` "Headless: the tool set is

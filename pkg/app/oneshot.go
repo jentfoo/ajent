@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -199,14 +200,42 @@ func RunHeadless(o HeadlessOptions) int {
 	// the scope is applied last, once every tool the run could offer is registered
 	toolsReg.SetEnabled(headlessTools(toolsReg, o.Scope, o.AllowTools, o.DenyTools))
 
-	// allow-all with the configured deny list: an operator's explicit gate still
-	// holds, and nothing else can prompt a human who is not there.
+	// a one-shot settles every ask without a dialog: the auto scopes run their mode
+	// so the model verdict is final, every other scope runs allow-all with the
+	// offered set carrying the gate.
 	barrier := permit.NewBarrier(toolsReg.ReadOnly)
-	barrier.SetMode(permit.ModeAllowAll)
-	barrier.SetDeniedCommands(o.Set.Settings().Permissions.DeniedCommands)
-	barrier.SetNotice(func(msg string) { notify(msg, agent.LevelInfo) })
-	toolsReg.AddGuard(barrier.Guard())
-	toolsReg.SetAsker(barrier.Asker())
+	m, ok := o.Scope.barrierMode()
+	if !ok {
+		m = permit.ModeAllowAll // no permission flag: nothing else can settle a prompt
+	}
+	barrier.SetMode(m)
+	wireBarrier(barrier, barrierDeps{
+		reg:      toolsReg,
+		provider: providerFor,
+		model:    func() llm.Model { return st.Model },
+		session:  sessionHint(rec),
+		notify:   notify,
+		safe:     o.Set.Settings().Permissions.SafeCommands,
+		denied:   o.Set.Settings().Permissions.DeniedCommands,
+	})
+	// --allow-tools names pre-granted session allows: a tool name runs that tool
+	// (writers included), `bash` every nameable shell call, any other word a bash
+	// command head. Granted after the mode switch, which clears grants.
+	for _, n := range o.AllowTools {
+		// a grant keys a tool name or one head word, so a multi-word entry can only
+		// be a mistake; say so rather than pass silently
+		if len(strings.Fields(n)) > 1 {
+			notify("--allow-tools: "+n+" names no tool; use a tool name or one bash command head",
+				agent.LevelWarn)
+		}
+	}
+	barrier.GrantSessionAllows(o.AllowTools)
+	// a batch's classified calls launch concurrently and agent_start calls reserve
+	// message-order job numbers, the same hooks the interactive driver installs
+	opts.OnToolBatch = func(ctx context.Context, calls []agent.ToolCall) {
+		sag.Reserve(calls)
+		barrier.Prefetch(ctx, calls)
+	}
 
 	// steered inputs (sub-agent completions) expand through the same @ pipeline
 	// the initial prompt gets, via the agent's append-point seam. Vision reads
@@ -286,18 +315,22 @@ func headlessOutcome(err error, res agent.TurnResult, answer string) (string, in
 }
 
 // headlessTools returns the tool names to enable for scope, then applies the allow and deny
-// adjustments. Built-in names follow the scope regardless of tools.enabled, and every other source
-// keeps its registered state, so a server disabled in mcp.json stays off.
+// adjustments. Built-in names follow the scope regardless of tools.enabled, and every other
+// source keeps its registered state unless --allow-tools names it, so an unlisted server
+// disabled in mcp.json stays off.
 func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) []string {
 	inScope := func(name string) bool {
 		if name == tools.ToolAskUser { // no human to answer a question headless
 			return false
 		}
 		switch scope {
-		case ToolScopeAllowAll:
+		case ToolScopeAllowAll, ToolScopeAutoWrite:
 			return true
 		case ToolScopeReadOnly:
 			return slices.Contains(tools.ReadOnlyBuiltins, name) || reg.ReadOnly(name)
+		case ToolScopeAuto:
+			// core writers have no unattended path: never offered rather than refused
+			return !permit.IsCoreWriter(name)
 		default:
 			return name != tools.ToolBash
 		}
@@ -315,7 +348,11 @@ func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) [
 		return scope != ToolScopeReadOnly || reg.ReadOnly(name)
 	}, reg.Names())...)
 
-	names = append(names, allow...)
+	names = append(names, bulk.SliceFilter(func(n string) bool {
+		// only a registered tool can be enabled; other entries stay bash prefixes
+		_, ok := reg.Lookup(n)
+		return ok
+	}, allow)...)
 	denied := bulk.SliceToSet(deny)
 	names = bulk.SliceFilterInPlace(func(n string) bool {
 		_, ok := denied[n]

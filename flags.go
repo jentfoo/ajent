@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/spf13/pflag"
 
 	"github.com/jentfoo/ajent/pkg/app"
@@ -45,6 +46,8 @@ type cliFlags struct {
 	stats      bool
 	allowAll   bool
 	readOnly   bool
+	allowAuto  bool
+	autoWrite  bool
 	allowTools []string
 	denyTools  []string
 
@@ -92,7 +95,12 @@ func parseFlags(argv []string) (cliFlags, error) {
 		"run with the permission barrier at allow-all")
 	fs.BoolVar(&f.readOnly, "read-only", false,
 		"run in auto read-only mode")
-	fs.StringSliceVar(&f.allowTools, "allow-tools", nil, "one-shot: extra tool names to offer")
+	fs.BoolVar(&f.allowAuto, "allow-auto", false,
+		"start in auto mode: unverifiable calls are model-classified, and a one-shot takes the verdict as final")
+	fs.BoolVar(&f.autoWrite, "allow-autowrite", false,
+		"like --allow-auto plus workspace-confined writes run without approval")
+	fs.StringSliceVar(&f.allowTools, "allow-tools", nil,
+		"one-shot: tool names or bash command heads to allow for the session")
 	fs.StringSliceVar(&f.denyTools, "deny-tools", nil, "one-shot: tool names to withhold")
 	fs.BoolVar(&f.stats, "stats", false,
 		"one-shot: print a tool and token summary to stderr (or a json summary line) when the run ends")
@@ -159,9 +167,11 @@ func (f cliFlags) validate() error {
 			return err
 		}
 	}
-	// the two permission-mode flags conflict in every mode, interactive and one-shot
-	if f.allowAll && f.readOnly {
-		return errors.New("--allow-all and --read-only are mutually exclusive")
+	// the permission-mode flags conflict in every mode, interactive and one-shot
+	picked := bulk.SliceFilter(func(on bool) bool { return on },
+		[]bool{f.allowAll, f.readOnly, f.allowAuto, f.autoWrite})
+	if len(picked) > 1 {
+		return errors.New("--allow-all, --read-only, --allow-auto and --allow-autowrite are mutually exclusive")
 	}
 	if f.prompt == "" {
 		if len(f.headless) > 0 {
@@ -187,6 +197,10 @@ func (f cliFlags) scope() app.ToolScope {
 		return app.ToolScopeAllowAll
 	case f.readOnly:
 		return app.ToolScopeReadOnly
+	case f.allowAuto:
+		return app.ToolScopeAuto
+	case f.autoWrite:
+		return app.ToolScopeAutoWrite
 	default:
 		return app.ToolScopeDefault
 	}

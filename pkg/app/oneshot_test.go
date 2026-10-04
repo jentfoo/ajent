@@ -14,6 +14,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
@@ -77,6 +78,20 @@ func TestHeadlessTools(t *testing.T) {
 				"read", "srv__deploy", "srv__search", "write"},
 		},
 		{
+			name:  "auto_drops_core_writers",
+			scope: ToolScopeAuto,
+			want: []string{"agent_list", "agent_poll", "agent_start", "bash", "find",
+				"git_diff", "git_log", "git_show", "git_status", "grep", "ls",
+				"read", "srv__deploy", "srv__search"},
+		},
+		{
+			name:  "autowrite_offers_everything",
+			scope: ToolScopeAutoWrite,
+			want: []string{"agent_list", "agent_poll", "agent_start", "bash", "edit",
+				"find", "git_diff", "git_log", "git_show", "git_status", "grep", "ls",
+				"read", "srv__deploy", "srv__search", "write"},
+		},
+		{
 			name:  "deny_tools_wins",
 			scope: ToolScopeAllowAll,
 			allow: []string{"write"},
@@ -101,6 +116,27 @@ func TestHeadlessTools(t *testing.T) {
 		_, ok = reg.Get("grep")
 		assert.True(t, ok)
 	})
+}
+
+func TestScopeBarrierMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		scope ToolScope
+		mode  permit.Mode
+		ok    bool
+	}{
+		{ToolScopeDefault, permit.ModeAllowRead, false}, // value ignored: caller keeps its default
+		{ToolScopeAllowAll, permit.ModeAllowAll, true},
+		{ToolScopeReadOnly, permit.ModeAuto, true},
+		{ToolScopeAuto, permit.ModeAuto, true},
+		{ToolScopeAutoWrite, permit.ModeAutoWrite, true},
+	}
+	for _, tc := range tests {
+		m, ok := tc.scope.barrierMode()
+		assert.Equal(t, tc.mode, m)
+		assert.Equal(t, tc.ok, ok)
+	}
 }
 
 func TestHeadlessOutcome(t *testing.T) {
@@ -237,6 +273,162 @@ func TestRunHeadless(t *testing.T) {
 			[]llm.ScriptedTurn{{Events: textTurn("all done")}})
 		assert.Equal(t, ExitOK, code)
 		assert.Equal(t, "all done\n", out)
+	})
+
+	// an allow verdict from the classifier runs the call with no dialog
+	t.Run("auto_scope_allow_runs_unattended", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("checking", "t1", "bash", `{"command":"stat ."}`)},
+			{Events: textTurn("allow")}, // the classifier's scripted verdict
+			{Events: textTurn("done with stat")},
+		}
+		code, out, errw := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAuto}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "done with stat")
+		assert.Contains(t, errw, "Tool auto allowed")
+	})
+
+	// a deny verdict refuses the call and the turn carries on without it
+	t.Run("auto_scope_deny_refuses", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("checking", "t1", "bash", `{"command":"stat ."}`)},
+			{Events: textTurn("deny")},
+			{Events: textTurn("understood, skipping")},
+		}
+		code, out, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAuto}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "understood, skipping")
+	})
+
+	// a workspace-confined write passes statically, no classifier turn scripted
+	t.Run("autowrite_runs_workspace_write", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("writing", "t1", "write", `{"path":"notes.txt","content":"hello"}`)},
+			{Events: textTurn("wrote it")},
+		}
+		code, out, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAutoWrite}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "wrote it")
+		b, err := os.ReadFile("notes.txt")
+		require.NoError(t, err)
+		assert.Equal(t, "hello", string(b))
+	})
+
+	// an --allow-tools name pre-grants its session allow, so the offered write
+	// runs under auto with no classifier turn scripted between
+	t.Run("auto_scope_allow_tools_grant_runs", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("writing", "t1", "write", `{"path":"notes.txt","content":"hello"}`)},
+			{Events: textTurn("wrote it")},
+		}
+		code, out, _ := headlessHarness(t, HeadlessOptions{
+			Prompt: "hi", Output: OutputText, Scope: ToolScopeAuto, AllowTools: []string{"write"},
+		}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "wrote it")
+	})
+
+	// `bash` as an allow entry permits every shell call outright, so no
+	// classifier turn is scripted between the call and the final answer
+	t.Run("auto_scope_allow_tools_bash_runs_all", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("checking", "t1", "bash", `{"command":"stat ."}`)},
+			{Events: textTurn("done with stat")},
+		}
+		code, out, errw := headlessHarness(t, HeadlessOptions{
+			Prompt: "hi", Output: OutputText, Scope: ToolScopeAuto, AllowTools: []string{"bash"},
+		}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "done with stat")
+		assert.NotContains(t, errw, "Tool auto allowed") // allow list, not a verdict
+	})
+
+	// an unknown bash command stays model-classified under auto even with an
+	// unrelated allow entry present
+	t.Run("auto_scope_unlisted_bash_still_classified", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("checking", "t1", "bash", `{"command":"stat ."}`)},
+			{Events: textTurn("deny")},
+			{Events: textTurn("understood, skipping")},
+		}
+		code, out, _ := headlessHarness(t, HeadlessOptions{
+			Prompt: "hi", Output: OutputText, Scope: ToolScopeAuto, AllowTools: []string{"python3"},
+		}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "understood, skipping")
+	})
+
+	// read-only runs auto, and a bash grant cannot cover a redirect: the line is
+	// model-reviewed and fails closed, never a missing-UI refusal
+	t.Run("read_only_grant_redirect_classifies", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("checking", "t1", "bash", `{"command":"echo hi > out.txt"}`)},
+			{Events: textTurn("deny")},
+			{Events: textTurn("understood, skipping")},
+		}
+		code, out, errw := headlessHarness(t, HeadlessOptions{
+			Prompt: "hi", Output: OutputText, Scope: ToolScopeReadOnly, AllowTools: []string{"bash"},
+		}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "understood, skipping")
+		assert.Contains(t, errw, "permission not given")
+	})
+
+	// a multi-word entry naming no tool grants nothing, and the run says so
+	t.Run("allow_tools_multiword_warns", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{{Events: textTurn("done")}}
+		code, _, errw := headlessHarness(t, HeadlessOptions{
+			Prompt: "hi", Output: OutputText, AllowTools: []string{"git status"},
+		}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, errw, "--allow-tools: git status names no tool")
+	})
+
+	// an out-of-workspace write under auto+write refuses with the documented
+	// message rather than a missing-UI one the script cannot interpret
+	t.Run("autowrite_out_of_scope_write_refuses", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("writing", "t1", "write",
+				`{"path":"/etc/ajent-must-not-write.txt","content":"no"}`)},
+			{Events: textTurn("understood, staying in the workspace")},
+		}
+		code, out, errw := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAutoWrite}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "staying in the workspace")
+		assert.Contains(t, errw, "tool failed: write: permission not given")
+	})
+
+	// a config-declared safe command runs with no model review under auto
+	t.Run("auto_scope_safe_command_skips_review", func(t *testing.T) {
+		cfg := `{"permissions":{"safeCommands":["stat"]}}`
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("checking", "t1", "bash", `{"command":"stat ."}`)},
+			{Events: textTurn("done with stat")},
+		}
+		code, out, errw := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAuto}, cfg, turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "done with stat")
+		assert.NotContains(t, errw, "Tool auto allowed") // granted by config, not a verdict
+	})
+
+	// a doomed out-of-workspace edit surfaces its natural error instead of a
+	// permission refusal, matching the interactive barrier's dry-run carve-out
+	t.Run("autowrite_doomed_edit_reports_error", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("editing", "t1", "edit",
+				`{"path":"/etc/ajent-missing.txt","old":"a","new":"b"}`)},
+			{Events: textTurn("noted the failure")},
+		}
+		code, out, errw := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAutoWrite}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "noted the failure")
+		assert.NotContains(t, errw, "permission not given") // the tool's own error surfaced
 	})
 
 	t.Run("json_stream_ends_in_result", func(t *testing.T) {

@@ -246,10 +246,14 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
     --update           reinstall ajent from @latest in the foreground, then exit
     --allow-all        barrier mode set to allow-all
     --read-only        start in auto read-only mode
+    --allow-auto       start in auto mode: unverifiable calls are model-
+                       classified, and a one-shot takes the verdict as final
+    --allow-autowrite  like --allow-auto plus workspace-confined writes run
+                       without approval
 -p, --prompt <text>    run one turn non-interactively, print the result and exit
 -o, --output <shape>   one-shot output: text (final answer) or json (one event per line)
     --system <text>    replace ajent's default prose guidance in the system prompt
-    --allow-tools      one-shot: extra tool names to offer
+    --allow-tools      one-shot: tool names or bash command heads to allow
     --deny-tools       one-shot: tool names to withhold
     --stats            one-shot: print a tool and token summary when the run ends
 ```
@@ -258,4 +262,4 @@ Sessions are normally identified by an opaque id; `--resume` takes the full id o
 
 `--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one; delete those by name when you are done with them. Both flags act on the current workspace only, and both exit without starting a session.
 
-The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. There is no dialog in headless mode, so the barrier runs at allow-all and the **offered tool set** carries the policy instead (the model is only ever handed tools it may call, which keeps it from wasting steps discovering a refusal). Scope flags (`--allow-all`, `--read-only`) are mutually exclusive; `--allow-tools` / `--deny-tools` refine either.
+The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. There is no dialog in headless mode, so without a scope flag the barrier runs at allow-all and the **offered tool set** carries the policy instead (the model is only ever handed tools it may call, which keeps it from wasting steps discovering a refusal). Scope flags (`--allow-all`, `--read-only`, `--allow-auto`, `--allow-autowrite`) are mutually exclusive. `--allow-tools` pre-grants an "allow for session": a tool name (`--allow-tools write`, writers included), `bash` for any nameable shell call, or a bare word for bash commands with that head (`--allow-tools python3`). A bash call no grant covers is still model-reviewed under the auto scopes. `--deny-tools` withholds tools. A refusal in a one-shot reads `permission not given`, so a script never prompts and never hangs on a dialog.

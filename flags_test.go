@@ -47,6 +47,16 @@ func TestParseFlags(t *testing.T) {
 		assert.Equal(t, "json", f.output)
 		assert.True(t, f.readOnly)
 		assert.Equal(t, app.ToolScopeReadOnly, f.scope())
+
+		f, err = parseFlags([]string{"--allow-auto"})
+		require.NoError(t, err)
+		assert.True(t, f.allowAuto)
+		assert.Equal(t, app.ToolScopeAuto, f.scope())
+
+		f, err = parseFlags([]string{"-p", "x", "--allow-autowrite"})
+		require.NoError(t, err)
+		assert.True(t, f.autoWrite)
+		assert.Equal(t, app.ToolScopeAutoWrite, f.scope())
 	})
 
 	t.Run("tool_lists_split", func(t *testing.T) {
@@ -156,6 +166,8 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"interactive_with_model", []string{"-m", "p/m", "--render", "plain"}, true},
 		{"interactive_allow_all", []string{"--allow-all"}, true},
 		{"interactive_read_only", []string{"--read-only"}, true},
+		{"interactive_allow_auto", []string{"--allow-auto"}, true},
+		{"interactive_autowrite", []string{"--allow-autowrite"}, true},
 		{"simple_prompt", []string{"-p", "hi"}, true},
 		{"prompt_with_allow_all", []string{"-p", "hi", "--allow-all"}, true},
 		{"prompt_with_json", []string{"-p", "hi", "-o", "json"}, true},
@@ -180,6 +192,10 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"delete_old_zero_days", []string{"--delete-old", "0"}, false},
 		{"delete_old_bad_days", []string{"--delete-old", "soon"}, false},
 		{"both_scopes", []string{"--allow-all", "--read-only"}, false},
+		{"auto_with_allow_all", []string{"--allow-auto", "--allow-all"}, false},
+		{"autowrite_with_read_only", []string{"--allow-autowrite", "--read-only"}, false},
+		{"auto_with_autowrite", []string{"--allow-auto", "--allow-autowrite"}, false},
+		{"three_scopes", []string{"-p", "hi", "--allow-all", "--allow-auto", "--allow-autowrite"}, false},
 		{"prompt_both_scopes", []string{"-p", "hi", "--allow-all", "--read-only"}, false},
 		{"bare_resume_picker", []string{"-p", "hi", "--resume"}, false},
 		{"trailing_args", []string{"-p", "hi", "extra"}, false},

@@ -456,6 +456,194 @@ func TestAskerNoUI(t *testing.T) {
 	})
 }
 
+func TestAskerUnattendedAuto(t *testing.T) {
+	t.Parallel()
+
+	// auto takes an allow verdict as final, running the call with no dialog
+	t.Run("auto_allow_verdict_runs", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAuto)
+		cl := &fakeClassifier{verdict: ClassAllow}
+		b.SetClassifier(cl)
+		n := &noticeRecorder{}
+		b.SetNotice(n.record)
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+		assert.Equal(t, 1, cl.calls)
+		require.Eventually(t, func() bool { return len(n.all()) == 1 }, time.Second, 10*time.Millisecond)
+	})
+
+	// a deny verdict refuses without ever opening a dialog
+	t.Run("auto_deny_verdict_refuses", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAuto)
+		cl := &fakeClassifier{verdict: ClassDeny}
+		b.SetClassifier(cl)
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+	})
+
+	// an unsure verdict fails closed like any unapproved call
+	t.Run("unsure_fails_closed", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAuto)
+		b.SetClassifier(&fakeClassifier{verdict: ClassUnsure})
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+	})
+
+	// a cancelled context refuses even an allow verdict
+	t.Run("cancelled_context_refuses", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAuto)
+		b.SetClassifier(&fakeClassifier{verdict: ClassAllow})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		d := runAsk(b, ctx, "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+	})
+
+	// a core writer has no unattended path in any auto mode
+	t.Run("write_denied_everywhere", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAutoWrite)
+		cl := &fakeClassifier{verdict: ClassAllow}
+		b.SetClassifier(cl)
+
+		d := runAsk(b, t.Context(), "write", []byte(`{}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason) // the documented one-shot refusal
+		assert.Zero(t, cl.calls)                        // never judged by the model
+	})
+
+	// an MCP/extension call is judged with its metadata like a shell command
+	t.Run("extension_tool_classified", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAuto)
+		cl := &fakeClassifier{verdict: ClassAllow}
+		b.SetClassifier(cl)
+
+		d := runAsk(b, t.Context(), "srv__deploy", []byte(`{"env":"prod"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+		assert.Equal(t, 1, cl.calls)
+	})
+
+	// a prompter that cannot open settles the ask like headless: the auto modes
+	// take the model verdict, keeping a plain-render session uniform with -p
+	t.Run("open_failure_takes_verdict", func(t *testing.T) {
+		p := newFakePrompter()
+		p.err = errors.New("tui: no interactive terminal")
+		b := newTestBarrier(p)
+		b.SetMode(ModeAuto)
+		cl := &fakeClassifier{verdict: ClassDeny}
+		b.SetClassifier(cl)
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+		assert.Zero(t, p.count()) // no dialog attempted twice
+	})
+}
+
+// TestGrantSessionAllows covers the pre-populated session-allow memory a
+// one-shot seeds from --allow-tools: tool names, whole-bash, and command heads.
+func TestGrantSessionAllows(t *testing.T) {
+	t.Parallel()
+
+	t.Run("tool_grant_runs_without_ui", func(t *testing.T) {
+		b := NewBarrier(noRO) // no prompter: only a grant can allow
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"write"})
+
+		d := runAsk(b, t.Context(), "write", []byte(`{}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+	})
+
+	t.Run("bash_grant_covers_any_command", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"bash"})
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+	})
+
+	t.Run("bash_grant_covers_compounds", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"bash"})
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build && mkdir dir"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+	})
+
+	t.Run("head_grant_covers_its_command", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"python3"})
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"python3 -c 'pass'"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+	})
+
+	t.Run("head_grant_leaves_others_gated", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"python3"})
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action) // nobody to prompt, no grant
+	})
+
+	t.Run("hard_reject_still_refuses", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"bash"})
+
+		d := b.Guard()(t.Context(), bashCall("sed -i s/a/b/ f"))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+	})
+
+	t.Run("deny_list_still_refuses", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"write"})
+		b.SetDeniedCommands([]string{"write"})
+
+		d := b.Guard()(t.Context(), call("write", `{}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+	})
+
+	t.Run("mode_change_clears_grants", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAllowRead)
+		b.GrantSessionAllows([]string{"write"})
+		b.SetMode(ModeAuto)
+
+		d := runAsk(b, t.Context(), "write", []byte(`{}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+	})
+
+	t.Run("unlisted_bash_auto_classifies", func(t *testing.T) {
+		b := NewBarrier(noRO)
+		b.SetMode(ModeAuto)
+		b.GrantSessionAllows([]string{"python3"})
+		cl := &fakeClassifier{verdict: ClassDeny}
+		b.SetClassifier(cl)
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+		assert.Equal(t, 1, cl.calls)
+	})
+}
+
 func TestAskerAllowThisCallOnly(t *testing.T) {
 	t.Parallel()
 

@@ -138,23 +138,58 @@ unverifiable prompts.
 
 ### Headless: the tool set is the gate
 
-A one-shot run (`-p`) has no dialog to open, so it never lets an ask arise. The
-barrier runs at `allow-all` and the **offered tool set** carries the policy
-instead: the model is only ever handed tools it is allowed to call, so it never
-spends a step discovering a refusal. `tools.ReadOnlyBuiltins` names what
-survives `--read-only`; `ask_user` is excluded from every headless scope because
-nobody can answer it.
+A one-shot run (`-p`) has no dialog to open, so every ask is settled without
+one. A permission flag names the barrier mode (`ToolScope.barrierMode` in
+`pkg/app`); with none the barrier runs `allow-all` and the **offered tool set**
+carries the policy instead: the model is only ever handed tools it may call, so
+it never spends a step discovering a refusal. `tools.ReadOnlyBuiltins` names
+what survives `--read-only`; `ask_user` is excluded from every headless scope
+because nobody can answer it.
 
 The one exception is `permissions.deniedCommands`, which is still installed and
-still refuses before the allow-all short circuit. It is the only headless
-refusal path, it only fires when an operator configured it, and it covers what a
-tool-name flag cannot, such as a bash command line rather than a tool. Such a
-refusal is an error result like any other, so the turn adapts and continues.
+still refuses before the allow-all short circuit. In the allow-all scopes it is
+the only refusal path: it only fires when an operator configured it, and it
+covers what a tool-name flag cannot, such as a bash command line rather than a
+tool. Such a refusal is an error result like any other, so the turn adapts and
+continues.
 
 The scope decides the built-in names outright, ignoring `tools.enabled`, because
 the config default omits `grep`/`ls`/`find`. It does **not** re-enable a tool
 its source registered disabled, so an MCP server switched off in `mcp.json`
-stays off.
+stays off unless `--allow-tools` names it.
+
+### Headless auto scopes: the verdict is the gate
+
+`--allow-auto` and `--allow-autowrite` put a one-shot run into the `auto` or
+`auto+write` mode instead of allow-all (`--read-only` also runs `auto`; its
+offered set asks nothing until `--allow-tools` re-offers a call). Nobody can
+answer a dialog there, so the asker takes the model classification as final: an
+allow runs the call (an "auto allowed" notice reaches stderr), while a deny, a
+failed or an unsure review all refuse with `permission not given`. Core writers
+are never classified, so plain `--allow-auto` withholds them at the registry
+rather than offering guaranteed refusals. Under `--allow-autowrite`
+workspace-confined writes pass statically, and one outside the roots refuses
+with the same `permission not given`, never a missing-UI message.
+
+Every scope installs the interactive barrier's decision inputs, classifier
+included, so a call is judged by one rule set and only the dialog differs.
+`permissions.safeCommands` skip a review they would otherwise need, write roots
+scope auto+write, and the registry dry-run lets a doomed edit surface its
+natural error. A prompter that cannot open a dialog (plain render in an
+interactive session) settles asks through this same unattended path, so
+permission behavior follows whether a dialog can open here, never which front
+end is attached.
+
+`--allow-tools` entries pre-populate the barrier's session-allow memory, the
+same keys a proactive "allow for session" answer would write: a tool name
+allows that tool (core writers included), `bash` allows any nameable shell
+call, and any other word allows bash commands with that head. An entry naming a
+registered tool enables it, even one its source registered disabled (an MCP
+server switched off in `mcp.json`); a multi-word entry naming no tool grants
+nothing and is warned about on stderr. A grant never overrides a hard reject
+(`sed -i`) or `permissions.deniedCommands`, both checked before the asker, and
+a bash call no grant covers is still settled by the model under any auto-mode
+scope.
 
 ## Built-in tools
 

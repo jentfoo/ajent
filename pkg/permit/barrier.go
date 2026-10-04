@@ -154,6 +154,32 @@ func (b *Barrier) SetWriteRoots(cwd string, extra ...string) {
 	b.scope = s
 }
 
+// GrantSessionAllows pre-populates the session-allow memory names would have
+// earned from an "allow for session" answer: a tool name allows that tool, any
+// other word allows bash commands with that head, and `bash` every nameable
+// shell call. A name keys both shapes, so a tool name that is also a command
+// head grants that head too. Call after SetMode, a mode change clearing grants.
+func (b *Barrier) GrantSessionAllows(names []string) {
+	if len(names) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			continue
+		}
+		// both keys, one entry: whichever shape the name turns out to name, the
+		// bare key covers a tool, the head key a bash command
+		b.allows[n] = true
+		if n != tools.ToolBash {
+			b.allows["bash:"+n] = true
+		}
+	}
+}
+
 // Mode returns the current live mode.
 func (b *Barrier) Mode() Mode {
 	b.mu.Lock()
@@ -333,8 +359,8 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 
 		prompter, _ := b.prompterSnapshot()
-		if prompter == nil {
-			return tools.Deny(noUIReason)
+		if prompter == nil { // nobody to ask; the auto modes still get a verdict
+			return b.unattendedAsk(ctx, m, call)
 		}
 
 		// the auto modes classify the call while the user types, the verdict racing
@@ -377,8 +403,12 @@ func (b *Barrier) Asker() tools.Asker {
 
 		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
 		if err != nil || dlg == nil {
+			// no dialog can open (plain render, a UI that went away): settle the ask
+			// exactly as a run without a prompter would, so permission behavior follows
+			// "can this session open a dialog", never which front end is attached
+			d := b.unattendedAsk(ctx, m, call)
 			stop()
-			return tools.Deny(noUIReason)
+			return d
 		}
 
 		b.mu.Lock()
@@ -421,6 +451,33 @@ func (b *Barrier) Asker() tools.Asker {
 			return tools.Deny(noUIReason)
 		}
 		return b.resolveChoice(ctx, call, idx, auto)
+	}
+}
+
+// unattendedDenyReason is the neutral refusal for an offered call nobody approved.
+const unattendedDenyReason = "permission not given"
+
+// unattendedAsk decides a prompted call with no UI: the auto modes take the
+// model verdict as final, every other mode has nobody to decide.
+func (b *Barrier) unattendedAsk(ctx context.Context, m Mode, call agent.ToolCall) tools.Decision {
+	// a core writer never classifies, so an offered one outside auto+write's scope
+	// is withheld by the gate itself rather than left to a missing UI
+	if _, isWrite := coreWriteTools[call.Name]; isWrite && (m == ModeAuto || m == ModeAutoWrite) {
+		return tools.Deny(unattendedDenyReason)
+	}
+	if !b.classifyCall(m, call.Name) {
+		return tools.Deny(noUIReason)
+	}
+	switch b.classifier.Classify(ctx, classifySubject(m, call)) {
+	case ClassAllow:
+		if ctx.Err() != nil { // the run ended under the verdict, nothing left to allow
+			return tools.Deny(noUIReason)
+		}
+		b.resolveNotice("once", true)
+		return allowDecision()
+	default:
+		// a deny verdict and an errored review both leave no permission: fail closed
+		return tools.Deny(unattendedDenyReason)
 	}
 }
 
@@ -490,8 +547,8 @@ func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
 // sessionAllowed checks the in-memory allow sets for a call. The returned string
 // is empty when no grant matched, ok distinguishing a match from none. A named grant
 // covers a plain command and any compound whose non-readonly heads are all granted;
-// a line no grant can cover (redirect/substitution, unnameable head) never matches,
-// so it re-prompts every time.
+// the bare `bash` grant covers every nameable shell call; a line no grant covers
+// (redirect/substitution, unnameable head) never matches, so it re-prompts every time.
 func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	cmd := bashCommand(call.Input)
 	if call.Name != tools.ToolBash || !compound(cmd) { // plain command or non-bash tool
@@ -500,7 +557,10 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
-		return key, b.allows[key]
+		if b.allows[key] {
+			return key, true
+		}
+		return key, call.Name == tools.ToolBash && b.allows[tools.ToolBash]
 	}
 
 	heads, ok := compoundGoverningHeads(cmd)
@@ -513,7 +573,8 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	b.mu.Unlock()
 
 	for _, h := range heads {
-		if !granted["bash:"+h] {
+		// the bare `bash` grant stands in for any head a compound could name
+		if !granted["bash:"+h] && !granted[tools.ToolBash] {
 			return "", false // an ungranted head: re-prompt
 		}
 	}
@@ -725,12 +786,13 @@ func CommandRefused(cmd string, denied []string) bool {
 }
 
 // SafeMatches reports whether call is named by a configured safe command: an exact
-// tool name for any non-bash tool (MCP/extension/built-in), or, for bash, the
-// trimmed command line matched as a token-boundary prefix, so "git" covers every
-// git invocation and "git status" its subcommands. A compound line matches only when
-// every component is either a listed entry or verifiably read-only (mirroring
-// allSegmentsReadOnly's all-or-nothing gate), so an appended write never rides in.
-// write/edit can never be listed, so no config entry overrides a known writer.
+// tool name (or an MCP server namespace, covering every `srv__*` tool it exposes)
+// for any non-bash tool, or, for bash, the trimmed command line matched as a
+// token-boundary prefix, so "git" covers every git invocation and "git status"
+// its subcommands. A compound line matches only when every component is either a
+// listed entry or verifiably read-only (mirroring allSegmentsReadOnly's
+// all-or-nothing gate), so an appended write never rides in. write/edit can never
+// be listed, so no config entry overrides a known writer.
 func SafeMatches(call agent.ToolCall, cmds []string) bool {
 	if _, isWrite := coreWriteTools[call.Name]; isWrite {
 		return false

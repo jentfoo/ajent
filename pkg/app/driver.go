@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -366,11 +365,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 		// a CLI permission flag overrides the configured default for this invocation
 		// only. It never persists and is not stored in any session.
-		switch scope {
-		case ToolScopeAllowAll:
-			barrier.SetMode(permit.ModeAllowAll)
-		case ToolScopeReadOnly:
-			barrier.SetMode(permit.ModeAuto)
+		if m, ok := scope.barrierMode(); ok {
+			barrier.SetMode(m)
 		}
 		showPermissionIndicator(ui, barrier)
 		// the prompter and noter adapt tui and agent onto permit's narrow interfaces,
@@ -380,27 +376,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		barrier.SetNoter(func(note string) {
 			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
 		})
-		// auto mode classifies unverifiable shell commands with a fresh-context model
-		// call, cached per exact command, and the verdict never enters the session.
-		// auto+write's writable roots: the gate path-scopes write/edit against them and
-		// the classifier prompt names the same two, so both judge by one rule.
-		wcwd, wtmp := config.Cwd(), os.TempDir()
-		barrier.SetClassifier(permit.NewCachedClassifier(classifierAdapter{
-			providerFor: providers.ProviderFor,
-			model:       func() llm.Model { return st.Model }, // current model so /model applies
-			schema:      toolSchema(toolsReg),
-			cwd:         wcwd,
-			tmp:         wtmp,
-			session:     sessionHint(rec),
-		}.Classify))
-		barrier.SetWriteRoots(wcwd, wtmp)
-		barrier.SetNotice(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
-		// config-declared safe commands (exact MCP tool names or verbatim bash lines)
-		// auto-allow as read-only in allow-read/auto, but write/edit can never be listed.
-		barrier.SetSafeCommands(set.Settings().Permissions.SafeCommands)
-		// config-declared denied commands refuse outright without prompting, every mode.
-		barrier.SetDeniedCommands(set.Settings().Permissions.DeniedCommands)
-		barrier.SetDryRun(toolsReg.DryRun)
 		// the full diff is already committed above the dialog by guardedTool.Execute,
 		// so the subject names it rather than repeating a truncated copy.
 		barrier.SetPreview(func(call agent.ToolCall) string {
@@ -410,8 +385,15 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 			return tui.DiffSummary(ch.Path, ch.Before, ch.After)
 		})
-		toolsReg.AddGuard(barrier.Guard())
-		toolsReg.SetAsker(barrier.Asker())
+		wireBarrier(barrier, barrierDeps{
+			reg:      toolsReg,
+			provider: providers.ProviderFor,
+			model:    func() llm.Model { return st.Model },
+			session:  sessionHint(rec),
+			notify:   func(msg string, level agent.Level) { ui.Notify(msg, tui.Level(level)) },
+			safe:     set.Settings().Permissions.SafeCommands,
+			denied:   set.Settings().Permissions.DeniedCommands,
+		})
 		// a batch's prompt-classified calls are classified concurrently ahead of
 		// their dialogs, so later commands in the batch resolve fast, and an abort cancels.
 		batchPrefetch = barrier.Prefetch
