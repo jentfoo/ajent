@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -283,6 +284,36 @@ func TestWriterHeadCursor(t *testing.T) {
 		require.NoError(t, err)
 		w.SetHead(e.ID)
 		assert.False(t, fileExists(headPath(w.path)))
+	})
+}
+
+// TestWriterAppendTimestamp pins the entry ts to the id's monotonic millisecond:
+// metadata ordering must survive a wall clock stepping backward mid-session.
+func TestWriterAppendTimestamp(t *testing.T) {
+	// resets the package counter and clock, so this cannot run in parallel
+
+	t.Run("ts_tracks_monotonic_not_wall", func(t *testing.T) {
+		base := time.Now().Add(time.Hour).UTC()
+		resetIDCounter() // ignore what earlier tests left in the counter
+		t.Cleanup(setClock(base))
+
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+
+		e1, aerr := w.Append(TypeNotice, NoticeData{Message: "one"})
+		require.NoError(t, aerr)
+		assert.Equal(t, base.UnixMilli(), e1.TS) // the pinned clock, not the real one
+		assert.Equal(t, idTimeMS(e1.ID), e1.TS)  // and exactly what the entry's own id encodes
+
+		setClock(base.Add(-time.Minute)) // the wall clock steps backward mid-session
+		e2, aerr := w.Append(TypeNotice, NoticeData{Message: "two"})
+		require.NoError(t, aerr)
+
+		assert.Equal(t, e1.TS, e2.TS)           // ts holds its millisecond
+		assert.Equal(t, idTimeMS(e2.ID), e2.TS) // still paired with the new id
+		assert.Greater(t, e2.ID, e1.ID)         // ids keep advancing past it
 	})
 }
 

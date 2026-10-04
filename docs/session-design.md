@@ -80,9 +80,11 @@ The writer owns the transcript file, its path and the current head id, under a
 mutex so concurrent appends form one linear chain.
 
 `Append(typ, data)` stamps `ParentID` from the current head and writes exactly
-one line under the mutex, so concurrent appends form one linear chain. The new
-id becomes the head only *after* a successful write; an append that fails to hit
-disk never advances the cursor.
+one line under the mutex, so concurrent appends form one linear chain. The
+entry timestamp shares the id's monotonic millisecond: ts-derived ordering
+(`Store.List`, `Stale`) always agrees with append order even when the wall
+clock steps back. The new id becomes the head only *after* a successful write;
+an append that fails to hit disk never advances the cursor.
 
 - **Create** makes a fresh file and writes its `session` entry first.
 - **Open** reopens an existing file for append and recovers the head from the

@@ -21,6 +21,13 @@ var (
 // NewID returns a 26-char Crockford ULID: a 48-bit millisecond timestamp plus
 // 80 random bits, lexically sortable by creation time.
 func NewID() string {
+	id, _ := newULID()
+	return id
+}
+
+// newULID returns a fresh id and the monotonic millisecond embedded in it, so a
+// caller stamping metadata beside the id reads back exactly what the id encodes.
+func newULID() (string, int64) {
 	var b [16]byte
 
 	mu.Lock()
@@ -29,13 +36,14 @@ func NewID() string {
 		_, _ = rand.Read(randTail[:]) // entropy failure leaves zero, still monotonic per process
 	}
 	incrementRand(randTail[:]) // strictly increasing even when the clock is pinned or ticks backward
+	ms := lastMS
 	for i := range 6 {
 		b[i] = byte(uint64(lastMS) >> uint((5-i)*8))
 	}
 	copy(b[6:16], randTail[:])
 	out := encodeULID(b)
 	mu.Unlock()
-	return out
+	return out, ms
 }
 
 // incrementRand carries a big-endian counter forward by one.

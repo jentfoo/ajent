@@ -21,6 +21,16 @@ func ids(entries []Entry) []string {
 	return out
 }
 
+// idTimeMS decodes the millisecond timestamp a Crockford ULID embeds. Tests use
+// it to tie an entry's ts back to its own id without reaching into package state.
+func idTimeMS(id string) int64 {
+	var ms int64
+	for i := range 10 { // ten chars carry 50 bits; the timestamp is the top 48
+		ms = ms<<5 | int64(strings.IndexByte(crockford, id[i]))
+	}
+	return ms >> 2
+}
+
 // msgData marshals a user text message payload for tests.
 func msgData(text string) json.RawMessage {
 	b, _ := json.Marshal(MessageData{Message: llm.Text(llm.RoleUser, text)})

@@ -88,3 +88,35 @@ func TestBranchFollowsHeadIgnoresSibling(t *testing.T) {
 	// Branch from b still follows root->a->b and ignores the fork c
 	assert.Equal(t, []string{"root", "a", "b"}, ids(Branch(forked, "b")))
 }
+
+func TestBranchCycleGuard(t *testing.T) {
+	t.Parallel()
+
+	// a parent pointing at itself ends the branch there instead of looping forever
+	t.Run("breaks_self_parent_loop", func(t *testing.T) {
+		entries := []Entry{
+			{ID: "root", Type: TypeSession},
+			{ID: "a", ParentID: "root", Type: TypeMessage, Data: msgData("m1")},
+			{ID: "b", ParentID: "b", Type: TypeMessage, Data: msgData("m2")}, // hand-edited self-loop
+		}
+		assert.Equal(t, []string{"b"}, ids(Branch(entries, "b")))
+	})
+
+	// two entries pointing at each other are walked once each
+	t.Run("breaks_two_entry_cycle", func(t *testing.T) {
+		entries := []Entry{
+			{ID: "a", ParentID: "b", Type: TypeMessage, Data: msgData("m1")},
+			{ID: "b", ParentID: "a", Type: TypeNotice, Data: noticeData("n")},
+		}
+		assert.Equal(t, []string{"a", "b"}, ids(Branch(entries, "b")))
+		assert.Equal(t, []string{"b", "a"}, ids(Branch(entries, "a")))
+	})
+
+	// a parent id missing from the file ends the branch there
+	t.Run("stops_at_unknown_parent", func(t *testing.T) {
+		entries := []Entry{
+			{ID: "a", ParentID: "missing", Type: TypeMessage, Data: msgData("m1")},
+		}
+		assert.Equal(t, []string{"a"}, ids(Branch(entries, "a")))
+	})
+}

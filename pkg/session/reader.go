@@ -81,12 +81,15 @@ func Branch(entries []Entry, head string) []Entry {
 	}
 
 	var rev []Entry
+	// Read accepts any well-formed line, so the parent chain can carry a cycle
+	seen := make(map[string]bool, len(entries))
 	id := head
-	for steps := 0; id != "" && steps <= len(entries); steps++ {
+	for id != "" {
 		i, ok := idx[id]
-		if !ok {
-			break // unknown or already-visited id stops the walk
+		if !ok || seen[id] { // unknown or already-walked (cycle guard)
+			break
 		}
+		seen[id] = true
 		e := entries[i]
 		rev = append(rev, e)
 		id = e.ParentID

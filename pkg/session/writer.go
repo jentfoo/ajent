@@ -69,11 +69,13 @@ func (w *Writer) Append(typ Type, data any) (Entry, error) {
 	if w.closed {
 		return Entry{}, errors.New("session writer is closed")
 	}
+	// TS shares the id's monotonic millisecond so ordering metadata matches append order
+	id, ts := newULID()
 	e := Entry{
-		ID:       NewID(),
+		ID:       id,
 		ParentID: w.head,
 		Type:     typ,
-		TS:       clock().UnixMilli(),
+		TS:       ts,
 		Data:     payload,
 	}
 	line, err := json.Marshal(e)
