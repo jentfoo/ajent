@@ -455,11 +455,8 @@ func TestBashBackground(t *testing.T) {
 	})
 }
 
-// TestBashBackgroundCloseKills proves agent shutdown (the tool's Close) kills
-// every background command still running, including grandchildren.
-func TestBashBackgroundCloseKills(t *testing.T) {
+func TestBashBackgroundClose(t *testing.T) {
 	t.Parallel()
-
 	if testing.Short() {
 		t.Skip("-short mode")
 	}

@@ -777,9 +777,6 @@ func TestStatusSegmentAndList(t *testing.T) {
 	assert.True(t, found)
 }
 
-// TestClose pins the owned-root shutdown contract: cancellation lands
-// synchronously from Close or a canceled root, and a start landing after
-// shutdown registers aborted without spawning.
 func TestClose(t *testing.T) {
 	t.Parallel()
 
