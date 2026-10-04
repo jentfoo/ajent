@@ -593,7 +593,9 @@ Every investigation child gets a fresh system block built by the same
 
 A reasoning model whose final assistant message is thinking-only returns no
 text, so an empty summary triggers a bounded nudge to emit plain-text output
-with no tool calls, then a placeholder rather than looping.
+with no tool calls. A message cut short by the output or step cap gets its own
+truncation variant asking for everything discovered so far; either way one
+attempt at most, then the job fails rather than looping.
 
 The task prompt is `Task:\n<task>` with an optional `Extra instructions:` block
 prepended when the caller supplied them.

@@ -251,6 +251,7 @@ func allRows() []settingsRow {
 		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+write", "block-all"}),
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
+		intRow("Sub-agent step limit", "subagent.maxSteps", 0, 10000),
 		{name: "Block images", render: rowImagesBlock, edit: editImagesBlock},
 		themeRow(),
 		{name: "Tool limits",

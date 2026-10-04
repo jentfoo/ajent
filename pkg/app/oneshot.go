@@ -162,6 +162,7 @@ func RunHeadless(o HeadlessOptions) int {
 		PollTimeout: subagentPollWait(o.Set, func(msg string) {
 			notify(msg, agent.LevelWarn)
 		}),
+		MaxSteps: o.Set.Settings().Subagent.MaxSteps,
 	})
 	defer sag.Close()
 	for _, t := range sag.Tools() {

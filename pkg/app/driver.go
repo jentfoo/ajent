@@ -211,6 +211,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			PollTimeout: subagentPollWait(set, func(msg string) {
 				ui.Notify(msg, tui.LevelWarn)
 			}),
+			MaxSteps: set.Settings().Subagent.MaxSteps,
 		})
 		for _, t := range sag.Tools() {
 			// builtin source so /tools sorts the trio up front with core tools

@@ -47,6 +47,7 @@ type Options struct {
 
 	MaxConcurrent int           // 0 -> defaultMaxConcurrent
 	PollTimeout   time.Duration // 0 -> defaultPollTimeout
+	MaxSteps      int           // per-turn step cap for every child; <= 0 means unlimited
 }
 
 // Manager owns every sub-agent job: spawning, concurrency bounding, polling,

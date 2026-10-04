@@ -86,6 +86,9 @@ type Subagent struct {
 	// still running: a Go duration string ("20m", "90s"), empty takes the
 	// built-in default. Read once when pkg/app builds the manager.
 	MaxPollWait string `json:"maxPollWait,omitempty"`
+	// MaxSteps caps one child turn's tool-calling iterations, <= 0 means
+	// unlimited. Applied at spawn so /settings changes reach the next job.
+	MaxSteps int `json:"maxSteps,omitempty"`
 }
 
 // UI configures the terminal surface.
@@ -115,7 +118,8 @@ type Permissions struct {
 // ordinary source and mirrors today's constants exactly.
 // Its compaction minSteps/verbatimFraction (2 / 0.1) twin pkg/compact's
 // defaultMinSteps/defaultVerbatimDivisor, and the two must agree. The subagent
-// maxPollWait ("10m") likewise twins pkg/subagent's defaultPollTimeout.
+// maxPollWait ("10m") likewise twins pkg/subagent's defaultPollTimeout, and
+// its maxSteps (200) pins a child that would otherwise investigate forever.
 const defaultsJSON = `{
   "reasoning": { "level": "medium", "retain": "wholeTurn" },
   "tools": {
@@ -132,7 +136,7 @@ const defaultsJSON = `{
   },
   "permissions": { "mode": "allow-read" },
   "compaction": { "auto": true, "threshold": 0.8, "minSteps": 2, "verbatimFraction": 0.1 },
-  "subagent": { "maxConcurrent": 8, "maxPollWait": "10m" },
+  "subagent": { "maxConcurrent": 8, "maxPollWait": "10m", "maxSteps": 200 },
   "ui": { "render": "auto", "color": "auto", "theme": "dark" }
 }`
 

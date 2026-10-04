@@ -117,13 +117,22 @@ returns, the summary is read off the **last assistant message** in
 `State.Messages`, joining only its non-empty `llm.TextBlock` content. Thinking
 is excluded.
 
-**Empty-summary retry.** A reasoning model whose final message is thinking-only
-returns no text. When the summary is blank and the stop reason is neither error
-nor aborted, re-`Prompt` with a nudge (one attempt), then recover what *does*
-exist: sizable trailing reasoning (`>= minThinkingSummary`, capped at
-`maxThinkingSummary`) becomes the summary, prefaced so the parent knows it is
-not prose; otherwise the job fails with `errNoSummary` instead of reporting done
-with a placeholder.
+**Empty-summary retry and truncation.** A reasoning model whose final message is
+thinking-only returns no text. When the summary is blank, or the last assistant
+message was cut short (`Stop == StopMaxTokens`, including a turn ended by the
+step limit, which still carries unanswered tool calls), re-`Prompt` with a nudge
+(one attempt; truncation gets its own variant asking for what was found so far),
+then recover what *does* exist: sizable trailing reasoning (`>=
+minThinkingSummary`, capped at `maxThinkingSummary`) becomes the summary,
+prefaced so the parent knows it is not prose. A message still cut off after the
+nudge fails with `errTruncated` and a blank one with `errNoSummary`, instead of
+reporting done with partial work.
+
+**Step cap.** Children are bounded by `Options.MaxSteps`
+(`subagent.maxSteps`, default 200): an unlimited runaway investigation burns
+tokens until the provider stops it. Hitting the cap ends the turn with tool
+calls unanswered, which reads as truncation above and earns one wrap-up turn to
+summarise.
 
 **Abort.** An aborted context yields `StatusAborted`, never a partial summary
 mistaken for a completed investigation, and never a completion notification. A
@@ -392,7 +401,9 @@ re-offer on interrupt, and child spend (visible in totals, never moving the
 parent's context bar). The empty-summary recovery is pinned: nudge -> summary;
 an empty nudge falls back to sizable thinking as the summary, else `StatusError`
 (`errNoSummary`). Mid-investigation tool-turn reasoning is excluded by the
-tool-call boundary.
+tool-call boundary. Truncation is pinned too: a partial text with
+`StopMaxTokens` is nudged (not reported done), and a retry that hits the cap
+again fails with `errTruncated`.
 
 ## Invariants
 

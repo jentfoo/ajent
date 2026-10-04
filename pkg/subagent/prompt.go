@@ -3,6 +3,8 @@ package subagent
 import (
 	"fmt"
 	"strings"
+
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // childBuiltinTools names the built-in read-only tools advertised to a child.
@@ -36,6 +38,19 @@ func childContract(inRepo bool) string {
 // continueNudge asks a child whose final message carried only thinking to emit
 // its summary as plain text, bounded by maxContinueAttempts.
 const continueNudge = `Continue. Your previous message had no summary text (only internal reasoning). Now output the final, self-contained summary as plain text with no tool calls.`
+
+// truncatedNudge asks a child whose last message was cut off to stop and
+// summarise what it has already found.
+const truncatedNudge = `Your previous message was cut off before completion (the output or step limit was reached). Output your final, self-contained summary of everything discovered so far as plain text with no tool calls.`
+
+// nudgeFor picks the wrap-up prompt: a cut-off message gets the truncation
+// variant, anything else blank gets the reasoning one.
+func nudgeFor(last *llm.Message) string {
+	if truncated(last) {
+		return truncatedNudge
+	}
+	return continueNudge
+}
 
 // taskPrompt assembles a child's first input from the delegated investigation
 // and any extra instructions.

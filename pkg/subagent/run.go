@@ -14,8 +14,8 @@ import (
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
-// maxContinueAttempts bounds the empty-summary nudges so a child that keeps
-// withholding text cannot loop forever.
+// maxContinueAttempts bounds the wrap-up nudges so a child that keeps
+// withholding or truncating its summary cannot loop forever.
 const maxContinueAttempts = 1
 
 // minThinkingSummary is trimmed reasoning length that may stand in for a summary.
@@ -30,6 +30,10 @@ const thinkingPreface = "(sub-agent produced no summary; its internal reasoning 
 
 // errNoSummary is returned when neither text nor usable reasoning exists.
 var errNoSummary = errors.New("sub-agent produced no output")
+
+// errTruncated is returned when the final message was still cut short by an
+// output or step cap after the nudge, so partial work never reads as complete.
+var errTruncated = errors.New("sub-agent was cut off before a summary")
 
 // gitInWorkTree reports whether cwd is inside a git work tree. It shells out
 // to system git on purpose: the answer only decides whether the (go-git based,
@@ -81,6 +85,7 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		Env:                 m.opts.Env,
 		ProjectInstructions: m.opts.ProjectInstructions,
 		SystemSnippets:      childSnippets(inRepo),
+		MaxSteps:            m.opts.MaxSteps, // bounds a runaway investigation
 	})
 
 	if err := a.Prompt(ctx, agent.Input{Text: taskPrompt(j.task, j.instructions)}); err != nil {
@@ -92,10 +97,8 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 
 	last := lastAssistant(state.Messages)
 	sum := assistantText(last)
-	for attempt := 0; sum == "" && last != nil &&
-		last.Stop != llm.StopError && last.Stop != llm.StopAborted &&
-		attempt < maxContinueAttempts; attempt++ {
-		if err := a.Prompt(ctx, agent.Input{Text: continueNudge}); err != nil {
+	for attempt := 0; needsNudge(sum, last) && attempt < maxContinueAttempts; attempt++ {
+		if err := a.Prompt(ctx, agent.Input{Text: nudgeFor(last)}); err != nil {
 			return "", err
 		}
 		if ctx.Err() != nil {
@@ -105,6 +108,10 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		sum = assistantText(last)
 	}
 
+	// still cut short after the wrap-up turn: partial work never reads as done.
+	if truncated(last) {
+		return "", errTruncated
+	}
 	if sum == "" {
 		if think := bestThinking(state.Messages); len([]rune(think)) >= minThinkingSummary {
 			return thinkingPreface + strutil.Clip(think, maxThinkingSummary), nil
@@ -112,6 +119,32 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		return "", errNoSummary
 	}
 	return strings.TrimSpace(sum), nil
+}
+
+// needsNudge reports whether the final message fails the summary contract and a
+// wrap-up turn may still fix it: blank text, or output cut short by an output
+// or step cap. A stop that is an error or abort is never nudged.
+func needsNudge(sum string, last *llm.Message) bool {
+	if last == nil || last.Stop == llm.StopError || last.Stop == llm.StopAborted {
+		return false
+	}
+	return sum == "" || truncated(last)
+}
+
+// truncated reports whether a message cannot be the final summary: cut short by
+// an output cap, or still carrying tool calls because the step limit ended the
+// turn mid-investigation (the loop reports that stop as StopMaxTokens on the
+// turn result without stamping it on the message).
+func truncated(m *llm.Message) bool {
+	return m != nil && (m.Stop == llm.StopMaxTokens || hasToolCall(m))
+}
+
+// hasToolCall reports whether a message carries any tool-call block.
+func hasToolCall(m *llm.Message) bool {
+	return m != nil && slices.ContainsFunc(m.Content, func(b llm.Block) bool {
+		_, ok := b.(llm.ToolCallBlock)
+		return ok
+	})
 }
 
 // lastAssistant returns the most recent assistant message in msgs, or nil.
