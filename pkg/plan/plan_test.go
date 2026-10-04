@@ -98,10 +98,66 @@ func TestControllerStop(t *testing.T) {
 		_, ok := c.Advance(t.Context(), done())
 		require.True(t, ok)
 
+		f.mu.Lock()
+		live := f.head // the review round's entries sit past both recorded tips
+		f.mu.Unlock()
+
 		c.Stop()
 		last := f.forks[len(f.forks)-1]
-		assert.Equal(t, c.planTip, last.head) // the live review branch
+		assert.Equal(t, live, last.head)
+		assert.NotEqual(t, c.planTip, last.head) // the final round must not be dropped
 		assert.Equal(t, implementorModel, last.model)
+	})
+
+	t.Run("final_round_not_lost", func(t *testing.T) {
+		c, f := started(t)
+		handOff(t, c, "the plan")
+		submitPlan(t, c, "the plan")
+		_, ok := c.Advance(t.Context(), done())
+		require.True(t, ok)
+
+		// one revision later the recorded tip trails the newest review round
+		require.True(t, call(t, c, DevReviseTool, `{"instructions":"round 2"}`).EndTurn)
+		_, ok = c.Advance(t.Context(), done())
+		require.True(t, ok)
+		stale := c.reviewTip
+		require.NotEmpty(t, stale)
+
+		_, ok = c.Advance(t.Context(), done()) // round-2 implementation ends, review re-forks
+		require.True(t, ok)
+
+		f.mu.Lock()
+		live := f.head
+		f.mu.Unlock()
+
+		c.Stop()
+		last := f.forks[len(f.forks)-1]
+		assert.Equal(t, live, last.head)
+		assert.NotEqual(t, stale, last.head) // completion lands past the stale tip
+	})
+
+	t.Run("gate_stop_returns_plan_tip", func(t *testing.T) {
+		c, f := started(t)
+		handOff(t, c, "the plan")
+
+		c.Stop()
+		last := f.forks[len(f.forks)-1]
+		assert.Equal(t, c.planTip, last.head) // a parked gate is pre-implementation
+	})
+
+	t.Run("empty_saved_tools_skipped", func(t *testing.T) {
+		c, f := started(t)
+		handOff(t, c, "the plan")
+		submitPlan(t, c, "the plan")
+		_, ok := c.Advance(t.Context(), done())
+		require.True(t, ok)
+
+		c.savedTools = []string{} // as if nothing was captured at /plan
+		require.True(t, call(t, c, DevCompleteTool, `{}`).EndTurn)
+		_, ok = c.Advance(t.Context(), done())
+		require.False(t, ok)
+
+		assert.NotEmpty(t, f.lastTools()) // restoring nothing must not disable every tool
 	})
 }
 

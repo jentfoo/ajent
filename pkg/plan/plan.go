@@ -251,8 +251,15 @@ func (c *Controller) stopLocked(msg string) {
 	if !c.phase.active() {
 		return
 	}
-	// land on the newest review branch when there is one, else the plan tip
-	target := c.reviewTip
+	// reviewing ends on its live branch, past both tips once the final round has
+	// run; other phases return to the newest recorded tip, undoing the fork
+	target := ""
+	if c.phase == PhaseReviewing && c.h.Head != nil {
+		target = c.h.Head()
+	}
+	if target == "" {
+		target = c.reviewTip
+	}
 	if target == "" {
 		target = c.planTip
 	}
@@ -262,7 +269,8 @@ func (c *Controller) stopLocked(msg string) {
 	if target != "" {
 		c.fork(target, c.savedModel)
 	}
-	if c.h.SetTools != nil && c.savedTools != nil {
+	// an empty saved set means none was captured; applying it would disable every tool
+	if c.h.SetTools != nil && len(c.savedTools) > 0 {
 		c.h.SetTools(c.savedTools)
 	}
 	if c.h.DropTools != nil {

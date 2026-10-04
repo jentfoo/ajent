@@ -83,7 +83,10 @@ func (c *Controller) Restore() bool {
 	}
 
 	c.planner, c.implementor, c.savedModel = planner, implementor, saved
-	c.savedTools = slices.Clone(p.SavedTools)
+	// a set that round-tripped empty is unknown rather than "disable everything"
+	if len(p.SavedTools) > 0 {
+		c.savedTools = slices.Clone(p.SavedTools)
+	}
 	c.approvedPlan = p.ApprovedPlan
 	c.draftPlan = p.DraftPlan
 	c.revisionRounds = slices.Clone(p.RevisionRounds)
