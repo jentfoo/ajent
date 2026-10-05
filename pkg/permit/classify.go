@@ -45,7 +45,9 @@ func bashCommand(input json.RawMessage) string {
 
 // Classify statically sorts a call into allow / reject / prompt using declared
 // metadata and the shell analyser. Session allows, mode and the model classifier
-// live above it, there being no name-prefix auto-approval.
+// live above it, there being no name-prefix auto-approval. A redirect keeps the
+// line from the read-only verdict: it writes, and only the write-scope and
+// configured-safe paths verify where.
 func Classify(call agent.ToolCall, ro func(string) bool) Verdict {
 	if _, ok := builtinReadOnly[call.Name]; ok {
 		return VerdictAllow

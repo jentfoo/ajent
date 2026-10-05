@@ -62,7 +62,7 @@ func TestScanRedirects(t *testing.T) {
 		split  bool
 		unsafe bool
 	}{
-		{`plain redirect`, "cat f > out", false, true},
+		{`plain redirect`, "cat f > out", false, false},
 		{`dev null discards`, "ls > /dev/null", false, false},
 		{"amp dev null not split", "cmd &>/dev/null", false, false},
 		{"stderr merge", "cmd 2>&1", false, false},
@@ -209,12 +209,12 @@ func TestScannerCorpus(t *testing.T) {
 		{`unterminated single`, `cat 'oops`, false, true},
 		{`escaped space outside quotes`, `ls a\ b`, false, false},
 		// redirects
-		{"append", "cmd >> log", false, true},
+		{"append", "cmd >> log", false, false},
 		{"stderr merge ok", "cmd 2>&1", false, false},
 		{"fd twelve real target", "cmd 2>&12", true, true},
 		{"amp dev null inert", "ls &>/dev/null", false, false},
 		{"word digit not eaten", "cat file1> /dev/null", false, false},
-		{`dev null foo is a file`, `echo hi >/dev/nullfoo`, false, true},
+		{`dev null foo is a file`, `echo hi >/dev/nullfoo`, false, false},
 		{`backtick unsafe`, "cmd `id`", false, true},
 		// split operators
 		{"double amp", "a && b", true, false},
@@ -274,6 +274,50 @@ func TestScanHeredocs(t *testing.T) {
 			assert.Equal(t, c.segments, s.Segments)
 			assert.Equal(t, c.unsafe, s.HasUnsafeOp)
 			assert.Len(t, s.Raw, len(s.Segments))
+		})
+	}
+}
+
+func TestScanRedirectTargets(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		in         string
+		redirects  []Redirect
+		unresolved bool
+		unsafe     bool
+	}{
+		{"plain", "go test ./... > /tmp/t.log", []Redirect{{Target: "/tmp/t.log"}}, false, false},
+		{"append", "cmd >> log", []Redirect{{Target: "log"}}, false, false},
+		{"stderr fd", "cmd 2> err.log", []Redirect{{Target: "err.log"}}, false, false},
+		{"target dropped from segment", "ls > out", []Redirect{{Target: "out"}}, false, false},
+		{"stderr merge none", "cmd 2>&1", nil, false, false},
+		{"dev null none", "ls > /dev/null", nil, false, false},
+		{"two targets", "cmd > a 2> b", []Redirect{{Target: "a"}, {Target: "b"}}, false, false},
+		{"quoted", `cmd > "my file"`, []Redirect{{Target: "my file", Raw: `"my file"`}}, true, false},
+		{"escaped space", `cmd > my\ file`, []Redirect{{Target: "my file"}}, false, false},
+		{"variable", "cmd > $OUT", []Redirect{{Target: "$OUT"}}, true, false},
+		{"home", "cmd > ~/x", []Redirect{{Target: "~/x"}}, true, false},
+		{"glob", "cmd > f*", []Redirect{{Target: "f*"}}, true, false},
+		{"brace", "cmd > {a,b}", []Redirect{{Target: "{a,b}"}}, true, false},
+		{"missing word", "cmd >", nil, false, true},
+		{"operator follows", "cmd > ; ls", nil, false, true},
+		{"unterminated quote", `cmd > "oops`, nil, false, true},
+		// procsub/subshell never parse as a target word: bash would execute it
+		{"procsub", "cmd 1>(sh)", nil, false, true},
+		{"append procsub", "cmd >>(sh)", nil, false, true},
+		{"procsub to cmd", "cmd > >(tr a-z A-Z)", nil, false, true},
+		{"paren mid word", "cmd > f(o)", []Redirect{{Target: "f"}}, false, true},
+		// a backslash-newline is a line continuation: bash's target word differs
+		{"escaped newline", "cmd > \\" + "\n/etc/passwd", nil, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := scanCommand(c.in)
+			assert.Equal(t, c.redirects, s.Redirects)
+			assert.Equal(t, c.unresolved, s.RedirectsUnresolved())
+			assert.Equal(t, c.unsafe, s.HasUnsafeOp)
 		})
 	}
 }

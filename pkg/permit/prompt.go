@@ -2,6 +2,7 @@ package permit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -134,15 +135,25 @@ func namedSessionLabel(names []string) string {
 
 // sessionNames returns the distinct non-readonly command names an "allow for
 // session" would remember for a bash line, read-only segments never counting.
-// (nil,false) when no reliable name list exists (a sub-shell/redirect or an
-// unnameable head), so the dialog offers no session memory at all.
+// (nil,false) when no reliable name list exists (a sub-shell, substitution or
+// an unnameable head), so the dialog offers no session memory at all. Redirect
+// targets name fine: the same heads run whether output goes to a terminal or a
+// file, and the run-time gates still verify where.
 func sessionNames(command string) ([]string, bool) {
 	s := scanCommand(command)
 	if !s.HasSplitOp && len(s.Segments) <= 1 { // a single simple command
-		if s.HasUnsafeOp { // redirect/substitution: not a simple command
+		if s.HasUnsafeOp || s.RedirectsUnresolved() { // substitution: not nameable
 			return nil, false
 		}
-		h, ok := headOf(strings.TrimSpace(command))
+		line := strings.TrimSpace(command)
+		if len(s.Redirects) > 0 {
+			// a leading redirect strips from the segment, so the head comes from it
+			if len(s.Raw) == 0 {
+				return nil, false
+			}
+			line = strings.TrimSpace(s.Raw[0])
+		}
+		h, ok := headKey(line)
 		if !ok || h == "" {
 			return nil, false
 		}
@@ -155,12 +166,30 @@ func sessionNames(command string) ([]string, bool) {
 	return heads, true
 }
 
-// compoundGoverningHeads returns the distinct non-readonly segment heads of a bash
-// line, or (nil,false) when sub-shells/redirects defeat reliable identification. A
-// repeated head collapses so `git add x && git commit` names one command.
+// nameableForModel reports whether a bash line may reach the unattended model
+// classifier: session names exist, and any redirect target verifies in scope
+// so an allow verdict can never bless a write the barrier could not place.
+// writesOK is the mode's say: plain auto is read-only, so a redirect is never
+// nameable there, while auto+write judges in-scope writes by verdict.
+func nameableForModel(command string, input json.RawMessage, scope writeScope, writesOK bool) bool {
+	if _, ok := sessionNames(command); !ok {
+		return false
+	}
+	s := scanCommand(command)
+	if len(s.Redirects) == 0 {
+		return true
+	}
+	return writesOK && scope.redirectsInScope(input, s)
+}
+
+// compoundGoverningHeads returns the distinct non-readonly segment head keys of
+// a bash line, or (nil,false) when sub-shells/substitution defeat reliable
+// identification. A resolved redirect never blocks naming: the same heads run
+// whether output goes to a terminal or a verified file. A repeated head
+// collapses so `git add x && git commit` names one command.
 func compoundGoverningHeads(command string) ([]string, bool) {
 	s := scanCommand(command)
-	if s.HasUnsafeOp || len(s.Segments) == 0 {
+	if s.HasUnsafeOp || s.RedirectsUnresolved() || len(s.Segments) == 0 {
 		return nil, false
 	}
 	var heads []string
@@ -172,7 +201,7 @@ func compoundGoverningHeads(command string) ([]string, bool) {
 		if segmentIsReadOnly(seg, raw) {
 			continue // read-only segments never drive the prompt
 		}
-		h, ok := headOf(seg)
+		h, ok := headKey(seg)
 		if !ok || h == "" { // env-prefixed or unidentifiable head defeats analysis
 			return nil, false
 		}
@@ -199,7 +228,15 @@ func allowSessionKey(call agent.ToolCall) string {
 	if len(s.Segments) == 0 {
 		return tools.ToolBash
 	}
-	h, ok := headOf(strings.TrimSpace(cmd))
+	line := strings.TrimSpace(cmd)
+	if len(s.Redirects) > 0 {
+		// a leading redirect strips from the segment, so the head comes from it
+		if len(s.Raw) == 0 {
+			return "bash:"
+		}
+		line = strings.TrimSpace(s.Raw[0])
+	}
+	h, ok := headKey(line)
 	if !ok || h == "" { // env-prefixed/unnameable: never matches a grant
 		return "bash:"
 	}

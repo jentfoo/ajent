@@ -185,6 +185,37 @@ func headOf(seg string) (string, bool) {
 	return h, true
 }
 
+// headKey returns the session-grant key a segment's head stores under: the
+// command name, narrowed by one subcommand word when the head takes
+// subcommands, so a `go test` grant never covers `go run`. Empty when headOf
+// would refuse the head.
+func headKey(seg string) (string, bool) {
+	h, ok := headOf(seg)
+	if !ok {
+		return "", false
+	}
+	if _, sub := subcommandHeads[h]; sub {
+		toks := segmentTokens(seg)
+		if len(toks) > 1 {
+			if s := toks[1]; subcommandWordRe.MatchString(s) {
+				h += " " + s
+			}
+		}
+	}
+	return h, true
+}
+
+// subcommandHeads name commands whose first operand is a subcommand verb, the
+// only heads a grant narrows on. Operand commands (rm, ifconfig) stay
+// head-granular: their second word names a file, not a capability.
+var subcommandHeads = bulk.SliceToSet([]string{
+	"git", "go", "make", "docker", "kubectl", "npm", "cargo",
+})
+
+// subcommandWordRe matches one plain word, the only argument shape allowed to
+// narrow a grant: paths, flags and punctuation carry no subcommand meaning.
+var subcommandWordRe = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
 // segmentTokens returns the effective head-walkable tokens of a collapsed segment.
 func segmentTokens(seg string) []string {
 	return unwrapLaunchers(strings.Fields(seg))

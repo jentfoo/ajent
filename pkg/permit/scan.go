@@ -11,10 +11,20 @@ type Scan struct {
 	Segments []string
 	// Raw is the index-aligned verbatim counterpart of Segments, sed/awk/rg/sort reading it.
 	Raw []string
+	// Redirects are the targets of every > or >> found outside quotes, fd merges
+	// and /dev/null excluded, raw verbatim text when it differs from the target.
+	Redirects []Redirect
 	// HasSplitOp reports any &&, ||, |, ;, & or newline outside quotes.
 	HasSplitOp bool
-	// HasUnsafeOp reports any >, `, $( or <( outside quotes except discarding redirects.
+	// HasUnsafeOp reports any `, $( or <( outside quotes, or anything unparseable.
 	HasUnsafeOp bool
+}
+
+// Redirect is one output redirect target. Raw carries the verbatim target only
+// when it differs from Target (quoting), empty meaning Target is already raw.
+type Redirect struct {
+	Target string // where the command writes
+	Raw    string
 }
 
 // nullRedirectRe matches (&>>|&>|>>|1>>|2>>|1>|2>|>) followed by /dev/null.
@@ -25,6 +35,77 @@ var nullRedirectRe = regexp.MustCompile(`^(?:&>>?|[12]?>>?)\s*/dev/null`)
 func isWordChar(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' ||
 		b == '.' || b == '_' || b == '-' || b == '/'
+}
+
+// parseRedirectTarget consumes one > or >> at i, returning the redirect and the
+// index past its target, ok false when no word follows or the target carries
+// shell syntax the scan cannot safely read (an unquoted paren is procsub or a
+// subshell, an escaped newline a line continuation).
+func parseRedirectTarget(command string, i int) (r Redirect, next int, ok bool) {
+	j := i + 1
+	if j < len(command) && command[j] == '>' {
+		j++ // append form, same target check
+	}
+	if j < len(command) && command[j] == '&' {
+		return r, 0, false // >&n fd merge, not a path
+	}
+	for j < len(command) && (command[j] == ' ' || command[j] == '\t') {
+		j++
+	}
+	if j >= len(command) || strings.ContainsRune(";&|<>()\n", rune(command[j])) {
+		return r, 0, false // no word follows, bash would reject the line
+	}
+	var target, raw strings.Builder
+	var quoted bool
+	for j < len(command) {
+		c := command[j]
+		switch {
+		case c == '"' || c == '\'':
+			// one quote pair is consumed per iteration, so "a"'b' joins like the shell
+			quote := c
+			quoted = true
+			raw.WriteByte(c)
+			j++
+			for j < len(command) && command[j] != quote {
+				if quote == '"' && command[j] == '\\' && j+1 < len(command) {
+					raw.WriteString(command[j : j+2])
+					target.WriteByte(command[j+1]) // approximated, see RedirectsUnresolved
+					j += 2
+					continue
+				}
+				raw.WriteByte(command[j])
+				target.WriteByte(command[j])
+				j++
+			}
+			if j >= len(command) {
+				return r, 0, false // unterminated quote
+			}
+			raw.WriteByte(quote)
+			j++
+		case c == '\\' && j+1 < len(command):
+			if command[j+1] == '\n' {
+				return r, 0, false // line continuation hides the real target word
+			}
+			raw.WriteString(command[j : j+2])
+			target.WriteByte(command[j+1])
+			j += 2
+		case strings.ContainsRune(" \t;&|<>()\n", rune(c)):
+			return Redirect{Target: target.String(), Raw: verbatim(raw.String(), quoted)}, j, true
+		default:
+			raw.WriteByte(c)
+			target.WriteByte(c)
+			j++
+		}
+	}
+	return Redirect{Target: target.String(), Raw: verbatim(raw.String(), quoted)}, j, true
+}
+
+// verbatim returns the raw target text when quoting shaped it, else empty.
+func verbatim(raw string, quoted bool) string {
+	if !quoted {
+		return ""
+	}
+	return raw
 }
 
 // matchNullRedirect returns bytes consumed by a /dev/null redirect at i, or 0.
@@ -145,6 +226,7 @@ func scanCommand(command string) Scan {
 	var i int
 	n := len(command)
 	var hasSplitOp, hasUnsafeOp bool
+	var redirects []Redirect
 	var heredocs []heredoc
 	var depth int // open (, $( or <( nesting: a << inside is a shift, not a marker
 
@@ -274,7 +356,18 @@ func scanCommand(command string) Scan {
 		}
 
 		switch ch {
-		case '>', '`':
+		case '>':
+			r, next, ok := parseRedirectTarget(command, i)
+			if !ok {
+				hasUnsafeOp = true // unparseable target, bash may still read it
+				break
+			}
+			redirects = append(redirects, r)
+			if depth == 0 {
+				i = next // parsed target chars drop from the segment
+				continue
+			}
+		case '`':
 			hasUnsafeOp = true
 		case '$':
 			if i+1 < n && command[i+1] == '(' {
@@ -329,7 +422,8 @@ func scanCommand(command string) Scan {
 		if ch == ')' && depth == 0 {
 			hasUnsafeOp = true // unbalanced: bash rejects the line
 		}
-		if ch == '>' || ch == '`' {
+		if ch == '`' || ch == '>' {
+			// ` always; > only inside a substitution or unparseable, both unsafe
 			buf.WriteByte(ch)
 			rawBuf.WriteByte(ch)
 			i++
@@ -345,16 +439,46 @@ func scanCommand(command string) Scan {
 	if len(heredocs) > 0 {
 		hasUnsafeOp = true // dangling marker, bash reads stdin unboundedly
 	}
-	return Scan{Segments: segments, Raw: raw, HasSplitOp: hasSplitOp, HasUnsafeOp: hasUnsafeOp}
+	return Scan{
+		Segments:    segments,
+		Raw:         raw,
+		Redirects:   redirects,
+		HasSplitOp:  hasSplitOp,
+		HasUnsafeOp: hasUnsafeOp,
+	}
+}
+
+// RedirectsUnresolved reports whether any redirect target carries expansion the
+// shell resolves after analysis: $, backtick, glob or brace expansion could
+// write somewhere the check never saw. Quoted targets count as unresolved too:
+// " escapes inside them are only approximated, never a trusted literal path.
+func (s Scan) RedirectsUnresolved() bool {
+	for _, r := range s.Redirects {
+		if r.Raw != "" || strings.ContainsAny(r.Target, "~$`{}*?[") {
+			return true
+		}
+	}
+	return false
+}
+
+// RedirectsAll reports whether ok holds for every redirect target.
+func (s Scan) RedirectsAll(ok func(target string) bool) bool {
+	for _, r := range s.Redirects {
+		if !ok(r.Target) {
+			return false
+		}
+	}
+	return true
 }
 
 // compound reports whether command carries pipes, redirects or substitution that
 // defeat per-command session memory. A leading env assignment also counts: it can
 // hijack what the head executes, so such a line is never treated as a simple,
-// nameable command.
+// nameable command. An unresolved redirect target counts too: a grant can never
+// name what the shell expands at run time.
 func compound(command string) bool {
 	s := scanCommand(command)
-	if s.HasSplitOp || s.HasUnsafeOp {
+	if s.HasSplitOp || s.HasUnsafeOp || s.RedirectsUnresolved() {
 		return true
 	}
 	for i, seg := range s.Segments {
@@ -375,12 +499,14 @@ func compound(command string) bool {
 }
 
 // allSegmentsReadOnly reports whether every collapsed segment is verifiably
-// read-only. Pipelines are tolerated (splitOp alone isn't fatal), an unsafe op
+// read-only and no redirect can write somewhere unseen. Pipelines are tolerated
+// (splitOp alone isn't fatal), an unsafe op or unresolved redirect target
 // disqualifying outright, and each segment must clear find flags plus the
-// sed/git/allowlist checks.
+// sed/git/allowlist checks. Resolved targets are never read-only here: they
+// write, and only a write scope may verify where.
 func allSegmentsReadOnly(s Scan) bool {
-	if s.HasUnsafeOp || len(s.Segments) == 0 {
-		return false // unparseable fails safe to the prompt path
+	if s.HasUnsafeOp || len(s.Segments) == 0 || len(s.Redirects) > 0 {
+		return false // unparseable or writing: fail safe to the prompt path
 	}
 	return forEachSegment(s, segmentIsReadOnly)
 }

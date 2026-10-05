@@ -155,8 +155,8 @@ func runAndAnswer(t *testing.T, p *fakePrompter, b *Barrier, name string, input 
 // fakeClassifier returns a canned verdict, optionally blocking until ctx ends.
 type fakeClassifier struct {
 	verdict Class
-	block   bool // when true, waits for ctx cancellation and reports unsure
-	calls   int  // invocation count (guarded by the single asker goroutine)
+	block   bool         // when true, waits for ctx cancellation and reports unsure
+	calls   atomic.Int64 // invocation count, concurrent paths sharing one fake
 }
 
 func (c *fakeClassifier) Classify(ctx context.Context, s Subject) Class {
@@ -164,7 +164,7 @@ func (c *fakeClassifier) Classify(ctx context.Context, s Subject) Class {
 		<-ctx.Done()
 		return ClassUnsure
 	}
-	c.calls++
+	c.calls.Add(1)
 	return c.verdict
 }
 
@@ -287,6 +287,43 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	b3 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"write", "edit"}})
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("write", `{}`)).Action)
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`)).Action)
+}
+
+func TestGuardSafeCommandsWithRedirects(t *testing.T) {
+	t.Parallel()
+
+	cwd := t.TempDir()
+	tmp := t.TempDir()
+	outside := t.TempDir()
+	roots := []string{cwd, tmp}
+
+	cases := []struct {
+		name string
+		safe []string
+		cmd  string
+		want tools.Action
+	}{
+		// a listed command with an in-scope redirect auto-runs: the write lands
+		// where the roots allow, the listed command being the only thing that runs
+		{"listed_with_tmp_redirect", []string{"go test"}, "go test ./... > " + tmp + "/t.log 2>&1", tools.ActionAllow},
+		{"listed_with_cwd_redirect", []string{"make"}, "make test-all > out.log 2>&1", tools.ActionAllow},
+		{"listed_compound_readonly_tail", []string{"go test"}, "go test ./... > " + tmp + "/t.log 2>&1; tail -2 " + tmp + "/t.log", tools.ActionAllow},
+		// a redirect outside the roots still prompts even for a listed command
+		{"listed_redirect_outside", []string{"go test"}, "go test ./... > " + outside + "/t.log", tools.ActionAsk},
+		// expansion in the target defeats verification, listed or not
+		{"listed_redirect_variable", []string{"go test"}, "go test ./... > $OUT", tools.ActionAsk},
+		{"listed_redirect_quoted", []string{"go test"}, `go test ./... > "out.log"`, tools.ActionAsk},
+		// a writer never rides in on a listed head's redirect
+		{"listed_with_writer_segment", []string{"go test"}, "go test ./... > " + tmp + "/t.log; rm -rf build", tools.ActionAsk},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o := withMode(Options{SafeCommands: c.safe, WriteRoots: roots}, ModeAllowRead)
+			b := newTestBarrierOpts(newFakePrompter(), o)
+			d := b.Guard()(t.Context(), bashCall(c.cmd))
+			assert.Equal(t, c.want, d.Action)
+		})
+	}
 }
 
 func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
@@ -532,7 +569,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
-		assert.Equal(t, 1, cl.calls)
+		assert.EqualValues(t, 1, cl.calls.Load())
 		require.Eventually(t, func() bool { return len(n.all()) == 1 }, time.Second, 10*time.Millisecond)
 	})
 
@@ -555,7 +592,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"echo hi > out.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 		assert.Equal(t, unattendedDenyReason, d.Reason)
-		assert.Zero(t, cl.calls)
+		assert.Zero(t, cl.calls.Load())
 	})
 
 	// an unsure verdict fails closed like any unapproved call
@@ -585,7 +622,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 		d := runAsk(b, t.Context(), "write", []byte(`{}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 		assert.Equal(t, unattendedDenyReason, d.Reason) // the documented one-shot refusal
-		assert.Zero(t, cl.calls)                        // never judged by the model
+		assert.Zero(t, cl.calls.Load())                 // never judged by the model
 	})
 
 	// an MCP/extension call is judged with its metadata like a shell command
@@ -595,7 +632,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 		d := runAsk(b, t.Context(), "srv__deploy", []byte(`{"env":"prod"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
-		assert.Equal(t, 1, cl.calls)
+		assert.EqualValues(t, 1, cl.calls.Load())
 	})
 
 	// a prompter that cannot open settles the ask like headless: the auto modes
@@ -684,7 +721,7 @@ func TestGrantSessionAllows(t *testing.T) {
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 		assert.Equal(t, unattendedDenyReason, d.Reason)
-		assert.Equal(t, 1, cl.calls)
+		assert.EqualValues(t, 1, cl.calls.Load())
 	})
 }
 
@@ -795,19 +832,71 @@ func TestAskerDenyAndNotes(t *testing.T) {
 func TestAskerSessionGrants(t *testing.T) {
 	t.Parallel()
 
-	// an allow-for-session bash:git grant covers a different git command without a new dialog
+	// an allow-for-session grant covers a repeat of the granted command, flags and all
 	t.Run("allow_for_session_short_circuits_next_call", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"git status"}`), int(optAllowSession))
+		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"ifconfig eth0"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// a different git command matches the same bash:git grant and opens no dialog
+		// the same invocation again matches the grant and opens no dialog
 		n := p.count()
-		d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"git log --oneline"}`))
+		d2 := runAsk(b, t.Context(), "bash", []byte(`{"command":"ifconfig eth0"}`))
 		assert.Equal(t, tools.ActionAllow, d2.Action)
 		assert.Equal(t, n, p.count())
+	})
+
+	// a subcommand grant covers its own subcommand only, never a sibling one
+	t.Run("subcommand_grant_never_covers_sibling", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrier(p)
+
+		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"git fetch origin"}`), int(optAllowSession))
+		assert.Equal(t, tools.ActionAllow, got.Action)
+
+		// the same subcommand with other arguments is covered without a dialog
+		_, ok := b.sessionAllowed(bashCall("git fetch upstream"))
+		assert.True(t, ok)
+
+		// a different subcommand is not: git fetch never blesses git push
+		_, ok = b.sessionAllowed(bashCall("git push origin"))
+		assert.False(t, ok)
+	})
+
+	// a bare command grant narrows to no subcommand, covering every line of that head
+	t.Run("bare_command_grant_covers_any_subcommand", func(t *testing.T) {
+		b := newTestBarrierOpts(nil, Options{Grants: []string{"go"}})
+
+		_, ok := b.sessionAllowed(bashCall("go test ./..."))
+		assert.True(t, ok)
+		_, ok = b.sessionAllowed(bashCall("go run ./cmd/x"))
+		assert.True(t, ok)
+	})
+
+	// a grant never blesses a redirect outside the write roots, even in auto+write
+	t.Run("redirect_grant_requires_scope", func(t *testing.T) {
+		cwd := t.TempDir()
+		tmp := t.TempDir()
+		outside := t.TempDir() // not under either root
+		o := withMode(Options{Grants: []string{"make"}, WriteRoots: []string{cwd, tmp}}, ModeAutoWrite)
+		b := newTestBarrierOpts(nil, o)
+
+		// an in-scope target matches the grant
+		_, ok := b.sessionAllowed(bashCall("make lint > " + tmp + "/t.log"))
+		assert.True(t, ok)
+
+		// outside the roots no grant matches, whatever the mode
+		_, ok = b.sessionAllowed(bashCall("make lint > " + outside + "/x"))
+		assert.False(t, ok)
+		_, ok = b.sessionAllowed(bashCall("make lint > ~/.zshrc"))
+		assert.False(t, ok)
+
+		// read-only modes refuse redirect lines outright, roots or not
+		ro := withMode(Options{Grants: []string{"make"}, WriteRoots: []string{cwd, tmp}}, ModeAuto)
+		bRO := newTestBarrierOpts(nil, ro)
+		_, ok = bRO.sessionAllowed(bashCall("make lint > " + tmp + "/t.log"))
+		assert.False(t, ok)
 	})
 
 	// a write grant is tool-scoped and does not cover edit
@@ -841,17 +930,17 @@ func TestAskerSessionGrants(t *testing.T) {
 		assert.False(t, ok)
 	})
 
-	// a piped git never matches the named bash:git grant
+	// a piped non-readonly command never matches a grant naming another subcommand
 	t.Run("compound_command_never_matches_named_grant", func(t *testing.T) {
 		p := newFakePrompter()
 		b := newTestBarrier(p)
 
-		// grant git for session
-		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"git status"}`), int(optAllowSession))
+		// grant git fetch for session
+		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"git fetch origin"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
-		// a piped git command is compound and never matches the named git grant
-		_, ok := b.sessionAllowed(bashCall("git log | head"))
+		// a piped git push is compound and never matches the git fetch grant
+		_, ok := b.sessionAllowed(bashCall("git push | head"))
 		assert.False(t, ok)
 	})
 
@@ -1022,7 +1111,7 @@ func TestAskerAuto(t *testing.T) {
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build"}`)); close(done) }()
 		<-done
 
-		assert.Equal(t, 1, cl.calls)
+		assert.EqualValues(t, 1, cl.calls.Load())
 		assert.Equal(t, tools.ActionAllow, got.Action)
 	})
 
@@ -1093,7 +1182,7 @@ func TestAskerAuto(t *testing.T) {
 		<-done // the readonly verdict resolves without a keystroke
 
 		assert.Equal(t, tools.ActionAllow, got.Action)
-		assert.Equal(t, 1, cl.calls)
+		assert.EqualValues(t, 1, cl.calls.Load())
 	})
 }
 
@@ -1460,7 +1549,7 @@ func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 
 			got := runAndAnswer(t, p, b, c.tool, []byte(c.input), int(optDeny))
 			assert.Equal(t, tools.ActionDeny, got.Action)
-			assert.Zero(t, cl.calls)
+			assert.Zero(t, cl.calls.Load())
 		})
 	}
 

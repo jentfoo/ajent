@@ -2,6 +2,7 @@ package permit
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -91,14 +92,15 @@ func NewBarrier(ro func(string) bool, o Options) *Barrier {
 		dryRun:     o.DryRun,
 		preview:    o.Preview,
 	}
+	if len(o.WriteRoots) > 0 {
+		b.scope = newWriteScope(o.WriteRoots[0], o.WriteRoots[1:]...)
+	}
 	if len(o.SafeCommands) > 0 {
-		b.safe = func(call agent.ToolCall) bool { return SafeMatches(call, o.SafeCommands) }
+		scope := b.scope
+		b.safe = func(call agent.ToolCall) bool { return safeMatches(call, o.SafeCommands, scope) }
 	}
 	if len(o.DeniedCommands) > 0 {
 		b.deny = func(call agent.ToolCall) bool { return DenyMatches(call, o.DeniedCommands) }
-	}
-	if len(o.WriteRoots) > 0 {
-		b.scope = newWriteScope(o.WriteRoots[0], o.WriteRoots[1:]...)
 	}
 	if o.ModeSet {
 		b.mode = o.Mode
@@ -232,7 +234,7 @@ func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 			continue // core writer or non-auto mode: never classified at ask time either
 		}
 		if call.Name == tools.ToolBash {
-			if _, ok := sessionNames(bashCommand(call.Input)); !ok {
+			if !nameableForModel(bashCommand(call.Input), call.Input, g.scope, g.mode.allowsWrites()) {
 				continue // unparseable line: the unattended ask refuses it, never the model
 			}
 		}
@@ -457,7 +459,7 @@ func (b *Barrier) unattendedAsk(ctx context.Context, m Mode, call agent.ToolCall
 	// head) never matches a grant either, so unattended it refuses outright
 	// rather than leaning on a model reading raw text
 	if call.Name == tools.ToolBash {
-		if _, ok := sessionNames(bashCommand(call.Input)); !ok {
+		if !nameableForModel(bashCommand(call.Input), call.Input, b.gateNow().scope, b.Mode().allowsWrites()) {
 			return tools.Deny(unattendedDenyReason)
 		}
 	}
@@ -544,16 +546,30 @@ func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
 // (redirect/substitution, unnameable head) never matches, so it re-prompts every time.
 func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	cmd := bashCommand(call.Input)
+	if call.Name == tools.ToolBash {
+		// a grant never blesses a write the barrier cannot place: redirect lines
+		// match grants only where writes are in play and every target resolves in
+		// scope, plain auto being read-only no matter the roots
+		if s := scanCommand(cmd); len(s.Redirects) > 0 {
+			if !b.Mode().allowsWrites() || !b.scope.redirectsInScope(call.Input, s) {
+				return "", false
+			}
+		}
+	}
 	if call.Name != tools.ToolBash || !compound(cmd) { // plain command or non-bash tool
 		key := allowSessionKey(call)
 
 		b.mu.Lock()
 		defer b.mu.Unlock()
 
-		if b.allows[key] {
+		if b.allows[key] || call.Name == tools.ToolBash && b.allows[tools.ToolBash] {
 			return key, true
 		}
-		return key, call.Name == tools.ToolBash && b.allows[tools.ToolBash]
+		// a head grant covers every line the key narrowed beyond it
+		if h, _, ok := strings.Cut(strings.TrimPrefix(key, "bash:"), " "); ok && b.allows["bash:"+h] {
+			return key, true
+		}
+		return key, false
 	}
 
 	heads, ok := compoundGoverningHeads(cmd)
@@ -566,10 +582,15 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	b.mu.Unlock()
 
 	for _, h := range heads {
-		// the bare `bash` grant stands in for any head a compound could name
-		if !granted["bash:"+h] && !granted[tools.ToolBash] {
-			return "", false // an ungranted head: re-prompt
+		// the bare `bash` grant stands in for any head a compound could name,
+		// and a head grant covers every line its subcommand narrowing keys
+		if granted["bash:"+h] || granted[tools.ToolBash] {
+			continue
 		}
+		if head, _, ok := strings.Cut(h, " "); ok && granted["bash:"+head] {
+			continue
+		}
+		return "", false // an ungranted head: re-prompt
 	}
 	return "session", true // every governing command is granted by name
 }
@@ -738,7 +759,7 @@ func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Deci
 // trimmed command line matched as a token-boundary prefix, so "git" covers every
 // git invocation and "git stash" its subcommands. A compound line is refused when
 // any of its components matches, so wrapping in `cd ... &&` never escapes the gate.
-// Unlike SafeMatches it may also name core writers, denying one being a legitimate safety gate.
+// Unlike safeMatches it may also name core writers, denying one being a legitimate safety gate.
 func DenyMatches(call agent.ToolCall, cmds []string) bool {
 	for _, e := range cmds {
 		e = strings.TrimSpace(e)
@@ -831,15 +852,16 @@ func CommandRefused(cmd string, denied []string) bool {
 	return false
 }
 
-// SafeMatches reports whether call is named by a configured safe command: an exact
+// safeMatches reports whether call is named by a configured safe command: an exact
 // tool name (or an MCP server namespace, covering every `srv__*` tool it exposes)
 // for any non-bash tool, or, for bash, the trimmed command line matched as a
 // token-boundary prefix, so "git" covers every git invocation and "git status"
 // its subcommands. A compound line matches only when every component is either a
 // listed entry or verifiably read-only (mirroring allSegmentsReadOnly's
-// all-or-nothing gate), so an appended write never rides in. write/edit can never
+// all-or-nothing gate), so an appended write never rides in. Redirect targets
+// must resolve in scope, the zero scope allowing none. write/edit can never
 // be listed, so no config entry overrides a known writer.
-func SafeMatches(call agent.ToolCall, cmds []string) bool {
+func safeMatches(call agent.ToolCall, cmds []string, scope writeScope) bool {
 	if _, isWrite := coreWriteTools[call.Name]; isWrite {
 		return false
 	}
@@ -853,18 +875,23 @@ func SafeMatches(call agent.ToolCall, cmds []string) bool {
 		}
 	}
 	if call.Name == tools.ToolBash {
-		return safeBashLine(bashCommand(call.Input), cmds)
+		return safeBashLine(bashCommand(call.Input), cmds, scope, call.Input)
 	}
 	return false
 }
 
-// safeBashLine reports whether a bash line is covered by configured entries. A single
-// command matches on the token-boundary prefix of its trimmed text, while a compound (control
-// operators or substitution) requires every component to be either a listed entry
-// or verifiably read-only, so "make lint" can never smuggle in an appended write.
-func safeBashLine(cmd string, cmds []string) bool {
+// safeBashLine reports whether a bash line is covered by configured entries. A
+// single command matches on the token-boundary prefix of its trimmed text, while
+// a compound (control operators or substitution) requires every component to be
+// either a listed entry or verifiably read-only, so "make lint" can never
+// smuggle in an appended write. Redirect targets must resolve in scope from
+// every cd baseline, the zero scope allowing none.
+func safeBashLine(cmd string, cmds []string, scope writeScope, input json.RawMessage) bool {
 	s := scanCommand(cmd)
-	if s.HasUnsafeOp { // > ` $( <( defeat analysis, fail to the prompt path
+	if s.HasUnsafeOp || s.RedirectsUnresolved() { // substitution defeats analysis
+		return false
+	}
+	if len(s.Redirects) > 0 && !scope.redirectsInScope(input, s) {
 		return false
 	}
 	if !s.HasSplitOp && len(s.Segments) <= 1 {

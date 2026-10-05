@@ -143,31 +143,76 @@ func (s writeScope) inScope(p string) bool {
 // of possible working directories stops being worth tracking.
 const maxCdSegments = 4
 
-// allowsCommand reports whether a bash line only reads or makes bounded
-// directory changes inside the scope, redirects and substitution failing closed.
-// A cd moves the baseline later relative paths resolve against, so both the
-// old and new directory stay candidates.
-func (s writeScope) allowsCommand(cmd string) bool {
-	sc := scanCommand(cmd)
-	if sc.HasUnsafeOp || len(sc.Segments) == 0 {
-		return false
+// cdBaselines returns every directory a line's cd segments could make current,
+// resolving against the call's declared cwd when input is non-nil. ok is false
+// when a cd target cannot be named, lands outside the scope, or the chain
+// exceeds maxCdSegments.
+func (s writeScope) cdBaselines(input json.RawMessage, sc Scan) ([]string, bool) {
+	if len(s.roots) == 0 {
+		return nil, false
 	}
-	bases := []string{s.cwd}
+	rebased, ok := s.rebase(bashCwd(input))
+	if !ok {
+		return nil, false
+	}
+	bases := []string{rebased.cwd}
 	var cds int
-	return forEachSegment(sc, func(seg, raw string) bool {
+	for i, seg := range sc.Segments {
+		var raw string
+		if i < len(sc.Raw) { // Segments and Raw stay index-aligned from pushSegment
+			raw = sc.Raw[i]
+		}
 		if h, ok := headOf(seg); ok && h == "cd" {
 			cds++
 			if cds > maxCdSegments {
-				return false
+				return nil, false
 			}
-			next, ok := s.cdTargets(bases, raw)
+			next, ok := rebased.cdTargets(bases, raw)
 			if !ok {
-				return false
+				return nil, false
 			}
 			bases = append(bases, next...)
-			return true
+		}
+	}
+	return bases, true
+}
+
+// redirectsInScope reports whether every redirect target of sc resolves inside
+// the scope from every cd baseline the line can reach. An empty scope verifies
+// nothing, and any cd failure fails the whole line.
+func (s writeScope) redirectsInScope(input json.RawMessage, sc Scan) bool {
+	if len(sc.Redirects) == 0 {
+		return true
+	}
+	bases, ok := s.cdBaselines(input, sc)
+	if !ok {
+		return false
+	}
+	return sc.RedirectsAll(func(target string) bool {
+		return s.inScopeFrom(bases, target)
+	})
+}
+
+// allowsCommand reports whether a bash line only reads or makes bounded
+// directory changes inside the scope, redirects resolving in scope or failing
+// closed. A cd moves the baseline relative paths resolve against, so a path
+// must be in scope from before and after every cd.
+func (s writeScope) allowsCommand(cmd string) bool {
+	sc := scanCommand(cmd)
+	if sc.HasUnsafeOp || len(sc.Segments) == 0 || sc.RedirectsUnresolved() {
+		return false
+	}
+	bases, ok := s.cdBaselines(nil, sc) // the caller already rebased for its cwd
+	if !ok {
+		return false
+	}
+	return forEachSegment(sc, func(seg, raw string) bool {
+		if h, ok := headOf(seg); ok && h == "cd" {
+			return true // its targets were checked in cdBaselines
 		}
 		return segmentIsReadOnly(seg, raw) || s.segmentWritesInScope(bases, seg, raw)
+	}) && sc.RedirectsAll(func(target string) bool {
+		return s.inScopeFrom(bases, target)
 	})
 }
 

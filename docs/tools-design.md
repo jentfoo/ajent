@@ -145,6 +145,26 @@ rather than being scanned as named commands. Nested interpreters (`sh -c`,
 rescans their payload, since a configured refusal must hold in every mode, while
 safe lists and read-only checks never see inside.
 
+An output redirect is not an unsafe op: the scanner records each `>`/`>>`
+target, and the gates decide. The read-only verdict still refuses every
+redirect (it writes); `auto+write` and configured `safeCommands` run one only
+when every target resolves inside the write roots from every possible `cd`
+baseline, the same check `mkdir` path arguments get. A target carrying `$`,
+glob, brace or `~` expansion never verifies — the shell would resolve it after
+the check — and a quoted target never verifies either: `"` escapes inside are
+approximated, so no quoted form is a trusted literal path. A line whose
+targets all resolve stays nameable for session memory and the approval dialog:
+`go test ./... > /tmp/t.log` grants `go test`, the same heads running whether
+output goes to a terminal or a verified file. Grants narrow to a subcommand
+for subcommand-verb heads (`git`, `go`, `make`, `docker`, `kubectl`, `npm`,
+`cargo`), so `git fetch` for session never covers `git push`, while operand
+commands (`rm`, `ifconfig`) stay head-granular; a head grant from an older
+line or `--allow-tools` still covers every narrowed key under it. A grant
+never blesses a write the barrier cannot place: a redirect line matches any
+grant (earned, granted, or `--allow-tools`) only when the mode allows writes
+and every target resolves inside the roots from every possible `cd`
+baseline — in the read-only modes it never matches one at all.
+
 ### Headless: the tool set is the gate
 
 A one-shot run (`-p`) has no dialog to open, so every ask is settled without
@@ -175,9 +195,13 @@ offered set asks nothing until `--allow-tools` re-offers a call). Nobody can
 answer a dialog there, so the asker takes the model classification as final: an
 allow runs the call (an "auto allowed" notice reaches stderr), while a deny, a
 failed or an unsure review all refuse with `permission not given`. A shell line
-static analysis cannot parse (redirect, substitution, unnameable head) never
-reaches the model unattended: no grant could cover it either, so it refuses
-outright instead of leaning on a model reading raw text. Core writers are never
+static analysis cannot parse (substitution, unnameable head) never reaches the
+model unattended: no grant could cover it either, so it refuses outright
+instead of leaning on a model reading raw text. A redirect line is unnameable
+only in the read-only modes — the model's allow verdict means "no side
+effects" there, and a redirect writes; under `auto+write` a redirect whose
+targets all resolve inside the roots may reach the model like any other
+nameable line. Core writers are never
 classified, so plain `--allow-auto` withholds them at the registry rather than
 offering guaranteed refusals. Under `--allow-autowrite` workspace-confined
 writes pass statically, and one outside the roots refuses with the same

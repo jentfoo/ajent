@@ -18,19 +18,31 @@ func TestBuildOptions(t *testing.T) {
 	}{
 		{"ls -la", 4, "Allow `ls` for session"},
 		{"/usr/bin/ifconfig eth0", 4, "Allow `ifconfig` for session"}, // path stripped
-		{"git status", 4, "Allow `git` for session"},
+		// subcommand heads narrow the grant: git status never covers git push
+		{"git status", 4, "Allow `git status` for session"},
 		// a compound with one non-readonly head names it, read-only segments not counting
 		{"ifconfig | head -n 10", 4, "Allow `ifconfig` for session"},
 		{"rm build && ls", 4, "Allow `rm` for session"}, // ls is read-only, so only rm governs
-		// a repeated head collapses into one grant (git add && git commit)
-		{"git add x && git commit -m y", 4, "Allow `git` for session"},
+		// distinct subcommands of one head name both halves of the grant
+		{"git add x && git commit -m y", 4, "Allow `git add` and `git commit` for session"},
 		// two distinct non-readonly heads name both in the option
 		{"rm build && mkdir dir", 4, "Allow `rm` and `mkdir` for session"},
 		// three or more heads still grant per name, past three eliding into "and N more"
 		{"rm a && mkdir b && touch c", 4, "Allow `rm`, `mkdir` and `touch` for session"},
 		{"rm a && mkdir b && touch c && chmod +x d", 4, "Allow `rm`, `mkdir` and `touch` (+1 more) for session"},
-		// redirect/substitution offers no session memory: it could never cover a future line
-		{"echo hi > out.txt", 3, ""},
+		// a resolved redirect target still names its heads: the same commands run
+		// whether output goes to a terminal or a file, the gates verifying where
+		{"echo hi > out.txt", 4, "Allow `echo` for session"},
+		// an expanding target defeats naming: no grant could cover what the shell
+		// resolves at run time
+		{"echo hi > $OUT", 3, ""},
+		{"echo hi > ~/x", 3, ""},
+		{`echo hi > "out.txt"`, 3, ""}, // quoted targets are never trusted literals
+		// a leading redirect strips from the segment, the head still naming the
+		// command that actually runs
+		{"> out git status", 4, "Allow `git status` for session"},
+		// substitution offers no session memory: it could never cover a future line
+		{"echo hi $(cat f)", 3, ""},
 		// a here-document body is data: only the reading command is named, the python
 		// inside never read as commands
 		{"python - <<'EOF'\nimport importlib.metadata as md\nprint(\"mcp\", md.version(\"mcp\"))\nEOF\n", 4, "Allow `python` for session"},
@@ -61,9 +73,18 @@ func TestAllowSessionKey(t *testing.T) {
 		in   string
 		want string
 	}{
-		{"bash", `git status`, "bash:git"},
-		{"bash", `git -C repo log --oneline`, "bash:git"}, // flags after head still key on git
-		{"bash", `/usr/bin/git status`, "bash:git"},       // path stripped
+		// subcommand heads narrow the key, so a git status grant never covers push
+		{"bash", `git status`, "bash:git status"},
+		// a flag first defeats narrowing rather than guessing which value is the verb
+		{"bash", `git -C repo log --oneline`, "bash:git"},
+		{"bash", `/usr/bin/git status`, "bash:git status"}, // path stripped
+		{"bash", `go test ./...`, "bash:go test"},
+		// operand commands stay head-granular: their second word names a file
+		{"bash", `rm -rf build`, "bash:rm"},
+		{"bash", `ifconfig eth0`, "bash:ifconfig"},
+		// a leading redirect strips from the segment, so the key names the command
+		{"bash", `> out git status`, "bash:git status"},
+		{"bash", `> out`, "bash"}, // a bare redirect falls to the bash grant
 		// a leading env assignment is never unwrapped, so the key can't collide with a
 		// real grant: PATH/LD_PRELOAD can hijack what `cmd` executes, so such a line
 		// must re-prompt rather than match an existing bash:<name>.

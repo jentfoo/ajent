@@ -134,6 +134,18 @@ func TestClassifyEdgeCases(t *testing.T) {
 	t.Run("ignores_read_only_mark_for_builtins_not_in_list", func(t *testing.T) {
 		assert.Equal(t, VerdictPrompt, Classify(call("write", `{}`), roSet([]string{"write"})))
 	})
+
+	// a redirect writes, so the read-only verdict never covers one wherever it
+	// lands: verification belongs to the write-scope and configured-safe paths
+	t.Run("redirect_never_read_only", func(t *testing.T) {
+		for _, cmd := range []string{
+			"git status > out.log",
+			"git status > /tmp/t.log",
+			"ls > f*",
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
+	})
 }
 
 // strconvQuote is a tiny JSON string builder to keep test tables readable.

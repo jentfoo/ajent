@@ -141,7 +141,15 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 		{"brace_escape_with_flag", "mkdir -p {/etc/x,/tmp/y}", false},
 		{"brace_rmdir_escape", "rmdir {/etc/x,/tmp/y}", false},
 		{"brace_in_scope_still_refused", "mkdir build/{a,b}", false},
-		{"redirect_fails_closed", "mkdir a > f", false},
+		// a redirect resolving in scope is a bounded write like any other
+		{"redirect_in_scope", "mkdir a > f", true},
+		{"redirect_outside", "mkdir a > " + outside + "/f", false},
+		{"redirect_expanding_target", "mkdir a > $HOME/f", false},
+		{"redirect_glob_target", "mkdir a > f*", false},
+		{"redirect_quoted_target", `mkdir a > "f"`, false},
+		// a cd may not run, so the target must resolve from before and after it
+		{"redirect_after_cd", "cd build && mkdir x > f", true},
+		{"redirect_after_cd_escape", "cd sub && mkdir ../x > ../f", false},
 		{"substitution_fails_closed", "mkdir $(cat f)", false},
 		{"chained_with_writer", "mkdir a && rm -rf b", false},
 		{"unlisted_writer", "touch a", false},
