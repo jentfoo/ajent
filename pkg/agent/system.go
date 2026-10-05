@@ -122,13 +122,13 @@ func identityLine() string {
 // and a directory listing are deliberately absent, since the listing would vary
 // whenever the workspace changes, and the model discovers files with its tools.
 func buildEnvironmentFacts(b *strings.Builder, env Environment) {
-	cwd := env.Cwd
-	if cwd == "" {
-		cwd = "."
+	if env.Cwd != "" {
+		_, _ = fmt.Fprintf(b, "Working directory: %s\n", env.Cwd)
 	}
-	_, _ = fmt.Fprintf(b, "Working directory: %s\n", cwd)
 	if env.OS != "" {
 		_, _ = fmt.Fprintf(b, "Platform: %s\n", env.OS)
 	}
-	_, _ = fmt.Fprintf(b, "Date: %s\n", env.Date)
+	if env.Date != "" {
+		_, _ = fmt.Fprintf(b, "Date: %s\n", env.Date)
+	}
 }

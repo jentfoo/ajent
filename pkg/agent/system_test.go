@@ -68,6 +68,16 @@ func TestBuildSystem(t *testing.T) {
 		assert.NotContains(t, tb.Text, "Directory contents:")
 	})
 
+	// empty values drop their line rather than fabricating a placeholder
+	t.Run("empty_facts_drop_lines", func(t *testing.T) {
+		tb, ok := buildSystem(Environment{}, nil, nil, "")[0].(llm.TextBlock)
+		require.True(t, ok)
+
+		assert.NotContains(t, tb.Text, "Working directory:")
+		assert.NotContains(t, tb.Text, "Platform:")
+		assert.NotContains(t, tb.Text, "Date:")
+	})
+
 	// snippets land after project instructions, each separated by a blank line
 	t.Run("snippets_append_after_project", func(t *testing.T) {
 		env := Environment{Cwd: "/repo", Date: "2024-01-02"}
