@@ -13,6 +13,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // editOp is one string replacement.
@@ -34,6 +35,11 @@ type editTarget struct {
 	Path   string      // the model-supplied path, for messages
 	Edited []lineRange // lines this session already wrote, so tierFuzzy will not heal them
 }
+
+// editWriteCeiling caps the post-edit file size, so a hallucinating model cannot
+// balloon a file arbitrarily with one small-oldText/huge-newText edit. The result
+// diff's own limit (editTextLimit) only bounds feedback, never what lands on disk.
+const editWriteCeiling = 64 << 20
 
 // editTool applies string edits to a single file, all-or-nothing. The array
 // form gives one round trip for a multi-site refactor.
@@ -135,6 +141,10 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	o, err := applyEdits(tgt, string(data), p.Edits)
 	if err != nil {
 		return resultErr(err.Error()), nil
+	}
+	if len(o.final) > editWriteCeiling {
+		return resultErr(fmt.Sprintf("edit: result would be %s, over the %s ceiling; split the change into smaller edits",
+			strutil.HumanSize(int64(len(o.final))), strutil.HumanSize(editWriteCeiling))), nil
 	}
 
 	if err := config.WriteFileAtomic(full, o.final, writePerm(full)); err != nil {

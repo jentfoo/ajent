@@ -282,7 +282,7 @@ func TestUIConsolePermissionModeAppliesButNotRecorded(t *testing.T) {
 
 	reg := tools.New()
 	reg.Register(&stubTool{name: "read"}, true)
-	barrier := permit.NewBarrier(reg.ReadOnly)
+	barrier := permit.NewBarrier(reg.ReadOnly, permit.Options{})
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
 

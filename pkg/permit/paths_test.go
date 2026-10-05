@@ -124,6 +124,10 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 		{"pure_readonly", "ls -la", true},
 		{"mkdir_outside", "mkdir " + outside + "/x", false},
 		{"mkdir_home", "mkdir ~/x", false},
+		// bash expands ~user to another home while PathPolicy leaves it literal,
+		// so the form is refused rather than resolved against the cwd
+		{"mkdir_user_home", "mkdir ~root/x", false},
+		{"cd_user_home_launders", "cd ~root && mkdir evil", false},
 		{"mkdir_parent_escape", "mkdir ../x", false},
 		{"mkdir_absolute_system", "mkdir /etc/x", false},
 		{"mkdir_no_args", "mkdir", false},

@@ -41,7 +41,7 @@ func TestGitReadOnly(t *testing.T) {
 		{`config action word rejected`, `git config edit`, false},
 		// remote / reflog / worktree actions
 		{"remote bare lists", "git remote", true},
-		{"remote show", "git remote show origin", true},
+		{"remote show contacts remote", "git remote show origin", false},
 		{"remote get url", "git remote get-url origin", true},
 		{`remote add writes`, `git remote add origin git@x`, false},
 		{"reflog show", "git reflog show HEAD", true},
@@ -143,7 +143,7 @@ func TestGitActionReadOnly(t *testing.T) {
 		in   string
 		want bool
 	}{
-		{"show origin", "show origin", true},
+		{"show contacts remote", "show origin", false},
 		{"get url", "get-url origin", true},
 		// mutating actions fail
 		{"add writes", "add origin git@x", false},

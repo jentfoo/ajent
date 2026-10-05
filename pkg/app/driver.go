@@ -259,18 +259,59 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// AwaitInput may hold that boundary while the user finishes a message, so a
 	// prompt typed during it lands in this same step rather than behind another call.
 	opts.AwaitInput = gate.hold
-	// OnToolBatch hands each step's calls (in message order) to sub-agent id
-	// reservation and permission prefetch. The barrier is built later, so it is
-	// reached through a forward reference assigned in its setup block below, and nil
-	// until then means no classification to prefetch.
-	var batchPrefetch func(context.Context, []agent.ToolCall)
-	opts.OnToolBatch = func(ctx context.Context, calls []agent.ToolCall) {
-		if sag != nil {
-			sag.Reserve(calls)
+
+	// the permission barrier gates every tool call through static classification and
+	// an approval dialog. Read-only work runs free, but writes prompt unless allowed or
+	// blocked by mode. It starts from the resolved config default so a restart always
+	// uses the configured (or CLI-flagged) mode. In-session cycling never persists.
+	// It must exist before agent.New: Options is copied there, so the batch hooks
+	// (sub-agent id reservation, classification prefetch) wire directly, not through
+	// a forward reference.
+	var barrier *permit.Barrier
+	if toolsReg != nil {
+		var po permit.Options
+		if mstr := set.Settings().Permissions.Mode; mstr != "" {
+			if m, ok := permit.ParseMode(mstr); ok {
+				po.Mode, po.ModeSet = m, true
+			}
 		}
-		if batchPrefetch != nil {
-			batchPrefetch(ctx, calls)
+		// a CLI permission flag overrides the configured default for this invocation
+		// only. It never persists and is not stored in any session.
+		if m, ok := scope.barrierMode(); ok {
+			po.Mode, po.ModeSet = m, true
 		}
+		// the prompter and noter adapt tui and agent onto permit's narrow interfaces,
+		// note injection steers the running turn without stopping it. Hold runs the
+		// typing gate's dialog hold, so an approval dialog never steals a draft's focus.
+		po.Prompter = promptAdapter{ui: ui, hold: gate.holdDialog}
+		po.Noter = func(note string) {
+			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
+		}
+		// the full diff is already committed above the dialog by guardedTool.Execute,
+		// so the subject names it rather than repeating a truncated copy.
+		po.Preview = func(call agent.ToolCall) string {
+			ch, ok := toolsReg.Preview(call)
+			if !ok {
+				return ""
+			}
+			return tui.DiffSummary(ch.Path, ch.Before, ch.After)
+		}
+		bd := barrierOptions{
+			reg:         toolsReg,
+			providerFor: providers.ProviderFor,
+			model:       func() llm.Model { return st.Model },
+			session:     sessionHint(rec),
+			notify:      func(msg string, level agent.Level) { ui.Notify(msg, tui.Level(level)) },
+			safe:        set.Settings().Permissions.SafeCommands,
+			denied:      set.Settings().Permissions.DeniedCommands,
+		}
+		barrier = permit.NewBarrier(toolsReg.ReadOnly, bd.options(po))
+		bd.install(barrier)
+		showPermissionIndicator(ui, barrier)
+
+		// OnToolBatch hands each step's calls (in message order) to sub-agent id
+		// reservation and permission prefetch, wired before agent.New copies Options.
+		wireBatchHooks(&opts, sag, barrier)
 	}
 	if sag != nil {
 		// completion steers join the same boundary: membership is decided at the
@@ -349,54 +390,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// dial every server in the background now so spawn + discovery hide behind
 		// typing. LoadOnFirstMessage waits for these before a prompt is built.
 		mgr.Preload()
-	}
-
-	// the permission barrier gates every tool call through static classification and
-	// an approval dialog. Read-only work runs free, but writes prompt unless allowed or
-	// blocked by mode. It starts from the resolved config default so a restart always
-	// uses the configured (or CLI-flagged) mode. In-session cycling never persists.
-	var barrier *permit.Barrier
-	if toolsReg != nil {
-		barrier = permit.NewBarrier(toolsReg.ReadOnly)
-		if mstr := set.Settings().Permissions.Mode; mstr != "" {
-			if m, ok := permit.ParseMode(mstr); ok {
-				barrier.SetMode(m)
-			}
-		}
-		// a CLI permission flag overrides the configured default for this invocation
-		// only. It never persists and is not stored in any session.
-		if m, ok := scope.barrierMode(); ok {
-			barrier.SetMode(m)
-		}
-		showPermissionIndicator(ui, barrier)
-		// the prompter and noter adapt tui and agent onto permit's narrow interfaces,
-		// note injection steers the running turn without stopping it. Hold runs the
-		// typing gate's dialog hold, so an approval dialog never steals a draft's focus.
-		barrier.SetPrompter(promptAdapter{ui: ui, hold: gate.holdDialog})
-		barrier.SetNoter(func(note string) {
-			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
-		})
-		// the full diff is already committed above the dialog by guardedTool.Execute,
-		// so the subject names it rather than repeating a truncated copy.
-		barrier.SetPreview(func(call agent.ToolCall) string {
-			ch, ok := toolsReg.Preview(call)
-			if !ok {
-				return ""
-			}
-			return tui.DiffSummary(ch.Path, ch.Before, ch.After)
-		})
-		wireBarrier(barrier, barrierDeps{
-			reg:      toolsReg,
-			provider: providers.ProviderFor,
-			model:    func() llm.Model { return st.Model },
-			session:  sessionHint(rec),
-			notify:   func(msg string, level agent.Level) { ui.Notify(msg, tui.Level(level)) },
-			safe:     set.Settings().Permissions.SafeCommands,
-			denied:   set.Settings().Permissions.DeniedCommands,
-		})
-		// a batch's prompt-classified calls are classified concurrently ahead of
-		// their dialogs, so later commands in the batch resolve fast, and an abort cancels.
-		batchPrefetch = barrier.Prefetch
 	}
 
 	// the command registry, shell stager and @ expander own the single dispatch path

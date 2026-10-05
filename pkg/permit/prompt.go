@@ -185,17 +185,21 @@ func compoundGoverningHeads(command string) ([]string, bool) {
 }
 
 // allowSessionKey names what an "allow for session" remembers: the command name
-// (bash:<head>) for shell commands, the tool name otherwise. Lines no grant can
-// cover are never keyed this way, offering no session memory instead.
+// (bash:<head>) for shell commands, the tool name otherwise. The head comes from
+// the raw command, the same derivation sessionNames uses when the grant is
+// written, so a quoted head ('git' log) looks up the key it was stored under.
+// Lines no grant can cover are never keyed this way, offering no session memory
+// instead.
 func allowSessionKey(call agent.ToolCall) string {
 	if call.Name != tools.ToolBash {
 		return call.Name
 	}
-	s := scanCommand(bashCommand(call.Input))
+	cmd := bashCommand(call.Input)
+	s := scanCommand(cmd)
 	if len(s.Segments) == 0 {
 		return tools.ToolBash
 	}
-	h, ok := headOf(s.Segments[0])
+	h, ok := headOf(strings.TrimSpace(cmd))
 	if !ok || h == "" { // env-prefixed/unnameable: never matches a grant
 		return "bash:"
 	}

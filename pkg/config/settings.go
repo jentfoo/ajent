@@ -108,7 +108,11 @@ type Images struct {
 
 // Permissions configures the tool guard chain.
 type Permissions struct {
-	Mode           string   `json:"mode,omitempty"`          // permission mode name
+	Mode string `json:"mode,omitempty"` // interactive barrier mode name
+	// HeadlessMode is the one-shot (-p, piped) barrier mode, defaulting to
+	// auto+write. Interactive and headless sessions gate so differently that one
+	// key serving both reads wrong, so mode stays interactive-only.
+	HeadlessMode   string   `json:"headlessMode,omitempty"`
 	SafeCommands   []string `json:"safeCommands,omitzero"`   // exact tool names / bash lines auto-allowed as read-only
 	DeniedCommands []string `json:"deniedCommands,omitzero"` // exact tool names / bash lines always denied, never prompted
 }

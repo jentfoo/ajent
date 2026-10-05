@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTokenizeRaw(t *testing.T) {
@@ -106,4 +107,20 @@ func TestSegmentTokens(t *testing.T) {
 	assert.Equal(t, []string{"git", "status"}, segmentTokens("timeout 30 git status"))
 	// nohup is a launcher and unwraps away entirely
 	assert.Equal(t, []string{"ls"}, segmentTokens("nohup ls"))
+}
+
+func TestHeadOfKeywords(t *testing.T) {
+	t.Parallel()
+
+	// control keywords head shell syntax, never a nameable command
+	for _, seg := range []string{"if", "then rm y", "for", "do head -20 x", "{", "! true"} {
+		h, ok := headOf(seg)
+		assert.False(t, ok, seg)
+		assert.Empty(t, h)
+	}
+
+	// time is a real command a launcher unwrap can expose, staying nameable
+	h, ok := headOf("timeout 5 time rm x")
+	require.True(t, ok)
+	assert.Equal(t, "time", h)
 }

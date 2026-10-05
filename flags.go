@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-analyze/bulk"
 	"github.com/spf13/pflag"
 
 	"github.com/jentfoo/ajent/pkg/app"
@@ -53,6 +52,17 @@ type cliFlags struct {
 
 	args     []string // positional arguments, joined into a bootstrap prompt
 	headless []string // headless flag names actually given, for validation
+}
+
+// countTrue reports how many of flags are set.
+func countTrue(flags ...bool) int {
+	var n int
+	for _, on := range flags {
+		if on {
+			n++
+		}
+	}
+	return n
 }
 
 // parseFlags parses argv (without the program name) into the command line. It
@@ -100,7 +110,7 @@ func parseFlags(argv []string) (cliFlags, error) {
 	fs.BoolVar(&f.autoWrite, "allow-autowrite", false,
 		"like --allow-auto plus workspace-confined writes run without approval")
 	fs.StringSliceVar(&f.allowTools, "allow-tools", nil,
-		"one-shot: tool names or bash command heads to allow for the session")
+		"one-shot: registered tool names to offer and pre-allow, or single bash command heads to allow for the session")
 	fs.StringSliceVar(&f.denyTools, "deny-tools", nil, "one-shot: tool names to withhold")
 	fs.BoolVar(&f.stats, "stats", false,
 		"one-shot: print a tool and token summary to stderr (or a json summary line) when the run ends")
@@ -168,9 +178,7 @@ func (f cliFlags) validate() error {
 		}
 	}
 	// the permission-mode flags conflict in every mode, interactive and one-shot
-	picked := bulk.SliceFilter(func(on bool) bool { return on },
-		[]bool{f.allowAll, f.readOnly, f.allowAuto, f.autoWrite})
-	if len(picked) > 1 {
+	if countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite) > 1 {
 		return errors.New("--allow-all, --read-only, --allow-auto and --allow-autowrite are mutually exclusive")
 	}
 	if f.prompt == "" {

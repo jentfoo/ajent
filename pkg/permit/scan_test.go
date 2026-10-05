@@ -144,6 +144,8 @@ func TestCompound(t *testing.T) {
 	}{
 		{"simple", "ls", false},
 		{"pipeline", "a | b", true},
+		{`quoted find delete`, `find . "-delete"`, true},
+		{"nested interpreter", `sh -c "ls"`, false}, // compound is about splits, not nameability
 		{`process substitution`, `grep -f <(echo x)`, true},
 	}
 	for _, c := range cases {
@@ -165,7 +167,16 @@ func TestAllSegmentsReadOnly(t *testing.T) {
 		{"git status && git log --oneline", true},
 		{`sed -n 's/a/b/p' f`, true},
 		{"rm -rf build", false},
-		{"find . -delete", false},    // unsafe find action
+		{"find . -delete", false},   // unsafe find action
+		{`find . "-delete"`, false}, // quoting cannot hide the action
+		{`find . "-exec" rm {} \;`, false},
+		{`find "-fprintf" x f`, false},
+		{`nohup find . "-delete"`, false},
+		{"ls FOO=1", false},           // argument-position assignment is still shell state
+		{`sh -c "git status"`, false}, // nested interpreter: unnameable
+		{`bash -c 'ls'`, false},
+		{`eval ls`, false},
+		{"FOO=1 ls", false},          // leading assignment already failed closed
 		{"echo hi > out.txt", false}, // unsafe redirect
 		{"curl -s https://x", false}, // not on the allowlist
 	}
@@ -253,6 +264,9 @@ func TestScanHeredocs(t *testing.T) {
 		{"here string not heredoc", "grep -f <<< x", []string{"grep -f <<< x"}, false},
 		// << inside arithmetic is a shift, never a marker (the $( itself is unsafe)
 		{"shift inside arithmetic", "echo $((1<<2)) && rm -rf /", []string{"echo $((1<<2))", "rm -rf /"}, true},
+		// a delimiter quoted across a newline names no marker: the body lines stay
+		// inside the quoted segment, and nothing may read a backwards index
+		{"newline crossing delimiter quote", "cat <<\\'E\nbody\nE'\\'tail", []string{"cat <<\\'E", "body", `E""tail`}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

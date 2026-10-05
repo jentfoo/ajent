@@ -50,6 +50,20 @@ func TestClosestBlock(t *testing.T) {
 		assert.False(t, ok) // a decoy would be worse than admitting nothing matches
 	})
 
+	t.Run("keeps_trailing_newline", func(t *testing.T) {
+		// a newline-terminated oldText needs the terminator on the hint, or the
+		// verbatim copy-back can never byte-match and the retry fails the same way
+		text, _, ok := closestBlock("last line\n", "first\nlast line\n")
+		require.True(t, ok)
+		assert.Equal(t, "last line\n", text)
+	})
+
+	t.Run("no_newline_stays_unterminated", func(t *testing.T) {
+		text, _, ok := closestBlock("last line", "first\nlast line\n")
+		require.True(t, ok)
+		assert.Equal(t, "last line", text)
+	})
+
 	t.Run("clamps_to_file_length", func(t *testing.T) {
 		text, line, ok := closestBlock("one\ntwo\nthree\nfour", "one\ntwo\n")
 		require.True(t, ok)

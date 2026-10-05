@@ -83,8 +83,12 @@ registry metadata.
 `deniedCommands` is its hard inverse: exact tool names, whole MCP server
 namespaces, or bash command lines that are always refused **without prompting**
 in every mode, including allow-all. Matching follows the same token-boundary
-rule as `safeCommands`; a compound line is refused when *any* component matches,
-so nesting a denied command behind `cd … &&` never escapes it. It may also name
+rule as `safeCommands`, with the resolved argv checked as well: both sides pass
+through the same tokenizer the per-command checkers use, so quoting or escaping
+the head (`"git" push`, `git pu\sh`) cannot slip a listed command past it, and a
+nested interpreter's payload (`sh -c "git push"`, `eval git push`) is extracted
+and scanned too. A compound line is refused when *any* component matches, so
+nesting a denied command behind `cd … &&` never escapes it. It may also name
 core writers, since denying one is a legitimate safety gate. A denied check runs
 first in the barrier verdict (after user-initiation), and only an agent call
 hits it: a human's own staged `!` line owns its shell and always runs.
@@ -97,12 +101,13 @@ seeds the barrier's session-allow memory as well (see `tools-design.md` "Headles
 auto scopes"), so there is no key for them to set and `Explain` keeps reporting
 the file's own values. A headless run therefore:
 
-- runs at allow-all unless a permission flag says otherwise, since nothing else
-  could settle a prompt. The scope flags limit what the model may call, so a
-  narrower policy is expressed as offered tools rather than a mode change.
+- runs at auto+write unless a permission flag or `permissions.headlessMode`
+  says otherwise. Precedence is flag > `headlessMode` > the auto+write default.
+  `headlessMode` is a separate key from the interactive `permissions.mode`
+  because unattended and dialog-backed sessions gate so differently.
 - `--allow-auto` / `--allow-autowrite` run the barrier in that mode instead and
   settle prompts with final model classifications (see `tools-design.md`
-  "Headless auto scopes"). The `permissions.mode` key itself is still never
+  "Headless auto scopes"). The interactive `permissions.mode` key is never
   read. `safeCommands` and `deniedCommands` apply as configured, exactly as
   interactive.
 

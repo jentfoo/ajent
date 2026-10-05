@@ -121,9 +121,10 @@ rebuild. Only the newest applies, so each run recomputes cumulatively.
 
 `pkg/app` is the only wiring layer (nothing imports it). It classifies each line as prompt /
 `/command` / `!shell`, feeds ordering to a single **prompt pump** goroutine, and sends shell
-lines straight to a non-blocking stager. A one-shot (`-p`) run wires the same loop onto a
-stdout drain instead of the TUI. Its safety model is the tool set (gate at allow-all, scope
-flags decide what's offered), not the permission barrier. Exit codes are `app.ExitOK`/`ExitUsage`/
+lines straight to a non-blocking stager. A one-shot (`-p`, or any piped stdio) run wires the same
+loop onto a stdout drain instead of the TUI. Its safety model is the auto+write default (the
+tool set still carries part of it: scope flags decide what's offered), not unrestricted
+allow-all. Exit codes are `app.ExitOK`/`ExitUsage`/
 `ExitTurn`: 0 answer, 1 usage/setup error, 2 failed turn.
 
 ### Permission barrier (`pkg/permit`)

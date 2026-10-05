@@ -14,8 +14,8 @@ import (
 // checker so its specific invocation can be verified.
 var gitReadonlySubcommands = bulk.SliceToSet([]string{
 	"status", "log", "diff", "show", "blame", "shortlog", "describe",
-	"rev-parse", "rev-list", "ls-files", "ls-tree", "ls-remote", "grep",
-	"count-objects", "name-rev",
+	"rev-parse", "rev-list", "ls-files", "ls-tree", "grep",
+	"count-objects", "name-rev", // ls-remote contacts the remote: never read-only
 	// Read-only plumbing/porcelain additions with no write form
 	"for-each-ref", // print refs by format
 	"show-branch",  // show branch commit history
@@ -42,7 +42,8 @@ var gitPreSubcommandFlags = bulk.SliceToSet([]string{"--no-pager", "-P"})
 // default display form, also read-only here. stash is deliberately absent:
 // bare `git stash` means `git stash push`.
 var gitActionActions = map[string]map[string]struct{}{
-	"remote":   bulk.SliceToSet([]string{"show", "get-url"}),
+	// remote show contacts the remote: only local reads belong here
+	"remote":   bulk.SliceToSet([]string{"get-url"}),
 	"reflog":   bulk.SliceToSet([]string{"show"}),
 	"worktree": bulk.SliceToSet([]string{"list"}),
 }

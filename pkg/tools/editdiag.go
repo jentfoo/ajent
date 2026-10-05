@@ -368,10 +368,14 @@ func plural(n int, unit string) string {
 
 // closestBlock finds the region of buf most similar to old and returns it
 // verbatim with the 1-based line it starts on. ok is false when nothing in the
-// file resembles old, so a decoy is never offered as the text to copy.
+// file resembles old, so a decoy is never offered as the text to copy. A
+// newline-terminated old keeps its terminator on the hint: the model copies the
+// block back verbatim, and a hint missing the final newline can never byte-match
+// an oldText that carried one, so the retry would fail the same way forever.
 func closestBlock(old, buf string) (text string, line int, ok bool) {
 	fileLines := dropTrailingEmpty(strings.Split(buf, "\n"))
 	oldLines := strings.Split(old, "\n")
+	trailingNL := strings.HasSuffix(old, "\n") && stripSpace(old) != ""
 	if len(fileLines) == 0 || stripSpace(old) == "" {
 		return "", 0, false
 	}
@@ -393,7 +397,11 @@ func closestBlock(old, buf string) (text string, line int, ok bool) {
 		return "", 0, false // nothing here resembles it, say so rather than point at a decoy
 	}
 	end := min(best+len(oldLines), len(fileLines))
-	return strings.Join(fileLines[best:end], "\n"), best + 1, true
+	text = strings.Join(fileLines[best:end], "\n")
+	if trailingNL {
+		text += "\n" // restore the terminator the split dropped
+	}
+	return text, best + 1, true
 }
 
 // anchorCandidates returns the block starts that old's lines agree on: every

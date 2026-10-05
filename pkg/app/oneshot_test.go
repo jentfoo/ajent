@@ -49,14 +49,15 @@ func TestHeadlessTools(t *testing.T) {
 		want        []string
 	}{
 		{
-			name:  "default_drops_bash",
+			// the default scope is auto+write, which offers the full set
+			name:  "default_offers_everything",
 			scope: ToolScopeDefault,
-			want: []string{"agent_list", "agent_poll", "agent_start", "edit", "find",
-				"git_diff", "git_log", "git_show", "git_status", "grep", "ls", "read",
-				"srv__deploy", "srv__search", "write"},
+			want: []string{"agent_list", "agent_poll", "agent_start", "bash", "edit",
+				"find", "git_diff", "git_log", "git_show", "git_status", "grep", "ls",
+				"read", "srv__deploy", "srv__search", "write"},
 		},
 		{
-			name:  "allow_all_adds_bash",
+			name:  "allow_all_offers_everything",
 			scope: ToolScopeAllowAll,
 			want: []string{"agent_list", "agent_poll", "agent_start", "bash", "edit",
 				"find", "git_diff", "git_log", "git_show", "git_status", "grep", "ls",
@@ -126,7 +127,7 @@ func TestScopeBarrierMode(t *testing.T) {
 		mode  permit.Mode
 		ok    bool
 	}{
-		{ToolScopeDefault, permit.ModeAllowRead, false}, // value ignored: caller keeps its default
+		{ToolScopeDefault, 0, false}, // value ignored: caller keeps its default
 		{ToolScopeAllowAll, permit.ModeAllowAll, true},
 		{ToolScopeReadOnly, permit.ModeAuto, true},
 		{ToolScopeAuto, permit.ModeAuto, true},
@@ -302,6 +303,56 @@ func TestRunHeadless(t *testing.T) {
 		assert.Contains(t, out, "understood, skipping")
 	})
 
+	// no scope flag: the default is auto+write, so a workspace write runs with no
+	// classifier turn scripted, and bash is offered
+	t.Run("default_scope_runs_autowrite", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("writing", "t1", "write", `{"path":"notes.txt","content":"hello"}`)},
+			{Events: textTurn("wrote it")},
+		}
+		code, out, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText}, "", turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "wrote it")
+	})
+
+	t.Run("headless_mode_block_all_refuses", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("writing", "t1", "write", `{"path":"blocked.txt","content":"x"}`)},
+			{Events: textTurn("cannot write, stopping")},
+		}
+		code, out, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText},
+			`{"permissions":{"headlessMode":"block-all"}}`, turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "cannot write")
+		_, err := os.ReadFile("blocked.txt")
+		assert.Error(t, err) // the refusal held
+	})
+
+	// a scope flag beats the configured headless mode
+	t.Run("scope_flag_beats_headless_mode", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{
+			{Events: textAndCallTurn("writing", "t1", "write", `{"path":"notes.txt","content":"hello"}`)},
+			{Events: textTurn("wrote it")},
+		}
+		code, out, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, Scope: ToolScopeAutoWrite},
+			`{"permissions":{"headlessMode":"block-all"}}`, turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, out, "wrote it")
+	})
+
+	// an unparseable mode name falls back to auto+write with a warning
+	t.Run("headless_mode_unknown_warns", func(t *testing.T) {
+		turns := []llm.ScriptedTurn{{Events: textTurn("all done")}}
+		code, _, errw := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText},
+			`{"permissions":{"headlessMode":"nonsense"}}`, turns)
+		assert.Equal(t, ExitOK, code)
+		assert.Contains(t, errw, "unknown permissions.headlessMode")
+	})
+
 	// a workspace-confined write passes statically, no classifier turn scripted
 	t.Run("autowrite_runs_workspace_write", func(t *testing.T) {
 		turns := []llm.ScriptedTurn{
@@ -362,11 +413,10 @@ func TestRunHeadless(t *testing.T) {
 	})
 
 	// read-only runs auto, and a bash grant cannot cover a redirect: the line is
-	// model-reviewed and fails closed, never a missing-UI refusal
-	t.Run("read_only_grant_redirect_classifies", func(t *testing.T) {
+	// refused outright, no model review of an unparseable line unattended
+	t.Run("read_only_grant_redirect_refuses", func(t *testing.T) {
 		turns := []llm.ScriptedTurn{
 			{Events: textAndCallTurn("checking", "t1", "bash", `{"command":"echo hi > out.txt"}`)},
-			{Events: textTurn("deny")},
 			{Events: textTurn("understood, skipping")},
 		}
 		code, out, errw := headlessHarness(t, HeadlessOptions{

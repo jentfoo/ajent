@@ -74,44 +74,60 @@ func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 	}
 }
 
-// autoClassifier builds the barrier's cached model classifier over the current
-// model and MCP tool metadata.
-func autoClassifier(providerFor func(llm.Model) (llm.Provider, error), model func() llm.Model,
-	schema func(name string) (llm.ToolSchema, bool), sessionID string) permit.Classifier {
-	return permit.NewCachedClassifier(classifierAdapter{
-		providerFor: providerFor,
-		model:       model,
-		schema:      schema,
+// barrierOptions carries what one front end supplies to the shared barrier
+// construction: the model classifier inputs, config lists and the notify sink.
+// Mode, grants, prompter, noter and preview live in permit.Options, which this
+// embeds and completes.
+type barrierOptions struct {
+	reg         *tools.Registry
+	providerFor func(llm.Model) (llm.Provider, error)
+	model       func() llm.Model
+	session     string
+	notify      func(msg string, level agent.Level)
+	safe        []string
+	denied      []string
+}
+
+// options returns the decision inputs both front ends share: classifier,
+// workspace write roots, config safe/deny lists, dry-run and notices. o's
+// caller-set fields (mode, grants, prompter, noter, preview) pass through.
+func (d barrierOptions) options(o permit.Options) permit.Options {
+	o.Classifier = permit.NewCachedClassifier(classifierAdapter{
+		providerFor: d.providerFor,
+		model:       d.model,
+		schema:      toolSchema(d.reg),
 		cwd:         config.Cwd(),
 		tmp:         os.TempDir(),
-		session:     sessionID,
+		session:     d.session,
 	}.Classify)
+	o.WriteRoots = []string{config.Cwd(), os.TempDir()}
+	o.SafeCommands = d.safe
+	o.DeniedCommands = d.denied
+	o.DryRun = d.reg.DryRun
+	o.Notice = func(msg string) { d.notify(msg, agent.LevelInfo) }
+	return o
 }
 
-// barrierDeps carries what one front end supplies to the shared barrier wiring.
-type barrierDeps struct {
-	reg      *tools.Registry
-	provider func(llm.Model) (llm.Provider, error)
-	model    func() llm.Model
-	session  string
-	notify   func(msg string, level agent.Level)
-	safe     []string
-	denied   []string
-}
-
-// wireBarrier installs the decision inputs both front ends share: classifier,
-// write roots, config safe/deny lists, dry-run, notices and the guard/asker
-// hookup. Mode, session grants, prompter, noter and preview stay with the
-// caller, since those differ by front end.
-func wireBarrier(b *permit.Barrier, d barrierDeps) {
-	b.SetClassifier(autoClassifier(d.provider, d.model, toolSchema(d.reg), d.session))
-	b.SetWriteRoots(config.Cwd(), os.TempDir())
-	b.SetSafeCommands(d.safe)
-	b.SetDeniedCommands(d.denied)
-	b.SetDryRun(d.reg.DryRun)
-	b.SetNotice(func(msg string) { d.notify(msg, agent.LevelInfo) })
+// install gates reg behind the barrier's guard and asker.
+func (d barrierOptions) install(b *permit.Barrier) {
 	d.reg.AddGuard(b.Guard())
 	d.reg.SetAsker(b.Asker())
+}
+
+// reserve is the small slice of the sub-agent manager the batch hook needs.
+type reserve interface {
+	Reserve(calls []agent.ToolCall)
+}
+
+// wireBatchHooks sets opts.OnToolBatch to reserve sub-agent job numbers and
+// prefetch classifications for one step's calls, both in message order.
+func wireBatchHooks(opts *agent.Options, sag reserve, b *permit.Barrier) {
+	opts.OnToolBatch = func(ctx context.Context, calls []agent.ToolCall) {
+		if sag != nil {
+			sag.Reserve(calls)
+		}
+		b.Prefetch(ctx, calls)
+	}
 }
 
 type classifierAdapter struct {

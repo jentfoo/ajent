@@ -571,7 +571,7 @@ func buildFakeMCPServer(t *testing.T) string {
 
 func TestGuardRegisteredAgainstRegistry(t *testing.T) {
 	reg := tools.New()
-	b := permit.NewBarrier(func(string) bool { return false })
+	b := permit.NewBarrier(func(string) bool { return false }, permit.Options{})
 	reg.AddGuard(b.Guard())
 	reg.SetAsker(b.Asker())
 

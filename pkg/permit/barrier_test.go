@@ -182,11 +182,21 @@ func (n *fakeNoter) all() []string {
 }
 
 func newTestBarrier(p *fakePrompter) *Barrier {
-	b := NewBarrier(noRO)
+	return newTestBarrierOpts(p, Options{})
+}
+
+// newTestBarrierOpts builds a barrier with a fake prompter (nil allowed) plus o.
+func newTestBarrierOpts(p *fakePrompter, o Options) *Barrier {
 	if p != nil {
-		b.SetPrompter(p)
+		o.Prompter = p
 	}
-	return b
+	return NewBarrier(noRO, o)
+}
+
+// withMode returns o set to start in m.
+func withMode(o Options, m Mode) Options {
+	o.Mode, o.ModeSet = m, true
+	return o
 }
 
 // runAsk drives the asker for one call and returns its decision.
@@ -228,8 +238,8 @@ func TestGuardModeMatrix(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			b := newTestBarrier(newFakePrompter())
-			b.SetMode(c.mode)
+			o := withMode(Options{Prompter: newFakePrompter()}, c.mode)
+			b := NewBarrier(noRO, o)
 			d := b.Guard()(t.Context(), c.call)
 			assert.Equal(t, c.want, d.Action)
 		})
@@ -239,9 +249,8 @@ func TestGuardModeMatrix(t *testing.T) {
 func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	t.Parallel()
 
-	b := newTestBarrier(newFakePrompter())
 	// a bash line and an MCP tool name, write/edit never listable.
-	b.SetSafeCommands([]string{"git status", "mcp__list", "write"})
+	safe := []string{"git status", "mcp__list", "write"}
 
 	cases := []struct {
 		name string
@@ -263,21 +272,19 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			b.SetMode(c.mode)
+			b := newTestBarrierOpts(newFakePrompter(), withMode(Options{SafeCommands: safe}, c.mode))
 			d := b.Guard()(t.Context(), c.call)
 			assert.Equal(t, c.want, d.Action)
 		})
 	}
 
 	// a config entry can never un-reject an in-place write.
-	b2 := newTestBarrier(newFakePrompter())
-	b2.SetSafeCommands([]string{"sed -i s/a/b/ f"})
+	b2 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"sed -i s/a/b/ f"}})
 	d := b2.Guard()(t.Context(), bashCall("sed -i s/a/b/ f"))
 	assert.Equal(t, tools.ActionDeny, d.Action)
 
 	// write/edit are excluded from safe matching by name.
-	b3 := newTestBarrier(newFakePrompter())
-	b3.SetSafeCommands([]string{"write", "edit"})
+	b3 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"write", "edit"}})
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("write", `{}`)).Action)
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`)).Action)
 }
@@ -286,8 +293,7 @@ func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
 	t.Parallel()
 
 	// naming an MCP server (tools register as server__tool) covers every tool it exposes
-	b := newTestBarrier(newFakePrompter())
-	b.SetSafeCommands([]string{"sectool"})
+	b := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"sectool"}})
 
 	for _, name := range []string{"sectool__proxy_poll", "sectool__flow_get", "sectool__js_surface"} {
 		d := b.Guard()(t.Context(), call(name, `{}`))
@@ -295,14 +301,12 @@ func TestGuardSafeCommandsMatchMCPServerNamespace(t *testing.T) {
 	}
 
 	// a different server's tool still prompts
-	b2 := newTestBarrier(newFakePrompter())
-	b2.SetSafeCommands([]string{"sectool"})
+	b2 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"sectool"}})
 	d := b2.Guard()(t.Context(), call("github__get_repo", `{}`))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 
 	// an exact namespaced tool name still matches that one tool only
-	b3 := newTestBarrier(newFakePrompter())
-	b3.SetSafeCommands([]string{"sectool__proxy_poll"})
+	b3 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"sectool__proxy_poll"}})
 	assert.Equal(t, tools.ActionAllow, b3.Guard()(t.Context(), call("sectool__proxy_poll", `{}`)).Action)
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("sectool__flow_get", `{}`)).Action)
 }
@@ -312,46 +316,95 @@ func TestGuardSafeMatchesBashCommandComponents(t *testing.T) {
 
 	// a compound line matches when every component is either the listed entry or
 	// verifiably read-only, wrapping in cd/pipe no longer defeating the safe match.
-	b := newTestBarrier(newFakePrompter())
-	b.SetSafeCommands([]string{"make lint"})
+	b := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"make lint"}})
 	d := b.Guard()(t.Context(), bashCall("cd /tmp && make lint 2>&1 | tail -5"))
 	assert.Equal(t, tools.ActionAllow, d.Action)
 
 	// an appended write never rides in on a listed prefix
-	b2 := newTestBarrier(newFakePrompter())
-	b2.SetSafeCommands([]string{"make lint"})
+	b2 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"make lint"}})
 	d = b2.Guard()(t.Context(), bashCall("make lint && rm -rf /tmp/x"))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 
 	// a compound whose unlisted component is neither read-only nor listed prompts
-	b3 := newTestBarrier(newFakePrompter())
-	b3.SetSafeCommands([]string{"make lint"})
+	b3 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"make lint"}})
 	d = b3.Guard()(t.Context(), bashCall("cd /tmp && make test"))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 
 	// unsafe ops (redirect/substitution) defeat component matching entirely
-	b4 := newTestBarrier(newFakePrompter())
-	b4.SetSafeCommands([]string{"make lint", "tail"})
+	b4 := newTestBarrierOpts(newFakePrompter(), Options{SafeCommands: []string{"make lint", "tail"}})
 	d = b4.Guard()(t.Context(), bashCall("cd /tmp && make lint > out.txt"))
 	assert.Equal(t, tools.ActionAsk, d.Action)
 }
 
-func TestGuardDenyMatchesBashCommandComponents(t *testing.T) {
+func TestGuardDenyMatches(t *testing.T) {
 	t.Parallel()
 
-	// a denied command nested in a compound is still refused
-	b := newTestBarrier(newFakePrompter())
-	b.SetMode(ModeAllowAll)
-	b.SetDeniedCommands([]string{"git stash"})
-	d := b.Guard()(t.Context(), bashCall("cd /x && git stash push -m wip"))
-	assert.Equal(t, tools.ActionDeny, d.Action)
+	// each case pins how one bash line fares against the deny list, in the mode
+	// where the list is the only gate: allow-all must still refuse
+	denied := []struct {
+		name string
+		cmds []string
+		in   string
+	}{
+		{"compound_component", []string{"git stash"}, "cd /x && git stash push -m wip"},
+		{"nested_sh_c", []string{"git push"}, `sh -c "git push --force"`},
+		{"nested_bash_c", []string{"git push"}, `bash -c 'git push'`},
+		{"nested_eval", []string{"git push"}, `eval git push`},
+		// quoting or escaping the head must not slip a listed command past the
+		// list: both sides resolve through tokenizeRaw before matching
+		{"quoted_head", []string{"git push"}, `"git" push`},
+		{"single_quoted_head", []string{"git push"}, `'git' push`},
+		{"quoted_subcommand", []string{"git push"}, `git "push"`},
+		{"escaped_char", []string{"git push"}, `git pu\sh`},
+		{"escaped_head", []string{"git push"}, `gi\t push`},
+		{"quoted_in_compound", []string{"git push"}, `cd /x && git "push"`},
+	}
+	for _, c := range denied {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTestBarrierOpts(newFakePrompter(),
+				withMode(Options{DeniedCommands: c.cmds}, ModeAllowAll))
+			assert.Equal(t, tools.ActionDeny, b.Guard()(t.Context(), bashCall(c.in)).Action)
+		})
+	}
+
+	// token-exact, never substring: near misses still run under allow-all
+	b := newTestBarrierOpts(newFakePrompter(),
+		withMode(Options{DeniedCommands: []string{"git push"}}, ModeAllowAll))
+	for _, cmd := range []string{`git pushx`, `git pus`, `git`} {
+		t.Run("no_match_"+cmd, func(t *testing.T) {
+			assert.Equal(t, tools.ActionAllow, b.Guard()(t.Context(), bashCall(cmd)).Action)
+		})
+	}
+}
+
+func TestGuardUnnameableLinesPrompt(t *testing.T) {
+	t.Parallel()
+
+	// nested interpreters and subshells execute what this line's tokens never
+	// name, so they prompt in every mode rather than auto-allowing
+	b := newTestBarrierOpts(newFakePrompter(), withMode(Options{}, ModeAllowRead))
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"sh_c", `sh -c "ls"`},
+		{"bash_c", `bash -c 'git status'`},
+		{"eval", `eval ls`},
+		{"subshell", `(ls)`},
+		{"subshell_write", `(git push)`},
+		{"subshell_chained", `ls && (echo hi)`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), bashCall(c.in)).Action)
+		})
+	}
 }
 
 func TestGuardDeniedCommandsMatchMCPServerNamespace(t *testing.T) {
 	t.Parallel()
 
-	b := newTestBarrier(newFakePrompter())
-	b.SetDeniedCommands([]string{"sectool"})
+	b := newTestBarrierOpts(newFakePrompter(), Options{DeniedCommands: []string{"sectool"}})
 	assert.Equal(t, tools.ActionDeny, b.Guard()(t.Context(), call("sectool__proxy_poll", `{}`)).Action)
 	// naming one server does not deny another
 	assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), call("github__get_repo", `{}`)).Action)
@@ -360,9 +413,9 @@ func TestGuardDeniedCommandsMatchMCPServerNamespace(t *testing.T) {
 func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 	t.Parallel()
 
-	b := newTestBarrier(newFakePrompter())
+	denied := []string{"git stash", "mcp__danger", "write"}
+	b := newTestBarrierOpts(newFakePrompter(), Options{DeniedCommands: denied})
 	// a bash line and an MCP tool name, and a core writer may also be denied
-	b.SetDeniedCommands([]string{"git stash", "mcp__danger", "write"})
 
 	cases := []struct {
 		name string
@@ -384,7 +437,7 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			b.SetMode(c.mode)
+			b := newTestBarrierOpts(newFakePrompter(), withMode(Options{DeniedCommands: denied}, c.mode))
 			d := b.Guard()(t.Context(), c.call)
 			assert.Equal(t, c.want, d.Action)
 		})
@@ -394,20 +447,13 @@ func TestGuardDeniedCommandsRefuseWithoutPrompting(t *testing.T) {
 	ctx := tools.WithUserInitiated(t.Context())
 	d := b.Guard()(ctx, bashCall("git stash"))
 	assert.Equal(t, tools.ActionAllow, d.Action)
-
-	// clearing the list lifts the denial for a previously listed command
-	b.SetMode(ModeAllowRead)
-	b.SetDeniedCommands(nil)
-	d = b.Guard()(t.Context(), bashCall("git stash"))
-	assert.NotEqual(t, tools.ActionDeny, d.Action)
 }
 
 func TestGuardUserInitiatedExemptInEveryMode(t *testing.T) {
 	t.Parallel()
 
-	b := newTestBarrier(newFakePrompter())
 	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeBlockAll} {
-		b.SetMode(m)
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{}, m))
 		ctx := tools.WithUserInitiated(t.Context())
 		d := b.Guard()(ctx, call("write", `{}`))
 		assert.Equal(t, tools.ActionAllow, d.Action, m.String())
@@ -417,9 +463,8 @@ func TestGuardUserInitiatedExemptInEveryMode(t *testing.T) {
 func TestGuardDoomedEditRunsInsteadOfPrompting(t *testing.T) {
 	t.Parallel()
 
-	b := newTestBarrier(newFakePrompter())
 	failDryRun := func(agent.ToolCall) error { return errors.New("missing") }
-	b.SetDryRun(failDryRun)
+	b := newTestBarrierOpts(newFakePrompter(), Options{DryRun: failDryRun})
 	d := b.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`))
 	assert.Equal(t, tools.ActionAllow, d.Action)
 
@@ -434,15 +479,14 @@ func TestAskerNoUI(t *testing.T) {
 
 	// no prompter installed denies headless
 	t.Run("denies_when_headless", func(t *testing.T) {
-		b := NewBarrier(noRO) // no prompter installed
+		b := NewBarrier(noRO, Options{}) // no prompter installed
 		d := runAsk(b, t.Context(), "write", []byte(`{}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
-		assert.Contains(t, d.Reason, "permission required")
+		assert.Equal(t, unattendedDenyReason, d.Reason)
 	})
 
 	t.Run("denies_reads_under_block_all", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeBlockAll)
+		b := NewBarrier(noRO, withMode(Options{}, ModeBlockAll))
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"ls -la"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 	})
@@ -454,6 +498,27 @@ func TestAskerNoUI(t *testing.T) {
 		d := runAsk(b, t.Context(), "write", []byte(`{}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 	})
+
+	// a hold that never releases must not deadlock the ask: an abort unwinds it
+	t.Run("stuck_hold_aborts_cleanly", func(t *testing.T) {
+		p := newFakePrompter()
+		p.beginHold() // never released
+		b := newTestBarrier(p)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, ctx, "write", []byte(`{}`)) }()
+		require.Eventually(t, func() bool { return p.holdCount() == 1 }, time.Second, 10*time.Millisecond)
+
+		cancel()
+		select {
+		case d := <-done:
+			assert.Equal(t, tools.ActionDeny, d.Action)
+			assert.Equal(t, unattendedDenyReason, d.Reason)
+		case <-time.After(2 * time.Second):
+			t.Fatal("a stuck hold must unwind on abort")
+		}
+	})
 }
 
 func TestAskerUnattendedAuto(t *testing.T) {
@@ -461,12 +526,9 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 	// auto takes an allow verdict as final, running the call with no dialog
 	t.Run("auto_allow_verdict_runs", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAuto)
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b.SetClassifier(cl)
 		n := &noticeRecorder{}
-		b.SetNotice(n.record)
+		b := NewBarrier(noRO, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl, Notice: n.record})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
@@ -476,21 +538,29 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 	// a deny verdict refuses without ever opening a dialog
 	t.Run("auto_deny_verdict_refuses", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAuto)
 		cl := &fakeClassifier{verdict: ClassDeny}
-		b.SetClassifier(cl)
+		b := NewBarrier(noRO, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 		assert.Equal(t, unattendedDenyReason, d.Reason)
 	})
 
+	// a redirect line is unparseable by static analysis: no grant could ever cover
+	// it, so unattended it refuses outright, the model never judging raw text
+	t.Run("redirect_line_refuses_without_model", func(t *testing.T) {
+		cl := &fakeClassifier{verdict: ClassAllow}
+		b := NewBarrier(noRO, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl})
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"echo hi > out.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+		assert.Zero(t, cl.calls)
+	})
+
 	// an unsure verdict fails closed like any unapproved call
 	t.Run("unsure_fails_closed", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAuto)
-		b.SetClassifier(&fakeClassifier{verdict: ClassUnsure})
+		b := NewBarrier(noRO, Options{Mode: ModeAuto, ModeSet: true, Classifier: &fakeClassifier{verdict: ClassUnsure}})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -499,9 +569,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 	// a cancelled context refuses even an allow verdict
 	t.Run("cancelled_context_refuses", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAuto)
-		b.SetClassifier(&fakeClassifier{verdict: ClassAllow})
+		b := NewBarrier(noRO, Options{Mode: ModeAuto, ModeSet: true, Classifier: &fakeClassifier{verdict: ClassAllow}})
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -511,10 +579,8 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 	// a core writer has no unattended path in any auto mode
 	t.Run("write_denied_everywhere", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAutoWrite)
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b.SetClassifier(cl)
+		b := NewBarrier(noRO, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl})
 
 		d := runAsk(b, t.Context(), "write", []byte(`{}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -524,10 +590,8 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 	// an MCP/extension call is judged with its metadata like a shell command
 	t.Run("extension_tool_classified", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAuto)
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b.SetClassifier(cl)
+		b := NewBarrier(noRO, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl})
 
 		d := runAsk(b, t.Context(), "srv__deploy", []byte(`{"env":"prod"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
@@ -539,10 +603,8 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	t.Run("open_failure_takes_verdict", func(t *testing.T) {
 		p := newFakePrompter()
 		p.err = errors.New("tui: no interactive terminal")
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
 		cl := &fakeClassifier{verdict: ClassDeny}
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -557,85 +619,67 @@ func TestGrantSessionAllows(t *testing.T) {
 	t.Parallel()
 
 	t.Run("tool_grant_runs_without_ui", func(t *testing.T) {
-		b := NewBarrier(noRO) // no prompter: only a grant can allow
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"write"})
+		b := NewBarrier(noRO, Options{Grants: []string{"write"}}) // no prompter: only a grant can allow
 
 		d := runAsk(b, t.Context(), "write", []byte(`{}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
 	})
 
 	t.Run("bash_grant_covers_any_command", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"bash"})
+		b := NewBarrier(noRO, Options{Grants: []string{"bash"}})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
 	})
 
 	t.Run("bash_grant_covers_compounds", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"bash"})
+		b := NewBarrier(noRO, Options{Grants: []string{"bash"}})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build && mkdir dir"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
 	})
 
 	t.Run("head_grant_covers_its_command", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"python3"})
+		b := NewBarrier(noRO, Options{Grants: []string{"python3"}})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"python3 -c 'pass'"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
 	})
 
 	t.Run("head_grant_leaves_others_gated", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"python3"})
+		b := NewBarrier(noRO, Options{Grants: []string{"python3"}})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action) // nobody to prompt, no grant
 	})
 
 	t.Run("hard_reject_still_refuses", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"bash"})
+		b := NewBarrier(noRO, Options{Grants: []string{"bash"}})
 
 		d := b.Guard()(t.Context(), bashCall("sed -i s/a/b/ f"))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 	})
 
 	t.Run("deny_list_still_refuses", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"write"})
-		b.SetDeniedCommands([]string{"write"})
+		b := NewBarrier(noRO, Options{Grants: []string{"write"}, DeniedCommands: []string{"write"}})
 
 		d := b.Guard()(t.Context(), call("write", `{}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 	})
 
-	t.Run("mode_change_clears_grants", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAllowRead)
-		b.GrantSessionAllows([]string{"write"})
+	t.Run("earned_grants_clear_flag_grants_hold", func(t *testing.T) {
+		b := NewBarrier(noRO, Options{Grants: []string{"bash"}})
 		b.SetMode(ModeAuto)
 
-		d := runAsk(b, t.Context(), "write", []byte(`{}`))
-		assert.Equal(t, tools.ActionDeny, d.Action)
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action) // the flag grant survives the mode change
 	})
 
 	t.Run("unlisted_bash_auto_classifies", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAuto)
-		b.GrantSessionAllows([]string{"python3"})
 		cl := &fakeClassifier{verdict: ClassDeny}
-		b.SetClassifier(cl)
+		b := NewBarrier(noRO, Options{
+			Mode: ModeAuto, ModeSet: true, Grants: []string{"python3"}, Classifier: cl,
+		})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -673,9 +717,8 @@ func TestAskerAllowEmitsDescriptiveNotices(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := newFakePrompter() // a fresh prompter per case so waitDialog targets its own dialog
-			b := newTestBarrier(p)
 			n := &noticeRecorder{}
-			b.SetNotice(n.record)
+			b := newTestBarrierOpts(p, Options{Notice: n.record})
 
 			got := runAndAnswer(t, p, b, "bash", c.input, c.opt)
 			assert.Equal(t, tools.ActionAllow, got.Action)
@@ -709,8 +752,7 @@ func TestAskerDenyAndNotes(t *testing.T) {
 		p := newFakePrompter()
 		p.reasons["note for allowing"] = "only inside build/"
 		n := &fakeNoter{}
-		b := newTestBarrier(p)
-		b.SetNoter(n.Note)
+		b := newTestBarrierOpts(p, Options{Noter: n.Note})
 
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build"}`), int(optAllowNote))
 
@@ -726,8 +768,7 @@ func TestAskerDenyAndNotes(t *testing.T) {
 		p := newFakePrompter()
 		p.reasons["reason for denying"] = "not now"
 		n := &fakeNoter{}
-		b := newTestBarrier(p)
-		b.SetNoter(n.Note)
+		b := newTestBarrierOpts(p, Options{Noter: n.Note})
 
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build"}`), int(optDeny))
 
@@ -742,8 +783,7 @@ func TestAskerDenyAndNotes(t *testing.T) {
 	t.Run("deny_no_reason_injects_nothing", func(t *testing.T) {
 		p := newFakePrompter() // no canned reason -> Reason returns false
 		n := &fakeNoter{}
-		b := newTestBarrier(p)
-		b.SetNoter(n.Note)
+		b := newTestBarrierOpts(p, Options{Noter: n.Note})
 
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm build"}`), int(optDeny))
 
@@ -890,6 +930,24 @@ func TestAskerSessionGrants(t *testing.T) {
 		assert.Equal(t, 3, p.count()) // every attack line opened its own dialog
 	})
 
+	// the grant write path (sessionNames) and lookup path (allowSessionKey) must
+	// derive one key for a quoted head, or the line re-prompts forever
+	t.Run("quoted_head_grants_one_key", func(t *testing.T) {
+		b := NewBarrier(noRO, Options{})
+		for _, cmd := range []string{`'git' log`, `ec'ho' hi`} {
+			c := bashCall(cmd)
+			keys, ok := b.allowSessionKeys(c)
+			require.True(t, ok, cmd)
+			b.mu.Lock()
+			for _, k := range keys {
+				b.allows[k] = true
+			}
+			b.mu.Unlock()
+			_, granted := b.sessionAllowed(c)
+			assert.True(t, granted, cmd)
+		}
+	})
+
 	// two non-readonly heads are both granted for the session by name
 	t.Run("compound_two_heads_grants_both_for_session", func(t *testing.T) {
 		p := newFakePrompter()
@@ -923,10 +981,8 @@ func TestAskerAuto(t *testing.T) {
 	// a read-only verdict resolves the open dialog without a keystroke
 	t.Run("classifies_read_only_and_resolves_dialog", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -939,10 +995,8 @@ func TestAskerAuto(t *testing.T) {
 	// a write verdict must not resolve, a user keystroke still deciding
 	t.Run("write_verdict_keeps_dialog_waiting", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
 		cl := &fakeClassifier{verdict: ClassDeny}
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -957,12 +1011,9 @@ func TestAskerAuto(t *testing.T) {
 
 	// a confident write (rm) is still classified in auto mode, a readonly verdict resolving the dialog open
 	t.Run("classifies_clear_write_and_approves_on_read_only", func(t *testing.T) {
-		b := NewBarrier(noRO)
-		b.SetMode(ModeAuto)
 		p := newFakePrompter()
-		b.SetPrompter(p)
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		// a confident write (rm) is still classified in auto mode, a readonly verdict
 		// resolving the dialog open without a keystroke.
@@ -977,12 +1028,9 @@ func TestAskerAuto(t *testing.T) {
 
 	// an auto-approved readonly call emits a notice
 	t.Run("read_only_emits_notice", func(t *testing.T) {
-		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
-		b.SetClassifier(&fakeClassifier{verdict: ClassAllow})
 		n := &noticeRecorder{}
-		b.SetNotice(n.record)
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{
+			Classifier: &fakeClassifier{verdict: ClassAllow}, Notice: n.record}, ModeAuto))
 
 		done := make(chan struct{})
 		go func() {
@@ -997,12 +1045,10 @@ func TestAskerAuto(t *testing.T) {
 
 	// a user-decided write verdict emits no auto-allow notice
 	t.Run("write_verdict_emits_no_notice", func(t *testing.T) {
-		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
-		b.SetClassifier(&fakeClassifier{verdict: ClassDeny})
 		n := &noticeRecorder{}
-		b.SetNotice(n.record)
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{
+			Classifier: &fakeClassifier{verdict: ClassDeny}, Notice: n.record}, ModeAuto))
+		p := b.prompter.(*fakePrompter)
 
 		go runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		d := waitDialog(t, p)
@@ -1012,12 +1058,10 @@ func TestAskerAuto(t *testing.T) {
 
 	// answering before classification returns cancels the in-flight classifier
 	t.Run("user_answer_cancels_in_flight_classification", func(t *testing.T) {
-		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
 		cancelled := make(chan struct{})
 		cl := &blockingClassifier{cancel: cancelled}
-		b.SetClassifier(cl)
+		p := newFakePrompter()
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1040,10 +1084,8 @@ func TestAskerAuto(t *testing.T) {
 	// auto also classifies MCP/extension calls
 	t.Run("mcp_classifies_non_bash_calls", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto) // auto also classifies MCP/extension calls
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1080,9 +1122,7 @@ func TestAskerDialogHold(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold() // held for the whole test, the verdict must not wait it out
 		defer release()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
-		b.SetClassifier(&fakeClassifier{verdict: ClassAllow})
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: &fakeClassifier{verdict: ClassAllow}}, ModeAuto))
 
 		done := make(chan tools.Decision, 1)
 		go func() { done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)) }()
@@ -1101,9 +1141,7 @@ func TestAskerDialogHold(t *testing.T) {
 	t.Run("deny_verdict_keeps_holding", func(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
-		b.SetClassifier(&fakeClassifier{verdict: ClassDeny})
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: &fakeClassifier{verdict: ClassDeny}}, ModeAuto))
 
 		done := make(chan tools.Decision, 1)
 		go func() { done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"rm x"}`)) }()
@@ -1121,11 +1159,9 @@ func TestAskerDialogHold(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold() // held for the whole test, the cached verdict must not wait it out
 		defer release()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
 		var calls atomic.Int32
 		cl := NewCachedClassifier(func(context.Context, Subject) Class { calls.Add(1); return ClassAllow })
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		call := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"stat f.txt"}`)}
 		b.Prefetch(t.Context(), []agent.ToolCall{call})
@@ -1149,11 +1185,9 @@ func TestAskerDialogHold(t *testing.T) {
 	// a banked deny still opens a dialog for the person; no classification is re-run
 	t.Run("banked_deny_still_dialogues", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
 		var calls atomic.Int32
 		cl := NewCachedClassifier(func(context.Context, Subject) Class { calls.Add(1); return ClassDeny })
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		call := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"rm f.txt"}`)}
 		b.Prefetch(t.Context(), []agent.ToolCall{call})
@@ -1184,7 +1218,7 @@ func TestAskerDialogHold(t *testing.T) {
 		select {
 		case got := <-done:
 			assert.Equal(t, tools.ActionDeny, got.Action)
-			assert.Equal(t, noUIReason, got.Reason)
+			assert.Equal(t, unattendedDenyReason, got.Reason)
 		case <-time.After(2 * time.Second):
 			t.Fatal("an abort must release the held dialog ask")
 		}
@@ -1291,10 +1325,8 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 	// leaving auto mid-dialog cancels the pending verdict, the user deciding again
 	t.Run("leaving_auto_cancels_pending_verdict", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrier(p)
 		cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
-		b.SetClassifier(cl)
-		b.SetMode(ModeAuto)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1323,10 +1355,8 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 		p := newFakePrompter()
 		releaseHold := p.beginHold()
 		defer releaseHold()
-		b := newTestBarrier(p)
 		cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
-		b.SetClassifier(cl)
-		b.SetMode(ModeAuto)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		done := make(chan tools.Decision, 1)
 		go func() {
@@ -1350,10 +1380,7 @@ func TestGuardAutoWriteScope(t *testing.T) {
 	outside := t.TempDir()
 
 	newScoped := func() *Barrier {
-		b := newTestBarrier(newFakePrompter())
-		b.SetWriteRoots(cwd)
-		b.SetMode(ModeAutoWrite)
-		return b
+		return newTestBarrierOpts(newFakePrompter(), withMode(Options{WriteRoots: []string{cwd}}, ModeAutoWrite))
 	}
 
 	cases := []struct {
@@ -1384,32 +1411,27 @@ func TestGuardAutoWriteScope(t *testing.T) {
 	})
 
 	t.Run("mkdir_asks_in_other_modes", func(t *testing.T) {
-		b := newTestBarrier(newFakePrompter())
-		b.SetWriteRoots(cwd)
-		b.SetMode(ModeAuto)
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{WriteRoots: []string{cwd}}, ModeAuto))
 		d := b.Guard()(t.Context(), bashCall("mkdir build"))
 		assert.Equal(t, tools.ActionAsk, d.Action)
 	})
 
 	t.Run("roots_unset_asks", func(t *testing.T) {
-		b := newTestBarrier(newFakePrompter())
-		b.SetMode(ModeAutoWrite)
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{}, ModeAutoWrite))
 		d := b.Guard()(t.Context(), call("write", `{"path":"`+cwd+`/a.go"}`))
 		assert.Equal(t, tools.ActionAsk, d.Action)
 	})
 
 	t.Run("denied_command_outranks", func(t *testing.T) {
-		b := newScoped()
-		b.SetDeniedCommands([]string{"write"})
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{
+			WriteRoots: []string{cwd}, DeniedCommands: []string{"write"}}, ModeAutoWrite))
 		d := b.Guard()(t.Context(), call("write", `{"path":"`+cwd+`/a.go"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 	})
 
 	t.Run("other_modes_still_ask", func(t *testing.T) {
 		for _, m := range []Mode{ModeAllowRead, ModeAuto, ModeBlockAll} {
-			b := newTestBarrier(newFakePrompter())
-			b.SetWriteRoots(cwd)
-			b.SetMode(m)
+			b := newTestBarrierOpts(newFakePrompter(), withMode(Options{WriteRoots: []string{cwd}}, m))
 			d := b.Guard()(t.Context(), call("write", `{"path":"`+cwd+`/a.go"}`))
 			assert.Equal(t, tools.ActionAsk, d.Action, m)
 		}
@@ -1432,11 +1454,9 @@ func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			p := newFakePrompter()
-			b := newTestBarrier(p)
 			cl := &fakeClassifier{verdict: ClassAllow} // would auto-allow if ever consulted
-			b.SetClassifier(cl)
-			b.SetWriteRoots(t.TempDir())
-			b.SetMode(c.mode)
+			b := newTestBarrierOpts(p, withMode(Options{
+				Classifier: cl, WriteRoots: []string{t.TempDir()}}, c.mode))
 
 			got := runAndAnswer(t, p, b, c.tool, []byte(c.input), int(optDeny))
 			assert.Equal(t, tools.ActionDeny, got.Action)
@@ -1446,9 +1466,7 @@ func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 
 	t.Run("mcp_tool_still_classified", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetClassifier(&fakeClassifier{verdict: ClassAllow})
-		b.SetMode(ModeAuto)
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: &fakeClassifier{verdict: ClassAllow}}, ModeAuto))
 
 		got := runAsk(b, t.Context(), "mcp__x", []byte(`{}`))
 		assert.Equal(t, tools.ActionAllow, got.Action) // resolved by the classifier, no answer given
@@ -1479,8 +1497,7 @@ func TestClassifyCall(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			b := newTestBarrier(nil)
-			b.SetClassifier(&fakeClassifier{})
+			b := newTestBarrierOpts(nil, Options{Classifier: &fakeClassifier{}})
 			assert.Equal(t, c.want, b.classifyCall(c.mode, c.tool))
 		})
 	}
@@ -1541,8 +1558,7 @@ func TestPrevResolvesOpenDialog(t *testing.T) {
 	// stepping back out of block-all lands on allow-all, which resolves the
 	// open dialog as allow exactly as Cycle would
 	p := newFakePrompter()
-	b := newTestBarrier(p)
-	b.SetMode(ModeBlockAll)
+	b := newTestBarrierOpts(p, withMode(Options{}, ModeBlockAll))
 
 	var got tools.Decision
 	done := make(chan struct{})
@@ -1560,8 +1576,7 @@ func TestPrevResetsSessionAllows(t *testing.T) {
 
 	// a grant earned in auto must not survive stepping back into allow-read
 	p := newFakePrompter()
-	b := newTestBarrier(p)
-	b.SetMode(ModeAuto)
+	b := newTestBarrierOpts(p, withMode(Options{}, ModeAuto))
 
 	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"curl example.com"}`), int(optAllowSession))
 	assert.Equal(t, tools.ActionAllow, got.Action)
@@ -1674,19 +1689,11 @@ func TestPrefetch(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			b := newTestBarrier(newFakePrompter())
 			cl := &concurrentClassifier{verdict: ClassAllow}
 			// the session's cached classifier, as main.go wires it: concurrent identical
 			// subjects join one request instead of duplicating it
-			b.SetClassifier(NewCachedClassifier(cl.Classify))
-			if c.mode == ModeAutoWrite {
-				b.SetMode(ModeAutoWrite)
-			} else {
-				b.SetMode(ModeAuto)
-			}
-			if len(c.safe) > 0 {
-				b.SetSafeCommands(c.safe)
-			}
+			b := newTestBarrierOpts(newFakePrompter(), withMode(Options{
+				Classifier: NewCachedClassifier(cl.Classify), SafeCommands: c.safe}, c.mode))
 			b.Prefetch(t.Context(), c.in)
 			require.Eventually(t, func() bool { return cl.count() == c.want }, time.Second, 10*time.Millisecond)
 		})
@@ -1698,10 +1705,8 @@ func TestPrefetchCancellation(t *testing.T) {
 
 	// the turn's abort cancels every in-flight prefetched classification
 	t.Run("abort_cancels_batch", func(t *testing.T) {
-		b := newTestBarrier(newFakePrompter())
-		b.SetMode(ModeAuto)
 		cl := &countingBlockingClassifier{}
-		b.SetClassifier(cl)
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{Classifier: cl}, ModeAuto))
 
 		ctx, cancel := context.WithCancel(t.Context())
 		calls := []agent.ToolCall{bashCall("rm f"), bashCall("git push origin main")}
@@ -1715,10 +1720,9 @@ func TestPrefetchCancellation(t *testing.T) {
 	// answering the dialog a prefetched request fronts stops it, abort or not
 	t.Run("answer_cancels_warm", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrier(p)
-		b.SetMode(ModeAuto)
 		stopped := make(chan struct{})
-		b.SetClassifier(NewCachedClassifier((&blockingClassifier{cancel: stopped}).Classify))
+		b := newTestBarrierOpts(p, withMode(Options{
+			Classifier: NewCachedClassifier((&blockingClassifier{cancel: stopped}).Classify)}, ModeAuto))
 
 		// the turn stays live past the answer, only the answer stopping the request
 		turnCtx, turnCancel := context.WithCancel(t.Context())
@@ -1747,10 +1751,8 @@ func TestPrefetchCancellation(t *testing.T) {
 func TestPrefetchSkipsSessionAllowed(t *testing.T) {
 	t.Parallel()
 
-	b := newTestBarrier(newFakePrompter())
-	b.SetMode(ModeAuto)
 	cl := &concurrentClassifier{verdict: ClassAllow}
-	b.SetClassifier(cl)
+	b := newTestBarrierOpts(newFakePrompter(), withMode(Options{Classifier: cl}, ModeAuto))
 
 	// grant "rm" for the session so a later rm call is covered by memory.
 	b.allows["bash:rm"] = true

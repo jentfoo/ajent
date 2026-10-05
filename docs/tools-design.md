@@ -138,7 +138,12 @@ unverifiable prompts. Here-document bodies are the reading command's data,
 never shell, so they neither contribute command names (a python script inside
 `<<'EOF'` names only `python`) nor match deny entries; an unquoted delimiter
 keeps expansion alive, so a body carrying `$(` or a backtick fails unsafe like
-any other substitution.
+any other substitution. A subshell `( … )` fails unsafe the same way: its
+contents execute but are not this line's tokens, so it prompts in every mode
+rather than being scanned as named commands. Nested interpreters (`sh -c`,
+`eval`) are likewise unnameable, with one asymmetry: the deny list extracts and
+rescans their payload, since a configured refusal must hold in every mode, while
+safe lists and read-only checks never see inside.
 
 ### Headless: the tool set is the gate
 
@@ -169,11 +174,14 @@ stays off unless `--allow-tools` names it.
 offered set asks nothing until `--allow-tools` re-offers a call). Nobody can
 answer a dialog there, so the asker takes the model classification as final: an
 allow runs the call (an "auto allowed" notice reaches stderr), while a deny, a
-failed or an unsure review all refuse with `permission not given`. Core writers
-are never classified, so plain `--allow-auto` withholds them at the registry
-rather than offering guaranteed refusals. Under `--allow-autowrite`
-workspace-confined writes pass statically, and one outside the roots refuses
-with the same `permission not given`, never a missing-UI message.
+failed or an unsure review all refuse with `permission not given`. A shell line
+static analysis cannot parse (redirect, substitution, unnameable head) never
+reaches the model unattended: no grant could cover it either, so it refuses
+outright instead of leaning on a model reading raw text. Core writers are never
+classified, so plain `--allow-auto` withholds them at the registry rather than
+offering guaranteed refusals. Under `--allow-autowrite` workspace-confined
+writes pass statically, and one outside the roots refuses with the same
+`permission not given`, never a missing-UI message.
 
 Every scope installs the interactive barrier's decision inputs, classifier
 included, so a call is judged by one rule set and only the dialog differs.
@@ -187,7 +195,9 @@ end is attached.
 `--allow-tools` entries pre-populate the barrier's session-allow memory, the
 same keys a proactive "allow for session" answer would write: a tool name
 allows that tool (core writers included), `bash` allows any nameable shell
-call, and any other word allows bash commands with that head. An entry naming a
+call, and any other word allows bash commands with that head. Unlike earned
+grants, these hold across the mode changes that clear session memory (the
+barrier re-applies its construction grants on every switch). An entry naming a
 registered tool enables it, even one its source registered disabled (an MCP
 server switched off in `mcp.json`); a multi-word entry naming no tool grants
 nothing and is warned about on stderr. A grant never overrides a hard reject

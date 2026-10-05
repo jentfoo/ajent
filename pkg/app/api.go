@@ -24,20 +24,21 @@ const (
 // ToolScope picks this invocation's permission posture: which tools a headless
 // run offers the model, and the barrier mode its permission flag starts. A
 // scope that names no mode leaves the configured default alone interactively,
-// and runs allow-all headless where no dialog can settle a prompt and the
-// offered tool set carries the gate.
+// and runs auto+write headless (permissions.headlessMode overriding) where no
+// dialog can settle a prompt and the model classifier is final.
 type ToolScope uint8
 
 const (
-	ToolScopeDefault   ToolScope = iota // every built-in but bash; startup mode from config
+	ToolScopeDefault   ToolScope = iota // all built-ins; headless mode from permissions.headlessMode (default auto+write)
 	ToolScopeAllowAll                   // everything incl. bash; starts at allow-all
 	ToolScopeReadOnly                   // verifiably read-only tools only; starts at auto
 	ToolScopeAuto                       // every built-in but the core writers; starts at auto
 	ToolScopeAutoWrite                  // everything incl. bash; starts at auto+write
 )
 
-// barrierMode maps a scope onto the barrier mode its permission flag starts in,
-// ok false when the scope names none and leaves the configured default alone.
+// barrierMode maps a scope onto the barrier mode its permission flag starts
+// in, ok false when the scope names none and leaves the configured default
+// alone. The zero Mode carries no meaning on false.
 func (s ToolScope) barrierMode() (permit.Mode, bool) {
 	switch s {
 	case ToolScopeAllowAll:
@@ -50,7 +51,7 @@ func (s ToolScope) barrierMode() (permit.Mode, bool) {
 	case ToolScopeAutoWrite:
 		return permit.ModeAutoWrite, true
 	default:
-		return permit.ModeAllowRead, false
+		return 0, false
 	}
 }
 

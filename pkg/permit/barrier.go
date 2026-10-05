@@ -16,8 +16,10 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// noUIReason is the denial for a call that would prompt with nobody to ask.
-const noUIReason = "permission required (no UI available)"
+// unattendedDenyReason is the one refusal for an offered call nobody approved:
+// a denied or failed review, an unparseable shell line and a prompter that
+// cannot open all read the same, so a script never parses why.
+const unattendedDenyReason = "permission not given"
 
 // maxClassifierArgs bounds a non-bash call's payload sent to auto classification,
 // so a large write body never inflates the model request.
@@ -40,9 +42,10 @@ type Barrier struct {
 
 	preview func(agent.ToolCall) string // enhanced dialog subject, nil = raw arguments
 
-	allows map[string]bool               // session allows by allowSessionKey
-	open   []*pendingAsk                 // live dialogs, re-evaluated on mode change
-	warm   map[string]context.CancelFunc // prefetched classifications by subject key
+	grants []string        // construction grants, re-applied after every mode change
+	allows map[string]bool // session allows by allowSessionKey
+	open   []*pendingAsk   // live dialogs, re-evaluated on mode change
+	warm   map[string]context.CancelFunc
 }
 
 // pendingAsk tracks one open approval dialog so a mode change can resolve it.
@@ -53,127 +56,66 @@ type pendingAsk struct {
 	cancelAuto func() // stops a racing classification, nil when none runs
 }
 
-// NewBarrier builds a barrier with read-only metadata lookup ro. It starts in
-// allow-read, setting prompter/classifier before use.
-func NewBarrier(ro func(string) bool) *Barrier {
-	return &Barrier{
-		mode:   ModeAllowRead,
-		allows: make(map[string]bool),
-		warm:   make(map[string]context.CancelFunc),
-		ro:     ro,
+// Options carries the decision inputs a front end installs at construction.
+// Mode names the starting gate, ModeSet false leaving the default allow-read.
+// Grants pre-populate the session-allow memory and survive the mode changes
+// that clear earned grants.
+type Options struct {
+	Mode           Mode // starting gate, ignored unless ModeSet
+	ModeSet        bool // whether Mode overrides the default
+	Grants         []string
+	Prompter       Prompter     // approval dialogs, nil meaning unattended
+	Noter          Noter        // allow/deny note injection, nil drops notes
+	Classifier     Classifier   // auto-mode verdicts, nil meaning none
+	Notice         func(string) // transient status notices, nil silences them
+	DryRun         func(agent.ToolCall) error
+	Preview        func(agent.ToolCall) string
+	SafeCommands   []string // exact tool names or bash lines skipping the prompt
+	DeniedCommands []string // exact tool names or bash lines refused in every mode
+	WriteRoots     []string // auto+write's writable roots, empty allowing none
+}
+
+// NewBarrier builds a barrier with read-only metadata lookup ro, applying o's
+// inputs with grants last so the starting mode can never clear them.
+func NewBarrier(ro func(string) bool, o Options) *Barrier {
+	b := &Barrier{
+		mode:       ModeAllowRead,
+		allows:     make(map[string]bool),
+		warm:       make(map[string]context.CancelFunc),
+		ro:         ro,
+		grants:     o.Grants,
+		prompter:   o.Prompter,
+		noter:      o.Noter,
+		classifier: o.Classifier,
+		notice:     o.Notice,
+		dryRun:     o.DryRun,
+		preview:    o.Preview,
 	}
-}
-
-// SetPrompter installs the approval-dialog source, nil meaning headless.
-func (b *Barrier) SetPrompter(p Prompter) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.prompter = p
-}
-
-// SetNoter installs note injection for "allow with note".
-func (b *Barrier) SetNoter(n Noter) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.noter = n
-}
-
-// SetClassifier installs the model classifier used in auto mode.
-func (b *Barrier) SetClassifier(c Classifier) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.classifier = c
-}
-
-// SetNotice installs a callback for transient status notices such as an
-// auto-allowed classification, typically the UI's Notify. nil silences them.
-func (b *Barrier) SetNotice(n func(string)) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.notice = n
-}
-
-// SetDryRun installs a registry-backed dry-run check for doomed calls. nil means
-// no tool can predict failure, so nothing is skipped.
-func (b *Barrier) SetDryRun(fn func(agent.ToolCall) error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.dryRun = fn
-}
-
-// SetPreview installs an optional per-call subject renderer (a write's content or
-// an edit diff). It returns "" to fall back on the raw tool arguments.
-func (b *Barrier) SetPreview(p func(agent.ToolCall) string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.preview = p
-}
-
-// SetSafeCommands installs config-declared safe commands: exact tool names or
-// bash command lines that skip the approval prompt. write/edit can never be
-// listed (they always prompt), an empty list clearing any prior set.
-func (b *Barrier) SetSafeCommands(cmds []string) {
-	var fn func(agent.ToolCall) bool
-	if len(cmds) > 0 {
-		fn = func(call agent.ToolCall) bool { return SafeMatches(call, cmds) }
+	if len(o.SafeCommands) > 0 {
+		b.safe = func(call agent.ToolCall) bool { return SafeMatches(call, o.SafeCommands) }
 	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.safe = fn
-}
-
-// SetDeniedCommands installs config-declared denied commands: exact tool names or
-// bash command lines that are always refused without prompting, in every
-// mode (allow-all and user-initiated included). An empty list clears any prior set.
-func (b *Barrier) SetDeniedCommands(cmds []string) {
-	var fn func(agent.ToolCall) bool
-	if len(cmds) > 0 {
-		fn = func(call agent.ToolCall) bool { return DenyMatches(call, cmds) }
+	if len(o.DeniedCommands) > 0 {
+		b.deny = func(call agent.ToolCall) bool { return DenyMatches(call, o.DeniedCommands) }
 	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.deny = fn
-}
-
-// SetWriteRoots installs the directories auto+write may write to without a
-// prompt, unset meaning every write prompts as in every other mode.
-func (b *Barrier) SetWriteRoots(cwd string, extra ...string) {
-	s := newWriteScope(cwd, extra...)
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.scope = s
-}
-
-// GrantSessionAllows pre-populates the session-allow memory names would have
-// earned from an "allow for session" answer: a tool name allows that tool, any
-// other word allows bash commands with that head, and `bash` every nameable
-// shell call. A name keys both shapes, so a tool name that is also a command
-// head grants that head too. Call after SetMode, a mode change clearing grants.
-func (b *Barrier) GrantSessionAllows(names []string) {
-	if len(names) == 0 {
-		return
+	if len(o.WriteRoots) > 0 {
+		b.scope = newWriteScope(o.WriteRoots[0], o.WriteRoots[1:]...)
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	if o.ModeSet {
+		b.mode = o.Mode
+	}
+	b.grantSessionAllowsLocked(o.Grants)
+	return b
+}
 
+// grantSessionAllowsLocked keys each name as both a tool grant and a bash
+// head grant, so a tool name that is also a command head covers both shapes.
+// Caller holds the lock.
+func (b *Barrier) grantSessionAllowsLocked(names []string) {
 	for _, n := range names {
 		n = strings.TrimSpace(n)
 		if n == "" {
 			continue
 		}
-		// both keys, one entry: whichever shape the name turns out to name, the
-		// bare key covers a tool, the head key a bash command
 		b.allows[n] = true
 		if n != tools.ToolBash {
 			b.allows["bash:"+n] = true
@@ -254,10 +196,12 @@ func (b *Barrier) reevaluateOpens(m Mode, opens []*pendingAsk) {
 	}
 }
 
-// resetSessionAllowsLocked clears granted session memory so a mode change never
-// carries one gate level's approvals into another. Caller holds the lock.
+// resetSessionAllowsLocked clears earned session memory so a mode change never
+// carries one gate level's approvals into another, then re-applies the
+// construction grants, which hold across modes. Caller holds the lock.
 func (b *Barrier) resetSessionAllowsLocked() {
 	clear(b.allows)
+	b.grantSessionAllowsLocked(b.grants)
 }
 
 // Guard returns the static gate: user-initiated and allow-all always permit,
@@ -272,11 +216,12 @@ func (b *Barrier) Guard() tools.Guard {
 // reach the model classifier, warming the verdict cache so the asker consumes a
 // ready verdict behind its typing hold instead of waiting on a fresh request,
 // including a lone eligible call, since serial predecessors may run for a while
-// before it asks. It filters exactly as the asker does: only auto-mode bash and
-// non-write extension calls whose static verdict is Ask and which are not
-// already session-allowed go to the model. Identical subjects launch one
-// request. Launched goroutines observe ctx (the turn's), so an abort stops them,
-// and answering the dialog a request fronts cancels it. Never blocks.
+// before it asks. It filters exactly as the unattended ask does: only auto-mode
+// bash lines static analysis can name and non-write extension calls whose
+// static verdict is Ask and which are not already session-allowed go to the
+// model. Identical subjects launch one request. Launched goroutines observe ctx
+// (the turn's), so an abort stops them, and answering the dialog a request
+// fronts cancels it. Never blocks.
 func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 	if b.classifier == nil {
 		return
@@ -285,6 +230,11 @@ func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 	for _, call := range calls {
 		if !b.classifyCall(g.mode, call.Name) {
 			continue // core writer or non-auto mode: never classified at ask time either
+		}
+		if call.Name == tools.ToolBash {
+			if _, ok := sessionNames(bashCommand(call.Input)); !ok {
+				continue // unparseable line: the unattended ask refuses it, never the model
+			}
 		}
 		if g.staticVerdict(ctx, call).Action != tools.ActionAsk {
 			continue // statically resolved (read-only, config safe/deny, write scope): no model
@@ -348,6 +298,8 @@ func holdForDialog(ctx context.Context, p Prompter, verdict <-chan Class) (<-cha
 	go func() { p.Hold(holdCtx); close(held) }()
 	for {
 		select {
+		case <-ctx.Done(): // a stuck Hold must not deadlock the ask
+			return nil, false
 		case <-held: // typing settled, the dialog may open
 			select { // a verdict racing the pause settles here, not in a flash dialog
 			case c := <-verdict:
@@ -422,7 +374,7 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 		if ctx.Err() != nil { // aborted during the hold, nobody left to ask
 			stop()
-			return tools.Deny(noUIReason)
+			return tools.Deny(unattendedDenyReason)
 		}
 
 		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
@@ -448,6 +400,7 @@ func (b *Barrier) Asker() tools.Asker {
 		}
 		b.mu.Unlock()
 
+		// stop() at Wait's return cancels again; context cancel is idempotent
 		if stale {
 			cancel() // the mode that launched the verdict no longer decides
 		}
@@ -483,14 +436,11 @@ func (b *Barrier) Asker() tools.Asker {
 			if errors.Is(werr, ErrDenied) {
 				return tools.Deny("denied by user")
 			}
-			return tools.Deny(noUIReason)
+			return tools.Deny(unattendedDenyReason)
 		}
 		return b.resolveChoice(ctx, call, idx, auto)
 	}
 }
-
-// unattendedDenyReason is the neutral refusal for an offered call nobody approved.
-const unattendedDenyReason = "permission not given"
 
 // unattendedAsk decides a prompted call with no UI: the auto modes take the
 // model verdict as final, every other mode has nobody to decide.
@@ -501,12 +451,20 @@ func (b *Barrier) unattendedAsk(ctx context.Context, m Mode, call agent.ToolCall
 		return tools.Deny(unattendedDenyReason)
 	}
 	if !b.classifyCall(m, call.Name) {
-		return tools.Deny(noUIReason)
+		return tools.Deny(unattendedDenyReason)
+	}
+	// a line static analysis cannot parse (redirect, substitution, unnameable
+	// head) never matches a grant either, so unattended it refuses outright
+	// rather than leaning on a model reading raw text
+	if call.Name == tools.ToolBash {
+		if _, ok := sessionNames(bashCommand(call.Input)); !ok {
+			return tools.Deny(unattendedDenyReason)
+		}
 	}
 	switch b.classifier.Classify(ctx, classifySubject(m, call)) {
 	case ClassAllow:
 		if ctx.Err() != nil { // the run ended under the verdict, nothing left to allow
-			return tools.Deny(noUIReason)
+			return tools.Deny(unattendedDenyReason)
 		}
 		b.resolveNotice("once", true)
 		return allowDecision()
@@ -792,10 +750,63 @@ func DenyMatches(call agent.ToolCall, cmds []string) bool {
 		}
 	}
 	if call.Name == tools.ToolBash {
-		for _, seg := range scanCommand(bashCommand(call.Input)).Segments {
+		s := scanCommand(bashCommand(call.Input))
+		for i, seg := range s.Segments {
+			var raw string
+			if i < len(s.Raw) {
+				raw = s.Raw[i]
+			}
+			if entryCovered(seg, cmds) || entryCoversArgv(raw, cmds) {
+				return true
+			}
+			if deniedPayload(raw, cmds) {
+				return true // the interpreter's own tokens hide what it runs
+			}
+		}
+	}
+	return false
+}
+
+// deniedPayload reports whether a nested-interpreter segment (sh -c, eval) wraps a
+// command the deny list names. The collapsed scan never sees the payload, so it is
+// pulled from the verbatim text and checked directly. eval's arguments are plain
+// words of this line, so they are scanned again for their own splits.
+func deniedPayload(raw string, cmds []string) bool {
+	for _, p := range interpreterPayloads(raw) {
+		ps := scanCommand(strings.TrimSpace(p))
+		for i, seg := range ps.Segments {
 			if entryCovered(seg, cmds) {
 				return true
 			}
+			if i < len(ps.Raw) && entryCoversArgv(ps.Raw[i], cmds) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// entryCoversArgv reports whether the resolved tokens of raw start with any
+// configured entry's resolved tokens, so quoting or escaping the head
+// ("git" push, git pus\x68) cannot slip a listed command past the list. Both
+// sides resolve through tokenizeRaw, the same argv view the sed/awk/git checkers
+// match on. Token-exact: an entry longer than the line cannot match.
+func entryCoversArgv(raw string, cmds []string) bool {
+	if raw == "" {
+		return false
+	}
+	toks := tokenizeRaw(raw)
+	if len(toks) == 0 {
+		return false
+	}
+	toks[0] = stripPath(toks[0])
+	for _, e := range cmds {
+		et := tokenizeRaw(strings.TrimSpace(e))
+		if len(et) == 0 || len(et) > len(toks) {
+			continue
+		}
+		if slices.Equal(toks[:len(et)], et) {
+			return true
 		}
 	}
 	return false
@@ -857,14 +868,14 @@ func safeBashLine(cmd string, cmds []string) bool {
 		return false
 	}
 	if !s.HasSplitOp && len(s.Segments) <= 1 {
-		return entryCovered(strings.TrimSpace(cmd), cmds)
+		return entryCovered(strings.TrimSpace(cmd), cmds) || entryCoversArgv(cmd, cmds)
 	}
 	for i, seg := range s.Segments {
 		var rw string
 		if i < len(s.Raw) { // Segments and Raw stay index-aligned from pushSegment
 			rw = s.Raw[i]
 		}
-		if entryCovered(seg, cmds) || segmentIsReadOnly(seg, rw) {
+		if entryCovered(seg, cmds) || entryCoversArgv(rw, cmds) || segmentIsReadOnly(seg, rw) {
 			continue
 		}
 		return false

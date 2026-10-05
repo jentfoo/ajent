@@ -69,6 +69,10 @@ func TestAllowSessionKey(t *testing.T) {
 		// must re-prompt rather than match an existing bash:<name>.
 		{"bash", `PATH=/tmp/evil git status`, "bash:"},
 		{"write", `{}`, "write"}, // tool name for non-bash
+		// a quoted head keys the same way the grant was stored (sessionNames reads
+		// the raw command too), so allow-for-session covers the line again
+		{"bash", `'git' log`, "bash:'git'"},
+		{"bash", `ec'ho' hi`, "bash:ec'ho'"},
 	}
 	for _, c := range cases {
 		var tc agent.ToolCall

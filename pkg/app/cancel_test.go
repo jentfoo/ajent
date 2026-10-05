@@ -242,10 +242,10 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 	}
 
 	prompter := newCancelPrompter()
-	b := permit.NewBarrier(func(string) bool { return false })
-	b.SetPrompter(prompter)
-	b.SetMode(permit.ModeAuto)
-	b.SetClassifier(permit.NewCachedClassifier(adapter.Classify))
+	b := permit.NewBarrier(func(string) bool { return false }, permit.Options{
+		Mode: permit.ModeAuto, ModeSet: true,
+		Prompter: prompter, Classifier: permit.NewCachedClassifier(adapter.Classify),
+	})
 
 	// askAllow drives one asker call, answering the dialog it opens with Allow
 	askAllow := func() tools.Decision {

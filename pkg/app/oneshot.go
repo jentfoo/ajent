@@ -200,27 +200,23 @@ func RunHeadless(o HeadlessOptions) int {
 	// the scope is applied last, once every tool the run could offer is registered
 	toolsReg.SetEnabled(headlessTools(toolsReg, o.Scope, o.AllowTools, o.DenyTools))
 
-	// a one-shot settles every ask without a dialog: the auto scopes run their mode
-	// so the model verdict is final, every other scope runs allow-all with the
-	// offered set carrying the gate.
-	barrier := permit.NewBarrier(toolsReg.ReadOnly)
+	// a one-shot settles every ask without a dialog: the auto modes take the model
+	// verdict as final, so the default gates writes rather than running allow-all.
+	// Precedence: permission flag > permissions.headlessMode config > auto+write.
 	m, ok := o.Scope.barrierMode()
 	if !ok {
-		m = permit.ModeAllowAll // no permission flag: nothing else can settle a prompt
+		m = permit.ModeAutoWrite
+		if hm := o.Set.Settings().Permissions.HeadlessMode; hm != "" {
+			if parsed, pok := permit.ParseMode(hm); pok {
+				m = parsed
+			} else {
+				notify("unknown permissions.headlessMode "+hm+", using auto+write", agent.LevelWarn)
+			}
+		}
 	}
-	barrier.SetMode(m)
-	wireBarrier(barrier, barrierDeps{
-		reg:      toolsReg,
-		provider: providerFor,
-		model:    func() llm.Model { return st.Model },
-		session:  sessionHint(rec),
-		notify:   notify,
-		safe:     o.Set.Settings().Permissions.SafeCommands,
-		denied:   o.Set.Settings().Permissions.DeniedCommands,
-	})
 	// --allow-tools names pre-granted session allows: a tool name runs that tool
 	// (writers included), `bash` every nameable shell call, any other word a bash
-	// command head. Granted after the mode switch, which clears grants.
+	// command head. They hold across the mode changes that clear earned grants.
 	for _, n := range o.AllowTools {
 		// a grant keys a tool name or one head word, so a multi-word entry can only
 		// be a mistake; say so rather than pass silently
@@ -229,13 +225,22 @@ func RunHeadless(o HeadlessOptions) int {
 				agent.LevelWarn)
 		}
 	}
-	barrier.GrantSessionAllows(o.AllowTools)
+	bd := barrierOptions{
+		reg:         toolsReg,
+		providerFor: providerFor,
+		model:       func() llm.Model { return st.Model },
+		session:     sessionHint(rec),
+		notify:      notify,
+		safe:        o.Set.Settings().Permissions.SafeCommands,
+		denied:      o.Set.Settings().Permissions.DeniedCommands,
+	}
+	barrier := permit.NewBarrier(toolsReg.ReadOnly, bd.options(permit.Options{
+		Mode: m, ModeSet: true, Grants: o.AllowTools,
+	}))
+	bd.install(barrier)
 	// a batch's classified calls launch concurrently and agent_start calls reserve
 	// message-order job numbers, the same hooks the interactive driver installs
-	opts.OnToolBatch = func(ctx context.Context, calls []agent.ToolCall) {
-		sag.Reserve(calls)
-		barrier.Prefetch(ctx, calls)
-	}
+	wireBatchHooks(&opts, sag, barrier)
 
 	// steered inputs (sub-agent completions) expand through the same @ pipeline
 	// the initial prompt gets, via the agent's append-point seam. Vision reads
@@ -324,15 +329,14 @@ func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) [
 			return false
 		}
 		switch scope {
-		case ToolScopeAllowAll, ToolScopeAutoWrite:
-			return true
 		case ToolScopeReadOnly:
 			return slices.Contains(tools.ReadOnlyBuiltins, name) || reg.ReadOnly(name)
 		case ToolScopeAuto:
 			// core writers have no unattended path: never offered rather than refused
 			return !permit.IsCoreWriter(name)
 		default:
-			return name != tools.ToolBash
+			// the default scope is auto+write, whose gate covers bash and the writers
+			return true
 		}
 	}
 

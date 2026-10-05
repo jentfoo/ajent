@@ -2,11 +2,15 @@ package app
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
+
+	"golang.org/x/term"
 
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -80,14 +84,32 @@ func Run(o RunOptions) int {
 
 	active := resolveActiveModel(o.Model, reg)
 
-	// a one-shot run never opens a terminal.
-	if o.Prompt != "" {
+	// a one-shot run never opens a terminal; neither does a piped invocation.
+	// Both settle every permission ask without a dialog, so they share the
+	// headless path rather than running the driver with a prompter that cannot
+	// open. tmux and alt-screen still present TTYs, so this only fires on a real
+	// pipe or redirect.
+	prompt := o.Prompt
+	if prompt == "" && !isTerminal(os.Stdin) {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "ajent: reading piped stdin:", err)
+			return ExitUsage
+		}
+		prompt = strings.TrimSpace(string(data))
+	}
+	if prompt != "" || !isTerminal(os.Stdout) {
+		if prompt == "" {
+			// a redirect with no -p and no piped text has nothing to run
+			_, _ = fmt.Fprintln(os.Stderr, "ajent: stdout is not a terminal; use --prompt or pipe a prompt on stdin")
+			return ExitUsage
+		}
 		return RunHeadless(HeadlessOptions{
 			Set: set, Reg: reg, Active: active,
 			SessMode:   o.SessMode,
 			SessTarget: o.SessTarget,
 			Warnings:   warnings,
-			Prompt:     o.Prompt,
+			Prompt:     prompt,
 			Output:     o.Output,
 			Stats:      o.Stats,
 			Scope:      o.Scope,
@@ -151,6 +173,12 @@ func Run(o RunOptions) int {
 		fmt.Printf("\nRun `ajent --resume %s` to resume this session.\n", resumeLabel)
 	}
 	return ExitOK
+}
+
+// isTerminal reports whether f is a character device, the same test the TUI
+// applies to decide whether a full-screen render is possible.
+func isTerminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
 }
 
 func resolveActiveModel(modelFlag string, reg *llm.Registry) llm.Model {

@@ -79,7 +79,7 @@ func parseHeredocMarker(command string, i int) (hd heredoc, next int, ok bool) {
 			j++
 		}
 		if j >= len(command) || command[j] != q {
-			return hd, 0, false // unterminated quote: fail toward no heredoc
+			return hd, 0, false // unterminated or newline-crossing quote: no marker here
 		}
 		j++
 	} else {
@@ -233,8 +233,11 @@ func scanCommand(command string) Scan {
 			continue
 		}
 
-		// paren nesting so arithmetic shifts ($((1<<2))) never read as markers
+		// paren nesting so arithmetic shifts ($((1<<2))) never read as markers. A
+		// bare ( opens a subshell: its contents execute, so like $( it fails unsafe
+		// rather than being scanned as this line's own commands.
 		if ch == '(' {
+			hasUnsafeOp = true // subshell spawn
 			depth++
 		} else if ch == ')' && depth > 0 {
 			depth--
@@ -305,7 +308,10 @@ func scanCommand(command string) Scan {
 		default:
 		}
 
-		if ch == '|' || ch == ';' || ch == '\n' || ch == '&' {
+		// control operators split segments only outside a subshell: inside parens the
+		// whole group is one segment, so (a && b) keeps its shape. An unbalanced
+		// close paren cannot name a command either, failing safe as unsafe.
+		if (ch == '|' || ch == ';' || ch == '\n' || ch == '&') && depth == 0 {
 			hasSplitOp = true
 			pushSegment()
 			if ch == '\n' && len(heredocs) > 0 {
@@ -319,6 +325,9 @@ func scanCommand(command string) Scan {
 				i++
 			}
 			continue
+		}
+		if ch == ')' && depth == 0 {
+			hasUnsafeOp = true // unbalanced: bash rejects the line
 		}
 		if ch == '>' || ch == '`' {
 			buf.WriteByte(ch)
@@ -348,9 +357,13 @@ func compound(command string) bool {
 	if s.HasSplitOp || s.HasUnsafeOp {
 		return true
 	}
-	for _, seg := range s.Segments {
+	for i, seg := range s.Segments {
+		var raw string
+		if i < len(s.Raw) {
+			raw = s.Raw[i]
+		}
 		for _, re := range findUnsafeFlags {
-			if re.MatchString(seg) {
+			if re.MatchString(seg) || re.MatchString(raw) {
 				return true
 			}
 		}
@@ -388,11 +401,18 @@ func forEachSegment(s Scan, ok func(seg, raw string) bool) bool {
 }
 
 // segmentIsReadOnly reports whether one collapsed segment (with its verbatim raw)
-// names a verifiably read-only command.
+// names a verifiably read-only command. find's flags are matched against both the
+// collapsed and verbatim text so a quoted "-delete" can never slip past, and any
+// env assignment defeats the verdict since the shell would treat it as one too.
 func segmentIsReadOnly(seg, raw string) bool {
 	for _, re := range findUnsafeFlags {
-		if re.MatchString(seg) {
+		if re.MatchString(seg) || re.MatchString(raw) {
 			return false
+		}
+	}
+	for _, tok := range tokenizeRaw(raw) {
+		if envAssignRe.MatchString(tok) {
+			return false // an argument-position assignment is still shell state
 		}
 	}
 	tokens := segmentTokens(seg)

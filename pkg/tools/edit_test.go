@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -170,6 +171,22 @@ func TestEditAppliesSingleMatch(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(e.cwd, "code.go"))
 	require.NoError(t, err)
 	assert.Equal(t, "var y = 2\n", string(data))
+}
+
+func TestEditWriteCeiling(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	e.writeFile("big.txt", "start\n")
+	_ = e.readExec(t.Context(), `{"path":"big.txt"}`)
+
+	huge := strings.Repeat("x", editWriteCeiling)
+	res := e.editExec(t.Context(),
+		`{"path":"big.txt","edits":[{"oldText":"start","newText":"`+huge+`"}]}`)
+	assert.True(t, res.IsError)
+	data, err := os.ReadFile(filepath.Join(e.cwd, "big.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "start\n", string(data)) // refused before any write
 }
 
 func TestEditFailure(t *testing.T) {

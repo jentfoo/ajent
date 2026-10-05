@@ -130,17 +130,43 @@ var envAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // shellKeywords are control-flow words, never command names: a segment headed by
 // one is shell syntax whose inner commands vary, so it has no nameable head.
+// `time` stays nameable: it heads a plain command (its own binary) and timeout's
+// unwrap can expose one, while its keyword form only matters before a pipeline,
+// which a segment never holds.
 var shellKeywords = bulk.SliceToSet([]string{
 	"if", "then", "elif", "else", "fi", "do", "done", "while", "until",
-	"for", "case", "esac", "in", "select", "function", "time", "{", "}", "!",
+	"for", "case", "esac", "in", "select", "function", "{", "}", "!",
 })
+
+// nestedInterpreters run their arguments as a fresh shell line, so what actually
+// executes never appears in this line's own tokens. Such a head is unnameable:
+// never read-only, never grant-matchable, and (barrier.go) its -c payload is
+// scanned for the deny list instead.
+var nestedInterpreters = bulk.SliceToSet([]string{"sh", "bash", "zsh", "dash", "eval"})
+
+// interpreterPayloads returns the shell text an sh-like segment runs: the
+// arguments following -c (a bare `sh` reads stdin, yielding nothing).
+func interpreterPayloads(raw string) []string {
+	toks := tokenizeRaw(raw)
+	if stripPath(firstToken(toks)) == "eval" {
+		// eval concatenates its arguments with spaces, so the words rejoin into one line
+		return []string{strings.Join(toks[1:], " ")}
+	}
+	for i, tok := range toks[1:] {
+		if tok == "-c" && i+2 < len(toks) {
+			return toks[i+2:]
+		}
+	}
+	return nil
+}
 
 // headOf returns the command name a segment runs after unwrapping launchers, or
 // ("",false) when none can be named reliably. A leading VAR= assignment is never
 // stripped: PATH/LD_PRELOAD/BASH_ENV/ENV, plus any other var a binary reads, can
 // hijack what the head actually executes, so such a segment has no trustworthy name
 // and must fail closed (never read-only, never matches an existing grant). A shell
-// keyword head likewise names nothing.
+// keyword or nested interpreter head likewise names nothing: the real command
+// lives in its arguments.
 func headOf(seg string) (string, bool) {
 	toks := segmentTokens(seg)
 	if len(toks) == 0 || envAssignRe.MatchString(firstToken(toks)) {
@@ -151,6 +177,9 @@ func headOf(seg string) (string, bool) {
 		return "", false
 	}
 	if _, kw := shellKeywords[h]; kw {
+		return "", false
+	}
+	if _, ok := nestedInterpreters[h]; ok {
 		return "", false
 	}
 	return h, true

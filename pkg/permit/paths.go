@@ -111,10 +111,15 @@ var vcsDirs = bulk.SliceToSet([]string{".git", ".hg", ".svn"})
 
 // resolveInScope resolves an unresolved path argument and reports whether it lands
 // inside the scope. Empty, unresolvable, glob or expanding paths never do, nor does
-// anything inside a VCS metadata directory.
+// anything inside a VCS metadata directory. A ~ or ~/ resolves to home, which the
+// roots never cover, while ~user/ is refused outright: bash expands it to another
+// home but PathPolicy leaves it literal, so the two would disagree.
 func (s writeScope) resolveInScope(p string) (string, bool) {
 	if p == "" || strings.ContainsAny(p, shellExpansion) || tools.HasGlob(p) {
 		return "", false // what it names cannot be known before the shell expands it
+	}
+	if p[0] == '~' {
+		return "", false
 	}
 	full, err := tools.PathPolicy{Cwd: s.cwd}.Resolve(p)
 	if err != nil || !s.contains(full) {
