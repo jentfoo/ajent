@@ -1296,7 +1296,7 @@ a unified intraline diff, long thinking + `find`, more writes (`retry_test.go`,
 `README.md`) each followed by grep/read of the new file, parallel dispatch
 (`grep` + `read` in one message), compound read-only shell lines (`wc && head`,
 `ls -la`), two streamed cats (the smaller test file, then ~180 raw lines of
-`notes.go`) into scrollback, and a final dialog (`rm -rf`) before the closing
+`notes.go`) into scrollback, and a final approval dialog before the closing
 turn. The full markdown showcase (headings, bold/italic/strike, inline + fenced
 code, GFM table with CJK/emoji, blockquote, rule, lists, links) runs in that
 last turn, after every tool result so the text wall cannot bury it; the final

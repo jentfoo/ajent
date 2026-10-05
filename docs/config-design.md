@@ -86,9 +86,9 @@ in every mode, including allow-all. Matching follows the same token-boundary
 rule as `safeCommands`, with the resolved argv checked as well: both sides pass
 through the same tokenizer the per-command checkers use, so quoting or escaping
 the head (`"git" push`, `git pu\sh`) cannot slip a listed command past it, and a
-nested interpreter's payload (`sh -c "git push"`, `eval git push`) is extracted
-and scanned too. A compound line is refused when *any* component matches, so
-nesting a denied command behind `cd … &&` never escapes it. It may also name
+nested interpreter's payload is extracted and scanned too. A compound line is
+refused when *any* component matches, so nesting a denied command behind
+`cd … &&` never escapes it. It may also name
 core writers, since denying one is a legitimate safety gate. A denied check runs
 first in the barrier verdict (after user-initiation), and only an agent call
 hits it: a human's own staged `!` line owns its shell and always runs.

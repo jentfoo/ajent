@@ -539,12 +539,12 @@ shell commands to `WorkspaceClassifierSystem`: there the question is not
 writable roots verbatim, cwd and the temp dir, the same two the barrier
 path-scopes `write`/`edit` against, so gate and model judge by one rule.
 Reads anywhere are always `allow`; only writes need confinement. Inside the
-two roots it allows file creation, `python`/`perl` rewrites, redirects,
-`mv`/`cp`, removing individual files, build and test commands and in-repo git;
+two roots it allows file creation, scripted rewrites, redirects, moves and
+copies, removing individual files, build and test commands and in-repo git;
 it denies regardless any path outside the roots (a write there), bulk
 destruction, system or package changes, the network in either direction (reading
 from it exfiltrates), unaccountable execution and credential access. An
-**in-scope** `mkdir`/`rmdir` never reaches it: the barrier resolves
+**in-scope** directory create/remove never reaches it: the barrier resolves
 those path arguments itself, and an out-of-scope one still goes to the model
 like any other command. Ambiguity resolves to `unsure`, never `allow`, and a
 `cd` into the workspace never launders a later absolute path.
@@ -559,8 +559,8 @@ the commands they actually run, examples are illustrative not exhaustive) with
 one deliberate change: **reading from the network is *not* read-only**. The
 exfiltration channel means "does not write locally" never equals safe; the
 classifier must say so explicitly rather than inheriting the reference's
-opposite claim. Network tools (`curl`, `wget`, `nc`) are absent from both the
-static allowlist and any notion of classifier read-only.
+opposite claim. Network tools are absent from both the static allowlist and
+any notion of classifier read-only.
 
 The MCP prompt applies the same no-change bar to a single tool invocation: a
 `allow` verdict requires **no observable change anywhere** (files, repo,
