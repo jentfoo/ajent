@@ -442,6 +442,80 @@ func TestFindGitRepoUsableNonAsciiPath(t *testing.T) {
 	assert.NotContains(t, out, "ignored.log")
 }
 
+func TestGrepRgPaths(t *testing.T) {
+	t.Parallel()
+
+	if !rgOnPath() {
+		t.Skip("ripgrep not on PATH")
+	}
+	// runRg, blockCapName and finalize all read the package limits other tests mutate
+	testLimitsGate.Lock()
+	t.Cleanup(testLimitsGate.Unlock)
+
+	// a small count search stays silent: nothing was withheld, yet the rg path
+	// used to append a cap footer unconditionally
+	t.Run("count_under_budget_silent", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "one\n")
+		mkfile(dir, "b.txt", "one\n")
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"one","mode":"count"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, ".txt:1")
+		assert.NotContains(t, out, "result cap")
+	})
+
+	// count output that spends the budget names the cap, mirroring the fallback
+	t.Run("count_cut_names_cap", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		for i := 1; i <= 5; i++ {
+			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "matchline\n")
+		}
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"matchline","mode":"count","limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 2, strings.Count(out, ".txt:")) // a further file would be withheld whole
+		assert.Contains(t, out, "result cap of 2 matches reached")
+	})
+
+	// context blocks are bounded by an explicit match limit too: each match adds
+	// at most 2*context+1 lines plus its group separator, so two matches stay
+	// within 12 streamed lines and a third block never appears
+	t.Run("block_explicit_limit_bounds", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		for i := 1; i <= 6; i++ {
+			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "pre-a\npre-b\nmatchline\npost-a\npost-b\n")
+		}
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"matchline","context":2,"limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 2, strings.Count(out, "matchline"))
+		assert.Contains(t, out, "result cap of 2 matches reached") // the explicit budget is named
+	})
+
+	// without an explicit limit a context stream still stops at GrepResult and
+	// names that output cap
+	t.Run("block_output_limit_named", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		for i := 1; i <= 30; i++ {
+			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "pre-a\npre-b\nmatchline\npost-a\npost-b\n")
+		}
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"matchline","context":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, "result cap of 100 matches reached")
+		assert.Less(t, strings.Count(out, "matchline"), 30) // some blocks were withheld
+	})
+}
+
 func TestGrepFallbackSkipsGitIgnored(t *testing.T) {
 	t.Parallel()
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/go-analyze/bulk"
+	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -18,6 +19,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
+	"github.com/go-git/go-git/v5/storage/filesystem/dotgit"
 )
 
 // errNotGit reports that path is not inside a git work tree.
@@ -43,7 +45,7 @@ func openGitRepo(path string) (*git.Repository, error) {
 	if dotRoot == "" { // not under any .git: treat path itself as a bare repository
 		dotRoot = path
 	}
-	s := filesystem.NewStorage(osfs.New(dotRoot), sharedGitCache)
+	s := filesystem.NewStorage(repoFilesystem(dotRoot), sharedGitCache)
 	var (
 		r   *git.Repository
 		err error
@@ -63,8 +65,10 @@ func openGitRepo(path string) (*git.Repository, error) {
 }
 
 // findDotGit walks up from path looking for a .git entry (directory or a
-// "gitdir:" pointer file), returning the real object directory and work-tree
-// root. An empty dotRoot means nothing was found.
+// "gitdir:" pointer file), returning that entry's directory and the work-tree
+// root. For a linked worktree the directory is the per-worktree metadata dir,
+// not the shared object store; openGitRepo resolves those via commondir.
+// An empty dotRoot means nothing was found.
 func findDotGit(path string) (dotRoot, wtRoot string) {
 	p := path
 	for {
@@ -95,6 +99,35 @@ func findDotGit(path string) (dotRoot, wtRoot string) {
 		p = next
 	}
 	return "", ""
+}
+
+// repoFilesystem returns the storage filesystem to read dotRoot through. A
+// linked-worktree metadata dir is merged with its commondir: objects and
+// shared refs resolve there, while HEAD, index and per-worktree refs stay in
+// the metadata directory.
+func repoFilesystem(dotRoot string) billy.Filesystem {
+	if common := worktreeCommonDir(dotRoot); common != "" {
+		return dotgit.NewRepositoryFilesystem(osfs.New(dotRoot), osfs.New(common))
+	}
+	return osfs.New(dotRoot)
+}
+
+// worktreeCommonDir returns the shared storage directory a linked-worktree
+// metadata dir names in its commondir file, resolved against dotRoot when
+// relative. Empty means dotRoot holds the object store itself.
+func worktreeCommonDir(dotRoot string) string {
+	b, err := os.ReadFile(filepath.Join(dotRoot, "commondir"))
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(b))
+	if line == "" {
+		return ""
+	}
+	if filepath.IsAbs(line) {
+		return filepath.Clean(line)
+	}
+	return filepath.Join(dotRoot, line)
 }
 
 // gitWorktree returns the work tree of r, naming bare repositories clearly.

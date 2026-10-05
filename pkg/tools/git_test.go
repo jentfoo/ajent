@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +16,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// gitRun executes one git command in dir, skipping the test when the git
+// binary is unavailable. Used where go-git has no API, like worktree creation.
+func gitRun(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	c := exec.CommandContext(t.Context(), "git", args...)
+	c.Dir = dir
+	out, err := c.CombinedOutput()
+	require.NoError(t, err, string(out))
+}
 
 // runGitTool executes one git tool call and returns the model text.
 func runGitTool(t *testing.T, tl agent.Tool, input string) (string, bool) {
@@ -95,6 +109,92 @@ func TestGitToolsBareRepo(t *testing.T) {
 	out, isErr := runGitTool(t, &gitStatusTool{policy: PathPolicy{Cwd: dir}}, `{}`)
 	assert.True(t, isErr)
 	assert.Contains(t, out, "bare repository")
+}
+
+// TestWorktreeCommonDir exercises the commondir resolution alone.
+func TestWorktreeCommonDir(t *testing.T) {
+	t.Parallel()
+
+	t.Run("absent_file", func(t *testing.T) {
+		assert.Empty(t, worktreeCommonDir(t.TempDir()))
+	})
+
+	t.Run("empty_file", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os0Write(dir, "commondir", "\n"))
+		assert.Empty(t, worktreeCommonDir(dir))
+	})
+
+	// git writes the common dir relative to the metadata dir it lives in
+	t.Run("relative_target", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os0Write(dir, "commondir", "../..\n"))
+		assert.Equal(t, filepath.Join(dir, "..", ".."), worktreeCommonDir(dir))
+	})
+
+	t.Run("absolute_target", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os0Write(dir, "commondir", "/repos/main/.git\n"))
+		assert.Equal(t, "/repos/main/.git", worktreeCommonDir(dir))
+	})
+}
+
+// TestGitToolsLinkedWorktree runs the readers against a real `git worktree add`
+// checkout: its .git is a pointer to a metadata dir that shares objects and
+// refs with the main repository through commondir.
+func TestGitToolsLinkedWorktree(t *testing.T) {
+	t.Parallel()
+
+	g := newGitRepo(t)
+	link := filepath.Join(t.TempDir(), "linked")
+	gitRun(t, g.dir, "worktree", "add", link, "side") // checks out the side branch there
+
+	// HEAD, index and refs resolve through the metadata dir without crossing
+	// into the main checkout's state
+	t.Run("status_reports_worktree_head", func(t *testing.T) {
+		out, isErr := runGitTool(t, &gitStatusTool{policy: PathPolicy{Cwd: link}}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "on branch side")
+		assert.Contains(t, out, "(clean)")
+	})
+
+	t.Run("main_repo_unaffected", func(t *testing.T) {
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "on branch master")
+	})
+
+	t.Run("log_walks_shared_history", func(t *testing.T) {
+		out, isErr := runGitTool(t, &gitLogTool{policy: PathPolicy{Cwd: link}}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "side edit of a.txt") // the worktree branch's commit
+		assert.Contains(t, out, "add files")          // an object only reachable via commondir
+	})
+
+	t.Run("show_renders_head_commit", func(t *testing.T) {
+		out, isErr := runGitTool(t, &gitShowTool{policy: PathPolicy{Cwd: link}}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "side edit of a.txt")
+		assert.Contains(t, out, "+TWO")
+	})
+
+	t.Run("diff_worktree_edits", func(t *testing.T) {
+		require.NoError(t, os0Write(link, "a.txt", "one\nTWO edited\nthree\n"))
+		out, isErr := runGitTool(t, &gitDiffTool{policy: PathPolicy{Cwd: link}}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "+TWO edited") // the edit on the linked work tree
+	})
+
+	// git normally writes a relative commondir; the absolute form resolves too
+	t.Run("absolute_commondir_resolves", func(t *testing.T) {
+		meta, _ := findDotGit(link)
+		require.NotEmpty(t, meta)
+		require.NoError(t, os0Write(meta, "commondir", filepath.Join(g.dir, ".git")+"\n"))
+
+		out, isErr := runGitTool(t, &gitStatusTool{policy: PathPolicy{Cwd: link}}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "on branch side")
+	})
 }
 
 func TestWriteGitFileDiff(t *testing.T) {

@@ -113,10 +113,10 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		switch {
 		case blockMode && cut:
 			// context rides whole blocks bounded by the output limit, never an exact match
-			// count. A cut means matches beyond GrepResult went unseen even under an explicit
-			// max, so always name it.
-			note = resultCapNote(GrepResultLimit().Lines)
-		case mode == grepCount || (cut && p.Limit <= 0): // budget spent, mirror the fallback's note
+			// count. A cut means matches beyond that bound went unseen even under an
+			// explicit max, so always name it.
+			note = resultCapNote(blockCapName(p, max))
+		case cut && (mode == grepCount || p.Limit <= 0): // budget spent, mirror the fallback's note
 			note = resultCapNote(max)
 		}
 		if warn != "" { // rg warned about paths it could not read, mirror the fallback's note
@@ -143,6 +143,21 @@ func capNote(out string, explicit, max int, mode string) string {
 // way cut-off content lines do not.
 func resultCapNote(max int) string {
 	return fmt.Sprintf("... result cap of %d matches reached; narrow the pattern or raise limit", max)
+}
+
+// blockMatchBudget reports the line ceiling a context-mode stream reaches once
+// every one of max matches has emitted, given p.Context.
+func (p grepParams) blockMatchBudget(max int) int {
+	return max * (2*p.Context + 2)
+}
+
+// blockCapName names which cap cut a context-mode rg stream: the explicit
+// match limit when it is tighter than GrepResult's line bound, else that bound.
+func blockCapName(p grepParams, max int) int {
+	if p.Limit > 0 && p.blockMatchBudget(max) < GrepResultLimit().Lines {
+		return max
+	}
+	return GrepResultLimit().Lines
 }
 
 // joinNotes combines two notes, dropping either when empty and joining with a
@@ -416,12 +431,16 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 		// would leave dangling context. Bound the stream by the output limit and
 		// cancel there instead. Finalize then names anything beyond GrepResult.
 		lim := GrepResultLimit()
+		capLines := lim.Lines
+		if p.Limit > 0 { // an explicit match budget bounds the stream too, not only GrepResult
+			capLines = min(capLines, p.blockMatchBudget(max))
+		}
 		for {
 			ln, rerr := r.ReadString('\n')
 			if ln != "" {
 				b.WriteString(ln)
 			}
-			cut = lim.Lines > 0 && countLines(b.String()) >= lim.Lines ||
+			cut = capLines > 0 && countLines(b.String()) >= capLines ||
 				lim.Bytes > 0 && b.Len() >= lim.Bytes
 			if rerr != nil { // rg finished naturally with a complete report
 				break
