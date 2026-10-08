@@ -621,22 +621,25 @@ func (m *Manager) publishStatus() {
 		fn("", "")
 		return
 	}
-	var b strings.Builder
-	_, _ = fmt.Fprintf(&b, "subagents: %d running", running)
-	if queued > 0 {
-		_, _ = fmt.Fprintf(&b, ", %d queued", queued)
+	var parts []string
+	if running > 0 {
+		s := fmt.Sprintf("%d running", running)
+		if oldest > 0 { // age note only while something is actively running
+			s += " (oldest " + strutil.Elapsed(oldest) + ")"
+		}
+		parts = append(parts, s)
 	}
-	if running > 0 && oldest > 0 { // age note only while something is actively running
-		_, _ = fmt.Fprintf(&b, " (oldest %s)", strutil.Elapsed(oldest))
+	if queued > 0 {
+		parts = append(parts, fmt.Sprintf("%d queued", queued))
 	}
 	if done > 0 {
-		_, _ = fmt.Fprintf(&b, ", %d done", done)
+		parts = append(parts, fmt.Sprintf("%d done", done))
 	}
 	var short string
 	if live := running + queued; live > 0 { // the short segment counts every live job
 		short = fmt.Sprintf("sub %d", live)
 	}
-	fn(b.String(), short)
+	fn("subagents: "+strings.Join(parts, ", "), short)
 }
 
 // model returns the configured child model or the session's current one.
