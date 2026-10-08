@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -214,6 +215,59 @@ func TestLegacyServerCompat(t *testing.T) {
 	require.NoError(t, c.Ping(t.Context()))
 }
 
+// TestNegotiatesAdvertisedOlderVersion covers a server that answers
+// server/discover but serves an older revision: ajent must negotiate to the
+// newest advertised version instead of sending era-stamped requests the server
+// rejects (the "protocol version 2026-07-28 is not supported" failure).
+func TestNegotiatesAdvertisedOlderVersion(t *testing.T) {
+	t.Parallel()
+
+	var modernLists atomic.Int32 // tools/list requests stamped 2026-07-28
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Method == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		respond := func(result string) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result + `}`))
+		}
+		switch req.Method {
+		case "server/discover":
+			respond(`{"supportedVersions":["2025-11-25","2025-06-18"],"capabilities":{},"serverInfo":{"name":"old","version":"1.0"}}`)
+		case "initialize":
+			respond(`{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"old","version":"1.0"}}`)
+		case "tools/list":
+			if strings.HasPrefix(r.Header.Get("Mcp-Protocol-Version"), "2026") {
+				modernLists.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) +
+					`,"error":{"code":-32001,"message":"protocol version \"2026-07-28\" is not supported by this server"}}`))
+				return
+			}
+			respond(`{"tools":[{"name":"old_tool","description":"d","inputSchema":{"type":"object"}}]}`)
+		default: // notifications and anything else
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	c, err := Connect(t.Context(), "aperture", ServerConfig{URL: ts.URL})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	assert.Equal(t, "2025-11-25", c.negotiated) // the advertised set wins over our newest
+
+	defs, err := c.Tools(t.Context())
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+	assert.Equal(t, "old_tool", defs[0].Name)
+	assert.Zero(t, modernLists.Load()) // nothing rode the rejected era
+}
+
 func TestHTTPAgainstHTTPServer(t *testing.T) {
 	t.Parallel()
 
@@ -358,6 +412,7 @@ func TestToolsDropsBadSchema(t *testing.T) {
 	require.Len(t, notices, 1)
 	assert.Contains(t, notices[0], `tool "bad_schema" has an invalid input schema`)
 	assert.Contains(t, notices[0], "properties.rows.items is not an object")
+	assert.NotContains(t, notices[0], "mcp fake") // warnings stay bare, the sink prefixes
 }
 
 func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {

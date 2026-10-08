@@ -87,8 +87,9 @@ func (b *bridgeTool) Execute(ctx context.Context, call agent.ToolCall, out agent
 	c := b.c
 	res, err := c.Call(runCtx, b.def.Name, call.Input, out)
 	if err != nil {
-		// Display carries what history renders, so an errored call still shows a line
-		msg := "mcp error: " + err.Error()
+		// Display carries what history renders, so an errored call still shows a line;
+		// client errors are bare, so the bridge names the server once
+		msg := "mcp " + c.ServerName() + ": " + err.Error()
 		return agent.ToolResult{
 			Content: llm.BlockList{llm.TextBlock{Text: msg}},
 			Display: msg,

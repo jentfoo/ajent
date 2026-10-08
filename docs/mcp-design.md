@@ -70,8 +70,19 @@ closes.
 - **stdio** — runs the server as a child process in its own process group, so
   `Close` can sweep grandchildren that outlive the child. The child env is built
   from the parent plus config overrides.
+- **Version probe** — before the initialize handshake ajent sends one raw
+  `server/discover` stamped modern and pins the newest mutually supported
+  revision the server advertises. mcp-go's own probe ignores
+  `supportedVersions` on success, so a server that answers discovery but serves
+  an older revision would otherwise be handed 2026-07-28 requests it rejects on
+  every call. A server with no discover answer goes straight to the legacy
+  handshake; a disjoint advertised set falls through to Initialize's legible
+  mismatch error. SSE skips the probe, the transport is legacy-only by design.
 - **Initialize errors are legible**: a protocol version mismatch names both our
   version and the server's rather than failing obscurely.
+- **Prefixes are owned by the surface** — client errors and warnings are bare;
+  the manager's notice sink, dial's returned error and the bridge each add
+  `mcp <name>:` exactly once, so history never renders a doubled prefix.
 
 ### Schema fidelity
 
@@ -122,7 +133,8 @@ The raw seam sits below mcp-go's own request stamping, so it must carry
 the era itself: on a connection negotiated to protocol 2026-07-28 every request
 needs per-request `_meta` and mirrored `Mcp-*` headers (added by `applyEra`;
 legacy connections stay unstamped, matching the pre-1.0 wire), and `Ping` no-ops
-there since the RPC was removed.
+there since the RPC was removed. The version probe rides this seam too, before
+any negotiation, stamping LATEST explicitly since nothing is negotiated yet.
 
 Raw request ids are seeded at `rawSeqBase` rather than from one: both the raw
 seam and mcp-go's typed calls share the transport's single response map keyed by

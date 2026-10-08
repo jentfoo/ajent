@@ -261,14 +261,13 @@ func (m *Manager) dial(ctx context.Context, name string, s *server, disc int) er
 		s.diag("connect failed: " + err.Error())
 		m.updateStatus() // this server contributes nothing to the ratio until it connects
 		m.retryDial(name, s, disc)
-		return err
+		return fmt.Errorf("mcp %s: %w", name, err) // client errors are bare, the caller's copy names the server
 	}
 	if err := m.preempted(name, s, disc); err != nil {
 		_ = c.Close() // the user's disconnect or a reload removal wins, drop the client
 		return err
 	}
-	c.SetNotice(func(msg string) {
-		msg = strings.TrimPrefix(msg, "mcp "+name+": ")
+	c.SetNotice(func(msg string) { // client warnings are bare, the sink adds the prefix
 		if s.sawWarn(msg) { // same defect re-reported on every reconnect: log, do not re-notice
 			s.diag(msg)
 			return

@@ -667,6 +667,7 @@ func TestRepeatedBadSchemaStaysQuiet(t *testing.T) {
 	mgr.LoadOnFirstMessage(t.Context())
 	require.Len(t, notices, 1) // the first discovery warns once, naming the tool
 	assert.Contains(t, notices[0], `tool "bad_schema"`)
+	assert.Equal(t, 1, strings.Count(notices[0], "mcp fake:")) // the prefix lands exactly once
 
 	// re-discovery of the same defect (reconnect here, list_changed in the wild)
 	// logs the repeat but never re-notifies history

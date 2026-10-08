@@ -77,7 +77,7 @@ func TestBridge(t *testing.T) {
 		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
-		assert.NotEmpty(t, res.Display) // history renders the failure, not a blank row
-		assert.Contains(t, res.Display, "mcp error")
+		assert.NotEmpty(t, res.Display)             // history renders the failure, not a blank row
+		assert.Contains(t, res.Display, "mcp fake") // the bridge names the server once
 	})
 }

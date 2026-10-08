@@ -63,6 +63,11 @@ type Client struct {
 // rawAttemptTimeout bounds one raw-seam request so a dropped or reset response cannot hang discovery.
 const rawAttemptTimeout = 15 * time.Second
 
+// probeTimeout bounds the server/discover version probe, so a server that
+// predates the method and never answers an unknown request cannot stall the
+// handshake. A var so tests can tighten it.
+var probeTimeout = 5 * time.Second
+
 // initTimeout bounds the initialize handshake and its transport start, so a
 // server that accepts the connection but never answers surfaces as a connect
 // error instead of hanging the dial and every waiter sharing it. A var so tests
@@ -104,7 +109,7 @@ func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error
 			cl, err = mcpclient.NewStreamableHttpClient(cfg.URL, transport.WithHTTPHeaders(hdr))
 		}
 		if err != nil {
-			return nil, fmt.Errorf("mcp %s: connect: %w", name, err)
+			return nil, fmt.Errorf("connect: %w", err)
 		}
 		c.c = cl
 	}
@@ -127,9 +132,10 @@ func (c *Client) ServerName() string { return c.name }
 func (c *Client) SetNotice(f func(string)) { c.onWarn = f }
 
 // warn reports through the notice callback, dropping it when none is set.
+// Messages stay bare: the sink owns the server prefix, so it appears once.
 func (c *Client) warn(msg string) {
 	if c.onWarn != nil {
-		c.onWarn("mcp " + c.name + ": " + msg)
+		c.onWarn(msg)
 	}
 }
 
@@ -152,22 +158,82 @@ func (c *Client) init(ctx context.Context) error {
 	ictx, cancel := context.WithTimeout(ctx, initTimeout)
 	defer cancel()
 	if err := c.c.Start(ictx); err != nil {
-		return fmt.Errorf("mcp %s: start: %w", c.name, err)
+		return fmt.Errorf("start: %w", err)
 	}
 	c.clientInfo = mcp.Implementation{Name: "ajent", Version: version.Version}
 	res, err := c.c.Initialize(ictx, mcp.InitializeRequest{
-		Params: mcp.InitializeParams{ClientInfo: c.clientInfo},
+		Params: mcp.InitializeParams{ClientInfo: c.clientInfo, ProtocolVersion: c.preferredVersion(ictx)},
 	})
 	if err != nil {
 		var unsup mcp.UnsupportedProtocolVersionError
 		if errors.As(err, &unsup) {
-			return fmt.Errorf("mcp %s: protocol version mismatch (we speak %s, server wants %s)",
-				c.name, mcp.LATEST_PROTOCOL_VERSION, unsup.Version)
+			return fmt.Errorf("protocol version mismatch (we speak %s, server wants %s)",
+				mcp.LATEST_PROTOCOL_VERSION, unsup.Version)
 		}
-		return fmt.Errorf("mcp %s: initialize: %w", c.name, err)
+		return fmt.Errorf("initialize: %w", err)
 	}
 	c.negotiated = res.ProtocolVersion
 	return nil
+}
+
+// preferredVersion asks a discover-capable server which protocol revisions it
+// serves and returns the newest one we share, so a server advertising an older
+// set negotiates there instead of failing its first request. The empty string
+// leaves Initialize's own probe and handshake to decide.
+func (c *Client) preferredVersion(ctx context.Context) string {
+	if c.tran == TransportSSE { // legacy-only transport, nothing to discover
+		return ""
+	}
+	supported, ok := c.discoverVersions(ctx)
+	if !ok {
+		// no discover answer: a pre-discover server, so go straight to the
+		// handshake instead of paying Initialize's duplicate probe
+		return mcp.LATEST_LEGACY_PROTOCOL_VERSION
+	}
+	v := mcp.NegotiateMutuallySupportedVersion(supported)
+	if v == "" || v == mcp.LATEST_PROTOCOL_VERSION {
+		return "" // default path already negotiates LATEST; disjoint sets fail legibly there
+	}
+	return v
+}
+
+// discoverVersions sends one raw server/discover, stamped modern, and returns
+// the protocol versions the server advertises. ok is false when the server
+// gave no usable answer: method unknown, transport failure, unparseable body.
+func (c *Client) discoverVersions(ctx context.Context) ([]string, bool) {
+	pctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	id := c.rawSeq.Add(1)
+	params, header := c.applyEraVersion(mcp.LATEST_PROTOCOL_VERSION, string(mcp.MethodServerDiscover), nil, id)
+	header.Set(mcp.HeaderProtocolVersion, mcp.LATEST_PROTOCOL_VERSION) // pre-init, no transport mirrors it yet
+	resp, err := c.c.GetTransport().SendRequest(pctx, transport.JSONRPCRequest{
+		JSONRPC: mcp.JSONRPC_VERSION,
+		ID:      mcp.NewRequestId(id),
+		Method:  string(mcp.MethodServerDiscover),
+		Params:  params,
+		Header:  header,
+	})
+	if err != nil {
+		return nil, false
+	}
+	if resp.Error != nil { // a version rejection may name the set the server does serve
+		if b, merr := json.Marshal(resp.Error.Data); merr == nil {
+			var data struct {
+				Supported []string `json:"supported"`
+			}
+			if json.Unmarshal(b, &data) == nil && len(data.Supported) > 0 {
+				return data.Supported, true
+			}
+		}
+		return nil, false
+	}
+	var disc struct {
+		SupportedVersions []string `json:"supportedVersions"`
+	}
+	if json.Unmarshal(resp.Result, &disc) != nil || len(disc.SupportedVersions) == 0 {
+		return nil, false
+	}
+	return disc.SupportedVersions, true
 }
 
 // spawnStdio launches a stdio server in its own process group so Close can sweep
@@ -190,7 +256,7 @@ func (c *Client) spawnStdio(ctx context.Context) error {
 		}),
 	)
 	if err != nil {
-		return fmt.Errorf("mcp %s: spawn %q: %w", c.name, c.cfg.Command, err)
+		return fmt.Errorf("spawn %q: %w", c.cfg.Command, err)
 	}
 	c.cmd = cmd // captured by the command func, used for process-group kill
 	c.c = cl
@@ -224,17 +290,17 @@ func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 	for {
 		resp, err := c.sendRaw(ctx, string(mcp.MethodToolsList), listToolParams(cursor))
 		if err != nil {
-			return nil, fmt.Errorf("mcp %s: tools/list: %w", c.name, err)
+			return nil, fmt.Errorf("tools/list: %w", err)
 		}
 		if resp.Error != nil {
-			return nil, fmt.Errorf("mcp %s: tools/list: %s", c.name, resp.Error.Message)
+			return nil, fmt.Errorf("tools/list: %s", resp.Error.Message)
 		}
 		var page struct {
 			Tools      []json.RawMessage `json:"tools"`
 			NextCursor string            `json:"nextCursor,omitempty"`
 		}
 		if err = json.Unmarshal(resp.Result, &page); err != nil {
-			return nil, fmt.Errorf("mcp %s: tools/list decode: %w", c.name, err)
+			return nil, fmt.Errorf("tools/list decode: %w", err)
 		}
 		for _, raw := range page.Tools {
 			def, ok, warn := parseTool(raw, c.name, c.cfg.ReadOnly)
@@ -358,7 +424,7 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage, ou
 	c.mu.Unlock()
 
 	if err != nil {
-		return Result{}, fmt.Errorf("mcp %s: call %q: %w", c.name, name, err)
+		return Result{}, fmt.Errorf("call %q: %w", name, err)
 	}
 	return mapCallResult(res), nil
 }
@@ -405,7 +471,7 @@ func (c *Client) Ping(ctx context.Context) error {
 		return nil
 	}
 	if _, err := c.Request(ctx, string(mcp.MethodPing), nil); err != nil {
-		return fmt.Errorf("mcp %s: ping: %w", c.name, err)
+		return fmt.Errorf("ping: %w", err)
 	}
 	return nil
 }
@@ -468,11 +534,17 @@ func (c *Client) sendRawAttempts(ctx context.Context, method string, params any,
 	return nil, lastErr
 }
 
-// applyEra returns params and headers carrying the metadata protocol 2026-07-28
-// requires on every request. id seeds the default progress token, so it matches
-// the request it rides on. Legacy connections are returned unchanged.
+// applyEra stamps the negotiated era onto a request; see applyEraVersion.
 func (c *Client) applyEra(method string, params any, id int64) (any, http.Header) {
-	if !mcp.IsModernProtocol(c.negotiated) {
+	return c.applyEraVersion(c.negotiated, method, params, id)
+}
+
+// applyEraVersion returns params and headers carrying the metadata the given
+// protocol version requires on every request. id seeds the default progress
+// token, so it matches the request it rides on. Legacy versions are returned
+// unchanged.
+func (c *Client) applyEraVersion(version, method string, params any, id int64) (any, http.Header) {
+	if !mcp.IsModernProtocol(version) {
 		return params, nil
 	}
 	fields := map[string]json.RawMessage{}
@@ -485,7 +557,7 @@ func (c *Client) applyEra(method string, params any, id int64) (any, http.Header
 	if raw, ok := fields["_meta"]; ok {
 		_ = json.Unmarshal(raw, &meta) // preserve a caller-supplied _meta, e.g. Call's progress token
 	}
-	meta[mcp.MetaKeyProtocolVersion] = c.negotiated
+	meta[mcp.MetaKeyProtocolVersion] = version
 	meta[mcp.MetaKeyClientInfo] = c.clientInfo
 	meta[mcp.MetaKeyClientCapabilities] = mcp.ClientCapabilities{} // required on every modern request, we declare none
 	if _, ok := meta["progressToken"]; !ok {
@@ -500,7 +572,7 @@ func (c *Client) applyEra(method string, params any, id int64) (any, http.Header
 		}
 	}
 	header := http.Header{}
-	for k, v := range mcp.StandardHeaders(c.negotiated, mcp.MCPMethod(method), mustJSON(params)) {
+	for k, v := range mcp.StandardHeaders(version, mcp.MCPMethod(method), mustJSON(params)) {
 		header.Set(k, v)
 	}
 	return params, header
@@ -519,10 +591,10 @@ func mustJSON(v any) json.RawMessage {
 func (c *Client) Request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	resp, err := c.sendRawAttempts(ctx, method, params, 0)
 	if err != nil {
-		return nil, fmt.Errorf("mcp %s: request %q: %w", c.name, method, err)
+		return nil, fmt.Errorf("request %q: %w", method, err)
 	}
 	if resp.Error != nil {
-		return nil, fmt.Errorf("mcp %s: request %q: %s", c.name, method, resp.Error.Message)
+		return nil, fmt.Errorf("request %q: %s", method, resp.Error.Message)
 	}
 	return slices.Clone(resp.Result), nil
 }
