@@ -20,8 +20,9 @@ func TestHomeOneLevel(t *testing.T) {
 	restoreHome(t, home)
 	idx := NewIndex(t.TempDir())
 
-	top := labelsOf(idx.Candidates("~", nil))
-	assert.Equal(t, []string{"~/.bashrc", "~/deep/"}, top) // deep once, never its contents
+	top := idx.Candidates("~", nil)
+	assert.Equal(t, []string{"~/.bashrc", "~/deep/"}, textsOf(top)) // deep once, never its contents
+	assert.Equal(t, []string{".bashrc", "deep/"}, labelsOf(top))
 }
 
 func TestCandidates(t *testing.T) {
@@ -42,9 +43,10 @@ func TestCandidates(t *testing.T) {
 		idx := NewIndex(dir)
 
 		assert.Equal(t, []string{"deep/", "main.go"}, labelsOf(idx.Candidates("", nil)))
-		// drilling one level at a time reaches the deep file
+		// drilling one level at a time reaches the deep file, inserted in full
 		sub := idx.Candidates("deep/one/two/th", nil)
-		assert.Equal(t, []string{"deep/one/two/three.txt"}, labelsOf(sub))
+		assert.Equal(t, []string{"deep/one/two/three.txt"}, textsOf(sub))
+		assert.Equal(t, []string{"three.txt"}, labelsOf(sub))
 	})
 
 	t.Run("directory_drills_deeper", func(t *testing.T) {
@@ -53,10 +55,22 @@ func TestCandidates(t *testing.T) {
 		idx := NewIndex(dir)
 
 		cands := idx.Candidates("src/", nil)
-		assert.Equal(t, []string{"src/cmd/", "src/main.go"}, labelsOf(cands))
+		assert.Equal(t, []string{"src/cmd/", "src/main.go"}, textsOf(cands))
+		assert.Equal(t, []string{"cmd/", "main.go"}, labelsOf(cands))
 
 		files := idx.Candidates("src/m", nil)
-		assert.Equal(t, []string{"src/main.go"}, labelsOf(files))
+		assert.Equal(t, []string{"src/main.go"}, textsOf(files))
+	})
+
+	t.Run("listing_shows_bare_names", func(t *testing.T) {
+		// the listing packs columns of entry names; only the accepted text is a path
+		dir := t.TempDir()
+		writeTree(t, dir, "pkg/refs/a_very_long_file_name_indeed.go")
+		idx := NewIndex(dir)
+
+		cands := idx.Candidates("pkg/re", nil)
+		assert.Equal(t, []string{"pkg/refs/"}, textsOf(cands))
+		assert.Equal(t, []string{"refs/"}, labelsOf(cands))
 	})
 
 	t.Run("partial_dir_completes_slash", func(t *testing.T) {
@@ -68,7 +82,7 @@ func TestCandidates(t *testing.T) {
 		assert.Equal(t, []string{"pkg/"}, labelsOf(cands))
 
 		sub := idx.Candidates("pkg/r", nil)
-		assert.Equal(t, []string{"pkg/refs/"}, labelsOf(sub))
+		assert.Equal(t, []string{"pkg/refs/"}, textsOf(sub))
 	})
 
 	t.Run("dot_prefix_keeps_slash", func(t *testing.T) {
@@ -77,10 +91,11 @@ func TestCandidates(t *testing.T) {
 		idx := NewIndex(dir)
 
 		top := idx.Candidates("./", nil)
-		assert.Equal(t, []string{"./main.go", "./src/"}, labelsOf(top))
+		assert.Equal(t, []string{"./main.go", "./src/"}, textsOf(top)) // the inserted text keeps ./
+		assert.Equal(t, []string{"main.go", "src/"}, labelsOf(top))
 
 		drill := idx.Candidates("./src/m", nil)
-		assert.Equal(t, []string{"./src/main.go"}, labelsOf(drill))
+		assert.Equal(t, []string{"./src/main.go"}, textsOf(drill))
 	})
 
 	t.Run("absolute_path_keeps_root_slash", func(t *testing.T) {
@@ -91,14 +106,14 @@ func TestCandidates(t *testing.T) {
 		idx := NewIndex(dir)
 
 		drill := idx.Candidates(filepath.Join(dir, "ma"), nil)
-		assert.Equal(t, []string{filepath.Join(dir, "main.go")}, labelsOf(drill))
+		assert.Equal(t, []string{filepath.Join(dir, "main.go")}, textsOf(drill))
 
 		// a trailing slash lists that directory's immediate children
 		children := idx.Candidates(dir+"/", nil)
-		assert.Equal(t, []string{dir + "/main.go"}, labelsOf(children))
+		assert.Equal(t, []string{dir + "/main.go"}, textsOf(children))
 
 		// the parent dir shows the workspace as one completable sibling
-		siblings := labelsOf(idx.Candidates(parent+"/", nil))
+		siblings := textsOf(idx.Candidates(parent+"/", nil))
 		require.True(t, slices.ContainsFunc(siblings,
 			func(l string) bool { return strings.HasSuffix(l, baseName+"/") }))
 	})
@@ -137,20 +152,20 @@ func TestCandidates(t *testing.T) {
 		t.Run("offers_home_top_level_only", func(t *testing.T) {
 			cands := idx.Candidates("~", nil)
 			for _, c := range cands {
-				assert.True(t, strings.HasPrefix(c.Label, "~/"))
+				assert.True(t, strings.HasPrefix(c.Text, "~/"))
 			}
 			assert.NotContains(t, labelsOf(cands), "main.go")
 		})
 
 		t.Run("drills_deeper_with_slash", func(t *testing.T) {
 			docs := idx.Candidates("~/d", nil)
-			require.Equal(t, []string{"~/docs/"}, labelsOf(docs))
+			require.Equal(t, []string{"~/docs/"}, textsOf(docs))
 
 			pk := idx.Candidates("~/pkg/m", nil)
-			assert.Equal(t, []string{"~/pkg/main.go"}, labelsOf(pk))
+			assert.Equal(t, []string{"~/pkg/main.go"}, textsOf(pk))
 
 			bin := idx.Candidates("~/bin/", nil)
-			assert.Equal(t, []string{"~/bin/run.sh"}, labelsOf(bin))
+			assert.Equal(t, []string{"~/bin/run.sh"}, textsOf(bin))
 		})
 	})
 }
@@ -168,7 +183,7 @@ func TestShellCandidates(t *testing.T) {
 		shell := labelsOf(idx.ShellCandidates(""))
 		assert.ElementsMatch(t, []string{".git/", "main.go", "node_modules/"}, shell)
 
-		assert.Equal(t, []string{".git/config"}, labelsOf(idx.ShellCandidates(".git/")))
+		assert.Equal(t, []string{".git/config"}, textsOf(idx.ShellCandidates(".git/")))
 	})
 
 	// a truncated set would yield too long a common prefix, skipping a branch
@@ -206,11 +221,20 @@ func writeTree(t *testing.T, root string, rels ...string) {
 	}
 }
 
-// labelsOf returns each completion's label in order.
+// labelsOf returns each completion's listing label in order.
 func labelsOf(cands []tui.Completion) []string {
 	out := make([]string, 0, len(cands))
 	for _, c := range cands {
 		out = append(out, c.Label)
+	}
+	return out
+}
+
+// textsOf returns each completion's inserted text in order.
+func textsOf(cands []tui.Completion) []string {
+	out := make([]string, 0, len(cands))
+	for _, c := range cands {
+		out = append(out, c.Text)
 	}
 	return out
 }

@@ -104,7 +104,8 @@ func (idx *Index) candidates(query string, inConversation func(path string) bool
 		if e.isDir {
 			text += "/"
 		}
-		out = append(out, rankCandidate(text, inConversation(e.path), mtime[e.path], query))
+		// one directory per listing, so the bare name is unique in a listing
+		out = append(out, rankCandidate(text, name+dirSuffix(e), inConversation(e.path), mtime[e.path], query))
 	}
 	slices.SortStableFunc(out, func(a, b tui.Completion) int { return b.Score - a.Score })
 	return out
@@ -126,7 +127,7 @@ func dirTarget(base, rel string) string {
 
 // rankCandidate builds one completion, scoring by conversation presence first,
 // then recency, then fuzzy match.
-func rankCandidate(text string, inConvo bool, mt time.Time, query string) tui.Completion {
+func rankCandidate(text, label string, inConvo bool, mt time.Time, query string) tui.Completion {
 	var score int
 	if inConvo {
 		score += 1000
@@ -135,7 +136,15 @@ func rankCandidate(text string, inConvo bool, mt time.Time, query string) tui.Co
 	if q, ok := tui.MatchScore(text, query); ok {
 		score += q
 	}
-	return tui.Completion{Text: text, Label: text, Score: score}
+	return tui.Completion{Text: text, Label: label, Score: score}
+}
+
+// dirSuffix marks directories in listings the way Text does.
+func dirSuffix(e entry) string {
+	if e.isDir {
+		return "/"
+	}
+	return ""
 }
 
 // recentScore gives newer files a higher score on a 0..300 scale.

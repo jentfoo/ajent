@@ -40,7 +40,8 @@ func TestShellComplete(t *testing.T) {
 		comp := newShellCompleter(t, "pkg")
 
 		_, items := comp.Complete("!./pk", 5)
-		assert.Equal(t, []string{"./pkg/"}, labelsOf(items))
+		assert.Equal(t, []string{"./pkg/"}, textsOf(items)) // inserted text keeps ./
+		assert.Equal(t, []string{"pkg/"}, labelsOf(items))
 	})
 
 	// an @ inside a shell line is literal text for bash, never a workspace ref

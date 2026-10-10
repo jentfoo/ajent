@@ -211,3 +211,12 @@ func labelsOf(items []tui.Completion) []string {
 	}
 	return out
 }
+
+// textsOf returns each completion's inserted text in order.
+func textsOf(items []tui.Completion) []string {
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.Text)
+	}
+	return out
+}
