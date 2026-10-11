@@ -8,7 +8,7 @@ require (
 	github.com/go-analyze/bulk v0.1.6
 	github.com/go-git/go-billy/v5 v5.9.2
 	github.com/go-git/go-git/v5 v5.19.3
-	github.com/mark3labs/mcp-go v1.1.1
+	github.com/mark3labs/mcp-go v1.2.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
