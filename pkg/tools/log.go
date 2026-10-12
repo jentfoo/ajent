@@ -49,7 +49,7 @@ func (t *gitLogTool) Label(agent.ToolCall) string {
 }
 
 func (t *gitLogTool) Description() string {
-	return "List recent commits of the repository containing path, newest first: short hash, author date and subject. Optional file narrows to commits touching that file or directory and follows its renames back through history. Read-only: the repository is parsed in process and nothing from it is executed."
+	return "List recent commits of the repository containing path, newest first: short hash, author date and subject. Optional file narrows to commits touching that file (following its renames back through history) or directory. Read-only: the repository is parsed in process and nothing from it is executed."
 }
 
 func (t *gitLogTool) Schema() llm.ToolSchema {
@@ -89,7 +89,7 @@ func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.O
 	if p.Limit > 0 {
 		walk = min(p.Limit, maxLogCommits)
 	}
-	file := strings.TrimSpace(p.File)
+	file := normalizeGitPathspec(p.File)
 	var out string
 	var more bool
 	var chain []string
@@ -143,8 +143,9 @@ func gitLogLines(ctx context.Context, iter object.CommitIter, limit int) (string
 // gitLogFollow walks full history newest first, listing commits that touch
 // file and following its renames backwards, `git log --follow` style: when a
 // commit renames the tracked path, older commits are matched under the old
-// name. It reports whether the walk was cut (by limit or step cap) and the
-// rename chain, oldest first.
+// name. A directory scope instead matches every change beneath it and never
+// follows renames or ends early, like `git log -- dir/`. It reports whether
+// the walk was cut (by limit or step cap) and the rename chain, oldest first.
 func gitLogFollow(ctx context.Context, iter object.CommitIter, file string, limit int) (string, bool, []string, error) {
 	var b strings.Builder
 	var chain []string
@@ -187,11 +188,14 @@ func gitLogFollow(ctx context.Context, iter object.CommitIter, file string, limi
 	}
 }
 
-// followTouch reports whether path changed at c against its first parent.
-// ended marks the path's history finishing here: born (created without a
-// rename source) or deleted. prev carries the pre-rename name, empty when the
-// path was merely modified or renamed away on a merge side.
-func followTouch(ctx context.Context, c *object.Commit, path string) (touched bool, prev string, ended bool, err error) {
+// followTouch reports whether scope changed at c against its first parent.
+// The scope matches an exact path or anything beneath it as a directory; only
+// an exact file match tracks renames. ended marks an exact path's history
+// finishing here: born (created without a rename source) or deleted. prev
+// carries the pre-rename name, empty when the path was merely modified or
+// renamed away on a merge side.
+func followTouch(ctx context.Context, c *object.Commit, file string) (touched bool, prev string, ended bool, err error) {
+	keep := gitPathScope(file)
 	var parent *object.Commit
 	if c.NumParents() > 0 {
 		if parent, err = c.Parent(0); err != nil {
@@ -199,8 +203,8 @@ func followTouch(ctx context.Context, c *object.Commit, path string) (touched bo
 		}
 	}
 	if parent != nil { // unchanged blobs cannot be part of any change
-		ph, pok := entryHash(parent, path)
-		chh, cok := entryHash(c, path)
+		ph, pok := entryHash(parent, file)
+		chh, cok := entryHash(c, file)
 		if pok && cok && ph == chh {
 			return false, "", false, nil
 		}
@@ -218,21 +222,27 @@ func followTouch(ctx context.Context, c *object.Commit, path string) (touched bo
 		return false, "", false, err
 	}
 	for _, ch := range changes {
-		if ch.To.Name == path {
+		if !keep(ch.From.Name) && !keep(ch.To.Name) {
+			continue
+		}
+		switch {
+		case ch.To.Name == file:
 			switch {
 			case ch.From.Name == "":
 				return true, "", true, nil // born here
-			case ch.From.Name != path:
+			case ch.From.Name != file:
 				return true, ch.From.Name, false, nil // renamed into path
 			default:
 				return true, "", false, nil // modified
 			}
-		}
-		if ch.From.Name == path {
-			if ch.To.Name == "" {
-				return true, "", true, nil // deleted: path history ends
-			}
+		case ch.From.Name == file && ch.To.Name == "":
+			return true, "", true, nil // deleted: history ends here
+		case ch.From.Name == file:
 			return true, "", false, nil // renamed away on a merge side
+		default:
+			// under a directory scope: one file's birth or deletion never
+			// ends the walk, other in-scope history may continue below
+			return true, "", false, nil
 		}
 	}
 	return false, "", false, nil

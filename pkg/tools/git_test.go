@@ -255,6 +255,17 @@ func TestWriteGitFileDiff(t *testing.T) {
 			&gitSide{path: "a.txt", mode: reg, data: "two\n"}) // hash zero: work tree
 		assert.NotContains(t, b.String(), "index ")
 	})
+
+	t.Run("oversized_contents_withheld", func(t *testing.T) {
+		var b strings.Builder
+		writeGitFileDiff(&b,
+			&gitSide{path: "big.txt", hash: ha, mode: reg, size: 3 << 20, data: "one\n", cut: true},
+			&gitSide{path: "big.txt", hash: hb, mode: reg, size: 3 << 20, data: "two\n"})
+		out := b.String()
+		assert.Contains(t, out, "diff --git a/big.txt b/big.txt")
+		assert.Contains(t, out, "too large to show (3mb)")
+		assert.NotContains(t, out, "@@") // never hunks over truncated content
+	})
 }
 
 func TestGitStatusLines(t *testing.T) {
@@ -309,10 +320,68 @@ func TestGitPathScope(t *testing.T) {
 	assert.True(t, gitPathScope("")("anything")) // empty scope matches all
 }
 
-func TestFinishDiff(t *testing.T) {
+func TestNormalizeGitPathspec(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "(no changes)", finishDiff("", nil))
-	assert.Equal(t, "body", finishDiff("body\n", nil))
-	assert.Equal(t, "body\nnote", finishDiff("body", []string{"note"}))
+	for _, tc := range []struct{ in, want string }{
+		{"", ""},
+		{"  ", ""},
+		{".", ""},
+		{"./", ""},
+		{"dir/", "dir"},             // trailing separator selects the directory
+		{".//dir/sub//", "dir/sub"}, // duplicate separators collapse
+		{"./dir/sub/", "dir/sub"},   // leading dot-slash drops
+		{"a/./b", "a/b"},            // interior dot segments resolve
+		{"pkg/api/../api/git.go", "pkg/api/git.go"},
+		{"/abs.txt", "abs.txt"}, // absolute spelling means repo-relative
+		{"..", ".."},            // escaping the repo never matches
+		{"../sibling.txt", "../sibling.txt"},
+	} {
+		assert.Equal(t, tc.want, normalizeGitPathspec(tc.in), tc.in)
+	}
+}
+
+func TestGitDiffOut(t *testing.T) {
+	t.Run("empty_scope_reads_as_no_changes", func(t *testing.T) {
+		d := newGitDiffOut("", ToolGitDiff)
+		defer func() { _ = d.close() }()
+		assert.Equal(t, "(no changes)", d.Text(""))
+	})
+
+	t.Run("notes_follow_blocks", func(t *testing.T) {
+		d := newGitDiffOut("", ToolGitDiff)
+		defer func() { _ = d.close() }()
+		d.Note("submodule sub changed")
+		d.Block(nil, &gitSide{path: "new.txt", mode: filemode.Regular, data: "x\n"})
+		text := d.Text("")
+		assert.Contains(t, text, "diff --git a/new.txt b/new.txt")
+		assert.Contains(t, text, "+x")
+		assert.Contains(t, text, "submodule sub changed")
+	})
+
+	t.Run("truncation_spills_and_counts_skipped", func(t *testing.T) {
+		testLimitsGate.Lock()
+		t.Cleanup(testLimitsGate.Unlock)
+		orig := GitResultLimit()
+		t.Cleanup(func() { ApplyLimits(Limits{Git: orig}) })
+		ApplyLimits(Limits{Git: Limit{Lines: 2}})
+
+		d := newGitDiffOut("", ToolGitDiff)
+		defer func() { _ = d.close() }()
+		for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+			if d.Full() { // the loop's own stop: nothing past the bound is read
+				d.skipped++
+				continue
+			}
+			d.Block(nil, &gitSide{path: name, mode: filemode.Regular, data: strings.Repeat(name+"\n", 3)})
+		}
+		text := d.Text("page it")
+		assert.Contains(t, text, "truncated:")
+		assert.Contains(t, text, "2 more changed paths not shown")
+		assert.Contains(t, text, "; page it")
+		require.NotEmpty(t, d.spill.path)
+		spilled, err := os.ReadFile(d.spill.path)
+		require.NoError(t, err)
+		assert.Contains(t, string(spilled), "diff --git a/a.txt b/a.txt") // full stream survives
+	})
 }

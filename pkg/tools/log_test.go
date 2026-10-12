@@ -92,6 +92,30 @@ func TestGitLog(t *testing.T) {
 		assert.True(t, isErr)
 		assert.Contains(t, out, "no commits yet")
 	})
+
+	t.Run("trailing_separator_file_scope", func(t *testing.T) {
+		g := newGitRepo(t)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"./a.txt/"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "side edit of a.txt") // never a false negative
+	})
+
+	t.Run("directory_scope_lists_nested_history", func(t *testing.T) {
+		g := newDirRepo(t)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"pkg/"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "edit pkg file")
+		assert.Contains(t, out, "delete pkg file")
+		assert.Contains(t, out, "add pkg") // a deletion never ends a directory walk
+		assert.NotContains(t, out, "edit root")
+	})
+
+	t.Run("dot_slash_scope_matches_too", func(t *testing.T) {
+		g := newDirRepo(t)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"./pkg/"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "edit pkg file")
+	})
 }
 
 // newLinearRepo builds master -> c1 adds origin.txt, c2 renames it to
@@ -120,5 +144,37 @@ func newLinearRepo(t *testing.T) *gitRepo {
 	commit("rename origin", base.Add(time.Minute))
 	require.NoError(t, os0Write(dir, "moved.txt", "one\ntwo\n"))
 	commit("edit moved", base.Add(2*time.Minute))
+	return &gitRepo{dir: dir}
+}
+
+// newDirRepo builds master -> c1 adds pkg/a.txt and root.txt, c2 edits
+// pkg/a.txt, c3 deletes pkg/a.txt, c4 edits root.txt: the smallest directory
+// scope shape, where one file's deletion must not end the walk.
+func newDirRepo(t *testing.T) *gitRepo {
+	t.Helper()
+
+	dir := t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	commit := func(msg string, when time.Time) string {
+		t.Helper()
+
+		require.NoError(t, w.AddWithOptions(&git.AddOptions{All: true})) // stage deletions too
+		h, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		return h.String()
+	}
+	require.NoError(t, os0Write(dir, "pkg/a.txt", "one\n"))
+	require.NoError(t, os0Write(dir, "root.txt", "r1\n"))
+	commit("add pkg", base)
+	require.NoError(t, os0Write(dir, "pkg/a.txt", "one\ntwo\n"))
+	commit("edit pkg file", base.Add(time.Minute))
+	require.NoError(t, os.Remove(filepath.Join(dir, "pkg", "a.txt")))
+	commit("delete pkg file", base.Add(2*time.Minute))
+	require.NoError(t, os0Write(dir, "root.txt", "r2\n"))
+	commit("edit root", base.Add(3*time.Minute))
 	return &gitRepo{dir: dir}
 }

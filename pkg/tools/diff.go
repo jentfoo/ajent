@@ -54,8 +54,8 @@ func (t *gitDiffTool) Close() {}
 // selfBounding: git_diff bounds and spills its own results.
 func (*gitDiffTool) selfBounding() {}
 
-// Execute renders the requested diff bounded by the tool limit. The complete
-// patch spills to disk when the bound cuts it, so the model can page the file.
+// Execute renders the requested diff bounded by the tool limit. Blocks stream
+// through the bound and the complete output spills to disk when it cuts.
 func (t *gitDiffTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p gitDiffParams
 	if err := decode(call.Input, &p); err != nil {
@@ -73,11 +73,12 @@ func (t *gitDiffTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 		return resultErr(ToolGitDiff + ": " + err.Error()), nil
 	}
 
-	out, err := gitDiffText(ctx, r, p.From, p.To, p.File)
-	if err != nil {
+	d := newGitDiffOut(t.sessionID, ToolGitDiff)
+	defer func() { _ = d.close() }()
+	if err := gitDiffText(ctx, r, p.From, p.To, normalizeGitPathspec(p.File), d); err != nil {
 		return resultErr(ToolGitDiff + ": " + err.Error()), nil
 	}
-	text, _ := truncateOutput(t.sessionID, ToolGitDiff, out, GitResultLimit(), "narrow with file or a smaller range")
+	text := d.Text("narrow with file or a smaller range")
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil
 }
 
@@ -98,52 +99,44 @@ func splitGitRange(rev string) (from, to string, err error) {
 	return from, to, nil
 }
 
-// gitDiffText resolves the requested range and renders its unified patch,
-// limited to file's path scope when non-empty.
-func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string) (string, error) {
+// gitDiffText resolves the requested range and renders its unified patch into
+// d, limited to file's path scope when non-empty.
+func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string, d *gitDiffOut) error {
 	if to == "" { // accept git's "a..b" range shorthand in from
 		var err error
 		if from, to, err = splitGitRange(from); err != nil {
-			return "", err
+			return err
 		}
 	}
 	switch {
 	case to == gitWorktreeRef:
 		base, err := gitCommit(r, from)
 		if err != nil {
-			return "", err
+			return err
 		}
 		baseTree, err := gitTree(base)
 		if err != nil {
-			return "", err
+			return err
 		}
-		body, notes, err := gitDiffWorktreeText(ctx, r, baseTree, file)
-		if err != nil {
-			return "", err
-		}
-		return finishDiff(body, notes), nil
+		return gitDiffWorktreeText(ctx, r, baseTree, file, d)
 	case from != "" && to != "":
 		fromC, err := gitCommit(r, from)
 		if err != nil {
-			return "", err
+			return err
 		}
 		toC, err := gitCommit(r, to)
 		if err != nil {
-			return "", err
+			return err
 		}
 		fromTree, err := gitTree(fromC)
 		if err != nil {
-			return "", err
+			return err
 		}
 		toTree, err := gitTree(toC)
 		if err != nil {
-			return "", err
+			return err
 		}
-		body, notes, err := gitDiffTreeText(ctx, fromTree, toTree, file)
-		if err != nil {
-			return "", err
-		}
-		return finishDiff(body, notes), nil
+		return gitDiffTreeText(ctx, fromTree, toTree, file, d)
 	case from != "" || to != "":
 		rev := from // exactly one side names the commit to show
 		if rev == "" {
@@ -151,14 +144,14 @@ func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string) 
 		}
 		c, err := gitCommit(r, rev)
 		if err != nil {
-			return "", err
+			return err
 		}
-		return gitCommitDiffText(ctx, c, file)
+		return gitCommitDiffText(ctx, c, file, d)
 	default:
 		head, err := gitCommit(r, "HEAD")
 		if err != nil {
-			return "", err
+			return err
 		}
-		return gitCommitDiffText(ctx, head, file)
+		return gitCommitDiffText(ctx, head, file, d)
 	}
 }

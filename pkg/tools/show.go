@@ -49,8 +49,8 @@ func (t *gitShowTool) Close() {}
 // selfBounding: git_show bounds and spills its own results.
 func (*gitShowTool) selfBounding() {}
 
-// Execute renders the commit bounded by the tool limit. The complete output
-// spills to disk when the bound cuts it, so the model can page the file.
+// Execute renders the commit bounded by the tool limit. Blocks stream through
+// the bound and the complete output spills to disk when it cuts.
 func (t *gitShowTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p gitShowParams
 	if err := decode(call.Input, &p); err != nil {
@@ -68,14 +68,17 @@ func (t *gitShowTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 	if err != nil {
 		return resultErr(ToolGitShow + ": " + err.Error()), nil
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "commit %s\nAuthor: %s\nDate:   %s\n\n%s\n",
+	d := newGitDiffOut(t.sessionID, ToolGitShow)
+	defer func() { _ = d.close() }()
+	// the bound never errors on an in-memory head, only diverts to the spill
+	_, _ = fmt.Fprintf(d, "commit %s\nAuthor: %s\nDate:   %s\n\n%s\n",
 		c.ID(), c.Author.String(), c.Author.When.Format(object.DateFormat), strings.TrimRight(c.Message, "\n"))
-	body, err := gitCommitDiffText(ctx, c, p.File)
-	if err != nil {
+	if err := gitCommitDiffText(ctx, c, normalizeGitPathspec(p.File), d); err != nil {
 		return resultErr(ToolGitShow + ": " + err.Error()), nil
 	}
-	b.WriteString("\n" + body)
-	text, _ := truncateOutput(t.sessionID, ToolGitShow, b.String(), GitResultLimit(), "use git_log to find a smaller commit")
+	if d.shown == 0 && len(d.notes) == 0 { // the patch section must name its emptiness
+		d.Note("(no changes)")
+	}
+	text := d.Text("use git_log to find a smaller commit")
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil
 }

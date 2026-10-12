@@ -1,11 +1,14 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,6 +23,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 	"github.com/go-git/go-git/v5/storage/filesystem/dotgit"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // errNotGit reports that path is not inside a git work tree.
@@ -168,14 +173,35 @@ func gitTree(c *object.Commit) (*object.Tree, error) {
 	return c.Tree()
 }
 
+// gitBlobCeiling caps how much of one side's content a diff materializes.
+// Text past it is withheld with an explicit note instead of hunks over a
+// truncated view, so one huge blob cannot dominate memory or CPU. Binary
+// detection only needs the prefix either way.
+const gitBlobCeiling = 512 << 10
+
 // gitSide is one snapshot of a path: blob content plus repo metadata. nil is
 // the /dev/null side of a creation or deletion.
 type gitSide struct {
 	path string
 	hash plumbing.Hash // zero for the work-tree side, where the hash is not repo-canonical
 	mode filemode.FileMode
-	data string
+	size int64  // full content size, past len(data) when cut
+	data string // up to gitBlobCeiling bytes; the whole blob when !cut
+	cut  bool   // data stopped at the ceiling: hunks withheld, never partial
 	bin  bool
+}
+
+// readGitSide reads r up to gitBlobCeiling bytes, reporting whether content
+// remains past what it returned.
+func readGitSide(r io.Reader) (data string, cut bool, err error) {
+	raw, err := io.ReadAll(io.LimitReader(r, gitBlobCeiling+1))
+	if err != nil {
+		return "", false, err
+	}
+	if cut = len(raw) > gitBlobCeiling; cut {
+		raw = raw[:gitBlobCeiling]
+	}
+	return string(raw), cut, nil
 }
 
 // gitBlobSide reads path out of a tree. A missing entry or submodule yields
@@ -195,11 +221,7 @@ func gitBlobSide(t *object.Tree, path string) (*gitSide, error) {
 	if f.Mode == filemode.Submodule {
 		return nil, nil
 	}
-	data, err := f.Contents()
-	if err != nil {
-		return nil, err
-	}
-	return &gitSide{path: path, hash: f.Hash, mode: f.Mode, data: data, bin: binary([]byte(data))}, nil
+	return fileSide(f)
 }
 
 // gitDiskSide reads one path off the work tree. dir reports a directory at
@@ -215,12 +237,18 @@ func gitDiskSide(root, path string) (side *gitSide, dir bool) {
 		return nil, true
 	}
 	var data string
+	var cut bool
 	if fi.Mode()&os.ModeSymlink != 0 { // symlink blobs hold the target path
 		data, err = os.Readlink(full)
 	} else {
-		var raw []byte
-		raw, err = os.ReadFile(full)
-		data = string(raw)
+		f, openErr := os.Open(full)
+		if openErr != nil {
+			return nil, false
+		}
+		data, cut, err = readGitSide(f)
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
 	}
 	if err != nil {
 		return nil, false
@@ -229,11 +257,29 @@ func gitDiskSide(root, path string) (side *gitSide, dir bool) {
 	if err != nil {
 		return nil, false
 	}
-	return &gitSide{path: path, mode: mode, data: data, bin: binary([]byte(data))}, false
+	return &gitSide{path: path, mode: mode, size: fi.Size(), data: data, cut: cut, bin: binary([]byte(data))}, false
 }
 
-// gitPathScope matches an exact path or anything beneath it as a directory.
-// An empty scope matches everything.
+// normalizeGitPathspec cleans a model-supplied repo-relative pathspec once at
+// parameter parse, so equivalent spellings share one scope ("dir/", "./dir"
+// and "dir/." all select dir) and can never filter everything out. An empty
+// result matches everything; specs escaping the repo ("..") stay unmatched.
+func normalizeGitPathspec(file string) string {
+	p := strings.TrimSpace(filepath.ToSlash(file))
+	if p == "" {
+		return ""
+	}
+	p = path.Clean(p)
+	p = strings.TrimLeft(p, "/") // an absolute spelling still means repo-relative
+	if p == "." || p == "" {
+		return ""
+	}
+	return p
+}
+
+// gitPathScope matches file exactly or anything beneath it as a directory.
+// An empty scope matches everything. file must come from normalizeGitPathspec,
+// so it carries no trailing separator or dot segments.
 func gitPathScope(file string) func(string) bool {
 	if file == "" {
 		return func(string) bool { return true }
@@ -243,58 +289,150 @@ func gitPathScope(file string) func(string) bool {
 	}
 }
 
-// gitDiffTreeText renders the rename-aware unified patch between two trees as
-// git-shaped per-file blocks, limited to file's path scope when non-empty.
-// Notes name omitted content: submodules.
-func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string) (string, []string, error) {
-	keep := gitPathScope(file) // matches everything when file is empty
-	changes, err := object.DiffTreeWithOptions(ctx, from, to, object.DefaultDiffTreeOptions)
-	if err != nil {
-		return "", nil, err
-	}
+// gitDiffOut renders one diff under GitResultLimit: per-file blocks stream
+// into a kept head and everything past the bound flows straight to a spill
+// file, so peak memory is one block rather than the whole patch. Once full,
+// callers stop expensive content reads for paths that cannot appear anymore.
+type gitDiffOut struct {
+	head    bytes.Buffer // kept prefix within the limit
+	spill   *spiller     // lazily created file holding the complete stream
+	w       *boundedWriter
+	notes   []string // deferred footer notes, order preserved
+	shown   int      // blocks emitted
+	skipped int      // in-scope paths dropped once full
+}
+
+// newGitDiffOut names its spill file after prefix.
+func newGitDiffOut(sessionID, prefix string) *gitDiffOut {
+	d := &gitDiffOut{spill: newSpiller(sessionID, prefix)}
+	d.w = Writer(&d.head, GitResultLimit(), d.spill).(*boundedWriter)
+	return d
+}
+
+// Write appends raw text such as git_show's metadata header.
+func (d *gitDiffOut) Write(p []byte) (int, error) { return d.w.Write(p) }
+
+// Note defers one footer line.
+func (d *gitDiffOut) Note(s string) { d.notes = append(d.notes, s) }
+
+// Full reports whether the result bound was reached: stop reading content for
+// paths that can no longer appear in the output.
+func (d *gitDiffOut) Full() bool { return d.w.Truncated() }
+
+// Block appends one changed path as a git-shaped block. Callers check Full
+// before materializing sides; skipped counting stays with them.
+func (d *gitDiffOut) Block(from, to *gitSide) {
 	var b strings.Builder
-	var notes []string
-	for _, ch := range changes {
-		if ctx.Err() != nil {
-			return "", nil, ctx.Err()
+	writeGitFileDiff(&b, from, to)
+	if b.Len() == 0 {
+		return // no content or metadata change worth a block
+	}
+	_, _ = d.w.Write([]byte(b.String()))
+	d.shown++
+}
+
+// Text flushes the stream and returns the model text: kept blocks or the
+// "(no changes)" stand-in, deferred notes, then a truncation footer naming
+// the spill file when anything was cut.
+func (d *gitDiffOut) Text(paging string) string {
+	d.w.Flush()
+	body := strings.TrimRight(d.head.String(), "\n")
+	if d.head.Len() == 0 && !d.Full() { // show's metadata header must survive
+		body = "(no changes)"
+	}
+	if d.skipped > 0 {
+		d.Note(plural(d.skipped, "more changed path") + " not shown")
+	}
+	if len(d.notes) > 0 {
+		footer := strings.Join(d.notes, "\n")
+		if body == "" {
+			body = footer
+		} else {
+			body += "\n" + footer
 		}
-		if !keep(ch.From.Name) && !keep(ch.To.Name) {
+	}
+	truncated := d.Full() || overlongLine(body)
+	if !truncated {
+		return body
+	}
+	capped := capText(body)
+	if !d.Full() { // only an overlong line triggered this: no file yet,
+		// write the complete stream so read can recover the uncapped tail
+		_, _ = d.spill.Write(d.w.replay.Bytes())
+	}
+	lines, bytes := d.w.Total()
+	note := truncationNote(Bounded{Shown: countLines(capped), Lines: lines, Bytes: bytes}, d.spill.path, paging)
+	if capped == "" {
+		return note // nothing fit at all, the footer is the whole answer
+	}
+	return capped + "\n" + note
+}
+
+// close flushes and closes the spill file when one was created.
+func (d *gitDiffOut) close() error { return d.spill.close() }
+
+// gitDiffTreeText renders the rename-aware unified patch between two trees as
+// git-shaped per-file blocks into d, limited to file's path scope when
+// non-empty. Rename detection runs on the in-scope changes only, so a scoped
+// call never pays similarity reads for paths it will not render.
+// Notes name omitted content: submodules.
+func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, d *gitDiffOut) error {
+	changes, err := object.DiffTreeWithOptions(ctx, from, to, &object.DiffTreeOptions{})
+	if err != nil {
+		return err
+	}
+	if file != "" { // raw adds/deletes/modifies carry in-scope names only,
+		// so detection afterward can never pair a change across the scope
+		keep := gitPathScope(file)
+		changes = bulk.SliceFilter(func(ch *object.Change) bool {
+			return keep(ch.From.Name) || keep(ch.To.Name)
+		}, changes)
+	}
+	if changes, err = object.DetectRenames(changes, object.DefaultDiffTreeOptions); err != nil {
+		return err
+	}
+	for _, ch := range changes { // every surviving side is in scope
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if d.Full() {
+			d.skipped++
 			continue
 		}
 		fromFile, toFile, err := ch.Files()
 		if err != nil {
-			return "", nil, err
+			return err
 		}
 		if (fromFile != nil && fromFile.Mode == filemode.Submodule) ||
 			(toFile != nil && toFile.Mode == filemode.Submodule) {
-			notes = append(notes, "submodule "+changePath(ch)+" changed")
+			d.Note("submodule " + changePath(ch) + " changed")
 			continue
 		}
 		from, err := fileSide(fromFile)
 		if err != nil {
-			return "", nil, err
+			return err
 		}
 		to, err := fileSide(toFile)
 		if err != nil {
-			return "", nil, err
+			return err
 		}
-		writeGitFileDiff(&b, from, to)
+		d.Block(from, to)
 	}
-	return strings.TrimRight(b.String(), "\n"), notes, nil
+	return nil
 }
 
 // gitDiffWorktreeText renders committed state at base against the files on
-// disk, like `git diff <ref>`: every difference since base, committed or not,
-// limited to file's path scope when non-empty. Notes name untracked files,
+// disk into d, like `git diff <ref>`: every difference since base, committed or
+// not, limited to file's path scope when non-empty. Notes name untracked files,
 // which git does not diff either.
-func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tree, file string) (string, []string, error) {
+func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tree, file string, d *gitDiffOut) error {
 	w, err := gitWorktree(r)
 	if err != nil {
-		return "", nil, err
+		return err
 	}
 	st, err := w.StatusWithOptions(git.StatusOptions{Strategy: git.Preload})
 	if err != nil {
-		return "", nil, err
+		return err
 	}
 	root := w.Filesystem.Root()
 
@@ -312,35 +450,39 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 		}
 	}
 
-	var b strings.Builder
-	var notes []string
 	var untracked int
 	for _, path := range slices.Sorted(maps.Keys(paths)) {
 		if ctx.Err() != nil {
-			return "", nil, ctx.Err()
+			return ctx.Err()
 		}
+		// counted before the full check: status knows it cheaply, and the
+		// footer names untracked files even when rendering stopped early
 		if fs := st[path]; fs != nil && fs.Worktree == git.Untracked {
 			untracked++
 			continue
 		}
+		if d.Full() {
+			d.skipped++
+			continue
+		}
 		from, err := gitBlobSide(base, path)
 		if err != nil {
-			return "", nil, err
+			return err
 		}
 		to, dir := gitDiskSide(root, path)
 		if dir || (from != nil && from.mode == filemode.Submodule) {
-			notes = append(notes, "submodule "+path+" changed")
+			d.Note("submodule " + path + " changed")
 			continue
 		}
 		if from == nil && to == nil {
 			continue // gone from both snapshots, nothing to show
 		}
-		writeGitFileDiff(&b, from, to)
+		d.Block(from, to)
 	}
 	if untracked > 0 {
-		notes = append(notes, plural(untracked, "untracked file")+" not shown")
+		d.Note(plural(untracked, "untracked file") + " not shown")
 	}
-	return strings.TrimRight(b.String(), "\n"), notes, nil
+	return nil
 }
 
 // changePath names a change's destination path, falling back to its source.
@@ -352,15 +494,23 @@ func changePath(ch *object.Change) string {
 }
 
 // fileSide converts an object.File change side onto a gitSide, nil for absent.
+// Content past gitBlobCeiling is not read; the cut side withholds hunks later.
 func fileSide(f *object.File) (*gitSide, error) {
 	if f == nil {
 		return nil, nil
 	}
-	data, err := f.Contents()
+	r, err := f.Reader()
 	if err != nil {
 		return nil, err
 	}
-	return &gitSide{path: f.Name, hash: f.Hash, mode: f.Mode, data: data, bin: binary([]byte(data))}, nil
+	data, cut, rerr := readGitSide(r)
+	if cerr := r.Close(); rerr == nil {
+		rerr = cerr
+	}
+	if rerr != nil {
+		return nil, rerr
+	}
+	return &gitSide{path: f.Name, hash: f.Hash, mode: f.Mode, size: f.Size, data: data, cut: cut, bin: binary([]byte(data))}, nil
 }
 
 // writeGitFileDiff appends one changed path as a git-shaped block: the
@@ -396,6 +546,16 @@ func writeGitFileDiff(b *strings.Builder, from, to *gitSide) {
 	case (from != nil && from.bin) || (to != nil && to.bin):
 		body = "Binary files " + sideLabel("a/", "/dev/null", from) +
 			" and " + sideLabel("b/", "/dev/null", to) + " differ"
+	case (from != nil && from.cut) || (to != nil && to.cut):
+		// hunks over truncated content would read as the whole change
+		n := int64(0)
+		if from != nil {
+			n = max(n, from.size)
+		}
+		if to != nil {
+			n = max(n, to.size)
+		}
+		body = "Contents too large to show (" + strutil.HumanSize(n) + ")"
 	default:
 		fromData, toData := "", ""
 		if from != nil {
@@ -455,47 +615,33 @@ func gitMode(m filemode.FileMode) string {
 	return fmt.Sprintf("%o", uint32(m))
 }
 
-// gitCommitDiffText renders the patch c introduces: first parent's tree to its
-// own, or the empty tree for a root commit, limited to file's scope. A merge
-// notes the first-parent basis, so the partial view is never mistaken for the
-// whole change.
-func gitCommitDiffText(ctx context.Context, c *object.Commit, file string) (string, error) {
+// gitCommitDiffText renders the patch c introduces into d: first parent's tree
+// to its own, or the empty tree for a root commit, limited to file's scope. A
+// merge notes the first-parent basis, so the partial view is never mistaken for
+// the whole change.
+func gitCommitDiffText(ctx context.Context, c *object.Commit, file string, d *gitDiffOut) error {
 	var parent *object.Commit
 	if c.NumParents() > 0 {
 		var err error
 		if parent, err = c.Parent(0); err != nil {
-			return "", err
+			return err
 		}
 	}
 	fromTree, err := gitTree(parent)
 	if err != nil {
-		return "", err
+		return err
 	}
 	toTree, err := gitTree(c)
 	if err != nil {
-		return "", err
+		return err
 	}
-	body, notes, err := gitDiffTreeText(ctx, fromTree, toTree, file)
-	if err != nil {
-		return "", err
+	if err := gitDiffTreeText(ctx, fromTree, toTree, file, d); err != nil {
+		return err
 	}
 	if c.NumParents() > 1 {
-		notes = append(notes, "merge commit; showing the diff against first parent "+shortHash(parent.ID()))
+		d.Note("merge commit; showing the diff against first parent " + shortHash(parent.ID()))
 	}
-	return finishDiff(body, notes), nil
-}
-
-// finishDiff joins a patch body with its notes, standing in "(no changes)" for
-// an empty diff so a blank result reads as a real answer.
-func finishDiff(body string, notes []string) string {
-	body = strings.TrimRight(body, "\n")
-	if strings.TrimSpace(body) == "" {
-		body = "(no changes)"
-	}
-	if len(notes) == 0 {
-		return body
-	}
-	return body + "\n" + strings.Join(notes, "\n")
+	return nil
 }
 
 // gitHeadLine names the checked-out state: branch, detached HEAD or unborn.

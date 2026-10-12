@@ -49,4 +49,21 @@ func TestGitShow(t *testing.T) {
 		assert.True(t, isErr)
 		assert.Contains(t, out, "unknown revision")
 	})
+
+	t.Run("file_scope_normalizes_separators", func(t *testing.T) {
+		g := newGitRepo(t)
+		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()},
+			`{"ref":"`+g.b+`","file":"./a.txt/"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "+TWO") // never a false negative
+	})
+
+	t.Run("unmatched_scope_keeps_metadata", func(t *testing.T) {
+		g := newGitRepo(t)
+		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()},
+			`{"ref":"`+g.b+`","file":"missing.txt"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "commit "+g.b) // the header is the answer's anchor
+		assert.Contains(t, out, "(no changes)")
+	})
 }

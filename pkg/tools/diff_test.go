@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -155,5 +156,44 @@ func TestGitDiff(t *testing.T) {
 			`{"from":"ghost","to":"worktree"}`)
 		assert.True(t, isErr)
 		assert.Contains(t, out, "unknown revision")
+	})
+
+	t.Run("file_scope_normalizes_separators", func(t *testing.T) {
+		g := newGitRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.a+`","to":"`+g.b+`","file":"./a.txt/"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "+TWO") // never a false negative
+	})
+
+	t.Run("oversized_contents_withheld", func(t *testing.T) {
+		g := newGitRepo(t)
+		g.write(t, "big.txt", strings.Repeat("line\n", 120<<10)) // past gitBlobCeiling
+		g.stage(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "diff --git a/big.txt b/big.txt")
+		assert.Contains(t, out, "too large to show") // named, never rendered
+		assert.NotContains(t, out, "+line")
+	})
+
+	t.Run("wide_diff_streams_and_truncates", func(t *testing.T) {
+		g := newGitRepo(t)
+		for _, name := range []string{"x1.txt", "x2.txt"} {
+			g.write(t, name, "content of "+name+"\n")
+		}
+		g.stage(t)
+
+		testLimitsGate.Lock()
+		t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
+		orig := GitResultLimit()
+		t.Cleanup(func() { ApplyLimits(Limits{Git: orig}) })
+		ApplyLimits(Limits{Git: Limit{Lines: 3}})
+
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "truncated:")
+		assert.Contains(t, out, "1 more changed path not shown") // rendering stopped at the bound
+		assert.NotContains(t, out, "+content of x2.txt")
 	})
 }
