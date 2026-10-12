@@ -62,12 +62,14 @@ type Manager struct {
 	ctx    context.Context // root for every job's context, canceled on Close
 	cancel context.CancelFunc
 
-	sem chan struct{} // buffer of size MaxConcurrent, one slot per send
-
 	wg sync.WaitGroup
+
+	pubMu sync.Mutex // serializes a status read with its callback, so a stale count never lands last
 
 	mu          sync.Mutex
 	jobs        map[string]*job
+	waiters     []*job         // registered but ungranted jobs, dispatched in job-number order
+	running     int            // concurrency slots currently held
 	pending     []string       // completed ids not yet delivered into the parent context
 	inFlight    []string       // ids a queued steer names, cleared when it lands or drops
 	noticeBatch []string       // completions since the last delivered steer, for the keyed notice
@@ -86,8 +88,7 @@ func New(opts Options) *Manager {
 	if root == nil {
 		root = context.Background()
 	}
-	m := &Manager{opts: opts, sem: make(chan struct{}, opts.MaxConcurrent),
-		jobs: map[string]*job{}, reserved: map[string]int{}}
+	m := &Manager{opts: opts, jobs: map[string]*job{}, reserved: map[string]int{}}
 	m.ctx, m.cancel = context.WithCancel(root)
 	return m
 }
@@ -135,6 +136,7 @@ func (m *Manager) start(task, instructions, callID string) string {
 		ctx:          ctx,
 		cancel:       cancel,
 		done:         make(chan struct{}),
+		grant:        make(chan struct{}),
 		tokens:       ledger,
 	}
 	m.jobs[id] = j
@@ -149,6 +151,9 @@ func (m *Manager) start(task, instructions, callID string) string {
 		return id
 	}
 	m.wg.Add(1) // before the goroutine and under mu, so Close's Wait never races a pending Add
+	// queued at registration, so activation follows job numbers not start races
+	m.waiters = append(m.waiters, j)
+	m.dispatchLocked()
 	m.mu.Unlock()
 
 	// show the job immediately: rows render above the prompt even while queued,
@@ -162,13 +167,13 @@ func (m *Manager) start(task, instructions, callID string) string {
 }
 
 // spawn drives one job to completion on its own goroutine. acquired gates the
-// slot release: a queued job cancelled before acquiring never sent into sem, so
+// slot release: a queued job cancelled before acquiring never held one, so
 // releasing unconditionally would steal another running job's slot and over-admit.
 func (m *Manager) spawn(j *job) {
 	acquired := m.acquireSlot(j)
 	defer func() {
 		if acquired { // only a holder may free one, or we exceed MaxConcurrent
-			m.releaseSlot(j)
+			m.releaseSlot()
 		}
 		j.cancel() // drop the root registration; jobs deriving from m.ctx hold it until cancelled
 		m.wg.Done()
@@ -180,6 +185,7 @@ func (m *Manager) spawn(j *job) {
 		j.finish(StatusAborted, "", nil)
 	default:
 		j.markRunning()
+		m.publishStatus() // republish: activation moved a job from queued to running
 		sum, err = m.run(j.ctx, j)
 		switch {
 		case j.ctx.Err() != nil: // user stop or shutdown beats any partial result
@@ -200,22 +206,45 @@ func (m *Manager) spawn(j *job) {
 	m.onComplete(j)
 }
 
-// acquireSlot blocks until a concurrency slot frees or the job is cancelled.
+// acquireSlot blocks until a slot is granted or the job is cancelled. A grant
+// that raced our cancel still returns true: the caller holds the slot and releases it.
 func (m *Manager) acquireSlot(j *job) bool {
 	select {
-	case m.sem <- struct{}{}:
+	case <-j.grant:
 		return true
 	case <-j.ctx.Done():
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if j.granted {
+			return true
+		}
+		// still queued: leave the queue so no later dispatch grants a dead job
+		m.waiters = bulk.SliceFilterInPlace(func(w *job) bool { return w != j }, m.waiters)
 		return false
 	}
 }
 
-// releaseSlot returns the job's concurrency slot, if it holds one.
-func (m *Manager) releaseSlot(j *job) {
-	select {
-	case <-m.sem:
-	default:
+// dispatchLocked hands free slots to waiters in job-number order, so a fan-out
+// activates as sub-1, sub-2, ... however the start goroutines raced. Caller holds mu.
+func (m *Manager) dispatchLocked() {
+	m.waiters = bulk.SliceFilterInPlace(func(j *job) bool { return j.ctx.Err() == nil }, m.waiters)
+	slices.SortFunc(m.waiters, func(a, b *job) int { return cmp.Compare(a.num, b.num) })
+	for len(m.waiters) > 0 && m.running < m.opts.MaxConcurrent {
+		j := m.waiters[0]
+		m.waiters = slices.Delete(m.waiters, 0, 1)
+		m.running++
+		j.granted = true
+		close(j.grant)
 	}
+}
+
+// releaseSlot returns one concurrency slot and wakes the next waiter.
+func (m *Manager) releaseSlot() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.running--
+	m.dispatchLocked()
 }
 
 // poll blocks until id completes, PollTimeout elapses, or ctx is cancelled,
@@ -310,11 +339,11 @@ func (m *Manager) claimResult(j *job) Job {
 	return j.snapshot()
 }
 
-// List returns a snapshot of every job, oldest id first.
+// List returns a snapshot of every job in job-number order (sub-1, ..., sub-10).
 func (m *Manager) List() []Job {
 	m.mu.Lock()
 	ids := bulk.MapKeysSlice(m.jobs)
-	slices.Sort(ids)
+	slices.SortFunc(ids, byJobNumber)
 	out := make([]Job, 0, len(ids))
 	for _, id := range ids {
 		if j, ok := m.jobs[id]; ok {
@@ -596,6 +625,9 @@ func (m *Manager) publishStatus() {
 	if fn == nil {
 		return
 	}
+	m.pubMu.Lock()
+	defer m.pubMu.Unlock()
+
 	m.mu.Lock()
 	var running, queued, done int
 	var oldest time.Duration // oldest live job's full age: queue wait plus active runtime

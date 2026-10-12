@@ -230,7 +230,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		})
 		for _, t := range sag.Tools() {
 			// builtin source so /tools sorts the trio up front with core tools
-			toolsReg.RegisterFrom(tools.SourceBuiltin, t, true) // enabled by default, /tools toggles
+			// SelfBounded: a poll result is the deliverable, never spilled to a file
+			toolsReg.RegisterFrom(tools.SourceBuiltin, tools.SelfBounded(t), true) // enabled by default, /tools toggles
 		}
 		// the trio toggles together in /tools under one "subagents" row.
 		toolsReg.RegisterGroup(tools.ToolGroup{

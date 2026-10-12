@@ -616,6 +616,30 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 		assert.Equal(t, "one\ntwo", joined)
 	})
 
+	// a tool registered through the SelfBounded adapter never spills: the payload
+	// is the deliverable (the sub-agent trio), so it reaches the model whole
+	t.Run("self_bounded_adapter_skips_wrap", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < OtherLimit().Lines+50; i++ {
+			b.WriteString("row\n")
+		}
+		r := New()
+		r.sessionID = "bound-test"
+		r.Register(SelfBounded(&stubTool{name: "srv__whole", res: agent.ToolResult{
+			Content: llmBlock(b.String()),
+		}}), true)
+		tool, ok := r.Get("srv__whole")
+		require.True(t, ok)
+		_, wrapped := tool.(*boundTool) // the precondition of this whole test
+		require.False(t, wrapped)
+
+		out, err := tool.Execute(t.Context(), callWith([]byte(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		got, ok := out.Content.AsText()
+		require.True(t, ok)
+		assert.Equal(t, b.String(), got) // every line passes through, no spill footer
+	})
+
 	// non-text content cannot be rebuilt faithfully, so it stays whole, an
 	// image block that is not a decodable image kept with a note beside it
 	t.Run("non_text_content_untouched", func(t *testing.T) {

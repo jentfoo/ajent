@@ -168,7 +168,8 @@ func RunHeadless(o HeadlessOptions) int {
 	})
 	defer sag.Close()
 	for _, t := range sag.Tools() {
-		toolsReg.RegisterFrom(tools.SourceBuiltin, t, true)
+		// SelfBounded: a poll result is the deliverable, never spilled to a file
+		toolsReg.RegisterFrom(tools.SourceBuiltin, tools.SelfBounded(t), true)
 	}
 	toolsReg.MarkReadOnly([]string{subAgentToolStart, subAgentToolPoll, subAgentToolList})
 	if stats != nil { // appended after the recorder settles the drain list

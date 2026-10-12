@@ -57,9 +57,12 @@ Concurrency model:
 - **One goroutine per job**, a cancellable context per job derived from a
   manager-owned root (mirroring `mcp.Manager`: cancelled on `Close`, seeded via
   `Options.Root` when the host supplies one, so process shutdown reaches jobs
-  directly), and a buffered-channel semaphore sized to the concurrency cap. A
-  queued job waits until it takes a slot. A job's cancel always fires when it
-  reaches a terminal state, so the root holds no finished-job registrations.
+  directly), and an ordered dispatcher over a slot count capped to
+  `MaxConcurrent`. Jobs register as queued at `start` under the registry lock,
+  and slots are granted to waiters in job-number order, so a fan-out activates
+  sub-1, sub-2, ... however the parallel start goroutines raced. A job's cancel
+  always fires when it reaches a terminal state, so the root holds no
+  finished-job registrations.
 - The waitgroup add happens **under the registry lock before** the spawn
   goroutine launches, so shutdown's wait never races a pending add; each
   goroutine finishes with its done signal and cleanup in one place.
@@ -102,6 +105,9 @@ reservation (host-driven, or a call the batch never named) takes the next
 number, and a new batch supersedes the previous one, so reservations left by an
 interrupted turn are dropped and their numbers skipped. Because the id is also
 the activity row's rank, the rows sort in submission order too.
+
+`List` sorts by that number (`byJobNumber`, never a string sort: sub-10 must
+land after sub-9), which is what both `agent_list` and `/agents` render.
 
 The internal `job` carries the per-job context/cancel/done channel, the child
 ledger (`*tokens.Accounting`, created at Start so it is visible to poll
@@ -318,9 +324,13 @@ true, so the steer queues and lands at step 1 without ever starting a turn.
 
 ### Status segment
 
-Recomputed on every transition: a full form naming the running count (with the
-oldest job's age) and the done count, a short form for narrow rows, cleared when
-no jobs exist. The front end renders it as a keyed status segment.
+Recomputed on every transition, activation included: registration marks a job
+queued and taking a slot republishes, so the running count is never left at its
+registration snapshot. The recompute and callback are serialized against other
+publishers (`pubMu`) so concurrent transitions cannot land an older count after
+a newer one. A full form names the running count (with the oldest job's age) and
+the done count, a short form for narrow rows, cleared when no jobs exist. The
+front end renders it as a keyed status segment.
 
 ## Accounting and configuration seams
 

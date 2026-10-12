@@ -89,6 +89,9 @@ type job struct {
 	done   chan struct{}      // closed when the owning goroutine finishes
 	tokens *tokens.Accounting // child ledger, created at Start for poll payloads
 
+	grant   chan struct{} // slot handoff: closed once a slot is handed over
+	granted bool          // set with grant under the manager lock, not mu
+
 	mu        sync.Mutex
 	status    Status
 	started   time.Time // submission (queued) stamp

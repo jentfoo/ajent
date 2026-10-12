@@ -654,6 +654,18 @@ type SelfBounding interface {
 	selfBounding()
 }
 
+// SelfBounded marks t as bounding its own model-visible output, so RegisterState
+// skips the generic spill wrapper. For out-of-package tools that cannot implement
+// the pkg-local marker: use only where the payload is the deliverable (the
+// sub-agent trio), never for arbitrary tool output.
+func SelfBounded(t agent.Tool) agent.Tool {
+	return selfBounded{Tool: t}
+}
+
+type selfBounded struct{ agent.Tool }
+
+func (selfBounded) selfBounding() {}
+
 // boundTool bounds a non-self-bounding tool's model-visible output through the
 // shared recovery path: past OtherLimit the complete text spills to a per-session
 // file and the footer names it, so one runaway tool cannot flood the context.

@@ -624,6 +624,124 @@ func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 	assert.LessOrEqual(t, g.peak.Load(), int32(max))
 }
 
+// gateProvider hands each stream its own release channel, so a test can unblock
+// jobs one at a time and observe activation order.
+type gateProvider struct {
+	mu    sync.Mutex
+	gates []chan struct{}
+}
+
+func (p *gateProvider) Name() string { return "scripted" }
+
+func (p *gateProvider) Stream(ctx context.Context, _ llm.Request) (llm.Stream, error) {
+	p.mu.Lock()
+	rel := make(chan struct{})
+	p.gates = append(p.gates, rel)
+	p.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-rel:
+	}
+	return &llm.SliceStream{Events: summaryTurn("done", llm.Usage{})}, nil
+}
+
+// release unblocks the stream at index i.
+func (p *gateProvider) release(i int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	close(p.gates[i])
+}
+
+// pending reports how many streams are currently held open.
+func (p *gateProvider) pending() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return len(p.gates)
+}
+
+// stubJob builds a dispatch-ready job without spawning its goroutine.
+func stubJob(m *Manager, num int) *job {
+	ctx, cancel := context.WithCancel(m.ctx)
+	return &job{id: "sub-" + strconv.Itoa(num), num: num, ctx: ctx, cancel: cancel,
+		done: make(chan struct{}), grant: make(chan struct{})}
+}
+
+func TestDispatchGrantsInJobOrder(t *testing.T) {
+	t.Parallel()
+
+	m := New(wired(Options{
+		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+		MaxConcurrent: 2,
+	}))
+	t.Cleanup(m.Close)
+
+	// waiters arrive out of number order, dispatch must still grant sub-1 then sub-2
+	granted := func(j *job) bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return j.granted
+	}
+
+	j1, j2, j3 := stubJob(m, 1), stubJob(m, 2), stubJob(m, 3)
+	m.mu.Lock()
+	m.waiters = []*job{j3, j1, j2} // arrival raced ahead of the numbers
+	m.dispatchLocked()
+	m.mu.Unlock()
+
+	require.Eventually(t, func() bool { return granted(j1) && granted(j2) }, time.Second, 5*time.Millisecond)
+	assert.False(t, granted(j3)) // the cap is reached, sub-3 stays queued
+
+	j3.cancel()
+	m.releaseSlot() // a slot frees; the cancelled waiter must not take it
+	assert.False(t, granted(j3))
+
+	j4 := stubJob(m, 4)
+	m.mu.Lock()
+	m.waiters = append(m.waiters, j4)
+	m.dispatchLocked()
+	m.mu.Unlock()
+	assert.True(t, granted(j4)) // the live waiter took the freed slot
+
+	m.mu.Lock()
+	assert.Equal(t, 2, m.running) // grants and releases stay balanced
+	m.mu.Unlock()
+}
+
+func TestActivationFollowsJobOrder(t *testing.T) {
+	t.Parallel()
+
+	// one slot and three queued jobs, the drain must go sub-1, sub-2, sub-3
+	g := &gateProvider{}
+	m := New(wired(Options{
+		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
+		MaxConcurrent: 1,
+	}))
+	t.Cleanup(m.Close)
+
+	for i := 0; i < 3; i++ {
+		m.start("job", "", "")
+	}
+	require.Eventually(t, func() bool { // sub-1's stream is the one held open
+		return g.pending() == 1
+	}, time.Second, 5*time.Millisecond)
+
+	g.release(0) // sub-1 completes, its slot goes to sub-2 not whoever raced
+	require.Eventually(t, func() bool {
+		s2, _ := jobStatus(m, "sub-2")
+		s3, _ := jobStatus(m, "sub-3")
+		return s2 == StatusRunning && s3 == StatusQueued && g.pending() == 2
+	}, time.Second, 5*time.Millisecond)
+
+	g.release(1)
+	require.Eventually(t, func() bool {
+		s3, _ := jobStatus(m, "sub-3")
+		return s3 == StatusRunning
+	}, time.Second, 5*time.Millisecond)
+}
+
 func TestShutdownCancelsRunningJobs(t *testing.T) {
 	t.Parallel()
 
@@ -775,6 +893,54 @@ func TestStatusSegmentAndList(t *testing.T) {
 	}
 	mu.Unlock()
 	assert.True(t, found)
+}
+
+func TestStatusPublishesOnActivation(t *testing.T) {
+	t.Parallel()
+
+	g := &gatedProvider{}
+	var mu sync.Mutex // Status runs from concurrent job goroutines
+	var last string
+	m := New(wired(Options{
+		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
+		MaxConcurrent: 4,
+		Status: func(text, _ string) {
+			mu.Lock()
+			last = text
+			mu.Unlock()
+		},
+	}))
+	t.Cleanup(m.Close)
+
+	m.start("one", "", "")
+	m.start("two", "", "")
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.Contains(last, "2 running")
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestListOrdersByJobNumber(t *testing.T) {
+	t.Parallel()
+
+	m := New(wired(Options{
+		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+		MaxConcurrent: 2,
+	}))
+	t.Cleanup(m.Close)
+
+	var want []string
+	for i := 0; i < 12; i++ {
+		want = append(want, m.start("job", "", ""))
+	}
+	jobs := m.List()
+	require.Len(t, jobs, len(want))
+	got := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		got = append(got, j.ID)
+	}
+	assert.Equal(t, want, got)
 }
 
 func TestClose(t *testing.T) {
