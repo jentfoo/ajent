@@ -64,6 +64,16 @@ func TestSearchOverlayKey(t *testing.T) {
 	}
 }
 
+func TestSearchOverlayQueryPaste(t *testing.T) {
+	t.Parallel()
+
+	s := &searchOverlay{items: []SearchItem{{Text: "hello"}}}
+
+	assert.Equal(t, searchStay, s.key(key{typ: keyPaste, text: "he\r\nllo\x00"}))
+	assert.Equal(t, "hello", s.query)
+	assert.Len(t, s.matches, 1)
+}
+
 func TestSearchOverlayRefilter(t *testing.T) {
 	t.Parallel()
 

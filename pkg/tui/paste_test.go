@@ -89,3 +89,50 @@ func TestSmallPasteInsertedInline(t *testing.T) {
 	}, time.Second, testPoll)
 	assert.NotContains(t, u.editorValue(), "pasted")
 }
+
+func TestPasteCRLFStaysOneBreak(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+
+	// Windows terminals deliver CRLF line endings inside a bracketed paste
+	go func() {
+		_, _ = io.WriteString(pw, "\x1b[200~first\r\nsecond\x1b[201~")
+		_ = pw.Close()
+	}()
+
+	require.Eventually(t, func() bool {
+		return u.editorValue() == "first\nsecond"
+	}, time.Second, testPoll)
+}
+
+func TestLargePasteStoresNormalizedContent(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+
+	raw := strings.Repeat("line\r\n", 500) // well past pasteThreshold
+	go func() {
+		_, _ = io.WriteString(pw, "\x1b[200~"+raw+"\x1b[201~")
+	}()
+
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return len(u.pastes) == 1
+	}, time.Second, testPoll)
+
+	u.mu.Lock()
+	content := u.pastes[0].content
+	expanded := u.expandPastes(u.editor.Value())
+	u.mu.Unlock()
+
+	assert.Equal(t, strings.Repeat("line\n", 500), content)
+	assert.Equal(t, content, expanded)
+}

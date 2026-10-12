@@ -70,6 +70,58 @@ func TestEditorInsert(t *testing.T) {
 	})
 }
 
+func TestNormalizeInput(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, in, want string
+	}{
+		{"plain_text_unchanged", "hello world", "hello world"},
+		{"newlines_kept", "a\nb\nc", "a\nb\nc"},
+		{"crlf_folds_to_one_break", "a\r\nb", "a\nb"},
+		{"lone_cr_folds", "a\rb", "a\nb"},
+		{"tab_expands", "a\tb", "a    b"},
+		{"controls_drop", "a\x00b\x1bc\x7fd", "abcd"},
+		{"c1_drops_break_kept", "\u009ba\nb", "a\nb"},
+		{"invalid_utf8_reencodes", "a\xffb", "a\uFFFDb"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, normalizeInput(tc.in))
+		})
+	}
+
+	t.Run("flat_folds_breaks_to_spaces", func(t *testing.T) {
+		assert.Equal(t, "a b c", flatInput("a\r\nb\nc"))
+	})
+
+	t.Run("filter_drops_breaks", func(t *testing.T) {
+		assert.Equal(t, "abc", filterInput("a\r\nb\nc"))
+	})
+}
+
+func TestEditorInputNormalized(t *testing.T) {
+	t.Parallel()
+
+	t.Run("insert_crlf_is_one_break", func(t *testing.T) {
+		e := &editor{}
+		e.Insert("first\r\nsecond")
+		assert.Equal(t, "first\nsecond", e.Value())
+		assert.Equal(t, 12, e.pos)
+	})
+
+	t.Run("set_value_strips_garbage", func(t *testing.T) {
+		e := &editor{}
+		e.SetValue("a\x00b\tc\x1bd")
+		assert.Equal(t, "ab    cd", e.Value())
+	})
+
+	t.Run("flat_insert_folds_breaks", func(t *testing.T) {
+		e := &editor{}
+		e.Insert(flatInput("a\r\nb"))
+		assert.Equal(t, "a b", e.Value())
+	})
+}
+
 func TestEditorDelete(t *testing.T) {
 	t.Parallel()
 

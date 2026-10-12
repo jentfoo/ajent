@@ -269,9 +269,6 @@ func TestUIActivityEscapeKeepsRowCount(t *testing.T) {
 	assert.Contains(t, v.Screen(), "committed reply")
 }
 
-// TestUIPastedEscapeKeepsRowCount pins the boundary split: the editor buffer
-// stays byte-exact (Value is what reaches the model), so an escape arrives in
-// the live row and must be neutralized at the render boundary only.
 func TestUIPastedEscapeKeepsRowCount(t *testing.T) {
 	t.Parallel()
 
@@ -283,13 +280,13 @@ func TestUIPastedEscapeKeepsRowCount(t *testing.T) {
 	_, err := io.WriteString(pw, "\x1b[200~sub \x1b[2B boom\x1b[201~")
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		return u.line(v, 1) == promptFirst+"sub  boom"
+		return u.line(v, 1) == promptFirst+"sub [2B boom"
 	}, time.Second, testPoll)
 
 	u.mu.Lock()
 	value := u.editor.Value()
 	u.mu.Unlock()
-	assert.Equal(t, "sub \x1b[2B boom", value)
+	assert.Equal(t, "sub [2B boom", value)
 
 	row, _ := u.cursor(v)
 	assert.Equal(t, top, row)

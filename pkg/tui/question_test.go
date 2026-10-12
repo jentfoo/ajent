@@ -407,6 +407,26 @@ func TestQuestionStateArrowKeys(t *testing.T) {
 	})
 }
 
+func TestQuestionStatePaste(t *testing.T) {
+	t.Parallel()
+
+	// key presses a single decoded key into s, failing the test on error
+	press := func(s *questionState, k key) {
+		t.Helper()
+
+		_, err := s.key(k)
+		require.NoError(t, err)
+	}
+
+	t.Run("paste_flattens_breaks_in_answer", func(t *testing.T) {
+		s := &questionState{} // no options: the free text answer takes every key
+
+		press(s, key{typ: keyRune, text: "a"})
+		press(s, key{typ: keyPaste, text: "b\r\nc"})
+		assert.Equal(t, "ab c", s.answer.Value())
+	})
+}
+
 func TestUIPlainAsk(t *testing.T) {
 	t.Parallel()
 

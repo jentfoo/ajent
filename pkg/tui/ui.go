@@ -1516,7 +1516,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.editor.Insert(k.text)
 	case keyPaste:
 		u.cancelRewindLocked()
-		text := strings.ReplaceAll(k.text, "\r", "\n")
+		text := normalizeInput(k.text)
 		if len(text) > pasteThreshold {
 			// large paste: store the content and insert a placeholder so the input
 			// block stays small. The placeholder is expanded before sending.

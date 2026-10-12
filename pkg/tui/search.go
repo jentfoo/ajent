@@ -55,7 +55,7 @@ func (s *searchOverlay) refilter() {
 func (s *searchOverlay) key(k key) searchAction {
 	switch k.typ {
 	case keyRune, keyPaste:
-		s.query += strings.ReplaceAll(k.text, "\n", "")
+		s.query += filterInput(k.text)
 		s.refilter()
 		return searchStay
 	case keyBackspace:

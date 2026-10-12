@@ -3,6 +3,7 @@ package tui
 import (
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -18,7 +19,9 @@ type undoState struct {
 }
 
 // editor is the multi line input buffer. Positions are grapheme cluster indexes
-// so the cursor moves over emoji and combining marks as a unit.
+// so the cursor moves over emoji and combining marks as a unit. Insert,
+// SetValue and ReplaceSpan normalize their text, so cells only ever hold
+// printable graphemes and newlines.
 type editor struct {
 	cells   []string
 	pos     int
@@ -40,12 +43,12 @@ func (e *editor) SpanText(start int) string {
 	return strings.Join(e.cells[start:end], "")
 }
 
-// ReplaceSpan swaps the buffer from start to the cursor for text, leaving the
-// cursor at its end.
+// ReplaceSpan swaps the buffer from start to the cursor for normalized text,
+// leaving the cursor at its end.
 func (e *editor) ReplaceSpan(start int, text string) {
 	end := e.pos
 	start = min(max(start, 0), end)
-	replace := graphemesOf(text)
+	replace := graphemesOf(normalizeInput(text))
 	cells := e.cells
 	out := make([]string, 0, len(cells)-(end-start)+len(replace))
 	out = append(out, cells[:start]...)
@@ -55,10 +58,10 @@ func (e *editor) ReplaceSpan(start int, text string) {
 	e.pos = start + len(replace)
 }
 
-// SetValue replaces the buffer and puts the cursor at the end. A fill is not
-// a user edit, so any pending undo is dropped.
+// SetValue replaces the buffer with normalized text and puts the cursor at the
+// end. A fill is not a user edit, so any pending undo is dropped.
 func (e *editor) SetValue(s string) {
-	e.cells = graphemesOf(s)
+	e.cells = graphemesOf(normalizeInput(s))
 	e.pos = len(e.cells)
 	e.undo = nil
 }
@@ -80,9 +83,9 @@ func (e *editor) SetValueAt(s string, off int) {
 	}
 }
 
-// Insert adds text at the cursor.
+// Insert adds normalized text at the cursor.
 func (e *editor) Insert(s string) {
-	add := graphemesOf(s)
+	add := graphemesOf(normalizeInput(s))
 	if len(add) == 0 {
 		return
 	}
@@ -367,6 +370,36 @@ func (e *editor) wordStart() int {
 
 func isSpaceCell(c string) bool {
 	return c == " " || c == "\t" || c == "\n"
+}
+
+// normalizeInput prepares text entering an editable field: CRLF and lone CR fold
+// to one LF, tabs expand so cell width matches painted columns, invalid UTF-8
+// re-encodes, remaining control runes drop. A terminal acts on those bytes rather
+// than printing them; sanitizeRow stays as the paint-side backstop.
+func normalizeInput(s string) string {
+	if utf8.ValidString(s) && !strings.ContainsFunc(s, isControl) {
+		return s
+	}
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	s = strings.ReplaceAll(s, "\r\n", "\n") // one break, not two
+	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.ReplaceAll(s, "\t", tabSpaces)
+	return strings.Map(func(r rune) rune {
+		if isControl(r) && r != '\n' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// flatInput is normalizeInput for single line fields: line breaks fold to spaces.
+func flatInput(s string) string {
+	return strings.ReplaceAll(normalizeInput(s), "\n", " ")
+}
+
+// filterInput is normalizeInput for match queries: line breaks drop entirely.
+func filterInput(s string) string {
+	return strings.ReplaceAll(normalizeInput(s), "\n", "")
 }
 
 // prefixWidths returns the display widths of the prompt glyph and a continuation

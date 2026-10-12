@@ -226,7 +226,7 @@ func (s *questionState) key(k key) (bool, error) {
 	}
 	switch k.typ { // free text, mirrored from the input row's editing keys
 	case keyRune, keyPaste:
-		s.answer.Insert(strings.ReplaceAll(k.text, "\n", " "))
+		s.answer.Insert(flatInput(k.text))
 	case keyNewline: // Alt+Enter or Ctrl+J wraps onto a new line, Enter submits
 		s.answer.Insert("\n")
 	case keyBackspace:

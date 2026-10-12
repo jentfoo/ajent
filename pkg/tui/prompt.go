@@ -203,7 +203,7 @@ func (s *inputState) rows(t Theme, width, _ int) ([]string, int, int) {
 func (s *inputState) key(k key) (bool, error) {
 	switch k.typ {
 	case keyRune, keyPaste:
-		s.value += strings.ReplaceAll(k.text, "\n", " ")
+		s.value += flatInput(k.text)
 	case keyBackspace:
 		s.value = trimLastCluster(s.value)
 	case keyKillLine:
@@ -306,7 +306,7 @@ func (s *pickState) key(k key) (bool, error) {
 	case keyPageDown:
 		s.cursor = min(max(len(s.matches)-1, 0), s.cursor+pickPage)
 	case keyRune, keyPaste:
-		s.filter += strings.ReplaceAll(k.text, "\n", "")
+		s.filter += filterInput(k.text)
 		s.refilter()
 	case keyBackspace:
 		if s.filter != "" {
@@ -651,10 +651,9 @@ func (s *multiPickState) key(k key) (bool, error) {
 			s.toggleCurrent() // space selects/deselects, it never narrows the filter
 			return false, nil
 		}
-		s.filter += k.text
-		s.refilter()
+		fallthrough // any other rune joins the filter, normalized like a paste
 	case keyPaste:
-		s.filter += strings.ReplaceAll(k.text, "\n", "")
+		s.filter += filterInput(k.text)
 		s.refilter()
 	case keyBackspace:
 		if s.filter != "" {

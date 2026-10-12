@@ -204,6 +204,54 @@ func TestInputStateSummary(t *testing.T) {
 	})
 }
 
+func TestInputStateKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("paste_flattens_and_strips", func(t *testing.T) {
+		s := &inputState{label: "Name:"}
+
+		_, _ = s.key(key{typ: keyRune, text: "a"})
+		_, _ = s.key(key{typ: keyPaste, text: "b\r\nc\x1bd"})
+		assert.Equal(t, "ab cd", s.value)
+	})
+}
+
+func TestPickStateKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("paste_keeps_a_single_token_filter", func(t *testing.T) {
+		s := &pickState{prompt: "Model", items: []PickItem{{Label: "alpha"}, {Label: "beta"}}}
+		s.refilter()
+
+		_, _ = s.key(key{typ: keyPaste, text: "al\r\nph\x00a"})
+		assert.Equal(t, "alpha", s.filter)
+		assert.Equal(t, []int{0}, s.matches)
+	})
+}
+
+func TestMultiPickStateKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("paste_keeps_a_single_token_filter", func(t *testing.T) {
+		s := &multiPickState{prompt: "Model", items: []PickItem{{Label: "alpha"}, {Label: "beta"}}}
+		s.refilter()
+
+		_, _ = s.key(key{typ: keyPaste, text: "al\r\nph\x00a"})
+		assert.Equal(t, "alpha", s.filter)
+	})
+
+	t.Run("typed_runes_normalize_like_paste", func(t *testing.T) {
+		s := &multiPickState{prompt: "Model", items: []PickItem{{Label: "alpha"}, {Label: "beta"}}, selected: make(map[int]struct{})}
+		s.refilter()
+
+		_, _ = s.key(key{typ: keyRune, text: "al\u009bpha"})
+		assert.Equal(t, "alpha", s.filter)
+
+		_, _ = s.key(key{typ: keyRune, text: " "}) // space still toggles, never filters
+		assert.Equal(t, "alpha", s.filter)
+	})
+}
+
 func TestPickStateRows(t *testing.T) {
 	t.Parallel()
 
