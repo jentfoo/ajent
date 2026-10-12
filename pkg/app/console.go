@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -23,14 +24,13 @@ import (
 
 // uiConsole implements command.Console over the objects the driver already
 // holds: the UI, model registry, agent state, tool registry and session recorder.
-// ag is the state gate: every mutation of st goes through it, since State is
-// owned by the turn goroutine whenever one runs.
+// q is the state gate: while a drain goroutine owns State, writes queue and the
+// pump applies them once it exits.
 type uiConsole struct {
 	ui       *tui.UI
 	set      *config.Set
 	reg      *llm.Registry
 	st       *agent.State
-	ag       *agent.Agent
 	tools    *tools.Registry
 	commands *command.Registry
 	rec      *session.Recorder
@@ -39,6 +39,14 @@ type uiConsole struct {
 	mcp      mcpAdapter      // the MCP server manager adapter, or nil
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
+
+	// q gates state writes against a live drain goroutine; nil applies at once
+	q *steerQueue
+	// snap is the settled transcript copy mid-turn readers use; nil reports none
+	snap *turnSnapshot
+	// deferred holds state writes queued while a turn owned State. Pump-goroutine
+	// confined: command handlers append, the dispatch and drain-exit flush drain
+	deferred []func()
 
 	started *startedFlag // shared with the driver pump
 	quit    func()       // idempotent driver quit, /exit and friends
@@ -92,6 +100,54 @@ func (c *uiConsole) Tools() *tools.Registry      { return c.tools }
 func (c *uiConsole) MCP() command.MCPServers     { return c.mcp }
 func (c *uiConsole) Commands() *command.Registry { return c.commands }
 func (c *uiConsole) Settings() *config.Set       { return c.set }
+
+// SettledMessages returns the transcript for a reader that may run mid-turn:
+// the live list at rest, else the copy the last turn end settled.
+func (c *uiConsole) SettledMessages() []llm.Message {
+	if c.st == nil {
+		return nil
+	}
+	if !c.stateOwned() {
+		return c.st.Messages // at rest, the pump serializes every reader and writer
+	}
+	if c.snap == nil {
+		return nil // no snapshot wired, report nothing rather than a torn read
+	}
+	return c.snap.messages()
+}
+
+// stateOwned reports whether a drain goroutine owns or is settling State, so
+// console state writes must queue behind it
+func (c *uiConsole) stateOwned() bool {
+	return c.q != nil && c.q.drainLive()
+}
+
+// queueState runs fn now when State is at rest, else queues it for the pump to
+// land once the drain exits, and says so. Nothing of the change lands until it
+// applies
+func (c *uiConsole) queueState(label string, fn func()) {
+	if !c.stateOwned() {
+		fn()
+		return
+	}
+	c.deferred = append(c.deferred, fn)
+	if c.ui != nil {
+		c.ui.Notify(label+" queued; applies after this turn", tui.LevelInfo)
+	}
+}
+
+// applyDeferred lands queued state writes; a live drain keeps them queued. The
+// pump runs this at each dispatch and at drain exit
+func (c *uiConsole) applyDeferred() {
+	if len(c.deferred) == 0 || c.stateOwned() {
+		return
+	}
+	pending := c.deferred
+	c.deferred = nil
+	for _, fn := range pending {
+		fn()
+	}
+}
 
 // Agents returns nil when no sub-agent manager was built, so /agents reports
 // unavailable instead of calling through a nil *subagent.Manager.
@@ -147,7 +203,7 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 		}
 	}
 	if key == "compaction.threshold" {
-		c.applyCompactThreshold(value)
+		c.queueState("compaction threshold", func() { c.applyCompactThreshold(value) })
 	}
 	if err := c.set.SetSession(key, value); err != nil {
 		return err
@@ -194,7 +250,8 @@ func (c *uiConsole) reapplyResolved(key string) {
 			showPermissionIndicator(c.ui, c.permit)
 		}
 	case key == "compaction.threshold":
-		c.applyCompactThreshold(c.set.Settings().Compaction.Threshold)
+		v := c.set.Settings().Compaction.Threshold
+		c.queueState("compaction threshold", func() { c.applyCompactThreshold(v) })
 	case key == "images.block":
 		applyImagesBlock(c.set)
 	case key == "tools.enabled" && c.tools != nil:
@@ -226,20 +283,20 @@ func (c *uiConsole) reapplyModel() {
 		c.ui.Notify("model: configured default unavailable: "+err.Error(), tui.LevelWarn)
 		return
 	}
-	c.SetModel(m)                   // refuses mid-turn with a notice, no-op when already active
-	_ = c.set.ClearSession("model") // undo the override SetModel just re-pinned
+	c.queueState("model "+key, func() {
+		c.applyModel(m)
+		_ = c.set.ClearSession("model") // undo the override applyModel just re-pinned
+	})
 }
 
 // reapplyReasoning rebuilds the live reasoning config from the resolved settings,
 // mirroring what a fresh start derives.
 func (c *uiConsole) reapplyReasoning() {
 	rc := llm.ReasoningFrom(c.set.Settings().Reasoning, c.st.Model)
-	applied := c.applyState("reasoning cannot change while a turn is running", func(s *agent.State) {
-		s.Reasoning = rc
-	})
-	if applied {
+	c.queueState("reasoning", func() {
+		c.st.Reasoning = rc
 		c.ui.SetStatusSegment(segment(segReasoning, levelOrEmpty(rc), ""))
-	}
+	})
 }
 
 // applyCompactThreshold re-defaults the registry and refreshes the live model, so a /settings edit
@@ -254,15 +311,9 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 	if err != nil {
 		return
 	}
-	var t *tokens.Accounting
-	applied := c.applyState("compaction threshold applies at the next model switch or restart", func(s *agent.State) {
-		s.Model = m // compactor.run reads the threshold from here
-		t = s.Tokens
-		t.SetWindow(m) // keeps every context term, SetModel would blank the bar
-	})
-	if !applied {
-		return
-	}
+	c.st.Model = m // compactor.run reads the threshold from here
+	t := c.st.Tokens
+	t.SetWindow(m) // keeps every context term, SetModel would blank the bar
 	cs := t.Context()
 	c.ui.SetContext(tui.ContextInfo{
 		Used:      cs.Used,
@@ -274,6 +325,16 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 }
 
 func (c *uiConsole) SetModel(m llm.Model) {
+	c.queueState("model "+m.Key(), func() { c.applyModel(m) })
+}
+
+// applyModel switches the live model, rebases the ledger and records the change.
+// Picking the already-active model is a no-op: nothing to rebase, record or
+// announce, so a stray /model does not spam the history with an unchanged line.
+func (c *uiConsole) applyModel(m llm.Model) {
+	if m.Key() == c.st.Model.Key() {
+		return
+	}
 	// keep the stored reasoning override untouched so a temporary switch does not lose
 	// the user's choice. Recompute only the live effective level for display (buildRequest
 	// already clamps requests) from the raw preference, restoring it on switching back.
@@ -281,28 +342,8 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	if parsed, ok := llm.ParseLevel(c.set.Settings().Reasoning.Level); ok {
 		lvl = parsed
 	}
-	var t *tokens.Accounting
-	var switched bool
-	applied := c.applyState("model cannot switch while a turn is running", func(s *agent.State) {
-		// picking the already-active model is a no-op: nothing to rebase, record or
-		// announce, so a stray /model does not spam the history with an unchanged line.
-		if m.Key() == s.Model.Key() {
-			return
-		}
-		switched = true
-		s.Model = m
-		s.Reasoning.Level = llm.ClampLevel(m, lvl)
-		t = s.Tokens
-		t.SetModel(m) // drops every context term for the new window/reserve
-		// SetModel zeroed the ledger, so Used would read empty regardless of real
-		// occupancy. Remeasure against the actual in-memory messages: a switch to a
-		// smaller window must reflect that it now overflows, or threshold auto-compaction
-		// could never fire on this model.
-		t.Reseed(tokens.EstimateFor(m, s.Reasoning.Retain, s.Messages))
-	})
-	if !applied || !switched {
-		return // refused: notified; no-op: silent
-	}
+	c.st.Model = m
+	c.st.Reasoning.Level = llm.ClampLevel(m, lvl)
 	c.reg.SetActive(m)
 	if c.comp != nil {
 		c.comp.resumeAuto() // a different window may reduce where the last one could not
@@ -311,7 +352,14 @@ func (c *uiConsole) SetModel(m llm.Model) {
 
 	// rebase the ledger's window and reserve onto the new model so a mid-session
 	// /model rescales the bar immediately rather than on the next turn.
+	t := c.st.Tokens
+	t.SetModel(m) // drops every context term for the new window/reserve
 	c.ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+	// SetModel zeroed the ledger, so Used would read empty regardless of real
+	// occupancy. Remeasure against the actual in-memory messages: a switch to a
+	// smaller window must reflect that it now overflows, or threshold auto-compaction
+	// could never fire on this model.
+	t.Reseed(tokens.EstimateFor(m, c.st.Reasoning.Retain, c.st.Messages))
 	cs := t.Context()
 	c.ui.SetContext(tui.ContextInfo{
 		Used:      cs.Used,
@@ -331,11 +379,12 @@ func (c *uiConsole) SetModel(m llm.Model) {
 }
 
 func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
-	if !c.applyState("reasoning cannot change while a turn is running", func(s *agent.State) {
-		s.Reasoning = rc
-	}) {
-		return
-	}
+	c.queueState("reasoning "+rc.Level.String(), func() { c.applyReasoning(rc) })
+}
+
+// applyReasoning sets the session reasoning config and persists it.
+func (c *uiConsole) applyReasoning(rc llm.ReasoningConfig) {
+	c.st.Reasoning = rc
 	// persist granular dotted leaves so every choice survives: marshalling the
 	// whole config would drop retain "none" and show false under omitempty.
 	_ = c.set.SetSession("reasoning.level", rc.Level.String())
@@ -372,17 +421,6 @@ func (c *uiConsole) ToolsChanged() {
 
 func (c *uiConsole) Started() bool { return c.started.marked() }
 
-// applyState mutates live state only while no turn owns it, so a command typed
-// mid-turn cannot race the loop goroutine. It reports whether fn ran; refused
-// attempts notify and skip every side effect.
-func (c *uiConsole) applyState(refused string, fn func(*agent.State)) bool {
-	if c.ag.WithState(fn) {
-		return true
-	}
-	c.ui.Notify(refused, tui.LevelWarn)
-	return false
-}
-
 // Compact reduces the session context toward the compaction threshold. An empty
 // instructions string runs an unguided pass, refused while a turn streams.
 func (c *uiConsole) Compact(ctx context.Context, instructions string) error {
@@ -398,6 +436,37 @@ func (c *uiConsole) Exit() {
 	if c.quit != nil {
 		c.quit()
 	}
+}
+
+// turnSnapshot keeps a stable copy of the transcript as of the last turn end, the
+// one source off-loop readers (/copy) may read while a turn still appends.
+type turnSnapshot struct {
+	agent.NopSink
+	st  *agent.State
+	mu  sync.Mutex
+	msg []llm.Message
+}
+
+// seed installs the starting transcript, before any turn runs.
+func (s *turnSnapshot) seed(msg []llm.Message) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.msg = msg
+}
+
+// TurnEnd snapshots the transcript on the loop goroutine, which owns it here.
+func (s *turnSnapshot) TurnEnd(agent.TurnResult) {
+	msg := slices.Clone(s.st.Messages)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.msg = msg
+}
+
+// messages returns the last settled transcript copy.
+func (s *turnSnapshot) messages() []llm.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.msg
 }
 
 // mcpAdapter adapts *mcp.Manager to command.MCPServers so /mcp works without

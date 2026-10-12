@@ -157,6 +157,10 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
 		settled,
 	)
+	// /copy reads the transcript as of the last turn end while a turn streams,
+	// never the live list the loop goroutine is appending to
+	snap := &turnSnapshot{st: st}
+	snap.seed(st.Messages)
 	// hints arbitrates the one hint status line across its sources: the typing hold and
 	// the control loop's quit/cancel notices
 	hints := uiHintBoard(ui)
@@ -288,7 +292,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// record each turn's outcome so a turn-boundary hook can tell a clean stop
 	// from an abort or a provider error.
 	turnRec := &turnRecorder{}
-	opts.Sinks = append(opts.Sinks, turnRec)
+	opts.Sinks = append(opts.Sinks, turnRec, snap)
 
 	// /init's write lands inside a normal turn, and this watches for it so the driver
 	// can say the new file only applies on the next start.
@@ -462,8 +466,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 	}
 	console := &uiConsole{
-		ui: ui, set: set, reg: reg, st: st, ag: ag, tools: toolsReg, commands: cmds,
+		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		started: started, quit: quitNow, permit: barrier,
+		q: q, snap: snap,
 	}
 	console.refreshBase = func() {
 		// BaseEstimate reports 0 while a turn owns State, and that turn's own SetBase
@@ -533,6 +538,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			if ictl != nil {
 				ictl.runner.Seed(msgs) // a rewound or forked transcript holds /init ids too
 			}
+			snap.seed(msgs) // mid-turn /copy reflects the switched context, not the old branch
 		}
 	}
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
@@ -587,6 +593,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	var drain drainWaiter
+	// a drain exit wakes the pump so queued state writes land without input
+	drain.wake = func() { send(pumpLine{wake: true}) }
 	go runPump(appRoot,
 		pump, ag, console, stager, expander, rec != nil, ui, started,
 		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)

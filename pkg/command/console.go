@@ -65,6 +65,10 @@ type Console interface {
 	// State returns the live agent state, always carrying a token ledger.
 	// Handlers read and mutate it directly.
 	State() *agent.State
+	// SettledMessages returns the transcript for a reader that may run while a
+	// turn streams: the live list when idle, else the last settled copy. Callers
+	// must not mutate the returned slice.
+	SettledMessages() []llm.Message
 	// Tools returns the live tool registry, the single source of truth for the
 	// enabled set.
 	Tools() *tools.Registry

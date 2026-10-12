@@ -14,25 +14,26 @@ import (
 // modelCommand resolves arg by name, or opens the picker when empty, and
 // persists the choice to the user layer so a fresh start keeps it. The registry
 // stays the single source of truth. Console.SetModel reflects the selection in
-// the status line, agent state and session record.
+// the status line, agent state and session record, queued behind a running turn.
 func modelCommand(ctx context.Context, arg string, c Console) error {
-	changed, err := applyModel(ctx, arg, c)
+	m, changed, err := applyModel(ctx, arg, c)
 	if err != nil || !changed {
 		return err
 	}
-	key := c.Models().Active().Key()
-	if serr := c.SaveSetting("user", "model", key); serr != nil {
+	if serr := c.SaveSetting("user", "model", m.Key()); serr != nil {
 		c.Notify("could not save model: "+serr.Error(), levelWarn)
 	}
 	return nil
 }
 
-// applyModel resolves arg by name, or opens the picker when empty, and applies it via
-// Console.SetModel. It reports whether a different model became active so callers decide persistence.
-func applyModel(ctx context.Context, arg string, c Console) (bool, error) {
+// applyModel resolves arg by name, or opens the picker when empty, and applies
+// it via Console.SetModel. It returns the picked model and whether it differs
+// from the previously active one, so callers persist what the user chose even
+// when the switch is queued behind a running turn.
+func applyModel(ctx context.Context, arg string, c Console) (llm.Model, bool, error) {
 	if len(c.Models().Models()) == 0 {
 		c.Notify("no models configured; add some to ~/.ajent/"+llm.ModelsFileName, levelWarn)
-		return false, nil
+		return llm.Model{}, false, nil
 	}
 	var m llm.Model
 	var err error
@@ -41,7 +42,7 @@ func applyModel(ctx context.Context, arg string, c Console) (bool, error) {
 		target, rerr := c.Models().Resolve(arg)
 		if rerr != nil {
 			reportResolveError(c, arg, rerr)
-			return false, nil
+			return llm.Model{}, false, nil
 		}
 		m = target
 	} else {
@@ -50,11 +51,11 @@ func applyModel(ctx context.Context, arg string, c Console) (bool, error) {
 		m, err = PickModel(ctx, c, "Model", prev,
 			tui.PickOptions{Silent: true})
 		if err != nil {
-			return false, err // cancelled or failed
+			return llm.Model{}, false, err // cancelled or failed
 		}
 	}
 	c.SetModel(m)
-	return m.Key() != prev, nil
+	return m, m.Key() != prev, nil
 }
 
 // PickModel opens the model picker under title and returns the chosen model

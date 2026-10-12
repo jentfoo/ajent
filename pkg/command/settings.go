@@ -396,10 +396,11 @@ func rowCompaction(c Console) (string, string) {
 // editModel applies a pick through the model picker without persisting.
 // The save-to-layer choice is offered by editRow's prompt.
 func editModel(ctx context.Context, c Console) ([]settingChange, error) {
-	if _, err := applyModel(ctx, "", c); err != nil {
+	m, _, err := applyModel(ctx, "", c)
+	if err != nil {
 		return nil, err
 	}
-	key := c.Models().Active().Key()
+	key := m.Key()
 	_ = c.SetSessionSetting("model", key)
 	return []settingChange{{key: "model", value: key}}, nil
 }

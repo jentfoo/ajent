@@ -174,6 +174,15 @@ func (s *steerQueue) pending() int {
 	return len(s.items)
 }
 
+// drainLive reports whether a drain goroutine owns or is settling turns, so
+// console state writes must queue behind it
+func (s *steerQueue) drainLive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.draining
+}
+
 // pull is the OnBoundary callback: hand over every queued item joined into
 // provenance runs at this step boundary. Returns nil when empty.
 func (s *steerQueue) pull() []agent.Input {

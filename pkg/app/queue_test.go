@@ -42,6 +42,26 @@ func (f *fakeQueueUI) lastQueued() []string {
 	return f.queued[len(f.queued)-1]
 }
 
+func TestSteerQueueDrainLive(t *testing.T) {
+	t.Parallel()
+
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {})
+
+	assert.False(t, q.drainLive())
+	q.offer(agent.Input{Text: "a"}, "a", 0) // marks draining, like the pump
+	assert.True(t, q.drainLive())
+	q.offer(agent.Input{Text: "b"}, "b", 0) // queues behind the drain
+	assert.True(t, q.drainLive())
+
+	_, ok := q.take()
+	assert.True(t, ok) // b hands over, the drain keeps running
+	assert.True(t, q.drainLive())
+
+	_, ok = q.take()
+	assert.False(t, ok) // empty: the drain goroutine is done
+	assert.False(t, q.drainLive())
+}
+
 func TestSteerQueueOffer(t *testing.T) {
 	t.Parallel()
 

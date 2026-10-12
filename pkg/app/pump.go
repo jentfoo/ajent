@@ -29,6 +29,8 @@ type pumpLine struct {
 	// onTurn runs as that input becomes a turn, so the sender can observe the turn
 	// its work produced rather than guessing when it lands.
 	onTurn func()
+	// wake flushes queued state writes without dispatching, sent at drain exit
+	wake bool
 }
 
 // submittedEcho returns a dispatched prompt line's echo: blank input stays
@@ -76,6 +78,10 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 		case line, ok := <-pump:
 			if !ok {
 				return
+			}
+			console.applyDeferred() // a dispatch or drain exit lands queued writes
+			if line.wake {
+				continue
 			}
 			switch line.kind {
 			case command.KindCommand:
@@ -192,17 +198,25 @@ func submitEstimate(in agent.Input, pending int) int {
 type drainWaiter struct {
 	mu   sync.Mutex
 	done chan struct{} // closed at drain exit, nil when none ever ran
+	// wake fires at drain exit, so the pump lands queued state writes without
+	// waiting for the next submitted line. Set before the first launch
+	wake func()
 }
 
-// launch runs fn as the drain goroutine, closing its exit channel on return.
+// launch runs fn as the drain goroutine, closing its exit channel on return
+// and firing wake after fn settles.
 func (d *drainWaiter) launch(fn func()) {
 	ch := make(chan struct{})
 	d.mu.Lock()
 	d.done = ch
+	wake := d.wake
 	d.mu.Unlock()
 	go func() {
 		defer close(ch)
 		fn()
+		if wake != nil {
+			wake()
+		}
 	}()
 }
 

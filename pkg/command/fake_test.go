@@ -213,9 +213,10 @@ func (f *fakeConsole) ColorProfile() tui.ColorProfile { return f.profile }
 func (f *fakeConsole) DetectTone() tui.Tone           { return f.tone }
 func (f *fakeConsole) SetTheme(pal tui.Palette)       { f.mu.Lock(); f.palette = pal; f.mu.Unlock() }
 
-func (f *fakeConsole) Models() *llm.Registry  { return f.models }
-func (f *fakeConsole) State() *agent.State    { return f.state }
-func (f *fakeConsole) Tools() *tools.Registry { return f.tools }
+func (f *fakeConsole) Models() *llm.Registry          { return f.models }
+func (f *fakeConsole) State() *agent.State            { return f.state }
+func (f *fakeConsole) SettledMessages() []llm.Message { return f.state.Messages }
+func (f *fakeConsole) Tools() *tools.Registry         { return f.tools }
 
 // MCP returns a nil manager, so the /mcp command reports it unavailable.
 func (f *fakeConsole) MCP() MCPServers { return nil }

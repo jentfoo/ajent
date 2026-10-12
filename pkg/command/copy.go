@@ -10,14 +10,10 @@ import (
 
 // copyCommand puts the last agent response on the clipboard: text plus every
 // tool call and its result as verbatim JSON, through the shared clipboard
-// writer. No agent messages yet is a notice, not an error.
+// writer. A streaming turn copies the last settled response, never a partial.
+// No agent messages yet is a notice, not an error.
 func copyCommand(ctx context.Context, _ string, c Console) error {
-	st := c.State()
-	if st == nil {
-		c.Notify("No agent messages to copy", levelWarn)
-		return nil
-	}
-	text := llm.CopyTurn(st.Messages)
+	text := llm.CopyTurn(c.SettledMessages())
 	if text == "" {
 		c.Notify("No agent messages to copy", levelWarn)
 		return nil

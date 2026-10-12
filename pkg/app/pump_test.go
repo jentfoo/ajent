@@ -133,6 +133,86 @@ func TestDrainWaiterWait(t *testing.T) {
 		}
 		close(blocked)
 	})
+
+	t.Run("exit_fires_wake", func(t *testing.T) {
+		var d drainWaiter
+		woke := make(chan struct{})
+		d.wake = func() { close(woke) }
+		d.launch(func() {})
+		select {
+		case <-woke:
+		case <-time.After(5 * time.Second):
+			t.Fatal("drain exit never fired wake")
+		}
+	})
+}
+
+// TestRunPumpWakeFlushesDeferred pins the wake path: a drain exit lands queued
+// state writes without dispatching a line
+func TestRunPumpWakeFlushesDeferred(t *testing.T) {
+	t.Parallel()
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+	go func() { _, _ = io.Copy(io.Discard, outR) }()
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	cmds := command.NewRegistry()
+	handled := make(chan string, 4)
+	cmds.Register(command.Command{
+		Name: "ping", Description: "test",
+		Handler: func(_ context.Context, arg string, _ command.Console) error {
+			handled <- arg
+			return nil
+		},
+	})
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {})
+	st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"}}
+	console := &uiConsole{ui: ui, commands: cmds, st: st, q: q}
+	applied := make(chan struct{})
+	console.deferred = append(console.deferred, func() { close(applied) })
+
+	pump := make(chan pumpLine, 4)
+	started := newStartedFlag(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	done := make(chan struct{})
+	var drain drainWaiter
+	go func() {
+		runPump(ctx, pump, nil, console, command.NewStager(ctx, nil, nil), nil,
+			false, ui, started, func() {},
+			q, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+		close(done)
+	}()
+
+	pump <- pumpLine{wake: true}
+	select {
+	case <-applied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wake line never flushed the deferred write")
+	}
+	select {
+	case <-handled:
+		t.Fatal("a wake line must not dispatch a command")
+	default:
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runPump did not exit on cancel")
+	}
 }
 
 func TestStartDrainParkedGate(t *testing.T) {
