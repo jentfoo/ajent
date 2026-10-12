@@ -38,9 +38,9 @@ type Registrar interface {
 	MarkReadOnly(names []string)          // record read-only publication metadata by name
 }
 
-// toolState is one source's live enable/disable split captured before a
-// re-registration, so the refresh restores exactly what was exposed rather than
-// resetting it.
+// toolState is one source's deliberate /tools toggles captured before a
+// re-registration: names whose live state departed from the config default that
+// produced them, layered back over whatever the refreshed registration implies.
 type toolState struct {
 	enabled  map[string]struct{}
 	disabled map[string]struct{}
@@ -68,7 +68,7 @@ type server struct {
 	down          bool          // a reconnect loop is active, suppresses the already-connected check
 	discSeq       int           // bumped by each explicit disconnect, stale snapshots abort in-flight dials
 	loopSeq       int           // bumped per reconnect-loop spawn, so a newer loop supersedes a parked older one
-	reopenKeep    *toolState    // live split captured at death, restored on reconnect
+	reopenKeep    *toolState    // pre-death deliberate toggles, restored on reconnect
 	rediscovering bool          // a list_changed re-discovery is in flight, coalesces bursts
 	connecting    bool          // a connect attempt is in flight (single-flight)
 	connectCh     chan struct{} // closed when that attempt settles, waking waiters
@@ -247,14 +247,15 @@ func (m *Manager) dial(ctx context.Context, name string, s *server, disc int) er
 	if already { // a path that connected while we waited for the slot
 		return nil
 	}
-	keep := m.captureLive(s.source) // registrar call stays off s.mu
+	cfg := s.config()
+	keep := m.captureLive(s.source, cfg) // registrar call stays off s.mu
 	s.mu.Lock()
-	if keep != nil && s.reopenKeep != nil { // restore the pre-death split across a reconnect
+	if s.reopenKeep != nil { // restore the pre-death split across a reconnect
 		mergeToolState(keep, s.reopenKeep)
 	}
 	s.mu.Unlock()
 
-	c, err := m.connectClient(ctx, name, s.config())
+	c, err := m.connectClient(ctx, name, cfg)
 	if err != nil {
 		// an unreachable server is expected (offline or not yet started), keep the
 		// reason out of notices, so it appears only in /mcp logs and the status ratio.
@@ -362,29 +363,19 @@ func (m *Manager) dropped(name string, s *server) bool {
 	return m.servers[name] != s
 }
 
-// register bridges live defs into the registry under s.source. keep holds a
-// source's pre-refresh enable/disable split, so re-registration restores exactly
-// what was exposed rather than resetting it. Tools not in keep follow defaults.
+// register bridges live defs into the registry under s.source. keep holds the
+// deliberate /tools toggles captured before a refresh, layered over the current
+// config's defaults. Tools absent from keep follow those defaults.
 func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState) {
 	cfg := s.config()
 	defs = filterTools(defs, cfg.Tools, cfg.ExcludeTools)
 	dur := time.Duration(cfg.Timeout)
 
-	var restore map[string]struct{}
-	if len(m.opts.Restore) > 0 { // a resumed session's enabled set is authoritative
-		restore = bulk.SliceToSet(m.opts.Restore)
-	}
-	disabledByCfg := disabledByConfig(cfg) // config-disabled stays inactive by default
-
 	for _, d := range defs {
 		n := s.name + "__" + d.Name
 		tool := Bridge(s.name, d, c, BridgeOptions{ReadOnly: d.ReadOnly, Timeout: dur})
 		st := StateDisabled // known but inactive by default, config-off or a restored subset leaves the rest off
-		if !disabledByCfg && restore == nil {
-			st = StateEnabled // fully-enabled, fresh server exposes everything
-		} else if has(restore, n) {
-			// an explicit enabled set is authoritative: /tools enablements win over the
-			// config default, and a restored subset keeps only its members on
+		if m.impliedEnabled(cfg, n) {
 			st = StateEnabled
 		}
 		if keep != nil && has(keep.enabled, n) { // live enablement wins over restore/default
@@ -439,13 +430,34 @@ func (m *Manager) preloadWG() *sync.WaitGroup {
 	return m.preload
 }
 
+// impliedEnabled reports whether cfg leaves name enabled before any live /tools
+// toggle. Config governs the default while a persisted Restore set is an explicit
+// enablement authoritative over it. register derives defaults through this too, so
+// captures and registrations cannot disagree about what a default state is.
+func (m *Manager) impliedEnabled(cfg ServerConfig, name string) bool {
+	if len(m.opts.Restore) > 0 { // a resumed session's enabled set wins over the config default
+		return slices.Contains(m.opts.Restore, name)
+	}
+	return !disabledByConfig(cfg)
+}
+
 // captureLive reads a source's current enable/disable split from the registrar,
-// so re-registration restores exactly what was exposed rather than resetting it.
-func (m *Manager) captureLive(source string) *toolState {
-	return &toolState{
+// keeping only names whose state differs from what inForce implied when it was
+// registered. Deliberate /tools toggles survive re-registration, while tools still
+// at their old default adopt whatever the config now says instead of freezing
+// stale defaults over an enabled flip.
+func (m *Manager) captureLive(source string, inForce ServerConfig) *toolState {
+	keep := &toolState{
 		enabled:  bulk.SliceToSet(m.opts.Registrar.EnabledNames(source)),
 		disabled: bulk.SliceToSet(m.opts.Registrar.DisabledNames(source)),
 	}
+	maps.DeleteFunc(keep.enabled, func(n string, _ struct{}) bool {
+		return m.impliedEnabled(inForce, n)
+	})
+	maps.DeleteFunc(keep.disabled, func(n string, _ struct{}) bool {
+		return !m.impliedEnabled(inForce, n)
+	})
+	return keep
 }
 
 // mergeToolState overlays src onto dst, so a pre-death split wins over any
@@ -560,7 +572,8 @@ func (m *Manager) applyConfig(ctx context.Context, s *server, sc ServerConfig) {
 		return
 	}
 	if filterChanged(old, sc) { // independent of the transport: applies against the running process
-		m.rediscan(ctx, s)
+		// captured under old: anything still at its pre-reload default must not pin it over the new one
+		m.rediscan(ctx, s, m.captureLive(s.source, old))
 	}
 	if connectionChanged(old, sc) {
 		s.note("connection config changed; applies on the next connect, or now with /mcp disconnect then /mcp connect", true)
@@ -750,7 +763,7 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 	switch n.Method {
 	case mcp.MethodNotificationToolsListChanged:
 		s.diag("tools changed; re-discovering")
-		m.rediscan(ctx, s)
+		m.rediscan(ctx, s, m.captureLive(s.source, s.config()))
 	case string(mcp.MethodNotificationProgress):
 		s.writeProgress(n.Params.AdditionalFields)
 	default:
@@ -772,10 +785,13 @@ const pingTimeout = 2 * time.Second
 const discoverTimeout = 45 * time.Second
 
 // rediscan re-discovers a connected server's tools and re-registers them, after a
-// tools/list_changed notification or a reloaded tool filter. It runs in its own
-// goroutine bounded by ctx, and is serialized per server: a second call while one
-// pass is running is coalesced, since the in-flight pass reads the current tool set anyway.
-func (m *Manager) rediscan(ctx context.Context, s *server) {
+// tools/list_changed notification or a reloaded tool filter. keep carries the live
+// enable split the caller captured under the config that produced it, so deliberate
+// toggles outlive the refresh while untouched tools follow the current defaults. It
+// runs in its own goroutine bounded by ctx, and is serialized per server: a second
+// call while one pass is running is coalesced, since the in-flight pass reads the
+// current tool set anyway.
+func (m *Manager) rediscan(ctx context.Context, s *server, keep *toolState) {
 	s.mu.Lock()
 	if s.rediscovering { // a refresh already in flight, it sees the latest state
 		s.mu.Unlock()
@@ -784,7 +800,6 @@ func (m *Manager) rediscan(ctx context.Context, s *server) {
 	s.rediscovering = true
 	c := s.c
 	s.mu.Unlock()
-	keep := m.captureLive(s.source)
 	if c == nil {
 		s.mu.Lock()
 		s.rediscovering = false
@@ -889,7 +904,7 @@ func (m *Manager) reconnect(s *server, dead *Client) {
 	if dead == nil { // nothing was watched, nothing can exit
 		return
 	}
-	keep := m.captureLive(s.source) // registrar call stays off s.mu
+	keep := m.captureLive(s.source, s.config()) // registrar call stays off s.mu
 	s.mu.Lock()
 	if s.c != dead { // a disconnect or successor owns the server now; this notice is stale
 		s.mu.Unlock()

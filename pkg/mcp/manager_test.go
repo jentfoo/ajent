@@ -733,7 +733,7 @@ func TestRegisterPreservesLiveDisabled(t *testing.T) {
 	fr.set("srv__b", StateDisabled)
 
 	// capture the live split and re-register as a refresh would (unregister first)
-	keep := mgr.captureLive(s.source)
+	keep := mgr.captureLive(s.source, ServerConfig{})
 	fr.Unregister(s.source)
 	mgr.register(s, nil, defs, keep)
 
@@ -760,6 +760,67 @@ func TestRegisterLiveDisabledBeatsRestore(t *testing.T) {
 
 	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
 	assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // live off wins over Restore
+}
+
+func TestImpliedEnabled(t *testing.T) {
+	t.Parallel()
+
+	var off bool
+	tests := []struct {
+		name    string
+		restore []string
+		cfg     ServerConfig
+		tool    string
+		want    bool
+	}{
+		{name: "config enabled default", cfg: ServerConfig{}, tool: "srv__a", want: true},
+		{name: "config disabled default", cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: false},
+		{name: "restore member wins", restore: []string{"srv__a"}, cfg: ServerConfig{}, tool: "srv__a", want: true},
+		{name: "restore non-member off", restore: []string{"srv__b"}, cfg: ServerConfig{}, tool: "srv__a", want: false},
+		{name: "restore beats config off", restore: []string{"srv__a"}, cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := New(nil, wired(Options{Registrar: newFakeRegistrar(), Restore: tt.restore}))
+			assert.Equal(t, tt.want, mgr.impliedEnabled(tt.cfg, tt.tool))
+		})
+	}
+}
+
+func TestCaptureLiveSubtractsDefaults(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(nil, wired(Options{Registrar: fr}))
+	s := mgr.newTestServer("srv")
+	defs := []ToolDef{
+		{Name: "a", InputSchema: jsonRawObject},
+		{Name: "b", InputSchema: jsonRawObject},
+	}
+
+	// both register enabled under a config-enabled default, then b is toggled off
+	mgr.register(s, nil, defs, nil)
+	fr.set("srv__b", StateDisabled)
+
+	// against the config that produced this split only the deliberate toggle remains,
+	// so an unchanged re-registration keeps it while anything untouched follows defaults
+	keep := mgr.captureLive(s.source, ServerConfig{})
+	assert.Empty(t, keep.enabled)
+	assert.Equal(t, map[string]struct{}{"srv__b": {}}, keep.disabled)
+
+	// against a config-disabled era the same split reads as pure default: b was never
+	// a toggle and a must have been turned on deliberately
+	var off bool
+	keep = mgr.captureLive(s.source, ServerConfig{Enabled: &off})
+	assert.Equal(t, map[string]struct{}{"srv__a": {}}, keep.enabled)
+	assert.Empty(t, keep.disabled)
+
+	// a restored enabled set makes the implication per name: only b's extra enablement departs
+	fr.set("srv__b", StateEnabled)
+	restored := New(nil, wired(Options{Registrar: fr, Restore: []string{"srv__a"}}))
+	keep = restored.captureLive(s.source, ServerConfig{})
+	assert.Empty(t, keep.disabled)
+	assert.Equal(t, map[string]struct{}{"srv__b": {}}, keep.enabled)
 }
 
 func mustState(fr *fakeRegistrar, name string) State {
@@ -887,6 +948,99 @@ func TestReload(t *testing.T) {
 
 		assert.Empty(t, fr.AllNames("mcp: fake")) // tools go with the server
 		assert.Nil(t, mgr.serverByName("fake"))
+	})
+
+	// flipping enabled false -> true must reach a connected server: nothing was ever
+	// toggled by hand, so the captured split holds no deliberate state to keep
+	t.Run("enabled_flip_activates", func(t *testing.T) {
+		mgr, fr, ws := setup(t, cfgJSON(`,"enabled":false`))
+		require.NotEmpty(t, fr.AllNames("mcp: fake"))
+		for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+			assert.Equal(t, StateDisabled, mustState(fr, "fake__"+n))
+		}
+
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(`,"enabled":true`))
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		require.Eventually(t, func() bool {
+			for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+				st, ok := fr.state("fake__" + n)
+				if !ok || st != StateEnabled {
+					return false
+				}
+			}
+			return true
+		}, 5*time.Second, 20*time.Millisecond)
+	})
+
+	// flipping enabled true -> false must not leave the just-disabled tools callable,
+	// the security-relevant direction of the same capture path
+	t.Run("enabled_flip_deactivates", func(t *testing.T) {
+		mgr, fr, ws := setup(t, cfgJSON(""))
+		require.NotEmpty(t, fr.AllNames("mcp: fake"))
+
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(`,"enabled":false`))
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		require.Eventually(t, func() bool {
+			for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+				st, ok := fr.state("fake__" + n)
+				if !ok || st != StateDisabled {
+					return false
+				}
+			}
+			return true
+		}, 5*time.Second, 20*time.Millisecond)
+	})
+
+	// a genuine /tools toggle must survive a refresh that keeps the same defaults:
+	// only pre-reload default state is reconciled away, never user choices
+	t.Run("user_toggle_survives_reload", func(t *testing.T) {
+		mgr, fr, ws := setup(t, cfgJSON(""))
+		require.NotEmpty(t, fr.AllNames("mcp: fake"))
+		fr.set("fake__tool_01", StateDisabled) // the user turned it off via /tools
+		before, ok := fr.toolByName("fake__tool_00")
+		require.True(t, ok)
+
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(`,"timeout":"90s"`)) // unrelated filter edit
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		// the refresh re-registered (fresh tool objects) and both states held
+		require.Eventually(t, func() bool {
+			after, ok := fr.toolByName("fake__tool_00")
+			off, okOff := fr.state("fake__tool_01")
+			on, okOn := fr.state("fake__tool_02")
+			return ok && after != before && okOff && off == StateDisabled &&
+				okOn && on == StateEnabled
+		}, 5*time.Second, 20*time.Millisecond)
+	})
+
+	// a flip landing while the server is down reaches its reconnect: the pre-death
+	// split was captured as deliberate toggles only, so it cannot pin old defaults over
+	t.Run("enabled_flip_reaches_dead_server", func(t *testing.T) {
+		mgr, fr, ws := setup(t, cfgJSON(`,"args":["-die"]`))
+		require.NotEmpty(t, fr.AllNames("mcp: fake"))
+
+		tool, ok := fr.toolByName("fake__trigger_die")
+		require.True(t, ok)
+		_, err := tool.Execute(t.Context(), agent.ToolCall{ID: "die", Name: tool.Name()}, agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)             // a dead transport is a result, never an abort
+		require.Eventually(t, func() bool { // death noticed and tools unregistered
+			return len(fr.AllNames("mcp: fake")) == 0
+		}, 5*time.Second, 20*time.Millisecond)
+
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(`,"args":["-die"],"enabled":false`))
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		require.Eventually(t, func() bool { // reconnected under the new default: all off
+			for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+				st, ok := fr.state("fake__" + n)
+				if !ok || st != StateDisabled {
+					return false
+				}
+			}
+			return true
+		}, 15*time.Second, 50*time.Millisecond)
 	})
 }
 
