@@ -104,14 +104,19 @@ each member in registration order. Fan-out costs nothing at the hot path.
 ## The loop
 
 ```
-drain follow-up queue -> for each turn:
+seed the queues by appending, never wiping -> pop one turn's inputs:
+    leading framing-only inputs (Before, callbacks) fold into the turn;
+    framing with nothing behind it lands through the append path, no turn
+for each turn:
     sink.TurnStart
-    append the prompt and any pre-start steering as user messages
-      (Before, the text, Delivered, After resolves, then Settled)
+    append the framing, the prompt and any pre-start steering as user messages
+      (each Before, the text, Delivered, After resolves, then Settled)
     for step := 0; maxSteps <= 0 || step < maxSteps; step++ {
         AwaitInput(ctx)                              may hold the boundary
+        cancel recheck: a released hold ends the turn, nothing appends
         drain push-steers, then OnBoundary inputs         (step boundary)
         Compact(CompactStep)                             hook decides
+        cancel recheck: abort before the stream
         req = request(state, env, tools)                 assemble()
         msg, usage = a.stream(ctx, req)                  forwards deltas to sink,
                                                           retries recoverable failures
@@ -123,6 +128,22 @@ drain follow-up queue -> for each turn:
     }
     sink.TurnEnd
 ```
+
+### Queue discipline
+
+Seeding appends. A `Prompt`/`PromptBatch` handed in while idle joins the steer
+queue ahead of whatever is already there, so a fresh prompt leads the next turn
+and accepted input is never wiped — a nested `PromptBatch` from an `OnSettled`
+observer folds behind steering a sibling observer queued, and the leftovers of
+an errored turn (which returns without draining) fold behind the next prompt.
+
+Only an input carrying the message (text, blocks, or `After`) can start a turn.
+Framing-only inputs (only `Before` and delivery callbacks) pop as leads that
+fold into the turn the next message-carrying input starts; framing with nothing
+behind it lands through the same append path without a turn, so `Delivered` and
+`Settled` still fire. Nothing popped is ever dropped for emptiness — only an
+input with nothing at all to deliver skips the append (and its callbacks with
+it). Steer/FollowUp entries that cannot start a turn are no exception.
 
 ### Assembly is pure
 
@@ -249,6 +270,14 @@ Interruption is cancellation, not draining:
   only once every launched call has finished.
 - Step- and overflow-boundary compaction runs under the turn's own context, so
   an interrupt aborts it. Turn-boundary compaction keeps the outer context.
+  A cancel that lands during the step compaction aborts before the stream, so
+  no partial assistant message is appended for a boundary that never ran.
+- A cancel recheck after every blocking boundary wait (the `AwaitInput` hold,
+  the step compaction) ends the turn before the next append. A released hold
+  therefore never records user messages against an aborted turn and never
+  fires `Delivered`/`Settled` for a boundary that never streamed — the price is
+  that a dropped input's submit reserve is released by the host's interrupt
+  path (the steer queue's abort) rather than by `Settled`.
 - On abort the partial assistant message from the Accumulator is still appended,
   then every unanswered `ToolCallBlock` gets a synthetic error result carrying
   the same `interrupted by user` marker. Without this, a cancelled turn leaves a
@@ -344,11 +373,12 @@ Two kinds of mid-turn input:
 - The `Options.NormalizeInput` seam runs once per input on the append path, so a
   steered, follow-up or host-supplied input gets the same handling a freshly
   submitted prompt gets (the pump's `refs.Expander` pass). The loop applies it
-  at the two dequeue points (`runTurn` before `TurnStart`, and `drainSteer`
-  before `appendSteer`), so every route into a turn is covered by construction:
-  anything not dequeued from the steer/follow queues must arrive through
-  `OnBoundary`, which `drainSteer` covers. Inputs the host already expanded set
-  `Input.Prepared` and skip the hook, so an expanded prompt is never re-read.
+  at the dequeue points (`runTurn` before `TurnStart`, `drainSteer` before
+  `appendSteer`, and the pop loop's framing-only delivery), so every route into
+  a turn is covered by construction: anything not dequeued from the steer/follow
+  queues must arrive through `OnBoundary`, which `drainSteer` covers. Inputs the
+  host already expanded set `Input.Prepared` and skip the hook, so an expanded
+  prompt is never re-read.
 - An `Input.Injected` flag marks system-provided context (sub-agent completion
   steers, permission-barrier notes) rather than a typed prompt. It rides onto
   the appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R /
@@ -387,7 +417,12 @@ it.
   each step before any input drains and may block while the user finishes a
   message. It takes the turn's context, so `Interrupt` releases it; draining
   happens after it returns, so anything arriving during the hold lands in this
-  same boundary. The interactive driver's typing hold supplies it. nil disables.
+  same boundary. A cancel that releases the hold ends the turn at that boundary
+  before anything appends: no user message lands, no `Delivered`/`Settled`
+  fires, and the step compaction is skipped. Input accepted before the
+  interrupt stays dropped (see Interrupt); input accepted after it, while the
+  turn is still unwinding, stays queued and is delivered by the next turn. The
+  interactive driver's typing hold supplies it. nil disables.
 
   The same editor draft that feeds AwaitInput also delays raising approval
   dialogs: a barrier holds its dialog until the user pauses their message,

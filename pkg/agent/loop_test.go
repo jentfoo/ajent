@@ -668,6 +668,168 @@ const (
 	pollInterval   = time.Millisecond
 )
 
+// userTexts returns the text blocks of every user message in order.
+func userTexts(msgs []llm.Message) []string {
+	var out []string
+	for _, m := range msgs {
+		if m.Role != llm.RoleUser {
+			continue
+		}
+		for _, b := range m.Content {
+			if tb, ok := b.(llm.TextBlock); ok {
+				out = append(out, tb.Text)
+			}
+		}
+	}
+	return out
+}
+
+// TestSteerLeftoverSurvivesErroredTurn: an errored turn returns without
+// draining, so a Steer accepted after its last boundary stays queued and folds
+// in behind the next prompt instead of being wiped by the next seed.
+func TestSteerLeftoverSurvivesErroredTurn(t *testing.T) {
+	t.Parallel()
+
+	inStep := make(chan struct{})
+	release := make(chan struct{})
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Err: errors.New("wire down")}, // turn one fails once the boundary passed
+		{Events: textOnly("recovered")},
+	}}
+	a := newTestAgent(nil, p, nil)
+	held := true // the loop goroutine is the only caller, no lock needed
+	a.opts.Compact = func(_ context.Context, r CompactReason) (bool, error) {
+		if r != CompactStep || !held {
+			return false, nil
+		}
+		held = false
+		inStep <- struct{}{}
+		<-release
+		return false, nil
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "first"}) }()
+	<-inStep // the boundary drain ran, a Steer now outlives the turn
+
+	var delivered bool
+	require.True(t, a.Steer(Input{Text: "note", Delivered: func() { delivered = true }}))
+	close(release)
+	require.Error(t, <-errCh)
+	assert.False(t, delivered) // the errored turn never lands it
+
+	// the next prompt leads, the leftover folds in behind it
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "second"}))
+	assert.True(t, delivered)
+	reqs := p.Requests()
+	require.Len(t, reqs, 2)
+	// turn one's echo persists, then the new prompt leads and the leftover folds
+	// in behind it
+	assert.Equal(t, []string{"first", "second", "note"}, userTexts(reqs[1].Messages))
+}
+
+// TestLoopHoldInterruptLandsNothing: an interrupt releasing AwaitInput ends the
+// turn before anything appends, so the held prompt never reaches state and no
+// delivery callback fires for the boundary that never streamed.
+func TestLoopHoldInterruptLandsNothing(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("late")}}}
+	catch := &resultCatcher{}
+	a := newTestAgent(nil, p, catch)
+	a.opts.AwaitInput = func(context.Context) {
+		close(entered)
+		<-release
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "held"}) }()
+	<-entered
+
+	a.Interrupt()
+	close(release)
+
+	require.NoError(t, <-errCh) // an interrupted hold is a clean abort, not a failure
+	assert.Equal(t, llm.StopAborted, catch.result.Stop)
+	assert.Empty(t, p.Requests())
+	assert.Empty(t, a.state.Messages)
+}
+
+// TestLoopHoldInterruptDeliversAcceptedSteer: input accepted while a hold is
+// still open queues behind the abort, so the fresh turn it starts delivers it
+// rather than losing it.
+func TestLoopHoldInterruptDeliversAcceptedSteer(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("after")}}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.AwaitInput = func(context.Context) {
+		// the follow-up turn the delivered steer starts holds too, but entered
+		// already fired for the aborted one
+		once.Do(func() { close(entered) })
+		<-release
+	}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "held"}) }()
+	<-entered
+
+	a.Interrupt() // drops what was queued, running stays true during the unwind
+	var delivered bool
+	require.True(t, a.Steer(Input{Text: "note", Delivered: func() { delivered = true }}))
+	close(release)
+
+	require.NoError(t, <-errCh)
+	assert.True(t, delivered)
+	reqs := p.Requests()
+	require.Len(t, reqs, 1)
+	assert.Equal(t, []string{"note"}, userTexts(reqs[0].Messages))
+}
+
+// TestLoopStepCompactInterruptAppendsNothing: a cancel during the step
+// compaction aborts before the stream, so no partial assistant message joins a
+// boundary that never ran.
+func TestLoopStepCompactInterruptAppendsNothing(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("late")}}}
+	catch := &resultCatcher{}
+	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Sinks:    []Sink{catch},
+		Env:      testEnv,
+		Compact: func(_ context.Context, r CompactReason) (bool, error) {
+			if r != CompactStep {
+				return false, nil
+			}
+			entered <- struct{}{}
+			<-release
+			return false, nil
+		},
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+	<-entered
+
+	a.Interrupt()
+	close(release)
+
+	require.NoError(t, <-errCh)
+	assert.Equal(t, llm.StopAborted, catch.result.Stop)
+	// the prompt echo stands, no partial assistant message joins it
+	require.Len(t, a.state.Messages, 1)
+	assert.Equal(t, llm.RoleUser, a.state.Messages[0].Role)
+	assert.Empty(t, p.Requests())
+}
+
 func TestLoopAwaitInput(t *testing.T) {
 	t.Parallel()
 

@@ -24,39 +24,72 @@ const (
 	contextInterval = 80 * time.Millisecond
 )
 
-// runTurns drains the follow-up queue, running one turn per queued input until
-// nothing is left. Prompt hands in a single initial input. Steering and
-// follow-ups arrive on the queues while it runs.
+// runTurns drains the steer and follow-up queues, running one turn per
+// message-carrying input until nothing is left. Prompt hands in a single
+// initial input. Steering and follow-ups arrive on the queues while it runs.
+// Seeding appends: a fresh prompt leads whatever is already queued, so an
+// accepted input is never wiped.
 func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 	a.mu.Lock()
 	if a.running {
 		a.follow = append(a.follow, first...)
 	} else {
-		a.steer = append(first[:0:0], first...) // the initial message is part of turn one
+		a.steer = slices.Concat(first, a.steer) // the initial message leads turn one
 	}
 	a.mu.Unlock()
 
 	for {
-		var input Input
-		a.mu.Lock()
-		if len(a.steer) > 0 {
-			input = a.steer[0]
-			a.steer = a.steer[1:]
-		} else if len(a.follow) > 0 {
-			input = a.follow[0]
-			a.follow = a.follow[1:]
-		}
-		empty := input.Text == "" && len(input.Blocks) == 0 && input.After == nil
-		idle := !a.running
-		a.mu.Unlock()
-
-		if empty {
-			if idle {
-				return nil // both queues drained and no turn in flight
+		// pop the next turn's inputs: framing-only entries (Before, callbacks)
+		// fold into the turn the first message-carrying input starts, never
+		// getting one of their own
+		var leads []Input
+		var head Input
+		var have, idle bool
+		for {
+			var next Input
+			var ok bool
+			a.mu.Lock()
+			switch {
+			case len(a.steer) > 0:
+				next = a.steer[0]
+				a.steer = a.steer[1:]
+				ok = true
+			case len(a.follow) > 0:
+				next = a.follow[0]
+				a.follow = a.follow[1:]
+				ok = true
 			}
-			continue
+			idle = !a.running
+			a.mu.Unlock()
+
+			if !ok {
+				break // both queues drained
+			}
+			if turnsStart(next) {
+				head, have = next, true
+				break
+			}
+			leads = append(leads, next)
 		}
-		err := a.runTurn(ctx, input)
+
+		if !have {
+			if !idle {
+				// unreachable under single ownership: hand the leads back so the
+				// running turn's next boundary (drainSteer) delivers them
+				a.mu.Lock()
+				a.steer = append(leads, a.steer...)
+				a.mu.Unlock()
+				continue
+			}
+			if len(leads) > 0 {
+				// framing with no message behind it still lands, so delivery and
+				// settled callbacks fire; no turn starts for context alone
+				a.appendSteer(ctx, a.normalizeInputs(leads))
+				continue
+			}
+			return nil // both queues drained and no turn in flight
+		}
+		err := a.runTurn(ctx, head, leads)
 		// a real turn boundary: the compact hook decides whether an automatic fold
 		// fires. Step boundaries fire it too, mid-turn. The per-turn state reset runs
 		// unconditionally so an errored turn cannot leave stalled/warned armed for the
@@ -103,9 +136,17 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 	}
 }
 
+// turnsStart reports whether an input carries a turn's message: text, extra
+// blocks, or the after-context it asked for. Framing-only inputs (Before,
+// delivery callbacks) fold into the next turn instead of starting one.
+func turnsStart(in Input) bool {
+	return in.Text != "" || len(in.Blocks) > 0 || in.After != nil
+}
+
 // runTurn drives one user turn: stream, dispatch tools, repeat until the model
-// stops, the context ends, or the step limit is hit.
-func (a *Agent) runTurn(ctx context.Context, input Input) error {
+// stops, the context ends, or the step limit is hit. head is the turn's
+// prompt, leads are framing-only inputs that land ahead of it.
+func (a *Agent) runTurn(ctx context.Context, head Input, leads []Input) error {
 	a.mu.Lock()
 	if a.running {
 		a.mu.Unlock()
@@ -116,10 +157,7 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	a.cancel = cancel
 	// fold pre-start steer in atomically with claiming the turn, so input Steer'd
 	// after Running() lands at a step boundary (drainSteer), not with the prompt.
-	promptInputs := append([]Input(nil), input)
-	if len(a.steer) > 0 {
-		promptInputs = append(promptInputs, a.steer...)
-	}
+	promptInputs := append(append(slices.Clone(leads), head), a.steer...)
 	a.steer = nil
 	a.mu.Unlock()
 	defer func() {
@@ -146,7 +184,8 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 	// normalize before TurnStart so the sink sees the input as it will land
 	promptInputs = a.normalizeInputs(promptInputs)
 
-	sink.TurnStart(TurnInfo{Model: a.state.Model, Input: promptInputs[0]})
+	// the head is the prompt, leads only frame it
+	sink.TurnStart(TurnInfo{Model: a.state.Model, Input: promptInputs[len(leads)]})
 
 	// the increment lives at the body's end so a recovery retry reruns the same step
 	for step := 1; ; {
@@ -154,6 +193,13 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		// arriving during the wait lands at this same step.
 		if a.opts.AwaitInput != nil {
 			a.opts.AwaitInput(turnCtx)
+		}
+		if turnCtx.Err() != nil {
+			// interrupt released the hold: this boundary never streams, so nothing
+			// appends, no delivery callback fires, and dropped input stays dropped
+			sink.Notice(InterruptedText, LevelInfo)
+			result.Stop = llm.StopAborted
+			break
 		}
 		// the turn's own prompt lands once, before any stream
 		if len(promptInputs) > 0 {
@@ -166,6 +212,13 @@ func (a *Agent) runTurn(ctx context.Context, input Input) error {
 		// the turn's own context, so an interrupt stops the summariser call
 		if a.opts.Compact != nil {
 			_, _ = a.opts.Compact(turnCtx, CompactStep)
+		}
+		if turnCtx.Err() != nil {
+			// interrupt during the summariser hold: abort before the stream instead
+			// of appending a reply to a boundary that never ran
+			sink.Notice(InterruptedText, LevelInfo)
+			result.Stop = llm.StopAborted
+			break
 		}
 
 		msg, usage, stop, err := a.stream(turnCtx, sink)

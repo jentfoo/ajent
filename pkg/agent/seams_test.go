@@ -139,6 +139,55 @@ func TestOnSettled(t *testing.T) {
 		assert.Equal(t, 2, settled) // once after each turn drains
 	})
 
+	// a sibling observer's nested Prompt never wipes steering an earlier observer
+	// queued: the seed appends, so the steer folds in behind the fresh prompt
+	t.Run("steer_survives_nested_prompt", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: textOnly("one")},
+			{Events: textOnly("two")},
+		}}
+		a := newTestAgent(nil, p, nil)
+
+		var steered, prompted bool
+		var nested error
+		a.opts.OnSettled = []func(context.Context){
+			func(context.Context) {
+				if !steered {
+					steered = true
+					require.True(t, a.Steer(Input{Text: "note"}))
+				}
+			},
+			func(ctx context.Context) {
+				if !prompted {
+					prompted = true
+					nested = a.PromptBatch(ctx, []Input{{Text: "next"}})
+				}
+			},
+		}
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "first"}))
+		require.NoError(t, nested)
+		assert.True(t, steered)
+		assert.True(t, prompted)
+
+		// the nested turn carries turn one's echo, the fresh prompt, and behind
+		// it the steer the sibling observer queued
+		reqs := p.Requests()
+		require.Len(t, reqs, 2)
+		var texts []string
+		for _, m := range reqs[1].Messages {
+			if m.Role != llm.RoleUser {
+				continue
+			}
+			for _, b := range m.Content {
+				if tb, ok := b.(llm.TextBlock); ok {
+					texts = append(texts, tb.Text)
+				}
+			}
+		}
+		assert.Equal(t, []string{"first", "next", "note"}, texts)
+	})
+
 	// an errored turn never reports itself as settled
 	t.Run("not_called_on_errored_turn", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}

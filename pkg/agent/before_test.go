@@ -192,6 +192,56 @@ func TestInputBeforeOnlyFiresDelivery(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "User Ran: echo hi", tb.Text)
 	})
+
+	// a Before-only batch head pops first, so it must fold into the turn the
+	// following text starts rather than streaming one over staged context alone
+	t.Run("batch_head_folds_not_starts", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		var delivered, settled bool
+		err := a.PromptBatch(t.Context(), []Input{
+			{Before: before, Delivered: func() { delivered = true }, Settled: func() { settled = true }},
+			{Text: "next"},
+		})
+		require.NoError(t, err)
+		assert.True(t, delivered)
+		assert.True(t, settled)
+
+		// one turn: the Before lands, then the typed prompt, then the reply
+		reqs := p.Requests()
+		require.Len(t, reqs, 1)
+		var texts []string
+		for _, m := range reqs[0].Messages {
+			if m.Role != llm.RoleUser {
+				continue
+			}
+			for _, b := range m.Content {
+				if tb, ok := b.(llm.TextBlock); ok {
+					texts = append(texts, tb.Text)
+				}
+			}
+		}
+		assert.Equal(t, []string{"User Ran: echo hi", "next"}, texts)
+	})
+
+	// framing with no message behind it still lands, no turn streams over it
+	t.Run("framing_alone_needs_no_turn", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		var delivered, settled bool
+		err := a.Prompt(t.Context(), Input{
+			Before: before, Delivered: func() { delivered = true }, Settled: func() { settled = true },
+		})
+		require.NoError(t, err)
+		assert.True(t, delivered)
+		assert.True(t, settled)
+
+		assert.Empty(t, p.Requests())
+		require.Len(t, a.state.Messages, 1)
+		tb, ok := a.state.Messages[0].Content[0].(llm.TextBlock)
+		require.True(t, ok)
+		assert.Equal(t, "User Ran: echo hi", tb.Text)
+	})
 }
 
 func TestNewOutputForwardsToSink(t *testing.T) {
