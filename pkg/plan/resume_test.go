@@ -80,6 +80,29 @@ func TestControllerRestore(t *testing.T) {
 		assert.Contains(t, f.notices[len(f.notices)-1], "is unavailable")
 	})
 
+	t.Run("unresolvable_saved_model_abandons", func(t *testing.T) {
+		f := newFakeHost()
+		p := mid()
+		p.SavedModel = "p/gone"
+		f.stored = p
+		c := New(f.host())
+
+		assert.False(t, c.Restore())
+		assert.False(t, c.Active()) // not silently rebuilt around the implementor
+		assert.Contains(t, f.notices[len(f.notices)-1], "saved model")
+	})
+
+	t.Run("missing_saved_model_falls_back", func(t *testing.T) {
+		f := newFakeHost()
+		p := mid()
+		p.SavedModel = "" // an entry predating the saved-model field
+		f.stored = p
+		c := New(f.host())
+
+		require.True(t, c.Restore())
+		assert.Equal(t, implementorModel, c.savedModel)
+	})
+
 	t.Run("active_workflow_is_kept", func(t *testing.T) {
 		c, f := started(t)
 		f.mu.Lock()

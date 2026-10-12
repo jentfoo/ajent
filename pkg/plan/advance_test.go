@@ -72,6 +72,24 @@ func TestControllerBeforePrompt(t *testing.T) {
 		assert.Equal(t, implementorModel, last.model)
 	})
 
+	// the pump flushes staged shell results into Before and clipboard images into
+	// Blocks; either would pin itself ahead of the kickoff in the fresh root
+	t.Run("kickoff_drops_flushed_context", func(t *testing.T) {
+		c, _ := started(t)
+		handOff(t, c, "draft plan")
+		in, ok := c.BeforePrompt(t.Context(), agent.Input{
+			Text:   "edited plan",
+			Blocks: llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: []byte("img")}},
+			Before: []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make test")}},
+		})
+		require.True(t, ok)
+
+		assert.Equal(t, PhaseImplementing, c.phase)
+		assert.Contains(t, in.Text, "<plan>\nedited plan\n</plan>")
+		assert.Empty(t, in.Before) // staged results never reach the new root
+		assert.Empty(t, in.Blocks)
+	})
+
 	t.Run("injected_input_never_approves", func(t *testing.T) {
 		c, _ := started(t)
 		handOff(t, c, "draft plan")

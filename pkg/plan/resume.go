@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // persisted is the workflow state written as a latest-wins session entry and read back on resume.
@@ -46,6 +47,16 @@ func (c *Controller) persistLocked() {
 	}
 }
 
+// resolveRole resolves a persisted model key, reported under its role name.
+// An unresolvable key abandons the restore with a notice and reports false.
+func (c *Controller) resolveRole(role, key string) (llm.Model, bool) {
+	m, ok := c.h.ResolveModel(key)
+	if !ok {
+		c.notify("plan workflow not resumed: "+role+" "+key+" is unavailable", agent.LevelWarn)
+	}
+	return m, ok
+}
+
 // Restore rebuilds a mid-workflow controller from the resumed branch, reporting
 // whether one was picked up. A finished workflow is never resurrected, and a
 // model that no longer resolves abandons the restore with a notice.
@@ -64,21 +75,18 @@ func (c *Controller) Restore() bool {
 	if c.h.ResolveModel == nil {
 		return false
 	}
-	planner, ok := c.h.ResolveModel(p.Planner)
+	planner, ok := c.resolveRole("planner", p.Planner)
 	if !ok {
-		c.notify("plan workflow not resumed: planner "+p.Planner+" is unavailable", agent.LevelWarn)
 		return false
 	}
-	implementor, ok := c.h.ResolveModel(p.Implementor)
+	implementor, ok := c.resolveRole("implementor", p.Implementor)
 	if !ok {
-		c.notify("plan workflow not resumed: implementor "+p.Implementor+" is unavailable",
-			agent.LevelWarn)
 		return false
 	}
-	saved := implementor
+	saved := implementor // entries predating the saved-model field have nothing of their own
 	if p.SavedModel != "" {
-		if m, found := c.h.ResolveModel(p.SavedModel); found {
-			saved = m
+		if saved, ok = c.resolveRole("saved model", p.SavedModel); !ok {
+			return false
 		}
 	}
 

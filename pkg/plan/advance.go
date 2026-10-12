@@ -31,6 +31,10 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 		c.approvedPlan = text
 		c.draftPlan = "" // gate passed, no draft to restore
 		in.Text = c.beginImplementationLocked()
+		// staged shell results and clipboard images flushed into this submission
+		// would pin themselves ahead of the kickoff; a fresh root starts from it alone
+		in.Before = nil
+		in.Blocks = nil
 		in.Injected = true
 		return in, true
 	}
