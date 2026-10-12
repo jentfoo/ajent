@@ -21,6 +21,35 @@ func NewCompleter(r *Registry, c Console, idx *refs.Index) *Completer {
 	return &Completer{commands: r, console: c, paths: idx}
 }
 
+// pathCompleter offers only @ path candidates, for free-text inputs that take
+// no commands or shell line, such as approval reasons and notes.
+type pathCompleter struct {
+	paths *refs.Index
+}
+
+// NewPathCompleter returns a completer sourcing @ references from idx alone.
+func NewPathCompleter(idx *refs.Index) tui.Completer {
+	return pathCompleter{paths: idx}
+}
+
+// Complete returns the cell an accepted Text replaces from, plus the candidates
+// for the @ token under pos. A cursor off any @ token offers nothing.
+func (c pathCompleter) Complete(text string, pos int) (int, []tui.Completion) {
+	cells := tui.GraphemeCells(text)
+	return atComplete(c.paths, cells, min(pos, len(cells)))
+}
+
+// atComplete offers idx's candidates for the @ token under pos in cells, with
+// the returned cell just past @ so accepting keeps the leading @. A nil idx or
+// a cursor off any @ token offers nothing.
+func atComplete(idx *refs.Index, cells []string, pos int) (int, []tui.Completion) {
+	start := tokenStart(cells, pos, 0)
+	if idx == nil || start >= len(cells) || cells[start] != "@" || start == pos {
+		return pos, nil
+	}
+	return offer(start+1, pos, idx.Candidates(strings.Join(cells[start+1:pos], ""), nil))
+}
+
 // completeKind is what the cursor is completing.
 type completeKind uint8
 
@@ -144,8 +173,7 @@ func (c *Completer) commandArgComplete(ctx completeCtx) (int, []tui.Completion) 
 
 // pathComplete offers workspace paths after @.
 func (c *Completer) pathComplete(ctx completeCtx) (int, []tui.Completion) {
-	// start after @ so accepting keeps the leading @
-	return offer(ctx.start+1, ctx.pos, c.paths.Candidates(ctx.spanText(ctx.start+1), nil))
+	return atComplete(c.paths, ctx.cells, ctx.pos)
 }
 
 // spanText returns the buffer from start up to the cursor.

@@ -268,6 +268,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// It must exist before agent.New: Options is copied there, so the batch hooks
 	// (sub-agent id reservation, classification prefetch) wire directly, not through
 	// a forward reference.
+	idx := refs.NewIndex(config.Cwd()) // one path index feeds the prompt completer and reason @ refs
 	var barrier *permit.Barrier
 	if toolsReg != nil {
 		var po permit.Options
@@ -284,7 +285,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// the prompter and noter adapt tui and agent onto permit's narrow interfaces,
 		// note injection steers the running turn without stopping it. Hold runs the
 		// typing gate's dialog hold, so an approval dialog never steals a draft's focus.
-		po.Prompter = promptAdapter{ui: ui, hold: gate.holdDialog}
+		po.Prompter = promptAdapter{ui: ui, hold: gate.holdDialog, path: command.NewPathCompleter(idx)}
 		po.Noter = func(note string) {
 			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
 		}
@@ -494,7 +495,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 		}
 	}
-	idx := refs.NewIndex(config.Cwd())
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
 
 	// Ctrl+R and ↑/↓ recall this workspace's typed lines merged with recorded

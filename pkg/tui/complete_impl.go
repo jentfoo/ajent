@@ -44,9 +44,9 @@ func (o *completionOverlay) accept(k key) bool {
 	return false
 }
 
-// key applies one overlay key, returning whether the editor should also receive
-// it and whether the line should submit now.
-func (o *completionOverlay) key(k key, u *UI) (consume, submit bool) {
+// key applies one overlay key against the editor it overlays, returning whether
+// the editor should also receive it and whether the line should submit now.
+func (o *completionOverlay) key(k key, ed *editor) (consume, submit bool) {
 	switch k.typ {
 	case keyUp:
 		o.move(-1)
@@ -57,14 +57,14 @@ func (o *completionOverlay) key(k key, u *UI) (consume, submit bool) {
 	case keyTab:
 		// accept now, a following Enter just submits
 		if len(o.items) > 0 {
-			o.applyCurrent(u)
+			o.applyCurrent(ed)
 			o.moved = false
 		}
 		return true, false
 	case keyEnter:
 		// accept and submit when ↑/↓ moved the selection, else submit as typed
 		if o.moved && len(o.items) > 0 {
-			o.applyCurrent(u)
+			o.applyCurrent(ed)
 			return true, true
 		}
 		return false, true
@@ -82,10 +82,11 @@ func (o *completionOverlay) move(delta int) {
 	}
 }
 
-// applyCurrent replaces the text from start to the cursor with the highlighted candidate's Text.
-func (o *completionOverlay) applyCurrent(u *UI) {
+// applyCurrent replaces the text from start to the cursor with the highlighted
+// candidate's Text.
+func (o *completionOverlay) applyCurrent(ed *editor) {
 	if len(o.items) > 0 {
-		u.replaceSpan(o.start, o.items[o.cursor].Text)
+		ed.ReplaceSpan(o.start, o.items[o.cursor].Text)
 	}
 }
 

@@ -126,54 +126,45 @@ func (u *UI) deliverCompletion(seq, start int, items []Completion, text string, 
 	u.repaint()
 }
 
-// applyCompletion inserts as much as the candidates agree on, or lists them
-// when they agree on nothing more. Caller holds the lock.
+// applyCompletion inserts as much as the candidates agree on at the prompt
+// editor's cursor, or lists them when they agree on nothing more. Caller holds
+// the lock.
 func (u *UI) applyCompletion(start int, items []Completion) {
 	if len(items) == 0 {
 		u.completion = nil
 		u.flashRule()
 		return
 	}
-	typed := u.spanText(start)
+	o, changed := completeAt(&u.editor, start, items, u.completion != nil)
+	switch {
+	case o != nil:
+		u.completion = o // ambiguous: show what is left
+	case changed:
+		u.completion = nil
+	default:
+		u.flashRule() // nothing to add and nothing new to show
+	}
+}
+
+// completeAt is the Tab core every completion surface shares: it inserts as much
+// of items as they agree on at ed's cursor, returning a listing to open when
+// they agree on nothing more (unless one already is) and reporting whether the
+// buffer changed.
+func completeAt(ed *editor, start int, items []Completion, listOpen bool) (*completionOverlay, bool) {
+	typed := ed.SpanText(start)
 	prefix := commonPrefix(items)
 	switch {
 	case !strings.HasPrefix(prefix, typed):
 		// candidates that do not extend the typed text have no useful prefix
-		u.replaceSpan(start, items[0].Text)
+		ed.ReplaceSpan(start, items[0].Text)
+		return nil, true
 	case prefix != typed:
-		u.replaceSpan(start, prefix)
-	case len(items) > 1 && u.completion == nil:
-		u.completion = &completionOverlay{items: items} // ambiguous: show what is left
-		return
-	default:
-		u.flashRule() // nothing to add and nothing new to show
-		return
+		ed.ReplaceSpan(start, prefix)
+		return nil, true
+	case len(items) > 1 && !listOpen:
+		return &completionOverlay{items: items, start: start}, false
 	}
-	u.completion = nil
-}
-
-// spanText returns the buffer from start up to the cursor.
-func (u *UI) spanText(start int) string {
-	start, end := max(start, 0), u.editor.pos
-	if start >= end {
-		return ""
-	}
-	return strings.Join(u.editor.cells[start:end], "")
-}
-
-// replaceSpan swaps the buffer from start to the cursor for text, leaving the
-// cursor at its end.
-func (u *UI) replaceSpan(start int, text string) {
-	end := u.editor.pos
-	start = min(max(start, 0), end)
-	replace := graphemesOf(text)
-	cells := u.editor.cells
-	out := make([]string, 0, len(cells)-(end-start)+len(replace))
-	out = append(out, cells[:start]...)
-	out = append(out, replace...)
-	out = append(out, cells[end:]...)
-	u.editor.cells = out
-	u.editor.pos = start + len(replace)
+	return nil, false
 }
 
 // ruleFlashDuration is how long the prompt rule stays accented.

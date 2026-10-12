@@ -31,6 +31,30 @@ type editor struct {
 // Value returns the current buffer contents.
 func (e *editor) Value() string { return strings.Join(e.cells, "") }
 
+// SpanText returns the buffer from start up to the cursor.
+func (e *editor) SpanText(start int) string {
+	start, end := max(start, 0), e.pos
+	if start >= end {
+		return ""
+	}
+	return strings.Join(e.cells[start:end], "")
+}
+
+// ReplaceSpan swaps the buffer from start to the cursor for text, leaving the
+// cursor at its end.
+func (e *editor) ReplaceSpan(start int, text string) {
+	end := e.pos
+	start = min(max(start, 0), end)
+	replace := graphemesOf(text)
+	cells := e.cells
+	out := make([]string, 0, len(cells)-(end-start)+len(replace))
+	out = append(out, cells[:start]...)
+	out = append(out, replace...)
+	out = append(out, cells[end:]...)
+	e.cells = out
+	e.pos = start + len(replace)
+}
+
 // SetValue replaces the buffer and puts the cursor at the end. A fill is not
 // a user edit, so any pending undo is dropped.
 func (e *editor) SetValue(s string) {

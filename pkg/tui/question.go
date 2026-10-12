@@ -19,8 +19,9 @@ const (
 // Question is an agent initiated prompt: free text when Options is empty,
 // otherwise a choice among them plus a chat row that takes a typed reply.
 type Question struct {
-	Text    string // may be several lines
-	Options []Option
+	Text      string // may be several lines
+	Options   []Option
+	Completer Completer // Tab completion for the typed reply, nil when none
 }
 
 // Answer is a question's outcome. Declined is set when the user pressed Esc,
@@ -42,7 +43,7 @@ func (u *UI) Ask(ctx context.Context, q Question) (Answer, error) {
 	if closed { // never block when there is nobody to ask
 		return Answer{}, ErrNoUI
 	}
-	st := &questionState{text: q.Text, options: slices.Clone(q.Options), chatIndex: -1}
+	st := &questionState{text: q.Text, options: slices.Clone(q.Options), chatIndex: -1, completer: q.Completer}
 	if len(st.options) > 0 && u.mode != ModePlain {
 		// plain mode has no row to type into, so there any non-numeric line is the reply
 		st.chatIndex = len(st.options)
@@ -73,6 +74,9 @@ type questionState struct {
 	answer    editor
 	width     int  // last render width, line navigation needs it
 	declined  bool // Esc: declined to answer, a normal result
+
+	completer Completer          // Tab completion for the reply, nil when none
+	comp      *completionOverlay // reply's Tab-driven listing, nil when closed
 }
 
 func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
@@ -105,6 +109,9 @@ func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	placeholder := answerPlaceholder
 	if s.chatting {
 		placeholder = chatPlaceholder
+	}
+	if s.comp != nil && maxRows-len(out) > 1 { // a Tab-driven listing rides above the reply,
+		out = append(out, s.comp.rows(t, width, maxRows-len(out)-1)...) // which always keeps a row
 	}
 	answerRows, caretRow, curCol := s.answer.view(t, max(1, width), max(1, maxRows-len(out)), marker, userContinue, placeholder, false)
 	out = append(out, answerRows...)
@@ -187,6 +194,10 @@ func (s *questionState) textLines() []string {
 func (s *questionState) key(k key) (bool, error) {
 	switch k.typ {
 	case keyEscape:
+		if s.comp != nil { // an open listing closes first, another Esc declines
+			s.comp = nil
+			return false, nil
+		}
 		if s.chatting { // step back to the options rather than abandon the question
 			s.chatting = false
 			s.answer.Clear()
@@ -216,6 +227,8 @@ func (s *questionState) key(k key) (bool, error) {
 	switch k.typ { // free text, mirrored from the input row's editing keys
 	case keyRune, keyPaste:
 		s.answer.Insert(strings.ReplaceAll(k.text, "\n", " "))
+	case keyNewline: // Alt+Enter or Ctrl+J wraps onto a new line, Enter submits
+		s.answer.Insert("\n")
 	case keyBackspace:
 		s.answer.Backspace()
 	case keyDelete:
@@ -244,10 +257,35 @@ func (s *questionState) key(k key) (bool, error) {
 		s.answer.LineEnd(s.width)
 	case keyKillLine:
 		s.answer.KillLine()
+	case keyTab:
+		s.tabComplete()
+		return false, nil
 	case keyEnter:
 		return true, nil
 	}
+	s.comp = nil // any other key drops a spent listing, as the prompt's does
 	return false, nil
+}
+
+// tabComplete offers the reply's completion candidates at the cursor. The query
+// runs synchronously: a dialog has no live menu to keep fresh, and the path
+// index prices one query at a single ReadDir.
+func (s *questionState) tabComplete() {
+	if s.completer == nil {
+		return
+	}
+	start, items := s.completer.Complete(s.answer.Value(), s.answer.pos)
+	if len(items) == 0 {
+		s.comp = nil
+		return
+	}
+	o, changed := completeAt(&s.answer, start, items, s.comp != nil)
+	switch {
+	case o != nil:
+		s.comp = o
+	case changed:
+		s.comp = nil
+	}
 }
 
 // choose settles on option i, or opens the typed reply when i is the chat row.

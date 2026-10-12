@@ -220,3 +220,59 @@ func textsOf(items []tui.Completion) []string {
 	}
 	return out
 }
+
+func TestPathCompleter(t *testing.T) {
+	t.Parallel()
+
+	// a lone @ path source for free-text inputs like approval reasons
+	newIdx := func(t *testing.T) refs.Index {
+		t.Helper()
+
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("x"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "read.go"), []byte("x"), 0o600))
+		return *refs.NewIndex(dir)
+	}
+
+	// an @ token anywhere completes paths, keeping the leading @ on accept
+	t.Run("at_token_mid_text", func(t *testing.T) {
+		idx := newIdx(t)
+		text := "see @main for details"
+		start, items := NewPathCompleter(&idx).Complete(text, 8)
+
+		assert.Equal(t, 5, start) // just past @, so accepting keeps it
+		assert.Contains(t, labelsOf(items), "main.go")
+	})
+
+	// a plain word offers nothing: only refs complete in free text
+	t.Run("plain_words_offer_nothing", func(t *testing.T) {
+		idx := newIdx(t)
+		comp := NewPathCompleter(&idx)
+
+		start, items := comp.Complete("read main for details", 8)
+		assert.Empty(t, items)
+		assert.Equal(t, 8, start)
+
+		start, items = comp.Complete("@main done", 10) // cursor off the token
+		assert.Empty(t, items)
+		assert.Equal(t, 10, start)
+	})
+
+	// a cursor right after @ with an empty query lists the directory
+	t.Run("empty_query_lists_children", func(t *testing.T) {
+		idx := newIdx(t)
+
+		start, items := NewPathCompleter(&idx).Complete("@", 1)
+
+		assert.Equal(t, 1, start)
+		assert.ElementsMatch(t, labelsOf(items), []string{"main.go", "read.go"})
+	})
+
+	// no index at all degrades to no completion
+	t.Run("nil_index_offers_nothing", func(t *testing.T) {
+		start, items := NewPathCompleter(nil).Complete("@main", 5)
+
+		assert.Equal(t, 5, start)
+		assert.Empty(t, items)
+	})
+}

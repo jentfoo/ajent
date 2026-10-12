@@ -487,6 +487,11 @@ option window grows out from the cursor by whole options while they fit (the
 overflow footer costs a row), and an over-long reply shows its tail, where the
 caret is. The placeholder marks where the reply is typed.
 
+The free-text modes take an optional `Completer`: Tab applies the tab-driven
+rules above to the reply buffer, which is how approval reasons complete @
+paths. The query runs synchronously because a dialog has no live menu and a
+path query prices one ReadDir.
+
 An **approval dialog** resolution reports nothing to history by itself; the
 caller (`permit.Barrier`) commits a descriptive notice instead, naming the scope
 of the grant (this call, this session, or auto). That keeps one source of truth

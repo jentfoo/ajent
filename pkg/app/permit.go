@@ -16,6 +16,7 @@ import (
 type promptAdapter struct {
 	ui   *tui.UI
 	hold func(context.Context) // typing wait behind Hold
+	path tui.Completer         // @ completion for reasons and notes, nil when none
 }
 
 // Hold defers dialogs while the user is typing a message.
@@ -36,7 +37,11 @@ func (a promptAdapter) Open(prompt, subject string, options []string) (permit.Di
 }
 
 func (a promptAdapter) Reason(ctx context.Context, label string) (string, bool) {
-	ans, err := a.ui.Ask(ctx, tui.Question{Text: label})
+	q := tui.Question{Text: label}
+	if a.path != nil { // a reason may name files, so @ refs complete like the prompt's
+		q.Completer = a.path
+	}
+	ans, err := a.ui.Ask(ctx, q)
 	if err != nil || ans.Declined {
 		return "", false
 	}

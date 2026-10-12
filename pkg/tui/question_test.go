@@ -349,6 +349,18 @@ func TestQuestionStateRows(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("newlines_break_reply_rows", func(t *testing.T) {
+		s := &questionState{text: "reason:", chatIndex: -1}
+		s.answer.SetValue("first line\nsecond line")
+
+		rows, caret, _ := s.rows(th, 40, 8)
+
+		require.GreaterOrEqual(t, len(rows), 3) // prompt plus one row per reply line
+		assert.Contains(t, rows[0], "reason:")
+		assert.Contains(t, rows[1], "first line")
+		assert.Equal(t, len(rows)-1, caret) // the caret sits on the last row
+	})
 }
 
 func TestQuestionStateArrowKeys(t *testing.T) {
@@ -469,5 +481,151 @@ func TestUIAskNoUITerminal(t *testing.T) {
 		a, err := u.Ask(t.Context(), Question{Text: "Proceed?"})
 		require.ErrorIs(t, err, ErrNoUI)
 		assert.False(t, a.Declined)
+	})
+}
+
+func TestQuestionReplyCompletion(t *testing.T) {
+	t.Parallel()
+
+	// the same @ source the prompt's path completion uses, anchored past @
+	files := []Completion{
+		{Text: "main.go", Label: "main.go"},
+		{Text: "main_test.go", Label: "main_test.go"},
+	}
+
+	t.Run("tab_completes_a_path", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, err := u.Ask(t.Context(), Question{
+				Text:      "reason for denying",
+				Completer: fakeAtCompleter{items: files[:1]},
+			})
+			assert.NoError(t, err)
+			result <- a
+		}()
+
+		waitFor(t, u, v, "reason for denying")
+		press(t, pw, "@ma\t")
+		waitFor(t, u, v, "@main.go")
+		press(t, pw, "\r")
+
+		a := <-result
+		assert.False(t, a.Declined)
+		assert.Equal(t, "@main.go", a.Text)
+	})
+
+	t.Run("ambiguous_reply_lists_above_itself", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, _ := u.Ask(t.Context(), Question{Text: "reason:", Completer: fakeAtCompleter{items: files}})
+			result <- a
+		}()
+
+		waitFor(t, u, v, "reason:")
+		press(t, pw, "@mai\t") // fills the shared prefix only
+		waitFor(t, u, v, "@main")
+		assert.NotContains(t, u.snapshot(v), "main_test.go")
+
+		press(t, pw, "\t") // a second Tab lists what is left
+		require.Eventually(t, func() bool {
+			return strings.Contains(u.snapshot(v), "main_test.go")
+		}, time.Second, testPoll)
+
+		// prompt, then the listing, then the typed reply row
+		screen := u.snapshot(v)
+		promptAt := strings.Index(screen, "reason:")
+		listAt := strings.Index(screen, "main_test.go")
+		replyAt := strings.LastIndex(screen, "@main")
+		require.GreaterOrEqual(t, listAt, 0)
+		assert.Less(t, promptAt, listAt)
+		assert.Less(t, listAt, replyAt)
+		press(t, pw, "\r") // a listing never holds the answer hostage
+		assert.Equal(t, "@main", (<-result).Text)
+	})
+
+	t.Run("escape_closes_the_listing_first", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, _ := u.Ask(t.Context(), Question{Text: "reason:", Completer: fakeAtCompleter{items: files}})
+			result <- a
+		}()
+
+		waitFor(t, u, v, "reason:")
+		press(t, pw, "@mai\t\t")
+		require.Eventually(t, func() bool {
+			return strings.Contains(u.snapshot(v), "main_test.go")
+		}, time.Second, testPoll)
+
+		press(t, pw, "\x1b") // the listing closes; declining takes another Esc
+		require.Eventually(t, func() bool {
+			return !strings.Contains(u.snapshot(v), "main_test.go")
+		}, time.Second, testPoll)
+		waitFor(t, u, v, "reason:") // the question itself is still open
+
+		press(t, pw, "\r")
+		a := <-result
+		assert.False(t, a.Declined)
+		assert.Equal(t, "@main", a.Text)
+	})
+
+	t.Run("typing_spends_the_listing", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, _ := u.Ask(t.Context(), Question{Text: "reason:", Completer: fakeAtCompleter{items: files}})
+			result <- a
+		}()
+
+		waitFor(t, u, v, "reason:")
+		press(t, pw, "@mai\t\t")
+		require.Eventually(t, func() bool {
+			return strings.Contains(u.snapshot(v), "main_test.go")
+		}, time.Second, testPoll)
+
+		press(t, pw, "x") // any key drops a spent listing
+		waitFor(t, u, v, "@mainx")
+		assert.NotContains(t, u.snapshot(v), "main_test.go")
+
+		press(t, pw, "\r")
+		assert.Equal(t, "@mainx", (<-result).Text)
+	})
+
+	t.Run("alt_enter_starts_a_new_line", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, _ := u.Ask(t.Context(), Question{Text: "reason:"})
+			result <- a
+		}()
+
+		waitFor(t, u, v, "reason:")
+		press(t, pw, "one\x1b\rtwo")
+		waitFor(t, u, v, "two")
+		press(t, pw, "\r")
+
+		assert.Equal(t, "one\ntwo", (<-result).Text)
+	})
+
+	t.Run("no_completer_leaves_tab_inert", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		result := make(chan Answer, 1)
+		go func() {
+			a, _ := u.Ask(t.Context(), Question{Text: "reason:"})
+			result <- a
+		}()
+
+		waitFor(t, u, v, "reason:")
+		press(t, pw, "@main\t\r") // Tab inserts nothing and answers normally
+
+		assert.Equal(t, "@main", (<-result).Text)
 	})
 }

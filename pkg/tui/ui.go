@@ -1453,7 +1453,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 	// a menu consumes Tab/↑/↓/Enter/Esc before the editor, and a Tab-driven listing
 	// only takes Esc. Every other key clears it on the way out below.
 	if u.completion != nil && u.completion.accept(k) {
-		consume, doSubmit := u.completion.key(k, u)
+		consume, doSubmit := u.completion.key(k, &u.editor)
 		if k.typ == keyEscape {
 			u.completion = nil
 			u.cancelRewindLocked()

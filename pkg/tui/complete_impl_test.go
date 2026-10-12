@@ -94,3 +94,60 @@ func itemsOf(labels ...string) []Completion {
 	}
 	return out
 }
+
+func TestCompleteAt(t *testing.T) {
+	t.Parallel()
+
+	// a lone candidate fills in whole from the start of its span
+	t.Run("single_candidate_fills", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@ma")
+		ed.pos = 3
+
+		o, changed := completeAt(&ed, 1, []Completion{{Text: "main.go"}}, false)
+
+		assert.True(t, changed)
+		assert.Nil(t, o)
+		assert.Equal(t, "@main.go", ed.Value())
+	})
+
+	// ambiguity fills only the shared prefix
+	t.Run("shared_prefix_only", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@mai")
+		ed.pos = 4
+
+		o, changed := completeAt(&ed, 1, []Completion{{Text: "main.go"}, {Text: "main_test.go"}}, false)
+
+		assert.True(t, changed)
+		assert.Nil(t, o)
+		assert.Equal(t, "@main", ed.Value())
+	})
+
+	// nothing more to insert opens a listing over the candidates
+	t.Run("ambiguous_opens_listing", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@main")
+		ed.pos = 5
+		items := []Completion{{Text: "main.go"}, {Text: "main_test.go"}}
+
+		o, changed := completeAt(&ed, 1, items, false)
+
+		assert.False(t, changed)
+		require.NotNil(t, o)
+		assert.Equal(t, items, o.items)
+		assert.Equal(t, 1, o.start)
+	})
+
+	// a listing already open is kept: nothing to add and nothing new to show
+	t.Run("open_listing_is_kept", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@main")
+		ed.pos = 5
+
+		o, changed := completeAt(&ed, 1, []Completion{{Text: "main.go"}, {Text: "main_test.go"}}, true)
+
+		assert.False(t, changed)
+		assert.Nil(t, o)
+	})
+}

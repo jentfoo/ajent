@@ -435,6 +435,10 @@ with the query that then runs. It returns a `completeCtx` carrying the grapheme
 cells, the clamped cursor and where the context begins, which every branch
 slices rather than rescanning the buffer.
 
+`NewPathCompleter` is the narrow sibling: an `@`-token-only source for free-text
+surfaces that take no commands or shell line, such as the approval dialog's
+allow/deny reason.
+
 ### Shell completion
 
 A leading `!` routes the whole line to shell completion, so an `@` inside it stays
