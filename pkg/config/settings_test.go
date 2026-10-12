@@ -16,6 +16,14 @@ func TestDefaultsLiteralHasNoUnknownKeys(t *testing.T) {
 	assert.Empty(t, unknown)
 }
 
+func TestDefaultsLiteralHasNoTypeErrors(t *testing.T) {
+	t.Parallel()
+
+	te, err := TypeErrors(Defaults().Data, Settings{})
+	require.NoError(t, err)
+	assert.Empty(t, te)
+}
+
 func TestSettingsDecodesMergedConfig(t *testing.T) {
 	t.Parallel()
 

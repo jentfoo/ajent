@@ -37,12 +37,12 @@ func walkUnknown(node any, t reflect.Type, path string, out *[]string) {
 		case reflect.Struct:
 			fields := jsonFields(t)
 			for k, v := range n {
-				ft, ok := fields[strings.ToLower(k)] // encoding/json matches case insensitively
+				fd, ok := fields[strings.ToLower(k)] // encoding/json matches case insensitively
 				if !ok {
 					*out = append(*out, join(path, k))
 					continue
 				}
-				walkUnknown(v, ft, join(path, k), out)
+				walkUnknown(v, fd.typ, join(path, k), out)
 			}
 		case reflect.Map:
 			for k, v := range n {
@@ -58,13 +58,13 @@ func walkUnknown(node any, t reflect.Type, path string, out *[]string) {
 	}
 }
 
-// jsonFields maps the lower cased JSON names t declares to their field types,
-// flattening embedded structs the way encoding/json does. Names are lowercased
-// for case-insensitive lookup against decoded keys.
-func jsonFields(t reflect.Type) map[string]reflect.Type {
-	out := make(map[string]reflect.Type, t.NumField())
+// jsonFields maps the lower cased JSON names t declares to their full field
+// declarations, flattening embedded structs the way encoding/json does. Names are
+// lowercased for case-insensitive lookup against decoded keys.
+func jsonFields(t reflect.Type) map[string]fieldDecl {
+	out := make(map[string]fieldDecl, t.NumField())
 	for _, fd := range declaredFields(t) {
-		out[strings.ToLower(fd.name)] = fd.typ
+		out[strings.ToLower(fd.name)] = fd
 	}
 	return out
 }
@@ -72,6 +72,7 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 // fieldDecl is one struct field with its JSON name as the schema declares it.
 type fieldDecl struct {
 	name string // original-case JSON tag or Go field name
+	opts string // tag options after the name, e.g. "string", "omitempty"
 	typ  reflect.Type
 }
 
@@ -82,7 +83,7 @@ func declaredFields(t reflect.Type) []fieldDecl {
 	var out []fieldDecl
 	for i := range t.NumField() {
 		f := t.Field(i)
-		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		name, opts, _ := strings.Cut(f.Tag.Get("json"), ",")
 		if name == "-" {
 			continue
 		} else if name == "" && f.Anonymous && deref(f.Type).Kind() == reflect.Struct {
@@ -94,7 +95,7 @@ func declaredFields(t reflect.Type) []fieldDecl {
 		} else if name == "" {
 			name = f.Name
 		}
-		out = append(out, fieldDecl{name: name, typ: f.Type})
+		out = append(out, fieldDecl{name: name, opts: opts, typ: f.Type})
 	}
 	return out
 }

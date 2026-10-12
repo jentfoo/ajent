@@ -230,7 +230,7 @@ type fileLayer struct {
 }
 
 // loadFile reads and validates one config file into relaxed data. A missing file
-// returns (nil, nil). Warnings cover unknown and duplicate keys.
+// returns (nil, nil). Warnings cover unknown, duplicate and wrong-typed keys.
 func loadFile(path string) ([]byte, []string, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -252,6 +252,9 @@ func loadFile(path string) ([]byte, []string, error) {
 	for _, k := range DuplicateKeys(data) {
 		warns = append(warns, fmt.Sprintf("%s: duplicate key %q, the last one wins", path, k))
 	}
+	for _, msg := range mustTypeErrors(data) {
+		warns = append(warns, fmt.Sprintf("%s: %s", path, msg))
+	}
 	return data, warns, nil
 }
 
@@ -262,4 +265,13 @@ func mustUnknownKeys(data []byte) []string {
 		return nil // malformed JSON is reported by the unmarshal check above
 	}
 	return unknown
+}
+
+// mustTypeErrors runs TypeErrors against Settings, swallowing a decode failure.
+func mustTypeErrors(data []byte) []string {
+	te, err := TypeErrors(data, Settings{})
+	if err != nil {
+		return nil // malformed JSON is reported by the unmarshal check above
+	}
+	return te
 }

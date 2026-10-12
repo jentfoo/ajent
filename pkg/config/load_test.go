@@ -72,6 +72,20 @@ func TestLoad(t *testing.T) {
 		assert.Empty(t, warns)
 		assert.NotNil(t, s.Settings())
 	})
+
+	t.Run("type_error_warns", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		writeConfig(t, userPathFor(t), `{"model":"keep","agent":{"maxSteps":"ten"}}`)
+
+		s, warns, err := Load(Options{Workspace: filepath.Join(home, "proj")})
+		require.NoError(t, err)
+		assert.Len(t, warns, 1)
+		assert.Contains(t, warns[0], `wrong type for key "agent.maxSteps": got a string, want an integer`)
+
+		// the wrong-typed key is dropped but its siblings still apply
+		assert.Equal(t, "keep", s.Settings().Model)
+	})
 }
 
 func TestSetConcurrentAccess(t *testing.T) {
