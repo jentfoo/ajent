@@ -359,6 +359,11 @@ func fuzzyWindow(old, rep, window []string) (int, bool) {
 		if p+s < fuzzyLineLimit {
 			return 0, false // too little context to anchor on: "bar" would heal onto "foo"
 		}
+		// old is a pure truncation of the window line, so the window's extra middle
+		// bytes were never quoted and rep would delete them silently
+		if ae == p {
+			return 0, false
+		}
 		rlo, rhi, ok := rewrittenSpan(old[j], rep[j])
 		if !ok || p < rlo || ae > rhi {
 			return 0, false // the drift is in the part of the line rep leaves alone

@@ -513,6 +513,34 @@ func TestFuzzyMatches(t *testing.T) {
 		assert.Empty(t, ms)
 	})
 
+	t.Run("refuses_truncated_quote_of_file_line", func(t *testing.T) {
+		// the quoted line is a pure truncation of the file's, so the extra digit
+		// was never acknowledged: writing newText deletes it (5000 to 900)
+		src := "timeout = 5000\nenable = true\n"
+		ms, _ := findMatches(src, "timeout = 500\nenable = true", "timeout = 900\nenable = true", nil)
+		assert.Empty(t, ms)
+	})
+
+	t.Run("truncation_refusal_names_the_file_text", func(t *testing.T) {
+		src := "timeout = 5000\nenable = true\n"
+		_, err := applyEdits(editTarget{Path: "a.go"}, src,
+			[]editOp{{OldText: "timeout = 500\nenable = true", NewText: "timeout = 900\nenable = true"}})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no match for edit 1")
+		assert.Contains(t, err.Error(), `"5000"`) // the retry can copy the real value
+	})
+
+	t.Run("heals_file_value_longer_than_quoted", func(t *testing.T) {
+		// the file holds more token content than oldText quotes, but the quote
+		// disagrees with it, so both versions sit inside what newText rewrites
+		src := "timeout = 5000\nenable = true\n"
+		ms, tier := findMatches(src, "timeout = 300\nenable = true", "timeout = 900\nenable = true", nil)
+		require.Len(t, ms, 1)
+		assert.Equal(t, tierFuzzy, tier)
+		assert.Equal(t, "timeout = 5000\nenable = true", src[ms[0].s:ms[0].e])
+		assert.Equal(t, "timeout = 900\nenable = true", ms[0].repl)
+	})
+
 	t.Run("refuses_previously_edited_line", func(t *testing.T) {
 		edited := []lineRange{{from: 3, to: 4}} // the queueDepth line
 		ms, _ := findMatches(file, "queueDepth      = 256", "queueDepth      = 4096", edited)

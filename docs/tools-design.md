@@ -350,7 +350,12 @@ file says `1024`. It works line by line. A line the region differs on must be on
 rewrites. That is what makes writing `newText` the requested edit. A line the
 edit only quotes is refused, because applying would rewrite text the model was not
 changing and nothing in the call says whether it meant to. The same holds for a
-drift outside the rewritten part of a line it is changing.
+drift outside the rewritten part of a line it is changing, and for a quoted line
+that is a pure truncation of the file's. Bytes the file holds beyond the quote
+were never acknowledged, so writing `newText` would delete them silently. A
+mis-typed value the quote does disagree with still heals no matter how much
+longer the file's version is, since both versions then sit inside the rewritten
+part.
 
 Healing needs `oldText` and `newText` to hold the same number of lines, since only
 then does each line pair up and the drift stay checkable. An edit that adds or
