@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -240,6 +241,26 @@ func TestReplay(t *testing.T) {
 		assert.Equal(t,
 			[]string{"start:first", "user:first", "text:one", "end_text", "turn_end",
 				"start:second", "user:second", "text:two", "end_text", "turn_end"},
+			s.calls)
+	})
+
+	// a message the reader tolerated as JSON but whose payload no longer decodes
+	// must not let later replies fold into the previous turn's window
+	t.Run("decode_error_closes_turn", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s", Type: TypeSession},
+			msgUser("m1", llm.Text(llm.RoleUser, "first")),
+			assistantText("a1", "one"),
+			{ID: "bad", Type: TypeMessage, Data: json.RawMessage(`"torn"`)},
+			assistantText("a2", "two"),
+		}
+		s := &replaySink{}
+		Replay(branch, s, ReplayOptions{})
+		// the reply after corruption opens no turn of its own (its prompt is lost),
+		// but it must not close the window opened before it either
+		assert.Equal(t,
+			[]string{"start:first", "user:first", "text:one", "end_text", "turn_end",
+				"text:two", "end_text"},
 			s.calls)
 	})
 

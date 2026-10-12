@@ -203,12 +203,14 @@ func (s *Store) Stale(workspace string, cutoff time.Time) ([]Info, error) {
 }
 
 // Remove deletes one saved transcript and its branch cursor. Other sessions in
-// the directory (and editor history) are untouched.
+// the directory (and editor history) are untouched. Cursor cleanup is best
+// effort: an error means the transcript itself survived.
 func (s *Store) Remove(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return removeHead(path)
+	_ = removeHead(path) // a session whose transcript is gone must not report as kept
+	return nil
 }
 
 // Info describes one saved session for the resume picker.

@@ -50,6 +50,7 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 		case TypeMessage:
 			var md MessageData
 			if err := e.Decode(&md); err != nil {
+				endTurn() // the lost line may have been the prompt bounding this turn
 				continue
 			}
 			turnUsage.Add(md.Usage)

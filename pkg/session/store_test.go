@@ -228,6 +228,35 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	assert.True(t, ok) // the sibling's cursor is untouched
 }
 
+func TestStoreRemoveCursorBestEffort(t *testing.T) {
+	t.Parallel()
+
+	// a stuck cursor sidecar must not report a session as kept once its transcript
+	// is gone: DeleteSession would exit non-zero and delete-old sweeps would
+	// under-count. An unremovable directory stands in for the cleanup failure.
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	w, err := s.Create(ws, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "gone soon")})
+	require.NoError(t, aerr)
+	require.NoError(t, w.Sync()) // the append's cursor sidecar
+	require.NoError(t, w.Close())
+
+	head := headPath(w.Path())
+	require.NoError(t, os.Remove(head))
+	require.NoError(t, os.Mkdir(head, sessionDirPerm))
+	require.NoError(t, os.WriteFile(filepath.Join(head, "lock"), []byte("x"), 0o600))
+
+	require.NoError(t, s.Remove(w.Path()))
+
+	_, serr := os.Stat(w.Path())
+	assert.True(t, os.IsNotExist(serr)) // the transcript itself is gone
+	list, lerr := s.List(ws)
+	require.NoError(t, lerr)
+	assert.Empty(t, list) // and nothing surfaces in the picker
+}
+
 func TestStoreStale(t *testing.T) {
 	now := time.UnixMilli(1_900_000_000_000).UTC()
 	cutoff := now.AddDate(0, 0, -28)
