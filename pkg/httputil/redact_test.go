@@ -11,21 +11,68 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// pinnedCredentialHeaders is the canonical header list providers-design.md
+// documents; the matcher must never regress on these spellings.
+var pinnedCredentialHeaders = []string{
+	"Authorization", "X-Api-Key", "Api-Key", "Proxy-Authorization",
+	"Cookie", "Set-Cookie", "X-Goog-Api-Key", "Openai-Organization",
+}
+
 func TestRedactHeaders(t *testing.T) {
 	t.Parallel()
 
 	t.Run("masks_every_credential_header", func(t *testing.T) {
 		h := http.Header{}
-		for _, k := range redactedHeaders {
+		for _, k := range pinnedCredentialHeaders {
 			h.Set(k, testAPIKey)
 		}
 		h.Set("Content-Type", "application/json")
 
 		got := redactHeaders(h)
-		for _, k := range redactedHeaders {
-			assert.Equal(t, redactedMask, got.Get(k), k)
+		for _, k := range pinnedCredentialHeaders {
+			assert.Equal(t, []string{redactedMask}, got[k], k)
 		}
 		assert.Equal(t, "application/json", got.Get("Content-Type"))
+	})
+
+	t.Run("masks_custom_credential_names", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("X-Custom-Token", testAPIKey)
+		h.Set("My-Service-Key", testAPIKey)
+		h.Set("Client-Secret", testAPIKey)
+
+		got := redactHeaders(h)
+		assert.Equal(t, []string{redactedMask}, got["X-Custom-Token"])
+		assert.Equal(t, []string{redactedMask}, got["My-Service-Key"])
+		assert.Equal(t, []string{redactedMask}, got["Client-Secret"])
+	})
+
+	t.Run("keeps_benign_headers_visible", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("Content-Type", "application/json")
+		h.Set("Anthropic-Version", "2023-06-01")
+		h.Set("X-Session-Affinity", "sess-1")
+		h.Set("Openai-Beta", "true")
+
+		got := redactHeaders(h)
+		assert.Equal(t, h, got)
+	})
+
+	t.Run("masks_non_canonical_keys", func(t *testing.T) {
+		h := http.Header{"x-api-key": {testAPIKey}}
+
+		got := redactHeaders(h)
+		//nolint:staticcheck // a non-canonical key is the case under test
+		assert.Equal(t, []string{redactedMask}, got["x-api-key"])
+	})
+
+	t.Run("collapses_multi_value_headers", func(t *testing.T) {
+		h := http.Header{}
+		h.Add("Authorization", "one")
+		h.Add("Authorization", testAPIKey)
+
+		got := redactHeaders(h)
+		assert.Equal(t, []string{redactedMask}, got["Authorization"])
 	})
 
 	t.Run("does_not_mutate_the_original", func(t *testing.T) {
@@ -34,15 +81,14 @@ func TestRedactHeaders(t *testing.T) {
 		redactHeaders(h)
 		assert.Equal(t, testAPIKey, h.Get("Authorization"))
 	})
-
-	t.Run("absent_header_not_added", func(t *testing.T) {
-		got := redactHeaders(http.Header{})
-		assert.Empty(t, got.Get("Authorization"))
-	})
 }
 
 func TestRedactURL(t *testing.T) {
 	t.Parallel()
+
+	t.Run("nil_input", func(t *testing.T) {
+		assert.Empty(t, redactURL(nil))
+	})
 
 	tests := []struct {
 		name     string
@@ -52,6 +98,8 @@ func TestRedactURL(t *testing.T) {
 		{"api_key_param", "https://x.test/v1?api_key=" + testAPIKey, redactedQuery},
 		{"key_param", "https://x.test/v1?key=" + testAPIKey, redactedQuery},
 		{"access_token_param", "https://x.test/v1?access_token=" + testAPIKey, redactedQuery},
+		{"compound_secret_param", "https://x.test/v1?client_secret=" + testAPIKey, redactedQuery},
+		{"compound_refresh_param", "https://x.test/v1?refresh_token=" + testAPIKey, redactedQuery},
 		{"unrelated_param_kept", "https://x.test/v1?model=opus", "model=opus"},
 		{"no_query", "https://x.test/v1", "https://x.test/v1"},
 	}
@@ -98,7 +146,7 @@ func TestRedactURLVariants(t *testing.T) {
 	}
 }
 
-func TestCredentialParam(t *testing.T) {
+func TestCredentialName(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -111,15 +159,25 @@ func TestCredentialParam(t *testing.T) {
 		{"upper_case", "API_KEY", true},
 		{"mixed_case", "ApiKey", true},
 		{"dash_separator", "access-token", true},
-		{"unrelated", "model", false},
+		{"compound_secret", "client_secret", true},
+		{"compound_refresh_token", "refresh_token", true},
+		{"exact_authorization", "Authorization", true},
+		{"exact_cookie", "Set-Cookie", true},
 		{"prefix_match_not_enough", "keys", false},
+		{"unrelated", "model", false},
+		{"no_separator_boundary", "keyboard", false},
 		{"empty", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, credentialParam(tc.key))
+			assert.Equal(t, tc.want, credentialName(tc.key))
 		})
 	}
+
+	t.Run("suffix_collision_over_masks", func(t *testing.T) {
+		// monkey ends with key; over-masking a benign name is the safe direction
+		assert.True(t, credentialName("monkey"))
+	})
 }
 
 func TestRedactErrURL(t *testing.T) {
@@ -162,10 +220,20 @@ func TestScrubSecrets(t *testing.T) {
 	})
 
 	t.Run("replaces_bearer_token_without_prefix", func(t *testing.T) {
-		body := []byte(`error: token ` + strings.TrimPrefix("Bearer "+testAPIKey, "Bearer ") + ` rejected`)
+		body := []byte(`error: token ` +
+			strings.TrimPrefix("Bearer "+testAPIKey, "Bearer ") + ` rejected`)
 
-		got := string(scrubSecrets(body, secretValues(http.Header{"Authorization": {"Bearer " + testAPIKey}})))
+		secrets := secretValues(http.Header{"Authorization": {"Bearer " + testAPIKey}})
+		got := string(scrubSecrets(body, secrets))
 		assert.NotContains(t, got, testAPIKey)
+	})
+
+	t.Run("longest_secret_applies_first", func(t *testing.T) {
+		long := "sk-aaaaaaaaaaaaaaaa"
+		body := []byte(`key: ` + long)
+
+		got := string(scrubSecrets(body, []string{"sk-aaa", long}))
+		assert.Equal(t, "key: "+redactedMask, got)
 	})
 
 	t.Run("masks_key_shaped_strings", func(t *testing.T) {
@@ -198,6 +266,36 @@ func TestScrubSecrets(t *testing.T) {
 	})
 }
 
+func TestExpandSecrets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		vals []string
+		want []string
+	}{
+		{"drops_empty_values", []string{"", testAPIKey}, []string{testAPIKey}},
+		{"sorts_longest_first", []string{testAPIKey, "abc"}, []string{testAPIKey, "abc"}},
+		{"splits_bearer_pair", []string{"Bearer " + testAPIKey},
+			[]string{"Bearer " + testAPIKey, testAPIKey}},
+		{"splits_lowercase_scheme", []string{"bearer " + testAPIKey},
+			[]string{"bearer " + testAPIKey, testAPIKey}},
+		{"splits_basic_pair", []string{"Basic dXNlcjpwYXNz"},
+			[]string{"Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"}},
+		{"splits_token_scheme", []string{"Token ghp_1234567890"},
+			[]string{"Token ghp_1234567890", "ghp_1234567890"}},
+		{"unknown_scheme_kept_whole", []string{"Negotiate abcdef"}, []string{"Negotiate abcdef"}},
+		{"cookie_pair_not_split", []string{"sessionid=x; Path=/"}, []string{"sessionid=x; Path=/"}},
+		{"scheme_without_space", []string{"BearerNoSpace"}, []string{"BearerNoSpace"}},
+		{"empty_token_not_split", []string{"Bearer "}, []string{"Bearer "}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, expandSecrets(tc.vals))
+		})
+	}
+}
+
 func TestSecretValues(t *testing.T) {
 	t.Parallel()
 
@@ -211,11 +309,20 @@ func TestSecretValues(t *testing.T) {
 		assert.ElementsMatch(t, []string{"Bearer " + testAPIKey, testAPIKey, testAPIKey}, got)
 	})
 
-	t.Run("no_bearer_split_without_prefix", func(t *testing.T) {
+	t.Run("collects_custom_credential_headers", func(t *testing.T) {
 		h := http.Header{}
-		h.Set("Authorization", "Basic abc")
+		h.Set("X-Custom-Token", testAPIKey)
 
-		assert.Equal(t, []string{"Basic abc"}, secretValues(h))
+		got := secretValues(h)
+		assert.Equal(t, []string{testAPIKey}, got)
+	})
+
+	t.Run("splits_scheme_pairs", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("Authorization", "Basic dXNlcjpwYXNz")
+
+		got := secretValues(h)
+		assert.ElementsMatch(t, []string{"Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"}, got)
 	})
 
 	t.Run("empty_headers", func(t *testing.T) {
@@ -231,8 +338,17 @@ func TestReadErrorBody(t *testing.T) {
 		assert.Len(t, readErrorBody(resp, nil), errBodyLimit)
 	})
 
+	t.Run("scrubs_before_the_limit_cut", func(t *testing.T) {
+		pad := strings.Repeat("a", errBodyLimit-len(testAPIKey)/2)
+		resp := &http.Response{Body: io.NopCloser(strings.NewReader(pad + testAPIKey))}
+
+		got := string(readErrorBody(resp, []string{testAPIKey}))
+		assert.NotContains(t, got, testAPIKey[:len(testAPIKey)/2])
+	})
+
 	t.Run("scrubs_echoed_key", func(t *testing.T) {
-		resp := &http.Response{Body: io.NopCloser(strings.NewReader(`{"error":"key ` + testAPIKey + ` invalid"}`))}
+		body := `{"error":"key ` + testAPIKey + ` invalid"}`
+		resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
 
 		got := readErrorBody(resp, []string{testAPIKey})
 		assert.NotContains(t, string(got), testAPIKey)
