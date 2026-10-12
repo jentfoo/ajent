@@ -261,7 +261,8 @@ func (r mdRenderer) buildTable(n ast.Node, src []byte) *mdTable {
 }
 
 // layoutTable renders the table at width: column widths come from content and are
-// shrunk (long cells wrapped) when they exceed it, with a separator running between rows.
+// shrunk (long cells wrapped) when they exceed it, with a separator running between
+// rows. Rows that still cannot fit clip to width.
 func layoutTable(t *mdTable, width int) []string {
 	cols := len(t.header)
 	if cols == 0 || t.align == nil {
@@ -313,6 +314,14 @@ func layoutTable(t *mdTable, width int) []string {
 			out = append(out, hBorder("└", "┴", "┘", w))
 		} else {
 			out = append(out, hBorder("├", "┼", "┤", w))
+		}
+	}
+	// Rows can outgrow the width asked of the layout: more columns than the border
+	// overhead allows, or a glyph wider than its column. The terminal would wrap
+	// them and garble the box outright, so anything over target clips here.
+	for i, row := range out {
+		if dw := displayWidth(row); dw > target {
+			out[i] = truncateDisplay(row, target)
 		}
 	}
 	return out
@@ -389,11 +398,14 @@ func tableRowGroup(cells [][]string, w []int, al []mdAlign) []string {
 }
 
 // padLine pads s to width columns honoring a column alignment. Styling is already
-// baked into s, and the appended spaces are plain.
+// baked into s, and the appended spaces are plain. Content wider than w (a single
+// grapheme the wrapper cannot cut) clips here; truncation can land short of w,
+// so the clipped result re-measures to keep every slot exactly w columns.
 func padLine(s string, w int, a mdAlign) string {
 	sw := displayWidth(s)
-	if sw >= w {
-		return s
+	if sw > w {
+		s = truncateDisplay(s, w)
+		sw = displayWidth(s)
 	}
 	switch a {
 	case alignCenter:

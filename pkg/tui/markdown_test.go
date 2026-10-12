@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,6 +172,77 @@ func TestRenderMarkdownTable(t *testing.T) {
 		narrow := layoutTable(lines[0].table, 30)
 
 		require.Greater(t, len(narrow), len(wide))
+	})
+}
+
+func TestLayoutTableClipsOverflow(t *testing.T) {
+	t.Parallel()
+
+	plain := NewTheme(ColorNone, DefaultPalette())
+	layout := func(src string, width int) []string {
+		lines := renderMarkdown(plain, width, src)
+		require.Len(t, lines, 1)
+		require.NotNil(t, lines[0].table)
+		return layoutTable(lines[0].table, width)
+	}
+	widest := func(rows []string) int {
+		var m int
+		for _, row := range rows {
+			m = max(m, displayWidth(row))
+		}
+		return m
+	}
+	// every row lands on the same width: a shorter one means a cell slot lost
+	// columns and the box no longer lines up with its borders
+	uniform := func(rows []string) bool {
+		w0 := displayWidth(rows[0])
+		return !slices.ContainsFunc(rows, func(row string) bool { return displayWidth(row) != w0 })
+	}
+
+	// two columns of wide glyphs: the shrunken first column cannot hold a glyph,
+	// which clips to an empty slot while every border keeps its place. Escaped
+	// code points keep non-Latin text out of string literals (gosmopolitan).
+	const cjk = "| \u540d\u524d | \u8aac\u660e |\n|---|---|\n" +
+		"| \u6771\u4eac\u30bf\u30ef\u30fc | \u9ad8\u3044\u3067\u3059\u4eca\u65e5\u3082 |"
+
+	// nine columns: the border overhead alone beats narrow targets, so rows only
+	// fit by clipping the right-hand side
+	const manyCols = "| a1 | b2 | c3 | d4 | e5 | f6 | g7 | h8 | i9 |\n" +
+		"|---|---|---|---|---|---|---|---|---|\n" +
+		"| aa | bb | cc | dd | ee | ff | gg | hh | ii |"
+
+	t.Run("wide_glyph_clips_to_column", func(t *testing.T) {
+		rows := layout(cjk, 10)
+		assert.LessOrEqual(t, widest(rows), 10)
+		// the clipped glyph leaves an empty slot rather than a short row
+		assert.True(t, uniform(rows))
+		assert.Contains(t, rows[1], "│ \u8aac │")
+		// the box itself still fits: full borders top and bottom
+		assert.Equal(t, "┌───┬────┐", rows[0])
+		assert.Equal(t, "└───┴────┘", rows[len(rows)-1])
+	})
+
+	t.Run("too_many_columns_clip", func(t *testing.T) {
+		rows := layout(manyCols, 20)
+		assert.LessOrEqual(t, widest(rows), 20)
+		// the leading columns survive with their borders; the tail is cut
+		assert.True(t, strings.HasPrefix(rows[1], "│ a │ b │"), "row: %q", rows[1])
+	})
+
+	t.Run("fitting_table_untouched", func(t *testing.T) {
+		rows := layout("| A | B |\n|---|---|\n| 1 | 2 |", 40)
+		assert.Equal(t, "┌───┬───┐", rows[0])
+		assert.Equal(t, "└───┴───┘", rows[len(rows)-1])
+	})
+
+	t.Run("every_width_stays_bounded", func(t *testing.T) {
+		for width := 1; width <= 80; width++ {
+			bound := min(width, maxTableWidth)
+			assert.LessOrEqual(t, widest(layout(cjk, width)), bound)
+			assert.True(t, uniform(layout(cjk, width)))
+			assert.LessOrEqual(t, widest(layout(manyCols, width)), bound)
+			assert.True(t, uniform(layout(manyCols, width)))
+		}
 	})
 }
 
