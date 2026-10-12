@@ -13,10 +13,11 @@ import (
 
 // Record is what a tool observed about a file when it last read it.
 type Record struct {
-	ModTime time.Time
-	Size    int64
-	Hash    string      // sha256 of the content
-	edited  []lineRange // lines this session's edits wrote, measured against Hash
+	ModTime  time.Time
+	Size     int64
+	Hash     string      // sha256 of the content
+	edited   []lineRange // lines this session's edits wrote, measured against Hash
+	complete bool        // every line was displayed; a partial observation never dedupes an @ref
 }
 
 // Tracker records what the session has observed so @ref expansion can dedupe
@@ -70,9 +71,11 @@ func hashBytes(data []byte) string {
 }
 
 // Observe records the state of data read from path, along with its file info.
-// Content identical to the prior observation keeps its recorded edit lines,
-// since those numbers still name the same text.
-func (t *Tracker) Observe(path string, data []byte, info os.FileInfo) {
+// complete reports whether everything a re-read would show was displayed; only
+// a complete observation dedupes a later @ref. Content identical to the prior
+// observation keeps its recorded edit lines and completeness, since those still
+// name the same text.
+func (t *Tracker) Observe(path string, data []byte, info os.FileInfo, complete bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -85,9 +88,10 @@ func (t *Tracker) Observe(path string, data []byte, info os.FileInfo) {
 		mod = info.ModTime()
 		size = info.Size()
 	}
-	rec := Record{ModTime: mod, Size: size, Hash: hashBytes(data)}
+	rec := Record{ModTime: mod, Size: size, Hash: hashBytes(data), complete: complete}
 	if prev, ok := t.m[path]; ok && prev.Hash == rec.Hash {
 		rec.edited = prev.edited
+		rec.complete = rec.complete || prev.complete
 	}
 	t.m[path] = rec
 }
@@ -135,13 +139,14 @@ func dirFingerprint(entries []os.DirEntry) string {
 	return hashBytes([]byte(b.String()))
 }
 
-// Unchanged reports whether path was observed earlier in the session and still
-// matches what was recorded. It is false for a file never observed.
+// Unchanged reports whether path was observed earlier in the session with all
+// of its content displayed and still matches what was recorded. It is false for
+// a file never observed, or last seen only through a window.
 func (t *Tracker) Unchanged(path string) bool {
 	t.mu.Lock()
 	rec, ok := t.m[path]
 	t.mu.Unlock()
-	if !ok {
+	if !ok || !rec.complete {
 		return false
 	}
 	fi, err := os.Stat(path)

@@ -397,6 +397,27 @@ func TestExpand(t *testing.T) {
 		res := x.Expand("list @sub")
 		assert.Empty(t, injected(t, res))
 	})
+
+	// a windowed read shows only part of the file, so @ must inject rather than
+	// dedupe against it; once a full read lands, later refs dedupe again
+	t.Run("partial_read_reinjects", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "a.txt")
+		require.NoError(t, os.WriteFile(p, []byte(strings.Repeat("line\n", 40)), 0o600))
+		x, _ := newExpander(t, dir)
+
+		// the model read one line of forty through a limit
+		tool, ok := x.reg.Lookup("read")
+		require.True(t, ok)
+		agent.InjectPair(t.Context(), tool, agent.NopSink{},
+			agent.ToolCall{ID: "agent-read", Name: "read", Input: []byte(`{"path":"a.txt","limit":1}`)}, "read a.txt")
+
+		res := x.Expand("see @a.txt")
+		require.Len(t, injected(t, res), 2) // the window is not the file
+
+		// that injection ran a full read, so a following ref dedupes
+		assert.Empty(t, injected(t, x.Expand("see @a.txt again")))
+	})
 }
 
 func TestExpanderSeed(t *testing.T) {

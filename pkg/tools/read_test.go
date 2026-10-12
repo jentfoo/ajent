@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 func TestRead(t *testing.T) {
@@ -137,8 +140,90 @@ func TestRead(t *testing.T) {
 		e := newToolEnv(t.TempDir())
 		e.writeFile("a.txt", "hello\nworld\n")
 		assert.False(t, e.readExec(t.Context(), `{"path":"a.txt"}`).IsError)
-		_, ok := e.tracker.Records()[filepath.Join(e.cwd, "a.txt")]
+		path := filepath.Join(e.cwd, "a.txt")
+		_, ok := e.tracker.Records()[path]
 		assert.True(t, ok) // read records the file so @ref expansion can dedupe
+		assert.True(t, e.tracker.Unchanged(path))
+	})
+
+	// an empty read shows everything there is, so it dedupes like any whole file
+	t.Run("empty_file_observes_complete", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("empty.txt", "")
+		path := filepath.Join(e.cwd, "empty.txt")
+
+		res := e.readExec(t.Context(), `{"path":"empty.txt"}`)
+		assert.False(t, res.IsError)
+		assert.True(t, e.tracker.Unchanged(path))
+	})
+
+	// a windowed read shows only part of the file: @refs must re-inject rather
+	// than dedupe against it
+	t.Run("windowed_read_never_dedupes", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "one\ntwo\nthree\nfour\n")
+		path := filepath.Join(e.cwd, "a.txt")
+
+		res := e.readExec(t.Context(), `{"path":"a.txt","limit":2}`)
+		assert.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "     1\tone")
+		assert.NotContains(t, textOf(res), "three") // the window held
+		assert.False(t, e.tracker.Unchanged(path))
+
+		// paging to EOF does not make it whole either: lines before the offset
+		// never arrived
+		res = e.readExec(t.Context(), `{"path":"a.txt","offset":3,"limit":2}`)
+		assert.False(t, res.IsError)
+		assert.False(t, e.tracker.Unchanged(path))
+
+		// the plain full read is what makes the file dedupeable again
+		res = e.readExec(t.Context(), `{"path":"a.txt"}`)
+		assert.False(t, res.IsError)
+		assert.True(t, e.tracker.Unchanged(path))
+	})
+
+	// a byte-bound cut is partial even at the default window: what landed stops
+	// short of the file's end
+	t.Run("byte_bound_read_never_dedupes", func(t *testing.T) {
+		testLimitsGate.Lock()
+		t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
+		orig := ReadFileLimit()
+		t.Cleanup(func() { ApplyLimits(Limits{Read: orig}) })
+		ApplyLimits(Limits{Read: Limit{Bytes: 24}})
+
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "1111111111\n2222222222\n3333333333\n4444444444\n")
+		path := filepath.Join(e.cwd, "a.txt")
+
+		res := e.readExec(t.Context(), `{"path":"a.txt"}`)
+		assert.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "... truncated at line") // the window was cut
+		assert.False(t, e.tracker.Unchanged(path))
+	})
+
+	// a rejected image lands nothing in context, so it must not let @refs dedupe
+	t.Run("failed_image_fit_records_nothing", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		// the bare jpeg marker makes probeFile classify as image; the body is undecodable
+		require.NoError(t, os.WriteFile(filepath.Join(e.cwd, "pic.jpg"), []byte{0xff, 0xd8, 'j', 'u', 'n', 'k'}, 0o644))
+		c := agent.ToolCall{ID: "c", Name: "read", Input: json.RawMessage(`{"path":"pic.jpg"}`)}
+		tool := &readTool{policy: e.policy, tracker: e.tracker, vision: func() bool { return true }}
+		res, _ := tool.Execute(t.Context(), c, agent.NewOutput(agent.NopSink{}, "c"))
+
+		assert.True(t, res.IsError)
+		assert.Empty(t, e.tracker.Records())
+	})
+
+	// a fitted image is unpaged, so its observation is whole and dedupes like text
+	t.Run("image_read_observes_complete", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		require.NoError(t, os.WriteFile(filepath.Join(e.cwd, "pic.png"), imagePNG(t), 0o644))
+		c := agent.ToolCall{ID: "c", Name: "read", Input: json.RawMessage(`{"path":"pic.png"}`)}
+		tool := &readTool{policy: e.policy, tracker: e.tracker, vision: func() bool { return true }}
+		res, _ := tool.Execute(t.Context(), c, agent.NewOutput(agent.NopSink{}, "c"))
+
+		require.False(t, res.IsError)
+		assert.True(t, e.tracker.Unchanged(filepath.Join(e.cwd, "pic.png")))
 	})
 
 	// a CRLF file reads as LF: the model never sees a \r

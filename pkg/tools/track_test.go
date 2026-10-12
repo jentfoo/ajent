@@ -35,7 +35,35 @@ func TestTracker(t *testing.T) {
 
 		tr := NewTracker()
 		info, _ := os.Stat(path)
-		tr.Observe(path, data, info)
+		tr.Observe(path, data, info, true)
+
+		assert.True(t, tr.Unchanged(path))
+	})
+
+	// a windowed observation never dedupes, however well the content matches
+	t.Run("partial_observation_never_dedupes", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "f.txt")
+		data := []byte("hello\nworld\n")
+		require.NoError(t, os.WriteFile(path, data, 0o644))
+
+		tr := NewTracker()
+		info, _ := os.Stat(path)
+		tr.Observe(path, data, info, false)
+
+		assert.False(t, tr.Unchanged(path))
+	})
+
+	// a whole read stays dedupeable across later peeks at the same content: the
+	// full text already sits in context from the first one
+	t.Run("peek_after_whole_read_still_dedupes", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "f.txt")
+		data := []byte("hello\nworld\n")
+		require.NoError(t, os.WriteFile(path, data, 0o644))
+
+		tr := NewTracker()
+		info, _ := os.Stat(path)
+		tr.Observe(path, data, info, true)
+		tr.Observe(path, data, info, false) // what a later offset or limited read does
 
 		assert.True(t, tr.Unchanged(path))
 	})
@@ -48,7 +76,7 @@ func TestTracker(t *testing.T) {
 
 		tr := NewTracker()
 		info, _ := os.Stat(path)
-		tr.Observe(path, data, info)
+		tr.Observe(path, data, info, true)
 
 		// modify the file in place, size changes so Unchanged reports false
 		changed := []byte("hello\nworld\nmore")
@@ -63,7 +91,7 @@ func TestTracker(t *testing.T) {
 
 		tr := NewTracker()
 		info, _ := os.Stat(path)
-		tr.Observe(path, data, info)
+		tr.Observe(path, data, info, true)
 		require.True(t, tr.Unchanged(path))
 
 		tr.Reset()
@@ -101,7 +129,7 @@ func TestTracker(t *testing.T) {
 		data := []byte("x")
 		require.NoError(t, os.WriteFile(path, data, 0o644))
 		info, _ := os.Stat(path)
-		tr.Observe(path, data, info)
+		tr.Observe(path, data, info, true)
 
 		snap := tr.Records()
 		assert.Contains(t, snap, path)
@@ -129,7 +157,7 @@ func TestTracker(t *testing.T) {
 				d := datas[i]
 				_ = os.WriteFile(p, d, 0o644)
 				fi, _ := os.Stat(p)
-				tr.Observe(p, d, fi)
+				tr.Observe(p, d, fi, true)
 			}(i, p)
 		}
 		wg.Wait()
@@ -142,31 +170,31 @@ func TestTrackerEditedRanges(t *testing.T) {
 
 	t.Run("returned_for_the_observed_content", func(t *testing.T) {
 		tr := NewTracker()
-		tr.Observe("a.go", []byte("one\ntwo\n"), nil)
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil, true)
 		tr.markEdited("a.go", []lineRange{{from: 1, to: 2}})
 		assert.Equal(t, []lineRange{{from: 1, to: 2}}, tr.editedFor("a.go", []byte("one\ntwo\n")))
 	})
 
 	t.Run("dropped_after_move", func(t *testing.T) {
 		tr := NewTracker()
-		tr.Observe("a.go", []byte("one\ntwo\n"), nil)
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil, true)
 		tr.markEdited("a.go", []lineRange{{from: 1, to: 2}})
 		assert.Empty(t, tr.editedFor("a.go", []byte("something else\n")))
 	})
 
 	t.Run("a_later_observe_clears_them", func(t *testing.T) {
 		tr := NewTracker()
-		tr.Observe("a.go", []byte("one\n"), nil)
+		tr.Observe("a.go", []byte("one\n"), nil, true)
 		tr.markEdited("a.go", []lineRange{{from: 0, to: 1}})
-		tr.Observe("a.go", []byte("two\n"), nil) // what an overwriting write does
+		tr.Observe("a.go", []byte("two\n"), nil, true) // what an overwriting write does
 		assert.Empty(t, tr.editedFor("a.go", []byte("two\n")))
 	})
 
 	t.Run("reread_of_same_content_keeps", func(t *testing.T) {
 		tr := NewTracker()
-		tr.Observe("a.go", []byte("one\ntwo\n"), nil)
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil, true)
 		tr.markEdited("a.go", []lineRange{{from: 1, to: 2}})
-		tr.Observe("a.go", []byte("one\ntwo\n"), nil) // what a read of the edited file does
+		tr.Observe("a.go", []byte("one\ntwo\n"), nil, true) // what a read of the edited file does
 		assert.Equal(t, []lineRange{{from: 1, to: 2}}, tr.editedFor("a.go", []byte("one\ntwo\n")))
 	})
 

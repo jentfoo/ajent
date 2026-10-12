@@ -150,7 +150,9 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	if err := config.WriteFileAtomic(full, o.final, writePerm(full)); err != nil {
 		return resultErr("edit: " + err.Error()), nil
 	}
-	t.tracker.Observe(full, o.final, fileInfo(full)) // drops the ranges below
+	// observes complete: an edit writes the whole file; it also clears edited
+	// ranges measured against the prior content, re-added below
+	t.tracker.Observe(full, o.final, fileInfo(full), true)
 	t.tracker.markEdited(full, append(shiftRanges(tgt.Edited, o.shifts), o.edited...))
 
 	return agent.ToolResult{

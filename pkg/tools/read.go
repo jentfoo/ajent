@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -73,8 +74,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		if !t.visionOn() {
 			return resultErr("model does not support images; this file can only be read by a vision model"), nil
 		}
-		t.tracker.Observe(full, data, info) // an image read dedupes like a text read
-		return t.readImage(full, data)
+		return t.readImage(full, data, info)
 	}
 
 	lim := ReadFileLimit()
@@ -92,8 +92,11 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 			"read: limit %d exceeds the maximum of %d lines; narrow the range and page with offset", n, lim.Lines)), nil
 	}
 
-	t.tracker.Observe(full, data, info)
 	out, lastEmitted, truncatedAt, total := numberLines(data, start, n, lim.Bytes, explicitLimit)
+
+	// complete covers every line from the first to EOF; not truncatedAt==0, which
+	// an explicit limit short of EOF also reports while hiding the tail
+	t.tracker.Observe(full, data, info, start == 1 && lastEmitted == total)
 
 	var b strings.Builder
 	b.WriteString(out)
@@ -118,12 +121,14 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 
 // readImage fits one image file and returns it as model content. A rejected
 // image becomes an error result naming why, while a fitted one carries the sizing
-// note so answers stay honest against the source pixels.
-func (t *readTool) readImage(full string, data []byte) (agent.ToolResult, error) {
+// note so answers stay honest against the source pixels. A successful fit also
+// observes complete: images are not paged, and a failed fit lands nothing.
+func (t *readTool) readImage(full string, data []byte, info os.FileInfo) (agent.ToolResult, error) {
 	blocks, err := FitImage(data)
 	if err != nil {
 		return resultErr(FitImageError(err)), nil
 	}
+	t.tracker.Observe(full, data, info, true)
 	var notes strings.Builder
 	notes.WriteString(relTo(t.policy.Cwd, full))
 	for _, b := range blocks {

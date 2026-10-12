@@ -81,7 +81,7 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	if err := config.WriteFileAtomic(full, data, writePerm(full)); err != nil {
 		return resultErr("write: " + err.Error()), nil
 	}
-	t.tracker.Observe(full, data, fileInfo(full))
+	t.tracker.Observe(full, data, fileInfo(full), true) // a write produces the whole file
 
 	msg := fmt.Sprintf("wrote %s (%d lines)", p.Path, countLines(string(data)))
 	// an overwrite displaced content the model never saw, since it supplied the
