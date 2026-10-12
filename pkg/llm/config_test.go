@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -346,10 +347,11 @@ func TestSaveUserFile(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 
 	want := File{DefaultModel: "zai/glm-5", Providers: map[string]ProviderConfig{
-		"zai":   {APIKeyEnv: "ZAI_API_KEY"},
+		"zai":   {APIKeyEnv: "ZAI_API_KEY", Models: []ModelConfig{{ID: "glm-5"}}},
 		"other": {APIKey: "literal"},
 	}}
-	require.NoError(t, SaveUserFile(want))
+	_, err := SaveUserFile(want)
+	require.NoError(t, err)
 
 	got, warnings, err := LoadUserFile()
 	require.NoError(t, err)
@@ -363,4 +365,69 @@ func TestSaveUserFile(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		assert.Zero(t, info.Mode().Perm()&0o077)
 	}
+
+	t.Run("unknown_keys_survive_a_rewrite", func(t *testing.T) {
+		path, err := config.UserPath(ModelsFileName)
+		require.NoError(t, err)
+		existing := `{` +
+			`"defaultModel": "zai/glm-5", ` +
+			`"handwrittenNote": true,` +
+			`"providers": {"zai": {` +
+			`"apiKeyEnv": "ZAI_API_KEY", "futureField": 7,` +
+			`"models": [{"id": "glm-5", "vendorHint": "beta"}]}}}`
+		require.NoError(t, os.WriteFile(path, []byte(existing), config.SecretPerm))
+
+		_, err = SaveUserFile(want)
+		require.NoError(t, err)
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var doc map[string]any
+		require.NoError(t, json.Unmarshal(data, &doc))
+		assert.Equal(t, true, doc["handwrittenNote"])
+		zai := doc["providers"].(map[string]any)["zai"].(map[string]any)
+		assert.InDelta(t, 7.0, zai["futureField"], 0)
+		model := zai["models"].([]any)[0].(map[string]any)
+		assert.Equal(t, "beta", model["vendorHint"]) // paired by id with the saved entry
+	})
+
+	t.Run("dropped_known_fields_stay_dropped", func(t *testing.T) {
+		path, err := config.UserPath(ModelsFileName)
+		require.NoError(t, err)
+		existing := `{"providers": {"gone": {}, "zai": {"apiKeyEnv": "ZAI_API_KEY", "disabled": true}}}`
+		require.NoError(t, os.WriteFile(path, []byte(existing), config.SecretPerm))
+
+		_, err = SaveUserFile(want)
+		require.NoError(t, err)
+
+		got, _, err := LoadUserFile()
+		require.NoError(t, err)
+		assert.NotContains(t, got.Providers, "gone")
+		assert.False(t, got.Providers["zai"].Disabled) // governed by the saved value
+	})
+
+	t.Run("comments_warn_before_the_save_drops_them", func(t *testing.T) {
+		path, err := config.UserPath(ModelsFileName)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, []byte("{ // hand edited\n}\n"), config.SecretPerm))
+
+		warns, err := SaveUserFile(want)
+		require.NoError(t, err)
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], "comments")
+
+		got, warnings, err := LoadUserFile()
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+		assert.Empty(t, warnings)
+	})
+
+	t.Run("malformed_existing_file_is_an_error", func(t *testing.T) {
+		path, err := config.UserPath(ModelsFileName)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, []byte("{ nope"), config.SecretPerm))
+
+		_, err = SaveUserFile(want)
+		require.Error(t, err)
+	})
 }

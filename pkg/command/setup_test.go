@@ -272,7 +272,8 @@ func TestProviderSetup(t *testing.T) {
 		existing := llm.File{Providers: map[string]llm.ProviderConfig{
 			"anthropic": {APIKeyEnv: "ANTHROPIC_API_KEY"},
 		}}
-		require.NoError(t, llm.SaveUserFile(existing))
+		_, err := llm.SaveUserFile(existing)
+		require.NoError(t, err)
 
 		c := newFakeConsole(t)
 		stubProbe(t, stub, nil)
@@ -285,6 +286,49 @@ func TestProviderSetup(t *testing.T) {
 		require.Contains(t, f.Providers, "anthropic")
 		require.Contains(t, f.Providers, "zai")
 		assert.Equal(t, "glm-5", f.DefaultModel)
+	})
+
+	t.Run("unknown_keys_survive_the_save", func(t *testing.T) {
+		setupHome(t)
+		path, err := config.UserPath(llm.ModelsFileName)
+		require.NoError(t, err)
+		// a hand written file with fields this build does not declare
+		handEdited := `{` +
+			`"importedFrom": "pi", ` +
+			`"providers": {"anthropic": {` +
+			`"apiKeyEnv": "ANTHROPIC_API_KEY", "futureField": true,` +
+			`"models": [{"id": "claude-x", "vendorHint": "keep me"}]}}}`
+		require.NoError(t, os.WriteFile(path, []byte(handEdited), config.SecretPerm))
+
+		c := newFakeConsole(t)
+		stubProbe(t, stub, nil)
+		c.picks = []fakePick{{result: pickName("zai")}, {result: 0}}
+		c.inputs = []string{""}
+
+		require.NoError(t, ProviderSetup(t.Context(), c))
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "importedFrom")
+		assert.Contains(t, string(data), "futureField")
+		assert.Contains(t, string(data), "vendorHint")
+		f := writtenFile(t)
+		require.Contains(t, f.Providers, "zai")
+	})
+
+	t.Run("comment_loss_is_warned", func(t *testing.T) {
+		setupHome(t)
+		path, err := config.UserPath(llm.ModelsFileName)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, []byte("{ // hand edited\n}\n"), config.SecretPerm))
+
+		c := newFakeConsole(t)
+		stubProbe(t, stub, nil)
+		c.picks = []fakePick{{result: pickName("zai")}, {result: 0}}
+		c.inputs = []string{""}
+
+		require.NoError(t, ProviderSetup(t.Context(), c))
+		assert.True(t, c.noticeContains("comments"))
 	})
 
 	t.Run("probe_result_is_cached", func(t *testing.T) {
@@ -322,7 +366,7 @@ func TestProviderSetup(t *testing.T) {
 		stubProbe(t, stub, nil)
 		c.picks = []fakePick{{result: pickName("zai")}, {result: 0}}
 		c.inputs = []string{""}
-		saveUserFile = func(llm.File) error { return errors.New("disk on fire") }
+		saveUserFile = func(llm.File) ([]string, error) { return nil, errors.New("disk on fire") }
 		t.Cleanup(func() { saveUserFile = llm.SaveUserFile })
 
 		err := ProviderSetup(t.Context(), c)

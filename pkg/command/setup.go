@@ -109,8 +109,12 @@ func ProviderSetup(ctx context.Context, c Console) error {
 	if err != nil {
 		return err
 	}
-	if err := saveUserFile(file); err != nil {
+	warns, err := saveUserFile(file)
+	if err != nil {
 		return fmt.Errorf("could not write %s: %w", modelsUserPath(), err)
+	}
+	for _, w := range warns {
+		c.Notify(w, levelWarn)
 	}
 
 	cache := llm.LoadUserCache()

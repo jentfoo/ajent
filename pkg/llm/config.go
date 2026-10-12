@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -374,16 +375,39 @@ func LoadUserFile() (File, []string, error) {
 
 // SaveUserFile writes the models file to the ajent configuration directory,
 // atomically and with secret permissions since it may hold a literal key.
-func SaveUserFile(f File) error {
+//
+// f overlays the existing file: fields the File schema declares follow f, and
+// unrecognized keys anywhere in the current contents survive the rewrite. The
+// returned warnings report content the save drops, such as // comments.
+func SaveUserFile(f File) ([]string, error) {
 	path, err := config.UserPath(ModelsFileName)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	data, err := json.MarshalIndent(f, "", "  ")
+	over, err := json.Marshal(f)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return config.WriteFileAtomic(path, data, config.SecretPerm)
+
+	var warns []string
+	raw, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		raw = nil // a brand new file starts empty
+	case err != nil:
+		return nil, err
+	default:
+		if relaxed := config.RelaxJSON(raw); !bytes.Equal(relaxed, raw) {
+			warns = append(warns, path+" has comments; saving will remove them")
+			raw = relaxed
+		}
+	}
+
+	out, err := config.OverlayJSON(raw, over, File{})
+	if err != nil {
+		return nil, err
+	}
+	return warns, config.WriteFileAtomic(path, out, config.SecretPerm)
 }
 
 // compatWarnings reports configuration that will not behave as authored for the
