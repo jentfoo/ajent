@@ -947,6 +947,96 @@ func TestReconnectAfterDeath(t *testing.T) {
 	assert.NotNil(t, mgr.serverByName("fake").client())
 }
 
+func TestReconnectStaleWatcher(t *testing.T) {
+	t.Parallel()
+
+	srv := buildFakeServer(t)
+
+	// /mcp disconnect followed by /mcp connect installs a fresh client inside the old
+	// watcher's lag window, and that healthy connection must survive its late EOF.
+	t.Run("successor_survives", func(t *testing.T) {
+		var mu sync.Mutex
+		var warns []string
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: srv},
+		}, wired(Options{Registrar: fr, Notice: func(msg string, warn bool) {
+			if !warn {
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			warns = append(warns, msg)
+		}}))
+		t.Cleanup(mgr.Close)
+
+		require.NoError(t, mgr.Connect(t.Context(), "fake"))
+		s := mgr.serverByName("fake")
+		stale := s.client()
+		mgr.Disconnect("fake")
+		require.NoError(t, mgr.Connect(t.Context(), "fake")) // the successor
+		live := s.client()
+		names := fr.AllNames("mcp: fake")
+
+		mgr.reconnect(s, stale) // a late exit notice for the replaced client
+
+		assert.Same(t, live, s.client()) // the fresh connection is untouched
+		assert.Equal(t, names, fr.AllNames("mcp: fake"))
+		s.mu.Lock()
+		down := s.down
+		s.mu.Unlock()
+		assert.False(t, down)
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Empty(t, warns) // no "server exited; reconnecting" either
+	})
+
+	// a stale notice after an explicit disconnect must not start a reconnect loop:
+	// the user's disconnect is never reverted.
+	t.Run("disconnected_stays_down", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: srv},
+		}, wired(Options{Registrar: fr}))
+		t.Cleanup(mgr.Close)
+
+		require.NoError(t, mgr.Connect(t.Context(), "fake"))
+		s := mgr.serverByName("fake")
+		stale := s.client()
+		mgr.Disconnect("fake")
+
+		mgr.reconnect(s, stale)
+
+		assert.Nil(t, s.client())
+		assert.Empty(t, fr.AllNames("mcp: fake"))
+		require.Never(t, func() bool {
+			return s.client() != nil || len(fr.AllNames("mcp: fake")) > 0
+		}, 1500*time.Millisecond, 25*time.Millisecond)
+	})
+
+	// the identity check only rejects foreign clients: a notice about the installed
+	// client is still a real death. The call returns after its loop's first retry,
+	// so assert the settled outcome rather than transient down state.
+	t.Run("current_client_reconnects", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(map[string]ServerConfig{
+			"fake": {Command: srv},
+		}, wired(Options{Registrar: fr}))
+		t.Cleanup(mgr.Close)
+
+		require.NoError(t, mgr.Connect(t.Context(), "fake"))
+		s := mgr.serverByName("fake")
+
+		mgr.reconnect(s, s.client()) // a real death for the installed client
+
+		assert.Contains(t, strings.Join(mgr.Logs("fake"), "\n"), "server exited")
+		require.Eventually(t, func() bool { // the loop re-dials and re-registers
+			return len(fr.AllNames("mcp: fake")) > 0
+		}, 15*time.Second, 50*time.Millisecond)
+		assert.NotNil(t, s.client())
+	})
+}
+
 func TestManagerClose(t *testing.T) {
 	t.Parallel()
 

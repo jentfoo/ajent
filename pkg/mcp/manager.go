@@ -312,7 +312,7 @@ func (m *Manager) dial(ctx context.Context, name string, s *server, disc int) er
 		m.disconnect(s)
 		return err
 	}
-	go m.watchServer(s)
+	go m.watchServer(s, c)
 	// m.ctx, not the caller's: notification refresh outlives whoever connected
 	c.OnNotification(func(n mcp.JSONRPCNotification) { m.onNotification(m.ctx, s, n) })
 	s.diag("connected (" + c.Transport() + ")")
@@ -850,10 +850,10 @@ func (s *server) writeProgress(fields map[string]any) {
 }
 
 // watchServer streams a stdio child's stderr into the ring log and, when the
-// process exits (stderr EOF), reconnects with capped backoff. Network servers have
-// no child to supervise and return immediately.
-func (m *Manager) watchServer(s *server) {
-	c := s.client()
+// process exits (stderr EOF), reconnects with capped backoff. c is the client dial
+// installed: threading it through pins this watcher to that one connection.
+// Network servers have no child to supervise and return immediately.
+func (m *Manager) watchServer(s *server, c *Client) {
 	if c == nil {
 		return
 	}
@@ -874,21 +874,26 @@ func (m *Manager) watchServer(s *server) {
 			break
 		}
 	}
-	m.reconnect(s)
+	m.reconnect(s, c)
 }
 
 // maxReconnectWait caps the exponential backoff between reconnection attempts.
 const maxReconnectWait = 30 * time.Second
 
-// reconnect marks a stdio server's death and begins the retry loop. Tools are
+// reconnect marks a stdio server's death and begins the retry loop. dead is the
+// client whose stderr EOF arrived: it must still be the installed one, so a stale
+// watcher cannot tear down a successor connected inside its lag window. Tools are
 // deregistered while down so the model never calls into a dead process. On success
 // connect() re-registers them restoring the pre-death enabled set.
-func (m *Manager) reconnect(s *server) {
+func (m *Manager) reconnect(s *server, dead *Client) {
+	if dead == nil { // nothing was watched, nothing can exit
+		return
+	}
 	keep := m.captureLive(s.source) // registrar call stays off s.mu
 	s.mu.Lock()
-	c := s.c
-	if c == nil { // already disconnected by /mcp disconnect or another path
+	if s.c != dead { // a disconnect or successor owns the server now; this notice is stale
 		s.mu.Unlock()
+		s.diag("stale exit notice ignored")
 		return
 	}
 	s.reopenKeep = keep
@@ -898,7 +903,7 @@ func (m *Manager) reconnect(s *server) {
 	s.loopSeq++ // a death supersedes any parked loop from an earlier failed first dial
 	gen := s.loopSeq
 	s.mu.Unlock()
-	_ = c.Close() // sweep the dead child's process group
+	_ = dead.Close() // sweep the dead child's process group
 	m.opts.Registrar.Unregister(s.source)
 	m.updateStatus() // a dead server's tools drop out of the ratio while it is down
 	s.note("server exited; reconnecting", true)
