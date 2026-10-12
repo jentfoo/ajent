@@ -340,6 +340,12 @@ verbatim and falls back to the fuzzy subsequence match only when none do: a
 subsequence hit is scored but never thresholded, so mixing the two buries what
 was typed under rows that merely lend their letters in order.
 
+A secret input (`InputSecretContext`) masks every echo of its value: one bullet
+per grapheme cluster stands in on screen and the summary line committed to
+history carries the same mask, so a pasted credential never lands in scrollback.
+The mask counts clusters (backspace's granularity) so deletion stays aligned,
+and only the masked length is ever visible.
+
 An interaction **grows the live block** rather than overlaying history, because
 invariant 1 forbids inline mode from addressing committed lines. It takes the
 input field's place while active, so the editor keeps whatever was typed and
@@ -506,17 +512,19 @@ for what happened and avoids duplicating the dialog's prompt-and-label echo.
 A lone `Esc` is indistinguishable from the start of a longer escape sequence
 until more bytes arrive or enough time passes, so it is held for a short timeout
 before being reported. Without that there is no cancel key at all. The timer is
-armed whenever the buffer starts with `Esc`, including a sequence still
-mid-delivery. That placement is deliberate: waiting indefinitely for an
-incomplete CSI or OSC would let a stalled `ESC [` absorb every later keystroke
-as parameter bytes, silently swallowing keys. The timeout drop at worst resyncs
-into one visible stray rune. The cost is that a real sequence split across two
-reads farther apart than the timeout loses its head, which only a terminal
-already broken past input decoding produces. The timer is not armed while an
-in-progress paste sits in the buffer, since a paste body can legitimately stall
-mid-arrival. When it does fire on a truncated sequence the whole remaining
-buffer is dropped rather than re-decoded as runes, so only a genuine lone `Esc`
-is reported.
+armed whenever the buffer starts with `Esc`, except while its head could still
+grow into a bracketed-paste start (`ESC[200~` or any longer prefix of one).
+Those bytes wait for input instead, because dropping a split header would decode
+the paste body as ordinary keys and a `\r` inside it submits mid-paste. The hold
+bounds itself: at most `len(pasteStart)-1` bytes sit in the buffer and any
+further byte completes, extends or breaks the match, resuming normal decoding.
+Waiting indefinitely for an incomplete CSI or OSC would let a stalled sequence
+absorb later keystrokes as parameter bytes, so only heads that name a paste
+start earn an open-ended wait. A split right after the bare escape byte is the
+one remaining exposure: a genuine `Esc` must keep its timeout to be reportable
+at all, so a header split there can still lose its head. When the timer does
+fire on a truncated sequence the whole remaining buffer is dropped rather than
+re-decoded as runes, so only a genuine lone `Esc` is reported.
 
 `ESC <byte>` with an unrecognized second byte consumes the `Esc` alone so the
 second byte decodes on its own: Alt+printable lands as a plain rune, and
@@ -554,8 +562,11 @@ indent on the continuation would require us to choose the break point, which
 would freeze the line at commit width and fragment copies. Tables and rules are
 the exception: wrapping a table garbles it outright, so they keep the width they
 were laid out at until they scroll away (drawn one column short of the edge, the
-same deferred-wrap precaution as live rows). Alt mode keeps the hanging indents
-because it re-lays everything itself on every resize.
+same deferred-wrap precaution as live rows). A layout that cannot fit its width,
+be it more columns than the border overhead allows or a glyph wider than its
+column, clips to that width instead: an overflowing row would wrap and garble.
+Alt mode keeps the hanging indents because it re-lays everything itself on every
+resize.
 
 A streaming preview must be wrapped by us, since a live row is exactly one
 terminal row, so it wraps by the rule its commit will use or the block visibly
@@ -690,7 +701,7 @@ Supported elements:
 | List | bulleted or ordered, nested by indent, tight and loose. Ordered markers pad to the widest numeral so the column stays aligned past 9 |
 | Task list | checked/unchecked checkboxes |
 | Thematic break | rule drawn to the width in force, one column short of the edge |
-| GFM table | our own layout: cells wrapped to their column, rows separated, re-laid out at each width (alt mode) and terminal-reflowed (inline) |
+| GFM table | our own layout: cells wrapped to their column, rows separated, re-laid out at each width (alt mode) and terminal-reflowed (inline). A row that still cannot fit the width clips rather than overflowing into a wrap |
 | HTML block | passed through dim |
 
 | Inline | Rendering |
@@ -1187,12 +1198,19 @@ cost of the terminal's own text selection for the whole session, so PgUp/PgDn
 scroll in alt mode (and page the multi-line buffer in inline).
 
 `editor.go` is the buffer. Positions are grapheme-cluster indexes, not bytes or
-runes, so the cursor moves over emoji and combining marks as a unit. Every
-programmatic fill parks the caret at the end (all recall paths), one variant
-translating a byte offset for callers with byte-indexed positions (the Ctrl+R
-match). It owns its own layout: wrapping the buffer into display rows on word
-boundaries and reporting the caret's row/column within them. Wrapping is purely
-visual and leaves `Value()` untouched, so submitted input never gains newlines.
+runes, so the cursor moves over emoji and combining marks as a unit. Text enters
+cells only through normalization (`normalizeInput`, with single-line and filter
+variants): CRLF and lone CR fold to one LF, tabs expand so cell width matches
+the painted columns, invalid UTF-8 re-encodes and remaining control bytes drop.
+A terminal acts on those rather than printing them, so one surviving in a cell
+would desync caret math from what paints. `sanitizeRow` at the render boundary
+stays as the backstop for text that reaches rows without passing through the
+editor. Every programmatic fill parks the caret at the end (all recall paths),
+one variant translating a byte offset for callers with byte-indexed positions
+(the Ctrl+R match). It owns its own layout: wrapping the buffer into display
+rows on word boundaries and reporting the caret's row/column within them.
+Wrapping is purely visual and leaves `Value()` untouched, so submitted input
+never gains newlines.
 Movement and editing keys respect those same visual rows: Home/End bound the
 current wrapped row rather than the logical line, matching ↑/↓; Ctrl+K kills
 only to that row's end, Ctrl+U from the row's start to the caret. Clear and the
@@ -1261,10 +1279,11 @@ UI claims the arrows. Enter fills the editor with the full line and does not
 send it. The first Esc selects the same way; only with no current match does it
 close leaving the buffer untouched, and a second Esc then clears the field. In
 the overlay ↑/↓ select and then browse: one press fills the editor with the
-highlighted line, closes the overlay without sending, and leaves subsequent plain
-arrows scrolling that same recalled list. Horizontal caret keys (←/→, their
-word-wise forms, Home) also accept the match and apply their own motion in that
-same press, so editing starts immediately. With no current match they only close
+highlighted line, closes the overlay without sending, and subsequent plain
+arrows scroll that same list from its newest entry. Accepting a match replaces
+whatever browsing had recalled and disarms it (see below). Horizontal caret keys
+(←/→, their word-wise forms, Home) also accept the match and apply their own
+motion in that same press, so editing starts immediately. With no current match they only close
 the overlay and reach the editor as usual.
 
 **Accepting places the caret on the match**, not at the end of the recalled
@@ -1285,9 +1304,13 @@ an edited line takes two presses: one to reach the boundary, one to scroll.
 The recall source is shared: plain ↑/↓ (no Ctrl+R) walk the same newest-first
 set as the search overlay; first ↑ recalls your most recent sent line, further ↑
 steps older and ↓ returns to the live draft. The editor's in-memory history
-applies only when no recall source is installed (no session store). Like
-completion it is an in-place live-block overlay rather than an interaction, so a
-slow scan never blocks input; its pure logic lives separate from the UI.
+applies only when no recall source is installed (no session store). Browsing is
+fragile by design: every buffer replacement that is not itself a recall step (a
+sent line, an accepted search match, an Esc or Ctrl+C clear, a host-driven fill)
+disarms it through `resetPromptNavLocked`, so an arrow at a buffer edge can
+never restore held state over fresh content.
+Like completion it is an in-place live-block overlay rather than an interaction,
+so a slow scan never blocks input and its pure logic lives separate from the UI.
 
 ## The demo
 

@@ -129,14 +129,24 @@ That is why `cd sub && mkdir ../x` is refused. VCS metadata (`.git`, `.hg`,
 `.svn`) is excluded from the roots, since a hook or `core.hooksPath` written
 there is code that executes on the next git invocation. `rmdir -p` is permitted
 because it walks only the operand's own components, so its shallowest one is
-scope-checked and everything it can reach sits under that. The
-`WithUserInitiated` marker rides the context so a user's own staged `!` shell
+scope-checked and everything it can reach sits under that.
+The `WithUserInitiated` marker rides the context so a user's own staged `!` shell
 line is exempt in every permission mode; it is the human's shell, not the
 model's. Shell commands are name-trusted only when they have no exec or write
 form; `awk`, `rg` and `sort` are verified per invocation like sed. Anything
-unverifiable prompts. Here-document bodies are the reading command's data,
-never shell, so they neither contribute command names (a python script inside
-`<<'EOF'` names only `python`) nor match deny entries; an unquoted delimiter
+unverifiable prompts. A head is trusted by name only when it is a bare word the
+PATH could resolve: `./bin/cat`, `../tooling/jq` and `/tmp/x/git` name no
+command at all, because an executable written earlier under an allowlisted name
+must never inherit its verdict. Such lines prompt like anything unverifiable,
+never reaching an unattended classifier, a grant or session memory in the
+dialog. A bare `.sh` head likewise keeps its literal name instead of folding to
+the script's stem, a double quote in the head refuses naming (it is the
+scanner's quoted-region placeholder), and `safeCommands` match argv only under
+a slash-free head for the same reasons. Deny entries keep folding basenames,
+their over-match failing safe. Here-document bodies are the reading command's
+data, never shell, so they neither contribute command names (a python script
+inside `<<'EOF'` names only `python`) nor match deny entries; an unquoted
+delimiter
 keeps expansion alive, so a body carrying `$(` or a backtick fails unsafe like
 any other substitution. A subshell `( … )` fails unsafe the same way: its
 contents execute but are not this line's tokens, so it prompts in every mode
@@ -467,7 +477,10 @@ Off-by-default extras for no-shell agents.
 - `grep`: searches file contents for a pattern in three modes (`files`, `content`
   (line numbers plus optional context lines) and `count`). Enumeration stops at the
   default match cap with a named note, never silently; surfaces stderr from an
-  underlying tool as an error.
+  underlying tool as an error. The rg path and the Go fallback share one output
+  contract (filenames always attributed, root-relative paths, cap notes counting
+  matches rather than output lines), so results read identically whichever
+  engine ran.
 - Both spill their complete result when the bound cuts it, so the model can page
   the rest recoverably rather than losing it.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via
@@ -567,6 +580,23 @@ exactly the RCE surface this design removes and split behaviour between two code
 paths for no user-visible gain. The tools are go-git only. Operators who want full
 git power already have `bash` in the parent.
 
+#### Pathspecs and bounded output
+
+A `file` argument is normalized once at parameter parse: whitespace, leading
+`./`, trailing separators and duplicate segments collapse before any matcher
+runs, so the common model spellings of "limit to this directory" cannot filter
+everything out. The same cleaned spec drives git_log's follow walk, where a
+directory path matches every change beneath it, one file's birth or deletion
+there never ends the walk, and only an exact file follows renames. Rename
+detection for a scoped diff runs on the in-scope changes alone, so similarity
+reads stay proportional to what will be rendered.
+
+git_show and git_diff stream per-file blocks through the shared bound machinery
+instead of building the whole patch in memory: once the result bound is reached
+rendering stops and remaining in-scope paths are counted into the footer. One
+side's content is capped at a blob ceiling, with text past it withheld behind an
+explicit note rather than hunks over a truncated view.
+
 #### Package shape and conventions
 
 The four follow the find/grep/ls conventions exactly:
@@ -577,7 +607,9 @@ The four follow the find/grep/ls conventions exactly:
   (the argument already rides on the committed header)
 - `Mode() agent.ModeParallel`. These are pure reads and may run alongside siblings
 - implement `selfBounding()` so the registry's generic bound does not double-wrap,
-  then spill via `truncateOutput(t.sessionID, ...)` like find/grep/ls
+  then bound results themselves: git_show/git_diff stream per-file blocks through
+  a spill file, while git_status and git_log trim via `truncateOutput` like
+  find/grep/ls
 
 Files under `pkg/tools/`, mirroring the existing built-ins:
 
@@ -727,10 +759,15 @@ containment check by default. Extensions layer their own limits via guards.
 ### Read tracking (`track.go`)
 
 The tracker records, per observed path, enough to detect that the file is
-unchanged on a later read (its modification time, size and a content hash).
-`@ref` expansion uses those records (via `Unchanged`) to dedupe against an
-unchanged in-context read, at plan time and again as each injection runs, so a
-batch of messages naming one path reads it once. It is shared by
+unchanged on a later read (its modification time, size and a content hash) plus
+whether the read was whole. `@ref` expansion uses those records (via
+`Unchanged`) to dedupe against an unchanged in-context read, at plan time and
+again as each injection runs, so a batch of messages naming one path reads it
+once. Only a whole observation, every line displayed from the first, vouches: a
+windowed read observes incomplete, so an `@ref` re-injects rather than trusting
+a fragment even though the file on disk matches. Images are unpaged and
+write/edit produce the full file, so those observe complete.
+It is shared by
 `read`/`write`/`edit`, which each observe the content they produce so a later
 `@file` reflects current state, and exported for reuse outside the package. Safe
 for concurrent use.
@@ -761,7 +798,10 @@ Recovery is one shared path with a single exception:
 
   Every spill is its own exclusive fresh file in that session dir, so concurrent
   or sequential spills never share a path and each footer pointer names exactly
-  one call's output.
+  one call's output. A footer only makes that claim when the spill file was
+  created and every byte reached it: on failure (permissions, disk full) the
+  note says the output could not be written rather than pointing at a missing
+  or partial file.
 - **Native paging** (read). The source file is the recovery: the footer names
   the next offset and nothing is written to disk. A range wider than the limit
   spills instead of truncating.

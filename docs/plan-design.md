@@ -99,6 +99,20 @@ non-injected (typed) submission clears the gate; injected context is never
 captured as approval, whether a staged `!` flush, a permission-barrier note or
 a sub-agent completion steer. This mirrors the Planning phase guard.
 
+The captured submission is stripped to its text: staged `!shell` results and
+pasted images arrive as framing around it (`Before`/`Blocks`), not plan content,
+and are dropped rather than pinned ahead of a kickoff whose root starts from
+nothing else.
+
+The gate also bounds the steer queue, because queued delivery skips
+`BeforePrompt`. When the workflow parks, queued steering must not run on:
+delivery stops and the items hold as rows until a typed submission starts the
+implementor's turn behind its kickoff, and inputs arriving while parked (a
+finished `/init` survey, an injected line) join them. Without this bound a
+queued prompt would start an ungated planner turn at the gate, and an approval
+submitted during it would surface as ordinary steering instead of being
+captured.
+
 **The implementor's report always reaches the reviewer.** The reviewer sees none
 of the implementation branch, so `dev_review`'s `summary` is required. An empty
 one is rejected like any other bad control call, in-turn. A round that ends

@@ -439,6 +439,8 @@ new turns), then waits a bounded slice for the drain to land its results before
 anything reads or removes the transcript. Signals quit through the driver loop
 rather than closing the UI, so the same ordered teardown runs for
 SIGINT/SIGTERM/SIGHUP, with a second signal during the wait as force exit.
+The same exit fires the waiter's wake callback onto the pump, which is what
+lands console state writes queued behind the turn (see `command-design.md`).
 
 `Options.OnSettled` is a slice of callbacks invoked on the loop goroutine once
 the queues are drained, nothing is running, and the last turn did not error.

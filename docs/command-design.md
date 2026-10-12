@@ -32,11 +32,16 @@ shell), then routed by the host's loop.
 | `!go test ./...` | shell | `go test ./...` (staged onto context) |
 | `!!echo hi` | shell | `echo hi`, excluded from context (`Excluded`) |
 | ` !echo hi` | prompt | `!echo hi` (leading space is the only literal-`!` escape) |
+| multi-line submission opening with `/name args` | prompt (`Multiline`) | verbatim, plus a notice (a paste is never consumed by one command dispatch) |
 
 Unknown `/foo` still parses as a command so dispatch can notice it rather than
-prompting the model: a typo should not cost tokens. The host's loop then routes
-by kind: shell lines go straight to the `Stager` (non-blocking); command and
-prompt lines go to a single **prompt pump** goroutine that owns ordering.
+prompting the model: a typo should not cost tokens. One exception guards pasted
+content: a submission carrying a newline and opening with `/name args` falls
+back to one verbatim prompt (`Multiline`, surfaced with a notice) whether or not
+the name is known, so a command dispatch never consumes a paste. Multi-line `!`
+is unaffected and stages the whole block as one run. The host's loop then routes
+by kind: shell lines go straight to the `Stager` (non-blocking), while command
+and prompt lines go to a single **prompt pump** goroutine that owns ordering.
 
 ### The prompt pump
 
@@ -47,6 +52,11 @@ prompt lines go to a single **prompt pump** goroutine that owns ordering.
 - A prompt flushes staged shell results, expands `@` refs, then either queues
   onto the steer queue (rendering as a dimmed row with its echo deferred until it
   lands) or starts the drain directly and echoes immediately.
+- Console state writes (`/model`, `/reasoning`, a compaction-threshold edit)
+  queue while a drain goroutine owns State. The pump lands them at its next
+  dispatch, and a drain exit sends a **wake line** so they apply even when no
+  further input arrives. Writes are pump-goroutine confined, which keeps them
+  ordered against turn starts and each other without locking `State`.
 
 The steer queue turns mid-turn prompts into **steering messages**: they deliver
 as newline-joined messages (one per provenance run, see below) at the agent's
@@ -56,7 +66,8 @@ recovers every queued item back into the editor (collapsed with newlines)
 before interrupting. Alt+Up recalls the newest queued message. Image blocks ride
 along with whatever is queued. Their slots were consumed at submit, so recall and
 abort refile each one under a fresh token and the recovered line still names its
-`[image #N]`. See `agent-loop-design.md` for the boundary contract.
+`[image #N]`. See `agent-loop-design.md` for the boundary contract. While the
+plan workflow parks at its gate, delivery holds instead (see `plan-design.md`).
 
 The pump also wires the **typing hold** (`Options.AwaitInput`, see
 `agent-loop-design.md`): at each step boundary, if a draft is being composed in
@@ -139,7 +150,13 @@ session-scoped. `SetSessionSetting` applies a dotted session override *and*
 records it via `recorder.SettingChange`, closing the old gap where a row called
 `SetSession` directly and the override silently vanished on resume
 (auto-compaction, tool limits). The bespoke `SetModel`/`SetReasoning` mutators
-keep their own paths. A permissions-mode row additionally applies its parsed
+keep their own paths. A state mutator typed mid-turn **queues** rather than
+refusing: the pump holds the write while a drain goroutine owns State, and
+lands it (in submission order) once the drain exits, with a notice saying so.
+Nothing about the change is recorded until it applies. `/copy` reads through
+`SettledMessages`, the one read seam over the same gate: the live transcript at
+rest, or the copy the last turn end settled while one streams, so a partial
+turn is never copied. A permissions-mode row additionally applies its parsed
 mode to the live permission barrier and republishes the status segment, which is
 what makes `/settings`'s Permissions enum row take effect rather than sitting
 inert. Permission mode is a per-run choice: it lives only on the barrier for this
@@ -155,12 +172,12 @@ dispatched, never on a command or a `!`.
 |---|---|
 | `/help` | markdown list of commands and keybindings through `Console.Print` |
 | `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown; sub-agent spend called out when nonzero) |
-| `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim; no agent messages yet is a notice, not an error |
+| `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim. Mid-turn it copies the last settled response, never a partial stream. No agent messages yet is a notice |
 | `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it; a no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
 | `/reasoning [level]` | report, or set/clear the level for capable models; a model offering zero levels reports "no reasoning options available", one level (only off) reports "only <level> available for this model". Neither case opens a picker |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/session [name]` | report the session's name, or set it; an invalid or conflicting name is a notice (see `session-design.md`) |
-| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (see `config-design.md`); rows come in three kinds, an enum (a string from a fixed set), a model picker, and an integer with min/max validation (sub-agent concurrency, since an enum stores a string that won't unmarshal into an int field), covering permission modes and sub-agent settings; a row whose choice is currently impossible (Reasoning on a single-option model) renders grayed out with the reason in its detail |
+| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (see `config-design.md`); rows come in three kinds, an enum (a string from a fixed set), a model picker, and an integer with min/max validation (sub-agent concurrency, since an enum stores a string that won't unmarshal into an int field), covering permission modes and sub-agent settings; a currently impossible choice (Reasoning on a single-option model) renders grayed out with the reason, as does Reset overrides when nothing is overridden (see `config-design.md`, "Session override reset") |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all; unknown verbs warn. Esc never cancels jobs; this is the only stop path |
 | `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice. The result is UI-only, never written to the transcript nor sent to the model (see below) |
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
@@ -192,7 +209,10 @@ run that takes minutes never stalls the pump. It is refused while a turn streams
 and while another survey is in flight; `Esc`/`Ctrl+C` cancels one, stopping the
 children **it** spawned by id via `Options.Started`, never `StopAll`, because
 the user may have started a turn during the survey whose own investigations must
-survive (a returning `Poll` does not end a job).
+survive (a returning `Poll` does not end a job). A duration ceiling bounds the
+whole run so a wedged child cannot hold the single survey slot until restart. A
+spent ceiling reports `ErrSurveyTimedOut`, which the controller treats like an
+abort: stop the survey's remaining children by id, then tell the user.
 
 **Slicing.** The agent count scales with the tree (under 50 files → 1, then 2,
 3, 4), and the slices themselves are top-level directories bin-packed
@@ -205,17 +225,22 @@ scatter of singletons.
 
 `pkg/projinit` does the work and spends no model tokens: it runs the real
 `read`, `agent_start` and `agent_poll` tools through `Registry.Lookup`,
-collecting their genuine call + result pairs: the same `agent.InjectPair`
-mechanism `@` references use. What comes back is an `agent.Input` whose `Before`
-is that survey and whose `Text` is the distillation instruction
+collecting their genuine call + result pairs (the same `agent.InjectPair`
+mechanism `@` references use). One deliberate exception tempers that Lookup:
+sub-agent tools are checked against the enabled set before anything spawns.
+Unlike a staged shell line, `/init` implicitly spends provider tokens on child
+turns, so a user who disabled the "subagents" group gets those children reported
+as disabled rather than spawned anyway. What comes back is an `agent.Input`
+whose `Before` is that survey and whose `Text` is the distillation instruction
 (`prompt-design.md` owns the wording). The controller hands it to the pump as a
 pre-assembled input, which skips `@` expansion and uses its rest field as a
 short echo label, and everything after is the ordinary prompt path: steer queue,
 plan hooks, ledger seeding, turn start. The model then writes `AGENTS.md` with
 the `write` tool, so the permission barrier gates it exactly as it gates any
-other write; no `tools.WithUserInitiated`, which would bypass the gate. A survey
-that cannot run reports *why*: a missing `read`, missing `agent_*`, or spawns
-that were refused are three different errors, never one "unavailable".
+other write; no `tools.WithUserInitiated`, which would bypass the gate. A
+survey that cannot run reports *why*: a missing `read`, missing or disabled
+`agent_*`, spawns that were refused, and an existing `AGENTS.md` that could not
+be read are distinct errors, never one "unavailable".
 
 **Call ids carry a run number.** `Input.Before` is appended to `State` and
 persisted, so a second `/init` in one session would otherwise replay the first
@@ -227,9 +252,10 @@ ids replayed from the transcript, mirroring how `@` references are seeded.
 Instructions are read once at startup, so a freshly written file applies on the
 next start. `initWatch` (an `opts.Sinks` member) is armed by the pump, not by
 the survey goroutine whose arming a turn already running would consume, and
-reports the change once the file's mtime actually moves. It stays armed across
-turns that wrote nothing, so a survey queued behind a running turn still
-reports, and stays quiet when the write was denied.
+reports the change once the file's stamp (size plus mtime) actually moves, which
+also covers coarse-mtime filesystems. It stays armed across turns that wrote
+nothing, so a survey queued behind a running turn still reports, and stays quiet
+when the write was denied.
 
 ### `/update` — self-update
 
@@ -481,7 +507,7 @@ text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 | wildcard pattern (contains `*`, `?` or `[`) | `ls` pair planned via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read; the pattern stays literal in prose |
 | missing | literal, warning notice |
 | directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state); skipped when the tracker's listing is unchanged (`UnchangedDir`) |
-| already read, unchanged (`Tracker.Unchanged`) | nothing planned, literal |
+| already read whole and unchanged (`Tracker.Unchanged`) | nothing planned, literal |
 | a path the same message already named | planned once; the repeat stays literal |
 | text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |
 | image on a vision model | `read` pair planned, so the image arrives through the ordinary read path |

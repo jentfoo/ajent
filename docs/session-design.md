@@ -55,7 +55,7 @@ understands; older or equal files are fine.
 | `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only); an `injected` flag marks system-provided user text that must not surface as a recallable prompt |
 | `compaction` | `CompactionData` | a context reduction recorded without deleting anything (see `compaction-design.md`) |
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
-| `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON |
+| `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON. A JSON null marks a reset: the override was cleared, so replay returns that domain to its unrecorded state instead of applying it |
 | `notice` | `NoticeData` | a user-visible notice worth replaying on resume |
 | `custom` | `CustomData` | opaque extension state that must survive a resume; `LatestCustom(branch, type, v)` reads the newest one back, so a feature stores latest-wins state rather than writing its own reverse scan |
 
@@ -130,9 +130,9 @@ claimed by a sibling, so no session and no concurrent process can steer another.
 
 Forking onto a new root removes the cursor rather than writing one, so it can
 never point back at the branch just abandoned. `headFor` falls back to tail
-recovery when a cursor is missing, corrupt, or names an id the file no longer
-holds, so a lost cursor degrades to "continue from the end" instead of losing
-the branch.
+recovery when a cursor is missing, corrupt (including an out-of-bounds count),
+or names an id the file no longer holds, so a lost cursor degrades to "continue
+from the end" instead of losing the branch.
 
 **Stale cursors lose to the tail.** The count in the cursor tells a crash apart
 from a fork: a file that grew past the counted length in one unbroken parent
@@ -247,9 +247,11 @@ Two consumers read the transcript back:
   order, model switches resolved through a resolver (a failure to resolve is
   a setting change left unapplied), and setting overrides applied per key
   (`applySetting` accepts both `tools.enabled`, the dotted form of any config
-  key) from `session.SettingOverrides(branch)`, which returns the last value
-  per setting_change. Reads go through a branch, never raw file order: a
-  transcript with forks restores only that branch's chain, not a sibling's.
+  key). The last value per setting_change comes from
+  `session.SettingOverrides(branch)`, where a reset surfaces as null and the
+  resume seed treats that as removal. Reads go through a branch, never
+  raw file order: a transcript with forks restores only that branch's chain,
+  not a sibling's.
 - **Replay** re-submits a restored branch to a sink (`session.Replay`), so a
   rewound or resumed session shows its history as fresh committed lines rather
   than erasing scrollback. User prompts open their own turn through `UserPrompt`

@@ -22,9 +22,24 @@ Configuration resolves lowest to highest precedence:
    and `ui.render` ride it; the one-shot flags deliberately do not (see below).
 7. **session** — per-key session overrides that survive resume, recorded from
    `/settings` and runtime mode cycles; empty at a fresh start.
-Merge is per-key: objects fold deeply, arrays and scalars replace wholesale.
+Merge is per-key: objects fold deeply, arrays and scalars replace wholesale. A
+JSON `null` never replaces an object subtree (it cannot deep-fold), so it is
+ignored at merge time instead of stripping every default beneath it. Object keys
+that match the schema only by letter case are normalized to each field's
+declared name when a file layer loads, so merge, provenance and typed decode
+agree on one spelling.
 `Resolved.Explain(key)` returns the resolved value plus the layer that supplied
 it. That is the difference between a config system and a mystery.
+
+### Session override reset
+
+`ClearSession` is the layer's one removal primitive: it drops keys (pruning
+intermediate objects left empty) so normal precedence applies again. The Reset
+overrides row in `/settings` offers `SessionOverrides`' dotted paths plus an
+all-keys entry, and each reset re-applies the key's resolved value live, so the
+surface never reports one layer while running another. A reset records a
+JSON-null `setting_change` (never for permission mode), which the resume seed
+reads back as removal rather than re-applying.
 
 A `Set` is safe for concurrent use: settings are read while a turn runs (the
 prompt pump, mid-turn compaction) and written from key handlers on another
@@ -212,6 +227,11 @@ Saving re-marshals an order-preserving object tree: unknown keys and key order
 survive, formatting is normalized, comments are dropped. When the target file
 already carries `//` comments the save warns that they will be lost. Writes go
 through `WriteFileAtomic` with secret permissions.
+
+`OverlayJSON` exposes the same preservation rule for typed saves elsewhere:
+struct-marshaled JSON overlays a file's contents, keeping keys the given schema
+does not declare (array elements pair by their `id`). models.json saving uses
+it (see providers-design.md).
 
 ## Build version
 

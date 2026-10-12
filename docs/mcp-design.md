@@ -193,10 +193,10 @@ package stays free of `pkg/tools`.
 - **Resume ordering.** Registration honors restore because `Options.Restore`
   carries the persisted enabled set into the constructor; the registry's own
   enable state is applied before MCP connects, so eager registration never drops
-  a restored subset. Re-registration always restores a source's full live
-  split, including tools the user turned off via `/tools`.
+  a restored subset. Re-registration carries over deliberate `/tools` toggles,
+  while untouched names follow the config default in force at each registration.
 - **`tools/list_changed`** triggers re-discovery: unregister source, register
-  fresh, preserving live enable state. It runs through `rediscan`, which
+  fresh, preserving deliberate enable state. It runs through `rediscan`, which
   serializes per server and bounds each pass with its own timeout so an
   unresponsive server surfaces an error rather than leaking a goroutine or
   hanging. Discovery covers tools only; resources/prompts are not exposed.
@@ -211,6 +211,13 @@ package stays free of `pkg/tools`.
   the server's **next connect**. A reconnect also re-reads stored config, so a death
   silently adopts the new endpoint whichever comes first: `/mcp disconnect` +
   reload or an automatic reconnect.
+- **Keep-state is reconciled against its era, never copied.** A captured
+  enabled/disabled split mixes old defaults with deliberate `/tools` toggles,
+  which the registry alone cannot tell apart. So every capture names the config
+  that was in force when it was taken and keeps only names whose state departed
+  from what that config implied. Registration layers those over current
+  defaults, so an `enabled` flip reaches a connected server instead of being
+  pinned by pre-flip defaults while genuine toggles survive every refresh.
 
 **Lock ownership.** `server.mu` guards every mutable per-server field (client,
 failure counters, discovered defs, config); `Manager.mu` only
@@ -246,7 +253,12 @@ status path.
 A stdio child's stderr is streamed to `/mcp logs` one line per entry
 (`bufio.Reader`, no fixed cap), so a long or newline-less line is never dropped.
 Only an actual EOF or read error marks the child as exited and triggers
-reconnection. A stdio server failing its **first** dial (Preload, `/mcp reload`
+reconnection. The watcher keeps the client dial installed, and a reconnect tears
+down only that exact client while it is still the installed one: grandchildren
+can hold the stderr fd past process death, so a late EOF must never close a
+successor installed by an explicit disconnect plus connect or a reload. A stdio
+server failing its **first** dial (Preload,
+`/mcp reload`
 or the initial connect against a server that is offline or not yet installed)
 enters the same capped-backoff loop a death would, so it comes up on its own.
 Network servers never do (see above). The initialize handshake is bounded too

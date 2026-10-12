@@ -331,7 +331,9 @@ observed. When `AGENTS.md` already exists it is read in stage 1 and the
 instruction becomes a correction pass instead: treat the survey as source of
 truth, correct what it contradicts, add what shows missing, keep existing
 structure and wording where they are still right (a correction pass not a
-rewrite).
+rewrite). That choice gates on the stage-1 read result, never the stat alone:
+an existing file whose read failed fails the survey rather than instructing
+corrections over content no one saw.
 
 Two rules are load-bearing and asserted verbatim. **Brevity**: the file is read
 on every turn, so a long one is a tax paid forever (principle 7 applied to the

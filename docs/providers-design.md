@@ -402,6 +402,13 @@ existing file so setup only ever adds. A local server URL pasted without a path
 inherits the flavor default's path, so a bare `http://host:port` still reaches
 the OpenAI-compatible chat endpoint.
 
+`SaveUserFile` follows config.json's writer contract (see
+config-design.md "The writer") by saving through `config.OverlayJSON`: declared
+fields follow the saved struct, unrecognized keys anywhere in the current file
+survive, array elements pair by their `id`, and a save over a commented file
+warns first. Declared-but-unset fields do not resurrect: what the struct view
+omits is gone.
+
 ## Registry and discovery
 
 Nothing about models is compiled in except per-flavor endpoint and capability
@@ -647,16 +654,21 @@ enriches, never adds or removes.
 
 **10. Credentials never reach a log or an error.** Redaction happens inside
 `pkg/httputil` before the hook is called, so a hook cannot leak by forgetting.
-Masked: `Authorization`, `X-Api-Key`, `Api-Key`, `Proxy-Authorization`,
-`Cookie`, `Set-Cookie`, `X-Goog-Api-Key`, `Openai-Organization`; URL
-credentials — userinfo is dropped and query parameters are matched
-case-insensitively against separators-stripped names (`key`, `apikey`,
-`token`, `accesstoken`, `auth`, `secret`, `signature`); and the truncated
-error body, which some providers echo the key into — both literal request
-credential values and common key shapes (`sk-…`, `AIza…`, `Bearer …`).
-Transport errors get the same treatment: the `*url.Error` URL is rewritten to
-its redacted form before the error leaves the package, so what a caller prints
-agrees with the LogEvent.
+One matcher covers header names and query parameters: after lowercasing and
+stripping `_`/`-`, a name matching the seed list (`authorization`,
+`proxy-authorization`, `cookie`, `set-cookie`, `openai-organization`, `auth`)
+is masked, as is any name ending in `key`, `token`, `secret` or `signature`.
+The ending rule keeps custom and compound names covered without an exhaustive
+list, and over-masking a benign name only costs log detail. Masked surfaces:
+every credential request header (the map is walked rather than probed, so
+non-canonical casing cannot slip past), URL credentials (userinfo dropped,
+query parameters matched by the same rule) and the error body some providers
+echo the key into. The body scrubs literal request credential values
+longest-first plus common key shapes (`sk-…`, `AIza…`, `Bearer …`) before
+clipping to its keep limit, so a credential straddling the cut cannot survive
+as a partial prefix. Transport errors get the same treatment: the `*url.Error`
+URL is rewritten to its redacted form before leaving the package, so what a
+caller prints agrees with the LogEvent.
 
 **11. `sse.go` knows no dialect.** No JSON, no vendor names, one const for the
 `[DONE]` sentinel and a method to report it, with the policy left to the caller.
