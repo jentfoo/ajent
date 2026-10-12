@@ -101,6 +101,31 @@ func TestSteerQueuePullJoinsAndDelivers(t *testing.T) {
 	require.GreaterOrEqual(t, cleared, 1)
 }
 
+func TestSteerQueueHold(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeQueueUI{}
+	var subs []int
+	q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, func() {})
+
+	// the pump offers before it knows the input is held, so hold must undo that
+	// drain mark: a queued row with no drain running, tokens still reserved
+	require.False(t, q.offer(agent.Input{}, "", 0))
+	q.hold(agent.Input{Text: "held"}, "held", 5)
+	assert.Equal(t, []string{"held"}, fake.lastQueued())
+	assert.Equal(t, []int{5}, subs)
+	assert.False(t, q.draining) // the gated submit starts its own drain
+	require.Equal(t, 1, q.pending())
+
+	out, ok := q.take() // delivers once the gate passes and a turn runs
+	require.True(t, ok)
+	require.Len(t, out, 1)
+	assert.Equal(t, "held", out[0].Text)
+
+	_, ok = q.take()
+	assert.False(t, ok) // drained; the next offer starts a fresh drain
+}
+
 func TestSteerQueueDeliveredEchoesImages(t *testing.T) {
 	t.Parallel()
 

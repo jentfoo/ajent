@@ -99,11 +99,22 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 					continue // queued as a dimmed row, the echo lands at delivery
 				}
 				// only reached with no drain running, so a workflow may branch here
+				captured := false
 				if hooks.beforePrompt != nil {
 					if wrapped, ok := hooks.beforePrompt(ctx, in); ok {
 						in = wrapped
 						est = submitEstimate(in, pending)
+						captured = true
 					}
+				}
+				// parked at a user gate: only the captured submission clears it, so
+				// anything else joins the queued rows and delivers once the gate passes
+				if !captured && hooks.parked != nil && hooks.parked() {
+					q.hold(in, echo, est)
+					if gate != nil {
+						gate.taken()
+					}
+					continue // held as a dimmed row, the echo lands at delivery
 				}
 				if echo != "" {
 					ui.UserEcho(echo)
@@ -206,6 +217,13 @@ func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent
 					inputs = []agent.Input{next}
 					continue
 				}
+			}
+			// parked at a user gate: queued steering never passed beforePrompt, so
+			// delivering it here would run an ungated turn. It holds until the gated
+			// submit starts the next one.
+			if hooks.parked != nil && hooks.parked() {
+				q.stopDrain()
+				break
 			}
 			if err != nil {
 				q.stopDrain() // leave items queued as rows, do not hammer a failing provider

@@ -62,6 +62,19 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 	return true
 }
 
+// hold queues an item while no drain runs: a parked-gate input the gate did not
+// capture. The pump offered it first, so reset that drain mark or the gated
+// submit would queue behind it and never run. Delivery waits for whatever turn
+// the gated submit starts next.
+func (s *steerQueue) hold(in agent.Input, label string, est int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.draining = false
+	s.items = append(s.items, steerItem{input: in, label: label, est: est})
+	s.refreshLocked()
+}
+
 // join splits the queue into contiguous provenance runs (caller holds the
 // lock): items sharing an Injected value merge into one input, texts joined by
 // newline, Before blocks and After resolvers chained in submit order. A
@@ -187,8 +200,8 @@ func (s *steerQueue) take() ([]agent.Input, bool) {
 	return s.join(), true
 }
 
-// stopDrain marks draining off after a Prompt error. Items stay queued as rows
-// so a failing provider is not hammered, and the next submit delivers them.
+// stopDrain marks draining off while items stay queued as rows: a failing provider
+// is not hammered and parked-gate steering holds; the next submit delivers them.
 func (s *steerQueue) stopDrain() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

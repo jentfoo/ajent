@@ -131,6 +131,13 @@ func (c *Controller) Active() bool {
 	return c.phase.active()
 }
 
+// Parked reports whether the workflow waits at the plan gate.
+func (c *Controller) Parked() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.phase == PhaseAwaitingPlan
+}
+
 // Status returns a one-line description of the workflow, empty when idle.
 func (c *Controller) Status() string {
 	c.mu.Lock()

@@ -211,3 +211,30 @@ func TestControllerStatus(t *testing.T) {
 	assert.Contains(t, c.Status(), "round=1/4")
 	assert.Contains(t, f.statuses, "plan: planning (r1/4)")
 }
+
+func TestControllerParked(t *testing.T) {
+	t.Parallel()
+
+	t.Run("idle_not_parked", func(t *testing.T) {
+		c := New(newFakeHost().host())
+		assert.False(t, c.Parked())
+	})
+
+	t.Run("planning_not_parked", func(t *testing.T) {
+		c, _ := started(t)
+		assert.False(t, c.Parked())
+	})
+
+	t.Run("awaiting_plan_parked", func(t *testing.T) {
+		c, _ := started(t)
+		handOff(t, c, "the plan")
+		assert.True(t, c.Parked())
+	})
+
+	t.Run("implementation_not_parked", func(t *testing.T) {
+		c, _ := started(t)
+		handOff(t, c, "the plan")
+		submitPlan(t, c, "the plan")
+		assert.False(t, c.Parked())
+	})
+}

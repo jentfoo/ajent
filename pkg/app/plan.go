@@ -18,7 +18,7 @@ import (
 )
 
 // planHooks are the workflow seams the pump and drain loop consult. A zero
-// value disables both, leaving dispatch exactly as it is with no workflow running.
+// value disables them, leaving dispatch exactly as it is with no workflow running.
 type planHooks struct {
 	// beforePrompt may rewrite a submitted input before it starts a turn. It runs
 	// on the pump goroutine with the agent idle, so it may switch branches.
@@ -26,6 +26,9 @@ type planHooks struct {
 	// advance runs at every turn boundary on the drain goroutine, errored turns
 	// included. A returned input continues the same drain loop as the next turn.
 	advance func(context.Context) (agent.Input, bool)
+	// parked reports whether the workflow waits at a user gate: no turn may run
+	// until a captured submission clears it, queued steering included.
+	parked func() bool
 }
 
 // turnRecorder keeps the last turn's result so a turn-boundary hook can tell a clean stop from an
@@ -154,6 +157,7 @@ func planHooksFor(ctl *plan.Controller, turnRec *turnRecorder) planHooks {
 	}
 	return planHooks{
 		beforePrompt: ctl.BeforePrompt,
+		parked:       ctl.Parked,
 		advance: func(ctx context.Context) (agent.Input, bool) {
 			return ctl.Advance(ctx, turnRec.last())
 		},
