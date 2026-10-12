@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -122,8 +123,22 @@ func rebuildUsage(t *tokens.Accounting, key string, md MessageData) {
 	t.Response(key, md.Usage, 0, true)
 }
 
-// applySetting folds one setting_change into state. Unknown keys are ignored.
+// applySetting folds one setting_change into state; unknown keys are ignored.
+// A JSON null marks a reset: the key's domain returns to what a rebuild without
+// any recorded change would carry, and resume re-derives it from seeded settings.
 func applySetting(st *agent.State, key string, value json.RawMessage) {
+	if len(value) == 0 {
+		return
+	}
+	if string(bytes.TrimSpace(value)) == "null" {
+		switch key {
+		case "reasoning", "reasoning.level", "reasoning.hide", "reasoning.retain":
+			st.Reasoning = llm.ReasoningConfig{}
+		case "tools", "tools.enabled": // dotted config key plus the legacy alias
+			st.Tools = nil
+		}
+		return
+	}
 	switch key {
 	case "reasoning":
 		var rc llm.ReasoningConfig
@@ -139,7 +154,8 @@ func applySetting(st *agent.State, key string, value json.RawMessage) {
 }
 
 // SettingOverrides returns the last written value per setting_change key on a
-// branch, for seeding the session config layer when resuming.
+// branch, for seeding the session config layer when resuming. A recorded reset
+// surfaces as JSON null, which SeedSession treats as removal.
 func SettingOverrides(branch []Entry) map[string]json.RawMessage {
 	out := make(map[string]json.RawMessage)
 	for _, e := range branch {

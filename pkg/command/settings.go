@@ -257,8 +257,55 @@ func allRows() []settingsRow {
 		{name: "Tool limits",
 			render: func(_ Console) (string, string) { return "Tool limits", "edit per-tool output bounds" },
 			edit:   func(ctx context.Context, c Console) ([]settingChange, error) { return editLimits(ctx, c) }},
+		{name: "Reset overrides", render: rowOverrides, edit: editOverrides,
+			unavailable: noOverrides},
 	}
 	return rows
+}
+
+// rowOverrides summarizes how many keys the session layer holds.
+func rowOverrides(c Console) (string, string) {
+	keys := c.Settings().SessionOverrides()
+	return "Reset overrides", fmt.Sprintf("%d this session", len(keys))
+}
+
+// noOverrides reports why nothing can be reset right now.
+func noOverrides(c Console) string {
+	if len(c.Settings().SessionOverrides()) == 0 {
+		return "no session overrides"
+	}
+	return ""
+}
+
+// editOverrides offers every key the session layer holds, one pick per reset,
+// plus an all-keys entry. A removal has nothing to persist, so no change is
+// returned and the save prompt never opens; the menu loop reopens on return.
+func editOverrides(ctx context.Context, c Console) ([]settingChange, error) {
+	keys := c.Settings().SessionOverrides()
+	items := make([]tui.PickItem, 0, len(keys)+1)
+	items = append(items, tui.PickItem{Label: "all overrides", Detail: fmt.Sprintf("%d keys", len(keys))})
+	for _, k := range keys {
+		items = append(items, tui.PickItem{Label: k})
+	}
+	picked, err := c.Pick(ctx, "Reset which override?", items, tui.PickOptions{})
+	if err != nil {
+		return nil, err
+	}
+	reset := func(k string) {
+		if err := c.ResetSessionSetting(k); err != nil {
+			c.Notify("could not reset "+k+": "+err.Error(), levelWarn)
+			return
+		}
+		c.Notify("reset "+k, levelInfo)
+	}
+	if picked == 0 {
+		for _, k := range keys {
+			reset(k)
+		}
+		return nil, nil
+	}
+	reset(keys[picked-1])
+	return nil, nil
 }
 
 // detail renders a key's raw value with its source layer.

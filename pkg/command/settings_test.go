@@ -431,3 +431,65 @@ func TestRowCompactionRendersFractionAndAbsolute(t *testing.T) {
 	assert.Contains(t, detailAbsolute, "tokens")
 	assert.NotContains(t, detailAbsolute, "%") // an absolute count must not read as a percentage
 }
+
+func TestEditOverrides(t *testing.T) {
+	// not parallel: the override setup uses Setenv
+
+	findRow := func(tb testing.TB, name string) settingsRow {
+		tb.Helper()
+		for i := range allRows() {
+			if allRows()[i].name == name {
+				return allRows()[i]
+			}
+		}
+		tb.Fatalf("settings row %q not found", name)
+		return settingsRow{}
+	}
+
+	t.Run("unavailable_without_overrides", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := findRow(t, "Reset overrides")
+		assert.Equal(t, "no session overrides", r.disabledReason(c))
+
+		_, err := r.edit(t.Context(), c) // no queued Pick reads as cancelled
+		require.ErrorIs(t, err, tui.ErrCancelled)
+		assert.Empty(t, c.resets)
+	})
+
+	t.Run("reset_removes_one_override", func(t *testing.T) {
+		t.Setenv(config.EnvHome, t.TempDir())
+		c := newFakeConsole(t)
+		require.NoError(t, c.settings.SetSession("model", "test/alpha"))
+
+		r := findRow(t, "Reset overrides")
+		assert.Empty(t, r.disabledReason(c))
+		label, detail := r.render(c)
+		assert.Equal(t, "Reset overrides", label)
+		assert.Contains(t, detail, "1 this session")
+
+		// item 0 is all-overrides, so item 1 is the model key itself
+		c.picks = []fakePick{{result: 1}}
+		changes, err := r.edit(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes) // a removal has nothing to persist
+
+		_, _, ok := c.settings.Explain("model")
+		assert.False(t, ok)
+		assert.Equal(t, []string{"model"}, c.resets)
+	})
+
+	t.Run("all_overrides_reset_together", func(t *testing.T) {
+		t.Setenv(config.EnvHome, t.TempDir())
+		c := newFakeConsole(t)
+		require.NoError(t, c.settings.SetSession("reasoning.level", "high"))
+		require.NoError(t, c.settings.SetSession("tools.limits.bash.lines", 10))
+
+		r := findRow(t, "Reset overrides")
+		c.picks = []fakePick{{result: 0}}
+		_, err := r.edit(t.Context(), c)
+		require.NoError(t, err)
+
+		assert.Empty(t, c.settings.SessionOverrides())
+		assert.Equal(t, []string{"reasoning.level", "tools.limits.bash.lines"}, c.resets)
+	})
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -165,6 +166,49 @@ func SetKey(data []byte, key string, value any) ([]byte, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// DeleteKey returns data with the dotted key removed and intermediate objects
+// the removal left empty pruned. A missing key returns data unchanged.
+func DeleteKey(data []byte, key string) ([]byte, error) {
+	root, err := parseNode(data)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(key, ".")
+	var containers []*object // containers[i] holds the object declaring parts[i]
+	cur := root
+	for _, seg := range parts {
+		if !cur.isObject() {
+			return data, nil // the path crosses a scalar, so the key cannot exist
+		}
+		child, ok := cur.obj.m[seg]
+		if !ok {
+			return data, nil
+		}
+		containers = append(containers, cur.obj)
+		cur = child
+	}
+	dropKey(containers[len(parts)-1], parts[len(parts)-1])
+	for i := len(parts) - 1; i > 0 && len(containers[i].keys) == 0; i-- {
+		dropKey(containers[i-1], parts[i-1]) // prune the emptied subtree's parent
+	}
+	out, err := indentJSON(root.marshal())
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// dropKey removes one key from an order-preserving object.
+func dropKey(o *object, seg string) {
+	delete(o.m, seg)
+	for i, k := range o.keys {
+		if k == seg {
+			o.keys = slices.Delete(o.keys, i, i+1)
+			return
+		}
+	}
 }
 
 // valueNode converts any marshals into a node.

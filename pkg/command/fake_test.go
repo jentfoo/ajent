@@ -34,6 +34,7 @@ type fakeConsole struct {
 	inputs     []string        // queued Input and InputSecret replies
 	secretAsks []string        // labels each InputSecret was asked with
 	saveCalls  []saveCall      // recorded SaveSetting calls
+	resets     []string        // recorded ResetSessionSetting keys
 
 	settings *config.Set
 	agents   Agents // set by tests exercising /agents, nil when unavailable
@@ -233,6 +234,18 @@ func (f *fakeConsole) SaveSetting(layer, key string, value any) error {
 }
 func (f *fakeConsole) SetSessionSetting(key string, value any) error {
 	return f.settings.SetSession(key, value)
+}
+
+// ResetSessionSetting clears the override through the real config Set so tests
+// observe the same resolution a live console drives.
+func (f *fakeConsole) ResetSessionSetting(key string) error {
+	if err := f.settings.ClearSession(key); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resets = append(f.resets, key)
+	return nil
 }
 func (f *fakeConsole) SessionName() string { return f.sessionName }
 func (f *fakeConsole) SetSessionName(name string) error {

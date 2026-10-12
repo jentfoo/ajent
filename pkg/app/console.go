@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/jentfoo/ajent/pkg/mcp"
@@ -130,12 +131,15 @@ func (c *uiConsole) SetSessionName(name string) error {
 	return c.rec.Rename(canonical)
 }
 
+// keyPermissionMode is the dotted config key driving the live permission barrier.
+const keyPermissionMode = "permissions.mode"
+
 // SetSessionSetting applies a dotted key as a session override and records it so a
 // resume restores it, mirroring ToolsChanged. permissions.mode is the exception: it
 // drives the live barrier but never records a setting_change entry, so a resumed
 // session always starts from the configured (or default) mode.
 func (c *uiConsole) SetSessionSetting(key string, value any) error {
-	if key == "permissions.mode" && c.permit != nil {
+	if key == keyPermissionMode && c.permit != nil {
 		s := fmt.Sprint(value)
 		if m, ok := permit.ParseMode(s); ok {
 			c.permit.SetMode(m)
@@ -153,10 +157,89 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 	}
 	// permission mode is applied for this run only and never written to a
 	// setting_change entry, so it cannot be restored on resume.
-	if c.rec != nil && key != "permissions.mode" {
+	if c.rec != nil && key != keyPermissionMode {
 		return c.rec.SettingChange(key, value)
 	}
 	return nil
+}
+
+// ResetSessionSetting clears key's session override so lower config layers apply
+// again. The reset records a null setting_change (SeedSession reads it back as a
+// removal) except for permissions.mode, which never persists like its override.
+func (c *uiConsole) ResetSessionSetting(key string) error {
+	if err := c.set.ClearSession(key); err != nil {
+		return err
+	}
+	if c.rec != nil && key != keyPermissionMode {
+		if err := c.rec.SettingChange(key, nil); err != nil {
+			return err
+		}
+	}
+	c.reapplyResolved(key)
+	return nil
+}
+
+// reapplyResolved refreshes the live surface key's override had driven, reading
+// the resolved settings that now fold every lower layer. Keys with no live
+// effect (limits, subagent concurrency) are read per use and need nothing.
+func (c *uiConsole) reapplyResolved(key string) {
+	switch {
+	case key == keyPermissionMode:
+		if c.permit == nil {
+			return
+		}
+		// the resolved mode is authoritative on every start, so it is what a reset returns to
+		if m, ok := permit.ParseMode(c.set.Settings().Permissions.Mode); ok {
+			c.permit.SetMode(m)
+			showPermissionIndicator(c.ui, c.permit)
+		}
+	case key == "compaction.threshold":
+		c.applyCompactThreshold(c.set.Settings().Compaction.Threshold)
+	case key == "images.block":
+		applyImagesBlock(c.set)
+	case key == "tools.enabled" && c.tools != nil:
+		// mirrors ToolsChanged's live side effects, minus its re-recording
+		c.tools.SetEnabled(c.set.Settings().Tools.Enabled)
+		if c.mcp.m != nil {
+			c.mcp.RefreshStatus()
+		}
+		if c.Started() && c.refreshBase != nil {
+			c.refreshBase()
+		}
+	case key == "model":
+		c.reapplyModel()
+	case key == "reasoning" || strings.HasPrefix(key, "reasoning."):
+		c.reapplyReasoning()
+	}
+}
+
+// reapplyModel switches back onto the configured model when one resolves, so a
+// reset undoes a /model override live instead of at the next start. An unset or
+// unresolvable default keeps the running model.
+func (c *uiConsole) reapplyModel() {
+	key := c.set.Settings().Model
+	if key == "" || key == c.st.Model.Key() {
+		return
+	}
+	m, err := c.reg.Resolve(key)
+	if err != nil {
+		c.ui.Notify("model: configured default unavailable: "+err.Error(), tui.LevelWarn)
+		return
+	}
+	c.SetModel(m)                   // refuses mid-turn with a notice, no-op when already active
+	_ = c.set.ClearSession("model") // undo the override SetModel just re-pinned
+}
+
+// reapplyReasoning rebuilds the live reasoning config from the resolved settings,
+// mirroring what a fresh start derives.
+func (c *uiConsole) reapplyReasoning() {
+	rc := llm.ReasoningFrom(c.set.Settings().Reasoning, c.st.Model)
+	applied := c.applyState("reasoning cannot change while a turn is running", func(s *agent.State) {
+		s.Reasoning = rc
+	})
+	if applied {
+		c.ui.SetStatusSegment(segment(segReasoning, levelOrEmpty(rc), ""))
+	}
 }
 
 // applyCompactThreshold re-defaults the registry and refreshes the live model, so a /settings edit

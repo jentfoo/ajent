@@ -156,8 +156,57 @@ func (s *Set) SetSession(key string, value any) error {
 	return nil
 }
 
+// ClearSession removes keys from the session layer so lower layers apply again.
+// Keys the layer does not declare are ignored; a whole subtree key drops every
+// override beneath it.
+func (s *Set) ClearSession(keys ...string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data := s.session.Data
+	for _, key := range keys {
+		next, err := DeleteKey(data, key)
+		if err != nil {
+			return err
+		}
+		data = next
+	}
+	s.session = Layer{Name: "session", Data: data}
+	s.valid = false
+	return nil
+}
+
+// SessionOverrides returns the dotted leaf paths the session layer declares,
+// sorted. Overridden object subtrees flatten to their leaves.
+func (s *Set) SessionOverrides() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	root, err := parseNode(s.session.Data)
+	if err != nil || !root.isObject() {
+		return nil
+	}
+	var out []string
+	collectLeaves(root, "", &out)
+	slices.Sort(out)
+	return out
+}
+
+// collectLeaves appends one path per scalar or array under v.
+func collectLeaves(v *val, prefix string, out *[]string) {
+	for _, k := range v.obj.keys {
+		child := v.obj.m[k]
+		path := join(prefix, k)
+		if child.isObject() && len(child.obj.keys) > 0 {
+			collectLeaves(child, path, out)
+			continue
+		}
+		*out = append(*out, path) // a scalar, array or empty object is resettable as-is
+	}
+}
+
 // SeedSession folds resumed setting overrides into the session layer. Keys
 // apply in sorted order so shared object subtrees keep a stable shape across runs.
+// A JSON null marks a recorded reset: the key leaves the session layer instead
+// of overriding with null, which no lower layer could mean.
 func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -167,6 +216,10 @@ func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
 	for _, k := range keys {
 		v := overrides[k]
 		if len(v) == 0 {
+			continue
+		}
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			data, _ = DeleteKey(data, k)
 			continue
 		}
 		data, _ = SetKey(data, k, v)

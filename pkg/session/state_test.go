@@ -133,6 +133,16 @@ func TestSettingOverridesLastWriteWins(t *testing.T) {
 	ov := SettingOverrides(branch)
 	assert.JSONEq(t, `{"level":"high"}`, string(ov["reasoning"]))
 	assert.JSONEq(t, `["bash"]`, string(ov["tools.enabled"]))
+
+	t.Run("reset_surfaces_as_null", func(t *testing.T) {
+		branch := []Entry{
+			settingChange("model", `"p/m1"`),
+			msgWithID("m1", llm.Text(llm.RoleUser, "hi")),
+			settingChange("model", `null`),
+		}
+		ov := SettingOverrides(branch)
+		assert.JSONEq(t, `null`, string(ov["model"])) // SeedSession reads this as removal
+	})
 }
 
 func TestStateLedger(t *testing.T) {
@@ -367,4 +377,48 @@ func TestStateTurnCountIgnoresCompaction(t *testing.T) {
 	assert.Equal(t, 2, plain.Tokens.TurnsCount())
 	assert.Equal(t, plain.Tokens.TurnsCount(), rewritten.Tokens.TurnsCount())
 	assert.Zero(t, rewritten.Tokens.EstimatedTurns())
+}
+
+func TestStateAppliesResetEntries(t *testing.T) {
+	t.Parallel()
+
+	// a null value marks a reset: the domain returns to what a rebuild without
+	// any recorded change would carry, no matter what earlier entries set.
+	t.Run("null_zeroes_reasoning_domain", func(t *testing.T) {
+		branch := []Entry{
+			settingChange("reasoning", `{"level":"high","retain":"all"}`),
+			settingChange("reasoning.level", `null`),
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		assert.Equal(t, llm.ReasoningConfig{}, st.Reasoning)
+	})
+
+	t.Run("null_clears_tools", func(t *testing.T) {
+		branch := []Entry{
+			settingChange("tools.enabled", `["read","bash"]`),
+			settingChange("tools.enabled", `null`),
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		assert.Nil(t, st.Tools)
+	})
+
+	t.Run("later_entries_win_after_reset", func(t *testing.T) {
+		branch := []Entry{
+			settingChange("tools.enabled", `["read"]`),
+			settingChange("tools.enabled", `null`),
+			settingChange("tools.enabled", `["grep"]`),
+		}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		assert.Equal(t, []string{"grep"}, st.Tools)
+	})
+
+	t.Run("unknown_key_ignored", func(t *testing.T) {
+		branch := []Entry{settingChange("compaction.threshold", `null`)}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		assert.Zero(t, st.Reasoning)
+	})
 }

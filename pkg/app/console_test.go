@@ -346,3 +346,147 @@ func TestUIConsolePermissionModeAppliesButNotRecorded(t *testing.T) {
 }
 
 func ptrTo[T any](v T) *T { return &v }
+
+func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
+	// not parallel: every subtest asserts against the compiled-in defaults, so
+	// AJENT_HOME must pin away any real user config for the whole test
+	t.Setenv("AJENT_HOME", t.TempDir())
+
+	t.Run("compact_threshold_returns_to_default", func(t *testing.T) {
+		ui := newPumpTestUI(t)
+		f := llm.File{Providers: map[string]llm.ProviderConfig{
+			"p": {Flavor: llm.FlavorAnthropic, Models: []llm.ModelConfig{
+				{ID: "big", ContextWindow: ptrTo(200000)},
+			}},
+		}}
+		reg, _ := llm.NewRegistry(f, nil, llm.RegistryOptions{})
+		model, err := reg.Resolve("p/big")
+		require.NoError(t, err)
+
+		st := &agent.State{Model: model, Tokens: tokens.New(model)}
+		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: agent.New(st, agent.Options{})}
+
+		require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
+		assert.Equal(t, 100000, st.Tokens.Context().Compact)
+		require.NoError(t, c.ResetSessionSetting("compaction.threshold"))
+		assert.InDelta(t, 0.8, set.Settings().Compaction.Threshold, 1e-09)
+		assert.Equal(t, 160000, st.Tokens.Context().Compact) // the compiled-in default again
+	})
+
+	t.Run("reasoning_falls_back_to_resolved", func(t *testing.T) {
+		ui := newPumpTestUI(t)
+		f := llm.File{Providers: map[string]llm.ProviderConfig{
+			"p": {Flavor: llm.FlavorAnthropic, Models: []llm.ModelConfig{
+				{ID: "big", ContextWindow: ptrTo(200000), Reasoning: ptrTo(true)},
+			}},
+		}}
+		reg, _ := llm.NewRegistry(f, nil, llm.RegistryOptions{})
+		model, err := reg.Resolve("p/big")
+		require.NoError(t, err)
+		st := &agent.State{Model: model, Tokens: tokens.New(model)}
+		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: agent.New(st, agent.Options{})}
+
+		c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
+		assert.Equal(t, llm.LevelHigh, st.Reasoning.Level)
+		require.NoError(t, c.ResetSessionSetting("reasoning.level"))
+		assert.Equal(t, llm.LevelMedium, st.Reasoning.Level) // the compiled-in default
+		_, layer, ok := set.Explain("reasoning.level")
+		require.True(t, ok)
+		assert.Equal(t, "default", layer)
+	})
+
+	t.Run("permission_mode_returns_to_configured", func(t *testing.T) {
+		reg := tools.New()
+		reg.Register(&stubTool{name: "read"}, true)
+		barrier := permit.NewBarrier(reg.ReadOnly, permit.Options{})
+		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+
+		c := &uiConsole{set: set, permit: barrier}
+		require.NoError(t, c.SetSessionSetting("permissions.mode", "auto"))
+		assert.Equal(t, "auto", barrier.Mode().String())
+		require.NoError(t, c.ResetSessionSetting("permissions.mode"))
+		assert.Equal(t, "allow-read", barrier.Mode().String()) // the configured default
+	})
+}
+
+// Serial: flips the package-wide images gate.
+func TestUIConsoleResetImagesBlockBackToConfig(t *testing.T) {
+	set := loadTestConfig(t)
+	tools.SetImagesEnabled(false)
+	t.Cleanup(func() { tools.SetImagesEnabled(true) })
+
+	c := &uiConsole{set: set}
+	require.NoError(t, c.SetSessionSetting("images.block", true))
+	assert.False(t, tools.ImagesEnabled())
+	require.NoError(t, c.ResetSessionSetting("images.block"))
+	assert.True(t, tools.ImagesEnabled()) // the config default (block off) applies again
+}
+
+func TestUIConsoleResetModelSwitchesBackToConfigured(t *testing.T) {
+	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+	t.Setenv("AJENT_HOME", t.TempDir())
+
+	home, err := config.UserPath(config.ConfigFileName)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(home, []byte(`{"model":"p/big"}`), 0o600))
+
+	ui := newPumpTestUI(t)
+	f := llm.File{Providers: map[string]llm.ProviderConfig{
+		"p": {Flavor: llm.FlavorAnthropic, Models: []llm.ModelConfig{
+			{ID: "big", ContextWindow: ptrTo(200000)},
+			{ID: "small", ContextWindow: ptrTo(10000)},
+		}},
+	}}
+	reg, _ := llm.NewRegistry(f, nil, llm.RegistryOptions{})
+	big, err := reg.Resolve("p/big")
+	require.NoError(t, err)
+	small, err := reg.Resolve("p/small")
+	require.NoError(t, err)
+
+	st := &agent.State{Model: big, Tokens: tokens.New(big)}
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: agent.New(st, agent.Options{})}
+
+	c.SetModel(small) // the override this reset must undo
+	assert.Equal(t, "p/small", st.Model.Key())
+
+	require.NoError(t, c.ResetSessionSetting("model"))
+	assert.Equal(t, "p/big", st.Model.Key()) // switched back onto the configured model
+	_, layer, ok := set.Explain("model")     // and the override is gone, not re-pinned
+	require.True(t, ok)
+	assert.Equal(t, "user", layer)
+}
+
+func TestUIConsoleResetRecordsNullSettingChange(t *testing.T) {
+	t.Parallel()
+
+	ui := newPumpTestUI(t)
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := session.Create(path, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	c := &uiConsole{ui: ui, set: set, rec: session.NewRecorder(w)}
+
+	require.NoError(t, c.SetSessionSetting("compaction.auto", false))
+	require.NoError(t, c.ResetSessionSetting("compaction.auto"))
+
+	entries, _, err := session.Read(path)
+	require.NoError(t, err)
+	ov := session.SettingOverrides(entries)
+	assert.JSONEq(t, `null`, string(ov["compaction.auto"]))
+
+	// a resumed run seeds the same map: the reset must drop the override a
+	// live Set still holds, leaving the resolved default in charge
+	resumed := loadTestConfig(t)
+	require.NoError(t, resumed.SetSession("compaction.auto", false))
+	assert.False(t, resumed.Settings().Compaction.Auto)
+	resumed.SeedSession(ov)
+	assert.True(t, resumed.Settings().Compaction.Auto)
+}

@@ -171,6 +171,21 @@ func TestSeedSession(t *testing.T) {
 		_, _, ok := s.Explain("agent.maxSteps")
 		assert.False(t, ok)
 	})
+
+	t.Run("null_removes_recorded_reset", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", t.TempDir())
+		s, _, err := Load(Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		require.NoError(t, s.SetSession("model", "stale"))
+
+		s.SeedSession(map[string]json.RawMessage{
+			"model":           json.RawMessage(`null`), // a reset beats the older live override
+			"reasoning.level": json.RawMessage(`"high"`),
+		})
+		_, _, ok := s.Explain("model")
+		assert.False(t, ok)
+		assert.Equal(t, "high", s.Settings().Reasoning.Level)
+	})
 }
 
 func TestSave(t *testing.T) {
@@ -273,4 +288,70 @@ func mustFlagLayer(t *testing.T, kvs map[string]any) Layer {
 		require.NoError(t, err)
 	}
 	return Layer{Name: "flag", Data: data}
+}
+
+func TestClearSession(t *testing.T) {
+	newSet := func(tb testing.TB) *Set {
+		tb.Helper()
+		t.Setenv("AJENT_HOME", tb.TempDir())
+		s, _, err := Load(Options{Workspace: tb.TempDir()})
+		require.NoError(tb, err)
+		return s
+	}
+
+	t.Run("falls_back_to_lower_layer", func(t *testing.T) {
+		s := newSet(t)
+		require.NoError(t, s.SetSession("model", "session-model"))
+		assert.Equal(t, "session-model", s.Settings().Model)
+
+		require.NoError(t, s.ClearSession("model"))
+		assert.Empty(t, s.Settings().Model) // no layer below declares model either
+		_, _, ok := s.Explain("model")
+		assert.False(t, ok)
+	})
+
+	t.Run("clears_whole_subtree", func(t *testing.T) {
+		s := newSet(t)
+		require.NoError(t, s.SetSession("reasoning.level", "high"))
+		require.NoError(t, s.SetSession("reasoning.retain", "all"))
+
+		require.NoError(t, s.ClearSession("reasoning"))
+		// the compiled-in default applies again, like a session never overrode it
+		st := s.Settings()
+		assert.Equal(t, "medium", st.Reasoning.Level)
+		_, src, _ := s.Explain("reasoning.level")
+		assert.Equal(t, "default", src)
+	})
+
+	t.Run("unknown_key_is_harmless", func(t *testing.T) {
+		s := newSet(t)
+		require.NoError(t, s.SetSession("model", "session-model"))
+		require.NoError(t, s.ClearSession("agent.maxSteps", "missing.key"))
+		assert.Equal(t, "session-model", s.Settings().Model)
+	})
+}
+
+func TestSessionOverrides(t *testing.T) {
+	t.Run("empty_when_no_overrides", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", t.TempDir())
+		s, _, err := Load(Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		assert.Empty(t, s.SessionOverrides())
+	})
+
+	t.Run("lists_sorted_leaves", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", t.TempDir())
+		s, _, err := Load(Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+
+		require.NoError(t, s.SetSession("tools.limits.bash.lines", 10))
+		require.NoError(t, s.SetSession("model", "p/m"))
+		require.NoError(t, s.SetSession("reasoning.level", "high"))
+
+		assert.Equal(t, []string{"model", "reasoning.level", "tools.limits.bash.lines"},
+			s.SessionOverrides())
+
+		require.NoError(t, s.ClearSession("reasoning.level"))
+		assert.Equal(t, []string{"model", "tools.limits.bash.lines"}, s.SessionOverrides())
+	})
 }

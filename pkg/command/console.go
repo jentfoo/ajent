@@ -83,6 +83,10 @@ type Console interface {
 	// SetSessionSetting applies key as a session override and records it so a
 	// resume restores it. The caller owns the in-memory update.
 	SetSessionSetting(key string, value any) error
+	// ResetSessionSetting clears key's session override so lower config layers
+	// apply again, records the reset so a resume keeps it, and re-applies the
+	// key's live effect from the resolved settings.
+	ResetSessionSetting(key string) error
 
 	// SessionName returns this session's name, empty when it has none.
 	SessionName() string
