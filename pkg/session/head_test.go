@@ -30,6 +30,7 @@ func TestWriteReadHead(t *testing.T) {
 			{name: "no_sidecar"},
 			{name: "garbage_json", content: "not json"},
 			{name: "empty_cursor", content: `{"id":""}`},
+			{name: "negative_count", content: `{"id":"a","n":-1}`},
 		}
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
@@ -135,10 +136,18 @@ func TestHeadFor(t *testing.T) {
 		assert.Equal(t, "a", headFor(p, entries))
 	})
 
-	// a file shorter than the counted length was truncated, keep the cursor
-	t.Run("short_file_keeps_cursor", func(t *testing.T) {
+	// a count past the end of file cannot be one writeHead produced, so it is
+	// as untrustworthy as an id the file no longer holds
+	t.Run("oversized_count_falls_back", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
-		require.NoError(t, writeHead(p, "b", len(entries)+2))
+		require.NoError(t, writeHead(p, "a", len(entries)+5))
+		assert.Equal(t, "b", headFor(p, entries))
+	})
+
+	// a negative count would slice chainFrom out of bounds, so it falls back
+	t.Run("negative_count_falls_back", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		require.NoError(t, os.WriteFile(headPath(p), []byte(`{"id":"a","n":-1}`), 0o600))
 		assert.Equal(t, "b", headFor(p, entries))
 	})
 
@@ -147,6 +156,14 @@ func TestHeadFor(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		require.NoError(t, writeHead(p, "gone", 5))
 		assert.Equal(t, "b", headFor(p, entries))
+	})
+
+	// an out-of-range count degrades to tail recovery like any other bad
+	// cursor, even on an empty file where there is nothing to fall back to
+	t.Run("out_of_range_count_empty_file", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		require.NoError(t, os.WriteFile(headPath(p), []byte(`{"id":"a","n":-1}`), 0o600))
+		assert.Empty(t, headFor(p, nil))
 	})
 
 	// a sibling session's cursor must not steer this one

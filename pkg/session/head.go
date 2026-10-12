@@ -42,14 +42,15 @@ func removeHead(sessionPath string) error {
 }
 
 // readHead returns the persisted branch cursor for the transcript at
-// sessionPath. ok is false when it is missing, empty or corrupt.
+// sessionPath. ok is false when it is missing, empty, corrupt, or carries a
+// negative entry count.
 func readHead(sessionPath string) (headCursor, bool) {
 	b, err := os.ReadFile(headPath(sessionPath))
 	if err != nil || len(b) == 0 {
 		return headCursor{}, false
 	}
 	var cur headCursor
-	if json.Unmarshal(b, &cur) != nil || cur.ID == "" {
+	if json.Unmarshal(b, &cur) != nil || cur.ID == "" || cur.N < 0 {
 		return headCursor{}, false
 	}
 	return cur, true
@@ -58,14 +59,15 @@ func readHead(sessionPath string) (headCursor, bool) {
 // headFor resolves the branch head for one transcript: the persisted cursor
 // unless the file grew past the cursor's recorded count in one parent chain,
 // which means unsynced appends from a crash rather than a fork. Falls back to
-// tail recovery when the cursor is missing, corrupt or unresolvable.
+// tail recovery when the cursor is missing, corrupt, carries a count outside
+// the file's bounds, or names an id the file no longer holds.
 func headFor(path string, entries []Entry) string {
 	cur, ok := readHead(path)
 	if !ok {
 		return Head(entries)
 	}
 	i := slices.IndexFunc(entries, func(e Entry) bool { return e.ID == cur.ID })
-	if i < 0 {
+	if i < 0 || cur.N > len(entries) {
 		return Head(entries)
 	}
 	if cur.N == 0 {
