@@ -86,6 +86,22 @@ func TestLoad(t *testing.T) {
 		// the wrong-typed key is dropped but its siblings still apply
 		assert.Equal(t, "keep", s.Settings().Model)
 	})
+
+	t.Run("odd_case_keys_normalize", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		writeConfig(t, userPathFor(t), `{"UI":{"Theme":"dark"}}`)
+
+		s, warns, err := Load(Options{Workspace: filepath.Join(home, "proj")})
+		require.NoError(t, err)
+		require.NotEmpty(t, warns)
+		assert.Contains(t, warns[0], `normalized key "UI" to "ui"`)
+
+		// typed decode and provenance now agree on one spelling
+		st := s.Settings()
+		assert.Equal(t, "dark", st.UI.Theme)
+		assert.Equal(t, "user", s.Source("ui.theme"))
+	})
 }
 
 func TestSetConcurrentAccess(t *testing.T) {
@@ -186,6 +202,28 @@ func TestSave(t *testing.T) {
 		require.NoError(t, err)
 		_, err = s.Save("bogus", "model", "x")
 		assert.Error(t, err)
+	})
+
+	t.Run("save_normalizes_odd_case", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		writeConfig(t, userPathFor(t), `{"MODEL":"keep","UI":{"Theme":"dark"}}`)
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+
+		warns, err := s.Save("user", "reasoning.level", "high")
+		require.NoError(t, err)
+		assert.Empty(t, warns) // load already reported the renames; saving stays silent
+
+		b, err := os.ReadFile(s.userPath)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(b, &raw))
+		assert.NotContains(t, string(b), "MODEL") // no twin keys survive the save
+		assert.NotContains(t, string(b), `"UI"`)
+		assert.Equal(t, "keep", raw["model"])
+		assert.Equal(t, "dark", raw["ui"].(map[string]any)["theme"])
+		assert.Equal(t, "high", raw["reasoning"].(map[string]any)["level"])
 	})
 
 	t.Run("commented_file_saves", func(t *testing.T) {

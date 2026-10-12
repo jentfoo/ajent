@@ -100,6 +100,52 @@ func TestMergeEmptyLayerSkipped(t *testing.T) {
 	assert.Equal(t, `"medium"`, string(v))
 }
 
+func TestMergeNullHandling(t *testing.T) {
+	t.Parallel()
+
+	defaults := Layer{Name: "default", Data: []byte(`{"ui":{"theme":"dark"},"model":"d"}`)}
+
+	t.Run("null_over_object_ignored", func(t *testing.T) {
+		r, err := Merge(defaults, Layer{Name: "user", Data: []byte(`{"ui":null}`)})
+		require.NoError(t, err)
+
+		// the whole subtree and its provenance survive the null
+		v, src, ok := r.Explain("ui.theme")
+		require.True(t, ok)
+		assert.Equal(t, `"dark"`, string(v))
+		assert.Equal(t, "default", src)
+
+		var st Settings
+		require.NoError(t, json.Unmarshal(r.Bytes(), &st))
+		assert.Equal(t, "dark", st.UI.Theme) // typed decode keeps the default too
+	})
+
+	t.Run("null_over_scalar_replaces", func(t *testing.T) {
+		r, err := Merge(defaults, Layer{Name: "user", Data: []byte(`{"model":null}`)})
+		require.NoError(t, err)
+
+		v, src, ok := r.Explain("model")
+		require.True(t, ok)
+		assert.Equal(t, "null", string(v))
+		assert.Equal(t, "user", src)
+	})
+
+	t.Run("null_over_object_then_deep_fold", func(t *testing.T) {
+		r, err := Merge(
+			defaults,
+			Layer{Name: "user", Data: []byte(`{"ui":null}`)},
+			Layer{Name: "project", Data: []byte(`{"ui":{"render":"auto"}}`)},
+		)
+		require.NoError(t, err)
+
+		v, src, ok := r.Explain("ui.render")
+		require.True(t, ok)
+		assert.Equal(t, `"auto"`, string(v))
+		assert.Equal(t, "project", src)
+		assert.Equal(t, "default", r.Source("ui.theme")) // earlier layers still count
+	})
+}
+
 func TestMergeSourceProvenance(t *testing.T) {
 	t.Parallel()
 

@@ -26,6 +26,11 @@ const (
 
 func (v *val) isObject() bool { return v != nil && v.k == kindObj }
 
+// isNull reports whether v holds the JSON null literal.
+func (v *val) isNull() bool {
+	return v != nil && v.k == kindScalar && string(v.raw) == "null"
+}
+
 // object holds a JSON object's keys in first-seen order alongside their values.
 type object struct {
 	keys []string

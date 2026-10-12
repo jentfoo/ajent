@@ -55,7 +55,10 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	} else if err = os.Rename(tmp, path); err != nil {
 		return err
 	}
-	return syncDir(dir)
+	// the rename already committed; a failed directory fsync only weakens crash
+	// durability, and reporting it would make callers treat the write as undone
+	_ = syncDir(dir)
+	return nil
 }
 
 // syncDir fsyncs a directory so a rename into it survives a power loss.

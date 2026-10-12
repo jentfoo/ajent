@@ -198,6 +198,10 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 		}
 	}
 
+	// normalize odd-case keys before SetKey, so a canonical key is never
+	// appended beside the twin it would shadow on the next decode
+	raw, _ = canonicalizeKeys(raw)
+
 	out, err := SetKey(raw, key, value)
 	if err != nil {
 		return warns, err
@@ -240,12 +244,19 @@ func loadFile(path string) ([]byte, []string, error) {
 	}
 	data := RelaxJSON(raw)
 
+	// odd-case keys normalize here, so merge and provenance see one spelling
+	norm, renames := canonicalizeKeys(data)
+	data = norm
+
 	var probe map[string]any
 	if err = json.Unmarshal(data, &probe); err != nil {
 		return nil, nil, JSONError(path, raw, err)
 	}
 
 	var warns []string
+	for _, r := range renames {
+		warns = append(warns, fmt.Sprintf("%s: normalized key %q to %q", path, r.from, r.to))
+	}
 	for _, k := range mustUnknownKeys(data) {
 		warns = append(warns, fmt.Sprintf("%s: unrecognized key %q", path, k))
 	}
