@@ -209,7 +209,7 @@ func setupCredentials(ctx context.Context, c Console, choice setupChoice) (llm.P
 	if prof.APIKeyEnv != "" {
 		placeholder = "paste key, or leave empty to use $" + prof.APIKeyEnv + " later"
 	}
-	key, err := c.Input(ctx, apiKeyLabel(choice.name, prof.APIKeyEnv), placeholder)
+	key, err := c.InputSecret(ctx, apiKeyLabel(choice.name, prof.APIKeyEnv), placeholder)
 	if err != nil {
 		return cfg, err
 	}

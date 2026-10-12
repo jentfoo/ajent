@@ -82,7 +82,17 @@ func (u *UI) ConfirmContext(ctx context.Context, prompt string) (bool, error) {
 
 // InputContext is Input, abandoned when ctx ends.
 func (u *UI) InputContext(ctx context.Context, label, placeholder string) (string, error) {
-	s := &inputState{label: label, placeholder: placeholder}
+	return u.input(ctx, &inputState{label: label, placeholder: placeholder})
+}
+
+// InputSecretContext is Input for credentials, abandoned when ctx ends: bullets
+// stand in for the typed text on screen and in the summary line.
+func (u *UI) InputSecretContext(ctx context.Context, label, placeholder string) (string, error) {
+	return u.input(ctx, &inputState{label: label, placeholder: placeholder, secret: true})
+}
+
+// input runs one text prompt to completion and returns its value.
+func (u *UI) input(ctx context.Context, s *inputState) (string, error) {
 	if err := u.run(ctx, s); err != nil {
 		return "", err
 	}
@@ -164,15 +174,30 @@ type inputState struct {
 	label       string
 	placeholder string
 	value       string
+	secret      bool // bullets replace the typed text everywhere it echoes
+}
+
+// secretMask stands in for one grapheme cluster of a secret, matching
+// backspace's granularity so deletion never desyncs the echo.
+const secretMask = "•"
+
+// echo returns what the user sees of the current value.
+func (s *inputState) echo() string {
+	if !s.secret {
+		return s.value
+	}
+	return strings.Repeat(secretMask, uniseg.GraphemeClusterCount(s.value))
 }
 
 func (s *inputState) rows(t Theme, width, _ int) ([]string, int, int) {
-	shown := s.value
+	echo := s.echo()
+	shown := echo
 	if shown == "" && s.placeholder != "" {
 		shown = t.Dim.Wrap(s.placeholder)
 	}
 	line := t.Accent.Wrap(s.label+" ") + shown
-	return []string{truncateDisplay(line, width)}, 0, displayWidth(t.Accent.Wrap(s.label+" ")) + displayWidth(s.value)
+	return []string{truncateDisplay(line, width)}, 0,
+		displayWidth(t.Accent.Wrap(s.label+" ")) + displayWidth(echo)
 }
 
 func (s *inputState) key(k key) (bool, error) {
@@ -192,7 +217,7 @@ func (s *inputState) key(k key) (bool, error) {
 }
 
 func (s *inputState) summary(t Theme) string {
-	return t.Dim.Wrap(noticeMarker + " " + s.label + " " + s.value)
+	return t.Dim.Wrap(noticeMarker + " " + s.label + " " + s.echo())
 }
 
 // pickState is a list narrowed by a live filter.

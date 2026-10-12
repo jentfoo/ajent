@@ -115,6 +115,19 @@ func TestProviderSetup(t *testing.T) {
 		assert.Empty(t, f.Providers["zai"].APIKeyEnv)
 	})
 
+	t.Run("key_prompt_is_masked", func(t *testing.T) {
+		setupHome(t)
+		c := newFakeConsole(t)
+		stubProbe(t, stub, nil)
+		c.picks = []fakePick{{result: pickName("zai")}, {result: 0}}
+		c.inputs = []string{"sk-secret"}
+
+		require.NoError(t, ProviderSetup(t.Context(), c))
+
+		require.Len(t, c.secretAsks, 1)
+		assert.Contains(t, c.secretAsks[0], "API key") // the hosted key rides InputSecret
+	})
+
 	t.Run("empty_key_still_writes_the_entry", func(t *testing.T) {
 		setupHome(t)
 		c := newFakeConsole(t)

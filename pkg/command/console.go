@@ -45,6 +45,9 @@ type Console interface {
 	Confirm(ctx context.Context, prompt string) (bool, error)
 	// Input prompts for one line of text.
 	Input(ctx context.Context, label, placeholder string) (string, error)
+	// InputSecret prompts for one line of sensitive text; bullets replace the
+	// typed content on screen and in history.
+	InputSecret(ctx context.Context, label, placeholder string) (string, error)
 	// CopyClipboard writes text to the system clipboard.
 	CopyClipboard(ctx context.Context, text string) error
 

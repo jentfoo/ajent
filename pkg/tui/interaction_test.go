@@ -193,6 +193,31 @@ func TestUIInputPrompt(t *testing.T) {
 		assert.Equal(t, "ajent", <-result)
 	})
 
+	t.Run("secret_never_echoes_the_value", func(t *testing.T) {
+		u, v, pw := interactionUI(t)
+
+		result := make(chan string, 1)
+		go func() {
+			s, err := u.InputSecretContext(t.Context(), "Key:", "paste key")
+			assert.NoError(t, err)
+			result <- s
+		}()
+
+		waitFor(t, u, v, "Key:")
+		waitFor(t, u, v, "paste key")
+		press(t, pw, "hunter2")
+		require.Eventually(t, func() bool {
+			return strings.Count(u.snapshot(v), secretMask) == 7
+		}, time.Second, testPoll, "screen never showed 7 bullets")
+		assert.NotContains(t, u.snapshot(v), "hunter2")
+		press(t, pw, "\r")
+
+		assert.Equal(t, "hunter2", <-result)
+		// the committed summary keeps the mask too, never the value
+		waitFor(t, u, v, noticeMarker+" Key: "+strings.Repeat(secretMask, 7))
+		assert.NotContains(t, u.snapshot(v), "hunter2")
+	})
+
 	t.Run("backspace_deletes", func(t *testing.T) {
 		u, v, pw := interactionUI(t)
 

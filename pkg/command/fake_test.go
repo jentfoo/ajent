@@ -31,7 +31,8 @@ type fakeConsole struct {
 	selects    []int           // queued Select indexes
 	selectOpts [][]tui.Option  // options each Select was offered
 	confirms   []bool          // queued Confirm answers
-	inputs     []string        // queued Input replies
+	inputs     []string        // queued Input and InputSecret replies
+	secretAsks []string        // labels each InputSecret was asked with
 	saveCalls  []saveCall      // recorded SaveSetting calls
 
 	settings *config.Set
@@ -177,6 +178,20 @@ func (f *fakeConsole) Input(_ context.Context, label, placeholder string) (strin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	return f.inputReply()
+}
+
+// InputSecret answers from the shared input queue and records that masking was asked.
+func (f *fakeConsole) InputSecret(_ context.Context, label, placeholder string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.secretAsks = append(f.secretAsks, label)
+	return f.inputReply()
+}
+
+// inputReply pops the next queued reply; caller holds the lock.
+func (f *fakeConsole) inputReply() (string, error) {
 	if len(f.inputs) == 0 {
 		return "", tui.ErrCancelled
 	}

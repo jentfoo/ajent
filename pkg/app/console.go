@@ -70,6 +70,10 @@ func (c *uiConsole) Input(ctx context.Context, label, placeholder string) (strin
 	return c.ui.InputContext(ctx, label, placeholder)
 }
 
+func (c *uiConsole) InputSecret(ctx context.Context, label, placeholder string) (string, error) {
+	return c.ui.InputSecretContext(ctx, label, placeholder)
+}
+
 func (c *uiConsole) ColorProfile() tui.ColorProfile { return c.ui.ColorProfile() }
 func (c *uiConsole) SetTheme(pal tui.Palette)       { c.ui.SetTheme(pal) }
 

@@ -2,9 +2,11 @@ package tui
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/strutil"
+	"github.com/rivo/uniseg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -142,6 +144,63 @@ func TestSelectStateRows(t *testing.T) {
 
 		rows, _, _ := s.rows(th, 40, 6)
 		assert.Equal(t, []string{"Confirm?", selectMarker + "opt-0", selectIndent + "opt-1", selectIndent + "opt-2"}, rows)
+	})
+}
+
+func TestInputStateRows(t *testing.T) {
+	t.Parallel()
+
+	th := NewTheme(ColorNone, DefaultPalette())
+
+	tests := []struct {
+		name string
+		s    inputState
+		want string
+	}{
+		{"value_echoes_verbatim", inputState{label: "Name:", value: "ajent"}, "Name: ajent"},
+		{"empty_shows_the_placeholder", inputState{label: "Name:", placeholder: "your name"}, "Name: your name"},
+		{"secret_echoes_bullets", inputState{label: "Key:", value: "sk-secret", secret: true},
+			"Key: " + strings.Repeat(secretMask, 9)},
+		{"secret_placeholder_shows", inputState{label: "Key:", placeholder: "paste key", secret: true}, "Key: paste key"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, _, col := tc.s.rows(th, 40, 1)
+			assert.Equal(t, []string{tc.want}, rows)
+			// the caret sits past whatever was echoed
+			label := displayWidth(tc.s.label + " ")
+			if !tc.s.secret {
+				assert.Equal(t, label+displayWidth(tc.s.value), col)
+			} else {
+				assert.Equal(t, label+uniseg.GraphemeClusterCount(tc.s.value), col)
+			}
+		})
+	}
+
+	t.Run("secret_masks_one_cluster_per_bullet", func(t *testing.T) {
+		s := &inputState{label: "K:", value: "a\u00e9\U0001F44D", secret: true} // a, é, 👍
+
+		rows, _, _ := s.rows(th, 40, 1)
+		assert.Equal(t, []string{"K: " + strings.Repeat(secretMask, 3)}, rows)
+	})
+}
+
+func TestInputStateSummary(t *testing.T) {
+	t.Parallel()
+
+	th := NewTheme(ColorNone, DefaultPalette())
+
+	t.Run("plain_value_is_verbatim", func(t *testing.T) {
+		s := &inputState{label: "Name:", value: "ajent"}
+
+		assert.Equal(t, th.Dim.Wrap(noticeMarker+" Name: ajent"), s.summary(th))
+	})
+
+	t.Run("secret_value_is_masked", func(t *testing.T) {
+		s := &inputState{label: "Key:", value: "sk-secret", secret: true}
+
+		got := strutil.StripANSI(s.summary(th))
+		assert.Equal(t, noticeMarker+" Key: "+strings.Repeat(secretMask, 9), got)
 	})
 }
 
