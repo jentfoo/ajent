@@ -239,6 +239,33 @@ func TestEscapeTimeout(t *testing.T) {
 	})
 }
 
+func TestPendingPasteStart(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{"empty", "", false},
+		{"lone_escape_keeps_timeout", "\x1b", false},
+		{"csi_open_bracket", "\x1b[", true},
+		{"partial_two", "\x1b[2", true},
+		{"partial_three", "\x1b[20", true},
+		{"complete_header", pasteStart, true},
+		{"header_with_body", pasteStart + "hi", true},
+		{"wrong_digit", "\x1b[0", false},
+		{"paste_end_not_start", pasteEnd, false},
+		{"diverged_params", "\x1b[21", false},
+		{"plain_runes", "abc", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, pendingPasteStart([]byte(tc.input)))
+		})
+	}
+}
+
 func TestInputReaderRun(t *testing.T) {
 	t.Parallel()
 
@@ -504,6 +531,58 @@ func TestInputReaderPasteStall(t *testing.T) {
 
 		assert.Equal(t, key{typ: keyPaste, text: "partial"}, <-r.keys) // blocks until decoded
 		assert.Zero(t, esc.resetCount())
+	})
+
+	t.Run("split_header_never_arms_timer", func(t *testing.T) {
+		// a header fragmented across reads is mid-delivery like any paste body:
+		// arming on the stalled head would drop it and let the body decode as keys
+		for _, n := range []int{2, 3, 4, 5} {
+			pr, pw := io.Pipe()
+			r, esc := newManualReader(pr)
+			go r.run()
+
+			_, err := io.WriteString(pw, pasteStart[:n])
+			require.NoError(t, err)
+			_, err = io.WriteString(pw, pasteStart[n:]+"split"+pasteEnd)
+			require.NoError(t, err)
+
+			assert.Equal(t, key{typ: keyPaste, text: "split"}, <-r.keys) // blocks until decoded
+			assert.Zero(t, esc.resetCount())
+			require.NoError(t, pw.Close())
+		}
+	})
+
+	t.Run("broken_prefix_resumes_decoding", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r, esc := newManualReader(pr)
+		go r.run()
+
+		// the held head completes as an ordinary CSI once a byte breaks the match:
+		// no runes leak from either fragment and later keys still arrive
+		_, err := io.WriteString(pw, "\x1b[2")
+		require.NoError(t, err)
+		_, err = io.WriteString(pw, "~z")
+		require.NoError(t, err)
+
+		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+		assert.Zero(t, esc.resetCount())
+	})
+
+	t.Run("lone_esc_split_still_arms", func(t *testing.T) {
+		// a split right after the bare escape byte is indistinguishable from a
+		// genuine Esc press, which must keep its timeout to stay reportable
+		pr, pw := io.Pipe()
+		r, esc := newManualReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
+
+		_, err = io.WriteString(pw, pasteStart[1:]+"split"+pasteEnd)
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyPaste, text: "split"}, <-r.keys)
+		assert.Equal(t, 1, esc.resetCount()) // the tail never re-arms: a complete header holds
 	})
 }
 

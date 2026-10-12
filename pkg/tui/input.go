@@ -454,6 +454,16 @@ func dropPasteTail(buf []byte) ([]byte, bool) {
 	return buf[max(len(buf)-len(pasteEnd)+1, 0):], false
 }
 
+// pendingPasteStart reports whether b could still grow into a bracketed-paste
+// start: the complete ESC[200~ header, or any strict prefix of one longer than
+// a bare escape byte (a lone Esc keeps its own timeout so it stays reportable).
+func pendingPasteStart(b []byte) bool {
+	if bytes.HasPrefix(b, pasteStartBytes) {
+		return true
+	}
+	return len(b) > 1 && bytes.HasPrefix(pasteStartBytes, b)
+}
+
 // readResult is one chunk from the source, or the failure that ended it.
 type readResult struct {
 	data []byte
@@ -467,7 +477,9 @@ type readResult struct {
 //
 // A lone escape byte is indistinguishable from the start of a longer sequence
 // until either more bytes arrive or enough time passes, so it is held for
-// escTimeout before being reported as keyEscape.
+// escTimeout before being reported as keyEscape. A viable bracketed-paste start
+// (the header, or any prefix of one) holds without arming that timer: its tail
+// can stall mid-delivery on slow links.
 func (r *inputReader) run() {
 	defer close(r.keys)
 	defer close(r.status)
@@ -519,8 +531,10 @@ func (r *inputReader) run() {
 		}
 
 		var pendingEsc <-chan time.Time
-		// not armed inside a capped paste either: the held bytes may be a split terminator
-		if len(buf) > 0 && buf[0] == escByte && !pasteOverflow && !bytes.HasPrefix(buf, pasteStartBytes) {
+		// not armed on bytes that may still become paste: a capped body can hide a split
+		// terminator, and a viable start header can be a fragmented head whose drop would
+		// turn the rest of the paste into ordinary keystrokes
+		if len(buf) > 0 && buf[0] == escByte && !pasteOverflow && !pendingPasteStart(buf) {
 			timer.Reset(r.escDelay)
 			pendingEsc = timer.C()
 		}
