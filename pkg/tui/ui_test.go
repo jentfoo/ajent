@@ -1821,6 +1821,70 @@ func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 	})
 }
 
+func TestTailRunes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		s    string
+		n    int
+		want string
+	}{
+		{"short_ascii", "hello", 10, "hello"},
+		{"ascii_tail", "abcdefgh", 3, "fgh"},
+		{"exact_bytes", strings.Repeat("a", 8), 8, strings.Repeat("a", 8)},
+		{"multibyte_tail", "\u4e00\u4e8c\u4e09\u56db\u4e94", 2, "\u56db\u4e94"},
+		{"multibyte_whole", "\u4e00\u4e8c\u4e09", 10, "\u4e00\u4e8c\u4e09"},
+		{"mixed_boundary", "a\u4e00b\u4e8cc", 3, "b\u4e8cc"},
+		{"emoji_tail", "\U0001F600\U0001F601x", 2, "\U0001F601x"},
+		// more bytes than runes: the whole string is already at most n runes
+		{"more_bytes_than_runes", "\u4e00\u4e8c\u4e09", 4, "\u4e00\u4e8c\u4e09"},
+		{"long_ascii", strings.Repeat("a", 4*streamPreviewRunes), streamPreviewRunes,
+			strings.Repeat("a", streamPreviewRunes)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, tailRunes(tc.s, tc.n))
+		})
+	}
+}
+
+func TestStreamingRowsMemoizesComposition(t *testing.T) {
+	t.Parallel()
+
+	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"}
+	rows := u.streamingRows(40)
+	require.Equal(t, strings.Repeat(ruleChar, 40), rows[0])
+	require.True(t, u.streamOK)
+	assert.Equal(t, u.textBuf, u.streamKey) // under the cap the whole buffer is the key
+
+	// an unchanged buffer and width reuse the composed rows untouched
+	u.streamRows[0] = "mutated"
+	assert.Equal(t, []string{"mutated"}, u.streamingRows(40))
+
+	// a delta lands: recompose from the new source
+	u.textBuf += "\n\nnext paragraph"
+	assert.Equal(t,
+		[]string{strings.Repeat(ruleChar, 40), "", "next paragraph"},
+		u.streamingRows(40))
+
+	// a width change re-lays the same source
+	u.textBuf = "---"
+	assert.Equal(t, strings.Repeat(ruleChar, 20), u.streamingRows(20)[0])
+}
+
+func TestStreamingRowsCapsTailRunes(t *testing.T) {
+	t.Parallel()
+
+	buf := strings.Repeat("x", 8*streamPreviewRunes) + " tail marker"
+	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: buf}
+	rows := u.streamingRows(40)
+	require.NotEmpty(t, rows)
+	assert.Contains(t, rows[len(rows)-1], "tail marker")
+	// only the capped tail is composed, never the whole buffer
+	assert.Equal(t, tailRunes(buf, streamPreviewRunes), u.streamKey)
+}
+
 func TestUIResizeProbeGatesTheRedraw(t *testing.T) {
 	t.Parallel()
 

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jentfoo/ajent/pkg/strutil"
 
@@ -41,6 +42,10 @@ const (
 	// cap on how much of a newline-free reasoning tail is laid out per repaint,
 	// so one enormous line cannot make every delta O(len) in wrapLine
 	thinkingPreviewRunes = 8192
+	// cap on how much buffered markdown preview is parsed and wrapped per frame;
+	// an unclosed fence or one enormous line would otherwise put O(len) grapheme
+	// segmentation under the lock on every tick and delta
+	streamPreviewRunes = 8192
 )
 
 // clockwise frames, with ⠦ (bottom-left) leading so idle rests at bottom-left
@@ -116,14 +121,14 @@ type UI struct {
 
 	// preview memos for the per-frame live block. Keys cover every render input
 	// except the theme, so SetTheme clears both.
-	streamKey   string
-	streamW     int
-	streamLines []histLine
-	streamOK    bool
-	thinkKey    string
-	thinkW      int
-	thinkRows   []string
-	thinkOK     bool
+	streamKey  string
+	streamW    int
+	streamRows []string
+	streamOK   bool
+	thinkKey   string
+	thinkW     int
+	thinkRows  []string
+	thinkOK    bool
 
 	runs      []*toolRun // in-flight tool calls, oldest first, the newest drives the spinner color
 	busy      bool       // a turn is in flight, the status-bar glyph animates while set
@@ -662,39 +667,41 @@ func (u *UI) Print(markdown string) {
 	u.EndText()
 }
 
-// streamingRows lays the in-progress markdown out into display rows for the live
-// block, at the width and by the rule the block will be committed with.
+// streamingRows lays the tail of the in-progress markdown out into display rows
+// for the live block, at the width and by the rule the block will be committed with.
 func (u *UI) streamingRows(w int) []string {
 	if !u.streaming || strings.TrimSpace(u.textBuf) == "" {
 		return nil
 	}
-	lines := u.previewLines(w)
-	if lines == nil {
+	rows := u.previewRows(w)
+	if len(rows) == 0 {
 		return nil
 	}
-	var out []string
-	if u.previewGap() {
-		out = append(out, "") // the separator writeMarkdown commits, or the block shifts down a row
+	if !u.previewGap() {
+		return rows
 	}
-	for _, l := range lines {
+	return append([]string{""}, rows...) // the separator writeMarkdown commits, or the block shifts down a row
+}
+
+// previewRows composes the buffered markdown tail into display rows, memoized
+// between deltas so idle spinner frames skip the re-parse and re-wrap.
+func (u *UI) previewRows(w int) []string {
+	src := tailRunes(u.textBuf, streamPreviewRunes)
+	if u.streamOK && u.streamKey == src && u.streamW == w {
+		return u.streamRows
+	}
+	var rows []string
+	for _, l := range renderPreview(u.theme, w, src) {
 		if l.structured() {
 			// structured lines carry no text. Lay them out or the preview
 			// shows a blank row until the block commits.
-			out = append(out, l.rows(w)...)
-		} else {
-			out = append(out, u.wrapPreview(l.text, w)...)
+			rows = append(rows, l.rows(w)...)
+			continue
 		}
+		rows = append(rows, u.wrapPreview(l.text, w)...)
 	}
-	return out
-}
-
-// previewLines renders the buffered markdown at w, memoized between deltas so
-// idle spinner frames skip the re-parse.
-func (u *UI) previewLines(w int) []histLine {
-	if !u.streamOK || u.streamKey != u.textBuf || u.streamW != w {
-		u.streamKey, u.streamW, u.streamLines, u.streamOK = u.textBuf, w, renderPreview(u.theme, w, u.textBuf), true
-	}
-	return u.streamLines
+	u.streamKey, u.streamW, u.streamRows, u.streamOK = src, w, rows, true
+	return rows
 }
 
 // previewGap reports whether committing the buffered block opens with a blank
@@ -712,17 +719,30 @@ func (u *UI) wrapPreview(line string, w int) []string {
 	return wrapLine(line, w)
 }
 
+// tailRunes returns s when it holds at most n runes, else the last n of them,
+// cut on a rune boundary so wrapping never sees half a sequence.
+func tailRunes(s string, n int) string {
+	if len(s) <= n { // every rune costs at least one byte
+		return s
+	}
+	floor := max(len(s)-utf8.UTFMax*n, 0) // bounds the walk when starts run out (invalid UTF-8)
+	i := len(s)
+	for r := 0; i > floor && r < n; {
+		i--
+		if utf8.RuneStart(s[i]) {
+			r++
+		}
+	}
+	return s[i:]
+}
+
 // thinkingPreviewRows lays the pending partial reasoning line out into display
 // rows for the live block, broken the way the committed line will be.
 func (u *UI) thinkingPreviewRows(w int) []string {
 	if !u.thinking || strings.TrimSpace(u.thinkBuf.Pending()) == "" {
 		return nil
 	}
-	tail := u.thinkBuf.Pending()
-	runes := []rune(tail)
-	if len(runes) > thinkingPreviewRunes {
-		tail = string(runes[len(runes)-thinkingPreviewRunes:])
-	}
+	tail := tailRunes(u.thinkBuf.Pending(), thinkingPreviewRunes)
 	if !u.thinkOK || u.thinkKey != tail || u.thinkW != w { // re-wrapped between deltas only
 		rows := u.wrapPreview(tail, w)
 		for i, r := range rows {

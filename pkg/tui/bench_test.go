@@ -113,16 +113,19 @@ func BenchmarkSanitizeRow(b *testing.B) {
 	}
 }
 
-// BenchmarkStreamingRows measures the goldmark path at growing open-block
-// sizes, the one genuinely quadratic path: every delta re-parses the block.
+// BenchmarkStreamingRows measures the per-delta cost of composing the live
+// markdown preview at growing open-block sizes. Every delta recomposes; idle
+// spinner frames ride the memo and only compare keys. Past the tail cap the
+// cost is flat instead of growing with the block.
 func BenchmarkStreamingRows(b *testing.B) {
 	chunk := "# Heading\n\nA paragraph with some *emphasis*, `code` and a [link](url).\n\n- one\n- two\n- three\n\n"
-	for _, size := range []int{1 << 10, 1 << 12, 1 << 14} {
+	for _, size := range []int{1 << 10, 1 << 12, 1 << 14, 1 << 18} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			src := strings.Repeat(chunk, size/len(chunk)+1)
 			u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: src}
 			b.ResetTimer()
 			for b.Loop() {
+				u.streamOK = false // a delta landed; the memo no longer matches
 				u.streamingRows(118)
 			}
 		})
