@@ -85,6 +85,37 @@ func TestSurvey(t *testing.T) {
 		require.GreaterOrEqual(t, len(reads), 2)
 	})
 
+	t.Run("unreadable_agents_file_fails", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "README.md", "AGENTS.md", "pkg/a.go")
+		start := startStub()
+		// stubs only, so the read failure is not masked by a real tool
+		r := New(Options{
+			Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {},
+			Registry: stubRegistry(readStub(agentsFile), start, pollStub()),
+		})
+
+		// the update prompt corrects content it never saw, so a failed read must not pick it
+		_, err := r.Survey(t.Context())
+		require.ErrorIs(t, err, ErrAgentsUnreadable)
+		assert.Contains(t, err.Error(), "permission denied")
+		assert.Empty(t, start.inputs()) // the survey stops before spawning anything
+	})
+
+	t.Run("failed_readme_keeps_correction", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "README.md", "AGENTS.md", "pkg/a.go")
+		r := New(Options{
+			Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {},
+			Registry: stubRegistry(readStub("README.md"), startStub(), pollStub()),
+		})
+
+		// only the correction premise is load-bearing: a failed README still reads as survey data
+		in, err := r.Survey(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, distillUpdate, in.Text)
+	})
+
 	t.Run("retries_until_terminal", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/a/a.go")

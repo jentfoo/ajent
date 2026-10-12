@@ -80,6 +80,30 @@ func pollStub() *stubTool {
 	}}
 }
 
+// readStub fails reads of failPath, reading every other path as plain text.
+func readStub(failPath string) *stubTool {
+	return &stubTool{name: "read", exec: func(call agent.ToolCall) agent.ToolResult {
+		var p map[string]string
+		_ = json.Unmarshal(call.Input, &p)
+		if p["path"] == failPath {
+			return agent.ToolResult{
+				Content: llm.BlockList{llm.TextBlock{Text: "permission denied"}},
+				IsError: true,
+			}
+		}
+		return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "read ok"}}}
+	}}
+}
+
+// stubRegistry holds only the given stubs, so a test drives every tool by hand.
+func stubRegistry(stubs ...agent.Tool) *tools.Registry {
+	reg := tools.New()
+	for _, s := range stubs {
+		reg.RegisterFrom(tools.SourceBuiltin, s, true)
+	}
+	return reg
+}
+
 // newRegistry returns the built-in tools rooted at cwd plus the given stubs.
 func newRegistry(t *testing.T, cwd string, stubs ...agent.Tool) *tools.Registry {
 	t.Helper()

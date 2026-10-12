@@ -19,11 +19,16 @@ import (
 )
 
 // Survey's terminal errors. The fan-out is the whole value of a run, so a
-// missing tool or a failed spawn reports rather than quietly drafting from less.
+// missing tool, a failed spawn or an unreadable file reports rather than
+// quietly drafting from less.
 var (
 	ErrNoSubAgents = errors.New("sub-agents are unavailable")
 	ErrNoRead      = errors.New("the read tool is unavailable")
 	ErrNoneStarted = errors.New("no sub-agent could be started")
+
+	// ErrAgentsUnreadable reports an existing AGENTS.md whose read failed: /init
+	// cannot correct what it never saw, and drafting anew would replace it.
+	ErrAgentsUnreadable = errors.New("the existing AGENTS.md could not be read")
 )
 
 // Options configures a Runner. Registry supplies the real read and agent_* tools,
@@ -86,8 +91,8 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 	}
 	run := r.runs.Add(1)
 
-	before, existing := r.readDocs(ctx, read, run)
-	if err := ctx.Err(); err != nil {
+	before, existing, err := r.readDocs(ctx, read, run)
+	if err != nil {
 		return agent.Input{}, err
 	}
 
@@ -125,18 +130,33 @@ func startError(failed []string) error {
 	return fmt.Errorf("%w: %s", ErrNoneStarted, strings.Join(failed, "; "))
 }
 
-// readDocs does one real read per README and any existing AGENTS.md,
-// reporting whether that file was found.
-func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]llm.Message, bool) {
+// readDocs does one real read per README and any existing AGENTS.md, reporting
+// whether that file was found. A found one whose read failed fails the survey:
+// the update prompt would correct content no one saw.
+func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]llm.Message, bool, error) {
 	paths, existing := docFiles(r.opts.Cwd)
 	out := make([]llm.Message, 0, 2*len(paths))
+	var agentsRes agent.ToolResult
 	for i, p := range paths {
 		input, _ := json.Marshal(map[string]any{"path": p})
 		call := agent.ToolCall{ID: callID(run, "read", strconv.Itoa(i+1)), Name: "read", Input: input}
-		msgs, _ := agent.InjectPair(ctx, tool, r.opts.Sink, call, "read "+p)
+		msgs, res := agent.InjectPair(ctx, tool, r.opts.Sink, call, "read "+p)
 		out = append(out, msgs...)
+		if p == agentsFile {
+			agentsRes = res
+		}
 	}
-	return out, existing
+	// a cancelled read is not an unreadable file, so cancellation wins the gate
+	if err := ctx.Err(); err != nil {
+		return out, existing, err
+	}
+	if existing && agentsRes.IsError {
+		if reason := blockText(agentsRes); reason != "" {
+			return out, existing, fmt.Errorf("%w: %s", ErrAgentsUnreadable, reason)
+		}
+		return out, existing, ErrAgentsUnreadable
+	}
+	return out, existing, nil
 }
 
 // startAll runs the survey spawns, returning their pairs, the ids to poll and
@@ -249,14 +269,19 @@ func runOf(id string) int64 {
 
 // resultText joins a tool result's text blocks, for reporting a refusal.
 func resultText(res agent.ToolResult) string {
+	if s := blockText(res); s != "" {
+		return s
+	}
+	return "no id returned"
+}
+
+// blockText joins a tool result's text blocks, empty when there are none.
+func blockText(res agent.ToolResult) string {
 	var b strings.Builder
 	for _, blk := range res.Content {
 		if tb, ok := blk.(llm.TextBlock); ok {
 			b.WriteString(tb.Text)
 		}
-	}
-	if b.Len() == 0 {
-		return "no id returned"
 	}
 	return b.String()
 }
