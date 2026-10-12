@@ -74,31 +74,31 @@ var bareLabels = []string{
 	"Deny",
 }
 
-// optionsFor returns the dialog's labels and their action mapping for command, kept
-// index-aligned so resolveChoice maps a rendered choice back to its opt constant.
-func optionsFor(command string) (labels []string, actions []int) {
+// optionsFor returns the dialog's labels and their action mapping for a tool
+// call, kept index-aligned so resolveChoice maps a rendered choice back to its
+// opt constant. A bash line no grant can cover (compound, substitution or an
+// unnameable head) offers no session memory: allowing it never generalizes.
+func optionsFor(name, command string) ([]string, []int) {
+	if name != tools.ToolBash { // a tool remembers under its own name
+		return slices.Clone(plainLabels),
+			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
+	}
 	if names, ok := sessionNames(command); ok && len(names) > 0 {
 		return []string{"Allow", "Allow with note", namedSessionLabel(names), "Deny"},
 			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
 	}
-	if compound(command) { // redirect/substitution: no grant could cover a future line
-		return slices.Clone(bareLabels),
-			[]int{optAllow, optAllowNote, optDeny}
-	}
-	// no head to name and not compound (non-bash tool): plain per-name memory.
-	return slices.Clone(plainLabels),
-		[]int{optAllow, optAllowNote, optAllowSession, optDeny}
+	return slices.Clone(bareLabels), []int{optAllow, optAllowNote, optDeny}
 }
 
-func buildOptions(command string) []string {
-	labels, _ := optionsFor(command)
+func buildOptions(name, command string) []string {
+	labels, _ := optionsFor(name, command)
 	return labels
 }
 
 // optionActions maps a dialog's display index back to the logical opt constant, matching
 // optionsFor so Deny is always resolved as a denial regardless of where it sits in the rendered list.
-func optionActions(command string) []int {
-	_, actions := optionsFor(command)
+func optionActions(name, command string) []int {
+	_, actions := optionsFor(name, command)
 	return actions
 }
 

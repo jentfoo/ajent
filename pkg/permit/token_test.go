@@ -93,6 +93,11 @@ func TestUnwrapLaunchers(t *testing.T) {
 		// confused timeout parse returns original tokens
 		{"timeout no duration", []string{"timeout", "-k", "5", "ls"},
 			[]string{"timeout", "-k", "5", "ls"}},
+		// a path-qualified launcher could be any binary, so it never unwraps
+		{"absolute launcher stays", []string{"/usr/bin/nohup", "git", "status"},
+			[]string{"/usr/bin/nohup", "git", "status"}},
+		{"relative launcher stays", []string{"./timeout", "5", "ls"},
+			[]string{"./timeout", "5", "ls"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -107,6 +112,32 @@ func TestSegmentTokens(t *testing.T) {
 	assert.Equal(t, []string{"git", "status"}, segmentTokens("timeout 30 git status"))
 	// nohup is a launcher and unwraps away entirely
 	assert.Equal(t, []string{"ls"}, segmentTokens("nohup ls"))
+	// a path-qualified launcher stays, headOf refusing the head outright
+	assert.Equal(t, []string{"/usr/bin/nohup", "ls"}, segmentTokens("/usr/bin/nohup ls"))
+}
+
+func TestHeadOfPathQualified(t *testing.T) {
+	t.Parallel()
+
+	// a path-qualified head can point at any binary, so it names nothing: never
+	// auto-allows under the basename's verdict and never matches a grant
+	for _, seg := range []string{
+		"./bin/cat x",
+		"../tooling/jq f",
+		"/tmp/x/git status",
+		`'./cat' x`,              // a quoted spelling keeps the path in the token
+		`"git" log`,              // a double quote overlaps a quoted region: no faithful word
+		"/usr/bin/nohup git log", // launcher not unwrapped, head refused outright
+	} {
+		h, ok := headOf(seg)
+		assert.False(t, ok, seg)
+		assert.Empty(t, h)
+	}
+
+	// a script-suffixed head keeps its literal name, never renamed to the bare word
+	h, ok := headOf("deploy.sh --dry-run")
+	require.True(t, ok)
+	assert.Equal(t, "deploy.sh", h)
 }
 
 func TestHeadOfKeywords(t *testing.T) {

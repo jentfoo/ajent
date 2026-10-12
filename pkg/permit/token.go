@@ -67,6 +67,9 @@ func tokenizeRaw(segment string) []string {
 }
 
 // stripPath returns everything after the last / in tok, else trims a .sh suffix.
+// Lenient on purpose, and only for matchers that fail safe when they over-match
+// (deny entries, checker guards): a basename can name any binary at all, so
+// allow-side naming goes through headOf, which refuses such tokens outright.
 func stripPath(tok string) string {
 	if idx := strings.LastIndexByte(tok, '/'); idx >= 0 {
 		return tok[idx+1:]
@@ -83,11 +86,13 @@ var (
 )
 
 // unwrapLaunchers strips side-effect-free launcher prefixes (nohup, timeout) so
-// classification sees the wrapped command. sudo/env/xargs/nice/stdbuf change
-// privilege or environment and are never unwrapped, a confused parse returning
-// the original tokens to fail safe toward prompting.
+// classification sees the wrapped command. Only a bare launcher name unwraps: a
+// path-qualified one could be any binary, and headOf refuses such heads anyway,
+// so leaving it in place fails safe toward prompting. sudo/env/xargs/nice/stdbuf
+// change privilege or environment and are never unwrapped, a confused parse
+// returning the original tokens to fail safe likewise.
 func unwrapLaunchers(tokens []string) []string {
-	cmd := stripPath(firstToken(tokens))
+	cmd := firstToken(tokens)
 	if cmd == "nohup" {
 		return unwrapLaunchers(tokens[1:])
 	}
@@ -161,20 +166,24 @@ func interpreterPayloads(raw string) []string {
 }
 
 // headOf returns the command name a segment runs after unwrapping launchers, or
-// ("",false) when none can be named reliably. A leading VAR= assignment is never
-// stripped: PATH/LD_PRELOAD/BASH_ENV/ENV, plus any other var a binary reads, can
-// hijack what the head actually executes, so such a segment has no trustworthy name
-// and must fail closed (never read-only, never matches an existing grant). A shell
-// keyword or nested interpreter head likewise names nothing: the real command
-// lives in its arguments.
+// ("",false) when none can be named reliably. Only a slash-free first token names
+// anything — PATH lookup is the one resolution this analysis trusts — so ./bin/cat
+// or /tmp/x/git name no command: an executable written earlier under an allowlisted
+// name must never inherit its verdict, and such a segment never auto-allows nor
+// matches a grant. A double quote is refused with it: the token overlaps a quoted
+// region (at worst scanCommand's collapsed placeholder), which would fold every
+// quoted head into one untrustworthy name. A leading VAR= assignment is likewise
+// refused: PATH/LD_PRELOAD/BASH_ENV/ENV, plus any other var a binary reads, can
+// hijack what the head actually executes. A shell keyword or nested interpreter
+// head names nothing either: the real command lives in its arguments.
 func headOf(seg string) (string, bool) {
 	toks := segmentTokens(seg)
 	if len(toks) == 0 || envAssignRe.MatchString(firstToken(toks)) {
 		return "", false
 	}
-	h := stripPath(firstToken(toks))
-	if h == "" {
-		return "", false
+	h := firstToken(toks)
+	if strings.ContainsAny(h, `/"`) {
+		return "", false // path-qualified or quoted: the basename need not be what ran
 	}
 	if _, kw := shellKeywords[h]; kw {
 		return "", false

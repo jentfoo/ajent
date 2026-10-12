@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,7 +18,14 @@ func TestBuildOptions(t *testing.T) {
 		expect  string // expected session-option text, "" when memory is not offered
 	}{
 		{"ls -la", 4, "Allow `ls` for session"},
-		{"/usr/bin/ifconfig eth0", 4, "Allow `ifconfig` for session"}, // path stripped
+		// a path-qualified head names no command at all (the file it points at need
+		// not be the binary its basename suggests), so no grant can cover the line
+		{"/usr/bin/ifconfig eth0", 3, ""},
+		{"./deploy.sh --dry-run", 3, ""},
+		// a quoted path-qualified head collapses to quote debris in a compound: it
+		// names nothing any grant could cover, or one approval would remember a key
+		// every other quoted-head line (a planted binary under any path) matches
+		{"echo hi && './cat' x", 3, ""},
 		// subcommand heads narrow the grant: git status never covers git push
 		{"git status", 4, "Allow `git status` for session"},
 		// a compound with one non-readonly head names it, read-only segments not counting
@@ -53,9 +61,9 @@ func TestBuildOptions(t *testing.T) {
 		{"for f in *.md; do head -20 \"$f\"; done", 3, ""},
 	}
 	for _, c := range cases {
-		opts := buildOptions(c.in)
+		opts := buildOptions(tools.ToolBash, c.in)
 		assert.Len(t, opts, c.wantLen, c.in)
-		actions := optionActions(c.in) // labels and actions stay aligned
+		actions := optionActions(tools.ToolBash, c.in) // labels and actions stay aligned
 		assert.Len(t, actions, c.wantLen, c.in)
 		if c.expect != "" {
 			assert.Equal(t, c.expect, opts[optAllowSession], c.in)
@@ -77,7 +85,8 @@ func TestAllowSessionKey(t *testing.T) {
 		{"bash", `git status`, "bash:git status"},
 		// a flag first defeats narrowing rather than guessing which value is the verb
 		{"bash", `git -C repo log --oneline`, "bash:git"},
-		{"bash", `/usr/bin/git status`, "bash:git status"}, // path stripped
+		// a path-qualified head names no command, so it can never match a grant
+		{"bash", `/usr/bin/git status`, "bash:"},
 		{"bash", `go test ./...`, "bash:go test"},
 		// operand commands stay head-granular: their second word names a file
 		{"bash", `rm -rf build`, "bash:rm"},
@@ -94,6 +103,9 @@ func TestAllowSessionKey(t *testing.T) {
 		// the raw command too), so allow-for-session covers the line again
 		{"bash", `'git' log`, "bash:'git'"},
 		{"bash", `ec'ho' hi`, "bash:ec'ho'"},
+		// a double-quoted head overlaps a quoted region (scanCommand's placeholder in
+		// the collapsed segment), naming nothing any grant could match
+		{"bash", `"git" status`, "bash:"},
 	}
 	for _, c := range cases {
 		var tc agent.ToolCall

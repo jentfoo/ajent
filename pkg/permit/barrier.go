@@ -379,7 +379,7 @@ func (b *Barrier) Asker() tools.Asker {
 			return tools.Deny(unattendedDenyReason)
 		}
 
-		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(bashCommand(call.Input)))
+		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(call.Name, bashCommand(call.Input)))
 		if err != nil || dlg == nil {
 			// no dialog can open (plain render, a UI that went away): settle the ask
 			// exactly as a run without a prompter would, so permission behavior follows
@@ -481,7 +481,7 @@ func (b *Barrier) unattendedAsk(ctx context.Context, m Mode, call agent.ToolCall
 // the rendered option list, translated through optionActions so Deny on a plain
 // command (whose list drops the session option) still refuses.
 func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displayIdx int, auto bool) tools.Decision {
-	actions := optionActions(bashCommand(call.Input))
+	actions := optionActions(call.Name, bashCommand(call.Input))
 	if displayIdx >= 0 && displayIdx < len(actions) {
 		switch actions[displayIdx] {
 		case optAllow:
@@ -895,19 +895,32 @@ func safeBashLine(cmd string, cmds []string, scope writeScope, input json.RawMes
 		return false
 	}
 	if !s.HasSplitOp && len(s.Segments) <= 1 {
-		return entryCovered(strings.TrimSpace(cmd), cmds) || entryCoversArgv(cmd, cmds)
+		return entryCovered(strings.TrimSpace(cmd), cmds) || bareEntryCoversArgv(cmd, cmds)
 	}
 	for i, seg := range s.Segments {
 		var rw string
 		if i < len(s.Raw) { // Segments and Raw stay index-aligned from pushSegment
 			rw = s.Raw[i]
 		}
-		if entryCovered(seg, cmds) || entryCoversArgv(rw, cmds) || segmentIsReadOnly(seg, rw) {
+		if entryCovered(seg, cmds) || bareEntryCoversArgv(rw, cmds) || segmentIsReadOnly(seg, rw) {
 			continue
 		}
 		return false
 	}
 	return true
+}
+
+// bareEntryCoversArgv reports whether raw starts with a configured entry at a
+// token boundary under a slash-free head: the file behind a path-qualified one
+// need not be what its basename suggests, so a safe command never blesses a
+// binary planted under an allowlisted name. Deny entries keep folding basenames
+// (entryCoversArgv), a refusal over-matching on purpose.
+func bareEntryCoversArgv(raw string, cmds []string) bool {
+	toks := tokenizeRaw(raw)
+	if len(toks) == 0 || strings.Contains(toks[0], "/") {
+		return false
+	}
+	return entryCoversArgv(raw, cmds)
 }
 
 // entryCovered reports whether line starts with a configured command at a token boundary.

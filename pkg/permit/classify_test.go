@@ -110,6 +110,42 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
+	// a planted binary under an allowlisted name must not inherit the real
+	// command's verdict: only slash-free heads are name-trusted, everything
+	// path-qualified or script-suffixed prompts like anything unverifiable
+	t.Run("path_qualified_head_prompts", func(t *testing.T) {
+		for _, cmd := range []string{
+			`./bin/cat x`,
+			`../tooling/jq f`,
+			`/tmp/x/git status`,
+			`myscript.sh`, // a bare .sh head keeps its literal name, allowlisting nothing
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
+	})
+
+	// path-qualified launcher prefixes launder the head the same way and must
+	// not unwrap into a trusted name either
+	t.Run("path_qualified_launcher_prompts", func(t *testing.T) {
+		for _, cmd := range []string{
+			`./nohup git status`,
+			`/usr/bin/nohup git log`,
+			`./timeout 5 git status`,
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
+	})
+
+	// a bare launcher still unwraps into the wrapped command's own verdict
+	t.Run("bare_launcher_still_allows", func(t *testing.T) {
+		assert.Equal(t, VerdictAllow, Classify(bashCall("nohup git status"), noRO))
+	})
+
+	// and its write form still rejects through the same unwrap
+	t.Run("bare_launcher_still_rejects", func(t *testing.T) {
+		assert.Equal(t, VerdictReject, Classify(bashCall("nohup sed -i s/a/b/ f"), noRO))
+	})
+
 	// unparseable input fails closed
 	t.Run("bash_unparseable_fails_safe", func(t *testing.T) {
 		c := agent.ToolCall{ID: "c", Name: "bash", Input: json.RawMessage(`not json`)}

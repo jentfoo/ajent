@@ -264,6 +264,11 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 		// whitespace is tolerated, a different command still prompting.
 		{"safe_bash_padded", ModeAllowRead, bashCall("  git status "), tools.ActionAllow},
 		{"unsafe_bash_prompt", ModeAllowRead, bashCall("git push"), tools.ActionAsk},
+		// a path-qualified head matches no entry: the file behind it need not be git
+		{"safe_path_qualified_head", ModeAllowRead, bashCall("./bin/git status"), tools.ActionAsk},
+		{"safe_quoted_absolute_head", ModeAllowRead, bashCall(`'/usr/bin/git' status`), tools.ActionAsk},
+		// a quote-stripped PATH spelling still resolves like the bare name
+		{"safe_quoted_path_lookup", ModeAllowRead, bashCall(`'git' status`), tools.ActionAllow},
 		// an exact MCP tool name auto-runs without needing registry metadata.
 		{"safe_mcp_tool", ModeAllowRead, call("mcp__list", `{}`), tools.ActionAllow},
 		{"other_mcp_prompt", ModeAllowRead, call("mcp__write", `{}`), tools.ActionAsk},
@@ -430,6 +435,11 @@ func TestGuardUnnameableLinesPrompt(t *testing.T) {
 		{"subshell", `(ls)`},
 		{"subshell_write", `(git push)`},
 		{"subshell_chained", `ls && (echo hi)`},
+		// a path-qualified head could be any binary, so it names nothing and
+		// must never inherit the basename's verdict; the quoted spelling keeps
+		// the path in the token or collapses to quote debris, naming likewise
+		{"path_qualified", `./bin/cat x`},
+		{"quoted_path_qualified", `'./cat' x`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -918,7 +928,7 @@ func TestAskerSessionGrants(t *testing.T) {
 
 		// cat | head is read-only end to end and never prompts; a compound needing
 		// approval must name its heads. A redirect line offers no session memory.
-		opts := buildOptions("echo x >> ~/.ssh/authorized_keys")
+		opts := buildOptions(tools.ToolBash, "echo x >> ~/.ssh/authorized_keys")
 		require.Len(t, opts, 3) // no memory option to accept
 
 		// allowing an unnameable compound covers only this call, granting nothing
@@ -975,7 +985,7 @@ func TestAskerSessionGrants(t *testing.T) {
 		b := newTestBarrier(p)
 
 		// three distinct non-readonly heads all land in the named grant
-		displayIdx := slices.Index(optionActions("rm a && mkdir b && touch c"), int(optAllowSession))
+		displayIdx := slices.Index(optionActions(tools.ToolBash, "rm a && mkdir b && touch c"), int(optAllowSession))
 		require.NotEqual(t, -1, displayIdx)
 		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm a && mkdir b && touch c"}`), displayIdx)
 		assert.Equal(t, tools.ActionAllow, got.Action)
@@ -1034,6 +1044,17 @@ func TestAskerSessionGrants(t *testing.T) {
 			b.mu.Unlock()
 			_, granted := b.sessionAllowed(c)
 			assert.True(t, granted, cmd)
+		}
+	})
+
+	// a quoted path-qualified head in a compound collapses to quote debris; it must
+	// name no grant at all, or one approval would cover every other quoted-head line
+	t.Run("quoted_path_compound_names_nothing", func(t *testing.T) {
+		b := NewBarrier(noRO, Options{})
+		for _, cmd := range []string{`echo hi && './cat' x`, `echo hi && "/tmp/evil" f`} {
+			keys, ok := b.allowSessionKeys(bashCall(cmd))
+			assert.False(t, ok, cmd)
+			assert.Empty(t, keys, cmd)
 		}
 	})
 

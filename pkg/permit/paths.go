@@ -281,8 +281,8 @@ func (s writeScope) segmentWritesInScope(bases []string, seg, raw string) bool {
 		return false
 	}
 	toks := tokenizeRaw(raw) // raw keeps quoted paths intact
-	if len(toks) < 2 || stripPath(toks[0]) != head {
-		return false
+	if len(toks) < 2 || toks[0] != head {
+		return false // a path-qualified raw head never reaches here: headOf refuses it
 	}
 	args, ancestors, ok := spec.parseFlags(toks[1:])
 	if !ok || len(args) == 0 {
