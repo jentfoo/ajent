@@ -111,8 +111,7 @@ func (e *editor) Clear() {
 	}
 	e.cells = nil
 	e.pos = 0
-	e.histIdx = len(e.history)
-	e.stash = ""
+	e.ResetHistory()
 }
 
 func (e *editor) Backspace() {
@@ -336,6 +335,12 @@ func (e *editor) HistoryNext() {
 	} else {
 		e.SetValue(e.history[e.histIdx])
 	}
+}
+
+// ResetHistory returns history navigation to the live buffer, dropping any held draft.
+func (e *editor) ResetHistory() {
+	e.histIdx = len(e.history)
+	e.stash = ""
 }
 
 // lineStart returns the index just after the newline preceding pos.

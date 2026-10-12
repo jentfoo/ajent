@@ -164,6 +164,8 @@ type UI struct {
 
 	// plain ↑/↓ browse the same recorded-prompt list that Ctrl+R searches (see
 	// SetHistorySearch), so arrows recall prompts without opening the overlay.
+	// Every non-recall buffer replacement calls resetPromptNavLocked, or an
+	// arrow at a buffer edge would clobber fresh content with a stale entry.
 	prompts   []string // newest-first prompt texts, nil falls back to editor history
 	promptIdx int      // -1 at the live buffer, else index of the recalled prompt
 	stashP    string   // live draft held aside while browsing recorded prompts
@@ -498,6 +500,7 @@ func (u *UI) SetInput(text string) {
 		return
 	}
 	u.editor.SetValue(text)
+	u.resetPromptNavLocked() // a host fill is never a recall step
 	u.repaint()
 }
 
@@ -528,6 +531,7 @@ func (u *UI) PrependInput(text string) {
 	} else {
 		u.editor.SetValue(text + "\n" + cur) // cursor lands at the end
 	}
+	u.resetPromptNavLocked() // a host fill is never a recall step
 	u.repaint()
 }
 
@@ -1322,6 +1326,7 @@ func (u *UI) openSearchLocked() {
 func (u *UI) acceptSearchLocked() {
 	if it, ok := u.search.current(); ok {
 		u.editor.SetValueAt(it.Text, u.search.matchOffset(it.Text))
+		u.resetPromptNavLocked() // the match replaced whatever a previous recall held
 	}
 	u.search = nil
 }
@@ -1385,15 +1390,16 @@ func (u *UI) browsingPrompts() bool {
 	return u.prompts != nil && u.promptIdx >= 0
 }
 
-// resetPromptNavLocked drops the cached prompt list so a later ↑ reloads it, letting
-// freshly recorded prompts appear. Caller holds the lock.
+// resetPromptNavLocked disarms prompt-history recall everywhere: the recorded-prompt
+// browse drops its cached list, position and held draft, and the editor fallback's
+// history returns to the live buffer. Every buffer replacement that is not itself a
+// recall step must call this, or an edge arrow restores stale state over fresh content.
+// Caller holds the lock.
 func (u *UI) resetPromptNavLocked() {
-	if u.prompts == nil && u.stashP == "" {
-		return
-	}
 	u.prompts = nil
 	u.promptIdx = -1
 	u.stashP = ""
+	u.editor.ResetHistory()
 }
 
 // deliverSearch stores the provider's results if the overlay is still open.
@@ -1486,9 +1492,10 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		}
 		if consume && doSubmit {
 			u.completion = nil
-			if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
+			v := u.editor.Submit()
+			u.resetPromptNavLocked() // submitted or discarded, browsing never survives
+			if strings.TrimSpace(v) != "" {
 				e := u.expandPastes(v)
-				u.resetPromptNavLocked() // let a later ↑ pick up the freshly sent prompt
 				return &e, true, false
 			}
 			return nil, true, false
@@ -1525,9 +1532,10 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		u.editor.Insert("\n")
 	case keyEnter:
 		u.completion = nil // a listing never holds a send hostage
-		if v := u.editor.Submit(); strings.TrimSpace(v) != "" {
+		v := u.editor.Submit()
+		u.resetPromptNavLocked() // submitted or discarded, browsing never survives
+		if strings.TrimSpace(v) != "" {
 			e := u.expandPastes(v)
-			u.resetPromptNavLocked() // let a later ↑ pick up the freshly sent prompt
 			return &e, true, false
 		}
 	case keyBackspace:
@@ -1615,6 +1623,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			// gesture so its deferred lone-Esc cannot fire after this press.
 			u.cancelRewindLocked()
 			u.editor.Clear()
+			u.resetPromptNavLocked() // a cleared draft must not come back via ↓
 		} else if u.idle && u.onRewind != nil && u.act == nil {
 			// idle prompt: defer the lone-Esc emission one window so a second Esc
 			// can rewind instead of interrupting (which mid-turn still does)
@@ -1635,6 +1644,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			return nil, false, false // no visual change
 		} else {
 			u.editor.Clear()
+			u.resetPromptNavLocked() // a cleared draft must not come back via ↓
 		}
 	case keyEOF:
 		if u.editor.Value() == "" {
