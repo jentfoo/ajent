@@ -713,8 +713,8 @@ func TestSwitchStateSeedsBase(t *testing.T) {
 		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
 
-	committed := true
-	r := &sessRec{w: w, rec: session.NewRecorder(w), started: &committed}
+	committed := newStartedFlag(true)
+	r := &sessRec{w: w, rec: session.NewRecorder(w), started: committed}
 	wantBase := ag.BaseEstimate(true)
 	require.NotZero(t, wantBase) // the system prompt alone is never free
 
@@ -750,8 +750,8 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 		},
 		Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
-	var committed bool
-	r := &sessRec{w: w, rec: session.NewRecorder(w), started: &committed}
+	committed := newStartedFlag(false)
+	r := &sessRec{w: w, rec: session.NewRecorder(w), started: committed}
 	r.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hello there")})
 
 	entries := readEntriesRewind(t, p)

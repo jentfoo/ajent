@@ -1,10 +1,12 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,8 +30,8 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	started := false
-	c := &uiConsole{tools: reg, set: set, started: &started, refreshBase: func() {}}
+	started := newStartedFlag(false)
+	c := &uiConsole{tools: reg, set: set, ag: agent.New(&agent.State{}, agent.Options{}), started: started, refreshBase: func() {}}
 
 	assert.NotPanics(t, func() { c.ToolsChanged() })
 
@@ -73,7 +75,7 @@ func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: agent.New(st, agent.Options{})}
 	// switching to a smaller window must not leave Used at zero.
 	c.SetModel(llm.Model{ID: "p/small", ContextWindow: 8000})
 
@@ -111,7 +113,7 @@ func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 	require.NoError(t, err)
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, rec: session.NewRecorder(w)}
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, rec: session.NewRecorder(w), ag: agent.New(st, agent.Options{})}
 
 	// re-selecting the same model must not record a change.
 	c.SetModel(active)
@@ -148,7 +150,7 @@ func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 	active := llm.Model{Provider: "p", ID: "first"}
 	st := &agent.State{Model: active, Tokens: tokens.New(active)}
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: agent.New(st, agent.Options{})}
 
 	// the same-model no-op must not create the file.
 	c.SetModel(active)
@@ -192,7 +194,7 @@ func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 		Caps: llm.Capabilities{Reasoning: true},
 	}
 	st := &agent.State{Model: reasoning, Tokens: tokens.New(reasoning)}
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: agent.New(st, agent.Options{})}
 
 	// the user's explicit choice persists as a session override (mirrors /reasoning).
 	c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
@@ -208,6 +210,56 @@ func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 	// switching back restores the user's original choice.
 	c.SetModel(reasoning)
 	assert.Equal(t, llm.LevelHigh, st.Reasoning.Level)
+}
+
+// TestUIConsoleMutatorsRefusedMidTurn pins a turn inside its tool call and
+// checks that the state mutators refuse instead of racing the loop goroutine.
+func TestUIConsoleMutatorsRefusedMidTurn(t *testing.T) {
+	t.Parallel()
+
+	ui := newPumpTestUI(t)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: mainToolTurn()},
+		{Events: textTurn("done")},
+	}}
+	st := &agent.State{Model: llm.Model{ID: "big", Provider: "p"}, Tokens: tokens.New(llm.Model{ID: "big", Provider: "p"})}
+	ag := agent.New(st, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Sinks:    []agent.Sink{agent.NopSink{}},
+		Tools:    singleToolSet{tool: holdBash{release: release, entered: entered}},
+		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: ag}
+
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {})
+	started := newStartedFlag(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	var drain drainWaiter
+	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, started, planHooks{}, &drain)
+
+	<-entered // the turn owns State from here until it settles
+
+	modelBefore := st.Model.Key()
+	reasoningBefore := st.Reasoning
+	c.SetModel(llm.Model{Provider: "p", ID: "small"})
+	assert.Equal(t, modelBefore, st.Model.Key())       // refused, nothing moved
+	assert.NotEqual(t, "session", set.Source("model")) // and nothing was recorded
+	c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
+	assert.Equal(t, reasoningBefore, st.Reasoning)
+
+	close(release) // unpin the tool call so the turn can end
+	drain.wait(5 * time.Second)
+
+	c.SetModel(llm.Model{Provider: "p", ID: "small"}) // idle again, applies now
+	assert.Equal(t, "p/small", st.Model.Key())
 }
 
 // readFileString returns a file's contents as text for assertions.
@@ -255,7 +307,7 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, ag: agent.New(st, agent.Options{})}
 	require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
 
 	assert.InDelta(t, 0.5, c.st.Model.CompactThreshold, 1e-09)

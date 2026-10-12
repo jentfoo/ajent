@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/config"
@@ -14,10 +15,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testProbes serializes the subtests that reassign the probe stubs, so a
+// future parallel parent cannot interleave a stub's window with real probing.
+var testProbes sync.Mutex
+
 // stubProbe replaces the wizard's discovery step, returning canned results and
 // recording the provider names it was asked about.
 func stubProbe(t *testing.T, entry llm.CacheEntry, err error) *[]string {
 	t.Helper()
+
+	testProbes.Lock()
+	t.Cleanup(testProbes.Unlock) // unlock runs after the restore below
 
 	probed := &[]string{}
 	probeProvider = func(_ context.Context, name string, _ llm.ProviderConfig, _ llm.DiscoverOptions) (llm.CacheEntry, error) {
@@ -31,6 +39,9 @@ func stubProbe(t *testing.T, entry llm.CacheEntry, err error) *[]string {
 // stubProbeAll replaces the custom-URL discovery step.
 func stubProbeAll(t *testing.T, entry llm.CacheEntry, err error) *[]llm.ProviderConfig {
 	t.Helper()
+
+	testProbes.Lock()
+	t.Cleanup(testProbes.Unlock) // unlock runs after the restore below
 
 	probed := &[]llm.ProviderConfig{}
 	probeAll = func(_ context.Context, cfg llm.ProviderConfig, _ llm.DiscoverOptions) (llm.CacheEntry, error) {

@@ -381,7 +381,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// started is the single answer to "has the tool block been committed?": it gates
 	// both whether tool schemas count toward the bar and whether /tools may still
 	// narrow the set. A resumed branch with history plainly sent one already.
-	started := len(st.Messages) > 0
+	started := newStartedFlag(len(st.Messages) > 0)
 
 	// seed the constant request overhead (system + AGENTS.md) so the bar is honest
 	// from startup. Tool schemas join only once the block is committed, since until
@@ -389,7 +389,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// when MCP servers have connected and their schemas are in the registry, and
 	// Agent.stream's own SetBase replaces this floor once a turn actually starts.
 	var seedToolsOnce sync.Once
-	st.Tokens.SetBase(ag.BaseEstimate(started))
+	st.Tokens.SetBase(ag.BaseEstimate(started.marked()))
 	pushContext()
 
 	if rec != nil {
@@ -462,13 +462,13 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 	}
 	console := &uiConsole{
-		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
-		started: &started, quit: quitNow, permit: barrier,
+		ui: ui, set: set, reg: reg, st: st, ag: ag, tools: toolsReg, commands: cmds,
+		started: started, quit: quitNow, permit: barrier,
 	}
 	console.refreshBase = func() {
 		// BaseEstimate reports 0 while a turn owns State, and that turn's own SetBase
 		// picks a widened tool block up at its next step, so skip rather than zero it
-		if est := ag.BaseEstimate(started); est > 0 {
+		if est := ag.BaseEstimate(started.marked()); est > 0 {
 			st.Tokens.SetBase(est)
 			pushContext()
 		}
@@ -524,7 +524,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	watchControls(appRoot, ui, hints, ag, q, stager, ictl, quitNow, onModeCycle)
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
-		rec.started = &started
+		rec.started = started
 		rec.onSwitch = func(msgs []llm.Message) {
 			if t := toolsReg.Tracker(); t != nil {
 				t.Reset() // reads the new context lacks must re-inject, not dedupe
@@ -578,7 +578,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 		if m := reg.Active(); m.ID != "" && m.Key() != st.Model.Key() {
 			console.SetModel(m) // applies the model, the bar and the session record
-			st.Tokens.SetBase(ag.BaseEstimate(started))
+			st.Tokens.SetBase(ag.BaseEstimate(started.marked()))
 			pushContext()
 		}
 	}
@@ -588,7 +588,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	var drain drainWaiter
 	go runPump(appRoot,
-		pump, ag, console, stager, expander, rec != nil, ui, &started,
+		pump, ag, console, stager, expander, rec != nil, ui, started,
 		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line

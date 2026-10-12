@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,10 +17,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testGlobals serializes the subtests that mutate package globals, so a future
+// parallel parent cannot interleave an override's window with another reader.
+var testGlobals sync.Mutex
+
 // setVersionForTest overrides Version for a subtest and restores it on cleanup.
 func setVersionForTest(t *testing.T, v string) {
 	t.Helper()
 
+	testGlobals.Lock()
+	t.Cleanup(testGlobals.Unlock) // unlock runs after the restore below
 	prev := Version
 	Version = v
 	t.Cleanup(func() { Version = prev })
@@ -168,6 +175,8 @@ func TestFetchLatestVersion(t *testing.T) {
 	swapURL := func(t *testing.T, url string) {
 		t.Helper()
 
+		testGlobals.Lock()
+		t.Cleanup(testGlobals.Unlock) // unlock runs after the restore below
 		prev := githubTagsURL
 		githubTagsURL = url
 		t.Cleanup(func() { githubTagsURL = prev })

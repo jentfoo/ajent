@@ -66,13 +66,13 @@ func TestRunPump(t *testing.T) {
 		})
 		console := &uiConsole{ui: ui, commands: cmds}
 		pump := make(chan pumpLine, 4)
-		var started bool
+		started := newStartedFlag(false)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan struct{})
 		var drain drainWaiter
 		go func() {
 			runPump(ctx, pump, nil, console, command.NewStager(ctx, nil, nil), nil,
-				false, ui, &started, func() {},
+				false, ui, started, func() {},
 				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}),
 				nil, &agent.State{}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 			close(done)
@@ -146,7 +146,7 @@ func TestStartDrainParkedGate(t *testing.T) {
 		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {})
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
-		var started bool
+		started := newStartedFlag(false)
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 		var drain drainWaiter
@@ -154,10 +154,10 @@ func TestStartDrainParkedGate(t *testing.T) {
 			advance: func(context.Context) (agent.Input, bool) { return agent.Input{}, false },
 			parked:  func() bool { return true },
 		}
-		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "plan"}}, &started, hooks, &drain)
+		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "plan"}}, started, hooks, &drain)
 		drain.wait(5 * time.Second)
 
-		require.True(t, started)
+		require.True(t, started.marked())
 		require.Len(t, p.Requests(), 1) // the queued prompt never ran as a turn
 		assert.Equal(t, 1, q.pending())
 		assert.False(t, q.offer(agent.Input{Text: "next"}, "next", 0)) // idle again
@@ -174,11 +174,11 @@ func TestStartDrainParkedGate(t *testing.T) {
 		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {})
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
-		var started bool
+		started := newStartedFlag(false)
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 		var drain drainWaiter
-		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "plan"}}, &started, planHooks{}, &drain)
+		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "plan"}}, started, planHooks{}, &drain)
 		drain.wait(5 * time.Second)
 
 		require.Len(t, p.Requests(), 2) // no workflow: steering delivers as before
@@ -211,12 +211,12 @@ func TestRunPumpParkedHold(t *testing.T) {
 	}
 
 	pump := make(chan pumpLine, 4)
-	var started bool
+	started := newStartedFlag(false)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	go runPump(ctx, pump, ag, console, command.NewStager(ctx, nil, nil), nil,
-		false, ui, &started, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
+		false, ui, started, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
 
 	pump <- pumpLine{kind: command.KindPrompt, rest: "note", input: &agent.Input{Text: "note", Injected: true}}
 	require.Eventually(t, func() bool { return q.pending() == 1 }, time.Second, time.Millisecond)
@@ -249,18 +249,18 @@ func TestStartDrainInterruptLandsFill(t *testing.T) {
 
 	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {})
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
-	var started bool
+	started := newStartedFlag(false)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	var drain drainWaiter
-	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, &started, planHooks{}, &drain)
+	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, started, planHooks{}, &drain)
 
 	<-entered // the turn is pinned inside its tool call
 
 	ag.Interrupt()
 	drain.wait(5 * time.Second)
 
-	require.True(t, started)
+	require.True(t, started.marked())
 	assert.False(t, ag.Running())
 	// the dangling tool_use must be answered: a tool_result for c1 follows it
 	var answered bool

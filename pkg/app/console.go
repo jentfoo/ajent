@@ -22,11 +22,14 @@ import (
 
 // uiConsole implements command.Console over the objects the driver already
 // holds: the UI, model registry, agent state, tool registry and session recorder.
+// ag is the state gate: every mutation of st goes through it, since State is
+// owned by the turn goroutine whenever one runs.
 type uiConsole struct {
 	ui       *tui.UI
 	set      *config.Set
 	reg      *llm.Registry
 	st       *agent.State
+	ag       *agent.Agent
 	tools    *tools.Registry
 	commands *command.Registry
 	rec      *session.Recorder
@@ -36,8 +39,8 @@ type uiConsole struct {
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
 
-	started *bool  // shared with the driver pump
-	quit    func() // idempotent driver quit, /exit and friends
+	started *startedFlag // shared with the driver pump
+	quit    func()       // idempotent driver quit, /exit and friends
 
 	// refreshBase re-measures the constant request overhead and republishes the
 	// bar, for the changes that resize the tool block between turns.
@@ -168,9 +171,15 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 	if err != nil {
 		return
 	}
-	c.st.Model = m // compactor.run reads the threshold from here
-	t := c.st.Tokens
-	t.SetWindow(m) // keeps every context term, SetModel would blank the bar
+	var t *tokens.Accounting
+	applied := c.applyState("compaction threshold applies at the next model switch or restart", func(s *agent.State) {
+		s.Model = m // compactor.run reads the threshold from here
+		t = s.Tokens
+		t.SetWindow(m) // keeps every context term, SetModel would blank the bar
+	})
+	if !applied {
+		return
+	}
 	cs := t.Context()
 	c.ui.SetContext(tui.ContextInfo{
 		Used:      cs.Used,
@@ -182,17 +191,6 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 }
 
 func (c *uiConsole) SetModel(m llm.Model) {
-	// picking the already-active model is a no-op: nothing to rebase, record or
-	// announce, so a stray /model does not spam the history with an unchanged line.
-	if m.Key() == c.st.Model.Key() {
-		return
-	}
-	c.reg.SetActive(m)
-	c.st.Model = m
-	if c.comp != nil {
-		c.comp.resumeAuto() // a different window may reduce where the last one could not
-	}
-
 	// keep the stored reasoning override untouched so a temporary switch does not lose
 	// the user's choice. Recompute only the live effective level for display (buildRequest
 	// already clamps requests) from the raw preference, restoring it on switching back.
@@ -200,19 +198,37 @@ func (c *uiConsole) SetModel(m llm.Model) {
 	if parsed, ok := llm.ParseLevel(c.set.Settings().Reasoning.Level); ok {
 		lvl = parsed
 	}
-	c.st.Reasoning.Level = llm.ClampLevel(m, lvl)
+	var t *tokens.Accounting
+	var switched bool
+	applied := c.applyState("model cannot switch while a turn is running", func(s *agent.State) {
+		// picking the already-active model is a no-op: nothing to rebase, record or
+		// announce, so a stray /model does not spam the history with an unchanged line.
+		if m.Key() == s.Model.Key() {
+			return
+		}
+		switched = true
+		s.Model = m
+		s.Reasoning.Level = llm.ClampLevel(m, lvl)
+		t = s.Tokens
+		t.SetModel(m) // drops every context term for the new window/reserve
+		// SetModel zeroed the ledger, so Used would read empty regardless of real
+		// occupancy. Remeasure against the actual in-memory messages: a switch to a
+		// smaller window must reflect that it now overflows, or threshold auto-compaction
+		// could never fire on this model.
+		t.Reseed(tokens.EstimateFor(m, s.Reasoning.Retain, s.Messages))
+	})
+	if !applied || !switched {
+		return // refused: notified; no-op: silent
+	}
+	c.reg.SetActive(m)
+	if c.comp != nil {
+		c.comp.resumeAuto() // a different window may reduce where the last one could not
+	}
 	showReasoningIndicator(c.ui, c.set, c.st)
 
 	// rebase the ledger's window and reserve onto the new model so a mid-session
 	// /model rescales the bar immediately rather than on the next turn.
-	t := c.st.Tokens
-	t.SetModel(m) // drops every context term for the new window/reserve
 	c.ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
-	// SetModel zeroed the ledger, so Used would read empty regardless of real
-	// occupancy. Remeasure against the actual in-memory messages: a switch to a
-	// smaller window must reflect that it now overflows, or threshold auto-compaction
-	// could never fire on this model.
-	t.Reseed(tokens.EstimateFor(m, c.st.Reasoning.Retain, c.st.Messages))
 	cs := t.Context()
 	c.ui.SetContext(tui.ContextInfo{
 		Used:      cs.Used,
@@ -232,7 +248,11 @@ func (c *uiConsole) SetModel(m llm.Model) {
 }
 
 func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
-	c.st.Reasoning = rc
+	if !c.applyState("reasoning cannot change while a turn is running", func(s *agent.State) {
+		s.Reasoning = rc
+	}) {
+		return
+	}
 	// persist granular dotted leaves so every choice survives: marshalling the
 	// whole config would drop retain "none" and show false under omitempty.
 	_ = c.set.SetSession("reasoning.level", rc.Level.String())
@@ -267,7 +287,18 @@ func (c *uiConsole) ToolsChanged() {
 	}
 }
 
-func (c *uiConsole) Started() bool { return *c.started }
+func (c *uiConsole) Started() bool { return c.started.marked() }
+
+// applyState mutates live state only while no turn owns it, so a command typed
+// mid-turn cannot race the loop goroutine. It reports whether fn ran; refused
+// attempts notify and skip every side effect.
+func (c *uiConsole) applyState(refused string, fn func(*agent.State)) bool {
+	if c.ag.WithState(fn) {
+		return true
+	}
+	c.ui.Notify(refused, tui.LevelWarn)
+	return false
+}
 
 // Compact reduces the session context toward the compaction threshold. An empty
 // instructions string runs an unguided pass, refused while a turn streams.

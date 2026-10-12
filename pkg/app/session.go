@@ -26,7 +26,7 @@ type sessRec struct {
 	onSwitch func([]llm.Message)
 	// started is the driver's tool-block-committed flag, shared so a rewind seeds
 	// its base with the same rule the pump uses. Nil until main wires it.
-	started *bool
+	started *startedFlag
 	// discardStaged drops shell results staged against the branch a rewind leaves,
 	// so they never ride the new branch's first prompt. Nil until main wires it.
 	discardStaged func()
@@ -388,7 +388,7 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 func (r *sessRec) baseEstimate(ag *agent.Agent) int {
 	var committed bool
 	if r.started != nil {
-		committed = *r.started
+		committed = r.started.marked()
 	}
 	return ag.BaseEstimate(committed)
 }

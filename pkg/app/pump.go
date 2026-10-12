@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -49,9 +50,25 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 	push()
 }
 
+// startedFlag marks whether a prompt has been dispatched this run, so tool
+// schemas may have committed to context. The pump flips it once; command
+// handlers and the rewind path read it from other goroutines.
+type startedFlag struct {
+	v atomic.Bool
+}
+
+func newStartedFlag(v bool) *startedFlag {
+	s := &startedFlag{}
+	s.v.Store(v)
+	return s
+}
+
+func (s *startedFlag) mark()        { s.v.Store(true) }
+func (s *startedFlag) marked() bool { return s.v.Load() }
+
 // runPump serves submitted lines until ctx (appRoot) is canceled. The pump
 // channel is never closed, so senders never race a close.
-func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks, drain *drainWaiter) {
+func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *startedFlag, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks, drain *drainWaiter) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -207,9 +224,9 @@ func (d *drainWaiter) wait(timeout time.Duration) {
 }
 
 // startDrain runs inputs as the turn goroutine, its exit observable on drain.
-func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, started *bool, hooks planHooks, drain *drainWaiter) {
+func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, started *startedFlag, hooks planHooks, drain *drainWaiter) {
 	ui.SetIdle(false)
-	*started = true
+	started.mark()
 	drain.launch(func() {
 		for {
 			err := ag.PromptBatch(ctx, inputs)
