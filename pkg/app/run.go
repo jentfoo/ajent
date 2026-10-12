@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"golang.org/x/term"
 
@@ -141,15 +139,6 @@ func Run(o RunOptions) int {
 	for _, w := range warnings {
 		ui.Notify(w, tui.LevelWarn)
 	}
-
-	// a terminating signal closes the UI, whose closed message channel ends the
-	// driver loop, so teardown and the resume hint run instead of a hard exit
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGHUP)
-	go func() {
-		<-sig
-		ui.Close()
-	}()
 
 	go func() {
 		if len(reg.ProviderNames()) == 0 {

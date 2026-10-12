@@ -937,9 +937,10 @@ func (u *UI) commit(text string, flow lineFlow) {
 // commitHist expands tabs, sanitizes and hands the lines to the renderer.
 // Sanitizing once here covers every committed surface (inline, alt's retained
 // lines, plain), keeping SGR so colored tool output reads, dropping the motion
-// and screen escapes caller text may carry.
+// and screen escapes caller text may carry. After Close restored the terminal,
+// late events from a drain still landing must not write to it.
 func (u *UI) commitHist(lines []histLine) {
-	if len(lines) == 0 {
+	if u.closed || len(lines) == 0 {
 		return
 	}
 	u.flushNotice()               // a keyed notice stops being collapsible once anything follows
@@ -1121,8 +1122,12 @@ func (u *UI) startSpinner() {
 }
 
 // syncSpinnerLocked keeps the frame ticker running exactly while some indicator
-// needs it. Caller holds the lock.
+// needs it. Never re-armed after Close, which stopped it.
+// Caller holds the lock.
 func (u *UI) syncSpinnerLocked() {
+	if u.closed {
+		return
+	}
 	if u.busy || u.toolLabel() != "" {
 		u.startSpinner()
 	} else {

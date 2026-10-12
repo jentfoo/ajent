@@ -433,6 +433,13 @@ rather than the agent: the driver consults its `planHooks.advance` after every
 `WithState` is legal and a returned input continues the same drain loop with no
 extra latency.
 
+The drain goroutine's exit is observable (`drainWaiter` in `pkg/app/pump.go`),
+so exit honors the abort fill: teardown interrupts, cancels the app root (no
+new turns), then waits a bounded slice for the drain to land its results before
+anything reads or removes the transcript. Signals quit through the driver loop
+rather than closing the UI, so the same ordered teardown runs for
+SIGINT/SIGTERM/SIGHUP, with a second signal during the wait as force exit.
+
 `Options.OnSettled` is a slice of callbacks invoked on the loop goroutine once
 the queues are drained, nothing is running, and the last turn did not error.
 They run after the compaction hook at each real boundary; an observer that

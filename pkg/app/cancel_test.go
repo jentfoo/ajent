@@ -340,7 +340,8 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			controls := make(chan tui.Control, 4)
 			go controlLoop(context.Background(), ui, controls,
 				newHintBoard(func(string, string) {}), ag,
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), stager, nil, quit, nil)
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), stager, nil,
+				func() { close(quit) }, nil)
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()

@@ -232,7 +232,8 @@ func TestControlLoop(t *testing.T) {
 		quit = make(chan struct{})
 		cycled = make(chan bool, 4)
 		ag := agent.New(&agent.State{}, agent.Options{})
-		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), command.NewStager(context.Background(), nil, nil), nil, quit,
+		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), command.NewStager(context.Background(), nil, nil), nil,
+			func() { close(quit) },
 			func(back bool) { cycled <- back })
 		return controls, quit, cycled
 	}

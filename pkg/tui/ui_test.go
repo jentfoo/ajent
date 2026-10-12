@@ -2365,3 +2365,32 @@ func TestMarkerWidths(t *testing.T) {
 		}
 	})
 }
+
+// TestUIClosedDropsWrites covers the post-close sink guards: after Close
+// restored the terminal, late events from a drain still landing must write
+// nothing and re-arm no spinner.
+func TestUIClosedDropsWrites(t *testing.T) {
+	t.Parallel()
+
+	u, out := newRecordingUI(t, strings.NewReader(""))
+	u.Close()
+	out.Reset()
+
+	u.UserEcho("echoed")
+	u.UserImages([]Image{{Label: "img"}})
+	u.Image(Image{Label: "img"})
+	u.Thinking("reason")
+	u.EndThinking()
+	u.Text("reply")
+	u.EndText()
+	u.Output("c1", "tool output")
+	u.SetOutputFull("c1")
+	u.Diff("f.txt", "a\n", "b\n")
+	u.Notify("noted", LevelWarn)
+	u.NotifyKeyed("k", "keyed", LevelInfo)
+	done := u.ToolStart("c1", "bash", "bash: ls")
+	done("result")
+
+	assert.Empty(t, out.String())
+	assert.Nil(t, u.spinnerCh, "a post-close ToolStart must not re-arm the spinner")
+}

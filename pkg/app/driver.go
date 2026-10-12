@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -30,6 +33,11 @@ const (
 	subAgentToolPoll  = "agent_poll"
 	subAgentToolList  = "agent_list"
 )
+
+// shutdownDrainWait bounds the exit wait for the drain goroutine's abort fill.
+// Local work only: buffered file writes survive process exit and a cancelled
+// provider read unblocks on context, so this is the worst-case bound.
+const shutdownDrainWait = 100 * time.Millisecond
 
 // Driver runs the real agent loop: it builds an Agent over the registry and
 // drives turns from submitted messages, steering mid-turn input into the running
@@ -188,6 +196,38 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		case <-quit:
 			stopApp()
 		case <-appRoot.Done():
+		}
+	}()
+
+	// quitNow ends the run from any path, idempotent so a signal racing a user
+	// quit is dropped
+	var quitOnce sync.Once
+	quitNow := func() {
+		quitOnce.Do(func() { close(quit) })
+	}
+
+	// shutdownDone closes when teardown finishes, retiring the force-exit path
+	shutdownDone := make(chan struct{})
+
+	// signals quit through the driver so teardown runs, plain mode included
+	// where Ctrl+C arrives as SIGINT with no keyboard controls to catch it.
+	// A second signal while teardown is still running force-exits, restoring the
+	// terminal first since the process dies without unwinding further.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sig)
+	go func() {
+		select {
+		case <-sig:
+			quitNow()
+		case <-quit:
+			return
+		}
+		select {
+		case <-sig:
+			ui.Close()
+			os.Exit(ExitTurn)
+		case <-shutdownDone:
 		}
 	}()
 
@@ -423,7 +463,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
-		started: &started, quit: quit, permit: barrier,
+		started: &started, quit: quitNow, permit: barrier,
 	}
 	console.refreshBase = func() {
 		// BaseEstimate reports 0 while a turn owns State, and that turn's own SetBase
@@ -481,7 +521,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		showPermissionIndicator(ui, barrier)
 		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
 	}
-	watchControls(appRoot, ui, hints, ag, q, stager, ictl, quit, onModeCycle)
+	watchControls(appRoot, ui, hints, ag, q, stager, ictl, quitNow, onModeCycle)
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
 		rec.started = &started
@@ -546,9 +586,10 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		ui.Notify("no model configured; use /model to pick one", tui.LevelWarn)
 	}
 
+	var drain drainWaiter
 	go runPump(appRoot,
 		pump, ag, console, stager, expander, rec != nil, ui, &started,
-		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks)
+		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)
 
 	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
 		initial := strings.Join(args, " ")
@@ -557,28 +598,44 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		send(pumpLine{kind: command.KindPrompt, rest: initial, injected: true})
 	}
 
-	// teardown runs on the way out of a quit the user just asked for, so the two
-	// independent shutdowns overlap rather than adding up between the keypress and
-	// the restored terminal. Each is internally bounded.
-	defer func() {
-		var wg sync.WaitGroup
-		if sag != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				sag.Close() // cancel every running investigation and wait briefly
-			}()
-		}
-		toolsReg.Close() // kill background commands so none outlives the run
-		if mgr != nil {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				mgr.Close()
-			}()
-		}
-		wg.Wait()
-	}()
+	// teardown order is load-bearing: cancel the root, interrupt, bounded drain
+	// wait, component closes. The root cancel stops the running turn and bars
+	// new ones (a boundary compaction included), so the wait only covers the
+	// abort fill landing. The UI closes after Driver returns, never onto a
+	// restored terminal.
+	//
+	// Run explicitly at each loop return before finish reads the transcript, and
+	// again from a defer as panic safety. The once makes the pair idempotent.
+	var shutdownOnce sync.Once
+	shutdown := func() {
+		shutdownOnce.Do(func() {
+			stopApp()
+			ag.Interrupt()
+			drain.wait(shutdownDrainWait)
+
+			var wg sync.WaitGroup
+			if sag != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					sag.Close() // cancel every running investigation and wait briefly
+				}()
+			}
+			if toolsReg != nil {
+				toolsReg.Close() // kill background commands so none outlives the run
+			}
+			if mgr != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					mgr.Close()
+				}()
+			}
+			wg.Wait()
+			close(shutdownDone)
+		})
+	}
+	defer shutdown()
 
 	// an abandoned session with no conversation is worthless to resume, drop it and
 	// return empty so main skips the "to resume this session" hint.
@@ -594,7 +651,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		select {
 		case msg, ok := <-ui.Messages():
 			if !ok {
-				return finish(rec) // UI closed; runPump exits via appRoot
+				// UI went away (stdin EOF): same ordered teardown as a user quit
+				shutdown()
+				return finish(rec)
 			}
 			line := command.ParseLine(msg)
 			var blocks []llm.Block
@@ -625,6 +684,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				send(pumpLine{kind: command.KindPrompt, rest: line.Rest, blocks: blocks})
 			}
 		case <-quit:
+			shutdown()
 			return finish(rec)
 		}
 	}
@@ -674,11 +734,11 @@ const (
 	hintNoticeTTL = 6 * time.Second
 )
 
-func watchControls(ctx context.Context, ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
-	go controlLoop(ctx, ui, ui.Controls(), hints, ag, q, stager, initCtl, quit, onModeCycle)
+func watchControls(ctx context.Context, ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quitNow func(), onModeCycle func(back bool)) {
+	go controlLoop(ctx, ui, ui.Controls(), hints, ag, q, stager, initCtl, quitNow, onModeCycle)
 }
 
-func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quit chan struct{}, onModeCycle func(back bool)) {
+func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quitNow func(), onModeCycle func(back bool)) {
 	// armed is when the first Ctrl+C landed, and quitHint fires to retire the hint
 	// that advertises the window, keeping the gesture and the hint the same
 	// length. The window is measured from armed, not from the timer, so a press
@@ -759,7 +819,7 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 					// teardown still has to run, say so rather than leaving the
 					// "again to quit" hint up, which reads as a press that missed
 					hints.Request("quitting…", "")
-					close(quit)
+					quitNow()
 					return
 				}
 				armed = time.Now()
@@ -769,7 +829,7 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 				if ag.Running() {
 					continue // ignored while a turn streams, per the key table
 				}
-				close(quit)
+				quitNow()
 				return
 			case tui.ControlRecallQueued:
 				q.recall() // Alt+Up: pop the newest queued message back into the editor

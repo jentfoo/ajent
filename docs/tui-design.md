@@ -290,7 +290,13 @@ runs, or the inline renderer redraws it as a stale ghost.
 thread safe. Input runs on its own goroutine, as does the spinner ticker, and
 both mutate through the same lock.
 
-**5. Teardown runs on every exit path.** `Close` is idempotent and must run on
+**5. Closed UIs write nothing.** The commit funnel (`commitHist`) and the
+spinner sync drop everything once `Close` restored the terminal, because every
+sink entry point funnels through them. A late event from a drain still landing
+otherwise paints escape sequences into the user's shell and re-arms a spinner
+that nothing stops.
+
+**6. Teardown runs on every exit path.** `Close` is idempotent and must run on
 normal exit, Ctrl+C, Ctrl+D, SIGTERM and panic. It restores raw mode, disables
 bracketed paste, and leaves the alternate screen. Alt mode also replays the
 transcript onto the main screen so the session is not lost. Every long lived
@@ -300,17 +306,17 @@ same protection wraps every timer callback armed through `afterSafe` (the resize
 probe/grace, rewind window and rule-flash timers all go through it). Both are
 only deadlock free because those callbacks release `u.mu` with `defer`.
 
-**6. Tabs are expanded at commit** (`tabSpaces`). `uniseg` measures a tab as one
+**7. Tabs are expanded at commit** (`tabSpaces`). `uniseg` measures a tab as one
 column but terminals render eight, so an unexpanded tab breaks every width
 calculation downstream.
 
-**7. Taking the terminal is reversible.** Raw mode clears `ISIG`, so Ctrl+Z will
+**8. Taking the terminal is reversible.** Raw mode clears `ISIG`, so Ctrl+Z will
 not suspend us on its own. `keySuspend` calls `renderer.suspend` to hand the
 terminal back, then re-raises `SIGTSTP`; the `SIGCONT` handler in `watchSignals`
 calls `renderer.resume` and repaints. Anything new that takes the terminal needs
 both halves.
 
-**8. A notice collapses only while it is still live.** Invariant 3 forbids
+**9. A notice collapses only while it is still live.** Invariant 3 forbids
 rewriting a committed line, so `NotifyKeyed` keeps its notice in the
 *live block*, not in history. Repeating the same key rewrites that row, which is
 free because the live block is redrawn every repaint anyway. The moment anything

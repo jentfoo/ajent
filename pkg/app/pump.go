@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
@@ -47,7 +48,7 @@ func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func())
 
 // runPump serves submitted lines until ctx (appRoot) is canceled. The pump
 // channel is never closed, so senders never race a close.
-func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks) {
+func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, started *bool, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks, drain *drainWaiter) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -116,7 +117,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 				if gate != nil {
 					gate.taken() // the submitted line starts its own turn, no handoff to wait for
 				}
-				startDrain(ctx, ui, recording, ag, q, []agent.Input{in}, started, hooks)
+				startDrain(ctx, ui, recording, ag, q, []agent.Input{in}, started, hooks, drain)
 			}
 		}
 	}
@@ -154,10 +155,48 @@ func submitEstimate(in agent.Input, pending int) int {
 	return est
 }
 
-func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, started *bool, hooks planHooks) {
+// drainWaiter tracks the live drain goroutine so shutdown can wait for its
+// abort fill before teardown reads the transcript. Only one drain runs at a
+// time (offers queue while one drains), so the newest channel covers all.
+type drainWaiter struct {
+	mu   sync.Mutex
+	done chan struct{} // closed at drain exit, nil when none ever ran
+}
+
+// launch runs fn as the drain goroutine, closing its exit channel on return.
+func (d *drainWaiter) launch(fn func()) {
+	ch := make(chan struct{})
+	d.mu.Lock()
+	d.done = ch
+	d.mu.Unlock()
+	go func() {
+		defer close(ch)
+		fn()
+	}()
+}
+
+// wait blocks until the drain goroutine exits or timeout passes. Returns at
+// once when none ran, so an idle exit costs nothing.
+func (d *drainWaiter) wait(timeout time.Duration) {
+	d.mu.Lock()
+	ch := d.done
+	d.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-ch:
+	case <-t.C:
+	}
+}
+
+// startDrain runs inputs as the turn goroutine, its exit observable on drain.
+func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, started *bool, hooks planHooks, drain *drainWaiter) {
 	ui.SetIdle(false)
 	*started = true
-	go func() {
+	drain.launch(func() {
 		for {
 			err := ag.PromptBatch(ctx, inputs)
 			// a workflow owns the next turn when it says so, errored turns included:
@@ -181,5 +220,5 @@ func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent
 		if recording {
 			ui.SetIdle(true)
 		}
-	}()
+	})
 }

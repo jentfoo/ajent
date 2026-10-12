@@ -36,8 +36,8 @@ type uiConsole struct {
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
 
-	started *bool // shared with the driver pump
-	quit    chan struct{}
+	started *bool  // shared with the driver pump
+	quit    func() // idempotent driver quit, /exit and friends
 
 	// refreshBase re-measures the constant request overhead and republishes the
 	// bar, for the changes that resize the tool block between turns.
@@ -277,9 +277,8 @@ func (c *uiConsole) Compact(ctx context.Context, instructions string) error {
 }
 
 func (c *uiConsole) Exit() {
-	select {
-	case c.quit <- struct{}{}:
-	default:
+	if c.quit != nil {
+		c.quit()
 	}
 }
 
