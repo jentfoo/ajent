@@ -567,8 +567,10 @@ func TestSubmittedEcho(t *testing.T) {
 	}{
 		{"prompt_echoes", "refactor the parser", "refactor the parser"},
 		{"blank_prompt_silent", "   ", ""},
-		{"command_not_echoed", "/model", ""},
-		{"shell_not_echoed", "!git status", ""},
+		// only dispatched prompts reach this path: escaped text that looks like a
+		// command or shell line was already classified, so it echoes verbatim
+		{"escaped_shell_echos", "!git status", "!git status"},
+		{"multiline_echos_verbatim", "line one\nline two", "line one\nline two"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -656,6 +656,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				return finish(rec)
 			}
 			line := command.ParseLine(msg)
+			if line.Multiline {
+				ui.Notify("multiline input sent as a prompt; /commands must be one line", tui.LevelWarn)
+			}
 			var blocks []llm.Block
 			if line.Kind == command.KindPrompt {
 				// image tokens become blocks, and the recorded line keeps them, so

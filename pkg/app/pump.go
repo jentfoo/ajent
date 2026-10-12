@@ -30,12 +30,15 @@ type pumpLine struct {
 	onTurn func()
 }
 
+// submittedEcho returns a dispatched prompt line's echo: blank input stays
+// silent (an image-only turn renders its own row), everything else echoes
+// verbatim. Commands and shell lines never reach the pump as prompts, so no
+// re-classification happens here.
 func submittedEcho(msg string) string {
-	line := command.ParseLine(msg)
-	if line.Kind == command.KindPrompt && strings.TrimSpace(line.Rest) != "" {
-		return line.Rest
+	if strings.TrimSpace(msg) == "" {
+		return ""
 	}
-	return ""
+	return msg
 }
 
 func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func()) {
@@ -155,7 +158,7 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 		After:    res.Run,
 		Injected: line.injected,
 		Prepared: true, // expanded here, the append seam must not re-expand
-	}, submittedEcho(line.rest), res.Est // "" unless a real prompt, commands and shell lines are not echoed here
+	}, submittedEcho(line.rest), res.Est // blank stays silent: an image-only turn renders its own row
 }
 
 func submitEstimate(in agent.Input, pending int) int {

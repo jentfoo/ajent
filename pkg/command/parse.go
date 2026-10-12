@@ -18,12 +18,19 @@ type Line struct {
 	// Excluded marks a `!!` shell run: executed and displayed but kept out of
 	// model context and the transcript.
 	Excluded bool
+	// Multiline marks a multi-line paste opening with `/`: sent as one verbatim
+	// prompt instead of a command dispatch consuming the whole submission.
+	Multiline bool
 }
 
 // ParseLine classifies a submitted line: `//` and leading space escape to a
 // literal prompt, `/name args` is a command, `!cmd` stages a shell command,
 // `!!cmd` runs one excluded from model context, else a prompt. Unknown `/foo`
 // still parses as a command so dispatch can notice typos.
+//
+// A multi-line submission opening with `/name args` falls back to a verbatim
+// prompt (Multiline set): pasted content may open with any prefix and one
+// command dispatch must not consume it. Multi-line `!` keeps its staged run.
 func ParseLine(s string) Line {
 	// a leading space escapes anything: the line is a literal prompt
 	if strings.HasPrefix(s, " ") {
@@ -32,6 +39,12 @@ func ParseLine(s string) Line {
 	// `//x` => prompt `/x`
 	if strings.HasPrefix(s, "//") {
 		return Line{Kind: KindPrompt, Rest: s[1:]}
+	}
+	// `/name args` never spans lines: a paste opening with one is sent as a
+	// verbatim prompt (Multiline flags the fallback) so nothing is consumed.
+	// Multi-line `!` keeps staging below, user-initiated like any staged run.
+	if strings.HasPrefix(s, "/") && strings.Contains(s, "\n") {
+		return Line{Kind: KindPrompt, Rest: s, Multiline: true}
 	}
 	// `!!x` runs x but keeps it out of context, `!x` stages x onto context
 	if strings.HasPrefix(s, "!!") {
