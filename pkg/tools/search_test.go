@@ -407,6 +407,24 @@ func TestGrepFallback(t *testing.T) {
 		assert.Contains(t, out, "a.txt:1: hit")
 		assert.NotContains(t, out, "not searched")
 	})
+
+	// an explicit limit spent under context names the cap, mirroring the rg block
+	// path where a cut withholds whole matches even under the model's own max
+	t.Run("context_limit_names_cap", func(t *testing.T) {
+		testLimitsGate.Lock()
+		defer testLimitsGate.Unlock()
+		dir, policy := newSearchEnv(t)
+		for i := 1; i <= 6; i++ {
+			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "pre-a\npre-b\nmatchline\npost-a\npost-b\n")
+		}
+
+		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"matchline","context":2,"limit":5}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 5, strings.Count(out, "matchline")) // the sixth block never emitted
+		assert.Contains(t, out, "result cap of 5 matches reached")
+	})
 }
 
 // gitInit turns dir into a fresh repo with everything tracked.
@@ -448,7 +466,7 @@ func TestGrepRgPaths(t *testing.T) {
 	if !rgOnPath() {
 		t.Skip("ripgrep not on PATH")
 	}
-	// runRg, blockCapName and finalize all read the package limits other tests mutate
+	// runRg and finalize read the package limits other tests mutate
 	testLimitsGate.Lock()
 	t.Cleanup(testLimitsGate.Unlock)
 
@@ -499,9 +517,10 @@ func TestGrepRgPaths(t *testing.T) {
 		assert.Contains(t, out, "result cap of 2 matches reached") // the explicit budget is named
 	})
 
-	// without an explicit limit a context stream still stops at GrepResult and
-	// names that output cap
-	t.Run("block_output_limit_named", func(t *testing.T) {
+	// without an explicit limit a context stream rides to the match budget, so a
+	// completed search never claims a match cap; finalize names the output bound
+	// it applied and spills the complete text instead
+	t.Run("block_output_bound_spills", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		for i := 1; i <= 30; i++ {
 			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "pre-a\npre-b\nmatchline\npost-a\npost-b\n")
@@ -511,8 +530,42 @@ func TestGrepRgPaths(t *testing.T) {
 			callWith([]byte(`{"pattern":"matchline","context":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
-		assert.Contains(t, out, "result cap of 100 matches reached")
-		assert.Less(t, strings.Count(out, "matchline"), 30) // some blocks were withheld
+		assert.NotContains(t, out, "result cap") // every match streamed; a cap note would be false
+		assert.Contains(t, out, "truncated:")    // the output bound is named where it fired
+		m := regexp.MustCompile(`@([^;\s]+)`).FindStringSubmatch(out)
+		require.NotNil(t, m)
+		dat, err := os.ReadFile(m[1])
+		require.NoError(t, err)
+		assert.Equal(t, 30, strings.Count(string(dat), "matchline")) // the spill holds every block
+	})
+
+	// a pattern occurring in printed paths must not spend the match budget on
+	// context lines: only true matches count toward the cap
+	t.Run("block_path_not_spending_budget", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, filepath.Join("needle", "a.txt"), "before\nneedle match\nafter\n")
+		mkfile(dir, filepath.Join("needle", "b.txt"), "before\nneedle match\nafter\n")
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"needle","context":1,"limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 2, strings.Count(out, "needle match")) // both real matches streamed
+		assert.Contains(t, out, "result cap of 2 matches reached")
+		assert.Equal(t, 1, strings.Count(out, "\n--\n")) // one group separator between the files
+	})
+
+	// a non-UTF-8 line still prints: rg delivers its raw bytes when text is invalid
+	t.Run("block_non_utf8_line_prints", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "lat.txt", "\xe9caf\nneedle\n")
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"needle","context":1}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, "lat.txt:2:")        // the match keeps its attribution
+		assert.Contains(t, out, "lat.txt-1-\xe9caf") // the invalid context line is not dropped
 	})
 }
 
@@ -556,6 +609,28 @@ func TestRelToDotPrefixedFilename(t *testing.T) {
 	assert.Equal(t, "/a/sibling", relTo("/a/b", "/a/sibling")) // true escape stays absolute
 }
 
+func TestRelLine(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "sub/a.txt:1:x\n", relLine("/root/dir", "/root/dir/sub/a.txt:1:x\n"))
+	assert.Equal(t, "sub/a.txt\n", relLine("/root/dir", "/root/dir/sub/a.txt\n")) // files mode
+	assert.Equal(t, "--\n", relLine("/root/dir", "--\n"))                         // group separator untouched
+	assert.Equal(t, "a.txt:2\n", relLine("/root/a.txt", "/root/a.txt:2\n"))       // single file names itself
+	assert.Equal(t, "/elsewhere/x:1:y", relLine("/root/dir", "/elsewhere/x:1:y"))
+	assert.Equal(t, "a.txt:1:x", relLine("/root/dir", "/root/dir/a.txt:1:x")) // no newline stays bare
+}
+
+func TestGrepRel(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "sub/a.txt", grepRel("/root/dir", "/root/dir/sub/a.txt"))
+	// a hidden file keeps its dot prefix and an escape stays absolute, like relTo
+	assert.Equal(t, "..hidden.go", grepRel("/a", "/a/..hidden.go"))
+	assert.Equal(t, "/a/sibling", grepRel("/a/b", "/a/sibling"))
+	// searching a single file attributes to that file's own name
+	assert.Equal(t, "a.txt", grepRel("/root/dir/a.txt", "/root/dir/a.txt"))
+}
+
 // TestFindScopedInsideGitRepo asserts a nested root never enumerates files
 // outside its subtree.
 func TestFindScopedInsideGitRepo(t *testing.T) {
@@ -595,4 +670,92 @@ func TestGrepFallbackScopedInsideGitRepo(t *testing.T) {
 	out := textOf(res)
 	assert.Contains(t, out, "inner.go")   // the in-scope file is searched
 	assert.NotContains(t, out, "leak.go") // a sibling outside scope never leaks
+}
+
+func TestGrepSingleFileSearch(t *testing.T) {
+	t.Parallel()
+
+	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
+		t.Run(name, func(t *testing.T) {
+			testLimitsGate.Lock()
+			t.Cleanup(testLimitsGate.Unlock)
+			if !forceGo && !rgOnPath() {
+				t.Skip("ripgrep not on PATH")
+			}
+			dir, policy := newSearchEnv(t)
+			mkfile(dir, "a.txt", "hit one\nmiss\nhit two\n")
+			tool := &grepTool{policy: policy, forceGo: forceGo}
+
+			run := func(args string) agent.ToolResult {
+				res, err := tool.Execute(t.Context(), callWith([]byte(args)), agent.NewOutput(agent.NopSink{}, "c"))
+				require.NoError(t, err)
+				assert.False(t, res.IsError)
+				return res
+			}
+
+			// count mode reports the file's matches instead of an empty result
+			out := textOf(run(fmt.Sprintf(`{"pattern":"hit","mode":"count","path":%q}`, filepath.Join(dir, "a.txt"))))
+			assert.Equal(t, "a.txt:2", strings.TrimSpace(out))
+
+			// content mode keeps file attribution on every line
+			out = textOf(run(fmt.Sprintf(`{"pattern":"hit","path":%q}`, filepath.Join(dir, "a.txt"))))
+			assert.Contains(t, out, "a.txt:1:")
+			assert.Contains(t, out, "a.txt:3:")
+
+			// files mode names the file rather than a bare "."
+			out = textOf(run(fmt.Sprintf(`{"pattern":"hit","mode":"files","path":%q}`, filepath.Join(dir, "a.txt"))))
+			assert.Equal(t, "a.txt", strings.TrimSpace(out))
+		})
+	}
+}
+
+func TestGrepNaturalCompletionNotCapped(t *testing.T) {
+	t.Parallel()
+
+	var content strings.Builder
+	for i := 0; i < 20; i++ {
+		content.WriteString(strings.Repeat("pad\n", 5) + "needle\n")
+	}
+
+	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
+		t.Run(name, func(t *testing.T) {
+			testLimitsGate.Lock() // the match budget defaults to GrepResultLimit
+			t.Cleanup(testLimitsGate.Unlock)
+			if !forceGo && !rgOnPath() {
+				t.Skip("ripgrep not on PATH")
+			}
+			dir, policy := newSearchEnv(t)
+			mkfile(dir, "a.txt", content.String())
+
+			res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
+				callWith([]byte(`{"pattern":"needle","context":5}`)), agent.NewOutput(agent.NopSink{}, "c"))
+			require.NoError(t, err)
+			out := textOf(res)
+			assert.Contains(t, out, "a.txt:")
+			assert.NotContains(t, out, "result cap") // 20 matches completed the search
+		})
+	}
+}
+
+func TestGrepPathShapeRootRelative(t *testing.T) {
+	t.Parallel()
+
+	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
+		t.Run(name, func(t *testing.T) {
+			testLimitsGate.Lock()
+			t.Cleanup(testLimitsGate.Unlock)
+			if !forceGo && !rgOnPath() {
+				t.Skip("ripgrep not on PATH")
+			}
+			dir, policy := newSearchEnv(t)
+			mkfile(dir, "sub/a.txt", "needle\n")
+
+			res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
+				callWith([]byte(`{"pattern":"needle"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+			require.NoError(t, err)
+			out := textOf(res)
+			assert.Contains(t, out, filepath.Join("sub", "a.txt")+":1:") // one shape either way
+			assert.NotContains(t, out, dir)                              // never absolute
+		})
+	}
 }

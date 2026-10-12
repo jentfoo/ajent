@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"slices"
@@ -108,17 +110,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		if rgErr != nil {
 			return resultErr("grep: " + rgErr.Error()), nil
 		}
-		blockMode := (mode == "" || mode == grepContent) && p.Context > 0
-		note := capNote(out, p.Limit, max, mode)
-		switch {
-		case blockMode && cut:
-			// context rides whole blocks bounded by the output limit, never an exact match
-			// count. A cut means matches beyond that bound went unseen even under an
-			// explicit max, so always name it.
-			note = resultCapNote(blockCapName(p, max))
-		case cut && (mode == grepCount || p.Limit <= 0): // budget spent, mirror the fallback's note
-			note = resultCapNote(max)
-		}
+		note := p.capNote(mode, cut, max)
 		if warn != "" { // rg warned about paths it could not read, mirror the fallback's note
 			note = joinNotes(note, "rg: "+strutil.FirstLine(warn))
 		}
@@ -129,10 +121,16 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	return t.goSearch(ctx, cwd, p, mode, re, max), nil
 }
 
-// capNote names the default match cap when enumeration reached it without an
-// explicit limit, so a stopped search is never mistaken for complete.
-func capNote(out string, explicit, max int, mode string) string {
-	if explicit > 0 || mode == grepCount || countLines(out) < max {
+// capNote names a spent match budget so a stopped search is never mistaken for
+// complete. Count output and context blocks always name it: a trimmed count
+// reads as authoritative in a way cut-off content lines do not, and a block cut
+// withholds whole matches even under an explicit limit. Plain content and files
+// results stay silent under an explicit limit because that cap is the model's
+// own choice. The budget counts matches, never output lines, so context-heavy
+// results are not falsely named when they complete naturally.
+func (p grepParams) capNote(mode string, spent bool, max int) string {
+	blocks := (mode == "" || mode == grepContent) && p.Context > 0
+	if !spent || (p.Limit > 0 && mode != grepCount && !blocks) {
 		return ""
 	}
 	return resultCapNote(max)
@@ -143,21 +141,6 @@ func capNote(out string, explicit, max int, mode string) string {
 // way cut-off content lines do not.
 func resultCapNote(max int) string {
 	return fmt.Sprintf("... result cap of %d matches reached; narrow the pattern or raise limit", max)
-}
-
-// blockMatchBudget reports the line ceiling a context-mode stream reaches once
-// every one of max matches has emitted, given p.Context.
-func (p grepParams) blockMatchBudget(max int) int {
-	return max * (2*p.Context + 2)
-}
-
-// blockCapName names which cap cut a context-mode rg stream: the explicit
-// match limit when it is tighter than GrepResult's line bound, else that bound.
-func blockCapName(p grepParams, max int) int {
-	if p.Limit > 0 && p.blockMatchBudget(max) < GrepResultLimit().Lines {
-		return max
-	}
-	return GrepResultLimit().Lines
 }
 
 // joinNotes combines two notes, dropping either when empty and joining with a
@@ -205,7 +188,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 	}
 	var paths []string
 	for _, path := range repoFiles(ctx, cwd) { // .gitignore semantics on the fallback too
-		if p.Glob == "" || matchGlob(p.Glob, relTo(cwd, path)) {
+		if p.Glob == "" || matchGlob(p.Glob, grepRel(cwd, path)) {
 			paths = append(paths, path)
 		}
 	}
@@ -264,7 +247,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 					}
 					data = buf.Bytes()
 				}
-				m.rel = relTo(cwd, path)
+				m.rel = grepRel(cwd, path)
 				m.hits, m.n, m.ends = goGrep(normalizeToLF(string(data)), re, p.Context, budget)
 				results[i-lo] = m
 			}(i, paths[i])
@@ -331,10 +314,7 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 	}
 
 	trimmed := strings.TrimRight(b.String(), "\n")
-	note := capNote(trimmed, p.Limit, max, mode)
-	if mode == grepCount && remaining <= 0 {
-		note = resultCapNote(max) // the budget was spent, so a trimmed count reads as authoritative
-	}
+	note := p.capNote(mode, remaining <= 0, max)
 	if skipped > 0 { // only when something could not be searched: results may miss matches there
 		n := fmt.Sprintf("%d file(s) not searched (binary/unreadable); results may be incomplete", skipped)
 		note = joinNotes(note, n)
@@ -357,13 +337,15 @@ func (t *grepTool) finalize(out, note string) agent.ToolResult {
 // rgOnPath reports whether ripgrep is available.
 func rgOnPath() bool { return lookPath("rg") }
 
-// runRg streams ripgrep output until the report is complete, then cancels rg
-// so a deep tree with many matches does not keep scanning. Returns the result,
-// whether the budget was spent (cut), any benign stderr warning (warn) to mirror
-// the fallback's incomplete-coverage note, and any failure. Exit status 1 means
-// "no matches", while an early cancel ignores whatever exit code follows.
-func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) (string, bool, string, error) {
-	args := []string{"--no-heading", "--color=never"}
+// runRg streams ripgrep output until the report is complete or the match
+// budget is spent, then cancels rg so a deep tree with many matches does not
+// keep scanning. Returns the result, whether the match budget was spent (cut),
+// any benign stderr warning (warn) to mirror the fallback's incomplete-coverage
+// note, and any failure. Output lines are rewritten to root-relative paths so
+// both engines print one shape. Exit status 1 means "no matches", while an
+// early cancel ignores whatever exit code follows.
+func runRg(ctx context.Context, root string, p grepParams, mode string, max int) (string, bool, string, error) {
+	args := []string{"--no-heading", "--color=never", "-H"} // -H: one file keeps its name prefix
 	switch mode {
 	case grepFiles:
 		args = append(args, "-l")
@@ -379,9 +361,9 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 		args = append(args, "-F")
 	}
 	contentMode := mode == "" || mode == grepContent
-	blockMode := contentMode && p.Context > 0 // whole blocks: budget is output size, not match count
+	blockMode := contentMode && p.Context > 0 // whole blocks: matches counted as they stream
 	if blockMode {
-		args = append(args, "-C", strconv.Itoa(p.Context))
+		args = append(args, "-C", strconv.Itoa(p.Context), "--json")
 	}
 	if p.Glob != "" {
 		args = append(args, "--glob", p.Glob)
@@ -389,7 +371,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 	if mode != grepCount {
 		args = append(args, "-m", strconv.Itoa(max)) // per-file bound, the stream stops globally
 	}
-	args = append(args, "--", p.Pattern, cwd)
+	args = append(args, "--", p.Pattern, root)
 
 	cmd := exec.CommandContext(ctx, "rg", args...)
 	var stderr bytes.Buffer
@@ -411,7 +393,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 		kept := 0 // matches shown across trimmed counts
 		for {
 			ln, rerr := r.ReadString('\n')
-			if rel, n, ok := splitCountLine(strings.TrimRight(ln, "\r\n")); ok && kept < max {
+			if rel, n, ok := splitCountLine(strings.TrimRight(relLine(root, ln), "\r\n")); ok && kept < max {
 				take := min(n, max-kept)
 				kept += take
 				fmt.Fprintf(&b, "%s:%d\n", rel, take)
@@ -427,25 +409,43 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 			}
 		}
 	case blockMode:
-		// rg never marks context vs matched lines, so a strict line cut mid-block
-		// would leave dangling context. Bound the stream by the output limit and
-		// cancel there instead. Finalize then names anything beyond GrepResult.
+		// Context rides whole blocks streamed from rg's JSON events, where match
+		// and context lines are distinct: a pattern occurring in a printed path
+		// cannot spend the budget on context. The byte bound only stops a runaway
+		// context size; finalize bounds and names whatever it cuts.
 		lim := GrepResultLimit()
-		capLines := lim.Lines
-		if p.Limit > 0 { // an explicit match budget bounds the stream too, not only GrepResult
-			capLines = min(capLines, p.blockMatchBudget(max))
-		}
+		var shown int // matching lines streamed; context lines and separators ride uncounted
+		var lastPath string
+		var lastLine int
+		var started bool
+		dec := json.NewDecoder(stdout)
 		for {
-			ln, rerr := r.ReadString('\n')
-			if ln != "" {
-				b.WriteString(ln)
-			}
-			cut = capLines > 0 && countLines(b.String()) >= capLines ||
-				lim.Bytes > 0 && b.Len() >= lim.Bytes
-			if rerr != nil { // rg finished naturally with a complete report
+			var ev rgEvent
+			if err := dec.Decode(&ev); err != nil { // io.EOF: the report is complete
 				break
 			}
-			if cut {
+			if ev.Type != "match" && ev.Type != "context" {
+				continue // begin/end/summary records carry no output line
+			}
+			pth := grepRel(root, ev.Data.Path.String())
+			sep := ":" // match lines print path:line:text, context ones path-line-text
+			if ev.Type == "context" {
+				sep = "-"
+			} else {
+				shown++
+			}
+			txt := ev.Data.Lines.String()
+			if !strings.HasSuffix(txt, "\n") {
+				txt += "\n" // a final line without one would glue the next group separator
+			}
+			if started && (pth != lastPath || ev.Data.LineNumber != lastLine+1) {
+				b.WriteString("--\n") // disjoint blocks separate, as rg's text printer emits
+			}
+			fmt.Fprintf(&b, "%s%s%d%s%s", pth, sep, ev.Data.LineNumber, sep, txt)
+			started, lastPath, lastLine = true, pth, ev.Data.LineNumber
+			cut = max > 0 && shown >= max // the report filled at or before this many matches
+			over := lim.Bytes > 0 && b.Len() >= lim.Bytes
+			if cut || over {
 				stopped = true
 				_ = cmd.Cancel()
 				break
@@ -456,7 +456,7 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 		for {
 			ln, rerr := r.ReadString('\n')
 			if ln != "" {
-				b.WriteString(ln)
+				b.WriteString(relLine(root, ln))
 				lines++
 			}
 			cut = max > 0 && lines >= max // the report filled at or before this line
@@ -487,6 +487,64 @@ func runRg(ctx context.Context, cwd string, p grepParams, mode string, max int) 
 		warn = strings.TrimSpace(stderr.String())
 	}
 	return strings.TrimRight(b.String(), "\n"), cut, warn, nil
+}
+
+// grepRel names a searched path relative to the search root. Searching a
+// single file attributes hits to that file's own name rather than relTo's ".",
+// so one explicit path reads like any other result line.
+func grepRel(root, path string) string {
+	if rel := relTo(root, path); rel != "." {
+		return rel
+	}
+	return filepath.Base(path)
+}
+
+// relLine rewrites an rg output line's leading path from the absolute search
+// root to root-relative shape, so both engines print one form. A single-file
+// search (where every printed path is the root itself) names that file.
+func relLine(root, ln string) string {
+	tail := strings.TrimSuffix(ln, "\n")
+	rest := strings.TrimPrefix(tail, root)
+	if len(rest) == len(tail) { // unrooted line, e.g. a "--" context group separator
+		return ln
+	}
+	switch {
+	case rest == "" || rest[0] == ':':
+		tail = filepath.Base(root) + rest
+	case rest[0] == filepath.Separator:
+		tail = rest[1:]
+	default:
+		return ln // not a rooted path; leave the line untouched
+	}
+	if strings.HasSuffix(ln, "\n") { // restore the newline ReadString kept
+		tail += "\n"
+	}
+	return tail
+}
+
+// rgEvent is one record of rg --json output; only match and context records
+// carry printable lines.
+type rgEvent struct {
+	Type string `json:"type"`
+	Data struct {
+		Path       rgText `json:"path"`
+		LineNumber int    `json:"line_number"`
+		Lines      rgText `json:"lines"`
+	} `json:"data"`
+}
+
+// rgText is printed line content: text when valid UTF-8, base64 bytes otherwise.
+type rgText struct {
+	Text  string `json:"text"`
+	Bytes []byte `json:"bytes"` // decoded from base64 by encoding/json
+}
+
+// String returns the line content, falling back to raw bytes for a non-UTF-8 line.
+func (x rgText) String() string {
+	if x.Text != "" || x.Bytes == nil {
+		return x.Text
+	}
+	return string(x.Bytes)
 }
 
 // splitCountLine splits a count line into path and match count, false when the
