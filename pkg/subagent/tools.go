@@ -125,25 +125,33 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	}
 	snap, complete, batched := t.m.poll(ctx, j.id)
 
-	var res agent.ToolResult
-	status := j.statusOf()
+	res, status := pollOutcome(ctx, snap, complete, j.pollProgress(), j.statusOf())
+	return withJob(nameDisplay(res, j.id, batched), j.id, status), nil
+}
+
+// pollOutcome resolves one agent_poll wait into its result and reported job
+// status. snap is what the wait returned, complete whether it claimed a terminal
+// result, progress the still-running payload for an unclaimed wait, live the
+// job's status when no snapshot came back. A claimed result delivers even on a
+// cancelled context (claim-implies-deliver). An unclaimed poll reports
+// interrupted and leaves re-offer to the orphan check.
+func pollOutcome(ctx context.Context, snap Job, complete bool, progress string, live Status) (agent.ToolResult, Status) {
 	switch {
-	case ctx.Err() != nil: // the turn was interrupted, release promptly and let abort fill this call
-		res = agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "poll interrupted"}}}
+	case ctx.Err() != nil && !complete: // dying turn, nothing claimed: abort fills this call
+		return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "poll interrupted"}}}, live
 	case !complete:
-		res = result(j.pollProgress())
+		return result(progress), snap.Status
 	case snap.Status == StatusAborted:
-		res, status = result("sub-agent "+j.id+" aborted"), snap.Status
+		return result("sub-agent " + snap.ID + " aborted"), snap.Status
 	case snap.Status == StatusError && snap.Err != nil:
-		res, status = resultErr(snap.Err.Error()), snap.Status
+		return resultErr(snap.Err.Error()), snap.Status
 	default: // done with a summary, the blank case is impossible so this is belt-and-braces
 		out := strings.TrimSpace(snap.Summary)
 		if out == "" {
 			out = placeholder
 		}
-		res, status = result(out), snap.Status
+		return result(out), snap.Status
 	}
-	return withJob(nameDisplay(res, j.id, batched), j.id, status), nil
 }
 
 // nameDisplay heads a batched poll's committed output with the sub-agent it came

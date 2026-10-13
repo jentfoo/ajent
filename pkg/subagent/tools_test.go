@@ -208,6 +208,103 @@ func TestAgentPoll(t *testing.T) {
 	})
 }
 
+func TestPollOutcome(t *testing.T) {
+	t.Parallel()
+
+	cancelled := func() context.Context {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx
+	}
+	const progress = "sub-agent sub-1 still running after 3s"
+
+	tests := []struct {
+		name     string
+		ctx      context.Context
+		snap     Job
+		complete bool
+		text     string
+		status   Status
+		isErr    bool
+	}{
+		// the claim sites (done and timer branches) race an interrupt: a claimed result
+		// must reach the model even on a dying turn, or the summary is eaten
+		{"claimed_summary_interrupted", cancelled(), Job{ID: "sub-1", Status: StatusDone, Summary: "found it"}, true,
+			"found it", StatusDone, false},
+		{"claimed_error_interrupted", cancelled(),
+			Job{ID: "sub-1", Status: StatusError, Err: errors.New("provider exploded")}, true,
+			"provider exploded", StatusError, true},
+		// an abort claimed by the same race reports its status rather than a lost claim
+		{"claimed_abort_interrupted", cancelled(), Job{ID: "sub-1", Status: StatusAborted}, true,
+			"sub-agent sub-1 aborted", StatusAborted, false},
+		// only an unclaimed poll defers to the interrupt, leaving re-offer armed
+		{"unclaimed_interrupted", cancelled(), Job{}, false, "poll interrupted", StatusRunning, false},
+		{"unclaimed_progress", context.Background(), Job{ID: "sub-1", Status: StatusRunning}, false,
+			progress, StatusRunning, false},
+		// normal paths unchanged
+		{"claimed_summary_live_ctx", context.Background(), Job{ID: "sub-1", Status: StatusDone, Summary: "found it"}, true,
+			"found it", StatusDone, false},
+		{"claimed_blank_summary", context.Background(), Job{ID: "sub-1", Status: StatusDone}, true,
+			placeholder, StatusDone, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, status := pollOutcome(tc.ctx, tc.snap, tc.complete, progress, StatusRunning)
+			assert.Equal(t, tc.text, textOf(res))
+			assert.Equal(t, tc.status, status)
+			assert.Equal(t, tc.isErr, res.IsError)
+		})
+	}
+}
+
+// The both-ready race from subagents-design.md: a turn interrupted as the polled
+// job finishes leaves wait's select with two ready channels and Go picks either,
+// and whichever wins the summary must survive. done is closed and ctx
+// pre-cancelled before wait runs, so select decides uniformly per attempt.
+func TestInterruptedPollDeliversClaimedResult(t *testing.T) {
+	t.Parallel()
+
+	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("race summary", llm.Usage{})}})
+	m := New(wired(Options{Provider: p}))
+	t.Cleanup(m.Close)
+	tools := m.Tools()
+
+	id := m.start("x", "", "")
+	j, ok := m.lookup(id)
+	require.True(t, ok)
+	<-j.done // finished before any poll registers; done stays closed for every attempt
+
+	poll := func(ctx context.Context) agent.ToolResult {
+		raw, err := json.Marshal(map[string]string{"id": id})
+		require.NoError(t, err)
+		res, err := tools[1].Execute(ctx, agent.ToolCall{ID: "c1", Name: "agent_poll", Input: raw}, discardOutput{})
+		require.NoError(t, err)
+		return res
+	}
+
+	const attempts = 30 // each pick is uniform, so all-miss odds are 2^-30
+	var delivered int
+	var everClaimed bool
+	for i := 0; i < attempts; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // both select cases ready at entry: the claim races the interrupt
+		res := poll(ctx)
+
+		if textOf(res) != "poll interrupted" { // the claim won and had to be delivered
+			delivered++
+			everClaimed = true
+			assert.Equal(t, map[string]string{"id": id, "status": "done"}, res.Details)
+			assert.Contains(t, textOf(res), "race summary")
+			continue
+		}
+		j.mu.Lock() // interrupted: consumed only if an earlier attempt claimed
+		consumed := j.consumed
+		j.mu.Unlock()
+		assert.Equal(t, everClaimed, consumed)
+	}
+	require.Positive(t, delivered, "select never landed a claim; the race was not exercised")
+}
+
 func TestAgentListEmptyAndPopulated(t *testing.T) {
 	t.Parallel()
 
