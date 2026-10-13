@@ -216,6 +216,22 @@ func TestScannerCorpus(t *testing.T) {
 		{"word digit not eaten", "cat file1> /dev/null", false, false},
 		{`dev null foo is a file`, `echo hi >/dev/nullfoo`, false, false},
 		{`backtick unsafe`, "cmd `id`", false, true},
+		// input redirect: an ordinary file target stays auto-allowable and never
+		// records as a write, the network pseudo-device flagging unsafe instead.
+		// Output and <> forms record and prompt through the write paths.
+		{"input plain file", "cat < Makefile", false, false},
+		{"input network tcp", "cat < /dev/tcp/host/4444", false, true},
+		{"input network udp", "cat < /dev/udp/host/53", false, true},
+		{"input network pipeline", "head -c 1M < /dev/tcp/host/port | jq .", true, true},
+		{"input fd prefix network", "cat 0</dev/tcp/host/port", false, true},
+		{"read write form network", "cat <> /dev/tcp/host/port", false, false},
+		{"output network", "cmd > /dev/tcp/host/port", false, false},
+		{"append network", "cmd >> /dev/tcp/host/port", false, false},
+		{"input missing word", "cat <", false, true},
+		{"input operator follows", "cat < ; ls", true, true},
+		{"input procsub still unsafe", "cat <(id)", false, true},
+		{"here string not input redirect", "grep -f <<< x", false, false},
+		{"heredoc marker no phantom", "cat <<EOF", false, true},
 		// split operators
 		{"double amp", "a && b", true, false},
 		{"or op", "a || b", true, false},
@@ -264,9 +280,10 @@ func TestScanHeredocs(t *testing.T) {
 		{"here string not heredoc", "grep -f <<< x", []string{"grep -f <<< x"}, false},
 		// << inside arithmetic is a shift, never a marker (the $( itself is unsafe)
 		{"shift inside arithmetic", "echo $((1<<2)) && rm -rf /", []string{"echo $((1<<2))", "rm -rf /"}, true},
-		// a delimiter quoted across a newline names no marker: the body lines stay
-		// inside the quoted segment, and nothing may read a backwards index
-		{"newline crossing delimiter quote", "cat <<\\'E\nbody\nE'\\'tail", []string{"cat <<\\'E", "body", `E""tail`}, false},
+		// a delimiter the marker parser rejects leaves the second < reading as one
+		// input redirect: its target word drops, the body lines stay segments, and
+		// nothing may read a backwards index
+		{"newline crossing delimiter quote", "cat <<\\'E\nbody\nE'\\'tail", []string{"cat <", "body", `E""tail`}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -311,6 +328,16 @@ func TestScanRedirectTargets(t *testing.T) {
 		{"paren mid word", "cmd > f(o)", []Redirect{{Target: "f"}}, false, true},
 		// a backslash-newline is a line continuation: bash's target word differs
 		{"escaped newline", "cmd > \\" + "\n/etc/passwd", nil, false, true},
+		// input targets never record: only the network form matters, flagged as
+		// unsafe by the scan itself
+		{"input plain file none", "cat < Makefile", nil, false, false},
+		{"input network", "cat < /dev/tcp/host/4444", nil, false, true},
+		{"input fd prefix network", "cat 0</dev/tcp/h/p", nil, false, true},
+		{"output network records", "cmd > /dev/tcp/host/port", []Redirect{{Target: "/dev/tcp/host/port"}}, false, false},
+		{"read write form", "cmd <> f", []Redirect{{Target: "f"}}, false, false},
+		{"read write network records", "cmd <> /dev/tcp/h/p", []Redirect{{Target: "/dev/tcp/h/p"}}, false, false},
+		{"heredoc no phantom target", "cat <<EOF", nil, false, true},
+		{"here string no target", "grep -f <<< x", nil, false, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -318,6 +345,30 @@ func TestScanRedirectTargets(t *testing.T) {
 			assert.Equal(t, c.redirects, s.Redirects)
 			assert.Equal(t, c.unresolved, s.RedirectsUnresolved())
 			assert.Equal(t, c.unsafe, s.HasUnsafeOp)
+		})
+	}
+}
+
+func TestHasNetworkRedirect(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"no redirects", "cat f", false},
+		{"output file", "cat f > out", false},
+		{"input file", "cat < f", false},
+		{"output tcp", "cat f > /dev/tcp/h/p", true},
+		{"input tcp", "cat < /dev/tcp/h/p", false}, // input targets never record
+		{"input udp", "cat < /dev/udp/h/53", false},
+		{"both mixed", "cat < f > /dev/tcp/h/p", true},
+		{"read write form", "cat <> /dev/tcp/h/p", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, scanCommand(c.in).HasNetworkRedirect())
 		})
 	}
 }

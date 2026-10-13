@@ -2,6 +2,7 @@ package permit
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -16,7 +17,8 @@ type Scan struct {
 	Redirects []Redirect
 	// HasSplitOp reports any &&, ||, |, ;, & or newline outside quotes.
 	HasSplitOp bool
-	// HasUnsafeOp reports any `, $( or <( outside quotes, or anything unparseable.
+	// HasUnsafeOp reports any `, $( or <( outside quotes, a network /dev/tcp|udp
+	// redirect target, or anything unparseable.
 	HasUnsafeOp bool
 }
 
@@ -25,6 +27,17 @@ type Scan struct {
 type Redirect struct {
 	Target string // where the command writes
 	Raw    string
+}
+
+// isNetworkTarget reports whether target is a bash network pseudo-device path
+// (/dev/tcp/host/port, /dev/udp/host/port): opening one is an outbound connection.
+func isNetworkTarget(target string) bool {
+	return strings.HasPrefix(target, "/dev/tcp/") || strings.HasPrefix(target, "/dev/udp/")
+}
+
+// isNetworkRedirect reports whether r targets a bash network pseudo-device.
+func isNetworkRedirect(r Redirect) bool {
+	return isNetworkTarget(r.Target)
 }
 
 // nullRedirectRe matches (&>>|&>|>>|1>>|2>>|1>|2>|>) followed by /dev/null.
@@ -37,14 +50,15 @@ func isWordChar(b byte) bool {
 		b == '.' || b == '_' || b == '-' || b == '/'
 }
 
-// parseRedirectTarget consumes one > or >> at i, returning the redirect and the
-// index past its target, ok false when no word follows or the target carries
-// shell syntax the scan cannot safely read (an unquoted paren is procsub or a
-// subshell, an escaped newline a line continuation).
+// parseRedirectTarget consumes one redirect operator at i (> or >>, <> from
+// either side), returning the redirect and the index past its target, ok false
+// when no word follows or the target carries shell syntax the scan cannot
+// safely read (an unquoted paren is procsub or a subshell, an escaped newline
+// a line continuation).
 func parseRedirectTarget(command string, i int) (r Redirect, next int, ok bool) {
 	j := i + 1
-	if j < len(command) && command[j] == '>' {
-		j++ // append form, same target check
+	if j < len(command) && (command[j] == '>' || command[j] == '<') {
+		j++ // append or <> read-write form, same target check
 	}
 	if j < len(command) && command[j] == '&' {
 		return r, 0, false // >&n fd merge, not a path
@@ -355,8 +369,28 @@ func scanCommand(command string) Scan {
 			}
 		}
 
+		// plain input redirect: an ordinary file target stays auto-allowable and never
+		// records as a write, the network pseudo-device flagging unsafe instead. <>
+		// opens its target for writing, so it records like > and the write paths gate
+		// it. Heredoc markers and procsub are handled above; depth > 0 keeps the text
+		// scanned as-is since a substitution body is never this line's own redirect.
+		if ch == '<' && (depth > 0 || i+1 >= n || (command[i+1] != '<' && command[i+1] != '(')) {
+			r, next, ok := parseRedirectTarget(command, i)
+			if !ok {
+				hasUnsafeOp = true // unparseable target, bash may still read it
+			} else if i+1 < n && command[i+1] == '>' {
+				redirects = append(redirects, r)
+			} else if isNetworkTarget(r.Target) {
+				hasUnsafeOp = true // /dev/tcp|udp opens an outbound connection
+			}
+			if ok && depth == 0 {
+				i = next // parsed target drops from the segment
+				continue
+			}
+		}
 		switch ch {
 		case '>':
+			// output redirect: the recorded target gates every write path
 			r, next, ok := parseRedirectTarget(command, i)
 			if !ok {
 				hasUnsafeOp = true // unparseable target, bash may still read it
@@ -453,12 +487,16 @@ func scanCommand(command string) Scan {
 // write somewhere the check never saw. Quoted targets count as unresolved too:
 // " escapes inside them are only approximated, never a trusted literal path.
 func (s Scan) RedirectsUnresolved() bool {
-	for _, r := range s.Redirects {
-		if r.Raw != "" || strings.ContainsAny(r.Target, "~$`{}*?[") {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.Redirects, func(r Redirect) bool {
+		return r.Raw != "" || strings.ContainsAny(r.Target, "~$`{}*?[")
+	})
+}
+
+// HasNetworkRedirect reports whether any recorded redirect target is a bash
+// network pseudo-device (/dev/tcp, /dev/udp), an outbound connection no
+// write scope or grant may bless.
+func (s Scan) HasNetworkRedirect() bool {
+	return slices.ContainsFunc(s.Redirects, isNetworkRedirect)
 }
 
 // RedirectsAll reports whether ok holds for every redirect target.
@@ -505,8 +543,9 @@ func compound(command string) bool {
 // sed/git/allowlist checks. Resolved targets are never read-only here: they
 // write, and only a write scope may verify where.
 func allSegmentsReadOnly(s Scan) bool {
-	if s.HasUnsafeOp || len(s.Segments) == 0 || len(s.Redirects) > 0 {
-		return false // unparseable or writing: fail safe to the prompt path
+	if s.HasUnsafeOp || s.HasNetworkRedirect() ||
+		len(s.Segments) == 0 || len(s.Redirects) > 0 {
+		return false // unparseable, network or writing: fail safe to the prompt path
 	}
 	return forEachSegment(s, segmentIsReadOnly)
 }

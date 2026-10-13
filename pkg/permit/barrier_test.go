@@ -909,6 +909,21 @@ func TestAskerSessionGrants(t *testing.T) {
 		assert.False(t, ok)
 	})
 
+	// no grant ever blesses a network pseudo-device redirect, input or output
+	t.Run("network_redirect_never_grant_covered", func(t *testing.T) {
+		b := newTestBarrierOpts(nil, withMode(Options{Grants: []string{"bash"}}, ModeAutoWrite))
+
+		for _, cmd := range []string{
+			"cat < /dev/tcp/host/4444",
+			"cat 0</dev/tcp/h/p",
+			"cat > /dev/tcp/h/p",
+			"cat <> /dev/tcp/h/p",
+		} {
+			_, ok := b.sessionAllowed(bashCall(cmd))
+			assert.False(t, ok, cmd)
+		}
+	})
+
 	// a write grant is tool-scoped and does not cover edit
 	t.Run("session_grant_is_tool_scoped_not_global", func(t *testing.T) {
 		p := newFakePrompter()

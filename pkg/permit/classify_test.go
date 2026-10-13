@@ -73,6 +73,13 @@ func TestClassify(t *testing.T) {
 		{"curl never readonly", "", "curl -s https://x", nil, VerdictPrompt},
 		{"wget never readonly", "", "wget http://x/f", nil, VerdictPrompt},
 		{"nc never readonly", "", "nc host 80", nil, VerdictPrompt},
+		// input redirect to a network pseudo-device: allowlisted head or not
+		{"input network tcp prompts", "", "cat < /dev/tcp/host/4444", nil, VerdictPrompt},
+		{"input network udp prompts", "", "head -c 1M < /dev/udp/host/53", nil, VerdictPrompt},
+		{"input network pipeline prompts", "", "head -c 1M < /dev/tcp/h/p | jq .", nil, VerdictPrompt},
+		{"input fd prefix network prompts", "", "cat 0</dev/tcp/h/p", nil, VerdictPrompt},
+		{"read write network prompts", "", "cat <> /dev/tcp/h/p", nil, VerdictPrompt},
+		{"output network prompts", "", "cat > /dev/tcp/h/p", nil, VerdictPrompt},
 		// find unsafe actions prompt even though find is read-only by name
 		{"find -delete prompts", "find", `{}`, []string{"find"}, VerdictAllow}, // tool form, shell handled below
 	}

@@ -162,7 +162,14 @@ when every target resolves inside the write roots from every possible `cd`
 baseline, the same check `mkdir` path arguments get. A target carrying `$`,
 glob, brace or `~` expansion never verifies — the shell would resolve it after
 the check — and a quoted target never verifies either: `"` escapes inside are
-approximated, so no quoted form is a trusted literal path. A line whose
+approximated, so no quoted form is a trusted literal path. `<>` opens its
+target for writing too, so it records and gates like `>`. The bash network
+pseudo-devices are the one exception on both sides: a `>`/`>>` target of
+`/dev/tcp` or `/dev/udp` is never verifiable by any scope, since opening it is
+an outbound connection, not a write placement, and an input redirect to one
+flags unsafe outright. Network is never read-only, by direction or by
+any verdict. Ordinary input redirects (`cat < Makefile`) neither record nor
+flag: stdin is read, and the read-only verdict keeps allowing them. A line whose
 targets all resolve stays nameable for session memory and the approval dialog:
 `go test ./... > /tmp/t.log` grants `go test`, the same heads running whether
 output goes to a terminal or a verified file. Grants narrow to a subcommand
@@ -173,7 +180,9 @@ line or `--allow-tools` still covers every narrowed key under it. A grant
 never blesses a write the barrier cannot place: a redirect line matches any
 grant (earned, granted, or `--allow-tools`) only when the mode allows writes
 and every target resolves inside the roots from every possible `cd`
-baseline — in the read-only modes it never matches one at all.
+baseline. In the read-only modes it never matches one at all. A network
+pseudo-device target never matches a grant in any mode, for the same reason:
+an outbound connection is not a placeable write.
 
 ### Headless: the tool set is the gate
 

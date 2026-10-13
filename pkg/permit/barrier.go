@@ -542,15 +542,20 @@ func (b *Barrier) allowSessionKeys(call agent.ToolCall) ([]string, bool) {
 // sessionAllowed checks the in-memory allow sets for a call. The returned string
 // is empty when no grant matched, ok distinguishing a match from none. A named grant
 // covers a plain command and any compound whose non-readonly heads are all granted;
-// the bare `bash` grant covers every nameable shell call; a line no grant covers
-// (redirect/substitution, unnameable head) never matches, so it re-prompts every time.
+// the bare `bash` grant covers every nameable shell call except a network redirect;
+// a line no grant covers (redirect/substitution, unnameable head) never matches, so
+// it re-prompts every time.
 func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 	cmd := bashCommand(call.Input)
 	if call.Name == tools.ToolBash {
+		s := scanCommand(cmd)
+		if s.HasNetworkRedirect() {
+			return "", false // an outbound connection is never grant-covered
+		}
 		// a grant never blesses a write the barrier cannot place: redirect lines
 		// match grants only where writes are in play and every target resolves in
 		// scope, plain auto being read-only no matter the roots
-		if s := scanCommand(cmd); len(s.Redirects) > 0 {
+		if len(s.Redirects) > 0 {
 			if !b.Mode().allowsWrites() || !b.scope.redirectsInScope(call.Input, s) {
 				return "", false
 			}
