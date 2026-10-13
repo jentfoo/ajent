@@ -77,6 +77,104 @@ func TestSpanStubs(t *testing.T) {
 		assert.Empty(t, all(branch))
 	})
 
+	t.Run("failed_read_keeps_earlier_copy", func(t *testing.T) {
+		// a denied re-read proves nothing about file state, so it must not
+		// demote the only successful read of that path
+		branch := []session.Entry{
+			callMsg("a1", "c1", "read", "/tmp/f.go"),
+			resultMsg("r1", "c1", "good body", false),
+			callMsg("a2", "c2", "read", "/tmp/f.go"),
+			resultMsg("r2", "c2", "denied: path is protected", true),
+		}
+		stubs := all(branch)
+		require.Len(t, stubs, 1)
+		assert.Equal(t, "c2", stubs[0].CallID)
+	})
+
+	// a failed newest read used to mark every earlier read of the path at once
+	t.Run("failed_last_read_keeps_all", func(t *testing.T) {
+		branch := []session.Entry{
+			callMsg("a1", "c1", "read", "/tmp/f.go"),
+			resultMsg("r1", "c1", "first body", false),
+			callMsg("a2", "c2", "read", "/tmp/f.go"),
+			resultMsg("r2", "c2", "second body", false),
+			callMsg("a3", "c3", "read", "/tmp/f.go"),
+			resultMsg("r3", "c3", "denied", true),
+		}
+		stubs := all(branch)
+		require.Len(t, stubs, 2)
+		assert.Equal(t, "c1", stubs[0].CallID) // superseded by c2's success only
+		assert.Equal(t, supersededReadMarker, stubs[0].Text)
+		assert.Equal(t, "c3", stubs[1].CallID) // the failure alone carries a failed stub
+	})
+
+	t.Run("success_after_failure_supersedes", func(t *testing.T) {
+		branch := []session.Entry{
+			callMsg("a1", "c1", "read", "/tmp/f.go"),
+			resultMsg("r1", "c1", "first body", false),
+			callMsg("a2", "c2", "read", "/tmp/f.go"),
+			resultMsg("r2", "c2", "boom", true),
+			callMsg("a3", "c3", "read", "/tmp/f.go"),
+			resultMsg("r3", "c3", "newest body", false),
+		}
+		stubs := all(branch)
+		require.Len(t, stubs, 2)
+		assert.Equal(t, "c1", stubs[0].CallID)
+		assert.Equal(t, supersededReadMarker, stubs[0].Text)
+	})
+
+	t.Run("failed_write_keeps_edit", func(t *testing.T) {
+		branch := []session.Entry{
+			callMsg("a1", "c1", "edit", "/tmp/f.go"),
+			resultMsg("r1", "c1", "edited", false),
+			callMsg("a2", "c2", "write", "/tmp/f.go"),
+			resultMsg("r2", "c2", "denied: path is protected", true),
+		}
+		stubs := all(branch)
+		require.Len(t, stubs, 1)
+		assert.Equal(t, "c2", stubs[0].CallID)
+	})
+
+	t.Run("later_successful_write_supersedes", func(t *testing.T) {
+		branch := []session.Entry{
+			callMsg("a1", "c1", "edit", "/tmp/f.go"),
+			resultMsg("r1", "c1", "edited", false),
+			callMsg("a2", "c2", "write", "/tmp/f.go"),
+			resultMsg("r2", "c2", "boom", true),
+			callMsg("a3", "c3", "write", "/tmp/f.go"),
+			resultMsg("r3", "c3", "written", false),
+		}
+		stubs := all(branch)
+		require.Len(t, stubs, 2)
+		assert.Equal(t, "c1", stubs[0].CallID)
+		assert.Equal(t, supersededEditMarker, stubs[0].Text)
+	})
+
+	t.Run("errored_duplicate_classifies_failed", func(t *testing.T) {
+		body := "boom: no such file\nmore detail"
+		branch := []session.Entry{
+			callMsg("a1", "c1", "bash", ""),
+			resultMsg("r1", "c1", body, true),
+			callMsg("a2", "c2", "bash", ""),
+			resultMsg("r2", "c2", body, true),
+		}
+		for _, s := range all(branch) {
+			assert.Contains(t, s.Text, "failed")
+		}
+	})
+
+	// unreachable on the real paths (synthetic error results fill aborts and the
+	// cut only fires on fully answered steps), but absence of success must never
+	// count as success
+	t.Run("unanswered_call_counts_absent", func(t *testing.T) {
+		branch := []session.Entry{
+			callMsg("a1", "c1", "read", "/tmp/f.go"),
+			resultMsg("r1", "c1", "good body", false),
+			callMsg("a2", "c2", "read", "/tmp/f.go"),
+		}
+		assert.Empty(t, all(branch))
+	})
+
 	t.Run("duplicate_output_stubbed", func(t *testing.T) {
 		body := strings.Repeat("same bytes ", 20)
 		branch := []session.Entry{

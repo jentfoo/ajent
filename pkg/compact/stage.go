@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -25,9 +27,17 @@ type callInfo struct {
 	path string
 }
 
+// writeCall joins a write's call id to the branch index of its message, so the
+// result-status filter keeps each write's ordering key.
+type writeCall struct {
+	at     int
+	callID string
+}
+
 // spanStubs returns what the summariser should read in place of the raw tool
-// results in [lo, band): superseded reads and edits, output identical to an
-// earlier result, and failed results reduced to their first line.
+// results in [lo, band): reads and edits superseded by a successful later
+// access to the same file, output identical to an earlier result, and failed
+// results reduced to their first line.
 //
 // Detection runs over the whole in-context region [lo, len(branch)) but emission
 // stops at band. Narrowing detection too would hide a real win, such as a read
@@ -38,32 +48,54 @@ func spanStubs(branch []session.Entry, lo, band int, cwd string) []session.Stub 
 	resolve := tools.PathPolicy{Cwd: cwd}.Resolve
 
 	calls := make(map[string]callInfo)
-	reads := make(map[string][]string) // canonical path -> ordered read call ids
-	writes := make(map[string][]int)   // canonical path -> branch index of each write
+	succeeded := make(map[string]struct{}) // call ids whose result reported success
+	reads := make(map[string][]string)     // canonical path -> ordered read call ids
+	writes := make(map[string][]writeCall) // canonical path -> ordered write calls with branch positions
 
 	for i := lo; i < len(branch); i++ {
 		m, ok := messageAt(branch, i)
-		if !ok || m.Role != llm.RoleAssistant {
+		if !ok {
 			continue
 		}
-		for _, b := range m.Content {
-			tc, ok := b.(llm.ToolCallBlock)
-			if !ok {
-				continue
+		switch m.Role {
+		case llm.RoleAssistant:
+			for _, b := range m.Content {
+				tc, ok := b.(llm.ToolCallBlock)
+				if !ok {
+					continue
+				}
+				p := canonicalPath(resolve, tc.Input)
+				calls[tc.ID] = callInfo{name: tc.Name, path: p}
+				switch tc.Name {
+				case "read":
+					if p != "" {
+						reads[p] = append(reads[p], tc.ID)
+					}
+				case "write":
+					if p != "" {
+						writes[p] = append(writes[p], writeCall{at: i, callID: tc.ID})
+					}
+				}
 			}
-			p := canonicalPath(resolve, tc.Input)
-			calls[tc.ID] = callInfo{name: tc.Name, path: p}
-			switch tc.Name {
-			case "read":
-				if p != "" {
-					reads[p] = append(reads[p], tc.ID)
+		case llm.RoleUser:
+			for _, b := range m.Content {
+				tr, ok := b.(llm.ToolResultBlock)
+				if !ok || tr.IsError {
+					continue
 				}
-			case "write":
-				if p != "" {
-					writes[p] = append(writes[p], i) // position, so a later edit is kept
-				}
+				succeeded[tr.CallID] = struct{}{}
 			}
 		}
+	}
+
+	// supersession is a claim about file state, so only a successful result makes
+	// the claim true: a failed or denied access counts as absent.
+	didSucceed := func(id string) bool { _, ok := succeeded[id]; return ok }
+	for p, ids := range reads {
+		reads[p] = bulk.SliceFilterInPlace(didSucceed, ids)
+	}
+	for p, wcs := range writes {
+		writes[p] = bulk.SliceFilterInPlace(func(wc writeCall) bool { return didSucceed(wc.callID) }, wcs)
 	}
 
 	var out []session.Stub
@@ -164,7 +196,8 @@ func resultText(tr llm.ToolResultBlock) string {
 	return ""
 }
 
-// superseded reports whether callID is not the last read of its path.
+// superseded reports whether callID is not the newest successful read of its
+// path; registration already dropped reads that failed or were denied.
 func superseded(ids []string, callID string) bool {
 	if len(ids) < 2 {
 		return false
@@ -172,12 +205,12 @@ func superseded(ids []string, callID string) bool {
 	return ids[len(ids)-1] != callID
 }
 
-// writtenAfter reports whether any recorded write to a path occurs after branch
-// position at. Indices are appended in scan order, so the last is the largest.
-// Only edits that precede a later wholesale rewrite get stubbed.
-func writtenAfter(idx []int, at int) bool {
-	if len(idx) == 0 {
+// writtenAfter reports whether the newest write registered for a path landed
+// after branch position at; only successful writes are registered, appended in
+// scan order, so the last entry is the newest.
+func writtenAfter(wcs []writeCall, at int) bool {
+	if len(wcs) == 0 {
 		return false
 	}
-	return idx[len(idx)-1] > at
+	return wcs[len(wcs)-1].at > at
 }
