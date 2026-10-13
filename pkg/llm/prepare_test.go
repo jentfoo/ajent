@@ -416,6 +416,80 @@ func TestDowngradeImages(t *testing.T) {
 	})
 }
 
+func TestRepairToolInputs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("malformed_becomes_empty_object", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "calling"},
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"pa`)},
+		}}
+		out := RepairToolInputs(in)
+		assert.Equal(t, TextBlock{Text: "calling"}, out.Content[0])
+		assert.JSONEq(t, "{}", string(out.Content[1].(ToolCallBlock).Input))
+	})
+
+	t.Run("nil_and_empty_repair", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read"}, // nil input
+			ToolCallBlock{ID: "c2", Name: "read", Input: json.RawMessage("")},
+		}}
+		out := RepairToolInputs(in)
+		assert.JSONEq(t, "{}", string(out.Content[0].(ToolCallBlock).Input))
+		assert.JSONEq(t, "{}", string(out.Content[1].(ToolCallBlock).Input))
+	})
+
+	t.Run("valid_input_untouched", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"path":true}`)},
+		}}
+		assert.Equal(t, in, RepairToolInputs(in))
+	})
+
+	t.Run("clean_content_shares_backing", func(t *testing.T) {
+		// the no-change path must not clone, so state keeps one backing array
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{}`)},
+		}}
+		out := RepairToolInputs(in)
+		assert.Same(t, &in.Content[0], &out.Content[0])
+	})
+}
+
+func TestPrepareRepairsToolInputs(t *testing.T) {
+	t.Parallel()
+
+	m := Model{Provider: "p", ID: "m", Caps: Capabilities{}}
+
+	t.Run("malformed_repaired_in_list", func(t *testing.T) {
+		in := []Message{
+			{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"pa`)},
+			}},
+			Text(RoleUser, "next"),
+		}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		assert.JSONEq(t, "{}", string(out[0].Content[0].(ToolCallBlock).Input))
+	})
+
+	t.Run("caller_list_not_mutated", func(t *testing.T) {
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"pa`)},
+		}}}
+		Prepare(Request{Model: m, Messages: in})
+		assert.Equal(t, `{"pa`, string(in[0].Content[0].(ToolCallBlock).Input))
+	})
+
+	t.Run("repair_idempotent", func(t *testing.T) {
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"pa`)},
+		}}}
+		once := Prepare(Request{Model: m, Messages: in})
+		twice := Prepare(Prepare(Request{Model: m, Messages: in}))
+		assert.Equal(t, once.Messages, twice.Messages)
+	})
+}
+
 func TestRepairTurns(t *testing.T) {
 	t.Parallel()
 

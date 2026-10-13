@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"encoding/json"
 	"hash/fnv"
 	"slices"
 	"strconv"
@@ -27,9 +28,10 @@ const processedTools = "I have processed the tool results."
 // Prepare returns req with its messages normalized for the target model: images
 // downgraded, leaked inline reasoning split back into thinking blocks, foreign
 // reasoning degraded to text or dropped, retention applied, tool-call ids made
-// legal and unanswered calls answered. Every request path passes through it so
-// the estimator and the wire never disagree about what is sent. It is
-// idempotent, so calling it twice yields an identical message list.
+// legal and unanswered calls answered, malformed tool-call inputs replaced with
+// {}. Every request path passes through it so the estimator and the wire never
+// disagree about what is sent. It is idempotent, so calling it twice yields an
+// identical message list.
 func Prepare(req Request) Request {
 	caps := req.Model.Caps
 	target := Origin{Provider: req.Model.Provider, Dialect: caps.Dialect, Model: req.Model.ID}
@@ -38,6 +40,7 @@ func Prepare(req Request) Request {
 	msgs = splitInlineThinking(msgs, caps)
 	msgs = normalizeContent(msgs, req.Reasoning.Retain, caps, target)
 	msgs = splitToolResultImages(msgs, caps) // B4: compat carries tool images separately
+	msgs = repairToolInputs(msgs)            // invalid args ride as {}, never raw
 	msgs = repairTurns(msgs, caps)
 
 	// stamp the resolved origin so a later Prepare pass sees same-model messages
@@ -564,6 +567,57 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 
 	flushPending()
 	return out
+}
+
+// RepairToolInputs returns m with every empty or invalid tool-call input
+// replaced by {}, so any message carrying one marshals for both storage and
+// the wire. Malformed arguments already failed their call at the stream
+// boundary, and survive only in its paired error result.
+func RepairToolInputs(m Message) Message {
+	repaired, _ := repairCallInputs(m)
+	return repaired
+}
+
+// repairToolInputs runs the input repair over a list, cloning lazily so the
+// clean path shares the caller's backing arrays.
+func repairToolInputs(msgs []Message) []Message {
+	var out []Message
+	for i, m := range msgs {
+		r, changed := repairCallInputs(m)
+		if !changed {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(msgs)
+		}
+		out[i] = r
+	}
+	if out == nil {
+		return msgs
+	}
+	return out
+}
+
+// repairCallInputs substitutes {} for each invalid input, reporting whether any
+// block changed. Content clones lazily, only when a change lands.
+func repairCallInputs(m Message) (Message, bool) {
+	var content BlockList
+	for i, b := range m.Content {
+		tc, ok := b.(ToolCallBlock)
+		if !ok || json.Valid(tc.Input) { // invalid covers nil and empty too
+			continue
+		}
+		if content == nil {
+			content = slices.Clone(m.Content)
+		}
+		tc.Input = json.RawMessage("{}")
+		content[i] = tc
+	}
+	if content == nil {
+		return m, false
+	}
+	m.Content = content
+	return m, true
 }
 
 // normalizeCallID returns id in the form target dialect accepts. kind marks how far the source

@@ -388,6 +388,10 @@ func TestLoopMalformedArgsFailsCall(t *testing.T) {
 	}}
 	a := newTestAgent(nil, p, nil)
 	a.opts.Tools = set
+	var recorded []llm.Message // OnMessage sees what a session recorder would persist
+	a.opts.OnMessage = append(a.opts.OnMessage, func(info MessageInfo) {
+		recorded = append(recorded, info.Message)
+	})
 
 	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
 	require.Len(t, tool.calls, 1) // only the valid sibling ran
@@ -403,9 +407,25 @@ func TestLoopMalformedArgsFailsCall(t *testing.T) {
 	assert.True(t, results[0].IsError)
 	assert.False(t, results[1].IsError)
 
+	// the failed call's raw bytes ride its error result as evidence, since they
+	// cannot persist anywhere else
+	tb, ok := results[0].Content[0].(llm.TextBlock)
+	require.True(t, ok)
+	assert.Contains(t, tb.Text, `{"pa`)
+
+	// the stored call carries {} instead of the raw bytes, so the message marshals
+	// and its tool result never orphans on rebuild
+	call, ok := a.state.Messages[1].Content[0].(llm.ToolCallBlock)
+	require.True(t, ok)
+	assert.JSONEq(t, "{}", string(call.Input))
+	for _, m := range recorded {
+		_, err := json.Marshal(m)
+		require.NoError(t, err)
+	}
+
 	// the loop continues to the recovery step: the call failed, not the turn
 	require.Len(t, a.state.Messages, 4)
-	tb, ok := a.state.Messages[3].Content[0].(llm.TextBlock)
+	tb, ok = a.state.Messages[3].Content[0].(llm.TextBlock)
 	require.True(t, ok)
 	assert.Equal(t, "recovered", tb.Text)
 }

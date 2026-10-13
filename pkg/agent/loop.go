@@ -9,11 +9,13 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/httputil"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
@@ -652,6 +654,9 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 	return out, slices.Contains(ends, true)
 }
 
+// maxArgsEvidence caps the raw malformed arguments quoted in an error result.
+const maxArgsEvidence = 120
+
 // runTool executes one tool and streams its output to the sink. A malformed or
 // erroring tool is still a result, not a turn failure.
 func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.ToolResultBlock, bool) {
@@ -660,9 +665,15 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 			Content: llm.BlockList{llm.TextBlock{Text: "no tools configured"}}}, false
 	}
 	if !json.Valid(call.Input) {
-		// answered here so the failure never depends on the tool's own arg tolerance
+		// answered here so the failure never depends on the tool's own arg tolerance.
+		// quoting the clipped bytes keeps the only record of what the model sent,
+		// since the stored call rides as {}
+		text := "malformed tool arguments: not valid JSON"
+		if args := strings.TrimSpace(string(call.Input)); args != "" {
+			text += ": " + strutil.Clip(args, maxArgsEvidence)
+		}
 		return llm.ToolResultBlock{CallID: call.ID, ToolName: call.Name, IsError: true,
-			Content: llm.BlockList{llm.TextBlock{Text: "malformed tool arguments: not valid JSON"}}}, false
+			Content: llm.BlockList{llm.TextBlock{Text: text}}}, false
 	}
 	tool, ok := a.opts.Tools.Get(call.Name)
 	if !ok {
@@ -741,6 +752,9 @@ func (a *Agent) append(info MessageInfo) {
 		n.Stop = info.Stop
 		info.Message = n
 	}
+	// invalid args cannot marshal, so storing them would silently drop the
+	// message and orphan its tool results. Dispatch already saw the raw bytes
+	info.Message = llm.RepairToolInputs(info.Message)
 	a.state.Messages = append(a.state.Messages, info.Message)
 	for _, h := range a.opts.OnMessage {
 		h(info)

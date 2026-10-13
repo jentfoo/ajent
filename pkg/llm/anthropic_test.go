@@ -1005,6 +1005,27 @@ func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
 		}
 		assert.Equal(t, []string{"tool_result", "text"}, order) // references in result, content after
 	})
+
+	t.Run("malformed_tool_input_still_builds", func(t *testing.T) {
+		// a local model's never-valid argument JSON failed the whole body marshal,
+		// breaking every later request of the live session
+		req := baseReq()
+		req.Messages = []Message{
+			{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"pa`)},
+			}},
+			{Role: RoleUser, Content: BlockList{
+				ToolResultBlock{CallID: "c1", IsError: true,
+					Content: BlockList{TextBlock{Text: "malformed tool arguments"}}},
+			}},
+		}
+
+		body, err := buildAnthropicBody(req)
+		require.NoError(t, err)
+		msgs := decode(t, body)["messages"].([]any)
+		block := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+		assert.Equal(t, map[string]any{}, block["input"])
+	})
 }
 
 func TestMakeStrictAnthropicSchema(t *testing.T) {

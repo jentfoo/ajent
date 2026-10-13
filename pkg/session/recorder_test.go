@@ -115,6 +115,32 @@ func TestRecorderWriteFailureNoticesInsteadOfFailing(t *testing.T) {
 	assert.Equal(t, "hello", caps.notices[1])
 }
 
+func TestRecorderDroppedMessageNoticesAtTurnEnd(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	// close the fd directly so Appends fail while f stays non-nil
+	require.NoError(t, w.f.Close())
+
+	r := NewRecorder(w)
+	caps := &captureSink{}
+	s := r.Sink(caps)
+
+	r.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hi")})
+	assert.Empty(t, caps.notices) // held until the turn boundary
+
+	s.TurnEnd(agent.TurnResult{})
+	require.Len(t, caps.notices, 2) // dropped message first, then the sync failure
+	assert.Contains(t, caps.notices[0], "failed to record message")
+
+	caps.notices = nil
+	s.TurnEnd(agent.TurnResult{})
+	require.Len(t, caps.notices, 1) // the held failure cleared after reporting
+	assert.NotContains(t, caps.notices[0], "failed to record message")
+}
+
 func TestRecorderTypedRoundTrip(t *testing.T) {
 	t.Parallel()
 

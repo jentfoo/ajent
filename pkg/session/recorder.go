@@ -12,21 +12,34 @@ import (
 // durability path: one entry per message, written as the loop appends it, so a
 // crash mid-turn resumes with its tool results intact.
 type Recorder struct {
-	w *Writer
+	w       *Writer
+	dropped string // first message-append failure since the last turn end
 }
 
 // NewRecorder returns a recorder that persists to w.
 func NewRecorder(w *Writer) *Recorder { return &Recorder{w: w} }
 
-// Message records one appended message. Wire as agent.Options.OnMessage.
+// Message records one appended message. Wire as agent.Options.OnMessage. A
+// failure is held for TurnEnd, which surfaces it as a notice rather than
+// dropping the message silently.
 func (r *Recorder) Message(info agent.MessageInfo) {
-	_, _ = r.w.Append(TypeMessage, MessageData{
+	_, err := r.w.Append(TypeMessage, MessageData{
 		Message:  info.Message,
 		Stop:     info.Stop,
 		Usage:    info.Usage,
 		Injected: info.Injected,
 		Replayed: info.Replayed,
 	})
+	if err != nil && r.dropped == "" {
+		r.dropped = "failed to record message: " + err.Error()
+	}
+}
+
+// pullDropped returns and clears the first held append failure, if any.
+func (r *Recorder) pullDropped() string {
+	d := r.dropped
+	r.dropped = ""
+	return d
 }
 
 // Sink wraps next so notices persist and the file is fsynced at each turn end.
@@ -100,9 +113,13 @@ func (s *recordingSink) Notice(msg string, level agent.Level) {
 	s.next.Notice(msg, level)
 }
 
-// TurnEnd fsyncs the transcript at a turn boundary, a failure surfacing as an
-// error-level notice rather than ending the turn.
+// TurnEnd reports any held message-append failure, fsyncs the transcript at a
+// turn boundary and lets failures surface as an error-level notice rather than
+// ending the turn.
 func (s *recordingSink) TurnEnd(r agent.TurnResult) {
+	if msg := s.rec.pullDropped(); msg != "" {
+		s.next.Notice(msg, agent.LevelError)
+	}
 	if err := s.rec.w.Sync(); err != nil {
 		s.next.Notice("failed to persist session: "+err.Error(), agent.LevelError)
 	}
