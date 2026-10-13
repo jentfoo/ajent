@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
@@ -320,4 +321,70 @@ func TestWriterAppendTimestamp(t *testing.T) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// TestWriterOpenRepairsTornTail pins the torn-tail fence: a partial write
+// without its newline must never glue the next append onto the stray bytes.
+func TestWriterOpenRepairsTornTail(t *testing.T) {
+	t.Parallel()
+
+	// a torn tail is quarantined aside and the next append stays line-atomic
+	t.Run("open_truncates_torn_tail", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		e1, aerr := w.Append(TypeMessage, MessageData{Message: llmText("one")})
+		require.NoError(t, aerr)
+		line, merr := json.Marshal(e1)
+		require.NoError(t, merr)
+		require.NoError(t, w.Sync())
+		require.NoError(t, w.Close())
+
+		// simulate a crashed partial write of the next entry
+		f, oerr := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+		require.NoError(t, oerr)
+		_, werr := f.Write(line[:len(line)/2])
+		require.NoError(t, werr)
+		require.NoError(t, f.Close())
+
+		w2, oerr := Open(p)
+		require.NoError(t, oerr)
+		t.Cleanup(func() { _ = w2.Close() })
+		assert.Equal(t, e1.ID, w2.Head()) // head is the last complete entry
+
+		e2, aerr := w2.Append(TypeMessage, MessageData{Message: llmText("two")})
+		require.NoError(t, aerr)
+		assert.Equal(t, e1.ID, e2.ParentID) // chain intact, no glued link
+
+		entries, warns, rerr := Read(p)
+		require.NoError(t, rerr)
+		assert.Empty(t, warns)
+		assert.Equal(t, []string{e2.ID}, ids(entries)[2:]) // e1 then the new tip
+
+		torn, terr := os.ReadFile(p + tornSuffix)
+		require.NoError(t, terr)
+		assert.Equal(t, string(line[:len(line)/2]), string(torn)) // bytes preserved
+	})
+
+	// a healthy file is left byte-identical and no sidecar appears
+	t.Run("open_untouched_healthy_file", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := Create(p, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llmText("one")})
+		require.NoError(t, aerr)
+		require.NoError(t, w.Close())
+
+		before, rerr := os.ReadFile(p)
+		require.NoError(t, rerr)
+
+		w2, oerr := Open(p)
+		require.NoError(t, oerr)
+		t.Cleanup(func() { _ = w2.Close() })
+
+		after, rerr := os.ReadFile(p)
+		require.NoError(t, rerr)
+		assert.Equal(t, string(before), string(after))
+		assert.False(t, fileExists(p+tornSuffix))
+	})
 }

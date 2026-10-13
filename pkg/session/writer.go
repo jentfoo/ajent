@@ -1,8 +1,10 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"sync"
 
@@ -37,10 +39,15 @@ func Create(path string, d SessionData) (*Writer, error) {
 }
 
 // Open reopens an existing file for append and recovers the head from its
-// persisted cursor or the tail.
+// persisted cursor or the tail. A torn tail from a crashed partial write is
+// quarantined to <path>.torn and truncated before the first append.
 func Open(path string) (*Writer, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
+		return nil, err
+	}
+	if err := repairTornTail(path, f); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 	e, _, rerr := Read(path)
@@ -49,6 +56,80 @@ func Open(path string) (*Writer, error) {
 		return nil, rerr
 	}
 	return &Writer{f: f, path: path, head: headFor(path, e), n: len(e)}, nil
+}
+
+// tornScanWindow is the tail slice read to gate and locate a torn line.
+const tornScanWindow = 64 << 10
+
+// tornSuffix names the sidecar quarantining a partial write's bytes.
+const tornSuffix = ".torn"
+
+// repairTornTail fences a partial trailing write: the unterminated bytes are
+// copied to a <path>.torn sidecar and the transcript is truncated back to its
+// last complete line, so the next append cannot glue onto them. Healthy files
+// are left byte-identical; the scan touches only the tail.
+func repairTornTail(path string, f *os.File) error {
+	rf, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rf.Close() }()
+
+	fi, err := rf.Stat()
+	if err != nil || fi.Size() == 0 {
+		return err
+	}
+	size := fi.Size()
+	tail := make([]byte, min(size, int64(tornScanWindow)))
+	if _, err := rf.ReadAt(tail, size-int64(len(tail))); err != nil {
+		return err
+	}
+	if tail[len(tail)-1] == '\n' {
+		return nil // terminated tail, nothing torn
+	}
+	cut := size - int64(len(tail)) // bytes to keep, or 0 for a whole-file tear
+	if i := bytes.LastIndexByte(tail, '\n'); i >= 0 {
+		cut += int64(i) + 1
+	} else if size > int64(len(tail)) {
+		// torn line longer than the window: rare, worth the full backward scan
+		cut, err = lastNewline(rf, size)
+		if err != nil {
+			return err
+		}
+	}
+	if err := quarantine(rf, path+tornSuffix, cut, size); err != nil {
+		return err
+	}
+	return f.Truncate(cut)
+}
+
+// quarantine copies the torn bytes at offset cut..size into the sidecar.
+func quarantine(rf *os.File, dst string, cut, size int64) error {
+	sf, err := os.OpenFile(dst, os.O_APPEND|os.O_CREATE|os.O_WRONLY, config.SecretPerm)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(sf, io.NewSectionReader(rf, cut, size-cut))
+	err = errors.Join(err, sf.Close())
+	return err
+}
+
+// lastNewline scans rf backward chunk by chunk for the final newline. Only
+// reached when a torn line exceeds the fast window; 0 means no newline at all.
+func lastNewline(rf *os.File, size int64) (int64, error) {
+	var buf [tornScanWindow]byte
+	for end := size; end > 0; {
+		start := max(end-int64(tornScanWindow), 0)
+		n, err := rf.ReadAt(buf[:end-start], start)
+		if n == 0 && err != nil {
+			return 0, err
+		}
+		if i := bytes.LastIndexByte(buf[:n], '\n'); i >= 0 {
+			return start + int64(i), nil
+		}
+		end = start
+	}
+	return 0, nil
 }
 
 // Discard returns a writer with no file so callers stay branch-free.
