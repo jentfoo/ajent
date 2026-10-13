@@ -230,6 +230,24 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.Equal(t, StopError, events[len(events)-1].StopReason)
 	})
 
+	t.Run("mid_stream_overloaded_is_recoverable", func(t *testing.T) {
+		srv, _ := sseServer(t, "anthropic/error_midstream.sse")
+		p := newAnthropicTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		for {
+			if _, ok := s.Next(); !ok {
+				break
+			}
+		}
+		require.Error(t, s.Err())
+		ok, _ := Recoverable(s.Err())
+		assert.True(t, ok) // mid-stream overload retries like a pre-stream 529
+	})
+
 	t.Run("close_mid_stream_is_not_an_error", func(t *testing.T) {
 		srv, _ := sseServer(t, "anthropic/text.sse")
 		p := newAnthropicTestProvider(t, srv.URL)

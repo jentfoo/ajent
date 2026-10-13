@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strconv"
+)
 
 const (
 	roleSystem    = "system"
@@ -246,7 +249,7 @@ type compatErrBody struct {
 }
 
 // codeString renders the code field, which is a string on some servers and a
-// number on others.
+// number on others, so the status ladder sees either form.
 func (e *compatErrObj) codeString() string {
 	if e == nil {
 		return ""
@@ -255,7 +258,7 @@ func (e *compatErrObj) codeString() string {
 	case string:
 		return v
 	case float64:
-		return ""
+		return strconv.FormatInt(int64(v), 10)
 	default:
 		return ""
 	}

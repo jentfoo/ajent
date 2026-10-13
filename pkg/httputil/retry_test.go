@@ -61,6 +61,7 @@ func TestShouldRetryStatus(t *testing.T) {
 		{"bad_gateway", http.StatusBadGateway, false, true},
 		{"unavailable", http.StatusServiceUnavailable, false, true},
 		{"gateway_timeout", http.StatusGatewayTimeout, false, true},
+		{"overloaded", 529, false, true},
 		{"conflict_with_retry_after", http.StatusConflict, true, true},
 		{"conflict_without_retry_after", http.StatusConflict, false, false},
 		{"bad_request", http.StatusBadRequest, false, false},

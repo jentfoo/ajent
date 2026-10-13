@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/jentfoo/ajent/pkg/httputil"
 )
 
 // overflowPhrases are the substrings each vendor uses to say the input did not
@@ -62,4 +65,51 @@ func matchesOverflow(text string, flavor Flavor) bool {
 	return slices.ContainsFunc(overflowPhrases[flavor], func(phrase string) bool {
 		return strings.Contains(lower, phrase)
 	})
+}
+
+// frameStatuses maps in-band error codes onto the status the same condition
+// carries pre-stream, so a mid-stream frame retries like the response it
+// mirrors. Anthropic type names plus the two openai responses codes.
+var frameStatuses = map[string]int{
+	"invalid_request_error": http.StatusBadRequest,
+	"authentication_error":  http.StatusUnauthorized,
+	"billing_error":         http.StatusBadRequest,
+	"permission_error":      http.StatusForbidden,
+	"not_found_error":       http.StatusNotFound,
+	"request_too_large":     http.StatusRequestEntityTooLarge,
+	"rate_limit_error":      http.StatusTooManyRequests,
+	"timeout_error":         http.StatusRequestTimeout,
+	"api_error":             http.StatusInternalServerError,
+	"overloaded_error":      httputil.StatusOverloaded,
+	"server_error":          http.StatusInternalServerError,
+	"rate_limit_exceeded":   http.StatusTooManyRequests,
+}
+
+// frameStatus parses a mid-stream frame's code into an HTTP status. Vendor app
+// codes outside 4xx/5xx do not parse, keeping the frame unrecoverable.
+func frameStatus(code string) (int, bool) {
+	if status, ok := frameStatuses[code]; ok {
+		return status, true
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(code))
+	if err != nil || n < 400 || n > 599 {
+		return 0, false
+	}
+	return n, true
+}
+
+// frameAPIError builds a mid-stream error frame's error, verdicted like a
+// pre-stream response when the code parses to a status.
+func frameAPIError(provider, code, message string, flavor Flavor) *APIError {
+	e := &APIError{Provider: provider, Code: code, Message: message}
+	status, ok := frameStatus(code)
+	if !ok {
+		return e
+	}
+	e.Status = status
+	if isOverflowStatus(status, flavor) && matchesOverflow(message+" "+code, flavor) {
+		return e.Overflow()
+	}
+	e.Retryable = httputil.ShouldRetryStatus(status, false)
+	return e
 }

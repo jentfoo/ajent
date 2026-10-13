@@ -150,7 +150,9 @@ func TestResponsesProviderStream(t *testing.T) {
 		require.Error(t, s.Err())
 		assert.Equal(t, "partial", textOf(events))
 		assert.Equal(t, StopError, events[len(events)-1].StopReason)
-		assert.ErrorContains(t, s.Err(), "upstream exploded")
+		require.ErrorContains(t, s.Err(), "upstream exploded")
+		ok, _ := Recoverable(s.Err())
+		assert.True(t, ok) // server_error retries like a pre-stream 500
 	})
 
 	t.Run("close_mid_stream_is_not_an_error", func(t *testing.T) {

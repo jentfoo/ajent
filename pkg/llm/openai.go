@@ -512,7 +512,8 @@ func (s *responsesStream) readFrame() []Event {
 	}
 }
 
-// frameError builds the error a failure frame carries.
+// frameError builds the error a failure frame carries, verdicted like a
+// pre-stream response when its code names a status.
 func (s *responsesStream) frameError(ev respEvent) error {
 	msg, code := ev.Message, ev.Code
 	if ev.Response != nil && ev.Response.Error != nil {
@@ -521,7 +522,7 @@ func (s *responsesStream) frameError(ev respEvent) error {
 	if msg == "" {
 		msg = "stream error"
 	}
-	return &APIError{Provider: s.provider, Code: code, Message: msg}
+	return frameAPIError(s.provider, code, msg, FlavorOpenAI)
 }
 
 func (s *responsesStream) onItemAdded(ev respEvent) []Event {

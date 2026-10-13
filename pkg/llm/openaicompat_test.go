@@ -28,7 +28,8 @@ func newCompatTestProvider(t *testing.T, url string) *compatProvider {
 	c, err := newHTTPClient(clientOptions{provider: "lmstudio", baseURL: url})
 	require.NoError(t, err)
 	return &compatProvider{client: c, profile: compatProfile{
-		name: "lmstudio", classify: compatClassifier("lmstudio", FlavorLMStudio),
+		name: "lmstudio", flavor: FlavorLMStudio,
+		classify: compatClassifier("lmstudio", FlavorLMStudio),
 	}}
 }
 
@@ -269,7 +270,27 @@ func TestCompatProviderStream(t *testing.T) {
 		last := events[len(events)-1]
 		assert.Equal(t, EventDone, last.Type)
 		assert.Equal(t, StopError, last.StopReason)
-		assert.Error(t, last.Err)
+		require.Error(t, last.Err)
+		ok, _ := Recoverable(s.Err())
+		assert.False(t, ok) // an opaque code keeps the fail-safe default
+	})
+
+	t.Run("mid_stream_numeric_code_is_recoverable", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/error_midstream_numeric.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		for {
+			if _, ok := s.Next(); !ok {
+				break
+			}
+		}
+		require.Error(t, s.Err())
+		ok, _ := Recoverable(s.Err())
+		assert.True(t, ok) // numeric codes ride the same status ladder
 	})
 
 	t.Run("close_mid_stream_is_not_an_error", func(t *testing.T) {
@@ -907,4 +928,26 @@ func TestCompatUsageToUsage(t *testing.T) {
 			"completion_tokens_details":{"reasoning_tokens":12}}`)
 		assert.Equal(t, Usage{Input: 100, Output: 20, Reasoning: 12}, got)
 	})
+}
+
+func TestCompatErrObjCodeString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"string_code", `{"code":"context_length_exceeded"}`, "context_length_exceeded"},
+		{"numeric_code", `{"code":502}`, "502"},
+		{"float_code", `{"code":529.0}`, "529"},
+		{"missing_code", `{}`, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var e compatErrObj
+			require.NoError(t, json.Unmarshal([]byte(tc.raw), &e))
+			assert.Equal(t, tc.want, e.codeString())
+		})
+	}
 }

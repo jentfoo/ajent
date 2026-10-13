@@ -17,6 +17,10 @@ const (
 	maxRetryAfter = time.Minute
 )
 
+// StatusOverloaded is Anthropic's non-standard overload status, also used by
+// some gateways.
+const StatusOverloaded = 529
+
 // RetryPolicy bounds automatic retries. Zero fields take the defaults.
 type RetryPolicy struct {
 	Attempts int
@@ -70,12 +74,14 @@ func BackoffDelay(p RetryPolicy, attempt int, retryAfter time.Duration, rnd floa
 // ShouldRetryStatus reports whether an HTTP status is worth another attempt.
 // 409 only counts when the server asked us to wait, which some gateways use to
 // mean the model is still loading. Callers building their own error from an
-// ErrorFunc use this to decide the retryable flag.
+// ErrorFunc use this to decide the retryable flag, as do mid-stream error
+// frames once their code resolves to a status.
 func ShouldRetryStatus(status int, hasRetryAfter bool) bool {
 	switch status {
 	case http.StatusRequestTimeout, http.StatusTooManyRequests,
 		http.StatusTooEarly, http.StatusInternalServerError,
-		http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout,
+		StatusOverloaded:
 		return true
 	case http.StatusConflict:
 		return hasRetryAfter

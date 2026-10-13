@@ -20,6 +20,7 @@ type compatProfile struct {
 	decorate func(body *compatRequest, req Request)             // provider only request fields
 	extra    func(raw json.RawMessage, st *compatState) []Event // provider only delta fields
 	classify func(status int, body []byte) error
+	flavor   Flavor // overflow wording, shared with mid-stream frames
 }
 
 // compatProvider serves the chat-completions dialect for one endpoint.
@@ -495,9 +496,8 @@ func (s *compatStream) readFrame() []Event {
 		return s.finish(err)
 	}
 	if chunk.Error != nil {
-		return s.finish(&APIError{
-			Provider: s.profile.name, Code: chunk.Error.codeString(), Message: chunk.Error.Message,
-		})
+		return s.finish(frameAPIError(s.profile.name,
+			chunk.Error.codeString(), chunk.Error.Message, s.profile.flavor))
 	}
 
 	var events []Event

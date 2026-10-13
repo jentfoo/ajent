@@ -500,15 +500,26 @@ which matters because llama.cpp reports overflow as a 500 that would otherwise
 transient-retry. Classifiers only parse vendor error shapes; they set no retry
 verdict of their own.
 
-Retry covers transient failures (rate limiting, request timeouts, server errors
-and connection errors) plus a conflict only when the server sent a `Retry-After`
-(some gateways use it for "model loading"). Exponential backoff with jitter,
+Retry covers transient failures (rate limiting, request timeouts, server
+errors, Anthropic's 529 overload status and connection errors) plus a
+conflict only when the server sent a `Retry-After` (some gateways use it
+for "model loading").
+Exponential backoff with jitter,
 honouring `Retry-After` but **capped**: beyond the cap the request fails
 immediately, because an agent that silently sleeps is indistinguishable from a
 hang. A failure that survives the transport ladder, or happens once the body is
 streaming, is classified by `llm.Recoverable`, which reports whether re-issuing
 the call can recover and any server-directed wait. The turn loop runs its own
 bounded recovery on that verdict (see agent-loop-design.md).
+
+Error frames that arrive mid-stream ride the same ladder as a pre-stream
+response. The frame's error code resolves to the HTTP status the same
+condition carries before first byte, and the shared status table plus the
+overflow checks decide the verdict, so a mid-stream `overloaded_error`
+retries like the pre-stream 529 it mirrors. Only the server-directed wait
+is unavailable mid-stream. A frame whose code resolves to nothing stays
+unrecoverable, and known non-retryables (overflow, auth) keep their
+verdicts, because the status table decides rather than the frame.
 
 Every provider signals "too many input tokens" differently, so each flavor has a
 phrase table in `classify.go` and maps its form to `ErrContextOverflow`, which
@@ -740,6 +751,10 @@ payloads line up would leak one test's needs into unrelated tests.
   keeps `tools` as the immediate (never-loaded) set, and an empty list stays
   present when everything was loaded, because some endpoints require the key
   once tool calls exist in history.
+- **Do not give mid-stream error frames their own retry verdict.** Resolve
+  the frame's code to a status and let the shared `ShouldRetryStatus` table
+  decide, or one failure turns retryable before first byte and permanent
+  mid-stream. A code that resolves to nothing must stay unrecoverable.
 - **Do not overwrite an anthropic stream's accumulated usage with a single wire report.**
   Only `Usage.Merge` is correct there (invariant 12), and only there: the other
   dialects' input total is derived, so merging can inflate it.

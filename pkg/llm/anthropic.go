@@ -660,14 +660,11 @@ func (s *anthropicStream) readFrame() []Event {
 		s.terminal = true
 		return s.finish(io.EOF)
 	case "error":
-		msg := "stream error"
-		var typ string
+		msg, typ := "stream error", ""
 		if ev.Error != nil {
-			msg = ev.Error.Message
-			typ = ev.Error.Type
+			msg, typ = ev.Error.Message, ev.Error.Type
 		}
-		return s.finish(&APIError{Provider: s.provider, Code: typ, Message: msg,
-			Retryable: typ == "overloaded_error"})
+		return s.finish(frameAPIError(s.provider, typ, msg, FlavorAnthropic))
 	default:
 		return nil // ping and anything added later
 	}

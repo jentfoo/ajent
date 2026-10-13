@@ -142,6 +142,7 @@ func profileFor(name string, flavor Flavor, baseURL string, cfg ProviderConfig) 
 	if isOpenRouterEndpoint(name, baseURL) {
 		return compatProfile{
 			name:     name,
+			flavor:   FlavorOpenRouter,
 			classify: compatClassifier(name, FlavorOpenRouter),
 			decorate: decorateOpenRouter(cfg.Routing),
 			extra:    openRouterExtra,
@@ -151,6 +152,7 @@ func profileFor(name string, flavor Flavor, baseURL string, cfg ProviderConfig) 
 		p.path = localChatPath
 	}
 	p.classify = compatClassifier(name, flavor)
+	p.flavor = flavor
 	switch flavor {
 	case FlavorLlamaCpp:
 		p.decorate = decorateLlamaCpp
