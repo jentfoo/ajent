@@ -24,6 +24,7 @@ type Input struct {
 	Delivered func()                              // called once the message lands, ahead of After, nil is the normal case
 	Settled   func()                              // called once After has landed too, nil is the normal case
 	Injected  bool                                // system-injected context (not a typed prompt), excluded from recall
+	Echo      string                              // injected-only live echo, drawn as the message lands; empty stays silent
 	Prepared  bool                                // the host's submit pipeline already ran, Options.NormalizeInput skips it
 }
 

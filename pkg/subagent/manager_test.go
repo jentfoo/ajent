@@ -108,7 +108,8 @@ func TestCompletionNotification(t *testing.T) {
 		ins := m.Boundary() // the step boundary pulls the batched completion input
 		require.Len(t, ins, 1)
 		assert.Contains(t, ins[0].Text, id)
-		ins[0].Delivered() // simulate the message landing
+		assert.Equal(t, ins[0].Text, ins[0].Echo) // echoed live where the notice lands
+		ins[0].Delivered()                        // simulate the message landing
 		m.mu.Lock()
 		assert.Empty(t, m.pending)
 		m.mu.Unlock()
@@ -1102,12 +1103,12 @@ func TestCompletionNotice(t *testing.T) {
 	t.Parallel()
 
 	t.Run("single_names_the_poll", func(t *testing.T) {
-		assert.Equal(t, "[system] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.",
+		assert.Equal(t, "[tool] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.",
 			completionNotice([]string{"sub-1"}))
 	})
 
 	t.Run("batch_names_each", func(t *testing.T) {
-		assert.Equal(t, "[system] Sub-agents sub-1, sub-2 completed. Poll each for its summary.",
+		assert.Equal(t, "[tool] Sub-agents sub-1, sub-2 completed. Poll each for its summary.",
 			completionNotice([]string{"sub-1", "sub-2"}))
 	})
 

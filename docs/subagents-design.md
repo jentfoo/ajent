@@ -210,7 +210,9 @@ apart from the prompt area above which they sit.
 
 The completion steer is marked `Input.Injected`, and the permission-barrier note
 steer in pkg/app is too, so neither surfaces as a recallable prompt via Ctrl+R
-or the up-arrow history. Only messages the user actually typed do.
+or the up-arrow history. Only messages the user actually typed do. Both also
+carry `Input.Echo`, so they surface live where they land and are replay-marked
+for resume and rewind.
 
 ### `tools.go` — the three tools
 

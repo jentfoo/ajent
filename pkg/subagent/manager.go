@@ -540,9 +540,11 @@ func (m *Manager) take(ids []string) []string {
 // names the message carried. A name dropped by an interrupt stays pending, and it
 // starts a fresh UI notice batch.
 func (m *Manager) noticeInput(ids []string) agent.Input {
+	notice := completionNotice(ids)
 	return agent.Input{
-		Text:     completionNotice(ids),
-		Injected: true, // a system notice rather than a typed prompt, excluded from recall
+		Text:     notice,
+		Echo:     notice, // live echo where the notice lands
+		Injected: true,   // a system notice rather than a typed prompt, excluded from recall
 		Delivered: func() {
 			m.mu.Lock()
 			m.pending = dropIDs(m.pending, ids)
@@ -605,7 +607,7 @@ func noticeText(ids []string) string {
 	return "Sub-agents " + strings.Join(ids, ", ") + " completed"
 }
 
-// completionNotice is the steer text naming completed sub-agents. The [system]
+// completionNotice is the steer text naming completed sub-agents. The [tool]
 // prefix marks generated context, so the model never reads it as operator speech.
 func completionNotice(ids []string) string {
 	switch len(ids) {
@@ -613,9 +615,9 @@ func completionNotice(ids []string) string {
 		return ""
 	case 1:
 		id := ids[0]
-		return "[system] Sub-agent " + id + " completed. Call agent_poll with id " + id + " to retrieve the summary."
+		return "[tool] Sub-agent " + id + " completed. Call agent_poll with id " + id + " to retrieve the summary."
 	default:
-		return fmt.Sprintf("[system] Sub-agents %s completed. Poll each for its summary.", strings.Join(ids, ", "))
+		return fmt.Sprintf("[tool] Sub-agents %s completed. Poll each for its summary.", strings.Join(ids, ", "))
 	}
 }
 
