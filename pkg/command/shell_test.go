@@ -67,20 +67,20 @@ func newShellStager(t *testing.T) (*Stager, *recordingSinkForShell) {
 	return NewStager(context.Background(), reg, sink), sink
 }
 
-func TestStagerRefusesDisabledBash(t *testing.T) {
+func TestStagerRunsDisabledBash(t *testing.T) {
 	t.Parallel()
 
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "t"})
 	require.NoError(t, err)
-	reg.SetEnabled([]string{"read", "write", "edit"}) // bash off
+	reg.SetEnabled([]string{"read", "write", "edit"}) // bash off for the agent
 	sink := &recordingSinkForShell{}
 	s := NewStager(context.Background(), reg, sink)
 
 	s.Run("echo hi", false)
-	sink.mu.Lock()
-	first := sink.notices[0]
-	sink.mu.Unlock()
-	assert.Contains(t, first, "bash")
+	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
+	msgs := s.Flush(t.Context())
+	require.Len(t, msgs, 1)
+	assert.Contains(t, resultText(msgs[0].Message.Content), "hi")
 }
 
 func TestStagerRunsAndFlushesInOrder(t *testing.T) {

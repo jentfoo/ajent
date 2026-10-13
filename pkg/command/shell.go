@@ -97,19 +97,20 @@ func (s *Stager) reportStaged() {
 	}
 }
 
-// Run starts cmd executing immediately. A disabled bash tool is a refusal
-// notice rather than a run, matching the /tools widening rule. An empty command
-// produces a notice and runs nothing. Run never blocks on the command itself.
-// An excluded run (`!!`) still displays but its output never reaches context or
-// the transcript.
+// Run starts cmd executing immediately. The bash tool resolves through Lookup, so
+// disabling it for the agent never blocks the human's own shell. A registry
+// without bash at all is a notice rather than a run. An empty command produces a
+// notice and runs nothing. Run never blocks on the command itself. An excluded
+// run (`!!`) still displays but its output never reaches context or the
+// transcript.
 func (s *Stager) Run(cmd string, excluded bool) {
 	if strings.TrimSpace(cmd) == "" {
 		s.sink.Notice("empty shell command", agent.LevelWarn)
 		return
 	}
-	tool, ok := s.reg.Get(tools.ToolBash)
+	tool, ok := s.reg.Lookup(tools.ToolBash)
 	if !ok {
-		s.sink.Notice("shell mode needs the bash tool enabled; use /tools", agent.LevelWarn)
+		s.sink.Notice("shell mode needs the bash tool registered", agent.LevelWarn)
 		return
 	}
 	s.mu.Lock()
