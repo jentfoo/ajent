@@ -869,6 +869,187 @@ func TestManagerRediscoverAfterListChanged(t *testing.T) {
 	assert.False(t, res2.IsError)
 }
 
+// heldRegistrar stalls RegisterState calls made while armed, so a test can land
+// a disconnect between a scan's live check and its registration.
+type heldRegistrar struct {
+	*fakeRegistrar
+	hold    atomic.Bool
+	started chan struct{} // receives one token when the first armed call parks
+	release chan struct{}
+}
+
+func (h *heldRegistrar) RegisterState(source string, t agent.Tool, s State) {
+	if h.hold.Load() {
+		select {
+		case h.started <- struct{}{}:
+		default:
+		}
+		<-h.release // closed channels read freely, so later calls pass through
+	}
+	h.fakeRegistrar.RegisterState(source, t, s)
+}
+
+func TestRediscanRevertAfterDisconnect(t *testing.T) {
+	t.Parallel()
+
+	srv := buildFakeServer(t)
+	fr := &heldRegistrar{
+		fakeRegistrar: newFakeRegistrar(),
+		started:       make(chan struct{}, 1),
+		release:       make(chan struct{}),
+	}
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: srv},
+	}, wired(Options{Registrar: fr}))
+	t.Cleanup(mgr.Close)
+
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	s := mgr.serverByName("fake")
+	require.Len(t, fr.AllNames("mcp: fake"), 3)
+
+	// park the pass inside its first RegisterState, after its live check passed
+	fr.hold.Store(true)
+	mgr.rediscan(t.Context(), s, nil)
+	select {
+	case <-fr.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scan never reached registration")
+	}
+
+	// the disconnect lands while the pass sits between its check and register,
+	// so the fresh registration must be compensated once it completes
+	mgr.Disconnect("fake")
+	close(fr.release)
+
+	require.Eventually(t, func() bool { // the pass settles before its revert can run
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return !s.rediscovering
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Empty(t, fr.AllNames("mcp: fake")) // nothing bound to the closed client survives
+	require.Never(t, func() bool {
+		return len(fr.AllNames("mcp: fake")) > 0
+	}, 750*time.Millisecond, 25*time.Millisecond)
+}
+
+func TestDisconnectDuringRediscan(t *testing.T) {
+	t.Parallel()
+
+	srv := buildFakeServer(t)
+	var mu sync.Mutex
+	var notices []string
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: srv},
+	}, wired(Options{
+		Registrar: fr,
+		Notice:    func(msg string, warn bool) { mu.Lock(); defer mu.Unlock(); notices = append(notices, msg) },
+	}))
+	t.Cleanup(mgr.Close)
+
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	s := mgr.serverByName("fake")
+
+	// the disconnect lands while the pass is listing (or just after): either way
+	// it wins, and its fallout never reaches history as a warning
+	mgr.rediscan(t.Context(), s, nil)
+	mgr.Disconnect("fake")
+
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return !s.rediscovering
+	}, 5*time.Second, 10*time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	// holds under every interleaving: a failed list is self-inflicted fallout
+	// (see TestReportScanError), and nothing the pass registered survives
+	assert.Empty(t, notices)
+	assert.Empty(t, fr.AllNames("mcp: fake"))
+	require.Never(t, func() bool {
+		return len(fr.AllNames("mcp: fake")) > 0
+	}, 750*time.Millisecond, 25*time.Millisecond)
+}
+
+func TestInstallScanStaleClient(t *testing.T) {
+	t.Parallel()
+
+	srv := buildFakeServer(t)
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: srv},
+	}, wired(Options{Registrar: fr}))
+	t.Cleanup(mgr.Close)
+
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	s := mgr.serverByName("fake")
+	stale := s.client()
+	defs := s.defsSnapshot()
+
+	// disconnect then reconnect: a successor owns the registration now
+	mgr.Disconnect("fake")
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	names := fr.AllNames("mcp: fake")
+	before, ok := fr.toolByName("fake__tool_00")
+	require.True(t, ok)
+
+	// a pass bound to the replaced client must not touch the successor's tools
+	mgr.installScan(s, stale, defs, nil)
+
+	after, ok := fr.toolByName("fake__tool_00")
+	require.True(t, ok)
+	assert.Same(t, before, after) // no re-registration happened at all
+	assert.Equal(t, names, fr.AllNames("mcp: fake"))
+}
+
+func TestReportScanError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		disconnected bool // a disconnect landed since the pass captured its snapshot
+		canceled     bool // the caller's context is already done
+		wantWarn     bool // whether history sees a warning
+	}{
+		{name: "real failure warns", wantWarn: true},
+		{name: "disconnect stays quiet", disconnected: true},
+		{name: "canceled scan stays quiet", canceled: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var notices []string
+			mgr := New(map[string]ServerConfig{"fake": {}}, wired(Options{
+				Registrar: newFakeRegistrar(),
+				Notice:    func(msg string, warn bool) { notices = append(notices, msg) },
+			}))
+			s := mgr.serverByName("fake")
+
+			disc := s.discSnapshot()
+			if tt.disconnected {
+				s.mu.Lock()
+				s.discSeq++ // the disconnect lands after the snapshot in real flow
+				s.mu.Unlock()
+			}
+			var cancel context.CancelFunc
+			ctx := t.Context()
+			if tt.canceled {
+				ctx, cancel = context.WithCancel(ctx)
+				cancel() // the caller gave up before the pass reported
+			}
+			s.reportScanError(errors.New("tools/list: file already closed"), disc, ctx)
+
+			if tt.wantWarn {
+				require.Len(t, notices, 1)
+				assert.Contains(t, notices[0], "re-discover failed")
+				return
+			}
+			assert.Empty(t, notices) // fallout never reaches history
+			logs := strings.Join(mgr.Logs("fake"), "\n")
+			assert.Contains(t, logs, "re-discover aborted")
+		})
+	}
+}
+
 // jsonRawObject is a minimal valid tool schema.
 var jsonRawObject = []byte(`{"type":"object","properties":{}}`)
 

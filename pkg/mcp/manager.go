@@ -790,22 +790,22 @@ const discoverTimeout = 45 * time.Second
 // toggles outlive the refresh while untouched tools follow the current defaults. It
 // runs in its own goroutine bounded by ctx, and is serialized per server: a second
 // call while one pass is running is coalesced, since the in-flight pass reads the
-// current tool set anyway.
+// latest tool set anyway. A disconnect or shutdown landing mid-pass aborts quietly
+// and leaves no registration behind (see installScan).
 func (m *Manager) rediscan(ctx context.Context, s *server, keep *toolState) {
 	s.mu.Lock()
 	if s.rediscovering { // a refresh already in flight, it sees the latest state
 		s.mu.Unlock()
 		return
 	}
-	s.rediscovering = true
 	c := s.c
-	s.mu.Unlock()
-	if c == nil {
-		s.mu.Lock()
-		s.rediscovering = false
+	if c == nil { // nothing connected, nothing to scan
 		s.mu.Unlock()
 		return
 	}
+	s.rediscovering = true
+	disc := s.discSeq // pinned like dial's disc, so later fallout reclassifies as user-initiated
+	s.mu.Unlock()
 
 	go func() { // off the caller's goroutine so re-registration never blocks a notification
 		defer func() {
@@ -817,18 +817,49 @@ func (m *Manager) rediscan(ctx context.Context, s *server, keep *toolState) {
 		defer cancel()
 		defs, err := c.Tools(dctx)
 		if err != nil {
-			s.note("re-discover failed: "+err.Error(), true)
+			s.reportScanError(err, disc, ctx)
 			return
 		}
-		s.mu.Lock() // bail if the client was replaced or disconnected mid-list
-		live := s.c == c && !s.down
-		s.mu.Unlock()
-		if !live {
-			return
-		}
-		m.opts.Registrar.Unregister(s.source)
-		m.register(s, c, defs, keep)
+		m.installScan(s, c, defs, keep)
 	}()
+}
+
+// installScan replaces a source's registration with defs discovered from c,
+// layering keep over current defaults as register does. A disconnect, death or
+// Close sweep landing mid-scan still wins: the pass bails instead of touching a
+// successor's registration and compensates its own fresh one if preemption
+// landed during the swap, so no tool bound to a closed client stays registered.
+func (m *Manager) installScan(s *server, c *Client, defs []ToolDef, keep *toolState) {
+	if !s.stillServing(c) { // replaced or disconnected mid-list: what stands in the registry now stays
+		return
+	}
+	m.opts.Registrar.Unregister(s.source)
+	m.register(s, c, defs, keep)
+	// a disconnect landing during the swap already unregistered under us, so this
+	// fresh registration must be torn back out (dial's post-check-and-revert)
+	if !s.stillServing(c) {
+		m.opts.Registrar.Unregister(s.source)
+		m.updateStatus() // registration removed, the ratio must follow
+	}
+}
+
+// stillServing reports whether c is still the server's installed client with no
+// disconnect or death since, so a scan may install against it.
+func (s *server) stillServing(c *Client) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.c == c && !s.down
+}
+
+// reportScanError surfaces a failed re-discovery. A disconnect or shutdown that
+// landed mid-list fails the list call itself; that self-inflicted fallout stays
+// in /mcp logs while real failures warn into history.
+func (s *server) reportScanError(err error, disc int, ctx context.Context) {
+	if s.disconnectSince(disc) || ctx.Err() != nil {
+		s.diag("re-discover aborted: " + err.Error())
+		return
+	}
+	s.note("re-discover failed: "+err.Error(), true)
 }
 
 // client returns the server's live client, or nil when disconnected.
