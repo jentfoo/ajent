@@ -1,6 +1,10 @@
 package llm
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -112,6 +116,19 @@ func TestNewRegistry(t *testing.T) {
 		assert.Empty(t, r.Models())
 		require.Len(t, warnings, 1)
 		assert.Contains(t, warnings[0], "openrouter")
+	})
+
+	t.Run("blank_declared_id_is_skipped", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"p": {Models: []ModelConfig{{ID: ""}, {ID: "real"}}},
+		}}
+		r, warnings := NewRegistry(f, nil, RegistryOptions{})
+		require.Len(t, r.Models(), 1)
+		assert.Equal(t, "p/real", r.Models()[0].Key())
+		// the junk entry sorts first and must not block first-model activation
+		assert.Equal(t, "p/real", r.Active().Key())
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "empty model id")
 	})
 
 	t.Run("flavor_defaults_from_the_provider_key", func(t *testing.T) {
@@ -423,6 +440,21 @@ func TestRegistryWithCache(t *testing.T) {
 		assert.Equal(t, "openrouter/z-ai/glm-5.2", r.Models()[0].Key())
 	})
 
+	t.Run("blank_discovered_id_is_skipped", func(t *testing.T) {
+		// the discovery cache is trusted unconditionally, so rebuild owns the filter
+		f := File{Providers: map[string]ProviderConfig{"openrouter": {}}}
+		cache := map[string]CacheEntry{"openrouter": {Models: []ModelConfig{
+			{ID: ""},
+			{ID: "z-ai/glm-5.2", Name: "GLM 5.2"},
+		}}}
+
+		r, warnings := NewRegistry(f, cache, RegistryOptions{})
+		require.Len(t, r.Models(), 1)
+		assert.Equal(t, "openrouter/z-ai/glm-5.2", r.Models()[0].Key())
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "empty model id")
+	})
+
 	t.Run("declared_provider_ignores_extra_discovered_models", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"openrouter": {Models: []ModelConfig{{ID: "z-ai/glm-5.2"}}},
@@ -474,6 +506,94 @@ func TestRegistryRefresh(t *testing.T) {
 			Now: func() time.Time { return testNow },
 		})
 		assert.Equal(t, before, r.Active().Key())
+	})
+
+	t.Run("repoints_active_onto_refreshed_data", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{
+			"openrouter": {BaseURL: srv.URL, Models: []ModelConfig{{ID: "z-ai/glm-5.2"}}},
+		}}
+
+		r, _ := NewRegistry(f, nil, RegistryOptions{Env: func(string) string { return "" }})
+		require.Equal(t, defaultContextWindow, r.Active().ContextWindow)
+
+		_, warnings := r.Refresh(t.Context(), DiscoverOptions{
+			Env: func(string) string { return "" },
+			Now: func() time.Time { return testNow },
+		})
+		assert.Empty(t, warnings)
+		assert.Equal(t, "openrouter/z-ai/glm-5.2", r.Active().Key())
+		assert.Equal(t, 800000, r.Active().ContextWindow) // discovery's real window
+	})
+
+	t.Run("vanished_active_keeps_serving", func(t *testing.T) {
+		var hits int
+		srv := discoveryServer(t, "/models", "openrouter/models.json", &hits)
+		f := File{Providers: map[string]ProviderConfig{"openrouter": {BaseURL: srv.URL}}}
+		cache := map[string]CacheEntry{
+			"openrouter": {Models: []ModelConfig{{ID: "retired-model"}}},
+		}
+
+		r, _ := NewRegistry(f, cache, RegistryOptions{Env: func(string) string { return "" }})
+		require.Equal(t, "openrouter/retired-model", r.Active().Key())
+
+		_, warnings := r.Refresh(t.Context(), DiscoverOptions{
+			Env: func(string) string { return "" },
+			Now: func() time.Time { return testNow },
+		})
+		// keep-and-notify: the running model stays, the removal is explained
+		assert.Equal(t, "openrouter/retired-model", r.Active().Key())
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "left the catalogue")
+	})
+
+	t.Run("a_switch_mid_refresh_governs", func(t *testing.T) {
+		data, err := os.ReadFile(filepath.Join("testdata", "openrouter", "models.json"))
+		require.NoError(t, err)
+		entered := make(chan struct{}, 1)
+		release := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release // hold discovery open so the switch lands mid-refresh
+			_, _ = w.Write(data)
+		}))
+		t.Cleanup(srv.Close)
+
+		f := File{Providers: map[string]ProviderConfig{
+			"openrouter": {BaseURL: srv.URL, Models: []ModelConfig{
+				{ID: "anthropic/claude-opus-4-5"},
+				{ID: "z-ai/glm-5.2"},
+			}},
+		}}
+		r, _ := NewRegistry(f, nil, RegistryOptions{Env: func(string) string { return "" }})
+		before := r.Active().Key()
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = r.Refresh(t.Context(), DiscoverOptions{
+				Env: func(string) string { return "" },
+				Now: func() time.Time { return testNow },
+			})
+		}()
+
+		select {
+		case <-entered: // discovery is running, past every capture point
+		case <-done:
+			t.Fatal("refresh finished without discovering")
+		}
+		switched, rerr := r.Resolve("z-ai/glm-5.2")
+		require.NoError(t, rerr)
+		r.SetActive(switched)
+		close(release)
+		<-done
+
+		assert.Equal(t, "openrouter/z-ai/glm-5.2", r.Active().Key())
+		assert.NotEqual(t, before, r.Active().Key())
 	})
 
 	t.Run("declared_models_survive_a_refresh", func(t *testing.T) {

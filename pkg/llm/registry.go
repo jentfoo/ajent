@@ -121,6 +121,12 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 			warnings = append(warnings, zeroModelsWarning(name, flavor, orBool(def.discover, cfg.Discover)))
 		}
 		for _, mc := range merged {
+			// an empty id names nothing, resolves to nothing and would sort first
+			// as a bare provider/ row; drop it wherever it came from
+			if mc.ID == "" {
+				warnings = append(warnings, "provider "+name+": empty model id skipped")
+				continue
+			}
 			if mc.API == DialectUnknown {
 				warnings = append(warnings, fmt.Sprintf("provider %s model %s: unsupported api, model skipped; want one of %s",
 					name, mc.ID, strings.Join(dialectChoices(), ", ")))
@@ -379,8 +385,10 @@ func (r *Registry) Load(f File, cache map[string]CacheEntry) []string {
 // the updated cache to persist and any warnings.
 //
 // It never blocks startup: callers run it in the background and the registry
-// swaps under its lock when it finishes. The active model is kept if it still
-// exists, so a refresh never changes what the next request uses.
+// swaps under its lock when it finishes. The active model keeps serving across
+// a refresh: still present gains its rebuilt entry, one that left the catalogue
+// is reported through warnings rather than switched away from, and a concurrent
+// switch always governs.
 func (r *Registry) Refresh(ctx context.Context, opts DiscoverOptions) (map[string]CacheEntry, []string) {
 	if opts.Env == nil {
 		opts.Env = r.env
@@ -391,18 +399,21 @@ func (r *Registry) Refresh(ctx context.Context, opts DiscoverOptions) (map[strin
 
 	cache, warnings := Discover(ctx, file, prev, opts)
 
-	active := r.Active()
 	warnings = append(warnings, r.rebuild(file, cache)...)
 
+	// Reconcile against the live pointer under one lock, so a switch that landed
+	// during discovery governs; an absent model keeps serving, never auto-switched.
 	r.mu.Lock()
-	r.cache = cache
-	r.mu.Unlock()
-
-	if active.ID != "" {
-		if m, err := r.Resolve(active.Key()); err == nil {
-			r.SetActive(m)
+	if r.hasModel {
+		if i, ok := r.byKey[strings.ToLower(r.active.Key())]; ok {
+			r.active = r.models[i]
+		} else {
+			warnings = append(warnings,
+				"active model "+r.active.Key()+" left the catalogue; keeping it selected")
 		}
 	}
+	r.cache = cache
+	r.mu.Unlock()
 	return cache, warnings
 }
 
