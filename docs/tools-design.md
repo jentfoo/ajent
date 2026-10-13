@@ -43,13 +43,13 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   them, and a partial or non-atomic change falls back to per-member rows. The
   session file persists the resulting enable set across resume.
 - Expanding any named tool group changes the prompt's tool block, so the cached
-  schema list is invalidated; disabled tools are invisible to the model. The
+  schema list is invalidated, and disabled tools are invisible to the model. The
   sub-agent's tool set is built from this via a narrow `ToolSource`, so a child
   never sees shell or agent_* tools (see `subagents-design.md`).
 - **Generic output bound** — every tool that does not bound its own output
   (`SelfBounding`) is wrapped at registration to keep model-visible content
   bound. Read-only marking for MCP comes from `annotations.readOnlyHint` or config
-  globs; the permission barrier uses this metadata (see "Read-only" below).
+  globs, and the permission barrier uses this metadata (see "Read-only" below).
 - **`Close` teardown** — `Close` sits on `agent.Tool` itself rather than an
   optional interface, so teardown fans out without type assertions. The registry
   exposes `Close()` and `pkg/app` calls it on every run's exit paths. The owning
@@ -59,7 +59,7 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
 ### Sub-agent tool set and preview seams
 
 The child agent's structural filter (which tools a sub-agent may call) is owned
-by the registry but specified in `subagents-design.md`; it lives in
+by the registry but specified in `subagents-design.md`, and it lives in
 `pkg/subagent/toolset.go`. The optional-tool seams the guard chain relies on are
 methods on `Registry`:
 - `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
@@ -76,12 +76,12 @@ A guard decides a call (allow, deny or ask) and an optional registered asker
 turns any `Ask` verdict into a final allow/deny. A user's own staged shell line
 is marked on the context so it stays exempt from every permission mode.
 
-Guards run in registration order before a tool executes; first non-allow wins.
+Guards run in registration order before a tool executes, and first non-allow wins.
 Core registers none by default. The agent runs unguarded unless configured with
 a guard. A denial becomes an error result carrying the reason, and nothing
 touches disk.
 
-`Ask` consults the registered asker (set via `SetAsker`) when one exists; the
+`Ask` consults the registered asker (set via `SetAsker`) when one exists. The
 asker turns it into a final allow or deny, and returning `Ask` again is treated
 as a denial. With no asker registered an `Ask` still refuses. Nothing changes
 for callers that do not opt in.
@@ -115,10 +115,10 @@ user message immediately after the tool call it governs, never as tool output.
 The model therefore treats it as operator intent (see `prompt-design.md`,
 provenance). Config's `permissions.safeCommands` lets a user declare extra
 tools, whole MCP server namespaces (`sectool` covers every `sectool__*` tool),
-or bash command lines to auto-allow as read-only; it can never name
+or bash command lines to auto-allow as read-only, and it can never name
 `write`/`edit`. Core never does. `auto+write` is the one mode that runs
 `write`/`edit` without a prompt, and only when the call's path resolves under
-its roots (cwd and the temp dir); resolution goes through the tool's own
+its roots (cwd and the temp dir), with resolution through the tool's own
 `PathPolicy`, so a symlink pointing outside lands out of scope and still
 prompts. Three carve-outs are load-bearing. A bash call's own `cwd` argument
 rebases every relative path, so it is resolved and scope-checked before the
@@ -131,9 +131,9 @@ there is code that executes on the next git invocation. `rmdir -p` is permitted
 because it walks only the operand's own components, so its shallowest one is
 scope-checked and everything it can reach sits under that.
 The `WithUserInitiated` marker rides the context so a user's own staged `!` shell
-line is exempt in every permission mode; it is the human's shell, not the
+line is exempt in every permission mode, because it is the human's shell, not the
 model's. Shell commands are name-trusted only when they have no exec or write
-form; `awk`, `rg` and `sort` are verified per invocation like sed. Anything
+form. `awk`, `rg` and `sort` are verified per invocation like sed, and anything
 unverifiable prompts. A head is trusted by name only when it is a bare word the
 PATH could resolve: `./bin/cat`, `../tooling/jq` and `/tmp/x/git` name no
 command at all, because an executable written earlier under an allowlisted name
@@ -145,7 +145,7 @@ scanner's quoted-region placeholder), and `safeCommands` match argv only under
 a slash-free head for the same reasons. Deny entries keep folding basenames,
 their over-match failing safe. Here-document bodies are the reading command's
 data, never shell, so they neither contribute command names (a python script
-inside `<<'EOF'` names only `python`) nor match deny entries; an unquoted
+inside `<<'EOF'` names only `python`) nor match deny entries, and an unquoted
 delimiter
 keeps expansion alive, so a body carrying `$(` or a backtick fails unsafe like
 any other substitution. A subshell `( … )` fails unsafe the same way: its
@@ -157,11 +157,11 @@ safe lists and read-only checks never see inside.
 
 An output redirect is not an unsafe op: the scanner records each `>`/`>>`
 target, and the gates decide. The read-only verdict still refuses every
-redirect (it writes); `auto+write` and configured `safeCommands` run one only
+redirect (it writes), while `auto+write` and configured `safeCommands` run one only
 when every target resolves inside the write roots from every possible `cd`
 baseline, the same check `mkdir` path arguments get. A target carrying `$`,
-glob, brace or `~` expansion never verifies — the shell would resolve it after
-the check — and a quoted target never verifies either: `"` escapes inside are
+glob, brace or `~` expansion never verifies, since the shell would resolve it
+after the check. A quoted target never verifies either, because `"` escapes inside are
 approximated, so no quoted form is a trusted literal path. `<>` opens its
 target for writing too, so it records and gates like `>`. The bash network
 pseudo-devices are the one exception on both sides: a `>`/`>>` target of
@@ -175,7 +175,7 @@ targets all resolve stays nameable for session memory and the approval dialog:
 output goes to a terminal or a verified file. Grants narrow to a subcommand
 for subcommand-verb heads (`git`, `go`, `make`, `docker`, `kubectl`, `npm`,
 `cargo`), so `git fetch` for session never covers `git push`, while operand
-commands (`rm`, `ifconfig`) stay head-granular; a head grant from an older
+commands (`rm`, `ifconfig`) stay head-granular. A head grant from an older
 line or `--allow-tools` still covers every narrowed key under it. A grant
 never blesses a write the barrier cannot place: a redirect line matches any
 grant (earned, granted, or `--allow-tools`) only when the mode allows writes
@@ -188,10 +188,10 @@ an outbound connection is not a placeable write.
 
 A one-shot run (`-p`) has no dialog to open, so every ask is settled without
 one. A permission flag names the barrier mode (`ToolScope.barrierMode` in
-`pkg/app`); with none the barrier runs `allow-all` and the **offered tool set**
+`pkg/app`). With none the barrier runs `allow-all` and the **offered tool set**
 carries the policy instead: the model is only ever handed tools it may call, so
 it never spends a step discovering a refusal. `tools.ReadOnlyBuiltins` names
-what survives `--read-only`; `ask_user` is excluded from every headless scope
+what survives `--read-only`, and `ask_user` is excluded from every headless scope
 because nobody can answer it.
 
 The one exception is `permissions.deniedCommands`, which is still installed and
@@ -209,7 +209,7 @@ stays off unless `--allow-tools` names it.
 ### Headless auto scopes: the verdict is the gate
 
 `--allow-auto` and `--allow-autowrite` put a one-shot run into the `auto` or
-`auto+write` mode instead of allow-all (`--read-only` also runs `auto`; its
+`auto+write` mode instead of allow-all (`--read-only` also runs `auto`, and its
 offered set asks nothing until `--allow-tools` re-offers a call). Nobody can
 answer a dialog there, so the asker takes the model classification as final: an
 allow runs the call (an "auto allowed" notice reaches stderr), while a deny, a
@@ -217,8 +217,8 @@ failed or an unsure review all refuse with `permission not given`. A shell line
 static analysis cannot parse (substitution, unnameable head) never reaches the
 model unattended: no grant could cover it either, so it refuses outright
 instead of leaning on a model reading raw text. A redirect line is unnameable
-only in the read-only modes — the model's allow verdict means "no side
-effects" there, and a redirect writes; under `auto+write` a redirect whose
+only in the read-only modes, because the model's allow verdict means "no side
+effects" there, and a redirect writes. Under `auto+write` a redirect whose
 targets all resolve inside the roots may reach the model like any other
 nameable line. Core writers are never
 classified, so plain `--allow-auto` withholds them at the registry rather than
@@ -243,7 +243,7 @@ call, and any other word allows bash commands with that head. Unlike earned
 grants, these hold across the mode changes that clear session memory (the
 barrier re-applies its construction grants on every switch). An entry naming a
 registered tool enables it, even one its source registered disabled (an MCP
-server switched off in `mcp.json`); a multi-word entry naming no tool grants
+server switched off in `mcp.json`), and a multi-word entry naming no tool grants
 nothing and is warned about on stderr. A grant never overrides a hard reject
 (`sed -i`) or `permissions.deniedCommands`, both checked before the asker, and
 a bash call no grant covers is still settled by the model under any auto-mode
@@ -295,7 +295,7 @@ push. A sub-agent on a different `subagent.model` shares the parent's gate and
 can therefore be refused where it could see images: single-sourced on purpose,
 and the harmless direction.
 
-The model always sees the full line-numbered content (`Content`); `Display` is
+The model always sees the full line-numbered content (`Content`), and `Display` is
 that same block, which the TUI elides to a head plus a collapse count via the
 shared output-head rule in `tui-design.md`. The path already rides on the tool
 header that `ToolStart` commits, so no bespoke summary string is produced here.
@@ -320,22 +320,22 @@ cascade, and overlapping spans across ops are rejected.
 
 A match ladder resolves each `oldText` through four tiers: exact byte-for-byte,
 then canonical (unicode lookalikes folded to ASCII), a whole-block indent shift,
-then a fuzzy per-line match. Escalation happens only on *zero* matches; a tier
+then a fuzzy per-line match. Escalation happens only on *zero* matches, and a tier
 that finds several leaves the ambiguity for the caller to reject rather than
 guessing which was meant. Canon and indent prove their span equal to the
 `oldText` it claims before writing, so a mapping bug degrades into a no-match
-error instead of corrupting the file; fuzzy cannot, and earns its span through
+error instead of corrupting the file. Fuzzy cannot, and earns its span through
 its own guards below. An `oldText` whose canonical fold is bare whitespace is
-refused above exact, since it would match every line boundary; the fold drops
+refused above exact, since it would match every line boundary, and the fold drops
 zero-width runes, so one carrying them still refuses. The indent tier applies
 only to a uniform whole-block shift, where both texts' non-blank lines share one
 base indent, in either direction including onto a block the file holds flush
-left; a mixed or nested tab/space conversion matches nothing and falls through
+left. A mixed or nested tab/space conversion matches nothing and falls through
 rather than being applied wrongly. Any match above exact reports in one line
 what differed, so the next edit is written correctly. Each differing run is
 widened to whole identifier and number tokens before it is quoted, since a value
 and the file's often share an edge digit (`4096` against `65536`) and a
-byte-level cut would quote back halves of a number; a non-exact match names
+byte-level cut would quote back halves of a number, so a non-exact match names
 every line that drifted. The canon tier tells a trailing-whitespace
 difference from a lookalike by trailing-trim equality rather
 than by stripping all whitespace, which folds an nbsp away and misreports it,
@@ -349,7 +349,7 @@ duplicated `newText` and a mis-transcribed `oldText` are the same bytes with
 opposite intent.
 
 That principle also governs what a non-exact match writes. Only the run between
-the site's and the replacement's common affixes comes from `newText`; text the
+the site's and the replacement's common affixes comes from `newText`. Text the
 edit merely quoted keeps the file's own bytes, so a lookalike the model
 flattened survives outside the change. A site that folds to the replacement is
 written whole, since there the fold is the edit.
@@ -371,10 +371,10 @@ Healing needs `oldText` and `newText` to hold the same number of lines, since on
 then does each line pair up and the drift stay checkable. An edit that adds or
 removes lines applies through the tiers above or not at all. Further guards apply:
 only a bounded set of lines may differ in one edit, each by one small drift with
-exact context anchoring it; the region must be the clear best match (a second close
+exact context anchoring it. The region must be the clear best match (a second close
 region is a guess outright, and one just past the limit separates a match already
-thin); no line may overlap one an earlier edit wrote, since healing there could
-revert that edit; and the punctuation ending a matched line must survive into the
+thin). No line may overlap one an earlier edit wrote, since healing there could
+revert that edit, and the punctuation ending a matched line must survive into the
 replacement, because every other guard is measured on `oldText` while the apply
 writes over the file's line. Those line numbers hang off the tracker's observation
 of the file, so a later edit remaps them past its own insertions. Any change the
@@ -400,13 +400,13 @@ quotable run, it is named rather than left as two strings to be compared by eye,
 under the same token widening.
 
 Multiple matches without `replace_all` return the occurrence count and each
-match's line; messages tell the model it **must provide text exactly** rather
+match's line, and messages tell the model it **must provide text exactly** rather
 than asking it to copy. Argument decoding tolerates what models emit in place of
 the declared schema (a double-encoded object, a JSON-stringified `edits`, a
 single edit where an array is declared), since rejecting those costs a round
 trip without saying anything new. Singleton wrapping now lives in
 `strutil.DecodeArgs` for every tool: a lone value whose shape fits a declared
-array field heals into a one-element array; leaf values are never reinterpreted.
+array field heals into a one-element array, and leaf values are never reinterpreted.
 Decode errors surface via `DecodeArgs` in model-facing shape (field plus
 expected/actual JSON kind), never leaking Go type names.
 
@@ -432,7 +432,7 @@ One non-login `bash -c` process per call (a login shell would reset PATH to the
 system default and hide user dirs like `~/.local/bin`, Homebrew or nvm). There
 is no persistent shell, so `cd` and state cannot confuse later calls. Streams
 stdout and stderr interleaved to the UI while teeing a bounded copy for the
-model; every kept line is capped, and output past the limit (or carrying one
+model. Every kept line is capped, and output past the limit (or carrying one
 overlong line) spills **the complete stream** (head + overflow) to a file under
 `os.TempDir()/ajent-<session>` and the model gets a pointer to it. Because that
 spill is an ordinary readable text file, the model can open it with `read` and
@@ -442,11 +442,11 @@ the footer names a written one instead of a next offset. ANSI escapes are
 stripped from captured output,
 **with the strip position carried between chunks**: `os/exec` splits at pipe
 reads, so one sequence can straddle two writes and stdout and stderr share one
-filter under the ordering lock. The child runs in its own process group; on
+filter under the ordering lock. The child runs in its own process group, and on
 timeout or cancellation the whole group is killed so grandchildren cannot leak,
 and the model is told it was a timeout.
 
-The cancellation contract: each run owns its process group; when the parent
+The cancellation contract is that each run owns its process group. When the parent
 context is cancelled (a turn interrupt, or `Stager.Cancel` on a `!` line), the
 whole group is SIGKILLed, whatever partial stdout/stderr arrived rides in the
 result, and the result is an **error result** marked as interrupted with the
@@ -477,21 +477,21 @@ behind: they are small and they are the record.
 The timeout ceiling follows the caller: model calls default to two minutes and
 cap at the maximum declared in the schema, while a user-initiated run (a staged
 `!` line, marked by `WithUserInitiated`) may name any explicit ceiling through
-the stager or none at all — the human can see and interrupt their own command,
+the stager or none at all. The human can see and interrupt their own command,
 so it is never force-killed by the model-facing default.
 
 ### find / grep / ls (`find.go`, `grep.go`, `ls.go`)
 
 Off-by-default extras for no-shell agents.
 
-- `find`: glob matching with `**` support; a bare pattern (`*.go`) matches at
+- `find`: glob matching with `**` support, and a bare pattern (`*.go`) matches at
   any depth. It lists files via `git ls-files -z` (quoting disabled, so non-ASCII
   filenames stay usable), falling back to a bounded Go walk when git is
   unavailable or yields nothing. A search never leaves its root: the listing is
   scoped to `Path`, and results are sorted newest first.
 - `grep`: searches file contents for a pattern in three modes (`files`, `content`
   (line numbers plus optional context lines) and `count`). Enumeration stops at the
-  default match cap with a named note, never silently; surfaces stderr from an
+  default match cap with a named note, never silently, and surfaces stderr from an
   underlying tool as an error. The rg path and the Go fallback share one output
   contract (filenames always attributed, root-relative paths, cap notes counting
   matches rather than output lines), so results read identically whichever
@@ -788,7 +788,7 @@ It is shared by
 for concurrent use.
 
 The tracker also observes directory listings (`ObserveDir`) via an entry-name
-fingerprint; `ls` records every real dir it lists (agent calls and injected `@`
+fingerprint. `ls` records every real dir it lists (agent calls and injected `@`
 refs alike), and `@ref` dedupes a repeat listing through `UnchangedDir`. Unlike
 files there is no stable hash, so only the entry set can be compared.
 

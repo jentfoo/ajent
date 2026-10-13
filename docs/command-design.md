@@ -4,7 +4,7 @@ How `pkg/command` and `pkg/refs` own everything the user does that is not "send
 a message to the model": slash commands through a registry, direct `!` shell
 execution with staged results (`!!` runs excluded from context), `@`-path
 expansion with auto-read, and the completion driving both. It is the single
-dispatch path for submitted lines; extensions and MCP register into the same
+dispatch path for submitted lines, and extensions and MCP register into the same
 registry, so a built-in `/tools` and a third-party `/plan` are the same
 mechanism.
 
@@ -13,7 +13,7 @@ mechanism.
 Three packages sit above the agent, tools and TUI: `pkg/command` (commands,
 the registry, the `Console` interface and shell staging) plus its completion,
 and `pkg/refs`, which owns `@`-reference expansion and the gitignore-aware path
-index. The UI never imports command; the host adapts `Console` onto `*tui.UI`, so
+index. The UI never imports command, and the host adapts `Console` onto `*tui.UI`, so
 headless mode and a sub-agent drive the same commands behind a different front end.
 
 ## Dispatch
@@ -47,7 +47,7 @@ and prompt lines go to a single **prompt pump** goroutine that owns ordering.
 
 `pkg/app`'s loop is a thin classifier feeding one pump channel:
 
-- `ParseLine` routes shell lines to `Stager.Run` (non-blocking); command and prompt
+- `ParseLine` routes shell lines to `Stager.Run` (non-blocking), while command and prompt
   lines go to the single pump goroutine that owns ordering.
 - A prompt flushes staged shell results, expands `@` refs, then either queues
   onto the steer queue (rendering as a dimmed row with its echo deferred until it
@@ -61,13 +61,16 @@ and prompt lines go to a single **prompt pump** goroutine that owns ordering.
 The steer queue turns mid-turn prompts into **steering messages**: they deliver
 as newline-joined messages (one per provenance run, see below) at the agent's
 next step boundary via `Options.OnBoundary`, or (if no boundary comes first) as
-the next turn's prompt drained by `startDrain`. Esc/Ctrl+C during a turn
+the next turn's prompt. Esc/Ctrl+C during a turn
 recovers every queued item back into the editor (collapsed with newlines)
-before interrupting. Alt+Up recalls the newest queued message. Image blocks ride
-along with whatever is queued. Their slots were consumed at submit, so recall and
-abort refile each one under a fresh token and the recovered line still names its
-`[image #N]`. See `agent-loop-design.md` for the boundary contract. While the
-plan workflow parks at its gate, delivery holds instead (see `plan-design.md`).
+before interrupting. Alt+Up recalls the newest queued message. Staged shell
+output is the stager's until a prompt delivers (see "Delivery timing"), so
+recall and abort never strand it. Image blocks ride along with whatever is
+queued. Their slots
+were consumed at submit, so recall and abort refile each one under a fresh
+token and the recovered line still names its `[image #N]`. See
+`agent-loop-design.md` for the boundary contract. While the plan workflow parks
+at its gate, delivery holds instead (see `plan-design.md`).
 
 The pump also wires the **typing hold** (`Options.AwaitInput`, see
 `agent-loop-design.md`): at each step boundary, if a draft is being composed in
@@ -77,22 +80,22 @@ therefore delivers into the **current** step rather than behind another model
 call, within a bounded handoff grace so a just-submitted line still lands there;
 queued items release the hold at once. An idle submission is consumed before its
 own turn spawns, so step one never waits on that already-delivered line. The
-same gate also holds approval dialogs while a draft is composed; see
-`agent-loop-design.md` and `tui-design.md` for that surface.
+same gate also holds approval dialogs while a draft is composed (see
+`agent-loop-design.md` and `tui-design.md` for that surface).
 
 A workflow that needs to act on a submission before it becomes a turn hooks the
-pump through `planHooks.beforePrompt`, consulted **after** `q.offer` returns
-false, so mid-turn typing still steers normally and the hook only ever fires
+pump through `planHooks.beforePrompt`, consulted only when the steer queue
+declines the input, so mid-turn typing still steers normally and the hook only ever fires
 with the agent idle, where switching branches is legal. It may rewrite the input
 (the estimate is recomputed) or leave it alone. The matching `planHooks.advance`
-runs in `startDrain` after every turn; both are documented in
+runs after every turn. Both are documented in
 `agent-loop-design.md` and used by `plan-design.md`.
 
 Submissions therefore stay in order, the UI never stalls, and "the turn is held
 until the pending command finishes" falls out of `Flush` blocking the pump. Only
 prompts flush: `!ls` followed by `/model` leaves the stage pending for the next
 real message. The CLI seed (`ajent "explain @pkg/app"`) goes through the pump
-too, so its references expand like any other prompt; the headless one
+too, so its references expand like any other prompt. The headless one
 (`ajent -p …`) expands in `runHeadless` instead, once the tool scope has
 settled.
 
@@ -113,14 +116,14 @@ handler that runs the parsed arguments against the `Console` view, returning an
 error.
 
 `Complete` is for *argument* completion: past the first space the matched
-command supplies its candidates. `/model` supplies model keys and aliases;
-`/reasoning` supplies `llm.Levels()`; a command with no completer offers
+command supplies its candidates. `/model` supplies model keys and aliases,
+`/reasoning` supplies `llm.Levels()`, and a command with no completer offers
 nothing.
 
 ### Registry
 
 The registry holds commands in registration order. Register is add-or-replace so
-it can be widened to cover more behaviour; the registration order is preserved
+it can be widened to cover more behaviour. The registration order is preserved
 for `/help` and command completion, and lookup by name plus listing are the only
 read paths.
 
@@ -206,7 +209,7 @@ choice under its own title rather than reimplementing the list.
 `/init` is the one command whose work outlives its handler. `initController`
 (`init.go`) starts the survey on its own goroutine and returns immediately, so a
 run that takes minutes never stalls the pump. It is refused while a turn streams
-and while another survey is in flight; `Esc`/`Ctrl+C` cancels one, stopping the
+and while another survey is in flight. `Esc`/`Ctrl+C` cancels one, stopping the
 children **it** spawned by id via `Options.Started`, never `StopAll`, because
 the user may have started a turn during the survey whose own investigations must
 survive (a returning `Poll` does not end a job). A duration ceiling bounds the
@@ -217,7 +220,7 @@ abort: stop the survey's remaining children by id, then tell the user.
 **Slicing.** The agent count scales with the tree (under 50 files → 1, then 2,
 3, 4), and the slices themselves are top-level directories bin-packed
 largest-first into the least loaded bucket. A directory holding more than one
-slice's share is replaced by its own children first, repeatedly; otherwise a
+slice's share is replaced by its own children first, repeatedly. Otherwise a
 repository whose code all lives under `pkg/` hands one agent everything and the
 others nothing. Files stage 1 and the build agent already read are dropped, and
 the loose files left at a level collapse into one named unit rather than a
@@ -237,7 +240,7 @@ pre-assembled input, which skips `@` expansion and uses its rest field as a
 short echo label, and everything after is the ordinary prompt path: steer queue,
 plan hooks, ledger seeding, turn start. The model then writes `AGENTS.md` with
 the `write` tool, so the permission barrier gates it exactly as it gates any
-other write; no `tools.WithUserInitiated`, which would bypass the gate. A
+other write, with no `tools.WithUserInitiated`, which would bypass the gate. A
 survey that cannot run reports *why*: a missing `read`, missing or disabled
 `agent_*`, spawns that were refused, and an existing `AGENTS.md` that could not
 be read are distinct errors, never one "unavailable".
@@ -261,29 +264,29 @@ when the write was denied.
 
 `/update` reinstalls ajent from `github.com/jentfoo/ajent@latest`. The handler
 spawns one goroutine (`SelfUpdate`) and returns immediately so a slow network
-fetch never blocks the pump; `Notify` is safe from any goroutine, so the result
+fetch never blocks the pump, and `Notify` is safe from any goroutine, so the result
 lands as a notice when it finishes. A second `/update` while one runs simply
 starts another install, harmless because both resolve then reinstall the same
 latest version.
 
 The shared logic lives in `pkg/version/update.go`, next to the build version it
-compares against, factored into an injectable exec seam (`updateCmds`) so tests
+compares against, factored into an injectable exec seam so tests
 exercise every branch with fakes and never touch a real go toolchain or network:
 resolve the latest published version, compare against the running build, install
-when they differ. Equal versions mean nothing is installed; any failure comes back
+when they differ. Equal versions mean nothing is installed, and any failure comes back
 as an error notice rather than panicking.
 
 The `--update` flag is the opposite surface: it runs the same `SelfUpdate` in
 the **foreground** and exits immediately after printing the result, never
 opening a TUI or starting a session (`pkg/app`, alongside the `--version` early
 exit). `/update` stays fully in-session. Both surfaces report through
-`UpdateResult.Notice`; neither writes to the transcript nor reaches the model:
-an update is a build concern, not conversation content.
+`UpdateResult.Notice`, and neither writes to the transcript nor reaches the model,
+because an update is a build concern, not conversation content.
 
 ### `/tools` and the enabled set
 
 The set only ever *widens* within a session, because the tool block the model
-has already seen is not retractable; history may hold calls to a tool, and
+has already seen is not retractable, since history may hold calls to a tool, and
 dropping it would leave the transcript describing a tool that no longer exists:
 
 - **Before the first prompt** the picker lists every registered tool
@@ -291,14 +294,14 @@ dropping it would leave the transcript describing a tool that no longer exists:
 
 The plan workflow is the deliberate exception: a phase scope *narrows* the set
 by calling `Registry.SetEnabled` directly. The widen-only rule is a
-command-layer policy protecting the user from a tool set shrinking under them; a
+command-layer policy protecting the user from a tool set shrinking under them, and a
 plan scope is explicit, user-initiated, and restored on every exit path.
 
 Widening the set changes the tool block and therefore busts the prompt cache
 (worth a one-line notice). `/tools` groups rows by `Registry.Source` (builtin,
 an MCP server name, an extension name), with a dim header row when the group
-changes. Space or Tab toggles the highlighted row; typed text narrows the filter
-(a space never becomes part of it) and Enter confirms.
+changes. Space or Tab toggles the highlighted row, typed text narrows the filter
+(a space never becomes part of it), and Enter confirms.
 
 ## Shell mode (`!`)
 
@@ -307,9 +310,10 @@ sink, it starts a command immediately (non-blocking), reports whether any run is
 pending, cancels every in-flight run, and flushes, waiting for each included run
 to finish then returning them as one user message each.
 
-`Run(cmd, excluded)` resolves `bash` through `Registry.Get` (enabled-only, so a
-disabled `bash` is a refusal notice), mints a call id, opens the display with
-`sink.ToolStart` and executes on a goroutine through `agent.NewOutput`. That
+`Run(cmd, excluded)` resolves `bash` through `Registry.Lookup` (state-independent,
+so disabling `bash` for the agent never blocks the human's own shell). Only a
+registry without bash at all is a notice. It mints a call id, opens the display
+with `sink.ToolStart` and executes on a goroutine through `agent.NewOutput`. That
 reuses the whole `bash` path (streaming, ANSI stripping, output cap, spill file,
 process-group kill) with no second implementation. It wraps its context in
 `tools.WithUserInitiated`, so a staged `!` line is exempt from every permission
@@ -326,7 +330,7 @@ whatever the bash tool returns, cap marker included.
 
 **Staging onto context.** The command text and its result are *not* sent to the
 model immediately. They sit in the pending slot ahead of the next user message.
-Running `!` never interrupts an in-flight turn; it only becomes visible to the
+Running `!` never interrupts an in-flight turn, and it only becomes visible to the
 model when the user next speaks. It is not free, though, and the context bar
 says so: as each run finishes the stager reports the staged total through its
 `SetOnChange` hook, which main feeds to `Accounting.SetStaged`. That term
@@ -340,24 +344,28 @@ staged against the branch just left must not ride the new one's first prompt.
 `rewind` calls `Stager.Discard` after `switchState` succeeds: it cancels every
 in-flight run, drops the staged set and reports zero back to the bar.
 
-**Flush timing.** On the next normal submit the pump first `Flush`es the stager
-(which waits for every included staged command to finish, in submission order)
-then injects each result ahead of the user message. The model therefore sees
-"here is a shell invocation I ran and its output" together with whatever the
-user just said. Multiple staged commands flush together, in submission order,
-each as its own **user** message. A run stays tracked for `Pending()`/`Cancel()`
-until Flush consumes it, so an included command that is still running when
-flushing begins can still be interrupted rather than freezing the front end.
+**Delivery timing.** Staged output only leaves the stager when a prompt
+delivers, never when it is submitted. A direct dispatch (no turn running)
+flushes at submit, since submit and delivery are the same moment. A queued
+submit does not consume anything. Finished results attach at delivery, so an
+Esc or Alt+Up that recovers the prompt to the editor leaves staged output
+untouched, still counted on the context bar, waiting for whichever prompt
+delivers next. A queued batch first waits out still-running commands, so output
+the user watched finish rides the batch it was meant for, and an abort during
+that wait consumes nothing. Multiple staged commands flush together, in
+submission order, each as its own **user** message. A run stays tracked for
+interruption until consumed, so an included command still running when delivery
+begins can be cancelled rather than freezing the front end.
 
 **Representation.** A completed run lands as a single `llm.RoleUser` text
 message, not a synthetic tool-call pair: it reads as the human's own action
 rather than an agent-initiated bash call. The body is built verbatim from the
 real `bash` tool's result text (`shellUserMessage`), with a placeholder when
-there is no output (the shape is owned by `prompt-design.md`); it is honest
+there is no output (the shape is owned by `prompt-design.md`). It is honest
 because it reuses the same bytes the model would see from a real call, with the
 exit-status, interruption and truncation markers already baked in by the tool
 itself. The message is appended as **injected** context (see
-`agent-loop-design.md`), so prompt recall excludes it; dropping the synthetic
+`agent-loop-design.md`), so prompt recall excludes it, and dropping the synthetic
 pair also removes the Anthropic duplicate-`tool_use`-id hazard for staged runs.
 It is also marked **replayed**, so a resume or rewind redraws it above the
 prompt it fed rather than leaving the model holding something the user can no
@@ -376,11 +384,11 @@ while they stream to the sink on their own goroutine.
 **Error behaviour.** A non-zero exit code is an ordinary staged result, not a
 turn failure: the model sees the failure (with the exit code) at the next
 message. `!` alone or an empty command produces a notice and runs nothing. A
-literal line beginning with `!` leads with whitespace (` !echo hi`); a literal
+literal line beginning with `!` leads with whitespace (` !echo hi`), and a literal
 `!!x` prompt is ` !!!x`.
 
 **Cancellation.** Each staged run owns a cancellable context. `Cancel` cancels
-every still-running run; the `bash` tool kills the whole process group when its
+every still-running run. The `bash` tool kills the whole process group when its
 derived context ends. A cancelled command still stages (if included): its
 partial output plus the killed-status the bash tool records, so the model's view
 matches what the user saw. Excluded runs cancel identically but their partial
@@ -408,7 +416,7 @@ neither, and a directory that pops a list on every keystroke was what made the
 arrows unusable for editing.
 
 The completion model pairs a replacement text with an optional label, detail and
-score; the `Completer` interface answers one query: given the buffer and cursor,
+score. The `Completer` interface answers one query: given the buffer and cursor,
 it returns where accepted text should start replacing from plus the candidate
 items. It must not call back into the UI.
 
@@ -425,7 +433,7 @@ accepts the highlighted candidate (it is Tab's target, not Enter's) and a follow
 Enter just submits the result, so `/model` then Enter runs it.
 
 - `↑`/`↓` cycle the highlight and mark the selection *moved*.
-- `Enter` on a moved selection accepts-and-submits in one press; otherwise it
+- `Enter` on a moved selection accepts-and-submits in one press, otherwise it
   submits the line as typed, so an open menu never swallows a send. Any key that
   reaches the editor (a character, Backspace, or a caret move) drops the *moved*
   state, so Enter then sends what was typed rather than re-applying.
@@ -439,20 +447,20 @@ that cannot must use `Async` instead.
 
 The tab-driven overlay holds no selection and consumes no keys. `Tab` fills in
 the candidates' longest common prefix and stops there, never guessing past an
-ambiguity (bash's behaviour); a lone candidate therefore completes in full.
+ambiguity (bash's behaviour), and a lone candidate therefore completes in full.
 
 - A `Tab` that cannot advance lists the remaining candidates as passive dim rows,
   packed into columns: no highlight, no selection, and the next keystroke clears
   them. Text with no meaningful common prefix is its best case for this listing.
 - A `Tab` with nothing to add and nothing new to list leaves the buffer alone and
   flashes a hint above the prompt.
-- `Esc` drops a listing before it clears the buffer; everything else, Enter and
+- `Esc` drops a listing before it clears the buffer. Everything else, Enter and
   the arrows included, reaches the editor untouched.
 
 ### `command.Completer`
 
 The aggregating completer sources commands from the registry and paths from
-`refs.Index`. `/` at line start offers command names; past the first space it
+`refs.Index`. `/` at line start offers command names, and past the first space it
 delegates to the matched command's `Complete`. `@` anywhere offers workspace
 paths. A nil path index disables path completion (plain mode).
 
@@ -474,7 +482,7 @@ the literal text bash will receive rather than a workspace ref.
 - **Command names.** The first word of the line, and of each piped or grouped
   segment, completes against what a non-interactive `bash -c 'compgen -abck'`
   reports (builtins, keywords and PATH), looked up once with a timeout. An empty
-  token offers nothing rather than every command on the system; an unavailable bash
+  token offers nothing rather than every command on the system, and an unavailable bash
   yields no command names.
 - **Paths.** Everything else, plus any first word containing `/`, completes through
   the same index used for `@` refs, so one read-per-step listing serves both
@@ -486,7 +494,7 @@ the literal text bash will receive rather than a workspace ref.
 ### Parse (`refs/parse.go`)
 
 `Parse(text)` returns `Ref{Path, Start, End, Note}`. `Note` carries any existing
-size/line measurement absorbed into the token; that absorption is what makes
+size/line measurement absorbed into the token, and that absorption is what makes
 re-expansion idempotent.
 
 `@` matches only at a word boundary (start of line, or after whitespace, `(`,
@@ -499,7 +507,7 @@ after a path is never eaten.
 
 ### Expand (`refs/expand.go`)
 
-`Expander.Expand(text)` **plans**; it does not read. It returns the rewritten
+`Expander.Expand(text)` **plans**: it does not read. It returns the rewritten
 text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 `Input.After`. Per distinct resolved path (via the tool `PathPolicy`):
 
@@ -521,7 +529,7 @@ Because planning no longer reads, the tracker cannot dedupe within one expansion
 (nothing has been observed yet), so **the plan dedupes by resolved path itself**
 and `Run` re-checks `Unchanged` per injection before executing it. The first guard
 keeps one message from naming a path twice (which would duplicate its content
-*and* its call id); the second keeps a joined batch from re-reading what an earlier
+*and* its call id), and the second keeps a joined batch from re-reading what an earlier
 item in the same batch just read. `Run` also stops on a cancelled context rather
 than appending error pairs for the rest of the batch.
 
@@ -536,7 +544,7 @@ also fixes the display: the tools run when the message lands, after its echo, so
 what is on screen is the order replay renders.
 
 That makes re-injection routine, so ids must not repeat. Each `Expand` takes a
-run number and mints a unique reference id for it; `Expander.Seed(msgs)` raises
+run number and mints a unique reference id for it. `Expander.Seed(msgs)` raises
 that counter above every reference id already present, and is called whenever
 the context is rebuilt (resume, rewind, fork) so a reopened transcript's ids are
 never minted twice.
@@ -568,12 +576,12 @@ rather than appending a second one.
 `Index` never walks the workspace tree: every `@` query lists only the single
 directory under the cursor, so completion is one cheap `ReadDir` however large
 or slow the filesystem. A bare `@` (or a partial name like `@ma`) offers the
-root's immediate children; drilling through a trailing `/` (`@src/`, `@pkg/r…`)
+root's immediate children. Drilling through a trailing `/` (`@src/`, `@pkg/r…`)
 descends one level at a time, never a recursive walk, which is what made `@`
 block input after typing in a large repo. The dependency/VCS skip list still
 applies per directory. A `~` or `~/…` query completes within the user's home
-directory instead, offered back with the leading `~` kept in each candidate (so
-accepting a home path inserts one that expands); a `./` query keeps its prefix,
+directory instead, offered back with the leading `~` kept in each candidate so
+accepting a home path inserts one that expands. A `./` query keeps its prefix,
 and an absolute `/…` path completes anywhere on the filesystem. All three keep
 their leading form so accepting inserts a usable path. Because a listing may
 still take time on a slow mount, `@` queries run off the key loop (see

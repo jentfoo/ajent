@@ -45,13 +45,12 @@ projection transform would leave every one of them reporting the wrong list.
 
 ## Invariants
 
-1. **A phase switch never mutates a prior branch.** Nothing is deleted; every
+1. **A phase switch never mutates a prior branch.** Nothing is deleted, and every
    phase is reachable from the rewind picker afterwards.
 2. **Only a successful control call ends a turn.** `dev_*` tools set
-   `agent.ToolResult.EndTurn` on their success path only; a rejected call is an
+   `agent.ToolResult.EndTurn` on their success path only, and a rejected call is an
    `IsError` result the model corrects inside the same turn. The loop enforces
-   this too. `runTool` reports `EndTurn && !IsError`, so a tool cannot silence a
-   model by erroring.
+   this too, so a tool cannot silence a model by erroring.
 3. **Every exit path restores scope.** Completion, `/plan-stop`, `Esc` and the
    revision cap all reach one `stopLocked`, which forks back to the live branch
    with the saved model, restores the saved tool set, unregisters the control
@@ -95,7 +94,7 @@ entry.
 The user gate at **AwaitingPlan** is the point of the workflow: `dev_implement`
 hands off to nobody. The plan lands in the editor to read, edit, rewrite or
 abandon, and the next submitted prompt is what the implementor receives. Only a
-non-injected (typed) submission clears the gate; injected context is never
+non-injected (typed) submission clears the gate, and injected context is never
 captured as approval, whether a staged `!` flush, a permission-barrier note or
 a sub-agent completion steer. This mirrors the Planning phase guard.
 
@@ -142,7 +141,7 @@ guarantee the workflow exists to provide.
 | Reviewing | planner | as planning, minus `dev_implement`, plus `dev_revise` + `dev_complete` |
 
 The implementor gets the user's own working set plus exactly one tool to signal
-completion, all present from the first message of its context; an empty captured
+completion, all present from the first message of its context. An empty captured
 set falls back to the core read/write tools rather than handing it `dev_review`
 alone.
 
@@ -161,7 +160,7 @@ means.
 
 A phase scope narrows the enabled set, which `/tools` refuses to do after the
 first prompt. That rule is a command-layer policy protecting the user from a
-model-visible tool set shrinking under them; a plan scope is explicit,
+model-visible tool set shrinking under them. A plan scope is explicit,
 user-initiated and restored on every exit path, so it calls
 `Registry.SetEnabled` directly.
 
@@ -198,16 +197,16 @@ once the gate passes.
 Phase kickoffs are injected messages carrying the replay mark, so a resume
 redraws each one as its own collapsed block above the turn it fed rather than
 echoing it as a typed prompt. The phase notice ("implementing with ..." /
-"reviewing with ...") is not replayed; the kickoff block carries the premise.
+"reviewing with ...") is not replayed, and the kickoff block carries the premise.
 
 Because ending a workflow leaves HEAD at the review tip while the file tail is
-an implementation entry, resume must prefer the live head over the tail
-(`resumeHead`); the same divergence already existed after a rewind.
+an implementation entry, resume must prefer the live head over the file tail.
+The same divergence already existed after a rewind.
 
 ## Compaction
 
 Compaction already runs over the live head's branch, which *is* the phase. There
 is no minimum cut, no segment-aware entries, no summary masquerading as a phase
 seed. The only addition is a per-phase focus (`Controller.Focus`) fed to
-`compact.Options.Instructions` for automatic runs; an explicit
+`compact.Options.Instructions` for automatic runs. An explicit
 `/compact <instructions>` still wins.

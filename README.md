@@ -44,7 +44,7 @@ Our agent simplifies the TUI in order to provide a terminal native output. Every
 
 <img width="640" height="309" alt="tools demo" src="https://github.com/user-attachments/assets/e17b834c-f3e9-407d-99d1-b870e9fc0d0c" />
 
-Copying things out is easy: `/copy` puts the last agent reply on your clipboard, and `ctrl+x` copies whatever message you're highlighting in the rewind picker. It works with the copy tool built into most operating systems, and over SSH or Mosh it uses a standard terminal trick instead; if nothing's available, ajent tells you exactly what to install.
+Copying things out is easy: `/copy` puts the last agent reply on your clipboard, and `ctrl+x` copies whatever message you're highlighting in the rewind picker. It works with the copy tool built into most operating systems, and over SSH or Mosh it uses a standard terminal trick instead. If nothing's available, ajent tells you exactly what to install.
 
 Tab support is available for file path completions, but our TUI favors a minimal form that is more conducive to power users. No notice of files available until you hit tab twice failing to complete a path.
 
@@ -55,11 +55,11 @@ Tab support is available for file path completions, but our TUI favors a minimal
 Our CLI agent attempts to balance autonomy and safety. This is done through a variety of permission modes:
   * **allow-read** (default) - Will automatically allow any read only tools or MCP tools which are marked as read only in their configuration. Any write or questionable bash operations will require user approval first.
   * **auto** - Still attempts to provide a read only experience by default, but will delegate to the agent to make decisions on bash commands and MCP/extension tool calls which are not automatically allowed.
-  * **auto+write** - Auto-approves `write`, `edit` and bash operations that stay safely inside the working directory or temp directory; anything touching files elsewhere, system changes, bulk deletion or network access still requires approval.
+  * **auto+write** - Auto-approves `write`, `edit` and bash operations that stay safely inside the working directory or temp directory. Anything touching files elsewhere, system changes, bulk deletion or network access still requires approval.
   * **allow-all** - All operations allowed without human approval.
   * **block-all** - Nothing runs without explicit approval, reads included.
 
-Shift+Tab cycles the live mode for the session only (Shift+→ does the same; Shift+← steps back), so you can reach an adjacent mode without wrapping all the way around.
+Shift+Tab cycles the live mode for the session only (Shift+→ does the same, Shift+← steps back), so you can reach an adjacent mode without wrapping all the way around.
 
 When a write operation does need approval, you're presented with a dialog that lets you steer, allow once, or allow for the session (or until the barrier mode is changed).
 
@@ -73,7 +73,7 @@ Sub-agents only function in a read only form. They exist only to keep the main c
 
 `AGENTS.md` in the working directory (and `~/.ajent/AGENTS.md` for habits you want everywhere) is read at startup and injected into every turn's system prompt. Editing it applies on the next start, not mid-session.
 
-`/init` writes that file for you. It reads the project's `README*` itself, then fans the build and the codebase out to read-only sub-agents in parallel — one surveying the Makefile, CI config and `CONTRIBUTING.md`, and one to four splitting the tree between them, scaled to its size and balanced by where the code actually is. Their summaries come back as ordinary tool results, and a single turn distills them into `AGENTS.md`. The write goes through the normal permission barrier, so you see the diff and approve it like any other. Run `/init` again later and it corrects the existing file against a fresh survey rather than replacing it. Esc cancels a survey in progress.
+`/init` writes that file for you. It reads the project's `README*` itself, then fans the build and the codebase out to read-only sub-agents in parallel. One surveying job covers the Makefile, CI config and `CONTRIBUTING.md`, and one to four split the tree between them, scaled to its size and balanced by where the code actually is. Their summaries come back as ordinary tool results, and a single turn distills them into `AGENTS.md`. The write goes through the normal permission barrier, so you see the diff and approve it like any other. Run `/init` again later and it corrects the existing file against a fresh survey rather than replacing it. Esc cancels a survey in progress.
 
 ### Tools
 
@@ -112,10 +112,10 @@ Per provider you can set:
 * `flavor` - selects discovery and quirk defaults. The built-in flavors are `anthropic`, `openai`, `zai`, `zai-coding-cn`, `openrouter`, `deepseek`, `together`, `xai`, `groq`, `mistral`, `moonshotai`, `moonshotai-cn`, `kimi`, `google`, `cerebras`, `nvidia`, `huggingface`, `minimax`, `minimax-cn`, `baseten`, `ant-ling`, `fireworks`, `qwen-token-plan`, `qwen-token-plan-cn`, `xiaomi`, `xiaomi-token-plan-cn`, `xiaomi-token-plan-sgp`, `xiaomi-token-plan-ams`, `lmstudio`, `llamacpp` and `generic`. Defaults to the provider key, so an OpenAI-compatible proxy in front of a known server can say `{"flavor": "lmstudio"}` and still get the right behavior.
 * `apiKeyEnv` / `apiKey` - where to read the secret. Resolution order is the configured env var, then a literal key, then the dialect's conventional variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, etc.).
 * `headers` - extra request headers
-* `timeouts` - connect / TLS / header / idle / total bounds as Go durations; an explicit `"0s"` disables a bound. Split these because one client timeout would clamp the body read, which is exactly what must be allowed to take minutes.
-* `retry` - attempts and backoff (`base`, `max`, `jitter`); honors `Retry-After` but caps it at 60s.
-* `discover` - whether this provider's models are fetched from the server. On by default for every flavor with a known model list (anthropic, openai, zai, openrouter, deepseek, together, xai, groq, mistral, moonshotai, google, cerebras, nvidia, huggingface, baseten, lm-studio, llama.cpp and the token-plan flavors); any other OpenAI-compatible endpoint can opt in with `"discover": true`, which asks its `/v1/models`.
-* `models` - your declared list for this provider. When present, it *is* the whole list; discovery only fills gaps.
+* `timeouts` - connect / TLS / header / idle / total bounds as Go durations, and an explicit `"0s"` disables a bound. Split these because one client timeout would clamp the body read, which is exactly what must be allowed to take minutes.
+* `retry` - attempts and backoff (`base`, `max`, `jitter`), honoring `Retry-After` but capping it at 60s.
+* `discover` - whether this provider's models are fetched from the server. On by default for every flavor with a known model list (anthropic, openai, zai, openrouter, deepseek, together, xai, groq, mistral, moonshotai, google, cerebras, nvidia, huggingface, baseten, lm-studio, llama.cpp and the token-plan flavors), and any other OpenAI-compatible endpoint can opt in with `"discover": true`, which asks its `/v1/models`.
+* `models` - your declared list for this provider. When present, it *is* the whole list, and discovery only fills gaps.
 
 ### Models
 
@@ -145,18 +145,18 @@ The minimal entry (if not using discovery) is just an id. Everything else has a 
 ```
 
 Per model you can set:
-  * `id` (required) - the identifier; also how overrides address it.
+  * `id` (required) - the identifier, also how overrides address it.
   * `name` / `aliases` - display name and extra names the registry resolves.
   * `reasoning` - a boolean: `true` enables reasoning with the model's resolved thinking format. There is no style-name form.
-  * `input` - accepted modalities (`text`, `image`); defaults to text plus image when capabilities allow it.
+  * `input` - accepted modalities (`text`, `image`), defaulting to text plus image when capabilities allow it.
   * `contextWindow` / `maxTokens` - input window and output cap in tokens.
   * `compat` - the capability overrides for this model: thinking format, tokenizer, cache-control encoding, parallel tool support, temperature, images, and so on. Every field is a pointer internally, so an override turns one quirk on without restating the others.
-  * `thinkingLevelMap` / `thinkingBudgets` - how our seven reasoning levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) map to this provider's effort values and token budgets; a `null` entry omits the parameter for that level.
+  * `thinkingLevelMap` / `thinkingBudgets` - how our seven reasoning levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) map to this provider's effort values and token budgets, and a `null` entry omits the parameter for that level.
   * `samplingParams` / `headers` / `api` / `baseUrl` - opaque additions folded into the request body, per-request headers, or a dialect/endpoint override so one gateway can serve two dialects.
 
-Reasoning retention is configured globally rather than per model (`reasoning.retain`, below) and applied only to what is sent; the transcript always keeps everything.
+Reasoning retention is configured globally rather than per model (`reasoning.retain`, below) and applied only to what is sent, so the transcript always keeps everything.
 
-The JSON loader is deliberately lenient: `//` comments and trailing commas are accepted, duplicate keys warn instead of silently keeping the last one, and an unrecognised key or reasoning level warns rather than locking you out. An unrecognised `api` disables its provider (a wrong dialect is a wrong protocol); an unknown flavor just degrades to generic.
+The JSON loader is deliberately lenient: `//` comments and trailing commas are accepted, duplicate keys warn instead of silently keeping the last one, and an unrecognised key or reasoning level warns rather than locking you out. An unrecognised `api` disables its provider (a wrong dialect is a wrong protocol), and an unknown flavor just degrades to generic.
 
 #### Minimal local setup
 
@@ -170,7 +170,7 @@ The fastest start is no declaration at all: llama.cpp discovers whatever model y
 }
 ```
 
-The host defaults to `localhost:8080`; discovery fills in the model's name and context window from what the server reports. Declare an entry only when you want to pin a window or override something discovery got wrong:
+The host defaults to `localhost:8080`, and discovery fills in the model's name and context window from what the server reports. Declare an entry only when you want to pin a window or override something discovery got wrong:
 
 ```jsonc
 {
@@ -209,27 +209,27 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
 
 The top-level blocks:
   * `model` - the model a fresh session starts with. A `/model` change writes your most recent choice here, so it is remembered across restarts.
-  * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is hidden from view (`hide`). Shown by default; set `hide: true` to stop streaming it.
-  * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations; absent or zero means unlimited.
-  * `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff; permanent errors (bad request, no credentials) never retry.
-  * `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them; a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.
-  * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, git, other, refInject, refTotal; `git` covers all four `git_*` readers).
+  * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is hidden from view (`hide`). Shown by default, so set `hide: true` to stop streaming it.
+  * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations, where absent or zero means unlimited.
+  * `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff, and permanent errors (bad request, no credentials) never retry.
+  * `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them, and a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.
+  * `tools.enabled` and `tools.limits` - which built-ins start enabled (defaults are just `read`, `write`, `edit`, `bash`) and per-tool output bounds (`lines`/`bytes` for bash, read, find, grep, ls, git, other, refInject, refTotal, with `git` covering all four `git_*` readers).
   * `tools.shellCommands` - extra shell commands the `bash` tool description may advertise, alongside a built-in set (`ls`, `grep`, `find`, `diff`, `wc`). A name is advertised only if it exists on PATH and is not refused by `permissions.deniedCommands`.
-  * `permissions.mode` - the interactive barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above; Shift+Tab or Shift+←/→ cycles it for the session only.
+  * `permissions.mode` - the interactive barrier mode: `allow-read` (default), `auto`, `auto+write`, `allow-all`, or `block-all`. See Tool Barriers above, since Shift+Tab or Shift+←/→ cycles it for the session only.
   * `permissions.headlessMode` - the one-shot (`-p` or piped) barrier mode, `auto+write` when unset. Kept separate from `mode` because unattended sessions gate so differently.
   * `permissions.safeCommands` / `deniedCommands` - extra auto-allow and hard-deny rules. Each entry is an exact tool name, a whole MCP server namespace, or a bash command line matched at token boundaries (so `git status` covers its subcommands, and wrapping in `cd … &&` never defeats either list).
-  * `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires; default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it; `threshold` is the default for the ones that do not.
-  * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped; everything older is replaced by a single structured summary. Every trigger keeps the same band.
+  * `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires, default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it, and `threshold` is the default for the ones that do not.
+  * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped, and everything older is replaced by a single structured summary. Every trigger keeps the same band.
   * `subagent.model` / `maxConcurrent` / `maxPollWait` / `maxSteps` - subagent specific configuration allows you to set a different model, as well as control concurrency and expected speed for running on local hardware.
-  * `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers; an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
-  * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default; `/settings` can flip it for the session, and `AJENT_IMAGES_BLOCK=true` sets it for a single run.
+  * `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers, while an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
+  * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default, and `/settings` can flip it for the session, while `AJENT_IMAGES_BLOCK=true` sets it for a single run.
   * `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.
-  * `ui.color` - colour depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`; any other value names the depth outright, which is the way out if your terminal is classified badly — `256` turns on syntax highlighting where detection was too conservative, `none` turns colour off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
-  * `disableUpdateCheck` - turn off the startup update-available notice. Off by default; a fork install or an offline machine that does not want to nag can set this once in the user layer.
+  * `ui.color` - colour depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`. Any other value names the depth outright. That is the way out if your terminal is classified badly, since `256` turns on syntax highlighting where detection was too conservative and `none` turns colour off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
+  * `disableUpdateCheck` - turn off the startup update-available notice. Off by default, and a fork install or an offline machine that does not want to nag can set this once in the user layer.
 
 ### Command-line options
 
-The CLI is deliberately small. Run `ajent --help` for the full list; the important ones:
+The CLI is deliberately small. Run `ajent --help` for the full list, and the important ones:
 
 ```
 -v, --version        print the build version and exit
@@ -260,8 +260,8 @@ The CLI is deliberately small. Run `ajent --help` for the full list; the importa
     --stats            one-shot: print a tool and token summary when the run ends
 ```
 
-Sessions are normally identified by an opaque id; `--resume` takes the full id or any unique prefix of it. `--session <name>` adds a human-readable name instead: the first run creates that session and every later one resumes it, so `--resume <name>` reaches it too. `/session <name>` names or renames the running session; `/session` alone reports its name. When a named session ends, the exit hint prints `ajent --resume <name>` rather than its id.
+Sessions are normally identified by an opaque id, and `--resume` takes the full id or any unique prefix of it. `--session <name>` adds a human-readable name instead: the first run creates that session and every later one resumes it, so `--resume <name>` reaches it too. `/session <name>` names or renames the running session, and `/session` alone reports its name. When a named session ends, the exit hint prints `ajent --resume <name>` rather than its id.
 
-`--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one; delete those by name when you are done with them. Both flags act on the current workspace only, and both exit without starting a session.
+`--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one. Delete those by name when you are done with them. Both flags act on the current workspace only, and both exit without starting a session.
 
-The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. Piping stdin or stdout takes the same path: `echo "question" | ajent` runs one turn and exits, the pipe standing in for `--prompt`. Bare `--resume` still wants its interactive picker, so a piped run refuses it (exit code 1) instead of silently starting a fresh transcript; scripts should name the session (`--resume <id|name>`) or use `--continue`. There is no dialog in headless mode, so without a scope flag the barrier runs at **auto+write** (`permissions.headlessMode` overrides; a scope flag overrides both): workspace-confined writes run free, and anything else the static analysis cannot verify is model-classified, its verdict final. Scope flags (`--allow-all`, `--read-only`, `--allow-auto`, `--allow-autowrite`) are mutually exclusive. `--allow-tools` pre-grants an "allow for session": a tool name (`--allow-tools write`, writers included), `bash` for any nameable shell call, or a bare word for bash commands with that head (`--allow-tools python3`). A nameable bash call no grant covers is still model-reviewed under the auto scopes; a line static analysis cannot parse (redirect, substitution) refuses outright. `--deny-tools` withholds tools. A refusal in a one-shot reads `permission not given`, so a script never prompts and never hangs on a dialog.
+The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. Piping stdin or stdout takes the same path, so `echo "question" | ajent` runs one turn and exits, the pipe standing in for `--prompt`. Bare `--resume` still wants its interactive picker, so a piped run refuses it (exit code 1) instead of silently starting a fresh transcript. Scripts should name the session (`--resume <id|name>`) or use `--continue`. There is no dialog in headless mode, so without a scope flag the barrier runs at **auto+write** (`permissions.headlessMode` overrides, and a scope flag overrides both): workspace-confined writes run free, and anything else the static analysis cannot verify is model-classified, its verdict final. Scope flags (`--allow-all`, `--read-only`, `--allow-auto`, `--allow-autowrite`) are mutually exclusive. `--allow-tools` pre-grants an "allow for session": a tool name (`--allow-tools write`, writers included), `bash` for any nameable shell call, or a bare word for bash commands with that head (`--allow-tools python3`). A nameable bash call no grant covers is still model-reviewed under the auto scopes, and a line static analysis cannot parse (redirect, substitution) refuses outright. `--deny-tools` withholds tools. A refusal in a one-shot reads `permission not given`, so a script never prompts and never hangs on a dialog.

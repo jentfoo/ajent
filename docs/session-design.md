@@ -15,7 +15,7 @@ directory so sessions survive renames deterministically without an index, keyed
 by `<slug>-<hash>` of the absolute workspace path (the slug encodes the whole
 path, the hash pins it).
 
-A session belongs to one agent; nothing requires every agent to have one. A
+A session belongs to one agent, and nothing requires every agent to have one. A
 sub-agent runs on an **in-memory session** (no transcript file, recorder, or
 resume/rewind), so its only lasting trace is child spend rolled into the parent
 ledger.
@@ -43,8 +43,16 @@ it is the *only* read path anything else uses, never raw file order.
 
 The first line of every file is always a `session` entry carrying `SessionData`:
 format version, cwd/workspace, the starting model key, and git branch/commit.
-The version gate (`Version`) refuses to open a transcript newer than this build
-understands; older or equal files are fine.
+The version gate (`Read`) refuses a transcript newer than this build understands
+with a classifiable error (`ErrNewerFormat`). Older or equal files are fine. The
+refusal still returns the parsed entries, so identity survives: selection
+classifies such a file as `Info.Blocked` and fills only the fields that identify
+the file (id, name, timestamps), never branch-derived ones. Blocked rows stay
+visible to every selection surface (`List`, `Find`, `FindNamed`, `NameConflict`)
+so they can be named, deleted or explained, but no path may hand one to `Open`:
+an append-open would repair a torn tail before it could refuse, and appending
+must never happen at all. Selection returns the fact (`Info.Blocked`), and each
+entry point owns its own surfacing policy (detailed in the resume table below).
 
 ### Entry types
 
@@ -68,7 +76,7 @@ IDs are Crockford ULIDs: a millisecond timestamp plus a random tail. They sort
 lexically by creation time (so `Store.List` can order sessions newest first),
 and the random tail makes them unique without a central counter. The counter's
 timestamp only moves forward: on an advancing clock it is adopted fresh
-(re-seeding entropy so prefixes spread across real time); otherwise
+(re-seeding entropy so prefixes spread across real time). Otherwise
 (same-millisecond bursts, tests pinning `clock`, an OS stepping back) the
 current timestamp is held and the random suffix incremented. IDs stay strictly
 increasing within a process even when the wall clock ticks backward, while
@@ -92,7 +100,7 @@ an append that fails to hit disk never advances the cursor.
 - **Discard** returns a writer with no backing file, so callers stay
   branch-free.
 - **Sync** flushes at a turn boundary *and* persists the current head, data
-  before cursor; it is never called by `Append`. A cursor that could not be
+  before cursor, and it is never called by `Append`. A cursor that could not be
   written surfaces as an error rather than silently continuing.
 - **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
   transcript keeps both histories (nothing is deleted) and the new tip becomes
@@ -146,18 +154,19 @@ a trusted cursor never names an entry that is not durable.
 The store maps workspaces to directories under `<config dir>/sessions`: a
 workspace is one `<root>/<slug>-<hash>` directory, so renaming a project does
 not orphan its sessions. The slug flattens the whole workspace path so a
-directory is recognisable at a glance; it is lossy, so the hash pins identity.
+directory is recognisable at a glance, and it is lossy, so the hash pins identity.
 Names are never parsed back into a workspace.
 The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
 - Timestamps are stored in UTC and rendered with `.Local()`.
 - **List** returns every session for a workspace, most recently used first
-  (start time only breaks ties); each row carries the summary a picker shows:
+  (start time only breaks ties), and each row carries the summary a picker shows:
   model, message count and started time. Newest-first is what lands on the work
-  actually left in progress rather than an abandoned fork.
+  actually left in progress rather than an abandoned fork. A newer-format
+  transcript appears too, marked `Blocked`, so it never reads as absent.
 - **Find** resolves `--resume`/`--delete` targets: exact id first, then a unique
-  id prefix; names match exactly only. Ambiguity at any step fails with a clear
+  id prefix, and names match exactly only. Ambiguity at any step fails with a clear
   error naming the candidates (see "Resume modes").
 - **NameConflict** is naming's one rule: a name is usable iff `Find` reaches
   nothing, or reaches the session being named. Names are kept narrower than the
@@ -168,16 +177,17 @@ The store:
   entry, not a branch).
 - **Stale** judges by `Info.Updated`: the newest entry's timestamp, or the file
   mtime when that is later. Taking the later of the two is conservative, like
-  `NameOf`: work on an abandoned fork was still work.
+  `NameOf`: work on an abandoned fork was still work. A newer-format session is
+  never swept: this build cannot read what it would be deleting.
 - **DeleteOld** sweeps unnamed sessions before a caller-supplied cutoff (default
-  28 days), most recently used first; its order and selection key are `List`'s
+  28 days), most recently used first. Its order and selection key are `List`'s
   already. Removing a session drops its head cursor too, leaving siblings and
   editor history alone.
 
 Ctrl+R history search reads each transcript's entries in raw append order,
 deduplicated to each distinct text's most recent occurrence across a bounded
-number of files rather than the whole workspace; `PromptIndex` caches that list
-on a short TTL (`promptTTL`) behind a mutex so it never rescans every
+number of files rather than the whole workspace. `PromptIndex` caches that list
+on a short TTL behind a mutex so it never rescans every
 transcript per keystroke. It is best effort: a scan failure yields an empty
 slice rather than an error.
 
@@ -193,7 +203,7 @@ distinct from the transcripts that record *turns*. Each message is
 `json.Marshal`ed onto a single physical line, so a multi-line turn (a paste or
 wrapped prompt) round-trips whole: embedded newlines are escaped and never
 fragment one submission into several recall entries. `/cmd` lines never write a
-transcript entry, and neither do `!!` runs (excluded from context); both still
+transcript entry, and neither do `!!` runs (excluded from context), though both still
 land as recall rows for ↑/↓ + Ctrl+R. An included `!` run lands as one
 **injected** user-message entry when flushed, never a typed-prompt entry.
 Prompts appear in both.
@@ -203,7 +213,7 @@ CRs, drops blank and secret-prefixed messages (the pasted-secret invariant),
 then one atomic `O_APPEND` write of the JSON row. A single short write never
 interleaves bytes, so concurrent agents on one workspace cannot corrupt it;
 different workspaces are different files. Every append is durable before recall,
-so a line lives only on disk; an append that fails to persist is held back in a
+so a line lives only on disk, and an append that fails to persist is held back in a
 queue capped at the same line budget as recall, and retried by the next
 compaction. A retry that fails keeps the queue, so the lines stay recallable
 this session rather than being dropped by the failed rewrite.
@@ -222,17 +232,17 @@ whose every copy is hidden, and caps at a bounded line count, newest kept. When
 the raw file grows well past the cap it kicks a background compaction,
 self-healing after a crash off the recall path. Compaction
 (`EditorHistory.Compact`) rewrites via `config.WriteFileAtomic`: read-current,
-merge local appends, dedup + cap, replace. It takes **no lock**; last writer
+merge local appends, dedup + cap, replace. It takes **no lock**, so last writer
 wins. Losing at most a few messages in the read→rename window is accepted over
 flocking the every-message append path. Rows that are not valid JSON
 (hand-edited or plain-text leftovers) decode literally, so the file stays
-human-edit friendly. Compaction also runs once on exit via
-`defer hist.Compact()`; it writes nothing when there is no message to persist,
+human-edit friendly. Compaction also runs once on exit and
+writes nothing when there is no message to persist,
 so an idle workspace never gains a phantom empty file.
 
 `RecallIndex` unifies recall onto one source: every typed message first, then
 any recorded prompt not already present (backfilling older transcripts). It
-reuses the `Prompt` type; a typed-only line carries a zero `At`.
+reuses the `Prompt` type, and a typed-only line carries no timestamp.
 
 ## Reading and rebuilding
 
@@ -254,7 +264,7 @@ Two consumers read the transcript back:
 - **Replay** re-submits a restored branch to a sink (`session.Replay`), so a
   rewound or resumed session shows its history as fresh committed lines rather
   than erasing scrollback. User prompts open their own turn through `UserPrompt`
-  and assistant content carries stop reason and usage; injected messages marked
+  and assistant content carries stop reason and usage, with injected messages marked
   `replayed` redraw as their own block (first line the label) without opening a
   turn. Thinking is off by default because it reads as noise on resume (see
   `tui-design.md`, "Rewind and resume" for the full rendering rules).
@@ -300,7 +310,7 @@ the writer's `SetHead` to that message's *parent* (so the picked text becomes
 the start of the new branch), rebuilds agent state from that head, redraws the
 UI, replays the restored context, and pre-fills the editor with the full
 original prompt, ready to edit or re-send. The cursor now points at the fork's
-tip; both it and every earlier branch remain in the file.
+tip, and both it and every earlier branch remain in the file.
 
 For a **large session** (at least `rewindDeferThreshold` tree rows), navigating
 the picker does not repaint committed history: alt mode keeps the retained lines
@@ -325,17 +335,17 @@ transcript by name or id (`--resume <id|name>`), or create-or-resume by name
 | Invocation | Behaviour |
 |---|---|
 | *(no flag)* | always a brand-new transcript; the previous one is untouched and stays resumable by id or picker |
-| `--continue` | auto-resumes the most recent session's leaf, no prompt; starts fresh if none exists. The "just get back to work" path |
-| `--resume` | lists saved sessions (newest first) in a picker showing the first user prompt, started time, model and message count, then resumes the chosen root's leaf; cancelling or an empty list falls back to fresh |
-| `--resume <id\|name>` | reopens that exact saved transcript directly by name, full id or unique id prefix; fails fast with a clear error if nothing matches |
-| `--session <name>` | resumes the session with that name, or creates one carrying it when the name is new. The repeatable path: the same command starts the work and returns to it |
+| `--continue` | auto-resumes the most recent session this build can open, no prompt, and starts fresh if none exists. A newer-format session is skipped with a loud notice naming it, never silently traded for an older conversation. The "just get back to work" path |
+| `--resume` | lists saved sessions (newest first) in a picker showing the first user prompt, started time, model and message count, then resumes the chosen root's leaf. Newer-format rows render disabled as "newer session format". Cancelling or an empty list falls back to fresh |
+| `--resume <id\|name>` | reopens that exact saved transcript directly by name, full id or unique id prefix. Fails fast with a clear error if nothing matches, and with the version hint when the match is blocked behind a newer format |
+| `--session <name>` | resumes the session with that name, or creates one carrying it when the name is new. The repeatable path: the same command starts the work and returns to it. A held name on a newer-format transcript refuses instead of re-minting it, which would make a future upgrade's `--resume` ambiguous |
 
 `--resume` overrides `--continue`. It is parsed out of `argv` before the
 standard flag parser so its optional trailing id is not greedily consumed as a
 positional argument. `--session` is an ordinary flag by contrast: combining it
 with either `--resume` or `--continue` is a usage error, since it already means
 create-or-resume. A requested id or name resolves *before* the TUI opens, so a
-bad one fails with a clear message instead of silently starting fresh; for
+bad one fails with a clear message instead of silently starting fresh. For
 `--session` that check also rejects a name reaching a session by *id*, which
 would resume one the user never named.
 
@@ -350,15 +360,20 @@ no-op while the bar keeps labelling another model.
 
 A one-shot run (`-p`) records its turn like any other, which is what makes
 `ajent -p "…"` and a follow-up `ajent -p "…" --continue` share one transcript.
-`--continue` and `--resume <id>` both compose with `-p`; a bare `--resume` does
+`--continue` and `--resume <id>` both compose with `-p`, but a bare `--resume` does
 not, because its picker needs a terminal, and the combination is a usage error
-rather than a hang. On exit the matching resume command (`--resume` plus the
+rather than a hang. The same holds for a piped invocation without `-p`: the pipe
+becomes the prompt and the run goes headless, where no picker can open. A bare
+`--resume` there refuses with a usage error (exit code 1) instead of silently
+opening a fresh transcript beside the one it meant to resume. An empty workspace
+still starts one, matching the picker's own empty-list rule, since there is
+nothing to choose among. On exit the matching resume command (`--resume` plus the
 session's name, or its id when unnamed) is printed, so a conversation is never
 more than one command away.
 
 An **empty session** (abandoned before its first prompt) is deleted on exit: it
 has nothing to resume and would only be a dead picker row. A **named** session
-is exempt, since `--session` resumes by name; deleting it would make the same
+is exempt, since `--session` resumes by name. Deleting it would make the same
 command start over instead of returning to the work, and the picker labels it
 rather than showing an empty row. The deletion drops its head cursor too;
 siblings are left untouched.
@@ -370,8 +385,8 @@ opens and exit, like `--version` and `--update`.
 
 | Invocation | Behaviour |
 |---|---|
-| `--delete <id\|name>` | removes that one transcript, resolved through the same `Find` as `--resume` (exact name, full id, unique id prefix). No prompt: the user named one session |
-| `--delete-old [days]` | lists every unnamed session unused for 28 days (or the given window), asks to confirm, then removes them |
+| `--delete <id\|name>` | removes that one transcript, resolved through the same `Find` as `--resume` (exact name, full id, unique id prefix). No prompt: the user named one session. A newer-format transcript resolves too, since deletion needs no decode and it is the only way to free its name from here |
+| `--delete-old [days]` | lists every unnamed session unused for 28 days (or the given window), asks to confirm, then removes them, excluding newer-format sessions |
 
 A name is the signal that a session is worth keeping, so `--delete-old` never
 sweeps one. That is the same argument that exempts a named session from the
@@ -380,7 +395,7 @@ swept session would silently become a new one. Unnamed sessions are the tail
 nothing resumes by hand, which is exactly what the sweep is for.
 
 Only the sweep confirms. `--delete` names one session explicitly and stays
-scriptable; `--delete-old` can remove many at once, so it prints the list first
+scriptable, and `--delete-old` can remove many at once, so it prints the list first
 and reads a `y/N` answer. An unreadable answer (no terminal, closed stdin)
 declines rather than deleting blind.
 
@@ -388,7 +403,7 @@ declines rather than deleting blind.
 
 These are load bearing. Each exists because breaking it produced a real bug.
 
-**1. The transcript is append-only; nothing is ever deleted.** Forks, rewinds
+**1. The transcript is append-only: nothing is ever deleted.** Forks, rewinds
 and compaction only add entries and move the cursor. Deleting would orphan
 branches that other tips still point at.
 
@@ -423,7 +438,7 @@ the tail wins and no unsynced turn is skipped. The cursor is per transcript, so
 a sibling session can never answer this question for another.
 
 **4. The head advances only on success.** An append updates the cursor after a
-successful write; an fsync records it at turn boundaries. A lost or corrupt
+successful write, and an fsync records it at turn boundaries. A lost or corrupt
 cursor falls back to tail recovery rather than losing the branch entirely.
 
 **5. Rebuilt context stays well formed.** Every `ToolCallBlock` is matched by a
@@ -438,7 +453,7 @@ turn.
 
 Package-specific rules beyond the house style in `AGENTS.md`:
 
-- No em dashes and no non-ASCII in comments; ASCII-only throughout identifiers.
+- No em dashes and no non-ASCII in comments. ASCII-only throughout identifiers.
 - Tests use a deterministic clock (`var clock = func() time.Time ...`) so IDs
   and timestamps are stable, plus an end-to-end fork test that rewinds onto an
   earlier message.
@@ -481,7 +496,7 @@ built from, so a plan recorded differently from how it was measured fails.
   and handle it where the transcript is consumed (state rebuild, replay,
   resume).
 - **Persist more of a session**: add a method on `Recorder` that appends an
-  entry; keep writes best-effort so recording failure cannot break a turn.
+  entry, keeping writes best-effort so recording failure cannot break a turn.
 
 Each new surface also needs its read path wired into `openSession`, and the
 schema change reflected in this doc's entry-type table.

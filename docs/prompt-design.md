@@ -1,7 +1,7 @@
 # Prompt design
 
 Every string ajent sends to a model, and the rules that keep those strings
-cheap, stable and honest. Each prompt surface is described in this document; it
+cheap, stable and honest. Each prompt surface is described in this document, so it
 is the single reference for prompting.
 
 The core idea:
@@ -27,13 +27,13 @@ one-line notice so users understand why caching resets.
 **2. Prompts are data plus instructions, kept separable.** The model should be
 able to tell "this is the conversation you must summarise" from "here is how to
 summarise". Injected content goes in explicit XML-ish tags (`<summary>`,
-`<plan>`, `<git_status>`, `<project_instructions path=...>`); instruction text
+`<plan>`, `<git_status>`, `<project_instructions path=...>`), and instruction text
 stays outside them. This is what lets one model hand work to another: the plan
 workflow's kickoffs are read by a model with no other context at all.
 
 **3. Structured output beats prose wherever a machine or another model consumes the result.**
 Summaries use fixed headings with exact formats spelled out in the prompt. The
-format is part of the contract; tests assert it verbatim.
+format is part of the contract, and tests assert it verbatim.
 
 **4. Preserve what resumption needs, verbatim: file paths, line numbers, function names, error messages.**
 Generic "summarise the conversation" prompts lose exactly the details that let a
@@ -107,7 +107,7 @@ through the normal output head rather than shown whole as the live run was.
 
 Assembled by `buildSystem` into a single cache-stable text block. Project
 instructions are layered on top of the ordered base parts without touching the
-loop; the enabled tool schemas ride in the request's separate `Tools` channel,
+loop, and the enabled tool schemas ride in the request's separate `Tools` channel,
 not this block.
 
 ### Parts, in order
@@ -122,7 +122,7 @@ not this block.
 
 Parts 1 and 2 together are ajent's default prose guidance. An operator can
 replace them with `agent.systemPrompt` in config (or `--system`) when they want a
-different opening stance; environment facts, project instructions and snippets
+different opening stance, while environment facts, project instructions and snippets
 still follow unchanged, since tools depend on cwd/date.
 
 ### Opening sentence
@@ -161,15 +161,15 @@ session: that is the cache-stability contract.
 
 ### Composition invariants
 
-- One text block (`llm.TextBlock`), not many; providers cache per-block.
+- One text block (`llm.TextBlock`), not many, since providers cache per-block.
 - The system prompt stays deterministic given its inputs, and is byte-stable
-  across calls with equal inputs; extension snippets and project instructions join
+  across calls with equal inputs. Extension snippets and project instructions join
   through explicit inputs so tests can assert that equality. An empty snippet slice
   produces a block identical to one built without the parameter. A non-empty
   `override` replaces parts 1–2 (opening sentence plus guidelines) but leaves
   environment facts, project instructions and snippets in place.
 - Changing the tool set or adding/removing project instructions changes this
-  block; per principle 1, a change is announced with a one-line notice.
+  block. Per principle 1, a change is announced with a one-line notice.
 
 ---
 
@@ -178,27 +178,27 @@ session: that is the cache-stability contract.
 Tools reach the model through the provider's tool-schema channel,
 **not as text in the system block**. Each enabled tool contributes its name, a
 prose `Description()` and JSON Schema parameters (derived from struct tags) to
-the request's `Tools` list; only tools whose state is Enabled are sent, which is
+the request's `Tools` list. Only tools whose state is Enabled are sent, which is
 how "only advertise what is real" is enforced.
 
 The description is full sentences, not a one-line snippet. It states plainly
 anything that changes how the model should use the tool:
 
-- `read`: returns line-numbered text and refuses binary files; supports
+- `read`: returns line-numbered text and refuses binary files, with
   offset/limit paging.
 - `bash`: runs in the session working directory. Output is truncated with the
   full log spilled to a file and timeout overrides the default. One shell
   process per call, no persistent `cd`. May end with a startup-probed list of
   common commands, framed as a fallback.
-- `write`: creates or overwrites files, making parent directories; an overwrite
+- `write`: creates or overwrites files, making parent directories, and an overwrite
   reports what it displaced as a diff.
-- `edit`: text replacement that applies atomically or not at all; non-exact text
+- `edit`: text replacement that applies atomically or not at all. Non-exact text
   may still resolve through guarded match tiers, which the result names.
 
 The `agent_*` sub-agent tools carry their whole contract in the description
 because a model that learns them by trial burns a round trip each: no session
-context (pass file paths and key facts, not content); read-only (`read`, `grep`,
-`find`, `ls` plus read-only MCP tools); and the final message is the entire
+context (pass file paths and key facts, not content), read-only (`read`, `grep`,
+`find`, `ls` plus read-only MCP tools), and the final message is the entire
 return value.
 
 There is deliberately **no "Available tools" list inside the system prompt**:
@@ -212,7 +212,7 @@ of tools (those ride the schema channel like any other request).
 The tool result has a model-facing form and a display form. `edit` shows the
 user a colourised diff while the model gets the summary plus a diff only when
 something needs checking (a non-exact match, several sites, possible
-duplication); `bash` streams full output to the screen while handing the model a
+duplication). `bash` streams full output to the screen while handing the model a
 truncated, ANSI-stripped version with an elision marker. The prompt contract is
 **the model must know when it has been told less than the whole truth**:
 truncation markers are not optional.
@@ -230,7 +230,7 @@ how to retry, not just a stop sign.
 
 When a user message contains `@path`, ajent injects a synthetic `read` call +
 result pair behind that message, using the real tool. The literal `@path` stays
-in the text; the injected read is what actually puts content in context. Behind,
+in the text, and the injected read is what actually puts content in context. Behind,
 not ahead, so that rewinding onto the message drops its reads too and a re-send
 sees the file as it is now (`command-design.md`).
 
@@ -241,7 +241,7 @@ Prompt implications:
   what it would see if it had called `read` itself.
 - Injected reads are visible to compaction's superseded-pass and countable by
   token accounting. No special "reference" block type is ever shown to the
-  model; a reference is just an ordinary read.
+  model. A reference is just an ordinary read.
 
 ---
 
@@ -273,7 +273,7 @@ Rules:
   sources are skipped. Nested discovery beyond these two: no ancestor walk.
 - **Provenance marker carries the absolute path**, so the model can point at
   which instruction file told it something.
-- Loaded once at startup and kept for the session; a changed `AGENTS.md` applies
+- Loaded once at startup and kept for the session, so a changed `AGENTS.md` applies
   on next launch. There is no mid-session reload or file watching, keeping the
   system block cache-stable per principle 1.
 
@@ -339,7 +339,7 @@ on every turn, so a long one is a tax paid forever (principle 7 applied to the
 one prompt surface the user writes). **Nothing invented**: the structure may
 echo ajent's own `AGENTS.md` (overview → commands → architecture), but its
 code-style sections are project-specific and must never be copied into another
-repository's file; tests assert their absence.
+repository's file, and tests assert their absence.
 
 The write is the model's own `write` call, so the permission barrier gates it
 like any other write rather than `/init` inventing a private path to disk.
@@ -349,7 +349,7 @@ like any other write rather than `/init` inventing a private path to disk.
 ## Compaction summarisation
 
 Compaction always cuts and always summarises. The newest steps are held back
-verbatim; everything before them is folded into one checkpoint. Free structural
+verbatim, and everything before them is folded into one checkpoint. Free structural
 reduction still runs, but only over the transcript the summariser reads.
 
 ### The summariser system prompt
@@ -401,6 +401,20 @@ It reuses the same six-section format. This is how summaries merge rather than
 nest: each compaction refines one checkpoint instead of piling summaries inside
 summaries.
 
+### Framing integrity
+
+The transcript is untrusted text inside a trusted frame, so tag literals in data
+are escaped at render time and stored raw everywhere else. Any literal
+`</conversation>`, `</previous-summary>` or `</summary>` rendered inside a block
+becomes `<\/...>` (`session.EscapeTagLiterals`) and cannot close it early. Only
+the framing's own tags stay raw. The scheme composes across merge rounds because
+it is idempotent: record-time canonicalisation undoes any escapes a model copied
+out of `<previous-summary>`, so every render escapes exactly once, and yesterday's
+unescaped summary needs no migration. A reply missing any of the six section
+headers gets one bounded retry. Still missing them, the fold records anyway and
+warns through `Result.Warnings`: a structurally defective checkpoint must not
+fail the run it paid for, nor persist silently.
+
 ### What the summariser reads
 
 The verbatim band is excluded by construction (the span handed to the summariser
@@ -412,12 +426,12 @@ reader can already see.
 - **Tool results carry self-describing markers** where the reduction pass
   replaced them: `[identical to an earlier tool result]`,
   `[superseded by a later read of the same file]`, and the failed-tool
-  one-liner. The wording is the instruction; the prompt says nothing about them.
+  one-liner. The wording is the instruction, and the prompt says nothing about them.
 - **Output is clipped only when it must be.** The transcript is built whole
-  first; a clip is applied only if it would not fit alongside the reply,
+  first, and a clip is applied only if it would not fit alongside the reply,
   stepping down toward smaller sizes and finally dropping the oldest entries.
   Dropped entries are folded into the checkpoint by their own chained call, so
-  nothing the cut removes goes unsummarised; if even a chunk cannot fit, the
+  nothing the cut removes goes unsummarised. If even a chunk cannot fit, the
   run fails with an error rather than sending a request the provider will
   reject or summarising an empty transcript. Compaction fires near the top of
   the window, so an unclipped span plus its summary can overflow, and an
@@ -433,10 +447,12 @@ reader can already see.
 
 The compacted history is placed back in context with explicit provenance so the
 model knows what it lost: an intro line naming that the history before this
-point was compacted, wrapped around the summary as a `<summary>` block.
+point was compacted, wrapped around the summary as a `<summary>` block. Tag
+literals inside are escaped the same way at replay, so a stored summary cannot
+end its own provenance frame and let its tail read as live user text.
 
 A branch return uses similar framing ("a summary of a branch this conversation
-came back from"). Nothing is ever deleted; recovery is a rewind onto the
+came back from"). Nothing is ever deleted, and recovery is a rewind onto the
 compaction row (see `compaction-design.md`).
 
 ### Honesty
@@ -451,12 +467,12 @@ agent "forgot" for no reason. The exact shape is specified in
 
 Four surfaces, all shaped by one fact:
 **the receiving model has no prior context**. Structural design is in
-`plan-design.md`; the wording contract is here.
+`plan-design.md`, and the wording contract is here.
 
 **Planning contract.** Appended to the user's first goal as its own content
 block, so `Input.Text` (and therefore the echoed line and the recall entry)
-stays the user's own words. `appendSteer` emits `Text` before `Blocks`, so the
-model reads the goal and then the contract; that placement is deliberate,
+stays the user's own words. The input emits its text before its blocks, so the
+model reads the goal and then the contract. That placement is deliberate,
 putting the no-prior-context rule closest to where the plan gets written. It
 sets the planning role, tells the model to ground the plan in the codebase it
 can read, and to put a genuine design fork to the user with `ask_user` rather
@@ -474,7 +490,7 @@ outstanding. It asks the model to verify its work as it goes, and to call
 `dev_review` with a summary, warning that review starts anyway if it stops. The
 summary's description says plainly that the reviewer sees none of this
 conversation and only learns what it reports, which is why the field is
-required; a round that never calls the tool falls back to its closing message.
+required, and a round that never calls the tool falls back to its closing message.
 
 **Review kickoff.** Carries `<plan>` **as the user approved it**, labelled as
 such since it may differ from the draft the reviewer watched itself write, plus
@@ -489,7 +505,7 @@ call `dev_review` when done.
 
 The compaction focus strings live here too: implementation keeps files changed,
 approaches tried, decisions made and unfinished plan items (reproduced
-verbatim); review keeps files inspected, issues found and conclusions reached.
+verbatim), and review keeps files inspected, issues found and conclusions reached.
 
 ---
 
@@ -498,14 +514,14 @@ verbatim); review keeps files inspected, issues found and conclusions reached.
 All three prompts live in **`pkg/permit`** (`ClassifierSystem`,
 `MCPClassifierSystem`, `WorkspaceClassifierSystem`), the package that owns the
 `Classifier` interface, not `pkg/app`. The shell prompt keeps its strict
-unconditional bar (running arbitrary software is always a write); the MCP
+unconditional bar (running arbitrary software is always a write), while the MCP
 variant states the no-observable-change and network-exfiltration rules. A call
 is classified with one fresh-context request to the session's current model
 (never the session history), and the verdict never enters the session. All three
 ask the same question (may this run unattended?) for the same one-word answer:
 `allow`, `deny` or `unsure`. One vocabulary means one normaliser and no
 per-prompt parsing anywhere downstream. Reasoning is off, so a verdict costs no
-thinking tokens; in auto modes each prompted call is classified concurrently
+thinking tokens. In auto modes each prompted call is classified concurrently
 with its typing hold and its dialog, so an allow verdict approves the call as
 soon as it lands (mid-typing included, see agent-loop-design.md), and a dialog
 the user answers without waiting cancels its in-flight request rather than
@@ -514,19 +530,26 @@ the verdict words anywhere in the reply: an `allow`/`allowed` token yields
 approval, `deny`/`denied`/`denies` denial, and
 **both present (or neither) is unsure**. The asymmetry is deliberate: `deny` and
 `unsure` are indistinguishable downstream (both leave the dialog open), so only
-an unambiguous single-direction reply can fail open; any conflict keeps the
+an unambiguous single-direction reply can fail open, and any conflict keeps the
 dialog open. A verdict word shadowed by a negator (`not`, `never`, `cannot`,
 `can't`, …) anywhere in the reply counts for nothing, so "I can't allow this"
 never fails open either. A response is never cached when unsure (usually
-transient: an abort, missing auth, an API error); confident verdicts are
-LRU-cached per subject identity (tool name plus exact payload), and concurrent
-identical subjects share one in-flight request.
+transient: an abort, missing auth, an API error). Confident verdicts are
+LRU-cached per subject identity: tool name plus payload, working directory and
+rule set. Elided arguments also carry a digest of the full text in the key, so
+two calls sharing one rendering never share a verdict. Concurrent identical
+subjects share one in-flight request.
 
 The modes differ in what they classify and by which rule set. **`auto`** judges
 unverifiable bash commands plus MCP/extension tool calls, sending the model the
 call's description and JSON-Schema parameters so it can judge functionality it
-has never seen before; `auto+write` adds write confinement to that same
+has never seen before, and `auto+write` adds write confinement to that same
 classifier.
+
+A non-bash call's arguments are bounded before the request (the shell branch
+stays unbounded): head and tail survive around an explicit `…[N chars elided]…`
+marker, so a verdict sees both ends of a large payload and is never left to
+wonder whether text was cut.
 
 A **core writer is never classified** in any mode. `write`/`edit` are decided
 statically (by `auto+write`'s path scope, otherwise by the dialog), so a stray
@@ -539,7 +562,7 @@ shell commands to `WorkspaceClassifierSystem`: there the question is not
 *does this write?* but *is this write permissible?*. The prompt names its two
 writable roots verbatim, cwd and the temp dir, the same two the barrier
 path-scopes `write`/`edit` against, so gate and model judge by one rule.
-Reads anywhere are always `allow`; only writes need confinement. Inside the
+Reads anywhere are always `allow`, and only writes need confinement. Inside the
 two roots it allows file creation, scripted rewrites, redirects, moves and
 copies, removing individual files, build and test commands and in-repo git;
 it denies regardless any path outside the roots (a write there), bulk
@@ -558,7 +581,7 @@ not.
 The shell prompt keeps the reference's framing (compound constructs classify by
 the commands they actually run, examples are illustrative not exhaustive) with
 one deliberate change: **reading from the network is *not* read-only**. The
-exfiltration channel means "does not write locally" never equals safe; the
+exfiltration channel means "does not write locally" never equals safe, so the
 classifier must say so explicitly rather than inheriting the reference's
 opposite claim. Network tools are absent from both the static allowlist and
 any notion of classifier read-only.
@@ -595,7 +618,7 @@ Every investigation child gets a fresh system block built by the same
 A reasoning model whose final assistant message is thinking-only returns no
 text, so an empty summary triggers a bounded nudge to emit plain-text output
 with no tool calls. A message cut short by the output or step cap gets its own
-truncation variant asking for everything discovered so far; either way one
+truncation variant asking for everything discovered so far. Either way one
 attempt at most, then the job fails rather than looping.
 
 The task prompt is `Task:\n<task>` with an optional `Extra instructions:` block
@@ -619,16 +642,17 @@ carries no prefix.
 
 Prompts are code. The bar is golden/verbatim tests over exact strings:
 
-- **System prompt**: assert byte-equality across calls with equal inputs; assert
-  cache stability across days (only the date differs); assert empty facts drop
+- **System prompt**: assert byte-equality across calls with equal inputs, assert
+  cache stability across days (only the date differs), and assert empty facts drop
   their lines and git failures fall silent.
 - **Tool schemas & descriptions**: assert a tool appears in the request's
-  `Tools` list only when enabled; guidelines derive correctly from the enabled
+  `Tools` list only when enabled, and guidelines derive correctly from the enabled
   set.
 - **Compaction**: assert the exact six-section format is present, that user
   focus instructions and the previous summary are included, and (with a scripted
   fake provider) that the model received history in `<conversation>` tags
-  treated as data.
+  treated as data. Assert tag literals inside those blocks are escaped so no
+  payload can close its own frame.
 
 Where a prompt is user-configurable (project instructions) the tests cover
 presence/absence of `<cwd>/AGENTS.md`, the provenance marker carrying its

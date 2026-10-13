@@ -11,7 +11,7 @@ answering. Differences that cannot be normalised (reasoning encoding, cache
 control, tokenizer availability) are declared as *capabilities* rather than
 leaking upward as special cases.
 
-No provider SDKs. HTTP, JSON and SSE are stdlib; the only third-party import is
+No provider SDKs. HTTP, JSON and SSE are stdlib, and the only third-party import is
 `go-analyze/bulk` for collection helpers. Five vendors with one SDK each is five
 dependency trees and five event models to normalise anyway, and four of the five
 speak either OpenAI-compatible JSON or Anthropic Messages JSON over SSE. The
@@ -46,7 +46,7 @@ decodes in `pkg/llm/config.go` rather than in `pkg/config`.
 
 ## The content model
 
-A message pairs a role with its content; the content is an opaque tagged block
+A message pairs a role with its content, and the content is an opaque tagged block
 list. The `Block` surface is sealed: only the five concrete kinds (`TextBlock`,
 `ThinkingBlock`, `ToolCallBlock`, `ToolResultBlock`, `ImageBlock`) exist, so
 every switch over blocks is exhaustive and a new kind is a deliberate change.
@@ -118,10 +118,16 @@ sent:
 - **Retention** (below) merged into the same pass so a `none` policy can still
   strip a block that degradation did not already turn to text.
 - **Orphan repair**: an unanswered tool call gets a synthetic error result
-  before any later turn or at the end of the list; assistant turns whose stop
+  before any later turn or at the end of the list. Assistant turns whose stop
   reason is `error` are skipped, and their tool results dropped with them. This
   makes well-formedness a request-build invariant rather than just an abort-time
   repair.
+- **Malformed tool-call input** rides as `{}`: argument JSON that never parsed
+  fails its one call at the stream boundary (invariant 7), so substituting loses
+  nothing. Shipping the raw bytes would break every later request instead:
+  anthropic rejects them at body marshal and the compat dialects would send them
+  silently inside their `arguments` string. The paired error result quotes the
+  clipped original, which is where replay still sees what the model emitted.
 
 A placeholder ladder gives empty or image-only tool results something to say
 (or, when an image survives, a pointer to it). Some chat-completions providers
@@ -134,11 +140,11 @@ result's `AddedToolNames` are builder inputs, never agent-loop state, and every
 dialect ignores them without its capability flag. The producer surface is the
 tool's own `Schema()` (registry and sub-agent toolsets pass `Deferred`/`Grammar`
 through) and `ToolResult.AddedToolNames`, which the loop copies onto the
-transcript block; no built-in tool declares either today. Kimi mode adds a
+transcript block, and no built-in tool declares either today. Kimi mode adds a
 chat-completions serialization: tools a result loaded leave the top level list
 and a bare system message re-offers their schemas at each load point.
 
-**Traps**: adapters never call the retention helpers directly; they go through
+**Traps**: adapters never call the retention helpers directly: they go through
 `Prepare`, which must stay idempotent (the Responses fallback builds the same
 body twice in a session). A provider that genuinely never sends a
 chat-completions finish reason must declare that it does not, or an otherwise
@@ -211,16 +217,16 @@ Only the last layer is new in kind. Defaults run **last** so a discovered
 context window is never replaced by a guess, and they are applied before the
 thinking ladder is computed so a defaulted `maxTokens` caps it. They are the
 schema defaults (a context window, a max completion size, a name derived from
-the id and text input; reasoning comes from the flavor baseline, which hosted
-openai-completions families set on), so a bare `"id"` is a complete entry;
+the id and text input, plus reasoning from the flavor baseline that hosted
+openai-completions families set on), so a bare `"id"` is a complete entry.
 without them both values resolve to zero, and zero means the context bar has no
 denominator, auto-compaction never fires, and Anthropic gets `max_tokens: 0`.
 
 `api` and `baseUrl` are settable per model as well as per provider, so one
 gateway serving two dialects is one provider entry. Dialect and endpoint are
 therefore resolved at **model**-resolution time, and `Model.BaseURL` plus
-`Model.Caps.Dialect` are what the adapter is built from; it never re-derives
-them. `Providers` caches on `provider + dialect + baseURL` for that reason; the
+`Model.Caps.Dialect` are what the adapter is built from, which never re-derives
+them. `Providers` caches on `provider + dialect + baseURL` for that reason: the
 vendor name alone would collapse two models onto whichever adapter was built
 first.
 
@@ -228,9 +234,9 @@ Detection returns a sparse `Compat` (a zero one when no vendor family matches)
 and never sets `Reasoning`. Whether a model reasons at all comes from the flavor
 baseline, an explicit per-model entry, or openrouter's discovery response. Hosted
 openai-completions flavors default it on because their model lists cannot say
-otherwise and nearly every model they serve today reasons; a per-model entry can
+otherwise and nearly every model they serve today reasons. A per-model entry can
 turn it back off for one that does not. Detection runs only for
-chat-completions; anthropic and responses providers are not detected.
+chat-completions, and anthropic and responses providers are not detected.
 
 Every `Compat` field is a pointer so "unset" is distinguishable from "explicitly
 false". Without that tri-state, `"supportsTemperature": false` is
@@ -246,7 +252,7 @@ The feature with the least agreement between vendors, so it gets the most
 machinery.
 
 **Levels** form a fixed standard set, so a `thinkingLevelMap` written against
-them maps every key. A model may translate them with `Capabilities.LevelMap`; a
+them maps every key. A model may translate them with `Capabilities.LevelMap`, and a
 `null` entry omits the parameter entirely for that level.
 
 **Thinking formats** decide how reasoning is encoded and parsed, carried as
@@ -254,7 +260,7 @@ them maps every key. A model may translate them with `Capabilities.LevelMap`; a
 `openrouter`, `deepseek`, `together`, `baseten`, `zai`, `qwen`, `chat-template`,
 `qwen-chat-template`, `string-thinking`, `ant-ling`) plus `none`, with two ajent
 extensions: `anthropic` (the Messages budget shape) and `think-tags` (no request
-parameter; reasoning is parsed back out of content with inline tags). Response
+parameter, and reasoning is parsed back out of content with inline tags). Response
 parsing for the tag formats uses `ThinkOpen` / `ThinkClose`. An unknown value in
 configuration warns rather than defaulting silently.
 
@@ -360,7 +366,7 @@ Deliberate choices in this loader:
   repeated key is a setting that looks applied and is not. Hand-written configs
   do this.
 - **`reasoning` is boolean-only**: `true` enables reasoning with the model's
-  resolved thinking format; there is no style-name form.
+  resolved thinking format, and there is no style-name form.
 - **Unrecognised keys warn rather than fail.** A typo silently ignored is worse
   than a warning, and a hard failure locks the user out of their agent.
 - **No pricing.** ajent does not track cost, and a `cost` block is an
@@ -376,7 +382,7 @@ Deliberate choices in this loader:
   never the protocol.
 - **Models are displayed by `Display()`, which prefers `name`.** The `id` is
   shown as a secondary detail while `name` drives matching. Defaulting `name` to
-  `id` makes the two agree for every entry that omits one; the divergence
+  `id` makes the two agree for every entry that omits one. The divergence
   remains only where a user set a descriptive `name`, and there showing it is
   the point.
 
@@ -428,6 +434,21 @@ that declares nothing. This is what lets you name three lm-studio models you
 actually use without the picker filling with everything the server has, while
 still learning the real loaded context length of the ones you named.
 
+**Blank ids never register.** Rebuild drops an entry with an empty id whether it
+was declared or discovered: `Resolve("")` already rejects it and it would sort
+first as a bare `provider/` row, so parse-time guards are convenience, not the
+rule.
+
+**The active pointer survives refresh in place.** A `Refresh` re-points an
+unchanged active model onto its rebuilt entry so new window and capability data
+take effect without a restart, but it never swaps which model serves the next
+turn: one that left the catalogue keeps serving as-is and is reported through
+the warnings channel (keep-and-notify, like `/model`'s unknown-name handling),
+because auto-switching would silently change what answers. Reconciliation reads
+the live pointer at apply time under one lock rather than a value captured
+before discovery ran, so a concurrent `/model` switch governs and no fallback
+computed from a stale key can stomp it.
+
 **`modelOverrides`** adjusts a *discovered* model by id without restating it as
 a full `ModelConfig`. It exists because discovery is the primary source for
 openrouter, lm-studio and llama.cpp, and correcting one field of one discovered
@@ -440,20 +461,20 @@ has no undeclared ones, so its `modelOverrides` never apply at all. Unknown ids
 are ignored without a warning, because discovery is asynchronous and an id that
 has not arrived yet is not a mistake.
 
-Discovery endpoints supply a subset of model metadata; the rest must come from
+Discovery endpoints supply a subset of model metadata, and the rest must come from
 `models[]`, `modelOverrides`, or the schema defaults. The hosted catalogue
 reports the most (identifiers, context window, completion size, modalities,
-reasoning and tool support); the local servers report less, and llama.cpp
+reasoning and tool support), while the local servers report less, and llama.cpp
 reports only the id and the context window. Reasoning is discovered at runtime
-only by openrouter; every other chat-completions list cannot say whether a model
+only by openrouter, and every other chat-completions list cannot say whether a model
 reasons, so those flavors carry it in their baseline (see Capabilities). The
 local endpoints report the
 context length the model was *loaded* with, which is often smaller than its
 maximum and which nothing else can know. A flavor's native endpoint is tried
-first; the standard chat-completions list (`/v1/models`) backs it up when that
+first, and the standard chat-completions list (`/v1/models`) backs it up when that
 yields nothing usable. A llama.cpp router serves no single loaded model on
 `/props`, so discovery falls through to the OpenAI list. lm-studio's native
-list moved to `/api/v1` in 0.4; its candidates walk `/api/v1`, then `/api/v0`
+list moved to `/api/v1` in 0.4, and its candidates walk `/api/v1`, then `/api/v0`
 for older builds, then the OpenAI list. The generic flavor discovers only
 through that list, and only when `discover: true` opts in.
 
@@ -473,14 +494,14 @@ the `/api/v0` fallback), llama.cpp's `/props`, and the standard `/v1/models`
 fallback. `probeAllSpec` unions the known endpoints for `ProbeAll`, the
 setup wizard's probe for a custom URL of unknown family.
 
-Refetch is conditional on `ETag` / `Last-Modified`; a `304` keeps the models and
+Refetch is conditional on `ETag` / `Last-Modified`, and a `304` keeps the models and
 only bumps the check time. Results cache to a file under the config dir. Time to
 live is generous for hosted catalogues and short for local servers, whose loaded
 model changes far more often.
 
 Discovery **never blocks startup and is never fatal**: `NewRegistry` is cache
 only, `Registry.Refresh` runs in the background, and a provider that fails keeps
-whatever was cached. Starting offline with a populated cache works; starting
+whatever was cached. Starting offline with a populated cache works, and starting
 offline with no cache still resolves declared models.
 
 ## Errors, retry and overflow
@@ -497,7 +518,7 @@ whether the call retries and how long to back off, so a classified 409 with a
 `Retry-After`, or any transient failure carrying one, keeps its server-directed
 wait. Overflow is the single exception: it always wins over the status table,
 which matters because llama.cpp reports overflow as a 500 that would otherwise
-transient-retry. Classifiers only parse vendor error shapes; they set no retry
+transient-retry. Classifiers only parse vendor error shapes and set no retry
 verdict of their own.
 
 Retry covers transient failures (rate limiting, request timeouts, server
@@ -524,7 +545,7 @@ verdicts, because the status table decides rather than the frame.
 Every provider signals "too many input tokens" differently, so each flavor has a
 phrase table in `classify.go` and maps its form to `ErrContextOverflow`, which
 callers catch with `errors.Is`. Note llama.cpp reports it as a **500**, not a
-client error. Matching vendor prose is fragile by nature; treat the table as
+client error. Matching vendor prose is fragile by nature, so treat the table as
 something that will need additions.
 
 Timeouts are five separate bounds (connect, TLS, header, idle and total),
@@ -543,7 +564,7 @@ Anthropic gets explicit `cache_control` breakpoints on the last system block,
 the last tool definition and the last `KeepLast` message boundaries, recomputed
 every request so the cached prefix grows with the conversation. Breakpoints
 start one message back, because the newest message is still changing. The API
-allows four; the code will not emit more. Models declaring
+allows four, and the code will not emit more. Models declaring
 `supportsLongCacheRetention` get the extended `ttl` tier.
 
 OpenAI and openrouter cache automatically and report it through
@@ -558,7 +579,7 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
 ### anthropic
 
 - System is a top-level field, not a message.
-- Tool results ride on **user** messages, never a tool role; consecutive
+- Tool results ride on **user** messages, never a tool role, and consecutive
   same-role messages must be merged.
 - Temperature must be dropped when thinking is enabled, or the request 400s.
 - Usage is split across events: input and cache numbers arrive at
@@ -567,24 +588,24 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
 - `count_tokens` is exact but billed, so it is a method and never called
   automatically.
 - Strict tools (`supportsStrictTools`) opt in per tool after rewriting the
-  schema to the strict subset; a tool that cannot be rewritten is sent
+  schema to the strict subset, and a tool that cannot be rewritten is sent
   non-strict rather than failing the whole request.
 - Deferred tools ride a beta header: `defer_loading` definitions, and
   `tool_reference` blocks replacing the result content they load, which cannot
-  share a block with it. Displaced content follows every tool_result; each name is
+  share a block with it. Displaced content follows every tool_result, and each name is
   referenced at most once per request. When every offered tool would be deferred
   there is nothing to reference later, so all are promoted to immediate.
 
 ### openai
 
-- Responses API primary; tools are flat, not nested under a `function` key.
+- Responses API primary, with tools flat, not nested under a `function` key.
   `max_output_tokens`, not `max_tokens`.
 - Reasoning items replay by id, and statelessly only with `encrypted_content`,
   which requires asking for it via `include`.
 - Falls back to chat-completions per model, decided from resolved capabilities
   rather than sniffed.
 - A terminal `incomplete` stop is output-token truncation (`StopMaxTokens`) only
-  when `incomplete_details.reason` says so; any other reason maps to
+  when `incomplete_details.reason` says so. Any other reason maps to
   `StopIncomplete`, so a content-filtered turn is not retried as though it ran
   out of room, and an absent reason keeps the safe truncation default.
 - Function tools carry explicit `strict: false` under the strict gate, and a
@@ -592,7 +613,7 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
 - A result's `AddedToolNames` materialize right after its output: an
   `additional_tools` item, or a client-executed
   `tool_search_call`/`tool_search_output` pair with `defer_loading` tools when
-  search is capable; dedup is per request build, so a name loaded earlier in the
+  search is capable. Dedup is per request build, so a name loaded earlier in the
   same request is not re-emitted. Load-on-demand tools stay out of the top-level
   `tools` list (only immediate ones are offered there), and only deferred names are
   injected, so a tool never appears twice.
@@ -624,7 +645,7 @@ produce, a real bug.
 every attempt and returns only once the status is 2xx and headers are read. The
 stream then reads with no retry underneath it, so no code path inside the
 provider can re-emit deltas. A mid-stream failure surfaces the partial plus an
-error for the caller to handle; the turn loop's recovery re-requests the whole
+error for the caller to handle, and the turn loop's recovery re-requests the whole
 call and owns closing what the failed attempt rendered.
 
 **2. A stream is a synchronous pull, not a goroutine and a channel.** Each
@@ -644,7 +665,7 @@ compaction summary), so cancellation is Close-not-drain everywhere.
 See "The content model" and "Reasoning".
 
 **5. Retention edits the request, never the transcript.** Everything is still on
-disk; only what is sent shrinks.
+disk, and only what is sent shrinks.
 
 **6. A tool call completes at a structural boundary, not when its JSON parses.**
 Partial arguments parse successfully far more often than not (`{"a":1}` is valid
@@ -683,11 +704,11 @@ caller prints agrees with the LogEvent.
 
 **11. `sse.go` knows no dialect.** No JSON, no vendor names, one const for the
 `[DONE]` sentinel and a method to report it, with the policy left to the caller.
-An MCP transport can reuse it; `openaicompat` breaks on `[DONE]` while MCP
+An MCP transport can reuse it, and `openaicompat` breaks on `[DONE]` while MCP
 ignores it.
 
 **12. Anthropic's usage reports are cumulative and split across events, so the adapter folds them with `Usage.Merge`, never by overwriting.**
-`message_start` carries input and cache numbers with a seed output; the final
+`message_start` carries input and cache numbers with a seed output, and the final
 totals plus `output_tokens_details.thinking_tokens` arrive only on the terminal
 `message_delta`, which may carry no usage at all. Overwriting drops the thinking
 breakdown that `pkg/tokens` bills apart from `Output`, and summing would double
@@ -699,12 +720,12 @@ two reports that disagree about that nesting can inflate it.
 
 Fixtures are **raw wire bytes**, byte-identical to what the vendor sends, under
 `pkg/llm/testdata/<provider>/`. No invented fixture dialect. Two replay servers
-prove the SSE reader reassembles a frame split at any write boundary; golden
+prove the SSE reader reassembles a frame split at any write boundary, and golden
 expectations are Go literals so a field rename becomes a compile error rather
 than a silent mismatch.
 
 **No test touches the network, and no test sleeps.** Retry asserts the durations
-handed to an injected `sleep`; timeout paths fire through injected timers
+handed to an injected `sleep`, and timeout paths fire through injected timers
 ordered against the read with no polling.
 
 **Cross-dialect parity** is pinned separately, in `contract_test.go`. The
@@ -735,9 +756,9 @@ payloads line up would leak one test's needs into unrelated tests.
 
 - **Do not add a model to `flavorDefaults`.** A stale context window silently
   corrupts the context bar, which is worse than not knowing it. A test asserts
-  the table ships no models; the setup wizard obeys the same rule.
-- **Do not mutate `httpClient.headers` for a per-call header.** Discovery runs
-  in the background; use the request's own headers, which merge over the
+  the table ships no models, and the setup wizard obeys the same rule.
+- **Do not mutate the shared client's headers for a per-call header.** Discovery runs
+  in the background, so use the request's own headers, which merge over the
   client's.
 - **Anthropic always sends a thinking shape.** Reasoning models emit
   `thinking:{"type":"disabled"}` when the level resolves to off (suppressed only
@@ -747,7 +768,7 @@ payloads line up would leak one test's needs into unrelated tests.
   capped at the model cap, so the reply keeps its full window. `display` is
   deliberately never sent.
 - **Do not reuse the `tools` key for kimi load points.** The re-offered schemas
-  ride a bare system message's own `tools` field; a chat-completions request
+  ride a bare system message's own `tools` field, while a chat-completions request
   keeps `tools` as the immediate (never-loaded) set, and an empty list stays
   present when everything was loaded, because some endpoints require the key
   once tool calls exist in history.
@@ -759,7 +780,7 @@ payloads line up would leak one test's needs into unrelated tests.
   Only `Usage.Merge` is correct there (invariant 12), and only there: the other
   dialects' input total is derived, so merging can inflate it.
 - **Do not cache a provider adapter by vendor name.** `api` and `baseUrl` are
-  per model, so two models on one provider entry can need two adapters; keying
+  per model, so two models on one provider entry can need two adapters. Keying
   is on provider, dialect and base URL together.
 - **A `Compat` bool must stay a pointer** and a `Timeouts` duration must stay a
   pointer. Both need the unset/explicit distinction (a plain zero cannot say
@@ -770,7 +791,7 @@ payloads line up would leak one test's needs into unrelated tests.
   rather than erroring, because erroring would make a `/settings` temperature
   change fail confusingly on exactly the models people reason with.
 - **`<think>` extraction must withhold a partial tag.** Emitting `"<"` as text
-  and correcting later is visible corruption; the splitter holds back the
+  and correcting later is visible corruption. The splitter holds back the
   longest suffix that could still become the tag.
 
 ## Extending
@@ -778,7 +799,7 @@ payloads line up would leak one test's needs into unrelated tests.
 Adding a provider that speaks chat-completions:
 
 1. Check whether detection (`pkg/llm/detect.go`) already covers the vendor by
-   name or base URL; most chat-completions families that are auto-detected are
+   name or base URL. Most chat-completions families that are auto-detected are
    handled there and need no flavor at all.
 2. If it still needs its own defaults, add a `Flavor` and an entry in
    `flavorDefaults`: base URL, dialect, key variable, capabilities. No models.
@@ -801,5 +822,5 @@ no wizard row, since `models.json` cannot express it.
 
 A genuinely new **dialect** is a new `Dialect`, a `*_wire.go`, an adapter
 implementing `Provider`, and a case in `factory.go`. It also adds a row to
-`contractDialects` and a `testdata/contract/<dir>` beside the others; a dialect
+`contractDialects` and a `testdata/contract/<dir>` beside the others, and a dialect
 that is not in the parity matrix is not known to agree with the rest.

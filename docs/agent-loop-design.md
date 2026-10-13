@@ -3,7 +3,7 @@
 How `pkg/agent` turns a model provider into an interactive coding agent: the
 prompt -> stream -> tool-call -> repeat loop, the event sink any front end can
 adapt onto, and interruption as a first-class operation. It is the reference for
-the turn loop; tools, sessions and compaction all build on it.
+the turn loop that tools, sessions and compaction all build on.
 
 ## Shape
 
@@ -26,7 +26,7 @@ concurrent second `Prompt`.
 
 ## The sink, not the UI
 
-The agent emits events on a `Sink`; it never imports the TUI and the TUI never
+The agent emits events on a `Sink`. It never imports the TUI, and the TUI never
 imports it. That is what makes headless mode, a sub-agent and tests all possible
 with one loop.
 
@@ -38,13 +38,13 @@ and the final `TurnEnd` outcome.
 
 The reasoning block gates on the session's `reasoning.hide`: when true, the
 loop drops thinking deltas before they reach any sink. Shown is the default (a
-zero-value config shows), so hiding must be explicit; a stale `show` key is an
-unrecognized setting and is ignored. This gating is display-only; it never
+zero-value config shows), so hiding must be explicit, and a stale `show` key is an
+unrecognized setting and is ignored. This gating is display-only, and it never
 changes what a retry keeps for retention or what gets assembled into
 the next request.
 
 `pkg/tui/sink` maps these almost 1:1 onto `tui.UI`. `NopSink` discards
-everything; a headless child agent uses it as an embedded base and overrides
+everything. A headless child agent uses it as an embedded base and overrides
 only the events that feed its activity row.
 
 ### The one-shot drain
@@ -70,7 +70,7 @@ Two constraints a non-TUI drain has to respect:
   from `TurnResult`, never inferred from the return value alone.
 - **The final answer is not a sink event.** The sink sees text deltas per block,
   not which block was last. The answer comes off `State.Messages` once the loop
-  settles; the front end therefore prints prose from the sink and reads state only
+  settles. The front end therefore prints prose from the sink and reads state only
 to decide it has finished.
 
 ### Tool-call progress
@@ -91,12 +91,12 @@ Constraints that keep it honest:
   progress can be matched to the right call even when ids arrive out of order.
 - The target is looked up **by argument name** (`path`, `file_path`, …), never by
   position: a marshalled Go map sorts its keys.
-- Progress must not repaint per token; rendering stays deterministic under test,
+- Progress must not repaint per token, so rendering stays deterministic under test,
   and an aborted turn never strands a row.
 
 ### Sink fan-out
 
-`Options.Sinks` is a slice; more than one consumer can watch turns without
+`Options.Sinks` is a slice, so more than one consumer can watch turns without
 displacing the recorder. The loop resolves it once and always emits on a single
 field: no sinks mean nothing, one sink is used as-is, two or more are forwarded to
 each member in registration order. Fan-out costs nothing at the hot path.
@@ -133,15 +133,15 @@ for each turn:
 
 Seeding appends. A `Prompt`/`PromptBatch` handed in while idle joins the steer
 queue ahead of whatever is already there, so a fresh prompt leads the next turn
-and accepted input is never wiped — a nested `PromptBatch` from an `OnSettled`
+and accepted input is never wiped. A nested `PromptBatch` from an `OnSettled`
 observer folds behind steering a sibling observer queued, and the leftovers of
 an errored turn (which returns without draining) fold behind the next prompt.
 
 Only an input carrying the message (text, blocks, or `After`) can start a turn.
 Framing-only inputs (only `Before` and delivery callbacks) pop as leads that
-fold into the turn the next message-carrying input starts; framing with nothing
+fold into the turn the next message-carrying input starts, and framing with nothing
 behind it lands through the same append path without a turn, so `Delivered` and
-`Settled` still fire. Nothing popped is ever dropped for emptiness — only an
+`Settled` still fire. Nothing popped is ever dropped for emptiness. Only an
 input with nothing at all to deliver skips the append (and its callbacks with
 it). Steer/FollowUp entries that cannot start a turn are no exception.
 
@@ -177,7 +177,7 @@ Two callers seed it: `Agent` exposes a base estimate so the front end can paint
 an honest bar before the first turn, and the stream itself calls `SetBase` with
 the real built request, which self-corrects whatever was seeded. Tool schemas join
 the base only once the tool block is **committed**, since `/tools` can still
-narrow the set before the first prompt; after that it can only widen, so the base
+narrow the set before the first prompt. After that it can only widen, so the base
 grows and never shrinks. A resumed branch with history has committed one already,
 and every context-tree jump (rewind, fork) re-seeds the base itself, because the
 ledger `session.State` builds carries none of its own.
@@ -203,7 +203,7 @@ arbitrary cap: the default is **unlimited** (`Options.MaxSteps <= 0`, the zero
 value), so a legitimate long turn is never cut short. A positive `MaxSteps`,
 when set, ends the turn cleanly with a notice once hit, not as an error. The cap
 is configurable: the `agent.maxSteps` config key (see config-design.md) is read
-once at startup; absent or non-positive means unlimited.
+once at startup, and absent or non-positive means unlimited.
 
 A step counts one model reply. Recovery, whether a stream re-request or the
 overflow compact-retry, reruns within the step and never advances it, so `MaxSteps` and
@@ -225,7 +225,7 @@ and assembly share one pass over the events:
 | `ThinkingEnd` | `EndThinking()` |
 | `TextEnd` | `EndText()` |
 
-Block boundaries come from the end events; deltas stream through. This keeps
+Block boundaries come from the end events, and deltas stream through. This keeps
 `EndThinking` before the first `Text`, which is what lets the TUI render a clean
 thinking block.
 
@@ -236,7 +236,7 @@ overloaded provider) is re-requested within the step a bounded number of times
 with transport-shaped backoff honouring `Retry-After`. Recovery never consumes a
 step: neither the re-request nor the overflow compact-retry advances it. An
 interrupt releases the backoff wait. A failed attempt appended nothing to state,
-so the retry sends the identical request; any block it left open is closed first
+so the retry sends the identical request. Any block it left open is closed first
 so the replacement renders into a fresh region, while a terminal failure leaves
 closing to `TurnEnd`'s flush, the same contract an interrupt uses. Permanent
 failures are never retried. Each retry re-enters the transport's own ladder
@@ -248,25 +248,25 @@ outages that outlast it, under a notice that names the wait.
 Interruption is cancellation, not draining:
 
 - `Prompt` derives a cancellable context and stores its cancel func under the
-  agent mutex; `Agent.Interrupt()` calls it. Key handling never touches the
+  agent mutex, and `Agent.Interrupt()` calls it. Key handling never touches the
   agent's internals.
-- `a.stream` starts one watcher goroutine that calls `stream.Close()` on
-  `ctx.Done()`, via the shared `llm.CloseOnDone` helper. Close abandons buffered
+- The stream starts one watcher goroutine that closes it on cancellation, via
+  the shared `llm.CloseOnDone` helper. Close abandons buffered
   events rather than draining them, so in-flight tokens are dropped at the
   boundary instead of being flushed out, keeping zero incoming tokens after an
   interrupt.
-- Tools receive the cancelled turn context; a tool that observes cancellation
+- Tools receive the cancelled turn context, so a tool that observes cancellation
   (e.g. `bash`) records its partial output as an **error result** marked
-  `interrupted by user`, appended in call order. `abortResults` keeps those real
-  results over the synthetic ones it fills in for calls that never returned.
+  `interrupted by user`, appended in call order. Real results keep
+  their place over the synthetic ones filled in for calls that never returned.
   A tool that only propagates the cancellation error gets the same marker: when
   the turn context is cancelled and the tool's error is `context.Canceled`,
-  `runTool` fills the empty error content with `interrupted by user` instead of
+  the loop fills the empty error content with `interrupted by user` instead of
   the raw transport text.
 - **Abort stops the batch.** Both dispatch paths check the turn context before
-  each launch, so a cancelled batch never starts new calls — parallel and serial
-  behave the same. Calls already running run to completion (a goroutine cannot
-  be killed); their results stand over synthetic fills, and `dispatch` returns
+  each launch, so a cancelled batch never starts new calls, whether parallel or
+  serial. Calls already running run to completion (a goroutine cannot
+  be killed), and their results stand over synthetic fills, while the batch returns
   only once every launched call has finished.
 - Step- and overflow-boundary compaction runs under the turn's own context, so
   an interrupt aborts it. Turn-boundary compaction keeps the outer context.
@@ -275,7 +275,7 @@ Interruption is cancellation, not draining:
 - A cancel recheck after every blocking boundary wait (the `AwaitInput` hold,
   the step compaction) ends the turn before the next append. A released hold
   therefore never records user messages against an aborted turn and never
-  fires `Delivered`/`Settled` for a boundary that never streamed — the price is
+  fires `Delivered`/`Settled` for a boundary that never streamed. The price is
   that a dropped input's submit reserve is released by the host's interrupt
   path (the steer queue's abort) rather than by `Settled`.
 - On abort the partial assistant message from the Accumulator is still appended,
@@ -284,7 +284,7 @@ Interruption is cancellation, not draining:
   dangling `tool_use` and the next Anthropic request 400s. That is the single
   most common way an agent ends up permanently broken.
 - The interrupted turn reports `TurnResult{Stop: StopAborted}` plus a visible
-  notice. No adapter ever emits `StopAborted`; only the agent sets it.
+  notice. No adapter ever emits `StopAborted` and only the agent sets it.
 
 The invariant behind the synthetic results: every cancelled or completed turn
 leaves `State.Messages` with each `ToolCallBlock` matched by a
@@ -295,8 +295,8 @@ leaves `State.Messages` with each `ToolCallBlock` matched by a
 The tool surface is an interface, keeping the loop decoupled from any concrete
 tool implementation and fully testable. A `Tool` declares its schema (what the
 model may call), whether it may run in parallel with siblings, and executes a
-call against an output writer that streams incremental tool output; the loop
-forwards those bytes to `sink.ToolOutput(callID, delta)`. The agent reads tools
+call against an output writer that streams incremental tool output, and the loop
+forwards those bytes to the sink. The agent reads tools
 through a narrow view that resolves one by name and returns the full schema set,
 so the registry stays behind one seam.
 
@@ -305,7 +305,7 @@ Dispatch rules:
 - **Serial by default.** Parallel only when every call in the batch is a
   `Parallel()` tool and `state.Model.Caps.ParallelTools` is set.
 - **Prompts force serial.** A `ToolSet` may implement the optional `Serializer`
-  interface (`MustSerialize(calls)`); when it reports true for a batch, dispatch
+  interface (`MustSerialize(calls)`). When it reports true, the batch
   runs serially even though every tool is parallel. block-all asks read-only
   tools too, and their dialogs must open in submission order. Racing them across
   goroutines would scramble prompt order against the calls' message
@@ -317,17 +317,21 @@ Dispatch rules:
   changes the prompt and breaks caching.
 - **Tool errors are results, not failures.** An erroring tool produces a
   `ToolResultBlock{IsError: true}` and the loop continues. Only transport or
-  context errors abort; they surface as a notice plus `TurnEnd{Err}`.
-- **Malformed arguments never reach the tool.** `runTool` answers a call whose
+  context errors abort, and they surface as a notice plus `TurnEnd{Err}`.
+- **Malformed arguments never reach the tool.** The loop answers a call whose
   arguments are not valid JSON with an error result before `Execute`, keeping
-  the failure on the call (invariant 7 in providers-design.md).
+  the failure on the call (invariant 7 in providers-design.md). The clipped raw
+  bytes ride that result as evidence, since they cannot marshal and would
+  otherwise vanish. The stored call carries `{}` instead (repaired by
+  `llm.RepairToolInputs` at append), so the transcript entry persists and its
+  tool result never orphans.
 - **A tool may end the turn** by returning `ToolResult{EndTurn: true}`: results
   are appended as usual and the loop stops with `StopEndTurn` instead of
   streaming another reply. It is how a control tool hands a phase to another
   model (see `plan-design.md`). Two rules make it safe. The signal rides on the
   **result**, so a tool that was never reached, whether denied by a guard or
-  given bad arguments, cannot silence the model. And `runTool` reports
-  `EndTurn && !IsError`, so a *rejected* control call always leaves the model
+  given bad arguments, cannot silence the model. And the loop only honors
+  `EndTurn` on a non-error result, so a *rejected* control call always leaves the model
   free to correct itself in the same turn. An earlier attempt keyed this off a
   marker interface checked before `Execute` ran, and a rejected call silently
   ended the turn.
@@ -366,7 +370,7 @@ Two kinds of mid-turn input:
   call). It returns false when idle, so the caller knows to start a new turn.
 - An `Input.Delivered` hook fires once its steer actually lands in `State`, so a
   sender that must confirm delivery (the sub-agent notifier) can clear pending
-  ids only on real arrival; one dropped by an interrupt is re-offered. Nil is
+  ids only on real arrival, and one dropped by an interrupt is re-offered. Nil is
   the normal case. It fires **before** `Input.After` resolves. The host clears
   its submit bucket there, and running the reads first would leave them counted
   in both that bucket and pending.
@@ -382,7 +386,7 @@ Two kinds of mid-turn input:
 - An `Input.Injected` flag marks system-provided context (sub-agent completion
   steers, permission-barrier notes) rather than a typed prompt. It rides onto
   the appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R /
-  up arrow) can exclude it; injected messages still appear in assembled context.
+  up arrow) can exclude it, while injected messages still appear in assembled context.
   Every injected text message is stamped `Replayed` at the single append site,
   so it survives resume and rewind repaints without each producer remembering
   to opt in. The live side is the reverse: an injected input is silent at
@@ -418,12 +422,12 @@ it.
   for push-steers.
 - **`Options.AwaitInput`**, when set, runs on the loop goroutine at the top of
   each step before any input drains and may block while the user finishes a
-  message. It takes the turn's context, so `Interrupt` releases it; draining
+  message. It takes the turn's context, so `Interrupt` releases it. Draining
   happens after it returns, so anything arriving during the hold lands in this
   same boundary. A cancel that releases the hold ends the turn at that boundary
   before anything appends: no user message lands, no `Delivered`/`Settled`
   fires, and the step compaction is skipped. Input accepted before the
-  interrupt stays dropped (see Interrupt); input accepted after it, while the
+  interrupt stays dropped (see Interrupt). Input accepted after it, while the
   turn is still unwinding, stays queued and is delivered by the next turn. The
   interactive driver's typing hold supplies it. nil disables.
 
@@ -439,17 +443,17 @@ it.
   hold at once so the tool runs without waiting out the draft. Only a call that
   genuinely needs a person (no classifier, or a deny/unsure verdict) waits for
   typing to settle before its dialog opens.
-- **`Options.OnToolBatch`**, when set, runs on the loop goroutine at the top of
-  `dispatch`, before any call runs, with one step's calls in message order and
+- **`Options.OnToolBatch`**, when set, runs on the loop goroutine before any call
+  runs, with one step's calls in message order and
   the turn's context (cancelled on abort). The parallel path races the calls
   against each other, so this is a host's only ordered view of a batch: it
   reserves ordered identity (`sub-N` numbering) and starts ahead-of-dialog work
-  such as permission classification (`permit.Prefetch`, `prompt-design.md`); a
+  such as permission classification (`permit.Prefetch`, `prompt-design.md`). A
   prefetched classification also stops when the dialog it fronts is answered, so
-  its request is never paid for twice. It must be cheap and never block; nil
+  its request is never paid for twice. It must be cheap and never block. Nil
   disables.
 
-Both wait for the loop boundary; neither interrupts the stream. `Interrupt`
+Both wait for the loop boundary and neither interrupts the stream. `Interrupt`
 drops everything queued (including any host inputs already handed over at a
 boundary) and cancels the running turn.
 
@@ -482,19 +486,19 @@ lands console state writes queued behind the turn (see `command-design.md`).
 
 `Options.OnSettled` is a slice of callbacks invoked on the loop goroutine once
 the queues are drained, nothing is running, and the last turn did not error.
-They run after the compaction hook at each real boundary; an observer that
+They run after the compaction hook at each real boundary. An observer that
 queues work (such as another `Prompt`) keeps the same outer `Prompt` alive
 because `runTurns` re-reads the queues before returning. An observer that always
 queues loops forever, exactly like a self-queueing follow-up does today.
 
 ## Concurrency rules
 
-- `State` is owned by the loop goroutine; the queue and `running` flag live
-  under `a.mu`.
-- All control methods (`Steer`, `FollowUp`, `Interrupt`, `Running`) take `a.mu`.
-  They never block on a stream; they only mutate the queue or cancel.
+- `State` is owned by the loop goroutine, and the queue and `running` flag live
+  under the agent mutex.
+- All control methods (`Steer`, `FollowUp`, `Interrupt`, `Running`) take the
+  agent mutex. They never block on a stream and only mutate the queue or cancel.
 - At a boundary only `Options.Compact` (its summariser call) and
-  `Options.AwaitInput` may block the loop goroutine; every other hook must be
+  `Options.AwaitInput` may block the loop goroutine. Every other hook must be
   cheap and non-blocking.
 - `Options.SystemSnippets` are extra system blocks appended after project
   instructions, an explicit input to `buildSystem` so sub-agents can inject

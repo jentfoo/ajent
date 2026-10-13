@@ -13,15 +13,15 @@ Configuration resolves lowest to highest precedence:
    reports `(default)` like any other source.
 2. **user** — the user's `~/.ajent/config.json`.
 3. **project** — `<workspace>/.ajent/config.json`, committed at the team's discretion.
-4. **local** — `<workspace>/.ajent/config.local.json`, never committed; overrides
-   project for machine-specific values.
+4. **local** — `<workspace>/.ajent/config.local.json`, never committed, and it
+   overrides project for machine-specific values.
 5. **env** — bound from `AJENT_*` variables, one per scalar key (a dotted path
    `p.q.r` binds to `AJENT_P_Q_R`). An unparseable number or boolean warns and
    keeps the lower layer rather than failing startup.
 6. **flag** — set by the caller at startup over an empty base. Only `model`
-   and `ui.render` ride it; the one-shot flags deliberately do not (see below).
+   and `ui.render` ride it, and the one-shot flags deliberately do not (see below).
 7. **session** — per-key session overrides that survive resume, recorded from
-   `/settings` and runtime mode cycles; empty at a fresh start.
+   `/settings` and runtime mode cycles, empty at a fresh start.
 Merge is per-key: objects fold deeply, arrays and scalars replace wholesale. A
 JSON `null` never replaces an object subtree (it cannot deep-fold), so it is
 ignored at merge time instead of stripping every default beneath it. Object keys
@@ -44,7 +44,7 @@ reads back as removal rather than re-applying.
 A `Set` is safe for concurrent use: settings are read while a turn runs (the
 prompt pump, mid-turn compaction) and written from key handlers on another
 goroutine (a permission mode cycle never waits for the turn). A mutex
-serializes layer writes and merge; each merged `Resolved` is immutable once
+serializes layer writes and merge, and each merged `Resolved` is immutable once
 built, so readers hold a stable snapshot across later writes.
 
 ## The schema
@@ -62,7 +62,7 @@ package parsing its own.
 `model` is the model a fresh start defaults to, resolved through normal layer
 precedence and handed to the registry before discovery runs. A `/model` change
 writes the selection to the **user** layer in addition to the session override,
-so the next start keeps the most recent choice; there is no separate last-used
+so the next start keeps the most recent choice, and there is no separate last-used
 key. The `/settings` Model row routes through the same picker but defers its
 persistence to the save-to-layer prompt, so a "this session only" answer leaves
 the config files untouched like every other settings row. Because the write
@@ -74,7 +74,7 @@ an `-m` flag still outranks it, and a resumed session replays its own
 
 The permission block has a compiled-in default mode, so `Explain` on it resolves
 and reports `(default)`. The mode name is one of the barrier's modes (see
-`permit`); `AJENT_PERMISSIONS_MODE` binds for free through EnvLayer. It seeds a
+`permit`), and `AJENT_PERMISSIONS_MODE` binds for free through EnvLayer. It seeds a
 session's live barrier at startup from the resolved config default, and a
 `Shift+Tab` or `Shift+←/→` cycle, or `/settings`, applies to that live barrier.
 The configured mode is authoritative on every start: a session resumes with its
@@ -85,7 +85,7 @@ save to user/project layer like any other enum row.
 `safeCommands` lists exact MCP/extension tool names or bash command lines that
 auto-allow as read-only in allow-read/auto. A single shell entry matches at a
 token boundary, so `git` covers every git invocation and `git status` its
-subcommands; a compound line (`cd … && make lint | tail`) instead requires
+subcommands, while a compound line (`cd … && make lint | tail`) instead requires
 **every** component to be either a listed entry or verifiably read-only.
 Wrapping in `cd`/pipe never defeats the match, and an appended write can't ride
 in on a listed prefix. It can never name a core writer (`write`, `edit`) or
@@ -106,7 +106,7 @@ refused when *any* component matches, so nesting a denied command behind
 `cd … &&` never escapes it. Two fail-closed decisions close former evasions:
 leading `KEY=VALUE` assignments are skipped before the head match on the deny
 side only, an env-prefixed head refusing like its bare form while a safe
-listing never blesses one; and an interpreter-read here-document body is
+listing never blesses one. An interpreter-read here-document body is
 deny-scanned like a `-c` payload, other readers keeping their bodies inert
 data. A payload living outside the line (`cat x | sh`) stays beyond any static
 matcher, covered by the approval dialog rather than scanning. It may also name
@@ -132,7 +132,7 @@ the file's own values. A headless run therefore:
   read. `safeCommands` and `deniedCommands` apply as configured, exactly as
   interactive.
 
-The flag surface itself lives in `flags.go`; per the README contract every scope
+The flag surface itself lives in `flags.go`, and per the README contract every scope
 flag also has its entry there. See `tools-design.md` "Headless: the tool set is
 the gate" for the rule.
 
@@ -152,16 +152,16 @@ has no `AJENT_*` binding.
 ### Subagent
 
 The `subagent` block ships compiled-in `maxConcurrent` and `maxPollWait`
-defaults; `model` is deliberately left out so `Explain` on it reports
+defaults, and `model` is deliberately left out so `Explain` on it reports
 `(default)` and an empty value means inherit the session model. All three bind
 for free through EnvLayer's reflection (`AJENT_SUBAGENT_MODEL`,
 `AJENT_SUBAGENT_MAXCONCURRENT`, `AJENT_SUBAGENT_MAXPOLLWAIT`), but only the
 first two are edited from `/settings`. `maxPollWait` is startup-time
 configuration like `agent.maxSteps`: pkg/app builds the sub-agent manager once,
 so a session override could never reach a live poll window. It is a Go duration
-string (`"20m"`, `"90s"`); an unparseable or negative value is a startup
+string (`"20m"`, `"90s"`). An unparseable or negative value is a startup
 warning that falls back to the compiled-in default, which twins pkg/subagent's
-`defaultPollTimeout`.
+own default.
 
 Per `## The rule` below, `subagent.model` is a plain
 string key, resolved against the model registry by the caller, never an llm
@@ -173,7 +173,7 @@ The agent block holds `maxSteps`, an **optional** cap on one turn's tool-calling
 iterations, and `turnRetries`, how often a failed model call is re-requested
 within a step (a permanent failure never retries, and `0` keeps the default rather
 than disabling). Both are deliberately absent from the defaults
-layer, so `Explain` reports `(default)`; `AJENT_AGENT_MAXSTEPS` and
+layer, so `Explain` reports `(default)`, and `AJENT_AGENT_MAXSTEPS` and
 `AJENT_AGENT_TURNRETRIES` bind for free through EnvLayer. They are startup-time
 configuration: pkg/app copies them into `agent.Options` once at process start,
 so they are deliberately absent from `/settings`, whose session overrides could
@@ -196,9 +196,9 @@ never at runtime.
 
 `ui.color` is a `tui.ColorProfile` name defaulting to `"auto"`, read once beside
 `ui.render` and, like it, absent from `/settings`: the theme is built before
-`tui.New` returns. `auto` detects from `TERM` and `COLORTERM`; any other value
+`tui.New` returns. `auto` detects from `TERM` and `COLORTERM`. Any other value
 names the depth outright, which is the escape hatch for a terminal we classify
-badly in either direction; `AJENT_UI_COLOR=none` is the per-invocation form. An
+badly in either direction. `AJENT_UI_COLOR=none` is the per-invocation form. An
 unknown name warns and falls back to detection rather than exiting, since a bad
 colour name is not worth a failed startup (`ui.render` still exits, because
 there is no safe paint mode to guess). `NO_COLOR` is still honoured beneath it
@@ -213,8 +213,8 @@ the **user** layer and records a session override, so a project pin still
 outranks it. Unlike `ui.render` the palette *can* change at runtime:
 `/settings → Theme` recolors the live UI, and a resumed session applies its
 override before the transcript replays (see tui-design.md, "Semantic styling").
-A first run with nothing configured then continues into the setup wizard; see
-providers-design.md, "First-run setup".
+A first run with nothing configured then continues into the setup wizard (see
+providers-design.md, "First-run setup").
 
 `ui.images` names a terminal image protocol (`kitty`, `iterm2`, `none`) and
 defaults to detection, forcing the capability the way `ui.color` forces depth.
@@ -233,6 +233,26 @@ Saving re-marshals an order-preserving object tree: unknown keys and key order
 survive, formatting is normalized, comments are dropped. When the target file
 already carries `//` comments the save warns that they will be lost. Writes go
 through `WriteFileAtomic` with secret permissions.
+
+A save is a whole-file replacement, so without coordination two concurrent
+sessions compose last-writer-wins over every key. User-layer saves and
+`llm.SaveUserFile` therefore hold a cross-process advisory lock across the
+entire read-modify-write through `config.LockSave`, a single exclusive flock
+on one lock file in the config directory shared by every locked writer.
+One file suffices because every locked target lives there and each write
+takes milliseconds. A leftover lockfile after a crash is inert, since the
+kernel releases flock on process death. Where flock does not exist the file
+is never created.
+
+Acquisition must never block dispatch, because command handlers run inline on
+the prompt pump. `LockSave` polls briefly and then proceeds
+unlocked, as it does wherever locking is unavailable. Degradation is silent,
+since locking may not turn saves into errors or a hang ("a failed save stays
+a warning"). The project layer deliberately stays outside the lock, where a
+lockfile would be permanent untracked clutter in the user's repo. The
+best-effort caches (`llm.SaveCache`, update check) stay outside it too,
+because they read outside the writer so a write-side lock closes nothing.
+Session files are covered in session-design.md.
 
 `OverlayJSON` exposes the same preservation rule for typed saves elsewhere:
 struct-marshaled JSON overlays a file's contents, keeping keys the given schema
@@ -257,7 +277,7 @@ Two TTLs bound it: the fetched version is reused for a while before the tags
 endpoint is hit again, and an update notice is shown at most once per interval.
 The check only reports for real builds, never `dev`, which is always behind by
 design, and compares clean `vX.Y.Z` tags strictly. A failed fetch keeps the
-stale cached tag; when it already holds a newer release the notice is still
+stale cached tag. When it already holds a newer release the notice is still
 reported, so going offline past the TTL never hides a known update. Only a
 failed check with no cached version to fall back on reports an error. Both
 writes are best-effort, so a broken cache directory cannot break startup.
