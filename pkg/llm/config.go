@@ -374,7 +374,9 @@ func LoadUserFile() (File, []string, error) {
 }
 
 // SaveUserFile writes the models file to the ajent configuration directory,
-// atomically and with secret permissions since it may hold a literal key.
+// atomically and with secret permissions since it may hold a literal key. A
+// bounded cross-process lock covers the read-modify-write, like config.json's
+// user layer.
 //
 // f overlays the existing file: fields the File schema declares follow f, and
 // unrecognized keys anywhere in the current contents survive the rewrite. The
@@ -388,6 +390,9 @@ func SaveUserFile(f File) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	release := config.LockSave(path)
+	defer release()
 
 	var warns []string
 	raw, err := os.ReadFile(path)

@@ -212,6 +212,50 @@ func TestSave(t *testing.T) {
 		assert.Equal(t, "high", raw["reasoning"].(map[string]any)["level"])
 	})
 
+	t.Run("user_save_takes_sidecar_lockfile", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+
+		_, err = s.Save("user", "model", "p/m")
+		require.NoError(t, err)
+		assert.FileExists(t, s.userPath+".lock")
+	})
+
+	t.Run("project_save_skips_sidecar", func(t *testing.T) {
+		home := t.TempDir()
+		ws := filepath.Join(home, "proj")
+		t.Setenv("AJENT_HOME", home)
+		s, _, err := Load(Options{Workspace: ws})
+		require.NoError(t, err)
+
+		_, err = s.Save("project", "model", "p/m")
+		require.NoError(t, err)
+
+		_, err = os.Stat(filepath.Join(ProjectDir(ws), ConfigFileName) + ".lock")
+		assert.True(t, os.IsNotExist(err)) // no lockfile litter in the user's repo
+	})
+
+	t.Run("save_proceeds_when_sibling_holds_lock", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+
+		// a sibling process holding the sidecar degrades the save to unlocked
+		held, err := os.OpenFile(s.userPath+".lock", os.O_CREATE|os.O_RDWR, SecretPerm)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = held.Close() })
+		require.NoError(t, lockExclusive(held))
+		shortenWait(t)
+
+		warns, err := s.Save("user", "reasoning.level", "high")
+		require.NoError(t, err)
+		assert.Empty(t, warns)
+		assert.Equal(t, "high", s.Settings().Reasoning.Level)
+	})
+
 	t.Run("unknown_layer_errors", func(t *testing.T) {
 		s, _, err := Load(Options{Workspace: "."})
 		require.NoError(t, err)

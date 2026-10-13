@@ -366,6 +366,10 @@ func TestSaveUserFile(t *testing.T) {
 		assert.Zero(t, info.Mode().Perm()&0o077)
 	}
 
+	lockPath, err := config.UserPath(ModelsFileName + ".lock")
+	require.NoError(t, err)
+	assert.FileExists(t, lockPath) // user-file saves take the cross-process sidecar lock
+
 	t.Run("unknown_keys_survive_a_rewrite", func(t *testing.T) {
 		path, err := config.UserPath(ModelsFileName)
 		require.NoError(t, err)

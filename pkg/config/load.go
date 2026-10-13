@@ -237,6 +237,11 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	}
 	path := target.path
 
+	if target.locked {
+		release := LockSave(path)
+		defer release()
+	}
+
 	var warns []string
 	raw, err := os.ReadFile(path)
 	switch {
@@ -272,9 +277,12 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 func (s *Set) layerForSave(layer string) *fileLayer {
 	switch layer {
 	case "user":
-		return &fileLayer{path: s.userPath, set: func(d []byte) { s.user = Layer{Name: "user", Path: s.userPath, Data: d}; s.valid = false }}
+		return &fileLayer{path: s.userPath, locked: true,
+			set: func(d []byte) { s.user = Layer{Name: "user", Path: s.userPath, Data: d}; s.valid = false }}
 	case "project":
-		return &fileLayer{path: s.projPath, set: func(d []byte) { s.project = Layer{Name: "project", Path: s.projPath, Data: d}; s.valid = false }}
+		// unlocked: a .lock sidecar here is permanent untracked clutter in the user's repo
+		return &fileLayer{path: s.projPath,
+			set: func(d []byte) { s.project = Layer{Name: "project", Path: s.projPath, Data: d}; s.valid = false }}
 	default:
 		return nil
 	}
@@ -284,6 +292,9 @@ func (s *Set) layerForSave(layer string) *fileLayer {
 type fileLayer struct {
 	path string
 	set  func(data []byte)
+	// locked holds the cross-process sidecar lock across the read-modify-write;
+	// off for layers whose directory must not grow stray files.
+	locked bool
 }
 
 // loadFile reads and validates one config file into relaxed data. A missing file
