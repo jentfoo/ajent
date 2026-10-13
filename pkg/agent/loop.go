@@ -365,10 +365,16 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 			continue // a fully-empty input carries nothing to deliver
 		}
 		if len(blocks) > 0 {
-			a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: blocks}, Injected: in.Injected})
-			// injected steers have no submission echo, surface them live like replay does
-			if in.Injected && !llm.OnlyToolResults(blocks) {
-				a.sink.UserPrompt(in.Text)
+			// injected text is marked for replay redraw and echoes live only when
+			// the producer named one. Tool-result-only content rides the tool path
+			// on both ends and stays unmarked
+			visible := in.Injected && !llm.OnlyToolResults(blocks)
+			a.append(MessageInfo{
+				Message:  llm.Message{Role: llm.RoleUser, Content: blocks},
+				Injected: in.Injected, Replayed: visible,
+			})
+			if visible && in.Echo != "" {
+				a.sink.UserPrompt(in.Echo)
 			}
 		}
 		// delivery is confirmed only when the message actually lands, and fires

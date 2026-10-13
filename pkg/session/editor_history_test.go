@@ -163,7 +163,7 @@ func TestEditorHistoryRecent(t *testing.T) {
 	t.Run("hidden_newer_copy_keeps_typed_line", func(t *testing.T) {
 		h := newTestHistory(t, t.TempDir())
 		h.Append("git status")       // typed by the user
-		h.AppendHidden("git status") // later argv bootstrap reuses the same text
+		h.AppendHidden("git status") // a later hidden copy reuses the same text
 		assert.Contains(t, h.Recent(), "git status", "a hidden copy must not hide a real typed line")
 	})
 
@@ -235,7 +235,7 @@ func TestEditorHistoryCompact(t *testing.T) {
 	t.Run("mixed_hidden_text_stays_visible_on_disk", func(t *testing.T) {
 		h := newTestHistory(t, t.TempDir())
 		h.Append("git status")       // typed by the user
-		h.AppendHidden("git status") // later argv bootstrap reuses the text
+		h.AppendHidden("git status") // a hidden copy reuses the text
 		h.Compact()
 		assert.Equal(t, []string{"git status"}, storedMessages(h.path), "a hidden copy must not erase a typed line on disk")
 	})

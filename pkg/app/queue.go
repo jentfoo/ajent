@@ -81,7 +81,8 @@ func (s *steerQueue) hold(in agent.Input, label string, est int) {
 // provenance change starts a new input, so a mixed user + system batch keeps
 // per-item attribution on the transcript rows instead of one OR-ed flag. The
 // final run clears accounting once everything behind it has landed. Each run
-// echoes its labels as its message lands. Blocks concatenate in queue order
+// echoes its labels as its message lands, so Input.Echo is never carried: a
+// loop-side echo too would draw twice. Blocks concatenate in queue order
 // across a run's items, so the joined message need not match any one label.
 func (s *steerQueue) join() []agent.Input {
 	type runAcc struct {

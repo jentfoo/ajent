@@ -331,7 +331,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// typing gate's dialog hold, so an approval dialog never steals a draft's focus.
 		po.Prompter = promptAdapter{ui: ui, hold: gate.holdDialog, path: command.NewPathCompleter(idx)}
 		po.Noter = func(note string) {
-			ag.Steer(agent.Input{Text: note, Injected: true}) // system context, not a user prompt
+			// system context, not a user prompt, echoed where it lands
+			ag.Steer(agent.Input{Text: note, Echo: note, Injected: true})
 		}
 		// the full diff is already committed above the dialog by guardedTool.Execute,
 		// so the subject names it rather than repeating a truncated copy.
@@ -599,11 +600,11 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		pump, ag, console, stager, expander, rec != nil, ui, started,
 		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)
 
-	if len(args) > 0 { // an argv prompt is programmatic input, not a typed line
+	if len(args) > 0 { // an argv prompt is the user's own input, recalled like a typed line
 		initial := strings.Join(args, " ")
-		hist.AppendHidden(initial) // durable in the workspace store yet excluded from ↑/↓ and Ctrl+R
+		hist.Append(initial) // durable in the workspace store for ↑/↓ and Ctrl+R
 		// echo and accounting happen in the pump like every other prompt.
-		send(pumpLine{kind: command.KindPrompt, rest: initial, injected: true})
+		send(pumpLine{kind: command.KindPrompt, rest: initial})
 	}
 
 	// teardown order is load-bearing: cancel the root, interrupt, bounded drain

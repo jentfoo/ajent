@@ -17,9 +17,8 @@ import (
 )
 
 type pumpLine struct {
-	kind     command.Kind
-	rest     string
-	injected bool // non-typed input, excluded from transcript-derived prompt recall
+	kind command.Kind
+	rest string
 	// blocks are image payloads captured from clipboard tokens in rest, appended
 	// to the turn's input after the text.
 	blocks []llm.Block
@@ -179,7 +178,6 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 		Blocks:   line.blocks, // clipboard images ride after the text
 		Before:   before,
 		After:    res.Run,
-		Injected: line.injected,
 		Prepared: true, // expanded here, the append seam must not re-expand
 	}, submittedEcho(line.rest), res.Est // blank stays silent: an image-only turn renders its own row
 }

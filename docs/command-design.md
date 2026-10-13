@@ -359,11 +359,12 @@ exit-status, interruption and truncation markers already baked in by the tool
 itself. The message is appended as **injected** context (see
 `agent-loop-design.md`), so prompt recall excludes it; dropping the synthetic
 pair also removes the Anthropic duplicate-`tool_use`-id hazard for staged runs.
-It is also marked **replayed**, the one kind of injected context that belongs in
-restored scrollback: a resume or rewind redraws it above the prompt it fed
-rather than leaving the model holding something the user can no longer see (see
-`session-design.md`). Once flushed, `Flush` reports the staged total back to
-zero: the submission's estimate owns those tokens from then on.
+It is also marked **replayed**, so a resume or rewind redraws it above the
+prompt it fed rather than leaving the model holding something the user can no
+longer see. That mark is stamped on every injected text message at the append
+site (see `agent-loop-design.md`), so staged runs and steered notices restore
+alike. Once flushed, `Flush` reports the staged total back to zero: the
+submission's estimate owns those tokens from then on.
 
 **Excluded runs (`!!`).** `Run(cmd, true)` executes and displays exactly like a
 staged run (same bash path, same streaming sink, same barrier exemption), but

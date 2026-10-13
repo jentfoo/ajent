@@ -195,6 +195,11 @@ puts it back into the editor: a crash or exit while parked must not silently
 turn the next arbitrary prompt into the plan of record. The draft is cleared
 once the gate passes.
 
+Phase kickoffs are injected messages carrying the replay mark, so a resume
+redraws each one as its own collapsed block above the turn it fed rather than
+echoing it as a typed prompt. The phase notice ("implementing with ..." /
+"reviewing with ...") is not replayed; the kickoff block carries the premise.
+
 Because ending a workflow leaves HEAD at the review tip while the file tail is
 an implementation entry, resume must prefer the live head over the tail
 (`resumeHead`); the same divergence already existed after a rewind.

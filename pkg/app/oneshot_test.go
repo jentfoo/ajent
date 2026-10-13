@@ -681,6 +681,40 @@ func TestRunHeadless(t *testing.T) {
 		assert.Equal(t, "nightly", list[0].Name)
 	})
 
+	t.Run("prompt_records_for_recall", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("AJENT_HOME", t.TempDir())
+		set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
+		require.NoError(t, err)
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+
+		sp := &llm.ScriptedProvider{ProviderName: "p", Turns: []llm.ScriptedTurn{{Events: textTurn("answer")}}}
+		var out, errw bytes.Buffer
+		code := RunHeadless(HeadlessOptions{
+			Prompt: "recall me", Output: OutputText, Set: set, Reg: reg,
+			Active: model, SessMode: ResumeNewSession,
+			Out: &out, Errw: &errw,
+			Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		})
+		require.Equal(t, ExitOK, code, errw.String())
+
+		// the prompt recalls from both surfaces a typed line feeds: editor history
+		// for ↑/↓ and the unmarked transcript entry for Ctrl+R
+		store, serr := session.NewStore()
+		require.NoError(t, serr)
+		transcripts, terr := store.Prompts(config.Cwd())
+		require.NoError(t, terr)
+		recalled := make([]string, 0, len(transcripts))
+		for _, p := range transcripts {
+			recalled = append(recalled, p.Text)
+		}
+		assert.Contains(t, recalled, "recall me")
+		hist, herr := session.NewEditorHistory(store, config.Cwd(), secretPrefix)
+		require.NoError(t, herr)
+		assert.Contains(t, hist.Recent(), "recall me")
+	})
+
 	t.Run("no_model_exits_one", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv("AJENT_HOME", t.TempDir())

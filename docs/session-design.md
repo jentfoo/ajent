@@ -208,14 +208,13 @@ queue capped at the same line budget as recall, and retried by the next
 compaction. A retry that fails keeps the queue, so the lines stay recallable
 this session rather than being dropped by the failed rewrite.
 
-Most rows are bare JSON strings (visible). Non-editor input that must still be
-durable (an `ajent "prompt"` argv bootstrap line) is written via `AppendHidden`
-as a marked hidden row so it survives restart and compaction yet never surfaces
-in ↑/↓ or Ctrl+R; the corresponding turn also carries `Input.Injected` so
-transcripts exclude it from prompt recall. Hidden rows are otherwise treated
-like any other line for dedup, cap and secret filtering. A text is excluded from
-recall only when **every** occurrence was hidden, so a programmatic bootstrap
-reusing an earlier typed line never hides the user's own input.
+Most rows are bare JSON strings (visible). Argv bootstrap prompts (`ajent
+"prompt"`) and the `-p` one-shot record like typed lines: visible in ↑/↓ and
+Ctrl+R, their turns carrying no `Input.Injected` mark so transcript-derived
+recall includes them too. Only slash commands ride `AppendHidden`, durable yet
+never recalled. A text is excluded from recall only when **every** occurrence
+was hidden, so a slash command reusing an earlier typed prompt's text never
+hides the user's own input.
 
 Recall (`EditorHistory.Recent`) reads the file plus this process's unflushed
 (failed) appends, dedups to each text's most recent occurrence, drops texts
@@ -255,9 +254,10 @@ Two consumers read the transcript back:
 - **Replay** re-submits a restored branch to a sink (`session.Replay`), so a
   rewound or resumed session shows its history as fresh committed lines rather
   than erasing scrollback. User prompts open their own turn through `UserPrompt`
-  and assistant content carries stop reason and usage; thinking is off by
-  default because it reads as noise on resume (see `tui-design.md`, "Rewind and
-  resume" for the full rendering rules).
+  and assistant content carries stop reason and usage; injected messages marked
+  `replayed` redraw as their own block (first line the label) without opening a
+  turn. Thinking is off by default because it reads as noise on resume (see
+  `tui-design.md`, "Rewind and resume" for the full rendering rules).
 
 Both share one invariant carried over from the agent loop: the rebuilt context
 must stay well formed (every `ToolCallBlock` matched by a `ToolResultBlock`) or

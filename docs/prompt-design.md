@@ -94,13 +94,12 @@ tool path itself, so what the model sees is byte-for-byte honest about how the
 command ended. The user role plus the `User Ran:` voice *is* the provenance
 marker the model reads. A `!!` run sends nothing to the model.
 
-The `Input.Before` entry carrying it is an `agent.MessageInfo`, which is where
-the one piece of metadata does ride: `Replayed`. It marks the message as
-injected context that still belongs on screen, so a resume or rewind redraws the
-run above the prompt it fed instead of showing a prompt whose premise has
-vanished. Replay draws it as its own block (first line the label, remainder the
-body), collapsed through the normal output head rather than shown whole as the
-live run was.
+The `Input.Before` entry carrying it is an `agent.MessageInfo`, whose `Replayed`
+mark is what puts it back on screen: injected context the model still carries
+belongs in restored scrollback, so a resume or rewind redraws the run above the
+prompt it fed instead of showing a prompt whose premise has vanished. Replay
+draws it as its own block (first line the label, remainder the body), collapsed
+through the normal output head rather than shown whole as the live run was.
 
 ---
 
@@ -604,11 +603,11 @@ prepended when the caller supplied them.
 
 **Completion steer.** When an investigation finishes unpolled, one batched
 notice is injected at the next step or turn boundary as an injected user
-message, prefixed `[system]` so the model reads it as generated context rather
+message, prefixed `[tool]` so the model reads it as generated context rather
 than operator speech:
 
 ```
-[system] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.
+[tool] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.
 ```
 
 The keyed UI notice naming the same completions is front-end text only and

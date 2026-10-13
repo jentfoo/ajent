@@ -552,13 +552,32 @@ func TestGuardDoomedEditRunsInsteadOfPrompting(t *testing.T) {
 	t.Parallel()
 
 	failDryRun := func(agent.ToolCall) error { return errors.New("missing") }
-	b := newTestBarrierOpts(newFakePrompter(), Options{DryRun: failDryRun})
-	d := b.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`))
-	assert.Equal(t, tools.ActionAllow, d.Action)
+	edit := call("edit", `{"path":"x.go","edits":[]}`)
+
+	cases := []struct {
+		name string
+		mode Mode
+		want tools.Action
+	}{
+		// the allowance holds in every mode: a prompt cannot make a failing call
+		// succeed, so the model gets the edit's natural error instead
+		{"allow_all_runs", ModeAllowAll, tools.ActionAllow},
+		{"allow_read_runs", ModeAllowRead, tools.ActionAllow},
+		{"auto_runs", ModeAuto, tools.ActionAllow},
+		{"auto_write_runs", ModeAutoWrite, tools.ActionAllow},
+		{"block_all_runs", ModeBlockAll, tools.ActionAllow},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			b := newTestBarrierOpts(newFakePrompter(), withMode(Options{DryRun: failDryRun}, c.mode))
+			d := b.Guard()(t.Context(), edit)
+			assert.Equal(t, c.want, d.Action)
+		})
+	}
 
 	// without a dry run the barrier cannot predict and prompts
-	b2 := newTestBarrier(newFakePrompter())
-	d = b2.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`))
+	b := newTestBarrier(newFakePrompter())
+	d := b.Guard()(t.Context(), edit)
 	assert.Equal(t, tools.ActionAsk, d.Action)
 }
 

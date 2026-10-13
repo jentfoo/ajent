@@ -383,8 +383,11 @@ Two kinds of mid-turn input:
   steers, permission-barrier notes) rather than a typed prompt. It rides onto
   the appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R /
   up arrow) can exclude it; injected messages still appear in assembled context.
-  A `MessageInfo.Replayed` mark opts one back into restored scrollback. Staged
-  `!` runs set it, so a resume redraws what the model is still carrying.
+  Every injected text message is stamped `Replayed` at the single append site,
+  so it survives resume and rewind repaints without each producer remembering
+  to opt in. The live side is the reverse: an injected input is silent at
+  delivery unless its producer sets `Input.Echo`, keeping the one-echo rule
+  between hosts that echo at submit and steers that land mid-turn.
 - **`Input.Before` and `Input.After`** frame one input. Before is context that
   predates the message, such as staged `!` output or `/init`'s survey. It is a
   `[]MessageInfo` appended ahead of it, so each entry carries its own marks

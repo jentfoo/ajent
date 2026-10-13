@@ -19,8 +19,8 @@ const maxHistoryLines = 1000
 const historyFileName = "editor-history.lines"
 
 // histLine is one persisted message plus whether it may be offered for recall.
-// Hidden lines (e.g. an argv bootstrap prompt) are durable but never surface in
-// Up/Down or Ctrl+R, so they stay distinct from editor-typed messages.
+// Hidden lines (slash commands) are durable but never surface in Up/Down or
+// Ctrl+R, so they stay distinct from editor-typed messages.
 type histLine struct {
 	msg    string
 	hidden bool // persisted yet excluded from Recent()/RecallIndex

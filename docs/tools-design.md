@@ -230,7 +230,8 @@ Every scope installs the interactive barrier's decision inputs, classifier
 included, so a call is judged by one rule set and only the dialog differs.
 `permissions.safeCommands` skip a review they would otherwise need, write roots
 scope auto+write, and the registry dry-run lets a doomed edit surface its
-natural error. A prompter that cannot open a dialog (plain render in an
+natural error in every mode, block-all included, since approval cannot make a
+failing call succeed. A prompter that cannot open a dialog (plain render in an
 interactive session) settles asks through this same unattended path, so
 permission behavior follows whether a dialog can open here, never which front
 end is attached.

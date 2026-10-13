@@ -640,8 +640,8 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 		"the turn must be in flight before steering is accepted")
 
 	assert.True(t, a.Steer(Input{Text: "steered!"}))
-	// an injected steer surfaces live (no submission echo) while the typed one stays silent
-	assert.True(t, a.Steer(Input{Text: "Allowed with note: keep it", Injected: true}))
+	// an injected steer with an echo surfaces live (no submission echo) while the typed one stays silent
+	assert.True(t, a.Steer(Input{Text: "Allowed with note: keep it", Echo: "Allowed with note: keep it", Injected: true}))
 	close(block) // release the tool, the next step boundary drains the steers
 
 	require.NoError(t, <-errCh)
@@ -661,6 +661,54 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{"user:Allowed with note: keep it"}, live) // only the injected steer echoes
+}
+
+// appendSteer marks every injected text for replay redraw, while the live echo
+// waits for an explicit one: producers that already echoed at submit (the argv
+// prompt, /init) stay silent here.
+func TestLoopSteerReplayMarkAndEcho(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		in         Input
+		wantEcho   []string
+		wantMarked bool
+	}{
+		{"typed_stays_silent_unmarked", Input{Text: "typed"}, nil, false},
+		{"injected_marked_no_echo", Input{Text: "kickoff", Injected: true}, nil, true},
+		{"injected_echoes_and_marks", Input{Text: "note", Echo: "note", Injected: true}, []string{"user:note"}, true},
+		{"tool_results_silent_unmarked", Input{Injected: true, Blocks: llm.BlockList{
+			llm.ToolResultBlock{CallID: "c1", Content: llm.BlockList{llm.TextBlock{Text: "out"}}},
+		}}, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var infos []MessageInfo
+			sink := &recordingSink{}
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+			a := newTestAgent(nil, p, sink)
+			a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { infos = append(infos, info) }}
+
+			err := a.Prompt(t.Context(), tc.in)
+			require.NoError(t, err)
+
+			var marked bool
+			for _, info := range infos {
+				if info.Injected {
+					marked = info.Replayed
+				}
+			}
+			assert.Equal(t, tc.wantMarked, marked)
+			var live []string
+			for _, c := range sink.calls {
+				if strings.HasPrefix(c, "user:") {
+					live = append(live, c)
+				}
+			}
+			assert.Equal(t, tc.wantEcho, live)
+		})
+	}
 }
 
 const (

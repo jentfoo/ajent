@@ -18,6 +18,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/mcp"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/refs"
+	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -267,6 +268,16 @@ func RunHeadless(o HeadlessOptions) int {
 			cfg:         func() config.Compaction { return o.Set.Settings().Compaction },
 		}
 	}
+
+	// the one-shot prompt recalls like a typed line: editor history for ↑/↓ and
+	// Ctrl+R, while the transcript carries it unmarked. Recording off leaves no
+	// store, so history stays empty
+	var hist *session.EditorHistory
+	if store := promptStore(rec); store != nil {
+		hist, _ = session.NewEditorHistory(store, config.Cwd(), secretPrefix)
+		defer hist.Compact() // bounded rewrite at exit, a failed append flushes here
+	}
+	hist.Append(o.Prompt)
 
 	// expand @ references like the pump does, once the scope has settled
 	expander.Seed(st.Messages) // --continue reopens a transcript that holds ref ids

@@ -716,10 +716,11 @@ func (b *Barrier) gateNow() gate {
 // staticVerdict computes the guard's verdict for call under mode without blocking.
 // Branch order is load-bearing: a configured denied command refuses first, before
 // even allow-all or user-initiation. auto+write's in-scope write runs next, so a
-// config denial still outranks it. block-all asks even verifiably read-only
-// calls, and a doomed edit runs so its natural error surfaces instead of prompting.
-// A configured safe command overrides a prompt but never a reject, and still
-// respects block-all (nothing auto-runs there).
+// config denial still outranks it. A doomed edit runs in every mode, block-all
+// included, so its natural error reaches the model: approval cannot make a
+// failing call succeed. Otherwise block-all asks even verifiably read-only calls,
+// and a configured safe command overrides a prompt but never a reject, still
+// respecting block-all (nothing else auto-runs there).
 func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Decision {
 	m := g.mode
 	// a user-issued ! line runs regardless of config denial or mode
@@ -741,8 +742,9 @@ func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Deci
 	case VerdictReject:
 		return tools.Deny(rejectionReason(call))
 	case VerdictPrompt:
-		// a doomed edit runs so its natural error surfaces instead of prompting.
-		if call.Name == "edit" && g.dryRun != nil && g.dryRun(call) != nil {
+		// a doomed edit runs so its natural error surfaces instead of prompting,
+		// even under block-all where approval cannot change the outcome
+		if g.doomedEdit(call) {
 			return tools.Allow(call)
 		}
 		// a config-declared safe command skips the prompt, otherwise ask. A hard
@@ -753,10 +755,16 @@ func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Deci
 	}
 	// VerdictAllow, or a Prompt matched by a configured safe command: auto-run
 	// unless block-all prompts everything (reads included).
-	if m == ModeBlockAll { // nothing auto-runs but ! lines under block-all
+	if m == ModeBlockAll {
 		return askDecision()
 	}
 	return tools.Allow(call)
+}
+
+// doomedEdit reports whether the edit tool's dry run predicts the call will fail,
+// so its natural error reaches the model instead of a prompt that cannot matter.
+func (g gate) doomedEdit(call agent.ToolCall) bool {
+	return call.Name == "edit" && g.dryRun != nil && g.dryRun(call) != nil
 }
 
 // DenyMatches reports whether call is named by a configured denied command: an exact
