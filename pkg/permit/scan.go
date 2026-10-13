@@ -15,6 +15,11 @@ type Scan struct {
 	// Redirects are the targets of every > or >> found outside quotes, fd merges
 	// and /dev/null excluded, raw verbatim text when it differs from the target.
 	Redirects []Redirect
+	// HeredocBodies are the here-document body texts each segment reads,
+	// index-aligned with Segments, shorter when no segment reads one. Bodies
+	// never become segments (data, not shell) but stay reachable here for deny
+	// scanning of interpreter-fed text.
+	HeredocBodies []string
 	// HasSplitOp reports any &&, ||, |, ;, & or newline outside quotes.
 	HasSplitOp bool
 	// HasUnsafeOp reports any `, $( or <( outside quotes, a network /dev/tcp|udp
@@ -143,12 +148,14 @@ func matchNullRedirect(command string, i int) int {
 }
 
 // heredoc captures one pending here-document: its terminator word, whether the
-// delimiter was quoted (a quoted delimiter disables expansion in the body) and
-// whether the <<- form strips body tabs.
+// delimiter was quoted (a quoted delimiter disables expansion in the body),
+// whether the <<- form strips body tabs, and the segment index of the command
+// reading it.
 type heredoc struct {
 	delim  string
 	quoted bool
 	tabs   bool
+	seg    int
 }
 
 // parseHeredocMarker returns the here-document pending after the << or <<- at i
@@ -191,12 +198,13 @@ func parseHeredocMarker(command string, i int) (hd heredoc, next int, ok bool) {
 }
 
 // consumeHeredocBodies skips the pending docs' bodies starting at pos, returning
-// the index after the last terminator. Body lines are the reading command's data,
-// never shell, so they contribute no segments. An unquoted delimiter leaves
-// expansion alive, so a body carrying $( or ` reports unsafe, as does a missing
-// terminator.
-func consumeHeredocBodies(command string, pos int, docs []heredoc) (next int, unsafe bool) {
-	for _, d := range docs {
+// the index after the last terminator, each body's text (tab-stripped under
+// <<-, lines joined with newlines) and whether any body carries expansion a
+// quoted delimiter did not turn off, or any terminator is missing.
+func consumeHeredocBodies(command string, pos int, docs []heredoc) (next int, texts []string, unsafe bool) {
+	texts = make([]string, len(docs))
+	for di, d := range docs {
+		var b strings.Builder
 		var terminated bool
 		i := pos
 		for i < len(command) {
@@ -217,16 +225,22 @@ func consumeHeredocBodies(command string, pos int, docs []heredoc) (next int, un
 				terminated = true
 				break
 			}
+			if b.Len() > 0 {
+				b.WriteByte('\n')
+			}
+			b.WriteString(cand)
 			if !d.quoted && (strings.Contains(line, "$(") || strings.Contains(line, "`")) {
 				unsafe = true // the body expands, substitution executes shell
 			}
 		}
 		if !terminated {
-			return len(command), true // bash stops reading at EOF, fail safe
+			texts[di] = b.String() // bash reads to EOF, fail safe as unsafe
+			return len(command), texts, true
 		}
+		texts[di] = b.String()
 		pos = i
 	}
-	return pos, unsafe
+	return pos, texts, unsafe
 }
 
 // scanCommand walks command once tracking quote state so shell operators inside
@@ -242,7 +256,8 @@ func scanCommand(command string) Scan {
 	var hasSplitOp, hasUnsafeOp bool
 	var redirects []Redirect
 	var heredocs []heredoc
-	var depth int // open (, $( or <( nesting: a << inside is a shift, not a marker
+	var bodies []string // heredoc text per reading segment, index-aligned
+	var depth int       // open (, $( or <( nesting: a << inside is a shift, not a marker
 
 	pushSegment := func() {
 		// keyed on the collapsed trim so Segments/Raw stay index-aligned, and rawBuf
@@ -352,6 +367,7 @@ func scanCommand(command string) Scan {
 		// segments. <<< here-strings stay excluded: their word is scanned normally.
 		if ch == '<' && depth == 0 && i+1 < n && command[i+1] == '<' {
 			if hd, next, ok := parseHeredocMarker(command, i); ok {
+				hd.seg = len(segments) // the reading command lands in the segment being built
 				heredocs = append(heredocs, hd)
 				marker := "<<"
 				if hd.tabs {
@@ -442,10 +458,23 @@ func scanCommand(command string) Scan {
 			hasSplitOp = true
 			pushSegment()
 			if ch == '\n' && len(heredocs) > 0 {
+				var texts []string
 				var hu bool
-				i, hu = consumeHeredocBodies(command, i+1, heredocs)
+				i, texts, hu = consumeHeredocBodies(command, i+1, heredocs)
 				if hu {
 					hasUnsafeOp = true
+				}
+				for j, hd := range heredocs { // each body rides to its reader's segment
+					if texts[j] == "" {
+						continue
+					}
+					for len(bodies) <= hd.seg {
+						bodies = append(bodies, "")
+					}
+					if bodies[hd.seg] != "" {
+						bodies[hd.seg] += "\n" // several docs on one reader concatenate
+					}
+					bodies[hd.seg] += texts[j]
 				}
 				heredocs = heredocs[:0]
 			} else {
@@ -474,11 +503,12 @@ func scanCommand(command string) Scan {
 		hasUnsafeOp = true // dangling marker, bash reads stdin unboundedly
 	}
 	return Scan{
-		Segments:    segments,
-		Raw:         raw,
-		Redirects:   redirects,
-		HasSplitOp:  hasSplitOp,
-		HasUnsafeOp: hasUnsafeOp,
+		Segments:      segments,
+		Raw:           raw,
+		Redirects:     redirects,
+		HeredocBodies: bodies,
+		HasSplitOp:    hasSplitOp,
+		HasUnsafeOp:   hasUnsafeOp,
 	}
 }
 

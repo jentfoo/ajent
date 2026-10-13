@@ -295,6 +295,37 @@ func TestScanHeredocs(t *testing.T) {
 	}
 }
 
+func TestScanHeredocBodies(t *testing.T) {
+	t.Parallel()
+
+	// the body text rides to the segment of the command reading it, so the deny
+	// path can scan it without a second parser
+	cases := []struct {
+		name   string
+		in     string
+		bodies []string
+		unsafe bool
+	}{
+		{"single_reader", "sh <<EOF\nrm -rf /\nEOF", []string{"rm -rf /"}, false},
+		{"reader_in_compound", "echo hi; sh <<E\nrm x\nE", []string{"", "rm x"}, false},
+		{"commands_after_body", "cat <<E\nhello\nE\necho done", []string{"hello"}, false},
+		{"two_docs_one_reader", "sh <<A <<B\na\nA\nb\nB", []string{"a\nb"}, false},
+		{"tab_stripped_lines", "sh <<-E\n\trm x\n\tE", []string{"rm x"}, false},
+		{"quoted_delim_body", "sh <<'E'\nrm -rf /\nE", []string{"rm -rf /"}, false},
+		{"empty_body_skipped", "cat <<E\nE", nil, false},
+		{"unterminated_kept_unsafe", "sh <<E\nrm x", []string{"rm x"}, true},
+		{"no_heredoc_none", "ls -la", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := scanCommand(c.in)
+			assert.Equal(t, c.bodies, s.HeredocBodies)
+			assert.Equal(t, c.unsafe, s.HasUnsafeOp)
+			assert.LessOrEqual(t, len(s.HeredocBodies), len(s.Segments))
+		})
+	}
+}
+
 func TestScanRedirectTargets(t *testing.T) {
 	t.Parallel()
 

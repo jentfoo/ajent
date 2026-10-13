@@ -274,6 +274,9 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 		{"other_mcp_prompt", ModeAllowRead, call("mcp__write", `{}`), tools.ActionAsk},
 		// block-all still asks even a listed safe command.
 		{"safe_bash_block", ModeBlockAll, bashCall("git status"), tools.ActionAsk},
+		// an env prefix never blesses a safe line: the assignments can hijack
+		// what the head executes, so skipping is deny-side only
+		{"safe_env_prefix_prompts", ModeAllowRead, bashCall("FOO=bar git status"), tools.ActionAsk},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -400,6 +403,20 @@ func TestGuardDenyMatches(t *testing.T) {
 		{"escaped_char", []string{"git push"}, `git pu\sh`},
 		{"escaped_head", []string{"git push"}, `gi\t push`},
 		{"quoted_in_compound", []string{"git push"}, `cd /x && git "push"`},
+		// leading env assignments are skipped, the prefixed head refusing like
+		// its bare form
+		{"env_prefixed_head", []string{"rm"}, "FOO=bar rm -rf /"},
+		{"env_preload_prefix", []string{"rm"}, "LD_PRELOAD=./x.so rm -rf /"},
+		{"env_stacked_prefixes", []string{"rm"}, "A=1 B=2 rm x"},
+		{"env_prefixed_compound", []string{"rm"}, "cd /x && FOO=bar rm -rf /"},
+		{"env_prefixed_payload", []string{"git push"}, `sh -c "FOO=bar git push"`},
+		// a heredoc body is scanned when an interpreter reads it, quoted
+		// delimiters protecting nothing
+		{"heredoc_sh_body", []string{"rm"}, "sh <<EOF\nrm -rf /\nEOF"},
+		{"heredoc_bash_body", []string{"git push"}, "bash <<E\ngit push\nE"},
+		{"heredoc_quoted_delim", []string{"rm"}, "sh <<'EOF'\nrm -rf /\nEOF"},
+		{"heredoc_after_then", []string{"rm"}, "if :; then sh <<E\nrm x\nE\nfi"},
+		{"heredoc_body_nested", []string{"git push"}, "sh <<E\nsh -c 'git push'\nE"},
 	}
 	for _, c := range denied {
 		t.Run(c.name, func(t *testing.T) {
@@ -409,14 +426,38 @@ func TestGuardDenyMatches(t *testing.T) {
 		})
 	}
 
-	// token-exact, never substring: near misses still run under allow-all
+	// the strictness move is deliberate: an env-prefixed or heredoc-fed denied
+	// head refuses in every mode, never downgraded to a prompt
 	b := newTestBarrierOpts(newFakePrompter(),
-		withMode(Options{DeniedCommands: []string{"git push"}}, ModeAllowAll))
-	for _, cmd := range []string{`git pushx`, `git pus`, `git`} {
-		t.Run("no_match_"+cmd, func(t *testing.T) {
-			assert.Equal(t, tools.ActionAllow, b.Guard()(t.Context(), bashCall(cmd)).Action)
+		withMode(Options{DeniedCommands: []string{"rm"}}, ModeAllowRead))
+	for _, cmd := range []string{"FOO=bar rm -rf /", "sh <<E\nrm -rf /\nE"} {
+		assert.Equal(t, tools.ActionDeny, b.Guard()(t.Context(), bashCall(cmd)).Action, cmd)
+	}
+
+	// token-exact, never substring, and inert readers' bodies stay data:
+	// near misses still run under allow-all
+	b = newTestBarrierOpts(newFakePrompter(),
+		withMode(Options{DeniedCommands: []string{"rm", "git push"}}, ModeAllowAll))
+	inert := []struct {
+		name string
+		in   string
+	}{
+		{"near_miss_head", `git pushx`},
+		{"env_prefix_unlisted_head", "FOO=bar ls -la"},
+		{"heredoc_cat_inert", "cat <<E\nrm -rf /\nE"},
+		{"heredoc_python_inert", "python - <<E\nrm -rf /\nE"},
+		{"heredoc_tee_inert", "tee <<E\nrm -rf /\nE"},
+	}
+	for _, c := range inert {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, tools.ActionAllow, b.Guard()(t.Context(), bashCall(c.in)).Action)
 		})
 	}
+
+	// residual gap, pinned as a boundary: a payload living outside the line is
+	// invisible to any static matcher, the approval dialog covering this shape
+	assert.Equal(t, tools.ActionAllow,
+		b.Guard()(t.Context(), bashCall("printf 'rm -rf /' | sh")).Action)
 }
 
 func TestGuardUnnameableLinesPrompt(t *testing.T) {

@@ -133,6 +133,16 @@ func firstToken(tokens []string) string {
 // envAssignRe matches a leading KEY=VALUE environment assignment.
 var envAssignRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
+// skipEnvAssigns drops the leading KEY=VALUE tokens the shell applies as
+// environment to the command that follows, stopping at the first
+// non-assignment.
+func skipEnvAssigns(toks []string) []string {
+	for len(toks) > 0 && envAssignRe.MatchString(toks[0]) {
+		toks = toks[1:]
+	}
+	return toks
+}
+
 // shellKeywords are control-flow words, never command names: a segment headed by
 // one is shell syntax whose inner commands vary, so it has no nameable head.
 // `time` stays nameable: it heads a plain command (its own binary) and timeout's
@@ -145,8 +155,8 @@ var shellKeywords = bulk.SliceToSet([]string{
 
 // nestedInterpreters run their arguments as a fresh shell line, so what actually
 // executes never appears in this line's own tokens. Such a head is unnameable:
-// never read-only, never grant-matchable, and (barrier.go) its -c payload is
-// scanned for the deny list instead.
+// never read-only, never grant-matchable, and (barrier.go) its -c payload and
+// heredoc body are scanned for the deny list instead.
 var nestedInterpreters = bulk.SliceToSet([]string{"sh", "bash", "zsh", "dash", "eval"})
 
 // interpreterPayloads returns the shell text an sh-like segment runs: the
