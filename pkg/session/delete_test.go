@@ -99,7 +99,7 @@ func TestDeleteSession(t *testing.T) {
 		list, err := store.List(ws)
 		require.NoError(t, err)
 		assert.Empty(t, list)
-		assert.Contains(t, buf.String(), "newer ajent")
+		assert.Contains(t, buf.String(), "newer session format")
 	})
 }
 

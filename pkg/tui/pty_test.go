@@ -64,8 +64,11 @@ func setPTYSize(t *testing.T, f *os.File, w, h int) {
 }
 
 // pumpPTY moves everything readable on the master into the emulator, if one is
-// given, and returns the raw bytes. Read failures come back as an error rather
-// than a test failure so it can run inside a poll loop.
+// given, and returns the raw bytes. The first read may block up to wait for
+// output to start; once bytes arrive the deadline drops to ptyQuiet, so a
+// synchronous write side drains in milliseconds instead of burning wait.
+// Read failures come back as an error rather than a test failure so it can run
+// inside a poll loop.
 func pumpPTY(master *os.File, v *vt, wait time.Duration) (string, error) {
 	if err := master.SetReadDeadline(time.Now().Add(wait)); err != nil {
 		return "", err
@@ -81,6 +84,10 @@ func pumpPTY(master *os.File, v *vt, wait time.Duration) (string, error) {
 					return raw.String(), werr
 				}
 			}
+			// data flowing: settle once the pipe stays quiet this long
+			if derr := master.SetReadDeadline(time.Now().Add(ptyQuiet)); derr != nil {
+				return raw.String(), derr
+			}
 		}
 		if err != nil {
 			if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, io.EOF) {
@@ -90,6 +97,9 @@ func pumpPTY(master *os.File, v *vt, wait time.Duration) (string, error) {
 		}
 	}
 }
+
+// ptyQuiet ends a drain once no further bytes arrive for this long.
+const ptyQuiet = 2 * time.Millisecond
 
 // drainPTY reads everything the UI has written so far into the emulator. The
 // deadline ends the read, and writes are synchronous so this is deterministic.

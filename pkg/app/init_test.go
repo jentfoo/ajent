@@ -383,7 +383,6 @@ func (t *initStub) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 func TestPromptInput(t *testing.T) {
 	t.Parallel()
 
-	staged := []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "staged shell result"), Replayed: true}}
 	surveyed := []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "survey pair")}}
 
 	t.Run("assembled_input_skips_expansion", func(t *testing.T) {
@@ -395,7 +394,7 @@ func TestPromptInput(t *testing.T) {
 			onTurn: func() { armed++ },
 		}
 		// a nil expander proves this path never reaches @ expansion
-		in, echo, pending := promptInput(line, staged, nil, func(string) { t.Error("unexpected notice") })
+		in, echo, pending := promptInput(line, nil, func(string) { t.Error("unexpected notice") })
 		assert.Zero(t, pending)
 
 		assert.Equal(t, "distill this", in.Text)
@@ -403,15 +402,14 @@ func TestPromptInput(t *testing.T) {
 		assert.True(t, in.Prepared)    // assembled by its sender, the seam must not re-expand
 		assert.Equal(t, "/init", echo) // a label, not the whole instruction
 		assert.Equal(t, 1, armed)      // armed as it becomes a turn
-		// staged shell results still land ahead of the survey's own pairs
-		require.Len(t, in.Before, 2)
-		assert.Equal(t, staged[0], in.Before[0])
-		assert.Equal(t, surveyed[0], in.Before[1])
+		// the survey's own pairs ride unchanged; staged shell output attaches at
+		// delivery now, never at the submit seam
+		assert.Equal(t, surveyed, in.Before)
 	})
 
 	t.Run("assembled_input_without_hook", func(t *testing.T) {
 		line := pumpLine{kind: command.KindPrompt, input: &agent.Input{Text: "x"}}
-		in, echo, _ := promptInput(line, nil, nil, func(string) {})
+		in, echo, _ := promptInput(line, nil, func(string) {})
 		assert.Equal(t, "x", in.Text)
 		assert.True(t, in.Prepared)
 		assert.Empty(t, echo)
@@ -425,15 +423,14 @@ func TestPromptInput(t *testing.T) {
 		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
 
 		line := pumpLine{kind: command.KindPrompt, rest: "look at @a.go"}
-		in, echo, pending := promptInput(line, staged, expander, func(string) {})
+		in, echo, pending := promptInput(line, expander, func(string) {})
 
 		assert.Contains(t, in.Text, "@a.go")
 		assert.Equal(t, in.Text, echo) // a typed prompt echoes itself
 		assert.False(t, in.Injected)
 		assert.True(t, in.Prepared) // expanded here, the seam must not re-expand
 		assert.Positive(t, pending) // the read is sized before it lands
-		// staged shell results ride ahead, the @ read lands behind the message
-		assert.Equal(t, staged, in.Before)
+		assert.Empty(t, in.Before)  // staged shell output attaches at delivery, not submit
 		require.NotNil(t, in.After)
 		assert.Equal(t, []string{"ref-1-a.go"}, callIDs(in.After(t.Context())))
 	})
@@ -446,7 +443,7 @@ func TestPromptInput(t *testing.T) {
 
 		var warned []string
 		line := pumpLine{kind: command.KindPrompt, rest: "see @missing.go"}
-		_, _, _ = promptInput(line, nil, expander, func(n string) { warned = append(warned, n) })
+		_, _, _ = promptInput(line, expander, func(n string) { warned = append(warned, n) })
 		require.Len(t, warned, 1)
 		assert.Contains(t, warned[0], "missing.go")
 	})

@@ -73,7 +73,7 @@ func TestSteerNormalizesThroughRefs(t *testing.T) {
 					callID = blk.ID
 				}
 			case llm.ToolResultBlock:
-				sawResult = blk.CallID == callID && callID != ""
+				sawResult = sawResult || (blk.CallID == callID && callID != "")
 			}
 		}
 	}

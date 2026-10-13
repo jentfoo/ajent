@@ -7,6 +7,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
@@ -26,10 +27,11 @@ type queueUI interface {
 // and are recoverable to the editor until then. Lock order: q.mu before any
 // tui.UI lock.
 type steerQueue struct {
-	ui      queueUI
-	submit  func(est int)             // SetSubmit(sum) while anything is pending
-	clear   func()                    // SetSubmit(0) once the batch and its reads have landed
-	restage func([]agent.MessageInfo) // stager.Restage: restored Before rides the next flush, nil skips
+	ui        queueUI
+	submit    func(est int)              // SetSubmit(sum) while anything is pending
+	clear     func()                     // SetSubmit(0) once the batch and its reads have landed
+	waitReady func(context.Context)      // stager.WaitReady: block until staged commands finish
+	takeReady func() []agent.MessageInfo // stager.TakeReady: consume finished staged output
 
 	mu       sync.Mutex
 	items    []steerItem // oldest first
@@ -44,8 +46,8 @@ type steerItem struct {
 	est   int         // token estimate carried in the submit bucket until landed
 }
 
-func newSteerQueue(ui queueUI, submit func(int), clear func(), restage func([]agent.MessageInfo)) *steerQueue {
-	return &steerQueue{ui: ui, submit: submit, clear: clear, restage: restage}
+func newSteerQueue(ui queueUI, submit func(int), clear func(), waitReady func(context.Context), takeReady func() []agent.MessageInfo) *steerQueue {
+	return &steerQueue{ui: ui, submit: submit, clear: clear, waitReady: waitReady, takeReady: takeReady}
 }
 
 // offer is the pump entry. When a drain goroutine runs it queues the item and
@@ -186,7 +188,8 @@ func (s *steerQueue) drainLive() bool {
 }
 
 // pull is the OnBoundary callback: hand over every queued item joined into
-// provenance runs at this step boundary. Returns nil when empty.
+// provenance runs at this step boundary. Staged shell output that already
+// finished rides ahead of the batch. Returns nil when empty.
 func (s *steerQueue) pull() []agent.Input {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,21 +197,53 @@ func (s *steerQueue) pull() []agent.Input {
 	if len(s.items) == 0 {
 		return nil
 	}
+	s.attachFlushedLocked()
 	return s.join()
 }
 
 // take returns the next batch of joined runs to deliver behind the next turn's
 // prompt, or false when empty (which also clears draining so a later offer
-// starts a fresh drain).
-func (s *steerQueue) take() ([]agent.Input, bool) {
+// starts a fresh drain). It first waits out any still-running staged command,
+// outside the lock, so its output rides the batch it was meant for.
+func (s *steerQueue) take(ctx context.Context) ([]agent.Input, bool) {
+	s.mu.Lock()
+	if len(s.items) == 0 {
+		s.draining = false // the drain goroutine is done, the next submit starts one
+		s.mu.Unlock()
+		return nil, false
+	}
+	s.mu.Unlock()
+
+	if s.waitReady != nil {
+		s.waitReady(ctx) // no q.mu: a long command must not block Esc or submits
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.items) == 0 {
-		s.draining = false // the drain goroutine is done, the next submit starts one
+	if len(s.items) == 0 { // aborted while waiting: nothing consumes the output
+		s.draining = false
 		return nil, false
 	}
+	s.attachFlushedLocked()
 	return s.join(), true
+}
+
+// attachFlushedLocked folds finished staged shell output ahead of the first
+// queued item. Deferring the consume here is what keeps it safe: output only
+// leaves the stager at the moment its batch delivers, so an aborted or recalled
+// prompt cannot lose it. Caller holds q.mu; items must be non-empty.
+func (s *steerQueue) attachFlushedLocked() {
+	if s.takeReady == nil {
+		return
+	}
+	before := s.takeReady()
+	if len(before) == 0 {
+		return
+	}
+	first := &s.items[0]
+	first.input.Before = append(before, first.input.Before...)
+	first.est += tokens.EstimateMessages(agent.BeforeMessages(before))
 }
 
 // stopDrain marks draining off while items stay queued as rows: a failing provider
@@ -232,7 +267,6 @@ func (s *steerQueue) recall() bool {
 	i := len(s.items) - 1 // LIFO: the most recently queued message first
 	last := s.items[i]
 	s.items = s.items[:i]
-	s.restageBefore(last.input.Before) // the flush that fed this item must not be lost
 	label := restoredLabel(last)
 	if label != "" {
 		s.ui.PrependInput(label)
@@ -263,24 +297,12 @@ func (s *steerQueue) abort() {
 		return
 	}
 	labels := make([]string, len(s.items))
-	var before []agent.MessageInfo
 	for i, it := range s.items {
 		labels[i] = restoredLabel(it)
-		before = append(before, it.input.Before...)
 	}
 	s.items = nil
-	s.restageBefore(before) // the flushes that fed these items must not be lost
 	s.ui.PrependInput(strings.Join(labels, "\n"))
 	s.refreshLocked()
-}
-
-// restageBefore returns restored items' Before messages to the stager, so output
-// its Flush already consumed rides a later prompt instead of vanishing with the
-// queued input. A nil hook (no stager wired) skips.
-func (s *steerQueue) restageBefore(before []agent.MessageInfo) {
-	if s.restage != nil && len(before) > 0 {
-		s.restage(before)
-	}
 }
 
 // refreshLocked re-renders the queued rows and keeps the submit bucket in step.

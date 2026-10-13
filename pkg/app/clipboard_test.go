@@ -13,8 +13,7 @@ import (
 )
 
 func TestCopyText(t *testing.T) {
-	t.Parallel()
-
+	// serial: swaps the package clipboardWrite seam
 	t.Run("success_reports_notice", func(t *testing.T) {
 		var got []string
 		real := clipboardWrite

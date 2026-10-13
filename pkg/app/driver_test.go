@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -110,7 +111,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	}}
 
 	fakeUI := &fakeQueueUI{}
-	q := newSteerQueue(fakeUI, func(int) {}, func() {}, nil)
+	q := newSteerQueue(fakeUI, func(int) {}, func() {}, nil, nil)
 
 	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
 	held := make(chan struct{}, 1)
@@ -232,7 +233,7 @@ func TestControlLoop(t *testing.T) {
 		quit = make(chan struct{})
 		cycled = make(chan bool, 4)
 		ag := agent.New(&agent.State{}, agent.Options{})
-		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil), command.NewStager(context.Background(), nil, nil), nil,
+		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil), command.NewStager(context.Background(), nil, nil), nil,
 			func() { close(quit) },
 			func(back bool) { cycled <- back })
 		return controls, quit, cycled
@@ -558,16 +559,43 @@ func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
 	assert.Contains(t, reg.Names(), "fake__tool_00")
 }
 
-// buildFakeMCPServer builds the pkg/mcp fakeserver binary and returns its path.
+var (
+	fakeMCPPath  string // shared fakeserver binary, compiled on first use
+	fakeMCPUsers int    // tests holding it; the last release removes its dir
+)
+
+// buildFakeMCPServer retains the pkg/mcp fakeserver binary for the calling
+// test's lifetime, compiling it once per run. Cleanup runs after the test's own
+// (LIFO), so spawned servers are gone before the last holder removes the
+// directory.
 func buildFakeMCPServer(t *testing.T) string {
 	t.Helper()
 
-	out := filepath.Join(t.TempDir(), "fakeserver")
-	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "../../pkg/mcp/testdata/fakeserver")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build fakeserver: %v\n%s", err, b)
+	if fakeMCPPath == "" {
+		// resolved off this file, never the test's working directory
+		_, here, _, _ := runtime.Caller(0)
+		src := filepath.Join(filepath.Dir(here), "..", "mcp", "testdata", "fakeserver")
+		dir, err := os.MkdirTemp("", "ajent-mcp-fake-")
+		if err != nil {
+			t.Fatalf("temp dir for fakeserver: %v", err)
+		}
+		out := filepath.Join(dir, "fakeserver")
+		cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, src)
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build fakeserver: %v\n%s", err, b)
+		}
+		fakeMCPPath = out
 	}
-	return out
+	fakeMCPUsers++
+
+	t.Cleanup(func() {
+		fakeMCPUsers--
+		if fakeMCPUsers == 0 && fakeMCPPath != "" {
+			_ = os.RemoveAll(filepath.Dir(fakeMCPPath))
+			fakeMCPPath = ""
+		}
+	})
+	return fakeMCPPath
 }
 
 func TestGuardRegisteredAgainstRegistry(t *testing.T) {

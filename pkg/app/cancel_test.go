@@ -340,7 +340,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			controls := make(chan tui.Control, 4)
 			go controlLoop(context.Background(), ui, controls,
 				newHintBoard(func(string, string) {}), ag,
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil), stager, nil,
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil), stager, nil,
 				func() { close(quit) }, nil)
 
 			errCh := make(chan error, 1)
@@ -371,11 +371,11 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 	}
 }
 
-// TestControlAbortRestagesQueuedStagedOutput pins a turn mid-tool and queues a
-// prompt carrying already-flushed staged shell output (what the pump leaves in
-// Before), then drives Esc: abort must hand those messages back to the stager,
-// so they count on the bar again and ride the next flush instead of vanishing.
-func TestControlAbortRestagesQueuedStagedOutput(t *testing.T) {
+// TestControlAbortKeepsStagedOutput pins a turn mid-tool with a finished `!`
+// run staged and a prompt queued mid-turn, then drives Esc: the abort recovers
+// the prompt to the editor while the staged output stays in the stager (never
+// consumed at submit), so it still counts on the bar and rides a later delivery.
+func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	t.Parallel()
 
 	inR, inW, err := os.Pipe()
@@ -392,7 +392,7 @@ func TestControlAbortRestagesQueuedStagedOutput(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(ui.Close)
 
-	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "ctrl-restage"})
+	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "ctrl-abort"})
 	require.NoError(t, err)
 	release := make(chan struct{})
 	entered := make(chan struct{})
@@ -410,13 +410,9 @@ func TestControlAbortRestagesQueuedStagedOutput(t *testing.T) {
 	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, func(int) {}, func() {}, stager.Restage)
-	// a mid-turn submit as the pump leaves it: one `!` run flushed ahead of the text
-	stagedOut := agent.MessageInfo{
-		Message:  llm.Text(llm.RoleUser, "User Ran: make\n\nOutput:\nboom"),
-		Replayed: true,
-	}
-	q.hold(agent.Input{Text: "why did it fail", Before: []agent.MessageInfo{stagedOut}}, "why did it fail", 1)
+	q := newSteerQueue(fake, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+	stager.Run("echo boom", false) // output stages while the turn runs
+	q.hold(agent.Input{Text: "why did it fail"}, "why did it fail", 1)
 
 	quit := make(chan struct{})
 	controls := make(chan tui.Control, 4)
@@ -427,21 +423,27 @@ func TestControlAbortRestagesQueuedStagedOutput(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()
 	<-entered // the turn is pinned in its tool call, so ag.Running() holds
-
-	controls <- tui.ControlEscape
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return barEst > 0 // the restored output counts on the context bar again
+		return barEst > 0 // the `!` output counts on the context bar once staged
 	}, time.Second, time.Millisecond)
 
-	// and rides the next flush verbatim, replay mark included
-	msgs := stager.Flush(t.Context())
-	require.Len(t, msgs, 1)
-	assert.Equal(t, stagedOut, msgs[0])
+	controls <- tui.ControlEscape
 
-	// the typed line is back in the editor ahead of any draft
+	// the typed line is back in the editor, the staged output untouched: still
+	// counted on the bar and still consumable by the next delivery. pending()
+	// shares the queue mutex with abort, so its emptying is the sync point
+	require.Eventually(t, func() bool {
+		return q.pending() == 0
+	}, time.Second, time.Millisecond)
 	assert.Equal(t, []string{"why did it fail"}, fake.prepended)
+	mu.Lock()
+	assert.Positive(t, barEst)
+	mu.Unlock()
+	msgs := stager.TakeReady()
+	require.Len(t, msgs, 1)
+	assert.Contains(t, msgs[0].Message.Content[0].(llm.TextBlock).Text, "User Ran: echo boom")
 
 	close(release) // the interrupted turn still unwinds cleanly
 	select {

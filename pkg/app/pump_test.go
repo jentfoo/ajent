@@ -73,7 +73,7 @@ func TestRunPump(t *testing.T) {
 		go func() {
 			runPump(ctx, pump, nil, console, command.NewStager(ctx, nil, nil), nil,
 				false, ui, started, func() {},
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil),
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil),
 				nil, &agent.State{}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 			close(done)
 		}()
@@ -176,7 +176,7 @@ func TestRunPumpWakeFlushesDeferred(t *testing.T) {
 			return nil
 		},
 	})
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 	st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"}}
 	console := &uiConsole{ui: ui, commands: cmds, st: st, q: q}
 	applied := make(chan struct{})
@@ -223,7 +223,7 @@ func TestStartDrainParkedGate(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("planned")}}}
 		ag, _ := scriptedAgent(p)
 
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
 		started := newStartedFlag(false)
@@ -251,7 +251,7 @@ func TestStartDrainParkedGate(t *testing.T) {
 		}}
 		ag, _ := scriptedAgent(p)
 
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
 		started := newStartedFlag(false)
@@ -276,7 +276,7 @@ func TestRunPumpParkedHold(t *testing.T) {
 	}}
 	ag, st := scriptedAgent(p)
 	console := &uiConsole{ui: ui, commands: command.NewRegistry()}
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 
 	var captured bool
 	hooks := planHooks{
@@ -327,7 +327,7 @@ func TestStartDrainInterruptLandsFill(t *testing.T) {
 		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
 
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
 	started := newStartedFlag(false)
 	ctx, cancel := context.WithCancel(t.Context())

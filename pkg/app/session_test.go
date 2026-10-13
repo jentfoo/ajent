@@ -575,7 +575,7 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	assert.Equal(t, at, cs.Compact) // the ledger's compact term follows the resumed threshold
 }
 
-// writeFutureSession plants a transcript stamped by a newer ajent format in the
+// writeFutureSession plants a transcript stamped by a newer session format in the
 // workspace store, named when name is set: exactly what a downgrade finds.
 func writeFutureSession(t *testing.T, store *session.Store, ws, name string) {
 	t.Helper()
@@ -604,7 +604,7 @@ func TestOpenSessionContinueSkipsNewer(t *testing.T) {
 	t.Cleanup(func() { _ = w.Close() })
 	assert.Equal(t, older.Path(), w.Path()) // the newest readable one resumes
 	assert.Contains(t, note, "future-work")
-	assert.Contains(t, note, "newer ajent")
+	assert.Contains(t, note, "newer session format")
 
 	// with every saved session blocked there is nothing to resume: fresh, still loudly
 	require.NoError(t, os.Remove(older.Path()))
@@ -612,7 +612,7 @@ func TestOpenSessionContinueSkipsNewer(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w2.Close() })
 	assert.NotEqual(t, older.Path(), w2.Path())
-	assert.Contains(t, note2, "newer ajent")
+	assert.Contains(t, note2, "newer session format")
 }
 
 func TestOpenSessionRefusesNewerFormat(t *testing.T) {
@@ -623,17 +623,17 @@ func TestOpenSessionRefusesNewerFormat(t *testing.T) {
 	writeFutureSession(t, store, ws, "future-work")
 
 	_, _, err := openSession(store, ResumeID, ws, "future-work", "", nil)
-	require.ErrorContains(t, err, "newer ajent")
+	require.ErrorContains(t, err, "newer session format")
 
 	// --session refuses the held name instead of re-minting it as a fresh
 	// transcript that would make a future upgrade's --resume ambiguous
 	_, _, err = openSession(store, ResumeSessionName, ws, "future-work", "", nil)
-	require.ErrorContains(t, err, "newer ajent")
+	require.ErrorContains(t, err, "newer session format")
 
 	// the picker only shades a blocked row, so a picked one refuses too
 	_, _, err = openSession(store, ResumePick, ws, "", "",
 		func([]session.Info) (int, error) { return 0, nil })
-	require.ErrorContains(t, err, "newer ajent")
+	require.ErrorContains(t, err, "newer session format")
 
 	list, lerr := store.List(ws)
 	require.NoError(t, lerr)
@@ -646,9 +646,9 @@ func TestCheckSessionTargetRefusesNewer(t *testing.T) {
 	writeFutureSession(t, store, ws, "future-work")
 
 	err := CheckSessionTarget(ResumeID, "future-work")
-	require.ErrorContains(t, err, "newer ajent")
+	require.ErrorContains(t, err, "newer session format")
 	err = CheckSessionTarget(ResumeSessionName, "FUTURE-WORK")
-	assert.ErrorContains(t, err, "newer ajent")
+	assert.ErrorContains(t, err, "newer session format")
 }
 
 func TestSubmittedEcho(t *testing.T) {

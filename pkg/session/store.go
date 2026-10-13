@@ -82,7 +82,7 @@ func (s *Store) Create(workspace string, d SessionData) (*Writer, error) {
 }
 
 // List returns every session for workspace, most recently used first. A
-// transcript this build cannot open (a newer ajent wrote it) still appears,
+// transcript whose format this build cannot read still appears,
 // marked Info.Blocked; callers surface those as they see fit and must never
 // pass one to Open.
 func (s *Store) List(workspace string) ([]Info, error) {
@@ -218,7 +218,7 @@ type Info struct {
 	Messages int
 	First    string // first user message, truncated
 
-	// Blocked marks a transcript written by a newer ajent (ErrNewerFormat):
+	// Blocked marks a transcript whose storage format this build cannot read
 	// identity fields are filled, branch-derived ones (Messages, First) are not,
 	// and Open must never see it.
 	Blocked bool

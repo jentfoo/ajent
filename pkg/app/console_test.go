@@ -237,7 +237,7 @@ func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, q: q}
 
 	started := newStartedFlag(false)
@@ -280,7 +280,7 @@ func TestUIConsoleSettledMessages(t *testing.T) {
 	snap := &turnSnapshot{st: st}
 	snap.seed(settled)
 
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 	c := &uiConsole{st: st, q: q, snap: snap}
 
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump

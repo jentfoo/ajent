@@ -671,7 +671,7 @@ func TestStoreNameConflict(t *testing.T) {
 const futureVersion = 999
 
 // writeNewer plants one newer-format transcript in the workspace's store, named
-// when name is set, as a newer ajent would have left behind.
+// when name is set, as a too-new format would have left behind.
 func writeNewer(t *testing.T, s *Store, ws, name string) Info {
 	t.Helper()
 

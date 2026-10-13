@@ -24,7 +24,7 @@ func DeleteSession(out io.Writer, store *Store, cwd, target string) error {
 		return err
 	}
 	if info.Blocked {
-		_, _ = fmt.Fprintf(out, "Deleted session %s (written by a newer ajent).\n", info.Label())
+		_, _ = fmt.Fprintf(out, "Deleted session %s (newer session format).\n", info.Label())
 		return nil
 	}
 	_, _ = fmt.Fprintf(out, "Deleted session %s (%s).\n", info.Label(), describeInfo(info))

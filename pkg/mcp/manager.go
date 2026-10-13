@@ -87,11 +87,13 @@ type Manager struct {
 	ctx    context.Context // long-lived for reconnect loops, canceled on Close
 	cancel context.CancelFunc
 
+	connectClient func(context.Context, string, ServerConfig) (*Client, error) // seam for tests
+	backoff       func(attempt int) time.Duration                              // reconnect retry delay, seam for tests
+	closeAfter    time.Duration                                                // shutdown sweep bound, seam for tests
+
 	mu      sync.Mutex // guards servers and loaded only, per-server state lives under server.mu
 	servers map[string]*server
 	preload *sync.WaitGroup // in-flight background dials from Preload, waited on at first message
-
-	connectClient func(context.Context, string, ServerConfig) (*Client, error) // seam for tests
 }
 
 // New returns a manager over the given servers. Restore names are applied to each
@@ -100,7 +102,9 @@ type Manager struct {
 func New(cfg map[string]ServerConfig, opts Options) *Manager {
 	m := &Manager{opts: opts, servers: make(map[string]*server)}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
-	m.connectClient = Connect // overridden by tests to drive single-flight deterministically
+	m.connectClient = Connect   // seam for tests to drive single-flight deterministically
+	m.backoff = reconnectDelay  // seam for tests to skip real retry pacing
+	m.closeAfter = closeTimeout // seam for tests to shrink the sweep bound
 	for name, sc := range cfg {
 		m.servers[name] = m.newServer(name, sc)
 	}
@@ -746,7 +750,7 @@ func (m *Manager) Close() {
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
-	timer := time.NewTimer(closeTimeout)
+	timer := time.NewTimer(m.closeAfter)
 	defer timer.Stop()
 	select {
 	case <-done:
@@ -965,7 +969,7 @@ func (m *Manager) reconnectLoop(s *server, gen int) {
 		select {
 		case <-m.ctx.Done():
 			return
-		case <-time.After(reconnectDelay(attempt - 1)):
+		case <-time.After(m.backoff(attempt - 1)):
 		}
 		if s.loopSuperseded(gen) {
 			return

@@ -159,17 +159,18 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	defer stopApp()
 
 	// the stager owns `!` shell lines: they run immediately through the real bash
-	// tool and stage their output ahead of the next prompt. Built before the steer
-	// queue so abort and recall can hand consumed results back to it.
+	// tool and stage their output for delivery to the model. Built before the
+	// steer queue, whose delivery paths flush staged output into the batch.
 	stager := command.NewStager(appRoot, toolsReg, sink)
 	// prompts submitted while a turn runs queue here: they render as dimmed rows,
 	// hand over at the next step boundary (or the next turn), and recover to the
-	// editor on interrupt or Alt+Up. A restored item's Before messages re-stage so
-	// flushed shell output rides the next flush instead of vanishing.
+	// editor on interrupt or Alt+Up. Staged shell output rides whichever prompt
+	// delivers, never a submission that might be recalled or aborted.
 	q := newSteerQueue(ui,
 		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
 		settled,
-		stager.Restage,
+		stager.WaitReady,
+		stager.TakeReady,
 	)
 	// /copy reads the transcript as of the last turn end while a turn streams,
 	// never the live list the loop goroutine is appending to

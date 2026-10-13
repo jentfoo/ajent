@@ -34,19 +34,15 @@ type Stager struct {
 	onChange func(est int) // reports the staged token estimate as it moves, nil before wiring
 }
 
-// stageRun is one entry in the staging area: an executing `!` command or a
-// re-staged flushed result. A finished entry becomes one user message in Flush.
-// An excluded run's output goes nowhere.
+// stageRun is one entry in the staging area: an executing `!` command. A
+// finished entry becomes one user message in Flush. An excluded run's output
+// goes nowhere.
 type stageRun struct {
 	id       string
 	cmd      string
 	label    string
 	cancel   context.CancelFunc
 	excluded bool
-
-	// restaged carries a pre-rendered message handed back by Restage: the entry
-	// never executed, so cmd/label/result stay unused and it is born finished.
-	restaged *agent.MessageInfo
 
 	// result written by the goroutine once the tool completes
 	done   chan struct{}
@@ -234,74 +230,50 @@ func (s *Stager) Cancel() {
 // Pending/Cancel keep tracking them. Their output goes nowhere, so Flush must not
 // hold the next prompt hostage waiting for them.
 func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
+	s.WaitReady(ctx)
+	return s.TakeReady()
+}
+
+// WaitReady blocks until every included staged command finished or ctx ends,
+// consuming nothing. Excluded runs never wait: their output goes nowhere.
+func (s *Stager) WaitReady(ctx context.Context) {
 	s.mu.Lock()
 	included := bulk.SliceFilter(func(r *stageRun) bool { return !r.excluded }, s.runs)
 	s.mu.Unlock()
 
-	var out []agent.MessageInfo
-	for i := range included {
-		r := included[i]
+	for _, r := range included {
 		select {
 		case <-r.done:
 		case <-ctx.Done():
-			// unfinished runs (this one and the tail) stay tracked in s.runs, so a
-			// later flush picks them up instead of dropping staged results.
-			s.reportStaged()
-			return out
+			return
 		}
-		out = append(out, r.message())
-		s.removeRun(r)
 	}
+}
 
-	// included runs are all consumed, dropping finished excluded ones outright and
-	// keeping still-running ones so Pending/Cancel keep tracking them.
+// TakeReady consumes every included staged command that already finished and
+// returns its message. Still-running ones stay staged for a later delivery.
+// Non-blocking, so a caller may hold another lock across it.
+func (s *Stager) TakeReady() []agent.MessageInfo {
 	s.mu.Lock()
-	s.runs = bulk.SliceFilterInPlace(func(r *stageRun) bool { return !r.excluded || !isDone(r.done) }, s.runs)
+	// the split rewrites the input backing array, so s.runs becomes the running
+	// tail and done is a fresh slice, never aliased
+	running, done := bulk.SliceSplitInPlace(func(r *stageRun) bool { return !isDone(r.done) }, s.runs)
+	s.runs = running
+	done = bulk.SliceFilterInPlace(func(r *stageRun) bool { return !r.excluded }, done)
 	s.mu.Unlock()
 
-	s.reportStaged() // the flushed results are the submission's to account for now
+	out := make([]agent.MessageInfo, 0, len(done))
+	for _, r := range done {
+		out = append(out, r.message())
+	}
+	s.reportStaged() // the consumed results are the delivery's to account for now
 	return out
 }
 
-// message renders what Flush emits and the estimate counts: a restaged entry
-// carries its own rendered result, an executed one builds from cmd plus output.
+// message renders what Flush emits and the estimate counts: an executed run
+// builds its user message from cmd plus output.
 func (r *stageRun) message() agent.MessageInfo {
-	if r.restaged != nil {
-		return *r.restaged
-	}
 	return shellUserMessage(r.cmd, r.result)
-}
-
-// Restage returns flushed results to the staging area so they ride the next
-// prompt: a queued input aborted or recalled after its flush still owns those
-// Before messages, and dropping them would silently lose context the user saw.
-// Entries are born finished in submission order (anything staged later is
-// newer), count on the bar again through reportStaged, and Discard drops them
-// like any staged result.
-func (s *Stager) Restage(msgs []agent.MessageInfo) {
-	if len(msgs) == 0 {
-		return
-	}
-	s.mu.Lock()
-	for _, mi := range msgs {
-		run := &stageRun{
-			cancel:   func() {}, // Discard cancels every run; a restaged one has nothing to cancel
-			restaged: &mi,
-			done:     make(chan struct{}),
-		}
-		close(run.done)
-		s.runs = append(s.runs, run)
-	}
-	s.mu.Unlock()
-	s.reportStaged()
-}
-
-// removeRun drops a consumed run from tracking so Pending/Cancel stop seeing it and
-// a later flush does not re-emit its message.
-func (s *Stager) removeRun(r *stageRun) {
-	s.mu.Lock()
-	s.runs = bulk.SliceFilterInPlace(func(x *stageRun) bool { return x != r }, s.runs)
-	s.mu.Unlock()
 }
 
 // shellUserMessage renders one completed run as the user message the model sees.

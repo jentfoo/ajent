@@ -63,7 +63,7 @@ func TestRawSeqBase(t *testing.T) {
 // TestConnectInitTimeout is serial: it tightens the package-wide initTimeout.
 func TestConnectInitTimeout(t *testing.T) {
 	prev := initTimeout
-	initTimeout = 250 * time.Millisecond
+	initTimeout = 100 * time.Millisecond
 	t.Cleanup(func() { initTimeout = prev })
 
 	start := time.Now()

@@ -212,7 +212,7 @@ func TestSave(t *testing.T) {
 		assert.Equal(t, "high", raw["reasoning"].(map[string]any)["level"])
 	})
 
-	t.Run("user_save_takes_sidecar_lockfile", func(t *testing.T) {
+	t.Run("user_save_takes_shared_lockfile", func(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("AJENT_HOME", home)
 		s, _, err := Load(Options{Workspace: "."})
@@ -220,7 +220,9 @@ func TestSave(t *testing.T) {
 
 		_, err = s.Save("user", "model", "p/m")
 		require.NoError(t, err)
-		assert.FileExists(t, s.userPath+".lock")
+		assert.FileExists(t, filepath.Join(home, lockFileName))
+		_, err = os.Stat(s.userPath + ".lock")
+		assert.True(t, os.IsNotExist(err)) // no per-file sidecar beside the target
 	})
 
 	t.Run("project_save_skips_sidecar", func(t *testing.T) {
@@ -243,8 +245,8 @@ func TestSave(t *testing.T) {
 		s, _, err := Load(Options{Workspace: "."})
 		require.NoError(t, err)
 
-		// a sibling process holding the sidecar degrades the save to unlocked
-		held, err := os.OpenFile(s.userPath+".lock", os.O_CREATE|os.O_RDWR, SecretPerm)
+		// a sibling process holding the lock degrades the save to unlocked
+		held, err := os.OpenFile(filepath.Join(home, lockFileName), os.O_CREATE|os.O_RDWR, SecretPerm)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = held.Close() })
 		require.NoError(t, lockExclusive(held))

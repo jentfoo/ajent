@@ -109,11 +109,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 				if console.mcp.m != nil {
 					console.mcp.LoadOnFirstMessage(ctx)
 				}
-				// flush staged shell results ahead of the message, waiting for any
-				// in-flight command to finish first
-				before := stager.Flush(ctx)
-
-				in, echo, pending := promptInput(line, before, expander, func(n string) {
+				in, echo, pending := promptInput(line, expander, func(n string) {
 					console.Notify(n, tui.LevelWarn)
 				})
 				est := submitEstimate(in, pending)
@@ -121,8 +117,13 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 					if gate != nil {
 						gate.taken() // queued: pending() releases the hold, no handoff left to wait for
 					}
-					continue // queued as a dimmed row, the echo lands at delivery
+					continue // queued as a dimmed row; staged output rides its delivery, not its submit
 				}
+				// direct dispatch: delivery is now, so staged shell output flushes ahead
+				// of the message, waiting for any in-flight command to finish first
+				before := stager.Flush(ctx)
+				in.Before = append(before, in.Before...)
+				est = submitEstimate(in, pending)
 				// only reached with no drain running, so a workflow may branch here
 				captured := false
 				if hooks.beforePrompt != nil {
@@ -159,10 +160,9 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 	}
 }
 
-func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expander, warn func(string)) (agent.Input, string, int) {
+func promptInput(line pumpLine, expander *refs.Expander, warn func(string)) (agent.Input, string, int) {
 	if line.input != nil {
 		in := *line.input
-		in.Before = append(before, in.Before...)
 		in.Prepared = true // assembled by its sender, the append seam must not re-expand
 		if line.onTurn != nil {
 			line.onTurn() // this turn writes, not the one running when the sender finished
@@ -176,7 +176,6 @@ func promptInput(line pumpLine, before []agent.MessageInfo, expander *refs.Expan
 	return agent.Input{
 		Text:     res.Text,
 		Blocks:   line.blocks, // clipboard images ride after the text
-		Before:   before,
 		After:    res.Run,
 		Prepared: true, // expanded here, the append seam must not re-expand
 	}, submittedEcho(line.rest), res.Est // blank stays silent: an image-only turn renders its own row
@@ -261,7 +260,7 @@ func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent
 				q.stopDrain() // leave items queued as rows, do not hammer a failing provider
 				break
 			}
-			next, ok := q.take()
+			next, ok := q.take(ctx)
 			if !ok {
 				break
 			}

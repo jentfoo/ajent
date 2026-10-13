@@ -8,9 +8,8 @@ import (
 	"os"
 )
 
-// ErrNewerFormat marks a transcript written by a newer ajent: Read still
-// returns its parsed entries so selection surfaces can identify the file
-// (Info.Blocked) while nothing here may open or append to it.
+// ErrNewerFormat marks a transcript stamped with a newer storage format: Read
+// still returns its parsed entries (selection shows it Blocked), never appended.
 var ErrNewerFormat = errors.New("session format is newer than this build supports")
 
 // Read parses every complete line of a transcript into entries, tolerating

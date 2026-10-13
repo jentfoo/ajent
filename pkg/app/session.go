@@ -99,20 +99,20 @@ func (r *sessRec) empty() bool {
 }
 
 // refuseNewer explains why a saved session cannot open here: this build would
-// append to a transcript it cannot read. The hint sends downgrade users to the
-// fix instead of letting them guess at absence.
+// append to a transcript it cannot read. Naming the format (never the binary
+// version) keeps the gate about storage, and the hint sends the user to the fix.
 func refuseNewer(info session.Info) error {
-	return fmt.Errorf("session %s was written by a newer ajent; update ajent to resume it", info.Label())
+	return fmt.Errorf("session %s uses a newer session format; update ajent to resume it", info.Label())
 }
 
 // skipNewerNote describes the newer-format sessions --continue skipped to reach
-// what it resumed (or fresh), so a downgrade reads as an explained fallback
-// rather than vanishing history.
+// what it resumed (or fresh), so the fallback reads as explained rather than
+// vanishing history.
 func skipNewerNote(skipped int, newest session.Info) string {
 	if skipped == 1 {
-		return fmt.Sprintf("skipping %s: written by a newer ajent", newest.Label())
+		return fmt.Sprintf("skipping %s: newer session format", newest.Label())
 	}
-	return fmt.Sprintf("skipping %d sessions (newest %s): written by a newer ajent", skipped, newest.Label())
+	return fmt.Sprintf("skipping %d sessions (newest %s): newer session format", skipped, newest.Label())
 }
 
 // CheckSessionTarget verifies that a requested session exists before the TUI
@@ -188,7 +188,7 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		// resume the newest session this build can open: a newer-format one is
 		// skipped loudly instead of quietly misrouting work into an older one.
 		i := slices.IndexFunc(list, func(in session.Info) bool { return !in.Blocked })
-		if i < 0 { // every save needs a newer ajent; still start one
+		if i < 0 { // every save carries a newer format; still start one
 			w, _, ferr := fresh("")
 			return w, skipNewerNote(len(list), list[0]), ferr
 		}
@@ -316,7 +316,7 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		items[i] = tui.PickItem{Label: label, Detail: detail, Tag: in.Name, Terms: []string{in.ID}}
 		if in.Blocked {
 			// present but unopenable: the row says where the conversation went
-			items[i].Label = "created by a newer ajent"
+			items[i].Label = "newer session format"
 			items[i].Disabled = true
 		}
 	}

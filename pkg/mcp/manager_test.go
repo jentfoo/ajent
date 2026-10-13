@@ -163,6 +163,10 @@ func wired(base Options) Options {
 	return base
 }
 
+// fastRetry is the reconnect-backoff seam for tests: retries every 25ms, so a
+// parked loop wakes inside a short window and a rogue loop surfaces fast.
+func fastRetry(int) time.Duration { return 25 * time.Millisecond }
+
 func TestLoadOnFirstMessage(t *testing.T) {
 	t.Parallel()
 
@@ -223,7 +227,7 @@ func TestPreload(t *testing.T) {
 		srv := buildFakeServer(t)
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
-			"fake": {Command: srv, Args: []string{"-startup-delay=500ms"}},
+			"fake": {Command: srv, Args: []string{"-startup-delay=200ms"}},
 		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
 
@@ -238,7 +242,7 @@ func TestPreload(t *testing.T) {
 		srv := buildFakeServer(t)
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
-			"fake": {Command: srv, Args: []string{"-startup-delay=500ms"}},
+			"fake": {Command: srv, Args: []string{"-startup-delay=200ms"}},
 		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
 
@@ -338,7 +342,7 @@ func TestDialAbortsWhenServerRemoved(t *testing.T) {
 
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=1s"}},
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=200ms"}},
 	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
 
@@ -365,9 +369,11 @@ func TestDisconnectDuringDial(t *testing.T) {
 
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=750ms"}},
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=200ms"}},
 	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
+	// fast retries: a stealth loop would surface within the short Never window
+	mgr.backoff = fastRetry
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- mgr.Connect(t.Context(), "fake") }()
@@ -398,7 +404,7 @@ func TestDisconnectDuringDial(t *testing.T) {
 	assert.Empty(t, fr.AllNames("mcp: fake"))
 	require.Never(t, func() bool {
 		return s.client() != nil || len(fr.AllNames("mcp: fake")) > 0
-	}, 1500*time.Millisecond, 25*time.Millisecond)
+	}, 400*time.Millisecond, 10*time.Millisecond)
 
 	// a later manual connect works: the mid-dial disconnect poisons nothing
 	require.NoError(t, mgr.Connect(t.Context(), "fake"))
@@ -410,9 +416,10 @@ func TestConnectAfterMidDialDisconnect(t *testing.T) {
 
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=750ms"}},
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=200ms"}},
 	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
+	mgr.backoff = fastRetry
 
 	first := make(chan error, 1)
 	go func() { first <- mgr.Connect(t.Context(), "fake") }()
@@ -458,6 +465,7 @@ func TestFailedDialReconnects(t *testing.T) {
 			"fake": {Command: missing},
 		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
+		mgr.backoff = fastRetry // retries land right after the symlink, not at 1s
 
 		require.Error(t, mgr.Connect(t.Context(), "fake"))
 
@@ -477,7 +485,7 @@ func TestFailedDialReconnects(t *testing.T) {
 		require.NoError(t, os.Symlink(srv, missing))
 		require.Eventually(t, func() bool {
 			return len(fr.AllNames("mcp: fake")) > 0
-		}, 15*time.Second, 50*time.Millisecond)
+		}, 5*time.Second, 20*time.Millisecond)
 		assert.NotNil(t, s.client())
 	})
 
@@ -537,7 +545,7 @@ func TestFailedDialReconnects(t *testing.T) {
 		assert.False(t, down)
 		require.Never(t, func() bool {
 			return s.client() != nil || len(fr.AllNames("mcp: fake")) > 0
-		}, 1500*time.Millisecond, 25*time.Millisecond)
+		}, 400*time.Millisecond, 10*time.Millisecond)
 	})
 
 	// a superseded loop generation must exit on wake without dialing: a disconnect
@@ -555,6 +563,7 @@ func TestFailedDialReconnects(t *testing.T) {
 			dials.Add(1)
 			return nil, errors.New("unreachable")
 		}
+		mgr.backoff = fastRetry // the parked loop wakes within the window, not at 1s
 		s := mgr.serverByName("fake")
 		s.mu.Lock()
 		s.down = true
@@ -565,8 +574,9 @@ func TestFailedDialReconnects(t *testing.T) {
 		s.mu.Lock() // a newer loop claims the server before the parked one wakes
 		s.loopSeq = 2
 		s.mu.Unlock()
+		// ~16 wakes pass under fastRetry: a superseded loop dialing once fails this
 		require.Never(t, func() bool { return dials.Load() > 0 },
-			2*time.Second, 25*time.Millisecond)
+			400*time.Millisecond, 10*time.Millisecond)
 	})
 
 	// the full interleaving that once stacked loops: disconnect lands between two
@@ -584,15 +594,16 @@ func TestFailedDialReconnects(t *testing.T) {
 			dials.Add(1)
 			return nil, errors.New("unreachable")
 		}
+		mgr.backoff = fastRetry
 
 		require.Error(t, mgr.Connect(t.Context(), "fake")) // starts the first loop
 		mgr.Disconnect("fake")                             // parks it with down cleared
 		require.Error(t, mgr.Connect(t.Context(), "fake")) // spawns the replacement
 
-		// one loop dials at its 1s wake; a duplicate would push the count past the
-		// two user dials plus that single retry before the 2s second attempt
-		require.Never(t, func() bool { return dials.Load() > 3 },
-			2500*time.Millisecond, 25*time.Millisecond)
+		// one chain retries every fastRetry; over the window that budget is ~2 user
+		// dials plus 400ms/25ms wakes, and a stacked second chain doubles past it
+		require.Never(t, func() bool { return dials.Load() > 2+400/25+2 },
+			400*time.Millisecond, 10*time.Millisecond)
 	})
 }
 
@@ -601,7 +612,7 @@ func TestConcurrentConnectsShareOneClient(t *testing.T) {
 
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
-		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=1s"}},
+		"fake": {Command: buildFakeServer(t), Args: []string{"-startup-delay=200ms"}},
 	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
 
@@ -929,7 +940,7 @@ func TestRediscanRevertAfterDisconnect(t *testing.T) {
 	assert.Empty(t, fr.AllNames("mcp: fake")) // nothing bound to the closed client survives
 	require.Never(t, func() bool {
 		return len(fr.AllNames("mcp: fake")) > 0
-	}, 750*time.Millisecond, 25*time.Millisecond)
+	}, 300*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestDisconnectDuringRediscan(t *testing.T) {
@@ -968,7 +979,7 @@ func TestDisconnectDuringRediscan(t *testing.T) {
 	assert.Empty(t, fr.AllNames("mcp: fake"))
 	require.Never(t, func() bool {
 		return len(fr.AllNames("mcp: fake")) > 0
-	}, 750*time.Millisecond, 25*time.Millisecond)
+	}, 300*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestInstallScanStaleClient(t *testing.T) {
@@ -1247,6 +1258,7 @@ func TestReconnectAfterDeath(t *testing.T) {
 		"fake": {Command: buildFakeServer(t), Args: []string{"-die"}},
 	}, wired(Options{Registrar: fr}))
 	t.Cleanup(mgr.Close)
+	mgr.backoff = fastRetry // the respawn is found on the first retry, not at 1s
 
 	// disable one tool so the restored enabled set is a strict subset, not everything
 	mgr.LoadOnFirstMessage(t.Context())
@@ -1334,6 +1346,7 @@ func TestReconnectStaleWatcher(t *testing.T) {
 			"fake": {Command: srv},
 		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
+		mgr.backoff = fastRetry // a rogue loop would surface inside the window
 
 		require.NoError(t, mgr.Connect(t.Context(), "fake"))
 		s := mgr.serverByName("fake")
@@ -1346,7 +1359,7 @@ func TestReconnectStaleWatcher(t *testing.T) {
 		assert.Empty(t, fr.AllNames("mcp: fake"))
 		require.Never(t, func() bool {
 			return s.client() != nil || len(fr.AllNames("mcp: fake")) > 0
-		}, 1500*time.Millisecond, 25*time.Millisecond)
+		}, 400*time.Millisecond, 10*time.Millisecond)
 	})
 
 	// the identity check only rejects foreign clients: a notice about the installed
@@ -1358,6 +1371,7 @@ func TestReconnectStaleWatcher(t *testing.T) {
 			"fake": {Command: srv},
 		}, wired(Options{Registrar: fr}))
 		t.Cleanup(mgr.Close)
+		mgr.backoff = fastRetry // the re-dial lands on the first retry, not at 1s
 
 		require.NoError(t, mgr.Connect(t.Context(), "fake"))
 		s := mgr.serverByName("fake")
@@ -1367,7 +1381,7 @@ func TestReconnectStaleWatcher(t *testing.T) {
 		assert.Contains(t, strings.Join(mgr.Logs("fake"), "\n"), "server exited")
 		require.Eventually(t, func() bool { // the loop re-dials and re-registers
 			return len(fr.AllNames("mcp: fake")) > 0
-		}, 15*time.Second, 50*time.Millisecond)
+		}, 5*time.Second, 20*time.Millisecond)
 		assert.NotNil(t, s.client())
 	})
 }
@@ -1407,6 +1421,7 @@ func TestManagerClose(t *testing.T) {
 			servers[n] = ServerConfig{Command: srv}
 		}
 		mgr := New(servers, wired(Options{Registrar: br}))
+		mgr.closeAfter = 50 * time.Millisecond // the sweep bound, not the product 1s
 
 		mgr.Close()
 

@@ -5,27 +5,64 @@ import (
 	"context"
 	"io"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-// buildFakeServer builds the pkg/mcp fakeserver binary from ./testdata/fakeserver
-// with the same module so mcp-go wire types match what our client expects. The
-// binary lands in the calling test's temp dir and is removed when that test ends.
+var (
+	fakeMu    sync.Mutex
+	fakePath  string // shared fakeserver binary, compiled on first use
+	fakeUsers int    // tests holding the binary; the last release removes its dir
+)
+
+// buildFakeServer retains the shared fakeserver binary for the calling test's
+// lifetime, compiling it once per run from ./testdata/fakeserver with the same
+// module so mcp-go wire types match what our client expects. Cleanup runs after
+// the test's own (LIFO), so spawned servers are gone before the last holder
+// removes the directory.
 func buildFakeServer(t *testing.T) string {
 	t.Helper()
 
-	out := filepath.Join(t.TempDir(), "fakeserver")
-	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "./testdata/fakeserver")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build fakeserver: %v\n%s", err, b)
+	fakeMu.Lock()
+	if fakePath == "" {
+		fakeMu.Unlock() // released before the build: t.Fatalf Goexits under no lock
+		dir, err := os.MkdirTemp("", "ajent-mcp-fake-")
+		if err != nil {
+			t.Fatalf("temp dir for fakeserver: %v", err)
+		}
+		out := filepath.Join(dir, "fakeserver")
+		// a parallel test's retain while this build runs simply waits on the lock and
+		// then reuses the result; the mutex makes the first-caller-wins race-free
+		cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "./testdata/fakeserver")
+		if b, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("build fakeserver: %v\n%s", err, b)
+		}
+		fakeMu.Lock()
+		if fakePath == "" {
+			fakePath = out
+		}
 	}
-	return out
+	fakeUsers++
+	path := fakePath
+	fakeMu.Unlock()
+
+	t.Cleanup(func() {
+		fakeMu.Lock()
+		defer fakeMu.Unlock()
+		fakeUsers--
+		if fakeUsers == 0 && fakePath != "" {
+			_ = os.RemoveAll(filepath.Dir(fakePath))
+			fakePath = ""
+		}
+	})
+	return path
 }
 
 // hostOf strips the scheme and path from a base URL, returning just "host:port".

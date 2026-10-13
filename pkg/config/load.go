@@ -238,7 +238,7 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	path := target.path
 
 	if target.locked {
-		release := LockSave(path)
+		release := LockSave()
 		defer release()
 	}
 

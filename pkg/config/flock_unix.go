@@ -8,6 +8,10 @@ import (
 	"syscall"
 )
 
+// flockSupported gates lockfile creation: where flock does not exist the file
+// would be permanent clutter that locks nothing.
+const flockSupported = true
+
 // lockExclusive takes an exclusive advisory lock without blocking, retrying only
 // EINTR. A held lock reports errLockContended; any other error means the platform
 // or filesystem cannot lock here and saving must degrade unlocked.

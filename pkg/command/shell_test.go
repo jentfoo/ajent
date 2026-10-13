@@ -359,73 +359,83 @@ func TestStagerDiscard(t *testing.T) {
 	assert.Zero(t, last)
 }
 
-func TestStagerRestage(t *testing.T) {
+func TestStagerWaitReady(t *testing.T) {
 	t.Parallel()
 
-	t.Run("flushes_verbatim_ahead_of_newer", func(t *testing.T) {
+	t.Run("returns_once_every_run_finished", func(t *testing.T) {
 		s, _ := newShellStager(t)
-
-		s.Run("echo one", false)
-		require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
-		first := s.Flush(t.Context())
-		require.Len(t, first, 1)
-
-		// the consumed result returns to the pending slot verbatim
-		s.Restage(first)
+		s.Run("echo hi", false)
+		s.WaitReady(t.Context())
 		assert.False(t, s.Pending())
-
-		// a command staged after the restore flushes behind it, in submission order
-		s.Run("echo two", false)
-		require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
-		msgs := s.Flush(t.Context())
-		require.Len(t, msgs, 2)
-		assert.Equal(t, first[0], msgs[0])
-		assert.Contains(t, resultText(msgs[1].Message.Content), "User Ran: echo two")
 	})
 
-	t.Run("counts_on_the_bar_again", func(t *testing.T) {
-		s, _ := newShellStager(t)
-		var mu sync.Mutex
-		var last int
-		s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
+	t.Run("unblocks_on_ctx_cancel", func(t *testing.T) {
+		blocked := &capturingBash{block: make(chan struct{})}
+		reg := tools.New()
+		reg.Register(blocked, true)
+		s := NewStager(t.Context(), reg, agent.NopSink{})
+		t.Cleanup(func() { close(blocked.block) })
 
-		s.Run("echo "+strings.Repeat("payload ", 200), false)
-		require.Eventually(t, func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return last > 0
-		}, 3*time.Second, time.Millisecond)
+		s.Run("sleep 100", false)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel() // cancelled before the wait: it must return rather than park
+		done := make(chan struct{})
+		go func() { s.WaitReady(ctx); close(done) }()
+		<-done
+	})
 
-		msgs := s.Flush(t.Context()) // the submission owns the tokens from here
+	t.Run("excluded_never_waits", func(t *testing.T) {
+		blocked := &capturingBash{block: make(chan struct{})}
+		reg := tools.New()
+		reg.Register(blocked, true)
+		s := NewStager(t.Context(), reg, agent.NopSink{})
+		t.Cleanup(func() { close(blocked.block) })
+
+		s.Run("long thing", true) // excluded: output goes nowhere, nothing waits on it
+		s.WaitReady(t.Context())
+	})
+}
+
+func TestStagerTakeReady(t *testing.T) {
+	t.Parallel()
+
+	t.Run("consumes_finished_leaves_running", func(t *testing.T) {
+		block := make(chan struct{})
+		reg := tools.New()
+		reg.Register(&parkingBash{parkCmd: "stuck", block: block}, true)
+		s := NewStager(t.Context(), reg, agent.NopSink{})
+
+		s.Run("echo done", false)  // finishes at once
+		s.Run("echo stuck", false) // parks in the fake
+		s.Run("echo hidden", true) // excluded runs never produce a message
+		require.Eventually(t, func() bool { return isDone(s.runs[0].done) }, time.Second, time.Millisecond)
+
+		msgs := s.TakeReady()
 		require.Len(t, msgs, 1)
-		mu.Lock()
-		cleared := last // flush reports zero synchronously
-		mu.Unlock()
-		assert.Zero(t, cleared)
+		assert.Contains(t, resultText(msgs[0].Message.Content), "User Ran: echo done")
+		assert.True(t, s.Pending()) // the stuck run stays staged
 
-		s.Restage(msgs) // the restore re-reports the same output as staged
-		mu.Lock()
-		defer mu.Unlock()
-		assert.Positive(t, last)
+		close(block)
+		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
+		msgs = s.TakeReady() // the released run delivers on the next consume
+		require.Len(t, msgs, 1)
+		assert.Contains(t, resultText(msgs[0].Message.Content), "User Ran: echo stuck")
+		assert.Empty(t, s.TakeReady()) // nothing left, and no excluded message ever
 	})
 
-	t.Run("discard_drops_restored", func(t *testing.T) {
-		s, _ := newShellStager(t)
-		var mu sync.Mutex
-		var last int
-		s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
+	t.Run("non_blocking", func(t *testing.T) {
+		blocked := &capturingBash{block: make(chan struct{})}
+		reg := tools.New()
+		reg.Register(blocked, true)
+		s := NewStager(t.Context(), reg, agent.NopSink{})
+		t.Cleanup(func() { close(blocked.block) })
 
-		s.Restage([]agent.MessageInfo{shellUserMessage("echo hi", agent.ToolResult{})})
-		mu.Lock()
-		staged := last
-		mu.Unlock()
-		require.Positive(t, staged)
+		s.Run("echo stuck", false)
+		require.True(t, s.Pending())
 
-		s.Discard() // a rewind abandons restored output like any staged result
-		assert.Empty(t, s.Flush(t.Context()))
-		mu.Lock()
-		defer mu.Unlock()
-		assert.Zero(t, last)
+		done := make(chan struct{})
+		go func() { s.TakeReady(); close(done) }()
+		<-done // returns at once: a running run stays staged, never waited on
 	})
 }
 
@@ -476,6 +486,30 @@ func (b *capturingBash) sawUserInitiated() bool {
 	defer b.mu.Unlock()
 
 	return b.user
+}
+
+// parkingBash parks any call whose command contains parkCmd, finishing the rest
+// at once, so one stager can hold a finished and a stuck run deterministically.
+type parkingBash struct {
+	parkCmd string
+	block   chan struct{}
+}
+
+func (b *parkingBash) Name() string                { return tools.ToolBash }
+func (b *parkingBash) Label(agent.ToolCall) string { return "bash: ..." }
+func (b *parkingBash) Description() string         { return "test tool" }
+func (b *parkingBash) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: tools.ToolBash} }
+func (b *parkingBash) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+func (b *parkingBash) Close()                      {}
+
+func (b *parkingBash) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
+	if strings.Contains(string(call.Input), b.parkCmd) {
+		select {
+		case <-b.block:
+		case <-ctx.Done():
+		}
+	}
+	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "ok"}}}, nil
 }
 
 func TestStagerTimeoutReachesBashInput(t *testing.T) {

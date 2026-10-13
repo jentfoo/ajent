@@ -391,7 +391,7 @@ func SaveUserFile(f File) ([]string, error) {
 		return nil, err
 	}
 
-	release := config.LockSave(path)
+	release := config.LockSave()
 	defer release()
 
 	var warns []string
