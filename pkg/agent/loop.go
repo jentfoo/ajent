@@ -626,9 +626,11 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 			wg.Add(1)
 			go func(i int, c llm.ToolCallBlock) {
 				defer wg.Done()
+				defer func() { // a panicked runTool still releases its slot
+					<-sem
+				}()
 				sem <- struct{}{}
 				out[i], ends[i] = a.runTool(ctx, sink, callFrom(c))
-				<-sem
 			}(i, c)
 		}
 		wg.Wait()
@@ -664,9 +666,17 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 
 	out := NewOutput(sink, call.ID)
 	done := sink.ToolStart(call, tool.Label(call), false)
-	res, err := tool.Execute(ctx, call, out)
+	var err error
+	res, err, fault := RecoverTool(ctx, done, sink, call, func() (ToolResult, error) {
+		return tool.Execute(ctx, call, out)
+	})
 	if res.Content == nil {
 		res.Content = llm.BlockList{}
+	}
+	if fault {
+		return llm.ToolResultBlock{
+			CallID: call.ID, ToolName: call.Name, Content: res.Content, IsError: true,
+		}, false
 	}
 	if err != nil && !res.IsError {
 		res.IsError = true

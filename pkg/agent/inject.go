@@ -14,7 +14,18 @@ import (
 func InjectPair(ctx context.Context, tool Tool, sink Sink, call ToolCall, label string) ([]llm.Message, ToolResult) {
 	out := NewOutput(sink, call.ID)
 	done := sink.ToolStart(call, label, false)
-	res, err := tool.Execute(ctx, call, out)
+	var err error
+	res, err, fault := RecoverTool(ctx, done, sink, call, func() (ToolResult, error) {
+		return tool.Execute(ctx, call, out)
+	})
+	if fault {
+		return []llm.Message{
+			{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
+				ID: call.ID, Name: call.Name, Input: call.Input}}},
+			{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
+				CallID: call.ID, Content: res.Content, IsError: true}}},
+		}, res
+	}
 	if res.Content == nil {
 		res.Content = llm.BlockList{}
 	}

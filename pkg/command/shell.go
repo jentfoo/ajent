@@ -143,7 +143,21 @@ func (s *Stager) Run(cmd string, excluded bool) {
 		// sees this run as finished and counts its output
 		func() {
 			defer close(run.done)
-			res, err := tool.Execute(runCtx, call, out)
+			var res agent.ToolResult
+			var err error
+			var fault bool
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						fault = true
+						err = fmt.Errorf("tool panicked: %v", r)
+					}
+				}()
+				res, err = tool.Execute(runCtx, call, out)
+			}()
+			if fault {
+				return
+			}
 			if res.Content == nil {
 				res.Content = llm.BlockList{}
 			}
