@@ -34,14 +34,19 @@ type Stager struct {
 	onChange func(est int) // reports the staged token estimate as it moves, nil before wiring
 }
 
-// stageRun is one staged shell command. Its finished result becomes one user
-// message in Flush. An excluded run's output goes nowhere.
+// stageRun is one entry in the staging area: an executing `!` command or a
+// re-staged flushed result. A finished entry becomes one user message in Flush.
+// An excluded run's output goes nowhere.
 type stageRun struct {
 	id       string
 	cmd      string
 	label    string
 	cancel   context.CancelFunc
 	excluded bool
+
+	// restaged carries a pre-rendered message handed back by Restage: the entry
+	// never executed, so cmd/label/result stay unused and it is born finished.
+	restaged *agent.MessageInfo
 
 	// result written by the goroutine once the tool completes
 	done   chan struct{}
@@ -83,7 +88,7 @@ func (s *Stager) reportStaged() {
 	for _, r := range s.runs {
 		// an excluded run never reaches context, and an unfinished one has no result yet
 		if !r.excluded && isDone(r.done) {
-			msgs = append(msgs, shellUserMessage(r.cmd, r.result).Message)
+			msgs = append(msgs, r.message().Message)
 		}
 	}
 	s.mu.Unlock()
@@ -243,7 +248,7 @@ func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 			s.reportStaged()
 			return out
 		}
-		out = append(out, shellUserMessage(r.cmd, r.result))
+		out = append(out, r.message())
 		s.removeRun(r)
 	}
 
@@ -255,6 +260,39 @@ func (s *Stager) Flush(ctx context.Context) []agent.MessageInfo {
 
 	s.reportStaged() // the flushed results are the submission's to account for now
 	return out
+}
+
+// message renders what Flush emits and the estimate counts: a restaged entry
+// carries its own rendered result, an executed one builds from cmd plus output.
+func (r *stageRun) message() agent.MessageInfo {
+	if r.restaged != nil {
+		return *r.restaged
+	}
+	return shellUserMessage(r.cmd, r.result)
+}
+
+// Restage returns flushed results to the staging area so they ride the next
+// prompt: a queued input aborted or recalled after its flush still owns those
+// Before messages, and dropping them would silently lose context the user saw.
+// Entries are born finished in submission order (anything staged later is
+// newer), count on the bar again through reportStaged, and Discard drops them
+// like any staged result.
+func (s *Stager) Restage(msgs []agent.MessageInfo) {
+	if len(msgs) == 0 {
+		return
+	}
+	s.mu.Lock()
+	for _, mi := range msgs {
+		run := &stageRun{
+			cancel:   func() {}, // Discard cancels every run; a restaged one has nothing to cancel
+			restaged: &mi,
+			done:     make(chan struct{}),
+		}
+		close(run.done)
+		s.runs = append(s.runs, run)
+	}
+	s.mu.Unlock()
+	s.reportStaged()
 }
 
 // removeRun drops a consumed run from tracking so Pending/Cancel stop seeing it and

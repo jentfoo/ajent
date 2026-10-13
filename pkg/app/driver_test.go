@@ -110,7 +110,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	}}
 
 	fakeUI := &fakeQueueUI{}
-	q := newSteerQueue(fakeUI, func(int) {}, func() {})
+	q := newSteerQueue(fakeUI, func(int) {}, func() {}, nil)
 
 	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
 	held := make(chan struct{}, 1)
@@ -232,7 +232,7 @@ func TestControlLoop(t *testing.T) {
 		quit = make(chan struct{})
 		cycled = make(chan bool, 4)
 		ag := agent.New(&agent.State{}, agent.Options{})
-		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), command.NewStager(context.Background(), nil, nil), nil,
+		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil), command.NewStager(context.Background(), nil, nil), nil,
 			func() { close(quit) },
 			func(back bool) { cycled <- back })
 		return controls, quit, cycled

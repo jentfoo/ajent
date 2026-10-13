@@ -340,7 +340,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			controls := make(chan tui.Control, 4)
 			go controlLoop(context.Background(), ui, controls,
 				newHintBoard(func(string, string) {}), ag,
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}), stager, nil,
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil), stager, nil,
 				func() { close(quit) }, nil)
 
 			errCh := make(chan error, 1)
@@ -368,5 +368,86 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 				t.Fatal("turn did not finish")
 			}
 		})
+	}
+}
+
+// TestControlAbortRestagesQueuedStagedOutput pins a turn mid-tool and queues a
+// prompt carrying already-flushed staged shell output (what the pump leaves in
+// Before), then drives Esc: abort must hand those messages back to the stager,
+// so they count on the bar again and ride the next flush instead of vanishing.
+func TestControlAbortRestagesQueuedStagedOutput(t *testing.T) {
+	t.Parallel()
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+	})
+	go func() { _, _ = io.Copy(io.Discard, outR) }() // status writes must not fill the pipe
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "ctrl-restage"})
+	require.NoError(t, err)
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: mainToolTurn()}}}
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+	ag := agent.New(st, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Tools:    singleToolSet{tool: holdBash{release: release, entered: entered}},
+		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+
+	stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+	var mu sync.Mutex
+	var barEst int
+	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })
+
+	fake := &fakeQueueUI{}
+	q := newSteerQueue(fake, func(int) {}, func() {}, stager.Restage)
+	// a mid-turn submit as the pump leaves it: one `!` run flushed ahead of the text
+	stagedOut := agent.MessageInfo{
+		Message:  llm.Text(llm.RoleUser, "User Ran: make\n\nOutput:\nboom"),
+		Replayed: true,
+	}
+	q.hold(agent.Input{Text: "why did it fail", Before: []agent.MessageInfo{stagedOut}}, "why did it fail", 1)
+
+	quit := make(chan struct{})
+	controls := make(chan tui.Control, 4)
+	go controlLoop(context.Background(), ui, controls,
+		newHintBoard(func(string, string) {}), ag, q, stager, nil,
+		func() { close(quit) }, nil)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()
+	<-entered // the turn is pinned in its tool call, so ag.Running() holds
+
+	controls <- tui.ControlEscape
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return barEst > 0 // the restored output counts on the context bar again
+	}, time.Second, time.Millisecond)
+
+	// and rides the next flush verbatim, replay mark included
+	msgs := stager.Flush(t.Context())
+	require.Len(t, msgs, 1)
+	assert.Equal(t, stagedOut, msgs[0])
+
+	// the typed line is back in the editor ahead of any draft
+	assert.Equal(t, []string{"why did it fail"}, fake.prepended)
+
+	close(release) // the interrupted turn still unwinds cleanly
+	select {
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("turn did not finish")
 	}
 }

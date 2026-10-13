@@ -26,9 +26,10 @@ type queueUI interface {
 // and are recoverable to the editor until then. Lock order: q.mu before any
 // tui.UI lock.
 type steerQueue struct {
-	ui     queueUI
-	submit func(est int) // SetSubmit(sum) while anything is pending
-	clear  func()        // SetSubmit(0) once the batch and its reads have landed
+	ui      queueUI
+	submit  func(est int)             // SetSubmit(sum) while anything is pending
+	clear   func()                    // SetSubmit(0) once the batch and its reads have landed
+	restage func([]agent.MessageInfo) // stager.Restage: restored Before rides the next flush, nil skips
 
 	mu       sync.Mutex
 	items    []steerItem // oldest first
@@ -43,8 +44,8 @@ type steerItem struct {
 	est   int         // token estimate carried in the submit bucket until landed
 }
 
-func newSteerQueue(ui queueUI, submit func(int), clear func()) *steerQueue {
-	return &steerQueue{ui: ui, submit: submit, clear: clear}
+func newSteerQueue(ui queueUI, submit func(int), clear func(), restage func([]agent.MessageInfo)) *steerQueue {
+	return &steerQueue{ui: ui, submit: submit, clear: clear, restage: restage}
 }
 
 // offer is the pump entry. When a drain goroutine runs it queues the item and
@@ -231,6 +232,7 @@ func (s *steerQueue) recall() bool {
 	i := len(s.items) - 1 // LIFO: the most recently queued message first
 	last := s.items[i]
 	s.items = s.items[:i]
+	s.restageBefore(last.input.Before) // the flush that fed this item must not be lost
 	label := restoredLabel(last)
 	if label != "" {
 		s.ui.PrependInput(label)
@@ -261,12 +263,24 @@ func (s *steerQueue) abort() {
 		return
 	}
 	labels := make([]string, len(s.items))
+	var before []agent.MessageInfo
 	for i, it := range s.items {
 		labels[i] = restoredLabel(it)
+		before = append(before, it.input.Before...)
 	}
 	s.items = nil
+	s.restageBefore(before) // the flushes that fed these items must not be lost
 	s.ui.PrependInput(strings.Join(labels, "\n"))
 	s.refreshLocked()
+}
+
+// restageBefore returns restored items' Before messages to the stager, so output
+// its Flush already consumed rides a later prompt instead of vanishing with the
+// queued input. A nil hook (no stager wired) skips.
+func (s *steerQueue) restageBefore(before []agent.MessageInfo) {
+	if s.restage != nil && len(before) > 0 {
+		s.restage(before)
+	}
 }
 
 // refreshLocked re-renders the queued rows and keeps the submit bucket in step.

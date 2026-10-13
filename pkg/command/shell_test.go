@@ -359,6 +359,76 @@ func TestStagerDiscard(t *testing.T) {
 	assert.Zero(t, last)
 }
 
+func TestStagerRestage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("flushes_verbatim_ahead_of_newer", func(t *testing.T) {
+		s, _ := newShellStager(t)
+
+		s.Run("echo one", false)
+		require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
+		first := s.Flush(t.Context())
+		require.Len(t, first, 1)
+
+		// the consumed result returns to the pending slot verbatim
+		s.Restage(first)
+		assert.False(t, s.Pending())
+
+		// a command staged after the restore flushes behind it, in submission order
+		s.Run("echo two", false)
+		require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
+		msgs := s.Flush(t.Context())
+		require.Len(t, msgs, 2)
+		assert.Equal(t, first[0], msgs[0])
+		assert.Contains(t, resultText(msgs[1].Message.Content), "User Ran: echo two")
+	})
+
+	t.Run("counts_on_the_bar_again", func(t *testing.T) {
+		s, _ := newShellStager(t)
+		var mu sync.Mutex
+		var last int
+		s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
+
+		s.Run("echo "+strings.Repeat("payload ", 200), false)
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return last > 0
+		}, 3*time.Second, time.Millisecond)
+
+		msgs := s.Flush(t.Context()) // the submission owns the tokens from here
+		require.Len(t, msgs, 1)
+		mu.Lock()
+		cleared := last // flush reports zero synchronously
+		mu.Unlock()
+		assert.Zero(t, cleared)
+
+		s.Restage(msgs) // the restore re-reports the same output as staged
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Positive(t, last)
+	})
+
+	t.Run("discard_drops_restored", func(t *testing.T) {
+		s, _ := newShellStager(t)
+		var mu sync.Mutex
+		var last int
+		s.SetOnChange(func(est int) { mu.Lock(); last = est; mu.Unlock() })
+
+		s.Restage([]agent.MessageInfo{shellUserMessage("echo hi", agent.ToolResult{})})
+		mu.Lock()
+		staged := last
+		mu.Unlock()
+		require.Positive(t, staged)
+
+		s.Discard() // a rewind abandons restored output like any staged result
+		assert.Empty(t, s.Flush(t.Context()))
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Zero(t, last)
+	})
+}
+
 // blockText builds a single-text-block list.
 func blockText(text string) llm.BlockList {
 	return llm.BlockList{llm.TextBlock{Text: text}}

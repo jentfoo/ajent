@@ -150,12 +150,24 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			pushContext()
 		}
 	}
+	// one app-lifetime root ties every derived operation (the prompt pump, staged
+	// shell runs, setup probes) to process shutdown. cancel fires when quit does,
+	// and again on any return path via the defer, so tool work dies with the app.
+	appRoot, stopApp := context.WithCancel(context.Background())
+	defer stopApp()
+
+	// the stager owns `!` shell lines: they run immediately through the real bash
+	// tool and stage their output ahead of the next prompt. Built before the steer
+	// queue so abort and recall can hand consumed results back to it.
+	stager := command.NewStager(appRoot, toolsReg, sink)
 	// prompts submitted while a turn runs queue here: they render as dimmed rows,
 	// hand over at the next step boundary (or the next turn), and recover to the
-	// editor on interrupt or Alt+Up.
+	// editor on interrupt or Alt+Up. A restored item's Before messages re-stage so
+	// flushed shell output rides the next flush instead of vanishing.
 	q := newSteerQueue(ui,
 		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
 		settled,
+		stager.Restage,
 	)
 	// /copy reads the transcript as of the last turn end while a turn streams,
 	// never the live list the loop goroutine is appending to
@@ -190,11 +202,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 
 	quit := make(chan struct{})
 
-	// one app-lifetime root ties every derived operation (the prompt pump, staged
-	// shell runs, setup probes) to process shutdown. cancel fires when quit does,
-	// and again on any return path via the defer, so tool work dies with the app.
-	appRoot, stopApp := context.WithCancel(context.Background())
-	defer stopApp()
 	go func() {
 		select {
 		case <-quit:
@@ -443,7 +450,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// for submitted lines. Commands run inline. Shell lines stage and flush ahead of
 	// the next prompt. Prompts expand @ refs and steer the agent.
 	cmds := command.NewRegistry()
-	stager := command.NewStager(appRoot, toolsReg, sink)
 	// `!` output is context the next prompt will carry, so the bar counts it from
 	// the moment the command finishes rather than waiting for a submission
 	stager.SetOnChange(func(est int) {
