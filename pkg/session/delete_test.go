@@ -86,6 +86,21 @@ func TestDeleteSession(t *testing.T) {
 		err := DeleteSession(&buf, store, ws, "no-such-session")
 		assert.ErrorContains(t, err, "no session matches")
 	})
+
+	// a newer-format transcript cannot be resumed here, so deletion is the only
+	// way to free its name: it must resolve like any other target
+	t.Run("deletes_newer_format", func(t *testing.T) {
+		store, ws := deleteWorkspace(t)
+		writeNewer(t, store, ws, "future-work")
+
+		var buf bytes.Buffer
+		require.NoError(t, DeleteSession(&buf, store, ws, "future-work"))
+
+		list, err := store.List(ws)
+		require.NoError(t, err)
+		assert.Empty(t, list)
+		assert.Contains(t, buf.String(), "newer ajent")
+	})
 }
 
 func TestDeleteOldSessions(t *testing.T) {

@@ -82,6 +82,8 @@ func RunHeadless(o HeadlessOptions) int {
 	}
 	if rec == nil {
 		notify("session recording disabled", agent.LevelWarn)
+	} else if rec.note != "" {
+		notify(rec.note, agent.LevelWarn) // e.g. --continue skipped newer-format sessions
 	}
 
 	// ask_user has nobody to ask, so it is left without an Ask func and excluded from every scope below

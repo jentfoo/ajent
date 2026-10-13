@@ -57,6 +57,17 @@ func TestRead(t *testing.T) {
 		assert.ErrorContains(t, err, "newer than supported v1")
 	})
 
+	// the refusal classifies as ErrNewerFormat and keeps the parsed entries, so
+	// listing can still identify a file this build must refuse
+	t.Run("rejects_newer_version_classifiably", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		writeLines(t, p, []string{`{"id":"a","type":"session","ts":1,"data":{"version":99}}`})
+
+		entries, _, err := Read(p)
+		require.ErrorIs(t, err, ErrNewerFormat)
+		assert.Equal(t, []string{"a"}, ids(entries))
+	})
+
 	// an unknown entry type is kept through a read
 	t.Run("keeps_unknown_entry_type", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")

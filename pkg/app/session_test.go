@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -293,27 +294,27 @@ func TestOpenSessionModes(t *testing.T) {
 	// so they come last to keep "latest" pointing at the seed above.
 
 	// --continue: reuse the most recent transcript (the seed, still alone)
-	wCont, err := openSession(store, ResumeContinue, ws, "", "", pickFirst)
+	wCont, _, err := openSession(store, ResumeContinue, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wCont.Path())
 
 	// --resume with a selection: reuse that root's transcript
-	wPick, err := openSession(store, ResumePick, ws, "", "", pickFirst)
+	wPick, _, err := openSession(store, ResumePick, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wPick.Path())
 
 	// --resume <id>: reuse that exact saved transcript directly
-	wID, err := openSession(store, ResumeID, ws, seedID, "", pickFirst)
+	wID, _, err := openSession(store, ResumeID, ws, seedID, "", pickFirst)
 	require.NoError(t, err)
 	assert.Equal(t, firstPath, wID.Path())
 
 	// no flag: always a fresh file, never reuses
-	wNew, err := openSession(store, ResumeNewSession, ws, "", "", pickFirst)
+	wNew, _, err := openSession(store, ResumeNewSession, ws, "", "", pickFirst)
 	require.NoError(t, err)
 	assert.NotEqual(t, firstPath, wNew.Path())
 
 	// --resume cancelled (ErrCancelled): start fresh rather than stall
-	wCancel, err := openSession(store, ResumePick, ws, "", "",
+	wCancel, _, err := openSession(store, ResumePick, ws, "", "",
 		func([]session.Info) (int, error) { return 0, tui.ErrCancelled })
 	require.NoError(t, err)
 	assert.NotEqual(t, firstPath, wCancel.Path())
@@ -327,12 +328,12 @@ func TestOpenSessionResumePickHeadless(t *testing.T) {
 
 	// an empty workspace needs no choice: fresh matches the picker's own
 	// empty-list rule, so there is nothing to refuse yet
-	w, err := openSession(store, ResumePick, ws, "", "", nil)
+	w, _, err := openSession(store, ResumePick, ws, "", "", nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
 
 	// now a saved session exists but headless has no way to choose it
-	_, err = openSession(store, ResumePick, ws, "", "", nil)
+	_, _, err = openSession(store, ResumePick, ws, "", "", nil)
 	assert.ErrorContains(t, err, "bare --resume")
 }
 
@@ -370,7 +371,7 @@ func TestOpenSessionContinueRewound(t *testing.T) {
 	used := time.Now().Add(time.Hour)
 	require.NoError(t, os.Chtimes(wa.Path(), used, used))
 
-	w, err := openSession(store, ResumeContinue, ws, "", "", nil)
+	w, _, err := openSession(store, ResumeContinue, ws, "", "", nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
 	assert.Equal(t, wa.Path(), w.Path())
@@ -389,7 +390,7 @@ func TestOpenSessionByName(t *testing.T) {
 	ws := t.TempDir()
 	store := session.StoreAt(filepath.Join(ws, "root"))
 
-	created, err := openSession(store, ResumeSessionName, ws, "fix-parser", "p/a", nil)
+	created, _, err := openSession(store, ResumeSessionName, ws, "fix-parser", "p/a", nil)
 	require.NoError(t, err)
 	require.NoError(t, created.Close())
 
@@ -398,16 +399,16 @@ func TestOpenSessionByName(t *testing.T) {
 	assert.Equal(t, "fix-parser", session.NameOf(entries))
 
 	// the same name reopens it, a different one starts its own transcript
-	resumed, err := openSession(store, ResumeSessionName, ws, "fix-parser", "p/a", nil)
+	resumed, _, err := openSession(store, ResumeSessionName, ws, "fix-parser", "p/a", nil)
 	require.NoError(t, err)
 	assert.Equal(t, created.Path(), resumed.Path())
 
-	other, err := openSession(store, ResumeSessionName, ws, "other", "p/a", nil)
+	other, _, err := openSession(store, ResumeSessionName, ws, "other", "p/a", nil)
 	require.NoError(t, err)
 	assert.NotEqual(t, created.Path(), other.Path())
 
 	// a name is reachable through --resume too
-	byResume, err := openSession(store, ResumeID, ws, "fix-parser", "", nil)
+	byResume, _, err := openSession(store, ResumeID, ws, "fix-parser", "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, created.Path(), byResume.Path())
 
@@ -416,7 +417,7 @@ func TestOpenSessionByName(t *testing.T) {
 	list, lerr := store.List(ws)
 	require.NoError(t, lerr)
 	require.NotEmpty(t, list)
-	_, err = openSession(store, ResumeSessionName, ws, list[0].ID, "p/a", nil)
+	_, _, err = openSession(store, ResumeSessionName, ws, list[0].ID, "p/a", nil)
 	assert.ErrorContains(t, err, "matches session id")
 }
 
@@ -450,18 +451,18 @@ func TestResumeByID(t *testing.T) {
 			continue
 		}
 
-		wPick, err := openSession(store, ResumePick, ws, "", "",
+		wPick, _, err := openSession(store, ResumePick, ws, "", "",
 			func([]session.Info) (int, error) { return i, nil })
 		require.NoError(t, err)
 		assert.Equal(t, older.Path(), wPick.Path())
 	}
 
-	w, err := openSession(store, ResumeID, ws, want.ID, "", nil)
+	w, _, err := openSession(store, ResumeID, ws, want.ID, "", nil)
 	require.NoError(t, err)
 	assert.Equal(t, older.Path(), w.Path())
 
 	// a bogus id resolves to ErrNotFound.
-	_, err = openSession(store, ResumeID, ws, "NO-SUCH-ID", "", nil)
+	_, _, err = openSession(store, ResumeID, ws, "NO-SUCH-ID", "", nil)
 	assert.ErrorIs(t, err, session.ErrNotFound)
 }
 
@@ -572,6 +573,82 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	at := tokens.CompactAt(st.Model)
 	assert.InDelta(t, 0.5, st.Model.CompactThreshold, 1e-9)
 	assert.Equal(t, at, cs.Compact) // the ledger's compact term follows the resumed threshold
+}
+
+// writeFutureSession plants a transcript stamped by a newer ajent format in the
+// workspace store, named when name is set: exactly what a downgrade finds.
+func writeFutureSession(t *testing.T, store *session.Store, ws, name string) {
+	t.Helper()
+
+	dir, err := store.Dir(ws)
+	require.NoError(t, err)
+	line := fmt.Sprintf(`{"id":"future-root","type":"session","ts":%d,"data":{"version":999,"name":%q}}`,
+		time.Now().Add(time.Hour).UnixMilli(), name)
+	p := filepath.Join(dir, "2099-01-01T00-00-00Z-future.jsonl")
+	require.NoError(t, os.WriteFile(p, []byte(line+"\n"), 0o600))
+}
+
+func TestOpenSessionContinueSkipsNewer(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
+
+	older, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = older.Close() })
+	writeFutureSession(t, store, ws, "future-work")
+
+	w, note, err := openSession(store, ResumeContinue, ws, "", "", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	assert.Equal(t, older.Path(), w.Path()) // the newest readable one resumes
+	assert.Contains(t, note, "future-work")
+	assert.Contains(t, note, "newer ajent")
+
+	// with every saved session blocked there is nothing to resume: fresh, still loudly
+	require.NoError(t, os.Remove(older.Path()))
+	w2, note2, err := openSession(store, ResumeContinue, ws, "", "", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w2.Close() })
+	assert.NotEqual(t, older.Path(), w2.Path())
+	assert.Contains(t, note2, "newer ajent")
+}
+
+func TestOpenSessionRefusesNewerFormat(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
+	writeFutureSession(t, store, ws, "future-work")
+
+	_, _, err := openSession(store, ResumeID, ws, "future-work", "", nil)
+	require.ErrorContains(t, err, "newer ajent")
+
+	// --session refuses the held name instead of re-minting it as a fresh
+	// transcript that would make a future upgrade's --resume ambiguous
+	_, _, err = openSession(store, ResumeSessionName, ws, "future-work", "", nil)
+	require.ErrorContains(t, err, "newer ajent")
+
+	// the picker only shades a blocked row, so a picked one refuses too
+	_, _, err = openSession(store, ResumePick, ws, "", "",
+		func([]session.Info) (int, error) { return 0, nil })
+	require.ErrorContains(t, err, "newer ajent")
+
+	list, lerr := store.List(ws)
+	require.NoError(t, lerr)
+	assert.Len(t, list, 1) // no transcript was minted or appended anywhere
+}
+
+func TestCheckSessionTargetRefusesNewer(t *testing.T) {
+	// not parallel: t.Chdir and AJENT_HOME pin process state
+	store, ws := deleteWorkspace(t)
+	writeFutureSession(t, store, ws, "future-work")
+
+	err := CheckSessionTarget(ResumeID, "future-work")
+	require.ErrorContains(t, err, "newer ajent")
+	err = CheckSessionTarget(ResumeSessionName, "FUTURE-WORK")
+	assert.ErrorContains(t, err, "newer ajent")
 }
 
 func TestSubmittedEcho(t *testing.T) {

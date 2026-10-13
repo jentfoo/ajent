@@ -21,6 +21,9 @@ type sessRec struct {
 	store *session.Store
 	w     *session.Writer
 	rec   *session.Recorder
+	// note is a startup caveat from session selection (--continue skipping
+	// newer-format sessions), surfaced once by whichever front end opened it.
+	note string
 	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
 	// and @ reference ids stop describing what it replaced. Nil until main wires it.
 	onSwitch func([]llm.Message)
@@ -95,8 +98,26 @@ func (r *sessRec) empty() bool {
 	return !slices.ContainsFunc(entries, func(e session.Entry) bool { return e.Type == session.TypeMessage })
 }
 
+// refuseNewer explains why a saved session cannot open here: this build would
+// append to a transcript it cannot read. The hint sends downgrade users to the
+// fix instead of letting them guess at absence.
+func refuseNewer(info session.Info) error {
+	return fmt.Errorf("session %s was written by a newer ajent; update ajent to resume it", info.Label())
+}
+
+// skipNewerNote describes the newer-format sessions --continue skipped to reach
+// what it resumed (or fresh), so a downgrade reads as an explained fallback
+// rather than vanishing history.
+func skipNewerNote(skipped int, newest session.Info) string {
+	if skipped == 1 {
+		return fmt.Sprintf("skipping %s: written by a newer ajent", newest.Label())
+	}
+	return fmt.Sprintf("skipping %d sessions (newest %s): written by a newer ajent", skipped, newest.Label())
+}
+
 // CheckSessionTarget verifies that a requested session exists before the TUI
-// opens, so an id or name fails fast rather than silently starting fresh.
+// opens, so an id or name fails fast rather than silently starting fresh. A
+// target blocked behind a newer format refuses with the version hint.
 func CheckSessionTarget(mode ResumeMode, target string) error {
 	store, err := session.NewStore()
 	if err != nil {
@@ -104,11 +125,19 @@ func CheckSessionTarget(mode ResumeMode, target string) error {
 	}
 	cwd := config.Cwd()
 	if mode == ResumeSessionName {
-		_, _, ferr := store.FindNamed(cwd, target)
-		return ferr
+		info, found, ferr := store.FindNamed(cwd, target)
+		if ferr != nil || !found {
+			return ferr
+		} else if info.Blocked {
+			return refuseNewer(info)
+		}
+		return nil
 	}
-	if _, ferr := store.Find(cwd, target); ferr != nil {
+	info, ferr := store.Find(cwd, target)
+	if ferr != nil {
 		return fmt.Errorf("no session matches %q", target)
+	} else if info.Blocked {
+		return refuseNewer(info)
 	}
 	return nil
 }
@@ -126,62 +155,92 @@ func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string) (*sessRec,
 	if ui != nil && mode == ResumePick {
 		pick = func(list []session.Info) (int, error) { return pickSessionRoot(ui, list) }
 	}
-	w, err := openSession(store, mode, cwd, target, modelKey, pick)
+	w, note, err := openSession(store, mode, cwd, target, modelKey, pick)
 	if err != nil {
 		return nil, err
 	}
-	return &sessRec{store: store, w: w, rec: session.NewRecorder(w)}, nil
+	return &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: note}, nil
 }
 
-func openSession(store *session.Store, mode ResumeMode, cwd string, target, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, error) {
-	fresh := func(name string) (*session.Writer, error) {
+// openSession resolves mode onto a transcript writer. A returned error is an
+// open failure the caller must surface, never a fall-back-to-fresh signal;
+// implicit modes that legitimately start fresh return a writer with a nil
+// error. note carries a caveat about what was chosen (a --continue that had to
+// skip newer-format sessions) for the front end to announce.
+func openSession(store *session.Store, mode ResumeMode, cwd string, target, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, string, error) {
+	fresh := func(name string) (*session.Writer, string, error) {
 		sd := session.SessionData{Version: session.Version(), Workspace: cwd, Name: name}
 		if modelKey != "" {
 			sd.Model = modelKey // provenance so a resume can stamp assistant origins
 		}
-		return store.Create(cwd, sd)
+		w, err := store.Create(cwd, sd)
+		return w, "", err
 	}
 
 	switch mode {
 	case ResumeContinue:
-		info, lerr := store.Latest(cwd)
-		if lerr == nil {
-			return session.Open(info.Path) // resume the most recent transcript's leaf
-		} else if errors.Is(lerr, session.ErrNoSessions) {
-			return fresh("")
+		list, lerr := store.List(cwd)
+		if lerr != nil {
+			return nil, "", lerr
+		} else if len(list) == 0 {
+			return fresh("") // nothing saved yet, start one
 		}
-		return nil, lerr
+		// resume the newest session this build can open: a newer-format one is
+		// skipped loudly instead of quietly misrouting work into an older one.
+		i := slices.IndexFunc(list, func(in session.Info) bool { return !in.Blocked })
+		if i < 0 { // every save needs a newer ajent; still start one
+			w, _, ferr := fresh("")
+			return w, skipNewerNote(len(list), list[0]), ferr
+		}
+		w, err := session.Open(list[i].Path)
+		var note string
+		if err == nil && i > 0 {
+			note = skipNewerNote(i, list[0]) // rows sorting above the resumed one are all blocked
+		}
+		return w, note, err
 	case ResumeID:
 		info, ferr := store.Find(cwd, target)
 		if ferr != nil {
-			return nil, ferr
+			return nil, "", ferr
+		} else if info.Blocked { // refused here so Open never touches a newer transcript
+			return nil, "", refuseNewer(info)
 		}
-		return session.Open(info.Path) // resume that exact transcript's leaf
+		w, err := session.Open(info.Path) // resume that exact transcript's leaf
+		return w, "", err
 	case ResumeSessionName:
 		info, found, ferr := store.FindNamed(cwd, target)
 		if ferr != nil {
-			return nil, ferr
+			return nil, "", ferr
 		} else if !found {
 			return fresh(target) // first run under this name
+		} else if info.Blocked { // the held name is refused, never re-minted as a fresh transcript
+			return nil, "", refuseNewer(info)
 		}
-		return session.Open(info.Path)
+		w, err := session.Open(info.Path)
+		return w, "", err
 	case ResumePick:
 		list, lerr := store.List(cwd)
 		if lerr != nil && !errors.Is(lerr, session.ErrNoSessions) {
-			return nil, lerr // a listing failure must not read as nothing to resume
+			return nil, "", lerr // a listing failure must not read as nothing to resume
 		} else if len(list) == 0 {
 			return fresh("") // nothing saved yet, start one
 		}
 		if pick == nil { // no way to choose: refuse rather than silently start fresh
-			return nil, errors.New("bare --resume needs a terminal for the session picker; pass an id or name")
+			return nil, "", errors.New("bare --resume needs a terminal for the session picker; pass an id or name")
 		}
 		picked, perr := pick(list)
 		if errors.Is(perr, tui.ErrCancelled) || picked < 0 {
 			return fresh("") // cancelled the resume, start new rather than stall
 		} else if perr != nil {
-			return nil, perr
+			return nil, "", perr
 		}
-		return session.Open(list[picked].Path) // resume that root's leaf
+		// the picker only shades a blocked row (Disabled is not enforced), so the
+		// invariant that Open never sees one holds at this boundary too
+		if list[picked].Blocked {
+			return nil, "", refuseNewer(list[picked])
+		}
+		w, err := session.Open(list[picked].Path) // resume that root's leaf
+		return w, "", err
 	default: // ResumeNewSession and anything unexpected: always fresh
 		return fresh("")
 	}
@@ -255,6 +314,11 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		}
 		// the name renders as the tag and both it and the id stay filterable
 		items[i] = tui.PickItem{Label: label, Detail: detail, Tag: in.Name, Terms: []string{in.ID}}
+		if in.Blocked {
+			// present but unopenable: the row says where the conversation went
+			items[i].Label = "created by a newer ajent"
+			items[i].Disabled = true
+		}
 	}
 	return ui.PickContext(context.Background(), "Resume session", items,
 		tui.PickOptions{Placeholder: "filter"})

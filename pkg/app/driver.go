@@ -67,6 +67,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			msg = "session open failed: " + serr.Error() + "; recording disabled, Esc will not rewind"
 		}
 		ui.Notify(msg, tui.LevelWarn)
+	} else if rec.note != "" {
+		ui.Notify(rec.note, tui.LevelWarn) // e.g. --continue skipped newer-format sessions
 	}
 
 	sink := tuisink.New(ui)

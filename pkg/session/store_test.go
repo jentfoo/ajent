@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -91,10 +92,6 @@ func TestStoreList(t *testing.T) {
 		// one message was appended to each session
 		assert.Equal(t, 1, list[0].Messages)
 
-		latest, lerr := s.Latest(ws)
-		require.NoError(t, lerr)
-		assert.Equal(t, bID, latest.ID)
-
 		found, ferr := s.Find(ws, aID)
 		require.NoError(t, ferr)
 		assert.Equal(t, aID, found.ID)
@@ -143,10 +140,6 @@ func TestStoreList(t *testing.T) {
 		require.Len(t, list, 2)
 		assert.Equal(t, old.Path(), list[0].Path)
 		assert.Equal(t, newer.Path(), list[1].Path)
-
-		latest, lerr := s.Latest(ws)
-		require.NoError(t, lerr)
-		assert.Equal(t, old.Path(), latest.Path)
 	})
 
 	t.Run("empty_when_missing_dir", func(t *testing.T) {
@@ -159,10 +152,6 @@ func TestStoreList(t *testing.T) {
 
 func TestStoreFindAmbiguousAndMissing(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-
-	// no sessions yet is ErrNoSessions, not an error from listing
-	_, err := s.Latest("nowhere")
-	require.ErrorIs(t, err, ErrNoSessions)
 
 	ws := t.TempDir()
 	t.Cleanup(setClock(time.UnixMilli(1_900_000_001).UTC()))
@@ -675,5 +664,106 @@ func TestStoreNameConflict(t *testing.T) {
 	t.Run("new_session_has_no_self", func(t *testing.T) {
 		require.ErrorIs(t, s.NameConflict(ws, "taken", ""), ErrNameConflict)
 		assert.NoError(t, s.NameConflict(ws, "free", ""))
+	})
+}
+
+// futureVersion is a session format no current build accepts.
+const futureVersion = 999
+
+// writeNewer plants one newer-format transcript in the workspace's store, named
+// when name is set, as a newer ajent would have left behind.
+func writeNewer(t *testing.T, s *Store, ws, name string) Info {
+	t.Helper()
+
+	dir, err := s.Dir(ws)
+	require.NoError(t, err)
+	line := fmt.Sprintf(`{"id":"newer-root","type":"session","ts":%d,"data":{"version":%d,"name":%q}}`,
+		time.Now().Add(time.Hour).UnixMilli(), futureVersion, name)
+	p := filepath.Join(dir, "2099-01-01T00-00-00Z-newer.jsonl")
+	writeLines(t, p, []string{line})
+
+	var info Info
+	info.Path = p
+	info.ID = "newer-root"
+	info.Name = name
+	return info
+}
+
+func TestStoreNewerFormat(t *testing.T) {
+	t.Run("read_info_marks_blocked", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		want := writeNewer(t, s, t.TempDir(), "future-work")
+
+		info, ok := readInfo(want.Path)
+		require.True(t, ok)
+
+		assert.True(t, info.Blocked)
+		assert.Equal(t, want.ID, info.ID)
+		assert.Equal(t, "future-work", info.Name)
+		assert.False(t, info.Started.IsZero())
+		assert.Zero(t, info.Messages) // branch-derived fields stay unset
+		assert.Empty(t, info.First)
+	})
+
+	t.Run("list_keeps_the_row_visible", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		blocked := writeNewer(t, s, ws, "")
+		readable := writeAt(t, s, ws, time.UnixMilli(1_900_000_000_000).UTC(), SessionData{Version: sessionVersion}, "older readable")
+
+		list, err := s.List(ws)
+		require.NoError(t, err)
+		require.Len(t, list, 2) // the blocked transcript is not invisible
+
+		row := func(path string) Info {
+			i := slices.IndexFunc(list, func(in Info) bool { return in.Path == path })
+			require.GreaterOrEqual(t, i, 0)
+			return list[i]
+		}
+		assert.True(t, row(blocked.Path).Blocked)
+		assert.Equal(t, blocked.ID, row(blocked.Path).ID)
+		assert.False(t, row(readable.Path()).Blocked)
+	})
+
+	t.Run("find_resolves_blocked", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		writeNewer(t, s, ws, "future-work")
+
+		for _, target := range []string{"future-work", "newer-root", "newer-ro"} { // name, id, prefix
+			info, err := s.Find(ws, target)
+			require.NoError(t, err)
+			assert.True(t, info.Blocked)
+			assert.Equal(t, "newer-root", info.ID)
+		}
+
+		found, exists, ferr := s.FindNamed(ws, "future-work")
+		require.NoError(t, ferr)
+		assert.True(t, exists) // --session sees it instead of re-minting the name
+		assert.True(t, found.Blocked)
+	})
+
+	t.Run("name_conflict_guards_held_name", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		writeNewer(t, s, ws, "future-work")
+		readable := writeAt(t, s, ws, time.UnixMilli(1_900_000_000_100).UTC(), SessionData{Version: sessionVersion}, "plain")
+
+		// /session rename must not hand the held name to another transcript
+		assert.ErrorIs(t, s.NameConflict(ws, "future-work", readable.Path()), ErrNameConflict)
+	})
+
+	t.Run("stale_never_sweeps_blocked", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		blocked := writeNewer(t, s, ws, "") // unnamed and old enough by entry ts
+
+		cutoff := time.Now().UTC().Add(time.Hour)
+		stale, err := s.Stale(ws, cutoff)
+		require.NoError(t, err)
+		assert.Empty(t, stale) // this build cannot read what it would be deleting
+
+		_, staterr := os.Stat(blocked.Path)
+		require.NoError(t, staterr) // and the file survived untouched
 	})
 }

@@ -81,7 +81,10 @@ func (s *Store) Create(workspace string, d SessionData) (*Writer, error) {
 	return Create(filepath.Join(dir, name), d)
 }
 
-// List returns every session for workspace, most recently used first.
+// List returns every session for workspace, most recently used first. A
+// transcript this build cannot open (a newer ajent wrote it) still appears,
+// marked Info.Blocked; callers surface those as they see fit and must never
+// pass one to Open.
 func (s *Store) List(workspace string) ([]Info, error) {
 	dir, err := s.Dir(workspace)
 	if err != nil {
@@ -113,20 +116,10 @@ func (s *Store) List(workspace string) ([]Info, error) {
 	return out, nil
 }
 
-// Latest returns the most recently used session for workspace.
-func (s *Store) Latest(workspace string) (Info, error) {
-	list, err := s.List(workspace)
-	if err != nil {
-		return Info{}, err
-	}
-	if len(list) == 0 {
-		return Info{}, ErrNoSessions
-	}
-	return list[0], nil
-}
-
 // Find returns the session matching target: an exact name first (case
-// insensitive), then an exact id, then a unique id prefix.
+// insensitive), then an exact id, then a unique id prefix. A match blocked
+// behind a newer format resolves too, with Info.Blocked set: it can be named,
+// resumed by a newer binary or deleted here, but never opened.
 func (s *Store) Find(workspace, target string) (Info, error) {
 	list, err := s.List(workspace)
 	if err != nil {
@@ -190,7 +183,8 @@ func (s *Store) NameConflict(workspace, name, selfPath string) error {
 }
 
 // Stale returns the workspace's unnamed sessions last used before cutoff, most recently used first.
-// A named session is never stale: the name is what --session resumes it by.
+// A named session is never stale: the name is what --session resumes it by. Nor
+// is a newer-format one swept: this build cannot read what it would be deleting.
 func (s *Store) Stale(workspace string, cutoff time.Time) ([]Info, error) {
 	list, err := s.List(workspace)
 	if err != nil {
@@ -198,7 +192,7 @@ func (s *Store) Stale(workspace string, cutoff time.Time) ([]Info, error) {
 	}
 	// List already orders on last use, the field the sweep selects by
 	return bulk.SliceFilterInPlace(func(in Info) bool {
-		return in.Name == "" && in.Updated.Before(cutoff)
+		return !in.Blocked && in.Name == "" && in.Updated.Before(cutoff)
 	}, list), nil
 }
 
@@ -223,12 +217,26 @@ type Info struct {
 	Model    string
 	Messages int
 	First    string // first user message, truncated
+
+	// Blocked marks a transcript written by a newer ajent (ErrNewerFormat):
+	// identity fields are filled, branch-derived ones (Messages, First) are not,
+	// and Open must never see it.
+	Blocked bool
+}
+
+// Label returns what --resume takes back for a saved session: its name, or its
+// id when unnamed.
+func (i Info) Label() string {
+	if i.Name != "" {
+		return i.Name
+	}
+	return i.ID
 }
 
 func readInfo(path string) (Info, bool) {
 	entries, _, err := Read(path)
 	if err != nil {
-		return Info{}, false
+		return blockedInfo(path, entries, err)
 	}
 	var info Info
 	info.Path = path
@@ -245,6 +253,23 @@ func readInfo(path string) (Info, bool) {
 	info.Name = NameOf(entries)
 	info.Updated = lastUsed(path, entries)
 	info.First = firstUserOn(branch)
+	return info, true
+}
+
+// blockedInfo classifies a failed read: only a newer format arrives with its
+// entries parsed, and those still identify the file so List and Find can see
+// it. Branch-derived fields stay unset because this build must not interpret
+// what it cannot open.
+func blockedInfo(path string, entries []Entry, err error) (Info, bool) {
+	if !errors.Is(err, ErrNewerFormat) || len(entries) == 0 {
+		return Info{}, false // missing or unreadable is simply not a session
+	}
+	var info Info
+	info.Path = path
+	info.Blocked = true
+	info.ID, info.Started, info.Model = sessionIdentity(entries)
+	info.Name = NameOf(entries)
+	info.Updated = lastUsed(path, entries)
 	return info, true
 }
 

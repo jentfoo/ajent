@@ -10,7 +10,9 @@ import (
 )
 
 // DeleteSession removes the one session target names, resolved the way --resume
-// resolves it: an exact name, a full id, or a unique id prefix.
+// resolves it: an exact name, a full id, or a unique id prefix. A newer-format
+// session is removable too: deletion needs no decode, and it is the escape
+// hatch that frees a name a blocked transcript would otherwise hold forever.
 func DeleteSession(out io.Writer, store *Store, cwd, target string) error {
 	info, err := store.Find(cwd, target)
 	if errors.Is(err, ErrNotFound) {
@@ -21,7 +23,11 @@ func DeleteSession(out io.Writer, store *Store, cwd, target string) error {
 	if err := store.Remove(info.Path); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "Deleted session %s (%s).\n", infoLabel(info), describeInfo(info))
+	if info.Blocked {
+		_, _ = fmt.Fprintf(out, "Deleted session %s (written by a newer ajent).\n", info.Label())
+		return nil
+	}
+	_, _ = fmt.Fprintf(out, "Deleted session %s (%s).\n", info.Label(), describeInfo(info))
 	return nil
 }
 
@@ -37,7 +43,7 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 		return nil
 	}
 	for _, info := range stale {
-		_, _ = fmt.Fprintf(out, "  %s  %s\n", infoLabel(info), describeInfo(info))
+		_, _ = fmt.Fprintf(out, "  %s  %s\n", info.Label(), describeInfo(info))
 	}
 	_, _ = fmt.Fprintf(out, "Delete %s? [y/N] ", plural(len(stale), "session"))
 	if !confirmed(in) {
@@ -75,15 +81,6 @@ func plural(n int, unit string) string {
 		return fmt.Sprintf("%d %s", n, unit)
 	}
 	return fmt.Sprintf("%d %ss", n, unit)
-}
-
-// infoLabel returns what --resume takes back for a saved session: its name, or
-// its id when unnamed.
-func infoLabel(info Info) string {
-	if info.Name != "" {
-		return info.Name
-	}
-	return info.ID
 }
 
 // describeInfo summarises a saved session for the delete output.

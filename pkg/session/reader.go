@@ -3,14 +3,21 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 )
 
+// ErrNewerFormat marks a transcript written by a newer ajent: Read still
+// returns its parsed entries so selection surfaces can identify the file
+// (Info.Blocked) while nothing here may open or append to it.
+var ErrNewerFormat = errors.New("session format is newer than this build supports")
+
 // Read parses every complete line of a transcript into entries, tolerating
 // garbage. A trailing partial write is skipped silently, while an unparseable middle
 // line becomes a warning and never makes the session unopenable. Only a newer
-// major format version is a hard error.
+// major format version is a hard error, returned together with the parsed
+// entries so a blocked file stays identifiable.
 func Read(path string) ([]Entry, []string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -54,8 +61,8 @@ func parseLine(line []byte) (Entry, string) {
 	return e, ""
 }
 
-// versionErr returns a hard error when any session entry carries a format newer
-// than this build understands.
+// versionErr returns a hard error when any session entry carries a format
+// newer than this build understands.
 func versionErr(entries []Entry) error {
 	for _, e := range entries {
 		if e.Type != TypeSession {
@@ -63,7 +70,7 @@ func versionErr(entries []Entry) error {
 		}
 		var sd SessionData
 		if err := json.Unmarshal(e.Data, &sd); err == nil && sd.Version > sessionVersion {
-			return fmt.Errorf("session format v%d is newer than supported v%d", sd.Version, sessionVersion)
+			return fmt.Errorf("session format v%d is newer than supported v%d: %w", sd.Version, sessionVersion, ErrNewerFormat)
 		}
 	}
 	return nil
