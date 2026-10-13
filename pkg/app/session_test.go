@@ -319,6 +319,23 @@ func TestOpenSessionModes(t *testing.T) {
 	assert.NotEqual(t, firstPath, wCancel.Path())
 }
 
+func TestOpenSessionResumePickHeadless(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
+
+	// an empty workspace needs no choice: fresh matches the picker's own
+	// empty-list rule, so there is nothing to refuse yet
+	w, err := openSession(store, ResumePick, ws, "", "", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	// now a saved session exists but headless has no way to choose it
+	_, err = openSession(store, ResumePick, ws, "", "", nil)
+	assert.ErrorContains(t, err, "bare --resume")
+}
+
 func TestOpenSessionContinueRewound(t *testing.T) {
 	t.Parallel()
 

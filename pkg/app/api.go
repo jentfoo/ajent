@@ -61,7 +61,7 @@ type ResumeMode int
 const (
 	ResumeNewSession  ResumeMode = iota // no flag: always a brand-new transcript
 	ResumeContinue                      // --continue: auto-resume the most recent one
-	ResumePick                          // --resume: picker over session roots, then resume its leaf
+	ResumePick                          // --resume: pick among saved roots in a terminal; with no UI (headless) it refuses, never silent fresh
 	ResumeID                            // --resume <id|name>: reopen that exact saved transcript directly
 	ResumeSessionName                   // --session <name>: resume that name, creating it when new
 )

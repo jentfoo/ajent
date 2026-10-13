@@ -70,7 +70,8 @@ func RunHeadless(o HeadlessOptions) int {
 	// recording keeps -p composable: a follow-up --continue rejoins this transcript
 	rec, serr := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key())
 	if serr != nil && o.SessMode != ResumeNewSession {
-		// an explicit resume target that cannot open must not silently start fresh
+		// an explicit resume target, or a bare --resume with no picker, must not
+		// silently start fresh
 		_, _ = fmt.Fprintf(errw, "session: %v\n", serr)
 		return ExitUsage
 	}

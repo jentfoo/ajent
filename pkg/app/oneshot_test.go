@@ -481,6 +481,44 @@ func TestRunHeadless(t *testing.T) {
 		assert.NotContains(t, errw, "permission not given") // the tool's own error surfaced
 	})
 
+	// a piped invocation without -p reaches RunHeadless as a bare --resume:
+	// it must refuse with a usage error rather than silently start fresh
+	t.Run("bare_resume_pick_refused", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("AJENT_HOME", t.TempDir())
+		set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
+		require.NoError(t, err)
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+
+		run := func(prompt string, mode ResumeMode, turns []llm.ScriptedTurn) (int, string) {
+			sp := &llm.ScriptedProvider{ProviderName: "p", Turns: turns}
+			var out, errw bytes.Buffer
+			code := RunHeadless(HeadlessOptions{
+				Prompt: prompt, Output: OutputText, Set: set, Reg: reg,
+				Active: model, SessMode: mode, Out: &out, Errw: &errw,
+				Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+			})
+			return code, errw.String()
+		}
+
+		// seed one saved transcript so the picker would have a choice to make
+		code, errw := run("first question", ResumeNewSession,
+			[]llm.ScriptedTurn{{Events: textTurn("first answer")}})
+		require.Equal(t, ExitOK, code, errw)
+
+		code, errw = run("piped question", ResumePick, nil)
+		assert.Equal(t, ExitUsage, code)
+		assert.Contains(t, errw, "session:")
+
+		// the refused run opened no stray transcript beside the seeded one
+		store, serr := session.NewStore()
+		require.NoError(t, serr)
+		list, lerr := store.List(config.Cwd())
+		require.NoError(t, lerr)
+		require.Len(t, list, 1)
+	})
+
 	t.Run("json_stream_ends_in_result", func(t *testing.T) {
 		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputJSON}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("all done")}})

@@ -167,15 +167,15 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		return session.Open(info.Path)
 	case ResumePick:
 		list, lerr := store.List(cwd)
-		if len(list) == 0 || errors.Is(lerr, session.ErrNoSessions) {
+		if lerr != nil && !errors.Is(lerr, session.ErrNoSessions) {
+			return nil, lerr // a listing failure must not read as nothing to resume
+		} else if len(list) == 0 {
 			return fresh("") // nothing saved yet, start one
-		} else if lerr != nil {
-			return nil, lerr
 		}
-		picked, perr := -1, error(nil)
-		if pick != nil { // no UI means we cannot choose, fall back to fresh
-			picked, perr = pick(list)
+		if pick == nil { // no way to choose: refuse rather than silently start fresh
+			return nil, errors.New("bare --resume needs a terminal for the session picker; pass an id or name")
 		}
+		picked, perr := pick(list)
 		if errors.Is(perr, tui.ErrCancelled) || picked < 0 {
 			return fresh("") // cancelled the resume, start new rather than stall
 		} else if perr != nil {
