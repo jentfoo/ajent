@@ -67,7 +67,7 @@ func TestFixtureCompact(t *testing.T) {
 		branch := loadFixtureBranch(t, "tools.jsonl")
 
 		opts := Options{Cwd: "/w", Retain: llm.RetainAll, Resolve: fixtureResolver()}
-		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\ntidy the parser"), opts)
+		res, err := Compact(t.Context(), branch, model, summaryRun(sectionedGoal("tidy the parser")), opts)
 		require.NoError(t, err)
 		require.NotNil(t, res, "the fixture has measurable slack")
 		assert.Less(t, res.After, res.Before)
@@ -86,7 +86,7 @@ func TestFixtureCompact(t *testing.T) {
 		var prompted bool
 		run := func(_ context.Context, _ llm.Request) (string, error) {
 			prompted = true
-			return "## Goal\ntidy the parser", nil
+			return sectionedGoal("tidy the parser"), nil
 		}
 		res, err := Compact(t.Context(), branch, model, run, Options{Cwd: "/w"})
 		require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestFixtureCompact(t *testing.T) {
 	t.Run("recompaction_keeps_the_prior_cut", func(t *testing.T) {
 		branch := loadFixtureBranch(t, "tools.jsonl")
 		opts := Options{Cwd: "/w", Retain: llm.RetainAll}
-		run := summaryRun("## Goal\ntidy the parser")
+		run := summaryRun(sectionedGoal("tidy the parser"))
 
 		first, err := Compact(t.Context(), branch, model, run, opts)
 		require.NoError(t, err)
@@ -152,7 +152,7 @@ func TestFixtureRecompaction(t *testing.T) {
 	var got llm.Request
 	run := func(_ context.Context, req llm.Request) (string, error) {
 		got = req
-		return "## Goal\nmerged checkpoint", nil
+		return sectionedGoal("merged checkpoint"), nil
 	}
 	opts := Options{Cwd: "/w", Retain: llm.RetainAll, Resolve: fixtureResolver()}
 

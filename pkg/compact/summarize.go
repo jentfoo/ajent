@@ -98,6 +98,38 @@ Produce ONE merged summary. RULES:
 // minSummaryTokens floors a merged checkpoint's budget.
 const minSummaryTokens = 8192 // a merged checkpoint is never amputated by a hard cap
 
+// errEmptySummary fails the run: a blank reply folds nothing.
+var errEmptySummary = errors.New("summariser returned an empty summary; retry, or if context usage is low skip compaction")
+
+// summarySections are the six exact-format headings a checkpoint must carry,
+// lower-cased for matching. See docs/prompt-design.md.
+var summarySections = []string{
+	"## goal",
+	"## constraints & preferences",
+	"## progress",
+	"## key decisions",
+	"## next steps",
+	"## critical context",
+}
+
+// canonicalSummary prepares one summariser reply for recording: trimmed and with
+// block escapes undone, so summaries are stored raw while every render re-escapes
+// and text copied out of <previous-summary> never double-escapes.
+func canonicalSummary(out string) string {
+	return session.UnescapeTagLiterals(strings.TrimSpace(out))
+}
+
+// missingSections returns the required checkpoint headings s does not carry,
+// matched case-insensitively against its exact-format spec; nil when none.
+func missingSections(s string) []string {
+	low := strings.ToLower(s)
+	miss := bulk.SliceFilter(func(h string) bool { return !strings.Contains(low, h) }, summarySections)
+	if len(miss) == 0 {
+		return nil
+	}
+	return miss
+}
+
 // summarise folds the message entries in [spanStart, end) into a checkpoint with
 // run, merging any previous summary on the branch. It returns the summary text and
 // how many messages it covered. An empty summary with no error means there was
@@ -153,9 +185,20 @@ func summariseRegion(ctx context.Context, v *branchView, start, end int, prev st
 		if err != nil {
 			return "", 0, err
 		}
-		summary := strings.TrimSpace(out)
+		summary := canonicalSummary(out)
 		if summary == "" {
-			return "", 0, errors.New("summariser returned an empty summary; retry, or if context usage is low skip compaction")
+			return "", 0, errEmptySummary
+		}
+		if len(missingSections(summary)) > 0 {
+			// one bounded retry: a section-less checkpoint persists on every replay
+			out, err = run(ctx, req)
+			if err != nil {
+				return "", 0, err
+			}
+			summary = canonicalSummary(out)
+			if summary == "" {
+				return "", 0, errEmptySummary
+			}
 		}
 		return summary, kept + v.countMessages(from, end), nil
 	}
@@ -186,12 +229,14 @@ func buildPrompt(v *branchView, start, end int, prev, instructions string, stubs
 		b.WriteString("[earlier messages omitted]\n")
 	}
 	byCall := bulk.SliceToIndexBy(func(s session.Stub) string { return s.CallID }, stubs)
-	serialise(&b, v, start, end, byCall, clip)
+	var conv strings.Builder // escaped whole on the way out, so no data write can skip it
+	serialise(&conv, v, start, end, byCall, clip)
+	b.WriteString(session.EscapeTagLiterals(conv.String()))
 	b.WriteString("</conversation>\n\n")
 
 	instr := initialInstruction
 	if prev != "" {
-		b.WriteString("<previous-summary>\n" + prev + "\n</previous-summary>\n\n")
+		b.WriteString("<previous-summary>\n" + session.EscapeTagLiterals(prev) + "\n</previous-summary>\n\n")
 		instr = incrementalInstruction
 	}
 	b.WriteString(instr)

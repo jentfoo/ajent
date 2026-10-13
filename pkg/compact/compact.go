@@ -3,6 +3,7 @@ package compact
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
@@ -35,6 +36,8 @@ type Result struct {
 	Before           int // estimated tokens the next request carries now
 	After            int // estimated tokens it will carry once this plan is recorded
 	Reduce           session.Reduce
+	// Warnings name defects in what was recorded that did not fail the run.
+	Warnings []string
 }
 
 // RunPrompt performs one summarisation model call and returns its assistant text.
@@ -91,6 +94,10 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		// the recorded plan is inert by construction, so it carries only what the
 		// notice needs, claiming stub work here would describe context that never changed
 		Reduce: session.Reduce{Stats: session.Stats{Summarized: nsum}},
+	}
+	// a defective checkpoint still records; the warning only makes the defect visible
+	if miss := missingSections(summary); len(miss) > 0 {
+		res.Warnings = append(res.Warnings, "summary is missing required sections: "+strings.Join(miss, ", "))
 	}
 	cd := session.CompactionData{Summary: summary, FirstKeptEntryID: firstKept, Reduce: &res.Reduce}
 	res.After = tokensFor(branch, cd, model, opts.Retain, opts.Base, opts.Resolve)

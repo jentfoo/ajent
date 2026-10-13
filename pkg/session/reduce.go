@@ -208,5 +208,36 @@ func summaryFraming(s string) string {
 		return ""
 	}
 	const head = "The conversation history before this point was compacted into the following summary:\n\n"
-	return head + "<summary>\n" + s + "\n</summary>"
+	return head + "<summary>\n" + EscapeTagLiterals(s) + "\n</summary>"
+}
+
+// tagEscaper neutralises the close tags framing compaction's data blocks: a
+// literal one in tool output or a stored summary would end its block early and
+// let text after it read as top-level user authority. The backslash form reads
+// naturally to models and cannot itself close a frame.
+var tagEscaper = strings.NewReplacer(
+	"</conversation>", `<\/conversation>`,
+	"</previous-summary>", `<\/previous-summary>`,
+	"</summary>", `<\/summary>`,
+)
+
+// tagUnescaper is tagEscaper's exact inverse, for canonicalising block framing a
+// model copied out of an escaped render before the result is stored raw.
+var tagUnescaper = strings.NewReplacer(
+	`<\/conversation>`, "</conversation>",
+	`<\/previous-summary>`, "</previous-summary>",
+	`<\/summary>`, "</summary>",
+)
+
+// EscapeTagLiterals neutralises the compaction close-tag literals in s so data
+// can ride inside a framed block without ending it early. Idempotent, so legacy
+// unescaped summaries compose with newly escaped ones on every render.
+func EscapeTagLiterals(s string) string {
+	return tagEscaper.Replace(s)
+}
+
+// UnescapeTagLiterals reverses EscapeTagLiterals on exactly the forms it emits,
+// leaving every other sequence alone.
+func UnescapeTagLiterals(s string) string {
+	return tagUnescaper.Replace(s)
 }

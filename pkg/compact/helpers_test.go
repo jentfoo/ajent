@@ -72,3 +72,35 @@ func injectedText(id, text string) session.Entry {
 	b, _ := json.Marshal(session.MessageData{Message: llm.Text(llm.RoleUser, text), Injected: true})
 	return session.Entry{ID: id, Type: session.TypeMessage, Data: b}
 }
+
+// sectionedGoal embeds a goal line into a complete six-section summariser reply,
+// so scripted runs satisfy the validation every recorded checkpoint must pass.
+func sectionedGoal(goal string) string {
+	return `## Goal
+` + goal + `
+
+## Constraints & Preferences
+- (none)
+
+## Progress
+### Done
+- [x] chose the cut
+
+### In Progress
+- [ ] merging checkpoints
+
+### Blocked
+- (none)
+
+## Key Decisions
+- **band first**: newest steps stay verbatim
+
+## Next Steps
+1. resume
+
+## Critical Context
+- /w/main.go holds the change`
+}
+
+// fullSummary is a complete six-section reply with nothing distinguishing.
+var fullSummary = sectionedGoal("fold history into one checkpoint")

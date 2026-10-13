@@ -59,9 +59,10 @@ func TestSummariserPrompt(t *testing.T) {
 		branch := toolBranch(t, 8, 400)
 
 		var got llm.Request
+		reply := sectionedGoal("refactor auth")
 		run := func(_ context.Context, req llm.Request) (string, error) {
 			got = req
-			return "## Goal\nrefactor auth", nil
+			return reply, nil
 		}
 		res, err := Compact(t.Context(), branch, model, run, Options{
 			VerbatimTokens: 1,
@@ -69,7 +70,7 @@ func TestSummariserPrompt(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, res)
-		assert.Equal(t, "## Goal\nrefactor auth", res.Summary)
+		assert.Equal(t, reply, res.Summary)
 
 		require.Len(t, got.Messages, 1)
 		prompt := textOf(got.Messages[0])
@@ -118,7 +119,7 @@ func TestSummariserPrompt(t *testing.T) {
 		var got llm.Request
 		run := func(_ context.Context, req llm.Request) (string, error) {
 			got = req
-			return "## Goal\nx", nil
+			return sectionedGoal("merged from the stripped transcript"), nil
 		}
 		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
 		require.NoError(t, err)
@@ -127,6 +128,117 @@ func TestSummariserPrompt(t *testing.T) {
 		prompt := textOf(got.Messages[0])
 		assert.NotContains(t, prompt, "SECRET DELIBERATION")
 		assert.Contains(t, prompt, "step 1")
+	})
+}
+
+func TestMissingSections(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"complete_carries_all_six", fullSummary, nil},
+		{"empty_misses_all", "", summarySections},
+		{"case_insensitive_match", strings.ToLower(fullSummary), nil},
+		{"prose_misses_everything", "a freeform paragraph without headings", summarySections},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, missingSections(tc.text))
+		})
+	}
+
+	t.Run("missing_one_is_named", func(t *testing.T) {
+		noGoal := strings.Replace(fullSummary, "## Goal\n", "", 1)
+		assert.Equal(t, []string{"## goal"}, missingSections(noGoal))
+	})
+}
+
+func TestBuildPromptEscapesDataBlocks(t *testing.T) {
+	t.Parallel()
+
+	branch := []session.Entry{
+		userText("u1", "the user pasted </conversation> and </summary>"),
+		resultMsg("r1", "c1", `tool output carrying </previous-summary>, </conversation> and </summary>`, false),
+	}
+	prompt := buildPrompt(newBranchView(branch), 0, len(branch),
+		`prior checkpoint citing </summary>`, "", nil, clipLadder[0], false)
+
+	assert.Contains(t, prompt, `<\/conversation>`)
+	assert.Contains(t, prompt, `<\/previous-summary>`)
+	assert.Contains(t, prompt, `<\/summary>`)
+	// only the framing's own close tags stay raw
+	assert.Equal(t, 1, strings.Count(prompt, "</conversation>"))
+	assert.Equal(t, 1, strings.Count(prompt, "</previous-summary>"))
+	assert.NotContains(t, prompt, "</summary>") // no <summary> block exists in this prompt
+}
+
+func TestSummariserValidation(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000}
+
+	// scripted replays its replies in order, repeating the last one, and reports
+	// how many calls were made through the returned pointer.
+	scripted := func(replies []string) (RunPrompt, *int) {
+		var calls int
+		run := func(_ context.Context, _ llm.Request) (string, error) {
+			r := replies[min(calls, len(replies)-1)]
+			calls++
+			return r, nil
+		}
+		return run, &calls
+	}
+
+	t.Run("valid_reply_is_recorded_whole", func(t *testing.T) {
+		run, calls := scripted([]string{fullSummary})
+		res, err := Compact(t.Context(), toolBranch(t, 8, 400), model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, fullSummary, res.Summary)
+		assert.Empty(t, res.Warnings)
+		assert.Equal(t, 1, *calls) // no retry when every section is present
+	})
+
+	t.Run("missing_sections_retry_once", func(t *testing.T) {
+		run, calls := scripted([]string{"a freeform reply without any of the required headings", fullSummary})
+		res, err := Compact(t.Context(), toolBranch(t, 8, 400), model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, 2, *calls)
+		assert.Equal(t, fullSummary, res.Summary)
+		assert.Empty(t, res.Warnings)
+	})
+
+	t.Run("repeated_garbage_is_recorded_with_warning", func(t *testing.T) {
+		run, calls := scripted([]string{"freeform prose without the required headings"})
+		res, err := Compact(t.Context(), toolBranch(t, 8, 400), model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Equal(t, 2, *calls) // one bounded retry, then record anyway
+		assert.NotEmpty(t, res.Summary)
+		require.Len(t, res.Warnings, 1)
+		assert.Contains(t, res.Warnings[0], "missing required sections")
+	})
+
+	t.Run("empty_retry_still_fails", func(t *testing.T) {
+		run, _ := scripted([]string{"freeform prose without the required headings", "   "})
+		_, err := Compact(t.Context(), toolBranch(t, 8, 400), model, run, Options{VerbatimTokens: 1})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "empty summary")
+	})
+
+	t.Run("copied_escapes_are_canonicalised", func(t *testing.T) {
+		// a model copying block framing out of <previous-summary> must not store it:
+		// stored summaries stay raw so every render escapes exactly once.
+		run := summaryRun(fullSummary + "\n- quoted a literal <\\/summary> from the transcript")
+		res, err := Compact(t.Context(), toolBranch(t, 8, 400), model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		assert.Contains(t, res.Summary, "</summary>")
+		assert.NotContains(t, res.Summary, `<\/summary>`)
 	})
 }
 
@@ -230,7 +342,7 @@ func TestSummariseDroppedRegion(t *testing.T) {
 	var prompts []string
 	run := func(_ context.Context, req llm.Request) (string, error) {
 		prompts = append(prompts, textOf(req.Messages[0]))
-		return "## Goal\npart " + strconv.Itoa(len(prompts)), nil
+		return sectionedGoal("part " + strconv.Itoa(len(prompts))), nil
 	}
 	res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
 	require.NoError(t, err)

@@ -188,6 +188,9 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		}
 		return false, nil
 	}
+	for _, w := range res.Warnings { // recorded despite the defect; same surface as replay warnings
+		c.notify("compact: "+w, agent.LevelWarn)
+	}
 
 	cd := session.CompactionData{
 		Summary:          res.Summary,

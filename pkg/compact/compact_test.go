@@ -50,7 +50,7 @@ func TestCompact(t *testing.T) {
 	t.Run("folds_everything_before_the_band", func(t *testing.T) {
 		branch := toolBranch(t, 8, 400)
 
-		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\nthe work"), Options{VerbatimTokens: 1})
+		res, err := Compact(t.Context(), branch, model, summaryRun(sectionedGoal("the work")), Options{VerbatimTokens: 1})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		assert.Equal(t, "a7", res.FirstKeptEntryID)
@@ -74,7 +74,7 @@ func TestCompact(t *testing.T) {
 	t.Run("declines_when_the_band_is_everything", func(t *testing.T) {
 		branch := toolBranch(t, 2, 20)
 
-		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\nx"), Options{})
+		res, err := Compact(t.Context(), branch, model, summaryRun(sectionedGoal("x")), Options{})
 		require.NoError(t, err)
 		assert.Nil(t, res)
 	})
@@ -99,7 +99,7 @@ func TestCompact(t *testing.T) {
 	t.Run("plan_is_inert", func(t *testing.T) {
 		branch := toolBranch(t, 8, 400)
 
-		res, err := Compact(t.Context(), branch, model, summaryRun("## Goal\nx"), Options{VerbatimTokens: 1})
+		res, err := Compact(t.Context(), branch, model, summaryRun(sectionedGoal("x")), Options{VerbatimTokens: 1})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
@@ -116,7 +116,7 @@ func TestCompactVerbatimBand(t *testing.T) {
 	t.Parallel()
 
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000}
-	run := summaryRun("## Goal\nwork")
+	run := summaryRun(sectionedGoal("work"))
 
 	t.Run("floor_only_keeps_two_steps", func(t *testing.T) {
 		branch := toolBranch(t, 10, 400)
@@ -189,14 +189,16 @@ func TestCompactMeasuresRequestRetention(t *testing.T) {
 	branch := []session.Entry{userText("u1", "start")}
 	for i := 1; i <= 6; i++ {
 		s := strconv.Itoa(i)
+		// padded prose keeps the thinking-free context worth more than a full
+		// six-section checkpoint costs, so RetainNone still measures a saving
 		branch = append(branch, msg("a"+s, llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
 			llm.ThinkingBlock{Text: strings.Repeat("deliberating ", 300)},
-			llm.TextBlock{Text: "step " + s},
+			llm.TextBlock{Text: "step " + s + " " + strings.Repeat("word ", 60)},
 		}}))
 	}
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000,
 		Caps: llm.Capabilities{Reasoning: true}}
-	run := summaryRun("## Goal\nx")
+	run := summaryRun(sectionedGoal("x"))
 
 	measure := func(t *testing.T, retain llm.RetainPolicy) int {
 		t.Helper()
@@ -221,7 +223,7 @@ func TestCompactRecompaction(t *testing.T) {
 	t.Parallel()
 
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000, MaxOutput: 4000}
-	run := summaryRun("## Goal\nfresh")
+	run := summaryRun(sectionedGoal("fresh"))
 
 	// priorBranch is eight folded steps, a compaction keeping from "a7", then ten new steps recorded after it
 	priorBranch := func(t *testing.T) []session.Entry {
@@ -294,7 +296,7 @@ func TestCompactRecompaction(t *testing.T) {
 		var got llm.Request
 		run := func(_ context.Context, req llm.Request) (string, error) {
 			got = req
-			return "## Goal\nfresh", nil
+			return sectionedGoal("fresh"), nil
 		}
 		res, err := Compact(t.Context(), branch, big, run, Options{VerbatimTokens: 1})
 		require.NoError(t, err)

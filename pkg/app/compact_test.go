@@ -46,6 +46,33 @@ func truncatedStream(text string) []llm.Event {
 	}
 }
 
+// fullSummary is a complete six-section summariser reply, so scripted providers
+// satisfy the section validation every recorded checkpoint must pass.
+const fullSummary = `## Goal
+user wanted a story about lighthouses
+
+## Constraints & Preferences
+- keep file paths verbatim
+
+## Progress
+### Done
+- [x] chose the cut
+
+### In Progress
+- [ ] merging checkpoints
+
+### Blocked
+- (none)
+
+## Key Decisions
+- **band first**: newest steps stay verbatim
+
+## Next Steps
+1. resume the story
+
+## Critical Context
+- /w/story.txt holds the draft`
+
 // testCompactor wires a compactor over a real transcript with a scripted provider.
 func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*compactor, *agent.State, *session.Writer) {
 	t.Helper()
@@ -106,7 +133,7 @@ func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 func TestCompactorManualSingleTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: textStream("## Goal\nuser wanted a story about a lighthouse")},
+		{Events: textStream(fullSummary)},
 	}}
 	c, st, w := testCompactor(t, model, sp)
 
@@ -133,7 +160,7 @@ func TestCompactorManualSingleTurn(t *testing.T) {
 func TestCompactorReportsRebuiltContext(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: textStream("## Goal\nuser wanted a story")},
+		{Events: textStream(fullSummary)},
 	}}
 	c, st, w := testCompactor(t, model, sp)
 
@@ -154,7 +181,7 @@ func TestCompactorReportsRebuiltContext(t *testing.T) {
 func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: textStream("## Goal\nuser wanted a story")},
+		{Events: textStream(fullSummary)},
 	}}
 	c, st, w := testCompactor(t, model, sp)
 
@@ -175,9 +202,9 @@ func TestCompactorPlansFromLiveHeadAfterRewind(t *testing.T) {
 func TestCompactorOverflowRunsMidTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 600, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Err: llm.ErrContextOverflow},                        // oversized request
-		{Events: textStream("## Goal\nuser wanted stories")}, // summariser
-		{Events: textStream("recovered")},                    // retried turn
+		{Err: llm.ErrContextOverflow},     // oversized request
+		{Events: textStream(fullSummary)}, // summariser
+		{Events: textStream("recovered")}, // retried turn
 	}}
 	c, st, w := testCompactor(t, model, sp)
 
@@ -218,7 +245,7 @@ func TestCompactorAnnouncesStart(t *testing.T) {
 		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
 			turns := make([]llm.ScriptedTurn, 4)
 			for i := range turns {
-				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+				turns[i] = llm.ScriptedTurn{Events: textStream(fullSummary)}
 			}
 			return turns
 		}()}
@@ -266,7 +293,7 @@ func TestCompactorStallsWhenStillOverPoint(t *testing.T) {
 		ContextWindow: 40000, MaxOutput: 1000, CompactThreshold: 3000}
 	turns := make([]llm.ScriptedTurn, 4)
 	for i := range turns {
-		turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+		turns[i] = llm.ScriptedTurn{Events: textStream(fullSummary)}
 	}
 	c, st, w := testCompactor(t, model, &llm.ScriptedProvider{Turns: turns})
 	c.cfg = func() config.Compaction {
@@ -302,8 +329,8 @@ func TestCompactorStallsWhenStillOverPoint(t *testing.T) {
 func TestCompactorStepRunsMidTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: textStream("## Goal\nthe lighthouse story")}, // summariser
-		{Events: textStream("carried on")},                    // the turn resumes after it
+		{Events: textStream(fullSummary)},  // summariser
+		{Events: textStream("carried on")}, // the turn resumes after it
 	}}
 	c, st, w := testCompactor(t, model, sp)
 	c.cfg = func() config.Compaction {
@@ -343,7 +370,8 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 	setup := func(t *testing.T) (*compactor, *[]string) {
 		t.Helper()
 
-		bloated := "## Goal\n" + strings.Repeat("the lighthouse keeper wrote it all down. ", 1000)
+		// huge but complete: validation must not spend a scripted retry here
+		bloated := strings.Repeat("the lighthouse keeper wrote it all down. ", 1000) + "\n" + fullSummary
 		turns := make([]llm.ScriptedTurn, 4)
 		for i := range turns {
 			turns[i] = llm.ScriptedTurn{Events: textStream(bloated)}
@@ -368,7 +396,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
 			turns := make([]llm.ScriptedTurn, 4)
 			for i := range turns {
-				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+				turns[i] = llm.ScriptedTurn{Events: textStream(fullSummary)}
 			}
 			return turns
 		}()}
@@ -469,7 +497,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
 			turns := make([]llm.ScriptedTurn, 4)
 			for i := range turns {
-				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+				turns[i] = llm.ScriptedTurn{Events: textStream(fullSummary)}
 			}
 			return turns
 		}()}
@@ -555,7 +583,7 @@ func TestCompactorReseedReflectsReducedFullUsage(t *testing.T) {
 	// only fits by dropping its oldest entries
 	turns := make([]llm.ScriptedTurn, 4)
 	for i := range turns {
-		turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nuser wanted a story about lighthouses")}
+		turns[i] = llm.ScriptedTurn{Events: textStream(fullSummary)}
 	}
 	sp := &llm.ScriptedProvider{Turns: turns}
 	c, st, w := testCompactor(t, model, sp)
@@ -767,6 +795,31 @@ func TestCompactorRejectsTruncatedSummary(t *testing.T) {
 	assert.Len(t, st.Messages, before) // state untouched
 }
 
+func TestCompactorWarnsOnSectionlessSummary(t *testing.T) {
+	t.Parallel()
+
+	// both attempts lack the six required headings: one bounded retry, then the
+	// fold records anyway and says so where every other compaction warning lands.
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textStream("a freeform reply without the required headings")},
+		{Events: textStream("still freeform on the retry")},
+	}}
+	c, _, w := testCompactor(t, model, sp)
+	var notices []string
+	c.notify = func(msg string, level agent.Level) { notices = append(notices, msg) }
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+
+	did, err := c.run(t.Context(), agent.CompactManual, "")
+	require.NoError(t, err)
+	require.True(t, did) // the fold itself is not failed by a defective summary
+	assert.Len(t, compactionEntries(t, w), 1)
+	joined := strings.Join(notices, "\n")
+	assert.Contains(t, joined, "compact: summary is missing required sections")
+}
+
 func TestCompactorAutoSetting(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
 
@@ -778,7 +831,7 @@ func TestCompactorAutoSetting(t *testing.T) {
 		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
 			turns := make([]llm.ScriptedTurn, 4)
 			for i := range turns {
-				turns[i] = llm.ScriptedTurn{Events: textStream("## Goal\nthe lighthouse story")}
+				turns[i] = llm.ScriptedTurn{Events: textStream(fullSummary)}
 			}
 			return turns
 		}()}
@@ -863,7 +916,7 @@ func TestEndTurnClearsStalled(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m",
 		ContextWindow: 40000, MaxOutput: 1000, CompactThreshold: 3000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: textStream("## Goal\nthe lighthouse story")},
+		{Events: textStream(fullSummary)},
 	}}
 	c, st, w := testCompactor(t, model, sp)
 	var notices []string
