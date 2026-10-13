@@ -235,7 +235,7 @@ func (r mdRenderer) buildTable(n ast.Node, src []byte) *mdTable {
 				if !ok {
 					continue
 				}
-				hdr = append(hdr, r.inline(cc, src, ""))
+				hdr = append(hdr, r.tableCell(cc, src))
 				switch cell.Alignment {
 				case east.AlignCenter:
 					t.align = append(t.align, alignCenter)
@@ -252,12 +252,19 @@ func (r mdRenderer) buildTable(n ast.Node, src []byte) *mdTable {
 				if _, ok := cc.(*east.TableCell); !ok {
 					continue
 				}
-				row = append(row, r.inline(cc, src, ""))
+				row = append(row, r.tableCell(cc, src))
 			}
 			t.rows = append(t.rows, row)
 		}
 	}
 	return t
+}
+
+// tableCell renders one cell's inline content through the commitHist recipe,
+// since a structured table line commits with empty text and its cells never
+// pass through it. Cleaning here covers every renderer that lays them out.
+func (r mdRenderer) tableCell(n ast.Node, src []byte) string {
+	return sanitizeRow(strings.ReplaceAll(r.inline(n, src, ""), "\t", tabSpaces))
 }
 
 // layoutTable renders the table at width: column widths come from content and are

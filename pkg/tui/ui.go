@@ -959,10 +959,12 @@ func (u *UI) commit(text string, flow lineFlow) {
 }
 
 // commitHist expands tabs, sanitizes and hands the lines to the renderer.
-// Sanitizing once here covers every committed surface (inline, alt's retained
+// Sanitizing once here covers every committed text line (inline, alt's retained
 // lines, plain), keeping SGR so colored tool output reads, dropping the motion
-// and screen escapes caller text may carry. After Close restored the terminal,
-// late events from a drain still landing must not write to it.
+// and screen escapes caller text may carry. A table commits as a structured
+// line with empty text, so its cells are cleaned where they are built instead
+// (buildTable). After Close restored the terminal, late events from a drain
+// still landing must not write to it.
 func (u *UI) commitHist(lines []histLine) {
 	if u.closed || len(lines) == 0 {
 		return

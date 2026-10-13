@@ -175,6 +175,51 @@ func TestRenderMarkdownTable(t *testing.T) {
 	})
 }
 
+func TestRenderMarkdownTableCells(t *testing.T) {
+	t.Parallel()
+
+	plain := NewTheme(ColorNone, DefaultPalette())
+	layout := func(src string) []string {
+		lines := renderMarkdown(plain, 60, src)
+		require.Len(t, lines, 1)
+		require.NotNil(t, lines[0].table)
+		return layoutTable(lines[0].table, 60)
+	}
+
+	t.Run("escapes_dropped_text_kept", func(t *testing.T) {
+		rows := layout("| a\x1b[2Jb\x7fc |\n|---|\n| d |")
+		out := strings.Join(rows, "\n")
+		assert.NotContains(t, out, "\x1b")
+		assert.NotContains(t, out, "\x7f")
+		assert.Contains(t, out, "│ abc │")
+	})
+
+	t.Run("tabs_expand_like_commit", func(t *testing.T) {
+		rows := layout("| a\tb |\n|---|\n| c |")
+		out := strings.Join(rows, "\n")
+		assert.NotContains(t, out, "\t")
+		assert.Contains(t, out, "│ a"+tabSpaces+"b │")
+	})
+
+	t.Run("styled_cells_keep_sgr", func(t *testing.T) {
+		th := NewTheme(Color256, DefaultPalette())
+		lines := renderMarkdown(th, 60, "| `code` |\n|---|\n| x |")
+		require.Len(t, lines, 1)
+		rows := layoutTable(lines[0].table, 60)
+		assert.Contains(t, strings.Join(rows, "\n"), th.Code.Open()+"code"+sgrReset)
+	})
+
+	t.Run("measured_width_matches_rendered", func(t *testing.T) {
+		// a tab measures as zero columns but draws eight: expansion must keep the
+		// measured row width and the drawn row width agreeing
+		rows := layout("| \x1b[2Ja\tb |\n|---|\n| c |")
+		w := displayWidth(rows[0])
+		for _, row := range rows {
+			assert.Equal(t, w, displayWidth(row))
+		}
+	})
+}
+
 func TestLayoutTableClipsOverflow(t *testing.T) {
 	t.Parallel()
 

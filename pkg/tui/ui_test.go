@@ -2556,6 +2556,22 @@ func TestMarkerWidths(t *testing.T) {
 	})
 }
 
+func TestUICommittedTableCellsSanitized(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 12)
+	u := newTestUI(t, v, strings.NewReader(""))
+
+	u.Print("marker before")
+	u.Print("| a\x1b[2Jb\tc |\n|---|\n| d |")
+
+	screen := u.snapshot(v)
+	// an executed ESC[2J erases the screen, taking the earlier marker with it;
+	// a tab jumps to the next eight-column stop and breaks every border in the row
+	assert.Contains(t, screen, "marker before")
+	assert.Contains(t, screen, "│ ab    c │")
+}
+
 // TestUIClosedDropsWrites covers the post-close sink guards: after Close
 // restored the terminal, late events from a drain still landing must write
 // nothing and re-arm no spinner.
