@@ -2,6 +2,7 @@ package permit
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -123,6 +124,29 @@ func TestCachedClassifierSeparatesRuleSets(t *testing.T) {
 	assert.Equal(t, 2, fn.count())
 	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
 	assert.Equal(t, 2, fn.count()) // cached within its own rule set
+}
+
+func TestCachedClassifierSeparatesElidedPayloads(t *testing.T) {
+	t.Parallel()
+
+	// two over-budget payloads sharing head and tail render identically; the
+	// digest keeps the unseen middle out of one shared verdict, so a banked
+	// allow for one call can never approve its sibling
+	mid := func(secret string) string {
+		return strings.Repeat("a", 300) + secret + strings.Repeat("b", 300)
+	}
+	a := classifySubject(ModeAuto, call("mcp__x", mid(`{"x":1}`)))
+	b := classifySubject(ModeAuto, call("mcp__x", mid(`{"y":2}`)))
+	require.Equal(t, a.Args, b.Args) // premise: the renderings collide without the digest
+	assert.NotEqual(t, a.key(), b.key())
+
+	fn := &countingFn{verdict: ClassAllow}
+	c := NewCachedClassifier(fn.call)
+	assert.Equal(t, ClassAllow, c.Classify(t.Context(), a))
+	assert.Equal(t, ClassAllow, c.Classify(t.Context(), b)) // judged fresh
+	assert.Equal(t, 2, fn.count())
+	assert.Equal(t, ClassAllow, c.Classify(t.Context(), a)) // still cached per subject
+	assert.Equal(t, 2, fn.count())
 }
 
 func TestCachedClassifierNeverStoresUnsure(t *testing.T) {

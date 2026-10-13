@@ -2,6 +2,8 @@ package permit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +15,6 @@ import (
 	"github.com/go-analyze/bulk"
 
 	"github.com/jentfoo/ajent/pkg/agent"
-	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
@@ -25,6 +26,10 @@ const unattendedDenyReason = "permission not given"
 // maxClassifierArgs bounds a non-bash call's payload sent to auto classification,
 // so a large write body never inflates the model request.
 const maxClassifierArgs = 500
+
+// elideKeep is the runes kept on each side of an over-budget payload's marker,
+// sized so head, tail and any count an int can hold stay within maxClassifierArgs.
+const elideKeep = 232
 
 // Barrier gates every tool call through static classification plus an optional
 // approval dialog, holding the live mode and any open dialogs.
@@ -649,8 +654,34 @@ func classifySubject(m Mode, call agent.ToolCall) Subject {
 			AllowWrite: m.allowsWrites(),
 		}
 	}
-	s := strings.TrimSpace(string(call.Input))
-	return Subject{Name: call.Name, Args: strutil.Clip(s, maxClassifierArgs)}
+	full := strings.TrimSpace(string(call.Input))
+	args, elided := elideClassifierArgs(full)
+	s := Subject{Name: call.Name, Args: args}
+	if elided {
+		s.Digest = argsDigest(full) // past the clip the rendering alone no longer identifies the payload
+	}
+	return s
+}
+
+// elideClassifierArgs bounds s to maxClassifierArgs runes, keeping head and tail
+// around a marker naming the withheld count, so the classifier sees both ends of
+// a large payload and knows text was hidden rather than absent. The bool reports
+// whether anything was cut.
+func elideClassifierArgs(s string) (string, bool) {
+	r := []rune(s)
+	if len(r) <= maxClassifierArgs {
+		return s, false
+	}
+	mid := fmt.Sprintf("…[%d chars elided]…", len(r)-2*elideKeep)
+	return string(r[:elideKeep]) + mid + string(r[len(r)-elideKeep:]), true
+}
+
+// argsDigest hashes a full payload so two calls sharing an elided rendering never
+// share one cached verdict. sha256 truncated to 128 bits keeps collision work
+// beyond anything a model could search.
+func argsDigest(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:16])
 }
 
 // resolveNotice reports how an approved call was granted, replacing the dialog's

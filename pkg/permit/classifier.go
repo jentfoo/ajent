@@ -26,12 +26,16 @@ type Subject struct {
 	Args       string // bash command text, or elided JSON arguments for other tools
 	Cwd        string // shell working directory when the call declares one
 	AllowWrite bool   // judge under auto+write's workspace rules rather than read-only
+	Digest     string // hash of a non-bash payload before elision, set only when Args was cut
 }
 
 // key is the cache identity: a call is judged by tool, exact payload, working
 // directory and rule set, so a mode change never reuses the other's verdict.
+// An elided subject keys on its Digest too, so two payloads sharing one rendering
+// of over-budget args never share a verdict.
 func (s Subject) key() string {
-	return strconv.FormatBool(s.AllowWrite) + "\x00" + s.Name + "\x00" + s.Cwd + "\x00" + s.Args
+	return strconv.FormatBool(s.AllowWrite) + "\x00" + s.Name + "\x00" + s.Cwd + "\x00" +
+		s.Args + "\x00" + s.Digest
 }
 
 // IsShell reports whether the subject is a shell command rather than an MCP/extension call.

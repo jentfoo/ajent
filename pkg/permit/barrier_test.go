@@ -3,6 +3,7 @@ package permit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -1711,9 +1712,79 @@ func TestClassifySubject(t *testing.T) {
 		assert.False(t, s.AllowWrite) // the workspace rules are shell-only
 	})
 
-	t.Run("args_respect_the_500_rune_cap", func(t *testing.T) {
-		s := classifySubject(ModeAuto, call("mcp__x", `{"a":"`+strings.Repeat("x", 600)+`"}`))
-		assert.Len(t, []rune(s.Args), maxClassifierArgs)
+	t.Run("short_args_exact_no_digest", func(t *testing.T) {
+		s := classifySubject(ModeAuto, call("mcp__x", `{"a":1}`))
+		assert.Equal(t, `{"a":1}`, s.Args)
+		assert.Empty(t, s.Digest) // exact args need no digest to be told apart
+	})
+
+	t.Run("long_args_elided_with_digest", func(t *testing.T) {
+		full := `{"a":"` + strings.Repeat("x", 600) + `"}`
+		s := classifySubject(ModeAuto, call("mcp__x", full))
+		assert.LessOrEqual(t, len([]rune(s.Args)), maxClassifierArgs)
+		assert.Contains(t, s.Args, "chars elided")
+		assert.Equal(t, argsDigest(full), s.Digest) // the digest names the full payload
+	})
+
+	t.Run("shell_args_unbounded_no_digest", func(t *testing.T) {
+		cmd := strings.Repeat("x", maxClassifierArgs+1)
+		s := classifySubject(ModeAuto, bashCall(cmd))
+		assert.Equal(t, cmd, s.Args) // the shell branch is never clipped
+		assert.Empty(t, s.Digest)
+	})
+
+	t.Run("sibling_payloads_keyed_apart", func(t *testing.T) {
+		// two long payloads sharing head and tail render identically but must
+		// never share a cached verdict over their unseen middles
+		mid := func(secret string) string {
+			return strings.Repeat("a", 300) + secret + strings.Repeat("b", 300)
+		}
+		a := classifySubject(ModeAuto, call("mcp__x", mid(`{"x":1}`)))
+		b := classifySubject(ModeAuto, call("mcp__x", mid(`{"y":2}`)))
+		assert.Equal(t, a.Args, b.Args)
+		assert.NotEqual(t, a.key(), b.key())
+	})
+}
+
+func TestElideClassifierArgs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("short_unchanged", func(t *testing.T) {
+		got, cut := elideClassifierArgs(`{"a":1}`)
+		assert.Equal(t, `{"a":1}`, got)
+		assert.False(t, cut)
+	})
+
+	t.Run("at_cap_unchanged", func(t *testing.T) {
+		s := strings.Repeat("x", maxClassifierArgs)
+		got, cut := elideClassifierArgs(s)
+		assert.Equal(t, s, got)
+		assert.False(t, cut)
+	})
+
+	t.Run("keeps_head_tail_and_count", func(t *testing.T) {
+		full := strings.Repeat("a", 300) + "SECRET" + strings.Repeat("b", 300)
+		got, cut := elideClassifierArgs(full)
+		assert.True(t, cut)
+		assert.LessOrEqual(t, len([]rune(got)), maxClassifierArgs)
+		want := strings.Repeat("a", elideKeep) +
+			fmt.Sprintf("…[%d chars elided]…", len([]rune(full))-2*elideKeep) +
+			strings.Repeat("b", elideKeep)
+		assert.Equal(t, want, got)
+		assert.NotContains(t, got, "SECRET") // the withheld middle is named, not shown
+	})
+
+	t.Run("wide_chars_count_as_runes", func(t *testing.T) {
+		wide := strings.Repeat("\U0001F600", maxClassifierArgs+1) // 4-byte runes
+		got, cut := elideClassifierArgs(wide)
+		assert.True(t, cut)
+		assert.LessOrEqual(t, len([]rune(got)), maxClassifierArgs)
+	})
+
+	t.Run("giant_payload_stays_bounded", func(t *testing.T) {
+		got, cut := elideClassifierArgs(strings.Repeat("x", 5<<20))
+		assert.True(t, cut)
+		assert.LessOrEqual(t, len([]rune(got)), maxClassifierArgs)
 	})
 }
 
