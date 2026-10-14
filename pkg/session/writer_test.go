@@ -361,7 +361,7 @@ func TestWriterOpenRepairsTornTail(t *testing.T) {
 		assert.Empty(t, warns)
 		assert.Equal(t, []string{e2.ID}, ids(entries)[2:]) // e1 then the new tip
 
-		torn, terr := os.ReadFile(p + tornSuffix)
+		torn, terr := os.ReadFile(tornPath(p))
 		require.NoError(t, terr)
 		assert.Equal(t, string(line[:len(line)/2]), string(torn)) // bytes preserved
 	})
@@ -385,6 +385,6 @@ func TestWriterOpenRepairsTornTail(t *testing.T) {
 		after, rerr := os.ReadFile(p)
 		require.NoError(t, rerr)
 		assert.Equal(t, string(before), string(after))
-		assert.False(t, fileExists(p+tornSuffix))
+		assert.False(t, fileExists(tornPath(p)))
 	})
 }

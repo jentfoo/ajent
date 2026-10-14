@@ -64,6 +64,9 @@ const tornScanWindow = 64 << 10
 // tornSuffix names the sidecar quarantining a partial write's bytes.
 const tornSuffix = ".torn"
 
+// tornPath returns the quarantine sidecar beside the transcript at sessionPath.
+func tornPath(sessionPath string) string { return sessionPath + tornSuffix }
+
 // repairTornTail fences a partial trailing write: the unterminated bytes are
 // copied to a <path>.torn sidecar and the transcript is truncated back to its
 // last complete line, so the next append cannot glue onto them. Healthy files
@@ -97,7 +100,7 @@ func repairTornTail(path string, f *os.File) error {
 			return err
 		}
 	}
-	if err := quarantine(rf, path+tornSuffix, cut, size); err != nil {
+	if err := quarantine(rf, tornPath(path), cut, size); err != nil {
 		return err
 	}
 	return f.Truncate(cut)

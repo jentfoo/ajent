@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -244,6 +245,40 @@ func TestStoreRemoveCursorBestEffort(t *testing.T) {
 	list, lerr := s.List(ws)
 	require.NoError(t, lerr)
 	assert.Empty(t, list) // and nothing surfaces in the picker
+}
+
+func TestStoreRemoveTakesTornSidecar(t *testing.T) {
+	t.Parallel()
+
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	w, err := s.Create(ws, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	e1, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "torn tail")})
+	require.NoError(t, aerr)
+	line, merr := json.Marshal(e1)
+	require.NoError(t, merr)
+	require.NoError(t, w.Close())
+
+	// crash mid-append, then reopen so torn-tail repair quarantines the stray bytes
+	f, oerr := os.OpenFile(w.Path(), os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, oerr)
+	_, werr := f.Write(line[:len(line)/2])
+	require.NoError(t, werr)
+	require.NoError(t, f.Close())
+	w2, oerr := Open(w.Path())
+	require.NoError(t, oerr)
+	require.NoError(t, w2.Sync()) // leave the branch cursor sidecar behind too
+	require.NoError(t, w2.Close())
+	require.True(t, fileExists(headPath(w.Path())))
+	require.True(t, fileExists(tornPath(w.Path())))
+
+	// removing the session takes every sidecar with it
+	require.NoError(t, s.Remove(w.Path()))
+
+	assert.False(t, fileExists(w.Path()))
+	assert.False(t, fileExists(headPath(w.Path())))
+	assert.False(t, fileExists(tornPath(w.Path())))
 }
 
 func TestStoreStale(t *testing.T) {
