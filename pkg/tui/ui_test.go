@@ -861,6 +861,90 @@ func TestNew(t *testing.T) {
 	})
 }
 
+// gateWriter blocks its first write until released, so a test can hold one
+// write mid-flight and observe what a second writer does meanwhile.
+type gateWriter struct {
+	entered chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	buf     strings.Builder
+	once    sync.Once
+}
+
+func newGateWriter() *gateWriter {
+	return &gateWriter{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (w *gateWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() {
+		w.entered <- struct{}{}
+		<-w.release
+	})
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
+
+func (w *gateWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+func TestTerminalWriter(t *testing.T) {
+	t.Run("writes_serialize_with_frames", func(t *testing.T) {
+		g := newGateWriter()
+		u := &UI{
+			theme:    NewTheme(ColorNone, DefaultPalette()),
+			render:   newTestInlineAt(g, 80, 24),
+			mode:     ModeInline,
+			in:       strings.NewReader(""),
+			inFd:     -1,
+			msgs:     make(chan string),
+			controls: make(chan Control, 4),
+			done:     make(chan struct{}),
+		}
+		t.Cleanup(u.Close)
+
+		w := u.TerminalWriter()
+		osc := "\x1b]52;c;" + strings.Repeat("a", 64) + "\x07"
+		wrote := make(chan error, 1)
+		go func() {
+			_, err := w.Write([]byte(osc))
+			wrote <- err
+		}()
+		<-g.entered // the escape write now holds u.mu inside the renderer
+		if u.mu.TryLock() {
+			u.mu.Unlock()
+			t.Error("the UI lock was free while a terminal write was in flight")
+		}
+		close(g.release) // the escape finishes, only then may the frame paint
+		var painted sync.WaitGroup
+		painted.Add(1)
+		go func() {
+			defer painted.Done()
+			u.UserEcho("frame")
+		}()
+		require.NoError(t, <-wrote)
+		painted.Wait()
+
+		// the escape landed whole ahead of the frame, never interleaved with it
+		out := g.String()
+		assert.True(t, strings.HasPrefix(out, osc))
+		assert.Contains(t, out[len(osc):], "frame")
+	})
+
+	t.Run("closed_ui_refuses", func(t *testing.T) {
+		u, out := newRecordingUI(t, strings.NewReader(""))
+		u.Close()
+
+		n, err := u.TerminalWriter().Write([]byte("\x1b]52;c;aGVsbG8=\x07"))
+		require.ErrorIs(t, err, ErrTerminalClosed)
+		assert.Zero(t, n)
+		assert.NotContains(t, out.String(), "52;c;")
+	})
+}
+
 func TestUIResume(t *testing.T) {
 	t.Parallel()
 

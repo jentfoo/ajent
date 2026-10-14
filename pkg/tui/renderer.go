@@ -170,6 +170,7 @@ type renderer interface {
 	probe()                         // ask the terminal for a status reply, a barrier against mid-reflow draws
 	reanchor(row int, started bool) // take the reported park row and pad the next full draw when the block lost the screen bottom
 	query(seq string)               // write a terminal query verbatim, for replies read off the input stream
+	rawWrite(seq string)            // write a raw sequence verbatim, for an out-of-band writer serialized with frames
 	scroll(lines int) bool          // false when the mode has no viewport of its own
 	suspend(inFd int)               // hand the terminal back to another program
 	resume(inFd int) error          // retake it
@@ -317,6 +318,7 @@ func (p *plainRenderer) setTheme(Theme)             {} // plain never colors any
 func (p *plainRenderer) probe()                     {} // plain draws nothing, no barrier needed
 func (p *plainRenderer) reanchor(int, bool)         {} // plain never addresses rows, nothing to re-anchor
 func (p *plainRenderer) query(string)               {} // a pipe has no terminal to ask
+func (p *plainRenderer) rawWrite(string)            {} // a pipe interprets no escapes
 func (p *plainRenderer) scroll(int) bool            { return false }
 func (p *plainRenderer) suspend(int)                {}
 func (p *plainRenderer) resume(int) error           { return nil }

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"os"
 	"os/signal"
@@ -375,6 +376,35 @@ func (u *UI) CopySelection() (text string, ok bool) {
 	}
 	text = p.items[p.matches[p.cursor]].Copy
 	return text, text != ""
+}
+
+// ErrTerminalClosed is returned by TerminalWriter's Write once Close restored
+// the terminal, so an out-of-band writer stops painting into the shell.
+var ErrTerminalClosed = errors.New("tui: terminal closed")
+
+// TerminalWriter returns an out-of-band sink onto the UI's terminal, writes
+// serialized with every frame under the UI lock. For escapes that must not
+// interleave with painting (an OSC 52 clipboard write). Once the UI closes it
+// refuses with ErrTerminalClosed, since the terminal belongs to the shell.
+func (u *UI) TerminalWriter() io.Writer {
+	return terminalWriter{u: u}
+}
+
+// terminalWriter adapts a UI into an io.Writer taking u.mu per write.
+type terminalWriter struct {
+	u *UI
+}
+
+func (w terminalWriter) Write(p []byte) (int, error) {
+	u := w.u
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.closed {
+		return 0, ErrTerminalClosed
+	}
+	u.render.rawWrite(string(p))
+	return len(p), nil
 }
 
 // Close restores the terminal, it is safe to call more than once.

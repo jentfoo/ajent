@@ -790,7 +790,7 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 					continue // a stale ctrl+x outlived its picker: silent no-op
 				}
 				go func() {
-					notice, level, ok := copyText(ctx, text)
+					notice, level, ok := copyText(ctx, ui, text)
 					if ok {
 						ui.Notify(notice, level)
 					}

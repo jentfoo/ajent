@@ -110,8 +110,17 @@ var remote = func() bool {
 	return false
 }
 
-// stdout receives the OSC 52 fallback. A var so tests capture the sequence.
+// stdout receives the OSC 52 fallback when no TTY sink was supplied. A var so
+// tests capture the sequence.
 var stdout io.Writer = os.Stdout
+
+// CopyOptions adjusts one Copy call, the zero value taking the defaults.
+type CopyOptions struct {
+	// TTY receives the OSC 52 escape instead of stdout. It must serialize its
+	// writes with everything else painting the same terminal (the TUI supplies
+	// its own), or the escape can interleave mid-frame.
+	TTY io.Writer
+}
 
 // stdoutIsTTY reports whether fd 1 is an interactive terminal, the only place
 // an emitted OSC 52 can be interpreted. A var so tests fake the check.
@@ -124,10 +133,15 @@ var stdoutIsTTY = func() bool {
 // accepted the payload, or on a remote session with a terminal on stdout that
 // the OSC 52 fallback was emitted. There OSC 52 also accompanies a native
 // success, since a forwarded display can accept a write that never reaches the
-// user's machine.
-func Copy(ctx context.Context, text string) error {
+// user's machine. opts.TTY routes the escape through a caller-owned terminal
+// sink serialized with that caller's own writes.
+func Copy(ctx context.Context, text string, opts CopyOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	osc := opts.TTY
+	if osc == nil {
+		osc = stdout
 	}
 	var tried, displayless []string
 	for _, w := range writers() {
@@ -141,7 +155,7 @@ func Copy(ctx context.Context, text string) error {
 		tried = append(tried, w.name)
 		if runWriter(ctx, w, text) == nil {
 			if remote() && stdoutIsTTY() {
-				_ = writeOSC52(text) // best effort, the native write already landed
+				_ = writeOSC52(text, osc) // best effort, the native write already landed
 			}
 			return nil
 		}
@@ -152,7 +166,7 @@ func Copy(ctx context.Context, text string) error {
 			// would only corrupt the redirected stream
 			return errors.New("clipboard unavailable: remote session but stdout is not a terminal, OSC 52 cannot reach any clipboard")
 		}
-		return writeOSC52(text)
+		return writeOSC52(text, osc)
 	}
 	return nativeError(tried, displayless)
 }
@@ -176,14 +190,15 @@ func nativeError(tried, displayless []string) error {
 	}
 }
 
-// writeOSC52 emits the terminal clipboard escape, refusing a payload past the
+// writeOSC52 emits the terminal clipboard escape as one Write call, so a sink
+// that serializes writes can never see it torn. Refuses a payload past the
 // encoded limit rather than truncating it.
-func writeOSC52(text string) error {
+func writeOSC52(text string, w io.Writer) error {
 	enc := base64.StdEncoding.EncodeToString([]byte(text))
 	if len(enc) > maxEncoded {
 		return fmt.Errorf("clipboard payload exceeds the %dkb OSC 52 limit; copy less text", maxEncoded/1000)
 	}
-	if _, err := io.WriteString(stdout, "\x1b]52;c;"+enc+"\x07"); err != nil {
+	if _, err := io.WriteString(w, "\x1b]52;c;"+enc+"\x07"); err != nil {
 		return fmt.Errorf("OSC 52 clipboard write failed: %w", err)
 	}
 	return nil

@@ -371,6 +371,10 @@ func (r *inlineRenderer) setTheme(Theme) {} // inline draws no styled chrome of 
 
 func (r *inlineRenderer) query(seq string) { r.t.write(seq) }
 
+// rawWrite is the out-of-band escape path: the same writer every frame uses,
+// so a caller-held sink serializes with painting.
+func (r *inlineRenderer) rawWrite(seq string) { r.t.write(seq) }
+
 // scroll is the terminal's job in this mode.
 func (r *inlineRenderer) scroll(int) bool { return false }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/clipboard"
 	"github.com/jentfoo/ajent/pkg/tui"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,10 +18,13 @@ func TestCopyText(t *testing.T) {
 	t.Run("success_reports_notice", func(t *testing.T) {
 		var got []string
 		real := clipboardWrite
-		clipboardWrite = func(_ context.Context, text string) error { got = append(got, text); return nil }
+		clipboardWrite = func(_ context.Context, text string, _ clipboard.CopyOptions) error {
+			got = append(got, text)
+			return nil
+		}
 		t.Cleanup(func() { clipboardWrite = real })
 
-		notice, level, ok := copyText(context.Background(), "payload")
+		notice, level, ok := copyText(t.Context(), plainTestUI(t), "payload")
 		assert.True(t, ok)
 		assert.Equal(t, "copied to the clipboard", notice)
 		assert.Equal(t, tui.LevelInfo, level)
@@ -29,10 +33,12 @@ func TestCopyText(t *testing.T) {
 
 	t.Run("failure_names_the_backend_problem", func(t *testing.T) {
 		real := clipboardWrite
-		clipboardWrite = func(context.Context, string) error { return errors.New("no clipboard writer on PATH") }
+		clipboardWrite = func(context.Context, string, clipboard.CopyOptions) error {
+			return errors.New("no clipboard writer on PATH")
+		}
 		t.Cleanup(func() { clipboardWrite = real })
 
-		notice, level, ok := copyText(context.Background(), "payload")
+		notice, level, ok := copyText(t.Context(), plainTestUI(t), "payload")
 		assert.True(t, ok)
 		assert.Equal(t, "no clipboard writer on PATH", notice)
 		assert.Equal(t, tui.LevelError, level)

@@ -123,6 +123,9 @@ func (r *altRenderer) setTheme(t Theme) { r.theme = t }
 
 func (r *altRenderer) query(seq string) { r.t.write(seq) }
 
+// rawWrite is the out-of-band escape path, on the writer every frame uses.
+func (r *altRenderer) rawWrite(seq string) { r.t.write(seq) }
+
 // scroll moves the viewport, positive scrolls back toward older output.
 func (r *altRenderer) scroll(lines int) bool {
 	before := r.offset

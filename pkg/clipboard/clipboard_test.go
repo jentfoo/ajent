@@ -57,7 +57,7 @@ func TestCopy(t *testing.T) {
 			},
 			false, nil, false)
 
-		require.NoError(t, Copy(t.Context(), "hello"))
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
 		assert.Equal(t, []string{"one:hello", "two:hello"}, got)
 		assert.Empty(t, out.String()) // local native win: no OSC 52
 	})
@@ -77,7 +77,7 @@ func TestCopy(t *testing.T) {
 			},
 			true)
 
-		require.NoError(t, Copy(t.Context(), "hello"))
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
 		assert.Equal(t, []string{"xclip"}, ran)
 		// the forwarded display may not be the user's clipboard: emit both
 		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", out.String())
@@ -91,7 +91,7 @@ func TestCopy(t *testing.T) {
 			true, nil, true)
 
 		// the native write landed, so a refused OSC 52 must not fail the copy
-		require.NoError(t, Copy(t.Context(), strings.Repeat("x", maxEncoded)))
+		require.NoError(t, Copy(t.Context(), strings.Repeat("x", maxEncoded), CopyOptions{}))
 		assert.Empty(t, out.String())
 	})
 
@@ -103,7 +103,7 @@ func TestCopy(t *testing.T) {
 			func(_ context.Context, _ writer, _ string) error { ran = append(ran, "ran"); return nil },
 			false, nil, false)
 
-		require.NoError(t, Copy(t.Context(), "hello"))
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
 		assert.Equal(t, []string{"ran"}, ran)
 	})
 
@@ -125,7 +125,7 @@ func TestCopy(t *testing.T) {
 			},
 			false)
 
-		require.NoError(t, Copy(t.Context(), "hello"))
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
 		assert.Equal(t, []string{"xclip"}, ran) // wl-copy gated: no Wayland
 	})
 
@@ -137,7 +137,7 @@ func TestCopy(t *testing.T) {
 			func(_ context.Context, _ writer, _ string) error { ran = append(ran, "ran"); return nil },
 			false, nil, false)
 
-		err := Copy(t.Context(), "hello")
+		err := Copy(t.Context(), "hello", CopyOptions{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "display session")
 		assert.Empty(t, ran)
@@ -150,7 +150,7 @@ func TestCopy(t *testing.T) {
 			ok,
 			false, nil, false)
 
-		err := Copy(t.Context(), "hello")
+		err := Copy(t.Context(), "hello", CopyOptions{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "install xclip")
 		assert.Empty(t, out.String())
@@ -163,7 +163,7 @@ func TestCopy(t *testing.T) {
 			func(context.Context, writer, string) error { return errors.New("boom") },
 			false, nil, false)
 
-		err := Copy(t.Context(), "hello")
+		err := Copy(t.Context(), "hello", CopyOptions{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "tried one, two")
 	})
@@ -175,7 +175,7 @@ func TestCopy(t *testing.T) {
 			ok,
 			true, nil, true)
 
-		require.NoError(t, Copy(t.Context(), "hello"))
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
 		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", out.String())
 	})
 
@@ -187,7 +187,7 @@ func TestCopy(t *testing.T) {
 			true, nil, false)
 
 		// native write still lands, but the OSC would only corrupt stdout
-		require.NoError(t, Copy(t.Context(), "hello"))
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
 		assert.Empty(t, out.String())
 	})
 
@@ -198,7 +198,7 @@ func TestCopy(t *testing.T) {
 			ok,
 			true, nil, false)
 
-		err := Copy(t.Context(), "hello")
+		err := Copy(t.Context(), "hello", CopyOptions{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "stdout is not a terminal")
 		assert.Empty(t, out.String())
@@ -213,7 +213,7 @@ func TestCopy(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
-		require.ErrorIs(t, Copy(ctx, "hello"), context.Canceled)
+		require.ErrorIs(t, Copy(ctx, "hello", CopyOptions{}), context.Canceled)
 	})
 }
 
@@ -224,7 +224,7 @@ func TestWriteOSC52(t *testing.T) {
 		stdout = &out
 		t.Cleanup(func() { stdout = real })
 
-		require.NoError(t, writeOSC52("hi"))
+		require.NoError(t, writeOSC52("hi", &out))
 		assert.True(t, strings.HasPrefix(out.String(), "\x1b]52;c;"))
 		assert.True(t, strings.HasSuffix(out.String(), "\x07"))
 		assert.Contains(t, out.String(), base64.StdEncoding.EncodeToString([]byte("hi")))
@@ -236,19 +236,47 @@ func TestWriteOSC52(t *testing.T) {
 		stdout = &out
 		t.Cleanup(func() { stdout = real })
 
-		err := writeOSC52(strings.Repeat("x", maxEncoded))
+		err := writeOSC52(strings.Repeat("x", maxEncoded), &out)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "OSC 52 limit")
 		assert.Empty(t, out.String())
 	})
 
 	t.Run("write_failure_wrapped", func(t *testing.T) {
-		real := stdout
-		stdout = failingWriter{}
-		t.Cleanup(func() { stdout = real })
-
-		require.Error(t, writeOSC52("hi"))
+		require.Error(t, writeOSC52("hi", failingWriter{}))
 	})
+
+	t.Run("single_write_no_tearing", func(t *testing.T) {
+		var calls []int
+		w := countingWriter{onWrite: func(n int) { calls = append(calls, n) }}
+
+		require.NoError(t, writeOSC52("hi", w))
+		// one Write carries the whole escape, so a serializing sink cannot tear it
+		assert.Equal(t, []int{len("\x1b]52;c;") + base64.StdEncoding.EncodedLen(2) + 1}, calls)
+	})
+}
+
+// TestCopyTTYSinkReceivesEscape pins the sink routing: with opts.TTY set the
+// escape lands there and never on the stdout seam.
+func TestCopyTTYSinkReceivesEscape(t *testing.T) {
+	var tty bytes.Buffer
+	fakeBackend(t,
+		[]writer{{"xclip", nil, nil}},
+		func(string) bool { return false },
+		func(context.Context, writer, string) error { return errors.New("boom") },
+		true, nil, true)
+
+	require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
+	assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", tty.String())
+}
+
+type countingWriter struct {
+	onWrite func(int)
+}
+
+func (w countingWriter) Write(p []byte) (int, error) {
+	w.onWrite(len(p))
+	return len(p), nil
 }
 
 type failingWriter struct{}

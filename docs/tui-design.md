@@ -1270,7 +1270,11 @@ swallowed.
 
 The clipboard split follows Ctrl+V's image read: `pkg/tui` reports the gesture
 and exposes the highlighted row's payload, never spawning a backend, and the write
-runs in `pkg/app` through `pkg/clipboard` (see `clipboard-copy-feature.md`).
+runs in `pkg/app` through `pkg/clipboard` (see `clipboard-copy-feature.md`). An
+OSC 52 write bypasses every renderer, so `pkg/app` routes it through
+`UI.TerminalWriter()`: a sink whose writes take `u.mu` and emit via the renderer,
+the same lock every frame write holds, so the escape can never interleave with a
+frame (invariant 4). It refuses with `ErrTerminalClosed` after `Close` (invariant 5).
 
 **Ctrl+R opens a reverse history search** over one merged recall source (every
 line typed this workspace, `/cmd` and `!shell`, plus recorded prompts, newest
