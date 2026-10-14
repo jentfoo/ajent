@@ -132,18 +132,9 @@ func (u *UI) deliverCompletion(seq, start int, items []Completion, text string, 
 // editor's cursor, or lists them when they agree on nothing more. Caller holds
 // the lock.
 func (u *UI) applyCompletion(start int, items []Completion) {
-	if len(items) == 0 {
-		u.completion = nil
-		u.flashRule()
-		return
-	}
-	o, changed := completeAt(&u.editor, start, items, u.completion != nil)
-	switch {
-	case o != nil:
-		u.completion = o // ambiguous: show what is left
-	case changed:
-		u.completion = nil
-	default:
+	var spent bool
+	u.completion, spent = applyTab(&u.editor, u.completion, start, items)
+	if spent || len(items) == 0 {
 		u.flashRule() // nothing to add and nothing new to show
 	}
 }
@@ -167,6 +158,25 @@ func completeAt(ed *editor, start int, items []Completion, listOpen bool) (*comp
 		return &completionOverlay{items: items, start: start}, false
 	}
 	return nil, false
+}
+
+// applyTab settles one Tab query for any editor with a Tab-driven listing: it
+// inserts the shared prefix, opens or keeps a listing on ambiguity and closes
+// it otherwise. spent reports nothing to add and nothing new to show, which the
+// prompt row acknowledges with a rule flash. The prompt editor and free-text
+// dialogs both settle here, so their Tab behavior cannot drift.
+func applyTab(ed *editor, listing *completionOverlay, start int, items []Completion) (keep *completionOverlay, spent bool) {
+	if len(items) == 0 {
+		return nil, false
+	}
+	o, changed := completeAt(ed, start, items, listing != nil)
+	switch {
+	case o != nil:
+		return o, false
+	case changed:
+		return nil, false
+	}
+	return listing, true
 }
 
 // ruleFlashDuration is how long the prompt rule stays accented.

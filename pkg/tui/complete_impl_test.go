@@ -167,3 +167,76 @@ func TestCompleteAt(t *testing.T) {
 		assert.Nil(t, o)
 	})
 }
+
+func TestApplyTab(t *testing.T) {
+	t.Parallel()
+
+	items := []Completion{{Text: "main.go"}, {Text: "main_test.go"}}
+
+	// no candidates close any open listing without spending the key
+	t.Run("empty_closes", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@main")
+		ed.pos = 5
+		open := &completionOverlay{items: items, start: 1}
+
+		keep, spent := applyTab(&ed, open, 1, nil)
+
+		assert.Nil(t, keep)
+		assert.False(t, spent)
+		assert.Equal(t, "@main", ed.Value())
+	})
+
+	// a fill closes the listing and spends nothing
+	t.Run("fill_closes", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@mai")
+		ed.pos = 4
+
+		keep, spent := applyTab(&ed, nil, 1, items)
+
+		assert.Nil(t, keep)
+		assert.False(t, spent)
+		assert.Equal(t, "@main", ed.Value())
+	})
+
+	// nothing to add opens the listing, which is new to show rather than spent
+	t.Run("ambiguous_opens", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@main")
+		ed.pos = 5
+
+		keep, spent := applyTab(&ed, nil, 1, items)
+
+		require.NotNil(t, keep)
+		assert.Equal(t, items, keep.items)
+		assert.Equal(t, 1, keep.start)
+		assert.False(t, spent)
+	})
+
+	// a single candidate already typed spends the key, adding nothing
+	t.Run("typed_whole_spends", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@main.go")
+		ed.pos = 8
+
+		keep, spent := applyTab(&ed, nil, 1, items[:1])
+
+		assert.Nil(t, keep)
+		assert.True(t, spent)
+		assert.Equal(t, "@main.go", ed.Value())
+	})
+
+	// an already-open listing stays put on a spent Tab
+	t.Run("open_listing_stays", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("@main")
+		ed.pos = 5
+		open := &completionOverlay{items: items, start: 1}
+
+		keep, spent := applyTab(&ed, open, 1, items)
+
+		assert.Same(t, open, keep)
+		assert.True(t, spent)
+	})
+}

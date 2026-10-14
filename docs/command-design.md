@@ -476,7 +476,10 @@ slices rather than rescanning the buffer.
 
 `NewPathCompleter` is the narrow sibling: an `@`-token-only source for free-text
 surfaces that take no commands or shell line, such as the approval dialog's
-allow/deny reason.
+allow/deny reason. It answers through the same `atComplete` core on the same
+`refs.Index` as the prompt completer, and a parity test pins the two equal on
+every `@` shape (workspace-relative, `../`, `~/` and absolute), so a free-text
+surface can never answer differently than the prompt would.
 
 ### Shell completion
 

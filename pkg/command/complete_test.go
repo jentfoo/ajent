@@ -276,3 +276,51 @@ func TestPathCompleter(t *testing.T) {
 		assert.Empty(t, items)
 	})
 }
+
+func TestPathCompleterMatchesPrompt(t *testing.T) {
+	t.Parallel()
+
+	// the free-text @ source must answer exactly what the prompt's does, ../
+	// forms included: both route one shared core, pinned equal here
+	root := t.TempDir()
+	proj := filepath.Join(root, "proj")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "other"), 0o755))
+	require.NoError(t, os.MkdirAll(proj, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "foo.txt"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "other", "bar.txt"), []byte("x"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(proj, "main.go"), []byte("x"), 0o600))
+	idx := refs.NewIndex(proj)
+
+	r := NewRegistry()
+	c := newFakeConsole(t)
+	prompt := NewCompleter(r, c, idx)
+	notes := NewPathCompleter(idx)
+
+	// every @ shape a user can type, cursor at the token's end
+	for _, tc := range []struct {
+		text string
+		pos  int
+	}{
+		{"@m", 2},
+		{"@", 1},
+		{"@../f", 5},
+		{"@../foo", 6},
+		{"@../", 4},
+		{"@../other/", 10},
+		{"@../other/b", 11},
+		{"see @../other/ here", 14},
+		{"@~/", 3},
+		{"@nope", 5},
+		{"plain words", 5},
+	} {
+		pStart, pItems := prompt.Complete(tc.text, tc.pos)
+		nStart, nItems := notes.Complete(tc.text, tc.pos)
+		assert.Equal(t, pStart, nStart, "start differs for %q at %d", tc.text, tc.pos)
+		assert.Equal(t, pItems, nItems, "items differ for %q at %d", tc.text, tc.pos)
+	}
+
+	// the restriction holds: free text never completes commands, only @ refs
+	start, items := notes.Complete("/mod", 4)
+	assert.Empty(t, items)
+	assert.Equal(t, 4, start)
+}

@@ -506,7 +506,10 @@ caret is. The placeholder marks where the reply is typed.
 The free-text modes take an optional `Completer`: Tab applies the tab-driven
 rules above to the reply buffer, which is how approval reasons complete @
 paths. The query runs synchronously because a dialog has no live menu and a
-path query prices one ReadDir.
+path query prices one ReadDir. Settlement is the prompt row's machinery, not a
+copy of it: both settle a Tab through one shared `applyTab` (fill, listing,
+spend), so fill-or-list behavior cannot drift; an open listing still closes on
+the first Esc.
 
 An **approval dialog** resolution reports nothing to history by itself, and the
 caller (`permit.Barrier`) commits a descriptive notice instead, naming the scope

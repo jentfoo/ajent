@@ -275,17 +275,7 @@ func (s *questionState) tabComplete() {
 		return
 	}
 	start, items := s.completer.Complete(s.answer.Value(), s.answer.pos)
-	if len(items) == 0 {
-		s.comp = nil
-		return
-	}
-	o, changed := completeAt(&s.answer, start, items, s.comp != nil)
-	switch {
-	case o != nil:
-		s.comp = o
-	case changed:
-		s.comp = nil
-	}
+	s.comp, _ = applyTab(&s.answer, s.comp, start, items)
 }
 
 // choose settles on option i, or opens the typed reply when i is the chat row.

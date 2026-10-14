@@ -37,11 +37,8 @@ func (a promptAdapter) Open(prompt, subject string, options []string) (permit.Di
 }
 
 func (a promptAdapter) Reason(ctx context.Context, label string) (string, bool) {
-	q := tui.Question{Text: label}
-	if a.path != nil { // a reason may name files, so @ refs complete like the prompt's
-		q.Completer = a.path
-	}
-	ans, err := a.ui.Ask(ctx, q)
+	// a reason may name files, so @ refs complete like the prompt's; nil path is inert
+	ans, err := a.ui.Ask(ctx, tui.Question{Text: label, Completer: a.path})
 	if err != nil || ans.Declined {
 		return "", false
 	}
