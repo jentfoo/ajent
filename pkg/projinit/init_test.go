@@ -175,7 +175,60 @@ func TestSurvey(t *testing.T) {
 		// a refused spawn is not a missing tool, the notice must not say otherwise
 		require.ErrorIs(t, err, ErrNoneStarted)
 		require.NotErrorIs(t, err, ErrNoSubAgents)
-		assert.Contains(t, err.Error(), "denied by user")
+		assert.Contains(t, err.Error(), "the build (denied by user)")
+	})
+
+	t.Run("partial_refusal_warns_once", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "pkg/a.go")
+		var n int
+		start := &stubTool{name: "agent_start", exec: func(agent.ToolCall) agent.ToolResult {
+			n++ // startAll is sequential, so call order picks the refused task
+			if n == 1 {
+				return agent.ToolResult{
+					Content: llm.BlockList{llm.TextBlock{Text: "denied by user"}},
+					IsError: true,
+				}
+			}
+			id := "sub-" + strconv.Itoa(n)
+			return agent.ToolResult{
+				Content: llm.BlockList{llm.TextBlock{Text: "Sub-agent " + id + " started."}},
+				Details: map[string]string{"id": id},
+			}
+		}}
+		var warns []string
+		r := New(Options{
+			Cwd: dir, Sink: agent.NopSink{}, Registry: newRegistry(t, dir, start, pollStub()),
+			Notify: func(msg string, level agent.Level) {
+				if level == agent.LevelWarn {
+					warns = append(warns, msg)
+				}
+			},
+		})
+
+		in, err := r.Survey(t.Context()) // the survivors still carry a survey to distill
+		require.NoError(t, err)
+		assert.Equal(t, distillNew, in.Text)
+		require.Len(t, warns, 1) // one user-facing notice naming every refused task
+		assert.Contains(t, warns[0], "the build (denied by user)")
+	})
+
+	t.Run("all_started_stays_quiet", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "pkg/a.go")
+		var warns int
+		r := New(Options{
+			Cwd: dir, Sink: agent.NopSink{}, Registry: newRegistry(t, dir, startStub(), pollStub()),
+			Notify: func(_ string, level agent.Level) {
+				if level == agent.LevelWarn {
+					warns++
+				}
+			},
+		})
+
+		_, err := r.Survey(t.Context())
+		require.NoError(t, err)
+		assert.Zero(t, warns) // a fully successful spawn reports nothing new
 	})
 
 	t.Run("call_ids_unique_across_runs", func(t *testing.T) {

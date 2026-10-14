@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,8 @@ import (
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
+	"github.com/jentfoo/ajent/pkg/subagent"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -169,6 +172,57 @@ func TestInitControllerStart(t *testing.T) {
 		var ctl *initController
 		assert.False(t, ctl.abort())
 	})
+
+	t.Run("late_spawn_stopped_after_abort", func(t *testing.T) {
+		h := newInitHarness(t)
+		mgr := newHoldManager()
+		t.Cleanup(mgr.Close)
+
+		// the survey's one spawn registers with the manager, then holds its result
+		// past abort's snapshot: only track can stop it once released
+		var real agent.Tool
+		for _, tool := range mgr.Tools() {
+			if tool.Name() == "agent_start" {
+				real = tool
+			}
+		}
+		release := make(chan struct{})
+		spawning := make(chan struct{})
+		reg, err := tools.Builtins(tools.Options{Cwd: h.ctl.deps.cwd})
+		require.NoError(t, err)
+		for _, tool := range mgr.Tools() {
+			if tool.Name() == "agent_poll" {
+				reg.RegisterFrom(tools.SourceBuiltin, tool, true)
+			}
+		}
+		reg.RegisterFrom(tools.SourceBuiltin, &initStub{name: "agent_start", run: func(ctx context.Context, call agent.ToolCall) agent.ToolResult {
+			res, err := real.Execute(ctx, call, nil) // the child exists from here on
+			if err != nil {
+				return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: err.Error()}}, IsError: true}
+			}
+			close(spawning)
+			<-release // abort lands inside this window, before Started carries the id
+			return res
+		}}, true)
+		h.ctl.deps.toolsReg = reg
+		h.ctl.deps.agents = mgr
+		h.ctl = newInitController(h.ctl.deps)
+
+		h.ctl.start(t.Context())
+		select {
+		case <-spawning:
+		case <-time.After(5 * time.Second):
+			t.Fatal("survey never spawned")
+		}
+		require.True(t, h.ctl.abort()) // the snapshot cannot hold this child's id
+
+		close(release)
+		require.Eventually(t, func() bool {
+			return slices.ContainsFunc(mgr.List(), func(j subagent.Job) bool {
+				return j.Status == subagent.StatusAborted
+			})
+		}, 5*time.Second, time.Millisecond) // stopped by track, never leaked to /agents
+	})
 }
 
 func TestInitWatch(t *testing.T) {
@@ -207,6 +261,21 @@ func TestInitWatch(t *testing.T) {
 		assert.Empty(t, got)
 	})
 
+	t.Run("size_moves_a_same_tick_write", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), agentsFileName)
+		at := time.Now().Add(-time.Hour).Truncate(time.Second) // a coarse tick
+		touch(t, path, at)
+
+		var got []string
+		w := &initWatch{notify: func(msg string, _ tui.Level) { got = append(got, msg) }}
+		w.arm(path)
+		// the write landed inside its own arming tick: mtime cannot move, size does
+		require.NoError(t, os.WriteFile(path, []byte("longer content"), 0o644))
+		require.NoError(t, os.Chtimes(path, at, at))
+		w.TurnEnd(agent.TurnResult{})
+		assert.Len(t, got, 1)
+	})
+
 	t.Run("survives_an_unrelated_turn", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), agentsFileName)
 		touch(t, path, time.Now().Add(-time.Hour))
@@ -241,6 +310,29 @@ func TestInitWatch(t *testing.T) {
 
 		var nilWatch *initWatch
 		nilWatch.arm("anything") // the driver may hand /init no watch at all
+	})
+}
+
+// holdProvider blocks every child turn until its job is cancelled, so a test
+// controls how long an investigation stays running.
+type holdProvider struct{}
+
+func (holdProvider) Name() string { return "hold" }
+
+func (holdProvider) Stream(ctx context.Context, _ llm.Request) (llm.Stream, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// newHoldManager returns a sub-agent manager whose children run until stopped.
+func newHoldManager() *subagent.Manager {
+	return subagent.New(subagent.Options{
+		Provider:  func(llm.Model) (llm.Provider, error) { return holdProvider{}, nil },
+		Model:     func() llm.Model { return llm.Model{} },
+		Reasoning: func() llm.ReasoningConfig { return llm.ReasoningConfig{} },
+		Parent:    func() *tokens.Accounting { return tokens.New(llm.Model{}) },
+		Notice:    func(string) {},
+		Deliver:   func(agent.Input) bool { return false },
 	})
 }
 

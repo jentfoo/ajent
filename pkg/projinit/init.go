@@ -102,6 +102,13 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 	if len(ids) == 0 {
 		return agent.Input{}, startError(failed)
 	}
+	if err := ctx.Err(); err != nil { // cancelled mid-spawn, so the counts would mislead
+		return agent.Input{}, err
+	}
+	if len(failed) > 0 { // each refusal already reached the model above, so this one is for the user
+		r.notify(fmt.Sprintf("init: %d of %d sub-agent spawns refused: %s",
+			len(failed), len(tasks), strings.Join(failed, "; ")), agent.LevelWarn)
+	}
 	r.notify("init: surveying the project with "+strconv.Itoa(len(ids))+" sub-agents", agent.LevelInfo)
 	before = append(before, r.pollAll(ctx, poll, ids, run)...)
 	if err := ctx.Err(); err != nil {
@@ -160,13 +167,13 @@ func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]ll
 }
 
 // startAll runs the survey spawns, returning their pairs, the ids to poll and
-// a reason per spawn that was refused.
-func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []string, run int64) (msgs []llm.Message, ids, failed []string) {
+// one named entry per refused spawn, its label carrying the task and its reason.
+func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []surveyTask, run int64) (msgs []llm.Message, ids, failed []string) {
 	for i, task := range tasks {
 		if ctx.Err() != nil {
 			break
 		}
-		input, _ := json.Marshal(map[string]any{"task": task})
+		input, _ := json.Marshal(map[string]any{"task": task.text})
 		call := agent.ToolCall{ID: callID(run, "start", strconv.Itoa(i+1)), Name: "agent_start", Input: input}
 		pair, res := agent.InjectPair(ctx, tool, r.opts.Sink, call, tool.Label(call))
 		msgs = append(msgs, pair...)
@@ -179,7 +186,7 @@ func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []string, 
 				r.opts.Started(id)
 			}
 		default: // a refused spawn (denied, bad child model) is not a missing tool
-			failed = append(failed, resultText(res))
+			failed = append(failed, task.label+" ("+resultText(res)+")")
 		}
 	}
 	return msgs, ids, failed

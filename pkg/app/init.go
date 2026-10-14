@@ -17,7 +17,7 @@ import (
 )
 
 // agentsFileName is the instruction file /init writes, and the survey watches its
-// mtime so the "applies on next start" notice only follows a real write.
+// stamp so the "applies on next start" notice only follows a real write.
 const agentsFileName = "AGENTS.md"
 
 // initDeps are the driver objects the /init controller closes over.
@@ -41,6 +41,7 @@ type initController struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	spawned []string // this survey's child ids, so an abort spares the model's own
+	aborted bool     // set by abort: a spawn still registering is stopped at track time
 }
 
 // newInitController returns the controller, or nil when there is no tool registry
@@ -62,12 +63,19 @@ func newInitController(deps initDeps) *initController {
 	return c
 }
 
-// track records a child this survey spawned.
+// track records a child this survey spawned. A spawn whose id lands after an
+// abort missed the stop-by-id sweep, so it is stopped here instead.
 func (c *initController) track(id string) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	stopped := c.aborted
+	if !stopped {
+		c.spawned = append(c.spawned, id)
+	}
+	c.mu.Unlock()
 
-	c.spawned = append(c.spawned, id)
+	if stopped && c.deps.agents != nil {
+		_ = c.deps.agents.Stop(id) // already finished is not a failure here
+	}
 }
 
 // start runs one survey on its own goroutine, so the pump keeps serving input for
@@ -88,7 +96,7 @@ func (c *initController) start(ctx context.Context) {
 		c.deps.notify("init: a survey is already running", tui.LevelWarn)
 		return
 	}
-	c.cancel, c.spawned = cancel, nil
+	c.cancel, c.spawned, c.aborted = cancel, nil, false
 	c.mu.Unlock()
 
 	go func() {
@@ -121,13 +129,17 @@ func (c *initController) submit(root context.Context, in agent.Input) {
 // abort ends a running survey and stops the children it spawned, reporting
 // whether there was one to stop. A returning Poll does not end a job, so each is
 // stopped by id, never StopAll. That would also kill investigations the model
-// started for itself while the survey ran.
+// started for itself while the survey ran. A spawn still registering when this
+// runs is stopped by track instead.
 func (c *initController) abort() bool {
 	if c == nil {
 		return false
 	}
 	c.mu.Lock()
 	cancel, ids := c.cancel, c.spawned
+	if cancel != nil { // nothing to mark once done has released the slot
+		c.aborted = true
+	}
 	c.spawned = nil
 	c.mu.Unlock()
 	if cancel == nil {
@@ -184,10 +196,10 @@ type initWatch struct {
 
 	mu   sync.Mutex
 	path string
-	prev time.Time
+	prev fileStamp
 }
 
-// arm records the instruction file's current mtime ahead of a survey turn.
+// arm records the instruction file's current stamp ahead of a survey turn.
 func (w *initWatch) arm(path string) {
 	if w == nil {
 		return
@@ -195,7 +207,7 @@ func (w *initWatch) arm(path string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.path, w.prev = path, modTime(path)
+	w.path, w.prev = path, stampOf(path)
 }
 
 // TurnEnd reports the file once it has actually changed, then disarms. It stays
@@ -209,8 +221,8 @@ func (w *initWatch) TurnEnd(agent.TurnResult) {
 	if path == "" {
 		return
 	}
-	now := modTime(path)
-	if now.IsZero() || now.Equal(prev) {
+	now := stampOf(path)
+	if now.mod.IsZero() || now == prev {
 		return // nothing written yet, keep watching
 	}
 	w.mu.Lock()
@@ -221,11 +233,19 @@ func (w *initWatch) TurnEnd(agent.TurnResult) {
 	}
 }
 
-// modTime returns path's modification time, zero when it does not exist.
-func modTime(path string) time.Time {
+// fileStamp is a watched file's identity. A write landing in the same tick it
+// was armed under leaves mtime untouched on coarse-mtime filesystems, so the
+// size moves with it.
+type fileStamp struct {
+	size int64
+	mod  time.Time
+}
+
+// stampOf returns path's stamp, zero when it does not exist.
+func stampOf(path string) fileStamp {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return time.Time{}
+		return fileStamp{}
 	}
-	return fi.ModTime()
+	return fileStamp{size: fi.Size(), mod: fi.ModTime()}
 }

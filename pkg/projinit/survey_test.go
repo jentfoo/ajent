@@ -178,14 +178,14 @@ func TestBuildTasks(t *testing.T) {
 		got := surveyTasks(t.Context(), dir)
 		require.Len(t, got, 2) // one build survey plus one codebase slice
 
-		assert.Equal(t, buildTask, got[0])
+		assert.Equal(t, buildLabel, got[0].label)
 		for _, want := range []string{"Makefile", ".github/workflows", "CONTRIBUTING.md"} {
-			assert.Contains(t, got[0], want)
+			assert.Contains(t, got[0].text, want)
 		}
 		for _, want := range []string{"pkg/", "cmd/"} {
-			assert.Contains(t, got[1], want)
+			assert.Contains(t, got[1].text, want)
 		}
-		assert.NotContains(t, got[1], "Makefile") // the division is visible in what each reads
+		assert.NotContains(t, got[1].text, "Makefile") // the division is visible in what each reads
 	})
 
 	t.Run("single_slice_instruction", func(t *testing.T) {

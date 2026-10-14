@@ -55,14 +55,24 @@ func docFiles(cwd string) ([]string, bool) {
 	return out, false
 }
 
+// surveyTask is one sub-agent assignment. The label names it in a refusal
+// notice; the text is the full prompt the agent receives.
+type surveyTask struct {
+	label string
+	text  string
+}
+
+// buildLabel names the build survey task, which has no paths to speak of.
+const buildLabel = "the build"
+
 // surveyTasks returns every sub-agent task: one build and test survey, then one
 // per disjoint codebase slice.
-func surveyTasks(ctx context.Context, cwd string) []string {
+func surveyTasks(ctx context.Context, cwd string) []surveyTask {
 	parts := codeSlices(ctx, cwd)
-	out := make([]string, 0, len(parts)+1)
-	out = append(out, buildTask)
+	out := make([]surveyTask, 0, len(parts)+1)
+	out = append(out, surveyTask{label: buildLabel, text: buildTask})
 	for _, p := range parts {
-		out = append(out, codeTask(p))
+		out = append(out, surveyTask{label: strings.Join(p, ", "), text: codeTask(p)})
 	}
 	return out
 }
