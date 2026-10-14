@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -106,6 +107,46 @@ func TestWrite(t *testing.T) {
 	})
 }
 
+func TestReadDisplaced(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "f.txt")
+
+	t.Run("absent", func(t *testing.T) {
+		d := readDisplaced(p)
+		assert.Equal(t, dispAbsent, d.state)
+	})
+
+	t.Run("readable", func(t *testing.T) {
+		require.NoError(t, os.WriteFile(p, []byte("old\n"), 0o644))
+		t.Cleanup(func() { _ = os.Remove(p) })
+
+		d := readDisplaced(p)
+		assert.Equal(t, dispReadable, d.state)
+		assert.Equal(t, "old\n", string(d.data))
+	})
+
+	t.Run("unreadable", func(t *testing.T) {
+		unreadableFileSkip(t)
+		writeChmod000(t, p, "hidden\n")
+		t.Cleanup(func() { _ = os.Remove(p) })
+
+		d := readDisplaced(p)
+		assert.Equal(t, dispUnreadable, d.state)
+		assert.Nil(t, d.data)
+		assert.Equal(t, int64(7), d.size)
+	})
+
+	t.Run("directory", func(t *testing.T) {
+		sub := filepath.Join(dir, "sub")
+		require.NoError(t, os.Mkdir(sub, 0o755))
+
+		d := readDisplaced(sub)
+		assert.Equal(t, dispAbsent, d.state) // a directory is not displaced content
+	})
+}
+
 func TestWriteReportsDisplacedContent(t *testing.T) {
 	t.Parallel()
 
@@ -139,4 +180,58 @@ func TestWriteReportsDisplacedContent(t *testing.T) {
 		require.False(t, res.IsError)
 		assert.NotContains(t, textOf(res), "@@")
 	})
+}
+
+func TestWriteUnreadableOverwrite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("execute_reports_size_not_diff", func(t *testing.T) {
+		unreadableFileSkip(t)
+		e := newToolEnv(t.TempDir())
+		p := filepath.Join(e.cwd, "locked.txt")
+		writeChmod000(t, p, "hidden\n")
+
+		res := e.writeExec(t.Context(), `{"path":"locked.txt","content":"new\n"}`)
+		require.False(t, res.IsError) // reporting only: the write proceeds
+
+		out := textOf(res)
+		assert.Contains(t, out, "wrote locked.txt")
+		assert.Contains(t, out, "existing content (7b) could not be read")
+		assert.NotContains(t, out, "@@") // no displaced-content diff can exist
+
+		require.NoError(t, os.Chmod(p, 0o644)) // the overwrite kept mode 000
+		data, err := os.ReadFile(p)
+		require.NoError(t, err)
+		assert.Equal(t, "new\n", string(data))
+	})
+
+	t.Run("preview_marks_displaced_side", func(t *testing.T) {
+		unreadableFileSkip(t)
+		e := newToolEnv(t.TempDir())
+		p := filepath.Join(e.cwd, "locked.txt")
+		writeChmod000(t, p, "hidden\n")
+
+		c := agent.ToolCall{ID: "c", Name: "write",
+			Input: json.RawMessage(`{"path":"locked.txt","content":"new\n"}`)}
+		ch, err := (&writeTool{policy: e.policy, tracker: e.tracker}).Preview(c)
+		require.NoError(t, err)
+
+		assert.Equal(t, "[existing content (7b) could not be read]", ch.Before)
+		assert.Equal(t, "new\n", ch.After)
+	})
+}
+
+// unreadableFileSkip skips where mode bits cannot hide file contents, as for root.
+func unreadableFileSkip(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file mode bits cannot make a file unreadable here")
+	}
+}
+
+// writeChmod000 creates p with content and strips every permission bit.
+func writeChmod000(t *testing.T, p, content string) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(p, []byte(content), 0o644))
+	require.NoError(t, os.Chmod(p, 0o000))
 }
