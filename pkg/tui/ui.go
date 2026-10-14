@@ -273,6 +273,13 @@ func New(opts Options) (*UI, error) {
 	}
 
 	u.reader = newInputReader(in)
+	// Type-ahead decodes and handles as soon as these start, so from here New
+	// holds the lock like every public method (invariant 4): the startup frame
+	// must not compose against a key-loop repaint, and the cell-size query
+	// below must not interleave with one.
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
 	u.safeGo(u.reader.run)
 	u.safeGo(u.readKeys)
 	u.safeGo(u.watchSignals)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/term"
 )
 
 // The vt emulator approximates reflow. A real pty is the reference for the
@@ -246,6 +247,35 @@ func TestPTYKeystrokes(t *testing.T) {
 		assert.Equal(t, "hello", got)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Enter never submitted the typed line")
+	}
+}
+
+// TestPTYStartupTypeAhead preloads raw-mode type-ahead before New runs, so the
+// bytes sit in the tty queue exactly like keys pressed during startup. They
+// must reach a submission rather than race the first frame; several rounds
+// give -race a chance to see the key loop overlap the compose.
+func TestPTYStartupTypeAhead(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		master, slave := openPTY(t)
+		setPTYSize(t, master, 60, 20)
+
+		_, err := term.MakeRaw(int(slave.Fd()))
+		require.NoError(t, err)
+		_, err = master.WriteString("hi\r")
+		require.NoError(t, err)
+
+		v := newVT(60, 20)
+		u := newPTYUI(t, master, slave)
+
+		select {
+		case got := <-u.Messages():
+			assert.Equal(t, "hi", got)
+		case <-time.After(5 * time.Second):
+			t.Fatal("type-ahead typed before startup was never submitted")
+		}
+		drainPTY(t, master, v)
+		assert.Equal(t, 1, countRules(v.Screen()))
+		u.Close()
 	}
 }
 
