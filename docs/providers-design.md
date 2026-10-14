@@ -614,7 +614,8 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
 - Responses API primary, with tools flat, not nested under a `function` key.
   `max_output_tokens`, not `max_tokens`.
 - Reasoning items replay by id, and statelessly only with `encrypted_content`,
-  which requires asking for it via `include`.
+  which requires asking for it via `include`. `store` stays pinned false, so an
+  id carrying no captured payload is dropped rather than stubbed.
 - Falls back to chat-completions per model, decided from resolved capabilities
   rather than sniffed.
 - A terminal `incomplete` stop is output-token truncation (`StopMaxTokens`) only

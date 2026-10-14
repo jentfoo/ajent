@@ -948,7 +948,7 @@ func TestResponsesItemsReplay(t *testing.T) {
 
 	t.Run("adjacent_text_blocks_merge", func(t *testing.T) {
 		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
-			ThinkingBlock{ItemID: "rs_1"},
+			ThinkingBlock{ItemID: "rs_1", Encrypted: "enc"},
 			TextBlock{Text: "first"},
 			TextBlock{Text: "second"},
 		}})
@@ -1026,6 +1026,29 @@ func TestResponsesItemsReplay(t *testing.T) {
 		got, err := json.Marshal(input[0])
 		require.NoError(t, err)
 		assert.JSONEq(t, string(raw), string(got))
+	})
+
+	t.Run("id_only_reasoning_is_dropped", func(t *testing.T) {
+		// store stays false, so an id with no encrypted payload can never resolve
+		// server-side and the item is not emitted at all
+		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
+			ThinkingBlock{ItemID: "rs_1", Text: "orphaned"},
+			TextBlock{Text: "answer"},
+		}})
+		require.Len(t, input, 1)
+		assert.Equal(t, "message", input[0].(map[string]any)["type"])
+	})
+
+	t.Run("encrypted_stub_carries_an_empty_summary", func(t *testing.T) {
+		// transcripts written before verbatim capture replay as a stub whose shape
+		// matches captured items, summary key included
+		input := build(t, Message{Role: RoleAssistant, Content: BlockList{
+			ThinkingBlock{ItemID: "rs_1", Encrypted: "ENC"},
+		}})
+		require.Len(t, input, 1)
+		got, err := json.Marshal(input[0])
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"type":"reasoning","id":"rs_1","encrypted_content":"ENC","summary":[]}`, string(got))
 	})
 
 	t.Run("tool_result_uses_the_bare_call_id", func(t *testing.T) {

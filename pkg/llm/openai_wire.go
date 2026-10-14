@@ -83,10 +83,12 @@ type respItem struct {
 	// when a tool result carries images the model accepts.
 	Output any `json:"output,omitempty"`
 
-	EncryptedContent string          `json:"encrypted_content,omitempty"`
-	Summary          []any           `json:"summary,omitempty"`
-	Phase            string          `json:"phase,omitempty"` // responses message phase
-	Raw              json.RawMessage `json:"-"`               // verbatim item, for replay
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+	// Summary is the decoded reasoning summary. A replay stub sets it to an
+	// empty non-nil slice so "summary":[] survives omitempty on the wire.
+	Summary any             `json:"summary,omitempty"`
+	Phase   string          `json:"phase,omitempty"` // responses message phase
+	Raw     json.RawMessage `json:"-"`               // verbatim item, for replay
 }
 
 // MarshalJSON returns the captured raw item verbatim when present so a reasoning

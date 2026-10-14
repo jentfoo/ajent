@@ -213,17 +213,15 @@ func responsesItems(m Message, caps Capabilities, schemaByName map[string]ToolSc
 				ImageURL: "data:" + v.MediaType + ";base64," + base64.StdEncoding.EncodeToString(v.Data)})
 		case ThinkingBlock:
 			flushMessage()
-			if v.ItemID == "" && len(v.Item) == 0 {
-				continue // nothing to reference, so it cannot be replayed
+			switch {
+			case len(v.Item) > 0: // replay the original serialized item verbatim
+				out = append(out, respItem{Type: respTypeReasoning, Raw: slices.Clone(v.Item)})
+			case v.ItemID != "" && v.Encrypted != "":
+				// transcripts written before verbatim capture fall back to a stub
+				out = append(out, respItem{Type: respTypeReasoning, ID: v.ItemID,
+					EncryptedContent: v.Encrypted, Summary: []any{}})
 			}
-			var item respItem
-			if len(v.Item) > 0 { // replay the original serialized item verbatim
-				item = respItem{Type: respTypeReasoning, Raw: slices.Clone(v.Item)}
-			} else { // transcripts written before this change fall back to a stub
-				item = respItem{Type: respTypeReasoning, ID: v.ItemID,
-					EncryptedContent: v.Encrypted, Summary: []any{}}
-			}
-			out = append(out, item)
+			// else nothing replayable: an id alone cannot resolve with store:false
 		case ToolCallBlock:
 			flushMessage()
 			callID, itemID := cutToolCallID(v.ID)

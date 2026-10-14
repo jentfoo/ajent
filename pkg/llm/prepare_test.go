@@ -38,19 +38,19 @@ func retentionFixture() []Message {
 	return []Message{
 		Text(RoleUser, "first question"),
 		{Role: RoleAssistant, Content: BlockList{
-			ThinkingBlock{Text: "old", Signature: "sig-old", ItemID: "rs-old", Details: []byte(`["old"]`)},
+			ThinkingBlock{Text: "old", Signature: "sig-old", ItemID: "rs-old", Encrypted: "enc-old", Details: []byte(`["old"]`)},
 			TextBlock{Text: "first answer"},
 		}},
 		Text(RoleUser, "second question"), // turn boundary
 		{Role: RoleAssistant, Content: BlockList{
-			ThinkingBlock{Text: "planning", Signature: "sig-a", ItemID: "rs-a", Details: []byte(`["a"]`)},
+			ThinkingBlock{Text: "planning", Signature: "sig-a", ItemID: "rs-a", Encrypted: "enc-a", Details: []byte(`["a"]`)},
 			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{}`)},
 		}},
 		{Role: RoleUser, Content: BlockList{ // tool result, not a turn boundary
 			ToolResultBlock{CallID: "c1", ToolName: "read", Content: BlockList{TextBlock{Text: "file"}}},
 		}},
 		{Role: RoleAssistant, Content: BlockList{
-			ThinkingBlock{Text: "concluding", Signature: "sig-b", ItemID: "rs-b", Details: []byte(`["b"]`)},
+			ThinkingBlock{Text: "concluding", Signature: "sig-b", ItemID: "rs-b", Encrypted: "enc-b", Details: []byte(`["b"]`)},
 			TextBlock{Text: "second answer"},
 		}},
 	}
@@ -200,16 +200,30 @@ func TestPrepareCrossModelDegradation(t *testing.T) {
 	t.Run("same_model_replay_preserved", func(t *testing.T) {
 		in := []Message{
 			{Role: RoleAssistant, Content: BlockList{
-				ThinkingBlock{ItemID: "rs_1"},
+				ThinkingBlock{ItemID: "rs_1", Encrypted: "enc"},
 				TextBlock{Text: "a", Signature: encodeTextSignature("msg_9", "")},
 			}},
 		}
 		out := Prepare(Request{Model: m, Messages: sameOrigin(m, in),
 			Reasoning: ReasoningConfig{Retain: RetainAll}}).Messages
 		assert.Equal(t, BlockList{
-			ThinkingBlock{ItemID: "rs_1"},
+			ThinkingBlock{ItemID: "rs_1", Encrypted: "enc"},
 			TextBlock{Text: "a", Signature: encodeTextSignature("msg_9", "")},
 		}, out[0].Content)
+	})
+
+	t.Run("same_model_id_only_thinking_dropped", func(t *testing.T) {
+		// store is pinned false, so an id with no encrypted payload cannot
+		// resolve server-side and must never reach the wire whatever the policy
+		in := []Message{
+			{Role: RoleAssistant, Content: BlockList{
+				ThinkingBlock{ItemID: "rs_1", Text: "reasoned"},
+				TextBlock{Text: "a"},
+			}},
+		}
+		out := Prepare(Request{Model: m, Messages: sameOrigin(m, in),
+			Reasoning: ReasoningConfig{Retain: RetainAll}}).Messages
+		assert.Equal(t, BlockList{TextBlock{Text: "a"}}, out[0].Content)
 	})
 
 	t.Run("nil_origin_treated_as_foreign", func(t *testing.T) {

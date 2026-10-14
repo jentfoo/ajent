@@ -58,7 +58,9 @@ func replayable(t ThinkingBlock, caps Capabilities) bool {
 	case DialectAnthropic:
 		return t.Signature != "" || t.Redacted != "" || caps.AllowEmptySignature
 	case DialectOpenAIResponses:
-		return t.ItemID != "" || len(t.Item) > 0
+		// store stays pinned false, so an id alone can never resolve server-side:
+		// replay rides the verbatim item or the encrypted payload inside it
+		return len(t.Item) > 0 || (t.ItemID != "" && t.Encrypted != "")
 	}
 	// a compat block with an originating field replays back to that field. This
 	// replaces the deepseek-only replay gate once the source-field round trip lands.
