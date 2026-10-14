@@ -178,6 +178,104 @@ func TestExpand(t *testing.T) {
 		assert.Empty(t, injected(t, res))
 	})
 
+	// sentence-final '.' and ':' ride inside the token; when the written form
+	// names nothing real they are retried without them
+	t.Run("sentence_period_trims_to_file", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("Explain @main.go.")
+		assert.Equal(t, "Explain @main.go.", res.Text) // prose keeps the period
+		assert.Empty(t, res.Notices)
+		require.Len(t, injected(t, res), 2)
+		assert.Contains(t, sink.starts, "read main.go")
+	})
+
+	t.Run("sentence_colon_trims_to_file", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("see @a.txt: it explains")
+		assert.Empty(t, res.Notices)
+		require.Len(t, injected(t, res), 2)
+		assert.Contains(t, sink.starts, "read a.txt")
+	})
+
+	t.Run("trailing_period_dir_lists", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("list @sub.")
+		assert.Empty(t, res.Notices)
+		require.Len(t, injected(t, res), 2)
+		assert.Contains(t, sink.starts, "ls sub")
+	})
+
+	t.Run("dot_slash_ref_trims", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("see @./a.go.")
+		assert.Empty(t, res.Notices)
+		require.Len(t, injected(t, res), 2)
+		assert.Contains(t, sink.starts, "read ./a.go")
+	})
+
+	// a written form that resolves is never reinterpreted: both spellings exist,
+	// the token must keep its trailing dot
+	t.Run("existing_written_form_wins", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"cfg", "cfg."} {
+			require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x\n"), 0o600))
+		}
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("see @cfg.")
+		assert.Empty(t, res.Notices)
+		require.Len(t, injected(t, res), 2)
+		assert.Contains(t, sink.starts, "read cfg.")
+	})
+
+	t.Run("missing_with_period_warns", func(t *testing.T) {
+		dir := t.TempDir()
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @nope.")
+		assert.Equal(t, "see @nope.", res.Text)
+		require.Len(t, res.Notices, 1)
+		assert.Contains(t, res.Notices[0], "@nope. not found")
+	})
+
+	// an all-punctuation token trims to nothing: the written form is what warns
+	t.Run("all_punct_token_warns", func(t *testing.T) {
+		dir := t.TempDir()
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @...")
+		assert.Equal(t, "see @...", res.Text)
+		require.Len(t, res.Notices, 1)
+		assert.Contains(t, res.Notices[0], "@... not found")
+	})
+
+	// a trimmed large reference annotates under its written token, and
+	// re-expanding that annotation replaces rather than doubles it
+	t.Run("trimmed_large_file_annotates", func(t *testing.T) {
+		dir := t.TempDir()
+		writeBigLines(t, dir, "big.go")
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @big.go.")
+		assert.Contains(t, res.Text, "@big.go. (")
+		assert.Empty(t, injected(t, res))
+
+		again := x.Expand(res.Text)
+		assert.Equal(t, 1, strings.Count(again.Text, "lines"), "no double annotation")
+	})
+
 	t.Run("dedupes_unchanged_file", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "a.go")

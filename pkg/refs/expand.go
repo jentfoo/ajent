@@ -162,14 +162,9 @@ func (x *Expander) Expand(text string) Result {
 			}
 			continue
 		}
-		full, err := x.policy.Resolve(ref.Path)
+		path, full, m, err := x.measureRef(ref.Path)
 		if err != nil {
-			notices = append(notices, "could not resolve @"+ref.Path+": "+err.Error())
-			continue
-		}
-		m, err := tools.Measure(full)
-		if err != nil {
-			notices = append(notices, "@"+ref.Path+" not found")
+			notices = append(notices, err.Error())
 			continue
 		}
 		if m.Dir {
@@ -179,7 +174,7 @@ func (x *Expander) Expand(text string) Result {
 				continue
 			}
 			if keep("ls:" + full) {
-				plan = append(plan, lsCall(run, ref.Path, full))
+				plan = append(plan, lsCall(run, path, full))
 			}
 			continue
 		}
@@ -195,7 +190,7 @@ func (x *Expander) Expand(text string) Result {
 				continue
 			}
 			if keep(full) {
-				plan = append(plan, newInjection(run, "read", "", ref.Path, full, imageNominalBytes))
+				plan = append(plan, newInjection(run, "read", "", path, full, imageNominalBytes))
 			}
 			continue
 		}
@@ -222,7 +217,7 @@ func (x *Expander) Expand(text string) Result {
 		}
 		// the tool returns line-numbered text, so what lands is the file plus a
 		// prefix per line, not its raw size
-		plan = append(plan, newInjection(run, "read", "", ref.Path, full, tools.ReadBytes(m)))
+		plan = append(plan, newInjection(run, "read", "", path, full, tools.ReadBytes(m)))
 		spent += int(m.Bytes)
 	}
 	// sized here rather than per branch: an injection that forgot to add its own
@@ -269,6 +264,40 @@ const lsNominalBytes = 1024
 // measurement, since the fitted block's size is unknowable before the read.
 // 6144 bytes prices the pair near imageMaxTokens at the code byte ratio.
 const imageNominalBytes = 6144
+
+// measureRef resolves token to an absolute path and measures it; the returned
+// path is what expansion acts on. Parse keeps a trailing '.' or ':' inside the
+// token (dotted names and x:y need both), so a written form naming nothing real
+// is retried without them. The trimmed reading wins only by existing: ./x and
+// dotted names resolve exactly as written.
+func (x *Expander) measureRef(token string) (path, full string, m tools.Measurement, err error) {
+	path = token
+	if full, m, err = x.measureOne(path); err == nil {
+		return path, full, m, nil
+	}
+	trimmed := strings.TrimRight(path, ".:")
+	if trimmed == "" || trimmed == path {
+		return "", "", tools.Measurement{}, err
+	}
+	tFull, tm, terr := x.measureOne(trimmed)
+	if terr != nil {
+		return "", "", tools.Measurement{}, err // the written form's failure is what to report
+	}
+	return trimmed, tFull, tm, nil
+}
+
+// measureOne resolves one path spelling to an absolute path and measures it.
+func (x *Expander) measureOne(path string) (string, tools.Measurement, error) {
+	full, err := x.policy.Resolve(path)
+	if err != nil {
+		return "", tools.Measurement{}, fmt.Errorf("could not resolve @%s: %w", path, err)
+	}
+	m, err := tools.Measure(full)
+	if err != nil {
+		return "", tools.Measurement{}, fmt.Errorf("@%s not found", path)
+	}
+	return full, m, nil
+}
 
 // lsCall plans the directory listing for a glob or directory reference. dir is
 // the resolved path when it names one directory (so Run can re-check it), empty
