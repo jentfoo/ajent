@@ -377,9 +377,10 @@ and barrier exist, with adapters:
   `Options.OnBoundary`, so completion steers and queued user prompts land at the
   same step boundary in submission order.
 - A tiny sink (`NopSink`) appended to `opts.Sinks` overrides `TurnStart` to call
-  `mgr.Flush()` and `TurnEnd` to release in-flight marks, so every turn end (a
-  normal stop, `/plan-stop` abort or headless run) clears them through one seam
-  instead of each path calling the manager directly.
+  `mgr.Flush()` and `TurnEnd` to release in-flight marks when the turn was
+  aborted, so every abort path clears them through one seam instead of each
+  calling the manager directly. A clean stop leaves the marks alone so a queued
+  completion steer can still land on the next turn's boundary via `Delivered`.
 
 Headless mode (`oneshot.go`) has no steer queue, so `Options.OnBoundary` is
 `mgr.Boundary` directly and the `Deliver` hook drives the idle case.

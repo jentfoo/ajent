@@ -527,7 +527,7 @@ soon as it lands (mid-typing included, see agent-loop-design.md), and a dialog
 the user answers without waiting cancels its in-flight request rather than
 paying for it. Verdicts normalise by scanning for
 the verdict words anywhere in the reply: an `allow`/`allowed` token yields
-approval, `deny`/`denied`/`denies` denial, and
+approval, `deny`/`denied`/`disallowed` denial, and
 **both present (or neither) is unsure**. The asymmetry is deliberate: `deny` and
 `unsure` are indistinguishable downstream (both leave the dialog open), so only
 an unambiguous single-direction reply can fail open, and any conflict keeps the
@@ -562,12 +562,15 @@ shell commands to `WorkspaceClassifierSystem`: there the question is not
 *does this write?* but *is this write permissible?*. The prompt names its two
 writable roots verbatim, cwd and the temp dir, the same two the barrier
 path-scopes `write`/`edit` against, so gate and model judge by one rule.
-Reads anywhere are always `allow`, and only writes need confinement. Inside the
-two roots it allows file creation, scripted rewrites, redirects, moves and
-copies, removing individual files, build and test commands and in-repo git;
-it denies regardless any path outside the roots (a write there), bulk
-destruction, system or package changes, the network in either direction (reading
-from it exfiltrates), unaccountable execution and credential access. An
+Reads anywhere are always `allow`, credentials and secrets the sole
+exception, and only writes need confinement. Inside the two roots it allows
+file creation, scripted rewrites, redirects, moves and copies, removing
+individual files, build and test commands and in-repo git. It denies regardless
+any path outside the roots (a write there), bulk destruction, system or package
+changes, repository metadata writes, unaccountable execution and credential
+access. Ordinary network retrieval is left to model discretion here, unlike the
+`auto` shell prompt below: anything that could exfiltrate data or reach a
+sensitive target denies. An
 **in-scope** directory create/remove never reaches it: the barrier resolves
 those path arguments itself, and an out-of-scope one still goes to the model
 like any other command. Ambiguity resolves to `unsure`, never `allow`, and a
@@ -599,21 +602,20 @@ by what it declares rather than guessed at.
 
 Every investigation child gets a fresh system block built by the same
 `buildSystem` with one extra snippet appended after project instructions:
-`childContract`. It carries three parts, and asserts them by golden tests:
-
-- `<INTRO>`: who the agent is (an isolated research sub-agent of a coding agent)
-- `<CONSTRAINS FOR USE>`: read-only constraints, only `read`, `grep`, `find`,
-  `ls` and any MCP tool marked read-only as typed tool calls rather than shell,
-  with no editing or destructive operations. The constraint is structural, not
-  advisory, because the tool set is filtered before the model ever sees it.
-  Inside a git work tree the same sentence also names the four `git_*` history
-  readers (`git_status`, `git_log`, `git_show`, `git_diff`), matching the
-  repo-gated tool set. Outside one they are omitted so the advertised list is
-  never wider than what a call can answer.
-- `<EXPECTED OUTPUT>`: the final assistant message **is** the entire return
-  value, a single self-contained summary of everything discovered, with
-  conclusions, key file paths and line numbers, caveats, and no tool calls.
-  Investigate thoroughly, then stop.
+`childContract`. It carries three parts, pinned by golden tests. The intro
+names the agent as an isolated research sub-agent of a coding agent. The
+constraints section limits it to read-only tool calls (`read`, `grep`, `find`,
+`ls` and any MCP tool marked read-only) issued as typed tool calls rather than
+shell, with no editing or destructive operations. That constraint is
+structural, not advisory, because the tool set is filtered before the model
+ever sees it. Inside a git work tree the same sentence also names the four
+`git_*` history readers (`git_status`, `git_log`, `git_show`, `git_diff`),
+matching the repo-gated tool set. Outside one they are omitted so the
+advertised list is never wider than what a call can answer. The output section
+makes the final assistant message the entire return value, a single
+self-contained summary of everything discovered, with conclusions, key file
+paths and line numbers, caveats, and no tool calls. Investigate thoroughly,
+then stop.
 
 A reasoning model whose final assistant message is thinking-only returns no
 text, so an empty summary triggers a bounded nudge to emit plain-text output
@@ -646,8 +648,7 @@ Prompts are code. The bar is golden/verbatim tests over exact strings:
   cache stability across days (only the date differs), and assert empty facts drop
   their lines and git failures fall silent.
 - **Tool schemas & descriptions**: assert a tool appears in the request's
-  `Tools` list only when enabled, and guidelines derive correctly from the enabled
-  set.
+  `Tools` list only when enabled.
 - **Compaction**: assert the exact six-section format is present, that user
   focus instructions and the previous summary are included, and (with a scripted
   fake provider) that the model received history in `<conversation>` tags

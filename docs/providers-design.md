@@ -550,10 +550,11 @@ something that will need additions.
 
 Timeouts are five separate bounds (connect, TLS, header, idle and total),
 enforced by `pkg/httputil`, because one `http.Client.Timeout` covers the body
-read, which is the one thing that must be allowed to take minutes. The header
-bound is disabled for lm-studio and llama.cpp (a just-in-time model load holds
-the headers for minutes), the idle bound is a gap-between-reads bound disabled
-for local servers, and the total is disabled and opt-in only.
+read, which is the one thing that must be allowed to take minutes. Local flavors
+tune the individual bounds per provider: a just-in-time model load can hold the
+first response headers for minutes and a local server may sit silent between
+reads, so the header and idle bounds are released where that applies, and the
+total is disabled everywhere, opt-in only.
 
 The idle bound wraps the response body rather than living in the SSE reader, so
 a `: ping` comment frame counts as progress even though it dispatches no event.

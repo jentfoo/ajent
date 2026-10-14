@@ -362,10 +362,11 @@ edit only quotes is refused, because applying would rewrite text the model was n
 changing and nothing in the call says whether it meant to. The same holds for a
 drift outside the rewritten part of a line it is changing, and for a quoted line
 that is a pure truncation of the file's. Bytes the file holds beyond the quote
-were never acknowledged, so writing `newText` would delete them silently. A
-mis-typed value the quote does disagree with still heals no matter how much
-longer the file's version is, since both versions then sit inside the rewritten
-part.
+were never acknowledged, so writing `newText` would delete them silently.
+A mis-typed value the quote disagrees with heals when the two versions are
+close. A file line that has drifted far from its quote refuses instead of
+being rewritten on guesswork, so healing depends on how near the match is,
+not merely on the quote disagreeing.
 
 Healing needs `oldText` and `newText` to hold the same number of lines, since only
 then does each line pair up and the drift stay checkable. An edit that adds or
@@ -819,7 +820,7 @@ Recovery is one shared path with a single exception:
   or partial file.
 - **Native paging** (read). The source file is the recovery: the footer names
   the next offset and nothing is written to disk. A range wider than the limit
-  spills instead of truncating.
+  is refused rather than truncated.
 
 `Elide`, rune-capped head and tail with a marker, survives for compaction's
 structural reduction and edit feedback only.

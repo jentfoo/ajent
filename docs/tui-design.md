@@ -489,7 +489,7 @@ reply in `Text`, kept distinct from a choice because a user who liked none of
 the options must not have their reply read as picking one. `Esc` in the reply
 goes *back to the options*, and only `Esc` on the list (or `Ctrl+C` anywhere)
 declines. Plain mode has no row to type into, so any line that is not an option
-number is the chat reply, and an empty line still cancels.
+number is the chat reply.
 
 The question's prompt rides above the answer row in the live block. Prompt text,
 options and the typed reply all **wrap** to the width instead of being clipped:

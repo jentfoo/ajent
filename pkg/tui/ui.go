@@ -774,7 +774,7 @@ func (u *UI) Output(id, delta string) {
 }
 
 // SetOutputFull marks call id's streamed head to show every line, bypassing
-// the four-line collapse. Ending the call clears it.
+// outputHeadLines collapse. Ending the call clears it.
 func (u *UI) SetOutputFull(id string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
