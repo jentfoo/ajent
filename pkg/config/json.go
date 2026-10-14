@@ -119,10 +119,15 @@ func redactSecretLine(line string) string {
 }
 
 // secretValueSpan reports the span of text to mask for a known-secret key whose
-// quoted name starts at line[i]. A string value is masked exactly; anything
-// else, or a missing colon, leaves the value's end unknown and masks the rest
-// of the line. ok is false when there is no value to hide.
+// quoted name starts at line[i]. The name must sit in key position: a quote
+// directly following a colon is a value that merely spells a key name, as in
+// "model": "token", so it is left alone. A string value is masked exactly;
+// anything else, or a missing colon, leaves the value's end unknown and masks
+// the rest of the line. ok is false when there is no value to hide.
 func secretValueSpan(line string, i int) (start, end int, ok bool) {
+	if p := prevNonBlank(line, i); p >= 0 && line[p] == ':' {
+		return 0, 0, false // value position: a string spelling a key name
+	}
 	var key string
 	for _, k := range secretKeys {
 		if strings.HasPrefix(line[i:], `"`+k+`"`) {
@@ -167,6 +172,17 @@ func skipSpace(line string, i int) int {
 		}
 	}
 	return i
+}
+
+// prevNonBlank returns the index of the closest byte before i that is not blank,
+// or -1 at the line's start.
+func prevNonBlank(line string, i int) int {
+	for i--; i >= 0; i-- {
+		if line[i] != ' ' && line[i] != '\t' && line[i] != '\r' {
+			return i
+		}
+	}
+	return -1
 }
 
 // jsonErrorOffset returns the byte offset an encoding/json error carries.

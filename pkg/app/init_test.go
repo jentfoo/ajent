@@ -222,6 +222,11 @@ func TestInitControllerStart(t *testing.T) {
 				return j.Status == subagent.StatusAborted
 			})
 		}, 5*time.Second, time.Millisecond) // stopped by track, never leaked to /agents
+
+		h.ctl.mu.Lock()
+		spawned := h.ctl.spawned
+		h.ctl.mu.Unlock()
+		assert.Empty(t, spawned) // a late id never joins a list a later abort would stop
 	})
 }
 

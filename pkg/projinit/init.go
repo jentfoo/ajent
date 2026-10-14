@@ -39,7 +39,8 @@ type Options struct {
 	Sink     agent.Sink
 	Notify   func(msg string, level agent.Level)
 	// Started reports each spawned investigation id, so a caller cancelling a
-	// survey stops its own children and not the model's.
+	// survey stops its own children and not the model's. Calls run synchronously
+	// on the survey goroutine and complete before Survey returns.
 	Started func(id string)
 }
 

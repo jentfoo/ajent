@@ -174,6 +174,10 @@ func TestRedactSecretLine(t *testing.T) {
 		{"missing_colon_masks_rest", `{"apiKey" "sk-1","b":1}`, `{"apiKey" [redacted]`},
 		{"key_without_value_untouched", `  "apiKey"`, `  "apiKey"`},
 		{"longer_key_name_kept", `{"tokenfile": "keep me"}`, `{"tokenfile": "keep me"}`},
+		// a quote after a colon is a value spelling a key name, never a key
+		{"value_spelling_key_name", `{"model": "token"}`, `{"model": "token"}`},
+		{"value_spelling_key_minified", `{"m":"token"}`, `{"m":"token"}`},
+		{"secret_masked_beside_exempt_value", `{"apiKey":"sk-1","m":"token"}`, `{"apiKey":[redacted],"m":"token"}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

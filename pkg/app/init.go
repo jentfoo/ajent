@@ -41,7 +41,7 @@ type initController struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	spawned []string // this survey's child ids, so an abort spares the model's own
-	aborted bool     // set by abort: a spawn still registering is stopped at track time
+	aborted bool     // abort ran: a late track stops its spawn instead of listing it
 }
 
 // newInitController returns the controller, or nil when there is no tool registry
