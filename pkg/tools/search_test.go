@@ -375,6 +375,22 @@ func TestGrepFallback(t *testing.T) {
 		assert.NotContains(t, out, "result cap")
 	})
 
+	// an exact fill still names the cap on the fallback: telling a natural end from
+	// more files would mean scanning past the budget, so its note is accepted cost
+	t.Run("count_exact_fill_still_noted", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		for i := 1; i <= 3; i++ {
+			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "hit\n")
+		}
+
+		res, err := (&grepTool{policy: policy, forceGo: true}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":3}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, "f01.txt:1")
+		assert.Contains(t, out, "result cap of 3 matches reached") // conservative on the fallback
+	})
+
 	// a binary file holds no text matches. When one exists the result says so,
 	// an empty or short search never being mistaken for complete coverage
 	t.Run("binary_file_noted_as_unsearched", func(t *testing.T) {
@@ -500,6 +516,76 @@ func TestGrepRgPaths(t *testing.T) {
 		assert.Contains(t, out, "result cap of 2 matches reached")
 	})
 
+	// a search filling the default budget exactly completed on its own: nothing
+	// followed the fill, so a cap note would send the model chasing matches that
+	// do not exist (an explicit limit stays silent by its own rule either way)
+	t.Run("exact_fill_silent", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit one\nmiss\nhit two\n")
+		mkfile(dir, "b.txt", "hit three\n")
+
+		orig := GrepResultLimit()
+		t.Cleanup(func() { ApplyLimits(Limits{Grep: orig}) })
+		ApplyLimits(Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 2, strings.Count(out, "a.txt:")) // all three matches streamed
+		assert.Contains(t, out, "b.txt:1:")
+		assert.NotContains(t, out, "result cap")
+	})
+
+	// a single file holding more matches than the default budget still names the
+	// cap: no per-file bound may end rg at exactly max, which would dress real
+	// withholding up as a natural end once an exact fill stays silent
+	t.Run("single_file_over_budget_names_cap", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit\nhit\nhit\nhit") // no final newline: the last line still reports
+
+		orig := GrepResultLimit()
+		t.Cleanup(func() { ApplyLimits(Limits{Grep: orig}) })
+		ApplyLimits(Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 3, strings.Count(out, "a.txt:")) // three of the four matches shown
+		assert.Contains(t, out, "result cap of 3 matches reached")
+	})
+
+	// count output filling its budget exactly is silent too: rg ended right after,
+	// so no file's count was withheld or trimmed
+	t.Run("count_exact_fill_silent", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit\nhit\n")
+		mkfile(dir, "b.txt", "hit\n")
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":3}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, "a.txt:2")
+		assert.Contains(t, out, "b.txt:1")
+		assert.NotContains(t, out, "result cap")
+	})
+
+	// a count trimmed partway hides its remainder even when rg ends right after,
+	// so the cap stays named though the budget filled without a further file
+	t.Run("count_trim_names_cap", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit\nhit\nhit\n")
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","mode":"count","limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Contains(t, out, "a.txt:2") // the third match is trimmed off the count
+		assert.Contains(t, out, "result cap of 2 matches reached")
+	})
+
 	// context blocks are bounded by an explicit match limit too: each match adds
 	// at most 2*context+1 lines plus its group separator, so two matches stay
 	// within 12 streamed lines and a third block never appears
@@ -540,11 +626,13 @@ func TestGrepRgPaths(t *testing.T) {
 	})
 
 	// a pattern occurring in printed paths must not spend the match budget on
-	// context lines: only true matches count toward the cap
+	// context lines: only true matches count toward the cap, and a further file's
+	// leading context never prints orphaned once the budget is spent
 	t.Run("block_path_not_spending_budget", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
-		mkfile(dir, filepath.Join("needle", "a.txt"), "before\nneedle match\nafter\n")
-		mkfile(dir, filepath.Join("needle", "b.txt"), "before\nneedle match\nafter\n")
+		for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+			mkfile(dir, filepath.Join("needle", name), "before\nneedle match\nafter\n")
+		}
 
 		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
 			callWith([]byte(`{"pattern":"needle","context":1,"limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
@@ -552,7 +640,23 @@ func TestGrepRgPaths(t *testing.T) {
 		out := textOf(res)
 		assert.Equal(t, 2, strings.Count(out, "needle match")) // both real matches streamed
 		assert.Contains(t, out, "result cap of 2 matches reached")
-		assert.Equal(t, 1, strings.Count(out, "\n--\n")) // one group separator between the files
+		assert.Equal(t, 2, strings.Count(out, "-3-after")) // the cut block keeps its trailing context
+		assert.Equal(t, 1, strings.Count(out, "\n--\n"))   // a third block never starts: one separator only
+	})
+
+	// context blocks filling the budget at a natural end stay silent too, and the
+	// final block still rides its trailing context lines whole
+	t.Run("block_exact_fill_silent", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "top\nhit one\nbottom\n")
+		mkfile(dir, "b.txt", "top\nhit two\nbottom\n")
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit","context":1,"limit":2}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.NotContains(t, out, "result cap") // both matches streamed, nothing withheld
+		assert.Contains(t, out, "b.txt-3-bottom")
 	})
 
 	// a non-UTF-8 line still prints: rg delivers its raw bytes when text is invalid

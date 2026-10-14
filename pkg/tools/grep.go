@@ -122,12 +122,14 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 }
 
 // capNote names a spent match budget so a stopped search is never mistaken for
-// complete. Count output and context blocks always name it: a trimmed count
-// reads as authoritative in a way cut-off content lines do not, and a block cut
-// withholds whole matches even under an explicit limit. Plain content and files
-// results stay silent under an explicit limit because that cap is the model's
-// own choice. The budget counts matches, never output lines, so context-heavy
-// results are not falsely named when they complete naturally.
+// complete. The rg path sets it only on proven withholding; the fallback cannot
+// tell an exact fill from more to come without scanning past the budget, so its
+// conservative note stays. Count output and context blocks always name it: a trimmed
+// count reads as authoritative in a way cut-off content lines do not, and a block
+// cut withholds whole matches even under an explicit limit. Plain content and
+// files results stay silent under an explicit limit because that cap is the
+// model's own choice. The budget counts matches, never output lines, so
+// context-heavy results are not falsely named when they complete naturally.
 func (p grepParams) capNote(mode string, spent bool, max int) string {
 	blocks := (mode == "" || mode == grepContent) && p.Context > 0
 	if !spent || (p.Limit > 0 && mode != grepCount && !blocks) {
@@ -337,13 +339,16 @@ func (t *grepTool) finalize(out, note string) agent.ToolResult {
 // rgOnPath reports whether ripgrep is available.
 func rgOnPath() bool { return lookPath("rg") }
 
-// runRg streams ripgrep output until the report is complete or the match
-// budget is spent, then cancels rg so a deep tree with many matches does not
-// keep scanning. Returns the result, whether the match budget was spent (cut),
-// any benign stderr warning (warn) to mirror the fallback's incomplete-coverage
-// note, and any failure. Output lines are rewritten to root-relative paths so
-// both engines print one shape. Exit status 1 means "no matches", while an
-// early cancel ignores whatever exit code follows.
+// runRg streams ripgrep output until the report is complete or one more item
+// arrives past the match budget, then cancels rg so a deep tree with many
+// matches does not keep scanning. Returns the result, whether anything was
+// withheld past the budget (cut: an exact fill ends naturally and stays
+// unnamed), any benign stderr warning (warn) to mirror the fallback's
+// incomplete-coverage note, and any failure. Output lines are rewritten to
+// root-relative paths so both engines print one shape. Exit status 1 means "no
+// matches", while an early cancel ignores whatever exit code follows. No -m is
+// passed: a per-file match bound would end an over-budget file at exactly max,
+// dressing real withholding up as a natural end.
 func runRg(ctx context.Context, root string, p grepParams, mode string, max int) (string, bool, string, error) {
 	args := []string{"--no-heading", "--color=never", "-H"} // -H: one file keeps its name prefix
 	switch mode {
@@ -368,9 +373,6 @@ func runRg(ctx context.Context, root string, p grepParams, mode string, max int)
 	if p.Glob != "" {
 		args = append(args, "--glob", p.Glob)
 	}
-	if mode != grepCount {
-		args = append(args, "-m", strconv.Itoa(max)) // per-file bound, the stream stops globally
-	}
 	args = append(args, "--", p.Pattern, root)
 
 	cmd := exec.CommandContext(ctx, "rg", args...)
@@ -385,26 +387,41 @@ func runRg(ctx context.Context, root string, p grepParams, mode string, max int)
 	}
 
 	var b strings.Builder
-	stopped := false                         // true once the report filled and rg was cancelled early
-	var cut bool                             // true once the budget is spent
+	var stopped bool                         // true once rg was cancelled early; waitErr and stderr follow from it
+	var cut bool                             // true only once content arrived past the budget, proving withholding
 	r := bufio.NewReaderSize(stdout, 64<<10) // no line-length cap, minified lines survive
+
+	// withheld classifies the read that follows a spent budget: any arriving line is
+	// content past the cap, so rg is cancelled and true reports it; EOF alone ends the
+	// report exactly at the budget. A final line riding io.EOF still counts as content.
+	withheld := func(ln string, rerr error) bool {
+		if rerr == nil || ln != "" {
+			stopped = true
+			_ = cmd.Cancel()
+			return true
+		}
+		return false
+	}
+
 	switch {
 	case mode == grepCount:
-		kept := 0 // matches shown across trimmed counts
+		var kept int     // matches shown across trimmed counts
+		var trimmed bool // a count cut partway hides its remainder even when rg ends right after
 		for {
 			ln, rerr := r.ReadString('\n')
+			if max > 0 && kept >= max { // budget spent on an earlier file: this read decides the outcome
+				spent := withheld(ln, rerr) // a further count is one whole file withheld
+				cut = spent || trimmed
+				break
+			}
 			if rel, n, ok := splitCountLine(strings.TrimRight(relLine(root, ln), "\r\n")); ok && kept < max {
 				take := min(n, max-kept)
+				trimmed = trimmed || take < n // the rest of this count is withheld from display
 				kept += take
 				fmt.Fprintf(&b, "%s:%d\n", rel, take)
 			}
-			cut = kept >= max // budget spent (whether or not more files follow)
-			if rerr != nil {  // rg finished naturally
-				break
-			}
-			if cut { // a further file would be withheld whole, stop scanning the tree
-				stopped = true
-				_ = cmd.Cancel()
+			if rerr != nil { // rg finished naturally at or under the budget
+				cut = trimmed
 				break
 			}
 		}
@@ -428,6 +445,16 @@ func runRg(ctx context.Context, root string, p grepParams, mode string, max int)
 				continue // begin/end/summary records carry no output line
 			}
 			pth := grepRel(root, ev.Data.Path.String())
+			contiguous := started && pth == lastPath && ev.Data.LineNumber == lastLine+1
+			if max > 0 && shown >= max && (ev.Type == "match" || !contiguous) {
+				// past the budget a further match, or context not trailing the final
+				// block, proves content was withheld: stop scanning and name the cap.
+				// Trailing context of the final block still rides, whole as streamed.
+				stopped = true
+				cut = true
+				_ = cmd.Cancel()
+				break
+			}
 			sep := ":" // match lines print path:line:text, context ones path-line-text
 			if ev.Type == "context" {
 				sep = "-"
@@ -443,9 +470,8 @@ func runRg(ctx context.Context, root string, p grepParams, mode string, max int)
 			}
 			fmt.Fprintf(&b, "%s%s%d%s%s", pth, sep, ev.Data.LineNumber, sep, txt)
 			started, lastPath, lastLine = true, pth, ev.Data.LineNumber
-			cut = max > 0 && shown >= max // the report filled at or before this many matches
-			over := lim.Bytes > 0 && b.Len() >= lim.Bytes
-			if cut || over {
+			over := lim.Bytes > 0 && b.Len() >= lim.Bytes // the byte bound only stops a runaway context size
+			if over {
 				stopped = true
 				_ = cmd.Cancel()
 				break
@@ -455,17 +481,17 @@ func runRg(ctx context.Context, root string, p grepParams, mode string, max int)
 		var lines int // kept output lines, each equals a match here
 		for {
 			ln, rerr := r.ReadString('\n')
+			if cut { // budget filled earlier: this read tells an exact fill from withholding
+				cut = withheld(ln, rerr) // a further line is withheld whole past the cap
+				break
+			}
 			if ln != "" {
 				b.WriteString(relLine(root, ln))
 				lines++
 			}
 			cut = max > 0 && lines >= max // the report filled at or before this line
-			if rerr != nil {              // rg finished naturally with fewer than budget results
-				break
-			}
-			if cut {
-				stopped = true // stop rg scanning the rest of the tree once the report is complete
-				_ = cmd.Cancel()
+			if rerr != nil {              // the stream ended with this line: nothing can follow to withhold
+				cut = false
 				break
 			}
 		}
