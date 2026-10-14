@@ -1,9 +1,15 @@
 package session
 
-import "time"
+import (
+	"time"
+
+	"github.com/go-analyze/bulk"
+)
 
 // RecallIndex is the single source for editor Up/Down and Ctrl+R: every typed line
 // from EditorHistory first, then recorded prompts that never reached the line file.
+// The pasted-secret exclusion holds across both sources, so a line dropped from
+// editor history cannot resurface through transcript backfill.
 type RecallIndex struct {
 	prompts *PromptIndex
 	hist    *EditorHistory
@@ -20,6 +26,11 @@ func NewRecallIndex(s *Store, workspace string, hist *EditorHistory) *RecallInde
 // also a recorded prompt carries the prompt's timestamp, otherwise At is zero.
 func (r *RecallIndex) Lines() []Prompt {
 	prompts := r.prompts.Prompts()
+	// typed lines never carry the secret prefix, so only backfill needs this check
+	if r.hist != nil {
+		prefix := r.hist.secretPrefix
+		prompts = bulk.SliceFilter(func(p Prompt) bool { return !hasSecretPrefix(prefix, p.Text) }, prompts)
+	}
 	at := make(map[string]time.Time, len(prompts))
 	for _, p := range prompts { // keep each text's newest recorded time
 		if _, ok := at[p.Text]; !ok {

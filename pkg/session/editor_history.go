@@ -18,6 +18,12 @@ const maxHistoryLines = 1000
 // historyFileName is the per-workspace message record inside a session directory.
 const historyFileName = "editor-history.lines"
 
+// hasSecretPrefix reports whether msg carries the pasted-secret prefix. One knob
+// governs every recall surface: editor history and transcript-derived backfill.
+func hasSecretPrefix(prefix, msg string) bool {
+	return prefix != "" && strings.HasPrefix(msg, prefix)
+}
+
 // histLine is one persisted message plus whether it may be offered for recall.
 // Hidden lines (slash commands) are durable but never surface in Up/Down or
 // Ctrl+R, so they stay distinct from editor-typed messages.
@@ -66,7 +72,7 @@ func (h *EditorHistory) append(msg string, hidden bool) {
 		return
 	}
 	msg = strings.TrimRight(msg, "\r")
-	if msg == "" || (h.secretPrefix != "" && strings.HasPrefix(msg, h.secretPrefix)) {
+	if msg == "" || hasSecretPrefix(h.secretPrefix, msg) {
 		return
 	}
 	l := histLine{msg: msg, hidden: hidden}
@@ -231,7 +237,7 @@ func normalize(lines []histLine, secretPrefix string) []histLine {
 	var clean []histLine
 	for _, l := range lines {
 		m := strings.TrimRight(l.msg, "\r")
-		if m != "" && (secretPrefix == "" || !strings.HasPrefix(m, secretPrefix)) {
+		if m != "" && !hasSecretPrefix(secretPrefix, m) {
 			clean = append(clean, histLine{msg: m, hidden: l.hidden})
 		}
 	}
