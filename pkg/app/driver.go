@@ -655,23 +655,13 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 	defer shutdown()
 
-	// an abandoned session with no conversation is worthless to resume, drop it and
-	// return empty so main skips the "to resume this session" hint.
-	finish := func(r *sessRec) string {
-		if r != nil && r.empty() {
-			_ = r.store.Remove(r.w.Path())
-			return ""
-		}
-		return sessionLabel(r)
-	}
-
 	for {
 		select {
 		case msg, ok := <-ui.Messages():
 			if !ok {
 				// UI went away (stdin EOF): same ordered teardown as a user quit
 				shutdown()
-				return finish(rec)
+				return rec.exitLabel() // drop an abandoned session, else the resume hint label
 			}
 			line := command.ParseLine(msg)
 			if line.Multiline {
@@ -706,7 +696,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			}
 		case <-quit:
 			shutdown()
-			return finish(rec)
+			return rec.exitLabel() // drop an abandoned session, else the resume hint label
 		}
 	}
 }

@@ -791,6 +791,48 @@ func TestEmptyReportsNoConversation(t *testing.T) {
 	assert.False(t, (&sessRec{w: nw, store: session.StoreAt(filepath.Dir(named))}).empty())
 }
 
+func TestExitLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty_removed", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+		r := &sessRec{w: w, store: session.StoreAt(filepath.Dir(p))}
+
+		assert.Empty(t, r.exitLabel()) // no hint may point at the dropped transcript
+		_, serr := os.Stat(p)
+		assert.True(t, os.IsNotExist(serr))
+	})
+
+	t.Run("named_empty_kept", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version(), Name: "keep-me"})
+		require.NoError(t, err)
+		r := &sessRec{w: w, store: session.StoreAt(filepath.Dir(p))}
+
+		assert.Equal(t, "keep-me", r.exitLabel())
+	})
+
+	t.Run("with_conversation_kept", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+		_, aerr := w.Append(session.TypeMessage, session.MessageData{
+			Message: llm.Text(llm.RoleUser, "hello"),
+		})
+		require.NoError(t, aerr)
+		r := &sessRec{w: w, store: session.StoreAt(filepath.Dir(p))}
+
+		assert.Equal(t, sessionLabel(r), r.exitLabel())
+	})
+
+	t.Run("nil_rec_no_label", func(t *testing.T) {
+		var r *sessRec
+		assert.Empty(t, r.exitLabel())
+	})
+}
+
 func TestSearchItems(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)

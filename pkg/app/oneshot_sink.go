@@ -20,7 +20,7 @@ const (
 )
 
 // headSink drains one headless turn onto stdout. finish reports the outcome
-// once the exit code is known, and is always the last thing written.
+// once the exit code is known, as the sink's own last write.
 type headSink interface {
 	agent.Sink
 	result() agent.TurnResult

@@ -248,6 +248,25 @@ func loadTestConfig(t *testing.T) *config.Set {
 	return set
 }
 
+// newestSessionLabel returns the only transcript's resume label, failing when
+// none or several exist.
+func newestSessionLabel(t *testing.T) string {
+	t.Helper()
+
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	list, err := store.List(config.Cwd())
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	return list[0].Label()
+}
+
+// wantResumeHint builds the exact trailing text a finished one-shot prints,
+// spelled out here so a drift from the interactive wording fails loudly.
+func wantResumeHint(label string) string {
+	return "\nRun `ajent --resume " + label + "` to resume this session.\n"
+}
+
 func TestRunHeadless(t *testing.T) {
 	t.Run("fresh_store_failure_degrades_to_no_recording", func(t *testing.T) {
 		// sessions exists as a file, so store.Create cannot make a transcript
@@ -273,7 +292,7 @@ func TestRunHeadless(t *testing.T) {
 		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("all done")}})
 		assert.Equal(t, ExitOK, code)
-		assert.Equal(t, "all done\n", out)
+		assert.Equal(t, "all done\n"+wantResumeHint(newestSessionLabel(t)), out)
 	})
 
 	// an allow verdict from the classifier runs the call with no dialog
@@ -519,6 +538,8 @@ func TestRunHeadless(t *testing.T) {
 		require.Len(t, list, 1)
 	})
 
+	// scripts decode every line --output json emits, so it stays a pure event
+	// stream ending at its result line: the resume hint only rides text output
 	t.Run("json_stream_ends_in_result", func(t *testing.T) {
 		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputJSON}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("all done")}})
@@ -530,13 +551,37 @@ func TestRunHeadless(t *testing.T) {
 		assert.Equal(t, "result", last["type"])
 		assert.Equal(t, statusOK, last["status"])
 		assert.Equal(t, "all done", last["text"])
+		assert.NotContains(t, out, "--resume")
+	})
+
+	// a named session resumes by that name, so the hint names it too
+	t.Run("named_session_hints_name", func(t *testing.T) {
+		code, out, _ := headlessHarness(t,
+			HeadlessOptions{Prompt: "hi", Output: OutputText, SessMode: ResumeSessionName, SessTarget: "nightly"},
+			"", []llm.ScriptedTurn{{Events: textTurn("all done")}})
+		assert.Equal(t, ExitOK, code)
+		assert.Equal(t, "all done\n"+wantResumeHint("nightly"), out)
+	})
+
+	// a run that appends nothing must not leave its session-entry-only transcript
+	// behind for --continue to adopt as the most recent conversation
+	t.Run("abandoned_transcript_removed", func(t *testing.T) {
+		code, _, _ := headlessHarness(t, HeadlessOptions{Prompt: "", Output: OutputText}, "", nil)
+		assert.Equal(t, ExitTurn, code) // an empty prompt starts no turn
+
+		store, serr := session.NewStore()
+		require.NoError(t, serr)
+		list, lerr := store.List(config.Cwd())
+		require.NoError(t, lerr)
+		assert.Empty(t, list)
 	})
 
 	t.Run("empty_answer_exits_two", func(t *testing.T) {
 		code, out, _ := headlessHarness(t, HeadlessOptions{Prompt: "hi", Output: OutputText}, "",
 			[]llm.ScriptedTurn{{Events: textTurn("")}})
 		assert.Equal(t, ExitTurn, code)
-		assert.Empty(t, out)
+		// the recorded prompt keeps the transcript resumable even without an answer
+		assert.Equal(t, wantResumeHint(newestSessionLabel(t)), out)
 	})
 
 	t.Run("provider_error_exits_two", func(t *testing.T) {
@@ -593,8 +638,8 @@ func TestRunHeadless(t *testing.T) {
 				{Events: textTurn("all done")},
 			})
 		assert.Equal(t, ExitOK, code)
-		assert.Equal(t, "let me check\nall done\n", out) // prose from both steps, in order
-		assert.Contains(t, errw, "tool: ")               // progress never touches stdout
+		assert.Equal(t, "let me check\nall done\n"+wantResumeHint(newestSessionLabel(t)), out) // prose from both steps, in order
+		assert.Contains(t, errw, "tool: ")                                                     // progress never touches stdout
 	})
 
 	t.Run("expands_at_references", func(t *testing.T) {

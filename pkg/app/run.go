@@ -159,7 +159,7 @@ func Run(o RunOptions) int {
 	// tell the user how to get back to this conversation
 	ui.Close()
 	if resumeLabel != "" {
-		fmt.Printf("\nRun `ajent --resume %s` to resume this session.\n", resumeLabel)
+		fmt.Print(resumeHint(resumeLabel))
 	}
 	return ExitOK
 }

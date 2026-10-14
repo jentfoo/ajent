@@ -92,6 +92,7 @@ func RunHeadless(o HeadlessOptions) int {
 	})
 	if terr != nil {
 		_, _ = fmt.Fprintln(errw, terr)
+		rec.exitLabel() // tool-set failure: drop the transcript opened before it
 		return ExitUsage
 	}
 
@@ -302,7 +303,13 @@ func RunHeadless(o HeadlessOptions) int {
 	if stats != nil {
 		drain.summary(stats.collect(st.Tokens, time.Since(started)))
 	}
+	label := rec.exitLabel() // an abandoned transcript is dropped, not advertised
 	drain.finish(status, code, answer)
+	// the same hint interactive exit prints; json output stays a pure event
+	// stream ending at its result line
+	if label != "" && o.Output != OutputJSON {
+		_, _ = fmt.Fprint(out, resumeHint(label))
+	}
 	return code
 }
 

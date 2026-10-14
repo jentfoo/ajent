@@ -98,6 +98,24 @@ func (r *sessRec) empty() bool {
 	return !slices.ContainsFunc(entries, func(e session.Entry) bool { return e.Type == session.TypeMessage })
 }
 
+// exitLabel ends the run's recording: an abandoned session (unnamed, nothing
+// recorded) is removed with its head cursor so it never becomes a dead picker
+// row or steals "most recent", reporting "" so no resume hint names it. Any
+// other transcript returns the label a `--resume` command takes.
+func (r *sessRec) exitLabel() string {
+	if r.empty() {
+		_ = r.store.Remove(r.w.Path())
+		return ""
+	}
+	return sessionLabel(r)
+}
+
+// resumeHint renders the exact line every finished run points home with, so
+// interactive and one-shot exits cannot drift apart.
+func resumeHint(label string) string {
+	return fmt.Sprintf("\nRun `ajent --resume %s` to resume this session.\n", label)
+}
+
 // refuseNewer explains why a saved session cannot open here: this build would
 // append to a transcript it cannot read. Naming the format (never the binary
 // version) keeps the gate about storage, and the hint sends the user to the fix.
