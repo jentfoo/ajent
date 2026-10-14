@@ -360,7 +360,7 @@ func TestExpand(t *testing.T) {
 
 		res := x.Expand("@a.go and @b.txt")
 		ids := toolCallIDs(injected(t, res))
-		assert.Equal(t, []string{"ref-1-a.go", "ref-1-b.txt"}, ids,
+		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-r-b.txt"}, ids,
 			"reads must land in forward document order, not reversed")
 	})
 
@@ -371,8 +371,21 @@ func TestExpand(t *testing.T) {
 		x, _ := newExpander(t, dir)
 
 		res := x.Expand("@a.go then @sub")
-		assert.Equal(t, []string{"ref-1-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)),
+		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)),
 			"mixed read and ls references keep document order")
+	})
+
+	// a file whose written path equals "ls-" plus a directory's path would mint
+	// the read and the listing one shared tool_use id: the exact duplicate the
+	// run number cannot separate
+	t.Run("ls_named_file_keeps_ids_distinct", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "ls-src"), []byte("x\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("diff @src and @ls-src")
+		assert.Equal(t, []string{"ref-1-ls-src", "ref-1-r-ls-src"}, toolCallIDs(injected(t, res)))
 	})
 
 	t.Run("nothing_to_inject_has_no_run", func(t *testing.T) {
@@ -392,7 +405,7 @@ func TestExpand(t *testing.T) {
 		res := x.Expand("compare @a.go with @a.go, then @sub and @sub")
 		// a repeated path must not duplicate its content, and must never repeat a
 		// call id: Anthropic rejects a request whose tool_use ids collide
-		assert.Equal(t, []string{"ref-1-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
+		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
 	})
 
 	t.Run("same_path_twice_counts_once", func(t *testing.T) {
@@ -526,11 +539,38 @@ func TestExpanderSeed(t *testing.T) {
 	x, _ := newExpander(t, dir)
 
 	x.Seed([]llm.Message{{Role: llm.RoleAssistant, Content: llm.BlockList{
-		llm.ToolCallBlock{ID: "ref-4-a.go", Name: "read"},
+		llm.ToolCallBlock{ID: "ref-4-r-a.go", Name: "read"},
 		llm.ToolCallBlock{ID: "call_9", Name: "bash"}, // an unrelated id never seeds
 	}}})
 
-	assert.Equal(t, []string{"ref-5-a.go"}, toolCallIDs(injected(t, x.Expand("@a.go"))))
+	assert.Equal(t, []string{"ref-5-r-a.go"}, toolCallIDs(injected(t, x.Expand("@a.go"))))
+}
+
+func TestCallID(t *testing.T) {
+	t.Parallel()
+
+	// the invariant that keeps a written path from imitating another kind's id:
+	// any kind prefixed by another admits a colliding path
+	t.Run("no_kind_prefixes_another", func(t *testing.T) {
+		for _, a := range []string{readKind, lsKind} {
+			for _, b := range []string{readKind, lsKind} {
+				if a == b {
+					continue
+				}
+				assert.False(t, strings.HasPrefix(a, b), "%s prefixes %s", a, b)
+			}
+		}
+	})
+
+	t.Run("read_and_ls_never_collide", func(t *testing.T) {
+		// the todo's exact pair must differ however the paths are chosen
+		assert.NotEqual(t, callID(1, readKind, "ls-src"), callID(1, lsKind, "src"))
+	})
+
+	t.Run("run_survives_digit_led_paths", func(t *testing.T) {
+		// a path starting with digits must not read as a second run number
+		assert.Equal(t, int64(42), runOf(callID(42, readKind, "7-x")))
+	})
 }
 
 // writeBigLines writes name under dir with enough lines to exceed RefInject.

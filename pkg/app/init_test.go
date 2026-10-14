@@ -529,7 +529,7 @@ func TestPromptInput(t *testing.T) {
 		assert.Positive(t, pending) // the read is sized before it lands
 		assert.Empty(t, in.Before)  // staged shell output attaches at delivery, not submit
 		require.NotNil(t, in.After)
-		assert.Equal(t, []string{"ref-1-a.go"}, callIDs(in.After(t.Context())))
+		assert.Equal(t, []string{"ref-1-r-a.go"}, callIDs(in.After(t.Context())))
 	})
 
 	t.Run("expansion_notices_surface", func(t *testing.T) {

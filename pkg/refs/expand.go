@@ -19,6 +19,14 @@ import (
 // idPrefix leads every injected @ reference call id.
 const idPrefix = "ref-"
 
+// call id kinds, one per injected tool. The path half of an id is namespaced by
+// kind because a written path can imitate another kind's tag: a file named
+// "ls-foo" beside a directory "foo". No kind may be a prefix of another.
+const (
+	readKind = "r-"
+	lsKind   = "ls-"
+)
+
 // Result is the outcome of expanding one message's @ references: the rewritten
 // text (with annotations in place), a Run that produces the synthetic messages
 // to append behind it, and any notices.
@@ -190,7 +198,7 @@ func (x *Expander) Expand(text string) Result {
 				continue
 			}
 			if keep(full) {
-				plan = append(plan, newInjection(run, "read", "", path, full, imageNominalBytes))
+				plan = append(plan, newInjection(run, "read", readKind, path, full, imageNominalBytes))
 			}
 			continue
 		}
@@ -217,7 +225,7 @@ func (x *Expander) Expand(text string) Result {
 		}
 		// the tool returns line-numbered text, so what lands is the file plus a
 		// prefix per line, not its raw size
-		plan = append(plan, newInjection(run, "read", "", path, full, tools.ReadBytes(m)))
+		plan = append(plan, newInjection(run, "read", readKind, path, full, tools.ReadBytes(m)))
 		spent += int(m.Bytes)
 	}
 	// sized here rather than per branch: an injection that forgot to add its own
@@ -303,11 +311,12 @@ func (x *Expander) measureOne(path string) (string, tools.Measurement, error) {
 // the resolved path when it names one directory (so Run can re-check it), empty
 // for a glob.
 func lsCall(run int64, path, dir string) injection {
-	return newInjection(run, "ls", "ls-", path, dir, lsNominalBytes)
+	return newInjection(run, "ls", lsKind, path, dir, lsNominalBytes)
 }
 
-// callID names one injected reference. The run number is what keeps a later
-// reference to the same path from reusing an id the context already holds.
+// callID names one injected reference. The run number keeps a later reference to
+// the same path from reusing an id the context already holds; kind keeps two
+// references within one run from colliding.
 func callID(run int64, kind, path string) string {
 	return fmt.Sprintf("%s%d-%s%s", idPrefix, run, kind, path)
 }
