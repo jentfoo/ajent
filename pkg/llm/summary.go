@@ -11,8 +11,9 @@ import (
 var ErrTruncated = errors.New("generation stopped at the output token cap: the response is incomplete")
 
 // RunSummary drives one model call through an accumulator and returns its
-// assistant text plus the usage the provider reported. A response the provider
-// stopped at its output token cap is an error, never partial text.
+// assistant text plus the usage the provider reported, including whatever a
+// failed call already billed after the stream opened. A response stopped at
+// the output token cap is an error, never partial text.
 func RunSummary(ctx context.Context, p Provider, req Request) (string, Usage, error) {
 	st, err := p.Stream(ctx, req)
 	if err != nil {
@@ -26,20 +27,20 @@ func RunSummary(ctx context.Context, p Provider, req Request) (string, Usage, er
 	for ev, ok := st.Next(); ok; ev, ok = st.Next() {
 		acc.Add(ev)
 		if ctx.Err() != nil {
-			return "", Usage{}, ctx.Err() // cancelled: stop consuming the response
+			return "", acc.Usage(), ctx.Err() // cancelled: stop consuming the response
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return "", Usage{}, err // deliberate close leaves st.Err nil, never return partial text
+		return "", acc.Usage(), err // deliberate close leaves st.Err nil, never return partial text
 	}
 	if err := st.Err(); err != nil {
-		return "", Usage{}, err
+		return "", acc.Usage(), err
 	}
 	if err := acc.Err(); err != nil {
-		return "", Usage{}, err
+		return "", acc.Usage(), err
 	}
 	if acc.StopReason() == StopMaxTokens {
-		return "", Usage{}, ErrTruncated
+		return "", acc.Usage(), ErrTruncated
 	}
 
 	var sb strings.Builder

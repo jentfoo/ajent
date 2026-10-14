@@ -795,6 +795,35 @@ func TestCompactorRejectsTruncatedSummary(t *testing.T) {
 	assert.Len(t, st.Messages, before) // state untouched
 }
 
+func TestCompactorSpendsFailedSummaryCall(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+	// a usage report rides in before the drain rejects the truncated reply:
+	// the provider bills those tokens whether or not a checkpoint lands
+	billed := llm.Usage{Input: 5000, Output: 20}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: append([]llm.Event{{Type: llm.EventUsage, Usage: billed}},
+			truncatedStream("## Goal\npartial sum")...)},
+	}}
+	c, st, w := testCompactor(t, model, sp)
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+
+	bar := st.Tokens.Context().Used
+	did, err := c.run(t.Context(), agent.CompactManual, "")
+	assert.False(t, did)
+	require.ErrorIs(t, err, llm.ErrTruncated)
+
+	total := st.Tokens.Total()
+	assert.Equal(t, billed.Input, total.Input)
+	assert.Equal(t, billed.Output, total.Output)
+	// spend-only: a failed compaction never moves the context bar
+	assert.Equal(t, bar, st.Tokens.Context().Used)
+	assert.Empty(t, compactionEntries(t, w))
+}
+
 func TestCompactorWarnsOnSectionlessSummary(t *testing.T) {
 	t.Parallel()
 

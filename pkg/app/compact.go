@@ -143,11 +143,10 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		// is watching, and a free decline never reaches here, so this cannot cry wolf
 		c.notify("compacting "+strutil.FormatTokens(c.used())+"…", agent.LevelInfo)
 		text, usage, serr := llm.RunSummary(ctx, provider, req)
-		if serr == nil {
-			// spend-only: the summariser's prompt is not this session's context, so a
-			// failed compaction must not leave the bar at its (much larger) size
-			c.st.Tokens.Spend(model.Key(), usage)
-		}
+		// spend-only: the summariser's prompt is not this session's context, so a
+		// failed compaction must not leave the bar at its (much larger) size. A
+		// failed call still bills what arrived and Spend ignores zero.
+		c.st.Tokens.Spend(model.Key(), usage)
 		return text, serr
 	}
 
