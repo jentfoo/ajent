@@ -181,8 +181,8 @@ The store:
   never swept: this build cannot read what it would be deleting.
 - **DeleteOld** sweeps unnamed sessions before a caller-supplied cutoff (default
   28 days), most recently used first. Its order and selection key are `List`'s
-  already. Removing a session drops its head cursor too, leaving siblings and
-  editor history alone.
+  already. Removing a session drops its sidecars too (the head cursor and any
+  `.torn` quarantine), leaving siblings and editor history alone.
 
 Ctrl+R history search reads each transcript's entries in raw append order,
 deduplicated to each distinct text's most recent occurrence across a bounded
@@ -242,7 +242,10 @@ so an idle workspace never gains a phantom empty file.
 
 `RecallIndex` unifies recall onto one source: every typed message first, then
 any recorded prompt not already present (backfilling older transcripts). It
-reuses the `Prompt` type, and a typed-only line carries no timestamp.
+reuses the `Prompt` type, and a typed-only line carries no timestamp. The
+pasted-secret invariant spans both sources: backfill drops recorded prompts
+carrying the secret prefix, matching what editor history never stored, so one
+surface cannot resurface what the other hides.
 
 ## Reading and rebuilding
 
@@ -352,11 +355,14 @@ would resume one the user never named.
 Every resume path reopens the file with `session.Open` (head recovery as above),
 rebuilds state and replays history. `(*sessRec).restoreState` is the UI-free
 half of that (rebuilt state and setting overrides, no replay), so a headless run
-resumes the same way without a front end. A rebuilt model is pushed back out too
-(`syncModelUI`): the registry's active entry (which preselects in `/model`) and
-the status line must name the model the session runs, not the config default.
-Without that, `/model` on the resumed model hits `SetModel`'s unchanged-key
-no-op while the bar keeps labelling another model.
+resumes the same way without a front end. A failed transcript read during that
+rebuild surfaces as a resume warning in every front end instead of resuming
+silently empty. Later turns still fork from the writer's intact head.
+A rebuilt model is pushed back out too (`syncModelUI`): the registry's active
+entry (which preselects in `/model`) and the status line must name the model
+the session runs, not the config default. Without that, `/model` on the
+resumed model hits `SetModel`'s unchanged-key no-op while the bar keeps
+labelling another model.
 
 A one-shot run (`-p`) records its turn like any other, which is what makes
 `ajent -p "…"` and a follow-up `ajent -p "…" --continue` share one transcript.
@@ -409,8 +415,8 @@ branches that other tips still point at.
 
 This governs entries *within* a transcript. Retiring a whole session
 (empty-session cleanup, `--delete`, `--delete-old`) is a separate lifecycle
-operation: `Remove` takes the file and its head cursor together, so no branch is
-ever left half present.
+operation: `Remove` takes the file with its sidecars (the head cursor and any
+torn-tail quarantine) so nothing of it lingers behind.
 
 **2. Reads go through the branch, never raw file order.** Every consumer (state
 rebuild, replay, info counts) walks from a head id along `ParentID`.

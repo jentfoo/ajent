@@ -363,7 +363,9 @@ rows are subtracted at the call site), floored both at a small minimum **and** a
 one row over the editor's own cap so it always outgrows the input wherever there is
 room. With fewer rows left than that share it takes them all, never fewer than one.
 The row naming prompts queued behind the active interaction is reserved *inside*
-that cap rather than added beneath it.
+that cap rather than added beneath it. When a one-row floor or fixed chrome
+larger than its cap consumes that reservation, the indicator is dropped rather
+than drawn over budget and the clamp stays a last resort.
 
 Lists scroll internally, keeping the cursor row in view, and an interactor never
 emits more rows than its cap: `listSection` takes an overflow footer's row out

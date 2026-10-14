@@ -77,7 +77,13 @@ closes.
   an older revision would otherwise be handed 2026-07-28 requests it rejects on
   every call. A server with no discover answer goes straight to the legacy
   handshake. A disjoint advertised set falls through to Initialize's legible
-  mismatch error. SSE skips the probe, the transport is legacy-only by design.
+  mismatch error. SSE skips the probe and pins the latest legacy revision
+  instead: the transport is legacy-only by design, so mcp-go must not send its
+  own discover probe against servers that ignore unknown methods.
+- **Connection lifetime** — the client owns its connection context (cancelled
+  by `Close`), because mcp-go keeps it for the SSE stream's whole life and
+  spawns the stdio child under it. A dial-scoped one would kill both once
+  connect returned.
 - **Initialize errors are legible**: a protocol version mismatch names both our
   version and the server's rather than failing obscurely.
 - **Prefixes are owned by the surface** — client errors and warnings are bare;
@@ -162,10 +168,11 @@ permissions, token accounting and the sub-agent treat it like any built-in.
   `Label()` shows the bare tool name when unambiguous.
 - **Mode** — serial unless read-only, which may run parallel with other reads.
 - **Timeout** — per-call cap from config, clamped to a max. A call that exceeds
-  it (or fails on transport) becomes an error result plus a notice so the turn
-  continues and the model adapts. An error result carries the same one-line
-  `Display` a success does, so history never renders an errored MCP call as a
-  blank row.
+  it (or fails on transport) becomes an error result so the turn continues and
+  the model adapts. The failure is also recorded to the owning server's
+  `/mcp logs` ring via a diagnostic sink, never surfaced as a user-facing
+  notice. An error result carries the same one-line `Display` a
+  success does, so history never renders an errored MCP call as a blank row.
 - **Output** — remote progress maps onto the same output writer as a built-in,
   so a bridged call's incremental output streams where its caller renders it, and
   the tool-layer cap keeps it from flooding the model. See `tools-design.md`.

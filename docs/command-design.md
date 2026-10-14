@@ -319,7 +319,10 @@ process-group kill) with no second implementation. It wraps its context in
 `tools.WithUserInitiated`, so a staged `!` line is exempt from every permission
 mode: this is the human's own shell, not the model's. It also never inherits
 the model-facing timeout default: the stager's ceiling is its own (zero runs
-uncapped), so a long human command like a build is not silently killed.
+uncapped), so a long human command like a build is not silently killed. The
+goroutine executes through `agent.RecoverTool`, the same helper an agent-run
+tool takes, so a panic still stages its fault text as the run's output instead
+of wedging the row.
 
 The display differs from an agent bash call in one way: because the output is
 the user's own, it must be shown whole. The stager calls `ToolStart` with `full`
@@ -499,7 +502,9 @@ re-expansion idempotent.
 
 `@` matches only at a word boundary (start of line, or after whitespace, `(`,
 `[`, a backtick or a quote) so `email@example.com` is prose. The path token
-stops at whitespace or trailing punctuation. The annotation shape is matched
+stops at whitespace or trailing punctuation, though a final `.` and `:` stay
+inside the token because dotted names and `x:y` need them. Whether they ended
+a sentence is decided at expand time. The annotation shape is matched
 strictly: a trailing `(...)` is absorbed only when it contains a digit or a
 known kind word (`binary`, `image`, `dir`, `lines`) and is made of the allowed
 tokens (digits, `b`/`kb`/`mb`, the kind words), so ordinary parenthetical prose
@@ -514,13 +519,19 @@ text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 | Case | Outcome |
 |---|---|
 | wildcard pattern (contains `*`, `?` or `[`) | `ls` pair planned via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read; the pattern stays literal in prose |
-| missing | literal, warning notice |
+| missing (retried once without a trailing `.` or `:`, see below) | literal, warning notice naming the written token |
 | directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state); skipped when the tracker's listing is unchanged (`UnchangedDir`) |
 | already read whole and unchanged (`Tracker.Unchanged`) | nothing planned, literal |
 | a path the same message already named | planned once; the repeat stays literal |
 | text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |
 | image on a vision model | `read` pair planned, so the image arrives through the ordinary read path |
 | image without vision, large, binary, or over the cap | annotation replaced in place, cap trim adds a notice |
+
+Resolution is existence-aware about sentence punctuation: because Parse keeps
+a trailing `.` or `:` inside the token, a written form that names nothing real
+is retried without it. The trimmed reading wins only by existing, so `./x`,
+dotted names and `x:y` resolve exactly as written. Prose, notices and
+annotations keep the written token while read/ls receive the trimmed path.
 
 Text is rebuilt by splicing spans back to front so earlier offsets stay valid;
 the plan is reversed once so the reads land in document order.

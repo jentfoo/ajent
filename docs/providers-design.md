@@ -365,6 +365,9 @@ Deliberate choices in this loader:
 - **Duplicate keys warn.** `encoding/json` keeps the last silently, so a
   repeated key is a setting that looks applied and is not. Hand-written configs
   do this.
+- **Durations are finite.** A duration reads as a Go duration string or a bare
+  number of seconds. `inf`, `nan` and values beyond time.Duration's range error
+  like any other invalid spelling instead of becoming garbage transport bounds.
 - **`reasoning` is boolean-only**: `true` enables reasoning with the model's
   resolved thinking format, and there is no style-name form.
 - **Unrecognised keys warn rather than fail.** A typo silently ignored is worse
@@ -426,6 +429,11 @@ error listing the candidates, never a coin flip. That extends to aliases: two
 models claiming the same alias are detected at build time (a warning names
 both), and resolving that alias reports the ambiguity rather than silently
 picking whichever model sorted last.
+
+**Duplicate ids warn.** Two entries sharing one provider's id both stay
+listed, with a warning at rebuild instead of a silent pass. The key index
+keeps the later entry so `provider/id` still resolves, and bare-id resolution
+reports the pair as ambiguous.
 
 **The merge rule:** when a provider declares models, that list *is* the list for
 that provider. Discovery may fill fields the declaration left unset but never
@@ -524,7 +532,11 @@ verdict of their own.
 Retry covers transient failures (rate limiting, request timeouts, server
 errors, Anthropic's 529 overload status and connection errors) plus a
 conflict only when the server sent a `Retry-After` (some gateways use it
-for "model loading").
+for "model loading"). Connection-shaped means transient: every `hc.Do`
+failure wraps its cause in a `*url.Error`, so transport classification unwraps
+to judge what is inside (`httputil.ShouldRetryTransport`, also the verdict
+behind `llm.Recoverable`). Timeouts and dial failures retry. Unsupported
+schemes or TLS verification failures fail fast instead of burning attempts.
 Exponential backoff with jitter,
 honouring `Retry-After` but **capped**: beyond the cap the request fails
 immediately, because an agent that silently sleeps is indistinguishable from a

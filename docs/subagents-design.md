@@ -301,6 +301,8 @@ before. Three pieces:
 - **UI notice** — fired at completion (`Options.Notice`), keyed by the front end
   (`NotifyKeyed`) so consecutive notices collapse in place rather than stack into
   one row per job, and each renders as one updating line, not a new committed row.
+  Its publish is serialized with the status segment, so two near-simultaneous
+  completions cannot land an older, smaller batch after the full one.
 - **Context steer at a step boundary** — completed ids accumulate, and the
   host chains `Manager.Boundary()` into `agent.Options.OnBoundary`, so at the
   boundary the manager filters them down to ids with no poller and no prior
@@ -335,9 +337,9 @@ Recomputed on every transition, activation included: registration marks a job
 queued and taking a slot republishes, so the running count is never left at its
 registration snapshot. The recompute and callback are serialized against other
 publishers (`pubMu`) so concurrent transitions cannot land an older count after
-a newer one. A full form names the running count (with the oldest job's age) and
-the done count, a short form for narrow rows, cleared when no jobs exist. The
-front end renders it as a keyed status segment.
+a newer one. A full form names the running count (with the oldest live job's
+age) and the done count, a short form for narrow rows, cleared when no jobs
+exist. The front end renders it as a keyed status segment.
 
 ## Accounting and configuration seams
 

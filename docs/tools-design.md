@@ -387,9 +387,13 @@ a uniform shift or refuses, because healing it here would reformat the file.
 Diagnostics run only after every tier failed and reason in canonical space, so
 with each lookalike difference already rejected they name the real cause
 (whitespace or casing, genuinely-absent content, an earlier edit in the same
-batch) rather than blaming a stray smart quote. A spacing mismatch is one
-comparison of the two lines' whitespace runs, reported once per distinct
-difference with the lines it covers. The message ends with the closest text
+batch) rather than blaming a stray smart quote. When every aligned line shares
+its whitespace runs, whatever remains is a character only the fold could have
+erased, so it is named from the raw pair instead of falling back to a spacing
+complaint. A self-replacing op gets that note alone, since no file-side
+diagnosis could be its cause. A spacing mismatch is one comparison of the two
+lines' whitespace runs, reported once per distinct difference with the lines
+it covers. The message ends with the closest text
 verbatim for copying: chosen by whole-block agreement over per-line token
 overlap (which previously landed hints outside the intended block), rendered
 untrimmed without a line gutter since position lives in the header and it must
@@ -452,10 +456,13 @@ context is cancelled (a turn interrupt, or `Stager.Cancel` on a `!` line), the
 whole group is SIGKILLed, whatever partial stdout/stderr arrived rides in the
 result, and the result is an **error result** marked as interrupted with the
 shared interruption text, so the transcript reads as an interruption. A timeout
-stays a distinct non-error result. Its status line names only what that note
-does not: an exit code, or `signal: <name>` for a death by any other signal. The
-kill we send adds nothing beyond its own note. The environment forces
-non-interactive settings (no pagers, no terminal prompts, no colour).
+stays a distinct non-error result. The deadline can expire in the same instant
+bash completes, so how the run died decides the wording: only a death by signal
+under an expired deadline reads as `killed after <n> timeout`, while a clean or
+coded finish that beat the kill keeps its plain status, since our SIGKILL
+cannot leave an exit code. The kill we send adds nothing beyond its own note.
+The environment forces non-interactive settings (no pagers, no terminal
+prompts, no colour).
 
 #### Background runs
 
