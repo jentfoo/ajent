@@ -205,7 +205,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 			_, _ = spill.Write(w.replay.Bytes())
 		}
 		lines, bytes := w.Total()
-		note := truncationNote(Bounded{Shown: countLines(captured), Lines: lines, Bytes: bytes}, spill.path, "")
+		note := truncationNote(Bounded{Shown: countLines(captured), Lines: lines, Bytes: bytes}, spill.claim(), "")
 		captured += "\n" + note
 	}
 

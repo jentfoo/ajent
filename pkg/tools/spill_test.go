@@ -64,6 +64,74 @@ func TestOpenSpill(t *testing.T) {
 			t.Cleanup(func() { _ = out.Close() })
 		}
 	})
+
+	// a non-collision open failure (permissions, ENOENT) must carry no path,
+	// or callers point footers at a file that was never created
+	t.Run("open_error_yields_no_path", func(t *testing.T) {
+		dir := t.TempDir()
+		f, path, err := openSpill(dir, "bash", func() string { return "a/b" }) // no dir/bash-a/
+		require.Error(t, err)
+		assert.Empty(t, path)
+		if f != nil {
+			t.Cleanup(func() { _ = f.Close() })
+		}
+	})
+}
+
+func TestSpillerWrite(t *testing.T) {
+	t.Parallel()
+
+	t.Run("untouched_claims_none", func(t *testing.T) {
+		sp := newSpiller("claim-test", "bash")
+		assert.Equal(t, spillNone, sp.claim().state)
+	})
+
+	t.Run("success_claims_complete", func(t *testing.T) {
+		sp := newSpiller("claim-test", "bash")
+		_, err := sp.Write([]byte("kept\n"))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = sp.close() })
+
+		c := sp.claim()
+		assert.Equal(t, spillComplete, c.state)
+		assert.NotEmpty(t, c.path) // the footer may point here
+	})
+
+	t.Run("write_failure_drops_partial", func(t *testing.T) {
+		sp := newSpiller("claim-test", "bash")
+		_, err := sp.Write([]byte("kept\n"))
+		require.NoError(t, err)
+		path := sp.path
+		require.NoError(t, sp.f.Close()) // force the next write to fail
+
+		_, err = sp.Write([]byte("more\n"))
+		require.ErrorIs(t, err, os.ErrClosed)
+
+		c := sp.claim()
+		assert.Equal(t, spillFailed, c.state)
+		assert.Empty(t, c.path) // the failed claim names no file
+		_, statErr := os.Stat(path)
+		assert.True(t, os.IsNotExist(statErr)) // nothing partial left to point at
+	})
+
+	t.Run("failed_write_stays_dead", func(t *testing.T) {
+		sp := newSpiller("claim-test", "bash")
+		_, err := sp.Write([]byte("kept\n"))
+		require.NoError(t, err)
+		path := sp.path
+		require.NoError(t, sp.f.Close()) // force the next write to fail
+
+		_, err = sp.Write([]byte("more\n"))
+		require.ErrorIs(t, err, os.ErrClosed)
+
+		// every later write reports the recorded failure and touches nothing
+		_, err = sp.Write([]byte("again\n"))
+		require.ErrorIs(t, err, os.ErrClosed)
+		c := sp.claim()
+		assert.Equal(t, spillFailed, c.state)
+		_, statErr := os.Stat(path)
+		assert.True(t, os.IsNotExist(statErr))
+	})
 }
 
 func TestFallbackSuffix(t *testing.T) {

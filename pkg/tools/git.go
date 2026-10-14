@@ -332,8 +332,8 @@ func (d *gitDiffOut) Block(from, to *gitSide) {
 }
 
 // Text flushes the stream and returns the model text: kept blocks or the
-// "(no changes)" stand-in, deferred notes, then a truncation footer naming
-// the spill file when anything was cut.
+// "(no changes)" stand-in, deferred notes, then a truncation footer describing
+// what was cut.
 func (d *gitDiffOut) Text(paging string) string {
 	d.w.Flush()
 	body := strings.TrimRight(d.head.String(), "\n")
@@ -361,7 +361,7 @@ func (d *gitDiffOut) Text(paging string) string {
 		_, _ = d.spill.Write(d.w.replay.Bytes())
 	}
 	lines, bytes := d.w.Total()
-	note := truncationNote(Bounded{Shown: countLines(capped), Lines: lines, Bytes: bytes}, d.spill.path, paging)
+	note := truncationNote(Bounded{Shown: countLines(capped), Lines: lines, Bytes: bytes}, d.spill.claim(), paging)
 	if capped == "" {
 		return note // nothing fit at all, the footer is the whole answer
 	}

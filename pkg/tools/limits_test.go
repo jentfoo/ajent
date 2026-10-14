@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -110,16 +111,23 @@ func TestBound(t *testing.T) {
 
 	t.Run("truncation_note_names_totals", func(t *testing.T) {
 		b := Bound(longLines(50), Limit{Lines: 5})
-		note := truncationNote(b, "/tmp/spill.txt", "")
+		note := truncationNote(b, spillClaim{path: "/tmp/spill.txt", state: spillComplete}, "")
 		assert.Contains(t, note, "5/50 lines shown")
 		assert.Contains(t, note, "/tmp/spill.txt") // names the spill path
 	})
 
 	t.Run("truncation_note_carries_paging", func(t *testing.T) {
 		b := Bound(longLines(50), Limit{Lines: 5})
-		note := truncationNote(b, "", "narrow the pattern")
+		note := truncationNote(b, spillClaim{}, "narrow the pattern")
 		assert.Contains(t, note, "narrow the pattern")
 		assert.NotContains(t, note, "@") // no spill path, paging alone
+	})
+
+	t.Run("truncation_note_admits_spill_failure", func(t *testing.T) {
+		b := Bound(longLines(50), Limit{Lines: 5})
+		note := truncationNote(b, spillClaim{state: spillFailed}, "")
+		assert.Contains(t, note, "could not be written")
+		assert.NotContains(t, note, "@") // never points at a missing or partial file
 	})
 }
 
@@ -146,6 +154,19 @@ func TestTruncateOutput(t *testing.T) {
 		dat, err := os.ReadFile(m[1])
 		require.NoError(t, err)
 		assert.Equal(t, in, string(dat)) // spill holds the complete stream
+	})
+
+	t.Run("spill_failure_admitted_in_footer", func(t *testing.T) {
+		// a regular file blocks this call's session directory, so creation fails
+		sess := "blocked-" + randSuffix()
+		blocker := filepath.Join(os.TempDir(), "ajent-"+sess)
+		require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o600))
+		t.Cleanup(func() { _ = os.Remove(blocker) })
+
+		out, cut := truncateOutput(sess, "t", strings.Repeat("line\n", 50), Limit{Lines: 5}, "")
+		assert.True(t, cut)
+		assert.Contains(t, out, "could not be written")
+		assert.NotContains(t, out, "@") // no pointer to a missing or partial file
 	})
 }
 

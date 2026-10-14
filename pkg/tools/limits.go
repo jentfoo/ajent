@@ -190,14 +190,34 @@ func Bound(s string, l Limit) Bounded {
 	return b
 }
 
+// spillState is what a footer may claim about one spill file: complete only
+// when creation and every write succeeded.
+type spillState uint8
+
+const (
+	spillNone     spillState = iota // nothing spilled, no pointer owed
+	spillComplete                   // the named file holds every byte written to it
+	spillFailed                     // a create or write failed: point at nothing
+)
+
+// spillClaim carries one spill's honest claim into a truncation footer.
+type spillClaim struct {
+	path  string // names the complete copy when state is spillComplete
+	state spillState
+}
+
 // truncationNote names what Bound or a bounded writer dropped: shown/total
-// lines, total bytes, the spill path when the full output lives on disk, and
-// paging when the tool offers its own way to continue.
-func truncationNote(b Bounded, spillPath, paging string) string {
+// lines, total bytes, the spill path when the full output verifiably lives on
+// disk, and paging when the tool offers its own way to continue.
+func truncationNote(b Bounded, claim spillClaim, paging string) string {
 	var sb strings.Builder
 	_, _ = fmt.Fprintf(&sb, "... truncated: %d/%d lines shown (%d bytes total)", b.Shown, b.Lines, b.Bytes)
-	if spillPath != "" {
-		sb.WriteString("; full output in @" + spillPath)
+	switch claim.state {
+	case spillComplete:
+		sb.WriteString("; full output in @" + claim.path)
+	case spillFailed:
+		// honesty contract: never point at a missing or partial file
+		sb.WriteString("; full output could not be written to disk")
 	}
 	if paging != "" {
 		sb.WriteString("; " + paging)
@@ -206,9 +226,10 @@ func truncationNote(b Bounded, spillPath, paging string) string {
 }
 
 // truncateOutput bounds out to lim, returning the kept text with a footer
-// naming the spill file holding the complete output. The bool reports whether
-// anything was cut. kind names the spill file, and paging, when non-empty, names
-// the tool's own way to continue.
+// naming what was cut. The bool reports whether anything was cut. kind names
+// the spill file, and paging, when non-empty, names the tool's own way to
+// continue; a spill that could not be written is admitted rather than pointed
+// at.
 func truncateOutput(sessionID, kind, out string, lim Limit, paging string) (string, bool) {
 	b := Bound(out, lim)
 	if !b.Truncated {
@@ -216,8 +237,8 @@ func truncateOutput(sessionID, kind, out string, lim Limit, paging string) (stri
 	}
 	spill := newSpiller(sessionID, kind)
 	defer func() { _ = spill.close() }()
-	_, _ = spill.Write([]byte(out))
-	return strings.TrimRight(b.Text, "\n") + "\n" + truncationNote(b, spill.path, paging), true
+	_, _ = spill.Write([]byte(out)) // failures stick to the spiller: the note admits them
+	return strings.TrimRight(b.Text, "\n") + "\n" + truncationNote(b, spill.claim(), paging), true
 }
 
 // overlongLine reports whether any line of s exceeds MaxLineRunes, so even an

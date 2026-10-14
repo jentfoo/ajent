@@ -23,6 +23,9 @@ type spiller struct {
 	prefix    string // names the file kind: "bash", "grep"
 	f         *os.File
 	path      string
+
+	failed bool  // a create or write failed: no footer may point at this spill
+	err    error // the first failure, reported to every later writer
 }
 
 // spillSeq backs the rand-failure fallback so same-PID spills stay unique per call.
@@ -39,15 +42,49 @@ func newSpiller(sessionID, prefix string) *spiller {
 
 // Write appends p to the spill file, creating both lazily on first use.
 func (s *spiller) Write(p []byte) (int, error) {
+	if s.failed {
+		return 0, s.err // dead: later writes report the recorded failure
+	}
 	if s.f == nil {
 		f, path, err := createSpill(s.sessionID, s.prefix)
 		if err != nil {
+			s.markFailed(err)
 			return 0, err
 		}
 		s.f = f
 		s.path = path
 	}
-	return s.f.Write(p)
+	n, err := s.f.Write(p)
+	if err != nil {
+		s.markFailed(err) // a short or failed write leaves partial data behind: drop it
+	}
+	return n, err
+}
+
+// markFailed kills the spiller once and removes any partial file, so nothing on
+// disk claims to hold output no footer may point at.
+func (s *spiller) markFailed(err error) {
+	if s.failed {
+		return
+	}
+	s.failed = true
+	s.err = err
+	if s.path != "" {
+		_ = os.Remove(s.path)
+	}
+}
+
+// claim reports what a truncation footer may honestly say about this spill:
+// complete only when the file was created and every byte written reached it.
+func (s *spiller) claim() spillClaim {
+	if s.failed {
+		return spillClaim{state: spillFailed}
+	}
+	if s.path != "" {
+		return spillClaim{path: s.path, state: spillComplete}
+	}
+	var none spillClaim // nothing spilled or attempted
+	return none
 }
 
 // close flushes and closes the spill file when one was created.
@@ -83,6 +120,9 @@ func openSpill(dir, prefix string, suffix func() string) (*os.File, string, erro
 		if errors.Is(err, fs.ErrExist) {
 			lastErr = err
 			continue
+		}
+		if err != nil { // a real failure: no file and no path may leak upward
+			return nil, "", err
 		}
 		return f, filepath.Join(dir, name), nil
 	}
