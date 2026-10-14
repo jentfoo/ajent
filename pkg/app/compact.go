@@ -43,6 +43,11 @@ type compactor struct {
 	// succeeded without clearing the point, and the turn boundary re-arms it.
 	stalled atomic.Bool
 	warned  atomic.Bool // one reminder per turn, reset at the turn boundary
+	// inFlight refuses a second concurrent run. Running() is advisory and reads
+	// false in the boundary gap (the turn's unset lands before the threshold hook)
+	// and between a queued batch's turns, where a /compact would race the threshold
+	// fold. Atomic because runs land on the turn, drain and pump goroutines.
+	inFlight atomic.Bool
 }
 
 // autoReason reports whether r is an automatic trigger, sharing the config gate,
@@ -85,9 +90,17 @@ func (c *compactor) compaction() config.Compaction {
 }
 
 // run performs one compaction for reason, returning whether anything changed. A manual run refuses
-// while a turn streams. An automatic run only acts when Used has crossed the model's compaction
-// point. Step and overflow runs fire mid-turn from the turn's own goroutine.
+// while a turn streams or another compaction runs. An automatic run only acts when Used has crossed
+// the model's compaction point. Step and overflow runs fire mid-turn from the turn's own goroutine.
 func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instructions string) (bool, error) {
+	if !c.inFlight.CompareAndSwap(false, true) {
+		// an automatic trigger retries at its next boundary, a manual run says so
+		if reason == agent.CompactManual {
+			c.notify("compaction refused: a compaction is already running", agent.LevelWarn)
+		}
+		return false, nil
+	}
+	defer c.inFlight.Store(false)
 	if !reason.MidTurn() && c.ag != nil && c.ag.Running() {
 		c.notify("compaction refused: press Esc to stop the turn first", agent.LevelWarn)
 		return false, nil
@@ -215,7 +228,12 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		c.notify("compact: "+wmsg, agent.LevelWarn)
 	}
 	if c.ag != nil && !reason.MidTurn() {
-		c.ag.WithState(func(s *agent.State) { s.Messages = rebuilt.Messages })
+		if !c.ag.WithState(func(s *agent.State) { s.Messages = rebuilt.Messages }) {
+			// a turn claimed the loop since the guard: the entry still applies on the
+			// next rebuild, but the reduced list never landed, so no reseed or report
+			c.notify("compaction recorded but the state rebuild failed", agent.LevelWarn)
+			return false, nil
+		}
 	} else {
 		// step and overflow runs are on the turn goroutine, where WithState refuses
 		c.st.Messages = rebuilt.Messages

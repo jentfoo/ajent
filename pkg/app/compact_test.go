@@ -74,7 +74,7 @@ user wanted a story about lighthouses
 - /w/story.txt holds the draft`
 
 // testCompactor wires a compactor over a real transcript with a scripted provider.
-func testCompactor(t *testing.T, model llm.Model, sp *llm.ScriptedProvider) (*compactor, *agent.State, *session.Writer) {
+func testCompactor(t *testing.T, model llm.Model, sp llm.Provider) (*compactor, *agent.State, *session.Writer) {
 	t.Helper()
 
 	store := session.StoreAt(t.TempDir())
@@ -360,6 +360,153 @@ func TestCompactorStepRunsMidTurn(t *testing.T) {
 
 	close(blocked)
 	require.NoError(t, <-errCh)
+}
+
+func TestCompactorRunRefusesInFlight(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+
+	setup := func(t *testing.T) (*compactor, *[]string, *session.Writer) {
+		t.Helper()
+
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textStream(fullSummary)}}}
+		c, st, w := testCompactor(t, model, sp)
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 6)
+		st.Tokens.Add(7000)
+		var notices []string
+		c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+		return c, &notices, w
+	}
+
+	t.Run("manual_notifies", func(t *testing.T) {
+		c, notices, w := setup(t)
+		c.inFlight.Store(true) // a drain-goroutine fold is in the boundary gap
+
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		require.NoError(t, err)
+		assert.False(t, did)
+		assert.Contains(t, strings.Join(*notices, "\n"),
+			"compaction refused: a compaction is already running")
+		assert.Empty(t, compactionEntries(t, w))
+	})
+
+	t.Run("auto_is_silent", func(t *testing.T) {
+		c, notices, w := setup(t)
+		c.cfg = func() config.Compaction { return config.Compaction{Auto: true} }
+		c.inFlight.Store(true)
+
+		did, err := c.run(t.Context(), agent.CompactThreshold, "")
+		require.NoError(t, err)
+		assert.False(t, did)
+		assert.Empty(t, *notices)
+		assert.Empty(t, compactionEntries(t, w))
+	})
+
+	t.Run("runs_again_once_clear", func(t *testing.T) {
+		c, _, w := setup(t)
+		c.inFlight.Store(true)
+		_, _ = c.run(t.Context(), agent.CompactManual, "") // refused, the owner still holds it
+		c.inFlight.Store(false)                            // its run returned
+
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		require.NoError(t, err)
+		assert.True(t, did)
+		assert.Len(t, compactionEntries(t, w), 1)
+	})
+}
+
+// gatedProvider holds Stream until released, so a test can start a turn while a
+// summariser call is in flight.
+type gatedProvider struct {
+	started chan struct{}
+	release chan struct{}
+	events  []llm.Event
+}
+
+func (p *gatedProvider) Name() string { return "gated" }
+
+func (p *gatedProvider) Stream(context.Context, llm.Request) (llm.Stream, error) {
+	p.started <- struct{}{}
+	<-p.release
+	return &llm.SliceStream{Events: p.events}, nil
+}
+
+func TestCompactorSkipsReseedWhenTurnStarts(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
+	gate := &gatedProvider{
+		started: make(chan struct{}, 4), // a chained summary call buffers harmlessly
+		release: make(chan struct{}),
+		events:  textStream(fullSummary),
+	}
+	c, st, w := testCompactor(t, model, gate)
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+	for _, e := range mustBranch(t, w) {
+		var md session.MessageData
+		if e.Decode(&md) == nil {
+			st.Messages = append(st.Messages, md.Message)
+		}
+	}
+
+	sink := &ctxSink{}
+	c.sink = sink
+	var notices []string
+	c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+
+	blocked := &blockingProvider{
+		turn:     []llm.Event{{Type: llm.EventTextDelta, Text: "x"}},
+		onCreate: make(chan *blockingStream, 1),
+	}
+	ag := agent.New(st, agent.Options{
+		Sinks:    []agent.Sink{agent.NopSink{}},
+		Provider: func(llm.Model) (llm.Provider, error) { return blocked, nil },
+		Env:      agent.DetectEnvironment(),
+	})
+	c.ag = ag
+
+	type res struct {
+		did bool
+		err error
+	}
+	compCh := make(chan res, 1)
+	go func() {
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		compCh <- res{did, err}
+	}()
+	<-gate.started // the summariser call is in flight, past the Running() guard
+
+	turnCtx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	turnCh := make(chan error, 1)
+	go func() { turnCh <- ag.Prompt(turnCtx, agent.Input{Text: "meanwhile"}) }()
+	select {
+	case <-blocked.onCreate: // prompt landed, the turn is blocked mid-stream
+	case <-time.After(5 * time.Second):
+		t.Fatal("the turn never started")
+	}
+	before := len(st.Messages)
+	used := st.Tokens.Context().Used
+
+	close(gate.release) // the summary lands, the swap now races a live turn
+
+	var got res
+	select {
+	case got = <-compCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("compaction did not return")
+	}
+	require.NoError(t, got.err)
+	assert.False(t, got.did)                        // nothing installed live
+	assert.Len(t, compactionEntries(t, w), 1)       // the entry is recorded
+	assert.Len(t, st.Messages, before)              // the reduced list never landed
+	assert.Equal(t, used, st.Tokens.Context().Used) // no reseed
+	assert.Zero(t, sink.last.Used)                  // no bar push
+	assert.False(t, c.inFlight.Load())              // the flag released
+	assert.Contains(t, strings.Join(notices, "\n"), "compaction recorded but the state rebuild failed")
+
+	cancel() // release the blocked turn
+	require.NoError(t, <-turnCh)
 }
 
 func TestCompactorDeclineLatchesAuto(t *testing.T) {

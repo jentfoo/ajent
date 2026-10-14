@@ -282,6 +282,12 @@ Two guards keep the per-step trigger affordable:
   for another summariser call, and a run that clears the point holds nothing. The
   reset is unconditional at every real turn end, including an errored turn.
 
+A third guard serialises runs. `Running()` is advisory and reads false in the
+gap between a turn's end and its threshold hook, so a `/compact` dispatched
+there would race the automatic fold into a double summariser spend. An
+in-flight flag refuses the second run without queueing or waiting. A manual run
+reports the refusal, an automatic trigger retries at its next boundary.
+
 The agent cannot import `session` or `compact` (session already imports agent),
 so the trigger is a func field on `agent.Options`, matching `Provider` and
 `OnMessage`: it receives a small reason enum (manual, threshold-crossed or
@@ -392,6 +398,11 @@ keeps its `~` marker, unlike `Rebase`, which is reserved for exact tokenizer
 counts. The summariser call itself is recorded spend-only (`Accounting.Spend`),
 so a failed compaction cannot leave the bar at the summariser's (much larger)
 prompt size.
+
+The swap goes through `Agent.WithState` and honours its refusal. A turn that
+started since the guard leaves the entry recorded (it applies on the next
+rebuild) but skips the reseed and the report, so the bar never describes a
+reduction that never landed.
 
 **7. A reduced context is reported to the host.** Reducing takes file content
 out of context, because a cut drops reads outright. Meanwhile `tools.Tracker`
