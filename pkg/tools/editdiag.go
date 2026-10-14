@@ -35,27 +35,21 @@ const (
 // missingError diagnoses why a zero-match edit failed and guides a retry: name
 // the failure, call out an earlier edit whose newText would create it (a cascade),
 // report each reliably-detected cause, and end with the closest text verbatim so
-// it can be copied.
+// it can be copied. A self-replacing op is reported on its own instead, since no
+// file-side cause would apply.
 func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
-	cascade := cascadeIssue(idx, old, ops)
-
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, t.Path)
-	if self := selfReplaceIssue(idx, ops); self != "" {
-		b.WriteString("- " + self + "\n") // orthogonal to the causes below, so never displaces one
-	}
-	// diagnose in canonical space: the tiers already tried every lookalike
-	// difference, so reasoning here names the real cause instead of a stray quote.
-	cold, _ := canonical(old)
-	cbuf, _ := canonical(buf)
-	switch issues := diagnoseNoMatch(cold, cbuf); {
-	case cascade != "":
+	if cascade := cascadeIssue(idx, old, ops); cascade != "" {
 		b.WriteString("- " + cascade + "\n")
-	case len(issues) > 0:
+	} else if self := selfReplaceIssue(idx, ops); self != "" {
+		// the no-op is its own cause, any file-side blame would misattribute
+		b.WriteString("- " + self + "\n")
+	} else if issues := diagnoseNoMatch(old, buf); len(issues) > 0 {
 		for _, it := range issues {
 			_, _ = fmt.Fprintf(&b, "- %s\n", it)
 		}
-	default:
+	} else {
 		b.WriteString("you must provide the oldText exactly as it appears in the file\n")
 	}
 	head := strings.TrimRight(b.String(), "\n")
@@ -110,24 +104,29 @@ func cascadeIssue(idx int, old string, ops []editOp) string {
 
 // diagnoseNoMatch inspects why old is absent from buf and reports each reliably
 // detectable cause: per-line indentation/spacing when the words are all present (a
-// pure-spacing mismatch), or casing. Returns nil when nothing reliable can be said.
+// pure-spacing mismatch), an erased lookalike character, or casing. Returns nil
+// when nothing reliable can be said.
 func diagnoseNoMatch(old, buf string) []string {
-	compact := stripSpace(old)
+	// reason in canonical space: the tiers already tried every lookalike
+	// difference, so reasoning here names the real cause instead of a stray quote
+	cold, _ := canonical(old)
+	cbuf, _ := canonical(buf)
+	compact := stripSpace(cold)
 	if compact == "" {
 		return nil // only-whitespace oldText: no anchor to reason about
 	}
 	switch {
-	case strings.Contains(stripSpace(buf), compact):
+	case strings.Contains(stripSpace(cbuf), compact):
 		// every word present: a pure-spacing mismatch, name it per line when we can
 		if specific := lineWhitespaceIssues(old, buf); len(specific) > 0 {
 			return specific
 		}
 		return []string{"your words are all in the file but separated by different whitespace; you must match it exactly"}
-	case strings.Contains(strings.ToLower(stripSpace(buf)), strings.ToLower(compact)):
+	case strings.Contains(strings.ToLower(stripSpace(cbuf)), strings.ToLower(compact)):
 		// words and order present ignoring case: only letter casing differs
 		return []string{"the text matches the file only if you ignore letter case. Your oldText's capitalization differs, so copy it exactly"}
 	default:
-		if stripSpace(buf) == "" {
+		if stripSpace(cbuf) == "" {
 			return []string{"the file appears empty or whitespace-only"}
 		}
 		// the words genuinely differ, a retry needing exact text rather than an approximation
@@ -161,7 +160,8 @@ func stripSpace(s string) string {
 }
 
 // buildContent maps a text's non-empty lines to their 1-based line numbers and the
-// count of blank (whitespace-only) lines immediately following each one.
+// count of blank (whitespace-only) lines immediately following each one. The empty
+// element a terminating newline leaves never counts as a blank line.
 type contentLine struct {
 	n     int // 1-based original line number
 	c     string
@@ -169,6 +169,7 @@ type contentLine struct {
 }
 
 func buildContent(lines []string) []contentLine {
+	lines = dropTrailingEmpty(lines)
 	var seq []contentLine
 	for i := 0; i < len(lines); {
 		if c := stripSpace(lines[i]); c == "" {
@@ -214,12 +215,16 @@ func countPhrase(n int) string {
 // lineWhitespaceIssues aligns old's non-empty lines against the file and reports,
 // per matched file line, how its whitespace differs from oldText. Only called when
 // every word is present (a pure-spacing mismatch), so each pair shares stripped form.
+// A fold-erased character leaves no spacing complaint to find and is named from the
+// raw pair instead.
 func lineWhitespaceIssues(old, buf string) []string {
 	oldLines := strings.Split(old, "\n")
 	bufLines := strings.Split(buf, "\n")
+	foldOld := canonLines(old)
+	foldBuf := canonLines(buf)
 
-	seq := buildContent(oldLines)
-	fileSeq := buildContent(bufLines)
+	seq := buildContent(foldOld)
+	fileSeq := buildContent(foldBuf)
 
 	match := -1
 outer:
@@ -240,13 +245,19 @@ outer:
 	// a block indented wrongly throughout is one fact, not one fact per line
 	var order, gaps []string
 	at := make(map[string][]int)
+	report := func(d string, n int) {
+		if _, seen := at[d]; !seen {
+			order = append(order, d)
+		}
+		at[d] = append(at[d], n)
+	}
 	for k := range seq {
 		n := fileSeq[match+k].n
-		if d := whitespaceIssue(oldLines[seq[k].n-1], bufLines[n-1]); d != "" {
-			if _, seen := at[d]; !seen {
-				order = append(order, d)
-			}
-			at[d] = append(at[d], n)
+		// folding never adds or drops a newline, so raw and folded lines share indexes
+		if d := whitespaceIssue(foldOld[seq[k].n-1], foldBuf[n-1]); d != "" {
+			report(d, n)
+		} else if d := foldResidue(oldLines[seq[k].n-1], bufLines[n-1]); d != "" {
+			report(d, n)
 		}
 		if d := blankGapIssue(n, seq[k].after, fileSeq[match+k].after); d != "" {
 			gaps = append(gaps, d)
@@ -320,6 +331,22 @@ func whitespaceIssue(oldLine, fileLine string) string {
 			describeRun(have[i]), describeRun(want[i]))
 	}
 	return ""
+}
+
+// foldResidue names what a line and its file counterpart differ by when only
+// folding brings them together: the lookalike run quoted from both sides, or a
+// plain note when no single run can be quoted. Empty for anything else.
+func foldResidue(oldLine, fileLine string) string {
+	if oldLine == fileLine || !canonEq(oldLine, fileLine) {
+		return ""
+	}
+	a, b, ok := driftRun(oldLine, fileLine)
+	quotable := ok && a != "" && b != "" &&
+		len(a) <= diffQuoteLimit && len(b) <= diffQuoteLimit
+	if !quotable {
+		return "this line differs from the file only by characters matching folds together"
+	}
+	return fmt.Sprintf("the file has %q where you wrote %q; matching folds these characters together, so this difference changes nothing", b, a)
 }
 
 // leadingWS returns the indentation of s's first line, never crossing into the

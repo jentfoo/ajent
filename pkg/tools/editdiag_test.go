@@ -116,6 +116,24 @@ func TestMissingErrorHint(t *testing.T) {
 		assert.Contains(t, msg, "appears nowhere in this file, read the file and copy it exactly")
 		assert.NotContains(t, msg, "must match verbatim")
 	})
+
+	t.Run("names_folded_character", func(t *testing.T) {
+		// every tier refuses: oldText folds to what the file already holds, so a
+		// spacing or blank-line complaint would name a cause that is not there
+		old := "title — subtitle" // em dash
+		msg := missingError(1, editTarget{Path: "f.txt"}, old, "title - subtitle\n",
+			[]editOp{{OldText: old, NewText: "title - subtitle"}})
+		assert.Contains(t, msg, `the file has "-" where you wrote "—"`)
+		assert.NotContains(t, msg, "separated by different whitespace")
+		assert.NotContains(t, msg, "blank line") // the terminator is not a missing blank line
+	})
+
+	t.Run("self_replace_reported_alone", func(t *testing.T) {
+		msg := missingError(1, editTarget{Path: "f.txt"}, "a b", "x\na  b\n",
+			[]editOp{{OldText: "a b", NewText: "a b"}})
+		assert.Contains(t, msg, "oldText equals newText")
+		assert.NotContains(t, msg, "separated by different whitespace")
+	})
 }
 
 func TestSelfReplaceIssue(t *testing.T) {
@@ -216,6 +234,17 @@ func TestLineWhitespaceIssuesAreBounded(t *testing.T) {
 		require.Len(t, issues, maxWhitespaceIssues+1)
 		assert.Contains(t, issues[maxWhitespaceIssues], "and 4 more spacing differences")
 	})
+
+	t.Run("groups_fold_residue", func(t *testing.T) {
+		var old, buf strings.Builder
+		for i := 0; i < 5; i++ {
+			fmt.Fprintf(&old, "item %d — ok\n", i)
+			fmt.Fprintf(&buf, "item %d - ok\n", i)
+		}
+		issues := lineWhitespaceIssues(old.String(), buf.String())
+		require.Len(t, issues, 1) // one folded character, not one complaint per line
+		assert.Contains(t, issues[0], "lines 1, 2, 3 and 2 more")
+	})
 }
 
 func TestSoleDifference(t *testing.T) {
@@ -238,6 +267,83 @@ func TestSoleDifference(t *testing.T) {
 	t.Run("empty_when_too_long", func(t *testing.T) {
 		long := strings.Repeat("z", diffQuoteLimit+1)
 		assert.Empty(t, soleDifference("x = "+long, "x = "+strings.Repeat("y", diffQuoteLimit+1)))
+	})
+}
+
+func TestDiagnoseNoMatch(t *testing.T) {
+	t.Parallel()
+
+	t.Run("names_folded_character", func(t *testing.T) {
+		issues := diagnoseNoMatch("title — subtitle", "intro\ntitle - subtitle\n")
+		require.Len(t, issues, 1)
+		assert.Contains(t, issues[0], `the file has "-" where you wrote "—"`)
+	})
+
+	t.Run("joined_words_still_spacing", func(t *testing.T) {
+		// the aligned lines are not fold-equal and no run differs, so a spacing
+		// shape the pairwise comparison cannot name is what remains
+		issues := diagnoseNoMatch("ab", "x\na b\n")
+		require.Len(t, issues, 1)
+		assert.Contains(t, issues[0], "separated by different whitespace")
+	})
+
+	t.Run("casing_only", func(t *testing.T) {
+		issues := diagnoseNoMatch("Hello World\n", "say hello world\n")
+		require.Len(t, issues, 1)
+		assert.Contains(t, issues[0], "ignore letter case")
+	})
+
+	t.Run("genuinely_absent", func(t *testing.T) {
+		issues := diagnoseNoMatch("unrelated words here", "func f() {}\n")
+		require.Len(t, issues, 1)
+		assert.Contains(t, issues[0], "appears nowhere in this file")
+	})
+
+	t.Run("whitespace_only_old", func(t *testing.T) {
+		assert.Nil(t, diagnoseNoMatch("  \n\t\n", "content\n"))
+	})
+}
+
+func TestBuildContent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("terminator_not_blank_line", func(t *testing.T) {
+		seq := buildContent(strings.Split("one\n", "\n"))
+		require.Len(t, seq, 1)
+		assert.Zero(t, seq[0].after)
+	})
+
+	t.Run("real_blanks_counted", func(t *testing.T) {
+		seq := buildContent(strings.Split("one\n\ntwo\n\n\n", "\n"))
+		require.Len(t, seq, 2)
+		assert.Equal(t, 1, seq[0].after)
+		// two real blank lines follow two; the terminator is not a third
+		assert.Equal(t, 2, seq[1].after)
+	})
+
+	t.Run("empty_text", func(t *testing.T) {
+		assert.Empty(t, buildContent(strings.Split("", "\n")))
+	})
+}
+
+func TestFoldResidue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("names_the_character", func(t *testing.T) {
+		d := foldResidue(`say "hello" — ok`, `say "hello" - ok`)
+		assert.Contains(t, d, `the file has "-" where you wrote "—"`)
+	})
+
+	t.Run("empty_without_fold_residue", func(t *testing.T) {
+		assert.Empty(t, foldResidue("same", "same"))
+		// a spacing difference is not residue; whitespaceIssue owns it
+		assert.Empty(t, foldResidue("ab", "a b"))
+	})
+
+	t.Run("unquotable_differs_note", func(t *testing.T) {
+		long := strings.Repeat(" ", diffQuoteLimit+1)
+		d := foldResidue("end"+long, "end")
+		assert.Contains(t, d, "only by characters matching folds together")
 	})
 }
 
