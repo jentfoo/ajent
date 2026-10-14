@@ -298,6 +298,28 @@ func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	assert.Equal(t, tools.ActionAsk, b3.Guard()(t.Context(), call("edit", `{"path":"x.go","edits":[]}`)).Action)
 }
 
+func TestGuardSafeCommandsMatchShHeadsLiterally(t *testing.T) {
+	t.Parallel()
+
+	// stripPath's .sh fold is deny-side leniency only: a listed head covers its
+	// own literal spelling, never a differently-named script on PATH (the pin
+	// classify_test applies to bare .sh heads holds here too)
+	b := newTestBarrierOpts(nil, withMode(Options{SafeCommands: []string{"git"}}, ModeAllowRead))
+	for _, cmd := range []string{
+		"git.sh status",
+		`'git.sh' status`,
+		"git status && git.sh push", // a compound component matches literally too
+	} {
+		assert.Equal(t, tools.ActionAsk, b.Guard()(t.Context(), bashCall(cmd)).Action, cmd)
+	}
+
+	// an entry naming a .sh script covers that exact name in both spellings
+	b2 := newTestBarrierOpts(nil, withMode(Options{SafeCommands: []string{"deploy.sh"}}, ModeAllowRead))
+	for _, cmd := range []string{"deploy.sh --dry-run", `'deploy.sh' --dry-run`} {
+		assert.Equal(t, tools.ActionAllow, b2.Guard()(t.Context(), bashCall(cmd)).Action, cmd)
+	}
+}
+
 func TestGuardSafeCommandsWithRedirects(t *testing.T) {
 	t.Parallel()
 

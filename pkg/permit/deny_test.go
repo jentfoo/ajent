@@ -34,6 +34,9 @@ func TestDenyMatches(t *testing.T) {
 		{"locale_quoted_head", []string{"rm"}, `$"rm" -rf x`},
 		{"ansi_c_after_launcher", []string{"rm"}, `nohup $'rm' -rf x`},
 		{"quoted_in_compound", []string{"git push"}, `cd /x && git "push"`},
+		// the .sh basename fold over-matches on purpose, a refusal catching a
+		// wrapper script the safe list's literal match would never bless
+		{"sh_suffix_folded_head", []string{"git push"}, "git.sh push"},
 		// leading env assignments are skipped, the prefixed head refusing like
 		// its bare form
 		{"env_prefixed_head", []string{"rm"}, "FOO=bar rm -rf /"},

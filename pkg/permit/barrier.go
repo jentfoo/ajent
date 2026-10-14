@@ -800,24 +800,13 @@ func (g gate) doomedEdit(call agent.ToolCall) bool {
 
 // argvCovers reports whether toks start with any configured entry's resolved
 // tokens, so quoting or escaping the head ("git" push, git pus\x68) cannot slip
-// a listed command past the list. Both sides resolve through tokenizeRaw, the
-// same argv view the sed/awk/git checkers match on. The head folds to its
-// basename on purpose: a refusal may over-match. Token-exact: an entry longer
-// than the line cannot match. Never mutates toks.
+// past a list. Deny matching folds the line head through stripPath on purpose:
+// a refusal may over-match. The safe list compares heads literally instead,
+// through safeArgvCovers. Both resolve tokens through tokenizeRaw, the same
+// argv view the sed/awk/git checkers match on; an entry longer than the line
+// can never match. Never mutates toks.
 func argvCovers(toks []string, cmds []string) bool {
-	if len(toks) == 0 {
-		return false
-	}
-	for _, e := range cmds {
-		et := tokenizeRaw(strings.TrimSpace(e))
-		if len(et) == 0 || len(et) > len(toks) || et[0] != stripPath(toks[0]) {
-			continue
-		}
-		if slices.Equal(toks[1:len(et)], et[1:]) {
-			return true
-		}
-	}
-	return false
+	return entriesCoverArgv(toks, cmds, stripPath)
 }
 
 // CommandRefused reports whether the deny configuration refuses bash cmd at
@@ -907,7 +896,36 @@ func bareEntryCoversArgv(raw string, cmds []string) bool {
 	if len(toks) == 0 || strings.Contains(toks[0], "/") {
 		return false
 	}
-	return argvCovers(toks, cmds)
+	return safeArgvCovers(toks, cmds)
+}
+
+// safeArgvCovers is the allow-side twin of argvCovers: heads compare exactly,
+// so a listed entry covers only its own literal spelling and stripPath's .sh
+// fold cannot bless a differently-named script on PATH.
+func safeArgvCovers(toks []string, cmds []string) bool {
+	return entriesCoverArgv(toks, cmds, nil)
+}
+
+// entriesCoverArgv runs the shared token-prefix loop, toks[0] compared as fold
+// resolves it (nil compares literally).
+func entriesCoverArgv(toks []string, cmds []string, fold func(string) string) bool {
+	if len(toks) == 0 {
+		return false
+	}
+	head := toks[0]
+	if fold != nil {
+		head = stripPath(head)
+	}
+	for _, e := range cmds {
+		et := tokenizeRaw(strings.TrimSpace(e))
+		if len(et) == 0 || len(et) > len(toks) || et[0] != head {
+			continue
+		}
+		if slices.Equal(toks[1:len(et)], et[1:]) {
+			return true
+		}
+	}
+	return false
 }
 
 // entryCovered reports whether line starts with a configured command at a token boundary.
