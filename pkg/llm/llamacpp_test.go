@@ -25,6 +25,10 @@ func TestParseLlamaProps(t *testing.T) {
 		require.NotNil(t, got[0].ContextWindow)
 		assert.Equal(t, 32768, *got[0].ContextWindow)
 		assert.Equal(t, "qwen3.6-27b-Q4_K_M.gguf", got[0].ID)
+
+		// the fixture's build reports stream usage support, so discovery enables it
+		require.NotNil(t, got[0].Compat)
+		assert.True(t, *got[0].Compat.SupportsUsageInStreaming)
 	})
 
 	t.Run("falls_back_to_per_slot_context", func(t *testing.T) {
@@ -58,9 +62,73 @@ func TestParseLlamaProps(t *testing.T) {
 		assert.Nil(t, got[0].ContextWindow)
 	})
 
+	t.Run("absent_build_info_keeps_stream_usage_off", func(t *testing.T) {
+		got, err := parseLlamaProps([]byte(`{"model_path":"/m/x.gguf"}`))
+		require.NoError(t, err)
+		assert.Nil(t, got[0].Compat)
+	})
+
 	t.Run("malformed_body_errors", func(t *testing.T) {
 		_, err := parseLlamaProps([]byte("nope"))
 		assert.Error(t, err)
+	})
+}
+
+func TestLlamaSupportsStreamUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		buildInfo string
+		expected  bool
+	}{
+		{"current_build", "b10700-d07e71ede", true},
+		{"first_supported_build", "b6508-abcdef012", true},
+		{"one_below_the_cutoff", "b6507-abcdef012", false},
+		{"bare_number_without_prefix", "6508", true},
+		{"empty_build_info", "", false},
+		{"commit_only_names_nothing", "bd07e71ede", false},
+		{"junk_text_is_unsupported", "unknown", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, llamaSupportsStreamUsage(tc.buildInfo))
+		})
+	}
+}
+
+func TestLlamaCppStreamUsageResolution(t *testing.T) {
+	t.Parallel()
+
+	base := flavorDefaults[FlavorLlamaCpp].caps
+	ctx := modelContext{provider: "llamacpp", dialect: DialectOpenAICompletions,
+		baseURL: flavorDefaults[FlavorLlamaCpp].baseURL}
+
+	data, err := os.ReadFile(filepath.Join("testdata", "llamacpp", "props.json"))
+	require.NoError(t, err)
+	discovered, err := parseLlamaProps(data)
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+
+	t.Run("discovery_turns_stream_usage_on", func(t *testing.T) {
+		m := resolveModel(ctx, base, nil, discovered[0])
+		assert.True(t, m.Caps.StreamUsage)
+	})
+
+	t.Run("declared_compat_beats_discovery", func(t *testing.T) {
+		// a user turning it back off must win over the probed default
+		merged, _ := mergeModels([]ModelConfig{{ID: discovered[0].ID,
+			Compat: &Compat{SupportsUsageInStreaming: ptr(false)}}}, discovered, nil)
+		m := resolveModel(ctx, base, nil, merged[0])
+		assert.False(t, m.Caps.StreamUsage)
+	})
+
+	t.Run("provider_compat_fills_where_discovery_is_silent", func(t *testing.T) {
+		// an old build sets nothing, so a hand-written enablement survives
+		old, err := parseLlamaProps([]byte(`{"model_path":"/m/x.gguf","build_info":"b6000-old"}`))
+		require.NoError(t, err)
+		m := resolveModel(ctx, base, &Compat{SupportsUsageInStreaming: ptr(true)}, old[0])
+		assert.True(t, m.Caps.StreamUsage)
 	})
 }
 

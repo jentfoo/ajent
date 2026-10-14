@@ -520,6 +520,21 @@ func TestRegistryWithCache(t *testing.T) {
 		require.Len(t, r.Models(), 1)
 		assert.Equal(t, 800000, r.Models()[0].ContextWindow) // still enriched
 	})
+
+	t.Run("llamacpp_discovered_compat_reaches_the_caps", func(t *testing.T) {
+		// /props discovery turns stream usage on for builds that can answer it
+		f := File{Providers: map[string]ProviderConfig{"llamacpp": {}}}
+		cache := map[string]CacheEntry{"llamacpp": {Models: []ModelConfig{
+			{ID: "m.gguf", Name: "m.gguf",
+				Compat: &Compat{SupportsUsageInStreaming: ptr(true)}},
+		}}}
+
+		r, warnings := NewRegistry(f, cache, RegistryOptions{})
+		assert.Empty(t, warnings)
+		m, err := r.Resolve("llamacpp/m.gguf")
+		require.NoError(t, err)
+		assert.True(t, m.Caps.StreamUsage)
+	})
 }
 
 func TestRegistryRefresh(t *testing.T) {
