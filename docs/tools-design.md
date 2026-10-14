@@ -138,6 +138,12 @@ provenance). The classification decisions that shape everything else:
   verdict. Anything unverifiable prompts, never reaching an unattended
   classifier, a grant or session memory in the dialog, and `safeCommands`
   match argv only under a slash-free head for the same reason.
+- Shell commands are name-trusted only when they have no exec or write form.
+  `sed`, `awk`, `rg` and `sort` are verified per invocation instead, anything
+  unverifiable prompting. GNU long options abbreviate: `getopt_long` resolves
+  any proper prefix, and whether one is ambiguous depends on the installed
+  binary's option table. A write/exec long option therefore matches by prefix
+  (`sort --outp=/x` fails like `--output`), an over-match merely prompting.
 - Heredoc and subshell bodies are not this line's tokens on the allow side: an
   interpreter payload or `( … )` prompts rather than being scanned as named
   commands. The deny list alone resolves whatever hides the head, since a
