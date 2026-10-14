@@ -1,9 +1,12 @@
 package httputil
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -103,7 +106,7 @@ func TestParseRetryAfter(t *testing.T) {
 	}
 }
 
-func TestRetryableConnErr(t *testing.T) {
+func TestShouldRetryTransport(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -112,13 +115,33 @@ func TestRetryableConnErr(t *testing.T) {
 		expected bool
 	}{
 		{"nil", nil, false},
-		{"net_error", &net.DNSError{IsTimeout: true}, true},
+		{"dns_timeout", &net.DNSError{IsTimeout: true}, true},
+		{"dial_refused", refused(), true},
 		{"closed", net.ErrClosed, true},
 		{"plain", errors.New("boom"), false},
+		// hc.Do wraps every failure in a *url.Error, which satisfies net.Error itself
+		{"wrapped_dns_timeout", urlWrap(&net.DNSError{IsTimeout: true}), true},
+		{"wrapped_dial_refused", urlWrap(refused()), true},
+		{"wrapped_closed", urlWrap(net.ErrClosed), true},
+		{"unsupported_scheme", urlWrap(errors.New(`unsupported protocol scheme "ftp"`)), false},
+		{"tls_verification", urlWrap(&tls.CertificateVerificationError{
+			Err: x509.CertificateInvalidError{Reason: x509.Expired}}), false},
+		{"scheme_mismatch", urlWrap(http.ErrSchemeMismatch), false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, retryableConnErr(tc.err))
+			assert.Equal(t, tc.expected, ShouldRetryTransport(tc.err))
 		})
 	}
+}
+
+// refused builds the error shape a failed dial produces.
+func refused() error {
+	return &net.OpError{Op: "dial", Net: "tcp",
+		Err: errors.New("connect: connection refused")}
+}
+
+// urlWrap mimics the single wrapping http.Client.Do applies to a transport failure.
+func urlWrap(err error) error {
+	return &url.Error{Op: "Post", URL: "https://api.test/v1/x", Err: err}
 }

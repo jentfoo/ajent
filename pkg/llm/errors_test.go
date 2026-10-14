@@ -2,10 +2,12 @@ package llm
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"testing"
 	"time"
 
@@ -106,6 +108,10 @@ func TestRecoverable(t *testing.T) {
 		{"idle_timeout", httputil.ErrIdleTimeout, true, 0},
 		{"unexpected_eof", io.ErrUnexpectedEOF, true, 0},
 		{"net_error", &net.OpError{Op: "read", Err: errors.New("reset")}, true, 0},
+		{"wrapped_net_error", &url.Error{Op: "Post", URL: "https://api.test",
+			Err: &net.OpError{Op: "dial", Err: errors.New("refused")}}, true, 0},
+		{"url_error_permanent", &url.Error{Op: "Post", URL: "https://api.test",
+			Err: x509.CertificateInvalidError{Reason: x509.Expired}}, false, 0},
 		{"plain_error", errors.New("boom"), false, 0},
 	}
 	for _, tc := range tests {

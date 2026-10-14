@@ -135,7 +135,7 @@ func doAttempt(ctx context.Context, hc *http.Client, r Request, h callHooks, att
 		emit(r.Log, LogEvent{Name: r.Name, Method: r.Method, URL: redactURL(req.URL),
 			Header: redactHeaders(req.Header), Attempt: attemptNum,
 			Duration: h.now().Sub(start), Err: err})
-		if retryableConnErr(err) {
+		if ShouldRetryTransport(err) {
 			return nil, 0, &retryableError{err: err}
 		}
 		return nil, 0, err

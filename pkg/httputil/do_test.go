@@ -332,6 +332,26 @@ func TestDo(t *testing.T) {
 		assert.Contains(t, got, redactedMask)
 	})
 
+	t.Run("permanent_transport_error_fails_fast", func(t *testing.T) {
+		r, hc, slept, logs := testRequest(t, "http://127.0.0.1:1")
+		r.URL = "ftp://" + strings.TrimPrefix(r.URL, "http://") // rejected before any dial
+		_, err := Do(t.Context(), hc, r)
+		require.Error(t, err)
+
+		assert.Contains(t, err.Error(), "unsupported protocol scheme")
+		assert.Empty(t, *slept) // a typo'd scheme never climbs the ladder
+		assert.Len(t, *logs, 1)
+	})
+
+	t.Run("transient_transport_error_retries", func(t *testing.T) {
+		r, hc, slept, logs := testRequest(t, "http://127.0.0.1:1") // nothing listens, refused
+		_, err := Do(t.Context(), hc, r)
+		require.Error(t, err)
+
+		assert.Len(t, *logs, 4) // connection shaped errors still retry in full
+		assert.Len(t, *slept, 3)
+	})
+
 	t.Run("total_timeout_outlives_the_call", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "streamed")

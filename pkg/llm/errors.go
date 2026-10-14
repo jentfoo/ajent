@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -124,9 +123,5 @@ func Recoverable(err error) (bool, time.Duration) {
 	if errors.As(err, &ae) {
 		return ae.Retryable, ae.RetryAfter
 	}
-	var ne net.Error
-	if errors.As(err, &ne) {
-		return true, 0
-	}
-	return false, 0
+	return httputil.ShouldRetryTransport(err), 0
 }

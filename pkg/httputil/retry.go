@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -90,17 +91,22 @@ func ShouldRetryStatus(status int, hasRetryAfter bool) bool {
 	}
 }
 
-// retryableConnErr reports whether a transport error is worth another attempt.
-// Only errors from before any response body was read reach here.
-func retryableConnErr(err error) bool {
+// ShouldRetryTransport reports whether a request level transport error is worth
+// another attempt. Only errors from before any response body was read reach here.
+// Timeouts and broken connections retry; unsupported schemes or TLS failures fail
+// fast.
+func ShouldRetryTransport(err error) bool {
 	if err == nil {
 		return false
 	}
-	var ne net.Error
-	if errors.As(err, &ne) {
-		return true
+	var ue *url.Error
+	// peel url.Error layers before matching; the wrapper satisfies net.Error,
+	// so left in place it always matches whatever its cause is
+	for errors.As(err, &ue) {
+		err = ue.Err
 	}
-	return errors.Is(err, net.ErrClosed)
+	var ne net.Error
+	return errors.As(err, &ne) || errors.Is(err, net.ErrClosed)
 }
 
 // parseRetryAfter reads a Retry-After header in either the delta seconds or the
