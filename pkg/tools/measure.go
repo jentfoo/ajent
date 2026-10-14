@@ -1,8 +1,6 @@
 package tools
 
 import (
-	"errors"
-	"io"
 	"os"
 )
 
@@ -68,12 +66,11 @@ func sniffKind(path string) (FileKind, error) {
 		return KindText, err
 	}
 	defer func() { _ = f.Close() }()
-	sniff := make([]byte, sniffLen)
-	n, err := io.ReadFull(f, sniff)
-	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+	head, err := readSniff(f)
+	if err != nil {
 		return KindText, err
 	}
-	switch detect(sniff[:n]) {
+	switch detect(head) {
 	case fileImage:
 		return KindImage, nil
 	case fileBinary:

@@ -6,12 +6,77 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestProbeFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	write := func(name string, content []byte) string {
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(p, content, 0o644))
+		return p
+	}
+
+	var pngBuf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	require.NoError(t, png.Encode(&pngBuf, img))
+
+	bin := append(bytes.Repeat([]byte{'a'}, sniffLen-1), 0)   // NUL ends the window
+	bin = append(bin, bytes.Repeat([]byte{'b'}, sniffLen)...) // tail beyond it must not matter
+
+	for _, tc := range []struct {
+		name     string
+		path     string
+		wantKind fileKind
+		wantData []byte
+	}{
+		{"small_text", write("small.txt", []byte("plain words\n")), fileText, []byte("plain words\n")},
+		{"empty_file", write("empty.txt", nil), fileText, nil},
+		{"text_beyond_window", write("big.txt", bytes.Repeat([]byte("abcdefgh\n"), sniffLen)),
+			fileText, bytes.Repeat([]byte("abcdefgh\n"), sniffLen)},
+		{"exact_window_size", write("edge.txt", bytes.Repeat([]byte{'a'}, sniffLen)),
+			fileText, bytes.Repeat([]byte{'a'}, sniffLen)},
+		{"binary_carries_no_data", write("bin.dat", bin), fileBinary, nil},
+		{"image_returns_full_bytes", write("pic.png", pngBuf.Bytes()), fileImage, pngBuf.Bytes()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, info, kind, err := probeFile(tc.path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantKind, kind)
+			if tc.wantData == nil { // no content: none there is, or the binary contract
+				assert.Empty(t, data)
+			} else {
+				assert.Equal(t, tc.wantData, data)
+			}
+			require.NotNil(t, info)
+			if kind != fileBinary { // binary returns no content by contract
+				assert.Equal(t, int64(len(tc.wantData)), info.Size())
+			}
+		})
+	}
+
+	t.Run("missing_path_errors", func(t *testing.T) {
+		_, _, kind, err := probeFile(filepath.Join(dir, "nope.txt"))
+		require.ErrorIs(t, err, fs.ErrNotExist)
+		assert.Equal(t, fileText, kind) // error paths default to text
+	})
+
+	t.Run("directory_errors", func(t *testing.T) {
+		_, _, kind, err := probeFile(dir)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "is a directory")
+		assert.Equal(t, fileText, kind)
+	})
+}
 
 func TestDetect(t *testing.T) {
 	t.Parallel()

@@ -2,7 +2,9 @@ package tools
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -18,28 +20,50 @@ const (
 	fileImage
 )
 
-// probeFile reads up to the whole of path, reporting its kind and size info. A
-// NUL byte in the first 8 kB marks binary, while a known image signature marks an image.
+// probeFile reports path's kind and size info alongside its content. Kind comes
+// from the first sniffLen bytes: a NUL byte there marks binary, while a known
+// image signature marks an image. Text and image return every byte; binary
+// returns none, so refusing a giant file never loads one.
 func probeFile(path string) (data []byte, info os.FileInfo, kind fileKind, err error) {
-	info, err = os.Stat(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, fileText, err
 	}
-	data, err = os.ReadFile(path)
+	defer func() { _ = f.Close() }()
+	info, err = f.Stat()
 	if err != nil {
 		return nil, nil, fileText, err
 	}
-	switch detect(data) {
-	case fileImage:
-		return data, info, fileImage, nil
-	case fileBinary:
-		return data, info, fileBinary, nil
-	default:
-		return data, info, fileText, nil
+	head, err := readSniff(f)
+	if err != nil {
+		return nil, nil, fileText, err
 	}
+	kind = detect(head)
+	if kind == fileBinary {
+		return nil, info, kind, nil // classified from the header alone
+	}
+	// text and image callers need every byte; continue on the same handle so
+	// classification and content come from one read of the file
+	var buf bytes.Buffer // accumulates head + remainder into one backing array
+	buf.Write(head)
+	if _, err = io.Copy(&buf, f); err != nil {
+		return nil, nil, fileText, err
+	}
+	return buf.Bytes(), info, kind, nil
 }
 
 const sniffLen = 8 << 10
+
+// readSniff reads up to sniffLen bytes from r. A file shorter than the window
+// ends the read rather than erroring.
+func readSniff(r io.Reader) ([]byte, error) {
+	head := make([]byte, sniffLen)
+	n, err := io.ReadFull(r, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, err
+	}
+	return head[:n], nil
+}
 
 // writePerm returns path's existing permission bits, or 0o644 for a new file.
 // Overwrites must not silently widen (or narrow) an owner-only mode like 0o600.
