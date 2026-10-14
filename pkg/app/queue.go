@@ -84,8 +84,8 @@ func (s *steerQueue) hold(in agent.Input, label string, est int) {
 // provenance change starts a new input, so a mixed user + system batch keeps
 // per-item attribution on the transcript rows instead of one OR-ed flag. The
 // final run clears accounting once everything behind it has landed. Each run
-// echoes its labels as its message lands, so Input.Echo is never carried: a
-// loop-side echo too would draw twice. Blocks concatenate in queue order
+// echoes its labels and images as its message lands, so Input.Echo is never
+// carried: a loop-side echo too would draw twice. Blocks concatenate in queue order
 // across a run's items, so the joined message need not match any one label.
 func (s *steerQueue) join() []agent.Input {
 	type runAcc struct {
@@ -124,10 +124,10 @@ func (s *steerQueue) join() []agent.Input {
 	out := make([]agent.Input, len(runs))
 	for i, r := range runs {
 		r.in.After = joinAfter(r.afters)
-		if label := strings.Join(r.labels, "\n"); label != "" {
-			joined := label // captured for the closure, landed takes no lock
-			blocks := r.in.Blocks
-			r.in.Delivered = func() { s.landed(joined, blocks) }
+		label := strings.Join(r.labels, "\n")
+		blocks := r.in.Blocks
+		if label != "" || llm.HasImageBlocks(blocks) { // image-only runs land visibly too
+			r.in.Delivered = func() { s.landed(label, blocks) }
 		}
 		out[i] = r.in
 	}
@@ -286,6 +286,19 @@ func restoredLabel(it steerItem) string {
 	return label
 }
 
+// queuedLabel is what a queue row shows: an image-only item has no typed line,
+// so its blocks stand in via the shared placeholder instead of an empty label.
+func queuedLabel(it steerItem) string {
+	if it.label != "" {
+		return it.label
+	}
+	var parts []string
+	for _, ib := range llm.ImageBlocks(it.input.Blocks) {
+		parts = append(parts, llm.ImagePlaceholder(ib.Data, ""))
+	}
+	return strings.Join(parts, ", ")
+}
+
 // abort recovers every queued item into the editor, joined by newlines ahead of
 // any draft, and clears rows/items/accounting. Called before an interrupt so a
 // mid-turn message is never lost.
@@ -310,7 +323,7 @@ func (s *steerQueue) abort() {
 func (s *steerQueue) refreshLocked() {
 	labels := make([]string, len(s.items))
 	for i, it := range s.items {
-		labels[i] = it.label
+		labels[i] = queuedLabel(it)
 	}
 	s.ui.SetQueued(labels)
 	var sum int

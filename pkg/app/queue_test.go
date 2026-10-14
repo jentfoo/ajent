@@ -161,6 +161,43 @@ func TestSteerQueue(t *testing.T) {
 		assert.Equal(t, "[image 4x4, "+strutil.HumanSize(int64(pngBuf.Len()))+"]", fake.images[0][0].String())
 	})
 
+	t.Run("image_only_row_placeholder", func(t *testing.T) {
+		fake := &fakeQueueUI{}
+		q := newSteerQueue(fake, func(int) {}, func() {}, nil, nil)
+
+		// an image-only submission has no typed line: the placeholder names it in rows
+		png, wide := slotPNG(t), slotSizedPNG(t, 8, 2)
+		in := agent.Input{Blocks: llm.BlockList{
+			llm.ImageBlock{MediaType: "image/png", Data: png},
+			llm.ImageBlock{MediaType: "image/png", Data: wide},
+		}}
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
+		require.True(t, q.offer(in, "", 2))
+
+		want := llm.ImagePlaceholder(png, "") + ", " + llm.ImagePlaceholder(wide, "")
+		assert.Equal(t, []string{want}, fake.lastQueued())
+	})
+
+	t.Run("delivered_image_only_visible", func(t *testing.T) {
+		fake := &fakeQueueUI{}
+		q := newSteerQueue(fake, func(int) {}, func() {}, nil, nil)
+
+		in := agent.Input{
+			Blocks: llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: slotPNG(t)}},
+		}
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
+		require.True(t, q.offer(in, "", 2))
+
+		out := q.pull()
+		require.Len(t, out, 1)
+		assert.Empty(t, fake.echoed)
+
+		out[0].Delivered() // fires at landing: UserImages alone names an image-only turn
+		assert.Empty(t, fake.echoed)
+		require.Len(t, fake.images, 1)
+		require.Len(t, fake.images[0], 1)
+	})
+
 	t.Run("join_splits_provenance", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		q := newSteerQueue(fake, func(int) {}, func() {}, nil, nil)
