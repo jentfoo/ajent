@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -266,6 +268,85 @@ func TestNegotiatesAdvertisedOlderVersion(t *testing.T) {
 	require.Len(t, defs, 1)
 	assert.Equal(t, "old_tool", defs[0].Name)
 	assert.Zero(t, modernLists.Load()) // nothing rode the rejected era
+}
+
+// startLegacySSE serves a minimal legacy-era SSE session: one endpoint event,
+// then JSON-RPC replies pushed as message events. Any other method is counted
+// in probes and never answered, like a server predating server/discover.
+func startLegacySSE(t *testing.T) (string, *atomic.Int32) {
+	t.Helper()
+
+	out := make(chan []byte, 16)
+	var probes atomic.Int32
+	push := func(b []byte) { // a dead stream must never block a POST handler
+		select {
+		case out <- b:
+		default:
+		}
+	}
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet { // the event stream, held open for the session
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher, ok := w.(http.Flusher)
+			if !ok {
+				return
+			}
+			_, _ = fmt.Fprint(w, "event: endpoint\ndata: /messages\n\n")
+			flusher.Flush()
+			for { // responses arrive as message events until the client hangs up
+				select {
+				case b := <-out:
+					_, _ = fmt.Fprintf(w, "event: message\ndata: %s\n\n", b)
+					flusher.Flush()
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}
+
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil || json.Unmarshal(body, &req) != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		switch req.Method {
+		case "initialize":
+			push([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) +
+				`,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"legacy-sse","version":"1.0"}}}`))
+		case "tools/list":
+			push([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) +
+				`,"result":{"tools":[{"name":"sse_tool","description":"d","inputSchema":{"type":"object"}}]}}`))
+		default:
+			if !strings.HasPrefix(req.Method, "notifications/") {
+				probes.Add(1) // unknown method: a pre-discover server never answers
+			}
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts.URL + "/sse", &probes
+}
+
+func TestConnectSSE(t *testing.T) {
+	t.Parallel()
+
+	url, probes := startLegacySSE(t)
+	c, err := Connect(t.Context(), "legacy-sse", ServerConfig{URL: url, Transport: TransportSSE})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	assert.Equal(t, mcp.LATEST_LEGACY_PROTOCOL_VERSION, c.negotiated) // pinned era wins the handshake
+	assert.Zero(t, probes.Load())                                     // an empty preferred version would have probed here
+
+	defs, err := c.Tools(t.Context())
+	require.NoError(t, err)
+	require.Len(t, defs, 1)
+	assert.Equal(t, "sse_tool", defs[0].Name)
 }
 
 func TestHTTPAgainstHTTPServer(t *testing.T) {

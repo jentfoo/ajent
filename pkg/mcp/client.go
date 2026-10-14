@@ -47,6 +47,12 @@ type Client struct {
 	cmd  *exec.Cmd // stdio child for process-group kill, nil for network servers
 	tran string    // "stdio", "http" or "sse"
 
+	// root owns the connection: mcp-go's SSE transport keeps Start's context for
+	// its whole lifetime and the stdio child is spawned under it too, so a
+	// dial-scoped one would end the stream as soon as init returns. Cancelled by Close.
+	root       context.Context
+	cancelRoot context.CancelFunc
+
 	onWarn func(string)
 
 	negotiated string             // negotiated protocol version, ""-era values gate applyEra
@@ -68,10 +74,10 @@ const rawAttemptTimeout = 15 * time.Second
 // handshake. A var so tests can tighten it.
 var probeTimeout = 5 * time.Second
 
-// initTimeout bounds the initialize handshake and its transport start, so a
-// server that accepts the connection but never answers surfaces as a connect
-// error instead of hanging the dial and every waiter sharing it. A var so tests
-// can tighten it.
+// initTimeout bounds the initialize handshake, so a server that accepts the
+// connection but never answers surfaces as a connect error instead of hanging
+// the dial and every waiter sharing it. Transport start is bounded separately:
+// SSE waits on mcp-go's own endpoint timeout. A var so tests can tighten it.
 var initTimeout = 45 * time.Second
 
 // rawRetries resends a single request after transport-level failures, since mcp-go's stdio can drop a line under load.
@@ -85,7 +91,8 @@ const rawSeqBase = 1 << 40
 const closeGrace = 500 * time.Millisecond
 
 // Connect dials cfg's server (stdio or Streamable HTTP / SSE), negotiates the
-// protocol and returns a ready client.
+// protocol and returns a ready client. ctx bounds only the dial: the returned
+// client owns its connection context, torn down by Close.
 func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error) {
 	c := &Client{
 		name:   name,
@@ -97,7 +104,7 @@ func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error
 	var cl *mcpclient.Client
 	switch c.tran {
 	case TransportStdio:
-		if err := c.spawnStdio(ctx); err != nil {
+		if err := c.spawnStdio(); err != nil {
 			return nil, err
 		}
 	default:
@@ -114,6 +121,9 @@ func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error
 		c.c = cl
 	}
 
+	// The connection root must not inherit ctx: callers may cancel it once
+	// Connect returned, and SSE keeps Start's context for the stream's whole life.
+	c.root, c.cancelRoot = context.WithCancel(context.Background())
 	c.rawSeq.Store(rawSeqBase)
 	if err := c.init(ctx); err != nil {
 		_ = c.Close()
@@ -155,11 +165,12 @@ func transportKind(cfg ServerConfig) string {
 
 // init negotiates the protocol version, naming ours and the server's on a mismatch.
 func (c *Client) init(ctx context.Context) error {
-	ictx, cancel := context.WithTimeout(ctx, initTimeout)
-	defer cancel()
-	if err := c.c.Start(ictx); err != nil {
+	// the connection root must outlive init's ctx: SSE keeps it for the stream's life
+	if err := c.c.Start(c.root); err != nil { //nolint:contextcheck
 		return fmt.Errorf("start: %w", err)
 	}
+	ictx, cancel := context.WithTimeout(ctx, initTimeout)
+	defer cancel()
 	c.clientInfo = mcp.Implementation{Name: "ajent", Version: version.Version}
 	res, err := c.c.Initialize(ictx, mcp.InitializeRequest{
 		Params: mcp.InitializeParams{ClientInfo: c.clientInfo, ProtocolVersion: c.preferredVersion(ictx)},
@@ -176,13 +187,17 @@ func (c *Client) init(ctx context.Context) error {
 	return nil
 }
 
-// preferredVersion asks a discover-capable server which protocol revisions it
-// serves and returns the newest one we share, so a server advertising an older
-// set negotiates there instead of failing its first request. The empty string
-// leaves Initialize's own probe and handshake to decide.
+// preferredVersion picks the protocol version to initialize with: SSE pins the
+// latest legacy revision, otherwise a discover-capable server names its set and
+// we return the newest one we share, so an older-advertising server negotiates
+// there instead of failing its first request. The empty string leaves
+// Initialize's own probe and handshake to decide.
 func (c *Client) preferredVersion(ctx context.Context) string {
-	if c.tran == TransportSSE { // legacy-only transport, nothing to discover
-		return ""
+	if c.tran == TransportSSE {
+		// legacy-only, but mcp-go only pins StreamableHTTP: an empty version sends
+		// its server/discover probe, which a pre-discover SSE server ignores until
+		// the probe timeout. Pinning is wire-identical; the handshake normalizes it.
+		return mcp.LATEST_LEGACY_PROTOCOL_VERSION
 	}
 	supported, ok := c.discoverVersions(ctx)
 	if !ok {
@@ -237,15 +252,16 @@ func (c *Client) discoverVersions(ctx context.Context) ([]string, bool) {
 }
 
 // spawnStdio launches a stdio server in its own process group so Close can sweep
-// grandchildren that outlive the child.
-func (c *Client) spawnStdio(ctx context.Context) error {
+// grandchildren that outlive the child. The child is created during Start, under
+// the connection root, never the dial ctx.
+func (c *Client) spawnStdio() error {
 	var cmd *exec.Cmd
 	cl, err := mcpclient.NewStdioMCPClientWithOptions(
 		c.cfg.Command,
 		nil, // env is built by the command func below
 		c.cfg.Args,
-		transport.WithCommandFunc(func(_ context.Context, command string, _ []string, args []string) (*exec.Cmd, error) {
-			cmd = exec.CommandContext(ctx, command, args...)
+		transport.WithCommandFunc(func(root context.Context, command string, _ []string, args []string) (*exec.Cmd, error) {
+			cmd = exec.CommandContext(root, command, args...)
 			if cmd.SysProcAttr == nil {
 				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 			} else {
@@ -482,6 +498,7 @@ func (c *Client) Ping(ctx context.Context) error {
 // for a remote to acknowledge the session delete, neither of which is worth
 // stalling a session teardown (or the app's exit) for.
 func (c *Client) Close() error {
+	defer c.cancelRoot()
 	var err error
 	if c.c != nil {
 		done := make(chan error, 1)
