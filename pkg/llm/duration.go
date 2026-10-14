@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"math"
 	"strconv"
 	"time"
 )
@@ -17,9 +18,13 @@ func (d Duration) MarshalText() ([]byte, error) {
 // UnmarshalText decodes a Go duration string or a number of seconds.
 func (d *Duration) UnmarshalText(data []byte) error {
 	s := string(data)
+	// inf, nan and values past the int64 range fall through to the ParseDuration
+	// error rather than converting out of range
 	if secs, err := strconv.ParseFloat(s, 64); err == nil {
-		*d = Duration(secs * float64(time.Second))
-		return nil
+		if ns := secs * float64(time.Second); math.Abs(ns) < maxDurationNs {
+			*d = Duration(ns)
+			return nil
+		}
 	}
 	v, err := time.ParseDuration(s)
 	if err != nil {
@@ -28,6 +33,10 @@ func (d *Duration) UnmarshalText(data []byte) error {
 	*d = Duration(v)
 	return nil
 }
+
+// maxDurationNs is 2^63 in float form; the exclusive comparison keeps every
+// accepted value inside the int64 conversion.
+const maxDurationNs = float64(math.MaxInt64)
 
 // dur returns a pointer to d, for building a Timeouts literal.
 func dur(d time.Duration) *Duration {

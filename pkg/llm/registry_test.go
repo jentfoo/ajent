@@ -254,6 +254,58 @@ func TestRegistryDuplicateAlias(t *testing.T) {
 	})
 }
 
+func TestRegistryDuplicateModelID(t *testing.T) {
+	t.Parallel()
+
+	f := File{Providers: map[string]ProviderConfig{
+		"anthropic": {Models: []ModelConfig{
+			{ID: "claude-opus-4-5", ContextWindow: ptr(200000)},
+			{ID: "claude-opus-4-5", ContextWindow: ptr(1000)},
+		}},
+	}}
+	r, warnings := NewRegistry(f, nil, RegistryOptions{})
+
+	t.Run("build_warns_on_the_duplicate", func(t *testing.T) {
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], "claude-opus-4-5 is listed more than once")
+	})
+
+	t.Run("provider_id_still_resolves", func(t *testing.T) {
+		m, err := r.Resolve("anthropic/claude-opus-4-5")
+		require.NoError(t, err)
+		assert.Equal(t, "anthropic/claude-opus-4-5", m.Key())
+	})
+
+	t.Run("bare_id_names_both_candidates", func(t *testing.T) {
+		_, err := r.Resolve("claude-opus-4-5")
+
+		var ae *ErrAmbiguousModel
+		require.ErrorAs(t, err, &ae)
+		assert.Len(t, ae.Candidates, 2)
+	})
+
+	t.Run("one_warning_for_three_entries", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"p": {Models: []ModelConfig{{ID: "x"}, {ID: "x"}, {ID: "x"}}},
+		}}
+		_, warnings := NewRegistry(f, nil, RegistryOptions{})
+		require.Len(t, warnings, 1)
+	})
+
+	t.Run("case_insensitive_ids_collide", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"p": {Models: []ModelConfig{{ID: "M1"}, {ID: "m1"}}},
+		}}
+		reg, warnings := NewRegistry(f, nil, RegistryOptions{})
+		require.Len(t, warnings, 1)
+
+		// the byte-larger id sorts last and wins byKey; resolution is unchanged
+		m, err := reg.Resolve("p/M1")
+		require.NoError(t, err)
+		assert.Equal(t, "m1", m.ID)
+	})
+}
+
 func TestMergeModels(t *testing.T) {
 	t.Parallel()
 

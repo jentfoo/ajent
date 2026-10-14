@@ -161,8 +161,19 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	r.byKey = make(map[string]int, len(models))
 	r.byAlias = make(map[string]int, len(models))
 	r.dupAlias = make(map[string]struct{})
+	dupKeys := make(map[string]struct{}) // one warning per repeated id
 	for i, m := range models {
-		r.byKey[strings.ToLower(m.Key())] = i
+		key := strings.ToLower(m.Key())
+		if _, ok := r.byKey[key]; ok {
+			// resolution keeps the last duplicate, so warn once rather than
+			// let it collapse silently
+			if _, reported := dupKeys[key]; !reported {
+				dupKeys[key] = struct{}{}
+				warnings = append(warnings,
+					fmt.Sprintf("model %s is listed more than once; the last entry wins", m.Key()))
+			}
+		}
+		r.byKey[key] = i
 		for _, a := range m.Aliases {
 			key := strings.ToLower(a)
 			if _, isDup := r.dupAlias[key]; isDup {
