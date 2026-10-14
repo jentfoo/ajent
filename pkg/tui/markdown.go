@@ -81,7 +81,7 @@ func (r mdRenderer) blocks(n ast.Node, src []byte) []histLine {
 			out = append(out, histLine{rule: true, style: r.theme.Dim})
 			continue
 		}
-		b, flow := r.block(c, src)
+		b, flow := r.block(c, src, "")
 		if b == "" {
 			continue
 		}
@@ -96,33 +96,41 @@ func (r mdRenderer) blocks(n ast.Node, src []byte) []histLine {
 }
 
 // blockTexts renders every child of n into an independent block of text, for
-// blocks nested inside another that owns their layout.
-func (r mdRenderer) blockTexts(n ast.Node, src []byte) []string {
+// blocks nested inside another that owns their layout. active threads through
+// to each child's inline content.
+func (r mdRenderer) blockTexts(n ast.Node, src []byte, active string) []string {
 	var out []string
 	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
-		if b, _ := r.block(c, src); b != "" {
+		if b, _ := r.block(c, src, active); b != "" {
 			out = append(out, b)
 		}
 	}
 	return out
 }
 
-func (r mdRenderer) block(n ast.Node, src []byte) (string, lineFlow) {
+// block renders one block node to styled text. active carries the enclosing
+// styles an inner span must reopen after its reset. The heading marker and quote
+// prefix end in resets of their own, so neither preserves a caller's stack.
+func (r mdRenderer) block(n ast.Node, src []byte, active string) (string, lineFlow) {
 	switch n.Kind() {
 	case ast.KindHeading:
 		h := n.(*ast.Heading)
 		marker := r.theme.Dim.Wrap(strings.Repeat("#", h.Level) + " ")
-		return marker + r.theme.Heading.Wrap(r.inline(n, src, "")), flowReflow
+		// the marker's reset ends any enclosing style, so a child span only
+		// restores the heading itself
+		return marker + r.theme.Heading.Wrap(r.inline(n, src, r.theme.Heading.Open())), flowReflow
 	case ast.KindParagraph, ast.KindTextBlock:
-		return r.inline(n, src, ""), flowReflow
+		return r.inline(n, src, active), flowReflow
 	case ast.KindFencedCodeBlock, ast.KindCodeBlock:
 		return r.codeBlock(n, src), flowWrap
 	case ast.KindBlockquote:
-		body := strings.Join(r.blockTexts(n, src), blockSeparator)
+		// continuation lines sit behind the dim prefix's reset, so the rest prefix
+		// reopens the quote style; body spans restore it through active
+		body := strings.Join(r.blockTexts(n, src, r.theme.Quote.Open()), blockSeparator)
 		prefix := r.theme.Dim.Wrap(quotePrefix)
-		return indentLines(r.theme.Quote.Wrap(body), prefix, prefix), flowWrap
+		return indentLines(r.theme.Quote.Wrap(body), prefix, prefix+r.theme.Quote.Open()), flowWrap
 	case ast.KindList:
-		return r.list(n.(*ast.List), src), flowWrap
+		return r.list(n.(*ast.List), src, active), flowWrap
 	case ast.KindThematicBreak:
 		// top-level breaks are handled in blocks() as a histLine{rule}. This
 		// path covers nested ones (inside a list or quote), which stay baked at
@@ -135,7 +143,7 @@ func (r mdRenderer) block(n ast.Node, src []byte) (string, lineFlow) {
 	case ast.KindHTMLBlock:
 		return r.theme.Dim.Wrap(strings.TrimRight(rawLines(n, src), "\n")), flowWrap
 	default:
-		return r.inline(n, src, ""), flowReflow
+		return r.inline(n, src, active), flowReflow
 	}
 }
 
@@ -175,7 +183,7 @@ func (r mdRenderer) codeBlock(n ast.Node, src []byte) string {
 	return b.String()
 }
 
-func (r mdRenderer) list(l *ast.List, src []byte) string {
+func (r mdRenderer) list(l *ast.List, src []byte, active string) string {
 	sep := "\n"
 	if !l.IsTight {
 		sep = blockSeparator
@@ -197,10 +205,12 @@ func (r mdRenderer) list(l *ast.List, src []byte) string {
 			marker = strconv.Itoa(num) + ". "
 			num++
 		}
-		body := strings.Join(r.blockTexts(c, src), sep)
+		body := strings.Join(r.blockTexts(c, src, active), sep)
 		indent := strings.Repeat(" ", markerW)
 		marker += strings.Repeat(" ", markerW-displayWidth(marker))
-		items = append(items, indentLines(body, r.theme.Accent.Wrap(marker), indent))
+		// the accent reset would drop an enclosing style such as a quote; reopen
+		// it for the item text
+		items = append(items, indentLines(body, r.theme.Accent.Wrap(marker)+active, indent))
 	}
 	return strings.Join(items, sep)
 }
@@ -511,7 +521,8 @@ func (r mdRenderer) inline(n ast.Node, src []byte, active string) string {
 		case *ast.AutoLink:
 			b.WriteString(r.theme.Link.Wrap(string(v.URL(src))) + active)
 		case *ast.Image:
-			label := r.inline(c, src, active)
+			// alt spans must restore the dim wrapper too, not only the outer style
+			label := r.inline(c, src, active+r.theme.Dim.Open())
 			b.WriteString(r.theme.Dim.Wrap("[image: "+label+"]") + active)
 		case *ast.RawHTML:
 			b.WriteString(r.theme.Dim.Wrap(rawHTML(v, src)) + active)

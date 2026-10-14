@@ -309,6 +309,49 @@ func TestRenderMarkdownStyled(t *testing.T) {
 	t.Run("heading_styled", func(t *testing.T) {
 		assert.Equal(t, th.Dim.Wrap("# ")+th.Heading.Wrap("Title")+"\n", mdText(renderMarkdown(th, 40, "# Title"), 40))
 	})
+
+	t.Run("heading_code_restores_heading", func(t *testing.T) {
+		out := mdText(renderMarkdown(th, 40, "# Run `make test` first"), 40)
+		// the code span's reset must be followed by a reopen of the heading style,
+		// or everything after it renders unstyled
+		assert.Contains(t, out, th.Code.Wrap("make test")+th.Heading.Open()+" first")
+	})
+
+	t.Run("heading_image_restores_heading", func(t *testing.T) {
+		out := mdText(renderMarkdown(th, 40, "# ![alt](x.png) tail"), 40)
+		assert.Contains(t, out, th.Dim.Wrap("[image: alt]")+th.Heading.Open()+" tail")
+	})
+
+	t.Run("image_alt_keeps_dim", func(t *testing.T) {
+		out := mdText(renderMarkdown(th, 40, "![a **b** c](x.png)"), 40)
+		// the alt text lives inside the dim wrapper: a span's reset restores it
+		assert.Contains(t, out, th.Bold.Wrap("b")+th.Dim.Open()+" c]")
+	})
+
+	t.Run("blockquote_hard_break_keeps_style", func(t *testing.T) {
+		p, q := th.Dim.Wrap(quotePrefix), th.Quote.Open()
+		// every continuation line reopens the quote style behind its prefix's reset
+		assert.Equal(t, p+q+"one\n"+p+q+"two"+sgrReset+"\n",
+			mdText(renderMarkdown(th, 40, "> one  \n> two"), 40))
+	})
+
+	t.Run("blockquote_paragraphs_keep_style", func(t *testing.T) {
+		p, q := th.Dim.Wrap(quotePrefix), th.Quote.Open()
+		assert.Equal(t, p+q+"one\n"+p+q+"\n"+p+q+"two"+sgrReset+"\n",
+			mdText(renderMarkdown(th, 40, "> one\n>\n> two"), 40))
+	})
+
+	t.Run("blockquote_span_restores_quote", func(t *testing.T) {
+		out := mdText(renderMarkdown(th, 40, "> a `b` c"), 40)
+		assert.Contains(t, out, th.Code.Wrap("b")+th.Quote.Open()+" c")
+	})
+
+	t.Run("quote_list_items_keep_style", func(t *testing.T) {
+		out := mdText(renderMarkdown(th, 40, "> - one\n>\n> - two"), 40)
+		// the accent marker's reset must not drop the quote style from item text
+		assert.Contains(t, out, th.Accent.Wrap(bulletMarker)+th.Quote.Open()+"one")
+		assert.Contains(t, out, th.Accent.Wrap(bulletMarker)+th.Quote.Open()+"two")
+	})
 }
 
 // TestRenderMarkdownDocument guards the full element set the demo exercises.
