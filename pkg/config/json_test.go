@@ -120,6 +120,29 @@ func TestJSONError(t *testing.T) {
 		assert.Contains(t, got, `"apiKey": [redacted]`)
 	})
 
+	t.Run("minified_file_masks_mid_line", func(t *testing.T) {
+		data := []byte(`{"providers":{"openai":{"apiKey":"sk-super-secret" "model":"gpt"}}}`)
+		var v map[string]any
+		err := json.Unmarshal(data, &v)
+		require.Error(t, err)
+
+		got := JSONError("models.json", data, err).Error()
+		assert.Contains(t, got, "models.json:1:")
+		assert.NotContains(t, got, "sk-super-secret")
+		assert.Contains(t, got, `[redacted]`)
+		assert.Contains(t, got, `"model":"gpt"`) // structure around the secret stays visible
+	})
+
+	t.Run("minified_missing_colon_masks", func(t *testing.T) {
+		data := []byte(`{"apiKey" "sk-super-secret"}`)
+		var v map[string]any
+		err := json.Unmarshal(data, &v)
+		require.Error(t, err)
+
+		got := JSONError("m.json", data, err).Error()
+		assert.NotContains(t, got, "sk-super-secret")
+	})
+
 	t.Run("non_secret_lines_are_untouched", func(t *testing.T) {
 		data := []byte("{\n  \"tokenfile\": \"keep me\" @oops\n}")
 		var v map[string]any
@@ -129,6 +152,34 @@ func TestJSONError(t *testing.T) {
 		got := JSONError("m.json", data, err).Error()
 		assert.Contains(t, got, `"tokenfile": "keep me"`)
 	})
+}
+
+func TestRedactSecretLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		line string
+		want string
+	}{
+		{"plain_line_untouched", `{"a": 1, "b": "two"}`, `{"a": 1, "b": "two"}`},
+		{"key_at_line_start", `"apiKey": "sk-123" @oops`, `"apiKey": [redacted] @oops`},
+		{"indented_key_first", "  \"token\": \"tk-1\", // note", "  \"token\": [redacted], // note"},
+		{"minified_mid_line", `{"p":{"apiKey":"sk-1"},"m":"gpt"}`, `{"p":{"apiKey":[redacted]},"m":"gpt"}`},
+		{"multiple_keys_masked", `{"a":1,"apiKey":"sk-1","b":2,"token":"tk-2"}`, `{"a":1,"apiKey":[redacted],"b":2,"token":[redacted]}`},
+		{"nested_secret_key", `{"x":{"secret":"s-1"}}`, `{"x":{"secret":[redacted]}}`},
+		{"escaped_quotes_in_value", `{"apiKey":"sk-\"123\""} @oops`, `{"apiKey":[redacted]} @oops`},
+		{"unterminated_string_value", `  "apiKey": "sk-1`, `  "apiKey": [redacted]`},
+		{"bare_value_masks_rest", `{"apiKey": 123, "m": "gpt"}`, `{"apiKey": [redacted]`},
+		{"missing_colon_masks_rest", `{"apiKey" "sk-1","b":1}`, `{"apiKey" [redacted]`},
+		{"key_without_value_untouched", `  "apiKey"`, `  "apiKey"`},
+		{"longer_key_name_kept", `{"tokenfile": "keep me"}`, `{"tokenfile": "keep me"}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, redactSecretLine(tc.line))
+		})
+	}
 }
 
 func TestLocate(t *testing.T) {

@@ -94,20 +94,79 @@ var secretKeys = []string{"apiKey", "token", "secret"}
 // redactedMask is what a secret value is replaced with.
 const redactedMask = `[redacted]`
 
-// redactSecretLine masks the value when a line sets a known-secret key, so a
-// malformed file's echoed source cannot leak credentials into logs.
+// redactSecretLine masks the value of every known-secret key on the line, so a
+// malformed file's echoed source cannot leak credentials into logs. Minified
+// files carry many members per line, so keys are matched anywhere on it.
 func redactSecretLine(line string) string {
-	trimmed := strings.TrimLeft(line, " \t")
-	indent := line[:len(line)-len(trimmed)]
-	for _, key := range secretKeys {
-		if !strings.HasPrefix(trimmed, `"`+key+`"`) {
+	var b strings.Builder
+	for i := 0; i < len(line); {
+		if line[i] != '"' {
+			b.WriteByte(line[i])
+			i++
 			continue
 		}
-		if colon := strings.Index(trimmed, ":"); colon >= 0 {
-			return indent + trimmed[:colon+1] + " " + redactedMask
+		start, end, ok := secretValueSpan(line, i)
+		if !ok {
+			b.WriteByte(line[i])
+			i++
+			continue
+		}
+		b.WriteString(line[i:start])
+		b.WriteString(redactedMask)
+		i = end
+	}
+	return b.String()
+}
+
+// secretValueSpan reports the span of text to mask for a known-secret key whose
+// quoted name starts at line[i]. A string value is masked exactly; anything
+// else, or a missing colon, leaves the value's end unknown and masks the rest
+// of the line. ok is false when there is no value to hide.
+func secretValueSpan(line string, i int) (start, end int, ok bool) {
+	var key string
+	for _, k := range secretKeys {
+		if strings.HasPrefix(line[i:], `"`+k+`"`) {
+			key = k
+			break
 		}
 	}
-	return line
+	if key == "" {
+		return 0, 0, false
+	}
+
+	j := skipSpace(line, i+len(key)+2) // just past the closing quote of the name
+	if j >= len(line) {
+		return 0, 0, false // nothing follows the key on this line
+	}
+	if line[j] != ':' { // a broken pair hides everything after the name
+		return j, len(line), true
+	}
+	start = skipSpace(line, j+1)
+	if start >= len(line) {
+		return 0, 0, false // nothing follows the colon on this line
+	}
+	if line[start] != '"' { // a bare value has no reliable end
+		return start, len(line), true
+	}
+	for j = start + 1; j < len(line); j++ {
+		switch line[j] {
+		case '\\':
+			j++
+		case '"':
+			return start, j + 1, true
+		}
+	}
+	return start, len(line), true // the string never closes
+}
+
+// skipSpace returns the index of the first byte at or after i that is not blank.
+func skipSpace(line string, i int) int {
+	for ; i < len(line); i++ {
+		if line[i] != ' ' && line[i] != '\t' && line[i] != '\r' {
+			return i
+		}
+	}
+	return i
 }
 
 // jsonErrorOffset returns the byte offset an encoding/json error carries.
