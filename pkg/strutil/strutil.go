@@ -1,6 +1,7 @@
 package strutil
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -76,14 +77,22 @@ func Elapsed(d time.Duration) string {
 	return d.String()
 }
 
-// FirstArgText returns the first non-empty string field of a JSON object, or ""
-// when none. Used to name tool calls by their primary target.
+// FirstArgText returns the first non-empty string field of a JSON object in
+// document order, or "" when none. Used to name tool calls by their target,
+// so document order keeps identical input on one stable label across replays.
 func FirstArgText(input json.RawMessage) string {
-	var m map[string]any
-	if err := json.Unmarshal(input, &m); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(input))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
 		return ""
 	}
-	for _, v := range m {
+	for dec.More() { // keys arrive in document order
+		if _, err := dec.Token(); err != nil { // the key: only its position matters
+			return ""
+		}
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return "" // truncated input has no stable first field
+		}
 		if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
 			return s
 		}

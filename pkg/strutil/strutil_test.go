@@ -99,6 +99,41 @@ func TestFirstArgText(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, FirstArgText(tc.in))
 	}
+
+	t.Run("document_order_beats_sorted", func(t *testing.T) {
+		// sorted keys would name edit by old_text; the label must follow the
+		// order the sender wrote, path first
+		in := json.RawMessage(`{"path":"a.go","old_text":"zzz"}`)
+		assert.Equal(t, "a.go", FirstArgText(in))
+	})
+
+	t.Run("deterministic_across_runs", func(t *testing.T) {
+		in := json.RawMessage(`{"path":"a.go","command":"go build"}`)
+		want := FirstArgText(in)
+		for range 100 { // map iteration order varies run to run
+			assert.Equal(t, want, FirstArgText(in))
+		}
+	})
+
+	t.Run("non_string_fields_skipped", func(t *testing.T) {
+		in := json.RawMessage(`{"opts":{"n":1},"line":5,"note":"  ","path":"a.go"}`)
+		assert.Equal(t, "a.go", FirstArgText(in))
+	})
+
+	t.Run("non_object_input", func(t *testing.T) {
+		for _, in := range []json.RawMessage{
+			nil,
+			json.RawMessage(`null`),
+			json.RawMessage(`[1,2]`),
+			json.RawMessage(`"s"`),
+		} {
+			assert.Empty(t, FirstArgText(in))
+		}
+	})
+
+	t.Run("truncated_input", func(t *testing.T) {
+		assert.Empty(t, FirstArgText(json.RawMessage(`{"path":`)))
+	})
 }
 
 func TestHumanSize(t *testing.T) {

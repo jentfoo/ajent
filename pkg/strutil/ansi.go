@@ -1,6 +1,6 @@
 package strutil
 
-// ESC starts an escape sequence, BEL terminates an OSC string.
+// ESC starts an escape sequence, BEL terminates a string form early.
 const (
 	escByte = 0x1b
 	belByte = 0x07
@@ -37,8 +37,8 @@ func (f *ANSIFilter) Strip(chunk string) string {
 			switch c {
 			case '[':
 				f.state = ansiCSI
-			case ']':
-				f.state = ansiOSC
+			case ']', 'P', 'X', '^', '_': // string forms: OSC DCS SOS PM APC
+				f.state = ansiStr
 			case escByte: // a further ESC only restarts the wait for that byte
 			default:
 				f.state = ansiGround // two-byte escape complete
@@ -47,20 +47,20 @@ func (f *ANSIFilter) Strip(chunk string) string {
 			if c >= '@' && c <= '~' {
 				f.state = ansiGround
 			}
-		case ansiOSC: // OSC ... ends at BEL or ST (ESC \)
+		case ansiStr: // string forms end at BEL or ST (ESC \)
 			switch c {
 			case belByte:
 				f.state = ansiGround
 			case escByte:
-				f.state = ansiOSCEsc
+				f.state = ansiStrEsc
 			}
-		case ansiOSCEsc: // an OSC ESC closes the string only when followed by \
+		case ansiStrEsc: // a string's ESC closes it only when followed by \
 			switch c {
 			case '\\', belByte:
 				f.state = ansiGround
 			case escByte: // a further ESC keeps waiting for ST
 			default:
-				f.state = ansiOSC
+				f.state = ansiStr
 			}
 		}
 	}
@@ -74,6 +74,6 @@ const (
 	ansiGround ansiState = iota // ordinary text
 	ansiEsc                     // after ESC, awaiting the byte naming the form
 	ansiCSI                     // inside CSI ..., awaiting a final byte @~
-	ansiOSC                     // inside OSC ..., awaiting BEL or ST
-	ansiOSCEsc                  // inside OSC, after an ESC that may start ST
+	ansiStr                     // inside OSC/DCS/SOS/PM/APC ..., awaiting BEL or ST
+	ansiStrEsc                  // inside a string form, after an ESC that may start ST
 )
