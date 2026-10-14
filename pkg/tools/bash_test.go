@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -373,6 +374,53 @@ func TestBashTimeout(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, bashTimeout(tc.requested, tc.userRun))
+		})
+	}
+}
+
+// bashWaitResult runs c to completion, returning its ProcessState and Wait's error
+// as realistic process-end data for runStatus.
+func bashWaitResult(t *testing.T, c *exec.Cmd) (*os.ProcessState, error) {
+	t.Helper()
+
+	require.NoError(t, c.Start())
+	err := c.Wait()
+	return c.ProcessState, err
+}
+
+func TestRunStatus(t *testing.T) {
+	t.Parallel()
+
+	okState, okErr := bashWaitResult(t, exec.CommandContext(t.Context(), "true"))
+	exitState, exitErr := bashWaitResult(t, exec.CommandContext(t.Context(), "sh", "-c", "exit 5"))
+	// a self-SIGKILL has the same shape as one our timeout delivers
+	sigState, sigErr := bashWaitResult(t, exec.CommandContext(t.Context(), "sh", "-c", "kill -9 $$"))
+
+	tests := []struct {
+		name        string
+		ctxErr      error
+		waitErr     error
+		state       *os.ProcessState
+		interrupted bool
+		want        string
+	}{
+		{"natural_success", nil, okErr, okState, false, ""},
+		{"natural_exit_code", nil, exitErr, exitState, false, "exit status 5\n"},
+		{"natural_signal_death", nil, sigErr, sigState, false, "signal: killed\n"},
+		// the race this guards: a finish that beat our kill is not a timeout
+		{"clean_finish_beats_timeout", context.DeadlineExceeded, okErr, okState, false, ""},
+		{"coded_finish_beats_timeout", context.DeadlineExceeded, exitErr, exitState, false, "exit status 5\n"},
+		// a signal death under an expired deadline is our kill
+		{"timeout_kill", context.DeadlineExceeded, sigErr, sigState, false, "killed after 1m30s timeout\n"},
+		// cancellation reads as an interruption however the run ended
+		{"cancel_after_clean_finish", context.Canceled, okErr, okState, true, agent.InterruptedText + "\n"},
+		{"cancel_after_killed_run", context.Canceled, sigErr, sigState, true, agent.InterruptedText + "\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			interrupted, text := runStatus(tc.ctxErr, 90*time.Second, tc.waitErr, tc.state)
+			assert.Equal(t, tc.interrupted, interrupted)
+			assert.Equal(t, tc.want, text)
 		})
 	}
 }

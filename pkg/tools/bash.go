@@ -192,19 +192,7 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}
 	w.Flush()      // trailing partial line still held in the buffer
 	killGroup(cmd) // sweep backgrounded survivors so they don't linger (safe post-Wait)
-	var interrupted bool
-	var statusText string
-	switch {
-	case runCtx.Err() == context.DeadlineExceeded:
-		statusText = fmt.Sprintf("killed after %s timeout\n", timeout) + ownExitStatus(waitErr, cmd.ProcessState)
-	case runCtx.Err() == context.Canceled:
-		// parent cancelled (turn interrupt or Stager.Cancel): drop the SIGKILL exit
-		// noise and mark the result so it reads as an interruption, not a failure.
-		interrupted = true
-		statusText = agent.InterruptedText + "\n"
-	default:
-		statusText = exitStatus(waitErr, cmd.ProcessState)
-	}
+	interrupted, statusText := runStatus(runCtx.Err(), timeout, waitErr, cmd.ProcessState)
 
 	captured := normalizeToLF(head.String()) // model-visible text is LF-only
 	truncated := w.Truncated() || overlongLine(captured)
@@ -322,12 +310,21 @@ func deathSignal(err error) (syscall.Signal, bool) {
 	return ws.Signal(), true
 }
 
-// ownExitStatus reports how a run we killed itself ended: the code it reached
-// before our kill landed, or "" when that signal was the end of it. The timeout
-// note already names that death, so an extra status there is noise.
-func ownExitStatus(err error, state *os.ProcessState) string {
-	if _, bySignal := deathSignal(err); bySignal {
-		return ""
+// runStatus picks the status line that opens a finished foreground run's output,
+// from how the context ended and what Wait reported. The bool marks the cancel case
+// so callers can flag an interruption rather than a failure.
+//
+// The deadline may expire in the same instant bash completes: SIGKILL leaves no exit
+// code, so only a signal death under an expired deadline is the timeout kill; any
+// clean or coded finish beat it and keeps its real status.
+func runStatus(ctxErr error, timeout time.Duration, waitErr error, state *os.ProcessState) (bool, string) {
+	if errors.Is(ctxErr, context.Canceled) {
+		// parent cancelled (turn interrupt or Stager.Cancel): drop the SIGKILL exit
+		// noise and mark the result so it reads as an interruption, not a failure.
+		return true, agent.InterruptedText + "\n"
 	}
-	return exitStatus(err, state)
+	if _, bySignal := deathSignal(waitErr); errors.Is(ctxErr, context.DeadlineExceeded) && bySignal {
+		return false, fmt.Sprintf("killed after %s timeout\n", timeout)
+	}
+	return false, exitStatus(waitErr, state)
 }
