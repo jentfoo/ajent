@@ -29,6 +29,23 @@ func TestSettingsSectionOpensDirectly(t *testing.T) {
 	assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
 }
 
+func TestSettingsReasoningCancelRecordsNothing(t *testing.T) {
+	t.Parallel()
+
+	c := newFakeConsole(t)
+	r := NewRegistry()
+	c.commands = r
+	RegisterBuiltins(r, c)
+
+	// /settings reasoning with no queued pick: the picker cancels, and neither a
+	// session override nor a save-to-layer prompt may appear for it
+	cmd, _ := r.Get("settings")
+	require.NoError(t, cmd.Handler(t.Context(), "reasoning", c))
+	_, srcName, _ := c.settings.Explain("reasoning.level")
+	assert.NotEqual(t, "session", srcName)
+	assert.Empty(t, c.selects) // the save prompt never opened
+}
+
 func TestSettingsReasoningUnavailableWithFewOptions(t *testing.T) {
 	t.Parallel()
 
@@ -219,6 +236,181 @@ func TestSettingsModelRowHonoursSaveChoice(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "session", src)
 		assert.JSONEq(t, `"test/beta"`, string(v))
+	})
+}
+
+func TestEditReasoningRow(t *testing.T) {
+	t.Parallel()
+
+	// a pick records the level as a session override
+	t.Run("pick_records_session_override", func(t *testing.T) {
+		c := newFakeConsole(t)
+		// supported levels are [off, minimal, low, medium, high]; index 4 picks high
+		c.picks = []fakePick{{result: 4}}
+
+		changes, err := editReasoning(t.Context(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "reasoning.level", changes[0].key)
+		assert.Equal(t, "high", changes[0].value)
+
+		raw, srcName, ok := c.settings.Explain("reasoning.level")
+		require.True(t, ok)
+		assert.JSONEq(t, `"high"`, string(raw))
+		assert.Equal(t, "session", srcName)
+	})
+
+	t.Run("cancelled_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+
+		// no queued pick: Esc in the picker, nothing recorded
+		changes, err := editReasoning(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("reasoning.level")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	// re-picking the active level is a no-op like any other pick that changes
+	// nothing, so no override appears and the save prompt never opens
+	t.Run("same_level_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		// the fake console starts at medium (index 3)
+		c.picks = []fakePick{{result: 3}}
+
+		changes, err := editReasoning(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("reasoning.level")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	// a model with only off never opens the picker; the /settings reasoning
+	// section path skips the row's disabled check, so the editor must still
+	// record nothing rather than pinning the current level
+	t.Run("single_level_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		reg, _ := llm.NewRegistry(llm.File{Providers: map[string]llm.ProviderConfig{
+			"test": {APIKeyEnv: "TEST_API_KEY", Models: []llm.ModelConfig{{ID: "alpha"}}},
+		}}, nil, llm.RegistryOptions{Env: func(string) string { return "" }})
+		c.models = reg
+		c.state.Model = reg.Active()
+
+		changes, err := editReasoning(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("reasoning.level")
+		assert.NotEqual(t, "session", srcName)
+	})
+}
+
+func TestEditModelRow(t *testing.T) {
+	t.Parallel()
+
+	// a pick of the already-active model is a no-op like /model's unchanged key,
+	// so no override appears and the save prompt never opens
+	t.Run("same_model_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		// alpha is active; picker lists [alpha, beta], so index 0 re-picks it
+		c.picks = []fakePick{{result: 0}}
+
+		changes, err := editModel(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("model")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	// a different model records the override the save prompt persists
+	t.Run("changed_model_records_override", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.picks = []fakePick{{result: 1}}
+
+		changes, err := editModel(t.Context(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "model", changes[0].key)
+		assert.Equal(t, "test/beta", changes[0].value)
+
+		raw, srcName, ok := c.settings.Explain("model")
+		require.True(t, ok)
+		assert.JSONEq(t, `"test/beta"`, string(raw))
+		assert.Equal(t, "session", srcName)
+	})
+}
+
+func TestEditToolsRow(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cancelled_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+
+		// no queued MultiPick: Esc in the picker, nothing recorded
+		changes, err := editTools(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("tools.enabled")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	t.Run("widen_only_nothing_picked_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+		c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
+		c.started = true // widen-only mode
+
+		// confirming the picker with nothing selected enables nothing
+		c.multiPicks = []fakeMultiPick{{result: []int{}}}
+		changes, err := editTools(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("tools.enabled")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	// with no disabled tools the picker never opens; nothing was offered to pick
+	t.Run("widen_only_all_enabled_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+		c.started = true // widen-only mode
+
+		changes, err := editTools(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("tools.enabled")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	// re-picking the currently enabled set leaves nothing to record
+	t.Run("same_set_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+
+		// free select lists [read]; picking just it reproduces the current set
+		c.multiPicks = []fakeMultiPick{{result: []int{0}}}
+		changes, err := editTools(t.Context(), c)
+		require.NoError(t, err)
+		assert.Empty(t, changes)
+		_, srcName, _ := c.settings.Explain("tools.enabled")
+		assert.NotEqual(t, "session", srcName)
+	})
+
+	// a real change records the enabled set the save prompt persists
+	t.Run("changed_set_records_override", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+		c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
+
+		// free select: pick read and ls (indexes 0,1) => both enabled
+		c.multiPicks = []fakeMultiPick{{result: []int{0, 1}}}
+		changes, err := editTools(t.Context(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "tools.enabled", changes[0].key)
+		assert.Equal(t, []string{"read", "ls"}, changes[0].value)
+
+		raw, srcName, ok := c.settings.Explain("tools.enabled")
+		require.True(t, ok)
+		assert.JSONEq(t, `["read","ls"]`, string(raw))
+		assert.Equal(t, "session", srcName)
 	})
 }
 

@@ -394,10 +394,11 @@ func rowCompaction(c Console) (string, string) {
 }
 
 // editModel applies a pick through the model picker without persisting.
-// The save-to-layer choice is offered by editRow's prompt.
+// The save-to-layer choice is offered by editRow's prompt. An unchanged key
+// records nothing, matching /model's no-op rule for the already-active model.
 func editModel(ctx context.Context, c Console) ([]settingChange, error) {
-	m, _, err := applyModel(ctx, "", c)
-	if err != nil {
+	m, changed, err := applyModel(ctx, "", c)
+	if err != nil || !changed {
 		return nil, err
 	}
 	key := m.Key()
@@ -405,16 +406,22 @@ func editModel(ctx context.Context, c Console) ([]settingChange, error) {
 	return []settingChange{{key: "model", value: key}}, nil
 }
 
-// editReasoning delegates to the reasoning picker.
+// editReasoning delegates to the reasoning picker. A cancelled pick, a model
+// with fewer than two levels and re-picking the active level all change
+// nothing, so no override is recorded for them.
 func editReasoning(ctx context.Context, c Console) ([]settingChange, error) {
-	err := reasoningCommand(ctx, "", c)
-	if err != nil {
+	before := c.State().Reasoning.Level
+	if err := reasoningCommand(ctx, "", c); err != nil {
 		return nil, err
 	}
+	level := c.State().Reasoning.Level
+	if level == before {
+		return nil, nil // nothing picked: no override to record
+	}
 	// persist the level as a dotted leaf, SetReasoning having updated state
-	level := c.State().Reasoning.Level.String()
-	_ = c.SetSessionSetting("reasoning.level", level)
-	return []settingChange{{key: "reasoning.level", value: level}}, nil
+	s := level.String()
+	_ = c.SetSessionSetting("reasoning.level", s)
+	return []settingChange{{key: "reasoning.level", value: s}}, nil
 }
 
 // editRetention lets the user pick a reasoning retention policy.
@@ -467,13 +474,18 @@ func editThinking(ctx context.Context, c Console) ([]settingChange, error) {
 	return []settingChange{{key: "reasoning.hide", value: !on}}, nil
 }
 
-// editTools delegates to the tools picker.
+// editTools delegates to the tools picker. A cancelled pick, an empty widen-only
+// selection and a re-pick of the same set all change nothing, so no override is
+// recorded for them.
 func editTools(ctx context.Context, c Console) ([]settingChange, error) {
-	err := toolsCommand(ctx, "", c)
-	if err != nil || c.Tools() == nil {
+	before := toolNames(c)
+	if err := toolsCommand(ctx, "", c); err != nil {
 		return nil, err
 	}
 	names := toolNames(c)
+	if slices.Equal(names, before) {
+		return nil, nil // nothing picked: no override to record
+	}
 	_ = c.SetSessionSetting("tools.enabled", names)
 	return []settingChange{{key: "tools.enabled", value: names}}, nil
 }
