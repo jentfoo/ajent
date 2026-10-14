@@ -794,7 +794,10 @@ again as each injection runs, so a batch of messages naming one path reads it
 once. Only a whole observation, every line displayed from the first, vouches: a
 windowed read observes incomplete, so an `@ref` re-injects rather than trusting
 a fragment even though the file on disk matches. Images are unpaged and
-write/edit produce the full file, so those observe complete.
+write/edit produce the full file, so those observe complete. A gate-blocked
+image read observes with a note-only mark that stops vouching once images are
+enabled (see *Images*): the note dedupes later reads while the gate stays off,
+never after it flips.
 It is shared by
 `read`/`write`/`edit`, which each observe the content they produce so a later
 `@file` reflects current state, and exported for reuse outside the package. Safe
@@ -856,9 +859,15 @@ blocks-out seam: the only package that touches an imaging codec. The rules:
   and an oversized image let into history would poison every later request. A
   failure keeps the original block with a note beside it rather than dropping
   output. Bytes that neither decode nor resemble recoverable content become the
-  note alone.
+  note alone. Sub-agent children run raw tools with no guard chain, so the
+  `ToolSource` adapter in `pkg/app` wraps each one with the same rewrite
+  (`NormalizeImages`); a child's history is short-lived but it is still history.
 - **One gate.** The block-images setting replaces every image with a text note
-  at that same seam, so mid-session changes take effect without restarts.
+  at that same seam, so mid-session changes take effect without restarts. The
+  gate's note is not content: a read it reduced to the note is tracked as
+  note-only, and once images are enabled again that observation stops vouching
+  so the next `@img` re-injects the picture rather than deduping against the
+  note it can no longer see.
 - **Classification before bytes.** The text/binary/image sniffer trusts image
   headers over the NUL scan, because most image headers contain NULs and would
   otherwise read as binary.

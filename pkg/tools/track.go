@@ -18,6 +18,7 @@ type Record struct {
 	Hash     string      // sha256 of the content
 	edited   []lineRange // lines this session's edits wrote, measured against Hash
 	complete bool        // every line was displayed; a partial observation never dedupes an @ref
+	noteOnly bool        // image read that landed the gate's disabled note, not the picture
 }
 
 // Tracker records what the session has observed so @ref expansion can dedupe
@@ -76,6 +77,17 @@ func hashBytes(data []byte) string {
 // observation keeps its recorded edit lines and completeness, since those still
 // name the same text.
 func (t *Tracker) Observe(path string, data []byte, info os.FileInfo, complete bool) {
+	t.observe(path, data, info, complete, false)
+}
+
+// ObserveImage records an unpaged image read. A gate-blocked read, reduced to
+// the disabled note, vouches only while images stay disabled (see Unchanged).
+func (t *Tracker) ObserveImage(path string, data []byte, info os.FileInfo) {
+	t.observe(path, data, info, true, !ImagesEnabled())
+}
+
+// observe records one observation, noteOnly marking a gate-blocked image read.
+func (t *Tracker) observe(path string, data []byte, info os.FileInfo, complete, noteOnly bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -88,7 +100,7 @@ func (t *Tracker) Observe(path string, data []byte, info os.FileInfo, complete b
 		mod = info.ModTime()
 		size = info.Size()
 	}
-	rec := Record{ModTime: mod, Size: size, Hash: hashBytes(data), complete: complete}
+	rec := Record{ModTime: mod, Size: size, Hash: hashBytes(data), complete: complete, noteOnly: noteOnly}
 	if prev, ok := t.m[path]; ok && prev.Hash == rec.Hash {
 		rec.edited = prev.edited
 		rec.complete = rec.complete || prev.complete
@@ -147,6 +159,9 @@ func (t *Tracker) Unchanged(path string) bool {
 	rec, ok := t.m[path]
 	t.mu.Unlock()
 	if !ok || !rec.complete {
+		return false
+	}
+	if rec.noteOnly && ImagesEnabled() { // the gate turned on: the note no longer vouches
 		return false
 	}
 	fi, err := os.Stat(path)

@@ -256,7 +256,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				return st.Reasoning
 			},
 			Parent:              func() *tokens.Accounting { return st.Tokens },
-			Tools:               toolsReg,
+			Tools:               childToolSource{reg: toolsReg},
 			Env:                 env,
 			ProjectInstructions: proj,
 			Root:                appRoot, // job contexts die with the app root, not only at Close

@@ -249,3 +249,24 @@ func TestRead(t *testing.T) {
 		assert.Contains(t, out, "\r") // a lone \r is preserved, unlike CRLF
 	})
 }
+
+// Serial: flips the package-wide images toggle.
+func TestReadImageGate(t *testing.T) {
+	SetImagesEnabled(false)
+	t.Cleanup(func() { SetImagesEnabled(true) })
+
+	e := newToolEnv(t.TempDir())
+	require.NoError(t, os.WriteFile(filepath.Join(e.cwd, "pic.png"), imagePNG(t), 0o644))
+	c := agent.ToolCall{ID: "c", Name: "read", Input: json.RawMessage(`{"path":"pic.png"}`)}
+	tool := &readTool{policy: e.policy, tracker: e.tracker, vision: func() bool { return true }}
+	res, _ := tool.Execute(t.Context(), c, agent.NewOutput(agent.NopSink{}, "c"))
+
+	// the note landed and vouches while images stay disabled
+	require.False(t, res.IsError)
+	assert.Equal(t, imagesDisabledText, textOf(res))
+	assert.True(t, e.tracker.Unchanged(filepath.Join(e.cwd, "pic.png")))
+
+	// gate on: the note no longer vouches, the next @img re-injects the picture
+	SetImagesEnabled(true)
+	assert.False(t, e.tracker.Unchanged(filepath.Join(e.cwd, "pic.png")))
+}

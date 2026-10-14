@@ -2,11 +2,13 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"errors"
 	"strings"
 	"sync"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/img"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -124,4 +126,29 @@ func normalizedImage(blk llm.ImageBlock) (keep llm.Block, note string, changed b
 		return blk, res.Note(), res.Note() != ""
 	}
 	return llm.ImageBlock{MediaType: res.MediaType, Data: res.Data}, res.Note(), true
+}
+
+// NormalizeImages wraps t so every result's image blocks are fitted before
+// the result reaches history. For tool sets that run outside the guard chain,
+// e.g. a sub-agent child's.
+func NormalizeImages(t agent.Tool) agent.Tool {
+	return &normalizingTool{t: t}
+}
+
+// normalizingTool applies the guard wrapper's image rewrite with no guards.
+type normalizingTool struct{ t agent.Tool }
+
+func (n *normalizingTool) Name() string                  { return n.t.Name() }
+func (n *normalizingTool) Label(c agent.ToolCall) string { return n.t.Label(c) }
+func (n *normalizingTool) Description() string           { return n.t.Description() }
+func (n *normalizingTool) Schema() llm.ToolSchema        { return n.t.Schema() }
+func (n *normalizingTool) Mode() agent.ExecutionMode     { return n.t.Mode() }
+func (n *normalizingTool) Close()                        {}
+
+func (n *normalizingTool) Execute(ctx context.Context, c agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
+	res, err := n.t.Execute(ctx, c, out)
+	if len(res.Content) > 0 {
+		res.Content = NormalizeImageBlocks(res.Content)
+	}
+	return res, err
 }

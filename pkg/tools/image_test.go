@@ -2,11 +2,13 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"image"
 	"image/color"
 	"image/png"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/img"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
@@ -114,5 +116,54 @@ func TestNormalizeImageBlocks(t *testing.T) {
 		note, ok := out[0].(llm.TextBlock)
 		require.True(t, ok)
 		assert.Contains(t, note.Text, "dropped")
+	})
+}
+
+// imgTool is a raw tool returning fixed blocks, unguarded by the registry.
+type imgTool struct{ blocks llm.BlockList }
+
+func (imgTool) Name() string                { return "mcp_shot" }
+func (imgTool) Label(agent.ToolCall) string { return "mcp_shot: ..." }
+func (imgTool) Description() string         { return "test tool" }
+func (imgTool) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: "mcp_shot"} }
+func (imgTool) Mode() agent.ExecutionMode   { return agent.ModeParallel }
+func (imgTool) Close()                      {}
+
+func (t imgTool) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
+	return agent.ToolResult{Content: t.blocks}, nil
+}
+
+func TestNormalizeImages(t *testing.T) {
+	t.Parallel()
+
+	t.Run("oversize result image is fitted", func(t *testing.T) {
+		m := image.NewRGBA(image.Rect(0, 0, 2600, 2000))
+		var b bytes.Buffer
+		require.NoError(t, png.Encode(&b, m))
+		wrapped := NormalizeImages(imgTool{blocks: llm.BlockList{
+			llm.ImageBlock{MediaType: "image/png", Data: b.Bytes()},
+		}})
+
+		res, err := wrapped.Execute(t.Context(), agent.ToolCall{ID: "c", Name: "mcp_shot"}, agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		fitted, ok := res.Content[0].(llm.ImageBlock)
+		require.True(t, ok)
+		assert.Less(t, len(fitted.Data), len(b.Bytes()))
+	})
+
+	t.Run("text result is untouched", func(t *testing.T) {
+		in := llm.BlockList{llm.TextBlock{Text: "hello"}}
+		wrapped := NormalizeImages(imgTool{blocks: in})
+
+		res, err := wrapped.Execute(t.Context(), agent.ToolCall{ID: "c", Name: "mcp_shot"}, agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.Equal(t, in, res.Content)
+	})
+
+	t.Run("metadata delegates", func(t *testing.T) {
+		wrapped := NormalizeImages(imgTool{})
+		assert.Equal(t, "mcp_shot", wrapped.Name())
+		assert.Equal(t, "test tool", wrapped.Description())
+		assert.Equal(t, agent.ModeParallel, wrapped.Mode())
 	})
 }

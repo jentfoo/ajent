@@ -121,14 +121,15 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 
 // readImage fits one image file and returns it as model content. A rejected
 // image becomes an error result naming why, while a fitted one carries the sizing
-// note so answers stay honest against the source pixels. A successful fit also
-// observes complete: images are not paged, and a failed fit lands nothing.
+// note so answers stay honest against the source pixels. Every read observes
+// (images are not paged): a gate-blocked one lands the note and observes
+// note-only, so repeats dedupe while images stay disabled.
 func (t *readTool) readImage(full string, data []byte, info os.FileInfo) (agent.ToolResult, error) {
 	blocks, err := FitImage(data)
 	if err != nil {
 		return resultErr(FitImageError(err)), nil
 	}
-	t.tracker.Observe(full, data, info, true)
+	t.tracker.ObserveImage(full, data, info)
 	var notes strings.Builder
 	notes.WriteString(relTo(t.policy.Cwd, full))
 	for _, b := range blocks {

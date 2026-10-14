@@ -154,7 +154,7 @@ func RunHeadless(o HeadlessOptions) int {
 		Model:               func() llm.Model { return resolveSubAgentModel(o.Set, o.Reg, st) },
 		Reasoning:           func() llm.ReasoningConfig { return st.Reasoning },
 		Parent:              func() *tokens.Accounting { return st.Tokens },
-		Tools:               toolsReg,
+		Tools:               childToolSource{reg: toolsReg},
 		Env:                 env,
 		ProjectInstructions: proj,
 		Root:                ctx, // job contexts die with the run's signal-notified root

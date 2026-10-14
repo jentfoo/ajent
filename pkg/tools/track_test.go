@@ -165,6 +165,29 @@ func TestTracker(t *testing.T) {
 	})
 }
 
+func TestObserveImage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pic.png")
+	data := []byte("png bytes")
+	require.NoError(t, os.WriteFile(path, data, 0o644))
+	info, _ := os.Stat(path)
+
+	SetImagesEnabled(false)
+	t.Cleanup(func() { SetImagesEnabled(true) })
+
+	// disabled: the note landed, so a repeat @img dedupes instead of re-reading
+	tr := NewTracker()
+	tr.ObserveImage(path, data, info)
+	assert.True(t, tr.Unchanged(path))
+
+	// gate on: the note no longer vouches, the picture must be re-injected
+	SetImagesEnabled(true)
+	assert.False(t, tr.Unchanged(path))
+
+	// a real read with images on observes an ordinary complete record
+	tr.ObserveImage(path, data, info)
+	assert.True(t, tr.Unchanged(path))
+}
+
 func TestTrackerEditedRanges(t *testing.T) {
 	t.Parallel()
 
