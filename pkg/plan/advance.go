@@ -37,6 +37,11 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 		in.Blocks = nil
 		in.Injected = true
 		return in, true
+
+	case c.phase == PhaseImplementing && !in.Injected:
+		// hand continuation restarts the budget, so a post-pause error retries
+		// rather than re-pausing with no attempts left
+		c.retries = 0
 	}
 	return in, false
 }

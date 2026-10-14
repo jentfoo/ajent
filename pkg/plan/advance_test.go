@@ -100,6 +100,49 @@ func TestControllerBeforePrompt(t *testing.T) {
 		assert.Empty(t, c.approvedPlan)
 	})
 
+	// a paused workflow's first hand-continued turn gets the full budget back,
+	// rather than re-pausing on the next error with zero attempts
+	t.Run("hand_continue_resets_retries", func(t *testing.T) {
+		c, _ := started(t)
+		handOff(t, c, "the plan")
+		submitPlan(t, c, "the plan")
+
+		failed := agent.TurnResult{Stop: llm.StopError, Err: assert.AnError}
+		for i := 0; i < maxExecRetries; i++ {
+			in, ok := c.Advance(t.Context(), failed)
+			require.True(t, ok) // the retries the budget allows
+			assert.Contains(t, in.Text, "Continue the implementation")
+		}
+		_, ok := c.Advance(t.Context(), failed)
+		require.False(t, ok) // budget spent: paused in place
+
+		_, changed := c.BeforePrompt(t.Context(), agent.Input{Text: "keep going"})
+		require.False(t, changed) // the input passes through untouched
+		for i := 0; i < maxExecRetries; i++ {
+			in, ok := c.Advance(t.Context(), failed)
+			require.True(t, ok) // a fresh budget retries instead of re-pausing
+			assert.Contains(t, in.Text, "Continue the implementation")
+		}
+	})
+
+	// injected input is not hand continuation, so it leaves the budget alone
+	t.Run("injected_submit_keeps_budget", func(t *testing.T) {
+		c, f := started(t)
+		handOff(t, c, "the plan")
+		submitPlan(t, c, "the plan")
+
+		failed := agent.TurnResult{Stop: llm.StopError, Err: assert.AnError}
+		_, ok := c.Advance(t.Context(), failed)
+		require.True(t, ok) // one retry spent
+
+		_, changed := c.BeforePrompt(t.Context(), agent.Input{Text: "staged flush", Injected: true})
+		require.False(t, changed)
+
+		_, ok = c.Advance(t.Context(), failed)
+		require.True(t, ok) // the second error still retries rather than pausing
+		assert.Contains(t, f.notices[len(f.notices)-1], "(2/3)")
+	})
+
 	t.Run("idle_controller_passes_through", func(t *testing.T) {
 		c := New(newFakeHost().host())
 		_, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "hi"})
