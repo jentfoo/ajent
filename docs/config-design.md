@@ -100,19 +100,18 @@ namespaces, or bash command lines that are always refused **without prompting**
 in every mode, including allow-all. Matching follows the same token-boundary
 rule as `safeCommands`, with the resolved argv checked as well: both sides pass
 through the same tokenizer the per-command checkers use, so quoting or escaping
-the head (`"git" push`, `git pu\sh`) cannot slip a listed command past it, and a
-nested interpreter's payload is extracted and scanned too. A compound line is
-refused when *any* component matches, so nesting a denied command behind
-`cd … &&` never escapes it. Two fail-closed decisions close former evasions:
-leading `KEY=VALUE` assignments are skipped before the head match on the deny
-side only, an env-prefixed head refusing like its bare form while a safe
-listing never blesses one. An interpreter-read here-document body is
-deny-scanned like a `-c` payload, other readers keeping their bodies inert
-data. A payload living outside the line (`cat x | sh`) stays beyond any static
-matcher, covered by the approval dialog rather than scanning. It may also name
-core writers, since denying one is a legitimate safety gate. A denied check runs
-first in the barrier verdict (after user-initiation), and only an agent call
-hits it: a human's own staged `!` line owns its shell and always runs.
+the head (`"git" push`, `git pu\sh`) cannot slip a listed command past it.
+One asymmetry holds the line: the deny side resolves or extracts any shell
+shape that hides the command (assignments, keywords, launchers, subshells,
+substitution, interpreter payloads, heredoc bodies), while the allow side never
+does, since every resolution there could over-match into an allowance. A
+compound line is refused when *any* component matches, so nesting a denied
+command behind `cd … &&` never escapes it. A payload living outside the line
+(`cat x | sh`) stays beyond any static matcher, covered by the approval dialog
+rather than scanning. It may also name core writers, since denying one is a
+legitimate safety gate. A denied check runs first in the barrier verdict
+(after user-initiation), and only an agent call hits it: a human's own staged
+`!` line owns its shell and always runs.
 
 ### Permissions and tools in a one-shot run
 

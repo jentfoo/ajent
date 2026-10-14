@@ -385,50 +385,32 @@ func TestGuardSafeMatchesBashCommandComponents(t *testing.T) {
 func TestGuardDenyMatches(t *testing.T) {
 	t.Parallel()
 
-	// each case pins how one bash line fares against the deny list, in the mode
-	// where the list is the only gate: allow-all must still refuse
-	denied := []struct {
+	// head-hiding shapes still refuse in allow-all, where the deny list is
+	// the only gate; the full matcher table lives with DenyMatches in
+	// deny_test.go
+	shapes := []struct {
 		name string
-		cmds []string
 		in   string
 	}{
-		{"compound_component", []string{"git stash"}, "cd /x && git stash push -m wip"},
-		{"nested_sh_c", []string{"git push"}, `sh -c "git push --force"`},
-		{"nested_bash_c", []string{"git push"}, `bash -c 'git push'`},
-		{"nested_eval", []string{"git push"}, `eval git push`},
-		// quoting or escaping the head must not slip a listed command past the
-		// list: both sides resolve through tokenizeRaw before matching
-		{"quoted_head", []string{"git push"}, `"git" push`},
-		{"single_quoted_head", []string{"git push"}, `'git' push`},
-		{"quoted_subcommand", []string{"git push"}, `git "push"`},
-		{"escaped_char", []string{"git push"}, `git pu\sh`},
-		{"escaped_head", []string{"git push"}, `gi\t push`},
-		{"quoted_in_compound", []string{"git push"}, `cd /x && git "push"`},
-		// leading env assignments are skipped, the prefixed head refusing like
-		// its bare form
-		{"env_prefixed_head", []string{"rm"}, "FOO=bar rm -rf /"},
-		{"env_preload_prefix", []string{"rm"}, "LD_PRELOAD=./x.so rm -rf /"},
-		{"env_stacked_prefixes", []string{"rm"}, "A=1 B=2 rm x"},
-		{"env_prefixed_compound", []string{"rm"}, "cd /x && FOO=bar rm -rf /"},
-		{"env_prefixed_payload", []string{"git push"}, `sh -c "FOO=bar git push"`},
-		// a heredoc body is scanned when an interpreter reads it, quoted
-		// delimiters protecting nothing
-		{"heredoc_sh_body", []string{"rm"}, "sh <<EOF\nrm -rf /\nEOF"},
-		{"heredoc_bash_body", []string{"git push"}, "bash <<E\ngit push\nE"},
-		{"heredoc_quoted_delim", []string{"rm"}, "sh <<'EOF'\nrm -rf /\nEOF"},
-		{"heredoc_after_then", []string{"rm"}, "if :; then sh <<E\nrm x\nE\nfi"},
-		{"heredoc_body_nested", []string{"git push"}, "sh <<E\nsh -c 'git push'\nE"},
+		{"subshell_body", "( rm -rf x )"},
+		{"brace_group_body", "{ rm -rf x; }"},
+		{"loop_body", "for f in *; do git push; done"},
+		{"command_substitution", "$(git push)"},
+		{"nohup_launcher", "nohup git push origin main"},
+		{"env_launcher", "env git push"},
+		{"timeout_launcher", "timeout 10 rm -rf x"},
+		{"ansi_c_quoted_head", "$'rm' -rf x"},
 	}
-	for _, c := range denied {
+	for _, c := range shapes {
 		t.Run(c.name, func(t *testing.T) {
 			b := newTestBarrierOpts(newFakePrompter(),
-				withMode(Options{DeniedCommands: c.cmds}, ModeAllowAll))
+				withMode(Options{DeniedCommands: []string{"rm", "git push"}}, ModeAllowAll))
 			assert.Equal(t, tools.ActionDeny, b.Guard()(t.Context(), bashCall(c.in)).Action)
 		})
 	}
 
-	// the strictness move is deliberate: an env-prefixed or heredoc-fed denied
-	// head refuses in every mode, never downgraded to a prompt
+	// the strictness move is deliberate: a hidden denied head refuses in
+	// every mode, never downgraded to a prompt
 	b := newTestBarrierOpts(newFakePrompter(),
 		withMode(Options{DeniedCommands: []string{"rm"}}, ModeAllowRead))
 	for _, cmd := range []string{"FOO=bar rm -rf /", "sh <<E\nrm -rf /\nE"} {

@@ -20,6 +20,10 @@ type Scan struct {
 	// never become segments (data, not shell) but stay reachable here for deny
 	// scanning of interpreter-fed text.
 	HeredocBodies []string
+	// HeredocQuoted is index-aligned with HeredocBodies: false when any body
+	// feeding that segment had an unquoted delimiter, leaving expansion live
+	// in its text.
+	HeredocQuoted []bool
 	// HasSplitOp reports any &&, ||, |, ;, & or newline outside quotes.
 	HasSplitOp bool
 	// HasUnsafeOp reports any `, $( or <( outside quotes, a network /dev/tcp|udp
@@ -256,8 +260,9 @@ func scanCommand(command string) Scan {
 	var hasSplitOp, hasUnsafeOp bool
 	var redirects []Redirect
 	var heredocs []heredoc
-	var bodies []string // heredoc text per reading segment, index-aligned
-	var depth int       // open (, $( or <( nesting: a << inside is a shift, not a marker
+	var bodies []string  // heredoc text per reading segment, index-aligned
+	var docQuoted []bool // whether every body feeding that segment was quoted
+	var depth int        // open (, $( or <( nesting: a << inside is a shift, not a marker
 
 	pushSegment := func() {
 		// keyed on the collapsed trim so Segments/Raw stay index-aligned, and rawBuf
@@ -470,9 +475,15 @@ func scanCommand(command string) Scan {
 					}
 					for len(bodies) <= hd.seg {
 						bodies = append(bodies, "")
+						docQuoted = append(docQuoted, true)
 					}
-					if bodies[hd.seg] != "" {
-						bodies[hd.seg] += "\n" // several docs on one reader concatenate
+					if bodies[hd.seg] == "" {
+						docQuoted[hd.seg] = hd.quoted
+					} else {
+						// several docs on one reader concatenate, any unquoted one
+						// leaving expansion live in the joined text
+						docQuoted[hd.seg] = docQuoted[hd.seg] && hd.quoted
+						bodies[hd.seg] += "\n"
 					}
 					bodies[hd.seg] += texts[j]
 				}
@@ -507,6 +518,7 @@ func scanCommand(command string) Scan {
 		Raw:           raw,
 		Redirects:     redirects,
 		HeredocBodies: bodies,
+		HeredocQuoted: docQuoted,
 		HasSplitOp:    hasSplitOp,
 		HasUnsafeOp:   hasUnsafeOp,
 	}

@@ -116,6 +116,38 @@ func TestSegmentTokens(t *testing.T) {
 	assert.Equal(t, []string{"/usr/bin/nohup", "ls"}, segmentTokens("/usr/bin/nohup ls"))
 }
 
+func TestSkipKeywords(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"none", []string{"rm", "x"}, []string{"rm", "x"}},
+		{"single", []string{"do", "git", "push"}, []string{"git", "push"}},
+		{"stacked", []string{"{", "rm", "x"}, []string{"rm", "x"}},
+		{"all_keywords", []string{"if", "then"}, []string{}},
+		{"empty", nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, skipKeywords(c.in))
+		})
+	}
+}
+
+func TestSkipQuoted(t *testing.T) {
+	t.Parallel()
+
+	// returns the index past the closing quote, unterminated running to the end
+	assert.Equal(t, 3, skipQuoted(`'a' x`, 0))
+	assert.Equal(t, 8, skipQuoted(`x "a\"b" y`, 2))
+	// backslash escapes only inside double quotes, single quotes literal
+	assert.Equal(t, 3, skipQuoted(`'\''`, 0))
+	assert.Equal(t, 3, skipQuoted("'ab", 0))
+}
+
 func TestHeadOfPathQualified(t *testing.T) {
 	t.Parallel()
 

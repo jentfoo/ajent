@@ -143,6 +143,35 @@ func skipEnvAssigns(toks []string) []string {
 	return toks
 }
 
+// skipKeywords drops the leading shell control words, so a keyword-headed
+// segment (`{ rm`, `do git push`) still exposes the command it runs. Deny-side
+// only: grants and read-only verdicts keep refusing keyword heads.
+func skipKeywords(toks []string) []string {
+	for len(toks) > 0 {
+		if _, kw := shellKeywords[toks[0]]; !kw {
+			break
+		}
+		toks = toks[1:]
+	}
+	return toks
+}
+
+// skipQuoted returns the index past the quote region opened at i, closing quote
+// included, len(s) when unterminated. Only \" escapes, and only inside ".
+func skipQuoted(s string, i int) int {
+	q := s[i]
+	for j := i + 1; j < len(s); j++ {
+		if q == '"' && s[j] == '\\' {
+			j++
+			continue
+		}
+		if s[j] == q {
+			return j + 1
+		}
+	}
+	return len(s)
+}
+
 // shellKeywords are control-flow words, never command names: a segment headed by
 // one is shell syntax whose inner commands vary, so it has no nameable head.
 // `time` stays nameable: it heads a plain command (its own binary) and timeout's
@@ -155,25 +184,9 @@ var shellKeywords = bulk.SliceToSet([]string{
 
 // nestedInterpreters run their arguments as a fresh shell line, so what actually
 // executes never appears in this line's own tokens. Such a head is unnameable:
-// never read-only, never grant-matchable, and (barrier.go) its -c payload and
-// heredoc body are scanned for the deny list instead.
+// never read-only, never grant-matchable, and its -c payload and heredoc body
+// are scanned for the deny list instead.
 var nestedInterpreters = bulk.SliceToSet([]string{"sh", "bash", "zsh", "dash", "eval"})
-
-// interpreterPayloads returns the shell text an sh-like segment runs: the
-// arguments following -c (a bare `sh` reads stdin, yielding nothing).
-func interpreterPayloads(raw string) []string {
-	toks := tokenizeRaw(raw)
-	if stripPath(firstToken(toks)) == "eval" {
-		// eval concatenates its arguments with spaces, so the words rejoin into one line
-		return []string{strings.Join(toks[1:], " ")}
-	}
-	for i, tok := range toks[1:] {
-		if tok == "-c" && i+2 < len(toks) {
-			return toks[i+2:]
-		}
-	}
-	return nil
-}
 
 // headOf returns the command name a segment runs after unwrapping launchers, or
 // ("",false) when none can be named reliably. Only a slash-free first token names

@@ -144,16 +144,20 @@ the script's stem, a double quote in the head refuses naming (it is the
 scanner's quoted-region placeholder), and `safeCommands` match argv only under
 a slash-free head for the same reasons. Deny entries keep folding basenames,
 their over-match failing safe. Here-document bodies are the reading command's
-data, never shell, so they neither contribute command names (a python script
-inside `<<'EOF'` names only `python`) nor match deny entries, and an unquoted
-delimiter
-keeps expansion alive, so a body carrying `$(` or a backtick fails unsafe like
-any other substitution. A subshell `( … )` fails unsafe the same way: its
+data, never shell, so they never contribute command names (a python script
+inside `<<'EOF'` names only `python`) and never match grants or read-only
+verdicts. The deny side alone reads bodies: an interpreter's body scans like a
+`-c` payload, and an unquoted delimiter leaves substitution live in a body
+whatever the reader, the shell expanding it before the reader sees the text.
+The same unquoted body still fails unsafe on the allow side for carrying `$(`
+or a backtick. A subshell `( … )` fails unsafe the same way: its
 contents execute but are not this line's tokens, so it prompts in every mode
 rather than being scanned as named commands. Nested interpreters (`sh -c`,
-`eval`) are likewise unnameable, with one asymmetry: the deny list extracts and
-rescans their payload, since a configured refusal must hold in every mode, while
-safe lists and read-only checks never see inside.
+`eval`) are likewise unnameable, with one asymmetry: the deny list resolves or
+extracts whatever hides the head (interpreter payloads, subshell/group/case
+bodies, substitution, keyword and launcher prefixes), since a configured
+refusal must hold in every mode, while safe lists and read-only checks never
+see inside.
 
 An output redirect is not an unsafe op: the scanner records each `>`/`>>`
 target, and the gates decide. The read-only verdict still refuses every

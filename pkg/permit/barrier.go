@@ -798,122 +798,26 @@ func (g gate) doomedEdit(call agent.ToolCall) bool {
 	return call.Name == "edit" && g.dryRun != nil && g.dryRun(call) != nil
 }
 
-// DenyMatches reports whether call is named by a configured denied command: an exact
-// tool name for any non-bash tool (MCP/extension/built-in), or, for bash, the
-// trimmed command line matched as a token-boundary prefix, so "git" covers every
-// git invocation and "git stash" its subcommands. A compound line is refused when
-// any of its components matches, so wrapping in `cd ... &&` never escapes the gate.
-// Leading KEY=VALUE assignments are skipped before matching, an env-prefixed head
-// refusing like its bare form, and a nested interpreter's payload or heredoc body
-// is scanned the same way. Unlike safeMatches it may also name core writers,
-// denying one being a legitimate safety gate.
-func DenyMatches(call agent.ToolCall, cmds []string) bool {
-	for _, e := range cmds {
-		e = strings.TrimSpace(e)
-		if e == "" {
-			continue
-		}
-		if call.Name != tools.ToolBash && toolNameCovered(call.Name, e) {
-			return true
-		}
-	}
-	if call.Name != tools.ToolBash {
-		return false
-	}
-	return deniedScan(scanCommand(bashCommand(call.Input)), cmds)
-}
-
-// deniedScan reports whether any segment of one scan names a denied command:
-// by collapsed text, resolved tokens, tokens past leading KEY=VALUE
-// assignments, a nested interpreter's payload, or the heredoc body it reads.
-func deniedScan(s Scan, cmds []string) bool {
-	for i, seg := range s.Segments {
-		var raw string
-		if i < len(s.Raw) {
-			raw = s.Raw[i]
-		}
-		if entryCovered(seg, cmds) || envArgvCovers(raw, cmds) {
-			return true
-		}
-		if deniedPayload(raw, cmds) {
-			return true // the interpreter's own tokens hide what it runs
-		}
-		if i < len(s.HeredocBodies) && deniedHeredoc(raw, s.HeredocBodies[i], cmds) {
-			return true // stdin is shell the line's own tokens never name
-		}
-	}
-	return false
-}
-
-// deniedPayload reports whether a nested-interpreter segment (sh -c, eval) wraps a
-// command the deny list names. The collapsed scan never sees the payload, so it
-// is pulled from the verbatim text and walked by deniedScan, env prefixes and
-// heredoc bodies included.
-func deniedPayload(raw string, cmds []string) bool {
-	for _, p := range interpreterPayloads(raw) {
-		if deniedScan(scanCommand(strings.TrimSpace(p)), cmds) {
-			return true
-		}
-	}
-	return false
-}
-
-// deniedHeredoc reports whether a segment reading heredoc body text runs an
-// interpreter (sh, bash, eval-style) whose body names a denied command: the
-// body executes as shell, the stdin twin of a -c payload. Other readers keep
-// their bodies inert data, so benign text fed to cat or tee never refuses.
-// Shell keywords and assignments before the head are skipped, `then sh <<E`
-// still naming sh. A quoted delimiter changes nothing, the body running either
-// way.
-func deniedHeredoc(raw, body string, cmds []string) bool {
-	toks := skipEnvAssigns(tokenizeRaw(raw))
-	for len(toks) > 0 { // `then sh <<E`: only the shell's keyword precedes the head
-		if _, kw := shellKeywords[toks[0]]; !kw {
-			break
-		}
-		toks = toks[1:]
-	}
-	if len(toks) == 0 {
-		return false
-	}
-	if _, ok := nestedInterpreters[stripPath(toks[0])]; !ok {
-		return false
-	}
-	return deniedScan(scanCommand(body), cmds)
-}
-
 // argvCovers reports whether toks start with any configured entry's resolved
 // tokens, so quoting or escaping the head ("git" push, git pus\x68) cannot slip
 // a listed command past the list. Both sides resolve through tokenizeRaw, the
 // same argv view the sed/awk/git checkers match on. The head folds to its
 // basename on purpose: a refusal may over-match. Token-exact: an entry longer
-// than the line cannot match.
+// than the line cannot match. Never mutates toks.
 func argvCovers(toks []string, cmds []string) bool {
 	if len(toks) == 0 {
 		return false
 	}
-	toks[0] = stripPath(toks[0])
 	for _, e := range cmds {
 		et := tokenizeRaw(strings.TrimSpace(e))
-		if len(et) == 0 || len(et) > len(toks) {
+		if len(et) == 0 || len(et) > len(toks) || et[0] != stripPath(toks[0]) {
 			continue
 		}
-		if slices.Equal(toks[:len(et)], et) {
+		if slices.Equal(toks[1:len(et)], et[1:]) {
 			return true
 		}
 	}
 	return false
-}
-
-// envArgvCovers reports whether raw runs a configured entry once its leading
-// KEY=VALUE assignments are skipped, an env-prefixed head refusing exactly like
-// its bare form. Deny-side only: a safe listing never blesses an env-prefixed
-// line, the assignments being able to hijack what the head executes.
-func envArgvCovers(raw string, cmds []string) bool {
-	if raw == "" {
-		return false
-	}
-	return argvCovers(skipEnvAssigns(tokenizeRaw(raw)), cmds)
 }
 
 // CommandRefused reports whether the deny configuration refuses bash cmd at

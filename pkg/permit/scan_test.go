@@ -326,6 +326,31 @@ func TestScanHeredocBodies(t *testing.T) {
 	}
 }
 
+func TestScanHeredocQuotedAlignment(t *testing.T) {
+	t.Parallel()
+
+	// quoted tracks per segment whether every body feeding it had a quoted
+	// delimiter, any unquoted one leaving expansion live in the joined text
+	cases := []struct {
+		name   string
+		in     string
+		quoted []bool
+	}{
+		{"unquoted", "cat <<E\nx\nE", []bool{false}},
+		{"single_quoted", "cat <<'E'\nx\nE", []bool{true}},
+		{"double_quoted", "cat <<\"E\"\nx\nE", []bool{true}},
+		{"mixed_docs_one_reader", "cat <<A <<'B'\na\nA\nb\nB", []bool{false}},
+		{"no_heredoc", "ls -la", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := scanCommand(c.in)
+			assert.Equal(t, c.quoted, s.HeredocQuoted)
+			assert.Len(t, s.HeredocQuoted, len(s.HeredocBodies))
+		})
+	}
+}
+
 func TestScanRedirectTargets(t *testing.T) {
 	t.Parallel()
 
