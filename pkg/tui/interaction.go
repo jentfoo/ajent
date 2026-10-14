@@ -150,8 +150,10 @@ func (u *UI) interactionRows(width, free int) (rows []string, caretRow, caretCol
 	waiting := len(u.queue) - 1 // prompts queued behind the active one
 	maxRows := interactionMaxRows(free, u.inputRows(), waiting > 0)
 	rows, caretRow, caretCol = u.act.it.rows(u.theme, width, maxRows)
-	if waiting > 0 {
-		// sits below the interaction so the caret position is unchanged
+	if waiting > 0 && len(rows)+1 <= free {
+		// sits below the interaction so the caret position is unchanged. The cap
+		// reserved this row, but a floor of one or an interactor's fixed chrome can
+		// spend it: the indicator yields rather than overflowing.
 		rows = append(rows, u.theme.Dim.Wrap("+"+strconv.Itoa(waiting)+" waiting"))
 	}
 	return rows, caretRow, caretCol

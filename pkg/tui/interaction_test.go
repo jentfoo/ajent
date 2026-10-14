@@ -646,6 +646,56 @@ func TestInteractionQueue(t *testing.T) {
 		}, time.Second, testPoll)
 	})
 
+	t.Run("one_free_row_keeps_the_block", func(t *testing.T) {
+		// a three row screen leaves one free row for the interaction: the waiting
+		// indicator must yield instead of pushing every redraw past the clamp
+		v := newVT(80, 3)
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		u := newTestUI(t, v, pr)
+
+		first := make(chan int, 1)
+		go func() {
+			i, _ := u.SelectContext(t.Context(), "First:", []Option{{Label: "A"}})
+			first <- i
+		}()
+		waitFor(t, u, v, "First:")
+
+		second := make(chan int, 1)
+		go func() {
+			i, _ := u.SelectContext(t.Context(), "Second:", []Option{{Label: "B"}})
+			second <- i
+		}()
+		require.Eventually(t, func() bool {
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			return len(u.queue) == 2
+		}, time.Second, testPoll)
+
+		screen := u.snapshot(v)
+		assert.NotContains(t, screen, "waiting")
+		assert.Contains(t, screen, "First:")
+		// nothing was shaved off the top: the rule still leads the block
+		assert.Equal(t, strings.Repeat(ruleChar, 79), v.Line(0))
+	})
+
+	t.Run("approval_queue_on_three_rows", func(t *testing.T) {
+		v := newVT(80, 3)
+		pr, pw := io.Pipe()
+		t.Cleanup(func() { _ = pw.Close() })
+		u := newTestUI(t, v, pr)
+
+		// a decision dialog always shows one option, so its fixed chrome spends the
+		// reservation itself and the prompt survives without the indicator row
+		d1 := u.OpenDecision(DecisionRequest{Prompt: "Approve one:", Options: []Option{{Label: "Allow"}, {Label: "Deny"}}})
+		d2 := u.OpenDecision(DecisionRequest{Prompt: "Approve two:", Options: []Option{{Label: "Allow"}, {Label: "Deny"}}})
+		t.Cleanup(func() { d1.Close(); d2.Close() }) // still open, resolve nothing
+
+		screen := u.snapshot(v)
+		assert.NotContains(t, screen, "waiting")
+		assert.Contains(t, screen, "Approve one:")
+	})
+
 	t.Run("interaction_on_a_closed_ui", func(t *testing.T) {
 		u, _, _ := interactionUI(t)
 		u.Close()
@@ -712,6 +762,8 @@ func TestInteractionMaxRows(t *testing.T) {
 		{"floor_beats_a_small_share", 4, 1, false, minInteractionRows},
 		{"never_over_the_editor_cap_plus_one", 8, 5, false, 6},
 		{"queued_row_shares_the_rows", 6, 3, true, 4},
+		{"queued_row_at_two_free", 2, 1, true, 1},
+		{"floor_defeats_the_reservation", 1, 0, true, 1},
 		{"squeezed_below_its_share", 2, 10, false, 2},
 		{"one_row_when_squeezed_flat", 0, 5, false, 1},
 		{"never_zero", -3, 0, true, 1},
@@ -737,5 +789,74 @@ func TestInteractionMaxRows(t *testing.T) {
 			rows := interactionMaxRows(free, 3, true)
 			assert.LessOrEqual(t, rows+1, free) // the indicator still shares those rows
 		}
+	})
+}
+
+func TestInteractionRows(t *testing.T) {
+	t.Parallel()
+
+	// renders act active at queue[0] with queued more waiting behind it, into an
+	// exact row budget, as repaint does.
+	render := func(t *testing.T, act interactor, queued, free int) ([]string, int, int) {
+		t.Helper()
+
+		u := newTestUI(t, newVT(60, 12), strings.NewReader(""))
+		u.mu.Lock()
+		defer u.mu.Unlock()
+
+		p := newPending(act)
+		u.act = p
+		u.queue = append(u.queue, p) // promote keeps the active one at queue[0]
+		for range queued {
+			u.queue = append(u.queue, newPending(&selectState{options: []Option{{Label: "x"}}}))
+		}
+		return u.interactionRows(59, free)
+	}
+
+	waitingShown := func(rows []string) bool {
+		return strings.Contains(strings.Join(rows, "\n"), "waiting")
+	}
+
+	selects := &selectState{prompt: "Pick:", options: []Option{{Label: "A"}, {Label: "B"}, {Label: "C"}}}
+
+	t.Run("indicator_shares_the_budget", func(t *testing.T) {
+		rows, _, _ := render(t, selects, 1, 6)
+		require.NotEmpty(t, rows)
+		assert.True(t, waitingShown(rows))
+		assert.LessOrEqual(t, len(rows), 6)
+	})
+
+	t.Run("no_queue_draws_no_indicator", func(t *testing.T) {
+		rows, _, _ := render(t, selects, 0, 6)
+		require.NotEmpty(t, rows)
+		assert.False(t, waitingShown(rows))
+	})
+
+	t.Run("indicator_keeps_the_caret", func(t *testing.T) {
+		in := &inputState{label: "Name:", value: "ajent"}
+		_, soloRow, soloCol := render(t, in, 0, 4)
+		rows, caretRow, caretCol := render(t, in, 1, 4)
+		require.Len(t, rows, 2)            // the input row plus the waiting indicator
+		assert.Equal(t, soloRow, caretRow) // sits below the interaction
+		assert.Equal(t, soloCol, caretCol)
+	})
+
+	t.Run("one_free_row_drops_the_indicator", func(t *testing.T) {
+		// the floor of one spends the reservation: the dialog keeps its only row
+		for _, free := range []int{0, 1} {
+			rows, _, _ := render(t, selects, 1, free)
+			require.Len(t, rows, 1)
+			assert.False(t, waitingShown(rows))
+		}
+	})
+
+	t.Run("fixed_chrome_drops_the_indicator", func(t *testing.T) {
+		// a decision dialog always shows one option, so at a cap of one it emits
+		// two rows and spends the reservation itself (two parallel approvals)
+		dialog := &decisionState{prompt: "Approve:", options: []Option{{Label: "Allow"}, {Label: "Deny"}}}
+		rows, _, _ := render(t, dialog, 1, 2)
+		require.NotEmpty(t, rows)
+		assert.LessOrEqual(t, len(rows), 2)
+		assert.False(t, waitingShown(rows))
 	})
 }
