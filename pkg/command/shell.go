@@ -138,39 +138,31 @@ func (s *Stager) Run(cmd string, excluded bool) {
 	encoded, _ := json.Marshal(input)
 	call := agent.ToolCall{ID: id, Name: tools.ToolBash, Input: encoded}
 	out := agent.NewOutput(s.sink, id)
-	done := s.startTool(call, run.label)
+	// full display keeps `!`/`!!` output whole instead of collapsed to its head
+	done := s.sink.ToolStart(call, run.label, true)
 
 	go func() {
 		// the inner scope closes run.done before the report, so reportStaged already
 		// sees this run as finished and counts its output
 		func() {
 			defer close(run.done)
-			var res agent.ToolResult
-			var err error
-			var fault bool
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						fault = true
-						err = fmt.Errorf("tool panicked: %v", r)
-					}
-				}()
-				res, err = tool.Execute(runCtx, call, out)
-			}()
-			if fault {
-				return
-			}
+			res, err, fault := agent.RecoverTool(runCtx, done, s.sink, call,
+				func() (agent.ToolResult, error) { return tool.Execute(runCtx, call, out) })
 			if res.Content == nil {
 				res.Content = llm.BlockList{}
 			}
+			// a fault result is already IsError with its panic text, and RecoverTool
+			// has delivered it through done, so only the staged copy is left to fill
 			if err != nil && !res.IsError {
 				res.IsError = true
 				if len(res.Content) == 0 {
 					res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
 				}
 			}
-			run.result = res
-			done(res)
+			run.result = res // a fault still stages, so Flush never emits "(no output)"
+			if !fault {
+				done(res)
+			}
 		}()
 		s.reportStaged() // the output is now context the next prompt will carry
 	}()
@@ -181,12 +173,6 @@ func (s *Stager) Run(cmd string, excluded bool) {
 type stageInput struct {
 	Command string `json:"command"`
 	Timeout int    `json:"timeout,omitempty"`
-}
-
-// startTool opens the run's header and stream on sink with full display, so
-// `!`/`!!` output is never collapsed to its head.
-func (s *Stager) startTool(call agent.ToolCall, label string) func(agent.ToolResult) {
-	return s.sink.ToolStart(call, label, true)
 }
 
 // Discard cancels every still-running staged command and drops all staged

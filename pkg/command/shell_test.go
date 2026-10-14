@@ -189,6 +189,47 @@ func TestStagerCancelStagesPartial(t *testing.T) {
 	assert.Contains(t, resultText(msgs[0].Message.Content), "interrupted by user")
 }
 
+func TestStagerPanickingTool(t *testing.T) {
+	t.Parallel()
+
+	newPanicStager := func() (*Stager, *recordingSinkForShell) {
+		reg := tools.New()
+		reg.Register(&explodingBash{}, true)
+		sink := &recordingSinkForShell{}
+		return NewStager(context.Background(), reg, sink), sink
+	}
+
+	t.Run("included_run_stages_fault", func(t *testing.T) {
+		s, sink := newPanicStager()
+		s.Run("echo boom", false)
+		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
+
+		msgs := s.Flush(t.Context())
+		require.Len(t, msgs, 1)
+		text := resultText(msgs[0].Message.Content)
+		assert.Contains(t, text, "User Ran: echo boom")
+		assert.Contains(t, text, "tool panicked") // never staged as "(no output)"
+
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		require.Len(t, sink.done, 1) // the ToolStart closer ran exactly once: no stuck row
+		assert.True(t, sink.done[0].IsError)
+		assert.Contains(t, resultText(sink.done[0].Content), "tool panicked")
+		require.Len(t, sink.notices, 1) // neither user nor model is left guessing
+	})
+
+	t.Run("excluded_run_still_closes_header", func(t *testing.T) {
+		s, sink := newPanicStager()
+		s.Run("echo boom", true)
+		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
+
+		sink.mu.Lock()
+		assert.Len(t, sink.done, 1) // `!!` display closes even though output goes nowhere
+		sink.mu.Unlock()
+		assert.Empty(t, s.Flush(t.Context()))
+	})
+}
+
 func TestStagerExcludedRunFlushesNothingAndDoesNotWait(t *testing.T) {
 	t.Parallel()
 
@@ -486,6 +527,20 @@ func (b *capturingBash) sawUserInitiated() bool {
 	defer b.mu.Unlock()
 
 	return b.user
+}
+
+// explodingBash panics on every Execute so staged runs exercise fault recovery.
+type explodingBash struct{}
+
+func (b *explodingBash) Name() string                { return tools.ToolBash }
+func (b *explodingBash) Label(agent.ToolCall) string { return "bash: ..." }
+func (b *explodingBash) Description() string         { return "test tool" }
+func (b *explodingBash) Schema() llm.ToolSchema      { return llm.ToolSchema{Name: tools.ToolBash} }
+func (b *explodingBash) Mode() agent.ExecutionMode   { return agent.ModeSerial }
+func (b *explodingBash) Close()                      {}
+
+func (b *explodingBash) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
+	panic("kaboom")
 }
 
 // parkingBash parks any call whose command contains parkCmd, finishing the rest
