@@ -313,15 +313,7 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 	// a source blocking until the test releases it, typing must stay responsive
 	g := &gatedAsync{queries: make(chan string), answers: make(chan []Completion)}
 	u.SetCompleter(g)
-
-	press(t, pw, "@")
-	press(t, pw, "\t") // the query starts and blocks
-	select {
-	case q := <-g.queries:
-		assert.Equal(t, "@", q)
-	case <-time.After(time.Second):
-		t.Fatal("first path query never started")
-	}
+	startBlockedQuery(t, pw, g)
 
 	// typing while the listing is pending must be accepted immediately
 	press(t, pw, "a")
@@ -335,6 +327,91 @@ func TestAsyncCompletionKeepsTypingFree(t *testing.T) {
 	assert.Equal(t, "@a", <-g.queries)
 	g.answers <- []Completion{{Text: "abc.go", Label: "abc.go"}}
 	require.Eventually(t, func() bool { return u.editorValue() == "@abc.go" }, time.Second, testPoll)
+}
+
+func TestAsyncCompletionDroppedUnderSearchOverlay(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem {
+		return []SearchItem{{Text: "recorded prompt"}}
+	})
+
+	g := &gatedAsync{queries: make(chan string), answers: make(chan []Completion)}
+	u.SetCompleter(g)
+	startBlockedQuery(t, pw, g)
+
+	// Ctrl+R while the result is pending: an owning overlay must drop it whole,
+	// leaving no hidden buffer edit and no completion rows under the overlay
+	press(t, pw, "\x12")
+	u.waitOpenSearch(t)
+
+	g.answers <- []Completion{{Text: "pkg/", Label: "pkg/"}}
+	assert.Never(t, func() bool { return strings.Contains(u.snapshot(v), "pkg/") }, 100*testPoll, testPoll)
+	assert.Equal(t, "@", u.editorValue())
+
+	// closing without a match leaves neither overlay nor a ghost listing
+	press(t, pw, "\x1b")
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.search == nil && u.completion == nil
+	}, time.Second, testPoll)
+	assert.Equal(t, "@", u.editorValue())
+}
+
+func TestAsyncCompletionDroppedUnderDialog(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+
+	g := &gatedAsync{queries: make(chan string), answers: make(chan []Completion)}
+	u.SetCompleter(g)
+	startBlockedQuery(t, pw, g)
+
+	// an approval dialog owns the keys while the result is pending: applying it
+	// would edit a draft the dialog hides
+	d := u.OpenDecision(DecisionRequest{
+		Prompt:  "Approve:",
+		Context: "run rm -rf /tmp/x",
+		Options: []Option{{Label: "Allow"}, {Label: "Deny"}},
+	})
+	t.Cleanup(d.Close)
+	waitFor(t, u, v, "Approve:")
+
+	g.answers <- []Completion{{Text: "pkg/", Label: "pkg/"}}
+	assert.Never(t, func() bool { return strings.Contains(u.editorValue(), "pkg/") }, 100*testPoll, testPoll)
+	assert.Equal(t, "@", u.editorValue())
+
+	// Esc answers the dialog and reveals the draft untouched
+	press(t, pw, "\x1b")
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.act == nil && u.completion == nil
+	}, time.Second, testPoll)
+	assert.Equal(t, "@", u.editorValue())
+}
+
+// startBlockedQuery types @Tab against an async completer and waits until its
+// query has started and blocked.
+func startBlockedQuery(t *testing.T, pw *io.PipeWriter, g *gatedAsync) {
+	t.Helper()
+
+	press(t, pw, "@")
+	press(t, pw, "\t") // the query starts and blocks
+	select {
+	case q := <-g.queries:
+		assert.Equal(t, "@", q)
+	case <-time.After(time.Second):
+		t.Fatal("path query never started")
+	}
 }
 
 // gatedAsync reports each query's text on queries, then blocks until the test sends its candidates on answers.

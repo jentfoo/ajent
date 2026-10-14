@@ -114,13 +114,15 @@ func (u *UI) startCompletion() {
 	u.applyCompletion(u.completer.Complete(text, pos))
 }
 
-// deliverCompletion applies an off-lock query's result unless a newer Tab
-// superseded it.
+// deliverCompletion applies an off-lock query's result unless a newer Tab,
+// more typing or an owning overlay (search, interaction) superseded it.
 func (u *UI) deliverCompletion(seq, start int, items []Completion, text string, pos int) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.closed || seq != u.completionSeq || u.editor.Value() != text || u.editor.pos != pos {
-		return // stale: a newer Tab or more typing moved on
+	if u.closed || seq != u.completionSeq ||
+		u.editor.Value() != text || u.editor.pos != pos ||
+		u.search != nil || u.act != nil {
+		return // stale: the buffer moved on or an overlay owns the keys now
 	}
 	u.applyCompletion(start, items)
 	u.repaint()
