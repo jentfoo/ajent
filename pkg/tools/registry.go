@@ -341,6 +341,15 @@ func (r *Registry) Enable(names []string) {
 	r.schema = nil
 }
 
+// IsEnabled reports whether name is registered and enabled.
+func (r *Registry) IsEnabled(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	rt, ok := r.findLocked(name)
+	return ok && rt.state == StateEnabled
+}
+
 // Get returns a guard-wrapped callable tool by name. Only enabled tools answer,
 // while disabled ones do not. Use Lookup when a caller needs the tool regardless of state.
 func (r *Registry) Get(name string) (agent.Tool, bool) {

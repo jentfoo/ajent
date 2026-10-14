@@ -23,8 +23,11 @@ import (
 // quietly drafting from less.
 var (
 	ErrNoSubAgents = errors.New("sub-agents are unavailable")
-	ErrNoRead      = errors.New("the read tool is unavailable")
-	ErrNoneStarted = errors.New("no sub-agent could be started")
+	// ErrSubAgentsDisabled reports a registered sub-agent tool the user turned off:
+	// /init spends child tokens implicitly, so an explicit opt-out is honored.
+	ErrSubAgentsDisabled = errors.New("sub-agents are disabled (/tools can re-enable them)")
+	ErrNoRead            = errors.New("the read tool is unavailable")
+	ErrNoneStarted       = errors.New("no sub-agent could be started")
 
 	// ErrAgentsUnreadable reports an existing AGENTS.md whose read failed: /init
 	// cannot correct what it never saw, and drafting anew would replace it.
@@ -89,6 +92,11 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 	poll, pok := r.opts.Registry.Lookup("agent_poll")
 	if !sok || !pok {
 		return agent.Input{}, ErrNoSubAgents
+	}
+	// Lookup deliberately ignores enable state, but /init spends child tokens
+	// implicitly: a disabled subagents group reports instead of spawning anyway
+	if !r.opts.Registry.IsEnabled("agent_start") || !r.opts.Registry.IsEnabled("agent_poll") {
+		return agent.Input{}, ErrSubAgentsDisabled
 	}
 	run := r.runs.Add(1)
 

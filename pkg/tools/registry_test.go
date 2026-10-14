@@ -16,15 +16,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-func (r *Registry) enabled(name string) bool {
-	for _, rt := range r.tools {
-		if rt.tool.Name() == name {
-			return rt.state == StateEnabled
-		}
-	}
-	return false
-}
-
 // newEditRegistry builds a registry holding an edit tool bound to dir.
 func newEditRegistry(dir string) (*Registry, *Tracker) {
 	tr := NewTracker()
@@ -75,8 +66,8 @@ func TestRegistryDefaultEnableDisable(t *testing.T) {
 	r.Register(&fakeTool{name: "bash"}, true)
 	r.Register(&fakeTool{name: "find"}, false)
 
-	assert.True(t, r.enabled("bash"))
-	assert.False(t, r.enabled("find"))
+	assert.True(t, r.IsEnabled("bash"))
+	assert.False(t, r.IsEnabled("find"))
 
 	_, ok := r.Get("bash")
 	assert.True(t, ok) // enabled tools resolve
@@ -93,6 +84,24 @@ func TestRegistrySetEnabledWithUnknownNameIgnored(t *testing.T) {
 	}
 	r.SetEnabled([]string{"a", "ghost"}) // ghost is unknown and ignored
 	assert.Equal(t, []string{"a"}, r.Names())
+}
+
+func TestRegistryIsEnabled(t *testing.T) {
+	t.Parallel()
+
+	r := New()
+	r.Register(&fakeTool{name: "read"}, true)
+	r.Register(&fakeTool{name: "ls"}, false)
+
+	assert.True(t, r.IsEnabled("read"))
+	assert.False(t, r.IsEnabled("ls"))
+	assert.False(t, r.IsEnabled("ghost")) // unregistered is never enabled
+
+	r.Enable([]string{"ls"})
+	assert.True(t, r.IsEnabled("ls"))
+
+	r.SetEnabled(nil) // the set replaces, nothing survives
+	assert.False(t, r.IsEnabled("read"))
 }
 
 func TestRegistrySchemaCacheInvalidatedBySetEnabled(t *testing.T) {
@@ -201,11 +210,11 @@ func TestRegistryEnableIsAdditive(t *testing.T) {
 	r.Register(&fakeTool{name: "ls"}, false)
 
 	r.Enable([]string{"ls"})
-	assert.True(t, r.enabled("read")) // Enable must not disable existing tools
-	assert.True(t, r.enabled("ls"))
+	assert.True(t, r.IsEnabled("read")) // Enable must not disable existing tools
+	assert.True(t, r.IsEnabled("ls"))
 
 	r.Enable([]string{"ghost"}) // unknown names ignored, no error
-	assert.True(t, r.enabled("ls"))
+	assert.True(t, r.IsEnabled("ls"))
 }
 
 func TestRegistryTrackerExposedByBuiltins(t *testing.T) {
@@ -357,23 +366,23 @@ func TestRegistryGroupTogglesTogether(t *testing.T) {
 		Tools:  []string{"agent_start", "agent_poll", "agent_list"},
 	})
 
-	assert.False(t, r.enabled("agent_start"))
+	assert.False(t, r.IsEnabled("agent_start"))
 
 	r.Enable([]string{"subagents"}) // one label widens the whole trio
 	for _, n := range []string{"agent_start", "agent_poll", "agent_list"} {
-		assert.True(t, r.enabled(n))
+		assert.True(t, r.IsEnabled(n))
 	}
 
 	// SetEnabled through a group name disables all members not selected again
 	r.SetEnabled([]string{"read", "subagents"})
 	for _, n := range []string{"agent_start", "agent_poll", "agent_list"} {
-		assert.True(t, r.enabled(n)) // re-selected via the group label
+		assert.True(t, r.IsEnabled(n)) // re-selected via the group label
 	}
-	assert.False(t, r.enabled("write")) // write was dropped
+	assert.False(t, r.IsEnabled("write")) // write was dropped
 
 	r.SetEnabled([]string{"read"}) // no group name: every member goes off together
 	for _, n := range []string{"agent_start", "agent_poll", "agent_list"} {
-		assert.False(t, r.enabled(n))
+		assert.False(t, r.IsEnabled(n))
 	}
 }
 
@@ -543,7 +552,7 @@ func TestRegistryConcurrentRegisterAndSetEnabled(t *testing.T) {
 	wg.Wait()
 
 	for _, n := range []string{"read", "write"} {
-		assert.True(t, r.enabled(n))
+		assert.True(t, r.IsEnabled(n))
 	}
 }
 

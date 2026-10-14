@@ -76,6 +76,16 @@ func TestInitControllerStart(t *testing.T) {
 		assert.Empty(t, h.pump) // nothing reaches the model
 	})
 
+	t.Run("reports_disabled_subagents", func(t *testing.T) {
+		h := newInitHarness(t)
+		h.ctl.deps.toolsReg.SetEnabled([]string{"read"}) // the stubs stay registered but off
+		h.ctl.start(t.Context())
+
+		require.Eventually(t, func() bool { return len(h.notices()) > 0 }, time.Second, time.Millisecond)
+		assert.Contains(t, h.notices()[0], "sub-agents are disabled")
+		assert.Empty(t, h.pump) // nothing reaches the model
+	})
+
 	t.Run("reports_missing_read", func(t *testing.T) {
 		h := newInitHarness(t)
 		h.ctl.deps.toolsReg = tools.New()

@@ -274,6 +274,34 @@ func TestSurvey(t *testing.T) {
 		require.ErrorIs(t, err, ErrNoRead)
 	})
 
+	t.Run("disabled_subagents_report", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "README.md")
+		start := startStub()
+		reg := newRegistry(t, dir, start, pollStub())
+		reg.SetEnabled([]string{"read"}) // both stubs registered but off
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: reg})
+
+		_, err := r.Survey(t.Context())
+		// disabled is not missing: the notice must name the toggle, not unavailability
+		require.ErrorIs(t, err, ErrSubAgentsDisabled)
+		require.NotErrorIs(t, err, ErrNoSubAgents)
+		assert.Empty(t, start.inputs()) // nothing spawned
+	})
+
+	t.Run("partially_disabled_still_blocked", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "README.md")
+		start := startStub()
+		reg := newRegistry(t, dir, start, pollStub())
+		reg.SetEnabled([]string{"read", "agent_start"}) // only agent_poll is off
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: reg})
+
+		_, err := r.Survey(t.Context())
+		require.ErrorIs(t, err, ErrSubAgentsDisabled)
+		assert.Empty(t, start.inputs())
+	})
+
 	t.Run("without_subagents", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md")
