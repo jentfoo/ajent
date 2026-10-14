@@ -196,6 +196,17 @@ bucket takes over, so the same bytes are never counted twice. Like `composing`,
 it survives `Rebase`, `Reseed` and `SetModel`: staged output has not ridden any
 request, so nothing the provider reports has anything to say about it.
 
+`Reseed` replaces every context term with one estimate taken from a real message
+list (`tokens.EstimateFor(model, retain, msgs)`): a rebuilt branch, a plan fork
+or a compaction swap reseeds from its reduced messages, and a model switch drops
+the old window's terms and reseeds immediately so a smaller window reflects real
+occupancy. A reseeded figure stays an estimate (the bar keeps its `~`), unlike
+`Rebase`, which is reserved for exact tokenizer counts. Usage recorded against
+transcript entries is spend, never context: replaying a branch counts it toward
+totals for every entry including ones the cut removed, while the rebuilt context
+is measured fresh from the assembled messages, so the bar never reports bytes
+both inside and outside the window.
+
 ### Step limit
 
 A runaway tool loop is bounded by the context window and compaction, not an

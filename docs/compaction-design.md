@@ -38,8 +38,7 @@ Without it the measure counts thinking blocks that retention would drop from
 completed turns (nor do they reach the wire on a non-`RetainAll` policy), so
 every number came out high and a "successful" compaction could still leave the
 estimate far above what the next request actually sends. What is measured is
-what is sent. A mid-turn run cannot call `Agent.BaseEstimate`, which reports 0
-while the loop owns `State`, so it reads the ledger's own base instead.
+what is sent.
 
 ## Where reductions live
 
@@ -49,7 +48,7 @@ A load-bearing invariant is
 message list. That would vanish on resume. Instead the cut and summary are
 recorded on the `compaction` entry and replayed on every context rebuild.
 
-`pkg/session` owns the schema and the replay (it already owns assembly);
+`pkg/session` owns the schema and the replay (it already owns assembly) while
 `pkg/compact` computes the plan. No import cycle: `compact -> session -> agent`.
 
 The reduction plan records, per tool result to replace or elide by call id, a
@@ -57,10 +56,9 @@ The reduction plan records, per tool result to replace or elide by call id, a
 elides it to that many bytes, with exactly one of the two set. The plan as a
 whole carries those stubs, the message entry ids dropped outright, whether
 thinking is stripped from the kept region, and the message count for the notice.
-New entries record none of the first three (see "The recorded plan is inert"),
-but replay still honours them for transcripts written by older builds. The
-per-reason stats fields are likewise legacy-replay-only (no producer writes
-them, and the notice reads only the summarized count).
+New entries carry none of the first three (see "The recorded plan is inert"),
+and replay still honours them for older transcripts. Schema details live in
+`session-design.md`.
 
 A stub's limit rather than an inlined replacement string keeps the JSONL small:
 assembly re-elides from the original bytes with `tools.Elide`.
@@ -112,9 +110,8 @@ the newest copy of that file. Narrowing emission is what keeps the band exact.
   the same canonical path has more than one successful read. Supersession is a
   claim about file state, so only a successful result makes it true: a failed or
   denied access counts as absent (its own result already carries the failure
-  marker). Detected from the transcript, not the read tracker. Each `read`
-  call's `path` is canonicalised with `tools.PathPolicy.Resolve` so keys match
-  the file tools.
+  marker). Detected from the transcript, not the read tracker. Paths are
+  canonicalised so keys match the file tools.
 - **Superseded edits**, position-aware: only an edit whose call precedes a
   *later successful* wholesale `write` to that path is marked. Each write
   records its branch index, so an edit that lands after the rewrite (building on
@@ -195,9 +192,8 @@ spec, and an optional focus line. That focus is either the user's
 `/compact <instructions>` or, on an automatic run, a caller-supplied default
 through `compactor.focus`. That is how a plan phase keeps its summary on
 implementation work or review findings. An explicit `/compact <instructions>`
-always wins. The exact wording lives in `prompt-design.md`. `MaxTokens` is sized
-as a fraction of what the call replaces, floored so a merged checkpoint is never
-amputated, and capped by what the model can emit and by the tokens the call
+always wins. The exact wording lives in `prompt-design.md`. `MaxTokens` is
+bounded so a merged checkpoint is never amputated and never exceeds what it
 replaces (the prior summary plus the new span). A blank response is a failure,
 not a legitimate no-op, and so is a truncated one: the drain rejects a
 max_tokens stop reason before any text escapes, so an incomplete checkpoint can
@@ -231,9 +227,6 @@ even that way fails the run. One call degrades better on the small local models
 user-message re-injection is what keeps a cut that lands mid-turn valid.
 
 The summariser's own usage folds into the session ledger so `/usage` counts it.
-The stream is driven with `llm.Accumulator`, the same as the agent loop. A
-`max_tokens` stop reason ends the run with an error. Partial text is never
-returned.
 
 Nothing else is needed to make compaction phase-aware. It already plans against
 the live head's branch, and under the plan workflow that branch *is* the phase
@@ -277,7 +270,8 @@ Two guards keep the per-step trigger affordable:
   jump. An interrupt never sets it. It is session state, not a write to
   `compaction.auto`. Only a summariser call that bought nothing or a hard
   failure latches it, and "nothing worth folding yet" alone does not.
-- **A compaction that succeeds without clearing the point holds the step trigger until the turn boundary.**
+- **A compaction that succeeds without clearing the point holds the step trigger
+  until the turn boundary.**
   It cut as far as the band allows, so the next step would fold one more step
   for another summariser call, and a run that clears the point holds nothing. The
   reset is unconditional at every real turn end, including an errored turn.
@@ -376,28 +370,21 @@ surviving messages describe a request that no longer exists. Replaying them
 reported the *pre*-compaction size, and reported it as exact, so the next turn
 compacted again immediately. Whether the plan rewrites history (a cut, a drop,
 a stub or a thinking strip, while a plan carrying only `Stats` changed nothing)
-decides between two paths in `State`:
+decides between two paths in `State` (ledger mechanics live in
+`agent-loop-design.md`):
 
-- **rewritten**: context is measured from the assembled messages,
-  `Reseed(tokens.EstimateFor(model, retain, msgs))`, which also accounts the
-  synthetic summary message that is not an entry of its own. Recorded usage
-  counts toward spend only, via `Accounting.RecordSpend`, and it counts for
-  **every** message entry including ones the cut removed: those tokens were
-  billed whether or not they still occupy context. Only an entry carrying a
-  report is a turn. The recorder persists user echoes and tool results as
-  entries too.
+- **rewritten**: context is measured fresh from the assembled messages, which
+  also accounts the synthetic summary message that is not an entry of its own.
+  Recorded usage still counts toward spend for every entry, including ones the
+  cut removed: those tokens were billed whether or not they still occupy
+  context.
 - **untouched**: nothing rewrote the branch, so the recorded prompt plus output
-  is still exactly what the next request carries and it is replayed as before,
-  bar and all, with no `~`.
+  is still exactly what the next request carries and it is replayed as before.
 
-The same applies to a live compaction: it reseeds with
-`Reseed(res.After - base)`, using only the reduced **messages**, since `After`
-already counts base and the ledger adds its own base on top at read time. The
-reseeded figure stays an estimate: the calibrator's factor applies and the bar
-keeps its `~` marker, unlike `Rebase`, which is reserved for exact tokenizer
-counts. The summariser call itself is recorded spend-only (`Accounting.Spend`),
-so a failed compaction cannot leave the bar at the summariser's (much larger)
-prompt size.
+The same applies to a live compaction, which reseeds from the reduced
+**messages** only. The summariser call itself is recorded spend-only, so a
+failed compaction cannot leave the bar at the summariser's much larger prompt
+size.
 
 The swap goes through `Agent.WithState` and honours its refusal. A turn that
 started since the guard leaves the entry recorded (it applies on the next
@@ -407,15 +394,15 @@ reduction that never landed.
 **7. A reduced context is reported to the host.** Reducing takes file content
 out of context, because a cut drops reads outright. Meanwhile `tools.Tracker`
 still records the process's reads. The compactor therefore calls the same
-rebuild hook `switchState` uses (`sessRec.onSwitch`), which resets read tracking
-so a later `@file` re-injects rather than deduping against content the model no
-longer has. Any future path that replaces `State.Messages` owes the same call.
+rebuild hook a session switch uses, which resets read tracking so a later
+`@file` re-injects rather than deduping against content the model no longer has
+(see `session-design.md`). Any future path that replaces `State.Messages` owes
+the same call.
 
-**8. A model switch remeasures, never reads empty.** `SetModel` drops every
-context term for the new window, and it immediately reseeds from the actual
-in-memory messages, so switching to a smaller window reflects real occupancy and
-lets threshold auto-compaction fire on that model instead of waiting for an
-overflow.
+**8. A model switch remeasures, never reads empty.** Switching models reseeds
+the ledger from the actual in-memory messages (mechanics in
+`agent-loop-design.md`), so a smaller window reflects real occupancy and lets
+threshold auto-compaction fire on it instead of waiting for an overflow.
 
 **9. At most one overflow retry per turn.** A second overflow fails the turn
 rather than compacting in a loop.

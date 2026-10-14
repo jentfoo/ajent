@@ -73,9 +73,7 @@ unit-testable against a fake `Host` with no UI, transcript or registry in scope.
 `Fork` is the interesting one. `pkg/app` implements it as a branch-switch that
 reuses rewind's state switch **without** its screen reset + replay: the screen is
 never reset, because a phase switch changes what the *model* sees, not what the
-user sees. An empty head starts a new root. It deliberately does not go through
-`console.SetModel`, whose same-model early return would leave a branch with no model
-entry.
+user sees. An empty head starts a new root.
 
 ## Phases and transitions
 
@@ -99,18 +97,15 @@ captured as approval, whether a staged `!` flush, a permission-barrier note or
 a sub-agent completion steer. This mirrors the Planning phase guard.
 
 The captured submission is stripped to its text: staged `!shell` results never
-reach a gated submit (the pump flushes nothing while parked), and pasted images
-are dropped rather than pinned ahead of a kickoff whose root starts from
-nothing else.
+reach a gated submit, and pasted images are dropped rather than pinned ahead of
+a kickoff whose root starts from nothing else.
 
-The gate also bounds the steer queue, because queued delivery skips
-`BeforePrompt`. When the workflow parks, queued steering must not run on:
-delivery stops and the items hold as rows until a typed submission starts the
-implementor's turn behind its kickoff, and inputs arriving while parked (a
-finished `/init` survey, an injected line) join them. Without this bound a
-queued prompt would start an ungated planner turn at the gate, and an approval
-submitted during it would surface as ordinary steering instead of being
-captured.
+While parked, queued and injected inputs must hold rather than run on, the same
+rule that bounds approval: they join the queue until a typed submission starts
+the implementor's turn behind its kickoff (injection rules:
+`prompt-design.md`). Without this bound a queued prompt would start an ungated
+planner turn at the gate, and an approval submitted during it would surface as
+ordinary steering instead of being captured.
 
 **The implementor's report always reaches the reviewer.** The reviewer sees none
 of the implementation branch, so `dev_review`'s `summary` is required. An empty
@@ -170,18 +165,17 @@ user-initiated and restored on every exit path, so it calls
 
 ## Display
 
-Phase transitions emit a divider plus a keyed notice naming phase, model and
-round, and update the `plan` status segment with the phase and round. A fork
-that does not move (for example `/plan` itself, which only records the planner
-on the current head) draws no divider, since nothing was divided. The kickoff
-message itself is **not** echoed live: the user just read the plan in the
-editor, and the review kickoff's `git status` reads better in the reviewer's own
-output. It is recorded in the transcript, so `session.Replay` does show it after
-a resume. That is a deliberate asymmetry.
+Phase transitions surface phase, model and round to the user (divider, keyed
+notice, `plan` status segment), but they never redraw or replay the screen,
+because what changed is what the *model* sees. The kickoff message itself is
+**not** echoed live: the user just read the plan in the editor, and the review
+kickoff's `git status` reads better in the reviewer's own output. It is recorded
+in the transcript, so replay shows it after a resume. That is a deliberate
+asymmetry.
 
-Prompts the user types while a workflow turn runs still reach that turn through
-`OnBoundary`/`q.pull`. User steering can therefore enter the implementor's
-otherwise-pristine context, by design: it is the user's agent.
+Prompts the user types while a workflow turn runs still steer that turn. User
+steering can therefore enter the implementor's otherwise-pristine context, by
+design: it is the user's agent.
 
 ## Persistence and resume
 
@@ -198,14 +192,13 @@ puts it back into the editor: a crash or exit while parked must not silently
 turn the next arbitrary prompt into the plan of record. The draft is cleared
 once the gate passes.
 
-Phase kickoffs are injected messages carrying the replay mark, so a resume
-redraws each one as its own collapsed block above the turn it fed rather than
-echoing it as a typed prompt. The phase notice ("implementing with ..." /
-"reviewing with ...") is not replayed, and the kickoff block carries the premise.
+Phase kickoffs are injected messages carrying the replay mark, so replay shows
+each one as its own block above the turn it fed rather than echoing it as a
+typed prompt (replay and provenance rules: `prompt-design.md`).
 
-Because ending a workflow leaves HEAD at the review tip while the file tail is
-an implementation entry, resume must prefer the live head over the file tail.
-The same divergence already existed after a rewind.
+Ending a workflow leaves HEAD at the review tip while the file tail is an
+implementation entry. Resume follows the live head over the tail, the same
+divergence a rewind already produces (`session-design.md`, the branch cursor).
 
 ## Compaction
 

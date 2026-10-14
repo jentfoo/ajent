@@ -85,33 +85,25 @@ save to user/project layer like any other enum row.
 `safeCommands` lists exact MCP/extension tool names or bash command lines that
 auto-allow as read-only in allow-read/auto. A single shell entry matches at a
 token boundary, so `git` covers every git invocation and `git status` its
-subcommands, while a compound line (`cd … && make lint | tail`) instead requires
+subcommands, while a compound line (`cd … && make lint | tail`) requires
 **every** component to be either a listed entry or verifiably read-only.
-Wrapping in `cd`/pipe never defeats the match, and an appended write can't ride
-in on a listed prefix. It can never name a core writer (`write`, `edit`) or
-un-reject an in-place sed, so no config entry overrides a known mutation.
-`auto+write` is the only mode that runs a core writer without a prompt, and it
-does so on its own path-scope check rather than this list. It gates on the live
-call's tool name (exact) or bash components (see permit), independent of
-registry metadata.
+Wrapping in `cd`/pipe never defeats the match. It can never name a core writer
+(`write`, `edit`) or un-reject an in-place sed, so no config entry overrides a
+known mutation. `auto+write` is the only mode that runs a core writer without a
+prompt, and it does so on its own path-scope check rather than this list.
 
 `deniedCommands` is its hard inverse: exact tool names, whole MCP server
-namespaces, or bash command lines that are always refused **without prompting**
-in every mode, including allow-all. Matching follows the same token-boundary
-rule as `safeCommands`, with the resolved argv checked as well: both sides pass
-through the same tokenizer the per-command checkers use, so quoting or escaping
-the head (`"git" push`, `git pu\sh`) cannot slip a listed command past it.
-One asymmetry holds the line: the deny side resolves or extracts any shell
-shape that hides the command (assignments, keywords, launchers, subshells,
-substitution, interpreter payloads, heredoc bodies), while the allow side never
-does, since every resolution there could over-match into an allowance. A
-compound line is refused when *any* component matches, so nesting a denied
-command behind `cd … &&` never escapes it. A payload living outside the line
-(`cat x | sh`) stays beyond any static matcher, covered by the approval dialog
-rather than scanning. It may also name core writers, since denying one is a
-legitimate safety gate. A denied check runs first in the barrier verdict
-(after user-initiation), and only an agent call hits it: a human's own staged
-`!` line owns its shell and always runs.
+namespaces, or bash command lines refused **without prompting** in every mode,
+including allow-all. It may name core writers too, since denying one is a
+legitimate safety gate. A denied check runs first in the barrier verdict (after
+user-initiation), and only an agent call hits it: a human's own staged `!` line
+owns its shell and always runs.
+
+Both entries match through the barrier's quote-aware analyser, whose allow/deny
+asymmetry, redirect handling and head-resolution rules are specified in
+`tools-design.md`. A payload living outside the line (`cat x | sh`) stays
+beyond any static matcher there too, covered by the approval dialog rather
+than scanning.
 
 ### Permissions and tools in a one-shot run
 

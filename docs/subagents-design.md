@@ -97,17 +97,14 @@ the elapsed column means what its status says.
 Ids are `sub-N` from a manager counter, handed out
 **in the order the model asked for the agents**. `agent_start` is
 `ModeParallel`, so the dispatch goroutines would otherwise race for the counter
-and the task submitted last routinely became `sub-1`. `Manager.Reserve` runs
-from `agent.Options.OnToolBatch`. The loop calls it with one step's calls in
-message order, before any of them runs. It reserves a number per `agent_start`
-call id, and `Execute` then claims its reservation by `ToolCall.ID`. A start with no
-reservation (host-driven, or a call the batch never named) takes the next
-number, and a new batch supersedes the previous one, so reservations left by an
-interrupted turn are dropped and their numbers skipped. Because the id is also
-the activity row's rank, the rows sort in submission order too.
-
-`List` sorts by that number (`byJobNumber`, never a string sort: sub-10 must
-land after sub-9), which is what both `agent_list` and `/agents` render.
+and the task submitted last routinely became `sub-1`. `Manager.Reserve` claims
+numbers before dispatch instead: the turn loop calls it from
+`agent.Options.OnToolBatch` with one step's calls in message order, and each
+`Execute` takes its reserved number. A host-driven start with no reservation
+takes the next one, and reservations die with their batch, so an interrupted
+turn's numbers are skipped. Because the id is also the activity row's rank and
+`List` sorts numerically, rows, `agent_list` and `/agents` all read in
+submission order rather than call-race order.
 
 The internal `job` carries the per-job context/cancel/done channel, the child
 ledger (`*tokens.Accounting`, created at Start so it is visible to poll
@@ -200,19 +197,16 @@ committed history:
   out of the list, and an early finisher is counted (not captured) so it never wipes a
   sibling still running.
 
-Rows are single lines with no width maths. `tui.SetActivityRanked` elides to
-width and never wraps, capped to a few rows plus an overflow indicator. Each row
-is published with the job number as its rank, so the list reads in job-number
-order for the life of the jobs however the parallel `agent_start` calls raced to
-publish, and the overflow always hides the newest rather than an arbitrary one.
-They render dim on a subtle background (`Theme.Activity`) so live work stands
-apart from the prompt area above which they sit.
+Rows are single lines published through `tui.SetActivityRanked`, each with the
+job number as its rank, so the list reads in job-number order however the
+parallel `agent_start` calls raced to publish, and overflow always hides the
+newest rather than an arbitrary one. Elision, the row cap and the dim
+`Theme.Activity` look belong to the paint layer (`tui-design.md`).
 
-The completion steer is marked `Input.Injected`, and the permission-barrier note
-steer in pkg/app is too, so neither surfaces as a recallable prompt via Ctrl+R
-or the up-arrow history. Only messages the user actually typed do. Both also
-carry `Input.Echo`, so they surface live where they land and are replay-marked
-for resume and rewind.
+The completion steer carries both `Input.Injected` and `Input.Echo`: it
+surfaces live where it lands and is replay-marked for resume and rewind, but
+never becomes recallable prompt history. Only messages the user actually typed
+do. See `agent-loop-design.md` for both flags.
 
 ### `tools.go` — the three tools
 
@@ -237,9 +231,7 @@ is the entire return value.
 
 All three set `ToolResult.Display` to the same text as `Content`, so history
 shows the payload through the shared output-head rule (`tui-design.md`) instead
-of a bare tool header: a poll timeout commits its elapsed/context line, a
-completed summary gets head-plus-collapse treatment, and start/list render their
-rows.
+of a bare tool header.
 
 One exception: `agent_poll` is `ModeParallel`, so a batch of polls commits every
 poll header at dispatch and each payload only as its own job finishes. The
@@ -353,8 +345,7 @@ rolls its usage into the parent's own totals. Two invariants:
   context terms, so a fan-out of investigations does not corrupt the main
   context bar.
 The delegated subset is exposed as `Accounting.ChildTotal()`, which `/usage`
-reads to show what delegation cost, and the per-model table already splits spend
-when the child model differs.
+reads to show what delegation cost.
 
 ### Configuration (`pkg/config`)
 
@@ -387,14 +378,11 @@ and barrier exist, with adapters:
 Headless mode (`oneshot.go`) has no steer queue, so `Options.OnBoundary` is
 `mgr.Boundary` directly and the `Deliver` hook drives the idle case.
 
-The three tools are registered under source `builtin`, enabled by default,
-before the permission barrier's guard attaches (so `/tools` ordering matches
-other sources), and marked read-only so allow-read mode runs them free, since
-the parent *calling* `agent_start` is itself a non-mutating act. They are
-collapsed into one toggleable `/tools` row via `Registry.RegisterGroup`: a
-single `subagents` label (grouped with the builtins, ahead of MCP) enables or
-disables all three at once. See the registry grouping in `tools-design.md`. A
-`defer sag.Close()` sits beside the MCP close.
+The three tools are registered under source `builtin`, enabled by default, and
+marked read-only so allow-read mode runs them free, since the parent *calling*
+`agent_start` is itself a non-mutating act. They collapse into one toggleable
+`/tools` row via `Registry.RegisterGroup`, following the registry grouping in
+`tools-design.md`.
 
 **Esc semantics.** Esc interrupts the *turn*, releasing any in-flight poll, and jobs
 keep running because they are independent investigations and re-running them is
@@ -405,15 +393,12 @@ second-Esc-cancels-jobs gesture.
 
 Every child gets a fresh system block built by the same cache-stable
 `buildSystem`, with one extra snippet appended after project instructions via
-`agent.Options.SystemSnippets`: `childContract`. It states the read-only
-constraints (structural, since the tool set is filtered before the model ever
-sees it) and that the final assistant message **is** the entire return value.
-The text is quoted verbatim, and owned, by `prompt-design.md`. There is
-deliberately no "Available tools" list in a child's system block (the schema
-channel carries it). The contract names only read/grep/find/ls plus MCP. The
-four git readers are added to that sentence when the child's cwd sits inside a
-work tree (`inRepo`, the same flag gating the tool set), so the advertised
-capability always matches what a call can actually answer.
+`agent.Options.SystemSnippets`. That snippet's text is owned, and quoted
+verbatim, by `prompt-design.md` (which also explains the deliberate absence of
+an "Available tools" list: the schema channel carries it). The only rule here
+is that what the contract advertises must track the structural filter above:
+read/grep/find/ls plus MCP, with the four git readers named exactly when
+`inRepo` gates them into the tool set.
 
 ## Testing
 

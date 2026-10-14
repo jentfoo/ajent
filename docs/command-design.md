@@ -72,16 +72,10 @@ token and the recovered line still names its `[image #N]`. See
 `agent-loop-design.md` for the boundary contract. While the plan workflow parks
 at its gate, delivery holds instead (see `plan-design.md`).
 
-The pump also wires the **typing hold** (`Options.AwaitInput`, see
-`agent-loop-design.md`): at each step boundary, if a draft is being composed in
-the editor the loop waits until it clears (Esc or backspace to empty), sits
-unchanged for 10s since the last edit, or Enter submits. A mid-turn submit
-therefore delivers into the **current** step rather than behind another model
-call, within a bounded handoff grace so a just-submitted line still lands there;
-queued items release the hold at once. An idle submission is consumed before its
-own turn spawns, so step one never waits on that already-delivered line. The
-same gate also holds approval dialogs while a draft is composed (see
-`agent-loop-design.md` and `tui-design.md` for that surface).
+The pump supplies the **typing hold** (`Options.AwaitInput`, specified in
+`agent-loop-design.md`): a mid-turn submit delivers into the **current** step
+rather than behind another model call, instead of waiting out the boundary. The
+same gate holds approval dialogs while a draft is composed.
 
 A workflow that needs to act on a submission before it becomes a turn hooks the
 pump through `planHooks.beforePrompt`, consulted only when the steer queue
@@ -131,39 +125,29 @@ read paths.
 
 `Console` is a command's view of the world: an interface, not a struct, so the
 extension host can back it with its own protocol. It exposes notices and a
-markdown printer (`/help` renders through it), the blocking interaction methods
-(pick one or many from items, select from options, confirm yes/no, free-text
-input for numbers and limits), a clipboard writer (`CopyClipboard`, the one
-write path behind `/copy`), read handles onto the model registry, agent
+markdown printer (`/help` renders through it), blocking interaction methods
+(pick from items, select from options, confirm yes/no, free-text input), a
+clipboard writer (the one write path behind `/copy`, see
+`clipboard-copy-feature.md`), read handles onto the model registry, agent
 state, tool registry, command registry and resolved config, settings writers
-(save to a layer, record a session override), and mutators that apply and
-persist a model or reasoning change, announce tool-set changes, report whether
-any prompt has been sent this session, and exit.
+that save to a layer or record a session override, mutators that apply and
+persist model, reasoning and tool-set changes, plus started-state reporting
+and exit.
 
 `pkg/app` implements it once (`uiConsole`) over the objects the driver already
-holds. `SetModel` records a `model_change` entry the old bespoke switch never
-did, applies the session override, and recomputes only the live effective
-reasoning level for display, leaving the stored override untouched so intent
-survives switching back. `ToolsChanged` records the enabled set as a
-`setting_change` so resume keeps the set. The three interaction methods are
-one-line forwarders to `tui.SelectContext`/`ConfirmContext`/`InputContext`, and
-the two settings methods delegate to the resolved `*config.Set`. Each mutator
-also calls `SetSession` with its config key so `/settings` shows the change as
-session-scoped. `SetSessionSetting` applies a dotted session override *and*
-records it via `recorder.SettingChange`, closing the old gap where a row called
-`SetSession` directly and the override silently vanished on resume
-(auto-compaction, tool limits). The bespoke `SetModel`/`SetReasoning` mutators
-keep their own paths. A state mutator typed mid-turn **queues** rather than
-refusing: the pump holds the write while a drain goroutine owns State, and
-lands it (in submission order) once the drain exits, with a notice saying so.
-Nothing about the change is recorded until it applies. `/copy` reads through
-`SettledMessages`, the one read seam over the same gate: the live transcript at
-rest, or the copy the last turn end settled while one streams, so a partial
-turn is never copied. A permissions-mode row additionally applies its parsed
-mode to the live permission barrier and republishes the status segment, which is
-what makes `/settings`'s Permissions enum row take effect rather than sitting
-inert. Permission mode is a per-run choice: it lives only on the barrier for this
-session and does not record a `setting_change`, so every start uses the resolved
+holds. Every mutator applies to the live object **and** records what resume
+needs (a transcript entry or a session override), so a change made through a
+command survives restart and shows in `/settings` as session-scoped.
+`SetModel` recomputes only the live effective reasoning level for display,
+leaving the stored override untouched so intent survives switching back. A
+state mutator typed mid-turn **queues** rather than refusing: the pump holds
+the write while a drain goroutine owns State, lands it in submission order once
+the drain exits, and announces the pending change with a notice. Nothing about
+a change is recorded until it applies. `/copy` reads through `SettledMessages`,
+the one read seam over that same gate: the live transcript at rest, or the copy
+the last turn end settled while one streams, so a partial turn is never copied.
+The permissions-mode row applies its parsed mode to the live barrier for this
+run only and records no `setting_change`, so every start uses the resolved
 config default.
 
 `Started()` is owned by the pump: it flips true when the first prompt is
@@ -177,10 +161,10 @@ dispatched, never on a command or a `!`.
 | `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown; sub-agent spend called out when nonzero) |
 | `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim. Mid-turn it copies the last settled response, never a partial stream. No agent messages yet is a notice |
 | `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it; a no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
-| `/reasoning [level]` | report, or set/clear the level for capable models; a model offering zero levels reports "no reasoning options available", one level (only off) reports "only <level> available for this model". Neither case opens a picker |
+| `/reasoning [level]` | report, or set/clear the level for capable models. A model with fewer than two options reports its situation inline and never opens a picker |
 | `/tools` | multi-select, grouped by source; widens the enabled set |
 | `/session [name]` | report the session's name, or set it; an invalid or conflicting name is a notice (see `session-design.md`) |
-| `/settings [section]` | two-level menu of rows showing value + source layer; each row edits and offers save-to-layer (see `config-design.md`); rows come in three kinds, an enum (a string from a fixed set), a model picker, and an integer with min/max validation (sub-agent concurrency, since an enum stores a string that won't unmarshal into an int field), covering permission modes and sub-agent settings; a currently impossible choice (Reasoning on a single-option model) renders grayed out with the reason, as does Reset overrides when nothing is overridden (see `config-design.md`, "Session override reset") |
+| `/settings [section]` | two-level menu of rows showing value + source layer, each edited in place with save-to-layer (see `config-design.md`). Rows come in three kinds: enum from a fixed set, model picker, and integer with min/max validation for sub-agent settings. A currently impossible choice (Reasoning on a single-option model) renders grayed out with the reason, as does Reset overrides when nothing is overridden |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all; unknown verbs warn. Esc never cancels jobs; this is the only stop path |
 | `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice. The result is UI-only, never written to the transcript nor sent to the model (see below) |
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
@@ -193,18 +177,17 @@ dispatched, never on a command or a `!`.
 `/mcp`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins;
 `/plan*` and `/init` are feature commands the driver adds on top.
 
-Registration goes through one `registerCommands` helper in `pkg/app` that always
-calls `RegisterBuiltins` first and then any feature commands. A feature that
-registers its own must not be written where the built-in call lives: an earlier
-plan-workflow attempt replaced that line and silently lost every built-in
-command. A `pkg/app` test asserts the built-in set survives with and without
-workflow commands.
+Registration goes through one helper in `pkg/app` that always calls
+`RegisterBuiltins` first and then any feature commands. Feature registration
+must never replace the built-in call, since doing so silently drops every
+built-in command, and a `pkg/app` test asserts the built-in set survives with
+and without workflow commands.
 
 `command.PickModel(ctx, console, title, current, opts)` is the shared picker
 behind `/model` and `/settings`, exported so a feature can offer its own model
 choice under its own title rather than reimplementing the list.
 
-### `/init` — the project survey
+### `/init`: the project survey
 
 `/init` is the one command whose work outlives its handler. `initController`
 (`init.go`) starts the survey on its own goroutine and returns immediately, so a
@@ -217,14 +200,12 @@ whole run so a wedged child cannot hold the single survey slot until restart. A
 spent ceiling reports `ErrSurveyTimedOut`, which the controller treats like an
 abort: stop the survey's remaining children by id, then tell the user.
 
-**Slicing.** The agent count scales with the tree (under 50 files → 1, then 2,
-3, 4), and the slices themselves are top-level directories bin-packed
-largest-first into the least loaded bucket. A directory holding more than one
-slice's share is replaced by its own children first, repeatedly. Otherwise a
-repository whose code all lives under `pkg/` hands one agent everything and the
-others nothing. Files stage 1 and the build agent already read are dropped, and
-the loose files left at a level collapse into one named unit rather than a
-scatter of singletons.
+**Slicing.** The agent count scales with the tree size, and top-level
+directories are bin-packed largest-first into the least loaded buckets, so a
+repository whose code all lives under `pkg/` still divides its work instead of
+handing one agent everything. A directory larger than one slice's share is
+replaced by its own children first. Files already read by stage 1 and the build
+agent are dropped, and loose files left at a level collapse into one named unit.
 
 `pkg/projinit` does the work and spends no model tokens: it runs the real
 `read`, `agent_start` and `agent_poll` tools through `Registry.Lookup`,
@@ -245,43 +226,33 @@ survey that cannot run reports *why*: a missing `read`, missing or disabled
 `agent_*`, spawns that were refused, and an existing `AGENTS.md` that could not
 be read are distinct errors, never one "unavailable".
 
-**Call ids carry a run number.** `Input.Before` is appended to `State` and
-persisted, so a second `/init` in one session would otherwise replay the first
-run's `tool_use` ids: a duplicate id makes every later Anthropic request fail
-permanently. Re-running is the advertised regenerate path, so this is not
-theoretical. A fresh controller per process seeds its runner above any survey
-ids replayed from the transcript, mirroring how `@` references are seeded.
+**Call ids carry a run number.** The uniqueness contract for host-run tool
+calls and what a repeated id costs are specified in `agent-loop-design.md`.
+Re-running `/init` is the advertised regenerate path, so a fresh controller per
+process seeds its runner above any survey ids replayed from the transcript,
+mirroring how `@` references are seeded.
 
 Instructions are read once at startup, so a freshly written file applies on the
-next start. `initWatch` (an `opts.Sinks` member) is armed by the pump, not by
-the survey goroutine whose arming a turn already running would consume, and
-reports the change once the file's stamp (size plus mtime) actually moves, which
-also covers coarse-mtime filesystems. It stays armed across turns that wrote
-nothing, so a survey queued behind a running turn still reports, and stays quiet
-when the write was denied.
+next start. `initWatch` is armed by the pump (arming it from the survey
+goroutine could be consumed by a turn already running) and reports once the
+file's stamp actually moves, which also covers coarse-mtime filesystems. It
+stays armed across turns that wrote nothing, so a survey queued behind a
+running turn still reports, and stays quiet when the write was denied.
 
-### `/update` — self-update
+### `/update`: self-update
 
-`/update` reinstalls ajent from `github.com/jentfoo/ajent@latest`. The handler
-spawns one goroutine (`SelfUpdate`) and returns immediately so a slow network
-fetch never blocks the pump, and `Notify` is safe from any goroutine, so the result
-lands as a notice when it finishes. A second `/update` while one runs simply
-starts another install, harmless because both resolve then reinstall the same
-latest version.
+The handler spawns one goroutine and returns immediately so a slow network
+fetch never blocks the pump, and `Notify` is safe from any goroutine, so the
+result lands as a notice when it finishes. A repeat while one runs just starts
+another install of the same latest version. Shared logic lives in
+`pkg/version` next to the build version it compares against: resolve latest,
+install only when it differs, report failure as an error notice.
 
-The shared logic lives in `pkg/version/update.go`, next to the build version it
-compares against, factored into an injectable exec seam so tests
-exercise every branch with fakes and never touch a real go toolchain or network:
-resolve the latest published version, compare against the running build, install
-when they differ. Equal versions mean nothing is installed, and any failure comes back
-as an error notice rather than panicking.
-
-The `--update` flag is the opposite surface: it runs the same `SelfUpdate` in
-the **foreground** and exits immediately after printing the result, never
-opening a TUI or starting a session (`pkg/app`, alongside the `--version` early
-exit). `/update` stays fully in-session. Both surfaces report through
-`UpdateResult.Notice`, and neither writes to the transcript nor reaches the model,
-because an update is a build concern, not conversation content.
+The `--update` flag is the opposite surface: it runs the same update in the
+**foreground** at startup and exits after printing the result, never opening a
+TUI or starting a session. Both surfaces report through `UpdateResult.Notice`,
+and neither writes to the transcript nor reaches the model, because an update
+is a build concern, not conversation content.
 
 ### `/tools` and the enabled set
 
@@ -299,9 +270,8 @@ plan scope is explicit, user-initiated, and restored on every exit path.
 
 Widening the set changes the tool block and therefore busts the prompt cache
 (worth a one-line notice). `/tools` groups rows by `Registry.Source` (builtin,
-an MCP server name, an extension name), with a dim header row when the group
-changes. Space or Tab toggles the highlighted row, typed text narrows the filter
-(a space never becomes part of it), and Enter confirms.
+an MCP server name, an extension name) with a dim header row between groups.
+Picker key handling is specified in `tui-design.md`.
 
 ## Shell mode (`!`)
 
@@ -335,10 +305,9 @@ whatever the bash tool returns, cap marker included.
 model immediately. They sit in the pending slot ahead of the next user message.
 Running `!` never interrupts an in-flight turn, and it only becomes visible to the
 model when the user next speaks. It is not free, though, and the context bar
-says so: as each run finishes the stager reports the staged total through its
-`SetOnChange` hook, which main feeds to `Accounting.SetStaged`. That term
-behaves like the editor buffer (`composing`): it survives a rebase or a model
-switch, because staged output has not ridden any request yet. Excluded (`!!`)
+says so: as each run finishes the stager reports the staged total upward. That
+term behaves like the editor buffer (`composing`): it survives a rebase or a
+model switch, because staged output has not ridden any request yet. Excluded (`!!`)
 runs and still-running ones count zero: the former never reaches context, the
 latter has no result to measure.
 
@@ -432,34 +401,20 @@ edited. Menu contexts are synchronous by contract.
 
 ### Menu rules
 
-The top candidate is highlighted from the moment the menu opens. `Tab` always
-accepts the highlighted candidate (it is Tab's target, not Enter's) and a following
-Enter just submits the result, so `/model` then Enter runs it.
-
-- `↑`/`↓` cycle the highlight and mark the selection *moved*.
-- `Enter` on a moved selection accepts-and-submits in one press, otherwise it
-  submits the line as typed, so an open menu never swallows a send. Any key that
-  reaches the editor (a character, Backspace, or a caret move) drops the *moved*
-  state, so Enter then sends what was typed rather than re-applying.
-- `Esc` dismisses without inserting.
-
 A menu is re-queried on every keystroke under the UI lock, so `Menu` is a
 promise that the source answers promptly and never re-enters the UI. A source
-that cannot must use `Async` instead.
+that cannot must use `Async` instead. Key handling for an open menu (cycling,
+accept versus submit-as-typed so an open menu never swallows a send,
+dismissing) is specified in `tui-design.md`.
 
 ### Tab rules
 
-The tab-driven overlay holds no selection and consumes no keys. `Tab` fills in
-the candidates' longest common prefix and stops there, never guessing past an
-ambiguity (bash's behaviour), and a lone candidate therefore completes in full.
-
-- A `Tab` that cannot advance lists the remaining candidates as passive dim rows,
-  packed into columns: no highlight, no selection, and the next keystroke clears
-  them. Text with no meaningful common prefix is its best case for this listing.
-- A `Tab` with nothing to add and nothing new to list leaves the buffer alone and
-  flashes a hint above the prompt.
-- `Esc` drops a listing before it clears the buffer. Everything else, Enter and
-  the arrows included, reaches the editor untouched.
+The tab-driven overlay holds no selection and consumes no keys beyond `Tab`.
+`Tab` fills in the candidates' longest common prefix and stops there, never
+guessing past an ambiguity (bash's behaviour), so a lone candidate completes in
+full. A `Tab` that cannot advance lists the remaining candidates as passive dim
+rows instead of inserting anything, and everything else reaches the editor
+untouched.
 
 ### `command.Completer`
 
@@ -537,8 +492,8 @@ is retried without it. The trimmed reading wins only by existing, so `./x`,
 dotted names and `x:y` resolve exactly as written. Prose, notices and
 annotations keep the written token while read/ls receive the trimmed path.
 
-Text is rebuilt by splicing spans back to front so earlier offsets stay valid;
-the plan is reversed once so the reads land in document order.
+The executed plan runs in document order, so injected reads appear in the same
+order as the prose that named them.
 
 Because planning no longer reads, the tracker cannot dedupe within one expansion
 (nothing has been observed yet), so **the plan dedupes by resolved path itself**
@@ -551,29 +506,22 @@ than appending error pairs for the rest of the batch.
 ### Reads land behind the message
 
 `Run` is `Input.After`, so the pairs are appended **after** the user message
-that named them, not ahead of it. `session.RewindTarget` rewinds a user prompt
-to its parent, so this is what makes rewinding onto an `@` message drop its
-reads with it: edit the file, press Enter on the refilled text, and the model
-sees the new contents instead of the old inclusion still sitting in context. It
-also fixes the display: the tools run when the message lands, after its echo, so
-what is on screen is the order replay renders.
+that named them. That placement is what makes rewinding onto an `@` message
+drop its reads with it, and it fixes the display: the tools run when the
+message lands, after its echo, so what is on screen is the order replay renders
+(the asymmetry behind both is specified in `agent-loop-design.md`,
+`Input.After`).
 
 That makes re-injection routine, so ids must not repeat. Each `Expand` takes a
-run number and mints a unique reference id for it. `Expander.Seed(msgs)` raises
-that counter above every reference id already present, and is called whenever
-the context is rebuilt (resume, rewind, fork) so a reopened transcript's ids are
-never minted twice.
-
-The same rebuild calls `tools.Tracker.Reset`. The tracker is process-wide and
-knows nothing of branches, so without it a rewound-away read would still count
-as "already in context" and the resubmit would inject nothing at all. Both hang
-off `sessRec.onSwitch`, which **every** path that replaces `State.Messages`
-calls: `switchState` (manual rewind, and the plan workflow's `forkTo`) and the
-compactor's rebuild. Compaction counts because a cut drops reads outright and
-`truncate` elides their results to a byte budget, either of which takes file
-content out of context that the tracker still vouches for. Headless seeds its
-own expander from the rebuilt state, since `--continue` reopens a transcript
-that already holds ref ids.
+run number and mints a unique reference id for it (naming its tool too, so read
+and listing references can never collide), and `Expander.Seed(msgs)` raises the
+counter above every id already present on rebuild. The same rebuild calls
+`tools.Tracker.Reset`, since tracker records describe the process rather than
+the context (`tools-design.md`): without it a rewound-away read would still
+count as "already in context" and the resubmit would inject nothing. Both hang
+off the one rebuild hook every path that replaces `State.Messages` owes (see
+`session-design.md`). Headless seeds its own expander from the rebuilt state,
+since `--continue` reopens a transcript that already holds ref ids.
 
 Injected tools run through the same sink as the stager, so the display order
 matches the transcript order and therefore matches what replay renders.
@@ -605,13 +553,11 @@ Ranking is (a) already in the conversation (`Tracker.Records()`), (b) recent
 mtime, (c) fuzzy score (reusing `tui.MatchScore` rather than a second
 implementation). Directories complete with a trailing `/` and keep completing.
 
-### Measure (`tools/measure.go`)
+### Measure
 
-`Measure(path)` stats first and, when the file is a small enough text file,
-counts its lines. A directory reports `Dir` with zero bytes. A file above
-`MeasureCeiling` reports its bytes and kind but never reads the whole content,
-so annotating a giant file is itself bounded. `HumanSize` abbreviates the way
-annotations show it.
+Annotation measurement is bounded by construction: stat first, count lines only
+for small text files, report bytes plus kind above the ceiling without reading
+content. Annotating a giant file never reads it whole.
 
 ## Pasted content
 

@@ -403,6 +403,10 @@ chosen right now: its body stays dim even under the cursor, so no accent ever
 suggests the locked option is selectable. `/settings` uses this for rows whose
 choice is impossible on the active model (Reasoning with a single level).
 
+A grouped `MultiPick` (`/tools`) toggles the highlighted row with `Space` or
+`Tab`, narrows with typed text (a space never joins it), and confirms with
+`Enter`.
+
 Body shade is otherwise decided per list. Where some rows carry a `Mark`, as in
 the rewind tree, untagged ones dim so they do not read as one of the kinds. A
 list with no marked rows at all renders every editable body plain, reserving
@@ -452,19 +456,13 @@ decides what it means (for approval, deny). Where no live block exists (plain
 mode) the handle's `Wait` reports `ErrNoUI`, and a caller can still resolve or
 close it harmlessly.
 
-The barrier raises its dialogs through this interaction layer only after the
-user pauses their editor draft: the prompter's `Hold` runs before `Open`, so
-while a message is being composed an approve/deny prompt waits (same
-idle/handoff windows as the step-boundary hold, its own `approval Ns`
-countdown segment) and opens only once the user pauses, clears or submits,
-never stealing focus from a draft.
-
-The typing delay gates **only the human prompt**, never AI decisions. In the
-auto modes the barrier classifies the call while its dialog is being held: an
-allow verdict ends the hold at once, mid-typing included, approving the tool
-without any dialog (and dismissing one once open). Only a call with no
-classifier, or a deny/unsure verdict that genuinely needs a person, waits out
-the pause before its dialog opens.
+An approval dialog never steals focus from an editor draft: the prompter's
+`Hold` runs before `Open`, so while a message is being composed the dialog
+waits behind its own `approval Ns` countdown segment and raises only once the
+user pauses, clears or submits. What the hold gates (the human prompt only,
+never an AI decision), when it releases and why classification still runs
+during it are specified in `agent-loop-design.md`. Here it is one deferred
+interaction raise plus that countdown segment.
 
 Plain mode has no live block and `readLines` already owns stdin, so a prompt is
 written to history and the answer is taken from the message queue. Reading the
@@ -1178,10 +1176,14 @@ Replay rendering differs from live output in ways that matter for fidelity:
   replay without unbounded scrollback.
 - **Assistant text replays verbatim** through `Text`/`EndText`, so replies
   survive intact.
+- **Injected context renders as its own block.** A message marked `replayed`
+  (staged `!` output, a plan kickoff) redraws with the label as its first line
+  and the body beneath it, collapsed through the normal output-head rule,
+  without opening a turn.
 
 The design intent: a restore reproduces the committed history (user prompts,
-tool headers with their bodies, and assistant content) minus thinking only.
-Dropping thinking is accepted as noise on a restore.
+tool headers with their bodies, injected blocks, and assistant content) minus
+thinking only. Dropping thinking is accepted as noise on a restore.
 
 ## Input
 
@@ -1247,6 +1249,16 @@ The key table:
 | Shift+Tab, Shift+→ | out-of-band `ControlModeCycle`, never consumed by the editor or a dialog. The front end cycles the permission mode forward |
 | Shift+← | out-of-band `ControlModeCycleBack`, the same cycle one mode back with the same dialog re-evaluation |
 | PgUp / PgDn (inline) | page the multi-line buffer: PgUp moves toward the head, PgDn toward the tail, each snapping onto the boundary when within one page or already on its row. In alt they scroll committed output (`render.scroll`) |
+
+An **open completion menu** (`/` commands and command arguments) holds the
+keyboard until resolved. The top candidate is highlighted from the moment it
+opens, `↑`/`↓` cycle the highlight and mark the selection *moved*, and `Tab`
+accepts the highlighted candidate (it is Tab's target, not Enter's). `Enter`
+on a moved selection accepts-and-submits in one press, otherwise it submits
+the line as typed, so an open menu never swallows a send. Any key that
+reaches the editor (a character, Backspace, or a caret move) drops the
+*moved* state, so Enter then sends what was typed rather than re-applying.
+`Esc` dismisses without inserting.
 
 A paste over a size threshold does not land in the editor: its content is stored
 on the UI and a marker naming the paste is inserted instead, expanded back to

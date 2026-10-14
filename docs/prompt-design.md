@@ -97,9 +97,8 @@ marker the model reads. A `!!` run sends nothing to the model.
 The `Input.Before` entry carrying it is an `agent.MessageInfo`, whose `Replayed`
 mark is what puts it back on screen: injected context the model still carries
 belongs in restored scrollback, so a resume or rewind redraws the run above the
-prompt it fed instead of showing a prompt whose premise has vanished. Replay
-draws it as its own block (first line the label, remainder the body), collapsed
-through the normal output head rather than shown whole as the live run was.
+prompt it fed instead of showing a prompt whose premise has vanished. How replay
+renders it lives in `tui-design.md`.
 
 ---
 
@@ -521,11 +520,9 @@ is classified with one fresh-context request to the session's current model
 ask the same question (may this run unattended?) for the same one-word answer:
 `allow`, `deny` or `unsure`. One vocabulary means one normaliser and no
 per-prompt parsing anywhere downstream. Reasoning is off, so a verdict costs no
-thinking tokens. In auto modes each prompted call is classified concurrently
-with its typing hold and its dialog, so an allow verdict approves the call as
-soon as it lands (mid-typing included, see agent-loop-design.md), and a dialog
-the user answers without waiting cancels its in-flight request rather than
-paying for it. Verdicts normalise by scanning for
+thinking tokens. In auto modes classification runs concurrently with the typing
+hold, so an allow verdict approves mid-typing (see `agent-loop-design.md`).
+Verdicts normalise by scanning for
 the verdict words anywhere in the reply: an `allow`/`allowed` token yields
 approval, `deny`/`denied`/`disallowed` denial, and
 **both present (or neither) is unsure**. The asymmetry is deliberate: `deny` and
@@ -533,12 +530,12 @@ approval, `deny`/`denied`/`disallowed` denial, and
 an unambiguous single-direction reply can fail open, and any conflict keeps the
 dialog open. A verdict word shadowed by a negator (`not`, `never`, `cannot`,
 `can't`, …) anywhere in the reply counts for nothing, so "I can't allow this"
-never fails open either. A response is never cached when unsure (usually
-transient: an abort, missing auth, an API error). Confident verdicts are
-LRU-cached per subject identity: tool name plus payload, working directory and
-rule set. Elided arguments also carry a digest of the full text in the key, so
-two calls sharing one rendering never share a verdict. Concurrent identical
-subjects share one in-flight request.
+never fails open either.
+
+Caching and single-flighting live below the prompt in `pkg/permit`, and unsure
+verdicts are never cached. One rule reaches up here: elided arguments carry a
+digest of the full text in the cache key, so two calls sharing one rendering
+never share a verdict.
 
 The modes differ in what they classify and by which rule set. **`auto`** judges
 unverifiable bash commands plus MCP/extension tool calls, sending the model the

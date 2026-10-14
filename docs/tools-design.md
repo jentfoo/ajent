@@ -111,82 +111,58 @@ Cost: write/edit read the target file twice per call (preview, then execute).
 The permission layer registers both: one guard from `permit.Barrier` runs static
 classification, and its asker resolves prompts into allow/deny with session
 memory. A reason typed for an "allow with note" or a denial is injected as a
-user message immediately after the tool call it governs, never as tool output.
-The model therefore treats it as operator intent (see `prompt-design.md`,
-provenance). Config's `permissions.safeCommands` lets a user declare extra
-tools, whole MCP server namespaces (`sectool` covers every `sectool__*` tool),
-or bash command lines to auto-allow as read-only, and it can never name
-`write`/`edit`. Core never does. `auto+write` is the one mode that runs
-`write`/`edit` without a prompt, and only when the call's path resolves under
-its roots (cwd and the temp dir), with resolution through the tool's own
-`PathPolicy`, so a symlink pointing outside lands out of scope and still
-prompts. Three carve-outs are load-bearing. A bash call's own `cwd` argument
-rebases every relative path, so it is resolved and scope-checked before the
-command is. A `cd` segment does the same mid-line: its target is checked like
-any other path, and both the old and new directory stay candidates, because a
-control operator may skip the `cd` and a later path must be in scope either way.
-That is why `cd sub && mkdir ../x` is refused. VCS metadata (`.git`, `.hg`,
-`.svn`) is excluded from the roots, since a hook or `core.hooksPath` written
-there is code that executes on the next git invocation. `rmdir -p` is permitted
-because it walks only the operand's own components, so its shallowest one is
-scope-checked and everything it can reach sits under that.
-The `WithUserInitiated` marker rides the context so a user's own staged `!` shell
-line is exempt in every permission mode, because it is the human's shell, not the
-model's. Shell commands are name-trusted only when they have no exec or write
-form. `awk`, `rg` and `sort` are verified per invocation like sed, and anything
-unverifiable prompts. A head is trusted by name only when it is a bare word the
-PATH could resolve: `./bin/cat`, `../tooling/jq` and `/tmp/x/git` name no
-command at all, because an executable written earlier under an allowlisted name
-must never inherit its verdict. Such lines prompt like anything unverifiable,
-never reaching an unattended classifier, a grant or session memory in the
-dialog. A bare `.sh` head likewise keeps its literal name instead of folding to
-the script's stem, a double quote in the head refuses naming (it is the
-scanner's quoted-region placeholder), and `safeCommands` match argv only under
-a slash-free head for the same reasons. Deny entries keep folding basenames,
-their over-match failing safe. Here-document bodies are the reading command's
-data, never shell, so they never contribute command names (a python script
-inside `<<'EOF'` names only `python`) and never match grants or read-only
-verdicts. The deny side alone reads bodies: an interpreter's body scans like a
-`-c` payload, and an unquoted delimiter leaves substitution live in a body
-whatever the reader, the shell expanding it before the reader sees the text.
-The same unquoted body still fails unsafe on the allow side for carrying `$(`
-or a backtick. A subshell `( … )` fails unsafe the same way: its
-contents execute but are not this line's tokens, so it prompts in every mode
-rather than being scanned as named commands. Nested interpreters (`sh -c`,
-`eval`) are likewise unnameable, with one asymmetry: the deny list resolves or
-extracts whatever hides the head (interpreter payloads, subshell/group/case
-bodies, substitution, keyword and launcher prefixes), since a configured
-refusal must hold in every mode, while safe lists and read-only checks never
-see inside.
+user message immediately after the tool call it governs, never as tool output,
+so the model treats it as operator intent (see `prompt-design.md`,
+provenance). The classification decisions that shape everything else:
 
-An output redirect is not an unsafe op: the scanner records each `>`/`>>`
-target, and the gates decide. The read-only verdict still refuses every
-redirect (it writes), while `auto+write` and configured `safeCommands` run one only
-when every target resolves inside the write roots from every possible `cd`
-baseline, the same check `mkdir` path arguments get. A target carrying `$`,
-glob, brace or `~` expansion never verifies, since the shell would resolve it
-after the check. A quoted target never verifies either, because `"` escapes inside are
-approximated, so no quoted form is a trusted literal path. `<>` opens its
-target for writing too, so it records and gates like `>`. The bash network
-pseudo-devices are the one exception on both sides: a `>`/`>>` target of
-`/dev/tcp` or `/dev/udp` is never verifiable by any scope, since opening it is
-an outbound connection, not a write placement, and an input redirect to one
-flags unsafe outright. Network is never read-only, by direction or by
-any verdict. Ordinary input redirects (`cat < Makefile`) neither record nor
-flag: stdin is read, and the read-only verdict keeps allowing them. A line whose
-targets all resolve stays nameable for session memory and the approval dialog:
-`go test ./... > /tmp/t.log` grants `go test`, the same heads running whether
-output goes to a terminal or a verified file. Grants narrow to a subcommand
-for subcommand-verb heads (`git`, `go`, `make`, `docker`, `kubectl`, `npm`,
-`cargo`), so `git fetch` for session never covers `git push`, while operand
-commands (`rm`, `ifconfig`) stay head-granular. A head grant from an older
-line or `--allow-tools` still covers every narrowed key under it. A grant
-never blesses a write the barrier cannot place: a redirect line matches any
-grant (earned, granted, or `--allow-tools`) only when the mode allows writes
-and every target resolves inside the roots from every possible `cd`
-baseline. In the read-only modes it never matches one at all. A network
-pseudo-device target never matches a grant in any mode, for the same reason:
-an outbound connection is not a placeable write.
+- Config's `permissions.safeCommands` declares extra tools, whole MCP server
+  namespaces (`sectool` covers every `sectool__*` tool) or bash command lines to
+  auto-allow as read-only. It can never name `write`/`edit`. Core never does.
+- `auto+write` is the one mode that runs `write`/`edit` without a prompt, and
+  only when the call's path resolves under its roots (cwd and the temp dir)
+  through the tool's own `PathPolicy`, so a symlink pointing outside lands out
+  of scope and still prompts.
+- A bash call's own `cwd` argument rebases every relative path, so it is
+  resolved and scope-checked before the command is. A `cd` segment does the
+  same mid-line, and both the old and new directory stay candidates, because a
+  control operator may skip the `cd`. That is why `cd sub && mkdir ../x` is
+  refused.
+- VCS metadata (`.git`, `.hg`, `.svn`) sits outside the roots: a hook or
+  `core.hooksPath` written there is code that executes on the next git
+  invocation.
+- A user's own staged `!` shell line rides the `WithUserInitiated` marker and
+  is exempt in every permission mode, because it is the human's shell, not the
+  model's.
+- A head is trusted by name only when it is a bare word the PATH could resolve,
+  so an executable written earlier under an allowlisted name never inherits its
+  verdict. Anything unverifiable prompts, never reaching an unattended
+  classifier, a grant or session memory in the dialog, and `safeCommands`
+  match argv only under a slash-free head for the same reason.
+- Heredoc and subshell bodies are not this line's tokens on the allow side: an
+  interpreter payload or `( … )` prompts rather than being scanned as named
+  commands. The deny list alone resolves whatever hides the head, since a
+  configured refusal must hold in every mode while any allow-side resolution
+  could over-match into an allowance.
+
+An output redirect is not itself an unsafe op: the scanner records each
+`>`/`>>` target and the gates decide. The read-only verdict refuses every
+redirect, while `auto+write` and configured `safeCommands` run one only when
+every target resolves inside the write roots from every possible `cd` baseline,
+the same check `mkdir` path arguments get. A target carrying `$`, glob or quote
+expansion never verifies, since the shell would resolve it after the check.
+The network pseudo-devices are the exception on both sides: a `/dev/tcp` or
+`/dev/udp` target is an outbound connection, not a write placement, so no scope
+verifies one and an input redirect from one flags unsafe outright. Network is
+never read-only, by direction or by any verdict. Ordinary input redirects
+(`cat < Makefile`) neither record nor flag.
+
+A line whose targets all resolve stays nameable for session memory and the
+approval dialog: `go test ./... > /tmp/t.log` grants `go test`. Grants narrow to
+a subcommand for subcommand-verb heads, so `git fetch` for session never covers
+`git push`, an older head grant or `--allow-tools` entry covers every narrowed
+key under it, and a grant never blesses a write the barrier cannot place: a
+redirect line matches one only when the mode allows writes and every target
+resolves inside the roots from every possible `cd` baseline.
 
 ### Headless: the tool set is the gate
 
