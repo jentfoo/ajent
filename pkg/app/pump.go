@@ -119,11 +119,16 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 					}
 					continue // queued as a dimmed row; staged output rides its delivery, not its submit
 				}
-				// direct dispatch: delivery is now, so staged shell output flushes ahead
-				// of the message, waiting for any in-flight command to finish first
-				before := stager.Flush(ctx)
-				in.Before = append(before, in.Before...)
-				est = submitEstimate(in, pending)
+				// read once: a held submit must consume nothing, and beforePrompt may
+				// clear the gate but never sets one
+				parked := hooks.parked != nil && hooks.parked()
+				if !parked {
+					// direct dispatch: delivery is now, so staged shell output flushes ahead
+					// of the message, waiting for any in-flight command to finish first
+					before := stager.Flush(ctx)
+					in.Before = append(before, in.Before...)
+					est = submitEstimate(in, pending)
+				}
 				// only reached with no drain running, so a workflow may branch here
 				captured := false
 				if hooks.beforePrompt != nil {
@@ -135,7 +140,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 				}
 				// parked at a user gate: only the captured submission clears it, so
 				// anything else joins the queued rows and delivers once the gate passes
-				if !captured && hooks.parked != nil && hooks.parked() {
+				if !captured && parked {
 					q.hold(in, echo, est)
 					if gate != nil {
 						gate.taken()

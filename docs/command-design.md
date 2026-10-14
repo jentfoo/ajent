@@ -348,12 +348,13 @@ staged against the branch just left must not ride the new one's first prompt.
 in-flight run, drops the staged set and reports zero back to the bar.
 
 **Delivery timing.** Staged output only leaves the stager when a prompt
-delivers, never when it is submitted. A direct dispatch (no turn running)
-flushes at submit, since submit and delivery are the same moment. A queued
-submit does not consume anything. Finished results attach at delivery, so an
-Esc or Alt+Up that recovers the prompt to the editor leaves staged output
-untouched, still counted on the context bar, waiting for whichever prompt
-delivers next. A queued batch first waits out still-running commands, so output
+delivers, never when it is submitted. A direct dispatch (no turn running, no
+workflow gate parked) flushes at submit, since submit and delivery are the same
+moment. A queued submit consumes nothing, and a submit held at a workflow gate
+queues as a row rather than delivering: it consumes nothing too. Finished
+results attach at delivery, so an Esc or Alt+Up that recovers the prompt to the
+editor leaves staged output untouched, still counted on the context bar, waiting
+for whichever prompt delivers next. A queued batch first waits out still-running commands, so output
 the user watched finish rides the batch it was meant for, and an abort during
 that wait consumes nothing. Multiple staged commands flush together, in
 submission order, each as its own **user** message. A run stays tracked for

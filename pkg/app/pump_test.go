@@ -14,7 +14,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/tokens"
+	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
@@ -308,6 +310,77 @@ func TestRunPumpParkedHold(t *testing.T) {
 	}, 5*time.Second, time.Millisecond)
 	assert.Contains(t, texts(p.Requests()[0]), "kickoff") // the gated submit ran first
 	assert.Contains(t, texts(p.Requests()[1]), "note")    // held input landed behind it
+}
+
+// TestRunPumpParkedSkipsFlush pins the P2-004 fix: a submit held at the plan
+// gate must consume no staged output. Held then recalled, and the gated approval
+// after it, both leave the `!` result in the stager for a later prompt.
+func TestRunPumpParkedSkipsFlush(t *testing.T) {
+	t.Parallel()
+
+	ui := newPumpTestUI(t)
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textTurn("kickoff reply")},
+		{Events: textTurn("later reply")},
+	}}
+	ag, st := scriptedAgent(p)
+	console := &uiConsole{ui: ui, commands: command.NewRegistry()}
+
+	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "parked-flush"})
+	require.NoError(t, err)
+	stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+	var mu sync.Mutex
+	var barEst int
+	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+	expander := refs.NewExpander(nil, agent.NopSink{}, tools.PathPolicy{Cwd: t.TempDir()}, nil)
+
+	var captured bool
+	hooks := planHooks{
+		beforePrompt: func(_ context.Context, in agent.Input) (agent.Input, bool) {
+			if captured || in.Injected {
+				return in, false // approval taken, and the gate never captures injected input
+			}
+			captured = true // the gated submit starts the implementor's turn
+			return agent.Input{Text: "kickoff", Injected: true}, true
+		},
+		parked: func() bool { return !captured },
+	}
+
+	pump := make(chan pumpLine, 4)
+	started := newStartedFlag(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	var drain drainWaiter
+	go runPump(ctx, pump, ag, console, stager, expander,
+		false, ui, started, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
+
+	stager.Run("echo boom", false)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return barEst > 0 // the `!` output counts on the bar once staged
+	}, 10*time.Second, time.Millisecond)
+
+	// held at the gate: no turn, and the staged output was never consumed. The
+	// gate never captures injected input, so it holds instead of approving
+	pump <- pumpLine{kind: command.KindPrompt, rest: "note", input: &agent.Input{Text: "note", Injected: true}}
+	require.Eventually(t, func() bool { return q.pending() == 1 }, time.Second, time.Millisecond)
+	require.True(t, q.recall()) // Alt+Up: the held line leaves the queue
+	mu.Lock()
+	assert.Positive(t, barEst) // consuming it would have reported zero
+	mu.Unlock()
+
+	// the gated approval starts the implementor's turn without the staged output
+	pump <- pumpLine{kind: command.KindPrompt, rest: "the plan"}
+	require.Eventually(t, func() bool { return len(p.Requests()) == 1 }, 5*time.Second, time.Millisecond)
+	assert.NotContains(t, texts(p.Requests()[0]), "User Ran")
+
+	// a later prompt delivers the staged output instead of losing it
+	pump <- pumpLine{kind: command.KindPrompt, rest: "and then?"}
+	require.Eventually(t, func() bool { return len(p.Requests()) == 2 }, 5*time.Second, time.Millisecond)
+	assert.Contains(t, texts(p.Requests()[1]), "User Ran: echo boom")
+	assert.Contains(t, texts(p.Requests()[1]), "and then?")
 }
 
 func TestStartDrainInterruptLandsFill(t *testing.T) {

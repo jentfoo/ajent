@@ -98,9 +98,9 @@ non-injected (typed) submission clears the gate, and injected context is never
 captured as approval, whether a staged `!` flush, a permission-barrier note or
 a sub-agent completion steer. This mirrors the Planning phase guard.
 
-The captured submission is stripped to its text: staged `!shell` results and
-pasted images arrive as framing around it (`Before`/`Blocks`), not plan content,
-and are dropped rather than pinned ahead of a kickoff whose root starts from
+The captured submission is stripped to its text: staged `!shell` results never
+reach a gated submit (the pump flushes nothing while parked), and pasted images
+are dropped rather than pinned ahead of a kickoff whose root starts from
 nothing else.
 
 The gate also bounds the steer queue, because queued delivery skips
