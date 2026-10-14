@@ -718,8 +718,9 @@ stays ignored, and the `agent_*` bar stays applied last.
 defaults to HEAD and `from` names any commit-ish, so one call answers both "what
 changed since I last committed" and "what changed since release-X". Work-tree mode
 diffs **everything since the base**, committed and uncommitted together, as `git diff
-<ref>` does. It walks the union of the base tree's paths and the status entries,
-never just the HEAD-relative status. Untracked files are named in a trailing note,
+<ref>` does. Candidate paths are the union of the base tree, HEAD's tree and the
+status entries: status alone is HEAD-relative and would miss files committed since
+the base but clean against HEAD. Untracked files are named in a trailing note,
 never diffed, matching git. `worktree` is only valid as `to` (it is the newer
 state), so `from: "worktree"` is a usage error.
 

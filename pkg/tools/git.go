@@ -438,12 +438,34 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 
 	keep := gitPathScope(file) // matches everything when file is empty
 	paths := make(map[string]struct{}, len(st))
-	_ = base.Files().ForEach(func(f *object.File) error {
-		if keep(f.Name) {
-			paths[f.Name] = struct{}{}
+	// seedPaths adds a tree's in-scope file names; walk errors propagate so a
+	// broken tree never reads as absent files
+	seedPaths := func(t *object.Tree) error {
+		return t.Files().ForEach(func(f *object.File) error {
+			if keep(f.Name) {
+				paths[f.Name] = struct{}{}
+			}
+			return nil
+		})
+	}
+	if err := seedPaths(base); err != nil {
+		return err
+	}
+	// status entries are HEAD-relative: files committed since base but clean
+	// against HEAD appear in none, so seed HEAD's tree too
+	head, err := gitCommit(r, "HEAD")
+	if err != nil && !errors.Is(err, errNoCommits) {
+		return err
+	}
+	if head != nil && head.TreeHash != base.Hash { // identical trees add nothing
+		headTree, err := gitTree(head)
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+		if err := seedPaths(headTree); err != nil {
+			return err
+		}
+	}
 	for path := range st {
 		if keep(path) {
 			paths[path] = struct{}{}
