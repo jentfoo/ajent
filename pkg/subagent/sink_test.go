@@ -2,8 +2,10 @@ package subagent
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -151,4 +153,20 @@ func TestSinkStreamSwitchStartsFresh(t *testing.T) {
 	s.Thinking("reasoning here")
 	s.Text("the answer")
 	require.Eventually(t, func() bool { return c.rowText("sub-11") == "sub-11  the answer" }, time.Second, 5*time.Millisecond)
+}
+
+func TestSinkClipsHugeLine(t *testing.T) {
+	t.Parallel()
+
+	// a line longer than maxBuf keeps only its head: the cut must stay rune-aligned
+	// so the row never publishes invalid UTF-8 until the next delta replaces it
+	c := newCapture()
+	s := newChildSink("sub-14", 14, c.recordRow)
+
+	line := strings.Repeat("\u00e9", maxBuf+10) // 2-byte runes: a byte-exact cut at maxBuf would split one
+	s.Text(line)
+
+	got := c.rowText(s.id)
+	assert.True(t, utf8.ValidString(got))
+	assert.Equal(t, rowLine(s.id, strings.Repeat("\u00e9", maxBuf-1)+"…"), got)
 }

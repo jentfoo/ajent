@@ -13,8 +13,9 @@ import (
 // streaming response does not repaint the row per token.
 const deltaFlush = 150 * time.Millisecond
 
-// maxBuf caps how much raw streamed text one row accumulates, keeping on overflow
-// only a clean head so the display never jumps to its tail, and tui.SetActivity then elides it to window width.
+// maxBuf caps how much streamed text one row accumulates, in runes: on overflow only
+// a clean head survives, rune-aligned so the row never carries invalid UTF-8, and
+// tui.SetActivity then elides it to window width.
 const maxBuf = 2048
 
 // Which stream owns buf: thinking reasoning or assistant text. They alternate
@@ -138,7 +139,7 @@ func (s *childSink) accumulate(delta string, src stream) {
 			b = b[i+1:]
 		}
 		if len(b) > maxBuf { // keep only the head so a huge single line never jumps
-			b = b[:maxBuf]
+			b = strutil.Clip(b, maxBuf) // rune-aware cut: a clipped row always stays valid UTF-8
 		}
 		s.buf = b
 	}

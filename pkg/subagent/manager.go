@@ -64,7 +64,7 @@ type Manager struct {
 
 	wg sync.WaitGroup
 
-	pubMu sync.Mutex // serializes a status read with its callback, so a stale count never lands last
+	pubMu sync.Mutex // serializes each keyed publish (status segment, notice) with its snapshot
 
 	mu          sync.Mutex
 	jobs        map[string]*job
@@ -460,6 +460,11 @@ func (m *Manager) onComplete(j *job) {
 // completion since the last delivered steer, so the collapsed line reads as one
 // batch instead of one row per agent.
 func (m *Manager) enqueue(id string) {
+	// pubMu spans the snapshot and callback: near-simultaneous completions must
+	// publish in append order, or a stale smaller batch lands after the full one
+	m.pubMu.Lock()
+	defer m.pubMu.Unlock()
+
 	m.mu.Lock()
 	if !slices.Contains(m.pending, id) {
 		m.pending = append(m.pending, id)
@@ -642,8 +647,9 @@ func (m *Manager) publishStatus() {
 			running++
 		case StatusDone:
 			done++
-		default: // terminal, not live
-			continue
+			continue // terminal, not live: its stale age must never feed the note
+		default:
+			continue // aborted or errored: no longer shown at all
 		}
 		if d := time.Since(started); d > oldest { // started is stamped for every live job
 			oldest = d

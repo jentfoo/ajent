@@ -579,6 +579,69 @@ func TestOrphanedCompletionRecovered(t *testing.T) {
 	assert.Contains(t, ins[0].Text, id)
 }
 
+func TestEnqueueSerializesNotices(t *testing.T) {
+	t.Parallel()
+
+	// two near-simultaneous completions must publish in append order: while one
+	// notice is still mid-publish, a second enqueue may not complete and let the
+	// stale smaller batch land after the full one
+	c := newCapture()
+	var mu sync.Mutex // guards held, written from the Notice callback goroutine
+	held := false     // the first notice's publish is paused mid-flight
+	release := make(chan struct{})
+	var unblock sync.Once
+	m := New(wired(Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+		Notice: func(s string) {
+			if strings.Contains(s, "sub-1") && !strings.Contains(s, "sub-2") {
+				mu.Lock()
+				held = true
+				mu.Unlock()
+				<-release // hold it open while the second completion enqueues
+			}
+			c.mu.Lock()
+			c.notices = append(c.notices, s)
+			c.mu.Unlock()
+		},
+	}))
+	t.Cleanup(m.Close)
+	t.Cleanup(func() { unblock.Do(func() { close(release) }) }) // unwind on an earlier failure
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m.enqueue("sub-1")
+	}()
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return held
+	}, 2*time.Second, 5*time.Millisecond)
+
+	done := make(chan struct{})
+	wg.Add(1)
+	go func() { // a second completion lands while the first is still on screen
+		defer wg.Done()
+		defer close(done)
+		m.enqueue("sub-2")
+	}()
+
+	// serialized publishes: sub-2 cannot finish until the blocked publish returns
+	require.Never(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, 5*time.Millisecond)
+
+	unblock.Do(func() { close(release) })
+	wg.Wait()
+	assert.Equal(t, "Sub-agents sub-1, sub-2 completed", c.lastNotice())
+}
+
 func TestOnCompleteIgnoresRunningJob(t *testing.T) {
 	t.Parallel()
 
@@ -894,6 +957,51 @@ func TestStatusSegmentAndList(t *testing.T) {
 	}
 	mu.Unlock()
 	assert.True(t, found)
+}
+
+func TestStatusAgeIgnoresFinishedJobs(t *testing.T) {
+	t.Parallel()
+
+	// a finished job keeps its transcript entry for the session: its long-gone
+	// age must never read as if it were still live in a fresh fan-out's note
+	var mu sync.Mutex // publishStatus runs from concurrent job goroutines
+	var last string
+	m := New(wired(Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+		Status: func(text, _ string) {
+			if text == "" {
+				return
+			}
+			mu.Lock()
+			last = text
+			mu.Unlock()
+		},
+	}))
+	t.Cleanup(m.Close)
+
+	id := m.start("stuck", "", "") // pinned running by the blocking provider
+	require.Eventually(t, func() bool {
+		s, ok := jobStatus(m, id)
+		return ok && s == StatusRunning
+	}, 2*time.Second, 5*time.Millisecond)
+
+	// a finished job whose entry lingers far past its runtime
+	old := stubJob(m, 2)
+	m.mu.Lock()
+	m.jobs[old.id] = old
+	m.mu.Unlock()
+	t.Cleanup(old.cancel)
+	old.finish(StatusDone, "", nil)
+	old.mu.Lock()
+	old.started = time.Now().Add(-10 * time.Minute)
+	old.mu.Unlock()
+
+	m.publishStatus()
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Contains(t, last, "1 running")
+	assert.Contains(t, last, "1 done")
+	assert.NotContains(t, last, "(oldest 10m", "a finished job's age must not feed the note")
 }
 
 func TestStatusPublishesOnActivation(t *testing.T) {
