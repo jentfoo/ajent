@@ -377,7 +377,11 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 
 	for _, d := range defs {
 		n := s.name + "__" + d.Name
-		tool := Bridge(s.name, d, c, BridgeOptions{ReadOnly: d.ReadOnly, Timeout: dur})
+		tool := Bridge(s.name, d, c, BridgeOptions{
+			ReadOnly: d.ReadOnly,
+			Timeout:  dur,
+			Diag:     s.diag,
+		})
 		st := StateDisabled // known but inactive by default, config-off or a restored subset leaves the rest off
 		if m.impliedEnabled(cfg, n) {
 			st = StateEnabled

@@ -1061,6 +1061,40 @@ func TestReportScanError(t *testing.T) {
 	}
 }
 
+func TestBridgeFailureLogs(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var notices []string
+	fr := newFakeRegistrar()
+	mgr := New(map[string]ServerConfig{
+		"fake": {
+			Command: buildFakeServer(t),
+			Args:    []string{"-slow"}, // every call blocks until the client gives up
+			Timeout: FlexDuration(50 * time.Millisecond),
+		},
+	}, wired(Options{
+		Registrar: fr,
+		Notice:    func(msg string, warn bool) { mu.Lock(); defer mu.Unlock(); notices = append(notices, msg) },
+	}))
+	t.Cleanup(mgr.Close)
+
+	require.NoError(t, mgr.Connect(t.Context(), "fake")) // the status row still says connected
+	tool, ok := fr.toolByName("fake__tool_00")
+	require.True(t, ok)
+	res, err := tool.Execute(t.Context(), agent.ToolCall{ID: "1", Name: tool.Name()}, agent.NewOutput(agent.NopSink{}, "c"))
+	require.NoError(t, err) // a failed call is a result, never an abort
+	assert.True(t, res.IsError)
+
+	// the diag lands synchronously inside Execute, so the ring holds it on return
+	logs := strings.Join(mgr.Logs("fake"), "\n")
+	assert.Contains(t, logs, `call failed: call "tool_00"`)
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Empty(t, notices) // no history entry behind the log line
+}
+
 // jsonRawObject is a minimal valid tool schema.
 var jsonRawObject = []byte(`{"type":"object","properties":{}}`)
 

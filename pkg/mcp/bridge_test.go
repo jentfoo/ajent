@@ -66,18 +66,40 @@ func TestBridge(t *testing.T) {
 		assert.True(t, res.IsError)
 	})
 
-	t.Run("transport_failure_sets_display", func(t *testing.T) {
+	t.Run("failure_logs_to_diag_sink", func(t *testing.T) {
 		c, err := Connect(t.Context(), "fake", stdioConfig(t))
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = c.Close() })
 		defs, err := c.Tools(t.Context())
 		require.NoError(t, err)
-		b := Bridge("fake", defs[0], c, BridgeOptions{Timeout: 1}) // 1ns, instantly exceeded
+
+		var logged []string
+		b := Bridge("fake", defs[0], c, BridgeOptions{
+			Timeout: 1, // 1ns, instantly exceeded
+			Diag:    func(msg string) { logged = append(logged, msg) },
+		})
 
 		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, res.IsError)
-		assert.NotEmpty(t, res.Display)             // history renders the failure, not a blank row
-		assert.Contains(t, res.Display, "mcp fake") // the bridge names the server once
+		require.Len(t, logged, 1) // the failure reaches /mcp logs exactly once
+		assert.Contains(t, logged[0], `call "tool_00"`)
+	})
+
+	t.Run("failure_result_shape", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+		defs, err := c.Tools(t.Context())
+		require.NoError(t, err)
+
+		b := Bridge("fake", defs[0], c, BridgeOptions{Timeout: 1}) // nil Diag must still yield the error result
+		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err) // transport failure is a result, not a Go error
+		assert.True(t, res.IsError)
+		text, ok := res.Content.AsText()
+		require.True(t, ok)
+		assert.Contains(t, text, "mcp fake") // the bridge names the server once
+		assert.Equal(t, text, res.Display)   // history renders the same one-line failure
 	})
 }
