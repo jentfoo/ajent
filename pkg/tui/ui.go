@@ -161,10 +161,12 @@ type UI struct {
 	completionSeq int                 // generation guard for async path queries
 	ruleFlash     bool                // prompt rule drawn accented until the flash timer clears it
 	historySearch func() []SearchItem // nil disables Ctrl+R history search
+	promptHistory func() []string     // plain ↑/↓ recall list, nil falls back to historySearch texts
 	search        *searchOverlay      // active search state, nil when closed
 
-	// plain ↑/↓ browse the same recorded-prompt list that Ctrl+R searches (see
-	// SetHistorySearch), so arrows recall prompts without opening the overlay.
+	// plain ↑/↓ browse the list SetPromptHistory installs, falling back to the
+	// history-search source's texts when none is set or it comes back empty
+	// (a fresh session has no prompts yet, so arrows still reach prior sessions).
 	// Every non-recall buffer replacement calls resetPromptNavLocked, or an
 	// arrow at a buffer edge would clobber fresh content with a stale entry.
 	prompts   []string // newest-first prompt texts, nil falls back to editor history
@@ -1338,6 +1340,18 @@ func (u *UI) SetHistorySearch(fn func() []SearchItem) {
 	u.repaint()
 }
 
+// SetPromptHistory installs the plain ↑/↓ recall source, scoped however the
+// host chooses. An empty list falls back to the history-search source's texts.
+// fn runs off the key loop; nil returns arrows to that fallback directly.
+func (u *UI) SetPromptHistory(fn func() []string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	u.promptHistory = fn
+	u.resetPromptNavLocked() // a swapped list must not resume mid-browse on stale state
+	u.repaint()
+}
+
 // openSearchLocked opens the Ctrl+R overlay and starts its provider off the key
 // loop, so a slow scan never blocks further input. Caller holds the lock.
 func (u *UI) openSearchLocked() {
@@ -1363,25 +1377,29 @@ func (u *UI) acceptSearchLocked() {
 	u.search = nil
 }
 
-// ensurePromptNavLocked lazily loads the recorded-prompt list for plain ↑/↓ once,
-// so arrows scroll the same set Ctrl+R searches. A nil or empty source leaves
-// prompts nil, in which case arrows fall back to editor history navigation.
-// Caller holds the lock, and the provider is TTL-cached upstream so this is cheap after
-// a first load and never scans per keystroke.
+// ensurePromptNavLocked lazily loads the ↑/↓ prompt list once per navigation
+// episode: the arrow source when installed, else the history-search source's
+// texts. An empty arrow list also falls back, so a fresh session with no
+// prompts of its own still recalls the search scope's entries. A nil or empty
+// result leaves prompts nil, and arrows fall back to editor history navigation.
+// Caller holds the lock; providers cache upstream so this is cheap after a
+// first load and never scans per keystroke.
 func (u *UI) ensurePromptNavLocked() {
-	if u.historySearch == nil || u.prompts != nil {
+	if u.prompts != nil {
 		return
 	}
-	items := u.historySearch()
-	ps := make([]string, 0, len(items))
-	for _, it := range items {
-		ps = append(ps, it.Text)
+	var ps []string
+	if u.promptHistory != nil {
+		ps = u.promptHistory()
+	}
+	if len(ps) == 0 && u.historySearch != nil {
+		for _, it := range u.historySearch() {
+			ps = append(ps, it.Text)
+		}
 	}
 	if len(ps) > 0 {
 		u.prompts = ps
 		u.promptIdx = -1 // at the live buffer, first ↑ recalls the newest prompt
-	} else {
-		u.prompts = nil // no recorded prompts: keep editor-history fallback active
 	}
 }
 

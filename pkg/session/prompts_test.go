@@ -70,7 +70,7 @@ func TestStorePrompts(t *testing.T) {
 
 		prompts, perr := s.Prompts(ws)
 		require.NoError(t, perr)
-		assert.Equal(t, []string{"other", "dup"}, promptTexts(prompts))
+		assert.Equal(t, []string{"other", "dup"}, PromptTexts(prompts))
 	})
 
 	t.Run("multi_line_joins_blocks", func(t *testing.T) {
@@ -92,7 +92,7 @@ func TestStorePrompts(t *testing.T) {
 
 		prompts, perr := s.Prompts(ws)
 		require.NoError(t, perr)
-		assert.Equal(t, []string{"a\nb", "line one\nline two"}, promptTexts(prompts))
+		assert.Equal(t, []string{"a\nb", "line one\nline two"}, PromptTexts(prompts))
 	})
 
 	// system-injected context (sub-agent completion steers, permission notes) never surfaces as a recallable prompt.
@@ -113,7 +113,7 @@ func TestStorePrompts(t *testing.T) {
 
 		prompts, perr := s.Prompts(ws)
 		require.NoError(t, perr)
-		assert.Equal(t, []string{"a real prompt"}, promptTexts(prompts))
+		assert.Equal(t, []string{"a real prompt"}, PromptTexts(prompts))
 	})
 
 	t.Run("limit", func(t *testing.T) {
@@ -176,7 +176,7 @@ func TestPromptIndexPrompts(t *testing.T) {
 		require.NoError(t, aerr)
 
 		pIdx := NewPromptIndex(s, ws)
-		assert.Equal(t, []string{"one"}, promptTexts(pIdx.Prompts()))
+		assert.Equal(t, []string{"one"}, PromptTexts(pIdx.Prompts()))
 
 		// inside the TTL an appended file does not trigger a rescan
 		setClock(time.UnixMilli(1_003_000).UTC()) // within 5s of the first scan
@@ -184,11 +184,11 @@ func TestPromptIndexPrompts(t *testing.T) {
 		require.NoError(t, err)
 		_, aerr = w2.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "two")})
 		require.NoError(t, aerr)
-		assert.Equal(t, []string{"one"}, promptTexts(pIdx.Prompts()))
+		assert.Equal(t, []string{"one"}, PromptTexts(pIdx.Prompts()))
 
 		// past the TTL a scan refreshes
 		setClock(time.UnixMilli(1_010_000).UTC()) // well beyond expires (1006002)
-		assert.Equal(t, []string{"two", "one"}, promptTexts(pIdx.Prompts()))
+		assert.Equal(t, []string{"two", "one"}, PromptTexts(pIdx.Prompts()))
 	})
 
 	t.Run("bump_refreshes", func(t *testing.T) {
@@ -204,7 +204,7 @@ func TestPromptIndexPrompts(t *testing.T) {
 		require.NoError(t, aerr)
 
 		pIdx := NewPromptIndex(s, ws) // default now hook, first scan sets a real-time expiry
-		assert.Equal(t, []string{"one"}, promptTexts(pIdx.Prompts()))
+		assert.Equal(t, []string{"one"}, PromptTexts(pIdx.Prompts()))
 
 		// an older file is added after the cache warmed, then a now bump refreshes
 		w2, err := Create(filepath.Join(dir, "2026-01-02T00-00-00Z-b.jsonl"), SessionData{Version: sessionVersion})
@@ -213,7 +213,59 @@ func TestPromptIndexPrompts(t *testing.T) {
 		require.NoError(t, aerr)
 
 		t.Cleanup(setPromptNow(time.UnixMilli(9_900_000_000_003).UTC())) // ~year 2300, past the first scan's real-time expiry
-		assert.Equal(t, []string{"two", "one"}, promptTexts(pIdx.Prompts()))
+		assert.Equal(t, []string{"two", "one"}, PromptTexts(pIdx.Prompts()))
+	})
+}
+
+func TestTranscriptIndexPrompts(t *testing.T) {
+	t.Parallel()
+
+	t.Run("recalls_newest_first_across_forks", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		w, err := s.Create(t.TempDir(), SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		for _, txt := range []string{"first", "second", "third"} {
+			_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, txt)})
+			require.NoError(t, aerr)
+		}
+		// the fork lives in the file even though HEAD moved back, so every branch surfaces
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "forked prompt")})
+		require.NoError(t, aerr)
+		require.NoError(t, w.Close())
+
+		idx := NewTranscriptIndex(w.Path())
+		assert.Equal(t, []string{"forked prompt", "third", "second", "first"}, idx.PromptTexts())
+	})
+
+	t.Run("append_refreshes", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		w, err := s.Create(t.TempDir(), SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "one")})
+		require.NoError(t, aerr)
+
+		idx := NewTranscriptIndex(w.Path())
+		assert.Equal(t, []string{"one"}, idx.PromptTexts())
+
+		_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "two")})
+		require.NoError(t, aerr)
+		assert.Equal(t, []string{"two", "one"}, idx.PromptTexts())
+	})
+
+	t.Run("missing_file_keeps_last", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "t.jsonl")
+		idx := NewTranscriptIndex(path)
+		assert.Empty(t, idx.PromptTexts()) // never scanned, nothing to keep
+
+		w, err := Create(path, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "kept")})
+		require.NoError(t, aerr)
+		require.NoError(t, w.Close())
+		assert.Equal(t, []string{"kept"}, idx.PromptTexts())
+
+		require.NoError(t, os.Remove(path))
+		assert.Equal(t, []string{"kept"}, idx.PromptTexts()) // a failed stat keeps the last list
 	})
 }
 
@@ -230,13 +282,4 @@ func setPromptFollowsClock() func() {
 	old := promptNow
 	promptNow = func() time.Time { return clock().UTC() }
 	return func() { promptNow = old }
-}
-
-// promptTexts returns each prompt's text in order.
-func promptTexts(ps []Prompt) []string {
-	out := make([]string, len(ps))
-	for i, p := range ps {
-		out[i] = p.Text
-	}
-	return out
 }

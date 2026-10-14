@@ -28,6 +28,21 @@ type Prompt struct {
 	At   time.Time
 }
 
+// PromptTexts returns each prompt's text in order.
+func PromptTexts(ps []Prompt) []string {
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = p.Text
+	}
+	return out
+}
+
+// PromptTexts returns the transcript's recorded prompt texts in Prompts' order,
+// refreshing the cache under the same rules.
+func (p *TranscriptIndex) PromptTexts() []string {
+	return PromptTexts(p.Prompts())
+}
+
 // Prompts returns the workspace's recorded user prompts, newest first and
 // deduplicated so each distinct text keeps only its most recent occurrence. A
 // directory with no sessions yields an empty slice without error.
@@ -125,6 +140,41 @@ func (p *PromptIndex) Prompts() []Prompt {
 		ps, _ := p.store.Prompts(p.workspace)
 		p.prompts = ps
 		p.expires = promptNow().Add(promptTTL)
+	}
+	return p.prompts
+}
+
+// TranscriptIndex serves one transcript's recorded prompts, re-read only when
+// the file changes.
+type TranscriptIndex struct {
+	path string
+
+	mu      sync.Mutex
+	scanned bool
+	size    int64
+	mod     time.Time
+	prompts []Prompt
+}
+
+// NewTranscriptIndex returns an index over the transcript at path.
+func NewTranscriptIndex(path string) *TranscriptIndex {
+	return &TranscriptIndex{path: path}
+}
+
+// Prompts returns the transcript's recorded user prompts, newest first across
+// every branch of its tree. Unchanged size and mtime reuse the last read; a
+// failed stat or read keeps the last good list.
+func (p *TranscriptIndex) Prompts() []Prompt {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	fi, err := os.Stat(p.path)
+	if err != nil {
+		return p.prompts
+	}
+	if !p.scanned || fi.Size() != p.size || !fi.ModTime().Equal(p.mod) {
+		p.prompts = filePrompts(p.path)
+		p.scanned, p.size, p.mod = true, fi.Size(), fi.ModTime()
 	}
 	return p.prompts
 }

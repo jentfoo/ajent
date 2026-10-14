@@ -623,7 +623,8 @@ recalling a pasted line from history still expands.
 The editor's line history is owned by `pkg/session`, not here: main appends
 every submitted message (prompt, `/cmd` and `!shell`, multi-line pastes included
 as one unit) to the workspace store at submit time, before `ParseLine` dispatch,
-so it persists whether or not a transcript/recorder is active. Recall (↑/↓ and
-Ctrl+R) walks that same store (`session.RecallIndex`). The storage format,
-secret-marker exclusion and compaction are documented in "Editor history" under
-`session-design.md`.
+so it persists whether or not a transcript/recorder is active. Ctrl+R walks the
+workspace-wide recall store (`session.RecallIndex`); plain ↑/↓ scope to the open
+session's own transcript (`session.TranscriptIndex`), falling back to the
+Ctrl+R scope until it has prompts. The storage format, secret-marker exclusion
+and compaction are documented in "Editor history" under `session-design.md`.

@@ -1194,71 +1194,26 @@ func TestUISearchArrowCommits(t *testing.T) {
 	}
 }
 
-func TestUIPlainArrowsScrollRecordedPrompts(t *testing.T) {
+func TestUIPromptHistory(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(40, 10)
-	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
-	u := newTestUI(t, v, pr)
-	u.SetHistorySearch(func() []SearchItem {
-		return []SearchItem{
-			{Text: "third"}, // newest first, as the provider returns them
-			{Text: "second"},
-			{Text: "first"}, // oldest
-		}
-	})
-
-	// plain ↑ is cursor-first: each recall fills the field with its caret at the
-	// end, so stepping older takes two presses. One Up reaches the start of the
-	// recalled line (moving nothing else), a second recalls the next entry.
-	submit := searchPress(u, key{typ: keyUp})
-	assert.Nil(t, submit)
-	assert.Equal(t, "third", u.editor.Value())
-
-	searchPress(u, key{typ: keyUp}) // caret to start of "third"
-	assert.Equal(t, "third", u.editor.Value())
-	assert.Equal(t, 0, u.editor.pos)
-	searchPress(u, key{typ: keyUp})
-	assert.Equal(t, "second", u.editor.Value())
-
-	searchPress(u, key{typ: keyUp}) // caret to start of "second"
-	searchPress(u, key{typ: keyUp})
-	assert.Equal(t, "first", u.editor.Value())
-
-	// at the oldest there is nothing more to recall. Up just moves within it.
-	searchPress(u, key{typ: keyUp}) // caret to start of "first"
-	assert.Equal(t, "first", u.editor.Value())
-	assert.Equal(t, 0, u.editor.pos)
-	searchPress(u, key{typ: keyUp})
-	assert.Equal(t, "first", u.editor.Value())
-
-	// ↓ is cursor-first too: the caret sits at the start of "first". One Down moves
-	// it back to the end before further Downs return newer toward the live draft.
-	searchPress(u, key{typ: keyDown})
-	assert.Equal(t, "first", u.editor.Value())
-	assert.Equal(t, len("first"), u.editor.pos)
-	searchPress(u, key{typ: keyDown})
-	assert.Equal(t, "second", u.editor.Value())
-	searchPress(u, key{typ: keyDown})
-	assert.Equal(t, "third", u.editor.Value())
-	searchPress(u, key{typ: keyDown})
-	assert.Empty(t, u.editor.Value())
-}
-
-func TestUIPromptNavResets(t *testing.T) {
-	t.Parallel()
-
-	// Every case arms recorded-prompt browsing from a typed draft (↑ to the
-	// buffer's start, then once more onto the newest entry), replaces the buffer
-	// some other way, and requires an edge ↓ to keep the new content instead of
-	// restoring the held draft over it.
-	newNavUI := func(items []SearchItem) *UI {
+	// newNavUI wires both recall sources: items feed Ctrl+R, arrow feeds plain
+	// ↑/↓. A nil arrow leaves the search texts as the arrow scope, matching the
+	// fresh-session fallback.
+	newNavUI := func(items []SearchItem, arrow []string) *UI {
 		v := newVT(40, 10)
 		pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
 		u := newTestUI(t, v, pr)
 		u.SetHistorySearch(func() []SearchItem { return items })
+		if arrow != nil {
+			u.SetPromptHistory(func() []string { return arrow })
+		}
 		return u
 	}
+	// Every armBrowse case starts recorded-prompt browsing from a typed draft (↑
+	// to the buffer's start, then once more onto the newest entry), then replaces
+	// the buffer some other way and requires an edge ↓ to keep the new content
+	// instead of restoring the held draft over it.
 	armBrowse := func(u *UI) {
 		u.SetInput("draft")
 		pressKey(u, key{typ: keyUp}) // caret to the buffer's start
@@ -1267,8 +1222,73 @@ func TestUIPromptNavResets(t *testing.T) {
 		require.True(t, u.browsingPrompts())
 	}
 
+	t.Run("plain_arrows_scroll_fallback", func(t *testing.T) {
+		u := newNavUI([]SearchItem{
+			{Text: "third"}, // newest first, as the provider returns them
+			{Text: "second"},
+			{Text: "first"}, // oldest
+		}, nil)
+
+		// plain ↑ is cursor-first: each recall fills the field with its caret at the
+		// end, so stepping older takes two presses. One Up reaches the start of the
+		// recalled line (moving nothing else), a second recalls the next entry.
+		submit := searchPress(u, key{typ: keyUp})
+		assert.Nil(t, submit)
+		assert.Equal(t, "third", u.editor.Value())
+
+		searchPress(u, key{typ: keyUp}) // caret to start of "third"
+		assert.Equal(t, "third", u.editor.Value())
+		assert.Equal(t, 0, u.editor.pos)
+		searchPress(u, key{typ: keyUp})
+		assert.Equal(t, "second", u.editor.Value())
+
+		searchPress(u, key{typ: keyUp}) // caret to start of "second"
+		searchPress(u, key{typ: keyUp})
+		assert.Equal(t, "first", u.editor.Value())
+
+		// at the oldest there is nothing more to recall. Up just moves within it.
+		searchPress(u, key{typ: keyUp}) // caret to start of "first"
+		assert.Equal(t, "first", u.editor.Value())
+		assert.Equal(t, 0, u.editor.pos)
+		searchPress(u, key{typ: keyUp})
+		assert.Equal(t, "first", u.editor.Value())
+
+		// ↓ is cursor-first too: the caret sits at the start of "first". One Down moves
+		// it back to the end before further Downs return newer toward the live draft.
+		searchPress(u, key{typ: keyDown})
+		assert.Equal(t, "first", u.editor.Value())
+		assert.Equal(t, len("first"), u.editor.pos)
+		searchPress(u, key{typ: keyDown})
+		assert.Equal(t, "second", u.editor.Value())
+		searchPress(u, key{typ: keyDown})
+		assert.Equal(t, "third", u.editor.Value())
+		searchPress(u, key{typ: keyDown})
+		assert.Empty(t, u.editor.Value())
+	})
+
+	t.Run("empty_list_falls_back_to_search", func(t *testing.T) {
+		// a fresh session has no prompts of its own: an empty arrow list must not
+		// strand arrows on editor history when the search scope has entries
+		u := newNavUI([]SearchItem{{Text: "cross session"}}, []string{})
+
+		searchPress(u, key{typ: keyUp})
+		assert.Equal(t, "cross session", u.editor.Value())
+	})
+
+	t.Run("own_list_shadows_search", func(t *testing.T) {
+		// a non-empty arrow list is the whole recall set: search entries stay out
+		// of plain ↑/↓ so each gesture keeps its own scope
+		u := newNavUI([]SearchItem{{Text: "cross session"}}, []string{"session own"})
+
+		searchPress(u, key{typ: keyUp})
+		assert.Equal(t, "session own", u.editor.Value())
+		searchPress(u, key{typ: keyUp}) // caret to start, already at the oldest
+		searchPress(u, key{typ: keyUp})
+		assert.Equal(t, "session own", u.editor.Value()) // nothing older: the list holds
+	})
+
 	t.Run("search_accept_disarms_browse", func(t *testing.T) {
-		u := newNavUI([]SearchItem{{Text: "alpha"}, {Text: "beta older"}})
+		u := newNavUI([]SearchItem{{Text: "alpha"}, {Text: "beta older"}}, nil)
 		armBrowse(u)
 
 		searchPress(u, key{typ: keyReverseSearch})
@@ -1284,7 +1304,7 @@ func TestUIPromptNavResets(t *testing.T) {
 	})
 
 	t.Run("search_nomatch_keeps_browse", func(t *testing.T) {
-		u := newNavUI([]SearchItem{{Text: "alpha"}})
+		u := newNavUI([]SearchItem{{Text: "alpha"}}, nil)
 		armBrowse(u)
 
 		// closing without a match replaces nothing, so the browse must stay armed:
@@ -1301,7 +1321,7 @@ func TestUIPromptNavResets(t *testing.T) {
 	})
 
 	t.Run("set_input_disarms_browse", func(t *testing.T) {
-		u := newNavUI([]SearchItem{{Text: "alpha"}})
+		u := newNavUI([]SearchItem{{Text: "alpha"}}, nil)
 		armBrowse(u)
 
 		u.SetInput("host text")
@@ -1311,7 +1331,7 @@ func TestUIPromptNavResets(t *testing.T) {
 	})
 
 	t.Run("prepend_input_disarms_browse", func(t *testing.T) {
-		u := newNavUI([]SearchItem{{Text: "alpha"}})
+		u := newNavUI([]SearchItem{{Text: "alpha"}}, nil)
 		armBrowse(u)
 
 		u.PrependInput("queued line")
@@ -1321,7 +1341,7 @@ func TestUIPromptNavResets(t *testing.T) {
 	})
 
 	t.Run("esc_clear_disarms_browse", func(t *testing.T) {
-		u := newNavUI([]SearchItem{{Text: "alpha"}})
+		u := newNavUI([]SearchItem{{Text: "alpha"}}, nil)
 		armBrowse(u)
 
 		pressKey(u, key{typ: keyEscape})
@@ -1331,7 +1351,7 @@ func TestUIPromptNavResets(t *testing.T) {
 	})
 
 	t.Run("ctrl_c_clear_disarms_browse", func(t *testing.T) {
-		u := newNavUI([]SearchItem{{Text: "alpha"}})
+		u := newNavUI([]SearchItem{{Text: "alpha"}}, nil)
 		armBrowse(u)
 
 		pressKey(u, key{typ: keyInterrupt})
@@ -1341,7 +1361,7 @@ func TestUIPromptNavResets(t *testing.T) {
 	})
 
 	t.Run("whitespace_enter_disarms_browse", func(t *testing.T) {
-		u := newNavUI([]SearchItem{{Text: "alpha"}})
+		u := newNavUI([]SearchItem{{Text: "alpha"}}, nil)
 		armBrowse(u)
 
 		for range "alpha" { // edit the recalled entry down to a lone space
@@ -1355,7 +1375,7 @@ func TestUIPromptNavResets(t *testing.T) {
 	})
 
 	t.Run("set_input_disarms_fallback", func(t *testing.T) {
-		u := newNavUI(nil) // no recorded prompts: arrows fall back to editor history
+		u := newNavUI(nil, nil) // no recorded prompts: arrows fall back to editor history
 		u.SetInput("sent line")
 		searchPress(u, key{typ: keyEnter}) // records it in the editor's own history
 		require.Len(t, u.editor.history, 1)

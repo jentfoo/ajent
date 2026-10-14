@@ -1308,12 +1308,15 @@ prompt's start and only a press already sitting on the very first character
 recalls older, symmetrically for Down on the last row. So scrolling history from
 an edited line takes two presses: one to reach the boundary, one to scroll.
 
-The recall source is shared: plain ↑/↓ (no Ctrl+R) walk the same newest-first
-set as the search overlay. First ↑ recalls your most recent sent line, further ↑
-steps older and ↓ returns to the live draft. The editor's in-memory history
-applies only when no recall source is installed (no session store). Browsing is
-fragile by design: every buffer replacement that is not itself a recall step (a
-sent line, an accepted search match, an Esc or Ctrl+C clear, a host-driven fill)
+The recall source is two-scoped: Ctrl+R searches the workspace-wide set (typed
+lines plus recorded prompts across sessions), while plain ↑/↓ (no Ctrl+R) walk
+the open session's own prompts when the host installs that list, falling back
+to the search set when it is absent or empty (a fresh session with no prompts
+of its own). First ↑ recalls your most recent sent line, further ↑ steps older
+and ↓ returns to the live draft. The editor's in-memory history applies only
+when no recall source is installed (no session store). Browsing is fragile by
+design: every buffer replacement that is not itself a recall step (a sent
+line, an accepted search match, an Esc or Ctrl+C clear, a host-driven fill)
 disarms it through `resetPromptNavLocked`, so an arrow at a buffer edge can
 never restore held state over fresh content.
 Like completion it is an in-place live-block overlay rather than an interaction,

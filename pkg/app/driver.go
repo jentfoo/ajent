@@ -553,14 +553,20 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
 
-	// Ctrl+R and ↑/↓ recall this workspace's typed lines merged with recorded
-	// prompts. Every submitted line also lands in the editor-history file now.
+	// Ctrl+R searches this workspace's typed lines merged with recorded prompts
+	// across sessions; plain ↑/↓ recall only the open session's own tree, falling
+	// back to that search scope until the session has prompts of its own. Every
+	// submitted line also lands in the editor-history file now.
 	var hist *session.EditorHistory
 	if store := promptStore(rec); store != nil {
 		hist, _ = session.NewEditorHistory(store, config.Cwd(), secretPrefix)
 		defer hist.Compact() // bounded rewrite at exit, last writer wins under concurrency
 		idx := session.NewRecallIndex(store, config.Cwd(), hist)
 		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
+		if rec != nil && rec.w != nil {
+			sess := session.NewTranscriptIndex(rec.w.Path())
+			ui.SetPromptHistory(func() []string { return session.PromptTexts(sess.Prompts()) })
+		}
 	}
 
 	if ctl != nil {

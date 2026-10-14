@@ -191,6 +191,11 @@ on a short TTL behind a mutex so it never rescans every
 transcript per keystroke. It is best effort: a scan failure yields an empty
 slice rather than an error.
 
+Plain ↑/↓ recall is scoped tighter: `TranscriptIndex` serves only the open
+session's own prompts (all branches of its tree, cached on size+mtime so live
+appends show up without rescans). A fresh session with no prompts of its own
+falls back to the Ctrl+R scope until it has some.
+
 Sessions are scoped to the workspace they started in, so resuming from elsewhere
 sees nothing and starts fresh (see "Resume modes").
 
