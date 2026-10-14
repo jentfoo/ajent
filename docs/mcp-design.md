@@ -224,11 +224,15 @@ package stays free of `pkg/tools`.
   reload or an automatic reconnect.
 - **Keep-state is reconciled against its era, never copied.** A captured
   enabled/disabled split mixes old defaults with deliberate `/tools` toggles,
-  which the registry alone cannot tell apart. So every capture names the config
-  that was in force when it was taken and keeps only names whose state departed
-  from what that config implied. Registration layers those over current
-  defaults, so an `enabled` flip reaches a connected server instead of being
-  pinned by pre-flip defaults while genuine toggles survive every refresh.
+  which the registry alone cannot tell apart. So the server remembers the
+  config that produced its current registration, and every capture classifies
+  the split against that era rather than the live config, keeping only names
+  whose state departed from what that era implied. A reload can flip the config
+  while the older registration still stands, so a capture reading the live
+  config would misread old defaults as deliberate toggles. Registration layers
+  the kept names over current defaults, so an `enabled` flip reaches a
+  connected server instead of being pinned by pre-flip defaults while genuine
+  toggles survive every refresh.
 
 **Lock ownership.** Each server guards its own mutable state (client,
 failure counters, discovered defs, config) under a per-server lock. The

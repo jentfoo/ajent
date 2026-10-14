@@ -78,6 +78,9 @@ type server struct {
 	warned map[string]bool    // surfaced warnings, so repeated discovery stays in /mcp logs only
 
 	mu sync.Mutex // sole guard for every mutable field above, m.mu covers only the servers map
+
+	regMu  sync.Mutex   // pairs each registration swap with its era record, captures read both as one
+	regEra ServerConfig // config that produced the source's current registration
 }
 
 // Manager supervises every configured MCP server's lifecycle.
@@ -115,6 +118,7 @@ func (m *Manager) newServer(name string, cfg ServerConfig) *server {
 	return &server{
 		name:   name,
 		cfg:    cfg,
+		regEra: cfg,
 		source: "mcp: " + name,
 		logs:   newRingLog(200),
 		notice: func(msg string, warn bool) {
@@ -252,7 +256,7 @@ func (m *Manager) dial(ctx context.Context, name string, s *server, disc int) er
 		return nil
 	}
 	cfg := s.config()
-	keep := m.captureLive(s.source, cfg) // registrar call stays off s.mu
+	keep := m.captureKeep(s) // registrar call stays off s.mu
 	s.mu.Lock()
 	if s.reopenKeep != nil { // restore the pre-death split across a reconnect
 		mergeToolState(keep, s.reopenKeep)
@@ -375,6 +379,9 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 	defs = filterTools(defs, cfg.Tools, cfg.ExcludeTools)
 	dur := time.Duration(cfg.Timeout)
 
+	// regMu spans the era write and the swap, so a capture never mixes generations
+	s.regMu.Lock()
+	s.regEra = cfg
 	for _, d := range defs {
 		n := s.name + "__" + d.Name
 		tool := Bridge(s.name, d, c, BridgeOptions{
@@ -397,6 +404,7 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 	if ro := readOnlyOf(defs, s.name); len(ro) > 0 { // sub-agent publication metadata
 		m.opts.Registrar.MarkReadOnly(ro)
 	}
+	s.regMu.Unlock()
 
 	s.mu.Lock()
 	s.defs = defs
@@ -450,22 +458,31 @@ func (m *Manager) impliedEnabled(cfg ServerConfig, name string) bool {
 }
 
 // captureLive reads a source's current enable/disable split from the registrar,
-// keeping only names whose state differs from what inForce implied when it was
+// keeping only names whose state differs from what era implied when it was
 // registered. Deliberate /tools toggles survive re-registration, while tools still
-// at their old default adopt whatever the config now says instead of freezing
+// at their era default adopt whatever the config now says instead of freezing
 // stale defaults over an enabled flip.
-func (m *Manager) captureLive(source string, inForce ServerConfig) *toolState {
+func (m *Manager) captureLive(source string, era ServerConfig) *toolState {
 	keep := &toolState{
 		enabled:  bulk.SliceToSet(m.opts.Registrar.EnabledNames(source)),
 		disabled: bulk.SliceToSet(m.opts.Registrar.DisabledNames(source)),
 	}
 	maps.DeleteFunc(keep.enabled, func(n string, _ struct{}) bool {
-		return m.impliedEnabled(inForce, n)
+		return m.impliedEnabled(era, n)
 	})
 	maps.DeleteFunc(keep.disabled, func(n string, _ struct{}) bool {
-		return !m.impliedEnabled(inForce, n)
+		return !m.impliedEnabled(era, n)
 	})
 	return keep
+}
+
+// captureKeep returns a source's deliberate /tools toggles: its live registrar
+// split classified against the config era that produced it, not the live config.
+// Every capture path goes through here.
+func (m *Manager) captureKeep(s *server) *toolState {
+	s.regMu.Lock() // a swap never interleaves with the capture
+	defer s.regMu.Unlock()
+	return m.captureLive(s.source, s.regEra)
 }
 
 // mergeToolState overlays src onto dst, so a pre-death split wins over any
@@ -580,8 +597,8 @@ func (m *Manager) applyConfig(ctx context.Context, s *server, sc ServerConfig) {
 		return
 	}
 	if filterChanged(old, sc) { // independent of the transport: applies against the running process
-		// captured under old: anything still at its pre-reload default must not pin it over the new one
-		m.rediscan(ctx, s, m.captureLive(s.source, old))
+		// keep holds deliberate toggles only, so pre-reload defaults cannot pin over the new config
+		m.rediscan(ctx, s, m.captureKeep(s))
 	}
 	if connectionChanged(old, sc) {
 		s.note("connection config changed; applies on the next connect, or now with /mcp disconnect then /mcp connect", true)
@@ -771,7 +788,7 @@ func (m *Manager) onNotification(ctx context.Context, s *server, n mcp.JSONRPCNo
 	switch n.Method {
 	case mcp.MethodNotificationToolsListChanged:
 		s.diag("tools changed; re-discovering")
-		m.rediscan(ctx, s, m.captureLive(s.source, s.config()))
+		m.rediscan(ctx, s, m.captureKeep(s))
 	case string(mcp.MethodNotificationProgress):
 		s.writeProgress(n.Params.AdditionalFields)
 	default:
@@ -943,7 +960,7 @@ func (m *Manager) reconnect(s *server, dead *Client) {
 	if dead == nil { // nothing was watched, nothing can exit
 		return
 	}
-	keep := m.captureLive(s.source, s.config()) // registrar call stays off s.mu
+	keep := m.captureKeep(s) // registrar call stays off s.mu
 	s.mu.Lock()
 	if s.c != dead { // a disconnect or successor owns the server now; this notice is stale
 		s.mu.Unlock()

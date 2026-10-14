@@ -798,6 +798,31 @@ func TestImpliedEnabled(t *testing.T) {
 	}
 }
 
+func TestCaptureKeep(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(nil, wired(Options{Registrar: fr}))
+	s := mgr.newTestServer("srv")
+	defs := []ToolDef{
+		{Name: "a", InputSchema: jsonRawObject},
+		{Name: "b", InputSchema: jsonRawObject},
+	}
+
+	// era A registers both enabled, then b is turned off via /tools
+	mgr.register(s, nil, defs, nil)
+	fr.set("srv__b", StateDisabled)
+
+	// the config flips to disabled while the era-A registration still stands,
+	// its re-registration not yet landed
+	var off bool
+	mgr.applyConfig(t.Context(), s, ServerConfig{Enabled: &off})
+
+	keep := mgr.captureKeep(s)
+	assert.Empty(t, keep.enabled) // a sits at its era default, never classified as a toggle
+	assert.Equal(t, map[string]struct{}{"srv__b": {}}, keep.disabled)
+}
+
 func TestCaptureLiveSubtractsDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -1282,6 +1307,73 @@ type blockingRegistrar struct {
 func (b *blockingRegistrar) Unregister(source string) {
 	b.entered <- source
 	<-b.release
+}
+
+// pauseRegistrar stalls the first Unregister made while armed, parking a
+// re-registration swap after its liveness check so a test can fire a capture
+// inside that window.
+type pauseRegistrar struct {
+	*fakeRegistrar
+	hold    atomic.Bool
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *pauseRegistrar) Unregister(source string) {
+	if p.hold.Swap(false) { // later calls pass through
+		p.started <- struct{}{}
+		<-p.release
+	}
+	p.fakeRegistrar.Unregister(source)
+}
+
+func TestReconnectCaptureEra(t *testing.T) {
+	t.Parallel()
+
+	srv := buildFakeServer(t)
+	pr := &pauseRegistrar{
+		fakeRegistrar: newFakeRegistrar(),
+		started:       make(chan struct{}, 1),
+		release:       make(chan struct{}),
+	}
+	mgr := New(map[string]ServerConfig{
+		"fake": {Command: srv},
+	}, wired(Options{Registrar: pr}))
+	t.Cleanup(mgr.Close)
+	mgr.backoff = fastRetry
+
+	require.NoError(t, mgr.Connect(t.Context(), "fake"))
+	s := mgr.serverByName("fake")
+	require.Len(t, pr.AllNames("mcp: fake"), 3) // era A: everything enabled by default
+
+	// reload flips the server off, then parks its re-registration inside the swap:
+	// the standing split is era A while the config is already era B
+	var off bool
+	pr.hold.Store(true)
+	mgr.applyConfig(t.Context(), s, ServerConfig{Command: srv, Enabled: &off})
+	select {
+	case <-pr.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reload re-registration never reached its swap")
+	}
+
+	// the child dies inside the window: the capture must classify the standing
+	// split against era A, so nothing pins era-A defaults over era B
+	mgr.reconnect(s, s.client())
+
+	for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+		assert.Equal(t, StateDisabled, mustState(pr.fakeRegistrar, "fake__"+n))
+	}
+
+	// the parked pass holds a client the reconnect closed, so its own revert
+	// empties the source rather than leaving dead-client tools registered
+	close(pr.release)
+	require.Eventually(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return !s.rediscovering
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Empty(t, pr.AllNames("mcp: fake"))
 }
 
 func TestReconnectAfterDeath(t *testing.T) {
