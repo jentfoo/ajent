@@ -139,6 +139,22 @@ func TestCompleteAt(t *testing.T) {
 		assert.Equal(t, 1, o.start)
 	})
 
+	// acceptance is a programmatic fill: any pending kill snapshot must drop,
+	// or Ctrl+Y restores an older buffer over the accepted text
+	t.Run("accept_drops_kill_snapshot", func(t *testing.T) {
+		var ed editor
+		ed.SetValue("git st")
+		ed.pos = 4
+		ed.KillToLineEnd(60) // kills "st"
+
+		o, changed := completeAt(&ed, 4, []Completion{{Text: "status"}}, false)
+
+		assert.True(t, changed)
+		assert.Nil(t, o)
+		assert.Equal(t, "git status", ed.Value())
+		assert.False(t, ed.Undo())
+	})
+
 	// a listing already open is kept: nothing to add and nothing new to show
 	t.Run("open_listing_is_kept", func(t *testing.T) {
 		var ed editor

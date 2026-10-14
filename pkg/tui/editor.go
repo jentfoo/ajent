@@ -44,7 +44,8 @@ func (e *editor) SpanText(start int) string {
 }
 
 // ReplaceSpan swaps the buffer from start to the cursor for normalized text,
-// leaving the cursor at its end.
+// leaving the cursor at its end. Like any programmatic fill it drops any
+// pending undo.
 func (e *editor) ReplaceSpan(start int, text string) {
 	end := e.pos
 	start = min(max(start, 0), end)
@@ -56,6 +57,7 @@ func (e *editor) ReplaceSpan(start int, text string) {
 	out = append(out, cells[end:]...)
 	e.cells = out
 	e.pos = start + len(replace)
+	e.undo = nil // a later Ctrl+Y must not clobber the accepted fill
 }
 
 // SetValue replaces the buffer with normalized text and puts the cursor at the
@@ -184,10 +186,10 @@ func (e *editor) KillToLineEnd(width int) {
 	case ends[r] > e.pos: // content after the cursor: clear to the row's end
 		e.saveUndo()
 		from := e.pos
-		// Wrapping drops the space each row breaks on. Clearing a whole row leaves the
-		// breaks on both sides of it, so consume the leading one to avoid a double
-		// space where the rows join.
-		if from == starts[r] && from > 0 && ends[r] < len(e.cells) &&
+		// Wrapping drops the space each row breaks on. A kill that ends on such a
+		// break leaves it beside whatever space survives at the caret, so consume
+		// one rather than join with a double.
+		if from > 0 && ends[r] < len(e.cells) &&
 			e.cells[from-1] == " " && e.cells[ends[r]] == " " {
 			from--
 		}

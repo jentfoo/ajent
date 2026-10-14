@@ -373,6 +373,34 @@ func TestEditorKill(t *testing.T) {
 		assert.Empty(t, e.Value())
 	})
 
+	t.Run("mid_row_kills_join_cleanly", func(t *testing.T) {
+		// "one two three four" at width 10 wraps to [one two][three][four]. Killing
+		// mid-row to the row's end must not leave the dropped break space beside the
+		// surviving one.
+		e := newEditorAt("one two three four", 4)
+		e.KillToLineEnd(10)
+		assert.Equal(t, "one three four", e.Value())
+		assert.Equal(t, 4, e.pos)
+	})
+
+	t.Run("mid_row_no_space_keeps_separator", func(t *testing.T) {
+		// nothing to consume beside the caret, so the dropped break space itself
+		// stays as the single join between what remains of each row
+		e := newEditorAt("one two three four", 6)
+		e.KillToLineEnd(10)
+		assert.Equal(t, "one tw three four", e.Value())
+		assert.Equal(t, 6, e.pos)
+	})
+
+	t.Run("mid_row_newline_end_keeps_space", func(t *testing.T) {
+		// a kill ending on an explicit newline is not a wrap break: the space before
+		// the caret survives
+		e := newEditorAt("ab cd\nef", 3)
+		e.KillToLineEnd(60)
+		assert.Equal(t, "ab \nef", e.Value())
+		assert.Equal(t, 3, e.pos)
+	})
+
 	t.Run("nonempty_line_tail_is_noop", func(t *testing.T) {
 		e := newEditorAt("hello\nworld", 5)
 		e.KillToLineEnd(wide)
@@ -486,6 +514,14 @@ func TestEditorUndo(t *testing.T) {
 		e.Clear()
 		e.SetValue("recalled")
 		assert.False(t, e.Undo())
+	})
+
+	t.Run("replace_span_drops_snapshot", func(t *testing.T) {
+		e := newEditorAt("hi", 2)
+		e.Clear()
+		e.ReplaceSpan(0, "filled")
+		assert.False(t, e.Undo())
+		assert.Equal(t, "filled", e.Value())
 	})
 
 	t.Run("restore_consumes_snapshot", func(t *testing.T) {
