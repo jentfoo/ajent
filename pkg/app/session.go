@@ -346,9 +346,16 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 		tui.PickOptions{Placeholder: "filter"})
 }
 
+// restoreState rebuilds resumed state into st from the transcript's branch,
+// seeding set with recorded session overrides. It returns entries and head for
+// replay plus resume warnings; a failed read warns through those rather than
+// resuming as an unannounced empty conversation.
 func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) ([]session.Entry, string, []string) {
-	entries, _, err := session.Read(r.w.Path())
-	if err != nil || len(entries) == 0 {
+	entries, rwarns, err := session.Read(r.w.Path())
+	if err != nil {
+		return nil, "", append(rwarns, "transcript unreadable: "+err.Error())
+	}
+	if len(entries) == 0 {
 		return nil, "", nil
 	}
 	head := resumeHead(r.w.Head(), entries)
@@ -559,8 +566,13 @@ func initialRow(tree []session.TreeRow, head string) int {
 const rewindDeferThreshold = 300
 
 func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
+	// a failed re-read is not the same as nothing recorded yet
 	entries, _, err := session.Read(r.w.Path())
-	if err != nil || len(entries) == 0 {
+	if err != nil {
+		ui.Notify("rewind: "+err.Error(), tui.LevelWarn)
+		return
+	}
+	if len(entries) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
 		return
 	}

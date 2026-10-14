@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -937,4 +940,131 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	assert.Equal(t, 100000, cs.Window) // framed by the live model, not left at zero
 	assert.Equal(t, tokens.CompactAt(model), cs.Compact)
 	assert.NotZero(t, cs.Used)
+}
+
+// syncBuffer guards one strings.Builder for the plainUI drain goroutine.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.b.Write(p)
+}
+
+// String snapshots what the UI has painted so far.
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.b.String()
+}
+
+// plainUI opens a plain-mode UI whose painted output drains into a buffer, so
+// notifications are assertable; the returned func snapshots it.
+func plainUI(t *testing.T) (*tui.UI, func() string) {
+	t.Helper()
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	buf := &syncBuffer{}
+	go func() { _, _ = io.Copy(buf, outR) }()
+	return ui, buf.String
+}
+
+func TestRestoreStateReadFailure(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unreadable_warns", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+		r := &sessRec{w: w}
+		// the flaky mount drops the file Open just succeeded on
+		require.NoError(t, os.Remove(p))
+
+		var st agent.State
+		entries, _, warns := r.restoreState(nil, nil, &st, nil)
+		assert.Nil(t, entries)
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], "transcript unreadable")
+	})
+
+	t.Run("empty_stays_silent", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+		r := &sessRec{w: w}
+		require.NoError(t, os.Truncate(p, 0)) // readable but holds no lines
+
+		var st agent.State
+		entries, _, warns := r.restoreState(nil, nil, &st, nil)
+		assert.Nil(t, entries)
+		assert.Empty(t, warns)
+	})
+}
+
+func TestRebuildWarnsUnreadable(t *testing.T) {
+	t.Parallel()
+
+	ui, out := plainUI(t)
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-lost.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+
+	set, _, err := config.Load(config.Options{
+		Workspace: t.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(t, err)
+
+	st := &agent.State{Model: reg.Active()}
+	require.NoError(t, os.Remove(p))
+	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(out(), "resume: transcript unreadable")
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+func TestRewindWarnsUnreadable(t *testing.T) {
+	t.Parallel()
+
+	ui, out := plainUI(t)
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w}
+	require.NoError(t, os.Remove(p))
+
+	r.rewind(ui, nil, nil) // the failure returns before the agent or registry are touched
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(out(), "rewind: ")
+	}, 2*time.Second, 5*time.Millisecond)
+	assert.NotContains(t, out(), "nothing to rewind onto yet")
 }
