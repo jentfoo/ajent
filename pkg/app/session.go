@@ -117,7 +117,9 @@ func skipNewerNote(skipped int, newest session.Info) string {
 
 // CheckSessionTarget verifies that a requested session exists before the TUI
 // opens, so an id or name fails fast rather than silently starting fresh. A
-// target blocked behind a newer format refuses with the version hint.
+// target blocked behind a newer format refuses with the version hint; only a
+// true miss reads as "no session matches", while ambiguity and listing
+// failures pass through verbatim.
 func CheckSessionTarget(mode ResumeMode, target string) error {
 	store, err := session.NewStore()
 	if err != nil {
@@ -134,8 +136,10 @@ func CheckSessionTarget(mode ResumeMode, target string) error {
 		return nil
 	}
 	info, ferr := store.Find(cwd, target)
-	if ferr != nil {
+	if errors.Is(ferr, session.ErrNotFound) {
 		return fmt.Errorf("no session matches %q", target)
+	} else if ferr != nil { // ambiguity and listing failures pass through verbatim, as --delete does
+		return ferr
 	} else if info.Blocked {
 		return refuseNewer(info)
 	}

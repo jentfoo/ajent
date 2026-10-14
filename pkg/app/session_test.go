@@ -651,6 +651,46 @@ func TestCheckSessionTargetRefusesNewer(t *testing.T) {
 	assert.ErrorContains(t, err, "newer session format")
 }
 
+func TestCheckSessionTargetErrorMapping(t *testing.T) {
+	// not parallel: t.Chdir and AJENT_HOME pin process state
+
+	t.Run("unknown_says_no_match", func(t *testing.T) {
+		deleteWorkspace(t)
+
+		err := CheckSessionTarget(ResumeID, "no-such")
+		require.ErrorContains(t, err, `no session matches "no-such"`)
+	})
+
+	// two sessions answering to one target are ambiguous, never absent: the
+	// fail-fast check keeps Find's words like --delete does instead of masking them
+	t.Run("ambiguous_not_masked", func(t *testing.T) {
+		store, ws := deleteWorkspace(t)
+		writeDeletableSession(t, store, ws, "dupe")
+		writeDeletableSession(t, store, ws, "dupe")
+
+		err := CheckSessionTarget(ResumeID, "dupe")
+		require.ErrorContains(t, err, `ambiguous session name "dupe"`)
+		assert.NotContains(t, err.Error(), "no session matches")
+
+		err = CheckSessionTarget(ResumeSessionName, "dupe")
+		assert.ErrorContains(t, err, `ambiguous session name "dupe"`)
+	})
+
+	// a store that cannot be listed must not read as nothing to resume either
+	t.Run("listing_failure_not_masked", func(t *testing.T) {
+		store, ws := deleteWorkspace(t)
+		dir, err := store.Dir(ws)
+		require.NoError(t, err)
+		require.NoError(t, os.Remove(dir))
+		// a file where the workspace's session directory belongs fails List
+		require.NoError(t, os.WriteFile(dir, nil, 0o600))
+
+		err = CheckSessionTarget(ResumeID, "whatever")
+		require.ErrorContains(t, err, dir) // Find's failure passes through verbatim
+		assert.NotContains(t, err.Error(), "no session matches")
+	})
+}
+
 func TestSubmittedEcho(t *testing.T) {
 	t.Parallel()
 
