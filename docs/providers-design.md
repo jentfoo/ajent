@@ -809,7 +809,10 @@ payloads line up would leak one test's needs into unrelated tests.
   change fail confusingly on exactly the models people reason with.
 - **`<think>` extraction must withhold a partial tag.** Emitting `"<"` as text
   and correcting later is visible corruption. The splitter holds back the
-  longest suffix that could still become the tag.
+  longest suffix that could still become the tag. At stream end that withheld
+  tail must ride the same emit path as a delta, so the end block commits it,
+  opening a fresh block when the tag never produced content. Emitting it as a
+  lone delta drops it, since the accumulator prefers the end event's block.
 
 ## Extending
 

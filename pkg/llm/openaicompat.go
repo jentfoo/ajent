@@ -523,7 +523,6 @@ func (s *compatStream) readFrame() []Event {
 // decodeDelta turns one choice delta into events.
 func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	st := s.st
-	var events []Event
 
 	// the first non-empty of reasoning_content, reasoning, reasoning_text wins.
 	// Chutes.ai sends the same text in two fields and this order picks the right one.
@@ -540,7 +539,25 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	if len(c.Delta.ReasoningDetails) > 0 {
 		st.details = c.Delta.ReasoningDetails
 	}
+	events := s.emitContent(reasoning, content)
 
+	for _, tc := range c.Delta.ToolCalls {
+		if st.tools == nil {
+			st.tools = newToolAccumulator(st.nextBlock)
+		}
+		events = append(events, st.tools.Delta(tc.Index, tc.ID, tc.Function.Name, tc.Function.Arguments)...)
+	}
+	if c.FinishReason != "" {
+		st.stop = stopReasonFrom(c.FinishReason)
+	}
+	return events
+}
+
+// emitContent emits the block events for one reasoning/content pair, closing
+// and opening blocks as the sides alternate. Either side may be empty.
+func (s *compatStream) emitContent(reasoning, content string) []Event {
+	st := s.st
+	var events []Event
 	if reasoning != "" {
 		// entering thinking closes an open text segment, keeping block order
 		if st.textIdx >= 0 {
@@ -566,16 +583,6 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 		}
 		st.textBuf.WriteString(content)
 		events = append(events, Event{Type: EventTextDelta, Index: st.textIdx, Text: content})
-	}
-
-	for _, tc := range c.Delta.ToolCalls {
-		if st.tools == nil {
-			st.tools = newToolAccumulator(st.nextBlock)
-		}
-		events = append(events, st.tools.Delta(tc.Index, tc.ID, tc.Function.Name, tc.Function.Arguments)...)
-	}
-	if c.FinishReason != "" {
-		st.stop = stopReasonFrom(c.FinishReason)
 	}
 	return events
 }
@@ -633,13 +640,10 @@ func (s *compatStream) finish(cause error) []Event {
 	var events []Event
 	st := s.st
 	if st.caps.ThinkOpen != "" {
+		// the withheld tail rides the same emit path as a delta so it reaches the
+		// end blocks, opening a fresh block when the tag never produced content
 		text, thinking := st.split.Flush()
-		if thinking != "" && st.thinkIdx >= 0 {
-			events = append(events, Event{Type: EventThinkingDelta, Index: st.thinkIdx, Text: thinking})
-		}
-		if text != "" && st.textIdx >= 0 {
-			events = append(events, Event{Type: EventTextDelta, Index: st.textIdx, Text: text})
-		}
+		events = append(events, s.emitContent(thinking, text)...)
 	}
 	if st.thinkIdx >= 0 {
 		events = append(events, s.endThinking())

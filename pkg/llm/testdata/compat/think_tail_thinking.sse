@@ -1,0 +1,10 @@
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"<think>pondering"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"</th"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+

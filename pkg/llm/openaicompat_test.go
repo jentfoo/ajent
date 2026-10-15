@@ -33,6 +33,13 @@ func newCompatTestProvider(t *testing.T, url string) *compatProvider {
 	}}
 }
 
+// thinkModel is a compat model parsing inline think tags.
+func thinkModel() Model {
+	return compatModel(func(c *Capabilities) {
+		c.ThinkOpen, c.ThinkClose = thinkOpenTag, thinkCloseTag
+	})
+}
+
 func TestCompatProviderStream(t *testing.T) {
 	t.Parallel()
 
@@ -138,16 +145,79 @@ func TestCompatProviderStream(t *testing.T) {
 		srv, _ := sseServer(t, "compat/think_tags.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
-		s, err := p.Stream(t.Context(), Request{
-			Model: compatModel(func(c *Capabilities) {
-				c.ThinkOpen, c.ThinkClose = thinkOpenTag, thinkCloseTag
-			}),
-		})
+		s, err := p.Stream(t.Context(), Request{Model: thinkModel()})
 		require.NoError(t, err)
 		events := collect(t, s)
 
 		assert.Equal(t, "pondering", thinkingOf(events))
 		assert.Equal(t, "the answer", textOf(events)) // no leaked tag fragment
+	})
+
+	t.Run("text_tail_flush_commits", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/think_tail_text.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: thinkModel()})
+		require.NoError(t, err)
+		events := collect(t, s)
+
+		assert.Equal(t, "Hello<", textOf(events)) // the withheld "<" still streams
+
+		var acc Accumulator
+		for _, ev := range events {
+			acc.Add(ev)
+		}
+		// the end block must carry the tail too, or the transcript loses it
+		assert.Equal(t, BlockList{TextBlock{Text: "Hello<"}}, acc.Message().Content)
+	})
+
+	t.Run("thinking_tail_flush_commits", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/think_tail_thinking.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: thinkModel()})
+		require.NoError(t, err)
+
+		msg, _, err := Accumulate(s)
+		require.NoError(t, err)
+		// an unclosed region keeps its partial close tag verbatim
+		assert.Equal(t, BlockList{ThinkingBlock{Text: "pondering</th"}}, msg.Content)
+	})
+
+	t.Run("flush_tail_opens_block", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/think_tail_lone_angle.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: thinkModel()})
+		require.NoError(t, err)
+		events := collect(t, s)
+
+		// no block ever opened: the tail opens one instead of vanishing
+		assert.Equal(t, []string{
+			"message_start", "text_start", "text_delta", "text_end", "done",
+		}, eventKinds(events))
+
+		var acc Accumulator
+		for _, ev := range events {
+			acc.Add(ev)
+		}
+		assert.Equal(t, BlockList{TextBlock{Text: "<"}}, acc.Message().Content)
+	})
+
+	t.Run("tail_keeps_block_order", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/think_tail_after_text.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: thinkModel()})
+		require.NoError(t, err)
+
+		msg, _, err := Accumulate(s)
+		require.NoError(t, err)
+		// a thinking tail closes the open text block first, keeping stream order
+		assert.Equal(t, BlockList{
+			TextBlock{Text: "hi"},
+			ThinkingBlock{Text: "<"},
+		}, msg.Content)
 	})
 
 	t.Run("tool_arguments_split_mid_token", func(t *testing.T) {
