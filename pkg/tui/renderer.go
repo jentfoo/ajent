@@ -52,10 +52,12 @@ type histLine struct {
 	style   Style      // styling re-applied when rendering a rule or divider (or empty)
 }
 
-// histImage is one committed terminal image. seq is the protocol escape, rows
-// the height it occupies (for inline's row accounting), and text the
+// histImage is one committed terminal image. src is the source payload awaiting
+// its geometry fit (fitImageLocked), seq the baked protocol escape once fitted,
+// and rows the height it occupies (for inline's row accounting); text is the
 // placeholder every non-emitting renderer falls back to.
 type histImage struct {
+	src  Image
 	seq  string
 	rows int
 	text string
@@ -82,8 +84,9 @@ func (l histLine) rows(width int) []string {
 	case l.image != nil:
 		// the protocol sequence where the mode draws images, else the
 		// placeholder. The blank rows after the first are what the drawing
-		// occupies, so every renderer's row accounting agrees
-		out := make([]string, l.image.rows)
+		// occupies, so every renderer's row accounting agrees. The floor keeps
+		// an unfitted line honest as a one-row placeholder.
+		out := make([]string, max(l.image.rows, 1))
 		out[0] = l.image.seq
 		if l.image.seq == "" {
 			out[0] = l.image.text

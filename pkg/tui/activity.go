@@ -92,18 +92,23 @@ func (u *UI) setActivityLocked(key, text string, rank int) {
 			u.activity = slices.Delete(u.activity, i, i+1)
 		} else {
 			u.activity[i].text, u.activity[i].rank = text, rank
+			sortActivity(u.activity)
 		}
 		u.repaint()
 		return
 	}
 	if text != "" {
 		u.activity = append(u.activity, activityRow{key: key, text: text, rank: rank})
-		// stable: rows sharing a rank (every unranked one) keep insertion order
-		slices.SortStableFunc(u.activity, func(a, b activityRow) int {
-			return cmp.Compare(a.rank, b.rank)
-		})
+		sortActivity(u.activity)
 	}
 	u.repaint()
+}
+
+// sortActivity orders rows by rank, stable so ties keep insertion order.
+func sortActivity(rows []activityRow) {
+	slices.SortStableFunc(rows, func(a, b activityRow) int {
+		return cmp.Compare(a.rank, b.rank)
+	})
 }
 
 // activityRows renders the ordered activity rows into at most budget rows, each

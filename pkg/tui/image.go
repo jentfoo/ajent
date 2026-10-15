@@ -19,36 +19,45 @@ type Image struct {
 // shared by replay and MCP display.
 func (im Image) String() string { return llm.ImagePlaceholder(im.Data, im.Label) }
 
-// imageLine builds one committed image line: a protocol sequence sized to the
-// cell grid where the mode can draw, else a placeholder-only line. Images only
-// commit into inline history: it is the one mode that never repaints committed
-// rows, so protocols without placement deletion (and repaints at all) cannot
-// stack copies. Caller holds the lock.
+// imageLine builds one committed image line. Where the mode can draw (inline
+// with a protocol) the source payload rides the line and fitImageLocked bakes
+// its geometry at commit, so an image held back through a resize burst lands at
+// the settled size rather than a mid-burst intermediate. Everywhere else the
+// line is placeholder-only from the start. Caller holds the lock.
 func (u *UI) imageLine(im Image) histLine {
 	if u.images == ImageNone || u.mode != ModeInline {
 		return histLine{image: &histImage{rows: 1, text: im.String()}}
 	}
+	return histLine{image: &histImage{src: im, text: im.String()}}
+}
+
+// fitImageLocked bakes the protocol sequence and spacer height at the terminal's
+// current size. A placeholder-only line (nothing drawable, no payload) stays as
+// it is. Caller holds the lock.
+func (u *UI) fitImageLocked(im *histImage) {
+	if u.images == ImageNone || u.mode != ModeInline || im.src.Data == nil {
+		return
+	}
 	tw, th := u.render.size()
-	cols, rows := fitCells(u.imageColsFor(im.W), u.imageRowsFor(im.H), tw, th)
-	var seq string
+	cols, rows := fitCells(u.imageColsFor(im.src.W), u.imageRowsFor(im.src.H), tw, th)
 	switch u.images {
 	case ImageKitty:
 		// f=100 names PNG: JPEG payloads ride only where the terminal sniffs
 		// them (kitty, WezTerm), so convert anything else rather than risk a
 		// silent rejection on Ghostty or Konsole
-		data := im.Data
-		if im.MediaType != "image/png" {
-			if b, ok := img.ToPNG(im.Data); ok {
+		data := im.src.Data
+		if im.src.MediaType != "image/png" {
+			if b, ok := img.ToPNG(im.src.Data); ok {
 				data = b
 			}
 		}
 		id := u.nextImageID()
 		u.imgIDs[id] = rows
-		seq = kittyTransmit(id, data, cols, rows)
+		im.seq = kittyTransmit(id, data, cols, rows)
 	case ImageITerm2:
-		seq = iterm2Sequence(im.Data, cols, rows)
+		im.seq = iterm2Sequence(im.src.Data, cols, rows)
 	}
-	return histLine{image: &histImage{seq: seq, rows: rows, text: im.String()}}
+	im.rows = rows
 }
 
 // nextImageID mints a fresh kitty image id, random first value then

@@ -138,6 +138,17 @@ func TestUIActivity(t *testing.T) {
 		assert.Equal(t, []string{"sub-1", "sub-2", "sub-3"}, activityKeys(u))
 	})
 
+	t.Run("rank_change_reorders_row", func(t *testing.T) {
+		u, _ := newUI(80, 12, strings.NewReader(""))
+
+		u.SetActivityRanked("sub-2", "b", 2)
+		u.SetActivityRanked("sub-1", "a", 1)
+		// a producer revising its rank must find the new place immediately
+		u.SetActivityRanked("sub-2", "b", 0)
+
+		assert.Equal(t, []string{"sub-2", "sub-1"}, activityKeys(u))
+	})
+
 	t.Run("unranked_rows_follow_ranked", func(t *testing.T) {
 		u, _ := newUI(80, 12, strings.NewReader(""))
 

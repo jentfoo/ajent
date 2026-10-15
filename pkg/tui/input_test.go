@@ -452,6 +452,10 @@ func TestDecodeKeyResync(t *testing.T) {
 		{"esc_aborts_partial_csi", "\x1b[1;5\x1b[A", []keyType{keyIgnore, keyUp}},
 		{"esc_aborts_partial_ss3", "\x1bO\x1b[C", []keyType{keyIgnore, keyRight}},
 		{"alt_letter_falls_through", "\x1bzx", []keyType{keyIgnore, keyRune, keyRune}},
+		{"dcs_consumed_whole", "\x1bP0;1|abc\x1b\\x", []keyType{keyIgnore, keyRune}},
+		{"sos_consumed_whole", "\x1bXhi\x1b\\z", []keyType{keyIgnore, keyRune}},
+		{"pm_consumed_whole", "\x1b^note\x1b\\y", []keyType{keyIgnore, keyRune}},
+		{"esc_aborts_dcs", "\x1bP\x1b[A", []keyType{keyIgnore, keyUp}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

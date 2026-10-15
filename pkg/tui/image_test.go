@@ -184,7 +184,9 @@ func TestImageLine(t *testing.T) {
 		t.Parallel()
 		// 800x600 px at the default 10x20 cell: 80 cols fit 120, 30 rows fit
 		// the half-viewport of 30 exactly, so nothing clamps
-		l := newUI(ImageKitty).imageLine(Image{Data: []byte("x"), W: 800, H: 600})
+		u := newUI(ImageKitty)
+		l := u.imageLine(Image{Data: []byte("x"), W: 800, H: 600})
+		u.fitImageLocked(l.image)
 		assert.Contains(t, l.image.seq, "c=80,r=30")
 		assert.Equal(t, 30, l.image.rows)
 	})
@@ -192,15 +194,32 @@ func TestImageLine(t *testing.T) {
 	t.Run("kitty clamps tall images", func(t *testing.T) {
 		t.Parallel()
 		// 200x2000 px: 20 cols, 100 rows must clamp to the 30-row half
-		l := newUI(ImageKitty).imageLine(Image{Data: []byte("x"), W: 200, H: 2000})
+		u := newUI(ImageKitty)
+		l := u.imageLine(Image{Data: []byte("x"), W: 200, H: 2000})
+		u.fitImageLocked(l.image)
 		assert.Contains(t, l.image.seq, "c=6,r=30")
 		assert.Equal(t, 30, l.image.rows)
+	})
+
+	t.Run("deferred image fits at settled size", func(t *testing.T) {
+		t.Parallel()
+		// an image committed during a resize burst is fitted at flush time,
+		// so a narrowing burst lands the smaller placement rather than one
+		// clamped to the burst-start width
+		u := newUI(ImageKitty)
+		l := u.imageLine(Image{Data: []byte("x"), W: 800, H: 600})
+		u.render.(*inlineRenderer).t.pinSize(60, 30)
+		u.commitNowLocked([]histLine{l})
+		assert.Contains(t, l.image.seq, "c=40,r=15")
+		assert.Equal(t, 15, l.image.rows)
 	})
 
 	t.Run("no protocol is placeholder only", func(t *testing.T) {
 		t.Parallel()
 		data := pngImage(t)
-		l := newUI(ImageNone).imageLine(Image{Data: data, W: 800, H: 600})
+		u := newUI(ImageNone)
+		l := u.imageLine(Image{Data: data, W: 800, H: 600})
+		u.fitImageLocked(l.image)
 		assert.Empty(t, l.image.seq)
 		assert.Equal(t, 1, l.image.rows)
 		// dims come from the header, not the caller's W/H

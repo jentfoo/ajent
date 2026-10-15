@@ -535,7 +535,10 @@ re-decoded as runes, so only a genuine lone `Esc` is reported.
 
 `ESC <byte>` with an unrecognized second byte consumes the `Esc` alone so the
 second byte decodes on its own: Alt+printable lands as a plain rune, and
-Esc-then-letter does not eat the first typed character.
+Esc-then-letter does not eat the first typed character. The string sequences
+(DCS, SOS, PM, APC) are the exception: like OSC they are consumed whole,
+since a reply payload is never editor input and one leaked byte can mutate the
+buffer from chatter the user never typed.
 
 A closed input stream emits no editing keystroke, and only the literal EOF byte
 decodes to an end-of-file key, so an external EOF never races with typed text or
@@ -671,8 +674,10 @@ its error into the input stream, and one row count drives the spacer model for
 each. The input decoder consumes any stray sequence whole so protocol chatter
 cannot type into the editor. Placements are clamped by `fitCells`, width to the
 terminal's column count and height to half the screen, both axes scaled together
-so the aspect survives. Terminals clip an oversized draw while its committed
-spacer rows remain, and blank gaps in scrollback are how that looks broken.
+so the aspect survives. The fit runs at commit rather than arrival, so a commit
+held back through a resize burst lands at the settled size instead of one
+clamped mid-burst. Terminals clip an oversized draw while its committed spacer
+rows remain, and blank gaps in scrollback are how that looks broken.
 
 An image line carries its own row count, sized from the cell geometry queried
 once at startup, so every renderer's row accounting agrees. Lines carrying image

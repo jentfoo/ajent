@@ -174,6 +174,10 @@ func decodeEscape(b []byte, pasteFrom int) (key, int, bool) {
 		return decodeOSC(b)
 	case '_':
 		return decodeAPC(b)
+	case 'P', 'X', '^':
+		// DCS, SOS, PM: string sequences whose payload is never editor input,
+		// consumed whole for the same reason as APC
+		return consumeToST(b)
 	case 'O':
 		if len(b) < 3 {
 			return key{}, 0, false // SS3 is a fixed three bytes
@@ -291,7 +295,12 @@ func oscKey(payload string) key {
 // decodeAPC consumes an application-programming-command (ESC _ ... ST) whole.
 // Kitty graphics replies take this form, and nothing inside one is editor
 // input, so an unhandled reply must never decode as runes.
-func decodeAPC(b []byte) (key, int, bool) {
+func decodeAPC(b []byte) (key, int, bool) { return consumeToST(b) }
+
+// consumeToST scans a string sequence opened at b[1] for its ST terminator and
+// swallows it whole. A bare ESC aborts and resyncs at that byte, and the scan
+// caps at maxControlLen so a stalled sequence cannot absorb the stream.
+func consumeToST(b []byte) (key, int, bool) {
 	for i := 2; i < len(b); i++ {
 		switch {
 		case b[i] == escByte:

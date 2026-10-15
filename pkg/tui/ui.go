@@ -437,7 +437,7 @@ func (u *UI) Close() {
 	close(u.done)
 	if len(u.deferred) > 0 {
 		// a burst overlapping the end of a turn must not swallow committed output
-		u.render.commit(u.deferred)
+		u.commitNowLocked(u.deferred)
 		u.deferred = nil
 	}
 	u.render.close(u.inFd)
@@ -1020,6 +1020,17 @@ func (u *UI) commitHist(lines []histLine) {
 		// repaints. Resize flushes these in order once the size settles.
 		u.deferred = append(u.deferred, lines...)
 		return
+	}
+	u.commitNowLocked(lines)
+}
+
+// commitNowLocked fits image geometry at the size in force right now, then
+// commits, so burst-deferred images land at the settled size. Caller holds the lock.
+func (u *UI) commitNowLocked(lines []histLine) {
+	for _, l := range lines {
+		if l.image != nil {
+			u.fitImageLocked(l.image)
+		}
 	}
 	u.render.commit(lines)
 }
@@ -1981,7 +1992,7 @@ func (u *UI) settleResizeLocked() {
 	if len(u.deferred) > 0 {
 		lines := u.deferred
 		u.deferred = nil
-		u.render.commit(lines)
+		u.commitNowLocked(lines)
 	}
 	// A resize landing mid-settle delivers its own SIGWINCH, and the settle
 	// that follows redraws at the final size.
