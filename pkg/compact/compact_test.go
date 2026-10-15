@@ -176,7 +176,7 @@ func TestCompactVerbatimBand(t *testing.T) {
 		for _, m := range msgs[1:] { // msgs[0] is the summary
 			for _, b := range m.Content {
 				if tr, ok := b.(llm.ToolResultBlock); ok {
-					assert.Equal(t, body, resultText(tr))
+					assert.Equal(t, body, llm.FirstBlockText(tr.Content))
 				}
 			}
 		}

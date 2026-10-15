@@ -54,19 +54,19 @@ func (*gitShowTool) selfBounding() {}
 func (t *gitShowTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p gitShowParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	root, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {
-		return resultErr(ToolGitShow + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitShow + ": " + err.Error()), nil
 	}
 	c, err := gitCommit(r, p.Ref)
 	if err != nil {
-		return resultErr(ToolGitShow + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitShow + ": " + err.Error()), nil
 	}
 	d := newGitDiffOut(t.sessionID, ToolGitShow)
 	defer func() { _ = d.close() }()
@@ -74,7 +74,7 @@ func (t *gitShowTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 	_, _ = fmt.Fprintf(d, "commit %s\nAuthor: %s\nDate:   %s\n\n%s\n",
 		c.ID(), c.Author.String(), c.Author.When.Format(object.DateFormat), strings.TrimRight(c.Message, "\n"))
 	if err := gitCommitDiffText(ctx, c, normalizeGitPathspec(p.File), d); err != nil {
-		return resultErr(ToolGitShow + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitShow + ": " + err.Error()), nil
 	}
 	if d.shown == 0 && len(d.notes) == 0 { // the patch section must name its emptiness
 		d.Note("(no changes)")

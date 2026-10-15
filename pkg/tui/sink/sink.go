@@ -84,7 +84,7 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string, full bool) func(agen
 		var result string
 		if res.IsError {
 			s.ui.Notify("tool "+call.Name+" failed", tui.LevelWarn)
-			result = firstText(res.Content)
+			result = llm.FirstBlockText(res.Content)
 		} else if strings.TrimSpace(res.Display) != "" {
 			// commit what history shows when it differs from the streamed output
 			result = res.Display
@@ -169,14 +169,4 @@ func (s *Sink) TurnEnd(res agent.TurnResult) {
 		s.busy()
 		s.busy = nil
 	}
-}
-
-// firstText returns the first non-empty text block, for a tool's error message.
-func firstText(blocks llm.BlockList) string {
-	for _, b := range blocks {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			return tb.Text
-		}
-	}
-	return ""
 }

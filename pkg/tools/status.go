@@ -49,19 +49,19 @@ func (*gitStatusTool) selfBounding() {}
 func (t *gitStatusTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p gitStatusParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	root, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {
-		return resultErr(ToolGitStatus + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitStatus + ": " + err.Error()), nil
 	}
 	out, err := gitStatusText(r)
 	if err != nil {
-		return resultErr(ToolGitStatus + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitStatus + ": " + err.Error()), nil
 	}
 	text, _ := truncateOutput(t.sessionID, ToolGitStatus, out, GitResultLimit(), "narrow the path")
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil

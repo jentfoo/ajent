@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
@@ -27,7 +26,7 @@ func RecoverTool(ctx context.Context, done func(ToolResult), sink Sink, call Too
 			return
 		}
 		detail := faultDetail(p)
-		res = faultResult(call, detail)
+		res = ErrorToolResult("tool panicked: " + strutil.Clip(detail, maxFaultDetail))
 		if sink != nil && ctx.Err() == nil {
 			sink.Notice(fmt.Sprintf("tool panicked: %s (%s)", detail, faultLocation()), LevelError)
 		}
@@ -39,15 +38,6 @@ func RecoverTool(ctx context.Context, done func(ToolResult), sink Sink, call Too
 	}()
 	res, err = fn()
 	return res, err, false
-}
-
-// faultResult builds the tool result a recovered panic converts to. Call ID and
-// name travel so the result pairs with its call wherever Execute unwound from.
-func faultResult(call ToolCall, detail string) ToolResult {
-	return ToolResult{
-		Content: llm.BlockList{llm.TextBlock{Text: "tool panicked: " + strutil.Clip(detail, maxFaultDetail)}},
-		IsError: true,
-	}
 }
 
 // faultDetail renders a panic value as a short string. Stack is never included,

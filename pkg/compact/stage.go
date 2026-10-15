@@ -115,7 +115,7 @@ func spanStubs(branch []session.Entry, lo, band int, cwd string) []session.Stub 
 			if !has {
 				continue
 			}
-			text := resultText(tr)
+			text := llm.FirstBlockText(tr.Content)
 
 			// the key includes name and path so two distinct results that happen to
 			// share bytes are not collapsed into each other
@@ -164,7 +164,7 @@ func messageAt(branch []session.Entry, i int) (llm.Message, bool) {
 // failedStub builds the one-line replacement for a failed result, keeping its
 // first line so a denied reason survives.
 func failedStub(name string, tr llm.ToolResultBlock) string {
-	line := strutil.FirstLine(strings.TrimSpace(resultText(tr)))
+	line := strutil.FirstLine(strings.TrimSpace(llm.FirstBlockText(tr.Content)))
 	if line == "" {
 		return "[tool " + name + " failed: output dropped]"
 	}
@@ -184,16 +184,6 @@ func canonicalPath(resolve func(string) (string, error), input json.RawMessage) 
 		return p.Path // bare fallback keeps superseded detection on a stable key
 	}
 	return r
-}
-
-// resultText returns the first non-blank text block of a tool result.
-func resultText(tr llm.ToolResultBlock) string {
-	for _, b := range tr.Content {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			return tb.Text
-		}
-	}
-	return ""
 }
 
 // superseded reports whether callID is not the newest successful read of its

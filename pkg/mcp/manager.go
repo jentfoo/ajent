@@ -393,10 +393,13 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 		if m.impliedEnabled(cfg, n) {
 			st = StateEnabled
 		}
-		if keep != nil && has(keep.enabled, n) { // live enablement wins over restore/default
-			st = StateEnabled
-		} else if keep != nil && has(keep.disabled, n) { // an explicit /tools off survives re-registration too
-			st = StateDisabled
+		if keep != nil {
+			// live enablement wins over restore/default; an explicit /tools off survives re-registration too
+			if _, ok := keep.enabled[n]; ok {
+				st = StateEnabled
+			} else if _, ok := keep.disabled[n]; ok {
+				st = StateDisabled
+			}
 		}
 		m.opts.Registrar.RegisterState(s.source, tool, st)
 	}
@@ -432,11 +435,6 @@ func (s *server) defsSnapshot() []ToolDef {
 	defer s.mu.Unlock()
 
 	return slices.Clone(s.defs)
-}
-
-func has(set map[string]struct{}, k string) bool {
-	_, ok := set[k]
-	return ok
 }
 
 // preloadWG returns the in-flight preload waitgroup, or nil before Preload ran.
@@ -1126,7 +1124,7 @@ func (m *Manager) updateStatus() {
 		disabled := bulk.SliceToSet(m.opts.Registrar.DisabledNames(s.source))
 		discovered += len(registered)
 		for _, n := range registered {
-			if !has(disabled, n) {
+			if _, ok := disabled[n]; !ok {
 				active++
 			}
 		}

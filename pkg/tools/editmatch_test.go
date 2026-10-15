@@ -10,6 +10,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// findMatches locates every occurrence of old in buf, escalating through the
+// match tiers until one yields a result. Escalation happens only on zero
+// matches: a tier that finds several leaves the ambiguity for the caller to
+// reject rather than guessing which was meant. Production code reaches the
+// matcher through newEditMatcher; this one-shot form exists for tests.
+func findMatches(buf, old, replacement string, edited []lineRange) ([]match, matchTier) {
+	return newEditMatcher(buf, edited).find(old, replacement)
+}
+
 func TestCanonical(t *testing.T) {
 	t.Parallel()
 

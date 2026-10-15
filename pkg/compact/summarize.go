@@ -265,7 +265,7 @@ func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[stri
 					_, _ = fmt.Fprintf(b, "[Tool result]: %s\n", strutil.Clip(stubbedText(tr, stubs), clip))
 				}
 			}
-			if t := userPlain(m); t != "" {
+			if t := llm.JoinText(m.Content); t != "" {
 				b.WriteString("[User]: " + t + "\n")
 			}
 		case llm.RoleAssistant:
@@ -288,7 +288,7 @@ func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[stri
 // stubbedText returns what a tool result contributes to the transcript: its stub
 // replacement when the plan has one.
 func stubbedText(tr llm.ToolResultBlock, stubs map[string]session.Stub) string {
-	text := resultText(tr)
+	text := llm.FirstBlockText(tr.Content)
 	s, ok := stubs[tr.CallID]
 	if ok && s.Text != "" {
 		return s.Text
@@ -389,18 +389,4 @@ func summarizeBudget(model llm.Model, span, prev int) int {
 	return min(emitCap,
 		max(minSummaryTokens, compactAt(model)/4),
 		max(minSummaryTokens, span+prev))
-}
-
-// userPlain extracts the plain text blocks of a prompt message.
-func userPlain(m llm.Message) string {
-	var sb strings.Builder
-	for _, b := range m.Content {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			if sb.Len() > 0 {
-				sb.WriteRune('\n')
-			}
-			sb.WriteString(tb.Text)
-		}
-	}
-	return sb.String()
 }

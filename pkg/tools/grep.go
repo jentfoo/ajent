@@ -76,27 +76,27 @@ func (*grepTool) selfBounding() {}
 func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p grepParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	if p.Pattern == "" {
-		return resultErr("grep needs a non-empty pattern"), nil
+		return agent.ErrorToolResult("grep needs a non-empty pattern"), nil
 	}
 	cwd, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 
 	mode := p.Mode
 	switch mode {
 	case "", grepContent, grepFiles, grepCount:
 	default:
-		return resultErr("grep mode must be files, content or count"), nil
+		return agent.ErrorToolResult("grep mode must be files, content or count"), nil
 	}
 
 	// compile first: a bad regex must surface as an error, not empty results
 	re, err := p.compile()
 	if err != nil {
-		return resultErr("grep: " + err.Error()), nil
+		return agent.ErrorToolResult("grep: " + err.Error()), nil
 	}
 
 	grepLimit := GrepResultLimit()
@@ -108,7 +108,7 @@ func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	if !t.forceGo && rgOnPath() {
 		out, cut, warn, rgErr := runRg(ctx, cwd, p, mode, max)
 		if rgErr != nil {
-			return resultErr("grep: " + rgErr.Error()), nil
+			return agent.ErrorToolResult("grep: " + rgErr.Error()), nil
 		}
 		note := p.capNote(mode, cut, max)
 		if warn != "" { // rg warned about paths it could not read, mirror the fallback's note

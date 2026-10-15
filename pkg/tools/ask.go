@@ -63,11 +63,11 @@ func (*askUserTool) selfBounding() {}
 func (t *askUserTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p askParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	question := strings.TrimSpace(p.Question)
 	if question == "" {
-		return resultErr("question must not be empty"), nil
+		return agent.ErrorToolResult("question must not be empty"), nil
 	}
 	if t.ask == nil {
 		return askAnswer("ask_user is unavailable: there is no interactive terminal. " +

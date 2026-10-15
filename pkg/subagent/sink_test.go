@@ -2,6 +2,7 @@ package subagent
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +39,8 @@ func TestToolStart(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newCapture()
-			s := newChildSink(tc.id, numberOf(tc.id), c.recordRow)
+			rank, _ := strconv.Atoi(strings.TrimPrefix(tc.id, "sub-"))
+			s := newChildSink(tc.id, rank, c.recordRow)
 			done := s.ToolStart(tc.call, tc.label, false)
 			assert.Equal(t, tc.wantRow, c.rowText(tc.id))
 			done(agent.ToolResult{})

@@ -98,3 +98,9 @@ type ToolResult struct {
 	// others ignore it.
 	AddedToolNames []string
 }
+
+// ErrorToolResult wraps msg as the model-facing result of a failed call. An
+// erroring tool still returns a result so the turn continues rather than aborting.
+func ErrorToolResult(msg string) ToolResult {
+	return ToolResult{Content: llm.BlockList{llm.TextBlock{Text: msg}}, IsError: true}
+}

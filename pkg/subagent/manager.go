@@ -561,14 +561,11 @@ func (m *Manager) noticeInput(ids []string) agent.Input {
 }
 
 // byJobNumber orders sub-N ids numerically, so batches read sub-1, sub-2, sub-10.
+// Unparseable ids sort first; the digits are read after the sub- prefix.
 func byJobNumber(a, b string) int {
-	return cmp.Compare(numberOf(a), numberOf(b))
-}
-
-// numberOf reads the digits after the sub- prefix, sorting unparseable ids first.
-func numberOf(id string) int {
-	n, _ := strconv.Atoi(strings.TrimPrefix(id, "sub-"))
-	return n
+	na, _ := strconv.Atoi(strings.TrimPrefix(a, "sub-"))
+	nb, _ := strconv.Atoi(strings.TrimPrefix(b, "sub-"))
+	return cmp.Compare(na, nb)
 }
 
 // activityKey pairs a job's row key with its rank, so Close can clear every row

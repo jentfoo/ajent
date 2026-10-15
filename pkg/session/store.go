@@ -17,6 +17,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
+	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 const (
@@ -413,11 +414,10 @@ func relHome(abs, home string) (string, bool) {
 	if home == "" {
 		return abs, false
 	}
-	rel, err := filepath.Rel(home, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return abs, false
+	if rel, ok := tools.WithinRoot(home, abs); ok {
+		return rel, true
 	}
-	return rel, true
+	return abs, false
 }
 
 // keepAlnum lowercases s and drops everything outside [a-z0-9].
@@ -449,10 +449,8 @@ func firstUserOn(branch []Entry) string {
 		if err := e.Decode(&md); err != nil || md.Message.Role != llm.RoleUser {
 			continue
 		}
-		for _, b := range md.Message.Content {
-			if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-				return strutil.Clip(strings.TrimSpace(tb.Text), maxFirstLen)
-			}
+		if text := llm.FirstBlockText(md.Message.Content); text != "" {
+			return strutil.Clip(strings.TrimSpace(text), maxFirstLen)
 		}
 	}
 	return ""

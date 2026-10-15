@@ -70,20 +70,20 @@ func (*gitLogTool) selfBounding() {}
 func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p gitLogParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	root, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {
-		return resultErr(ToolGitLog + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitLog + ": " + err.Error()), nil
 	}
 
 	head, err := gitCommit(r, "HEAD")
 	if err != nil {
-		return resultErr(ToolGitLog + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitLog + ": " + err.Error()), nil
 	}
 	walk := defaultLogCount
 	if p.Limit > 0 {
@@ -96,7 +96,7 @@ func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.O
 	var chain []string
 	iter, logErr := r.Log(&git.LogOptions{From: head.ID(), Order: git.LogOrderCommitterTime})
 	if logErr != nil {
-		return resultErr(ToolGitLog + ": " + logErr.Error()), nil
+		return agent.ErrorToolResult(ToolGitLog + ": " + logErr.Error()), nil
 	}
 	if file != "" {
 		out, shown, more, chain, err = gitLogFollow(ctx, iter, file, walk)
@@ -104,7 +104,7 @@ func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.O
 		out, shown, more, err = gitLogLines(ctx, iter, walk)
 	}
 	if err != nil {
-		return resultErr(ToolGitLog + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitLog + ": " + err.Error()), nil
 	}
 	// only a finished walk may claim an empty scope matched nothing
 	if !more && out == "" && file != "" {
@@ -115,7 +115,7 @@ func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.O
 	}
 	paging := "raise limit or narrow with file"
 	if more { // cap cuts can list fewer than limit
-		out += "\n... " + plural(shown, "commit") + " shown"
+		out += "\n... " + strutil.Plural(shown, "commit") + " shown"
 	}
 	text, _ := truncateOutput(t.sessionID, ToolGitLog, out, GitResultLimit(), paging)
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil

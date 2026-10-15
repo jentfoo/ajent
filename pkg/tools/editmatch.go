@@ -74,14 +74,6 @@ type match struct {
 	repl string
 }
 
-// findMatches locates every occurrence of old in buf, escalating through the
-// match tiers until one yields a result. Escalation happens only on zero
-// matches: a tier that finds several leaves the ambiguity for the caller to
-// reject rather than guessing which was meant.
-func findMatches(buf, old, replacement string, edited []lineRange) ([]match, matchTier) {
-	return newEditMatcher(buf, edited).find(old, replacement)
-}
-
 // editMatcher carries the canonical form of one apply's buffer, computed once
 // and shared by every op that needs a non-exact tier.
 type editMatcher struct {

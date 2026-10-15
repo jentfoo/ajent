@@ -50,33 +50,24 @@ func (t *controlTool) Execute(_ context.Context, call agent.ToolCall, _ agent.Ou
 
 	switch {
 	case !t.c.phase.active():
-		return controlErr(t.name + " is only valid inside a running plan workflow"), nil
+		return agent.ErrorToolResult(t.name + " is only valid inside a running plan workflow"), nil
 	case t.c.phase != t.from:
-		return controlErr(t.name + " is only valid in the " + t.from.String() +
+		return agent.ErrorToolResult(t.name + " is only valid in the " + t.from.String() +
 			" phase; the workflow is " + t.c.phase.String()), nil
 	case t.c.pending != nil:
-		return controlErr("a phase transition is already pending this turn; " +
+		return agent.ErrorToolResult("a phase transition is already pending this turn; " +
 			"call only one control tool per turn"), nil
 	}
 
 	msg, err := t.record(t.c, call.Input)
 	if err != nil {
-		return controlErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 	return agent.ToolResult{
 		Content: llm.BlockList{llm.TextBlock{Text: msg}},
 		Display: msg,
 		EndTurn: true, // the next phase owns the conversation from here
 	}, nil
-}
-
-// controlErr frames a rejected control call so the model can retry in-turn.
-func controlErr(msg string) agent.ToolResult {
-	return agent.ToolResult{
-		Content: llm.BlockList{llm.TextBlock{Text: msg}},
-		Display: msg,
-		IsError: true,
-	}
 }
 
 type implementParams struct {

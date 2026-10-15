@@ -63,11 +63,11 @@ type startParams struct {
 func (t *startTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p startParams
 	if err := strutil.DecodeArgs(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	p.Task = strings.TrimSpace(p.Task)
 	if p.Task == "" {
-		return resultErr("agent_start requires a task"), nil
+		return agent.ErrorToolResult("agent_start requires a task"), nil
 	}
 	// the call id claims this task's reserved number, so ids follow the order the
 	// model asked for the agents rather than the order the goroutines won the lock
@@ -117,11 +117,11 @@ type pollParams struct {
 func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p pollParams
 	if err := strutil.DecodeArgs(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	j, ok := t.m.lookup(p.ID)
 	if !ok {
-		return resultErr("unknown sub-agent id " + strings.TrimSpace(p.ID)), nil
+		return agent.ErrorToolResult("unknown sub-agent id " + strings.TrimSpace(p.ID)), nil
 	}
 	snap, complete, batched := t.m.poll(ctx, j.id)
 
@@ -144,7 +144,7 @@ func pollOutcome(ctx context.Context, snap Job, complete bool, progress string, 
 	case snap.Status == StatusAborted:
 		return result("sub-agent " + snap.ID + " aborted"), snap.Status
 	case snap.Status == StatusError && snap.Err != nil:
-		return resultErr(snap.Err.Error()), snap.Status
+		return agent.ErrorToolResult(snap.Err.Error()), snap.Status
 	default: // done with a summary, the blank case is impossible so this is belt-and-braces
 		out := strings.TrimSpace(snap.Summary)
 		if out == "" {
@@ -232,11 +232,4 @@ func strProp(desc string) map[string]any {
 // elapsed line and a summary gets the head-plus-collapse treatment.
 func result(text string) agent.ToolResult {
 	return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: text}}, Display: text}
-}
-
-// resultErr builds an error ToolResult carrying the message the model should see.
-func resultErr(msg string) agent.ToolResult {
-	r := result(msg)
-	r.IsError = true
-	return r
 }

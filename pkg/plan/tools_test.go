@@ -3,6 +3,7 @@ package plan
 import (
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +42,7 @@ func TestControlToolExecute(t *testing.T) {
 		res := call(t, c, DevCompleteTool, `{}`)
 		assert.True(t, res.IsError)
 		assert.False(t, res.EndTurn)
-		assert.Contains(t, res.Display, "reviewing")
+		assert.Contains(t, llm.FirstBlockText(res.Content), "reviewing")
 	})
 
 	t.Run("second_call_rejected", func(t *testing.T) {

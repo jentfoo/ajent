@@ -59,24 +59,24 @@ func (*gitDiffTool) selfBounding() {}
 func (t *gitDiffTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p gitDiffParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	if p.From == gitWorktreeRef {
-		return resultErr(ToolGitDiff + ": from must be a commit-ish; put \"worktree\" in to"), nil
+		return agent.ErrorToolResult(ToolGitDiff + ": from must be a commit-ish; put \"worktree\" in to"), nil
 	}
 	root, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {
-		return resultErr(ToolGitDiff + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitDiff + ": " + err.Error()), nil
 	}
 
 	d := newGitDiffOut(t.sessionID, ToolGitDiff)
 	defer func() { _ = d.close() }()
 	if err := gitDiffText(ctx, r, p.From, p.To, normalizeGitPathspec(p.File), d); err != nil {
-		return resultErr(ToolGitDiff + ": " + err.Error()), nil
+		return agent.ErrorToolResult(ToolGitDiff + ": " + err.Error()), nil
 	}
 	text := d.Text("narrow with file or a smaller range")
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil

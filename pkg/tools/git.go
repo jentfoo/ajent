@@ -341,7 +341,7 @@ func (d *gitDiffOut) Text(paging string) string {
 		body = "(no changes)"
 	}
 	if d.skipped > 0 {
-		d.Note(plural(d.skipped, "more changed path") + " not shown")
+		d.Note(strutil.Plural(d.skipped, "more changed path") + " not shown")
 	}
 	if len(d.notes) > 0 {
 		footer := strings.Join(d.notes, "\n")
@@ -502,7 +502,7 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 		d.Block(from, to)
 	}
 	if untracked > 0 {
-		d.Note(plural(untracked, "untracked file") + " not shown")
+		d.Note(strutil.Plural(untracked, "untracked file") + " not shown")
 	}
 	return nil
 }

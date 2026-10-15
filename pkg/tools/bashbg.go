@@ -34,12 +34,12 @@ func (t *bashTool) Close() {
 func (t *bashTool) executeBackground(root context.Context, cwd string, p bashParams) (agent.ToolResult, error) {
 	outF, outPath, err := createSpill(t.sessionID, "bash-stdout")
 	if err != nil {
-		return resultErr("bash: " + err.Error()), nil
+		return agent.ErrorToolResult("bash: " + err.Error()), nil
 	}
 	errF, errPath, err := createSpill(t.sessionID, "bash-stderr")
 	if err != nil {
 		_ = outF.Close()
-		return resultErr("bash: " + err.Error()), nil
+		return agent.ErrorToolResult("bash: " + err.Error()), nil
 	}
 
 	// CommandContext over the background root, not the call context: the run
@@ -59,7 +59,7 @@ func (t *bashTool) executeBackground(root context.Context, cwd string, p bashPar
 	if err := cmd.Start(); err != nil {
 		_ = outF.Close()
 		_ = errF.Close()
-		return resultErr("bash: " + err.Error()), nil
+		return agent.ErrorToolResult("bash: " + err.Error()), nil
 	}
 
 	pid := cmd.Process.Pid

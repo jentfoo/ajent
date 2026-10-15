@@ -51,11 +51,11 @@ func (*lsTool) selfBounding() {}
 func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p lsParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	full, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 
 	// a wildcard pattern is not a real directory: list the files it matches
@@ -65,7 +65,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 
 	entries, err := os.ReadDir(full) // ReadDir returns entries sorted by name
 	if err != nil {
-		return resultErr("ls: " + err.Error()), nil
+		return agent.ErrorToolResult("ls: " + err.Error()), nil
 	}
 	t.tracker.ObserveDir(full, entries)
 
@@ -87,7 +87,7 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 func (t *lsTool) listMatches(pattern string, limit int) agent.ToolResult {
 	matches, err := filepath.Glob(pattern)
 	if err != nil || len(matches) == 0 {
-		return resultErr("ls: nothing matches " + relTo(t.policy.Cwd, pattern))
+		return agent.ErrorToolResult("ls: nothing matches " + relTo(t.policy.Cwd, pattern))
 	}
 	slices.Sort(matches)
 

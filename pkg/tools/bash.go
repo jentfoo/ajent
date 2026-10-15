@@ -120,10 +120,10 @@ func ownProcessGroup(cmd *exec.Cmd) {
 func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	var p bashParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	if strings.TrimSpace(p.Command) == "" {
-		return resultErr("bash needs a non-empty command"), nil
+		return agent.ErrorToolResult("bash needs a non-empty command"), nil
 	}
 
 	cwd, res, ok := t.resolveCwd(p.Cwd)
@@ -176,9 +176,9 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 
 	if err := cmd.Start(); err != nil {
 		if runCtx.Err() != nil { // cancelled before launch, the loop aborts this turn
-			return resultErr(agent.InterruptedText), nil
+			return agent.ErrorToolResult(agent.InterruptedText), nil
 		}
-		return resultErr("bash: " + err.Error()), nil
+		return agent.ErrorToolResult("bash: " + err.Error()), nil
 	}
 
 	done := make(chan error, 1)
@@ -220,7 +220,7 @@ func (t *bashTool) resolveCwd(cwd string) (string, agent.ToolResult, bool) {
 	}
 	resolved, err := t.policy.Resolve(cwd)
 	if err != nil {
-		return "", resultErr(err.Error()), false
+		return "", agent.ErrorToolResult(err.Error()), false
 	}
 	return resolved, agent.ToolResult{}, true
 }

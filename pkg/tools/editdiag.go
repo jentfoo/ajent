@@ -377,20 +377,12 @@ func describeRun(run string) string {
 	tabs, spaces := countWS(run)
 	switch {
 	case tabs > 0 && spaces == 0:
-		return plural(tabs, "tab")
+		return strutil.Plural(tabs, "tab")
 	case spaces > 0 && tabs == 0:
-		return plural(spaces, "space")
+		return strutil.Plural(spaces, "space")
 	default:
-		return fmt.Sprintf("mixed %s and %s", plural(tabs, "tab"), plural(spaces, "space"))
+		return fmt.Sprintf("mixed %s and %s", strutil.Plural(tabs, "tab"), strutil.Plural(spaces, "space"))
 	}
-}
-
-// plural renders n unit(s), singular for one.
-func plural(n int, unit string) string {
-	if n == 1 {
-		return "1 " + unit
-	}
-	return strconv.Itoa(n) + " " + unit + "s"
 }
 
 // closestBlock finds the region of buf most similar to old and returns it

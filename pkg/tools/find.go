@@ -52,14 +52,14 @@ func (*findTool) selfBounding() {}
 func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p findParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	if strings.TrimSpace(p.Pattern) == "" {
-		return resultErr("find needs a non-empty pattern"), nil
+		return agent.ErrorToolResult("find needs a non-empty pattern"), nil
 	}
 	root, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 
 	matches := listFiles(ctx, root, p.Pattern)
@@ -159,9 +159,8 @@ func matchSegments(pat, name []string) bool {
 
 // relTo returns path relative to root when inside it.
 func relTo(root, path string) string {
-	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return path
+	if rel, ok := WithinRoot(root, path); ok {
+		return rel
 	}
-	return rel
+	return path
 }

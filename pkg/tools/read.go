@@ -56,23 +56,23 @@ func (*readTool) selfBounding() {}
 func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p readParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 
 	data, info, kind, err := probeFile(full)
 	if err != nil {
-		return resultErr("read: " + err.Error()), nil
+		return agent.ErrorToolResult("read: " + err.Error()), nil
 	}
 	switch kind {
 	case fileBinary:
-		return resultErr("refusing to read a binary file; use bash if you need its bytes"), nil
+		return agent.ErrorToolResult("refusing to read a binary file; use bash if you need its bytes"), nil
 	case fileImage:
 		if !t.visionOn() {
-			return resultErr("model does not support images; this file can only be read by a vision model"), nil
+			return agent.ErrorToolResult("model does not support images; this file can only be read by a vision model"), nil
 		}
 		return t.readImage(full, data, info)
 	}
@@ -88,7 +88,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 		n = lim.Lines
 	}
 	if n > lim.Lines {
-		return resultErr(fmt.Sprintf(
+		return agent.ErrorToolResult(fmt.Sprintf(
 			"read: limit %d exceeds the maximum of %d lines; narrow the range and page with offset", n, lim.Lines)), nil
 	}
 
@@ -127,7 +127,7 @@ func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 func (t *readTool) readImage(full string, data []byte, info os.FileInfo) (agent.ToolResult, error) {
 	blocks, err := FitImage(data)
 	if err != nil {
-		return resultErr(FitImageError(err)), nil
+		return agent.ErrorToolResult(FitImageError(err)), nil
 	}
 	t.tracker.ObserveImage(full, data, info)
 	var notes strings.Builder

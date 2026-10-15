@@ -167,7 +167,7 @@ func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]ll
 		return out, existing, err
 	}
 	if existing && agentsRes.IsError {
-		if reason := blockText(agentsRes); reason != "" {
+		if reason := llm.JoinText(agentsRes.Content); reason != "" {
 			return out, existing, fmt.Errorf("%w: %s", ErrAgentsUnreadable, reason)
 		}
 		return out, existing, ErrAgentsUnreadable
@@ -285,21 +285,10 @@ func runOf(id string) int64 {
 
 // resultText joins a tool result's text blocks, for reporting a refusal.
 func resultText(res agent.ToolResult) string {
-	if s := blockText(res); s != "" {
+	if s := llm.JoinText(res.Content); s != "" {
 		return s
 	}
 	return "no id returned"
-}
-
-// blockText joins a tool result's text blocks, empty when there are none.
-func blockText(res agent.ToolResult) string {
-	var b strings.Builder
-	for _, blk := range res.Content {
-		if tb, ok := blk.(llm.TextBlock); ok {
-			b.WriteString(tb.Text)
-		}
-	}
-	return b.String()
 }
 
 // detail reads one key from a tool result's Details map.

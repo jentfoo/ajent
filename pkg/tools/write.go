@@ -75,18 +75,18 @@ func (*writeTool) selfBounding() {}
 func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	var p writeParams
 	if err := decode(call.Input, &p); err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 
 	// an overwrite keeps the existing file's majority line ending, a new file gets LF
 	disp := readDisplaced(full)
 	data := []byte(restoreLineEndings(normalizeToLF(p.Content), detectLineEnding(disp.data)))
 	if err := config.WriteFileAtomic(full, data, writePerm(full)); err != nil {
-		return resultErr("write: " + err.Error()), nil
+		return agent.ErrorToolResult("write: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, data, fileInfo(full), true) // a write produces the whole file
 

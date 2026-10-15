@@ -20,6 +20,14 @@ func FirstLine(s string) string {
 // trimZero strips a trailing ".0" from a formatted float so "68.2k", not "68.20k".
 func trimZero(s string) string { return strings.TrimSuffix(s, ".0") }
 
+// Plural renders a count with its unit, appending "s" for every count but one.
+func Plural(n int, unit string) string {
+	if n == 1 {
+		return "1 " + unit
+	}
+	return strconv.Itoa(n) + " " + unit + "s"
+}
+
 func FormatTokens(n int) string {
 	switch {
 	case n >= 1_000_000:

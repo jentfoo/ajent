@@ -125,30 +125,30 @@ func (*editTool) selfBounding() {}
 func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	p, err := decodeEditParams(call.Input)
 	if err != nil {
-		return resultErr("bad args: " + err.Error()), nil
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
 	}
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 
 	// The file is re-read here. A stale or changed file simply fails to match in applyEdits.
 	data, err := os.ReadFile(full)
 	if err != nil {
-		return resultErr("edit: " + err.Error()), nil
+		return agent.ErrorToolResult("edit: " + err.Error()), nil
 	}
 	tgt := t.target(p.Path, full, data)
 	o, err := applyEdits(tgt, string(data), p.Edits)
 	if err != nil {
-		return resultErr(err.Error()), nil
+		return agent.ErrorToolResult(err.Error()), nil
 	}
 	if len(o.final) > editWriteCeiling {
-		return resultErr(fmt.Sprintf("edit: result would be %s, over the %s ceiling; split the change into smaller edits",
+		return agent.ErrorToolResult(fmt.Sprintf("edit: result would be %s, over the %s ceiling; split the change into smaller edits",
 			strutil.HumanSize(int64(len(o.final))), strutil.HumanSize(editWriteCeiling))), nil
 	}
 
 	if err := config.WriteFileAtomic(full, o.final, writePerm(full)); err != nil {
-		return resultErr("edit: " + err.Error()), nil
+		return agent.ErrorToolResult("edit: " + err.Error()), nil
 	}
 	// observes complete: an edit writes the whole file; it also clears edited
 	// ranges measured against the prior content, re-added below

@@ -52,26 +52,40 @@ func RunSummary(ctx context.Context, p Provider, req Request) (string, Usage, er
 	return sb.String(), acc.Usage(), nil
 }
 
+// LastAssistantMessage returns the newest assistant message in msgs, or nil
+// when the context holds none.
+func LastAssistantMessage(msgs []Message) *Message {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == RoleAssistant {
+			return &msgs[i]
+		}
+	}
+	return nil
+}
+
+// JoinText joins a block list's non-blank text blocks with newlines. Thinking
+// and tool blocks never contribute.
+func JoinText(blocks BlockList) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if tb, ok := b.(TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
+			if sb.Len() > 0 {
+				sb.WriteRune('\n')
+			}
+			sb.WriteString(tb.Text)
+		}
+	}
+	return sb.String()
+}
+
 // FinalAnswer returns the joined text of the last assistant message's non-blank
 // blocks, or "" when the turn produced none.
 func FinalAnswer(msgs []Message) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role != RoleAssistant {
-			continue
-		}
-
-		var sb strings.Builder
-		for _, b := range msgs[i].Content {
-			if tb, ok := b.(TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-				if sb.Len() > 0 {
-					sb.WriteRune('\n')
-				}
-				sb.WriteString(tb.Text)
-			}
-		}
-		return strings.TrimSpace(sb.String())
+	m := LastAssistantMessage(msgs)
+	if m == nil {
+		return ""
 	}
-	return ""
+	return strings.TrimSpace(JoinText(m.Content))
 }
 
 // LastAssistantText returns the text of the newest assistant message that has

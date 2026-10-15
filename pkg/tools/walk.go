@@ -70,7 +70,7 @@ func repoFiles(ctx context.Context, root string) []string {
 				continue
 			}
 			p := filepath.Join(root, f)
-			if !withinRoot(root, p) { // older git still emits ../, never leave scope
+			if _, ok := WithinRoot(root, p); !ok { // older git still emits ../, never leave scope
 				continue
 			}
 			if fi, err := os.Stat(p); err == nil && !fi.IsDir() { // -c lists deleted-but-tracked files
@@ -88,13 +88,14 @@ func repoFiles(ctx context.Context, root string) []string {
 	return allWalk(ctx, root)
 }
 
-// withinRoot reports whether path stays inside root.
-func withinRoot(root, path string) bool {
+// WithinRoot returns path relative to root when it stays inside it. ok is
+// false when the relation cannot be determined or path escapes root.
+func WithinRoot(root, path string) (string, bool) {
 	rel, err := filepath.Rel(root, path)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
+		return "", false
 	}
-	return true
+	return rel, true
 }
 
 // runQuiet runs a command with a short timeout and returns trimmed stdout or

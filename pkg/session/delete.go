@@ -7,6 +7,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
 // DeleteSession removes the one session target names, resolved the way --resume
@@ -45,7 +47,7 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 	for _, info := range stale {
 		_, _ = fmt.Fprintf(out, "  %s  %s\n", info.Label(), describeInfo(info))
 	}
-	_, _ = fmt.Fprintf(out, "Delete %s? [y/N] ", plural(len(stale), "session"))
+	_, _ = fmt.Fprintf(out, "Delete %s? [y/N] ", strutil.Plural(len(stale), "session"))
 	if !confirmed(in) {
 		_, _ = fmt.Fprintln(out, "Cancelled; nothing was deleted.")
 		return nil
@@ -60,7 +62,7 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 			removed++
 		}
 	}
-	_, _ = fmt.Fprintf(out, "Deleted %s.\n", plural(removed, "session"))
+	_, _ = fmt.Fprintf(out, "Deleted %s.\n", strutil.Plural(removed, "session"))
 	return errors.Join(errs...)
 }
 
@@ -75,16 +77,8 @@ func confirmed(in io.Reader) bool {
 	return answer == "y" || answer == "yes"
 }
 
-// plural returns n with unit, suffixed beyond one.
-func plural(n int, unit string) string {
-	if n == 1 {
-		return fmt.Sprintf("%d %s", n, unit)
-	}
-	return fmt.Sprintf("%d %ss", n, unit)
-}
-
 // describeInfo summarises a saved session for the delete output.
 func describeInfo(info Info) string {
 	return fmt.Sprintf("%s, last used %s",
-		plural(info.Messages, "message"), info.Updated.Local().Format("2006-01-02")) // recorded in UTC, rendered in the system local time zone
+		strutil.Plural(info.Messages, "message"), info.Updated.Local().Format("2006-01-02")) // recorded in UTC, rendered in the system local time zone
 }

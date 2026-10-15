@@ -95,8 +95,11 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		return "", ctx.Err()
 	}
 
-	last := lastAssistant(state.Messages)
-	sum := assistantText(last)
+	last := llm.LastAssistantMessage(state.Messages)
+	var sum string
+	if last != nil {
+		sum = llm.JoinText(last.Content)
+	}
 	for attempt := 0; needsNudge(sum, last) && attempt < maxContinueAttempts; attempt++ {
 		if err := a.Prompt(ctx, agent.Input{Text: nudgeFor(last)}); err != nil {
 			return "", err
@@ -104,8 +107,11 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		last = lastAssistant(state.Messages)
-		sum = assistantText(last)
+		last = llm.LastAssistantMessage(state.Messages)
+		sum = ""
+		if last != nil {
+			sum = llm.JoinText(last.Content)
+		}
 	}
 
 	// still cut short after the wrap-up turn: partial work never reads as done.
@@ -145,33 +151,6 @@ func hasToolCall(m *llm.Message) bool {
 		_, ok := b.(llm.ToolCallBlock)
 		return ok
 	})
-}
-
-// lastAssistant returns the most recent assistant message in msgs, or nil.
-func lastAssistant(msgs []llm.Message) *llm.Message {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == llm.RoleAssistant {
-			return &msgs[i]
-		}
-	}
-	return nil
-}
-
-// assistantText joins a message's non-empty text blocks, excluding thinking.
-func assistantText(m *llm.Message) string {
-	if m == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for _, b := range m.Content {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			if sb.Len() > 0 {
-				sb.WriteRune('\n')
-			}
-			sb.WriteString(tb.Text)
-		}
-	}
-	return sb.String()
 }
 
 // bestThinking returns the longest reasoning text among the trailing assistant
