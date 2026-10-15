@@ -642,7 +642,10 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
 ### llama.cpp
 
 - Older builds reject an unknown `stream_options`, so stream usage starts off
-  and discovery turns it on.
+  and discovery turns it on: `/props` reports `build_info`, and at or past
+  upstream b6508 (when `include_usage` began to be honoured) discovery adds a
+  `supportsUsageInStreaming` compat that declared entries and overrides can
+  still turn back off.
 - `/tokenize` is exact, local and cheap, so it is the one tokenizer used freely.
 
 ### lm-studio

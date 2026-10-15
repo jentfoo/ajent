@@ -288,7 +288,9 @@ runs, or the inline renderer redraws it as a stale ghost.
 
 **4. All public `UI` methods take `u.mu`.** Renderers are not independently
 thread safe. Input runs on its own goroutine, as does the spinner ticker, and
-both mutate through the same lock.
+both mutate through the same lock. This includes the tail of `New`: startup
+type-ahead can be decoded before the first frame composes, so the key-loop
+repaints serialize against it instead of composing concurrently.
 
 **5. Closed UIs write nothing.** The commit funnel (`commitHist`) and the
 spinner sync drop everything once `Close` restored the terminal, because every

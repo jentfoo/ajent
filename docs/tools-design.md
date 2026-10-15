@@ -137,7 +137,9 @@ provenance). The classification decisions that shape everything else:
   so an executable written earlier under an allowlisted name never inherits its
   verdict. Anything unverifiable prompts, never reaching an unattended
   classifier, a grant or session memory in the dialog, and `safeCommands`
-  match argv only under a slash-free head for the same reason.
+  match argv only under a slash-free head for the same reason. Safe-list heads
+  compare literally (deny matching folds basenames on purpose), so listing
+  `git` never blesses a `git.sh` on PATH while the deny list still catches one.
 - Shell commands are name-trusted only when they have no exec or write form.
   `sed`, `awk`, `rg` and `sort` are verified per invocation instead, anything
   unverifiable prompting. GNU long options abbreviate: `getopt_long` resolves
@@ -293,7 +295,11 @@ directories. Emits a `Change` (empty → content for new files) through
 `Previewer`, rendered before the call is vetted rather than after it applies.
 Overwriting an existing file returns a unified diff of what was displaced, the
 one part of the change the model did not itself supply. A new file reports its
-line count alone.
+line count alone. Writes are never gated on readability, so an unreadable
+existing file (a mode-000 in an otherwise writable directory) still goes
+through, but no diff is possible: the preview marks the before side with the
+file's byte size, and the result reports that the existing content could not
+be read rather than passing the change off as additions.
 
 ### edit (`edit.go`)
 
