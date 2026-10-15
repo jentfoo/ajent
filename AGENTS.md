@@ -48,40 +48,11 @@ into a reference mirroring either surface.
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
-| `clipboard-copy-feature.md` | `pkg/clipboard` (+ `pkg/llm`, `pkg/session`, `pkg/command`, TUI control in `pkg/tui`, routing in `pkg/app`) | The shared clipboard writer (platform-native first, OSC 52 only on remote sessions) and its two surfaces: `/copy` for the last agent response and `ctrl+x` in the rewind picker. Tool call/result JSON copies verbatim, never as display labels. |
 | `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by pkg/app. |
 | `plan-design.md` | `pkg/plan` (+ seams in `pkg/agent`, `pkg/session`, `pkg/tools`) | The two-model `/plan` workflow: phases as branches of the session tree rather than projections of one message list, the `Host` boundary, the user gate on the drafted plan, per-phase model and tool scope with guaranteed restore, `dev_*` control tools and `ToolResult.EndTurn`, persistence and resume. |
 | `prompt-design.md` | every string sent to a model | Each prompt surface ajent sends; the principles enforced by tests: cache-stability of the system block, cheap/stable/honest prompts, provenance markers on all injected content. The single reference for prompting. |
 
 ## Architecture
-
-Dependency direction is load-bearing. Actual internal edges:
-
-```
-config   (no internal deps — paths, JSON merge, layered settings)
-strutil  (no internal deps — tiny shared string helpers)
-httputil (no internal deps — the hardened outbound HTTP client)
-clipboard(no internal deps — the shared clipboard text writer)
-version  -> config, httputil
-llm      -> config, strutil, httputil, version
-tokens   -> llm
-agent    -> llm, tokens
-tools    -> agent, config, llm, strutil
-session  -> agent, config, llm, strutil, tokens, tools
-compact  -> llm, session, strutil, tokens, tools
-tui      -> img, strutil (+ goldmark, uniseg, go-udiff, chroma)
-mcp      -> agent, config, llm, strutil, version (+ mcp-go; never tools/tui/command — adapters live in pkg/app)
-subagent -> agent, llm, strutil, tokens (never tools/tui/command/session/permit — ToolSource + func Options supplied by pkg/app)
-plan     -> agent, llm, strutil (never tools/tui/command/session — the driver supplies Host)
-projinit -> agent, llm, tools (never tui/command/session/subagent — /init drives the
-            real read and agent_* tools through the registry)
-permit   -> agent, tools, strutil (never tui; prompter/classifier interfaces are supplied by pkg/app)
-refs     -> agent, llm, tokens, tools, tui
-command  -> agent, config, llm, refs, tokens, tools, tui, version
-app      -> everything except httputil; nothing imports it (the only wiring layer); root
-            main() parses flags, short-circuits --version/--update/--delete/--delete-old,
-            and calls app.Run / app.RunDelete / app.CheckSessionTarget
-```
 
 ### Outbound HTTP (`pkg/httputil`)
 
@@ -119,7 +90,7 @@ rebuild. Only the newest applies, so each run recomputes cumulatively.
 
 ### Front end and dispatch
 
-`pkg/app` is the only wiring layer (nothing imports it). It classifies each line as prompt /
+`pkg/app` is the only wiring layer. It classifies each line as prompt /
 `/command` / `!shell`, feeds ordering to a single **prompt pump** goroutine, and sends shell
 lines straight to a non-blocking stager. A one-shot (`-p`, or any piped stdio) run wires the same
 loop onto a stdout drain instead of the TUI. Its safety model is the auto+write default (the
@@ -134,30 +105,32 @@ never tui, so headless stays free. Only **verifiably read-only** actions run wit
 approval: built-in readers by name, declared-read-only tools (MCP hint / config globs),
 bash through a quote-aware analyser. Network commands are never read-only.
 
-## Package map
+### Package map
 
-Quick navigation from concern → package (read the matching design doc first). One line each.
+One line per package: role, then import boundaries (`(leaf)` = no internal deps).
+Depth lives in the design docs above.
 
-- **`pkg/agent`** — turn loop: `Agent`, `State` (single owner), event sink, pure message assembly, cache-stable system block. Everything else builds on it.
-- **`pkg/app`** — the only wiring layer; nothing imports it. Prompt pump + line dispatch, headless (`-p`) run, and thin adapters that supply seams other packages refuse to import (permit classifier, compact driver, plan Host).
-- **`pkg/clipboard`** — shared clipboard writer: platform-native first, OSC 52 on remote only.
-- **`pkg/command`** — `/slash`, `!shell`, and prompt-line classification + completion; registry open to MCP. Uses `pkg/refs` for `@` expansion.
-- **`pkg/compact`** — compaction: verbatim band, cut point, structured summary checkpoint recorded on a session entry.
-- **`pkg/config`** — layered settings with per-key provenance; ordered writer and secret-perm handling.
-- **`pkg/httputil`** — the one hardened outbound HTTP client (no redirects, retries, credential redaction). MCP traffic does not ride it.
-- **`pkg/img`** — image normalization for model input: sniff, downscale/convert under a ceiling.
-- **`pkg/llm`** — one streaming interface over five vendors; normalisation pass (`Prepare`), capabilities, registry/discovery from `models.json`. One file per vendor.
-- **`pkg/mcp`** — MCP client/server manager keeping mcp-go isolated here; bridge turns remote tools into `agent.Tool`.
-- **`pkg/permit`** — permission barrier: classify every tool call, prompt for approval unless verifiably read-only (bash via quote-aware analyser).
-- **`pkg/plan`** — `/plan`: two-model phases as session-tree branches; supplies `dev_*` control tools.
-- **`pkg/projinit`** — `/init`: scaffolds project instructions into the repo by driving real read and agent_* tools.
-- **`pkg/refs`** — `@`-path expansion with auto-read and gitignore-aware completion index.
-- **`pkg/session`** — append-only JSONL transcript as source of truth: entry tree, rewind/branch/resume, replay to a sink, compaction data.
-- **`pkg/strutil`** — tiny shared string helpers (Clip, FirstLine, HumanSize...). Leaf package.
-- **`pkg/subagent`** — fan-out child agents for read-only investigation; bounded concurrency, completion notification, spend rollup. Never runs shell or agent_* tools.
-- **`pkg/tokens`** — token estimation and spend accounting (child spend rolls into parent ledger).
-- **`pkg/tools`** — tool registry + built-ins (read/write/edit/bash/grep/find/diff/ask), guard chain, path policy, per-tool limits.
-- **`pkg/tui`** — no-framework terminal UI: paint layers, scrollback survival, markdown/highlight rendering.
+- **`pkg/agent`** — the turn loop; everything else builds on it.
+- **`pkg/app`** — the only wiring layer, nothing imports it. Root `main()` short-circuits
+  `--version`/`--update`/`--delete`/`--delete-old` before calling into `app`.
+- **`pkg/clipboard`** — shared clipboard writer: platform-native first, OSC 52 on remote (leaf).
+- **`pkg/command`** — `/slash`, `!shell`, prompt-line classification and completion.
+- **`pkg/compact`** — compaction: verbatim band, cut point, summary checkpoint.
+- **`pkg/config`** — layered settings with per-key provenance (leaf).
+- **`pkg/httputil`** — the hardened outbound HTTP client (leaf).
+- **`pkg/img`** — image sniff/downscale for model input (leaf).
+- **`pkg/llm`** — the streaming provider interface, capabilities, model registry.
+- **`pkg/mcp`** — MCP client/server manager; never imports tools/tui/command — adapters live in `pkg/app`.
+- **`pkg/permit`** — permission barrier; imports only agent/tools, never tui.
+- **`pkg/plan`** — the `/plan` two-model workflow; never imports tools/tui/command/session.
+- **`pkg/projinit`** — `/init` scaffolding; never imports tui/command/session/subagent.
+- **`pkg/refs`** — `@`-path expansion with auto-read and gitignore-aware completion.
+- **`pkg/session`** — the append-only JSONL transcript tree.
+- **`pkg/strutil`** — tiny shared string helpers (leaf).
+- **`pkg/subagent`** — read-only child agents; never imports tools/tui/command/session/permit.
+- **`pkg/tokens`** — token estimation and spend accounting.
+- **`pkg/tools`** — tool registry, built-ins, guard chain, path policy.
+- **`pkg/tui`** — no-framework terminal UI; `tui/sink` is the agent event sink over the paint layer.
 - **`pkg/version`** — version string + self-update.
 
 ### Context lifecycle
