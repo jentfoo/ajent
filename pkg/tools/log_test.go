@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,6 +58,36 @@ func TestGitLog(t *testing.T) {
 		assert.Contains(t, out, "edit moved")
 		assert.Contains(t, out, "1 commit shown")
 		assert.NotContains(t, out, "renames followed") // the rename commit was cut
+	})
+
+	t.Run("step_cap_counts_shown_commits", func(t *testing.T) {
+		g := newDeepRepo(t, maxLogCommits+10)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"target.txt"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "edit target again")
+		assert.Contains(t, out, "edit target")
+		assert.Contains(t, out, "... 2 commits shown") // the cap cut before the limit did
+	})
+
+	t.Run("step_cap_without_match_stays_partial", func(t *testing.T) {
+		g := newDeepRepo(t, maxLogCommits+10)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt","limit":5}`)
+		assert.False(t, isErr)
+		assert.NotContains(t, out, "no commits touch") // a capped walk may not claim it
+		assert.Contains(t, out, "... 0 commits shown")
+	})
+
+	t.Run("cap_at_history_end_is_complete", func(t *testing.T) {
+		g := newDeepRepo(t, maxLogCommits-4) // the cut lands exactly at history's end
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt"}`)
+		assert.False(t, isErr)
+		// a capped walk that exhausted history may claim the empty scope after all
+		assert.Equal(t, "(no commits touch ghost.txt)", strings.TrimSpace(out))
+
+		out, isErr = runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"target.txt"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "add target") // the birth was reached before the cap
+		assert.NotContains(t, out, "shown")   // nothing was cut
 	})
 
 	t.Run("empty_scope_says_so", func(t *testing.T) {
@@ -116,6 +147,41 @@ func TestGitLog(t *testing.T) {
 		assert.False(t, isErr)
 		assert.Contains(t, out, "edit pkg file")
 	})
+}
+
+// newDeepRepo builds a history of noise+4 commits: two edits of target.txt on
+// top, its birth far below them, and base.txt filler in between. Sizing the
+// filler past maxLogCommits forces a step-cap exit; at exactly maxLogCommits
+// total commits the walk instead exhausts history there.
+func newDeepRepo(t *testing.T, noise int) *gitRepo {
+	t.Helper()
+
+	dir := t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	commit := func(msg string, when time.Time) {
+		t.Helper()
+
+		require.NoError(t, w.AddWithOptions(&git.AddOptions{All: true}))
+		_, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+	}
+	require.NoError(t, os0Write(dir, "base.txt", "one\n"))
+	commit("add base", base)
+	require.NoError(t, os0Write(dir, "target.txt", "one\n"))
+	commit("add target", base.Add(time.Minute))
+	for i := range noise {
+		require.NoError(t, os0Write(dir, "base.txt", fmt.Sprintf("one\n%d\n", i)))
+		commit(fmt.Sprintf("edit base %d", i), base.Add(time.Duration(2+i)*time.Minute))
+	}
+	require.NoError(t, os0Write(dir, "target.txt", "one\ntwo\n"))
+	commit("edit target", base.Add((maxLogCommits+12)*time.Minute))
+	require.NoError(t, os0Write(dir, "target.txt", "one\ntwo\nthree\n"))
+	commit("edit target again", base.Add((maxLogCommits+13)*time.Minute))
+	return &gitRepo{dir: dir}
 }
 
 // newLinearRepo builds master -> c1 adds origin.txt, c2 renames it to

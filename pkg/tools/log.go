@@ -91,6 +91,7 @@ func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.O
 	}
 	file := normalizeGitPathspec(p.File)
 	var out string
+	var shown int // commits actually listed, never walk
 	var more bool
 	var chain []string
 	iter, logErr := r.Log(&git.LogOptions{From: head.ID(), Order: git.LogOrderCommitterTime})
@@ -98,83 +99,89 @@ func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.O
 		return resultErr(ToolGitLog + ": " + logErr.Error()), nil
 	}
 	if file != "" {
-		out, more, chain, err = gitLogFollow(ctx, iter, file, walk)
+		out, shown, more, chain, err = gitLogFollow(ctx, iter, file, walk)
 	} else {
-		out, more, err = gitLogLines(ctx, iter, walk)
+		out, shown, more, err = gitLogLines(ctx, iter, walk)
 	}
 	if err != nil {
 		return resultErr(ToolGitLog + ": " + err.Error()), nil
 	}
-	if out == "" && file != "" { // a scope that matches nothing still needs an answer
+	// only a finished walk may claim an empty scope matched nothing
+	if !more && out == "" && file != "" {
 		out = "(no commits touch " + file + ")"
 	}
 	if len(chain) > 0 {
 		out += "\nrenames followed: " + strings.Join(chain, ", ")
 	}
 	paging := "raise limit or narrow with file"
-	if more {
-		out += "\n... " + plural(walk, "commit") + " shown"
+	if more { // cap cuts can list fewer than limit
+		out += "\n... " + plural(shown, "commit") + " shown"
 	}
 	text, _ := truncateOutput(t.sessionID, ToolGitLog, out, GitResultLimit(), paging)
 	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil
 }
 
-// gitLogLines renders at most limit commits, reporting whether history
-// continues past them.
-func gitLogLines(ctx context.Context, iter object.CommitIter, limit int) (string, bool, error) {
+// gitLogLines renders at most limit commits, reporting how many it listed and
+// whether history continues past them.
+func gitLogLines(ctx context.Context, iter object.CommitIter, limit int) (string, int, bool, error) {
 	var b strings.Builder
+	var shown int
 	for i := 0; i < limit; i++ {
 		if ctx.Err() != nil {
-			return "", false, ctx.Err()
+			return "", 0, false, ctx.Err()
 		}
 		c, err := iter.Next()
 		if errors.Is(err, io.EOF) {
-			return strings.TrimRight(b.String(), "\n"), false, nil
+			return strings.TrimRight(b.String(), "\n"), shown, false, nil
 		}
 		if err != nil {
-			return "", false, err
+			return "", 0, false, err
 		}
 		fmt.Fprintf(&b, "%s %s %s\n", shortHash(c.ID()), c.Author.When.Format(logTimeFormat), commitSubject(c))
+		shown++
 	}
 	_, err := iter.Next() // one past the limit decides "more"
-	return strings.TrimRight(b.String(), "\n"), !errors.Is(err, io.EOF), nil
+	return strings.TrimRight(b.String(), "\n"), shown, !errors.Is(err, io.EOF), nil
 }
 
 // gitLogFollow walks full history newest first, listing commits that touch
 // file and following its renames backwards, `git log --follow` style: when a
 // commit renames the tracked path, older commits are matched under the old
 // name. A directory scope instead matches every change beneath it and never
-// follows renames or ends early, like `git log -- dir/`. It reports whether
-// the walk was cut (by limit or step cap) and the rename chain, oldest first.
-func gitLogFollow(ctx context.Context, iter object.CommitIter, file string, limit int) (string, bool, []string, error) {
+// follows renames or ends early, like `git log -- dir/`. It reports how many
+// commits it listed, whether history continues past them and the rename
+// chain, oldest first.
+func gitLogFollow(ctx context.Context, iter object.CommitIter, file string, limit int) (string, int, bool, []string, error) {
 	var b strings.Builder
 	var chain []string
 	path := file
-	shown, steps := 0, 0
+	var shown, steps int
 	for {
 		if ctx.Err() != nil {
-			return "", false, nil, ctx.Err()
+			return "", 0, false, nil, ctx.Err()
 		}
 		if steps++; steps > maxLogCommits {
-			return strings.TrimRight(b.String(), "\n"), true, chain, nil
+			// a cut can land at history's end: one more step decides "more"
+			_, err := iter.Next()
+			return strings.TrimRight(b.String(), "\n"), shown, !errors.Is(err, io.EOF), chain, nil
 		}
 		c, err := iter.Next()
 		if errors.Is(err, io.EOF) {
-			return strings.TrimRight(b.String(), "\n"), false, chain, nil
+			return strings.TrimRight(b.String(), "\n"), shown, false, chain, nil
 		}
 		if err != nil {
-			return "", false, nil, err
+			return "", 0, false, nil, err
 		}
 		touched, prev, ended, err := followTouch(ctx, c, path)
 		if err != nil {
-			return "", false, nil, err
+			return "", 0, false, nil, err
 		}
 		if !touched {
 			continue
 		}
 		if shown >= limit {
 			// past the limit: the next older touch decides whether history continues
-			return strings.TrimRight(b.String(), "\n"), !ended, chain, nil
+			return strings.TrimRight(b.String(), "\n"), shown, !ended, chain, nil
 		}
 		fmt.Fprintf(&b, "%s %s %s\n", shortHash(c.ID()), c.Author.When.Format(logTimeFormat), commitSubject(c))
 		if prev != "" {
@@ -183,7 +190,7 @@ func gitLogFollow(ctx context.Context, iter object.CommitIter, file string, limi
 		}
 		shown++
 		if ended {
-			return strings.TrimRight(b.String(), "\n"), false, chain, nil // born or deleted: history ends
+			return strings.TrimRight(b.String(), "\n"), shown, false, chain, nil // born or deleted: history ends
 		}
 	}
 }
