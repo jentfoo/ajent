@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"io"
-	"maps"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -14,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/img"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -120,7 +120,7 @@ func (s *imageSlots) evictLocked() {
 	if len(s.slots) <= maxImageSlots {
 		return
 	}
-	delete(s.slots, slices.Min(slices.Collect(maps.Keys(s.slots))))
+	delete(s.slots, slices.Min(bulk.MapKeysSlice(s.slots)))
 }
 
 // take extracts every token's blocks from text and removes the tokens, in

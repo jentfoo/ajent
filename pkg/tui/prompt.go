@@ -611,12 +611,7 @@ func (s *multiPickState) groupMembers(group string) []int {
 
 // allSelected reports whether every member of a set is selected.
 func (s *multiPickState) allSelected(members []int) bool {
-	for _, m := range members {
-		if !s.isSelected(m) {
-			return false
-		}
-	}
-	return len(members) > 0
+	return len(members) > 0 && !slices.ContainsFunc(members, func(m int) bool { return !s.isSelected(m) })
 }
 
 // groupTri reports a header's checkbox state: -1 none, 0 partial, 1 all.

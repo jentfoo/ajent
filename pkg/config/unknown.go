@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 var unmarshalerType = reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
@@ -62,11 +64,7 @@ func walkUnknown(node any, t reflect.Type, path string, out *[]string) {
 // declarations, flattening embedded structs the way encoding/json does. Names are
 // lowercased for case-insensitive lookup against decoded keys.
 func jsonFields(t reflect.Type) map[string]fieldDecl {
-	out := make(map[string]fieldDecl, t.NumField())
-	for _, fd := range declaredFields(t) {
-		out[strings.ToLower(fd.name)] = fd
-	}
-	return out
+	return bulk.SliceToIndexBy(func(fd fieldDecl) string { return strings.ToLower(fd.name) }, declaredFields(t))
 }
 
 // fieldDecl is one struct field with its JSON name as the schema declares it.

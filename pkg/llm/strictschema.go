@@ -39,10 +39,8 @@ func makeStrictAnthropicSchema(raw json.RawMessage) (json.RawMessage, bool) {
 
 // strictAnthropicNode makes one schema node strict in place.
 func strictAnthropicNode(s map[string]any) bool {
-	for k := range s {
-		if slices.Contains(unsupportedStrictKeys, k) {
-			return false
-		}
+	if slices.ContainsFunc(unsupportedStrictKeys, func(k string) bool { _, ok := s[k]; return ok }) {
+		return false
 	}
 	// anyOf variants must be simple, never a structured object or array union
 	if raw, ok := s["anyOf"]; ok {

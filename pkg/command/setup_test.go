@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 
@@ -60,12 +61,7 @@ func setupHome(t *testing.T) {
 
 // pickName finds a provider choice's index by its models.json key.
 func pickName(name string) int {
-	for i, ch := range providerSetupChoices {
-		if ch.name == name {
-			return i
-		}
-	}
-	return -1
+	return slices.IndexFunc(providerSetupChoices, func(ch setupChoice) bool { return ch.name == name })
 }
 
 // writtenFile loads what the wizard saved, failing the test when it did not.

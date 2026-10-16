@@ -1,6 +1,8 @@
 package permit
 
 import (
+	"regexp"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -53,10 +55,5 @@ func TestFindUnsafeFlags(t *testing.T) {
 
 // hasFindUnsafeFlag reports whether any unsafe flag matches a segment.
 func hasFindUnsafeFlag(seg string) bool {
-	for _, re := range findUnsafeFlags {
-		if re.MatchString(seg) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(findUnsafeFlags, func(re *regexp.Regexp) bool { return re.MatchString(seg) })
 }

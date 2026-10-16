@@ -581,9 +581,7 @@ func mergeExtra(base, src map[string]json.RawMessage) map[string]json.RawMessage
 	if out == nil {
 		out = make(map[string]json.RawMessage, len(src))
 	}
-	for k, v := range src {
-		out[k] = v
-	}
+	maps.Copy(out, src)
 	return out
 }
 
@@ -674,9 +672,7 @@ func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, m
 	} else {
 		// start from the ladder, then overlay configured rungs so a partial map keeps the rest of it
 		caps.Budgets = defaultBudgets(maxOut)
-		for l, b := range mc.ThinkingBudgets {
-			caps.Budgets[l] = b
-		}
+		maps.Copy(caps.Budgets, mc.ThinkingBudgets)
 	}
 
 	m := Model{

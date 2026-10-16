@@ -1,6 +1,7 @@
 package permit
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/go-analyze/bulk"
@@ -157,12 +158,9 @@ const (
 // command: subshells, substitution, process substitution and case tails
 // all execute text the enclosing tokens never name.
 func deniedBodies(raw string, cmds []string, depth int, mode bodyMode) bool {
-	for _, body := range shellBodies(raw, mode) {
-		if deniedScan(scanCommand(strings.TrimSpace(body)), cmds, depth) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(shellBodies(raw, mode), func(body string) bool {
+		return deniedScan(scanCommand(strings.TrimSpace(body)), cmds, depth)
+	})
 }
 
 // shellBodies returns the shell text raw embeds under mode, quotes
@@ -283,12 +281,9 @@ func backtickBody(s string, tick int) (string, int, bool) {
 // wraps a command the deny list names, the payload pulled from the resolved
 // tokens and rescanned.
 func deniedPayload(raw string, cmds []string, depth int) bool {
-	for _, p := range interpreterPayloads(raw) {
-		if deniedScan(scanCommand(strings.TrimSpace(p)), cmds, depth) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(interpreterPayloads(raw), func(p string) bool {
+		return deniedScan(scanCommand(strings.TrimSpace(p)), cmds, depth)
+	})
 }
 
 // interpreterPayloads returns the shell text an interpreter segment runs:

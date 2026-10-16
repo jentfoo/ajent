@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -188,13 +189,7 @@ func TestStatsBenchmarkDataPath(t *testing.T) {
 	})
 
 	find := func(lines []map[string]any, typ string) []map[string]any {
-		var out []map[string]any
-		for _, l := range lines {
-			if l["type"] == typ {
-				out = append(out, l)
-			}
-		}
-		return out
+		return bulk.SliceFilter(func(l map[string]any) bool { return l["type"] == typ }, lines)
 	}
 
 	t.Run("successful_edit_is_counted_and_tokens_recorded", func(t *testing.T) {

@@ -196,12 +196,7 @@ func downgradeImages(msgs []Message, caps Capabilities) []Message {
 }
 
 func hasImageBlock(msgs []Message) bool {
-	for _, m := range msgs {
-		if slices.ContainsFunc(m.Content, blockHasImage) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(msgs, func(m Message) bool { return slices.ContainsFunc(m.Content, blockHasImage) })
 }
 
 // blockHasImage reports whether a block is an image or carries one in its content.

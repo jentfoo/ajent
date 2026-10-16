@@ -949,12 +949,9 @@ func TestStatusSegmentAndList(t *testing.T) {
 
 	// a status was published naming the live count, not just an opaque marker
 	mu.Lock()
-	var found bool
-	for _, s := range statuses {
-		if strings.HasPrefix(s, "subagents: ") && (strings.Contains(s, "running") || strings.Contains(s, "done")) {
-			found = true
-		}
-	}
+	found := slices.ContainsFunc(statuses, func(s string) bool {
+		return strings.HasPrefix(s, "subagents: ") && (strings.Contains(s, "running") || strings.Contains(s, "done"))
+	})
 	mu.Unlock()
 	assert.True(t, found)
 }

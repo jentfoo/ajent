@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -163,10 +164,7 @@ func (s *mapSet) Schemas() []llm.ToolSchema {
 }
 
 func (s *mapSet) Names() []string {
-	names := make([]string, 0, len(s.tools))
-	for name := range s.tools {
-		names = append(names, name)
-	}
+	names := bulk.MapKeysSlice(s.tools)
 	slices.Sort(names)
 	return names
 }
@@ -674,12 +672,7 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 		}
 	}
 	assert.True(t, foundSteer)
-	var live []string
-	for _, c := range sink.calls {
-		if strings.HasPrefix(c, "user:") {
-			live = append(live, c)
-		}
-	}
+	live := bulk.SliceFilter(func(c string) bool { return strings.HasPrefix(c, "user:") }, sink.calls)
 	assert.Equal(t, []string{"user:Allowed with note: keep it"}, live) // only the injected steer echoes
 }
 
@@ -695,12 +688,12 @@ func TestLoopSteerReplayMarkAndEcho(t *testing.T) {
 		wantEcho   []string
 		wantMarked bool
 	}{
-		{"typed_stays_silent_unmarked", Input{Text: "typed"}, nil, false},
-		{"injected_marked_no_echo", Input{Text: "kickoff", Injected: true}, nil, true},
+		{"typed_stays_silent_unmarked", Input{Text: "typed"}, []string{}, false},
+		{"injected_marked_no_echo", Input{Text: "kickoff", Injected: true}, []string{}, true},
 		{"injected_echoes_and_marks", Input{Text: "note", Echo: "note", Injected: true}, []string{"user:note"}, true},
 		{"tool_results_silent_unmarked", Input{Injected: true, Blocks: llm.BlockList{
 			llm.ToolResultBlock{CallID: "c1", Content: llm.BlockList{llm.TextBlock{Text: "out"}}},
-		}}, nil, false},
+		}}, []string{}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -720,12 +713,7 @@ func TestLoopSteerReplayMarkAndEcho(t *testing.T) {
 				}
 			}
 			assert.Equal(t, tc.wantMarked, marked)
-			var live []string
-			for _, c := range sink.calls {
-				if strings.HasPrefix(c, "user:") {
-					live = append(live, c)
-				}
-			}
+			live := bulk.SliceFilter(func(c string) bool { return strings.HasPrefix(c, "user:") }, sink.calls)
 			assert.Equal(t, tc.wantEcho, live)
 		})
 	}

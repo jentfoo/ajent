@@ -820,12 +820,10 @@ func CommandRefused(cmd string, denied []string) bool {
 	if entryCovered(cmd, denied) {
 		return true
 	}
-	for _, e := range denied {
-		if fields := strings.Fields(e); len(fields) > 0 && fields[0] == cmd {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(denied, func(e string) bool {
+		fields := strings.Fields(e)
+		return len(fields) > 0 && fields[0] == cmd
+	})
 }
 
 // safeMatches reports whether call is named by a configured safe command: an exact

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -415,9 +416,7 @@ func marshalMerged(body any, extra map[string]json.RawMessage) ([]byte, error) {
 	if err = json.Unmarshal(data, &merged); err != nil {
 		return nil, err
 	}
-	for k, v := range extra {
-		merged[k] = v
-	}
+	maps.Copy(merged, extra)
 	return json.Marshal(merged)
 }
 

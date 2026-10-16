@@ -61,12 +61,9 @@ func bashCwd(input json.RawMessage) string {
 
 // contains reports whether the already-resolved path full sits at or under a root.
 func (s writeScope) contains(full string) bool {
-	for _, r := range s.roots {
-		if full == r || strings.HasPrefix(full, r+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.roots, func(r string) bool {
+		return full == r || strings.HasPrefix(full, r+string(filepath.Separator))
+	})
 }
 
 // allows reports whether call writes only inside the scope: a core writer on an in-scope
@@ -246,12 +243,7 @@ func (s writeScope) from(base string) writeScope {
 // inScopeFrom reports whether p lands inside the scope from every possible baseline,
 // so a path is refused unless it is safe however the cd chain actually played out.
 func (s writeScope) inScopeFrom(bases []string, p string) bool {
-	for _, b := range bases {
-		if !s.from(b).inScope(p) {
-			return false
-		}
-	}
-	return true
+	return !slices.ContainsFunc(bases, func(b string) bool { return !s.from(b).inScope(p) })
 }
 
 // topComponent returns the shallowest component of p, which is the highest

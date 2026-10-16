@@ -8,6 +8,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,9 +64,7 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 			return nil, warnings, err
 		}
 		warnings = append(warnings, warns...)
-		for name, cfg := range servers { // whole-entry replacement: project wins
-			merged[name] = cfg
-		}
+		maps.Copy(merged, servers) // whole-entry replacement: project wins
 	}
 
 	for name, cfg := range merged {

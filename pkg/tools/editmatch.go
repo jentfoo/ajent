@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -582,12 +583,7 @@ func canonIndent(base string) string {
 
 // sharedIndent reports whether every non-blank line starts with base.
 func sharedIndent(lines []string, base string) bool {
-	for _, l := range lines {
-		if nonBlank(l) && !strings.HasPrefix(l, base) {
-			return false
-		}
-	}
-	return true
+	return !slices.ContainsFunc(lines, func(l string) bool { return nonBlank(l) && !strings.HasPrefix(l, base) })
 }
 
 // reindent swaps base for prefix on every non-blank line of s. Blank lines

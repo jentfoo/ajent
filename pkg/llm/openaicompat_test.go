@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -274,12 +275,7 @@ func TestCompatProviderStream(t *testing.T) {
 		require.NoError(t, s.Err()) // a malformed call must not fail the stream
 		assert.NoError(t, acc.Err())
 
-		var ends []Event
-		for _, ev := range events {
-			if ev.Type == EventToolCallEnd {
-				ends = append(ends, ev)
-			}
-		}
+		ends := bulk.SliceFilter(func(ev Event) bool { return ev.Type == EventToolCallEnd }, events)
 		require.Len(t, ends, 2)
 		require.ErrorIs(t, ends[0].Err, ErrMalformedToolArgs) // the one call failed
 		require.NoError(t, ends[1].Err)                       // its sibling stayed valid

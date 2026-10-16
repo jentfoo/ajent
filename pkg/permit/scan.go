@@ -543,12 +543,7 @@ func (s Scan) HasNetworkRedirect() bool {
 
 // RedirectsAll reports whether ok holds for every redirect target.
 func (s Scan) RedirectsAll(ok func(target string) bool) bool {
-	for _, r := range s.Redirects {
-		if !ok(r.Target) {
-			return false
-		}
-	}
-	return true
+	return !slices.ContainsFunc(s.Redirects, func(r Redirect) bool { return !ok(r.Target) })
 }
 
 // compound reports whether command carries pipes, redirects or substitution that
@@ -566,10 +561,8 @@ func compound(command string) bool {
 		if i < len(s.Raw) {
 			raw = s.Raw[i]
 		}
-		for _, re := range findUnsafeFlags {
-			if re.MatchString(seg) || re.MatchString(raw) {
-				return true
-			}
+		if slices.ContainsFunc(findUnsafeFlags, func(re *regexp.Regexp) bool { return re.MatchString(seg) || re.MatchString(raw) }) {
+			return true
 		}
 		if toks := segmentTokens(seg); len(toks) > 0 && envAssignRe.MatchString(firstToken(toks)) {
 			return true // leading assignment: not a nameable simple command
@@ -612,10 +605,8 @@ func forEachSegment(s Scan, ok func(seg, raw string) bool) bool {
 // collapsed and verbatim text so a quoted "-delete" can never slip past, and any
 // env assignment defeats the verdict since the shell would treat it as one too.
 func segmentIsReadOnly(seg, raw string) bool {
-	for _, re := range findUnsafeFlags {
-		if re.MatchString(seg) || re.MatchString(raw) {
-			return false
-		}
+	if slices.ContainsFunc(findUnsafeFlags, func(re *regexp.Regexp) bool { return re.MatchString(seg) || re.MatchString(raw) }) {
+		return false
 	}
 	for _, tok := range tokenizeRaw(raw) {
 		if envAssignRe.MatchString(tok) {

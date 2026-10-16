@@ -414,10 +414,7 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	present := make(map[string]bool, len(offered))
-	for _, t := range offered {
-		present[t.Name()] = true
-	}
+	present := bulk.SliceToSetBy(func(t agent.Tool) string { return t.Name() }, offered)
 	sourceOf := make(map[string]string, len(r.tools))
 	for i := range r.tools {
 		sourceOf[r.tools[i].tool.Name()] = r.tools[i].source
@@ -463,13 +460,8 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 }
 
 // allPresent reports whether every member appears in present.
-func allPresent(members []string, present map[string]bool) bool {
-	for _, m := range members {
-		if !present[m] {
-			return false
-		}
-	}
-	return true
+func allPresent(members []string, present map[string]struct{}) bool {
+	return !slices.ContainsFunc(members, func(m string) bool { _, ok := present[m]; return !ok })
 }
 
 // EnabledNames returns the currently enabled names registered under source. The

@@ -485,10 +485,8 @@ func compatJSONName(f reflect.StructField) string {
 
 // secretWarning reports a permissive mode on a file holding a literal key.
 func secretWarning(path string, f File) string {
-	for _, p := range f.Providers {
-		if p.APIKey != "" {
-			return config.CheckSecretPerms(path)
-		}
+	if slices.ContainsFunc(bulk.MapValuesSlice(f.Providers), func(p ProviderConfig) bool { return p.APIKey != "" }) {
+		return config.CheckSecretPerms(path)
 	}
 	return ""
 }

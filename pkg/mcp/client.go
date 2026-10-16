@@ -283,15 +283,9 @@ func (c *Client) spawnStdio() error {
 func mcpEnv(cfg ServerConfig) []string {
 	env := os.Environ()
 	for k, v := range cfg.Env { // replace or append each override
-		var found bool
-		for i, kv := range env {
-			if strings.HasPrefix(kv, k+"=") {
-				env[i] = k + "=" + v
-				found = true
-				break
-			}
-		}
-		if !found {
+		if i := slices.IndexFunc(env, func(kv string) bool { return strings.HasPrefix(kv, k+"=") }); i >= 0 {
+			env[i] = k + "=" + v
+		} else {
 			env = append(env, k+"="+v)
 		}
 	}

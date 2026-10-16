@@ -95,12 +95,7 @@ var remoteEnvVars = []string{"SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION"}
 // remote reports a remote session, where the terminal is the only clipboard OSC
 // 52 can still reach. A var so tests fake the environment.
 var remote = func() bool {
-	for _, k := range remoteEnvVars {
-		if os.Getenv(k) != "" {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(remoteEnvVars, func(k string) bool { return os.Getenv(k) != "" })
 }
 
 // stdout receives the OSC 52 fallback when no TTY sink was supplied. A var so

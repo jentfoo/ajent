@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -30,11 +31,8 @@ var noRO = func(string) bool { return false }
 
 // roSet returns a stub reporting the given names read-only.
 func roSet(names []string) func(string) bool {
-	set := make(map[string]bool)
-	for _, n := range names {
-		set[n] = true
-	}
-	return func(n string) bool { return set[n] }
+	set := bulk.SliceToSet(names)
+	return func(n string) bool { _, ok := set[n]; return ok }
 }
 
 func TestClassify(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 // runPlain asks an interaction without a live block, answering through the same
@@ -66,9 +68,7 @@ func applyPlainAnswer(it interactor, line string) error {
 		if len(s.picks) == 0 {
 			return ErrCancelled
 		}
-		for idx := range s.selected {
-			s.chosen = append(s.chosen, idx)
-		}
+		s.chosen = bulk.MapKeysSlice(s.selected)
 		slices.Sort(s.chosen)
 		return nil
 	case *questionState:

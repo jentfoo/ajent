@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -63,12 +65,7 @@ func TestThinkingCommitKeepsOutput(t *testing.T) {
 		if strings.TrimSpace(l) == "" {
 			return true
 		}
-		for _, c := range committed {
-			if strings.Contains(c, l) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(committed, func(c string) bool { return strings.Contains(c, l) })
 	}
 
 	for _, c := range []string{
@@ -84,12 +81,7 @@ func TestThinkingCommitKeepsOutput(t *testing.T) {
 	// carry text that was never part of those lines (see TestStreamingCommitKeepsOutput).
 	u.Thinking("\nthird reasoning follows")
 
-	var lost []string
-	for _, l := range v.scrollback {
-		if !isRetired(strings.TrimSpace(l)) {
-			lost = append(lost, l)
-		}
-	}
+	lost := bulk.SliceFilter(func(l string) bool { return !isRetired(strings.TrimSpace(l)) }, v.scrollback)
 	screen := u.snapshot(v)
 	assert.Empty(t, lost,
 		"nothing but retired committed history may scroll\nscreen:\n%s", screen)
