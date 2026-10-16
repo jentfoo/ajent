@@ -169,9 +169,12 @@ type UI struct {
 	// (a fresh session has no prompts yet, so arrows still reach prior sessions).
 	// Every non-recall buffer replacement calls resetPromptNavLocked, or an
 	// arrow at a buffer edge would clobber fresh content with a stale entry.
-	prompts   []string // newest-first prompt texts, nil falls back to editor history
-	promptIdx int      // -1 at the live buffer, else index of the recalled prompt
-	stashP    string   // live draft held aside while browsing recorded prompts
+	prompts     []string // newest-first prompt texts, nil falls back to editor history
+	promptIdx   int      // -1 at the live buffer, else index of the recalled prompt
+	stashP      string   // live draft held aside while browsing recorded prompts
+	promptSeq   uint64   // generation counter, each armed list load adopts the next value
+	promptLoad  uint64   // the in-flight load's generation, 0 when idle
+	promptEmpty bool     // last load resolved empty: no re-arm until reset
 
 	pastes   []pasteEntry // large pastes in arrival order, expanded at submit
 	pasteSeq int          // numbers each placeholder so they stay unique
@@ -1352,6 +1355,7 @@ func (u *UI) SetHistorySearch(fn func() []SearchItem) {
 	defer u.mu.Unlock()
 
 	u.historySearch = fn
+	u.resetPromptNavLocked() // the arrow fallback reads this source: a swapped list never resumes mid-browse
 	if fn == nil {
 		u.search = nil // clear any open overlay when the source is removed
 	}
@@ -1395,31 +1399,75 @@ func (u *UI) acceptSearchLocked() {
 	u.search = nil
 }
 
-// ensurePromptNavLocked lazily loads the ↑/↓ prompt list once per navigation
+// promptLoadKey names the transient status segment shown while the ↑/↓ prompt
+// list loads off the key loop.
+const promptLoadKey = "history"
+
+// ensurePromptNavLocked arms the ↑/↓ prompt list load once per navigation
 // episode: the arrow source when installed, else the history-search source's
 // texts. An empty arrow list also falls back, so a fresh session with no
-// prompts of its own still recalls the search scope's entries. A nil or empty
-// result leaves prompts nil, and arrows fall back to editor history navigation.
-// Caller holds the lock; providers cache upstream so this is cheap after a
-// first load and never scans per keystroke.
+// prompts of its own still recalls the search scope's entries. A provider may
+// scan transcripts, so the load runs off the key loop like Ctrl+R's: while it
+// is in flight arrows fall back to editor history, a transient status segment
+// says why, and the result lands through deliverPromptNav. A nil or empty
+// result leaves prompts nil, and arrows fall back to editor history
+// navigation. Caller holds the lock.
 func (u *UI) ensurePromptNavLocked() {
-	if u.prompts != nil {
+	if u.prompts != nil || u.promptLoad != 0 || u.promptEmpty {
+		return // list cached, a load in flight, or the last one already came back empty
+	}
+	arrowFn, searchFn := u.promptHistory, u.historySearch
+	if arrowFn == nil && searchFn == nil {
 		return
 	}
+	u.promptSeq++
+	gen := u.promptSeq
+	u.promptLoad = gen
+	u.setSegmentLocked(Segment{Key: promptLoadKey, Text: "loading history…"})
+	u.safeGo(func() { u.deliverPromptNav(gen, loadPromptNav(arrowFn, searchFn)) })
+}
+
+// loadPromptNav resolves the recall list in the arrows' preference order: the
+// arrow source first, then the search source's texts when it comes back empty.
+func loadPromptNav(arrowFn func() []string, searchFn func() []SearchItem) []string {
 	var ps []string
-	if u.promptHistory != nil {
-		ps = u.promptHistory()
+	if arrowFn != nil {
+		ps = arrowFn()
 	}
-	if len(ps) == 0 && u.historySearch != nil {
-		items := u.historySearch()
+	if len(ps) == 0 && searchFn != nil {
+		items := searchFn()
 		ps = make([]string, 0, len(items))
 		for _, it := range items {
 			ps = append(ps, it.Text)
 		}
 	}
+	return ps
+}
+
+// deliverPromptNav stores the loaded list when its generation still owns the
+// slot; a reset or re-arm while it was in flight drops it instead. An empty
+// result arms no reload until resetPromptNavLocked, so an empty scope never
+// re-scans per arrow press.
+func (u *UI) deliverPromptNav(gen uint64, ps []string) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.closed {
+		if gen == u.promptLoad { // resolve the slot when this delivery still owns it
+			u.promptLoad = 0
+		}
+		return
+	}
+	if gen != u.promptLoad {
+		return
+	}
+	u.promptLoad = 0
+	u.setSegmentLocked(Segment{Key: promptLoadKey}) // empty Text removes the slot
 	if len(ps) > 0 {
 		u.prompts = ps
 		u.promptIdx = -1 // at the live buffer, first ↑ recalls the newest prompt
+	} else {
+		u.promptEmpty = true
 	}
 }
 
@@ -1469,7 +1517,18 @@ func (u *UI) resetPromptNavLocked() {
 	u.prompts = nil
 	u.promptIdx = -1
 	u.stashP = ""
+	u.promptEmpty = false
+	u.cancelPromptLoadLocked()
 	u.editor.ResetHistory()
+}
+
+// cancelPromptLoadLocked drops any in-flight prompt-list load and its segment.
+func (u *UI) cancelPromptLoadLocked() {
+	if u.promptLoad == 0 {
+		return
+	}
+	u.promptLoad = 0
+	u.setSegmentLocked(Segment{Key: promptLoadKey}) // empty Text removes the slot
 }
 
 // deliverSearch stores the provider's results if the overlay is still open.

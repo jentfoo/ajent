@@ -98,20 +98,28 @@ func (s *Store) List(workspace string) ([]Info, error) {
 		}
 		return nil, err
 	}
-	out := make([]Info, 0, len(files)) // jsonl transcripts are a share of dir entries
+	names := make([]string, 0, len(files)) // jsonl transcripts are a share of dir entries
 	for _, f := range files {
 		// side files (output-*.txt, editor-history.lines) are not transcripts, and only
 		// non-dir *.jsonl entries surface in the resume picker.
-		if f.IsDir() || !strings.HasSuffix(f.Name(), ".jsonl") {
-			continue
-		}
-		p := filepath.Join(dir, f.Name())
-		if info, ok := readInfo(p); ok {
-			out = append(out, info)
+		if !f.IsDir() && strings.HasSuffix(f.Name(), ".jsonl") {
+			names = append(names, f.Name())
 		}
 	}
-	// ordered on last use, with start time only as a tie break
-	slices.SortFunc(out, func(a, b Info) int {
+	slices.Sort(names) // parse in name order so results land deterministic
+	paths := make([]string, len(names))
+	for i, name := range names {
+		paths[i] = filepath.Join(dir, name)
+	}
+	infos := scanEach(paths, func(p string) Info {
+		info, _ := readInfo(p)
+		return info // zero Info when the file holds no session
+	})
+	// every row readInfo acknowledges carries Path, so the rest drop here
+	out := bulk.SliceFilterInPlace(func(in Info) bool { return in.Path != "" }, infos)
+	// ordered on last use, with start time only as a tie break. Stable so equal
+	// clocks keep the name order above rather than the ReadDir arrival order.
+	slices.SortStableFunc(out, func(a, b Info) int {
 		return cmp.Or(b.Updated.Compare(a.Updated), b.Started.Compare(a.Started))
 	})
 	return out, nil

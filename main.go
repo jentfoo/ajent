@@ -66,12 +66,16 @@ func main() {
 	}
 
 	// A requested session must resolve before the TUI opens; otherwise fail fast
-	// with a clear message instead of silently starting a fresh transcript.
+	// with a clear message instead of silently starting a fresh transcript. The
+	// resolution rides into the run so the open never scans the workspace twice.
+	var sessResolved app.SessionResolution
 	if sessMode == app.ResumeID || sessMode == app.ResumeSessionName {
-		if err := app.CheckSessionTarget(sessMode, sessTarget); err != nil {
+		info, err := app.CheckSessionTarget(sessMode, sessTarget)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
 			os.Exit(app.ExitUsage)
 		}
+		sessResolved = info
 	}
 
 	// the demo build reconfigures itself before config.Load reads AJENT_HOME.
@@ -90,8 +94,9 @@ func main() {
 		DenyTools:  f.denyTools,
 		Args:       f.args,
 
-		SessMode:   sessMode,
-		SessTarget: sessTarget,
+		SessMode:     sessMode,
+		SessTarget:   sessTarget,
+		SessResolved: sessResolved,
 	})
 	if code != app.ExitOK {
 		stop() // os.Exit skips the deferred demo teardown

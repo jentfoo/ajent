@@ -96,7 +96,9 @@ an append that fails to hit disk never advances the cursor.
 
 - **Create** makes a fresh file and writes its `session` entry first.
 - **Open** reopens an existing file for append and recovers the head from the
-  persisted cursor or the tail (see the branch cursor below).
+  persisted cursor or the tail (see the branch cursor below). **OpenEntries**
+  additionally returns what it parsed, so a resume can rebuild state without
+  reading the file a second time.
 - **Discard** returns a writer with no backing file, so callers stay
   branch-free.
 - **Sync** flushes at a turn boundary *and* persists the current head, data
@@ -149,6 +151,27 @@ no unsynced turn is lost. Growth that breaks the chain is a rewind or fork, and
 the cursor wins. Sync flushes transcript data before persisting the cursor, so
 a trusted cursor never names an entry that is not durable.
 
+## Concurrent access
+
+Nothing in the design locks a transcript to one process. Two ajent instances
+may share a workspace directory or even one session, kept safe without
+coordination by four rules:
+
+1. **Appends interleave whole lines, never bytes.** Each append is one write
+   of a complete line, so concurrent writers land interleaved entries in one
+   tree and nothing is lost or corrupt.
+2. **The cursor is atomic, last writer wins.** A reader sees the old or new
+   cursor, never a torn one. The last cursor to land names the branch a resume
+   continues, and the other instance's entries stay intact in the tree, one
+   rewind away.
+3. **Reads are uncoordinated and tolerant.** A scan racing an append sees a
+   consistent prefix or freshly landed lines, exactly as a serial scan would,
+   and torn tails quarantine themselves on open.
+4. **A parsed snapshot is trusted only while the file is unchanged.** A
+   process holding one (an open's parse, a cached prompt scan) re-reads before
+   building on it whenever the file has grown, so a concurrent writer's
+   entries never land unseen.
+
 ## The store
 
 The store maps workspaces to directories under `<config dir>/sessions`: a
@@ -183,6 +206,12 @@ The store:
   28 days), most recently used first. Its order and selection key are `List`'s
   already. Removing a session drops its sidecars too (the head cursor and any
   `.torn` quarantine), leaving siblings and editor history alone.
+
+**Scans are concurrent and deterministic.** Each transcript parses
+independently, so `List` and `Prompts` walk files through a bounded worker
+pool while results keep the serial walk's order and a per-file failure still
+degrades to a skipped row. `Prompts` scans newest files first and stops at its
+quota, so files beyond the quota are never parsed.
 
 Ctrl+R history search reads each transcript's entries in raw append order,
 deduplicated to each distinct text's most recent occurrence across a bounded
@@ -280,6 +309,18 @@ Two consumers read the transcript back:
 Both share one invariant carried over from the agent loop: the rebuilt context
 must stay well formed (every `ToolCallBlock` matched by a `ToolResultBlock`) or
 the next request would be invalid. Rebuild checks this and warns if not.
+
+**A resume reads its transcript once.** The open's parse feeds the startup
+rebuild, so head recovery, hint and state rebuild share one read. The parse is
+a snapshot under the concurrent-access rules: trusted only while the file is
+unchanged, and every later path (rewind, compaction, exit) re-reads live
+state.
+
+An explicit target (`--resume <id|name>`, `--session <name>`) resolves once,
+before the TUI opens, so the run never scans the workspace twice. The
+resolution is a locator for the open, which still parses the transcript it
+names. One deleted in between surfaces as that open's failure rather than a
+silent fresh start.
 
 ## The recorder
 

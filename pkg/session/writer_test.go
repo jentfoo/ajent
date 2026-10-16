@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -34,6 +35,30 @@ func TestWriterCreateAndOpen(t *testing.T) {
 	e2, err := w2.Append(TypeNotice, NoticeData{Message: "again"})
 	require.NoError(t, err)
 	assert.Equal(t, entries[1].ID, e2.ParentID)
+}
+
+func TestWriterOpenEntries(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	for i := range 3 {
+		_, aerr := w.Append(TypeNotice, NoticeData{Message: fmt.Sprintf("note %d", i)})
+		require.NoError(t, aerr)
+	}
+	require.NoError(t, w.Close())
+
+	want, warns, rerr := Read(p)
+	require.NoError(t, rerr)
+	require.Empty(t, warns)
+
+	w2, got, gwarns, oerr := OpenEntries(p)
+	require.NoError(t, oerr)
+	t.Cleanup(func() { _ = w2.Close() })
+	assert.Empty(t, gwarns)
+	assert.Equal(t, want, got) // the caller rebuilds without re-reading
+	assert.Equal(t, Head(got), w2.Head())
 }
 
 func TestWriterParentChainLinear(t *testing.T) {

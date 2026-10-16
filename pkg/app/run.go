@@ -104,15 +104,16 @@ func Run(o RunOptions) int {
 		}
 		return RunHeadless(HeadlessOptions{
 			Set: set, Reg: reg, Active: active,
-			SessMode:   o.SessMode,
-			SessTarget: o.SessTarget,
-			Warnings:   warnings,
-			Prompt:     prompt,
-			Output:     o.Output,
-			Stats:      o.Stats,
-			Scope:      o.Scope,
-			AllowTools: o.AllowTools,
-			DenyTools:  o.DenyTools,
+			SessMode:     o.SessMode,
+			SessTarget:   o.SessTarget,
+			SessResolved: o.SessResolved,
+			Warnings:     warnings,
+			Prompt:       prompt,
+			Output:       o.Output,
+			Stats:        o.Stats,
+			Scope:        o.Scope,
+			AllowTools:   o.AllowTools,
+			DenyTools:    o.DenyTools,
 		})
 	}
 
@@ -154,7 +155,7 @@ func Run(o RunOptions) int {
 		go version.CheckForUpdate(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 	}
 
-	resumeLabel := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.Args, o.Scope)
+	resumeLabel := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.SessResolved, o.Args, o.Scope)
 
 	// tell the user how to get back to this conversation
 	ui.Close()

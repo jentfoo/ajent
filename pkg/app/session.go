@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
@@ -17,6 +19,16 @@ import (
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
+// snapshot is a transcript's open-time parse: the entries head recovery read,
+// Read's per-line warnings, and the size/mtime stamped before that read so a
+// rebuild can detect concurrent appends.
+type snapshot struct {
+	entries []session.Entry
+	warns   []string // surfaced as resume notices when the rebuild consumes them
+	size    int64    // transcript size at stat time; unchanged means still fresh
+	mod     time.Time
+}
+
 type sessRec struct {
 	store *session.Store
 	w     *session.Writer
@@ -24,6 +36,13 @@ type sessRec struct {
 	// note is a startup caveat from session selection (--continue skipping
 	// newer-format sessions), surfaced once by whichever front end opened it.
 	note string
+	// snapshot is the transcript's open-time parse, shared by the startup hint
+	// and resume rebuild. Consumed by restoreState: every later path (rewind,
+	// compaction, exit) re-reads live state.
+	snapshot snapshot
+	// hint is the transcript's root id, cached on first read and stable for the
+	// process lifetime.
+	hint string
 	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
 	// and @ reference ids stop describing what it replaced. Nil until main wires it.
 	onSwitch func([]llm.Message)
@@ -39,11 +58,15 @@ type sessRec struct {
 }
 
 func sessionHint(r *sessRec) string {
-	entries, ok := sessionEntries(r)
-	if !ok {
+	if r == nil || r.w == nil {
 		return ""
 	}
-	return rootID(entries)
+	if r.hint == "" { // a fresh session caches on its first read, never re-reading after
+		if entries, ok := sessionEntries(r); ok {
+			r.hint = rootID(entries) // the root id never changes once minted
+		}
+	}
+	return r.hint
 }
 
 func sessionLabel(r *sessRec) string {
@@ -51,10 +74,7 @@ func sessionLabel(r *sessRec) string {
 	if !ok {
 		return ""
 	}
-	if name := session.NameOf(entries); name != "" {
-		return name
-	}
-	return rootID(entries)
+	return labelOf(entries)
 }
 
 func (r *sessRec) name() string {
@@ -84,14 +104,9 @@ func rootID(entries []session.Entry) string {
 	return entries[i].ID
 }
 
-func (r *sessRec) empty() bool {
-	if r == nil || r.w == nil || r.store == nil {
-		return false
-	}
-	entries, _, err := session.Read(r.w.Path())
-	if err != nil {
-		return false
-	}
+// abandoned reports whether entries describe a transcript worth dropping at
+// exit: unnamed and holding no message.
+func abandoned(entries []session.Entry) bool {
 	if session.NameOf(entries) != "" {
 		return false // --session resumes by name, so a named session is worth keeping
 	}
@@ -103,11 +118,27 @@ func (r *sessRec) empty() bool {
 // row or steals "most recent", reporting "" so no resume hint names it. Any
 // other transcript returns the label a `--resume` command takes.
 func (r *sessRec) exitLabel() string {
-	if r.empty() {
+	if r == nil || r.w == nil {
+		return ""
+	}
+	entries, ok := sessionEntries(r)
+	if !ok {
+		return "" // unreadable: neither dropped nor advertised
+	}
+	if r.store != nil && abandoned(entries) {
 		_ = r.store.Remove(r.w.Path())
 		return ""
 	}
-	return sessionLabel(r)
+	return labelOf(entries)
+}
+
+// labelOf names a transcript the way --resume takes it back: its recorded
+// name, else the root entry's id.
+func labelOf(entries []session.Entry) string {
+	if name := session.NameOf(entries); name != "" {
+		return name
+	}
+	return rootID(entries)
 }
 
 // resumeHint renders the exact line every finished run points home with, so
@@ -134,40 +165,48 @@ func skipNewerNote(skipped int, newest session.Info) string {
 }
 
 // CheckSessionTarget verifies that a requested session exists before the TUI
-// opens, so an id or name fails fast rather than silently starting fresh. A
-// target blocked behind a newer format refuses with the version hint; only a
-// true miss reads as "no session matches", while ambiguity and listing
-// failures pass through verbatim.
-func CheckSessionTarget(mode ResumeMode, target string) error {
+// opens, so an id or name fails fast rather than silently starting fresh. It
+// returns the resolution for the open to adopt as a locator; a zero Info
+// resolves nothing. A target blocked behind a newer format refuses with the
+// version hint; only a true miss reads as "no session matches", while
+// ambiguity and listing failures pass through verbatim.
+func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
+	switch mode {
+	case ResumeID, ResumeSessionName:
+	default:
+		return session.Info{}, nil // nothing requested: implicit modes need no check
+	}
 	store, err := session.NewStore()
 	if err != nil {
-		return err
+		return session.Info{}, err
 	}
 	cwd := config.Cwd()
 	if mode == ResumeSessionName {
 		info, found, ferr := store.FindNamed(cwd, target)
 		if ferr != nil || !found {
-			return ferr
+			return session.Info{}, ferr
 		} else if info.Blocked {
-			return refuseNewer(info)
+			return session.Info{}, refuseNewer(info)
 		}
-		return nil
+		return info, nil
 	}
 	info, ferr := store.Find(cwd, target)
 	if errors.Is(ferr, session.ErrNotFound) {
-		return fmt.Errorf("no session matches %q", target)
+		return session.Info{}, fmt.Errorf("no session matches %q", target)
 	} else if ferr != nil { // ambiguity and listing failures pass through verbatim, as --delete does
-		return ferr
+		return session.Info{}, ferr
 	} else if info.Blocked {
-		return refuseNewer(info)
+		return session.Info{}, refuseNewer(info)
 	}
-	return nil
+	return info, nil
 }
 
-// newSession opens the run's transcript. A returned error is an open failure
-// the caller must surface, never a fall-back-to-fresh signal; implicit modes
-// that legitimately start fresh return a writer with a nil error.
-func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string) (*sessRec, error) {
+// newSession opens the run's transcript. pre is the check-time resolution of
+// target, adopted as a locator when it still fits the live store. A returned
+// error is an open failure the caller must surface, never a fall-back-to-fresh
+// signal; implicit modes that legitimately start fresh return a writer with a
+// nil error.
+func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string, pre session.Info) (*sessRec, error) {
 	store, err := session.NewStore()
 	if err != nil {
 		return nil, err
@@ -177,33 +216,38 @@ func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string) (*sessRec,
 	if ui != nil && mode == ResumePick {
 		pick = func(list []session.Info) (int, error) { return pickSessionRoot(ui, list) }
 	}
-	w, note, err := openSession(store, mode, cwd, target, modelKey, pick)
+	w, snap, note, err := openSession(store, mode, cwd, target, modelKey, pick, pre)
 	if err != nil {
 		return nil, err
 	}
-	return &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: note}, nil
+	r := &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: note, snapshot: snap}
+	r.hint = rootID(snap.entries)
+	return r, nil
 }
 
-// openSession resolves mode onto a transcript writer. A returned error is an
-// open failure the caller must surface, never a fall-back-to-fresh signal;
-// implicit modes that legitimately start fresh return a writer with a nil
-// error. note carries a caveat about what was chosen (a --continue that had to
-// skip newer-format sessions) for the front end to announce.
-func openSession(store *session.Store, mode ResumeMode, cwd string, target, modelKey string, pick func([]session.Info) (int, error)) (*session.Writer, string, error) {
-	fresh := func(name string) (*session.Writer, string, error) {
+// openSession resolves mode onto a transcript writer, its open-time snapshot
+// (empty for a fresh session) and a startup caveat note. pre is the check-time
+// resolution of target for the id and name modes, adopted as a locator when it
+// still fits the live store so the workspace is scanned once. A returned error
+// is an open failure the caller must surface, never a fall-back-to-fresh
+// signal; implicit modes that legitimately start fresh return a writer with a
+// nil error. note carries a caveat about what was chosen (a --continue that had
+// to skip newer-format sessions) for the front end to announce.
+func openSession(store *session.Store, mode ResumeMode, cwd string, target, modelKey string, pick func([]session.Info) (int, error), pre session.Info) (*session.Writer, snapshot, string, error) {
+	fresh := func(name string) (*session.Writer, snapshot, string, error) {
 		sd := session.SessionData{Version: session.Version(), Workspace: cwd, Name: name}
 		if modelKey != "" {
 			sd.Model = modelKey // provenance so a resume can stamp assistant origins
 		}
 		w, err := store.Create(cwd, sd)
-		return w, "", err
+		return w, snapshot{}, "", err
 	}
 
 	switch mode {
 	case ResumeContinue:
 		list, lerr := store.List(cwd)
 		if lerr != nil {
-			return nil, "", lerr
+			return nil, snapshot{}, "", lerr
 		} else if len(list) == 0 {
 			return fresh("") // nothing saved yet, start one
 		}
@@ -211,61 +255,106 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		// skipped loudly instead of quietly misrouting work into an older one.
 		i := slices.IndexFunc(list, func(in session.Info) bool { return !in.Blocked })
 		if i < 0 { // every save carries a newer format; still start one
-			w, _, ferr := fresh("")
-			return w, skipNewerNote(len(list), list[0]), ferr
+			w, _, _, ferr := fresh("")
+			return w, snapshot{}, skipNewerNote(len(list), list[0]), ferr
 		}
-		w, err := session.Open(list[i].Path)
+		w, snap, err := openSnapshot(list[i].Path)
 		var note string
 		if err == nil && i > 0 {
 			note = skipNewerNote(i, list[0]) // rows sorting above the resumed one are all blocked
 		}
-		return w, note, err
+		return w, snap, note, err
 	case ResumeID:
-		info, ferr := store.Find(cwd, target)
+		info, ferr := preTarget(store, cwd, target, pre)
 		if ferr != nil {
-			return nil, "", ferr
+			return nil, snapshot{}, "", ferr
 		} else if info.Blocked { // refused here so Open never touches a newer transcript
-			return nil, "", refuseNewer(info)
+			return nil, snapshot{}, "", refuseNewer(info)
 		}
-		w, err := session.Open(info.Path) // resume that exact transcript's leaf
-		return w, "", err
+		w, snap, err := openSnapshot(info.Path) // resume that exact transcript's leaf
+		return w, snap, "", err
 	case ResumeSessionName:
-		info, found, ferr := store.FindNamed(cwd, target)
+		var info session.Info
+		var found bool
+		var ferr error
+		if preAdoptable(store, cwd, pre) {
+			info, found = pre, true // the check found it; content still parses fresh
+		} else {
+			info, found, ferr = store.FindNamed(cwd, target)
+		}
 		if ferr != nil {
-			return nil, "", ferr
+			return nil, snapshot{}, "", ferr
 		} else if !found {
 			return fresh(target) // first run under this name
 		} else if info.Blocked { // the held name is refused, never re-minted as a fresh transcript
-			return nil, "", refuseNewer(info)
+			return nil, snapshot{}, "", refuseNewer(info)
 		}
-		w, err := session.Open(info.Path)
-		return w, "", err
+		w, snap, err := openSnapshot(info.Path)
+		return w, snap, "", err
 	case ResumePick:
 		list, lerr := store.List(cwd)
 		if lerr != nil && !errors.Is(lerr, session.ErrNoSessions) {
-			return nil, "", lerr // a listing failure must not read as nothing to resume
+			return nil, snapshot{}, "", lerr // a listing failure must not read as nothing to resume
 		} else if len(list) == 0 {
 			return fresh("") // nothing saved yet, start one
 		}
 		if pick == nil { // no way to choose: refuse rather than silently start fresh
-			return nil, "", errors.New("bare --resume needs a terminal for the session picker; pass an id or name")
+			return nil, snapshot{}, "", errors.New("bare --resume needs a terminal for the session picker; pass an id or name")
 		}
 		picked, perr := pick(list)
 		if errors.Is(perr, tui.ErrCancelled) || picked < 0 {
 			return fresh("") // cancelled the resume, start new rather than stall
 		} else if perr != nil {
-			return nil, "", perr
+			return nil, snapshot{}, "", perr
 		}
 		// the picker only shades a blocked row (Disabled is not enforced), so the
 		// invariant that Open never sees one holds at this boundary too
 		if list[picked].Blocked {
-			return nil, "", refuseNewer(list[picked])
+			return nil, snapshot{}, "", refuseNewer(list[picked])
 		}
-		w, err := session.Open(list[picked].Path) // resume that root's leaf
-		return w, "", err
+		w, snap, err := openSnapshot(list[picked].Path) // resume that root's leaf
+		return w, snap, "", err
 	default: // ResumeNewSession and anything unexpected: always fresh
 		return fresh("")
 	}
+}
+
+// openSnapshot opens a transcript for append and returns its open-time parse
+// with the size and mtime stamped before the read, so a later rebuild can
+// detect concurrent appends.
+func openSnapshot(path string) (*session.Writer, snapshot, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, snapshot{}, err
+	}
+	w, entries, warns, oerr := session.OpenEntries(path)
+	if oerr != nil {
+		return nil, snapshot{}, oerr
+	}
+	return w, snapshot{entries: entries, warns: warns, size: fi.Size(), mod: fi.ModTime()}, nil
+}
+
+// preTarget resolves the resume target, adopting pre's path when it still
+// belongs to the live store so the workspace parses once.
+func preTarget(store *session.Store, cwd, target string, pre session.Info) (session.Info, error) {
+	if preAdoptable(store, cwd, pre) {
+		return pre, nil
+	}
+	return store.Find(cwd, target)
+}
+
+// preAdoptable reports whether pre may serve as the open's locator: resolved,
+// unblocked, and inside the workspace's live session directory (the demo build
+// redirects the config home after the check, so a foreign path is dropped).
+func preAdoptable(store *session.Store, cwd string, pre session.Info) bool {
+	if pre.Path == "" || pre.Blocked {
+		return false
+	}
+	dir, err := store.Dir(cwd)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(pre.Path, dir+string(os.PathSeparator))
 }
 
 func promptStore(rec *sessRec) *session.Store {
@@ -351,9 +440,18 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 // replay plus resume warnings; a failed read warns through those rather than
 // resuming as an unannounced empty conversation.
 func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) ([]session.Entry, string, []string) {
-	entries, rwarns, err := session.Read(r.w.Path())
-	if err != nil {
-		return nil, "", append(rwarns, "transcript unreadable: "+err.Error())
+	var entries []session.Entry
+	var rwarns []string
+	snap := r.snapshot
+	r.snapshot = snapshot{} // consumed: later rebuilds re-read live state
+	if snap.entries != nil && snapshotFresh(r.w.Path(), snap) {
+		entries, rwarns = snap.entries, snap.warns // the open-time parse: startup reads once
+	} else {
+		var err error
+		entries, rwarns, err = session.Read(r.w.Path())
+		if err != nil {
+			return nil, "", append(rwarns, "transcript unreadable: "+err.Error())
+		}
 	}
 	if len(entries) == 0 {
 		return nil, "", nil
@@ -371,7 +469,7 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 
 	rebuilt, warns := r.stateFor(modelResolver(reg), entries, head)
 	if len(rebuilt.Messages) == 0 && rebuilt.Model.ID == "" {
-		return nil, "", warns // a brand-new transcript carries no history yet
+		return nil, "", append(rwarns, warns...) // a brand-new transcript carries no history yet
 	}
 	st.Messages = rebuilt.Messages
 	if rebuilt.Model.ID != "" {
@@ -389,7 +487,14 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 		toolsReg.SetEnabled(resumed.Tools.Enabled)
 	}
 	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
-	return entries, head, warns
+	return entries, head, append(rwarns, warns...)
+}
+
+// snapshotFresh reports whether the transcript still matches the snapshot's
+// stamped size and mtime, so another process's appends force a live re-read.
+func snapshotFresh(path string, snap snapshot) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Size() == snap.size && fi.ModTime().Equal(snap.mod)
 }
 
 func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {

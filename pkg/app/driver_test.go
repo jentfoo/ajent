@@ -316,27 +316,33 @@ func TestCheckSessionTarget(t *testing.T) {
 	require.NoError(t, w.Close())
 
 	t.Run("resume_by_name", func(t *testing.T) {
-		assert.NoError(t, CheckSessionTarget(ResumeID, "fix-parser"))
+		_, err := CheckSessionTarget(ResumeID, "fix-parser")
+		assert.NoError(t, err)
 	})
 
 	t.Run("resume_by_id", func(t *testing.T) {
-		assert.NoError(t, CheckSessionTarget(ResumeID, id))
+		_, err = CheckSessionTarget(ResumeID, id)
+		assert.NoError(t, err)
 	})
 
 	t.Run("resume_unknown_fails", func(t *testing.T) {
-		assert.Error(t, CheckSessionTarget(ResumeID, "no-such-session"))
+		_, err = CheckSessionTarget(ResumeID, "no-such-session")
+		assert.Error(t, err)
 	})
 
 	t.Run("new_name_is_allowed", func(t *testing.T) {
-		assert.NoError(t, CheckSessionTarget(ResumeSessionName, "brand-new"))
+		_, err = CheckSessionTarget(ResumeSessionName, "brand-new")
+		assert.NoError(t, err)
 	})
 
 	t.Run("existing_name_is_allowed", func(t *testing.T) {
-		assert.NoError(t, CheckSessionTarget(ResumeSessionName, "fix-parser"))
+		_, err = CheckSessionTarget(ResumeSessionName, "fix-parser")
+		assert.NoError(t, err)
 	})
 
 	t.Run("name_matching_id_fails", func(t *testing.T) {
-		assert.Error(t, CheckSessionTarget(ResumeSessionName, id))
+		_, err = CheckSessionTarget(ResumeSessionName, id)
+		assert.Error(t, err)
 	})
 }
 

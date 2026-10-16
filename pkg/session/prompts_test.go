@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -282,4 +284,57 @@ func setPromptFollowsClock() func() {
 	old := promptNow
 	promptNow = func() time.Time { return clock().UTC() }
 	return func() { promptNow = old }
+}
+
+func TestStorePromptsMatchesSerial(t *testing.T) {
+	// pins the shared scanWorkers var, so this is sequential
+	pinScanWorkers(t, 2) // three files scan as 2+1, exercising the chunk boundary
+
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	base := time.UnixMilli(1_700_000_000).UTC()
+	for i := range 3 { // one file per scan chunk, newest last
+		restore := setClock(base.Add(time.Duration(i) * time.Second))
+		resetIDCounter()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		for j := range 2 {
+			_, aerr := w.Append(TypeMessage, MessageData{
+				Message:  llm.Text(llm.RoleUser, fmt.Sprintf("f%d p%d", i, j)),
+				Injected: j == 0, // injected context never recalls
+			})
+			require.NoError(t, aerr)
+		}
+		require.NoError(t, w.Close())
+		restore()
+	}
+
+	got, err := s.Prompts(ws)
+	require.NoError(t, err)
+
+	// serial reference: the pre-parallel walk, newest file first
+	dir, derr := s.Dir(ws)
+	require.NoError(t, derr)
+	des, rerr := os.ReadDir(dir)
+	require.NoError(t, rerr)
+	var names []string
+	for _, de := range des {
+		if !de.IsDir() && strings.HasSuffix(de.Name(), ".jsonl") {
+			names = append(names, de.Name())
+		}
+	}
+	slices.SortFunc(names, func(a, b string) int { return strings.Compare(b, a) })
+	var serial []Prompt
+	seen := make(map[string]struct{})
+	for _, name := range names {
+		for _, p := range filePrompts(filepath.Join(dir, name)) {
+			if _, dup := seen[p.Text]; dup {
+				continue
+			}
+			seen[p.Text] = struct{}{}
+			serial = append(serial, p)
+		}
+	}
+
+	assert.Equal(t, serial, got)
 }

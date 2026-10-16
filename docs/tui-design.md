@@ -1344,6 +1344,13 @@ never restore held state over fresh content.
 Like completion it is an in-place live-block overlay rather than an interaction,
 so a slow scan never blocks input and its pure logic lives separate from the UI.
 
+The first edge arrow **loads the recall list off the key loop**, exactly like
+Ctrl+R's provider: the source may scan transcripts, so the press arms an async
+load, arrows fall back to editor history until it lands, and a transient
+status segment explains the wait. A generation guard drops a delivery that
+raced a reset or source swap, and an empty result arms no reload until the
+next navigation episode, so an empty scope never re-scans per press.
+
 ## The demo
 
 The TUI is exercised by a real agent loop against a scripted model server.

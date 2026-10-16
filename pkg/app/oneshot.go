@@ -68,7 +68,9 @@ func RunHeadless(o HeadlessOptions) int {
 	}
 
 	// recording keeps -p composable: a follow-up --continue rejoins this transcript
-	rec, serr := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key())
+	// sessResolved carries the check-time resolution so the open skips a second
+	// workspace scan; zero for implicit modes and every interactive picker run.
+	rec, serr := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key(), o.SessResolved)
 	if serr != nil && o.SessMode != ResumeNewSession {
 		// an explicit resume target, or a bare --resume with no picker, must not
 		// silently start fresh

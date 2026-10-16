@@ -42,20 +42,28 @@ func Create(path string, d SessionData) (*Writer, error) {
 // persisted cursor or the tail. A torn tail from a crashed partial write is
 // quarantined to <path>.torn and truncated before the first append.
 func Open(path string) (*Writer, error) {
+	w, _, _, err := OpenEntries(path)
+	return w, err
+}
+
+// OpenEntries is Open also returning the post-repair entries its head recovery
+// parsed, with Read's per-line warnings, so a resume rebuilds state without
+// reading the file again.
+func OpenEntries(path string) (*Writer, []Entry, []string, error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	if err := repairTornTail(path, f); err != nil {
 		_ = f.Close()
-		return nil, err
+		return nil, nil, nil, err
 	}
-	e, _, rerr := Read(path)
+	e, warns, rerr := Read(path)
 	if rerr != nil {
 		_ = f.Close()
-		return nil, rerr
+		return nil, nil, nil, rerr
 	}
-	return &Writer{f: f, path: path, head: headFor(path, e), n: len(e)}, nil
+	return &Writer{f: f, path: path, head: headFor(path, e), n: len(e)}, e, warns, nil
 }
 
 // tornScanWindow is the tail slice read to gate and locate a torn line.

@@ -211,3 +211,85 @@ func BenchmarkStoreScan(b *testing.B) {
 		}
 	})
 }
+
+// benchWorkspace seeds n sibling transcripts so the scan benchmarks measure a
+// directory, not one file.
+func benchWorkspace(b *testing.B, n int) (*Store, string) {
+	b.Helper()
+
+	root := b.TempDir()
+	store := StoreAt(root)
+	workspace := filepath.Join(root, "ws")
+	dir, err := store.Dir(workspace)
+	require.NoError(b, err)
+	for i := range n {
+		writeBenchTranscript(b, filepath.Join(dir, fmt.Sprintf("bench-%03d.jsonl", i)))
+	}
+	return store, workspace
+}
+
+// BenchmarkStoreScanParallel measures List and Prompts over a many-session
+// workspace, where the per-file parse pool pays for itself.
+func BenchmarkStoreScanParallel(b *testing.B) {
+	store, workspace := benchWorkspace(b, 12)
+
+	b.Run("list", func(b *testing.B) {
+		for b.Loop() {
+			infos, err := store.List(workspace)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(infos) != 12 {
+				b.Fatalf("got %d sessions, want 12", len(infos))
+			}
+		}
+	})
+	b.Run("prompts", func(b *testing.B) {
+		for b.Loop() {
+			ps, err := store.Prompts(workspace)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(ps) == 0 {
+				b.Fatal("no prompts found")
+			}
+		}
+	})
+}
+
+// BenchmarkResumeOpen measures what the startup snapshot saves: OpenEntries
+// parses once for head recovery and state rebuild, while Open plus a separate
+// Read (the pre-snapshot pattern) parses twice.
+func BenchmarkResumeOpen(b *testing.B) {
+	_, _, path := benchSession(b)
+
+	b.Run("open_entries", func(b *testing.B) {
+		for b.Loop() {
+			w, entries, warns, err := OpenEntries(path)
+			if err != nil || len(warns) > 0 {
+				b.Fatal(err)
+			}
+			if len(entries) == 0 {
+				b.Fatal("no entries")
+			}
+			if err := w.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("open_plus_read", func(b *testing.B) {
+		for b.Loop() {
+			w, err := Open(path)
+			if err != nil {
+				b.Fatal(err)
+			}
+			entries, _, rerr := Read(path)
+			if rerr != nil || len(entries) == 0 {
+				b.Fatal("no entries")
+			}
+			if err := w.Close(); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

@@ -71,17 +71,26 @@ func (s *Store) Prompts(workspace string) ([]Prompt, error) {
 
 	out := make([]Prompt, 0, len(names))
 	seen := make(map[string]struct{})
-	for _, name := range names {
-		prompts := filePrompts(filepath.Join(dir, name))              // newest first within the file
-		for i := 0; i < len(prompts) && len(out) < promptLimit; i++ { // keep most recent occurrence
-			if _, dup := seen[prompts[i].Text]; dup {
-				continue
-			}
-			seen[prompts[i].Text] = struct{}{}
-			out = append(out, prompts[i])
+	// newest-first batches keep the quota honest: once out is full the remaining
+	// files stay unread, and each transcript parses concurrently. The clamp
+	// mirrors scanEach's, so a pinned zero never stalls either side.
+	for chunk := range slices.Chunk(names, max(scanWorkers, 1)) {
+		paths := make([]string, len(chunk))
+		for i, name := range chunk {
+			paths[i] = filepath.Join(dir, name)
 		}
-		if len(out) >= promptLimit {
-			break
+		results := scanEach(paths, func(p string) []Prompt { return filePrompts(p) })
+		for _, prompts := range results { // file order within the batch is name order
+			for i := 0; i < len(prompts) && len(out) < promptLimit; i++ { // keep most recent occurrence
+				if _, dup := seen[prompts[i].Text]; dup {
+					continue
+				}
+				seen[prompts[i].Text] = struct{}{}
+				out = append(out, prompts[i])
+			}
+			if len(out) >= promptLimit {
+				return out, nil
+			}
 		}
 	}
 	return out, nil

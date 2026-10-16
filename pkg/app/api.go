@@ -6,6 +6,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
+	"github.com/jentfoo/ajent/pkg/session"
 )
 
 // Exit codes a script can branch on. They are the same for text and json output.
@@ -66,6 +67,10 @@ const (
 	ResumeSessionName                   // --session <name>: resume that name, creating it when new
 )
 
+// SessionResolution names the transcript CheckSessionTarget resolved, for the
+// open to adopt as a locator instead of rescanning the workspace.
+type SessionResolution = session.Info
+
 // HeadlessOptions carries everything main resolved before deciding not to open a UI.
 type HeadlessOptions struct {
 	Set        *config.Set
@@ -73,7 +78,10 @@ type HeadlessOptions struct {
 	Active     llm.Model
 	SessMode   ResumeMode
 	SessTarget string
-	Warnings   []string
+	// SessResolved is the check-time resolution of SessTarget, adopted by the
+	// open as a locator when it still fits the live store.
+	SessResolved SessionResolution
+	Warnings     []string
 
 	Prompt     string
 	Output     string // OutputText or OutputJSON
@@ -100,6 +108,7 @@ type RunOptions struct {
 	DenyTools  []string
 	Args       []string // positional arguments, joined into a bootstrap prompt
 
-	SessMode   ResumeMode
-	SessTarget string
+	SessMode     ResumeMode
+	SessTarget   string
+	SessResolved SessionResolution // check-time target resolution, avoids a second scan
 }

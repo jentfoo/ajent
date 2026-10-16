@@ -1180,10 +1180,13 @@ func TestUISearchArrowCommits(t *testing.T) {
 			submit = searchPress(u, key{typ: keyUp})
 			assert.Nil(t, submit)
 			assert.Equal(t, tc.prompt, u.editor.Value())
-			assert.Equal(t, 0, u.editor.pos) // first up moves the caret to the prompt's start
-			submit = searchPress(u, key{typ: keyUp})
+			assert.Equal(t, 0, u.editor.pos)         // first up moves the caret to the prompt's start
+			submit = searchPress(u, key{typ: keyUp}) // at the edge: arms the async list load
 			assert.Nil(t, submit)
-			assert.Equal(t, tc.prompt, u.editor.Value()) // second up recalls without a visible change
+			u.waitPromptNav(t)
+			submit = searchPress(u, key{typ: keyUp}) // the load landed: recall the newest (same text)
+			assert.Nil(t, submit)
+			assert.Equal(t, tc.prompt, u.editor.Value())
 			submit = searchPress(u, key{typ: keyUp})
 			assert.Nil(t, submit)
 			assert.Equal(t, 0, u.editor.pos) // recalled text again ends at its caret, Up reaches the start first
@@ -1218,6 +1221,8 @@ func TestUIPromptHistory(t *testing.T) {
 		u.SetInput("draft")
 		pressKey(u, key{typ: keyUp}) // caret to the buffer's start
 		require.Equal(t, 0, u.editor.pos)
+		pressKey(u, key{typ: keyUp}) // at the edge: arms the async list load
+		u.waitPromptNav(t)
 		pressKey(u, key{typ: keyUp}) // recall the newest recorded prompt
 		require.True(t, u.browsingPrompts())
 	}
@@ -1230,10 +1235,14 @@ func TestUIPromptHistory(t *testing.T) {
 		}, nil)
 
 		// plain ↑ is cursor-first: each recall fills the field with its caret at the
-		// end, so stepping older takes two presses. One Up reaches the start of the
-		// recalled line (moving nothing else), a second recalls the next entry.
-		submit := searchPress(u, key{typ: keyUp})
+		// end, so stepping older takes two presses. The first edge ↑ arms the async
+		// list load and falls back; once it lands the original rhythm resumes. One
+		// Up reaches the start of the recalled line (moving nothing else), a second
+		// recalls the next entry.
+		submit := searchPress(u, key{typ: keyUp}) // arms the list load, falls back
 		assert.Nil(t, submit)
+		u.waitPromptNav(t)
+		searchPress(u, key{typ: keyUp})
 		assert.Equal(t, "third", u.editor.Value())
 
 		searchPress(u, key{typ: keyUp}) // caret to start of "third"
@@ -1271,6 +1280,8 @@ func TestUIPromptHistory(t *testing.T) {
 		// strand arrows on editor history when the search scope has entries
 		u := newNavUI([]SearchItem{{Text: "cross session"}}, []string{})
 
+		searchPress(u, key{typ: keyUp}) // arms the list load, falls back
+		u.waitPromptNav(t)
 		searchPress(u, key{typ: keyUp})
 		assert.Equal(t, "cross session", u.editor.Value())
 	})
@@ -1280,6 +1291,8 @@ func TestUIPromptHistory(t *testing.T) {
 		// of plain ↑/↓ so each gesture keeps its own scope
 		u := newNavUI([]SearchItem{{Text: "cross session"}}, []string{"session own"})
 
+		searchPress(u, key{typ: keyUp}) // arms the list load, falls back
+		u.waitPromptNav(t)
 		searchPress(u, key{typ: keyUp})
 		assert.Equal(t, "session own", u.editor.Value())
 		searchPress(u, key{typ: keyUp}) // caret to start, already at the oldest
@@ -1455,6 +1468,17 @@ func (u *UI) waitOpenSearch(t *testing.T) {
 	}, time.Second, testPoll)
 }
 
+// waitPromptNav waits until an armed ↑/↓ list load settles, delivered or dropped.
+func (u *UI) waitPromptNav(t *testing.T) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return u.promptLoad == 0
+	}, time.Second, testPoll)
+}
+
 func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 	const wide = 40 // no wrapping, each logical line is its own visual row
 
@@ -1496,7 +1520,9 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 		u.SetHistorySearch(func() []SearchItem {
 			return []SearchItem{{Text: "prior prompt"}}
 		})
-		press(u, key{typ: keyUp}) // still at pos 0, now the recall list exists
+		press(u, key{typ: keyUp}) // still at pos 0: arms the async list load, falls back
+		u.waitPromptNav(t)
+		press(u, key{typ: keyUp}) // now the recall list exists
 		assert.Equal(t, "prior prompt", editorVal(u))
 	})
 
@@ -1528,7 +1554,9 @@ func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
 		})
 		press(u, key{typ: keyUp}) // move to the start of the current line
 		assert.Equal(t, 0, editorPos(u))
-		press(u, key{typ: keyUp}) // now at the start: recall the newest prompt
+		press(u, key{typ: keyUp}) // at the start: arms the async list load, falls back
+		u.waitPromptNav(t)
+		press(u, key{typ: keyUp}) // recall the newest prompt
 		assert.Equal(t, "next prompt", editorVal(u))
 		press(u, key{typ: keyDown})
 		assert.Equal(t, "hello world", editorVal(u)) // restores the held draft on returning to it
@@ -2703,4 +2731,154 @@ func TestUIClosedDropsWrites(t *testing.T) {
 
 	assert.Empty(t, out.String())
 	assert.Nil(t, u.spinnerCh, "a post-close ToolStart must not re-arm the spinner")
+}
+
+func TestUIPromptNavLoadsAsync(t *testing.T) {
+	t.Parallel()
+
+	// gated provider: the load stays in flight until the test releases it
+	newGated := func(u *UI, gate chan struct{}) {
+		u.SetHistorySearch(func() []SearchItem {
+			<-gate
+			return []SearchItem{{Text: "gated prompt"}}
+		})
+	}
+	arm := func(u *UI) {
+		u.mu.Lock()
+		u.ensurePromptNavLocked()
+		u.mu.Unlock()
+	}
+	segShown := func(u *UI) bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		for _, seg := range u.status.Segments {
+			if seg.Key == promptLoadKey {
+				return seg.Text != ""
+			}
+		}
+		return false
+	}
+
+	t.Run("in_flight_arrow_falls_back", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, _ := io.Pipe()
+		u := newTestUI(t, v, pr)
+		gate := make(chan struct{})
+		t.Cleanup(func() { close(gate) }) // release the provider however the case ends
+		newGated(u, gate)
+
+		// the editor's own history answers while the prompt list loads
+		u.mu.Lock()
+		u.editor.SetValue("typed")
+		u.editor.history = []string{"typed before"}
+		u.editor.histIdx = 1
+		u.mu.Unlock()
+
+		pressKey(u, key{typ: keyUp}) // caret to start
+		pressKey(u, key{typ: keyUp}) // edge: arms the load, falls back to editor history
+		assert.Equal(t, "typed before", func() string {
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			return u.editor.Value()
+		}())
+		assert.True(t, segShown(u))
+	})
+
+	t.Run("delivery_installs_list", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, _ := io.Pipe()
+		u := newTestUI(t, v, pr)
+		gate := make(chan struct{})
+		newGated(u, gate)
+		arm(u)
+		close(gate)
+		u.waitPromptNav(t)
+
+		u.mu.Lock()
+		prompts := u.prompts
+		u.mu.Unlock()
+		assert.Equal(t, []string{"gated prompt"}, prompts)
+		assert.False(t, segShown(u))
+	})
+
+	t.Run("reset_drops_in_flight_load", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, _ := io.Pipe()
+		u := newTestUI(t, v, pr)
+		gate := make(chan struct{})
+		newGated(u, gate)
+		arm(u)
+		u.SetInput("fresh") // a host fill resets nav, cancelling the load
+
+		close(gate)
+		u.waitPromptNav(t)
+
+		u.mu.Lock()
+		prompts := u.prompts
+		u.mu.Unlock()
+		assert.Nil(t, prompts) // the stale result never lands
+		assert.False(t, segShown(u))
+	})
+
+	t.Run("rearm_drops_stale_load", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, _ := io.Pipe()
+		u := newTestUI(t, v, pr)
+		gate := make(chan struct{})
+		newGated(u, gate)
+		arm(u)
+
+		// a second arm while the first is in flight: only the newest may land
+		u.SetHistorySearch(func() []SearchItem { return []SearchItem{{Text: "second"}} })
+		arm(u)
+		close(gate)
+		u.waitPromptNav(t)
+
+		u.mu.Lock()
+		prompts := u.prompts
+		u.mu.Unlock()
+		assert.Equal(t, []string{"second"}, prompts)
+	})
+
+	t.Run("closed_ui_ignores_delivery", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, _ := io.Pipe()
+		u := newTestUI(t, v, pr)
+		gate := make(chan struct{})
+		newGated(u, gate)
+		arm(u)
+		u.Close()
+		close(gate)
+		u.waitPromptNav(t)
+
+		u.mu.Lock()
+		prompts := u.prompts
+		u.mu.Unlock()
+		assert.Nil(t, prompts)
+	})
+
+	t.Run("empty_delivery_does_not_rearm", func(t *testing.T) {
+		v := newVT(40, 10)
+		pr, _ := io.Pipe()
+		u := newTestUI(t, v, pr)
+
+		var calls atomic.Int32
+		u.SetHistorySearch(func() []SearchItem {
+			calls.Add(1)
+			return nil // an empty scope resolves empty
+		})
+		pressKey(u, key{typ: keyUp}) // arms the load, falls back
+		u.waitPromptNav(t)
+
+		pressKey(u, key{typ: keyUp}) // the empty outcome is remembered: no re-arm
+		assert.Equal(t, int32(1), calls.Load())
+		assert.False(t, segShown(u))
+
+		// a reset re-arms, so a swapped source still gets its chance
+		u.SetPromptHistory(func() []string { return []string{"after swap"} })
+		pressKey(u, key{typ: keyUp})
+		u.waitPromptNav(t)
+		pressKey(u, key{typ: keyUp})
+		assert.Equal(t, int32(1), calls.Load()) // the arrow source answered, not the search one
+	})
 }

@@ -268,6 +268,11 @@ func joinStatus(parts []string, t Theme) string {
 func (u *UI) SetStatusSegment(seg Segment) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.setSegmentLocked(seg)
+}
+
+// setSegmentLocked is SetStatusSegment for callers already holding the lock.
+func (u *UI) setSegmentLocked(seg Segment) {
 	seg.Text = sanitizeRow(seg.Text) // arbitrary caller text, keep SGR only
 	seg.Short = sanitizeRow(seg.Short)
 

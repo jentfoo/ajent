@@ -43,7 +43,7 @@ const shutdownDrainWait = 100 * time.Millisecond
 // drives turns from submitted messages, steering mid-turn input into the running
 // turn rather than starting a second one. sessMode decides whether this run starts
 // fresh or resumes a saved transcript, and sessTarget names it for the id and name modes.
-func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, args []string, scope ToolScope) string {
+func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, sessResolved SessionResolution, args []string, scope ToolScope) string {
 	providers := llm.NewProviders(reg)
 	rc := llm.ReasoningFrom(set.Settings().Reasoning, active)
 	st := &agent.State{
@@ -58,7 +58,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	if active.ID != "" {
 		modelKey = active.Key() // a modelless start stays unstamped, "/" would warn on resume
 	}
-	rec, serr := newSession(ui, sessMode, sessTarget, modelKey)
+	rec, serr := newSession(ui, sessMode, sessTarget, modelKey, sessResolved)
 	if rec == nil {
 		msg := "session recording disabled; Esc will not rewind"
 		if serr != nil {

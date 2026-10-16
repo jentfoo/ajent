@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -801,4 +802,78 @@ func TestStoreNewerFormat(t *testing.T) {
 		_, staterr := os.Stat(blocked.Path)
 		require.NoError(t, staterr) // and the file survived untouched
 	})
+}
+
+func TestStoreListMatchesSerial(t *testing.T) {
+	// pins the package clock via setClock, so this is sequential
+
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	base := time.UnixMilli(1_700_000_000).UTC()
+	for i := range 5 {
+		at := base.Add(time.Duration(i) * time.Minute)
+		restore := setClock(at)
+		resetIDCounter()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion, Model: "m"})
+		require.NoError(t, err)
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, fmt.Sprintf("msg %d", i))})
+		require.NoError(t, aerr)
+		require.NoError(t, w.Close())
+		require.NoError(t, os.Chtimes(w.Path(), at, at))
+		restore()
+	}
+
+	list, lerr := s.List(ws)
+	require.NoError(t, lerr)
+	require.Len(t, list, 5)
+
+	// serial reference: the pre-parallel walk, one file at a time
+	dir, derr := s.Dir(ws)
+	require.NoError(t, derr)
+	des, rerr := os.ReadDir(dir)
+	require.NoError(t, rerr)
+	var serial []Info
+	for _, de := range des {
+		if de.IsDir() || !strings.HasSuffix(de.Name(), ".jsonl") {
+			continue
+		}
+		if info, ok := readInfo(filepath.Join(dir, de.Name())); ok {
+			serial = append(serial, info)
+		}
+	}
+	slices.SortFunc(serial, func(a, b Info) int {
+		return cmp.Or(b.Updated.Compare(a.Updated), b.Started.Compare(a.Started))
+	})
+
+	assert.Equal(t, serial, list)
+}
+
+func TestStoreListTieKeepsNameOrder(t *testing.T) {
+	// pins the package clock, so this is sequential
+
+	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+	ws := t.TempDir()
+	at := time.UnixMilli(1_700_000_000).UTC()
+	for i := range 3 { // same pinned clock and mtime: Updated and Started tie across all three
+		writeAt(t, s, ws, at, SessionData{Version: sessionVersion}, fmt.Sprintf("m%d", i))
+	}
+
+	list, lerr := s.List(ws)
+	require.NoError(t, lerr)
+	require.Len(t, list, 3)
+
+	dir, derr := s.Dir(ws)
+	require.NoError(t, derr)
+	names, nerr := os.ReadDir(dir)
+	require.NoError(t, nerr)
+	var sorted []string
+	for _, de := range names {
+		if !de.IsDir() && strings.HasSuffix(de.Name(), ".jsonl") {
+			sorted = append(sorted, de.Name())
+		}
+	}
+	slices.Sort(sorted) // the tie order the stable sort must preserve
+	for i, name := range sorted {
+		assert.Equal(t, filepath.Join(dir, name), list[i].Path)
+	}
 }
