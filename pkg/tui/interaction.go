@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strconv"
 	"sync"
 )
@@ -111,11 +112,8 @@ func (u *UI) abandon(p *pending) {
 
 // dequeue drops p from the queue and re-promotes. Caller holds the lock.
 func (u *UI) dequeue(p *pending) {
-	for i, q := range u.queue {
-		if q == p {
-			u.queue = append(u.queue[:i], u.queue[i+1:]...)
-			break
-		}
+	if i := slices.Index(u.queue, p); i >= 0 {
+		u.queue = slices.Delete(u.queue, i, i+1)
 	}
 	if u.act == p {
 		u.promote()

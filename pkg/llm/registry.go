@@ -151,7 +151,7 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	defer r.mu.Unlock()
 	r.entries, r.flavors = entries, flavors
 	r.models = models
-	r.declaredCompact = make(map[string]struct{})
+	r.declaredCompact = make(map[string]struct{}) // only user-declared thresholds land here
 	for _, m := range models {
 		if m.CompactThreshold != 0 {
 			r.declaredCompact[m.Key()] = struct{}{}
@@ -160,8 +160,8 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	r.applyCompactDefault()
 	r.byKey = make(map[string]int, len(models))
 	r.byAlias = make(map[string]int, len(models))
-	r.dupAlias = make(map[string]struct{})
-	dupKeys := make(map[string]struct{}) // one warning per repeated id
+	r.dupAlias = make(map[string]struct{}) // duplicates are the rare case
+	dupKeys := make(map[string]struct{})   // one warning per repeated id
 	for i, m := range models {
 		key := strings.ToLower(m.Key())
 		if _, ok := r.byKey[key]; ok {
@@ -280,8 +280,10 @@ func unreachableOverrides(declared, discovered []ModelConfig, overrides map[stri
 	declaredIDs := bulk.SliceToSetBy(func(m ModelConfig) string { return m.ID }, declared)
 	discoveredIDs := bulk.SliceToSetBy(func(m ModelConfig) string { return m.ID }, discovered)
 
-	var out []string
-	for _, id := range slices.Sorted(maps.Keys(overrides)) {
+	sortedOverrideKeys := bulk.MapKeysSlice(overrides)
+	slices.Sort(sortedOverrideKeys)
+	out := make([]string, 0, len(sortedOverrideKeys))
+	for _, id := range sortedOverrideKeys {
 		if _, ok := declaredIDs[id]; ok {
 			out = append(out, fmt.Sprintf("modelOverrides %q is also declared in models, the declaration wins", id))
 		} else if _, ok := discoveredIDs[id]; ok {
@@ -527,7 +529,7 @@ func hasAlias(m Model, q string) bool {
 // unique returns the single model matching pred, nil when none match, or an
 // error naming the candidates when several do. Caller holds the read lock.
 func (r *Registry) unique(pred func(Model) bool, name string) (*Model, error) {
-	var hits []int
+	var hits []int // expected length is one; several matches are the error path
 	for i, m := range r.models {
 		if pred(m) {
 			hits = append(hits, i)
@@ -551,6 +553,7 @@ func (r *Registry) unique(pred func(Model) bool, name string) (*Model, error) {
 func (r *Registry) ProviderConfigFor(m Model) (ProviderConfig, Flavor, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	cfg, ok := r.entries[m.Provider]
 	return cfg, r.flavors[m.Provider], ok
 }
@@ -559,6 +562,7 @@ func (r *Registry) ProviderConfigFor(m Model) (ProviderConfig, Flavor, bool) {
 func (r *Registry) ProviderNames() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+
 	out := bulk.MapKeysSlice(r.entries)
 	slices.Sort(out)
 	return out

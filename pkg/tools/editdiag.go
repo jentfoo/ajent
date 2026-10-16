@@ -170,7 +170,7 @@ type contentLine struct {
 
 func buildContent(lines []string) []contentLine {
 	lines = dropTrailingEmpty(lines)
-	var seq []contentLine
+	seq := make([]contentLine, 0, len(lines))
 	for i := 0; i < len(lines); {
 		if c := stripSpace(lines[i]); c == "" {
 			i++
@@ -433,7 +433,7 @@ func anchorCandidates(oldLines, fileLines []string) []int {
 			index[c] = append(index[c], i)
 		}
 	}
-	votes := make(map[int]int)
+	votes := make(map[int]int, len(oldLines))
 	for k, l := range oldLines {
 		c := stripSpace(l)
 		if c == "" {
@@ -460,7 +460,7 @@ func tokenCandidates(old string, fileLines []string) []int {
 	if len(tokens) == 0 {
 		return nil
 	}
-	votes := make(map[int]int)
+	votes := make(map[int]int, len(fileLines))
 	for i, l := range fileLines {
 		var n int
 		for _, t := range tokens {

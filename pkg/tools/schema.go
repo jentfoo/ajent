@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -88,12 +89,7 @@ func fieldJSON(f reflect.StructField) string {
 }
 
 func hasOmitempty(f reflect.StructField) bool {
-	for _, part := range splitList(f.Tag.Get("json")) {
-		if part == "omitempty" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(splitList(f.Tag.Get("json")), "omitempty")
 }
 
 // nodeFor builds the schema node for a field type, recursing into slices and
@@ -141,8 +137,9 @@ func marshalSchema(v any) json.RawMessage {
 
 // splitList splits a comma-separated tag value into trimmed parts.
 func splitList(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
 		if p := strings.TrimSpace(part); p != "" {
 			out = append(out, p)
 		}

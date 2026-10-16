@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,15 +68,7 @@ var envValue = os.Getenv
 // envSet reports whether a writer's display requirements are met: no
 // requirements, or any listed variable set.
 func envSet(names []string) bool {
-	if len(names) == 0 {
-		return true
-	}
-	for _, n := range names {
-		if envValue(n) != "" {
-			return true
-		}
-	}
-	return false
+	return len(names) == 0 || slices.ContainsFunc(names, func(n string) bool { return envValue(n) != "" })
 }
 
 // available reports whether a writer's executable is installed. A var so tests

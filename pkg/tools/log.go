@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
@@ -183,7 +183,7 @@ func gitLogFollow(ctx context.Context, iter object.CommitIter, file string, limi
 			// past the limit: the next older touch decides whether history continues
 			return strings.TrimRight(b.String(), "\n"), shown, !ended, chain, nil
 		}
-		fmt.Fprintf(&b, "%s %s %s\n", shortHash(c.ID()), c.Author.When.Format(logTimeFormat), commitSubject(c))
+		_, _ = fmt.Fprintf(&b, "%s %s %s\n", shortHash(c.ID()), c.Author.When.Format(logTimeFormat), commitSubject(c))
 		if prev != "" {
 			chain = append(chain, prev+" -> "+path)
 			path = prev

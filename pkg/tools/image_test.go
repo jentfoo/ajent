@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math/rand"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -23,6 +24,25 @@ func imagePNG(t *testing.T) []byte {
 	for y := 0; y < 8; y++ {
 		for x := 0; x < 8; x++ {
 			m.Set(x, y, color.RGBA{R: 10, G: 20, B: 30, A: 255})
+		}
+	}
+	var b bytes.Buffer
+	require.NoError(t, png.Encode(&b, m))
+	return b.Bytes()
+}
+
+// oversizedPNG returns a deterministically noisy png wider than the per-axis
+// pixel ceiling: noise keeps the encoding from compressing, so a downscaled
+// re-encode comes out strictly smaller. Small enough to stay fast under -race.
+func oversizedPNG(t *testing.T) []byte {
+	t.Helper()
+
+	const w, h = 2400, 60
+	rng := rand.New(rand.NewSource(1))
+	m := image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := range m.Pix {
+		if i%4 != 3 {
+			m.Pix[i] = byte(rng.Intn(256))
 		}
 	}
 	var b bytes.Buffer
@@ -74,17 +94,15 @@ func TestNormalizeImageBlocks(t *testing.T) {
 	})
 
 	t.Run("oversize image is downscaled", func(t *testing.T) {
-		m := image.NewRGBA(image.Rect(0, 0, 2600, 2000))
-		var b bytes.Buffer
-		require.NoError(t, png.Encode(&b, m))
-		out := NormalizeImageBlocks(llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: b.Bytes()}})
+		src := oversizedPNG(t)
+		out := NormalizeImageBlocks(llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: src}})
 		require.NotEmpty(t, out)
 		img, ok := out[0].(llm.ImageBlock)
 		require.True(t, ok)
-		assert.LessOrEqual(t, len(img.Data), len(b.Bytes()))
+		assert.Less(t, len(img.Data), len(src))
 		// the sizing note rides along when dimensions changed
 		require.Len(t, out, 2)
-		assert.Contains(t, out[1].(llm.TextBlock).Text, "original 2600x2000")
+		assert.Contains(t, out[1].(llm.TextBlock).Text, "original 2400x60")
 	})
 
 	t.Run("disabled replaces with placeholder", func(t *testing.T) {
@@ -137,18 +155,16 @@ func TestNormalizeImages(t *testing.T) {
 	t.Parallel()
 
 	t.Run("oversize result image is fitted", func(t *testing.T) {
-		m := image.NewRGBA(image.Rect(0, 0, 2600, 2000))
-		var b bytes.Buffer
-		require.NoError(t, png.Encode(&b, m))
+		src := oversizedPNG(t)
 		wrapped := NormalizeImages(imgTool{blocks: llm.BlockList{
-			llm.ImageBlock{MediaType: "image/png", Data: b.Bytes()},
+			llm.ImageBlock{MediaType: "image/png", Data: src},
 		}})
 
 		res, err := wrapped.Execute(t.Context(), agent.ToolCall{ID: "c", Name: "mcp_shot"}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		fitted, ok := res.Content[0].(llm.ImageBlock)
 		require.True(t, ok)
-		assert.Less(t, len(fitted.Data), len(b.Bytes()))
+		assert.Less(t, len(fitted.Data), len(src))
 	})
 
 	t.Run("text result is untouched", func(t *testing.T) {

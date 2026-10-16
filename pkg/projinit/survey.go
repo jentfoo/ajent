@@ -40,9 +40,9 @@ var ownedElsewhere = bulk.SliceToSet([]string{
 // docFiles returns the files /init reads for itself (every README plus any
 // existing AGENTS.md) and whether that AGENTS.md was among them.
 func docFiles(cwd string) ([]string, bool) {
-	var out []string
 	matches, _ := filepath.Glob(filepath.Join(cwd, "README*"))
 	slices.Sort(matches)
+	out := make([]string, 0, len(matches))
 	for _, m := range matches {
 		if isFile(m) {
 			out = append(out, filepath.Base(m))
@@ -158,7 +158,7 @@ func sliceUnits(files []string, n int) []unit {
 // group buckets the files under prefix by their next path segment. Those sitting
 // directly in prefix collapse into one unit rather than a scatter of singletons.
 func group(files []string, prefix string) []unit {
-	counts := make(map[string]int)
+	counts := make(map[string]int) // distinct segments, far fewer than files
 	var order []string
 	var loose int
 	for _, f := range files {
@@ -261,10 +261,10 @@ func walkFiles(ctx context.Context, cwd string) []string {
 	_ = filepath.WalkDir(cwd, func(path string, d fs.DirEntry, err error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
-		}
-		if err != nil {
+		} else if err != nil {
 			return nil //nolint:nilerr // an unreadable subtree is skipped, not fatal
 		}
+
 		rel, rerr := filepath.Rel(cwd, path)
 		if rerr != nil || rel == "." {
 			return nil

@@ -3,27 +3,18 @@ package img
 import (
 	"encoding/binary"
 	"image"
-	"image/color"
 	"math/rand"
 	"testing"
 )
 
-// noise returns a w x h image of deterministic pseudo-random pixels, so its
-// png encoding stays large enough to exercise the shrink ladder.
+// noise returns a w x h image of deterministic pseudo-random pixels. Full
+// per-pixel randomness keeps the png encoding near four bytes per pixel, so a
+// modest fixture still reliably busts the encoded-size ceiling.
 func noise(w, h int) *image.RGBA {
 	rng := rand.New(rand.NewSource(1))
 	m := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y += 2 {
-		for x := 0; x < w; x += 2 {
-			c := color.RGBA{
-				R: uint8(rng.Intn(256)), G: uint8(rng.Intn(256)),
-				B: uint8(rng.Intn(256)), A: 255,
-			}
-			m.Set(x, y, c)
-			m.Set(x+1, y, c)
-			m.Set(x, y+1, c)
-			m.Set(x+1, y+1, c)
-		}
+	for i := range m.Pix {
+		m.Pix[i] = byte(rng.Intn(256))
 	}
 	return m
 }

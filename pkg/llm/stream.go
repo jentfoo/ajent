@@ -154,7 +154,7 @@ func (a *Accumulator) Message() Message {
 
 // pendingIndexes returns the indexes of blocks opened but never closed, in index order.
 func (a *Accumulator) pendingIndexes() []int {
-	var out []int
+	out := make([]int, 0, len(a.partial))
 	for i, p := range a.partial {
 		if !p.done {
 			out = append(out, i)

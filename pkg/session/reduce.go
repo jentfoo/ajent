@@ -1,6 +1,7 @@
 package session
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/go-analyze/bulk"
@@ -40,7 +41,6 @@ type Stats struct {
 // the model that produced it (walking session and model_change entries) so cross-
 // model degradation can act on resume, a nil resolve leaving messages unstamped.
 func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (llm.Model, error)) ([]llm.Message, []string) {
-	var msgs []llm.Message
 	var warns []string
 
 	keep := CutIndex(branch, cd)
@@ -48,6 +48,8 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 		warns = append(warns, "compaction first-kept entry not found")
 		return nil, warns // a cut that cannot be located keeps nothing safe
 	}
+
+	var msgs []llm.Message // the cut keeps only the recent band, a small tail of the branch
 
 	var current llm.Model // resolved from session/model_change entries as we walk
 
@@ -136,12 +138,7 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 // set FirstKeptEntryID is missing from the branch.
 func CutIndex(branch []Entry, cd CompactionData) int {
 	if cd.FirstKeptEntryID != "" {
-		for i := range branch {
-			if branch[i].ID == cd.FirstKeptEntryID {
-				return i
-			}
-		}
-		return -1
+		return slices.IndexFunc(branch, func(e Entry) bool { return e.ID == cd.FirstKeptEntryID })
 	}
 	if cd.Summary == "" {
 		return 0 // reductions only, no truncation

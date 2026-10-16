@@ -353,21 +353,14 @@ func compatMessageFor(m Message, caps Capabilities, on bool) ([]compatMessage, e
 
 // compatContent renders blocks as a plain string, or as parts when an image is present.
 func compatContent(blocks BlockList, caps Capabilities) ([]compatPart, string, error) {
-	var hasImage bool
-	for _, b := range blocks {
-		if _, ok := b.(ImageBlock); ok {
-			hasImage = true
-			break
-		}
-	}
-	if !hasImage {
+	if !HasImageBlocks(blocks) {
 		return nil, blocksText(blocks), nil
 	}
 	if !caps.Images {
 		return nil, "", errors.New("llm: model does not accept image input")
 	}
 
-	var parts []compatPart
+	parts := make([]compatPart, 0, len(blocks))
 	for _, b := range blocks {
 		switch v := b.(type) {
 		case TextBlock:

@@ -199,8 +199,9 @@ func readHistLines(path string) []histLine {
 	if err != nil {
 		return nil
 	}
-	var out []histLine
-	for _, row := range strings.Split(string(data), "\n") {
+	dataLines := strings.Split(string(data), "\n")
+	out := make([]histLine, 0, len(dataLines))
+	for _, row := range dataLines {
 		if l, ok := decodeHistLine(row); ok {
 			out = append(out, l)
 		}
@@ -234,7 +235,7 @@ func decodeHistLine(row string) (histLine, bool) {
 // then caps at maxHistoryLines from the newest. A text stays visible when any copy was
 // typed, purely hidden texts staying excluded.
 func normalize(lines []histLine, secretPrefix string) []histLine {
-	var clean []histLine
+	clean := make([]histLine, 0, len(lines))
 	for _, l := range lines {
 		m := strings.TrimRight(l.msg, "\r")
 		if m != "" && !hasSecretPrefix(secretPrefix, m) {
@@ -252,7 +253,7 @@ func normalize(lines []histLine, secretPrefix string) []histLine {
 		}
 	}
 
-	var out []histLine
+	out := make([]histLine, 0, len(clean))
 	for i, l := range clean {
 		if newestPos[l.msg] != i { // skip copies older than the newest occurrence
 			continue

@@ -157,6 +157,7 @@ type Bounded struct {
 // complete line fits. One overlong line alone also counts as truncated, so the
 // caller spills the full text and the footer names what was dropped.
 func Bound(s string, l Limit) Bounded {
+	// TODO - should we countLines or just do the split below first? benchmark and find out.
 	b := Bounded{Bytes: len(s), Lines: countLines(s)}
 	if !overBudget(s, l) && !overlongLine(s) {
 		b.Text = s
@@ -164,9 +165,14 @@ func Bound(s string, l Limit) Bounded {
 		return b
 	}
 
-	var kept []string
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	n := len(lines)
+	if l.Lines > 0 {
+		n = min(n, l.Lines)
+	}
+	kept := make([]string, 0, n)
 	var byteCount int // bytes of kept text including each joining newline
-	for _, ln := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+	for _, ln := range lines {
 		if l.Lines > 0 && len(kept) >= l.Lines {
 			break
 		}

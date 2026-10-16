@@ -141,8 +141,9 @@ func (c *Completer) Style(text string, pos int) tui.CompleteStyle {
 // case-insensitively as dispatch resolves it.
 func (c *Completer) commandComplete(ctx completeCtx) (int, []tui.Completion) {
 	name := strings.ToLower(strings.TrimPrefix(ctx.spanText(ctx.start), "/"))
-	var out []tui.Completion
-	for _, cmd := range c.commands.List() {
+	allCmds := c.commands.List()
+	out := make([]tui.Completion, 0, len(allCmds))
+	for _, cmd := range allCmds {
 		if strings.HasPrefix(cmd.Name, name) {
 			out = append(out, tui.Completion{
 				Text:   "/" + cmd.Name,

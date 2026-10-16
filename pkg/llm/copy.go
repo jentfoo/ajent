@@ -68,7 +68,7 @@ func CopyResults(msgs []Message, i int) string {
 
 // copyPairLines renders a call and/or a result as clipboard JSON lines.
 func copyPairLines(call ToolCallBlock, res ToolResultBlock, withCall, withResult bool) []string {
-	var out []string
+	out := make([]string, 0, 2) // worst case 2 slots
 	if withCall {
 		if s := marshalCopy(copyCall{Name: call.Name, Input: call.Input}); s != "" {
 			out = append(out, s)

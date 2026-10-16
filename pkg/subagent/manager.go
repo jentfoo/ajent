@@ -514,7 +514,7 @@ func (m *Manager) offer(ids []string) {
 // take filters ids down to those still needing delivery, excluding ones claimed
 // by a poll or already carried by a queued input, then marks them in flight.
 func (m *Manager) take(ids []string) []string {
-	var deliverable []string
+	deliverable := make([]string, 0, len(ids))
 	m.mu.Lock()
 	for _, id := range ids {
 		if slices.Contains(m.inFlight, id) {
@@ -658,7 +658,7 @@ func (m *Manager) publishStatus() {
 		fn("", "")
 		return
 	}
-	var parts []string
+	parts := make([]string, 0, 4)
 	if running > 0 {
 		s := fmt.Sprintf("%d running", running)
 		if oldest > 0 { // age note only while something is actively running

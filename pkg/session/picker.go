@@ -1,6 +1,7 @@
 package session
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -80,7 +81,7 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 	}
 	ti := newTreeIndex(entries)
 
-	activeSet := make(map[string]bool) // the root..head chain, marked live
+	activeSet := make(map[string]bool, len(entries)) // the root..head chain, marked live
 	for id := head; id != ""; {
 		i, ok := ti.idx[id]
 		if !ok || activeSet[id] { // unknown or already-walked (cycle guard)
@@ -91,7 +92,7 @@ func TreeRows(entries []Entry, head string) []TreeRow {
 	}
 
 	depth := make(map[string]int, len(entries))
-	var order []string
+	order := make([]string, 0, len(entries)) // one append per reachable entry
 	var visit func(id string)
 	visit = func(id string) {
 		order = append(order, id)
@@ -150,18 +151,15 @@ func treePrefix(node string, parentOf map[string]string, children map[string][]s
 		}
 		id = p
 	}
+	slices.Reverse(rev) // walked node..root; scanned root..node below
 	n := len(rev)
-	path := make([]string, n) // root .. node
-	for i := range rev {
-		path[i] = rev[n-1-i]
-	}
 
 	var out strings.Builder
 	// continuation bars for forks strictly above this node's own connector.
 	for j := 0; j < n-2; j++ {
-		kids := children[path[j]]
+		kids := children[rev[j]]
 		if len(kids) > 1 { // a fork level: does the branch toward node continue past it?
-			if dispLast(kids, path[j+1]) {
+			if dispLast(kids, rev[j+1]) {
 				out.WriteString("    ")
 			} else {
 				out.WriteString("│   ")
@@ -185,12 +183,8 @@ func treePrefix(node string, parentOf map[string]string, children map[string][]s
 // listed oldest first, so a new branch (appended later) lands at the bottom and
 // closes its fork with └──.
 func dispLast(kids []string, id string) bool {
-	for i, k := range kids { // insertion order: newest sibling is last
-		if k == id {
-			return i == len(kids)-1
-		}
-	}
-	return true
+	i := slices.Index(kids, id)
+	return i < 0 || i == len(kids)-1
 }
 
 // RewindTarget maps selecting one row onto the new branch head and editor

@@ -143,13 +143,17 @@ func scrubSecrets(body []byte, secrets []string) []byte {
 // empty values dropped, bare tokens split off scheme pairs, longest first so a
 // value that prefixes another cannot truncate it into a still-visible tail.
 func expandSecrets(vals []string) []string {
-	out := bulk.SliceFilter(func(v string) bool { return v != "" }, vals)
+	out := make([]string, 0, len(vals))
 	for _, v := range vals {
+		if v == "" { // empty values dropped
+			continue
+		}
+		out = append(out, v)
 		scheme, tok, ok := strings.Cut(v, " ")
 		if !ok || tok == "" || !slices.Contains(credentialSchemes, strings.ToLower(scheme)) {
 			continue
 		}
-		out = append(out, tok)
+		out = append(out, tok) // scheme pairs also split off the bare token
 	}
 	slices.SortFunc(out, func(a, b string) int { return len(b) - len(a) })
 	return out

@@ -230,13 +230,7 @@ func isGitConfigReadOnly(args []string) bool {
 			return len(positionals) <= 3
 		}
 	}
-	var query bool
-	for _, t := range args {
-		if strings.HasPrefix(t, "--get") {
-			query = true
-			break
-		}
-	}
+	query := slices.ContainsFunc(args, func(t string) bool { return strings.HasPrefix(t, "--get") })
 	// query flags make the positionals keys/patterns/urls rather than values
 	if query || hasGitFlag(args, "l", "--list") {
 		return len(positionals) <= 2
@@ -286,23 +280,17 @@ func gitReadOnly(tokens []string) bool {
 	}
 	sub := tokens[j]
 	args := slices.Clone(tokens[j+1:])
-	for _, t := range args {
-		if isGitExecOrWriteToken(t) {
-			return false
-		}
+	if slices.ContainsFunc(args, isGitExecOrWriteToken) {
+		return false
 	}
 	switch sub {
 	case "grep":
-		for _, t := range args {
-			if isGitGrepExec(t) {
-				return false
-			}
+		if slices.ContainsFunc(args, isGitGrepExec) {
+			return false
 		}
 	case "ls-remote":
-		for _, t := range args {
-			if isGitLsRemoteExec(t) {
-				return false
-			}
+		if slices.ContainsFunc(args, isGitLsRemoteExec) {
+			return false
 		}
 	}
 	switch sub {

@@ -64,8 +64,10 @@ func repoFiles(ctx context.Context, root string) []string {
 		// The "." pathspec keeps ls-files to root's subtree, so a nested cwd never
 		// lists parent or sibling files as "../".
 		out := runQuiet(ctx, "git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
-		seen := make(map[string]struct{})
-		for _, f := range strings.Split(out, "\x00") {
+		parts := strings.Split(out, "\x00")
+		seen := make(map[string]struct{}, len(parts))
+		entries = make([]string, 0, len(parts))
+		for _, f := range parts {
 			if f == "" { // the trailing separator always yields one empty element
 				continue
 			}

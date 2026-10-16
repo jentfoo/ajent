@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 )
 
 // ErrNewerFormat marks a transcript stamped with a newer storage format: Read
@@ -86,7 +87,7 @@ func Branch(entries []Entry, head string) []Entry {
 		idx[entries[i].ID] = i
 	}
 
-	var rev []Entry
+	rev := make([]Entry, 0, len(entries)) // a linear chain is the common shape
 	// Read accepts any well-formed line, so the parent chain can carry a cycle
 	seen := make(map[string]bool, len(entries))
 	id := head
@@ -100,11 +101,8 @@ func Branch(entries []Entry, head string) []Entry {
 		rev = append(rev, e)
 		id = e.ParentID
 	}
-	out := make([]Entry, len(rev))
-	for i, e := range rev { // reverse to root..head order
-		out[len(rev)-1-i] = e
-	}
-	return out
+	slices.Reverse(rev) // walked head..root; root..head order is the contract
+	return rev
 }
 
 // Head returns the id of the last entry in file order.

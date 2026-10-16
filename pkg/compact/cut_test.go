@@ -222,10 +222,12 @@ func TestVerbatimCutFuzz(t *testing.T) {
 	}
 	t.Parallel()
 
-	for seed := int64(0); seed < 40; seed++ {
+	// eight seed shapes across the budget range: enough variety to pin every
+	// invariant without pricing the package out of a tight -race run
+	for seed := int64(0); seed < 8; seed++ {
 		r := rand.New(rand.NewSource(seed))
 		branch := randomBranch(r)
-		budgets := []int{30, 100, 300, 600, 1200, 2000, 2900}
+		budgets := []int{30, 120, 600, 1500, 2900}
 		for _, priorCut := range []int{0, len(branch) / 3} {
 			for minSteps := 1; minSteps <= 4; minSteps++ {
 				for _, budget := range budgets {

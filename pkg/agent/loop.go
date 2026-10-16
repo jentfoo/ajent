@@ -800,18 +800,16 @@ func callFrom(c llm.ToolCallBlock) ToolCall {
 
 // allParallel reports whether every requested tool allows parallel execution.
 func allParallel(ts ToolSet, calls []llm.ToolCallBlock) bool {
-	for _, c := range calls {
+	return len(calls) > 0 && !slices.ContainsFunc(calls, func(c llm.ToolCallBlock) bool {
 		t, ok := ts.Get(c.Name)
-		if !ok || t.Mode() != ModeParallel {
-			return false
-		}
-	}
-	return len(calls) > 0
+		return !ok || t.Mode() != ModeParallel
+	})
 }
 
 // toolCalls returns the tool-call blocks in an assistant message.
 func toolCalls(msg llm.Message) []llm.ToolCallBlock {
-	var out []llm.ToolCallBlock
+	// calls share the content list with text and thinking, so len is the worst case
+	out := make([]llm.ToolCallBlock, 0, len(msg.Content))
 	for _, b := range msg.Content {
 		if tc, ok := b.(llm.ToolCallBlock); ok {
 			out = append(out, tc)

@@ -1,6 +1,7 @@
 package tokens
 
 import (
+	"maps"
 	"sync"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -312,11 +313,7 @@ func (a *Accounting) ByModel() map[string]llm.Usage {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	out := make(map[string]llm.Usage, len(a.byModel))
-	for k, v := range a.byModel {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(a.byModel)
 }
 
 // Child returns a nested ledger sharing this session's calibrator. Its spend rolls

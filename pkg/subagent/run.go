@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	osexec "os/exec"
 
@@ -119,7 +120,7 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		return "", errTruncated
 	}
 	if sum == "" {
-		if think := bestThinking(state.Messages); len([]rune(think)) >= minThinkingSummary {
+		if think := bestThinking(state.Messages); utf8.RuneCountInString(think) >= minThinkingSummary {
 			return thinkingPreface + strutil.Clip(think, maxThinkingSummary), nil
 		}
 		return "", errNoSummary

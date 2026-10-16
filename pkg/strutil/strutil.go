@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // FirstLine returns s up to the first newline, or s when it has none. Used for
@@ -46,14 +47,19 @@ func Clip(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
-	r := []rune(s)
-	if len(r) <= n {
+	if utf8.RuneCountInString(s) <= n { // the common fit path, no allocation
 		return s
 	}
 	if n == 1 {
 		return "…"
 	}
-	return string(r[:n-1]) + "…"
+	for off := range s { // byte offset where the budget's last rune starts
+		if n == 1 {
+			return s[:off] + "…"
+		}
+		n--
+	}
+	return "" // unreachable: s has more than n runes
 }
 
 // HumanSize abbreviates a byte count as 259b, 3.5kb or 1.2mb: binary units,

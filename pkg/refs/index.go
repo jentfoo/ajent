@@ -86,7 +86,7 @@ func (idx *Index) candidates(query string, inConversation func(path string) bool
 
 	dir, prefix := filepath.Split(qrel)
 
-	var out []tui.Completion
+	out := make([]tui.Completion, 0, len(entries))
 	for _, e := range entries {
 		fr, err := filepath.Rel(base, e.path)
 		if err != nil || !strings.HasPrefix(fr, dir) {

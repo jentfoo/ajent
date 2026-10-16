@@ -93,7 +93,7 @@ func (s *steerQueue) join() []agent.Input {
 		afters []func(context.Context) []llm.Message
 		labels []string
 	}
-	var runs []runAcc
+	runs := make([]runAcc, 0, len(s.items))
 
 	cur := func() *runAcc {
 		return &runs[len(runs)-1]

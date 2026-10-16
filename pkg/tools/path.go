@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 var userHome = os.UserHomeDir // injectable for tests
@@ -102,7 +104,7 @@ func evalPrefix(candidate string) (string, bool) {
 		if err == nil {
 			return filepath.Join(append([]string{resolved}, suffix...)...), true
 		}
-		suffix = append([]string{filepath.Base(p)}, suffix...) // keep original order
+		suffix = bulk.SlicePrepend(filepath.Base(p), suffix) // keep original order
 		parent := filepath.Dir(p)
 		if parent == p { // reached the filesystem root without finding anything
 			break

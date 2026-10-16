@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
@@ -51,8 +52,7 @@ func childTools(src ToolSource, inRepo bool) []agent.Tool {
 		name := t.Name()
 		if strings.HasPrefix(name, "agent_") || isChildBarred(name) { // structural bar: nothing configures past it
 			return false
-		}
-		if !slices.Contains(readOnlyBuiltins, name) && !src.ReadOnly(name) {
+		} else if !slices.Contains(readOnlyBuiltins, name) && !src.ReadOnly(name) {
 			return false
 		}
 		return !isGitTool(name) || inRepo // repo-context gate
@@ -65,16 +65,14 @@ type toolSet struct {
 	byName map[string]agent.Tool
 }
 
-// newToolSet indexes resolved tools by name. First wins on a repeated name,
-// matching the parent registry's lookup.
+// newToolSet indexes resolved tools by name, matching the parent registry's
+// lookup. Names arrive unique: mcp tools are server-namespaced and plan control
+// tools never reach a child.
 func newToolSet(resolved []agent.Tool) *toolSet {
-	byName := make(map[string]agent.Tool, len(resolved))
-	for _, t := range resolved {
-		if _, ok := byName[t.Name()]; !ok {
-			byName[t.Name()] = t
-		}
+	return &toolSet{
+		tools:  resolved,
+		byName: bulk.SliceToIndexBy(func(t agent.Tool) string { return t.Name() }, resolved),
 	}
-	return &toolSet{tools: resolved, byName: byName}
 }
 
 func (t *toolSet) Get(name string) (agent.Tool, bool) {

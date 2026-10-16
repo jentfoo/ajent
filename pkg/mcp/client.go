@@ -404,10 +404,8 @@ func parseTool(raw json.RawMessage, server string, readOnly FlexStrings) (def To
 	if wire.Annotations != nil && wire.Annotations.ReadOnlyHint != nil {
 		def.ReadOnly = *wire.Annotations.ReadOnlyHint
 	}
-	for _, pat := range readOnly { // config globs mark additional tools read-only, "*" marks all
-		if pathMatch(pat, def.Name) {
-			def.ReadOnly = true
-		}
+	if slices.ContainsFunc(readOnly, func(p string) bool { return pathMatch(p, def.Name) }) { // config globs, "*" marks all
+		def.ReadOnly = true
 	}
 	return def, true, ""
 }

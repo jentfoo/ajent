@@ -19,6 +19,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -188,12 +190,9 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 		n    int
 		skip bool // inspected but binary or unreadable, can hold no matches
 	}
-	var paths []string
-	for _, path := range repoFiles(ctx, cwd) { // .gitignore semantics on the fallback too
-		if p.Glob == "" || matchGlob(p.Glob, grepRel(cwd, path)) {
-			paths = append(paths, path)
-		}
-	}
+	paths := bulk.SliceFilterInPlace(func(path string) bool {
+		return p.Glob == "" || matchGlob(p.Glob, grepRel(cwd, path))
+	}, repoFiles(ctx, cwd)) // .gitignore semantics on the fallback too
 
 	workers := min(runtime.GOMAXPROCS(0), maxGrepWorkers)
 	// one scan covers twice the worker count: enough to keep every worker busy,
@@ -468,7 +467,7 @@ func runRg(ctx context.Context, root string, p grepParams, mode string, max int)
 			if started && (pth != lastPath || ev.Data.LineNumber != lastLine+1) {
 				b.WriteString("--\n") // disjoint blocks separate, as rg's text printer emits
 			}
-			fmt.Fprintf(&b, "%s%s%d%s%s", pth, sep, ev.Data.LineNumber, sep, txt)
+			_, _ = fmt.Fprintf(&b, "%s%s%d%s%s", pth, sep, ev.Data.LineNumber, sep, txt)
 			started, lastPath, lastLine = true, pth, ev.Data.LineNumber
 			over := lim.Bytes > 0 && b.Len() >= lim.Bytes // the byte bound only stops a runaway context size
 			if over {

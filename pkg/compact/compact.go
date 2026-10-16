@@ -3,6 +3,7 @@ package compact
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -113,11 +114,8 @@ func normalisePrior(branch []session.Entry, cd session.CompactionData, idx int) 
 	if cd.Summary == "" || cd.FirstKeptEntryID != "" {
 		return cd
 	}
-	for i := idx + 1; i < len(branch); i++ {
-		if branch[i].Type == session.TypeMessage {
-			cd.FirstKeptEntryID = branch[i].ID
-			return cd
-		}
+	if i := slices.IndexFunc(branch[idx+1:], func(e session.Entry) bool { return e.Type == session.TypeMessage }); i >= 0 {
+		cd.FirstKeptEntryID = branch[idx+1+i].ID
 	}
 	return cd
 }

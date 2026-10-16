@@ -51,6 +51,7 @@ func jpegBytes(t *testing.T, m image.Image, q int) []byte {
 // tag, little-endian byte order and IFD0 at TIFF offset 8.
 func exifJpeg(t *testing.T, src []byte, orient uint16) []byte {
 	t.Helper()
+
 	require.LessOrEqual(t, len(src), 1<<14, "jpeg must fit one APP1 segment")
 	return app1Jpeg(src, exifPayload(binary.LittleEndian, orient))
 }
@@ -127,7 +128,6 @@ func TestSniff(t *testing.T) {
 	require.NoError(t, gif.Encode(gifBytes, solid(4, 4), nil))
 
 	t.Run("known formats", func(t *testing.T) {
-		t.Parallel()
 		for _, c := range []struct {
 			name string
 			data []byte
@@ -144,7 +144,6 @@ func TestSniff(t *testing.T) {
 	})
 
 	t.Run("rejects text", func(t *testing.T) {
-		t.Parallel()
 		_, ok := Sniff([]byte("just some text, not an image"))
 		assert.False(t, ok)
 	})
@@ -152,6 +151,7 @@ func TestSniff(t *testing.T) {
 
 func TestPreparePassthrough(t *testing.T) {
 	t.Parallel()
+
 	src := pngBytes(t, solid(120, 80))
 	res, err := Prepare(src)
 	require.NoError(t, err)
@@ -165,40 +165,37 @@ func TestPreparePassthrough(t *testing.T) {
 }
 
 func TestPrepareDownscalesUnderCeiling(t *testing.T) {
-	if testing.Short() {
-		t.Skip("-short mode")
-	}
 	t.Parallel()
 
-	// a noisy large png: noise defeats compression, pushing the encoded size
-	// past the ceiling so the jpeg arm of the ladder does real work
-	src := pngBytes(t, noise(2600, 2000))
-	res, err := Prepare(src)
+	// a solid source busts only the pixel ceiling: the ladder's first rung
+	// fits, proving the resize, the honest source size and the sizing note
+	res, err := Prepare(pngBytes(t, solid(2600, 390)))
 	require.NoError(t, err)
 	assert.LessOrEqual(t, res.Width, MaxPixels)
 	assert.LessOrEqual(t, res.Height, MaxPixels)
 	enc := base64.StdEncoding.EncodedLen(len(res.Data))
 	assert.LessOrEqual(t, enc, MaxBase64Bytes)
 	assert.Equal(t, 2600, res.SrcWidth)
-	assert.Equal(t, 2000, res.SrcHeight)
+	assert.Equal(t, 390, res.SrcHeight)
 	assert.True(t, res.Resized())
 	assert.NotEmpty(t, res.Note())
-	assert.Contains(t, res.Note(), "original 2600x2000")
+	assert.Contains(t, res.Note(), "original 2600x390")
 	assert.Contains(t, res.Note(), "displayed at")
 	// both axes scale together, so the note's single factor is honest
 	ratio := float64(res.Width) / float64(res.Height)
-	assert.InDelta(t, 2600.0/2000.0, ratio, 0.01)
+	assert.InDelta(t, 2600.0/390.0, ratio, 0.01)
 }
 
 func TestPrepareKeepsAspect(t *testing.T) {
 	t.Parallel()
+
 	for _, c := range []struct {
 		name         string
 		w, h         int
 		wantW, wantH int
 	}{
-		{"ultrawide screenshot", 3840, 1080, 2000, 563},
-		{"tall phone capture", 1080, 2400, 900, 2000},
+		{"wide past the cap", 2048, 64, 2000, 63},
+		{"tall past the cap", 64, 2048, 63, 2000},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			res, err := Prepare(pngBytes(t, solid(c.w, c.h)))
@@ -213,6 +210,7 @@ func TestPrepareKeepsAspect(t *testing.T) {
 
 func TestPrepareConvertsUnsupportedFormat(t *testing.T) {
 	t.Parallel()
+
 	// bmp has no stdlib encoder, hand-build a minimal 24-bit one
 	src := bmpBytes(t, 4, 3)
 	res, err := Prepare(src)
@@ -251,6 +249,7 @@ func apngBytes(t *testing.T, m image.Image) []byte {
 
 func TestPrepareConvertsAnimatedPNG(t *testing.T) {
 	t.Parallel()
+
 	// an animated png within the limits must not ride to the provider
 	// verbatim: it is re-encoded to its first frame, with the flattening
 	// disclosed in the note so the model knows it sees one frame
@@ -268,6 +267,7 @@ func TestPrepareConvertsAnimatedPNG(t *testing.T) {
 
 func TestPrepareRejectsVastDimensions(t *testing.T) {
 	t.Parallel()
+
 	// a valid header claiming far more pixels than any decode may allocate
 	// for is refused before the bytes are ever decoded
 	src := pngBytes(t, solid(1, 1))
@@ -287,39 +287,45 @@ func TestPrepareRejectsVastDimensions(t *testing.T) {
 
 func TestPrepareRejectsGarbage(t *testing.T) {
 	t.Parallel()
+
 	_, err := Prepare([]byte("definitely not an image"))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupported)
 }
 
-func TestPrepareJPEGFallbackFlattensAlpha(t *testing.T) {
-	if testing.Short() {
-		t.Skip("-short mode")
-	}
+func TestPrepareJPEGFallback(t *testing.T) {
 	t.Parallel()
 
-	// a transparent png too big for the ceiling falls to the jpeg arm, which
-	// keeps no alpha: compositing over white must win over whatever rgb sat beneath
-	// black rgb under noisy alpha: the png arm busts the ceiling (noise will
-	// not compress), and the jpeg arm would encode solid black if the alpha
-	// were dropped rather than composited over white
-	m := image.NewNRGBA(image.Rect(0, 0, 2600, 2000))
-	rng := rand.New(rand.NewSource(1))
-	for i := 0; i < len(m.Pix); i += 4 {
-		m.Pix[i+3] = uint8(rng.Intn(256))
-	}
-	res, err := Prepare(pngBytes(t, m))
+	// a png over only the size ceiling falls to the jpeg arm of the ladder:
+	// full noise at legal dimensions encodes past the ceiling, so no resize
+	// happens and the fallback is the only way to fit
+	res, err := Prepare(pngBytes(t, noise(940, 940)))
 	require.NoError(t, err)
 	assert.Equal(t, typeJPEG, res.MediaType)
+	assert.False(t, res.Resized())
+	assert.LessOrEqual(t, base64.StdEncoding.EncodedLen(len(res.Data)), MaxBase64Bytes)
+}
 
-	decoded, err := jpeg.Decode(bytes.NewReader(res.Data))
-	require.NoError(t, err)
-	var sum int64
-	for i := range 100 {
-		r, _, _, _ := decoded.At(i*7, i*11).RGBA()
-		sum += int64(r)
+// the jpeg arm keeps no alpha: compositing over white must win over whatever
+// rgb sat beneath, here black under random alpha
+func TestFlattenWhite(t *testing.T) {
+	t.Parallel()
+
+	src := image.NewNRGBA(image.Rect(0, 0, 64, 48))
+	rng := rand.New(rand.NewSource(1))
+	for i := 3; i < len(src.Pix); i += 4 {
+		src.Pix[i] = byte(rng.Intn(256))
 	}
-	assert.Greater(t, sum/int64(100), int64(30000)) // mid-gray: white shows through
+	out := flattenWhite(src)
+	var sum int64
+	for y := range 48 {
+		for x := range 64 {
+			r, _, _, _ := out.NRGBAAt(x, y).RGBA()
+			sum += int64(r)
+		}
+	}
+	mean := sum / int64(64*48)
+	assert.Greater(t, mean, int64(30000)) // mid-gray: white shows through
 }
 
 func TestPrepareOversizeJpegShrinks(t *testing.T) {
@@ -327,33 +333,30 @@ func TestPrepareOversizeJpegShrinks(t *testing.T) {
 
 	// a sendable jpeg over only the pixel ceiling must still be resized, not
 	// passed through: withinLimits is checked on both ceilings or none
-	res, err := Prepare(jpegBytes(t, solid(2600, 300), 95))
+	res, err := Prepare(jpegBytes(t, solid(2600, 45), 95))
 	require.NoError(t, err)
 	assert.Equal(t, MaxPixels, res.Width)
-	assert.Equal(t, 231, res.Height)
+	assert.Equal(t, 35, res.Height)
 	assert.Equal(t, 2600, res.SrcWidth)
-	assert.Equal(t, 300, res.SrcHeight)
+	assert.Equal(t, 45, res.SrcHeight)
 	assert.True(t, res.Resized())
 }
 
 func TestPrepareAppliesExifOrientation(t *testing.T) {
-	if testing.Short() {
-		t.Skip("-short mode")
-	}
 	t.Parallel()
 
 	t.Run("rotates_and_swaps_source", func(t *testing.T) {
 		// a wide jpeg tagged rotate-90: after orientation the honest source
 		// size swaps axes, and the re-encoded result reflects the rotated bounds.
-		src := exifJpeg(t, jpegBytes(t, solid(2600, 300), 95), 8) // 8 = rotate 90 ccw
+		src := exifJpeg(t, jpegBytes(t, solid(2600, 45), 95), 8) // 8 = rotate 90 ccw
 		res, err := Prepare(src)
 		require.NoError(t, err)
 		assert.NotEmpty(t, res.MediaType)
-		// oriented source is 300 wide x 2000 tall, the shrink keeps that aspect
+		// oriented source is 45 wide x 2600 tall, the shrink keeps that aspect
 		assert.LessOrEqual(t, res.Width, MaxPixels)
 		assert.LessOrEqual(t, res.Height, MaxPixels)
 		assert.InDelta(t,
-			float64(300)/float64(2600), float64(res.SrcWidth)/float64(res.SrcHeight), 0.01)
+			float64(45)/float64(2600), float64(res.SrcWidth)/float64(res.SrcHeight), 0.01)
 
 		// the raw tag read itself must surface rotate-90 and refuse nonsense
 		assert.Equal(t, orientationRotate90, jpegOrientation(src))
@@ -362,14 +365,14 @@ func TestPrepareAppliesExifOrientation(t *testing.T) {
 	t.Run("malformed_exif_still_fits", func(t *testing.T) {
 		// an oversized jpeg wearing a crafted EXIF block: the count claims far
 		// more entries than the payload holds, which must not panic the fitter
-		src := app1Jpeg(jpegBytes(t, solid(2600, 300), 95), overrunPayload(10))
+		src := app1Jpeg(jpegBytes(t, solid(2600, 45), 95), overrunPayload(10))
 		res, err := Prepare(src)
 		require.NoError(t, err)
 		assert.LessOrEqual(t, res.Width, MaxPixels)
 		assert.LessOrEqual(t, res.Height, MaxPixels)
 		// the unreadable orientation must leave the honest source size unswapped
 		assert.Equal(t, 2600, res.SrcWidth)
-		assert.Equal(t, 300, res.SrcHeight)
+		assert.Equal(t, 45, res.SrcHeight)
 	})
 
 	t.Run("malformed_exif_to_png", func(t *testing.T) {

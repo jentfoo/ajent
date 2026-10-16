@@ -250,7 +250,7 @@ func New(opts Options) (*UI, error) {
 		msgs:     make(chan string),
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
-		imgIDs:   make(map[uint32]int),
+		imgIDs:   make(map[uint32]int, maxTrackedImages),
 		images:   DetectImageProtocol(opts.Images, osEnv, isTTY),
 	}
 	if opts.OnEdit != nil {
@@ -1069,7 +1069,7 @@ func (u *UI) repaint() {
 	st.Spinner = u.spinnerStyleLocked().Wrap(frame)
 	statusRows := st.rows(u.theme, w)
 
-	var rows []string
+	var rows []string // a screenful; pre-sizing wastes more than it saves
 	if u.noticeText != "" {
 		rows = append(rows, u.noticeText)
 	}
@@ -1411,7 +1411,9 @@ func (u *UI) ensurePromptNavLocked() {
 		ps = u.promptHistory()
 	}
 	if len(ps) == 0 && u.historySearch != nil {
-		for _, it := range u.historySearch() {
+		items := u.historySearch()
+		ps = make([]string, 0, len(items))
+		for _, it := range items {
 			ps = append(ps, it.Text)
 		}
 	}

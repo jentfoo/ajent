@@ -22,7 +22,7 @@ type Result struct {
 // the registry's result normalization bounds and gates whatever lands. Audio
 // and the rest map to plain text.
 func mapCallResult(r *mcp.CallToolResult) Result {
-	res := Result{IsError: r.IsError}
+	res := Result{Blocks: make([]llm.Block, 0, len(r.Content)), IsError: r.IsError}
 	for _, c := range r.Content {
 		switch b := c.(type) {
 		case mcp.TextContent:

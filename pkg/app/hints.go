@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -90,11 +91,8 @@ func (s *hintSlot) Free() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	for i, held := range b.live {
-		if held.id == s.id {
-			b.live = append(b.live[:i], b.live[i+1:]...)
-			break
-		}
+	if i := slices.IndexFunc(b.live, func(held *hintSlot) bool { return held.id == s.id }); i >= 0 {
+		b.live = slices.Delete(b.live, i, i+1)
 	}
 	if s.stop != nil {
 		s.stop() // idempotent, and safe to call from the expiry itself
@@ -158,12 +156,7 @@ func (l *hintLine) Set(text, short string) {
 
 // liveLocked reports whether a claim remains. Caller holds b.mu.
 func (s *hintSlot) liveLocked() bool {
-	for _, held := range s.b.live {
-		if held.id == s.id {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.b.live, func(held *hintSlot) bool { return held.id == s.id })
 }
 
 // paintLocked renders the winning slot, or clears the segment when none is alive. Writes

@@ -38,7 +38,7 @@ func toolsFreeSelect(ctx context.Context, c Console, reg *tools.Registry) error 
 	if err != nil {
 		return nil // cancelled
 	}
-	var names []string
+	names := make([]string, 0, len(all))
 	for _, p := range picked {
 		names = append(names, rows[p].Names...) // a group row expands to every member
 	}
@@ -66,7 +66,7 @@ func toolsWidenOnly(ctx context.Context, c Console, reg *tools.Registry) error {
 	if len(picked) == 0 {
 		return nil
 	}
-	var toEnable []string
+	toEnable := make([]string, 0, len(disabled))
 	for _, p := range picked {
 		toEnable = append(toEnable, rows[p].Names...) // a group row expands to every member
 	}
@@ -104,13 +104,7 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 			label = l
 		}
 		items[i] = tui.PickItem{Label: rw.Name, Group: label}
-		allOn := true
-		for _, n := range rw.Names {
-			if _, ok := enabled[n]; !ok {
-				allOn = false
-				break
-			}
-		}
+		allOn := !slices.ContainsFunc(rw.Names, func(n string) bool { _, ok := enabled[n]; return !ok })
 		if allOn {
 			initial = append(initial, i)
 		}
@@ -120,11 +114,13 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 
 // mcpGroupLabels builds source-to-header-label for MCP servers from the manager.
 func mcpGroupLabels(c Console) map[string]string {
-	labels := make(map[string]string)
+	var groups []MCPGroup
 	if mgr := c.MCP(); mgr != nil {
-		for _, g := range mgr.Groups() {
-			labels[g.Source] = g.Label
-		}
+		groups = mgr.Groups()
+	}
+	labels := make(map[string]string, len(groups))
+	for _, g := range groups {
+		labels[g.Source] = g.Label
 	}
 	return labels
 }

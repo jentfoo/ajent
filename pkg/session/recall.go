@@ -38,16 +38,18 @@ func (r *RecallIndex) Lines() []Prompt {
 		}
 	}
 
-	var out []Prompt
-	seen := make(map[string]struct{})
+	var recent []string
+	if r.hist != nil { // typed lines are the complete current record, list them first
+		recent = r.hist.Recent()
+	}
+	out := make([]Prompt, 0, len(recent)+len(prompts))
+	seen := make(map[string]struct{}, len(recent)+len(prompts))
 	addTyped := func(txt string) {
 		out = append(out, Prompt{Text: txt, At: at[txt]}) // zero time when never recorded
 		seen[txt] = struct{}{}
 	}
-	if r.hist != nil { // typed lines are the complete current record, list them first
-		for _, txt := range r.hist.Recent() {
-			addTyped(txt)
-		}
+	for _, txt := range recent {
+		addTyped(txt)
 	}
 	for _, p := range prompts { // backfill older transcripts not yet in the line file
 		if _, ok := seen[p.Text]; ok {

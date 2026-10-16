@@ -92,8 +92,9 @@ func agentsCompletion(c Console) func(prefix string) []string {
 				return verb == "" || strings.HasPrefix(v, verb)
 			}, []string{"list", "stop"})
 		case verb == "stop":
-			ids := []string{"all"} // stop all is offered alongside job ids
 			jobs := a.List()
+			ids := make([]string, 0, len(jobs)+1) // stop all is offered alongside job ids
+			ids = append(ids, "all")
 			for _, j := range jobs {
 				ids = append(ids, j.ID)
 			}

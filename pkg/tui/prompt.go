@@ -120,7 +120,7 @@ func (u *UI) MultiPickContext(ctx context.Context, prompt string, items []PickIt
 	if len(items) == 0 {
 		return nil, ErrCancelled
 	}
-	s := &multiPickState{prompt: prompt, items: items, filter: opts.Filter, placeholder: opts.Placeholder, selected: make(map[int]struct{})}
+	s := &multiPickState{prompt: prompt, items: items, filter: opts.Filter, placeholder: opts.Placeholder, selected: make(map[int]struct{}, len(items))}
 	for _, i := range opts.Initial {
 		s.selected[i] = struct{}{}
 	}
@@ -564,9 +564,10 @@ func (s *multiPickState) refilter() {
 // buildRows orders matching items best-first with a synthetic header before each
 // group change so the list reads as grouped sections.
 func buildRows(items []PickItem, filter string) []pickRow {
-	var out []pickRow
+	matches := refilterMatches(items, filter)
+	out := make([]pickRow, 0, len(matches)*2)
 	var prev string
-	for _, idx := range refilterMatches(items, filter) {
+	for _, idx := range matches {
 		g := items[idx].Group
 		if g != "" && g != prev {
 			out = append(out, pickRow{group: g, item: -1})
@@ -599,7 +600,7 @@ func (s *multiPickState) rows(t Theme, width, maxRows int) ([]string, int, int) 
 
 // groupMembers returns the visible item indexes belonging to a header's group.
 func (s *multiPickState) groupMembers(group string) []int {
-	var out []int
+	out := make([]int, 0, len(s.picks))
 	for _, r := range s.picks {
 		if r.item >= 0 && s.items[r.item].Group == group {
 			out = append(out, r.item)

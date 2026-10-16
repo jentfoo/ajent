@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -347,7 +348,7 @@ func anthropicBlocks(blocks BlockList, caps Capabilities, deferred map[string]st
 			}
 			if len(deferred) > 0 && len(v.AddedToolNames) > 0 {
 				// only tools offered defer_loading are referenced, once each request
-				var refs []antBlock
+				refs := make([]antBlock, 0, len(v.AddedToolNames))
 				for _, name := range v.AddedToolNames {
 					if _, ok := deferred[name]; !ok || loaded[name] {
 						continue // not deferred this request, or already materialized
@@ -460,13 +461,7 @@ func anthropicDeferredNames(tools []ToolSchema, caps Capabilities) map[string]st
 	if !caps.ToolReferences || len(tools) == 0 {
 		return nil
 	}
-	hasImmediate := false
-	for _, t := range tools {
-		if !t.Deferred {
-			hasImmediate = true
-			break
-		}
-	}
+	hasImmediate := slices.ContainsFunc(tools, func(t ToolSchema) bool { return !t.Deferred })
 	if !hasImmediate {
 		return map[string]struct{}{} // all promoted, so nothing is deferred
 	}

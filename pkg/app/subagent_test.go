@@ -5,6 +5,7 @@ import (
 	"context"
 	"image"
 	"image/png"
+	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,7 +33,17 @@ func (t oversizedTool) Execute(context.Context, agent.ToolCall, agent.Output) (a
 func oversizedPNG(t *testing.T) []byte {
 	t.Helper()
 
-	m := image.NewRGBA(image.Rect(0, 0, 2600, 2000))
+	// noisy and just past the per-axis ceiling: noise keeps the encoding from
+	// compressing, so the fitted re-encode is strictly smaller, while the small
+	// pixel count keeps the fit fast under -race
+	const w, h = 2400, 60
+	rng := rand.New(rand.NewSource(1))
+	m := image.NewRGBA(image.Rect(0, 0, w, h))
+	for i := range m.Pix {
+		if i%4 != 3 {
+			m.Pix[i] = byte(rng.Intn(256))
+		}
+	}
 	var b bytes.Buffer
 	require.NoError(t, png.Encode(&b, m))
 	return b.Bytes()
@@ -43,9 +54,10 @@ func oversizedPNG(t *testing.T) []byte {
 func TestChildToolSource(t *testing.T) {
 	t.Parallel()
 
+	png := oversizedPNG(t)
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir()})
 	require.NoError(t, err)
-	reg.RegisterFrom("mcp", oversizedTool{data: oversizedPNG(t)}, true)
+	reg.RegisterFrom("mcp", oversizedTool{data: png}, true)
 	reg.MarkReadOnly([]string{"mcp_shot"})
 
 	src := childToolSource{reg: reg}
@@ -64,7 +76,7 @@ func TestChildToolSource(t *testing.T) {
 	require.NoError(t, err)
 	fitted, ok := res.Content[0].(llm.ImageBlock)
 	require.True(t, ok)
-	assert.Less(t, len(fitted.Data), len(oversizedPNG(t)))
+	assert.Less(t, len(fitted.Data), len(png))
 }
 
 // namesOf returns the tool names in order.

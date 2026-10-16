@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 // enumNames maps a small enum to the names used in configuration and logs. Enums encode as
@@ -49,14 +51,11 @@ func (n enumNames[T]) lookup(s string) (T, bool) {
 
 // sorted returns the configuration names in enum order.
 func (n enumNames[T]) sorted() []string {
-	keys := make([]int, 0, len(n))
-	for v := range n {
-		keys = append(keys, int(v))
-	}
+	keys := bulk.MapKeysSlice(n)
 	slices.Sort(keys)
 	out := make([]string, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, n[T(k)])
+		out = append(out, n[k])
 	}
 	return out
 }

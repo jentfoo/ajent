@@ -419,7 +419,7 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 // readOnlyOf returns namespaced server__tool names marked read-only among defs,
 // for recording publication metadata on the registry after registration.
 func readOnlyOf(defs []ToolDef, server string) []string {
-	var out []string
+	out := make([]string, 0, len(defs))
 	for _, d := range defs {
 		if d.ReadOnly {
 			out = append(out, server+"__"+d.Name)
@@ -441,6 +441,7 @@ func (s *server) defsSnapshot() []ToolDef {
 func (m *Manager) preloadWG() *sync.WaitGroup {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	return m.preload
 }
 
@@ -480,18 +481,15 @@ func (m *Manager) captureLive(source string, era ServerConfig) *toolState {
 func (m *Manager) captureKeep(s *server) *toolState {
 	s.regMu.Lock() // a swap never interleaves with the capture
 	defer s.regMu.Unlock()
+
 	return m.captureLive(s.source, s.regEra)
 }
 
 // mergeToolState overlays src onto dst, so a pre-death split wins over any
 // current registrar split. A name lives in exactly one set, so this is a union.
 func mergeToolState(dst, src *toolState) {
-	for k := range src.enabled {
-		dst.enabled[k] = struct{}{}
-	}
-	for k := range src.disabled {
-		dst.disabled[k] = struct{}{}
-	}
+	maps.Copy(dst.enabled, src.enabled)
+	maps.Copy(dst.disabled, src.disabled)
 }
 
 // Disconnect closes and unregisters a server without removing its config.

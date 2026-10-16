@@ -89,22 +89,27 @@ func EstimateText(text string, kind Kind) int {
 func estimateBlocks(blocks llm.BlockList) int {
 	var n int
 	for _, blk := range blocks {
-		switch b := blk.(type) {
-		case llm.TextBlock:
-			n += EstimateText(b.Text, KindProse)
-		case llm.ThinkingBlock:
-			n += estimateThinking(b)
-		case llm.ToolCallBlock:
-			n += estimateToolCall(b)
-		case llm.ImageBlock:
-			n += imageTokens(b)
-		case llm.ToolResultBlock:
-			n += estimateToolResult(b)
-		default:
-			n += unknownBlockTokens
-		}
+		n += estimateBlock(blk)
 	}
 	return n
+}
+
+// estimateBlock sizes one block.
+func estimateBlock(b llm.Block) int {
+	switch b := b.(type) {
+	case llm.TextBlock:
+		return EstimateText(b.Text, KindProse)
+	case llm.ThinkingBlock:
+		return estimateThinking(b)
+	case llm.ToolCallBlock:
+		return estimateToolCall(b)
+	case llm.ImageBlock:
+		return imageTokens(b)
+	case llm.ToolResultBlock:
+		return estimateToolResult(b)
+	default:
+		return unknownBlockTokens
+	}
 }
 
 // estimateThinking sizes a thinking block by the one payload its provider
@@ -141,7 +146,7 @@ func estimateToolResult(b llm.ToolResultBlock) int {
 		if tb, ok := cb.(llm.TextBlock); ok {
 			n += EstimateText(tb.Text, KindCode)
 		} else {
-			n += estimateBlocks(llm.BlockList{cb})
+			n += estimateBlock(cb)
 		}
 	}
 	return n

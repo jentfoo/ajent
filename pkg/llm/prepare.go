@@ -113,14 +113,10 @@ func thinkTagsFor(caps Capabilities) (open, close string) {
 
 // hasThinkMarker reports whether any text block carries an inline marker.
 func hasThinkMarker(content BlockList, open, close string) bool {
-	for _, b := range content {
-		if tb, ok := b.(TextBlock); ok {
-			if strings.Contains(tb.Text, open) || strings.Contains(tb.Text, close) {
-				return true
-			}
-		}
-	}
-	return false
+	return slices.ContainsFunc(content, func(b Block) bool {
+		tb, ok := b.(TextBlock)
+		return ok && (strings.Contains(tb.Text, open) || strings.Contains(tb.Text, close))
+	})
 }
 
 // splitThinkText splits one text at its reasoning markers, returning the
@@ -179,7 +175,7 @@ func downgradeImages(msgs []Message, caps Capabilities) []Message {
 	}
 	out := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
-		var content BlockList
+		content := make(BlockList, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch v := b.(type) {
 			case ImageBlock:
@@ -222,7 +218,7 @@ func blockHasImage(b Block) bool {
 
 // downgradeBlocks maps each image to a placeholder text block, collapsing runs.
 func downgradeBlocks(blocks BlockList, placeholder string) BlockList {
-	var out BlockList
+	out := make(BlockList, 0, len(blocks))
 	for _, b := range blocks {
 		if _, ok := b.(ImageBlock); ok {
 			out = appendPlaceholder(out, placeholder)
@@ -309,7 +305,7 @@ func normalizeContent(msgs []Message, policy RetainPolicy, caps Capabilities, ta
 		foreign := originForeign(m.Origin, target) // full mismatch: any model switch
 		kind := callKindFor(m.Origin, target)      // endpoint vs same-endpoint for ids
 
-		var content BlockList
+		content := make(BlockList, 0, len(m.Content))
 		for _, b := range m.Content {
 			switch v := b.(type) {
 			case ThinkingBlock:
@@ -473,12 +469,10 @@ func applyPlaceholderLadder(tr ToolResultBlock) ToolResultBlock {
 }
 
 func trHasText(content BlockList) bool {
-	for _, b := range content {
-		if t, ok := b.(TextBlock); ok && strings.TrimSpace(t.Text) != "" {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(content, func(b Block) bool {
+		t, ok := b.(TextBlock)
+		return ok && strings.TrimSpace(t.Text) != ""
+	})
 }
 
 // repairTurns enforces request well-formedness: errored assistant turns are
@@ -486,7 +480,7 @@ func trHasText(content BlockList) bool {
 // tool_result Anthropic rejects), aborted ones stay because the abort path fills
 // every pending call, and unanswered calls receive a synthetic error result.
 func repairTurns(msgs []Message, caps Capabilities) []Message {
-	var out []Message
+	out := make([]Message, 0, len(msgs))
 	skippedCalls := map[string]struct{}{}
 	pending := map[string]ToolCallBlock{}
 	var order []string
@@ -496,7 +490,7 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 		if len(order) == 0 {
 			return
 		}
-		var content BlockList
+		content := make(BlockList, 0, len(order))
 		for _, id := range order {
 			c, ok := pending[id]
 			if !ok {
@@ -536,7 +530,7 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 			out = append(out, Text(RoleAssistant, processedTools))
 		}
 
-		var content BlockList
+		content := make(BlockList, 0, len(m.Content))
 		for _, b := range m.Content {
 			if tr, ok := b.(ToolResultBlock); ok {
 				if _, skip := skippedCalls[tr.CallID]; skip {

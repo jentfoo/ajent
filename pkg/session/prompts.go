@@ -58,7 +58,7 @@ func (s *Store) Prompts(workspace string) ([]Prompt, error) {
 		}
 		return nil, err
 	}
-	var names []string
+	names := make([]string, 0, len(files))
 	for _, f := range files {
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".jsonl") {
 			names = append(names, f.Name())
@@ -69,7 +69,7 @@ func (s *Store) Prompts(workspace string) ([]Prompt, error) {
 		names = names[:promptScanFiles]
 	}
 
-	var out []Prompt
+	out := make([]Prompt, 0, len(names))
 	seen := make(map[string]struct{})
 	for _, name := range names {
 		prompts := filePrompts(filepath.Join(dir, name))              // newest first within the file

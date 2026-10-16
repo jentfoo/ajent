@@ -1,5 +1,9 @@
 package strutil
 
+import (
+	"strings"
+)
+
 // ESC starts an escape sequence, BEL terminates a string form early.
 const (
 	escByte = 0x1b
@@ -23,7 +27,8 @@ type ANSIFilter struct {
 // Strip returns chunk with escape sequences removed. A sequence open at the end
 // stays suppressed until a later call closes it.
 func (f *ANSIFilter) Strip(chunk string) string {
-	var out []byte
+	var b strings.Builder
+	b.Grow(len(chunk)) // escapes are rare, so the output is nearly chunk-sized
 	for i := 0; i < len(chunk); i++ {
 		c := chunk[i]
 		switch f.state {
@@ -32,7 +37,7 @@ func (f *ANSIFilter) Strip(chunk string) string {
 				f.state = ansiEsc
 				continue
 			}
-			out = append(out, c)
+			b.WriteByte(c)
 		case ansiEsc: // one byte names the sequence form
 			switch c {
 			case '[':
@@ -64,7 +69,7 @@ func (f *ANSIFilter) Strip(chunk string) string {
 			}
 		}
 	}
-	return string(out)
+	return b.String()
 }
 
 // ansiState is a filter's position within an escape sequence.

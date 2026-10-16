@@ -516,6 +516,7 @@ func (e *editor) view(t Theme, width, maxRows int, marker, cont, hint string, sh
 	}
 	contW := displayWidth(cont)
 	starts, ends := e.layoutAt(width, firstW, contW)
+	rows = make([]string, 0, len(ends))
 
 	// Render each range: the first row carries marker (or nothing for a leading
 	// `!` under shell), continuations are indented by cont.

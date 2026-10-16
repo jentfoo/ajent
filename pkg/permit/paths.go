@@ -125,10 +125,11 @@ func (s writeScope) resolveInScope(p string) (string, bool) {
 	if err != nil || !s.contains(full) {
 		return "", false
 	}
-	for _, part := range strings.Split(full, string(filepath.Separator)) {
-		if _, ok := vcsDirs[part]; ok {
-			return "", false
-		}
+	if slices.ContainsFunc(strings.Split(full, string(filepath.Separator)), func(part string) bool {
+		_, ok := vcsDirs[part]
+		return ok
+	}) {
+		return "", false
 	}
 	return full, true
 }
@@ -224,7 +225,7 @@ func (s writeScope) cdTargets(bases []string, raw string) ([]string, bool) {
 	if len(toks) != 2 || toks[1] == "-" {
 		return nil, false
 	}
-	var out []string
+	out := make([]string, 0, len(bases))
 	for _, b := range bases {
 		full, ok := s.from(b).resolveInScope(toks[1])
 		if !ok {

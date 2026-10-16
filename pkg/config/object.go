@@ -203,11 +203,8 @@ func DeleteKey(data []byte, key string) ([]byte, error) {
 // dropKey removes one key from an order-preserving object.
 func dropKey(o *object, seg string) {
 	delete(o.m, seg)
-	for i, k := range o.keys {
-		if k == seg {
-			o.keys = slices.Delete(o.keys, i, i+1)
-			return
-		}
+	if i := slices.Index(o.keys, seg); i >= 0 {
+		o.keys = slices.Delete(o.keys, i, i+1)
 	}
 }
 

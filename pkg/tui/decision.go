@@ -176,9 +176,10 @@ func (s *decisionState) contextRows(t Theme, width, budget int) ([]string, int) 
 // single long command is never dropped whole. It returns the kept lines and how many
 // input lines were dropped. The result is tool output: never passed through renderMarkdown.
 func (s *decisionState) elideContext() ([]string, int) {
-	var out []string
+	ctxLines := strings.Split(s.context, "\n")
+	out := make([]string, 0, min(len(ctxLines), decisionContextRows))
 	var total, cut int
-	for _, ln := range strings.Split(s.context, "\n") {
+	for _, ln := range ctxLines {
 		if len(out) > 0 && (len(out) >= decisionContextRows || total+len(ln) > decisionContextChars) {
 			cut++ // count dropped lines so the marker can name them
 			continue

@@ -16,7 +16,7 @@ import (
 	"github.com/go-analyze/bulk"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/osfs"
-	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
@@ -743,7 +743,7 @@ func collapseUntracked(blocked map[string]struct{}, untracked []string) []string
 		_, ok := blockedDirs[dir]
 		return !ok
 	}
-	var out []string
+	out := make([]string, 0, len(untracked))
 	seen := make(map[string]struct{}, len(untracked))
 	for _, path := range untracked {
 		chosen := path
@@ -801,7 +801,7 @@ func gitStatusText(r *git.Repository) (string, error) {
 
 	var b strings.Builder
 	b.WriteString(gitHeadLine(r) + "\n")
-	var counts []string
+	counts := make([]string, 0, 3)
 	for _, c := range []struct {
 		n int
 		s string

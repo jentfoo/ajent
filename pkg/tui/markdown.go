@@ -198,7 +198,7 @@ func (r mdRenderer) list(l *ast.List, src []byte, active string) string {
 	if l.IsOrdered() {
 		markerW = displayWidth(strconv.Itoa(num+l.ChildCount()-1) + ". ")
 	}
-	var items []string
+	items := make([]string, 0, l.ChildCount())
 	for c := l.FirstChild(); c != nil; c = c.NextSibling() {
 		marker := bulletMarker
 		if l.IsOrdered() {

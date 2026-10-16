@@ -279,7 +279,7 @@ func (r *Registry) Enabled() []agent.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []agent.Tool
+	out := make([]agent.Tool, 0, len(r.tools))
 	for _, rt := range r.tools {
 		if rt.state == StateEnabled {
 			out = append(out, rt.tool)
@@ -383,7 +383,7 @@ func (r *Registry) Disabled() []agent.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []agent.Tool
+	out := make([]agent.Tool, 0, len(r.tools))
 	for _, rt := range r.tools {
 		if rt.state == StateDisabled {
 			out = append(out, rt.tool)
@@ -431,13 +431,14 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 		}
 	}
 	var rows []Row
-	covered := make(map[*ToolGroup]bool) // group already emitted as a row
-	seen := make(map[string]bool)        // tool names consumed by a group row
+	covered := make(map[*ToolGroup]bool)        // group already emitted as a row
+	seen := make(map[string]bool, len(offered)) // tool names consumed by a group row
 	for _, t := range offered {
 		name := t.Name()
 		if seen[name] {
 			continue
 		}
+
 		g := ownerOf[name]
 		switch {
 		case g == nil: // a plain tool stands alone
@@ -478,7 +479,7 @@ func (r *Registry) EnabledNames(source string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []string
+	out := make([]string, 0, len(r.tools))
 	for _, rt := range r.tools {
 		if rt.source == source && rt.state == StateEnabled {
 			out = append(out, rt.tool.Name())
@@ -494,7 +495,7 @@ func (r *Registry) DisabledNames(source string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []string
+	out := make([]string, 0, len(r.tools))
 	for _, rt := range r.tools {
 		if rt.source == source && rt.state == StateDisabled {
 			out = append(out, rt.tool.Name())
@@ -509,7 +510,7 @@ func (r *Registry) AllNames(source string) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []string
+	out := make([]string, 0, len(r.tools))
 	for _, rt := range r.tools {
 		if rt.source == source {
 			out = append(out, rt.tool.Name())
@@ -552,7 +553,7 @@ func (r *Registry) Schemas() []llm.ToolSchema {
 	if r.schema != nil {
 		return slices.Clone(r.schema)
 	}
-	var out []llm.ToolSchema
+	out := make([]llm.ToolSchema, 0, len(r.tools))
 	for _, rt := range r.tools {
 		if rt.state != StateEnabled {
 			continue
@@ -575,7 +576,7 @@ func (r *Registry) Names() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	var out []string
+	out := make([]string, 0, len(r.tools))
 	for _, rt := range r.tools {
 		if rt.state == StateEnabled {
 			out = append(out, rt.tool.Name())

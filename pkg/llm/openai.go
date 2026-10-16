@@ -272,8 +272,8 @@ func toolResultOutput(caps Capabilities, blocks BlockList) any {
 // deferred output so the model can load on demand.
 func responsesAddedTools(names []string, schemaByName map[string]ToolSchema,
 	loaded map[string]bool, caps Capabilities) []respItem {
-	var tools []respTool
-	var added []string
+	tools := make([]respTool, 0, len(names))
+	added := make([]string, 0, len(names))
 	for _, name := range names {
 		if loaded[name] {
 			continue // already materialized this turn

@@ -9,6 +9,9 @@ import (
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,6 +20,7 @@ func TestGitLog(t *testing.T) {
 	t.Parallel()
 
 	t.Run("lists_newest_first_with_metadata", func(t *testing.T) {
+		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{}`)
 		assert.False(t, isErr)
@@ -26,6 +30,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("file_filter_scopes_to_path", func(t *testing.T) {
+		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"a.txt"}`)
 		assert.False(t, isErr)
@@ -34,6 +39,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("follows_rename_to_older_history", func(t *testing.T) {
+		t.Parallel()
 		g := newLinearRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"moved.txt"}`)
 		assert.False(t, isErr)
@@ -44,6 +50,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("old_name_still_finds_creation", func(t *testing.T) {
+		t.Parallel()
 		g := newLinearRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"origin.txt"}`)
 		assert.False(t, isErr)
@@ -52,6 +59,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("follow_limit_reports_more", func(t *testing.T) {
+		t.Parallel()
 		g := newLinearRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"moved.txt","limit":1}`)
 		assert.False(t, isErr)
@@ -61,6 +69,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("step_cap_counts_shown_commits", func(t *testing.T) {
+		t.Parallel()
 		g := newDeepRepo(t, maxLogCommits+10)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"target.txt"}`)
 		assert.False(t, isErr)
@@ -70,6 +79,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("step_cap_without_match_stays_partial", func(t *testing.T) {
+		t.Parallel()
 		g := newDeepRepo(t, maxLogCommits+10)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt","limit":5}`)
 		assert.False(t, isErr)
@@ -78,6 +88,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("cap_at_history_end_is_complete", func(t *testing.T) {
+		t.Parallel()
 		g := newDeepRepo(t, maxLogCommits-4) // the cut lands exactly at history's end
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt"}`)
 		assert.False(t, isErr)
@@ -91,6 +102,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("empty_scope_says_so", func(t *testing.T) {
+		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt"}`)
 		assert.False(t, isErr)
@@ -98,6 +110,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("limit_bounds_output", func(t *testing.T) {
+		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"limit":1}`)
 		assert.False(t, isErr)
@@ -108,6 +121,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("limit_at_history_end_has_no_note", func(t *testing.T) {
+		t.Parallel()
 		g := newGitRepo(t) // exactly three commits
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"limit":3}`)
 		assert.False(t, isErr)
@@ -115,6 +129,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("unborn_head_errors_cleanly", func(t *testing.T) {
+		t.Parallel()
 		dir := t.TempDir()
 		_, err := git.PlainInit(dir, false)
 		require.NoError(t, err)
@@ -125,6 +140,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("trailing_separator_file_scope", func(t *testing.T) {
+		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"./a.txt/"}`)
 		assert.False(t, isErr)
@@ -132,6 +148,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("directory_scope_lists_nested_history", func(t *testing.T) {
+		t.Parallel()
 		g := newDirRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"pkg/"}`)
 		assert.False(t, isErr)
@@ -142,6 +159,7 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("dot_slash_scope_matches_too", func(t *testing.T) {
+		t.Parallel()
 		g := newDirRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"./pkg/"}`)
 		assert.False(t, isErr)
@@ -150,37 +168,68 @@ func TestGitLog(t *testing.T) {
 }
 
 // newDeepRepo builds a history of noise+4 commits: two edits of target.txt on
-// top, its birth far below them, and base.txt filler in between. Sizing the
-// filler past maxLogCommits forces a step-cap exit; at exactly maxLogCommits
-// total commits the walk instead exhausts history there.
+// top, its birth far below them, and identical-tree filler in between. Sizing
+// the filler past maxLogCommits forces a step-cap exit; at exactly maxLogCommits
+// total commits the walk instead exhausts history there. The filler only needs
+// to sit in the ancestry, so commits are written straight through the object
+// storer: no worktree round-trip per commit keeps a thousand-commit fixture cheap.
 func newDeepRepo(t *testing.T, noise int) *gitRepo {
 	t.Helper()
 
 	dir := t.TempDir()
 	r, err := git.PlainInit(dir, false)
 	require.NoError(t, err)
-	w, err := r.Worktree()
-	require.NoError(t, err)
-	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	commit := func(msg string, when time.Time) {
-		t.Helper()
 
-		require.NoError(t, w.AddWithOptions(&git.AddOptions{All: true}))
-		_, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(when)})
+	store := func(o plumbing.EncodedObject) plumbing.Hash {
+		t.Helper()
+		h, err := r.Storer.SetEncodedObject(o)
 		require.NoError(t, err)
+		return h
 	}
-	require.NoError(t, os0Write(dir, "base.txt", "one\n"))
-	commit("add base", base)
-	require.NoError(t, os0Write(dir, "target.txt", "one\n"))
-	commit("add target", base.Add(time.Minute))
+	blob := func(content string) plumbing.Hash {
+		mo := &plumbing.MemoryObject{}
+		mo.SetType(plumbing.BlobObject)
+		_, err := mo.Write([]byte(content))
+		require.NoError(t, err)
+		return store(mo)
+	}
+	tree := func(target plumbing.Hash, withTarget bool) plumbing.Hash {
+		entries := []object.TreeEntry{
+			{Name: "base.txt", Mode: filemode.Regular, Hash: blob("one\n")},
+		}
+		if withTarget {
+			entries = append(entries, object.TreeEntry{Name: "target.txt", Mode: filemode.Regular, Hash: target})
+		}
+		tr := &object.Tree{Entries: entries}
+		mo := &plumbing.MemoryObject{}
+		require.NoError(t, tr.Encode(mo))
+		return store(mo)
+	}
+	commit := func(parent, treeHash plumbing.Hash, msg string, when time.Time) plumbing.Hash {
+		c := &object.Commit{Author: *gitAuthor(when), Committer: *gitAuthor(when),
+			Message: msg, TreeHash: treeHash}
+		if parent != plumbing.ZeroHash {
+			c.ParentHashes = []plumbing.Hash{parent}
+		}
+		mo := &plumbing.MemoryObject{}
+		require.NoError(t, c.Encode(mo))
+		return store(mo)
+	}
+
+	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	targetV2 := blob("one\ntwo\n")
+	targetV3 := blob("one\ntwo\nthree\n")
+	birthTree := tree(plumbing.ZeroHash, false) // target.txt not yet added
+	noiseTree := tree(blob("one\n"), true)      // identical trees: filler touches nothing
+
+	h := commit(plumbing.ZeroHash, birthTree, "add base", base)
+	h = commit(h, noiseTree, "add target", base.Add(time.Minute))
 	for i := range noise {
-		require.NoError(t, os0Write(dir, "base.txt", fmt.Sprintf("one\n%d\n", i)))
-		commit(fmt.Sprintf("edit base %d", i), base.Add(time.Duration(2+i)*time.Minute))
+		h = commit(h, noiseTree, fmt.Sprintf("edit base %d", i), base.Add(time.Duration(2+i)*time.Minute))
 	}
-	require.NoError(t, os0Write(dir, "target.txt", "one\ntwo\n"))
-	commit("edit target", base.Add((maxLogCommits+12)*time.Minute))
-	require.NoError(t, os0Write(dir, "target.txt", "one\ntwo\nthree\n"))
-	commit("edit target again", base.Add((maxLogCommits+13)*time.Minute))
+	h = commit(h, tree(targetV2, true), "edit target", base.Add((maxLogCommits+12)*time.Minute))
+	h = commit(h, tree(targetV3, true), "edit target again", base.Add((maxLogCommits+13)*time.Minute))
+	require.NoError(t, r.Storer.SetReference(plumbing.NewHashReference(plumbing.Master, h)))
 	return &gitRepo{dir: dir}
 }
 

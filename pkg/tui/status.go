@@ -116,7 +116,7 @@ func (s Status) parts(t Theme) []part {
 // fixedParts returns the always-present pieces: the spinner and the context bar with its
 // token totals. Both keep their full text at any width.
 func (s Status) fixedParts(t Theme) []part {
-	var parts []part
+	parts := make([]part, 0, 16) // general size estimate for all parts
 	if s.Spinner != "" {
 		parts = append(parts, part{orderSpinner, neverCollapse, s.Spinner, ""})
 	}
@@ -168,7 +168,7 @@ func (s Status) modelTextShort(t Theme) string {
 // text: lowest Priority first (0/unset before anything), ties the later position. A
 // neverCollapse piece or one without a short form is absent.
 func collapseOrder(parts []part) []int {
-	var idxs []int
+	idxs := make([]int, 0, len(parts))
 	for i := range parts {
 		if parts[i].coll >= 0 && parts[i].short != "" {
 			idxs = append(idxs, i)
@@ -254,13 +254,7 @@ func splitRow(parts []part) (head, tail []part) {
 // withoutPart returns the parts minus the given index, remapping nothing: callers drop by
 // position in the slice they still hold.
 func withoutPart(parts []part, idx int) []part {
-	out := make([]part, 0, len(parts)-1)
-	for i, p := range parts {
-		if i != idx {
-			out = append(out, p)
-		}
-	}
-	return out
+	return slices.Delete(slices.Clone(parts), idx, idx+1)
 }
 
 // joinStatus joins status pieces with the dim separator.

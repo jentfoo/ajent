@@ -363,8 +363,10 @@ func rebuild(orig, buf string, spans []matchSpan) []byte {
 	// one walk records each line's start in both spaces plus its ending.
 	// normalizeToLF only deletes the \r of a CRLF pair, so bytes map one-to-one
 	// inside a line and line starts just shift by the pairs before them
-	var starts, nstarts []int
-	var crlfs []bool
+	lines := strings.Count(orig, "\n") + 1 // every newline appends once; +1 covers a final line without one
+	starts := make([]int, 0, lines)
+	nstarts := make([]int, 0, lines)
+	crlfs := make([]bool, 0, lines)
 	var o, n int
 	for i := 0; i < len(orig); i++ {
 		if orig[i] != '\n' {
@@ -426,7 +428,7 @@ func validateEdits(ops []editOp) error {
 	if len(ops) == 0 {
 		return errors.New("edit requires at least one entry in edits")
 	}
-	seen := make(map[string]int)
+	seen := make(map[string]int, len(ops))
 	for i := range ops {
 		op := &ops[i]
 		if op.OldText == "" {

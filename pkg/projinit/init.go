@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -216,11 +217,7 @@ func (r *Runner) pollAll(ctx context.Context, tool agent.Tool, ids []string, run
 	}
 	wg.Wait()
 
-	out := make([]llm.Message, 0, 2*len(ids)) // one call and one result per investigation
-	for _, p := range pairs {
-		out = append(out, p...)
-	}
-	return out
+	return slices.Concat(pairs...) // one call and one result per investigation
 }
 
 // pollOne waits for one investigation, re-polling past a timeout so only the

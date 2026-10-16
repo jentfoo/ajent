@@ -98,7 +98,7 @@ func (s *Store) List(workspace string) ([]Info, error) {
 		}
 		return nil, err
 	}
-	var out []Info
+	out := make([]Info, 0, len(files)) // jsonl transcripts are a share of dir entries
 	for _, f := range files {
 		// side files (output-*.txt, editor-history.lines) are not transcripts, and only
 		// non-dir *.jsonl entries surface in the resume picker.
