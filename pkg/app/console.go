@@ -48,8 +48,8 @@ type uiConsole struct {
 	// confined: command handlers append, the dispatch and drain-exit flush drain
 	deferred []func()
 
-	started *startedFlag // shared with the driver pump
-	quit    func()       // idempotent driver quit, /exit and friends
+	starts *startState // shared with the driver pump
+	quit   func()      // idempotent driver quit, /exit and friends
 
 	// refreshBase re-measures the constant request overhead and republishes the
 	// bar, for the changes that resize the tool block between turns.
@@ -260,7 +260,7 @@ func (c *uiConsole) reapplyResolved(key string) {
 		if c.mcp.m != nil {
 			c.mcp.RefreshStatus()
 		}
-		if c.Started() && c.refreshBase != nil {
+		if c.starts != nil && c.starts.committed.marked() && c.refreshBase != nil {
 			c.refreshBase()
 		}
 	case key == "model":
@@ -408,18 +408,24 @@ func (c *uiConsole) ToolsChanged() {
 	if c.rec != nil {
 		_ = c.rec.SettingChange("tools.enabled", names)
 	}
-	// /tools changed which MCP tools are enabled, republish the status ratio
 	if c.mcp.m != nil {
+		// late registrations consult this set, so a reshape stays authoritative over
+		// the snapshot taken when the run resumed
+		c.mcp.SetRestore(names)
 		c.mcp.RefreshStatus()
 	}
 	// a wider tool block occupies context immediately, not at the next turn. Before
 	// the block is committed schemas are not in the base at all, so nothing to redo.
-	if c.Started() {
+	if c.starts != nil && c.starts.committed.marked() {
 		c.refreshBase()
 	}
 }
 
-func (c *uiConsole) Started() bool { return c.started.marked() }
+// Dispatched reports whether this run has sent a prompt. A resumed session
+// reports false until its first prompt, keeping /tools selection free.
+func (c *uiConsole) Dispatched() bool {
+	return c.starts != nil && c.starts.dispatched.marked()
+}
 
 // Compact reduces the session context toward the compaction threshold. An empty
 // instructions string runs an unguided pass, refused while a turn streams.
@@ -496,6 +502,9 @@ func (a mcpAdapter) Disconnect(name string)                         { a.m.Discon
 func (a mcpAdapter) Reload(ctx context.Context) error               { return a.m.Reload(ctx) }
 func (a mcpAdapter) Logs(name string) []string                      { return a.m.Logs(name) }
 func (a mcpAdapter) RefreshStatus()                                 { a.m.RefreshStatus() }
+
+// SetRestore keeps a /tools reshape authoritative over tools that register later.
+func (a mcpAdapter) SetRestore(names []string) { a.m.SetRestore(names) }
 
 // Groups maps the manager's tool groups onto /tools headers.
 func (a mcpAdapter) Groups() []command.MCPGroup {

@@ -46,9 +46,9 @@ type sessRec struct {
 	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
 	// and @ reference ids stop describing what it replaced. Nil until main wires it.
 	onSwitch func([]llm.Message)
-	// started is the driver's tool-block-committed flag, shared so a rewind seeds
-	// its base with the same rule the pump uses. Nil until main wires it.
-	started *startedFlag
+	// starts is the driver's dispatch state, shared so a rewind seeds its base
+	// with the same committed rule the pump uses. Nil until main wires it.
+	starts *startState
 	// discardStaged drops shell results staged against the branch a rewind leaves,
 	// so they never ride the new branch's first prompt. Nil until main wires it.
 	discardStaged func()
@@ -475,6 +475,9 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	if rebuilt.Model.ID != "" {
 		st.Model = rebuilt.Model
 	}
+	// the recorded set feeds the driver's post-registration re-apply and the MCP
+	// manager's connect-time restore, so the resumed frame's tools survive
+	st.Tools = rebuilt.Tools
 	if _, ok := llm.ParseLevel(resumed.Reasoning.Level); ok || resumed.Reasoning.Retain != "" {
 		st.Reasoning = llm.ReasoningFrom(config.Reasoning{
 			Level:  resumed.Reasoning.Level,
@@ -483,7 +486,9 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 			Budget: resumed.Reasoning.Budget,
 		}, st.Model)
 	}
-	if toolsReg != nil && len(resumed.Tools.Enabled) > 0 {
+	// a recorded empty set disables everything registered; unrecorded keeps the
+	// config default. Tri-state survives the transcript: JSON [] unmarshals non-nil.
+	if toolsReg != nil && resumed.Tools.Enabled != nil {
 		toolsReg.SetEnabled(resumed.Tools.Enabled)
 	}
 	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
@@ -585,8 +590,8 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 
 func (r *sessRec) baseEstimate(ag *agent.Agent) int {
 	var committed bool
-	if r.started != nil {
-		committed = r.started.marked()
+	if r.starts != nil {
+		committed = r.starts.committed.marked()
 	}
 	return ag.BaseEstimate(committed)
 }

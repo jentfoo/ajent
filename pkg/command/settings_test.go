@@ -356,7 +356,7 @@ func TestEditToolsRow(t *testing.T) {
 		c := newFakeConsole(t)
 		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
 		c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
-		c.started = true // widen-only mode
+		c.dispatched = true // widen-only mode
 
 		// confirming the picker with nothing selected enables nothing
 		c.multiPicks = []fakeMultiPick{{result: []int{}}}
@@ -371,7 +371,7 @@ func TestEditToolsRow(t *testing.T) {
 	t.Run("widen_only_all_enabled_records_nothing", func(t *testing.T) {
 		c := newFakeConsole(t)
 		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
-		c.started = true // widen-only mode
+		c.dispatched = true // widen-only mode
 
 		changes, err := editTools(t.Context(), c)
 		require.NoError(t, err)

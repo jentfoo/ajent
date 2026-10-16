@@ -31,8 +31,8 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	started := newStartedFlag(false)
-	c := &uiConsole{tools: reg, set: set, started: started, refreshBase: func() {}}
+	starts := newStartState(false)
+	c := &uiConsole{tools: reg, set: set, starts: starts, refreshBase: func() {}}
 
 	assert.NotPanics(t, func() { c.ToolsChanged() })
 
@@ -41,6 +41,20 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "session", layer)
 	assert.JSONEq(t, `["read"]`, string(raw))
+}
+
+// A resumed run starts committed (its history already sent a tool block) but not
+// dispatched, so /tools selection stays free until this run sends a prompt.
+func TestUIConsoleDispatchedVsCommitted(t *testing.T) {
+	t.Parallel()
+
+	starts := newStartState(true) // a resumed branch with history
+	c := &uiConsole{starts: starts}
+	assert.False(t, c.Dispatched())
+
+	starts.mark() // the pump dispatches the first prompt
+	assert.True(t, c.Dispatched())
+	assert.True(t, starts.committed.marked()) // dispatch commits the block too
 }
 
 func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
@@ -240,12 +254,12 @@ func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
 	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, q: q}
 
-	started := newStartedFlag(false)
+	starts := newStartState(false)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
-	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, started, planHooks{}, &drain)
+	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
 
 	<-entered // the turn owns State from here until it settles
 

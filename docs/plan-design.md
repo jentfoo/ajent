@@ -157,11 +157,12 @@ runs them free without being widened for anything else. The barrier itself is
 unchanged, and `block-all` still prompts for them, which is what `block-all`
 means.
 
-A phase scope narrows the enabled set, which `/tools` refuses to do after the
-first prompt. That rule is a command-layer policy protecting the user from a
-model-visible tool set shrinking under them. A plan scope is explicit,
-user-initiated and restored on every exit path, so it calls
-`Registry.SetEnabled` directly.
+A phase scope narrows the enabled set, which `/tools` refuses to do once the
+run has dispatched a prompt. That rule is a command-layer policy protecting the
+user from a model-visible tool set shrinking under them. A plan scope is
+explicit, user-initiated and restored on every exit path, so it calls
+`Registry.SetEnabled` directly. Restoring a mid-workflow session re-applies
+its phase scope first, so the resume's free `/tools` window opens inside it.
 
 ## Display
 

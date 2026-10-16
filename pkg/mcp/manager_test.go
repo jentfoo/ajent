@@ -773,6 +773,34 @@ func TestRegisterLiveDisabledBeatsRestore(t *testing.T) {
 	assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // live off wins over Restore
 }
 
+// A reshaped set replaces the resume snapshot, so a server registering after the
+// reshape (a late connect) honors the run's latest selection, not startup state.
+func TestSetRestoreRefreshesLateRegistration(t *testing.T) {
+	t.Parallel()
+
+	fr := newFakeRegistrar()
+	mgr := New(nil, wired(Options{Registrar: fr, Restore: []string{"srv__a"}}))
+	s := mgr.newTestServer("srv")
+	defs := []ToolDef{
+		{Name: "a", InputSchema: jsonRawObject},
+		{Name: "b", InputSchema: jsonRawObject},
+	}
+
+	// the resume snapshot enables a alone
+	mgr.register(s, nil, defs, nil)
+	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
+	assert.Equal(t, StateDisabled, mustState(fr, "srv__b"))
+
+	// /tools reshapes to b alone while srv is still connecting; its eventual
+	// registration must not resurrect a from the stale snapshot
+	mgr.SetRestore([]string{"srv__b"})
+	fr.Unregister(s.source)
+	mgr.register(s, nil, defs, nil)
+
+	assert.Equal(t, StateDisabled, mustState(fr, "srv__a"))
+	assert.Equal(t, StateEnabled, mustState(fr, "srv__b"))
+}
+
 func TestImpliedEnabled(t *testing.T) {
 	t.Parallel()
 
@@ -788,6 +816,7 @@ func TestImpliedEnabled(t *testing.T) {
 		{name: "config disabled default", cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: false},
 		{name: "restore member wins", restore: []string{"srv__a"}, cfg: ServerConfig{}, tool: "srv__a", want: true},
 		{name: "restore non-member off", restore: []string{"srv__b"}, cfg: ServerConfig{}, tool: "srv__a", want: false},
+		{name: "restore empty all off", restore: []string{}, cfg: ServerConfig{}, tool: "srv__a", want: false},
 		{name: "restore beats config off", restore: []string{"srv__a"}, cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: true},
 	}
 	for _, tt := range tests {

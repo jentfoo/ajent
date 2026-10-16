@@ -175,12 +175,14 @@ than accumulating keeps a fresh epoch from double-counting across steps.
 
 Two callers seed it: `Agent` exposes a base estimate so the front end can paint
 an honest bar before the first turn, and the stream itself calls `SetBase` with
-the real built request, which self-corrects whatever was seeded. Tool schemas join
-the base only once the tool block is **committed**, since `/tools` can still
-narrow the set before the first prompt. After that it can only widen, so the base
-grows and never shrinks. A resumed branch with history has committed one already,
-and every context-tree jump (rewind, fork) re-seeds the base itself, because the
-ledger `session.State` builds carries none of its own.
+the real built request, which self-corrects whatever was seeded. Tool schemas
+join the base only once the tool block is **committed**, since `/tools` may
+still reshape the set until this run dispatches its first prompt (afterwards it
+only widens, so the base grows and never shrinks). Commitment belongs to the
+branch: a resumed one with history counts its schemas from startup while the
+free-selection window stays open. Every context-tree jump (rewind, fork)
+re-seeds the base itself, because the ledger `session.State` builds carries
+none of its own.
 
 A separate **submitted** bucket (`SetSubmit`) carries a sent prompt across the
 gap between the editor clearing and its message landing in state.

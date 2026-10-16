@@ -52,7 +52,7 @@ type Options struct {
 	Registrar Registrar
 	Notice    func(msg string, warn bool) // user-visible notices, prefixed per server
 	Status    func(text, short string)    // status segment texts, empty text clears it
-	Restore   []string                    // persisted tools.enabled names to honour on connect
+	Restore   []string                    // persisted tools.enabled names to honour on connect; SetRestore refreshes after a /tools reshape
 	Workspace string                      // for re-reading mcp.json on /mcp reload
 }
 
@@ -97,13 +97,16 @@ type Manager struct {
 	mu      sync.Mutex // guards servers and loaded only, per-server state lives under server.mu
 	servers map[string]*server
 	preload *sync.WaitGroup // in-flight background dials from Preload, waited on at first message
+	// haveRestore marks a recorded tools.enabled (Restore may be empty: the session
+	// ran with every MCP tool off). Until set, each server's config governs.
+	haveRestore bool
 }
 
 // New returns a manager over the given servers. Restore names are applied to each
 // registered tool so a resumed session keeps its enabled set even though MCP
 // registers after the resume replay.
 func New(cfg map[string]ServerConfig, opts Options) *Manager {
-	m := &Manager{opts: opts, servers: make(map[string]*server)}
+	m := &Manager{opts: opts, servers: make(map[string]*server), haveRestore: opts.Restore != nil}
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.connectClient = Connect   // seam for tests to drive single-flight deterministically
 	m.backoff = reconnectDelay  // seam for tests to skip real retry pacing
@@ -446,14 +449,27 @@ func (m *Manager) preloadWG() *sync.WaitGroup {
 }
 
 // impliedEnabled reports whether cfg leaves name enabled before any live /tools
-// toggle. Config governs the default while a persisted Restore set is an explicit
-// enablement authoritative over it. register derives defaults through this too, so
-// captures and registrations cannot disagree about what a default state is.
+// toggle. A recorded tools.enabled is an explicit enablement authoritative over
+// config (an empty set disables everything); without one, config governs the
+// default. register derives defaults through this too, so captures and
+// registrations cannot disagree about what a default state is.
 func (m *Manager) impliedEnabled(cfg ServerConfig, name string) bool {
-	if len(m.opts.Restore) > 0 { // a resumed session's enabled set wins over the config default
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.haveRestore { // the recorded enabled set wins over the config default
 		return slices.Contains(m.opts.Restore, name)
 	}
 	return !disabledByConfig(cfg)
+}
+
+// SetRestore replaces the connect-time restore set after a /tools reshape, so a
+// server registering later (a late connect) honors the run's latest selection
+// rather than the snapshot taken at construction.
+func (m *Manager) SetRestore(names []string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.opts.Restore = names
+	m.haveRestore = true
 }
 
 // captureLive reads a source's current enable/disable split from the registrar,

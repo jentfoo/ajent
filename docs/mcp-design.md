@@ -202,6 +202,9 @@ package stays free of `pkg/tools`.
   enable state is applied before MCP connects, so eager registration never drops
   a restored subset. Re-registration carries over deliberate `/tools` toggles,
   while untouched names follow the config default in force at each registration.
+  A `/tools` reshape refreshes `Options.Restore`, so a registration arriving
+  later (a late connect) follows the run's latest selection rather than the
+  resume-time snapshot.
 - **`tools/list_changed`** triggers re-discovery: unregister source, register
   fresh, preserving deliberate enable state. It runs through `rediscan`, which
   serializes per server and bounds each pass with its own timeout so an

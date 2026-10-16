@@ -131,7 +131,7 @@ clipboard writer (the one write path behind `/copy`, see
 `clipboard-copy-feature.md`), read handles onto the model registry, agent
 state, tool registry, command registry and resolved config, settings writers
 that save to a layer or record a session override, mutators that apply and
-persist model, reasoning and tool-set changes, plus started-state reporting
+persist model, reasoning and tool-set changes, plus dispatch-state reporting
 and exit.
 
 `pkg/app` implements it once (`uiConsole`) over the objects the driver already
@@ -150,8 +150,9 @@ The permissions-mode row applies its parsed mode to the live barrier for this
 run only and records no `setting_change`, so every start uses the resolved
 config default.
 
-`Started()` is owned by the pump: it flips true when the first prompt is
-dispatched, never on a command or a `!`.
+`Dispatched()` is owned by the pump and flips true on this run's first prompt,
+never on a command or a `!`. It stays false on a resumed session until then,
+so `/tools` selection opens free despite existing history.
 
 ### Built-ins
 
@@ -162,7 +163,7 @@ dispatched, never on a command or a `!`.
 | `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim. Mid-turn it copies the last settled response, never a partial stream. No agent messages yet is a notice |
 | `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it; a no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
 | `/reasoning [level]` | report, or set/clear the level for capable models. A model with fewer than two options reports its situation inline and never opens a picker |
-| `/tools` | multi-select, grouped by source; widens the enabled set |
+| `/tools` | multi-select, grouped by source. Free selection before this run's first prompt (a resumed session preselects its recorded set), widen-only after |
 | `/session [name]` | report the session's name, or set it; an invalid or conflicting name is a notice (see `session-design.md`) |
 | `/settings [section]` | two-level menu of rows showing value + source layer, each edited in place with save-to-layer (see `config-design.md`). Rows come in three kinds: enum from a fixed set, model picker, and integer with min/max validation for sub-agent settings. A currently impossible choice (Reasoning on a single-option model) renders grayed out with the reason, as does Reset overrides when nothing is overridden |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all; unknown verbs warn. Esc never cancels jobs; this is the only stop path |
@@ -256,12 +257,17 @@ is a build concern, not conversation content.
 
 ### `/tools` and the enabled set
 
-The set only ever *widens* within a session, because the tool block the model
-has already seen is not retractable, since history may hold calls to a tool, and
-dropping it would leave the transcript describing a tool that no longer exists:
+The set only ever *widens* once this run has dispatched a prompt, because the
+tool block the model has already seen is not retractable, since history may hold
+calls to a tool, and dropping it would leave the transcript describing a tool
+that no longer exists:
 
-- **Before the first prompt** the picker lists every registered tool
-  (`Registry.All`) and the selection is free: enable or disable anything.
+- **Before this run's first dispatched prompt** the picker lists every
+  registered tool (`Registry.All`) and the selection is free: enable or disable
+  anything. A resumed session sits in this window too, preselected with its
+  recorded frame through the same restore paths a resume uses (see
+  `session-design.md`). Any change records a fresh `tools.enabled`, so the next
+  resume takes the reshaped set.
 
 The plan workflow is the deliberate exception: a phase scope *narrows* the set
 by calling `Registry.SetEnabled` directly. The widen-only rule is a

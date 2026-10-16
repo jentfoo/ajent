@@ -316,6 +316,15 @@ a snapshot under the concurrent-access rules: trusted only while the file is
 unchanged, and every later path (rewind, compaction, exit) re-reads live
 state.
 
+**A resume restores the recorded tool set.** The branch's last `tools.enabled`
+lands in `State.Tools`, and every later registration replays it: the driver
+re-applies after its own registrations, and the MCP manager receives the same
+set as its connect-time restore (see `mcp-design.md`), so any registration
+order ends at the resumed frame. A recorded empty set means everything off,
+while a branch that never recorded one falls back to the resolved config like
+every other unrecorded setting. Until this run dispatches its first prompt
+`/tools` may reshape what was restored (see `command-design.md`).
+
 An explicit target (`--resume <id|name>`, `--session <name>`) resolves once,
 before the TUI opens, so the run never scans the workspace twice. The
 resolution is a locator for the open, which still parses the transcript it

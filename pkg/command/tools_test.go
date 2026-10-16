@@ -16,7 +16,7 @@ func TestToolsCommand(t *testing.T) {
 	t.Parallel()
 
 	// before the first prompt, a free multi-select can enable any tool
-	t.Run("free_select_before_started", func(t *testing.T) {
+	t.Run("free_select_before_dispatched", func(t *testing.T) {
 		c := newFakeConsole(t)
 		// register a couple of tools, with ls disabled by default
 		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
@@ -33,13 +33,33 @@ func TestToolsCommand(t *testing.T) {
 		assert.Equal(t, 1, c.toolsChanged)
 	})
 
+	// a resumed session's recorded set preselects the picker, and a free pick can
+	// narrow it ahead of the run's first prompt
+	t.Run("free_select_narrows_resumed_set", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+		c.tools.Register(&fakeToolAdapter{name: "grep"}, true)
+		c.tools.Register(&fakeToolAdapter{name: "write"}, false)
+
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+
+		// the user drops grep, keeping read alone
+		c.multiPicks = []fakeMultiPick{{result: []int{0}}}
+		cmd, _ := r.Get("tools")
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
+		assert.Equal(t, []string{"read"}, c.tools.Names())
+		assert.Equal(t, 1, c.toolsChanged)
+	})
+
 	// after the first prompt only disabled tools are offered (widen-only)
-	t.Run("widen_only_after_started", func(t *testing.T) {
+	t.Run("widen_only_after_dispatched", func(t *testing.T) {
 		c := newFakeConsole(t)
 		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
 		c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
 		c.tools.Register(&fakeToolAdapter{name: "find"}, false)
-		c.started = true // after first prompt: widen only
+		c.dispatched = true // after first prompt: widen only
 
 		r := NewRegistry()
 		c.commands = r
@@ -57,7 +77,7 @@ func TestToolsCommand(t *testing.T) {
 	t.Run("widen_only_nothing_disabled", func(t *testing.T) {
 		c := newFakeConsole(t)
 		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
-		c.started = true
+		c.dispatched = true
 
 		r := NewRegistry()
 		c.commands = r

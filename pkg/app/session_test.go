@@ -578,6 +578,143 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	assert.Equal(t, at, cs.Compact) // the ledger's compact term follows the resumed threshold
 }
 
+// A recorded tools.enabled must survive resume: the rebuilt state carries it (so
+// the driver's post-registration re-apply and the MCP restore set see it) and the
+// live registry reflects it. Subagents were off in the recorded frame, so the
+// trio registering after the rebuild must not resurrect them.
+func TestResumeRestoresRecordedToolSet(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{
+			"p": {Models: []llm.ModelConfig{{ID: "a"}}},
+		},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+
+	_, err = w.Append(session.TypeMessage, session.MessageData{
+		Message: llm.Text(llm.RoleUser, "do the work"),
+	})
+	require.NoError(t, err)
+	// the session enabled the readers and dropped bash; subagents never came on
+	raw := json.RawMessage(`["read","write","edit","grep","find","ls"]`)
+	_, err = w.Append(session.TypeSettingChange, session.SettingData{Key: "tools.enabled", Value: raw})
+	require.NoError(t, err)
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	set, _, err := config.Load(config.Options{
+		Workspace: t.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(t, err)
+
+	toolsReg, terr := builtinTools(set, reg, nil, nil)
+	require.NoError(t, terr)
+
+	st := &agent.State{Model: reg.Active()}
+	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+
+	// the recorded frame lands in state, feeding the MCP restore set
+	assert.Equal(t, []string{"read", "write", "edit", "grep", "find", "ls"}, st.Tools)
+	// builtins restored through the seeded session layer, in declaration order:
+	// readers on, bash off
+	assert.Equal(t, []string{"read", "write", "edit", "find", "grep", "ls"}, toolsReg.Names())
+
+	// the trio registers after the rebuild (driver order), enabled by default
+	for _, name := range []string{subAgentToolStart, subAgentToolPoll, subAgentToolList} {
+		toolsReg.RegisterFrom(tools.SourceBuiltin, &stubTool{name: name}, true)
+	}
+	// the driver's re-apply of the recorded set must then switch them back off
+	toolsReg.SetEnabled(st.Tools)
+	for _, name := range []string{subAgentToolStart, subAgentToolPoll, subAgentToolList} {
+		assert.False(t, toolsReg.IsEnabled(name))
+	}
+	assert.False(t, toolsReg.IsEnabled(tools.ToolBash))
+	assert.True(t, toolsReg.IsEnabled(tools.ToolGrep))
+}
+
+// A recorded empty set means the session ran with every tool off: resume comes
+// back all-off rather than the config default, and a late registration stays off.
+func TestResumeRestoresEmptyToolSet(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{
+			"p": {Models: []llm.ModelConfig{{ID: "a"}}},
+		},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+
+	_, err = w.Append(session.TypeMessage, session.MessageData{
+		Message: llm.Text(llm.RoleUser, "do the work"),
+	})
+	require.NoError(t, err)
+	// an explicitly empty enabled set, distinct from never recording one
+	raw := json.RawMessage(`[]`)
+	_, err = w.Append(session.TypeSettingChange, session.SettingData{Key: "tools.enabled", Value: raw})
+	require.NoError(t, err)
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+	})
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	set, _, err := config.Load(config.Options{
+		Workspace: t.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(t, err)
+
+	toolsReg, terr := builtinTools(set, reg, nil, nil)
+	require.NoError(t, terr)
+
+	st := &agent.State{Model: reg.Active()}
+	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+
+	// the empty frame survives as empty, not nil, feeding every restore path
+	assert.NotNil(t, st.Tools)
+	assert.Empty(t, st.Tools)
+	assert.Empty(t, toolsReg.Names()) // builtins restored off through the seeded session layer
+
+	// the trio registers after the rebuild (driver order), then the re-apply of
+	// the empty set must keep them off instead of falling back to defaults
+	for _, name := range []string{subAgentToolStart, subAgentToolPoll, subAgentToolList} {
+		toolsReg.RegisterFrom(tools.SourceBuiltin, &stubTool{name: name}, true)
+	}
+	toolsReg.SetEnabled(st.Tools)
+	assert.False(t, toolsReg.IsEnabled(subAgentToolStart))
+	assert.False(t, toolsReg.IsEnabled(tools.ToolRead))
+}
+
 // writeFutureSession plants a transcript stamped by a newer session format in the
 // workspace store, named when name is set: exactly what a downgrade finds.
 func writeFutureSession(t *testing.T, store *session.Store, ws, name string) {
@@ -876,8 +1013,8 @@ func TestSwitchStateSeedsBase(t *testing.T) {
 		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
 
-	committed := newStartedFlag(true)
-	r := &sessRec{w: w, rec: session.NewRecorder(w), started: committed}
+	committed := newStartState(true)
+	r := &sessRec{w: w, rec: session.NewRecorder(w), starts: committed}
 	wantBase := ag.BaseEstimate(true)
 	require.NotZero(t, wantBase) // the system prompt alone is never free
 
@@ -913,8 +1050,8 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 		},
 		Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
-	committed := newStartedFlag(false)
-	r := &sessRec{w: w, rec: session.NewRecorder(w), started: committed}
+	committed := newStartState(false)
+	r := &sessRec{w: w, rec: session.NewRecorder(w), starts: committed}
 	r.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hello there")})
 
 	entries := readEntriesRewind(t, p)

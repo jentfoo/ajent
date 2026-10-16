@@ -18,7 +18,7 @@ import (
 )
 
 // fakeConsole is a recording Console for built-in command tests. It captures
-// notices and prints, records model/reasoning/tools/started changes, and lets a
+// notices and prints, records model/reasoning/tools/dispatch changes, and lets a
 // test drive Pick/MultiPick with canned results.
 type fakeConsole struct {
 	mu sync.Mutex
@@ -43,7 +43,7 @@ type fakeConsole struct {
 	state        *agent.State
 	tools        *tools.Registry
 	commands     *Registry
-	started      bool
+	dispatched   bool
 	setModel     llm.Model
 	toolsChanged int
 	exited       bool
@@ -259,7 +259,7 @@ func (f *fakeConsole) SetSessionName(name string) error {
 func (f *fakeConsole) SetModel(m llm.Model)               { f.models.SetActive(m); f.state.Model = m; f.setModel = m }
 func (f *fakeConsole) SetReasoning(c llm.ReasoningConfig) { f.state.Reasoning = c }
 func (f *fakeConsole) ToolsChanged()                      { f.mu.Lock(); f.toolsChanged++; f.mu.Unlock() }
-func (f *fakeConsole) Started() bool                      { return f.started }
+func (f *fakeConsole) Dispatched() bool                   { return f.dispatched }
 func (f *fakeConsole) Exit()                              { f.exited = true }
 
 func (f *fakeConsole) Compact(context.Context, string) error { return nil }

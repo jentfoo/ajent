@@ -108,9 +108,10 @@ type Console interface {
 	// ToolsChanged persists the enabled set to the session so a resume keeps it.
 	ToolsChanged()
 
-	// Started reports whether a user prompt has been sent this session. The
-	// /tools picker is unrestricted before it and widen-only after.
-	Started() bool
+	// Dispatched reports whether this run has dispatched a prompt. The /tools
+	// picker is unrestricted before it and widen-only after, so a resumed session
+	// can reshape the recorded set ahead of its first prompt.
+	Dispatched() bool
 	// Compact reduces the session context toward the compaction threshold.
 	// instructions is an optional /compact <instructions> focus for the summariser.
 	Compact(ctx context.Context, instructions string) error

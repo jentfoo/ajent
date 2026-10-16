@@ -12,8 +12,9 @@ import (
 // filterPlaceholder is the default picker hint for narrowing a list.
 const filterPlaceholder = "filter"
 
-// toolsCommand widens the enabled set. Before the first prompt the picker lists
-// every registered tool and the selection is free. After it only disabled tools
+// toolsCommand reshapes the enabled set. Before this run's first dispatched
+// prompt the picker lists every registered tool and the selection is free (a
+// resumed session preselects its recorded set). After it only disabled tools
 // are offered, since the tool block the model has already seen is not retractable.
 func toolsCommand(ctx context.Context, _ string, c Console) error {
 	reg := c.Tools()
@@ -21,7 +22,7 @@ func toolsCommand(ctx context.Context, _ string, c Console) error {
 		c.Notify("no tools registered", levelWarn)
 		return nil
 	}
-	if !c.Started() {
+	if !c.Dispatched() {
 		return toolsFreeSelect(ctx, c, reg)
 	}
 	return toolsWidenOnly(ctx, c, reg)
