@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -360,6 +361,108 @@ func TestCompactorStepRunsMidTurn(t *testing.T) {
 
 	close(blocked)
 	require.NoError(t, <-errCh)
+}
+
+func TestCompactorReadFailureSurfaces(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
+
+	setup := func(t *testing.T) (*compactor, *[]string, *llm.ScriptedProvider) {
+		t.Helper()
+
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textStream(fullSummary)}}}
+		c, st, w := testCompactor(t, model, sp)
+		c.cfg = func() config.Compaction { return config.Compaction{Auto: true} }
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 6)
+		st.Tokens.Add(7000) // past the compaction point, so the automatic gates pass
+		var notices []string
+		c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+		return c, &notices, sp
+	}
+
+	t.Run("manual_notifies", func(t *testing.T) {
+		c, notices, sp := setup(t)
+		require.NoError(t, os.Remove(c.rec.w.Path()))
+
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		require.Error(t, err)
+		assert.False(t, did)
+		assert.Contains(t, strings.Join(*notices, "\n"), "compaction failed: transcript unreadable")
+		assert.Empty(t, sp.Requests()) // no summariser spend on a failed read
+	})
+
+	// the loop retries only a successful reduction, so the returned error is what
+	// keeps the single overflow retry skipped while the failure stays visible
+	t.Run("overflow_returns_error", func(t *testing.T) {
+		c, notices, sp := setup(t)
+		require.NoError(t, os.Remove(c.rec.w.Path()))
+
+		did, err := c.run(t.Context(), agent.CompactOverflow, "")
+		require.Error(t, err)
+		assert.False(t, did)
+		assert.Contains(t, strings.Join(*notices, "\n"), "compaction failed")
+		assert.Empty(t, sp.Requests())
+	})
+
+	t.Run("step_notifies", func(t *testing.T) {
+		c, notices, sp := setup(t)
+		require.NoError(t, os.Remove(c.rec.w.Path()))
+
+		did, err := c.run(t.Context(), agent.CompactStep, "")
+		require.Error(t, err)
+		assert.False(t, did)
+		assert.Contains(t, strings.Join(*notices, "\n"), "compaction failed")
+		assert.Empty(t, sp.Requests())
+		// a failed read is not evidence this session cannot reduce
+		assert.False(t, c.autoDisabled.Load())
+	})
+}
+
+func TestCompactorNewerFormatRefused(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textStream(fullSummary)}}}
+	c, _, w := testCompactor(t, model, sp)
+	var notices []string
+	c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+	// a future build stamped this transcript, so Read reports it blocked
+	_, err := w.Append(session.TypeSession, session.SessionData{Version: session.Version() + 1})
+	require.NoError(t, err)
+	head := w.Head()
+
+	did, err := c.run(t.Context(), agent.CompactManual, "")
+	require.ErrorIs(t, err, session.ErrNewerFormat)
+	assert.False(t, did)
+	assert.Contains(t, strings.Join(notices, "\n"), "compaction failed")
+	assert.Equal(t, head, w.Head()) // a blocked transcript gains no entries
+	assert.Empty(t, sp.Requests())
+}
+
+func TestCompactorEmptyTranscriptReportsNothing(t *testing.T) {
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
+	sp := &llm.ScriptedProvider{}
+	c, st, w := testCompactor(t, model, sp)
+	c.cfg = func() config.Compaction { return config.Compaction{Auto: true} }
+	var notices []string
+	c.notify = func(msg string, _ agent.Level) { notices = append(notices, msg) }
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	st.Tokens.Add(7000)                          // past the compaction point, so the step trigger reaches the read
+	require.NoError(t, os.Truncate(w.Path(), 0)) // readable but holds no lines
+
+	did, err := c.run(t.Context(), agent.CompactManual, "")
+	require.NoError(t, err)
+	assert.False(t, did)
+	assert.Contains(t, strings.Join(notices, "\n"), "nothing to compact")
+
+	notices = nil
+	did, err = c.run(t.Context(), agent.CompactStep, "")
+	require.NoError(t, err)
+	assert.False(t, did)
+	assert.Empty(t, notices) // a thin session is not a failure and never latches
+	assert.False(t, c.autoDisabled.Load())
 }
 
 func TestCompactorRunRefusesInFlight(t *testing.T) {

@@ -136,7 +136,17 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 
 	path := c.rec.w.Path()
 	entries, _, err := session.Read(path)
-	if err != nil || len(entries) == 0 {
+	if err != nil {
+		// a failed read is not a thin session, and a newer-format transcript
+		// must not gain entries from this build: fail loudly, never a silent no-op
+		c.notify("compaction failed: transcript unreadable: "+err.Error(), agent.LevelWarn)
+		return false, err
+	}
+	if len(entries) == 0 {
+		// nothing recorded: not evidence this session cannot reduce, so no latch
+		if reason == agent.CompactManual {
+			c.notify("nothing to compact", agent.LevelInfo)
+		}
 		return false, nil
 	}
 	// plan against the live head, not the file tail (they differ after a rewind)
@@ -212,6 +222,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		Reduce:           &res.Reduce,
 	}
 	if _, aerr := c.rec.w.Append(session.TypeCompaction, cd); aerr != nil {
+		c.notify("compaction failed: recording the checkpoint: "+aerr.Error(), agent.LevelWarn)
 		return false, aerr
 	}
 

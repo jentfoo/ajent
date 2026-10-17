@@ -282,6 +282,11 @@ there would race the automatic fold into a double summariser spend. An
 in-flight flag refuses the second run without queueing or waiting. A manual run
 reports the refusal, an automatic trigger retries at its next boundary.
 
+A transcript the run cannot read fails the run with a warning, never a
+silent no-op. Otherwise a transient I/O error masquerades as a thin session
+and defeats the overflow retry's recovery. An empty read is the legitimate
+"nothing to compact" decline and latches nothing.
+
 The agent cannot import `session` or `compact` (session already imports agent),
 so the trigger is a func field on `agent.Options`, matching `Provider` and
 `OnMessage`: it receives a small reason enum (manual, threshold-crossed or
