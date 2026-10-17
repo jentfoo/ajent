@@ -32,7 +32,8 @@ func IsSkippedDir(path string) bool {
 }
 
 // allWalk returns every regular file under root, skipping VCS and dependency
-// directory subtrees so a huge tree cannot hang a grep forever.
+// directory subtrees so a huge tree cannot hang a grep forever. Symlinks stay
+// unlisted, matching rg's no-follow traversal.
 func allWalk(ctx context.Context, root string) []string {
 	var out []string
 	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -48,16 +49,19 @@ func allWalk(ctx context.Context, root string) []string {
 			}
 			return nil
 		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
 		out = append(out, p)
 		return nil
 	})
 	return out
 }
 
-// repoFiles lists files under root with .gitignore semantics inside a repo via
-// git ls-files -z (quoting disabled, so non-ASCII names stay usable), falling
-// back to allWalk otherwise or when git yields nothing. Entries that no longer
-// exist on disk are dropped.
+// repoFiles lists regular files under root with .gitignore semantics inside a
+// repo via git ls-files -z (quoting disabled, so non-ASCII names stay usable),
+// falling back to allWalk otherwise or when git yields nothing. Entries missing
+// on disk and symlinks are dropped, so neither engine follows a link out of root.
 func repoFiles(ctx context.Context, root string) []string {
 	var entries []string
 	if IsGitRepo(ctx, root) {
@@ -75,7 +79,8 @@ func repoFiles(ctx context.Context, root string) []string {
 			if _, ok := WithinRoot(root, p); !ok { // older git still emits ../, never leave scope
 				continue
 			}
-			if fi, err := os.Stat(p); err == nil && !fi.IsDir() { // -c lists deleted-but-tracked files
+			// -c lists deleted-but-tracked files; Lstat drops symlinks like rg's no-follow walk
+			if fi, err := os.Lstat(p); err == nil && fi.Mode().IsRegular() {
 				if _, dup := seen[p]; dup { // unmerged entries repeat, git --deduplicate is 2.31+
 					continue
 				}

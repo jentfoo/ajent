@@ -542,7 +542,7 @@ func TestRepairToolCallIDs(t *testing.T) {
 		assert.True(t, changed)
 		second := out.Content[1].(ToolCallBlock)
 		assert.NotEqual(t, want, second.ID)
-		assert.NotEqual(t, "", second.ID)
+		assert.NotEmpty(t, second.ID)
 	})
 
 	t.Run("deterministic", func(t *testing.T) {

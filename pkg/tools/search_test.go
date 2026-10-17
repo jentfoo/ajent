@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -293,9 +294,9 @@ func TestGrepFallback(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		out := textOf(res)
-		assert.Contains(t, out, ":1: before") // one line of context each side
-		assert.Contains(t, out, ":2: match here")
-		assert.Contains(t, out, ":3: after")
+		assert.Contains(t, out, "a.txt-1-before") // context lines use path-line-text
+		assert.Contains(t, out, "a.txt:2:match here")
+		assert.Contains(t, out, "a.txt-3-after")
 	})
 
 	// count mode output is deterministically sorted
@@ -330,7 +331,7 @@ func TestGrepFallback(t *testing.T) {
 		assert.False(t, res.IsError)
 		out := textOf(res)
 		for i := 1; i <= 5; i++ {
-			assert.Contains(t, out, fmt.Sprintf("f%02d.txt:1: hit", i))
+			assert.Contains(t, out, fmt.Sprintf("f%02d.txt:1:hit", i))
 		}
 		assert.NotContains(t, out, "f06.txt")
 	})
@@ -420,7 +421,7 @@ func TestGrepFallback(t *testing.T) {
 			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		out := textOf(res)
-		assert.Contains(t, out, "a.txt:1: hit")
+		assert.Contains(t, out, "a.txt:1:hit")
 		assert.NotContains(t, out, "not searched")
 	})
 
@@ -774,6 +775,119 @@ func TestGrepFallbackScopedInsideGitRepo(t *testing.T) {
 	out := textOf(res)
 	assert.Contains(t, out, "inner.go")   // the in-scope file is searched
 	assert.NotContains(t, out, "leak.go") // a sibling outside scope never leaks
+}
+
+// TestGrepSymlinkEscapeSkipped asserts traversal never follows symlinks on
+// either engine, so no content outside the search root is reported.
+func TestGrepSymlinkEscapeSkipped(t *testing.T) {
+	t.Parallel()
+
+	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
+		t.Run(name, func(t *testing.T) {
+			testLimitsGate.Lock()
+			t.Cleanup(testLimitsGate.Unlock)
+			if !forceGo && !rgOnPath() {
+				t.Skip("ripgrep not on PATH")
+			}
+			dir, policy := newSearchEnv(t)
+			outside := t.TempDir()
+			mkfile(dir, "plain.txt", "needle inside\n")
+			mkfile(outside, "secret.txt", "needle secret payload\n")
+			require.NoError(t, os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(dir, "link.txt")))
+			gitInit(t, dir) // a committed link is the escape scenario
+
+			res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
+				callWith([]byte(`{"pattern":"needle"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+			require.NoError(t, err)
+			assert.False(t, res.IsError)
+			out := textOf(res)
+			assert.Contains(t, out, "plain.txt:1:needle inside")
+			assert.NotContains(t, out, "link.txt")              // no in-tree alias for outside content
+			assert.NotContains(t, out, "needle secret payload") // outside content never arrives
+		})
+	}
+}
+
+// TestGrepSymlinkArgFollowed asserts an explicit symlink path arg searches
+// its target, matching rg's explicit-argument rule on both engines.
+func TestGrepSymlinkArgFollowed(t *testing.T) {
+	t.Parallel()
+
+	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
+		t.Run(name, func(t *testing.T) {
+			testLimitsGate.Lock()
+			t.Cleanup(testLimitsGate.Unlock)
+			if !forceGo && !rgOnPath() {
+				t.Skip("ripgrep not on PATH")
+			}
+			dir, policy := newSearchEnv(t)
+			outside := t.TempDir()
+			mkfile(outside, "secret.txt", "needle secret payload\n")
+			require.NoError(t, os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(dir, "link.txt")))
+
+			res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
+				callWith([]byte(`{"pattern":"needle","path":"link.txt"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+			require.NoError(t, err)
+			assert.False(t, res.IsError)
+			// the target is reported under its own name, either engine
+			assert.Equal(t, "secret.txt:1:needle secret payload", strings.TrimSpace(textOf(res)))
+		})
+	}
+}
+
+// TestFindSymlinksNotListed asserts find's shared enumeration drops symlinks.
+func TestFindSymlinksNotListed(t *testing.T) {
+	t.Parallel()
+
+	dir, policy := newSearchEnv(t)
+	outside := t.TempDir()
+	mkfile(dir, "plain.txt", "x")
+	mkfile(outside, "secret.txt", "x")
+	require.NoError(t, os.Symlink(filepath.Join(outside, "secret.txt"), filepath.Join(dir, "link.txt")))
+	gitInit(t, dir)
+
+	res, err := (&findTool{policy: policy}).Execute(t.Context(),
+		callWith([]byte(`{"pattern":"*.txt"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+	require.NoError(t, err)
+	out := textOf(res)
+	assert.Contains(t, out, "plain.txt")
+	assert.NotContains(t, out, "link.txt")
+	assert.NotContains(t, out, "secret.txt")
+}
+
+// TestGrepEnginesShareOutputContract asserts both engines emit the same blocks
+// for one tree: separators, block breaks and raw text all agree.
+func TestGrepEnginesShareOutputContract(t *testing.T) {
+	t.Parallel()
+
+	if !rgOnPath() {
+		t.Skip("ripgrep not on PATH")
+	}
+	testLimitsGate.Lock()
+	t.Cleanup(testLimitsGate.Unlock)
+
+	dir, policy := newSearchEnv(t)
+	mkfile(dir, "a.txt", "pad\n  match lead\npad\n") // leading whitespace kept raw
+	mkfile(dir, "b.txt", "crlf match\r\n")
+	mkfile(dir, "sub/c.txt", "hit\npad\npad\nhit\n") // two disjoint blocks
+	mkfile(dir, "skip.txt", "nothing here\n")
+
+	run := func(forceGo bool) string {
+		res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"match|hit","context":1}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.False(t, res.IsError)
+		return textOf(res)
+	}
+	assert.Equal(t, grepBlocks(run(false)), grepBlocks(run(true)))
+}
+
+// grepBlocks splits content output into separator-delimited blocks, sorted so
+// engine comparison tolerates rg's parallel file ordering.
+func grepBlocks(out string) []string {
+	blocks := strings.Split(strings.TrimSpace(out), "\n--\n")
+	slices.Sort(blocks)
+	return blocks
 }
 
 func TestGrepSingleFileSearch(t *testing.T) {

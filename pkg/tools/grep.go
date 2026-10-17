@@ -259,7 +259,9 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 
 	var matches []string
 	counts := map[string]int{}
-	var skipped int // files inspected but binary or unreadable, so not actually searched
+	var skipped int  // files inspected but binary or unreadable, so not actually searched
+	var printed bool // any content line emitted yet, gating the leading "--" separator
+	var prevLine int // line number of the last emitted line, for block contiguity
 	remaining := max
 	for lo := 0; lo < len(paths) && remaining > 0 && ctx.Err() == nil; lo += window {
 		budget := remaining // no file in this scan can emit more than the budget left
@@ -289,8 +291,17 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 				if n < m.n {
 					m.hits = m.hits[:m.ends[n-1]] // keep context through the n-th match
 				}
-				for _, h := range m.hits {
-					matches = append(matches, fmt.Sprintf("%s:%d: %s", m.rel, h.line, strings.TrimSpace(h.text)))
+				for i, h := range m.hits {
+					// rg's text printer: "--" separates disjoint blocks and file changes
+					if printed && (i == 0 || h.line != prevLine+1) {
+						matches = append(matches, "--")
+					}
+					sep := ":" // match lines print path:line:text, context ones path-line-text
+					if !h.match {
+						sep = "-"
+					}
+					matches = append(matches, fmt.Sprintf("%s%s%d%s%s", m.rel, sep, h.line, sep, h.text))
+					prevLine, printed = h.line, true
 				}
 			}
 			if mode != grepFiles {
@@ -591,7 +602,13 @@ func splitCountLine(line string) (string, int, bool) {
 // ends[i] is the exclusive hits index where match i's context block ends, so a
 // caller can trim hits to the first k matches.
 func goGrep(content string, re *regexp.Regexp, ctxLines, limit int) (hits []grepHit, n int, ends []int) {
+	if content == "" {
+		return nil, 0, nil // an empty file has no lines, rg emits nothing for one
+	}
 	lines := strings.Split(content, "\n")
+	if strings.HasSuffix(content, "\n") {
+		lines = lines[:len(lines)-1] // the split's trailing element is past EOF, not a line
+	}
 	emitted := map[int]bool{}
 	for i, line := range lines {
 		if limit > 0 && n >= limit {
@@ -607,7 +624,7 @@ func goGrep(content string, re *regexp.Regexp, ctxLines, limit int) (hits []grep
 				continue
 			}
 			emitted[j] = true
-			hits = append(hits, grepHit{line: j + 1, text: lines[j]})
+			hits = append(hits, grepHit{line: j + 1, text: lines[j], match: j == i})
 		}
 		n++
 		ends = append(ends, len(hits))
@@ -616,8 +633,9 @@ func goGrep(content string, re *regexp.Regexp, ctxLines, limit int) (hits []grep
 }
 
 type grepHit struct {
-	line int
-	text string
+	line  int
+	text  string
+	match bool // a match line rather than context around one
 }
 
 // binary reports whether data looks like a binary file.

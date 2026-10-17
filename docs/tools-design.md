@@ -488,14 +488,16 @@ Off-by-default extras for no-shell agents.
   any depth. It lists files via `git ls-files -z` (quoting disabled, so non-ASCII
   filenames stay usable), falling back to a bounded Go walk when git is
   unavailable or yields nothing. A search never leaves its root: the listing is
-  scoped to `Path`, and results are sorted newest first.
+  scoped to `Path`, lists regular files only (symlinks are never followed, like
+  rg's default traversal), and results are sorted newest first.
 - `grep`: searches file contents for a pattern in three modes (`files`, `content`
   (line numbers plus optional context lines) and `count`). Enumeration stops at the
   default match cap with a named note, never silently, and surfaces stderr from an
   underlying tool as an error. The rg path and the Go fallback share one output
-  contract (filenames always attributed, root-relative paths, cap notes counting
-  matches rather than output lines), so results read identically whichever
-  engine ran.
+  contract (filenames always attributed, root-relative paths, rg's exact line
+  shape `path:line:text` with `path-line-text` context and `--` block breaks,
+  cap notes counting matches rather than output lines), so results read
+  identically whichever engine ran.
 - Both spill their complete result when the bound cuts it, so the model can page
   the rest recoverably rather than losing it.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via

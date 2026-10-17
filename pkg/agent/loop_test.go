@@ -449,9 +449,10 @@ func TestLoopRepairsDegenerateCallIDs(t *testing.T) {
 		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
 		assert.True(t, wellFormed(a.state.Messages))
 
-		var ids []string
-		var texts []string
-		for _, blk := range a.state.Messages[2].Content {
+		blocks := a.state.Messages[2].Content
+		ids := make([]string, 0, len(blocks))
+		texts := make([]string, 0, len(blocks))
+		for _, blk := range blocks {
 			tr, ok := blk.(llm.ToolResultBlock)
 			require.True(t, ok)
 			ids = append(ids, tr.CallID)
