@@ -103,6 +103,42 @@ func TestInterrupt(t *testing.T) {
 		require.NoError(t, <-errCh)
 		assert.True(t, wellFormed(a.state.Messages)) // every tool call has a matching result
 	})
+
+	// duplicate ids land already repaired, so the interrupt fill answers each
+	// slot under its own id instead of emitting one result twice
+	t.Run("duplicate_call_ids", func(t *testing.T) {
+		block := make(chan struct{})
+		set := &mapSet{tools: map[string]Tool{
+			"a": &stubTool{name: "a", result: "ra", block: block},
+		}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: twoToolCalls("c1", "a", "c1", "a")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+		require.Eventually(t, func() bool {
+			return set.tools["a"].(*stubTool).callCount() == 1
+		}, defaultTimeout, pollInterval, "the first call must be executing before the interrupt")
+
+		a.Interrupt()
+
+		require.NoError(t, <-errCh)
+		assert.True(t, wellFormed(a.state.Messages))
+		var ids []string
+		for _, m := range a.state.Messages {
+			for _, b := range m.Content {
+				if tr, ok := b.(llm.ToolResultBlock); ok {
+					ids = append(ids, tr.CallID)
+				}
+			}
+		}
+		require.Len(t, ids, 2) // both slots answered, no result emitted twice
+		assert.Equal(t, "c1", ids[0])
+		assert.NotEqual(t, "c1", ids[1])
+	})
 }
 
 func TestAbortResults(t *testing.T) {

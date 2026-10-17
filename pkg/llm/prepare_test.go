@@ -470,6 +470,94 @@ func TestRepairToolInputs(t *testing.T) {
 	})
 }
 
+func TestRepairToolCallIDs(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clean_ids_untouched", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{}`)},
+			ToolCallBlock{ID: "c2", Name: "read", Input: json.RawMessage(`{}`)},
+		}}
+		out, changed := RepairToolCallIDs(in)
+		assert.False(t, changed)
+		assert.Same(t, &in.Content[0], &out.Content[0]) // clean path shares backing
+	})
+
+	t.Run("no_calls_untouched", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "hi"}}}
+		out, changed := RepairToolCallIDs(in)
+		assert.False(t, changed)
+		assert.Equal(t, in, out)
+	})
+
+	t.Run("empty_id_synthesized", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{"a":1}`)},
+		}}
+		out, changed := RepairToolCallIDs(in)
+		assert.True(t, changed)
+		tc := out.Content[0].(ToolCallBlock)
+		assert.NotEmpty(t, tc.ID)
+		assert.Contains(t, tc.ID, synthCallIDPrefix)
+		assert.Equal(t, "bash", tc.Name) // only the id changed
+	})
+
+	t.Run("duplicate_keeps_first", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
+			ToolCallBlock{ID: "c1", Name: "b", Input: json.RawMessage(`{}`)},
+		}}
+		out, changed := RepairToolCallIDs(in)
+		assert.True(t, changed)
+		first := out.Content[0].(ToolCallBlock)
+		second := out.Content[1].(ToolCallBlock)
+		assert.Equal(t, "c1", first.ID)
+		assert.NotEqual(t, "c1", second.ID)
+		assert.NotEmpty(t, second.ID)
+		assert.Equal(t, "b", second.Name)
+	})
+
+	t.Run("multiple_empty_ids_distinct", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{}`)},
+			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{}`)},
+		}}
+		out, changed := RepairToolCallIDs(in)
+		assert.True(t, changed)
+		first := out.Content[0].(ToolCallBlock)
+		second := out.Content[1].(ToolCallBlock)
+		assert.NotEqual(t, first.ID, second.ID)
+	})
+
+	t.Run("synth_never_collides_with_sibling", func(t *testing.T) {
+		// pre-compute what the empty call would synthesize to, then plant it as a
+		// sibling id so the collision suffix path must engage
+		taken := map[string]struct{}{}
+		want := synthCallID(ToolCallBlock{Name: "bash", Input: json.RawMessage(`{}`)}, 1, taken)
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: want, Name: "read", Input: json.RawMessage(`{}`)},
+			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{}`)},
+		}}
+		out, changed := RepairToolCallIDs(in)
+		assert.True(t, changed)
+		second := out.Content[1].(ToolCallBlock)
+		assert.NotEqual(t, want, second.ID)
+		assert.NotEqual(t, "", second.ID)
+	})
+
+	t.Run("deterministic", func(t *testing.T) {
+		mk := func() Message {
+			return Message{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
+				ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
+			}}
+		}
+		first, _ := RepairToolCallIDs(mk())
+		second, _ := RepairToolCallIDs(mk())
+		assert.Equal(t, first, second)
+	})
+}
+
 func TestPrepareRepairsToolInputs(t *testing.T) {
 	t.Parallel()
 

@@ -428,6 +428,74 @@ func TestLoopMalformedArgsFailsCall(t *testing.T) {
 	assert.Equal(t, "recovered", tb.Text)
 }
 
+func TestLoopRepairsDegenerateCallIDs(t *testing.T) {
+	t.Parallel()
+
+	// two calls sharing one id: the second is rewritten before anything sees
+	// the message, so both pair with their own result instead of the last one's
+	t.Run("duplicate_ids", func(t *testing.T) {
+		set := &mapSet{tools: map[string]Tool{
+			"a": &stubTool{name: "a", result: "ra"},
+			"b": &stubTool{name: "b", result: "rb"},
+		}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: append(twoToolCalls("c1", "a", "c1", "b"), doneEvent())},
+			{Events: textOnly("done")},
+		}}
+		rec := &recordingSink{}
+		a := newTestAgent(nil, p, rec)
+		a.opts.Tools = set
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+		assert.True(t, wellFormed(a.state.Messages))
+
+		var ids []string
+		var texts []string
+		for _, blk := range a.state.Messages[2].Content {
+			tr, ok := blk.(llm.ToolResultBlock)
+			require.True(t, ok)
+			ids = append(ids, tr.CallID)
+			texts = append(texts, tr.Content[0].(llm.TextBlock).Text)
+		}
+		require.Len(t, ids, 2)
+		assert.Equal(t, "c1", ids[0]) // the first occurrence keeps its id
+		assert.NotEqual(t, "c1", ids[1])
+		assert.NotEmpty(t, ids[1])
+		assert.Equal(t, []string{"ra", "rb"}, texts) // each call keeps its own output
+
+		call, ok := a.state.Messages[1].Content[1].(llm.ToolCallBlock)
+		require.True(t, ok)
+		assert.Equal(t, ids[1], call.ID) // transcript call matches its result
+
+		assert.Contains(t, rec.calls, "notice:repaired duplicate or missing tool-call ids from the stream")
+	})
+
+	// a call whose id never arrives still executes and gets answered under a
+	// synthesized id, instead of running with side effects and vanishing
+	t.Run("empty_id", func(t *testing.T) {
+		tool := &stubTool{name: "bash", result: "ok"}
+		set := &mapSet{tools: map[string]Tool{"bash": tool}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("", "bash")},
+			{Events: textOnly("done")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+		assert.True(t, wellFormed(a.state.Messages))
+		require.Len(t, tool.calls, 1)
+
+		call, ok := a.state.Messages[1].Content[0].(llm.ToolCallBlock)
+		require.True(t, ok)
+		assert.NotEmpty(t, call.ID) // synthesized before the call landed
+		tr, ok := a.state.Messages[2].Content[0].(llm.ToolResultBlock)
+		require.True(t, ok)
+		assert.Equal(t, call.ID, tr.CallID)
+		assert.False(t, tr.IsError)
+	})
+}
+
 func TestLoopMaxSteps(t *testing.T) {
 	t.Parallel()
 

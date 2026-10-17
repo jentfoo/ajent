@@ -474,10 +474,14 @@ func trHasText(content BlockList) bool {
 // skipped along with their tool results (their results would be an unmatched
 // tool_result Anthropic rejects), aborted ones stay because the abort path fills
 // every pending call, and unanswered calls receive a synthetic error result.
+// Empty ids drop and a repeated id keeps only its first call and first result,
+// the only shapes that still pair on the wire.
 func repairTurns(msgs []Message, caps Capabilities) []Message {
 	out := make([]Message, 0, len(msgs))
 	skippedCalls := map[string]struct{}{}
 	pending := map[string]ToolCallBlock{}
+	seenCalls := map[string]struct{}{} // every call id already emitted, answered or not
+	answered := map[string]struct{}{}  // every call id a result already answered
 	var order []string
 	var lastWasResults bool // whether the last emitted message was tool-results-only
 
@@ -528,11 +532,18 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 		content := make(BlockList, 0, len(m.Content))
 		for _, b := range m.Content {
 			if tr, ok := b.(ToolResultBlock); ok {
+				if tr.CallID == "" {
+					continue // unpairable, dropped rather than sent dangling
+				}
 				if _, skip := skippedCalls[tr.CallID]; skip {
 					continue // result of a skipped (errored) call
 				}
+				if _, dup := answered[tr.CallID]; dup {
+					continue // echo of an already-answered duplicate call
+				}
 				if c, inTurn := pending[tr.CallID]; inTurn {
 					delete(pending, tr.CallID)
+					answered[tr.CallID] = struct{}{}
 					if tr.ToolName == "" && c.Name != "" {
 						tr.ToolName = c.Name
 					}
@@ -540,7 +551,14 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 				content = append(content, tr)
 				continue
 			}
-			if tc, ok := b.(ToolCallBlock); ok && tc.ID != "" {
+			if tc, ok := b.(ToolCallBlock); ok {
+				if tc.ID == "" {
+					continue // unanswerable, dropped rather than sent dangling
+				}
+				if _, dup := seenCalls[tc.ID]; dup {
+					continue // repeated id: the first call is the one results pair with
+				}
+				seenCalls[tc.ID] = struct{}{}
 				pending[tc.ID] = tc
 				order = append(order, tc.ID)
 			}
@@ -607,6 +625,84 @@ func repairCallInputs(m Message) (Message, bool) {
 	}
 	m.Content = content
 	return m, true
+}
+
+// synthCallIDPrefix leads every id synthesized for a degenerate tool call, so
+// repairs stay recognizable in transcripts and request logs.
+const synthCallIDPrefix = "synth_"
+
+// RepairToolCallIDs returns m with every empty or repeated tool-call id made
+// unique, and reports whether any id changed. Only a unique id pairs a call
+// with its own result on the wire.
+func RepairToolCallIDs(m Message) (Message, bool) {
+	if !hasDegenerateCallID(m.Content) {
+		return m, false
+	}
+	// every id the message holds, so a synthesized one cannot collide with a sibling
+	taken := make(map[string]struct{})
+	for _, b := range m.Content {
+		if tc, ok := b.(ToolCallBlock); ok && tc.ID != "" {
+			taken[tc.ID] = struct{}{}
+		}
+	}
+
+	var content BlockList
+	seen := make(map[string]struct{}, len(taken)) // first occurrences kept
+	for i, b := range m.Content {
+		tc, ok := b.(ToolCallBlock)
+		if !ok {
+			continue
+		}
+		if tc.ID != "" {
+			if _, first := seen[tc.ID]; !first {
+				seen[tc.ID] = struct{}{}
+				continue
+			}
+		}
+		if content == nil {
+			content = slices.Clone(m.Content)
+		}
+		tc.ID = synthCallID(tc, i, taken)
+		taken[tc.ID] = struct{}{}
+		content[i] = tc
+	}
+	if content == nil {
+		return m, false
+	}
+	m.Content = content
+	return m, true
+}
+
+// hasDegenerateCallID reports whether blocks carry an empty or repeated tool-call id.
+func hasDegenerateCallID(blocks BlockList) bool {
+	for i, b := range blocks {
+		tc, ok := b.(ToolCallBlock)
+		if !ok {
+			continue
+		}
+		if tc.ID == "" {
+			return true
+		}
+		if slices.ContainsFunc(blocks[:i], func(p Block) bool {
+			ptc, isCall := p.(ToolCallBlock)
+			return isCall && ptc.ID == tc.ID
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+// synthCallID returns an id for the tool call at index i that no entry of taken holds.
+func synthCallID(tc ToolCallBlock, i int, taken map[string]struct{}) string {
+	base := synthCallIDPrefix + shortHash(tc.Name+"\x00"+string(tc.Input)+"\x00"+strconv.Itoa(i))
+	id := base
+	for n := 2; ; n++ {
+		if _, ok := taken[id]; !ok {
+			return id
+		}
+		id = base + "_" + strconv.Itoa(n)
+	}
 }
 
 // normalizeCallID returns id in the form target dialect accepts. kind marks how far the source
