@@ -247,6 +247,7 @@ func New(opts Options) (*UI, error) {
 		theme:    theme,
 		render:   newRenderer(mode, theme, out, int(out.Fd())),
 		mode:     mode,
+		editor:   editor{shell: true}, // the prompt row: a leading `!` is its marker
 		status:   Status{Model: opts.Model, ModelShort: opts.ModelShort, MaxTokens: opts.MaxTokens},
 		in:       in,
 		inFd:     int(in.Fd()),

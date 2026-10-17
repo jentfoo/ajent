@@ -1224,6 +1224,10 @@ editor. Every programmatic fill parks the caret at the end (all recall paths),
 one variant translating a byte offset for callers with byte-indexed positions
 (the Ctrl+R match). It owns its own layout: wrapping the buffer into display
 rows on word boundaries and reporting the caret's row/column within them.
+Painting and caret movement derive from that one layout. Only the prompt
+editor swaps its marker for a leading `!` (the shell line), so a question
+reply beginning with `!` keeps the marker and wraps identically for painter
+and arrows.
 Wrapping is purely visual and leaves `Value()` untouched, so submitted input
 never gains newlines.
 Movement and editing keys respect those same visual rows: Home/End bound the

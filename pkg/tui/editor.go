@@ -25,6 +25,7 @@ type undoState struct {
 type editor struct {
 	cells   []string
 	pos     int
+	shell   bool // the prompt editor: a leading `!` serves as its own marker
 	history []string
 	histIdx int        // len(history) while editing the live buffer
 	stash   string     // live buffer held aside during history browsing
@@ -405,18 +406,19 @@ func filterInput(s string) string {
 }
 
 // prefixWidths returns the display widths of the prompt glyph and a continuation
-// indent. A leading `!` shell marker replaces ❯ with nothing, so its width is 0.
+// indent. A shell editor's leading `!` is the marker itself, so the glyph width
+// is 0 there. Every other editor keeps the glyph even before a leading `!`.
 func (e *editor) prefixWidths() (firstW, contW int) {
 	marker := promptFirst
-	if len(e.cells) > 0 && e.cells[0] == "!" { // the literal `!` serves as the marker
+	if e.shell && len(e.cells) > 0 && e.cells[0] == "!" { // the literal `!` serves as the marker
 		marker = ""
 	}
 	return displayWidth(marker), displayWidth(promptCont)
 }
 
 // layout returns the buffer's visual rows as cell ranges [starts[k]:ends[k]], laid
-// out at width by the same word-wrap rules inputView renders with. A leading `!`
-// shell marker occupies row 0 without a glyph, so it wraps differently.
+// out at width by the same word-wrap rules view renders with. A shell editor's
+// leading `!` marker occupies row 0 without a glyph, so it wraps differently.
 func (e *editor) layout(width int) (starts, ends []int) {
 	firstW, contW := e.prefixWidths()
 	return e.layoutAt(width, firstW, contW)
@@ -500,16 +502,16 @@ func (e *editor) displayRow(starts, ends []int) int {
 // cursor offset within those rows. Wrapping is purely visual: Value() is
 // untouched, so submitted input gains no newlines.
 func (e *editor) inputView(t Theme, width, maxRows int) (rows []string, curRow, curCol int) {
-	return e.view(t, width, maxRows, t.Prompt.Wrap(promptFirst), promptCont, inputHint, true)
+	return e.view(t, width, maxRows, t.Prompt.Wrap(promptFirst), promptCont, inputHint)
 }
 
 // view lays the editor into display rows of at most width columns: marker on
 // the first row, cont indenting continuations, hint filling an empty buffer.
-// shell drops the glyph when cells[0] is "!" (the prompt editor). It returns the
-// zero based cursor offset within those rows. Wrapping is purely visual and
-// Value() gains no newlines.
-func (e *editor) view(t Theme, width, maxRows int, marker, cont, hint string, shell bool) (rows []string, curRow, curCol int) {
-	leadBang := shell && len(e.cells) > 0 && e.cells[0] == "!" // the literal `!` serves as the marker
+// A shell editor drops the glyph when cells[0] is "!": the literal is the marker.
+// It returns the zero based cursor offset within those rows. Wrapping is purely
+// visual and Value() gains no newlines.
+func (e *editor) view(t Theme, width, maxRows int, marker, cont, hint string) (rows []string, curRow, curCol int) {
+	leadBang := e.shell && len(e.cells) > 0 && e.cells[0] == "!" // the literal `!` serves as the marker
 	firstW := displayWidth(marker)
 	if leadBang {
 		firstW = 0

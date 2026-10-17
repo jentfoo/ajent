@@ -350,6 +350,21 @@ func TestQuestionStateRows(t *testing.T) {
 		}
 	})
 
+	t.Run("bang_leading_reply_wraps_with_marker", func(t *testing.T) {
+		// a reply's `!` is content: the marker stays and the wrap matches the rows
+		// the movement keys walk
+		s := &questionState{text: "reason:", chatIndex: -1}
+		s.answer.SetValue("!cd pkg && make test")
+
+		rows, caret, col := s.rows(th, 20, 8)
+
+		require.Len(t, rows, 3) // prompt plus two wrapped reply rows
+		assert.Equal(t, userMarker+"!cd pkg && make", rows[1])
+		assert.Equal(t, userContinue+"test", rows[2])
+		assert.Equal(t, 2, caret)
+		assert.Equal(t, displayWidth(rows[2]), col)
+	})
+
 	t.Run("newlines_break_reply_rows", func(t *testing.T) {
 		s := &questionState{text: "reason:", chatIndex: -1}
 		s.answer.SetValue("first line\nsecond line")
@@ -386,6 +401,20 @@ func TestQuestionStateArrowKeys(t *testing.T) {
 		// Down drops back onto the last visual row.
 		press(s, key{typ: keyDown})
 		require.GreaterOrEqual(t, s.answer.pos, 4) // column preserved from the up move
+	})
+
+	t.Run("bang_leading_up_down_walk_painted_rows", func(t *testing.T) {
+		// the reply's `!` is content, so arrows walk rows that still pay for the
+		// marker: "!cd pkg && make test" wraps at width 20
+		s := &questionState{text: "Note:", width: 20}
+		s.answer.SetValue("!cd pkg && make test")
+		s.answer.pos = len(s.answer.cells)
+
+		press(s, key{typ: keyUp})
+		assert.Equal(t, 4, s.answer.pos) // column four of row zero, beside the marker
+
+		press(s, key{typ: keyDown})
+		assert.Equal(t, len(s.answer.cells), s.answer.pos)
 	})
 
 	t.Run("up_on_first_row_jumps_to_start", func(t *testing.T) {

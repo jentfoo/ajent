@@ -113,7 +113,7 @@ func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	if s.comp != nil && maxRows-len(out) > 1 { // a Tab-driven listing rides above the reply,
 		out = append(out, s.comp.rows(t, width, maxRows-len(out)-1)...) // which always keeps a row
 	}
-	answerRows, caretRow, curCol := s.answer.view(t, max(1, width), max(1, maxRows-len(out)), marker, userContinue, placeholder, false)
+	answerRows, caretRow, curCol := s.answer.view(t, max(1, width), max(1, maxRows-len(out)), marker, userContinue, placeholder)
 	out = append(out, answerRows...)
 	return out, len(out) - len(answerRows) + caretRow, curCol
 }

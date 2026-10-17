@@ -16,6 +16,15 @@ func newEditorAt(value string, pos int) *editor {
 	return e
 }
 
+// newShellEditorAt returns a prompt editor (leading `!` as its marker) holding
+// value with the cursor at pos.
+func newShellEditorAt(value string, pos int) *editor {
+	e := &editor{shell: true}
+	e.SetValue(value)
+	e.pos = pos
+	return e
+}
+
 func TestEditorSetValueAt(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +215,14 @@ func TestEditorMovement(t *testing.T) {
 		assert.Equal(t, 5, e.pos)
 		e.LineStart(9)
 		assert.Equal(t, 0, e.pos)
+	})
+
+	t.Run("answer_bang_keeps_marker_width", func(t *testing.T) {
+		// a non-shell editor paints the marker before a leading `!`, so its rows
+		// wrap at width-marker: End stops where the painted row does
+		e := newEditorAt("!abcdef", 0)
+		e.LineEnd(8)
+		assert.Equal(t, 6, e.pos)
 	})
 }
 
@@ -594,6 +611,22 @@ func TestEditorLineNavigation(t *testing.T) {
 		require.True(t, e.Down(wide))
 		assert.Equal(t, 8, e.pos) // row below is shorter than the same column
 	})
+
+	t.Run("shell_bang_row_pays_no_marker", func(t *testing.T) {
+		// the prompt editor's `!` is the marker itself, so row 0 keeps every column
+		e := newShellEditorAt("!abcdef", 0)
+		e.LineEnd(8)
+		assert.Equal(t, 7, e.pos)
+	})
+
+	t.Run("answer_bang_rows_move_like_painted", func(t *testing.T) {
+		// "!abcdef" at width 8 paints [❯ !abcde][  f]: arrows walk those rows
+		e := newEditorAt("!abcdef", 7)
+		require.True(t, e.Up(8))
+		assert.Equal(t, 1, e.pos) // column three of row zero: marker plus `!`
+		require.True(t, e.Down(8))
+		assert.Equal(t, 7, e.pos)
+	})
 }
 
 func TestEditorHistory(t *testing.T) {
@@ -725,7 +758,7 @@ func TestEditorInputView(t *testing.T) {
 	})
 
 	t.Run("leading_bang_swaps_marker_no_duplicate", func(t *testing.T) {
-		e := newEditorAt("!ls -la", 2)
+		e := newShellEditorAt("!ls -la", 2)
 		rows, _, curCol := e.inputView(th, 60, 5)
 		// the literal `!` replaces ❯ as the marker: exactly one bang on screen
 		assert.Equal(t, []string{"!ls -la"}, rows)
@@ -736,22 +769,30 @@ func TestEditorInputView(t *testing.T) {
 	})
 
 	t.Run("bare_bang_is_the_marker", func(t *testing.T) {
-		e := newEditorAt("!", 1)
+		e := newShellEditorAt("!", 1)
 		rows, _, curCol := e.inputView(th, 60, 5)
 		assert.Equal(t, []string{"!"}, rows)
 		assert.Equal(t, 1, curCol)
 	})
 
 	t.Run("bang_mid_buffer_keeps_prompt", func(t *testing.T) {
-		e := newEditorAt("a!b", 2)
+		e := newShellEditorAt("a!b", 2)
 		rows, _, _ := e.inputView(th, 60, 5)
 		assert.Equal(t, []string{promptFirst + "a!b"}, rows)
 	})
 
 	t.Run("continuation_lines_keep_indent", func(t *testing.T) {
-		e := newEditorAt("!echo a\necho b", 10)
+		e := newShellEditorAt("!echo a\necho b", 10)
 		rows, _, _ := e.inputView(th, 60, 5)
 		assert.Equal(t, []string{"!echo a", promptCont + "echo b"}, rows)
+	})
+
+	t.Run("answer_leading_bang_keeps_marker", func(t *testing.T) {
+		// a reply paints the marker before a leading `!`: the glyph never doubles
+		e := newEditorAt("!ls -la", 2)
+		rows, _, curCol := e.view(th, 60, 5, th.User.Wrap(userMarker), userContinue, answerPlaceholder)
+		assert.Equal(t, []string{userMarker + "!ls -la"}, rows)
+		assert.Equal(t, 4, curCol) // marker plus two cells
 	})
 }
 
@@ -763,6 +804,12 @@ func TestPrefixWidths(t *testing.T) {
 		assert.Equal(t, displayWidth(promptFirst), displayWidth(promptCont))
 	})
 
+	t.Run("answer_marker_widths_match_prompt", func(t *testing.T) {
+		// the question rows paint userMarker while layout budgets promptFirst
+		assert.Equal(t, displayWidth(promptFirst), displayWidth(userMarker))
+		assert.Equal(t, displayWidth(promptCont), displayWidth(userContinue))
+	})
+
 	t.Run("prompt_and_continuation_align", func(t *testing.T) {
 		var e editor
 		e.SetValue("hello")
@@ -772,10 +819,17 @@ func TestPrefixWidths(t *testing.T) {
 	})
 
 	t.Run("shell_marker_drops_the_glyph", func(t *testing.T) {
-		var e editor
-		e.SetValue("!ls")
+		e := newShellEditorAt("!ls", 0)
 		first, cont := e.prefixWidths()
 		assert.Equal(t, 0, first)
+		assert.Equal(t, 2, cont)
+	})
+
+	t.Run("answer_keeps_glyph_before_bang", func(t *testing.T) {
+		// a reply's leading `!` is content: only the prompt editor swaps the marker
+		e := newEditorAt("!ls", 0)
+		first, cont := e.prefixWidths()
+		assert.Equal(t, 2, first)
 		assert.Equal(t, 2, cont)
 	})
 }
