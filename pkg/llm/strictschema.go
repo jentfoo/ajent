@@ -122,7 +122,12 @@ func strictAnthropicNode(s map[string]any) bool {
 		}
 	}
 
-	s["required"] = bulk.MapKeysSlice(props)
+	// bulk.MapKeysSlice returns nil for an empty map, which marshals as null
+	required := bulk.MapKeysSlice(props)
+	if required == nil {
+		required = []string{}
+	}
+	s["required"] = required
 	s["additionalProperties"] = false
 	return true
 }
@@ -156,7 +161,8 @@ func strictSchemaAllowsNull(s map[string]any) bool {
 			return true
 		}
 	case []any:
-		if slices.ContainsFunc(t, func(x any) bool { return x == nil }) {
+		// type-array elements unmarshal as strings, so match the type name
+		if slices.ContainsFunc(t, func(x any) bool { return x == "null" }) {
 			return true
 		}
 	}

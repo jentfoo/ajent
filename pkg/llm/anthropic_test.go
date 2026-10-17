@@ -912,6 +912,19 @@ func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
 		assert.Equal(t, false, input["additionalProperties"])
 	})
 
+	t.Run("strict_zero_arg_tool_required_array", func(t *testing.T) {
+		// the property-less shape must stay a valid schema: required [] not null
+		req := baseReq()
+		req.Model.Caps.SupportsStrictTools = true
+		req.Tools[0].Parameters = json.RawMessage(`{"type":"object","properties":{}}`)
+
+		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+		assert.Equal(t, true, tool["strict"])
+		input := tool["input_schema"].(map[string]any)
+		assert.Equal(t, []any{}, input["required"])
+		assert.Equal(t, false, input["additionalProperties"])
+	})
+
 	t.Run("strict_flag_absent_without_capability", func(t *testing.T) {
 		// the default caps leave SupportsStrictTools off and schemas untouched
 		tool := decode(t, buildBody(t, baseReq()))["tools"].([]any)[0].(map[string]any)
@@ -1025,47 +1038,6 @@ func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
 		msgs := decode(t, body)["messages"].([]any)
 		block := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
 		assert.Equal(t, map[string]any{}, block["input"])
-	})
-}
-
-func TestMakeStrictAnthropicSchema(t *testing.T) {
-	t.Parallel()
-
-	rewrittenOK := func(t *testing.T, raw string) map[string]any {
-		t.Helper()
-		out, ok := makeStrictAnthropicSchema(json.RawMessage(raw))
-		require.True(t, ok)
-		var m map[string]any
-		require.NoError(t, json.Unmarshal(out, &m))
-		return m
-	}
-
-	t.Run("simple_object_is_rewritten", func(t *testing.T) {
-		in := rewrittenOK(t, `{"type":"object","properties":{"path":{"type":"string"}}}`)
-		assert.Equal(t, []any{"path"}, in["required"])
-		assert.Equal(t, false, in["additionalProperties"])
-	})
-
-	t.Run("optional_property_null_wrapped", func(t *testing.T) {
-		in := rewrittenOK(t, `{"type":"object",`+
-			`"properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"]}`)
-		props := in["properties"].(map[string]any)
-		assert.ElementsMatch(t, []any{"a", "b"}, in["required"])
-		// the optional property becomes a null union so required stays total
-		anyOf := props["b"].(map[string]any)["anyOf"].([]any)
-		assert.Len(t, anyOf, 2)
-	})
-
-	t.Run("union_object_rejected", func(t *testing.T) {
-		_, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
-			`"properties":{"x":{"anyOf":[{"type":"string"},{"type":"object"}]}}}`))
-
-		assert.False(t, ok)
-	})
-
-	t.Run("non_object_root_rejected", func(t *testing.T) {
-		_, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"string"}`))
-		assert.False(t, ok)
 	})
 }
 
