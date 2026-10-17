@@ -11,9 +11,9 @@ import (
 // toolAccumulator assembles tool calls from chat-completions deltas, which
 // arrive as unframed JSON fragments keyed by an array index.
 type toolAccumulator struct {
-	base  int // block index of the first tool call
-	order []int
-	calls map[int]*partialCall
+	blocks *blockCounter
+	order  []int
+	calls  map[int]*partialCall
 }
 
 // partialCall is one tool call being assembled.
@@ -27,9 +27,9 @@ type partialCall struct {
 	buffer  []string // fragments seen before the call could be announced
 }
 
-// newToolAccumulator returns an accumulator assigning block indexes from base.
-func newToolAccumulator(base int) *toolAccumulator {
-	return &toolAccumulator{base: base, calls: make(map[int]*partialCall)}
+// newToolAccumulator returns an accumulator claiming block indexes from blocks.
+func newToolAccumulator(blocks *blockCounter) *toolAccumulator {
+	return &toolAccumulator{blocks: blocks, calls: make(map[int]*partialCall)}
 }
 
 // Delta folds one tool_calls entry, returning the events it produced. A fragment
@@ -38,7 +38,7 @@ func newToolAccumulator(base int) *toolAccumulator {
 func (a *toolAccumulator) Delta(index int, id, name, fragment string) []Event {
 	c, ok := a.calls[index]
 	if !ok {
-		c = &partialCall{block: a.base + len(a.order)}
+		c = &partialCall{block: a.blocks.alloc()}
 		a.calls[index] = c
 		a.order = append(a.order, index)
 	}

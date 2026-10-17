@@ -430,12 +430,26 @@ func compatToolChoice(tc ToolChoice) any {
 	}
 }
 
+// blockCounter allocates block indexes for one stream. Content regions and
+// tool calls share it, so a region opening after calls were announced never
+// reuses an index a call claimed, and a late call never reuses a region's.
+type blockCounter struct {
+	next int
+}
+
+// alloc returns the next unclaimed index.
+func (b *blockCounter) alloc() int {
+	i := b.next
+	b.next++
+	return i
+}
+
 // compatState is the mutable decode state one stream carries.
 type compatState struct {
 	caps        Capabilities
 	split       *thinkSplitter
 	tools       *toolAccumulator
-	nextBlock   int
+	blocks      *blockCounter
 	thinkIdx    int
 	textIdx     int
 	thinkBuf    strings.Builder // accumulated for the end block
@@ -466,6 +480,7 @@ func newCompatStream(ctx context.Context, resp *http.Response, caps Capabilities
 		st: &compatState{
 			caps:     caps,
 			split:    newThinkSplitter(caps.ThinkOpen, caps.ThinkClose),
+			blocks:   &blockCounter{},
 			thinkIdx: -1,
 			textIdx:  -1,
 		},
@@ -535,7 +550,7 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 
 	for _, tc := range c.Delta.ToolCalls {
 		if st.tools == nil {
-			st.tools = newToolAccumulator(st.nextBlock)
+			st.tools = newToolAccumulator(st.blocks)
 		}
 		events = append(events, st.tools.Delta(tc.Index, tc.ID, tc.Function.Name, tc.Function.Arguments)...)
 	}
@@ -556,8 +571,7 @@ func (s *compatStream) emitContent(reasoning, content string) []Event {
 			events = append(events, s.endText())
 		}
 		if st.thinkIdx < 0 {
-			st.thinkIdx = st.nextBlock
-			st.nextBlock++
+			st.thinkIdx = st.blocks.alloc()
 			events = append(events, Event{Type: EventThinkingStart, Index: st.thinkIdx})
 		}
 		st.thinkBuf.WriteString(reasoning)
@@ -569,8 +583,7 @@ func (s *compatStream) emitContent(reasoning, content string) []Event {
 			events = append(events, s.endThinking())
 		}
 		if st.textIdx < 0 {
-			st.textIdx = st.nextBlock
-			st.nextBlock++
+			st.textIdx = st.blocks.alloc()
 			events = append(events, Event{Type: EventTextStart, Index: st.textIdx})
 		}
 		st.textBuf.WriteString(content)

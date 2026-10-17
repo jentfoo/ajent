@@ -11,7 +11,7 @@ func TestToolAccumulatorDelta(t *testing.T) {
 	t.Parallel()
 
 	t.Run("announces_then_streams_fragments", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		got := a.Delta(0, "call_1", "read", `{"pa`)
 		require.Len(t, got, 2)
 		assert.Equal(t, Event{Type: EventToolCallStart, Index: 0, ToolCallID: "call_1", ToolName: "read"}, got[0])
@@ -23,7 +23,7 @@ func TestToolAccumulatorDelta(t *testing.T) {
 	})
 
 	t.Run("buffers_fragments_seen_before_the_name", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		got := a.Delta(0, "call_1", "", `{"a`) // name not known yet
 		assert.Empty(t, got)
 
@@ -35,7 +35,7 @@ func TestToolAccumulatorDelta(t *testing.T) {
 	})
 
 	t.Run("later_name_overwrites_an_empty_one", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(0, "call_1", "", "")
 		got := a.Delta(0, "", "bash", "")
 		require.NotEmpty(t, got)
@@ -43,7 +43,7 @@ func TestToolAccumulatorDelta(t *testing.T) {
 	})
 
 	t.Run("parallel_calls_get_distinct_block_indexes", func(t *testing.T) {
-		a := newToolAccumulator(1)
+		a := newToolAccumulator(&blockCounter{next: 1})
 		first := a.Delta(0, "c1", "read", "{}")
 		second := a.Delta(1, "c2", "write", "{}")
 
@@ -51,11 +51,24 @@ func TestToolAccumulatorDelta(t *testing.T) {
 		assert.Equal(t, 2, second[0].Index)
 	})
 
-	t.Run("base_offsets_the_block_index", func(t *testing.T) {
-		a := newToolAccumulator(5)
+	t.Run("claims_skip_preclaimed_indexes", func(t *testing.T) {
+		// regions opened before the first call already consumed 0..4
+		a := newToolAccumulator(&blockCounter{next: 5})
 		got := a.Delta(0, "c1", "read", "")
 		require.NotEmpty(t, got)
 		assert.Equal(t, 5, got[0].Index)
+	})
+
+	t.Run("claims_share_the_counter_with_regions", func(t *testing.T) {
+		blocks := &blockCounter{}
+		a := newToolAccumulator(blocks)
+		first := a.Delta(0, "c1", "read", "{}")
+		region := blocks.alloc() // a region opening between announcements
+		second := a.Delta(1, "c2", "write", "{}")
+
+		assert.Equal(t, 0, first[0].Index)
+		assert.Equal(t, 1, region)
+		assert.Equal(t, 2, second[0].Index)
 	})
 }
 
@@ -63,7 +76,7 @@ func TestToolAccumulatorClose(t *testing.T) {
 	t.Parallel()
 
 	t.Run("emits_end_with_parsed_input", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(0, "call_1", "read", `{"pa`)
 		a.Delta(0, "", "", `th":"main.go"}`)
 
@@ -79,7 +92,7 @@ func TestToolAccumulatorClose(t *testing.T) {
 
 	t.Run("does_not_complete_on_early_parseable_json", func(t *testing.T) {
 		// {"a":1} parses long before ,"b":2 arrives, so only the boundary ends it
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(0, "c1", "read", `{"a":1`)
 		got := a.Delta(0, "", "", `,"b":2}`)
 		for _, ev := range got {
@@ -93,7 +106,7 @@ func TestToolAccumulatorClose(t *testing.T) {
 	})
 
 	t.Run("closes_in_arrival_order", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(1, "c2", "write", "{}")
 		a.Delta(0, "c1", "read", "{}")
 
@@ -104,7 +117,7 @@ func TestToolAccumulatorClose(t *testing.T) {
 	})
 
 	t.Run("empty_arguments_become_an_object", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(0, "c1", "now", "")
 
 		got := a.Close()
@@ -115,7 +128,7 @@ func TestToolAccumulatorClose(t *testing.T) {
 	})
 
 	t.Run("empty_string_arguments_become_an_object", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(0, "c1", "now", `""`)
 
 		got := a.Close()
@@ -126,7 +139,7 @@ func TestToolAccumulatorClose(t *testing.T) {
 	})
 
 	t.Run("malformed_arguments_fail_the_call_not_the_turn", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(0, "c1", "read", `{"path":`)
 
 		got := a.Close()
@@ -136,14 +149,14 @@ func TestToolAccumulatorClose(t *testing.T) {
 	})
 
 	t.Run("close_is_idempotent", func(t *testing.T) {
-		a := newToolAccumulator(0)
+		a := newToolAccumulator(&blockCounter{})
 		a.Delta(0, "c1", "read", "{}")
 		require.Len(t, a.Close(), 1)
 		assert.Empty(t, a.Close())
 	})
 
 	t.Run("no_calls", func(t *testing.T) {
-		assert.Empty(t, newToolAccumulator(0).Close())
+		assert.Empty(t, newToolAccumulator(&blockCounter{}).Close())
 	})
 }
 

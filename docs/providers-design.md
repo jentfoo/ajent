@@ -807,6 +807,12 @@ payloads line up would leak one test's needs into unrelated tests.
 - **Anthropic rejects a temperature alongside thinking.** It is dropped silently
   rather than erroring, because erroring would make a `/settings` temperature
   change fail confusingly on exactly the models people reason with.
+- **Compat block indexes come from one shared counter.** Thinking/text regions
+  and tool calls both claim from it, in either order: reasoning interleaved
+  after `tool_calls` deltas began is routine for the compat vendors, and fixing
+  only one direction leaves a silent collision where one block's end event
+  replaces the other's, losing tool arguments or text with no error. The
+  counter lives on `compatState` and is handed to the tool accumulator.
 - **`<think>` extraction must withhold a partial tag.** Emitting `"<"` as text
   and correcting later is visible corruption. The splitter holds back the
   longest suffix that could still become the tag. At stream end that withheld

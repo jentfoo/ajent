@@ -258,6 +258,46 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, "call_2", msg.Content[1].(ToolCallBlock).ID)
 	})
 
+	t.Run("regions_opening_after_tool_calls", func(t *testing.T) {
+		// GLM/Kimi/DeepSeek-style vendors keep interleaving reasoning after
+		// tool_calls deltas began, so both sides must claim distinct indexes
+		srv, _ := sseServer(t, "compat/reasoning_after_tools.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		msg, _, err := Accumulate(s)
+		require.NoError(t, err)
+		// a reused index would make one end event replace the other's block,
+		// silently losing tool arguments or text
+		require.Len(t, msg.Content, 6)
+		assert.Equal(t, ThinkingBlock{Text: "first", Field: "reasoning_content"}, msg.Content[0])
+		assert.Equal(t, TextBlock{Text: "answer"}, msg.Content[1])
+		assert.Equal(t, ThinkingBlock{Text: "reconsidering", Field: "reasoning_content"}, msg.Content[2])
+		assert.Equal(t, TextBlock{Text: "final"}, msg.Content[3])
+		assert.Equal(t, "call_1", msg.Content[4].(ToolCallBlock).ID)
+		assert.Equal(t, "call_2", msg.Content[5].(ToolCallBlock).ID)
+	})
+
+	t.Run("think_tags_after_tool_calls", func(t *testing.T) {
+		srv, _ := sseServer(t, "compat/think_after_tools.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: thinkModel()})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		msg, _, err := Accumulate(s)
+		require.NoError(t, err)
+		assert.Equal(t, BlockList{
+			TextBlock{Text: "visible"},
+			ThinkingBlock{Text: "reconsidering"},
+			ToolCallBlock{ID: "call_1", Name: "read", Input: json.RawMessage(`{"path":"main.go"}`)},
+		}, msg.Content)
+	})
+
 	t.Run("malformed_args_fail_the_call_not_the_turn", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/malformed_tool_args.sse")
 		p := newCompatTestProvider(t, srv.URL)
