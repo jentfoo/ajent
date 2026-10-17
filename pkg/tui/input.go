@@ -335,8 +335,11 @@ func decodeTilde(b []byte, params string, n int, pasteFrom int) (key, int, bool)
 		end := bytes.Index(b[n+pasteFrom:], pasteEndBytes)
 		if end < 0 {
 			if len(b)-n >= maxPasteLen {
-				// deliver the capped body, partial tells the reader its tail is still in flight
-				return key{typ: keyPaste, text: string(b[n:]), partial: true}, len(b), true
+				// deliver the capped body minus the bytes that could still begin the
+				// terminator: a head split here must survive into the overflow scan.
+				// partial tells the reader its tail is still in flight
+				hold := len(b) - len(pasteEnd) + 1
+				return key{typ: keyPaste, text: string(b[n:hold]), partial: true}, hold, true
 			}
 			return key{}, 0, false // wait for more of the body
 		}

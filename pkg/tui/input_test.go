@@ -121,8 +121,11 @@ func TestDecodeKeyIncomplete(t *testing.T) {
 		k, n, ok := decodeKey(b)
 		assert.True(t, ok)
 		assert.Equal(t, keyPaste, k.typ)
-		assert.Len(t, []byte(k.text), maxPasteLen)
-		assert.Equal(t, len(b), n)
+		assert.True(t, k.partial)
+		assert.Len(t, []byte(k.text), maxPasteLen-len(pasteEnd)+1)
+		assert.Equal(t, len(b)-len(pasteEnd)+1, n)
+		// exactly a terminator head's worth stays unconsumed for the overflow scan
+		assert.Equal(t, bytes.Repeat([]byte{'a'}, len(pasteEnd)-1), b[n:])
 	})
 }
 
@@ -627,25 +630,78 @@ func TestInputReaderBounded(t *testing.T) {
 	})
 }
 
+func TestDropPasteTail(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+		done bool
+	}{
+		{"empty", "", "", false},
+		{"terminator_only", pasteEnd, "", true},
+		{"terminator_drops_prefix", "x" + pasteEnd + "ab", "ab", true},
+		{"short_tail_kept_whole", "ab", "ab", false},
+		{"long_tail_keeps_head_window", "abcdefgh", "defgh", false},
+		{"split_head_kept", "\x1b[201", "\x1b[201", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, done := dropPasteTail([]byte(tc.in))
+			assert.Equal(t, tc.done, done)
+			assert.Equal(t, tc.want, string(out))
+		})
+	}
+}
+
 func TestInputReaderPasteOverflow(t *testing.T) {
 	t.Parallel()
 
-	pr, pw := io.Pipe()
-	r := newInputReader(pr)
-	go r.run()
+	t.Run("tail_dropped_to_terminator", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
 
-	go func() {
-		_, _ = io.WriteString(pw, pasteStart+strings.Repeat("a", maxPasteLen))
-		_, _ = io.WriteString(pw, "tail\rmore"+pasteEnd+"z")
-	}()
+		go func() {
+			_, _ = io.WriteString(pw, pasteStart+strings.Repeat("a", maxPasteLen))
+			_, _ = io.WriteString(pw, "tail\rmore"+pasteEnd+"zy")
+		}()
 
-	capped := <-r.keys
-	require.Equal(t, keyPaste, capped.typ)
-	assert.True(t, capped.partial)
-	assert.Len(t, capped.text, maxPasteLen)
+		capped := <-r.keys
+		require.Equal(t, keyPaste, capped.typ)
+		assert.True(t, capped.partial)
+		assert.Len(t, capped.text, maxPasteLen-len(pasteEnd)+1)
 
-	// the next key is what followed the terminator, never the tail's Enter
-	assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+		// the next keys follow the terminator, never the tail's Enter
+		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+		assert.Equal(t, key{typ: keyRune, text: "y"}, <-r.keys)
+	})
+
+	t.Run("split_terminator_head_completes", func(t *testing.T) {
+		// the delivery boundary can cut the terminator's head from its tail: the
+		// held-back bytes must complete it, or every later keystroke is dropped
+		for n := 0; n < len(pasteEnd); n++ {
+			pr, pw := io.Pipe()
+			r := newInputReader(pr)
+			go r.run()
+
+			head := pasteStart + strings.Repeat("a", maxPasteLen-n) + pasteEnd[:n]
+			tail := pasteEnd[n:] + "zy"
+			go func() {
+				_, _ = io.WriteString(pw, head)
+				_, _ = io.WriteString(pw, tail)
+			}()
+
+			capped := <-r.keys
+			require.Equal(t, keyPaste, capped.typ)
+			assert.True(t, capped.partial)
+			assert.Equal(t, strings.Repeat("a", maxPasteLen-len(pasteEnd)+1), capped.text)
+
+			assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+			assert.Equal(t, key{typ: keyRune, text: "y"}, <-r.keys)
+		}
+	})
 }
 
 func TestDecodeOSC(t *testing.T) {

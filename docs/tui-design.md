@@ -1277,8 +1277,10 @@ a recalled prompt still resolves and nesting is deterministic.
 When a capped paste delivers its body (`key.partial`), the reader stays inside
 the paste: the tail is dropped up to and including the terminator, keeping only
 the bytes that could still begin one, and the escape timer stays disarmed since
-those held bytes may be a split terminator. Decoding that tail as ordinary keys
-is what let a `\r` in a pasted file submit the prompt mid-paste.
+those held bytes may be a split terminator. The delivery withholds that same
+window so a terminator split across the cap boundary stays matchable. Decoding
+that tail as ordinary keys is what let a `\r` in a pasted file submit the
+prompt mid-paste.
 
 Keys that resolve to nothing are emitted as control events so the host decides
 their meaning. Shift+Tab and Shift+←/→ are special: they reach the control
