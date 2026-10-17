@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/plan"
+	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -56,6 +58,8 @@ type planHarness struct {
 	st       *agent.State
 	rec      *sessRec
 	toolsReg *tools.Registry
+	expander *refs.Expander
+	dir      string
 	planner  *llm.ScriptedProvider
 	impl     *llm.ScriptedProvider
 	editor   []string
@@ -89,9 +93,10 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 	st := &agent.State{Model: e2eImplementor, Tokens: tokens.New(e2eImplementor)}
 
 	h := &planHarness{
-		st: st, rec: rec, toolsReg: toolsReg,
-		planner: &llm.ScriptedProvider{ProviderName: "planner", Turns: plannerTurns},
-		impl:    &llm.ScriptedProvider{ProviderName: "impl", Turns: implTurns},
+		st: st, rec: rec, toolsReg: toolsReg, dir: dir,
+		expander: refs.NewExpander(toolsReg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil),
+		planner:  &llm.ScriptedProvider{ProviderName: "planner", Turns: plannerTurns},
+		impl:     &llm.ScriptedProvider{ProviderName: "impl", Turns: implTurns},
 	}
 
 	h.ag = agent.New(st, agent.Options{
@@ -105,6 +110,11 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 		OnMessage: []func(agent.MessageInfo){rec.rec.Message},
 		Tools:     toolsReg,
 		Env:       agent.Environment{Cwd: dir, OS: "linux/amd64", Date: "2024-01-02"},
+		// the driver's real append-point seam, so kickoffs face the same
+		// @-expansion pass a steered input does
+		NormalizeInput: func(in agent.Input) agent.Input {
+			return refs.Normalize(h.expander, in, func(string) {})
+		},
 	})
 
 	h.ctl = plan.New(plan.Host{
@@ -151,12 +161,13 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 	return h
 }
 
-// prompt runs one turn through the pump and drain seams, returning any turn the
-// workflow itself took over with.
+// prompt runs one turn through the pump and drain seams, expanding the typed
+// line the way the pump does, and follows every turn the workflow takes over.
 func (h *planHarness) prompt(t *testing.T, text string) {
 	t.Helper()
 
-	in := agent.Input{Text: text}
+	res := h.expander.Expand(text)
+	in := agent.Input{Text: res.Text, After: res.Run, Prepared: true}
 	if wrapped, ok := h.ctl.BeforePrompt(t.Context(), in); ok {
 		in = wrapped
 	}
@@ -182,6 +193,17 @@ func texts(req llm.Request) string {
 		}
 	}
 	return b.String()
+}
+
+// hasRefInjection reports whether a request carries an @-injected read/ls pair,
+// told apart from model-requested calls by the ref- call-id prefix.
+func hasRefInjection(req llm.Request) bool {
+	return slices.ContainsFunc(req.Messages, func(m llm.Message) bool {
+		return slices.ContainsFunc(m.Content, func(b llm.Block) bool {
+			call, ok := b.(llm.ToolCallBlock)
+			return ok && strings.HasPrefix(call.ID, "ref-")
+		})
+	})
 }
 
 // TestPlanWorkflowEndToEnd drives plan → user approval → implement → review →
@@ -258,4 +280,57 @@ func TestPlanWorkflowBranchesPerPhase(t *testing.T) {
 
 	// two roots: the session line, plus the independent implementation round.
 	assert.Len(t, bulk.SliceFilter(func(e session.Entry) bool { return e.ParentID == "" }, entries), 2)
+}
+
+// TestPlanKickoffsStayUnexpanded drives the workflow over the driver's real
+// @-expansion seam with @ paths in every authored surface: the gate submit's
+// planned reads must not land behind the implementation kickoff, and paths
+// quoted in summaries or revision instructions must stay literal pointers.
+func TestPlanKickoffsStayUnexpanded(t *testing.T) {
+	t.Parallel()
+
+	h := newPlanHarness(t,
+		[]llm.ScriptedTurn{
+			{Events: devCallTurn("1", plan.DevImplementTool, `{"plan":"draft"}`)},
+			{Events: devCallTurn("2", plan.DevReviseTool, `{"instructions":"also fix @note.go"}`)},
+			{Events: devCallTurn("3", plan.DevCompleteTool, `{}`)},
+		},
+		[]llm.ScriptedTurn{
+			{Events: devCallTurn("10", plan.DevReviewTool, `{"summary":"edited @flag.go, see @other.go"}`)},
+			{Events: devCallTurn("11", plan.DevReviewTool, `{"summary":"done"}`)},
+		},
+	)
+	// each quoted path is read by no earlier turn, so tracker dedupe cannot mask
+	// an expansion: one for the gate submit, the summary and the instructions
+	for name, body := range map[string]string{
+		"flag.go":  "package main\n\nvar Flag = true\n",
+		"other.go": "package main\n\nvar Other = 2\n",
+		"note.go":  "package main\n\nvar Note = 3\n",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(h.dir, name), []byte(body), 0o644))
+	}
+
+	require.Empty(t, h.ctl.Start(t.Context(), ""))
+	h.prompt(t, "add a flag")
+	h.prompt(t, "edit @flag.go") // the gate captures a submit with a planned read
+
+	// the whole workflow ran: two implementation rounds, a review after each
+	require.Len(t, h.impl.Requests(), 2)
+	require.Len(t, h.planner.Requests(), 3)
+
+	// round 1: the fresh root holds the kickoff alone, the planned read never lands
+	assert.Contains(t, texts(h.impl.Requests()[0]), "edit @flag.go")
+	assert.NotContains(t, texts(h.impl.Requests()[0]), "var Flag = true")
+	assert.False(t, hasRefInjection(h.impl.Requests()[0]))
+
+	// review round 1: the quoted summary stays verbatim, no read pinned to it
+	assert.Contains(t, texts(h.planner.Requests()[1]), "see @other.go")
+	assert.NotContains(t, texts(h.planner.Requests()[1]), "var Other = 2")
+	assert.False(t, hasRefInjection(h.planner.Requests()[1]))
+
+	// round 2 kickoff: revision instructions ride in as literal pointers too
+	assert.Contains(t, texts(h.impl.Requests()[1]), "also fix @note.go")
+	assert.False(t, hasRefInjection(h.impl.Requests()[1]))
+
+	assert.False(t, h.ctl.Active())
 }

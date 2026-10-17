@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -72,8 +73,9 @@ func TestControllerBeforePrompt(t *testing.T) {
 		assert.Equal(t, implementorModel, last.model)
 	})
 
-	// the pump flushes staged shell results into Before and clipboard images into
-	// Blocks; either would pin itself ahead of the kickoff in the fresh root
+	// the pump flushes staged shell results into Before, clipboard images into
+	// Blocks and planned @ reads into After; any would pin itself around the
+	// kickoff in the fresh root
 	t.Run("kickoff_drops_flushed_context", func(t *testing.T) {
 		c, _ := started(t)
 		handOff(t, c, "draft plan")
@@ -81,6 +83,7 @@ func TestControllerBeforePrompt(t *testing.T) {
 			Text:   "edited plan",
 			Blocks: llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: []byte("img")}},
 			Before: []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make test")}},
+			After:  func(context.Context) []llm.Message { return []llm.Message{llm.Text(llm.RoleUser, "read pair")} },
 		})
 		require.True(t, ok)
 
@@ -88,6 +91,8 @@ func TestControllerBeforePrompt(t *testing.T) {
 		assert.Contains(t, in.Text, "<plan>\nedited plan\n</plan>")
 		assert.Empty(t, in.Before) // staged results never reach the new root
 		assert.Empty(t, in.Blocks)
+		assert.Nil(t, in.After)     // planned reads never land behind the kickoff
+		assert.True(t, in.Prepared) // workflow text, the expansion seam skips it
 	})
 
 	t.Run("injected_input_never_approves", func(t *testing.T) {
@@ -177,6 +182,7 @@ func TestControllerAdvance(t *testing.T) {
 		in, ok := c.Advance(t.Context(), done())
 		require.True(t, ok)
 		assert.Equal(t, PhaseReviewing, c.phase)
+		assert.True(t, in.Prepared) // quoted @ paths stay literal for the reviewer
 		assert.Contains(t, in.Text, "<plan>\nthe plan\n</plan>")
 		assert.Contains(t, in.Text, "M main.go")
 		last := f.forks[len(f.forks)-1]
@@ -241,6 +247,7 @@ func TestControllerAdvance(t *testing.T) {
 		in, ok := c.Advance(t.Context(), done())
 		require.True(t, ok)
 		assert.Equal(t, PhaseImplementing, c.phase)
+		assert.True(t, in.Prepared) // instructions quote paths as pointers
 		assert.Contains(t, in.Text, "handle the empty case")
 		assert.Contains(t, in.Text, "<plan>\nthe plan\n</plan>")
 		assert.Empty(t, f.forks[len(f.forks)-1].head)
@@ -286,6 +293,7 @@ func TestControllerAdvance(t *testing.T) {
 		in, ok := c.Advance(t.Context(), agent.TurnResult{Stop: llm.StopMaxTokens})
 		require.True(t, ok)
 		assert.Contains(t, in.Text, "Continue the implementation")
+		assert.True(t, in.Prepared)
 		assert.Equal(t, PhaseImplementing, c.phase)
 	})
 

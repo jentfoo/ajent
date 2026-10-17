@@ -394,8 +394,9 @@ Two kinds of mid-turn input:
   `appendSteer`, and the pop loop's framing-only delivery), so every route into
   a turn is covered by construction: anything not dequeued from the steer/follow
   queues must arrive through `OnBoundary`, which `drainSteer` covers. Inputs the
-  host already expanded set `Input.Prepared` and skip the hook, so an expanded
-  prompt is never re-read.
+  host already expanded, or authored outright (plan kickoffs, `plan-design.md`),
+  set `Input.Prepared` and skip the hook, so an expanded prompt is never re-read
+  and authored text is never rewritten.
 - An `Input.Injected` flag marks system-provided context (sub-agent completion
   steers, permission-barrier notes) rather than a typed prompt. It rides onto
   the appended `MessageInfo` and into the transcript so prompt recall (Ctrl+R /

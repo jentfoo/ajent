@@ -31,10 +31,13 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 		c.approvedPlan = text
 		c.draftPlan = "" // gate passed, no draft to restore
 		in.Text = c.beginImplementationLocked()
-		// images or carried context would pin themselves ahead of the kickoff; the
-		// fresh root starts from it alone (staged output never reaches a gated submit)
+		// staged output and images would pin themselves ahead of the kickoff and its
+		// planned @ reads behind it. The fresh root starts from the kickoff alone
 		in.Before = nil
 		in.Blocks = nil
+		in.After = nil
+		// the text is workflow-authored now, so the host's expansion seam skips it
+		in.Prepared = true
 		in.Injected = true
 		return in, true
 
@@ -144,7 +147,7 @@ func (c *Controller) beginRevisionLocked(instructions string) (agent.Input, bool
 		c.stopLocked(capReport(instructions))
 		return agent.Input{}, false
 	}
-	return agent.Input{Text: c.beginImplementationLocked(), Injected: true}, true
+	return kickoffInput(c.beginImplementationLocked()), true
 }
 
 // beginReviewLocked forks onto the review branch and returns its kickoff.
@@ -165,10 +168,7 @@ func (c *Controller) beginReviewLocked(ctx context.Context) agent.Input {
 	}
 	c.notify("reviewing with "+c.planner.Key()+" (round "+strconv.Itoa(c.round())+
 		"/"+strconv.Itoa(maxRevisions)+")", agent.LevelInfo)
-	return agent.Input{
-		Text:     reviewKickoff(c.approvedPlan, status, diffStat, c.execSummary),
-		Injected: true,
-	}
+	return kickoffInput(reviewKickoff(c.approvedPlan, status, diffStat, c.execSummary))
 }
 
 // retryImplementationLocked resumes an implementation turn that died on a
@@ -182,7 +182,7 @@ func (c *Controller) retryImplementationLocked() (agent.Input, bool) {
 	}
 	c.notify("implementation turn errored; retrying ("+strconv.Itoa(c.retries)+"/"+
 		strconv.Itoa(maxExecRetries)+")", agent.LevelWarn)
-	return agent.Input{Text: execContinue(), Injected: true}, true
+	return kickoffInput(execContinue()), true
 }
 
 // stalledReviewerLocked asks the user what to do when a review ended without
@@ -216,6 +216,13 @@ func latestRound(rounds []string) string {
 		return ""
 	}
 	return rounds[len(rounds)-1]
+}
+
+// kickoffInput wraps one round of workflow-authored turn text. Prepared marks it
+// past the host's expansion seam: an @path quoted in a plan, summary or
+// instruction is a pointer for the receiving model, never a reference to expand.
+func kickoffInput(text string) agent.Input {
+	return agent.Input{Text: text, Injected: true, Prepared: true}
 }
 
 // fork switches the workflow onto head with model m, reporting a failure rather

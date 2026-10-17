@@ -25,7 +25,7 @@ type Input struct {
 	Settled   func()                              // called once After has landed too, nil is the normal case
 	Injected  bool                                // system-injected context (not a typed prompt), excluded from recall
 	Echo      string                              // injected-only live echo, drawn as the message lands; empty stays silent
-	Prepared  bool                                // the host's submit pipeline already ran, Options.NormalizeInput skips it
+	Prepared  bool                                // already expanded or host-authored, Options.NormalizeInput skips it
 }
 
 // State is the in-memory projection of a session. It is owned by the loop

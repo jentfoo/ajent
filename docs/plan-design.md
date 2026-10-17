@@ -97,8 +97,16 @@ captured as approval, whether a staged `!` flush, a permission-barrier note or
 a sub-agent completion steer. This mirrors the Planning phase guard.
 
 The captured submission is stripped to its text: staged `!shell` results never
-reach a gated submit, and pasted images are dropped rather than pinned ahead of
-a kickoff whose root starts from nothing else.
+reach a gated submit, pasted images are dropped rather than pinned ahead of a
+kickoff whose root starts from nothing else, and the reads its `@` references
+planned are dropped rather than landing behind it.
+
+Workflow-authored kickoffs never expand `@` references. The plan, summary or
+instruction text they carry may quote a path as `@src/foo.go`, and that is a
+pointer for the receiving model to read, not a user-typed reference. Kickoff
+inputs are therefore already prepared for the host's user-input seam
+(`agent-loop-design.md`, steering and follow-up), which would otherwise rewrite
+that text and pin reads into a fresh root.
 
 While parked, queued and injected inputs must hold rather than run on, the same
 rule that bounds approval: they join the queue until a typed submission starts
