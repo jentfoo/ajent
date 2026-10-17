@@ -12,7 +12,7 @@ mechanism.
 
 Three packages sit above the agent, tools and TUI: `pkg/command` (commands,
 the registry, the `Console` interface and shell staging) plus its completion,
-and `pkg/refs`, which owns `@`-reference expansion and the gitignore-aware path
+and `pkg/refs`, which owns `@`-reference expansion and the per-directory path
 index. The UI never imports command, and the host adapts `Console` onto `*tui.UI`, so
 headless mode and a sub-agent drive the same commands behind a different front end.
 

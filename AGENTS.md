@@ -44,7 +44,7 @@ into a reference mirroring either surface.
 | `tools-design.md` | `pkg/tools` (+ `pkg/agent.Tool`) | The `Tool` interface and registry, built-in tools (incl. the four read-only git readers on go-git), and shared infra: path policy, read tracking, output limits, the guard chain. |
 | `session-design.md` | `pkg/session`, CLI resume | Append-only JSONL transcript as source of truth; entry/parent tree, branching, rewind/fork, resume (`--resume`, `--continue`, `--session <name>`) and named sessions, deletion (`--delete`, `--delete-old` via `DeleteSession`/`DeleteOldSessions`). Schema and replay rules. |
 | `compaction-design.md` | `pkg/compact` (+ session) | Verbatim-band + checkpoint model: keep the most recent steps verbatim, fold everything older into one structured summary recorded on a compaction entry and replayed. Free structural reduction shapes only the summariser's transcript. Uses `prompt-design.md` summaries. |
-| `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager (`!!` runs excluded from context), `@`-path expansion with auto-read and gitignore-aware completion. |
+| `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager (`!!` runs excluded from context), `@`-path expansion with auto-read and completion. |
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
@@ -124,7 +124,7 @@ Depth lives in the design docs above.
 - **`pkg/permit`** — permission barrier; imports only agent/tools, never tui.
 - **`pkg/plan`** — the `/plan` two-model workflow; never imports tools/tui/command/session.
 - **`pkg/projinit`** — `/init` scaffolding; never imports tui/command/session/subagent.
-- **`pkg/refs`** — `@`-path expansion with auto-read and gitignore-aware completion.
+- **`pkg/refs`** — `@`-path expansion with auto-read and per-directory path completion.
 - **`pkg/session`** — the append-only JSONL transcript tree.
 - **`pkg/strutil`** — tiny shared string helpers (leaf).
 - **`pkg/subagent`** — read-only child agents; never imports tools/tui/command/session/permit.

@@ -745,13 +745,9 @@ func (b *Barrier) gateNow() gate {
 }
 
 // staticVerdict computes the guard's verdict for call under mode without blocking.
-// Branch order is load-bearing: a configured denied command refuses first, before
-// even allow-all or user-initiation. auto+write's in-scope write runs next, so a
-// config denial still outranks it. A doomed edit runs in every mode, block-all
-// included, so its natural error reaches the model: approval cannot make a
-// failing call succeed. Otherwise block-all asks even verifiably read-only calls,
-// and a configured safe command overrides a prompt but never a reject, still
-// respecting block-all (nothing else auto-runs there).
+// Precedence is load-bearing: user-initiation allows first, outranking even a
+// configured denial (a staged ! line is exempt in every permission mode). A config
+// denied command refuses next, before allow-all or any scope grant.
 func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Decision {
 	m := g.mode
 	// a user-issued ! line runs regardless of config denial or mode
