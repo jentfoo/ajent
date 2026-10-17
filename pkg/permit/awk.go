@@ -150,7 +150,11 @@ func awkKeywordAt(code string, i int, kw string) bool {
 // of exec and file-write vectors. False positives (prompting a safe call) are
 // acceptable, false negatives are not.
 func awkScriptReadSafe(script string) bool {
-	code := awkStripStrings(script)
+	// normalize CRLF, then splice backslash-newline: awk joins continuations
+	// before tokens form (POSIX; mawk/busybox also inside strings), else one
+	// hides statement boundaries or splits keywords
+	logical := strings.ReplaceAll(script, "\r\n", "\n")
+	code := awkStripStrings(strings.ReplaceAll(logical, "\\\n", ""))
 	if awkSystemCallRe.MatchString(code) || awkGetlinePipeRe.MatchString(code) ||
 		awkAtDirectiveRe.MatchString(code) {
 		return false

@@ -40,6 +40,18 @@ func TestAwkReadSafe(t *testing.T) {
 		{`regex hidden system`, `awk '/\"/ {system("x")}' f`, false},
 		{"regex hidden redirect", `awk '/\(/ {print $1 > "/tmp/evil"}' f`, false},
 
+		// backslash-newline continuations splice before tokens form: the physical
+		// newline must not reset the print tracker or split a keyword
+		{"continuation redirect", `awk 'BEGIN{print \
+> "/tmp/evil"}'`, false},
+		{"continuation pipe", `printf 'x\n' | awk '{print $1 \
+| "sort"}'`, false},
+		{"continuation crlf redirect", "awk 'BEGIN{print \\\r\n> \"/tmp/evil\"}'", false},
+		{"continuation split keyword", `awk 'BEGIN{ sys\
+tem("x")}'`, false},
+		{"continuation in string", `awk 'BEGIN{print "a \
+> b"}'`, true},
+
 		// unverifiable flag forms and missing scripts fail safe.
 		{"script file", "awk -f prog.awk f", false},
 		{"dangling expression", "awk -e", false},
@@ -71,6 +83,19 @@ func TestAwkScriptReadSafe(t *testing.T) {
 		{"pipe after print", `{print $1 | "sort"}`, false},
 		{"coprocess getline", `{c="x" |& getline l}`, false},
 		{`load directive`, `@include "f.awk"`, false},
+
+		// spliced continuations must read as one logical statement or keyword
+		{"spliced redirect", `{print \
+> "f"}`, false},
+		{"spliced keyword", `BEGIN{ sys\
+tem("x")}`, false},
+		{"spliced getline", `BEGIN{ "x" \
+| getline v}`, false},
+		{"crlf spliced redirect", "{print \\\r\n> \"f\"}", false},
+		{"spliced regex pattern", `$1 ~ /a\
+b/`, true},
+		{"spliced string literal", `BEGIN{print "a\
+b"}`, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

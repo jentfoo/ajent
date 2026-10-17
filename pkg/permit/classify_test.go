@@ -151,6 +151,19 @@ func TestClassifyEdgeCases(t *testing.T) {
 		assert.Equal(t, VerdictReject, Classify(bashCall("nohup sed -i s/a/b/ f"), noRO))
 	})
 
+	// awk splices backslash-newline before tokens form, so a redirect or pipe on
+	// the next physical line still belongs to the print statement: the read-only
+	// verdict must not survive the splice
+	t.Run("awk_continuation_still_prompts", func(t *testing.T) {
+		for _, cmd := range []string{
+			"awk 'BEGIN{print \\\n> \"/tmp/evil\"}'",
+			"printf 'x\\n' | awk '{print $1 \\\n| \"sort\"}'",
+			"awk 'BEGIN{print \\\r\n> \"/tmp/evil\"}'",
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
+	})
+
 	// unparseable input fails closed
 	t.Run("bash_unparseable_fails_safe", func(t *testing.T) {
 		c := agent.ToolCall{ID: "c", Name: "bash", Input: json.RawMessage(`not json`)}
