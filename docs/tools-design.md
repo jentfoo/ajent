@@ -582,6 +582,10 @@ error rather than silently emitting something git-shaped but wrong. go-git's dif
 has known edge cases. A `git_diff` that cannot faithfully represent a rename,
 binary delta or octopus merge says so and offers what it can (e.g. "N files
 changed, binary deltas omitted") instead of emitting a misleading unified diff.
+Submodule pointer changes are named in a note, never rendered: gitlinks
+reference commits, not blobs. Rename detection cannot carry them because the
+change sides skip gitlink entries, so the tree entries themselves carry the
+mode.
 Unified hunks are rendered by the same go-udiff engine the `edit` tool's change
 preview uses (`unidiff.go`), not go-git's encoder, so both surfaces produce one
 diff dialect. go-git supplies the object model (trees, changes and rename
@@ -709,8 +713,9 @@ diffs **everything since the base**, committed and uncommitted together, as `git
 <ref>` does. Candidate paths are the union of the base tree, HEAD's tree and the
 status entries: status alone is HEAD-relative and would miss files committed since
 the base but clean against HEAD. Untracked files are named in a trailing note,
-never diffed, matching git. `worktree` is only valid as `to` (it is the newer
-state), so `from: "worktree"` is a usage error.
+never diffed, matching git. Submodule pointer changes are named the same way,
+while a pointer identical to the base stays silent. `worktree` is only valid
+as `to` (it is the newer state), so `from: "worktree"` is a usage error.
 
 #### Prompt surface
 

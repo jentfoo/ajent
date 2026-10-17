@@ -8,6 +8,8 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/stretchr/testify/require"
 )
@@ -79,6 +81,104 @@ func newGitRepo(t *testing.T) *gitRepo {
 	require.NoError(t, err)
 
 	return &gitRepo{dir: dir, a: a, b: b, m: m}
+}
+
+// submoduleRepo is a parent repo whose "sub" path is a gitlink into a child
+// repository, set through the index alone: no checkout and no .gitmodules, so
+// the pointer is the only submodule state that exists.
+//
+//	pre (a.txt) --- base (sub @ child1) --- bump (sub @ child2)
+type submoduleRepo struct {
+	dir             string
+	pre, base, bump string // parent commits around the pointer moves
+	child1          string // child commit the base pointer names
+}
+
+// newSubmoduleRepo builds the fixture in temp directories.
+func newSubmoduleRepo(t *testing.T) *submoduleRepo {
+	t.Helper()
+
+	when := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+
+	// child repo supplies the two commits the pointer moves between
+	child := t.TempDir()
+	cr, err := git.PlainInit(child, false)
+	require.NoError(t, err)
+	cw, err := cr.Worktree()
+	require.NoError(t, err)
+	childHead := func(content string) string {
+		t.Helper()
+		require.NoError(t, os0Write(child, "lib.txt", content))
+		_, err = cw.Add(".")
+		require.NoError(t, err)
+		h, err := cw.Commit("child "+content, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		return h.String()
+	}
+	child1 := childHead("one\n")
+	child2 := childHead("two\n")
+
+	dir := t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	setGitlink := func(hash string) {
+		t.Helper()
+		idx, err := r.Storer.Index()
+		require.NoError(t, err)
+		var seen bool
+		for _, e := range idx.Entries {
+			if e.Name == "sub" {
+				e.Hash = plumbing.NewHash(hash)
+				seen = true
+			}
+		}
+		if !seen {
+			idx.Entries = append(idx.Entries, &index.Entry{
+				Name: "sub", Hash: plumbing.NewHash(hash), Mode: filemode.Submodule,
+			})
+		}
+		require.NoError(t, r.Storer.SetIndex(idx))
+	}
+	parentCommit := func(msg string) string {
+		t.Helper()
+		h, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		when = when.Add(time.Minute)
+		return h.String()
+	}
+
+	require.NoError(t, os0Write(dir, "a.txt", "one\n"))
+	_, err = w.Add(".")
+	require.NoError(t, err)
+	pre := parentCommit("before submodule")
+	setGitlink(child1)
+	base := parentCommit("add submodule")
+	setGitlink(child2)
+	bump := parentCommit("bump submodule")
+	return &submoduleRepo{dir: dir, pre: pre, base: base, bump: bump, child1: child1}
+}
+
+// point restages the gitlink at hash without committing, an uncommitted
+// pointer move.
+func (g *submoduleRepo) point(t *testing.T, hash string) {
+	t.Helper()
+	r, err := git.PlainOpen(g.dir)
+	require.NoError(t, err)
+	idx, err := r.Storer.Index()
+	require.NoError(t, err)
+	for _, e := range idx.Entries {
+		if e.Name == "sub" {
+			e.Hash = plumbing.NewHash(hash)
+		}
+	}
+	require.NoError(t, r.Storer.SetIndex(idx))
+}
+
+// policy returns a PathPolicy rooted at the repo.
+func (g *submoduleRepo) policy() PathPolicy {
+	return PathPolicy{Cwd: g.dir}
 }
 
 // policy returns a PathPolicy rooted at the repo, plus the session spill id.

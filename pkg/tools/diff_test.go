@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	git "github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -121,6 +123,59 @@ func TestGitDiff(t *testing.T) {
 		assert.Contains(t, out, `put "worktree" in to`)
 	})
 
+	// status entries are HEAD-relative, so candidate paths must also come from
+	// HEAD's tree or files committed after the base are silently omitted
+	t.Run("worktree_since_base", func(t *testing.T) {
+		g := newGitRepo(t)
+		r, err := git.PlainOpen(g.dir)
+		require.NoError(t, err)
+		w, err := r.Worktree()
+		require.NoError(t, err)
+
+		// a commit on master after base g.a: adds later/new.txt, clean against HEAD
+		require.NoError(t, os0Write(g.dir, "later/new.txt", "later\n"))
+		_, err = w.Add(".")
+		require.NoError(t, err)
+		_, err = w.Commit("add later file", &git.CommitOptions{
+			Author: gitAuthor(time.Date(2026, 9, 1, 12, 5, 0, 0, time.UTC)),
+		})
+		require.NoError(t, err)
+
+		fromBase := `{"from":"` + g.a + `","to":"worktree"}`
+
+		t.Run("committed_addition_since_base", func(t *testing.T) {
+			out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, fromBase)
+			assert.False(t, isErr)
+			assert.Contains(t, out, "diff --git a/later/new.txt b/later/new.txt")
+			assert.Contains(t, out, "new file mode 100644")
+			assert.Contains(t, out, "+later")
+			assert.Contains(t, out, "+TWO") // committed edit since base still shown
+		})
+
+		t.Run("scoped_addition_since_base", func(t *testing.T) {
+			out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+				`{"from":"`+g.a+`","to":"worktree","file":"later"}`)
+			assert.False(t, isErr)
+			assert.Contains(t, out, "later/new.txt")
+			assert.NotContains(t, out, "a.txt")
+		})
+
+		// deleted on disk after being committed: absent from base and work tree
+		t.Run("uncommitted_deletion_of_addition", func(t *testing.T) {
+			require.NoError(t, os.Remove(filepath.Join(g.dir, "later", "new.txt")))
+			out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, fromBase)
+			assert.False(t, isErr)
+			assert.NotContains(t, out, "later/new.txt")
+		})
+
+		t.Run("uncommitted_edit_since_base", func(t *testing.T) {
+			g.write(t, "later/new.txt", "later edit\n")
+			out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, fromBase)
+			assert.False(t, isErr)
+			assert.Contains(t, out, "+later edit") // work-tree content, not the commit
+		})
+	})
+
 	t.Run("binary_delta_named_not_rendered", func(t *testing.T) {
 		g := newGitRepo(t)
 		g.write(t, "bin.dat", "totally\x00different")
@@ -195,5 +250,82 @@ func TestGitDiff(t *testing.T) {
 		assert.Contains(t, out, "truncated:")
 		assert.Contains(t, out, "1 more changed path not shown") // rendering stopped at the bound
 		assert.NotContains(t, out, "+content of x2.txt")
+	})
+
+	t.Run("submodule_add_and_delete_named", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.pre+`","to":"`+g.base+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "submodule sub changed")
+
+		out, isErr = runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.bump+`","to":"`+g.pre+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "submodule sub changed")
+	})
+
+	t.Run("submodule_scope_filters_note", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.pre+`","to":"`+g.bump+`","file":"sub"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "submodule sub changed")
+
+		out, isErr = runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.pre+`","to":"`+g.bump+`","file":"a.txt"}`)
+		assert.False(t, isErr)
+		assert.NotContains(t, out, "submodule")
+		assert.Contains(t, out, "(no changes)")
+	})
+
+	// the todo's headline case: a clean bump committed since base
+	t.Run("worktree_names_committed_bump", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.base+`","to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "submodule sub changed")
+	})
+
+	// an unchecked-out pointer identical at base and HEAD is no change
+	t.Run("worktree_silent_when_unchanged", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.NotContains(t, out, "submodule")
+		assert.Contains(t, out, "(no changes)")
+	})
+
+	t.Run("worktree_names_staged_move", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		g.point(t, g.child1) // index back at child1 while HEAD holds child2
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "submodule sub changed")
+	})
+
+	// a gitlink added since base with no checkout on disk still gets its note
+	t.Run("worktree_names_submodule_added", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.pre+`","to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "submodule sub changed")
+	})
+
+	// a directory replacing a tracked file renders the deletion; its contents
+	// stay untracked, never a submodule note
+	t.Run("dir_replacement_not_submodule", func(t *testing.T) {
+		g := newGitRepo(t)
+		require.NoError(t, os.Remove(filepath.Join(g.dir, "bin.dat")))
+		require.NoError(t, os0Write(g.dir, "bin.dat/inner.txt", "x\n"))
+
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "diff --git a/bin.dat b/bin.dat")
+		assert.Contains(t, out, "deleted file mode 100644")
+		assert.NotContains(t, out, "submodule")
+		assert.Contains(t, out, "untracked file not shown")
 	})
 }

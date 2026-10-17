@@ -204,22 +204,31 @@ func readGitSide(r io.Reader) (data string, cut bool, err error) {
 	return string(raw), cut, nil
 }
 
-// gitBlobSide reads path out of a tree. A missing entry or submodule yields
-// nil with no error, while a read failure returns the error so a broken object is
-// never misread as a deletion.
+// gitBlobSide reads path out of a tree: nil when absent, a hash-only side
+// for a submodule gitlink (it references a commit, not a blob), content for
+// files. A read failure returns the error so a broken object is never misread
+// as a deletion.
 func gitBlobSide(t *object.Tree, path string) (*gitSide, error) {
 	if t == nil {
 		return nil, nil
 	}
-	f, err := t.File(path)
+	e, err := t.FindEntry(path)
 	if err != nil {
-		if errors.Is(err, object.ErrFileNotFound) {
+		// absent leaf or absent parent directory both read as absent
+		if errors.Is(err, object.ErrEntryNotFound) || errors.Is(err, object.ErrDirectoryNotFound) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	if f.Mode == filemode.Submodule {
-		return nil, nil
+	if e.Mode == filemode.Submodule {
+		return &gitSide{path: path, hash: e.Hash, mode: e.Mode}, nil
+	}
+	f, err := t.TreeEntryFile(e)
+	if err != nil {
+		if errors.Is(err, plumbing.ErrObjectNotFound) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	return fileSide(f)
 }
@@ -399,14 +408,14 @@ func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, d 
 			d.skipped++
 			continue
 		}
+		// Files() yields nils for gitlink sides, so modes come from the entries
+		if ch.From.TreeEntry.Mode == filemode.Submodule || ch.To.TreeEntry.Mode == filemode.Submodule {
+			d.Note("submodule " + changePath(ch) + " changed")
+			continue
+		}
 		fromFile, toFile, err := ch.Files()
 		if err != nil {
 			return err
-		}
-		if (fromFile != nil && fromFile.Mode == filemode.Submodule) ||
-			(toFile != nil && toFile.Mode == filemode.Submodule) {
-			d.Note("submodule " + changePath(ch) + " changed")
-			continue
 		}
 		from, err := fileSide(fromFile)
 		if err != nil {
@@ -424,7 +433,7 @@ func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, d 
 // gitDiffWorktreeText renders committed state at base against the files on
 // disk into d, like `git diff <ref>`: every difference since base, committed or
 // not, limited to file's path scope when non-empty. Notes name untracked files,
-// which git does not diff either.
+// which git does not diff either, and submodule pointer changes.
 func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tree, file string, d *gitDiffOut) error {
 	w, err := gitWorktree(r)
 	if err != nil {
@@ -438,28 +447,46 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 
 	keep := gitPathScope(file) // matches everything when file is empty
 	paths := make(map[string]struct{}, len(st))
-	// seedPaths adds a tree's in-scope file names; walk errors propagate so a
-	// broken tree never reads as absent files
+	// seedPaths adds a tree's in-scope paths; walk errors propagate so a
+	// broken tree never reads as absent files. Gitlinks reference commits, not
+	// blobs, so Files() skips them and a separate entry walk seeds them.
 	seedPaths := func(t *object.Tree) error {
-		return t.Files().ForEach(func(f *object.File) error {
+		if err := t.Files().ForEach(func(f *object.File) error {
 			if keep(f.Name) {
 				paths[f.Name] = struct{}{}
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
+		tw := object.NewTreeWalker(t, true, nil)
+		defer tw.Close()
+		for {
+			name, entry, err := tw.Next()
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if entry.Mode == filemode.Submodule && keep(name) {
+				paths[name] = struct{}{}
+			}
+		}
 	}
 	if err := seedPaths(base); err != nil {
 		return err
 	}
 	// status entries are HEAD-relative: files committed since base but clean
-	// against HEAD appear in none, so seed HEAD's tree too
+	// against HEAD appear in none, so seed HEAD's tree too. Identical trees
+	// share every entry, and the loop reads HEAD's side through headTree.
+	headTree := base
 	head, err := gitCommit(r, "HEAD")
 	if err != nil && !errors.Is(err, errNoCommits) {
 		return err
 	}
-	if head != nil && head.TreeHash != base.Hash { // identical trees add nothing
-		headTree, err := gitTree(head)
-		if err != nil {
+	if head != nil && head.TreeHash != base.Hash {
+		if headTree, err = gitTree(head); err != nil {
 			return err
 		}
 		if err := seedPaths(headTree); err != nil {
@@ -477,9 +504,10 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		fs := st[path]
 		// counted before the full check: status knows it cheaply, and the
 		// footer names untracked files even when rendering stopped early
-		if fs := st[path]; fs != nil && fs.Worktree == git.Untracked {
+		if fs != nil && fs.Worktree == git.Untracked {
 			untracked++
 			continue
 		}
@@ -491,13 +519,47 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 		if err != nil {
 			return err
 		}
-		to, dir := gitDiskSide(root, path)
-		if dir || (from != nil && from.mode == filemode.Submodule) {
-			d.Note("submodule " + path + " changed")
+		// gitlinks carry no blob: pointer moves are named, never rendered
+		if from != nil && from.mode == filemode.Submodule {
+			hs, err := gitBlobSide(headTree, path)
+			if err != nil {
+				return err
+			}
+			if hs == nil || hs.mode != filemode.Submodule || hs.hash != from.hash || gitPointerMoved(fs) {
+				d.Note("submodule " + path + " changed")
+			}
 			continue
 		}
-		if from == nil && to == nil {
-			continue // gone from both snapshots, nothing to show
+		to, dir := gitDiskSide(root, path)
+		if dir {
+			hs, err := gitBlobSide(headTree, path)
+			if err != nil {
+				return err
+			}
+			// a directory at a tracked path means a submodule checkout when a
+			// tree knows a gitlink or the index staged one; otherwise the old
+			// file reads as deleted and the contents stay untracked
+			if (hs != nil && hs.mode == filemode.Submodule) ||
+				(fs != nil && (fs.Staging == git.Added || fs.Staging == git.Modified)) {
+				d.Note("submodule " + path + " changed")
+				continue
+			}
+			d.Block(from, nil)
+			continue
+		}
+		if from == nil {
+			hs, err := gitBlobSide(headTree, path)
+			if err != nil {
+				return err
+			}
+			// a gitlink added since base without a checkout still gets its note
+			if hs != nil && hs.mode == filemode.Submodule {
+				d.Note("submodule " + path + " changed")
+				continue
+			}
+			if to == nil {
+				continue // gone from both snapshots, nothing to show
+			}
 		}
 		d.Block(from, to)
 	}
@@ -505,6 +567,18 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 		d.Note(strutil.Plural(untracked, "untracked file") + " not shown")
 	}
 	return nil
+}
+
+// gitPointerMoved reports a status entry that moves a submodule pointer the
+// trees already agree on: staged against HEAD, or checked out at another
+// commit. A deleted work-tree entry stays quiet, since an unchecked-out
+// submodule is not a pointer change.
+func gitPointerMoved(fs *git.FileStatus) bool {
+	if fs == nil {
+		return false
+	}
+	return fs.Staging != git.Unmodified ||
+		(fs.Worktree != git.Unmodified && fs.Worktree != git.Deleted)
 }
 
 // changePath names a change's destination path, falling back to its source.

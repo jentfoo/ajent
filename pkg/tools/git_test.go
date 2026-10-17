@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 
@@ -195,62 +194,6 @@ func TestGitToolsLinkedWorktree(t *testing.T) {
 		out, isErr := runGitTool(t, &gitStatusTool{policy: PathPolicy{Cwd: link}}, `{}`)
 		assert.False(t, isErr)
 		assert.Contains(t, out, "on branch side")
-	})
-}
-
-// TestGitDiffWorktreeSinceBase exercises work-tree diffs against a non-HEAD
-// base: status entries are HEAD-relative, so candidate paths must also come
-// from HEAD's tree or files committed after the base are silently omitted.
-func TestGitDiffWorktreeSinceBase(t *testing.T) {
-	t.Parallel()
-
-	g := newGitRepo(t)
-	r, err := git.PlainOpen(g.dir)
-	require.NoError(t, err)
-	w, err := r.Worktree()
-	require.NoError(t, err)
-
-	// a commit on master after base g.a: adds later/new.txt, clean against HEAD
-	require.NoError(t, os0Write(g.dir, "later/new.txt", "later\n"))
-	_, err = w.Add(".")
-	require.NoError(t, err)
-	_, err = w.Commit("add later file", &git.CommitOptions{
-		Author: gitAuthor(time.Date(2026, 9, 1, 12, 5, 0, 0, time.UTC)),
-	})
-	require.NoError(t, err)
-
-	fromBase := `{"from":"` + g.a + `","to":"worktree"}`
-
-	t.Run("committed_addition_since_base", func(t *testing.T) {
-		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, fromBase)
-		assert.False(t, isErr)
-		assert.Contains(t, out, "diff --git a/later/new.txt b/later/new.txt")
-		assert.Contains(t, out, "new file mode 100644")
-		assert.Contains(t, out, "+later")
-		assert.Contains(t, out, "+TWO") // committed edit since base still shown
-	})
-
-	t.Run("scoped_addition_since_base", func(t *testing.T) {
-		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
-			`{"from":"`+g.a+`","to":"worktree","file":"later"}`)
-		assert.False(t, isErr)
-		assert.Contains(t, out, "later/new.txt")
-		assert.NotContains(t, out, "a.txt")
-	})
-
-	// deleted on disk after being committed: absent from base and work tree
-	t.Run("uncommitted_deletion_of_addition", func(t *testing.T) {
-		require.NoError(t, os.Remove(filepath.Join(g.dir, "later", "new.txt")))
-		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, fromBase)
-		assert.False(t, isErr)
-		assert.NotContains(t, out, "later/new.txt")
-	})
-
-	t.Run("uncommitted_edit_since_base", func(t *testing.T) {
-		g.write(t, "later/new.txt", "later edit\n")
-		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, fromBase)
-		assert.False(t, isErr)
-		assert.Contains(t, out, "+later edit") // work-tree content, not the commit
 	})
 }
 

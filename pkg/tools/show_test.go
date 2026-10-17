@@ -9,6 +9,15 @@ import (
 func TestGitShow(t *testing.T) {
 	t.Parallel()
 
+	t.Run("submodule_pointer_bump_named", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+g.bump+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "submodule sub changed")
+		assert.NotContains(t, out, "(no changes)")
+		assert.NotContains(t, out, "diff --git") // no phantom block for a gitlink
+	})
+
 	t.Run("metadata_plus_patch", func(t *testing.T) {
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()},
