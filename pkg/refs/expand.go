@@ -206,23 +206,27 @@ func (x *Expander) Expand(text string) Result {
 			out = splice(out, ref, annotate(ref, m))
 			continue
 		}
-		rl := tools.RefInjectLimit()
-		overCap := overInjectLimit(m, rl) || spent+int(m.Bytes) > tools.RefTotalLimit().Bytes
-		if overCap {
+		// a shape too big on its own is annotated whatever else the message holds:
+		// the per-ref limit is about the file, not the budget
+		if overInjectLimit(m, tools.RefInjectLimit()) {
 			out = splice(out, ref, annotate(ref, m))
 			notices = append(notices, "@"+ref.Path+" too large; annotated")
 			continue
 		}
-		// within cap: content is injected now (or already present this session),
-		// so an absorbed size claim from a prior larger measurement must not survive
-		out = stripNote(out, ref)
-		// dedupe against an unchanged read this session, the literal staying bare
-		if x.tracker != nil && x.tracker.Unchanged(full) {
+		// dedupe before the total cap: an unchanged or repeat mention reserves
+		// nothing, so counting it is what falsely annotated repeats as too large
+		if x.tracker != nil && x.tracker.Unchanged(full) || !keep(full) {
+			out = stripNote(out, ref) // the literal stays bare
 			continue
 		}
-		if !keep(full) {
-			continue // repeat already planned above, its note stripped too
+		if spent+int(m.Bytes) > tools.RefTotalLimit().Bytes {
+			out = splice(out, ref, annotate(ref, m))
+			notices = append(notices, "@"+ref.Path+" too large; annotated")
+			continue
 		}
+		// within cap: content is injected now, so an absorbed size claim from a
+		// prior larger measurement must not survive
+		out = stripNote(out, ref)
 		// the tool returns line-numbered text, so what lands is the file plus a
 		// prefix per line, not its raw size
 		plan = append(plan, newInjection(run, "read", readKind, path, full, tools.ReadBytes(m)))

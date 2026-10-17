@@ -573,6 +573,56 @@ func TestCallID(t *testing.T) {
 	})
 }
 
+func TestExpandTotalCap(t *testing.T) {
+	t.Parallel()
+
+	// one 90kb file fits RefTotal alone, two do not; 100 lines keeps it under
+	// RefInject so only the total cap can trip
+	t.Run("repeat_mention_not_annotated", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSizedLines(t, dir, "half.txt", 100, 900)
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @half.txt and @half.txt again")
+		assert.Equal(t, "see @half.txt and @half.txt again", res.Text)
+		assert.Empty(t, res.Notices)
+		assert.Equal(t, []string{"ref-1-r-half.txt"}, toolCallIDs(injected(t, res)))
+	})
+
+	// a fresh sibling pushing spent over must not annotate an unchanged file:
+	// its content is already in context, it reserves nothing against the cap
+	t.Run("unchanged_file_not_annotated", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSizedLines(t, dir, "a.txt", 100, 900)
+		writeSizedLines(t, dir, "b.txt", 100, 900)
+		x, _ := newExpander(t, dir)
+
+		// the first mention lands the read, so the tracker holds a.txt unchanged
+		require.Len(t, injected(t, x.Expand("read @a.txt")), 2)
+
+		res := x.Expand("compare @a.txt with @b.txt")
+		assert.Equal(t, "compare @a.txt with @b.txt", res.Text)
+		assert.Empty(t, res.Notices)
+		assert.Equal(t, []string{"ref-2-r-b.txt"}, toolCallIDs(injected(t, res)))
+	})
+
+	// distinct fresh files over the cap together still annotate the one that
+	// does not fit, so the cap keeps biting on genuinely new content
+	t.Run("distinct_files_annotate_overflow", func(t *testing.T) {
+		dir := t.TempDir()
+		writeSizedLines(t, dir, "a.txt", 100, 900)
+		writeSizedLines(t, dir, "b.txt", 100, 900)
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("compare @a.txt with @b.txt")
+		assert.Contains(t, res.Text, "@a.txt (")
+		assert.NotContains(t, res.Text, "@b.txt (")
+		require.Len(t, res.Notices, 1)
+		assert.Contains(t, res.Notices[0], "@a.txt too large; annotated")
+		assert.Equal(t, []string{"ref-1-r-b.txt"}, toolCallIDs(injected(t, res)))
+	})
+}
+
 // writeBigLines writes name under dir with enough lines to exceed RefInject.
 func writeBigLines(t *testing.T, dir string, name string) {
 	t.Helper()
@@ -580,6 +630,20 @@ func writeBigLines(t *testing.T, dir string, name string) {
 	var b strings.Builder
 	for i := 0; i < 600; i++ {
 		b.WriteString("line\n")
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o600))
+}
+
+// writeSizedLines writes name under dir as lines text lines of lineLen bytes
+// each: a file shaped to sit between half and all of the default RefTotal cap
+// while staying under RefInject.
+func writeSizedLines(t *testing.T, dir, name string, lines, lineLen int) {
+	t.Helper()
+
+	var b strings.Builder
+	for range lines {
+		b.WriteString(strings.Repeat("x", lineLen))
+		b.WriteByte('\n')
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(b.String()), 0o600))
 }

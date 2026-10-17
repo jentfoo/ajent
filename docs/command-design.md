@@ -503,7 +503,11 @@ order as the prose that named them.
 
 Because planning no longer reads, the tracker cannot dedupe within one expansion
 (nothing has been observed yet), so **the plan dedupes by resolved path itself**
-and `Run` re-checks `Unchanged` per injection before executing it. The first guard
+and `Run` re-checks `Unchanged` per injection before executing it. Dedupe runs
+before the `RefTotal` budget, so the cap counts only newly planned reads: an
+unchanged or repeat mention reserves nothing and is never annotated by the
+total cap (only by the per-file `RefInject` limit, which is about the file's
+shape, not the budget). The first guard
 keeps one message from naming a path twice (which would duplicate its content
 *and* its call id), and the second keeps a joined batch from re-reading what an earlier
 item in the same batch just read. `Run` also stops on a cancelled context rather
