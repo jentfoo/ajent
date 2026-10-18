@@ -27,6 +27,7 @@ func main() {
 	var startupDelay time.Duration // block before serving so connects overlap in single-flight tests
 	var badSchema bool             // expose one tool whose input schema is structurally malformed
 	var hangInit bool              // never serve, so the client's initialize hangs until cancelled
+	var pageLimit int              // paginate list results at this size, for multi-page discovery tests
 	flag.StringVar(&httpAddr, "http", "", "serve over Streamable HTTP on this address")
 	flag.BoolVar(&slow, "slow", false, "block each tool call until cancelled")
 	flag.IntVar(&tools, "tools", 3, "number of generated echo tools to expose")
@@ -34,6 +35,7 @@ func main() {
 	flag.BoolVar(&legacyOnly, "legacy", false, "refuse protocol versions after 2025-11-25")
 	flag.DurationVar(&startupDelay, "startup-delay", 0, "sleep before serving; for connect single-flight tests")
 	flag.BoolVar(&badSchema, "bad-schema", false, "expose a tool with a malformed input schema")
+	flag.IntVar(&pageLimit, "page-limit", 0, "paginate list results at this size; for pagination tests")
 	var die bool // expose a trigger_die tool that exits the process, for reconnect tests
 	flag.BoolVar(&die, "die", false, "expose a trigger_die tool that exits the server")
 	flag.BoolVar(&hangInit, "hang-init", false, "hold the transport open without ever answering")
@@ -49,7 +51,11 @@ func main() {
 		time.Sleep(startupDelay)
 	}
 
-	srv := mcpserver.NewMCPServer("fakeserver", "1.0")
+	var srvOpts []mcpserver.ServerOption // non-zero flags map onto server options
+	if pageLimit > 0 {
+		srvOpts = append(srvOpts, mcpserver.WithPaginationLimit(pageLimit))
+	}
+	srv := mcpserver.NewMCPServer("fakeserver", "1.0", srvOpts...)
 
 	for i := range tools {
 		name := fmt.Sprintf("tool_%02d", i)

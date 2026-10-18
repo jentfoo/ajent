@@ -296,6 +296,7 @@ func mcpEnv(cfg ServerConfig) []string {
 // as raw JSON so a lossy typed decode cannot drop schema keywords.
 func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 	var out []ToolDef
+	seen := map[string]struct{}{} // cursors already followed
 	var cursor string
 	for {
 		resp, err := c.sendRaw(ctx, string(mcp.MethodToolsList), listToolParams(cursor))
@@ -323,6 +324,11 @@ func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 		if page.NextCursor == "" {
 			break
 		}
+		// repeated-cursor guard, mirroring mcp-go's typed list which the raw seam bypasses
+		if _, dup := seen[page.NextCursor]; dup {
+			return nil, fmt.Errorf("tools/list: %w: %q", mcpclient.ErrRepeatedListCursor, page.NextCursor)
+		}
+		seen[page.NextCursor] = struct{}{}
 		cursor = page.NextCursor
 	}
 	return uniqueTools(out, c.warn), nil

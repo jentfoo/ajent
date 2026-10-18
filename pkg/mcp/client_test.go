@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
@@ -190,6 +191,74 @@ func TestConnectHTTPListsTools(t *testing.T) {
 	assert.Len(t, defs, 3)
 }
 
+func TestToolsFollowsPagination(t *testing.T) {
+	t.Parallel()
+
+	c, err := Connect(t.Context(), "fake", stdioConfig(t, "-tools", "5", "-page-limit", "2"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	defs, err := c.Tools(t.Context())
+	require.NoError(t, err)
+	require.Len(t, defs, 5)
+	for i, d := range defs {
+		assert.Equal(t, fmt.Sprintf("tool_%02d", i), d.Name) // every page landed, in order
+	}
+}
+
+// jsonrpcPost decodes one JSON-RPC POST body, answering undecodable or methodless
+// ones with 400. It returns the request's method plus an answer func writing a
+// result under its id.
+func jsonrpcPost(w http.ResponseWriter, r *http.Request) (string, json.RawMessage, func(result string)) {
+	var req struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	if json.NewDecoder(r.Body).Decode(&req) != nil || req.Method == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return "", nil, nil
+	}
+	return req.Method, req.ID, func(result string) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result + `}`))
+	}
+}
+
+func TestToolsRepeatedCursor(t *testing.T) {
+	t.Parallel()
+
+	var lists atomic.Int32 // tools/list requests answered so far
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, _, respond := jsonrpcPost(w, r)
+		if respond == nil {
+			return
+		}
+		switch method {
+		case "server/discover":
+			respond(`{"supportedVersions":["2025-11-25"],"capabilities":{},"serverInfo":{"name":"loopy","version":"1.0"}}`)
+		case "initialize":
+			respond(`{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"loopy","version":"1.0"}}`)
+		case "tools/list":
+			lists.Add(1)
+			respond(`{"tools":[{"name":"loop_tool","description":"d","inputSchema":{"type":"object"}}],"nextCursor":"again"}`)
+		default: // notifications and anything else
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	c, err := Connect(t.Context(), "loopy", ServerConfig{URL: ts.URL})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	// bounded so a regression spins out of the test instead of to go-test's timeout
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err = c.Tools(ctx)
+	require.ErrorIs(t, err, mcpclient.ErrRepeatedListCursor)
+	assert.Equal(t, int32(2), lists.Load()) // the echoed cursor is caught on its second appearance
+}
+
 func TestLegacyServerCompat(t *testing.T) {
 	t.Parallel()
 
@@ -226,19 +295,11 @@ func TestNegotiatesAdvertisedOlderVersion(t *testing.T) {
 
 	var modernLists atomic.Int32 // tools/list requests stamped 2026-07-28
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     json.RawMessage `json:"id"`
-			Method string          `json:"method"`
-		}
-		if json.NewDecoder(r.Body).Decode(&req) != nil || req.Method == "" {
-			w.WriteHeader(http.StatusBadRequest)
+		method, id, respond := jsonrpcPost(w, r)
+		if respond == nil {
 			return
 		}
-		respond := func(result string) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) + `,"result":` + result + `}`))
-		}
-		switch req.Method {
+		switch method {
 		case "server/discover":
 			respond(`{"supportedVersions":["2025-11-25","2025-06-18"],"capabilities":{},"serverInfo":{"name":"old","version":"1.0"}}`)
 		case "initialize":
@@ -247,7 +308,7 @@ func TestNegotiatesAdvertisedOlderVersion(t *testing.T) {
 			if strings.HasPrefix(r.Header.Get("Mcp-Protocol-Version"), "2026") {
 				modernLists.Add(1)
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(req.ID) +
+				_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(id) +
 					`,"error":{"code":-32001,"message":"protocol version \"2026-07-28\" is not supported by this server"}}`))
 				return
 			}
