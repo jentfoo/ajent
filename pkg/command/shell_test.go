@@ -480,6 +480,36 @@ func TestStagerTakeReady(t *testing.T) {
 	})
 }
 
+func TestStagerCancelsRunContextOnCompletion(t *testing.T) {
+	t.Parallel()
+
+	newStager := func() (*Stager, *capturingBash) {
+		fake := &capturingBash{}
+		reg := tools.New()
+		reg.Register(fake, true)
+		return NewStager(context.Background(), reg, agent.NopSink{}), fake
+	}
+
+	t.Run("included_run", func(t *testing.T) {
+		s, fake := newStager()
+		s.Run("echo hi", false)
+		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
+
+		// a finished run must release its root-child context, not leak it until exit
+		require.Eventually(t, fake.ctxCancelled, time.Second, time.Millisecond)
+		msgs := s.Flush(t.Context())
+		require.Len(t, msgs, 1)
+		assert.Contains(t, resultText(msgs[0].Message.Content), "ok")
+	})
+
+	t.Run("excluded_run", func(t *testing.T) {
+		s, fake := newStager()
+		s.Run("echo hi", true)
+		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
+		require.Eventually(t, fake.ctxCancelled, time.Second, time.Millisecond)
+	})
+}
+
 // blockText builds a single-text-block list.
 func blockText(text string) llm.BlockList {
 	return llm.BlockList{llm.TextBlock{Text: text}}
@@ -490,7 +520,8 @@ func blockText(text string) llm.BlockList {
 type capturingBash struct {
 	mu    sync.Mutex
 	input []string
-	user  bool // whether the latest Execute saw a user-initiated context
+	user  bool            // whether the latest Execute saw a user-initiated context
+	ctx   context.Context // latest Execute's run context
 	block chan struct{}
 }
 
@@ -505,6 +536,7 @@ func (b *capturingBash) Execute(ctx context.Context, call agent.ToolCall, _ agen
 	b.mu.Lock()
 	b.input = append(b.input, string(call.Input))
 	b.user = tools.IsUserInitiated(ctx)
+	b.ctx = ctx
 	b.mu.Unlock()
 	if b.block != nil {
 		select {
@@ -527,6 +559,14 @@ func (b *capturingBash) sawUserInitiated() bool {
 	defer b.mu.Unlock()
 
 	return b.user
+}
+
+// ctxCancelled reports whether the latest Execute's context has ended.
+func (b *capturingBash) ctxCancelled() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.ctx != nil && b.ctx.Err() != nil
 }
 
 // explodingBash panics on every Execute so staged runs exercise fault recovery.

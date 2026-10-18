@@ -159,7 +159,11 @@ func (s *Stager) Run(cmd string, excluded bool) {
 					res.Content = llm.BlockList{llm.TextBlock{Text: err.Error()}}
 				}
 			}
-			run.result = res // a fault still stages, so Flush never emits "(no output)"
+			// a fault still stages, so Flush never emits "(no output)"
+			run.result = res
+			// release the root-child registration now the result is captured; every
+			// completion path lands here, and Discard/Cancel stay idempotent with it
+			run.cancel()
 			if !fault {
 				done(res)
 			}

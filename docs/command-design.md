@@ -366,8 +366,12 @@ message. `!` alone or an empty command produces a notice and runs nothing. A
 literal line beginning with `!` leads with whitespace (` !echo hi`), and a literal
 `!!x` prompt is ` !!!x`.
 
-**Cancellation.** Each staged run owns a cancellable context. `Cancel` cancels
-every still-running run. The `bash` tool kills the whole process group when its
+**Cancellation.** Each staged run owns a cancellable context, released the
+moment its result is captured: a finished run must not stay registered as a
+dead child of the app root, or every `!`/`!!` line leaks one until process
+exit. `Cancel` cancels every still-running run; cancellation is idempotent, so
+`Discard`/`Cancel` firing on an already-released run is a no-op. The `bash`
+tool kills the whole process group when its
 derived context ends. A cancelled command still stages (if included): its
 partial output plus the killed-status the bash tool records, so the model's view
 matches what the user saw. Excluded runs cancel identically but their partial
