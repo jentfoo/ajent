@@ -234,8 +234,11 @@ vendor name alone would collapse two models onto whichever adapter was built
 first.
 
 Detection returns a sparse `Compat` (a zero one when no vendor family matches)
-and never sets `Reasoning`. Whether a model reasons at all comes from the flavor
-baseline, an explicit per-model entry, or openrouter's discovery response. Hosted
+and never sets `Reasoning`. Family matching (provider key and base URL) is
+case-insensitive: the name and host are normalized once up front, so new
+families must not add per-check casing. Whether a model reasons at all comes
+from the flavor baseline, an explicit per-model entry, or openrouter's discovery
+response. Hosted
 openai-completions flavors default it on because their model lists cannot say
 otherwise and nearly every model they serve today reasons. A per-model entry can
 turn it back off for one that does not. Detection runs only for
@@ -611,6 +614,9 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
   share a block with it. Displaced content follows every tool_result, and each name is
   referenced at most once per request. When every offered tool would be deferred
   there is nothing to reference later, so all are promoted to immediate.
+- `model_context_window_exceeded` maps to `StopIncomplete`, matching the
+  responses dialect: a reply cut off by the window is not recorded as a natural
+  turn end.
 
 ### openai
 
@@ -625,6 +631,8 @@ providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
   when `incomplete_details.reason` says so. Any other reason maps to
   `StopIncomplete`, so a content-filtered turn is not retried as though it ran
   out of room, and an absent reason keeps the safe truncation default.
+  Chat-completions maps its `content_filter` finish the same way, while
+  unknown stop reasons keep the `EndTurn` default on every dialect.
 - Function tools carry explicit `strict: false` under the strict gate, and a
   grammar turns one into a `custom` tool.
 - A result's `AddedToolNames` materialize right after its output: an

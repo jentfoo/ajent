@@ -218,14 +218,15 @@ quota, so files beyond the quota are never parsed.
 Ctrl+R history search reads each transcript's entries in raw append order,
 deduplicated to each distinct text's most recent occurrence across a bounded
 number of files rather than the whole workspace. `PromptIndex` caches that list
-on a short TTL behind a mutex so it never rescans every
-transcript per keystroke. It is best effort: a scan failure yields an empty
-slice rather than an error.
+on a short TTL behind a mutex so it never rescans every transcript per
+keystroke. It is best effort: a scan failure yields an empty slice rather than
+an error.
 
 Plain ↑/↓ recall is scoped tighter: `TranscriptIndex` serves only the open
 session's own prompts (all branches of its tree, cached on size+mtime so live
-appends show up without rescans). A fresh session with no prompts of its own
-falls back to the Ctrl+R scope until it has some.
+appends show up without rescans). Both prompt indexes drop secret-prefixed
+prompts at read time. A fresh session with no prompts of its own falls back to
+the Ctrl+R scope until it has some.
 
 Sessions are scoped to the workspace they started in, so resuming from elsewhere
 sees nothing and starts fresh (see "Resume modes").
@@ -279,8 +280,8 @@ so an idle workspace never gains a phantom empty file.
 `RecallIndex` unifies recall onto one source: every typed message first, then
 any recorded prompt not already present (backfilling older transcripts). It
 reuses the `Prompt` type, and a typed-only line carries no timestamp. The
-pasted-secret invariant spans both sources: backfill drops recorded prompts
-carrying the secret prefix, matching what editor history never stored, so one
+pasted-secret invariant spans both sources: editor history drops secret-prefixed
+input at append time and both prompt indexes drop it at read time, so one
 surface cannot resurface what the other hides.
 
 ## Reading and rebuilding

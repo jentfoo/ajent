@@ -225,6 +225,12 @@ survive, formatting is normalized, comments are dropped. When the target file
 already carries `//` comments the save warns that they will be lost. Writes go
 through `WriteFileAtomic` with secret permissions.
 
+Only hand-edit artifacts the parser can fully consume are forgiven: `//` line
+comments and trailing commas, blanked by RelaxJSON before the rewrite. Bytes
+after the top-level value cannot survive a tree rebuild, so they fail the save
+with an error instead of being dropped silently (Load rejects them too). Such
+bytes can only appear by editing while ajent runs.
+
 A save is a whole-file replacement, so without coordination two concurrent
 sessions compose last-writer-wins over every key. User-layer saves and
 `llm.SaveUserFile` therefore hold a cross-process advisory lock across the

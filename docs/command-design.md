@@ -453,9 +453,11 @@ the literal text bash will receive rather than a workspace ref.
 
 - **Command names.** The first word of the line, and of each piped or grouped
   segment, completes against what a non-interactive `bash -c 'compgen -abck'`
-  reports (builtins, keywords and PATH), looked up once with a timeout. An empty
-  token offers nothing rather than every command on the system, and an unavailable bash
-  yields no command names.
+  reports (builtins, keywords and PATH), looked up once with a timeout. A
+  multi-line `!` block stages as one run, so every line of it gets the same
+  treatment: a newline starts a command like any separator. An empty token offers
+  nothing rather than every command on the system, and an unavailable bash yields
+  no command names.
 - **Paths.** Everything else, plus any first word containing `/`, completes through
   the same index used for `@` refs, so one read-per-step listing serves both
   surfaces. Quoting, escapes and variable expansion are not handled: the token

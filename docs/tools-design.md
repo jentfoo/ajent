@@ -464,7 +464,10 @@ it, returns the pid and the two log file paths (separate stdout and stderr files
 under the session's spill directory) at once, and the model reviews output with
 `tail` and stops the run with `kill` using the reported pid. The description
 tells the model to reach for it only when a call must outlive its own turn
-(a long-running server or watcher).
+(a long-running server or watcher). Both files are created before the start so
+the result can name them: a start that fails removes every file it created and
+its error result names no logs. Logs exist only for runs that actually started,
+matching foreground spill's rule that nothing on disk claims to hold output.
 
 The run keeps its own process group, and its lifetime is owned by a dedicated
 **background root context** on the tool, never the calling turn's context, so an
@@ -502,8 +505,11 @@ Off-by-default extras for no-shell agents.
 - Both spill their complete result when the bound cuts it, so the model can page
   the rest recoverably rather than losing it.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via
-  `filepath.Glob`), sorted alphabetically with `/` suffix on directories. A glob
-  with no matches is an error, so it is never mistaken for an empty listing.
+  `filepath.Glob`), sorted alphabetically with `/` suffix on directories. A path
+  naming an existing directory is listed literally even when it carries glob
+  metacharacters (`weird[1]`), so real names cannot silently list a sibling's
+  contents. Any other request expands as a pattern, and a glob with no matches
+  is an error so it is never mistaken for an empty listing.
 
 Like `read`, each sets `ToolResult.Display` to the same text as its
 model-visible `Content`, so history renders it through the shared output-head

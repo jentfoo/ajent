@@ -96,7 +96,9 @@ closes.
 So `Tools()` issues raw `tools/list` through the transport and decodes each
 entry's `inputSchema` into a `json.RawMessage`, preserving the server's schema
 **byte for byte** (proof that the raw request seam works). Pagination follows
-`nextCursor`. Names are validated as composed: server key, bare tool name and
+`nextCursor`. A repeated cursor is a legible error (mirroring mcp-go's typed-list
+guard, which the raw seam bypasses) instead of re-requesting one page until the
+caller's timeout. Names are validated as composed: server key, bare tool name and
 the composed `server__tool` string all fit the tightest provider tool-name
 charset and cap. A bad server key is skipped with
 a warning at config load, so one non-conforming entry never disables the
