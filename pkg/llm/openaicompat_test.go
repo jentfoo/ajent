@@ -459,6 +459,31 @@ func TestCompatStreamFinishReason(t *testing.T) {
 	})
 }
 
+func TestStopReasonFrom(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		reason   string
+		expected StopReason
+	}{
+		{"stop", "stop", StopEndTurn},
+		{"end_turn_spelling", "end_turn", StopEndTurn},
+		{"tool_calls", "tool_calls", StopToolUse},
+		{"function_call", "function_call", StopToolUse},
+		{"length", "length", StopMaxTokens},
+		{"max_tokens_field", fieldMaxTokens, StopMaxTokens},
+		{"content_filter_is_incomplete", "content_filter", StopIncomplete},
+		{"empty_is_unknown", "", StopUnknown},
+		{"unknown_defaults_end_turn", "some_future_reason", StopEndTurn},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, stopReasonFrom(tc.reason))
+		})
+	}
+}
+
 func TestBuildCompatBody(t *testing.T) {
 	t.Parallel()
 

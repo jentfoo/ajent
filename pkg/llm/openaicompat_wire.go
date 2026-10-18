@@ -273,6 +273,8 @@ func stopReasonFrom(s string) StopReason {
 		return StopToolUse
 	case "length", fieldMaxTokens:
 		return StopMaxTokens
+	case "content_filter": // truncation-class, matching the responses dialect
+		return StopIncomplete
 	case "":
 		return StopUnknown
 	default:

@@ -200,6 +200,8 @@ func antStopReason(s string) StopReason {
 		return StopToolUse
 	case fieldMaxTokens:
 		return StopMaxTokens
+	case "model_context_window_exceeded": // truncation-class, matching the responses dialect
+		return StopIncomplete
 	case "":
 		return StopUnknown
 	default:

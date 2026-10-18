@@ -1297,6 +1297,31 @@ func TestParseAnthropicModels(t *testing.T) {
 	})
 }
 
+func TestAntStopReason(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		reason   string
+		expected StopReason
+	}{
+		{"end_turn", "end_turn", StopEndTurn},
+		{"stop_sequence", "stop_sequence", StopEndTurn},
+		{"refusal", "refusal", StopEndTurn},
+		{"tool_use", "tool_use", StopToolUse},
+		{"pause_turn", "pause_turn", StopToolUse},
+		{"max_tokens", fieldMaxTokens, StopMaxTokens},
+		{"context_exceeded_is_incomplete", "model_context_window_exceeded", StopIncomplete},
+		{"empty_is_unknown", "", StopUnknown},
+		{"unknown_defaults_end_turn", "some_future_reason", StopEndTurn},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, antStopReason(tc.reason))
+		})
+	}
+}
+
 func TestAnthropicProviderStreamTruncation(t *testing.T) {
 	t.Parallel()
 
