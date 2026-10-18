@@ -266,8 +266,16 @@ func (s *SliceStream) Next() (Event, bool) {
 	return ev, true
 }
 
-// Err returns the configured error.
-func (s *SliceStream) Err() error { return s.Error }
+// Err returns the failure that ended the stream, or nil after a deliberate close.
+func (s *SliceStream) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+	return s.Error
+}
 
 // Close stops the stream. Safe to call more than once or while Next runs.
 func (s *SliceStream) Close() error {

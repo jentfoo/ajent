@@ -161,4 +161,22 @@ func TestSliceStream(t *testing.T) {
 		_, ok = s.Next()
 		assert.False(t, ok)
 	})
+
+	t.Run("configured_error_surfaces", func(t *testing.T) {
+		want := errors.New("boom")
+		s := &SliceStream{Events: textTurn(), Error: want}
+		_, ok := s.Next()
+		require.True(t, ok)
+
+		assert.ErrorIs(t, s.Err(), want)
+	})
+
+	t.Run("err_nil_after_close", func(t *testing.T) {
+		s := &SliceStream{Events: textTurn(), Error: errors.New("boom")}
+		_, ok := s.Next()
+		require.True(t, ok)
+		require.NoError(t, s.Close())
+
+		assert.NoError(t, s.Err()) // deliberate close is not a stream failure
+	})
 }
