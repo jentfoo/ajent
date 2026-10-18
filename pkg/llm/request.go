@@ -221,6 +221,12 @@ func clampLevel(caps Capabilities, l Level) Level {
 // LevelsFor returns the reasoning depths m offers, for menus and completion.
 func LevelsFor(m Model) []Level { return levelsFor(m.Caps) }
 
+// reasoningOn reports whether a requested level resolves to reasoning
+// enabled, clamped and gated on the capability.
+func reasoningOn(caps Capabilities, l Level) bool {
+	return caps.Reasoning && clampLevel(caps, l) != LevelOff
+}
+
 // ClampLevel snaps a requested level onto one m actually supports.
 func ClampLevel(m Model, l Level) Level { return clampLevel(m.Caps, l) }
 

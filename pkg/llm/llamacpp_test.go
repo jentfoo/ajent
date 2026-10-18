@@ -205,6 +205,88 @@ func TestDecorateLlamaCpp(t *testing.T) {
 		decorateLlamaCpp(&body, Request{Model: model(false)})
 		assert.Empty(t, body.ChatTemplateKwarg)
 	})
+
+	t.Run("toggles_stay_false_without_reasoning", func(t *testing.T) {
+		m := model(true)
+		m.Caps.Reasoning = false
+		var body compatRequest
+		decorateLlamaCpp(&body, Request{
+			Model: m, Reasoning: ReasoningConfig{Level: LevelHigh},
+		})
+		assert.Equal(t, false, body.ChatTemplateKwarg["enable_thinking"])
+	})
+
+	t.Run("clamps_opt_in_max_to_high", func(t *testing.T) {
+		m := model(true)
+		m.Caps.LevelMap = map[Level]*string{LevelMinimal: ptrOf("min"), LevelLow: ptrOf("low"),
+			LevelMedium: ptrOf("med"), LevelHigh: ptrOf("high")} // no xhigh, no max
+		var body compatRequest
+		decorateLlamaCpp(&body, Request{
+			Model: m, Reasoning: ReasoningConfig{Level: LevelMax},
+		})
+		assert.Equal(t, true, body.ChatTemplateKwarg["enable_thinking"])
+	})
+
+	t.Run("merges_built_kwargs_without_clobber", func(t *testing.T) {
+		var body compatRequest
+		body.ChatTemplateKwarg = map[string]any{
+			"enable_thinking":   true, // a configured value must not survive
+			"preserve_thinking": true,
+			"extra":             7,
+		}
+		decorateLlamaCpp(&body, Request{
+			Model: model(true), Reasoning: ReasoningConfig{Level: LevelOff},
+		})
+		assert.Equal(t, map[string]any{
+			"enable_thinking": false, "preserve_thinking": true, "extra": 7,
+		}, body.ChatTemplateKwarg)
+	})
+}
+
+// llamaProfile is the llamacpp chat-completions profile, used by body-shape
+// asserts that need its decorator in the chain.
+func llamaProfile() compatProfile {
+	return profileFor("llamacpp", FlavorLlamaCpp, flavorDefaults[FlavorLlamaCpp].baseURL, ProviderConfig{})
+}
+
+func TestLlamaCppThinkingBodyMerge(t *testing.T) {
+	t.Parallel()
+
+	t.Run("configured_kwargs_survive_the_decorator", func(t *testing.T) {
+		caps := flavorDefaults[FlavorLlamaCpp].caps
+		caps.Thinking = ThinkingQwenChatTemplate
+		caps.ChatTemplateKwargs = map[string]json.RawMessage{
+			"extra": json.RawMessage(`"kept"`),
+		}
+		m := thinkingModel(caps)
+
+		got := reasoningFragment(llamacppBody(t, m, LevelHigh))
+		assert.JSONEq(t, `{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true,"extra":"kept"}}`, got)
+	})
+
+	t.Run("think_tags_default_sends_only_the_toggle", func(t *testing.T) {
+		m := thinkingModel(flavorDefaults[FlavorLlamaCpp].caps)
+
+		got := reasoningFragment(llamacppBody(t, m, LevelOff))
+		assert.JSONEq(t, `{"chat_template_kwargs":{"enable_thinking":false}}`, got)
+	})
+}
+
+// llamacppBody builds a request body through the llamacpp profile.
+func llamacppBody(t *testing.T, m Model, level Level) map[string]any {
+	t.Helper()
+
+	body, err := buildCompatBody(Request{
+		Model:     m,
+		System:    BlockList{TextBlock{Text: "sys"}},
+		Messages:  []Message{Text(RoleUser, "hi")},
+		MaxTokens: 4000,
+		Reasoning: ReasoningConfig{Level: level},
+	}, llamaProfile())
+	require.NoError(t, err)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(body, &out))
+	return out
 }
 
 func TestCompatProviderCountTokens(t *testing.T) {

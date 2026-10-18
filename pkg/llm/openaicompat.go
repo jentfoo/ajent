@@ -214,7 +214,7 @@ func compatMessages(req Request, caps Capabilities) ([]compatMessage, error) {
 	msgs := req.Messages // already normalized by Prepare
 	out := make([]compatMessage, 0, len(msgs)+1)
 	// whether reasoning is on for this turn, which gates the empty replay field
-	on := caps.Reasoning && clampLevel(caps, req.Reasoning.Level) != LevelOff
+	on := reasoningOn(caps, req.Reasoning.Level)
 	var byName map[string]ToolSchema // kimi load-point lookup
 	if caps.DeferredTools == deferredToolsKimi {
 		byName = bulk.SliceToIndexBy(func(t ToolSchema) string { return t.Name }, req.Tools)

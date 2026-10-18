@@ -161,6 +161,32 @@ func TestClampLevel(t *testing.T) {
 	})
 }
 
+func TestReasoningOn(t *testing.T) {
+	t.Parallel()
+
+	t.Run("on_above_off", func(t *testing.T) {
+		caps := Capabilities{Reasoning: true}
+		assert.True(t, reasoningOn(caps, LevelMedium))
+		assert.False(t, reasoningOn(caps, LevelOff))
+	})
+
+	t.Run("off_without_capability", func(t *testing.T) {
+		assert.False(t, reasoningOn(Capabilities{}, LevelHigh))
+	})
+
+	t.Run("clamps_before_deciding", func(t *testing.T) {
+		// max is opt-in, so it clamps down to high on a bare model
+		caps := Capabilities{Reasoning: true}
+		assert.True(t, reasoningOn(caps, LevelMax))
+	})
+
+	t.Run("off_stays_off_when_suppressed", func(t *testing.T) {
+		caps := Capabilities{Reasoning: true}
+		caps.LevelMap = map[Level]*string{LevelOff: nil}
+		assert.False(t, reasoningOn(caps, LevelOff))
+	})
+}
+
 func TestMaxOutputFor(t *testing.T) {
 	t.Parallel()
 
