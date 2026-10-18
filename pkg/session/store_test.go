@@ -150,6 +150,35 @@ func TestStoreList(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, list)
 	})
+
+	// a zero-byte .jsonl (crash between create and first write) must not surface
+	// as an id-less row, even one whose fresh mtime would top the --continue list
+	t.Run("drops_files_with_no_session", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		sessID := w.Head()
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+		require.NoError(t, aerr)
+		require.NoError(t, w.Close())
+
+		dir, derr := s.Dir(ws)
+		require.NoError(t, derr)
+		phantom := filepath.Join(dir, "2026-01-01T00-00-00Z-dead.jsonl")
+		require.NoError(t, os.WriteFile(phantom, nil, 0o600))
+		future := time.Now().Add(time.Hour) // newest mtime, so List ordering alone cannot save it
+		require.NoError(t, os.Chtimes(phantom, future, future))
+
+		list, lerr := s.List(ws)
+		require.NoError(t, lerr)
+		require.Len(t, list, 1)
+		assert.Equal(t, sessID, list[0].ID)
+		assert.Equal(t, w.Path(), list[0].Path)
+
+		_, ferr := s.Find(ws, phantom) // invisible to Find too, not just unlisted
+		assert.ErrorIs(t, ferr, ErrNotFound)
+	})
 }
 
 func TestStoreFindAmbiguousAndMissing(t *testing.T) {
@@ -473,6 +502,29 @@ func TestReadInfo(t *testing.T) {
 		assert.False(t, info.Started.IsZero())
 		assert.Equal(t, "trunk-model", info.Model)
 		assert.Equal(t, 1, info.Messages) // only kickoff sits on the new root's branch
+	})
+
+	// a file that parses but holds no session entry (zero bytes from a crash
+	// between create and first write, or hand-made lines) is not a session, so
+	// readInfo returns zero Info and no listing surface shows a rootless row
+	t.Run("no_session_entry_is_not_a_session", func(t *testing.T) {
+		dir := t.TempDir()
+
+		empty := filepath.Join(dir, "2026-01-01T00-00-00Z-0.jsonl")
+		require.NoError(t, os.WriteFile(empty, nil, 0o600))
+
+		data, derr := json.Marshal(MessageData{Message: llm.Text(llm.RoleUser, "stray")})
+		require.NoError(t, derr)
+		line, lerr := json.Marshal(Entry{ID: "handmade", Type: TypeMessage, TS: 1_700_000_000_000, Data: data})
+		require.NoError(t, lerr)
+		stray := filepath.Join(dir, "2026-01-01T00-00-01Z-1.jsonl")
+		require.NoError(t, os.WriteFile(stray, append(line, '\n'), 0o600))
+
+		for _, p := range []string{empty, stray} {
+			info, ok := readInfo(p)
+			assert.False(t, ok)
+			assert.Zero(t, info)
+		}
 	})
 }
 

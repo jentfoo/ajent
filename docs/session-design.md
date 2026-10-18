@@ -187,7 +187,9 @@ The store:
   (start time only breaks ties), and each row carries the summary a picker shows:
   model, message count and started time. Newest-first is what lands on the work
   actually left in progress rather than an abandoned fork. A newer-format
-  transcript appears too, marked `Blocked`, so it never reads as absent.
+  transcript appears too, marked `Blocked`, so it never reads as absent. A
+  transcript that holds no session entry is not a session and never lists, so
+  an id-less file can never surface as a resumable row.
 - **Find** resolves `--resume`/`--delete` targets: exact id first, then a unique
   id prefix, and names match exactly only. Ambiguity at any step fails with a clear
   error naming the candidates (see "Resume modes").

@@ -250,10 +250,15 @@ func readInfo(path string) (Info, bool) {
 		return blockedInfo(path, entries, err)
 	}
 	var info Info
-	info.Path = path
 	// identity belongs to the file, not its active branch: a head sitting on a
 	// second root never reaches line 1's session entry, yet still names the file.
 	info.ID, info.Started, info.Model = sessionIdentity(entries)
+	if info.ID == "" {
+		// no decodable session entry: a crash before Create's first write landed, or
+		// a hand-made file. Either way it is not a session, so no surface lists it.
+		return Info{}, false
+	}
+	info.Path = path
 	branch := Branch(entries, headFor(path, entries))
 	for _, e := range branch {
 		switch e.Type {
