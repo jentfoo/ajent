@@ -900,6 +900,7 @@ func collapseUntracked(blocked map[string]struct{}, untracked []string) []string
 }
 
 // headTreePaths lists every path in HEAD's tree, empty before any commit.
+// Walk errors propagate so a broken tree never reads as absent files.
 func headTreePaths(r *git.Repository) ([]string, error) {
 	c, err := gitCommit(r, "HEAD")
 	if err != nil {
@@ -913,10 +914,12 @@ func headTreePaths(r *git.Repository) ([]string, error) {
 		return nil, err
 	}
 	var names []string
-	_ = t.Files().ForEach(func(f *object.File) error {
+	if err := t.Files().ForEach(func(f *object.File) error {
 		names = append(names, f.Name)
 		return nil
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return names, nil
 }
 

@@ -99,6 +99,44 @@ func TestGitToolsCorruptTreeErrors(t *testing.T) {
 	})
 }
 
+func TestHeadTreePaths(t *testing.T) {
+	t.Parallel()
+
+	g := newGitRepo(t)
+	g.write(t, "dir/nested.txt", "nested\n")
+	g.commitAll(t, "add nested")
+
+	r, err := git.PlainOpen(g.dir)
+	require.NoError(t, err)
+
+	names, err := headTreePaths(r)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a.txt", "bin.dat", "dir/nested.txt"}, names)
+
+	// a lost blob must fail the walk: swallowing it narrows the tracked set,
+	// so an untracked file under dir/ collapses into `?? dir/`
+	t.Run("missing_blob_errors", func(t *testing.T) {
+		c, err := gitCommit(r, "")
+		require.NoError(t, err)
+		tree, err := c.Tree()
+		require.NoError(t, err)
+		e, err := tree.FindEntry("dir/nested.txt")
+		require.NoError(t, err)
+		h := e.Hash.String()
+		require.NoError(t, os.Remove(filepath.Join(g.dir, ".git", "objects", h[:2], h[2:])))
+
+		_, err = headTreePaths(r)
+		assert.ErrorIs(t, err, plumbing.ErrObjectNotFound)
+	})
+
+	t.Run("status_reports_breakage", func(t *testing.T) {
+		g.write(t, "dir/new.txt", "u\n")
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.True(t, isErr)
+		assert.NotContains(t, out, "?? dir/")
+	})
+}
+
 func TestGitToolsBareRepo(t *testing.T) {
 	t.Parallel()
 
