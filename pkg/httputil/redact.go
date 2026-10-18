@@ -159,14 +159,45 @@ func expandSecrets(vals []string) []string {
 	return out
 }
 
-// secretValues returns the credential values a request's headers carried,
-// including custom names beyond the seed list and bare scheme tokens.
-func secretValues(h http.Header) []string {
+// secretValues returns the credential values a request carried, from headers
+// and URL alike, including custom names beyond the seed list and bare scheme
+// tokens.
+func secretValues(h http.Header, u *url.URL) []string {
 	var vals []string // expanded by expandSecrets below
 	for k, vs := range h {
 		if credentialName(k) {
 			vals = append(vals, vs...)
 		}
 	}
-	return expandSecrets(vals)
+	return expandSecrets(append(vals, urlSecrets(u)...))
+}
+
+// urlSecrets returns the credential values a URL carried: name-matched query
+// values and the userinfo username and password. Query values appear in both
+// raw and decoded form, since a body echoes the URL as sent, encoded.
+func urlSecrets(u *url.URL) []string {
+	if u == nil {
+		return nil
+	}
+	var vals []string
+	for _, pair := range strings.Split(u.RawQuery, "&") {
+		k, v, _ := strings.Cut(pair, "=")
+		if dec, err := url.QueryUnescape(k); err == nil {
+			k = dec // an encoded name still matches after unescaping
+		}
+		if !credentialName(k) {
+			continue
+		}
+		vals = append(vals, v)
+		if dec, err := url.QueryUnescape(v); err == nil && dec != v {
+			vals = append(vals, dec)
+		}
+	}
+	if u.User != nil {
+		vals = append(vals, u.User.Username())
+		if pw, ok := u.User.Password(); ok {
+			vals = append(vals, pw)
+		}
+	}
+	return vals
 }

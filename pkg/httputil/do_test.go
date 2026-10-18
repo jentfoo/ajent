@@ -17,6 +17,10 @@ import (
 
 const testAPIKey = "sk-secret-do-not-leak"
 
+// testPlainKey carries no key shape the scrub's pattern pass recognizes, so
+// tests exercising the literal path cannot pass on the pattern alone.
+const testPlainKey = "org-plain-credential-9f2"
+
 // testRequest builds a call with a deterministic clock, jitter and recorded
 // sleeps. The returned slices are filled as Do runs.
 func testRequest(t *testing.T, srvURL string) (Request, *http.Client, *[]time.Duration, *[]LogEvent) {
@@ -329,6 +333,26 @@ func TestDo(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 
 		assert.NotContains(t, got, testAPIKey)
+		assert.Contains(t, got, redactedMask)
+	})
+
+	t.Run("error_body_scrubs_echoed_url_credentials", func(t *testing.T) {
+		srv, _ := countingServer(t, func(w http.ResponseWriter, req *http.Request) {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = io.WriteString(w, `invalid key in `+req.URL.String())
+		})
+
+		r, hc, _, _ := testRequest(t, srv.URL)
+		r.URL += "?api_key=" + testPlainKey
+		var got string
+		r.Error = func(_ int, body []byte, _ time.Duration) (error, bool) {
+			got = string(body)
+			return context.Canceled, false
+		}
+		_, err := Do(t.Context(), hc, r)
+		require.ErrorIs(t, err, context.Canceled)
+
+		assert.NotContains(t, got, testPlainKey)
 		assert.Contains(t, got, redactedMask)
 	})
 

@@ -18,6 +18,14 @@ var pinnedCredentialHeaders = []string{
 	"Cookie", "Set-Cookie", "X-Goog-Api-Key", "Openai-Organization",
 }
 
+// parseTestURL parses a URL a redaction test feeds into a secret matcher.
+func parseTestURL(t *testing.T, raw string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(raw)
+	require.NoError(t, err)
+	return u
+}
+
 func TestRedactHeaders(t *testing.T) {
 	t.Parallel()
 
@@ -223,7 +231,7 @@ func TestScrubSecrets(t *testing.T) {
 		body := []byte(`error: token ` +
 			strings.TrimPrefix("Bearer "+testAPIKey, "Bearer ") + ` rejected`)
 
-		secrets := secretValues(http.Header{"Authorization": {"Bearer " + testAPIKey}})
+		secrets := secretValues(http.Header{"Authorization": {"Bearer " + testAPIKey}}, nil)
 		got := string(scrubSecrets(body, secrets))
 		assert.NotContains(t, got, testAPIKey)
 	})
@@ -296,6 +304,48 @@ func TestExpandSecrets(t *testing.T) {
 	}
 }
 
+func TestURLSecrets(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_url", func(t *testing.T) {
+		assert.Empty(t, urlSecrets(nil))
+	})
+
+	t.Run("no_credentials", func(t *testing.T) {
+		assert.Empty(t, urlSecrets(parseTestURL(t, "https://x.test/v1?model=opus")))
+	})
+
+	t.Run("collects_credential_query_values", func(t *testing.T) {
+		u := parseTestURL(t, "https://x.test/v1?api_key=abc&key=def&model=opus")
+		assert.Equal(t, []string{"abc", "def"}, urlSecrets(u))
+	})
+
+	t.Run("collects_raw_and_decoded_forms", func(t *testing.T) {
+		u := parseTestURL(t, "https://x.test/v1?api_key=a%2Bb%3D")
+		assert.Equal(t, []string{"a%2Bb%3D", "a+b="}, urlSecrets(u))
+	})
+
+	t.Run("matches_encoded_names", func(t *testing.T) {
+		u := parseTestURL(t, "https://x.test/v1?api%5Fkey=abc")
+		assert.Equal(t, []string{"abc"}, urlSecrets(u))
+	})
+
+	t.Run("collects_userinfo", func(t *testing.T) {
+		u := parseTestURL(t, "https://user:pw@x.test/v1")
+		assert.Equal(t, []string{"user", "pw"}, urlSecrets(u))
+	})
+
+	t.Run("collects_username_without_password", func(t *testing.T) {
+		u := parseTestURL(t, "https://"+testPlainKey+"@x.test/v1")
+		assert.Equal(t, []string{testPlainKey}, urlSecrets(u))
+	})
+
+	t.Run("collects_repeated_values", func(t *testing.T) {
+		u := parseTestURL(t, "https://x.test/v1?token=one&token=two")
+		assert.Equal(t, []string{"one", "two"}, urlSecrets(u))
+	})
+}
+
 func TestSecretValues(t *testing.T) {
 	t.Parallel()
 
@@ -305,7 +355,7 @@ func TestSecretValues(t *testing.T) {
 		h.Set("X-Api-Key", testAPIKey)
 		h.Set("Content-Type", "application/json")
 
-		got := secretValues(h)
+		got := secretValues(h, nil)
 		assert.ElementsMatch(t, []string{"Bearer " + testAPIKey, testAPIKey, testAPIKey}, got)
 	})
 
@@ -313,20 +363,40 @@ func TestSecretValues(t *testing.T) {
 		h := http.Header{}
 		h.Set("X-Custom-Token", testAPIKey)
 
-		got := secretValues(h)
+		got := secretValues(h, nil)
 		assert.Equal(t, []string{testAPIKey}, got)
+	})
+
+	t.Run("collects_url_query_credentials", func(t *testing.T) {
+		got := secretValues(nil, parseTestURL(t, "https://x.test/v1?api_key="+testPlainKey))
+
+		assert.Equal(t, []string{testPlainKey}, got)
+	})
+
+	t.Run("collects_userinfo_credentials", func(t *testing.T) {
+		got := secretValues(nil, parseTestURL(t, "https://user:"+testPlainKey+"@x.test/v1"))
+		assert.Equal(t, []string{testPlainKey, "user"}, got)
+	})
+
+	t.Run("merges_header_and_url_values", func(t *testing.T) {
+		h := http.Header{}
+		h.Set("X-Api-Key", testAPIKey)
+		u := parseTestURL(t, "https://x.test/v1?access_token="+testPlainKey)
+
+		got := secretValues(h, u)
+		assert.ElementsMatch(t, []string{testAPIKey, testPlainKey}, got)
 	})
 
 	t.Run("splits_scheme_pairs", func(t *testing.T) {
 		h := http.Header{}
 		h.Set("Authorization", "Basic dXNlcjpwYXNz")
 
-		got := secretValues(h)
+		got := secretValues(h, nil)
 		assert.ElementsMatch(t, []string{"Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"}, got)
 	})
 
-	t.Run("empty_headers", func(t *testing.T) {
-		assert.Empty(t, secretValues(http.Header{}))
+	t.Run("empty_inputs", func(t *testing.T) {
+		assert.Empty(t, secretValues(http.Header{}, nil))
 	})
 }
 

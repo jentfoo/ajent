@@ -151,7 +151,7 @@ func doAttempt(ctx context.Context, hc *http.Client, r Request, h callHooks, att
 		return resp, 0, nil
 	}
 
-	errBody := readErrorBody(resp, secretValues(req.Header))
+	errBody := readErrorBody(resp, secretValues(req.Header, req.URL))
 	retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), h.now())
 	var errOut error
 	var retryable bool

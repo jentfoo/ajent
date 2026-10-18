@@ -715,8 +715,9 @@ list, and over-masking a benign name only costs log detail. Masked surfaces:
 every credential request header (the map is walked rather than probed, so
 non-canonical casing cannot slip past), URL credentials (userinfo dropped,
 query parameters matched by the same rule) and the error body some providers
-echo the key into. The body scrubs literal request credential values
-longest-first plus common key shapes (`sk-…`, `AIza…`, `Bearer …`) before
+echo the key into. The body scrubs literal request credential values, drawn
+from headers, query values and userinfo alike, longest-first plus common key
+shapes (`sk-…`, `AIza…`, `Bearer …`) before
 clipping to its keep limit, so a credential straddling the cut cannot survive
 as a partial prefix. Transport errors get the same treatment: the `*url.Error`
 URL is rewritten to its redacted form before leaving the package, so what a
