@@ -727,7 +727,6 @@ func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock
 	a.append(MessageInfo{Message: llm.Message{Role: llm.RoleUser, Content: content}})
 }
 
-// modelOrigin returns the Origin stamp for an assistant message produced by the current model.
 // append records one message in state and notifies the OnMessage hook so a
 // session can persist it as the loop appends it.
 func (a *Agent) append(info MessageInfo) {

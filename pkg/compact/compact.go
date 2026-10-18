@@ -8,6 +8,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // Options configures one compaction pass over a branch.
@@ -124,15 +125,15 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 // resolveVerbatim returns the band bounds: opts' overrides when set, else two
 // steps and a tenth of the model's compaction point. Every trigger uses the same
 // band. A manual run is not an instruction to keep less recent work.
-func resolveVerbatim(model llm.Model, opts Options) (steps, tokens int) {
+func resolveVerbatim(model llm.Model, opts Options) (steps, budget int) {
 	steps = min(opts.MinSteps, maxVerbatimSteps)
 	if steps <= 0 {
 		steps = defaultMinSteps
 	}
-	tokens = opts.VerbatimTokens
-	if tokens <= 0 {
+	budget = opts.VerbatimTokens
+	if budget <= 0 {
 		// CompactAt is 0 on an unknown window, which would leave the band unbounded
-		tokens = max(minVerbatimTokens, compactAt(model)/defaultVerbatimDivisor)
+		budget = max(minVerbatimTokens, tokens.CompactAt(model)/defaultVerbatimDivisor)
 	}
-	return steps, tokens
+	return steps, budget
 }

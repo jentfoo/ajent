@@ -80,7 +80,7 @@ func TestStagerRunsDisabledBash(t *testing.T) {
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 1)
-	assert.Contains(t, resultText(msgs[0].Message.Content), "hi")
+	assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "hi")
 }
 
 func TestStagerRunsAndFlushesInOrder(t *testing.T) {
@@ -106,11 +106,11 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 
 	// each run lands as a single user text message in submission order
 	assert.Equal(t, llm.RoleUser, msgs[0].Message.Role)
-	assert.Contains(t, resultText(msgs[0].Message.Content), "User Ran: echo one")
-	assert.Contains(t, resultText(msgs[0].Message.Content), "Output:")
-	assert.Contains(t, resultText(msgs[0].Message.Content), "one")
+	assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "User Ran: echo one")
+	assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "Output:")
+	assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "one")
 	assert.Equal(t, llm.RoleUser, msgs[1].Message.Role)
-	assert.Contains(t, resultText(msgs[1].Message.Content), "User Ran: echo two")
+	assert.Contains(t, llm.JoinText(msgs[1].Message.Content), "User Ran: echo two")
 	_, ok := msgs[0].Message.Content[0].(llm.TextBlock)
 	require.True(t, ok)
 }
@@ -170,7 +170,7 @@ func TestStagerNonZeroExitStagesAsError(t *testing.T) {
 	require.Len(t, msgs, 1)
 	// a non-zero exit is an ordinary staged result: the model sees the exit code
 	// in the Output section, but it is not flagged as a turn failure
-	assert.Contains(t, resultText(msgs[0].Message.Content), "exit status 3")
+	assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "exit status 3")
 }
 
 func TestStagerCancelStagesPartial(t *testing.T) {
@@ -186,7 +186,7 @@ func TestStagerCancelStagesPartial(t *testing.T) {
 	require.Len(t, msgs, 1)
 
 	// a cancelled command stages an interrupted marker so the model sees it was cut off
-	assert.Contains(t, resultText(msgs[0].Message.Content), "interrupted by user")
+	assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "interrupted by user")
 }
 
 func TestStagerPanickingTool(t *testing.T) {
@@ -206,7 +206,7 @@ func TestStagerPanickingTool(t *testing.T) {
 
 		msgs := s.Flush(t.Context())
 		require.Len(t, msgs, 1)
-		text := resultText(msgs[0].Message.Content)
+		text := llm.JoinText(msgs[0].Message.Content)
 		assert.Contains(t, text, "User Ran: echo boom")
 		assert.Contains(t, text, "tool panicked") // never staged as "(no output)"
 
@@ -214,7 +214,7 @@ func TestStagerPanickingTool(t *testing.T) {
 		defer sink.mu.Unlock()
 		require.Len(t, sink.done, 1) // the ToolStart closer ran exactly once: no stuck row
 		assert.True(t, sink.done[0].IsError)
-		assert.Contains(t, resultText(sink.done[0].Content), "tool panicked")
+		assert.Contains(t, llm.JoinText(sink.done[0].Content), "tool panicked")
 		require.Len(t, sink.notices, 1) // neither user nor model is left guessing
 	})
 
@@ -276,7 +276,7 @@ func TestStagerFlushKeepsInFlightCancellable(t *testing.T) {
 	}, 3*time.Second, time.Millisecond)
 
 	require.Len(t, got.msgs, 1)
-	assert.Contains(t, resultText(got.msgs[0].Message.Content), "interrupted by user")
+	assert.Contains(t, llm.JoinText(got.msgs[0].Message.Content), "interrupted by user")
 }
 
 func TestStagerRequestsFullToolStart(t *testing.T) {
@@ -309,7 +309,7 @@ func TestShellUserMessage(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			msg := shellUserMessage(c.cmd, agent.ToolResult{Content: c.content})
 			assert.Equal(t, llm.RoleUser, msg.Message.Role)
-			assert.Contains(t, resultText(msg.Message.Content), c.want)
+			assert.Contains(t, llm.JoinText(msg.Message.Content), c.want)
 		})
 	}
 }
@@ -453,14 +453,14 @@ func TestStagerTakeReady(t *testing.T) {
 
 		msgs := s.TakeReady()
 		require.Len(t, msgs, 1)
-		assert.Contains(t, resultText(msgs[0].Message.Content), "User Ran: echo done")
+		assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "User Ran: echo done")
 		assert.True(t, s.Pending()) // the stuck run stays staged
 
 		close(block)
 		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
 		msgs = s.TakeReady() // the released run delivers on the next consume
 		require.Len(t, msgs, 1)
-		assert.Contains(t, resultText(msgs[0].Message.Content), "User Ran: echo stuck")
+		assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "User Ran: echo stuck")
 		assert.Empty(t, s.TakeReady()) // nothing left, and no excluded message ever
 	})
 
@@ -499,7 +499,7 @@ func TestStagerCancelsRunContextOnCompletion(t *testing.T) {
 		require.Eventually(t, fake.ctxCancelled, time.Second, time.Millisecond)
 		msgs := s.Flush(t.Context())
 		require.Len(t, msgs, 1)
-		assert.Contains(t, resultText(msgs[0].Message.Content), "ok")
+		assert.Contains(t, llm.JoinText(msgs[0].Message.Content), "ok")
 	})
 
 	t.Run("excluded_run", func(t *testing.T) {

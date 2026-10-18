@@ -273,7 +273,7 @@ func shellUserMessage(cmd string, res agent.ToolResult) agent.MessageInfo {
 	sb.WriteString("User Ran: ")
 	sb.WriteString(cmd)
 	sb.WriteString("\n\nOutput:\n")
-	text := resultText(res.Content)
+	text := llm.JoinText(res.Content)
 	if text == "" {
 		text = "(no output)"
 	}
@@ -282,18 +282,6 @@ func shellUserMessage(cmd string, res agent.ToolResult) agent.MessageInfo {
 		Message:  llm.Message{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: sb.String()}}},
 		Replayed: true,
 	}
-}
-
-// resultText concatenates the non-empty TextBlocks in content. The bash tool
-// returns a single text block holding status prefix + combined output.
-func resultText(content llm.BlockList) string {
-	var sb strings.Builder
-	for _, b := range content {
-		if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
-			sb.WriteString(tb.Text)
-		}
-	}
-	return sb.String()
 }
 
 // isDone reports whether a completion channel has closed.

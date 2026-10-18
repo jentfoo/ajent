@@ -329,7 +329,7 @@ func detail(c Console, key string) (string, bool) {
 func rowModel(c Console) (string, string) {
 	d, ok := detail(c, "model")
 	if !ok {
-		return "Model", c.Models().Active().Key() + "  (" + sessionOrFlag(c) + ")"
+		return "Model", c.Models().Active().Key() + "  (session)"
 	}
 	return "Model", d
 }
@@ -374,7 +374,7 @@ func rowTools(c Console) (string, string) {
 	if tr := c.Tools(); tr != nil {
 		total = len(tr.All())
 	}
-	return "Tools", fmt.Sprintf("%d of %d enabled  (%s)", n, total, sessionOrFlag(c))
+	return "Tools", fmt.Sprintf("%d of %d enabled  (session)", n, total)
 }
 
 func rowCompaction(c Console) (string, string) {
@@ -574,9 +574,6 @@ func detailOrDefault(c Console, key string) string {
 	}
 	return d
 }
-
-// sessionOrFlag always reports the runtime/session layer.
-func sessionOrFlag(_ Console) string { return "session" }
 
 func orDefault(src string) string {
 	if src == "" {

@@ -374,6 +374,6 @@ func summarizeBudget(model llm.Model, span, prev int) int {
 		emitCap = model.Reserve()
 	}
 	return min(emitCap,
-		max(minSummaryTokens, compactAt(model)/4),
+		max(minSummaryTokens, tokens.CompactAt(model)/4),
 		max(minSummaryTokens, span+prev))
 }
