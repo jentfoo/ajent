@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -500,6 +501,26 @@ func TestBashBackground(t *testing.T) {
 		require.NoError(t, err)
 		assert.NoError(t, syscall.Kill(n, 0), "process must still be running after the call returns")
 		t.Cleanup(func() { _ = syscall.Kill(n, syscall.SIGKILL) })
+	})
+
+	// a failed start leaves no empty logs claiming output, like foreground spill
+	t.Run("failed_start_removes_logs", func(t *testing.T) {
+		dir := t.TempDir()
+		sess := "bg-start-fail-" + randSuffix() // fresh spill dir: old leaks cannot mask this run
+		tool := &bashTool{policy: PathPolicy{Cwd: dir}, sessionID: sess}
+		missing := filepath.Join(dir, "missing") // only resolved upstream, not checked
+		c := agent.ToolCall{ID: "c", Name: "bash",
+			Input: []byte(fmt.Sprintf(`{"command":"echo hi","background":true,"cwd":%s}`, strconv.Quote(missing)))}
+
+		res, err := tool.Execute(t.Context(), c, &captureOutput{})
+		require.NoError(t, err)
+		assert.True(t, res.IsError)                // the missing cwd fails cmd.Start
+		assert.NotContains(t, textOf(res), "log:") // the failure names no log files
+
+		spillDir := filepath.Join(os.TempDir(), "ajent-"+sanitize(sess))
+		entries, readErr := os.ReadDir(spillDir)
+		require.NoError(t, readErr) // both spills were created before Start failed
+		assert.Empty(t, entries)    // a failed start removes them again
 	})
 }
 

@@ -97,6 +97,16 @@ func (s *spiller) close() error {
 	return err
 }
 
+// discardSpill closes and removes an eagerly created spill file that will never
+// hold output, the eager-file counterpart of markFailed. f and path come from a
+// successful createSpill.
+func discardSpill(f *os.File, path string) {
+	_ = f.Close()
+	if path != "" {
+		_ = os.Remove(path)
+	}
+}
+
 // createSpill opens a fresh spill file under os.TempDir/ajent-<session>.
 func createSpill(sessionID, prefix string) (*os.File, string, error) {
 	if sessionID == "" {

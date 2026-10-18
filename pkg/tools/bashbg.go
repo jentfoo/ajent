@@ -38,7 +38,7 @@ func (t *bashTool) executeBackground(root context.Context, cwd string, p bashPar
 	}
 	errF, errPath, err := createSpill(t.sessionID, "bash-stderr")
 	if err != nil {
-		_ = outF.Close()
+		discardSpill(outF, outPath) // nothing will ever write the stdout log
 		return agent.ErrorToolResult("bash: " + err.Error()), nil
 	}
 
@@ -57,8 +57,9 @@ func (t *bashTool) executeBackground(root context.Context, cwd string, p bashPar
 	ownProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
-		_ = outF.Close()
-		_ = errF.Close()
+		// chdir or exec failure: no live child will ever write these, drop both
+		discardSpill(outF, outPath)
+		discardSpill(errF, errPath)
 		return agent.ErrorToolResult("bash: " + err.Error()), nil
 	}
 

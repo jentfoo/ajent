@@ -78,6 +78,20 @@ func TestOpenSpill(t *testing.T) {
 	})
 }
 
+func TestDiscardSpill(t *testing.T) {
+	t.Parallel()
+
+	f, path, err := openSpill(t.TempDir(), "bash", randSuffix)
+	require.NoError(t, err)
+
+	discardSpill(f, path)
+
+	_, writeErr := f.WriteString("x")
+	require.ErrorIs(t, writeErr, os.ErrClosed) // closed too, no fd leak
+	_, statErr := os.Stat(path)
+	assert.True(t, os.IsNotExist(statErr)) // removed, not left empty
+}
+
 func TestSpillerWrite(t *testing.T) {
 	t.Parallel()
 
