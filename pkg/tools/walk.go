@@ -66,8 +66,10 @@ func repoFiles(ctx context.Context, root string) []string {
 	var entries []string
 	if IsGitRepo(ctx, root) {
 		// The "." pathspec keeps ls-files to root's subtree, so a nested cwd never
-		// lists parent or sibling files as "../".
-		out := runQuiet(ctx, "git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
+		// lists parent or sibling files as "../". Raw output: in -z framing the
+		// leading whitespace of the first name is name content, trimming mangles
+		// or drops it.
+		out := runQuietRaw(ctx, "git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
 		parts := strings.Split(out, "\x00")
 		seen := make(map[string]struct{}, len(parts))
 		entries = make([]string, 0, len(parts))
@@ -108,6 +110,12 @@ func WithinRoot(root, path string) (string, bool) {
 // runQuiet runs a command with a short timeout and returns trimmed stdout or
 // empty on failure, so an unresponsive child cannot hang the tool.
 func runQuiet(ctx context.Context, args ...string) string {
+	return strings.TrimSpace(runQuietRaw(ctx, args...))
+}
+
+// runQuietRaw is runQuiet without the trim, for NUL-separated output where
+// whitespace belongs to a record.
+func runQuietRaw(ctx context.Context, args ...string) string {
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	var out strings.Builder
@@ -116,5 +124,5 @@ func runQuiet(ctx context.Context, args ...string) string {
 	if cmd.Run() != nil {
 		return ""
 	}
-	return strings.TrimSpace(out.String())
+	return out.String()
 }
