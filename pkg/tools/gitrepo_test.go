@@ -192,6 +192,35 @@ func (g *gitRepo) write(t *testing.T, name, content string) {
 	require.NoError(t, os0Write(g.dir, name, content))
 }
 
+// commitAll stages every work-tree change and commits it, returning the hash.
+func (g *gitRepo) commitAll(t *testing.T, msg string) string {
+	t.Helper()
+	r, err := git.PlainOpen(g.dir)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	_, err = w.Add(".")
+	require.NoError(t, err)
+	h, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(time.Date(2026, 9, 1, 13, 0, 0, 0, time.UTC))})
+	require.NoError(t, err)
+	return h.String()
+}
+
+// renameChmodRepo commits old.sh at oldMode, then renames it to new.sh with
+// newMode and content, returning the repo and the rename commit's hash.
+func renameChmodRepo(t *testing.T, oldMode os.FileMode, content string, newMode os.FileMode) (*gitRepo, string) {
+	t.Helper()
+	g := newGitRepo(t)
+	oldPath := filepath.Join(g.dir, "old.sh")
+	newPath := filepath.Join(g.dir, "new.sh")
+	require.NoError(t, os.WriteFile(oldPath, []byte("echo hi\n"), oldMode))
+	g.commitAll(t, "add script")
+	require.NoError(t, os.Rename(oldPath, newPath))
+	require.NoError(t, os.WriteFile(newPath, []byte(content), newMode))
+	require.NoError(t, os.Chmod(newPath, newMode)) // WriteFile keeps the mode of an existing file
+	return g, g.commitAll(t, "rename script")
+}
+
 // stage stages every work-tree change, as git add -A would.
 func (g *gitRepo) stage(t *testing.T) {
 	t.Helper()

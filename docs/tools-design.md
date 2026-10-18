@@ -594,6 +594,11 @@ preview uses (`unidiff.go`), not go-git's encoder, so both surfaces produce one
 diff dialect. go-git supplies the object model (trees, changes and rename
 detection). `git.go` shapes git-style per-file blocks around the shared hunks.
 
+go-git's rename detector never pairs sides whose file modes differ, so a rename
+with a chmod would split into separate delete and add blocks. Rename pairing in
+the git readers follows content alone the way git's does, so one block carries
+both the rename pair and any mode change.
+
 **Why not both, switchable.** A runtime fallback from go-git to system `git`
 sounds pragmatic ("go-git in a sub-agent, git otherwise") but is rejected: the
 engine that runs *inside* a child is the one with the safety requirement. A config

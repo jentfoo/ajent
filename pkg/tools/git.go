@@ -391,6 +391,50 @@ func (d *gitDiffOut) Text(paging string) string {
 // close flushes and closes the spill file when one was created.
 func (d *gitDiffOut) close() error { return d.spill.close() }
 
+// isBlobMode reports a plain file mode, not a symlink or gitlink.
+func isBlobMode(m filemode.FileMode) bool {
+	return m == filemode.Regular || m == filemode.Executable
+}
+
+// detectGitRenames pairs renames the way git does, on content alone. It wraps
+// go-git's detector, which rejects pairs whose file modes differ and would
+// split a rename with a chmod into separate delete and add blocks. Returned
+// sides keep their original modes.
+func detectGitRenames(changes object.Changes) (object.Changes, error) {
+	fromModes := make(map[string]filemode.FileMode, len(changes))
+	toModes := make(map[string]filemode.FileMode, len(changes))
+	normalized := make(object.Changes, len(changes))
+	for i, ch := range changes {
+		if ch.From.Name != "" {
+			fromModes[ch.From.Name] = ch.From.TreeEntry.Mode
+		}
+		if ch.To.Name != "" {
+			toModes[ch.To.Name] = ch.To.TreeEntry.Mode
+		}
+		c := *ch // copy, so the caller's entries are never rewritten
+		if isBlobMode(c.From.TreeEntry.Mode) {
+			c.From.TreeEntry.Mode = filemode.Regular
+		}
+		if isBlobMode(c.To.TreeEntry.Mode) {
+			c.To.TreeEntry.Mode = filemode.Regular
+		}
+		normalized[i] = &c
+	}
+	paired, err := object.DetectRenames(normalized, object.DefaultDiffTreeOptions)
+	if err != nil {
+		return nil, err
+	}
+	for _, ch := range paired { // every non-empty side names an input path
+		if ch.From.Name != "" {
+			ch.From.TreeEntry.Mode = fromModes[ch.From.Name]
+		}
+		if ch.To.Name != "" {
+			ch.To.TreeEntry.Mode = toModes[ch.To.Name]
+		}
+	}
+	return paired, nil
+}
+
 // gitDiffTreeText renders the rename-aware unified patch between two trees as
 // git-shaped per-file blocks into d, limited to file's path scope when
 // non-empty. Rename detection runs on the in-scope changes only, so a scoped
@@ -408,7 +452,7 @@ func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, d 
 			return keep(ch.From.Name) || keep(ch.To.Name)
 		}, changes)
 	}
-	if changes, err = object.DetectRenames(changes, object.DefaultDiffTreeOptions); err != nil {
+	if changes, err = detectGitRenames(changes); err != nil {
 		return err
 	}
 	for _, ch := range changes { // every surviving side is in scope
@@ -635,14 +679,15 @@ func writeGitFileDiff(b *strings.Builder, from, to *gitSide) {
 	case to == nil: // deletion
 		head = append(head, "diff --git a/"+from.path+" b/"+from.path,
 			"deleted file mode "+gitMode(from.mode))
-	case from.path != to.path: // rename
-		head = append(head, "diff --git a/"+from.path+" b/"+to.path,
-			"rename from "+from.path, "rename to "+to.path)
-	case from.mode != to.mode: // mode change only
-		head = append(head, "diff --git a/"+from.path+" b/"+to.path,
-			"old mode "+gitMode(from.mode), "new mode "+gitMode(to.mode))
 	default:
 		head = append(head, "diff --git a/"+from.path+" b/"+to.path)
+		// git prints the mode pair before the rename pair
+		if from.mode != to.mode {
+			head = append(head, "old mode "+gitMode(from.mode), "new mode "+gitMode(to.mode))
+		}
+		if from.path != to.path {
+			head = append(head, "rename from "+from.path, "rename to "+to.path)
+		}
 	}
 	if idx := gitIndexLine(from, to); idx != "" {
 		head = append(head, idx)

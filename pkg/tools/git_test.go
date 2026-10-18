@@ -229,6 +229,20 @@ func TestWriteGitFileDiff(t *testing.T) {
 		assert.Contains(t, out, "+two")
 	})
 
+	t.Run("rename_with_mode_change", func(t *testing.T) {
+		var b strings.Builder
+		writeGitFileDiff(&b,
+			&gitSide{path: "old.sh", hash: ha, mode: reg, data: "echo hi\n"},
+			&gitSide{path: "new.sh", hash: ha, mode: exec, data: "echo hi\n"})
+		out := b.String()
+		// git's header order: mode pair before the rename pair
+		assert.Less(t, strings.Index(out, "old mode 100644"), strings.Index(out, "rename from old.sh"))
+		assert.Less(t, strings.Index(out, "new mode 100755"), strings.Index(out, "rename to new.sh"))
+		assert.NotContains(t, out, "new file mode")
+		assert.NotContains(t, out, "deleted file mode")
+		assert.NotContains(t, out, "@@") // identical content, no hunks
+	})
+
 	t.Run("creation_and_deletion", func(t *testing.T) {
 		var b strings.Builder
 		writeGitFileDiff(&b, nil, &gitSide{path: "new.txt", hash: hb, mode: reg, data: "a\n"})
@@ -265,6 +279,35 @@ func TestWriteGitFileDiff(t *testing.T) {
 		assert.Contains(t, out, "diff --git a/big.txt b/big.txt")
 		assert.Contains(t, out, "too large to show (3mb)")
 		assert.NotContains(t, out, "@@") // never hunks over truncated content
+	})
+}
+
+func TestDetectGitRenames(t *testing.T) {
+	t.Parallel()
+
+	entry := func(name string, mode filemode.FileMode, hash string) object.ChangeEntry {
+		return object.ChangeEntry{Name: name,
+			TreeEntry: object.TreeEntry{Name: name, Mode: mode, Hash: plumbing.NewHash(hash)}}
+	}
+	h := "0123456789abcdef0123456789abcdef01234567"
+	deleted := &object.Change{From: entry("old.sh", filemode.Regular, h)}
+	added := &object.Change{To: entry("new.sh", filemode.Executable, h)}
+
+	t.Run("pairs_across_mode_change", func(t *testing.T) {
+		changes, err := detectGitRenames(object.Changes{deleted, added})
+		require.NoError(t, err)
+		require.Len(t, changes, 1)
+		assert.Equal(t, "old.sh", changes[0].From.Name)
+		assert.Equal(t, "new.sh", changes[0].To.Name)
+		assert.Equal(t, filemode.Regular, changes[0].From.TreeEntry.Mode)
+		assert.Equal(t, filemode.Executable, changes[0].To.TreeEntry.Mode)
+	})
+
+	t.Run("input_entries_untouched", func(t *testing.T) {
+		_, err := detectGitRenames(object.Changes{deleted, added})
+		require.NoError(t, err)
+		assert.Equal(t, filemode.Regular, deleted.From.TreeEntry.Mode)
+		assert.Equal(t, filemode.Executable, added.To.TreeEntry.Mode)
 	})
 }
 

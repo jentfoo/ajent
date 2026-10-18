@@ -52,6 +52,16 @@ func TestGitShow(t *testing.T) {
 		assert.Contains(t, out, "merge commit; showing the diff against first parent "+g.a[:7])
 	})
 
+	t.Run("rename_chmod_keeps_mode_lines", func(t *testing.T) {
+		g, h := renameChmodRepo(t, 0o644, "echo hi\n", 0o755)
+		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+h+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "commit "+h)
+		assert.Contains(t, out, "rename from old.sh")
+		assert.Contains(t, out, "new mode 100755")
+		assert.NotContains(t, out, "new file mode")
+	})
+
 	t.Run("unknown_revision_errors", func(t *testing.T) {
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"nope"}`)

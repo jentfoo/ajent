@@ -197,6 +197,44 @@ func TestGitDiff(t *testing.T) {
 		assert.Contains(t, out, "new file mode")
 	})
 
+	// committed renames pair even across a chmod, which go-git's detector alone
+	// refuses to match
+	t.Run("committed_rename_detection", func(t *testing.T) {
+		t.Run("chmod_only_keeps_one_block", func(t *testing.T) {
+			g, h := renameChmodRepo(t, 0o644, "echo hi\n", 0o755)
+			out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"from":"`+h+`"}`)
+			assert.False(t, isErr)
+			assert.Contains(t, out, "rename from old.sh")
+			assert.Contains(t, out, "rename to new.sh")
+			assert.Contains(t, out, "old mode 100644")
+			assert.Contains(t, out, "new mode 100755")
+			assert.NotContains(t, out, "new file mode")
+			assert.NotContains(t, out, "deleted file mode")
+			assert.NotContains(t, out, "@@") // content identical, no hunks
+		})
+
+		t.Run("chmod_with_edit_renders_hunks", func(t *testing.T) {
+			g, h := renameChmodRepo(t, 0o644, "echo hi\nmore\n", 0o755)
+			out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"from":"`+h+`"}`)
+			assert.False(t, isErr)
+			assert.Contains(t, out, "rename from old.sh")
+			assert.Contains(t, out, "new mode 100755")
+			assert.Contains(t, out, "+more")
+			assert.NotContains(t, out, "new file mode")
+		})
+
+		// the similarity path also skips executable sides, not just mode changes
+		t.Run("executable_rename_edited_pairs", func(t *testing.T) {
+			g, h := renameChmodRepo(t, 0o755, "echo hi\nmore\n", 0o755)
+			out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"from":"`+h+`"}`)
+			assert.False(t, isErr)
+			assert.Contains(t, out, "rename from old.sh")
+			assert.Contains(t, out, "+more")
+			assert.NotContains(t, out, "new file mode")
+			assert.NotContains(t, out, "old mode") // modes equal, no mode lines
+		})
+	})
+
 	t.Run("no_changes_reads_as_answer", func(t *testing.T) {
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
