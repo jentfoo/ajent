@@ -507,7 +507,7 @@ func TestReadInfo(t *testing.T) {
 	// a file that parses but holds no session entry (zero bytes from a crash
 	// between create and first write, or hand-made lines) is not a session, so
 	// readInfo returns zero Info and no listing surface shows a rootless row
-	t.Run("no_session_entry_is_not_a_session", func(t *testing.T) {
+	t.Run("no_session_entry_dropped", func(t *testing.T) {
 		dir := t.TempDir()
 
 		empty := filepath.Join(dir, "2026-01-01T00-00-00Z-0.jsonl")
