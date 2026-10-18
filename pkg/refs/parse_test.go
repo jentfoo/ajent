@@ -33,6 +33,19 @@ func TestParse(t *testing.T) {
 		{"prose_paren_not_absorbed", "@file (see above)", []Ref{
 			{Path: "file", Start: 0, End: 5},
 		}},
+		{"crlf_between_refs", "@a.go\r\n@b.go", []Ref{
+			{Path: "a.go", Start: 0, End: 5},
+			{Path: "b.go", Start: 7, End: 12},
+		}},
+		{"crlf_after_interior_ref", "see @a.go\r\nnext line", []Ref{
+			{Path: "a.go", Start: 4, End: 9},
+		}},
+		{"cr_before_ref_at_boundary", "prev\r@a.go", []Ref{
+			{Path: "a.go", Start: 5, End: 10},
+		}},
+		{"crlf_after_annotation", "@file (800 lines, 64kb)\r\ntext", []Ref{
+			{Path: "file", Start: 0, End: 23, Note: " (800 lines, 64kb)"},
+		}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

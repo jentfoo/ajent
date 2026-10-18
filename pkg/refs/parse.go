@@ -70,16 +70,17 @@ func atBoundary(text string, pos int) bool {
 	}
 	prev := text[pos-1]
 	switch prev {
-	case ' ', '\t', '\n', '(', '[', '`', '"', '\'', '{':
+	case ' ', '\t', '\n', '\r', '(', '[', '`', '"', '\'', '{':
 		return true
 	}
 	return false
 }
 
-// isSpaceOrPunct reports whether c ends a path token.
+// isSpaceOrPunct reports whether c ends a path token. CR counts so an interior
+// CRLF line ending never lands inside a parsed path.
 func isSpaceOrPunct(c byte) bool {
 	switch c {
-	case ' ', '\t', '\n', ',', ';', ')', ']', '}', '`', '"', '\'', '!', '?':
+	case ' ', '\t', '\n', '\r', ',', ';', ')', ']', '}', '`', '"', '\'', '!', '?':
 		return true
 	}
 	return false
@@ -107,8 +108,8 @@ func absorbNote(text string, pos int) (end int, ok bool) {
 				}
 				return pos, false
 			}
-		case '\n':
-			return pos, false // a newline inside the parens is not a measurement
+		case '\n', '\r':
+			return pos, false // a line break inside the parens is not a measurement
 		}
 	}
 	return pos, false

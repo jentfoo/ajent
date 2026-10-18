@@ -203,6 +203,20 @@ func TestExpand(t *testing.T) {
 		assert.Contains(t, sink.starts, "read a.txt")
 	})
 
+	// piped headless input keeps interior CRLF; every line-ending ref must still resolve
+	t.Run("crlf_line_endings_resolve", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "b.txt"), []byte("hi\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("see @a.go\r\nand @b.txt")
+		assert.Empty(t, res.Notices) // no "@a.go\r not found"
+		require.Len(t, injected(t, res), 4)
+		assert.Contains(t, sink.starts, "read a.go")
+		assert.Contains(t, sink.starts, "read b.txt")
+	})
+
 	t.Run("trailing_period_dir_lists", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
