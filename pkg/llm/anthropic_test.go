@@ -520,7 +520,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 		assert.Equal(t, "ephemeral", last["cache_control"].(map[string]any)["type"])
 	})
 
-	t.Run("cache_breakpoints_skip_the_newest_message", func(t *testing.T) {
+	t.Run("cache_breakpoints_mark_the_newest_message", func(t *testing.T) {
 		req := baseReq()
 		req.Cache = CachePolicy{Enabled: true, KeepLast: 1}
 		req.Messages = []Message{Text(RoleUser, "one"), Text(RoleAssistant, "two"), Text(RoleUser, "three")}
@@ -530,7 +530,28 @@ func TestBuildAnthropicBody(t *testing.T) {
 
 		msgs := decode(t, body)["messages"].([]any)
 		newest := msgs[len(msgs)-1].(map[string]any)["content"].([]any)[0].(map[string]any)
-		assert.NotContains(t, newest, "cache_control") // still changing
+		assert.Equal(t, "ephemeral", newest["cache_control"].(map[string]any)["type"])
+	})
+
+	t.Run("cache_breakpoint_skips_a_thinking_tail", func(t *testing.T) {
+		// a lone thinking block cannot carry a marker, so it lands one message back
+		req := baseReq()
+		req.Cache = CachePolicy{Enabled: true, KeepLast: 1}
+		req.Reasoning.Retain = RetainAll
+		req.Messages = sameOrigin(req.Model, []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{ThinkingBlock{Text: "hmm", Signature: "sig"}}},
+		})
+
+		body, err := buildAnthropicBody(req)
+		require.NoError(t, err)
+
+		msgs := decode(t, body)["messages"].([]any)
+		thinking := msgs[1].(map[string]any)["content"].([]any)[0].(map[string]any)
+		require.Equal(t, "thinking", thinking["type"])
+		assert.NotContains(t, thinking, "cache_control")
+		user := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+		assert.Equal(t, "ephemeral", user["cache_control"].(map[string]any)["type"])
 	})
 
 	t.Run("long_retention_tier_when_supported", func(t *testing.T) {
@@ -677,6 +698,36 @@ func TestBuildAnthropicBodyInflation(t *testing.T) {
 
 		m := decode(t, buildBody(t, req))
 		assert.InDelta(t, 16000, m["max_tokens"], 0.001)
+	})
+
+	t.Run("budget_stable_across_a_growing_session", func(t *testing.T) {
+		// MaxTokens tracks the live ledger, budget_tokens is a cache key and
+		// must not move with it
+		m := anthropicModel(nil)
+		m.ContextWindow = 128000
+		m.MaxOutput = 64000
+		build := func(maxTokens int) map[string]any {
+			return decode(t, buildBody(t, Request{
+				Model: m, Messages: []Message{Text(RoleUser, "hi")},
+				MaxTokens: maxTokens, Reasoning: ReasoningConfig{Level: LevelMedium},
+			}))
+		}
+		assert.Equal(t, build(22000)["thinking"], build(3000)["thinking"])
+		assert.InDelta(t, 8192,
+			build(3000)["thinking"].(map[string]any)["budget_tokens"], 0.001)
+	})
+
+	t.Run("tiny_budget_keeps_max_tokens_above_the_budget", func(t *testing.T) {
+		// a sub-minimum budget is raised, and inflation keeps the request valid
+		// even near a full window
+		req := baseReq()
+		req.MaxTokens = 3000
+		req.Reasoning = ReasoningConfig{Level: LevelHigh, Budget: 512}
+
+		m := decode(t, buildBody(t, req))
+		thinking := m["thinking"].(map[string]any)
+		assert.InDelta(t, minThinkingBudget, thinking["budget_tokens"], 0.001)
+		assert.Greater(t, m["max_tokens"], thinking["budget_tokens"])
 	})
 }
 

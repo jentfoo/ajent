@@ -141,16 +141,12 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 	// answer window. Adaptive models replace the budget with an effort instead.
 	var budget int
 	if on && !caps.ForceAdaptiveThinking {
-		explicit := req.Reasoning.Budget // else the model's configured budget for the level
-		if explicit > 0 {
-			maxTokens += explicit
-		} else {
-			maxTokens += req.Model.Caps.Budgets[level]
-		}
+		// the ceiling is model-fixed, so budget_tokens never drifts mid-session
+		budget = thinkingBudget(caps, level, req.Reasoning.Budget, MaxOutputFor(req.Model, 0))
+		maxTokens += budget
 		if req.Model.MaxOutput > 0 {
 			maxTokens = min(maxTokens, req.Model.MaxOutput)
 		}
-		budget = thinkingBudget(caps, level, req.Reasoning.Budget, maxTokens)
 	}
 
 	body := antRequest{
@@ -198,8 +194,8 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 }
 
 // thinkingBudget returns the reasoning token budget for a resolved level, or zero
-// when it cannot fit under maxTokens with the answer floor kept.
-func thinkingBudget(caps Capabilities, level Level, explicitBudget int, maxTokens int) int {
+// when it cannot fit under ceiling with the answer floor kept.
+func thinkingBudget(caps Capabilities, level Level, explicitBudget int, ceiling int) int {
 	if caps.Dialect != DialectAnthropic || !caps.Reasoning || level == LevelOff {
 		return 0
 	}
@@ -212,8 +208,8 @@ func thinkingBudget(caps Capabilities, level Level, explicitBudget int, maxToken
 		budget = minThinkingBudget
 	}
 	// the shared answer floor keeps reasoning from eating the whole output, and a
-	// max_tokens too small to leave any room drops thinking entirely
-	headroom := max(0, maxTokens-minAnswerTokens)
+	// ceiling too small to leave any room drops thinking entirely
+	headroom := max(0, ceiling-minAnswerTokens)
 	if budget > headroom {
 		budget = headroom
 	}
@@ -535,13 +531,22 @@ func applyCacheBreakpoints(body *antRequest, keepLast int, longTTL bool, cacheOn
 			remaining--
 		}
 	}
-	// the newest message is still changing, so breakpoints start one back
-	for i := len(body.Messages) - 2; i >= 0 && keepLast > 0 && remaining > 0; i-- {
+	// assembly is pure and state only appends, so the newest message is final
+	// and takes a marker like the rest
+	for i := len(body.Messages) - 1; i >= 0 && keepLast > 0 && remaining > 0; i-- {
 		blocks := body.Messages[i].Content
-		if len(blocks) == 0 {
-			continue
+		var marked bool
+		for j := len(blocks) - 1; j >= 0; j-- {
+			// thinking-family blocks cannot carry cache_control
+			if t := blocks[j].Type; t != antTypeThinking && t != antTypeRedacted {
+				blocks[j].CacheControl = mark()
+				marked = true
+				break
+			}
 		}
-		blocks[len(blocks)-1].CacheControl = mark()
+		if !marked {
+			continue // thinking-only message: no boundary to mark
+		}
 		keepLast--
 		remaining--
 	}

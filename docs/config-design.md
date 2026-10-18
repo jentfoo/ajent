@@ -57,6 +57,10 @@ permissions, compaction, sub-agent settings, and UI render/palette.
 Enum-valued keys are stored as their text names and parsed by the caller, each
 package parsing its own.
 
+Retain defaults per model rather than per layer: the global layers pin no
+value, so an unset policy survives layering and resolves against the model's
+caps. An explicit choice in any layer still wins through normal precedence.
+
 ### Model
 
 `model` is the model a fresh start defaults to, resolved through normal layer

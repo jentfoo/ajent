@@ -211,7 +211,9 @@ func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 	st := &agent.State{Model: reasoning, Tokens: tokens.New(reasoning)}
 	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
 
-	// the user's explicit choice persists as a session override (mirrors /reasoning).
+	// the user's explicit level choice persists as a session override, the
+	// /reasoning pick owns that leaf now
+	require.NoError(t, c.SetSessionSetting("reasoning.level", "high"))
 	c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
 
 	// switching to a model that cannot reason clamps only the live effective level.
@@ -473,6 +475,7 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 		c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
 
 		c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
+		require.NoError(t, c.SetSessionSetting("reasoning.level", "high"))
 		assert.Equal(t, llm.LevelHigh, st.Reasoning.Level)
 		require.NoError(t, c.ResetSessionSetting("reasoning.level"))
 		assert.Equal(t, llm.LevelMedium, st.Reasoning.Level) // the compiled-in default
@@ -543,6 +546,35 @@ func TestUIConsoleResetModelSwitchesBackToConfigured(t *testing.T) {
 	_, layer, ok := set.Explain("model")     // and the override is gone, not re-pinned
 	require.True(t, ok)
 	assert.Equal(t, "user", layer)
+}
+
+// A resolved flavor retention default must never latch into a config layer:
+// the level pick owns its leaf, the sink writes nothing.
+func TestUIConsoleReasoningRetainDoesNotLatch(t *testing.T) {
+	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+	t.Setenv("AJENT_HOME", t.TempDir())
+
+	ui := newPumpTestUI(t)
+	local := llm.Model{Provider: "local", ID: "lm",
+		Caps: llm.Capabilities{Reasoning: true, RetainDefault: llm.RetainAll}}
+	priced := llm.Model{Provider: "p", ID: "big",
+		Caps: llm.Capabilities{Reasoning: true}}
+	st := &agent.State{Model: local,
+		Reasoning: llm.ReasoningFrom(config.Reasoning{}, local), Tokens: tokens.New(local)}
+	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+	require.NoError(t, err)
+	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+
+	require.Equal(t, llm.RetainAll, st.Reasoning.Retain) // the flavor default
+
+	// a level pick through the generic sink, then a switch to priced caps
+	c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh, Retain: st.Reasoning.Retain})
+	require.NoError(t, c.SetSessionSetting("reasoning.level", "high"))
+	c.SetModel(priced)
+
+	_, _, ok := set.Explain("reasoning.retain")
+	assert.False(t, ok) // no layer holds the resolved flavor value
 }
 
 func TestUIConsoleResetRecordsNullSettingChange(t *testing.T) {

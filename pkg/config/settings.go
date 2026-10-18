@@ -125,7 +125,7 @@ type Permissions struct {
 // maxPollWait ("10m") likewise twins pkg/subagent's defaultPollTimeout, and
 // its maxSteps (200) pins a child that would otherwise investigate forever.
 const defaultsJSON = `{
-  "reasoning": { "level": "medium", "retain": "wholeTurn" },
+  "reasoning": { "level": "medium" },
   "tools": {
     "enabled": ["read", "write", "edit", "bash"],
     "limits": {

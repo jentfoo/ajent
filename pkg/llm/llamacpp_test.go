@@ -264,11 +264,11 @@ func TestLlamaCppThinkingBodyMerge(t *testing.T) {
 		assert.JSONEq(t, `{"chat_template_kwargs":{"enable_thinking":true,"preserve_thinking":true,"extra":"kept"}}`, got)
 	})
 
-	t.Run("think_tags_default_sends_only_the_toggle", func(t *testing.T) {
+	t.Run("think_tags_default_sends_the_core_keys", func(t *testing.T) {
 		m := thinkingModel(flavorDefaults[FlavorLlamaCpp].caps)
 
 		got := reasoningFragment(llamacppBody(t, m, LevelOff))
-		assert.JSONEq(t, `{"chat_template_kwargs":{"enable_thinking":false}}`, got)
+		assert.JSONEq(t, `{"chat_template_kwargs":{"enable_thinking":false,"preserve_thinking":true}}`, got)
 	})
 }
 

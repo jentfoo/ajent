@@ -274,7 +274,9 @@ configuration warns rather than defaulting silently.
 ingest, the first non-empty of `reasoning_content` → `reasoning` →
 `reasoning_text` wins (that order, since some providers echo the same text into
 two fields), and that delta name is recorded on the thinking block
-(`ThinkingBlock.Field`, inline-tag blocks leave it empty). On replay every
+(`ThinkingBlock.Field`). Inline-tag reasoning arrives on the content channel
+rather than a delta, so ingest records `Capabilities.ReasoningField` on it:
+every compat thinking block carries the channel it replays on. On replay every
 surviving non-blank thinking block joins with `"\n"` and is written back under
 `Capabilities.ReasoningField` when set, else the first block's own `Field`. That
 resolves the reasoning replay field, which detection can remap per vendor,
@@ -297,8 +299,14 @@ The transcript always holds everything.
 - `none` — strip entirely.
 - `lastTurn` — keep the most recent assistant message.
 - `wholeTurn` — keep the current tool calling turn, strip completed turns. The
-  configured default.
+  default unless the flavor declares otherwise.
 - `all` — never strip for policy reasons.
+
+The default resolves per model: an unset policy takes
+`Capabilities.RetainDefault` when the flavor declares one, else `wholeTurn`.
+The local flavors (LM Studio, llama.cpp) declare `all` so the replayed prefix
+stays identical to the engine's KV cache. Priced flavors keep `wholeTurn`,
+since replayed thinking is billed input.
 
 Two rules make it survive contact with real providers:
 
@@ -581,8 +589,11 @@ a `: ping` comment frame counts as progress even though it dispatches no event.
 
 Anthropic gets explicit `cache_control` breakpoints on the last system block,
 the last tool definition and the last `KeepLast` message boundaries, recomputed
-every request so the cached prefix grows with the conversation. Breakpoints
-start one message back, because the newest message is still changing. The API
+every request so the cached prefix grows with the conversation. The newest
+message is final (assembly is pure and state only appends), so it receives a
+breakpoint too and the next request reads it at cache price instead of paying
+the write premium again. Inside a message the breakpoint lands on the last
+block that can carry one, skipping a trailing thinking-family block. The API
 allows four, and the code will not emit more. Models declaring
 `supportsLongCacheRetention` get the extended `ttl` tier.
 
@@ -591,7 +602,8 @@ OpenAI and openrouter cache automatically and report it through
 `prompt_cache_key` (clamped to 64 chars) for cache routing: default on
 api.openai.com, `supportsExplicitPromptCacheMode` opts in elsewhere. Local
 providers reuse their own KV cache and need nothing sent, beyond llama.cpp's
-`cache_prompt`.
+`cache_prompt` and `preserve_thinking`, which keeps the template from dropping
+reasoning on turns without tool calls.
 
 ## Provider notes
 
@@ -794,8 +806,11 @@ payloads line up would leak one test's needs into unrelated tests.
   by an explicit `off:null` in the level map), the budget shape when on, and the
   adaptive shape (`thinking:{"type":"adaptive"}` plus `output_config.effort`) on
   models that require it. `max_tokens` is inflated by the thinking budget first,
-  capped at the model cap, so the reply keeps its full window. `display` is
-  deliberately never sent.
+  capped at the model cap, so the reply keeps its full window. The budget clamps
+  against a model-fixed ceiling, never the live request cap, so `budget_tokens`
+  stays identical across a session (a moving budget invalidates the cached
+  prefix). The compat `thinking_token_budget` follows the same rule. `display`
+  is deliberately never sent.
 - **Do not reuse the `tools` key for kimi load points.** The re-offered schemas
   ride a bare system message's own `tools` field, while a chat-completions request
   keeps `tools` as the immediate (never-loaded) set, and an empty list stays

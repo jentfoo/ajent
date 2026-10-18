@@ -294,6 +294,9 @@ func TestThinkingTokenBudget(t *testing.T) {
 			c.ThinkingBudgetField = fieldThinkingTokenBudget
 			c.Budgets = map[Level]int{LevelHigh: 30000, LevelMedium: 8000}
 		})
+		// a larger cap than the shared helper's 512, the window reserve is what
+		// the clamp answers to now that MaxTokens no longer feeds it
+		m.MaxOutput = 40000
 		return Request{
 			Model:     m,
 			System:    BlockList{TextBlock{Text: "sys"}},
@@ -308,12 +311,13 @@ func TestThinkingTokenBudget(t *testing.T) {
 		require.NoError(t, err)
 		var m map[string]any
 		require.NoError(t, json.Unmarshal(body, &m))
-		assert.InDelta(t, 18976, m["thinking_token_budget"], 0.001) // min(30000, maxTokens-1024)
+		// min(30000, window 8192 - reserve 1638 - floor 1024)
+		assert.InDelta(t, 5530, m["thinking_token_budget"], 0.001)
 	})
 
 	t.Run("omitted_when_ceiling_too_small", func(t *testing.T) {
 		req := base()
-		req.MaxTokens = 500 // ceiling - floor <= 0
+		req.Model.MaxOutput = minAnswerTokens // ceiling leaves no room at all
 		assert.NotContains(t,
 			decodeThinkingBudget(t, req), "thinking_token_budget")
 	})
@@ -330,6 +334,19 @@ func TestThinkingTokenBudget(t *testing.T) {
 		req.Reasoning.Level = LevelOff
 		assert.NotContains(t,
 			decodeThinkingBudget(t, req), "thinking_token_budget")
+	})
+
+	t.Run("budget_stable_across_a_growing_session", func(t *testing.T) {
+		// the live cap no longer feeds the clamp, so a drifting MaxTokens cannot
+		// move the budget (and with it the whole body) between steps
+		other := base()
+		other.MaxTokens = 4000
+		assert.Equal(t,
+			decodeThinkingBudget(t, base())["thinking_token_budget"],
+			decodeThinkingBudget(t, other)["thinking_token_budget"])
+		assert.Equal(t,
+			decodeThinkingBudget(t, base())["messages"],
+			decodeThinkingBudget(t, other)["messages"])
 	})
 }
 

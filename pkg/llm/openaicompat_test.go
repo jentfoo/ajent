@@ -182,7 +182,8 @@ func TestCompatProviderStream(t *testing.T) {
 		msg, _, err := Accumulate(s)
 		require.NoError(t, err)
 		// an unclosed region keeps its partial close tag verbatim
-		assert.Equal(t, BlockList{ThinkingBlock{Text: "pondering</th"}}, msg.Content)
+		assert.Equal(t, BlockList{ThinkingBlock{Text: "pondering</th",
+			Field: "reasoning_content"}}, msg.Content)
 	})
 
 	t.Run("flush_tail_opens_block", func(t *testing.T) {
@@ -217,7 +218,7 @@ func TestCompatProviderStream(t *testing.T) {
 		// a thinking tail closes the open text block first, keeping stream order
 		assert.Equal(t, BlockList{
 			TextBlock{Text: "hi"},
-			ThinkingBlock{Text: "<"},
+			ThinkingBlock{Text: "<", Field: "reasoning_content"},
 		}, msg.Content)
 	})
 
@@ -293,7 +294,7 @@ func TestCompatProviderStream(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, BlockList{
 			TextBlock{Text: "visible"},
-			ThinkingBlock{Text: "reconsidering"},
+			ThinkingBlock{Text: "reconsidering", Field: "reasoning_content"},
 			ToolCallBlock{ID: "call_1", Name: "read", Input: json.RawMessage(`{"path":"main.go"}`)},
 		}, msg.Content)
 	})
@@ -1081,4 +1082,38 @@ func TestCompatErrObjCodeString(t *testing.T) {
 			assert.Equal(t, tc.want, e.codeString())
 		})
 	}
+}
+
+// TestThinkTagReplayField pins the ingest rule end to end: reasoning that
+// arrived inside content tags carries the configured replay field, so the
+// request after a tool result sends it back instead of dropping it.
+func TestThinkTagReplayField(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := sseServer(t, "compat/think_tags.sse")
+	p := newCompatTestProvider(t, srv.URL)
+	m := thinkModel()
+
+	s, err := p.Stream(t.Context(), Request{Model: m})
+	require.NoError(t, err)
+
+	msg, _, err := Accumulate(s)
+	require.NoError(t, err)
+	require.Len(t, msg.Content, 2)
+	think, ok := msg.Content[0].(ThinkingBlock)
+	require.True(t, ok)
+	assert.Equal(t, "reasoning_content", think.Field) // stamped at ingest
+
+	req := Request{
+		Model:     m,
+		System:    BlockList{TextBlock{Text: "be terse"}},
+		Reasoning: ReasoningConfig{Level: LevelHigh, Retain: RetainAll},
+		Messages: sameOrigin(m, []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: msg.Content},
+		}),
+	}
+	body, err := buildCompatBody(req, compatProfile{})
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"reasoning_content":"pondering"`)
 }

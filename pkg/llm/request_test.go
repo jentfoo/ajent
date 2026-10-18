@@ -238,6 +238,20 @@ func TestReasoningFrom(t *testing.T) {
 	assert.Equal(t, RetainWholeTurn, d.Retain)
 }
 
+func TestReasoningFromRetainDefault(t *testing.T) {
+	t.Parallel()
+
+	local := flavorDefaults[FlavorLMStudio].caps
+	mLocal := Model{Provider: "lmstudio", ID: "m", Caps: local}
+	mPriced := Model{Provider: "anthropic", ID: "m", Caps: Capabilities{Reasoning: true}}
+
+	assert.Equal(t, RetainAll, ReasoningFrom(config.Reasoning{}, mLocal).Retain)
+	assert.Equal(t, RetainWholeTurn, ReasoningFrom(config.Reasoning{}, mPriced).Retain)
+	// an explicit choice always wins over the flavor default
+	assert.Equal(t, RetainWholeTurn,
+		ReasoningFrom(config.Reasoning{Retain: "wholeTurn"}, mLocal).Retain)
+}
+
 func TestReasoningConfigUnmarshal(t *testing.T) {
 	t.Parallel()
 

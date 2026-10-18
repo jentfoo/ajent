@@ -147,4 +147,24 @@ func TestReasoningCommand(t *testing.T) {
 		require.NoError(t, cmd.Handler(t.Context(), "high", c))
 		assert.False(t, c.state.Reasoning.Hide)
 	})
+
+	// the level pick owns its leaf: no retain or hide override appears
+	t.Run("level_pick_writes_only_the_level_leaf", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+
+		c.state.Reasoning.Retain = llm.RetainAll // a resolved flavor default
+		cmd, _ := r.Get("reasoning")
+		require.NoError(t, cmd.Handler(t.Context(), "high", c))
+		assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
+
+		v, src, ok := c.settings.Explain("reasoning.level")
+		require.True(t, ok)
+		assert.Equal(t, "session", src)
+		assert.JSONEq(t, `"high"`, string(v))
+		_, _, hasRetain := c.settings.Explain("reasoning.retain")
+		assert.False(t, hasRetain)
+	})
 }

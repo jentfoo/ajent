@@ -114,7 +114,7 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 		// an empty list for endpoints that require it once tool calls exist
 		body.Tools = &[]compatTool{}
 	}
-	applyThinking(&body, req) // runs after the max-tokens fields for its budget read
+	applyThinking(&body, req)
 	if caps.Store {
 		// store:false opts out of server-side storage, gated because not every
 		// completions endpoint accepts the key unlike the responses dialect
@@ -577,14 +577,19 @@ func (s *compatStream) emitContent(reasoning, content string) []Event {
 }
 
 // endThinking closes the thinking block, carrying the replay tokens and its
-// originating delta field. It is idempotent so both the text transition and the
-// terminal drain may call it.
+// originating field: the delta field, else the configured one when tag-split
+// reasoning arrived on the content channel. Idempotent, since both the text
+// transition and the terminal drain call it.
 func (s *compatStream) endThinking() Event {
 	st := s.st
 	idx := st.thinkIdx
 	st.thinkIdx = -2 // closed, so a later drain does not repeat it
+	field := st.reasonField
+	if field == "" {
+		field = st.caps.ReasoningField
+	}
 	event := Event{Type: EventThinkingEnd, Index: idx,
-		Block: ThinkingBlock{Text: st.thinkBuf.String(), Details: st.details, Field: st.reasonField}}
+		Block: ThinkingBlock{Text: st.thinkBuf.String(), Details: st.details, Field: field}}
 	// reset per-block accumulators so a second region starts clean
 	st.thinkBuf.Reset()
 	st.details = nil

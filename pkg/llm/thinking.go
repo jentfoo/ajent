@@ -12,9 +12,8 @@ const (
 )
 
 // applyThinking dispatches reasoning on or off onto the wire shape for
-// caps.Thinking. It runs after max-tokens fields are set in buildCompatBody so
-// the vLLM thinking_token_budget can read them, and it writes nothing when reasoning
-// is unsupported or this request has none.
+// caps.Thinking, and writes nothing when reasoning is unsupported or this
+// request has none.
 func applyThinking(body *compatRequest, req Request) {
 	caps := req.Model.Caps
 	if !caps.Reasoning {
@@ -129,21 +128,18 @@ func setReasoningEffort(body *compatRequest, caps Capabilities, l Level) {
 	body.ReasoningEffort = &e
 }
 
-// applyThinkingTokenBudget caps the reasoning phase under caps.ThinkingBudgetField,
-// clamped so at least minAnswerTokens stay for the reply. It is independent of
-// thinking format: any chat-completions model may be served by vLLM.
+// applyThinkingTokenBudget caps the reasoning phase under
+// caps.ThinkingBudgetField, keeping minAnswerTokens for the reply. The ceiling
+// is model-fixed rather than the live request cap, so the budget cannot drift
+// and bust the engine's prefix cache. Independent of thinking format: any
+// chat-completions model may be served by vLLM.
 func applyThinkingTokenBudget(body *compatRequest, req Request, lvl Level, on bool) {
 	field := req.Model.Caps.ThinkingBudgetField
 	if !on || field == "" {
 		return
 	}
-	ceiling := req.Model.MaxOutput
-	if body.MaxTokens != nil {
-		ceiling = *body.MaxTokens
-	} else if body.MaxCompletion != nil {
-		ceiling = *body.MaxCompletion
-	}
-	budget := min(req.Model.Caps.Budgets[lvl], max(0, ceiling-minAnswerTokens))
+	budget := min(req.Model.Caps.Budgets[lvl],
+		max(0, MaxOutputFor(req.Model, 0)-minAnswerTokens))
 	if budget > 0 {
 		if body.extra == nil { // records one configuration named body key
 			body.extra = make(map[string]json.RawMessage, 1)

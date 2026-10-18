@@ -209,7 +209,7 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
 
 The top-level blocks:
   * `model` - the model a fresh session starts with. A `/model` change writes your most recent choice here, so it is remembered across restarts.
-  * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is hidden from view (`hide`). Shown by default, so set `hide: true` to stop streaming it.
+  * `reasoning` - the default reasoning level (`level`, one of the seven), how much thinking to retain when sending history (`retain`: `none`, `lastTurn`, `wholeTurn`, `all`), an optional token `budget`, and whether reasoning is hidden from view (`hide`). Shown by default, so set `hide: true` to stop streaming it. Leave `retain` unset to take the model's default: `wholeTurn` on priced providers, `all` on local ones (LM Studio, llama.cpp) so their cache keeps serving.
   * `agent.maxSteps` - an optional cap on one turn's tool-calling iterations, where absent or zero means unlimited.
   * `agent.turnRetries` - how many times a failed model call is re-requested before the turn fails (default 4). Covers dropped connections, truncated streams and overloaded providers, with backoff, and permanent errors (bad request, no credentials) never retry.
   * `agent.systemPrompt` - replaces ajent's default prose guidance in the system prompt (the opening sentence and the two guideline bullets) when set. Environment facts, project instructions (`AGENTS.md`) and extension snippets still follow, since tools depend on them, and a trailing newline is trimmed. The CLI flag `--system <text>` sets it for one run.

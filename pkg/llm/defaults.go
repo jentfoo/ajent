@@ -365,6 +365,8 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			StreamUsage:    true,
 			Temperature:    true,
 			ToolChoice:     true,
+			// keeps reasoning so replay matches the engine's KV cache
+			RetainDefault: RetainAll,
 			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			SupportsFinishReason:    true,
@@ -386,6 +388,8 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Tokenizer:      TokenizerRemoteTokenize,
 			MaxTokensField: fieldMaxTokens,
 			SystemAsRole:   true,
+			// keeps reasoning so replay matches the engine's KV cache
+			RetainDefault: RetainAll,
 			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			// older builds reject the unknown stream_options key, discovery
@@ -521,6 +525,7 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.Images = orBool(c.Images, o.SupportsImages)
 	c.ReasoningReplay = orBool(c.ReasoningReplay, o.RequiresReasoningReplay)
 	c.ReplayReasoning = orBool(c.ReplayReasoning, o.RequiresReasoningContent)
+	c.RetainDefault = orRetain(c.RetainDefault, o.RetainDefault)
 
 	// supportsReasoningEffort is a pure gate, it never picks the encoding
 	c.SupportsReasoningEffort = orBool(c.SupportsReasoningEffort, o.SupportsReasoningEffort)
@@ -570,6 +575,13 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 }
 
 func orBool(dst bool, p *bool) bool {
+	if p != nil {
+		return *p
+	}
+	return dst
+}
+
+func orRetain(dst RetainPolicy, p *RetainPolicy) RetainPolicy {
 	if p != nil {
 		return *p
 	}

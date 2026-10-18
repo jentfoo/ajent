@@ -263,14 +263,17 @@ type ModelOverride struct {
 // honours it, which is where ajent's own extensions sit. compatWarnings reports
 // any set field whose dialect does not include the model's resolved dialect.
 type Compat struct {
-	ThinkingFormat        *string  `json:"thinkingFormat,omitempty"`
-	MaxTokensField        *string  `json:"maxTokensField,omitempty" dialect:"openai-completions"`
-	ReasoningContentField *string  `json:"reasoningContentField,omitempty"`
-	CacheControlFormat    *string  `json:"cacheControlFormat,omitempty"`
-	Tokenizer             *string  `json:"tokenizer,omitempty"`
-	ThinkTags             []string `json:"thinkTags,omitempty"` // open then close
-	SessionAffinityFormat *string  `json:"sessionAffinityFormat,omitempty" dialect:"openai-completions,openai-responses"`
-	DeferredTools         *string  `json:"deferredToolsMode,omitempty" dialect:"openai-completions"`
+	ThinkingFormat        *string `json:"thinkingFormat,omitempty"`
+	MaxTokensField        *string `json:"maxTokensField,omitempty" dialect:"openai-completions"`
+	ReasoningContentField *string `json:"reasoningContentField,omitempty"`
+	// RetainDefault is the policy a model falls back to when no layer sets one.
+	// "none" parses to the enum zero and reads as unset, a silent no-op here
+	RetainDefault         *RetainPolicy `json:"retainDefault,omitempty"`
+	CacheControlFormat    *string       `json:"cacheControlFormat,omitempty"`
+	Tokenizer             *string       `json:"tokenizer,omitempty"`
+	ThinkTags             []string      `json:"thinkTags,omitempty"` // open then close
+	SessionAffinityFormat *string       `json:"sessionAffinityFormat,omitempty" dialect:"openai-completions,openai-responses"`
+	DeferredTools         *string       `json:"deferredToolsMode,omitempty" dialect:"openai-completions"`
 
 	SupportsDeveloperRole    *bool `json:"supportsDeveloperRole,omitempty"`
 	SupportsSystemRole       *bool `json:"supportsSystemRole,omitempty"`

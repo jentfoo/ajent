@@ -10,8 +10,8 @@ import (
 )
 
 // decorateLlamaCpp asks the server to reuse its prompt cache and merges the
-// enable_thinking toggle into any kwargs a configured thinking format built.
-// The core toggle key wins, matching applyThinking's configured-kwargs rule.
+// enable_thinking and preserve_thinking core keys into any kwargs a configured
+// thinking format built, matching applyThinking's configured-kwargs rule.
 func decorateLlamaCpp(body *compatRequest, req Request) {
 	cache := true
 	body.CachePrompt = &cache
@@ -21,10 +21,12 @@ func decorateLlamaCpp(body *compatRequest, req Request) {
 	}
 	on := reasoningOn(caps, req.Reasoning.Level)
 	if body.ChatTemplateKwarg == nil {
-		body.ChatTemplateKwarg = map[string]any{"enable_thinking": on}
+		body.ChatTemplateKwarg = map[string]any{"enable_thinking": on, "preserve_thinking": true}
 		return
 	}
 	body.ChatTemplateKwarg["enable_thinking"] = on
+	// the template drops thinking on call-free turns unless asked to keep it
+	body.ChatTemplateKwarg["preserve_thinking"] = true
 }
 
 // llamaProps is the subset of /props that describes the loaded model.

@@ -532,7 +532,8 @@ func (a *Agent) buildRequest() llm.Request {
 		Reasoning: reasoning,
 		MaxTokens: llm.MaxOutputFor(a.state.Model, used),
 		SessionID: a.opts.SessionID,
-		// anthropic: fills the four-breakpoint budget
+		// anthropic breakpoints: system (1) + tools (1) + KeepLast messages fill
+		// the API's four-marker budget exactly
 		Cache: llm.CachePolicy{Enabled: true, KeepLast: 2},
 	}
 }

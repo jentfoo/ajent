@@ -16,6 +16,9 @@ type Capabilities struct {
 	ReasoningReplay bool   // prior thinking blocks must be sent back
 	ReasoningField  string // delta field carrying reasoning text, compat dialect
 	ReplayReasoning bool   // echo reasoning_content on assistant messages
+	// RetainDefault is the flavor's policy when the user set none. RetainNone
+	// is the enum zero and doubles as unset, so a flavor cannot declare none
+	RetainDefault RetainPolicy
 
 	// per-level override of the provider's effort value. Nil omits it, absent uses the default.
 	LevelMap map[Level]*string

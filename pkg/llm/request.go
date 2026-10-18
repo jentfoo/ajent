@@ -284,7 +284,8 @@ func (p *RetainPolicy) UnmarshalText(data []byte) error {
 func ParseRetain(s string) (RetainPolicy, bool) { return retainNames.lookup(s) }
 
 // ReasoningFrom resolves a config reasoning block against m, falling back to
-// the compiled-in defaults when a name is absent or unparsable.
+// the compiled-in defaults when a name is absent or unparsable. An absent
+// retention policy takes the flavor's RetainDefault when one is declared.
 func ReasoningFrom(r config.Reasoning, m Model) ReasoningConfig {
 	lvl := LevelMedium
 	if l, ok := ParseLevel(r.Level); ok && r.Level != "" {
@@ -293,6 +294,8 @@ func ReasoningFrom(r config.Reasoning, m Model) ReasoningConfig {
 	retain := RetainWholeTurn
 	if p, ok := ParseRetain(r.Retain); ok && r.Retain != "" {
 		retain = p
+	} else if m.Caps.RetainDefault != RetainNone {
+		retain = m.Caps.RetainDefault
 	}
 	return ReasoningConfig{Level: lvl, Retain: retain, Hide: r.Hide, Budget: r.Budget}
 }

@@ -44,7 +44,7 @@ func TestSettingsDecodesMergedConfig(t *testing.T) {
 	assert.False(t, st.Compaction.Auto)        // overrides the default true
 	assert.InDelta(t, 0.4, st.Compaction.Threshold, 1e-9)
 	// fields the user layer leaves alone keep their defaults
-	assert.Equal(t, "wholeTurn", st.Reasoning.Retain) // default retain name survives the level override
+	assert.Empty(t, st.Reasoning.Retain) // unset resolves against the model caps
 	assert.Equal(t, "auto", st.UI.Render)
 }
 

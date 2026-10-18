@@ -388,20 +388,13 @@ func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {
 	c.queueState("reasoning "+rc.Level.String(), func() { c.applyReasoning(rc) })
 }
 
-// applyReasoning sets the session reasoning config and persists it.
+// applyReasoning sets the live reasoning config. Persistence belongs to the
+// editor that owns the change, so resolved values never latch into a layer.
 func (c *uiConsole) applyReasoning(rc llm.ReasoningConfig) {
 	c.st.Reasoning = rc
-	// persist granular dotted leaves so every choice survives: marshalling the
-	// whole config would drop retain "none" and show false under omitempty.
-	_ = c.set.SetSession("reasoning.level", rc.Level.String())
-	_ = c.set.SetSession("reasoning.hide", rc.Hide)
-	_ = c.set.SetSession("reasoning.retain", rc.Retain.String())
 	// keep the status indicator in step with a non-default level.
 	c.ui.SetStatusSegment(segment(segReasoning, levelOrEmpty(rc), ""))
 	c.ui.Notify("reasoning: "+rc.Level.String(), tui.LevelInfo)
-	if c.rec != nil {
-		_ = c.rec.SettingChange("reasoning", rc)
-	}
 }
 
 func (c *uiConsole) ToolsChanged() {

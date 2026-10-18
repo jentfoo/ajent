@@ -178,6 +178,10 @@ func reasoningCommand(ctx context.Context, arg string, c Console) error {
 		Hide:   cur.Hide,   // keep whether thinking streams to the UI
 		Budget: cur.Budget, // keep an explicit token budget across level changes
 	})
+	if lvl != cur.Level {
+		// the pick owns the leaf, the sink persists nothing
+		_ = c.SetSessionSetting("reasoning.level", lvl.String())
+	}
 	return nil
 }
 

@@ -242,7 +242,7 @@ func allRows() []settingsRow {
 		{name: "Model", render: rowModel, edit: editModel},
 		{name: "Reasoning", render: detailRow("Reasoning", "reasoning.level"), edit: editReasoning,
 			unavailable: reasoningUnavailable},
-		{name: "Reasoning retention", render: detailRow("Reasoning retention", "reasoning.retain"), edit: editRetention},
+		{name: "Reasoning retention", render: rowRetention, edit: editRetention},
 		{name: "Show thinking", render: detailRow("Show thinking", "reasoning.hide"), edit: editThinking},
 		{name: "Tools", render: rowTools, edit: editTools},
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
@@ -339,6 +339,12 @@ func detailRow(label, key string) func(Console) (string, string) {
 	return func(c Console) (string, string) { return label, detailOrDefault(c, key) }
 }
 
+// rowRetention renders the resolved policy, since the flavor default lives in
+// caps and never surfaces in a config layer.
+func rowRetention(c Console) (string, string) {
+	return "Reasoning retention", c.State().Reasoning.Retain.String()
+}
+
 // reasoningUnavailable reports why the Reasoning level cannot be edited: a model
 // that offers fewer than two levels has no choice to make, so the row is grayed.
 func reasoningUnavailable(c Console) string {
@@ -399,7 +405,8 @@ func editModel(ctx context.Context, c Console) ([]settingChange, error) {
 
 // editReasoning delegates to the reasoning picker. A cancelled pick, a model
 // with fewer than two levels and re-picking the active level all change
-// nothing, so no override is recorded for them.
+// nothing, so no override is recorded for them. reasoningCommand owns the
+// leaf, so nothing is recorded here.
 func editReasoning(ctx context.Context, c Console) ([]settingChange, error) {
 	before := c.State().Reasoning.Level
 	if err := reasoningCommand(ctx, "", c); err != nil {
@@ -409,10 +416,7 @@ func editReasoning(ctx context.Context, c Console) ([]settingChange, error) {
 	if level == before {
 		return nil, nil // nothing picked: no override to record
 	}
-	// persist the level as a dotted leaf, SetReasoning having updated state
-	s := level.String()
-	_ = c.SetSessionSetting("reasoning.level", s)
-	return []settingChange{{key: "reasoning.level", value: s}}, nil
+	return []settingChange{{key: "reasoning.level", value: level.String()}}, nil
 }
 
 // editRetention lets the user pick a reasoning retention policy.
