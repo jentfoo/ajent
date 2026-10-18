@@ -125,6 +125,32 @@ func TestResolveCaps(t *testing.T) {
 		got := resolveCaps(base, nil, &Compat{RequiresReasoningContent: ptr(true)})
 		assert.True(t, got.ReplayReasoning)
 	})
+
+	t.Run("stream_usage_alias_precedence", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			alias     *bool // supportsStreamUsage, the historical spelling
+			canonical *bool // supportsUsageInStreaming
+			expected  bool
+		}{
+			{"neither_keeps_base", nil, nil, base.StreamUsage},
+			{"alias_alone_true", ptr(true), nil, true},
+			{"alias_alone_false", ptr(false), nil, false},
+			{"canonical_alone_true", nil, ptr(true), true},
+			{"canonical_alone_false", nil, ptr(false), false},
+			{"conflict_canonical_wins_off", ptr(true), ptr(false), false},
+			{"conflict_canonical_wins_on", ptr(false), ptr(true), true},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				got := resolveCaps(base, nil, &Compat{
+					SupportsStreamUsage:      tc.alias,
+					SupportsUsageInStreaming: tc.canonical,
+				})
+				assert.Equal(t, tc.expected, got.StreamUsage)
+			})
+		}
+	})
 }
 
 func TestResolveModel(t *testing.T) {

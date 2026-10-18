@@ -511,8 +511,9 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.SystemAsRole = orBool(c.SystemAsRole, o.SupportsSystemRole)
 	c.Temperature = orBool(c.Temperature, o.SupportsTemperature)
 	c.ParallelTools = orBool(c.ParallelTools, o.SupportsParallelTools)
-	// supportsStreamUsage is ajent's historical name, while supportsUsageInStreaming is canonical
-	c.StreamUsage = orBool(orBool(c.StreamUsage, o.SupportsUsageInStreaming), o.SupportsStreamUsage)
+	// supportsStreamUsage is ajent's historical name, while supportsUsageInStreaming
+	// is canonical and wins when a block carries both spellings
+	c.StreamUsage = orBool(orBool(c.StreamUsage, o.SupportsStreamUsage), o.SupportsUsageInStreaming)
 	c.ToolChoice = orBool(c.ToolChoice, o.SupportsToolChoice)
 	c.Store = orBool(c.Store, o.SupportsStore)
 	c.PromptCache = orBool(c.PromptCache, o.SupportsPromptCache)
