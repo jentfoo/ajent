@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -59,10 +60,13 @@ type planHarness struct {
 	rec      *sessRec
 	toolsReg *tools.Registry
 	expander *refs.Expander
+	ui       *tui.UI
+	reg      *llm.Registry
 	dir      string
 	planner  *llm.ScriptedProvider
 	impl     *llm.ScriptedProvider
 	editor   []string
+	notices  []string
 }
 
 // newPlanHarness wires the workflow over a real session and agent. Only the
@@ -93,7 +97,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 	st := &agent.State{Model: e2eImplementor, Tokens: tokens.New(e2eImplementor)}
 
 	h := &planHarness{
-		st: st, rec: rec, toolsReg: toolsReg, dir: dir,
+		st: st, rec: rec, toolsReg: toolsReg, dir: dir, ui: ui, reg: reg,
 		expander: refs.NewExpander(toolsReg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil),
 		planner:  &llm.ScriptedProvider{ProviderName: "planner", Turns: plannerTurns},
 		impl:     &llm.ScriptedProvider{ProviderName: "impl", Turns: implTurns},
@@ -117,7 +121,16 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 		},
 	})
 
-	h.ctl = plan.New(plan.Host{
+	h.ctl = plan.New(h.host())
+	return h
+}
+
+// host wires the workflow over the live harness seams. A resumed process builds
+// a fresh controller over the same surfaces.
+func (h *planHarness) host() plan.Host {
+	w, rec, st, toolsReg := h.rec.w, h.rec, h.st, h.toolsReg
+	ui, reg := h.ui, h.reg
+	return plan.Host{
 		PickModel:   func(context.Context, string) (llm.Model, bool) { return e2ePlanner, true },
 		ActiveModel: func() llm.Model { return st.Model },
 		Running:     h.ag.Running,
@@ -144,21 +157,31 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 			}
 			return session.LatestCustom(session.Branch(entries, w.Head()), plan.CustomType, v)
 		},
-		ResolveModel: func(key string) (llm.Model, bool) {
-			switch key {
-			case e2ePlanner.Key():
-				return e2ePlanner, true
-			case e2eImplementor.Key():
-				return e2eImplementor, true
+		Landed: func() bool {
+			entries, _, rerr := session.Read(w.Path())
+			if rerr != nil {
+				return true
 			}
-			return llm.Model{}, false
+			return session.CustomLanded(session.Branch(entries, w.Head()), plan.CustomType)
 		},
+		ResolveModel: h.resolveModel,
 
-		LastText: func() string { return llm.LastAssistantText(st.Messages) },
+		Messages: func() []llm.Message { return st.Messages },
 		SetInput: func(s string) { h.editor = append(h.editor, s) },
+		Notify:   func(msg string, _ agent.Level) { h.notices = append(h.notices, msg) },
 		Git:      func(context.Context) (string, string) { return " M main.go", " main.go | 2 +-" },
-	})
-	return h
+	}
+}
+
+// resolveModel maps the scripted workflow roles onto their models.
+func (h *planHarness) resolveModel(key string) (llm.Model, bool) {
+	switch key {
+	case e2ePlanner.Key():
+		return e2ePlanner, true
+	case e2eImplementor.Key():
+		return e2eImplementor, true
+	}
+	return llm.Model{}, false
 }
 
 // prompt runs one turn through the pump and drain seams, expanding the typed
@@ -180,6 +203,43 @@ func (h *planHarness) prompt(t *testing.T, text string) {
 		}
 		in = next
 	}
+}
+
+// crashAt persists the workflow state BeforePrompt produced without running the
+// turn it framed, the window a crash between persistence and delivery leaves.
+func (h *planHarness) crashAt(t *testing.T, text string) {
+	t.Helper()
+
+	res := h.expander.Expand(text)
+	_, ok := h.ctl.BeforePrompt(t.Context(), agent.Input{Text: res.Text, After: res.Run, Prepared: true})
+	require.True(t, ok) // the transition persisted
+}
+
+// resumeFromTranscript simulates a fresh process over the crashed session: state
+// rebuilds from the file, the workflow restores from the resumed branch. It
+// returns what that branch actually carries.
+func (h *planHarness) resumeFromTranscript(t *testing.T) []llm.Message {
+	t.Helper()
+
+	// the resumed process registers its own control tools
+	h.toolsReg.Unregister(plan.Source)
+	entries, _, err := session.Read(h.rec.w.Path())
+	require.NoError(t, err)
+	branch := session.Branch(entries, resumeHead(h.rec.w.Head(), entries))
+	rebuilt, _ := session.State(branch, func(key string) (llm.Model, error) {
+		m, ok := h.resolveModel(key)
+		if !ok {
+			return m, errors.New("unresolved model: " + key)
+		}
+		return m, nil
+	})
+	h.st.Messages = rebuilt.Messages
+	if rebuilt.Model.ID != "" {
+		h.st.Model = rebuilt.Model
+	}
+	h.ctl = plan.New(h.host())
+	require.True(t, h.ctl.Restore())
+	return rebuilt.Messages
 }
 
 // texts flattens every text block a request carried, for content assertions.
@@ -333,4 +393,68 @@ func TestPlanKickoffsStayUnexpanded(t *testing.T) {
 	assert.False(t, hasRefInjection(h.impl.Requests()[1]))
 
 	assert.False(t, h.ctl.Active())
+}
+
+// TestPlanResumeRepairsMissingKickoff reproduces the crash window between the
+// implementing transition persisting and its kickoff landing: the resumed root
+// carries only bookkeeping entries, so the next prompt must re-deliver the
+// kickoff ahead of itself rather than run the implementor context-free.
+func TestPlanResumeRepairsMissingKickoff(t *testing.T) {
+	t.Parallel()
+
+	h := newPlanHarness(t,
+		[]llm.ScriptedTurn{
+			{Events: devCallTurn("1", plan.DevImplementTool, `{"plan":"the plan"}`)},
+			{Events: devCallTurn("2", plan.DevCompleteTool, `{}`)},
+		},
+		[]llm.ScriptedTurn{
+			{Events: devCallTurn("3", plan.DevReviewTool, `{"summary":"added the flag"}`)},
+		},
+	)
+	require.Empty(t, h.ctl.Start(t.Context(), ""))
+	h.prompt(t, "add a --version flag")
+	require.Equal(t, []string{"the plan"}, h.editor)
+
+	h.crashAt(t, "the plan") // approval persisted, the kickoff turn never ran
+
+	msgs := h.resumeFromTranscript(t)
+	require.Empty(t, msgs) // the new root holds no kickoff, only bookkeeping
+	require.True(t, h.ctl.Active())
+
+	h.prompt(t, "keep going")
+	require.Len(t, h.impl.Requests(), 1)
+	implCtx := texts(h.impl.Requests()[0])
+	assert.Contains(t, implCtx, "<plan>\nthe plan\n</plan>")
+	assert.Contains(t, implCtx, "keep going")
+	assert.Less(t, strings.Index(implCtx, "<plan>"), strings.Index(implCtx, "keep going"))
+
+	// the repaired round still reviews and completes
+	require.Len(t, h.planner.Requests(), 2)
+	assert.Contains(t, texts(h.planner.Requests()[1]), "added the flag")
+	assert.False(t, h.ctl.Active())
+}
+
+// TestPlanResumeRepairsMissingGoal covers the planning half of the same window:
+// a goal recorded as captured whose message never landed must not swallow the
+// planning contract from the prompt that retypes it.
+func TestPlanResumeRepairsMissingGoal(t *testing.T) {
+	t.Parallel()
+
+	h := newPlanHarness(t,
+		[]llm.ScriptedTurn{
+			{Events: textTurn("a draft")},
+		},
+		nil,
+	)
+	require.Empty(t, h.ctl.Start(t.Context(), ""))
+
+	h.crashAt(t, "add a --version flag") // goal captured, the goal turn never ran
+
+	h.resumeFromTranscript(t)
+
+	h.prompt(t, "add a --version flag")
+	require.Len(t, h.planner.Requests(), 1)
+	planningCtx := texts(h.planner.Requests()[0])
+	assert.Contains(t, planningCtx, "planning, not implementing")
+	assert.Contains(t, planningCtx, "add a --version flag")
 }

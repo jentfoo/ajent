@@ -120,7 +120,7 @@ of the implementation branch, so `dev_review`'s `summary` is required. An empty
 one is rejected like any other bad control call, in-turn. A round that ends
 *without* calling `dev_review` at all still has to be reported, so the
 implementor's closing assistant message stands in as the summary
-(`Host.LastText`, read before the fork replaces the context). Without that
+(`Host.Messages`, read before the fork replaces the context). Without that
 fallback a stopped implementor reaches review as silence, and the reviewer has
 only `git status` to go on.
 
@@ -200,6 +200,14 @@ The entry also persists the awaiting draft (`draftPlan`) at the gate, and resume
 puts it back into the editor: a crash or exit while parked must not silently
 turn the next arbitrary prompt into the plan of record. The draft is cleared
 once the gate passes.
+
+A restore validates the restored phase against the branch. Transition ordering
+makes the phase's first message follow the entry that recorded it, so an entry
+alone at the tail means a crash landed between persisting and delivering. The
+missing kickoff is re-delivered ahead of the next prompt, and a missing goal
+lets the next prompt become the goal. The check reads the transcript rather
+than the rebuilt context, so compaction cannot make a delivered kickoff read
+as missing.
 
 Phase kickoffs are injected messages carrying the replay mark, so replay shows
 each one as its own block above the turn it fed rather than echoing it as a

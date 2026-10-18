@@ -75,9 +75,14 @@ type Host struct {
 	Restore      func(v any) bool
 	ResolveModel func(key string) (llm.Model, bool)
 
-	// LastText is the trailing assistant text of the live context, used as the
-	// implementation summary when the implementor stopped without reporting one.
-	LastText func() string
+	// Landed reports whether the newest persisted workflow state has message
+	// entries after it on the resumed branch, telling a restore the recorded
+	// phase actually began. Nil disables the crash-window repair.
+	Landed func() bool
+
+	// Messages reads the live context. Its trailing assistant text stands in as
+	// the implementation summary when the implementor stopped without reporting one.
+	Messages func() []llm.Message
 
 	SetInput func(string)
 	Ask      func(ctx context.Context, q string, opts []string) (int, error)
@@ -119,6 +124,9 @@ type Controller struct {
 	retries   int
 	pending   *transition
 	cancelled bool
+	// kickoffDue marks a restored phase whose kickoff never landed. The next
+	// prompt re-delivers it ahead of itself
+	kickoffDue bool
 }
 
 // New returns a controller bound to h. Nothing is registered or changed until Start runs.
@@ -283,7 +291,7 @@ func (c *Controller) stopLocked(msg string) {
 	if c.h.DropTools != nil {
 		c.h.DropTools()
 	}
-	c.pending, c.cancelled = nil, false
+	c.pending, c.cancelled, c.kickoffDue = nil, false, false
 	c.setPhaseLocked(PhaseDone)
 	c.notify(msg, agent.LevelInfo)
 }

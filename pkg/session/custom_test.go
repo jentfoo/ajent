@@ -54,3 +54,47 @@ func TestLatestCustom(t *testing.T) {
 		assert.False(t, LatestCustom(branch, "plan", &got))
 	})
 }
+
+func TestCustomLanded(t *testing.T) {
+	t.Parallel()
+
+	t.Run("message_after_custom_lands", func(t *testing.T) {
+		branch := []Entry{
+			customEntry("c1", "plan", customPayload{Phase: "implementing"}),
+			msgWithID("m1", llmText("kickoff")),
+		}
+		assert.True(t, CustomLanded(branch, "plan"))
+	})
+
+	t.Run("custom_at_tail_never_landed", func(t *testing.T) {
+		branch := []Entry{
+			msgWithID("m1", llmText("earlier")),
+			customEntry("c1", "plan", customPayload{Phase: "implementing"}),
+		}
+		assert.False(t, CustomLanded(branch, "plan"))
+	})
+
+	// bookkeeping entries after the custom entry are not delivery: only a
+	// message proves the recorded phase began
+	t.Run("non_message_entries_do_not_count", func(t *testing.T) {
+		branch := []Entry{
+			customEntry("c1", "plan", customPayload{Phase: "implementing"}),
+			{ID: "mc1", Type: TypeModelChange},
+		}
+		assert.False(t, CustomLanded(branch, "plan"))
+	})
+
+	t.Run("other_custom_types_ignored", func(t *testing.T) {
+		branch := []Entry{
+			customEntry("c1", "plan", customPayload{Phase: "implementing"}),
+			customEntry("c2", "other", customPayload{}),
+		}
+		assert.False(t, CustomLanded(branch, "plan"))
+	})
+
+	// no entry of the type means nothing can be pending, and the caller only
+	// asks after a successful LatestCustom anyway
+	t.Run("missing_custom_nothing_pending", func(t *testing.T) {
+		assert.True(t, CustomLanded([]Entry{msgWithID("m1", llmText("hi"))}, "plan"))
+	})
+}

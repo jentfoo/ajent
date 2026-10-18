@@ -3,6 +3,8 @@ package plan
 import (
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -124,6 +126,74 @@ func TestControllerRestore(t *testing.T) {
 		require.True(t, c.Restore())
 		assert.Equal(t, PhaseAwaitingPlan, c.phase)
 		assert.Contains(t, f.inputs, "the draft") // the editor is refilled for editing
+	})
+
+	// a crash between persisting a transition and delivering its message leaves
+	// the phase recorded with nothing behind it
+	t.Run("missing_kickoff_is_repaired", func(t *testing.T) {
+		for _, phase := range []Phase{PhaseImplementing, PhaseReviewing} {
+			f := newFakeHost()
+			p := mid()
+			p.Phase = phase
+			f.stored = p
+			f.landed = false
+			c := New(f.host())
+
+			require.True(t, c.Restore())
+			in, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "keep going"})
+			require.True(t, ok)
+			require.Len(t, in.Before, 1) // the kickoff rides ahead of the prompt
+			assert.Contains(t, in.Before[0].Message.Content[0].(llm.TextBlock).Text,
+				"<plan>\nthe plan\n</plan>")
+			assert.Contains(t, f.notices[len(f.notices)-2], "never reached the transcript")
+		}
+	})
+
+	// a goal recorded as captured whose message never landed must not swallow
+	// the planning contract from the prompt that retypes it
+	t.Run("missing_goal_is_recaptured", func(t *testing.T) {
+		f := newFakeHost()
+		p := mid()
+		p.Phase = PhasePlanning
+		p.GoalCaptured = true
+		f.stored = p
+		f.landed = false
+		c := New(f.host())
+
+		require.True(t, c.Restore())
+		in, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "add a flag"})
+		require.True(t, ok) // the retype becomes the goal and gains the contract
+		require.Len(t, in.Blocks, 1)
+		assert.Contains(t, in.Blocks[0].(llm.TextBlock).Text, "planning, not implementing")
+		assert.Contains(t, f.notices[len(f.notices)-2], "becomes the goal")
+	})
+
+	t.Run("landed_transition_needs_no_repair", func(t *testing.T) {
+		f := newFakeHost()
+		p := mid()
+		p.Phase = PhaseImplementing
+		f.stored = p // landed defaults true
+		c := New(f.host())
+
+		require.True(t, c.Restore())
+		_, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "keep going"})
+		assert.False(t, ok) // passes through, the round has its kickoff
+	})
+
+	// a parked gate is legitimately entry-tailed: the draft refill is all it needs
+	t.Run("missing_landing_at_gate_ignored", func(t *testing.T) {
+		f := newFakeHost()
+		p := mid()
+		p.Phase = PhaseAwaitingPlan
+		p.DraftPlan = "the draft"
+		f.stored = p
+		f.landed = false
+		c := New(f.host())
+
+		require.True(t, c.Restore())
+		assert.Equal(t, PhaseAwaitingPlan, c.phase)
+		_, ok := c.BeforePrompt(t.Context(), agent.Input{Text: "the draft"})
+		require.True(t, ok) // the gate itself, not a kickoff repair
 	})
 }
 

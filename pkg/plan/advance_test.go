@@ -195,7 +195,7 @@ func TestControllerAdvance(t *testing.T) {
 	t.Run("unreported_round_falls_back", func(t *testing.T) {
 		c, f := started(t)
 		f.mu.Lock()
-		f.lastText = "wrote the flag and its test"
+		f.messages = []llm.Message{llm.Text(llm.RoleAssistant, "wrote the flag and its test")}
 		f.mu.Unlock()
 		handOff(t, c, "the plan")
 		submitPlan(t, c, "the plan")
@@ -209,7 +209,7 @@ func TestControllerAdvance(t *testing.T) {
 	t.Run("reported_summary_wins", func(t *testing.T) {
 		c, f := started(t)
 		f.mu.Lock()
-		f.lastText = "trailing chatter"
+		f.messages = []llm.Message{llm.Text(llm.RoleAssistant, "trailing chatter")}
 		f.mu.Unlock()
 		handOff(t, c, "the plan")
 		submitPlan(t, c, "the plan")

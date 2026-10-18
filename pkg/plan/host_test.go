@@ -35,8 +35,11 @@ type fakeHost struct {
 	head     string
 	askIndex int
 	askErr   error
-	lastText string
-	forkErr  error
+	// messages is what the live context carries, for the summary fallback
+	messages []llm.Message
+	// landed says the persisted entry is followed by messages on the branch
+	landed  bool
+	forkErr error
 
 	forks     []forkCall
 	toolSets  [][]string
@@ -52,7 +55,7 @@ type fakeHost struct {
 
 // newFakeHost returns a host wired for a planner pick, with the trunk head set.
 func newFakeHost() *fakeHost {
-	return &fakeHost{pick: plannerModel, pickOK: true, head: "trunk-tip"}
+	return &fakeHost{pick: plannerModel, pickOK: true, head: "trunk-tip", landed: true}
 }
 
 func (f *fakeHost) host() Host {
@@ -117,6 +120,11 @@ func (f *fakeHost) host() Host {
 			raw, _ := json.Marshal(*f.stored)
 			return json.Unmarshal(raw, v) == nil
 		},
+		Landed: func() bool {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			return f.landed
+		},
 		ResolveModel: func(key string) (llm.Model, bool) {
 			switch key {
 			case plannerModel.Key():
@@ -127,10 +135,10 @@ func (f *fakeHost) host() Host {
 			return llm.Model{}, false
 		},
 
-		LastText: func() string {
+		Messages: func() []llm.Message {
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			return f.lastText
+			return f.messages
 		},
 
 		SetInput: func(s string) { f.mu.Lock(); f.inputs = append(f.inputs, s); f.mu.Unlock() },

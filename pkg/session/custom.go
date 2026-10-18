@@ -22,3 +22,23 @@ func LatestCustom(branch []Entry, customType string, v any) bool {
 	}
 	return false
 }
+
+// CustomLanded reports whether any message entry follows the newest custom
+// entry of customType on branch, telling a caller that what the entry recorded
+// actually began rather than sitting alone at the tail. With no entry of the
+// type it reports true: nothing can be pending.
+func CustomLanded(branch []Entry, customType string) bool {
+	for i := len(branch) - 1; i >= 0; i-- {
+		e := branch[i]
+		switch e.Type {
+		case TypeMessage:
+			return true
+		case TypeCustom:
+			var cd CustomData
+			if err := e.Decode(&cd); err == nil && cd.CustomType == customType {
+				return false
+			}
+		}
+	}
+	return false
+}

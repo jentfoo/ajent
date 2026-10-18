@@ -126,12 +126,20 @@ func newPlanController(d planDeps) *plan.Controller {
 			branch := session.Branch(entries, resumeHead(d.rec.w.Head(), entries))
 			return session.LatestCustom(branch, plan.CustomType, v)
 		},
+		Landed: func() bool {
+			entries, _, err := session.Read(d.rec.w.Path())
+			if err != nil {
+				return true // unreadable: leave the phase as persisted
+			}
+			branch := session.Branch(entries, resumeHead(d.rec.w.Head(), entries))
+			return session.CustomLanded(branch, plan.CustomType)
+		},
 		ResolveModel: func(key string) (llm.Model, bool) {
 			m, err := d.reg.Resolve(key)
 			return m, err == nil
 		},
 
-		LastText: func() string { return llm.LastAssistantText(d.st.Messages) },
+		Messages: func() []llm.Message { return d.st.Messages },
 
 		SetInput: d.ui.SetInput,
 		Ask: func(ctx context.Context, q string, opts []string) (int, error) {

@@ -41,6 +41,19 @@ func (c *Controller) BeforePrompt(ctx context.Context, in agent.Input) (agent.In
 		in.Injected = true
 		return in, true
 
+	case c.kickoffDue && (c.phase == PhaseImplementing || c.phase == PhaseReviewing):
+		// a crash recorded the phase before its kickoff landed, so it rides ahead
+		// of this prompt rather than the round running with nothing to go on
+		c.kickoffDue = false
+		kickoff := agent.MessageInfo{
+			Message: llm.Text(llm.RoleUser, c.repairKickoff(ctx)), Injected: true, Replayed: true,
+		}
+		in.Before = append([]agent.MessageInfo{kickoff}, in.Before...)
+		if c.phase == PhaseImplementing && !in.Injected {
+			c.retries = 0 // hand continuation restarts the budget
+		}
+		return in, true
+
 	case c.phase == PhaseImplementing && !in.Injected:
 		// hand continuation restarts the budget, so a post-pause error retries
 		// rather than re-pausing with no attempts left
@@ -87,8 +100,8 @@ func (c *Controller) Advance(ctx context.Context, last agent.TurnResult) (agent.
 		if pending != nil && pending.to == PhaseReviewing {
 			c.execSummary = pending.payload
 		}
-		if strings.TrimSpace(c.execSummary) == "" && c.h.LastText != nil {
-			c.execSummary = c.h.LastText()
+		if strings.TrimSpace(c.execSummary) == "" && c.h.Messages != nil {
+			c.execSummary = llm.LastAssistantText(c.h.Messages())
 		}
 		return c.beginReviewLocked(ctx), true
 
@@ -133,7 +146,7 @@ func (c *Controller) beginImplementationLocked() string {
 	c.setPhaseLocked(PhaseImplementing)
 	c.notify("implementing with "+c.implementor.Key()+" (round "+strconv.Itoa(c.round())+
 		"/"+strconv.Itoa(maxRevisions)+")", agent.LevelInfo)
-	return implementKickoff(c.approvedPlan, latestRound(c.revisionRounds))
+	return c.implementKickoffText()
 }
 
 // beginRevisionLocked records a review round and re-enters implementation, or
@@ -162,13 +175,32 @@ func (c *Controller) beginReviewLocked(ctx context.Context) agent.Input {
 	c.applyScopeLocked(PhaseReviewing)
 	c.setPhaseLocked(PhaseReviewing)
 
+	c.notify("reviewing with "+c.planner.Key()+" (round "+strconv.Itoa(c.round())+
+		"/"+strconv.Itoa(maxRevisions)+")", agent.LevelInfo)
+	return kickoffInput(c.reviewKickoffText(ctx))
+}
+
+// implementKickoffText returns the current round's implementation kickoff.
+// Caller holds mu.
+func (c *Controller) implementKickoffText() string {
+	return implementKickoff(c.approvedPlan, latestRound(c.revisionRounds))
+}
+
+// reviewKickoffText returns the review kickoff over live git state. Caller holds mu.
+func (c *Controller) reviewKickoffText(ctx context.Context) string {
 	var status, diffStat string
 	if c.h.Git != nil {
 		status, diffStat = c.h.Git(ctx)
 	}
-	c.notify("reviewing with "+c.planner.Key()+" (round "+strconv.Itoa(c.round())+
-		"/"+strconv.Itoa(maxRevisions)+")", agent.LevelInfo)
-	return kickoffInput(reviewKickoff(c.approvedPlan, status, diffStat, c.execSummary))
+	return reviewKickoff(c.approvedPlan, status, diffStat, c.execSummary)
+}
+
+// repairKickoff rebuilds the kickoff a crash dropped. Caller holds mu.
+func (c *Controller) repairKickoff(ctx context.Context) string {
+	if c.phase == PhaseReviewing {
+		return c.reviewKickoffText(ctx)
+	}
+	return c.implementKickoffText()
 }
 
 // retryImplementationLocked resumes an implementation turn that died on a

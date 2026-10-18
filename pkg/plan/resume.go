@@ -17,6 +17,7 @@ type persisted struct {
 	ApprovedPlan   string   `json:"approvedPlan,omitempty"`
 	DraftPlan      string   `json:"draftPlan,omitempty"`
 	RevisionRounds []string `json:"revisionRounds,omitempty"`
+	ExecSummary    string   `json:"execSummary,omitempty"`
 	GoalCaptured   bool     `json:"goalCaptured,omitempty"`
 	PlanTip        string   `json:"planTip,omitempty"`
 	ReviewTip      string   `json:"reviewTip,omitempty"`
@@ -37,6 +38,7 @@ func (c *Controller) persistLocked() {
 		ApprovedPlan:   c.approvedPlan,
 		DraftPlan:      c.draftPlan,
 		RevisionRounds: c.revisionRounds,
+		ExecSummary:    c.execSummary,
 		GoalCaptured:   c.goalCaptured,
 		PlanTip:        c.planTip,
 		ReviewTip:      c.reviewTip,
@@ -98,6 +100,7 @@ func (c *Controller) Restore() bool {
 	c.approvedPlan = p.ApprovedPlan
 	c.draftPlan = p.DraftPlan
 	c.revisionRounds = slices.Clone(p.RevisionRounds)
+	c.execSummary = p.ExecSummary
 	c.goalCaptured = p.GoalCaptured
 	c.planTip, c.reviewTip = p.PlanTip, p.ReviewTip
 	c.retries, c.pending, c.cancelled = 0, nil, false // a resume is manual intervention
@@ -110,6 +113,7 @@ func (c *Controller) Restore() bool {
 	c.phase = p.Phase
 	c.applyScopeLocked(p.Phase)
 	c.setPhaseLocked(p.Phase)
+	c.repairFromBranch()
 	// a parked gate loses its draft unless it is put back, so the user can read,
 	// edit and submit rather than an arbitrary prompt becoming the plan of record
 	if c.phase == PhaseAwaitingPlan && c.draftPlan != "" && c.h.SetInput != nil {
@@ -117,4 +121,29 @@ func (c *Controller) Restore() bool {
 	}
 	c.notify("resumed plan workflow: "+p.Phase.String(), agent.LevelInfo)
 	return true
+}
+
+// repairFromBranch validates the restored phase against the branch: a crash
+// between persisting a transition and delivering its message leaves the entry
+// at the tail with nothing behind it, so the missing message is re-delivered
+// ahead of the next prompt. Caller holds mu.
+func (c *Controller) repairFromBranch() {
+	if c.h.Landed == nil || c.h.Landed() {
+		return
+	}
+	switch c.phase {
+	case PhaseImplementing, PhaseReviewing:
+		// the round would run with no plan in context at all
+		c.kickoffDue = true
+		c.notify("the "+c.phase.String()+" kickoff never reached the transcript; it rides "+
+			"ahead of the next prompt", agent.LevelWarn)
+	case PhasePlanning:
+		if c.goalCaptured {
+			// the goal was recorded as captured before its message landed, so the
+			// next prompt becomes the goal
+			c.goalCaptured = false
+			c.notify("the recorded goal never reached the transcript; the next prompt "+
+				"becomes the goal", agent.LevelWarn)
+		}
+	}
 }
