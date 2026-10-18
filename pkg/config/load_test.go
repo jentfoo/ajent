@@ -73,6 +73,41 @@ func TestLoad(t *testing.T) {
 		assert.NotNil(t, s.Settings())
 	})
 
+	t.Run("empty_file_loads_as_absent", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		ws := filepath.Join(home, "proj")
+		require.NoError(t, os.MkdirAll(ws, 0o755))
+
+		writeConfig(t, userPathFor(t), "// no settings yet\n")            // comment-only
+		writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName), "") // zero bytes, like touch
+		writeConfig(t, filepath.Join(ProjectDir(ws), LocalConfigFileName), " \t\n ")
+
+		s, warns, err := Load(Options{Workspace: ws})
+		require.NoError(t, err)
+		assert.Empty(t, warns)
+
+		// defaults resolve as if every file were missing
+		st := s.Settings()
+		assert.Equal(t, "medium", st.Reasoning.Level)
+		assert.Equal(t, "default", s.Source("reasoning.level"))
+	})
+
+	t.Run("empty_file_beside_valid_layer", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		ws := filepath.Join(home, "proj")
+		require.NoError(t, os.MkdirAll(ws, 0o755))
+
+		writeConfig(t, userPathFor(t), "")
+		writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName), `{"model":"project-model"}`)
+
+		s, warns, err := Load(Options{Workspace: ws})
+		require.NoError(t, err)
+		assert.Empty(t, warns)
+		assert.Equal(t, "project-model", s.Settings().Model)
+	})
+
 	t.Run("type_error_warns", func(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("AJENT_HOME", home)

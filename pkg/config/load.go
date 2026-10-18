@@ -299,8 +299,9 @@ type fileLayer struct {
 	locked bool
 }
 
-// loadFile reads and validates one config file into relaxed data. A missing file
-// returns (nil, nil). Warnings cover unknown, duplicate and wrong-typed keys.
+// loadFile reads and validates one config file into relaxed data. A missing,
+// empty or comment-only file returns (nil, nil), matching how Merge skips blank
+// layers. Warnings cover unknown, duplicate and wrong-typed keys.
 func loadFile(path string) ([]byte, []string, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -309,6 +310,9 @@ func loadFile(path string) ([]byte, []string, error) {
 		return nil, nil, err
 	}
 	data := RelaxJSON(raw)
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil, nil // blank or comment-only content behaves as an absent file
+	}
 
 	// odd-case keys normalize here, so merge and provenance see one spelling
 	norm, renames := canonicalizeKeys(data)
