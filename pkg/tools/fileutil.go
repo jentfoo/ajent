@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -20,11 +21,39 @@ const (
 	fileImage
 )
 
+// errNotRegular reports that a path is a pipe, device or socket rather than
+// a readable file.
+var errNotRegular = errors.New("not a regular file")
+
+// specialFile reports a pipe, device or socket mode, whose open can block
+// forever.
+func specialFile(m os.FileMode) bool {
+	return m&(os.ModeNamedPipe|os.ModeDevice|os.ModeSocket) != 0
+}
+
+// refuseSpecial returns the open refusal for path when it names a pipe, device
+// or socket, nil when it may be opened. Stat errors are left to the open that
+// follows.
+func refuseSpecial(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	if specialFile(fi.Mode()) {
+		return &fs.PathError{Op: "open", Path: path, Err: errNotRegular}
+	}
+	return nil
+}
+
 // probeFile reports path's kind and size info alongside its content. Kind comes
 // from the first sniffLen bytes: a NUL byte there marks binary, while a known
 // image signature marks an image. Text and image return every byte; binary
-// returns none, so refusing a giant file never loads one.
+// returns none, so refusing a giant file never loads one. A special file is
+// refused rather than opened.
 func probeFile(path string) (data []byte, info os.FileInfo, kind fileKind, err error) {
+	if err := refuseSpecial(path); err != nil {
+		return nil, nil, fileText, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil, fileText, err

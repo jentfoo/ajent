@@ -168,6 +168,9 @@ func (t *Tracker) Unchanged(path string) bool {
 	if err != nil {
 		return false
 	}
+	if specialFile(fi.Mode()) { // never open a pipe or device just to dedupe
+		return false
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false

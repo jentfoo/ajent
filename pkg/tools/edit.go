@@ -77,6 +77,9 @@ func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
+	if err := refuseSpecial(full); err != nil {
+		return Change{}, err
+	}
 	data, err := os.ReadFile(full) // missing or unreadable counts as will-fail
 	if err != nil {
 		return Change{}, err
@@ -133,6 +136,9 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}
 
 	// The file is re-read here. A stale or changed file simply fails to match in applyEdits.
+	if err := refuseSpecial(full); err != nil {
+		return agent.ErrorToolResult("edit: " + err.Error()), nil
+	}
 	data, err := os.ReadFile(full)
 	if err != nil {
 		return agent.ErrorToolResult("edit: " + err.Error()), nil

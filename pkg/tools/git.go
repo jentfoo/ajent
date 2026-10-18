@@ -83,6 +83,9 @@ func findDotGit(path string) (dotRoot, wtRoot string) {
 		case err == nil && fi.IsDir():
 			return gp, p
 		case err == nil: // linked worktree or submodule pointer file
+			if specialFile(fi.Mode()) {
+				break
+			}
 			b, rerr := os.ReadFile(gp)
 			if rerr != nil {
 				break
@@ -121,7 +124,11 @@ func repoFilesystem(dotRoot string) billy.Filesystem {
 // metadata dir names in its commondir file, resolved against dotRoot when
 // relative. Empty means dotRoot holds the object store itself.
 func worktreeCommonDir(dotRoot string) string {
-	b, err := os.ReadFile(filepath.Join(dotRoot, "commondir"))
+	p := filepath.Join(dotRoot, "commondir")
+	if refuseSpecial(p) != nil {
+		return ""
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return ""
 	}
@@ -234,8 +241,9 @@ func gitBlobSide(t *object.Tree, path string) (*gitSide, error) {
 }
 
 // gitDiskSide reads one path off the work tree. dir reports a directory at
-// path, most plausibly an unopened submodule checkout. A missing or unreadable
-// file yields a nil side, the /dev/null side of a deletion.
+// path, most plausibly an unopened submodule checkout. A missing, unreadable
+// or special (pipe, device, socket) file yields a nil side, the /dev/null side
+// of a deletion.
 func gitDiskSide(root, path string) (side *gitSide, dir bool) {
 	full := filepath.Join(root, filepath.FromSlash(path))
 	fi, err := os.Lstat(full)
@@ -244,6 +252,9 @@ func gitDiskSide(root, path string) (side *gitSide, dir bool) {
 	}
 	if fi.IsDir() {
 		return nil, true
+	}
+	if specialFile(fi.Mode()) {
+		return nil, false
 	}
 	var data string
 	var cut bool

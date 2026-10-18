@@ -25,7 +25,9 @@ type Measurement struct {
 // Measure stats path and, when it is a small enough text file, counts its lines.
 // A directory reports Dir with its byte size left zero. A file above
 // MeasureCeiling reports its bytes and kind but never reads it, so annotating a
-// giant file is itself bounded. A missing path returns the os error.
+// giant file is itself bounded. A special file (pipe, device, socket) is never
+// opened: the annotation stays size-only and a later read names the refusal.
+// A missing path returns the os error.
 func Measure(path string) (Measurement, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -33,6 +35,9 @@ func Measure(path string) (Measurement, error) {
 	}
 	if info.IsDir() {
 		return Measurement{Dir: true}, nil
+	}
+	if specialFile(info.Mode()) {
+		return Measurement{Bytes: info.Size()}, nil
 	}
 	var m Measurement
 	m.Bytes = info.Size()

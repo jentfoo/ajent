@@ -123,8 +123,12 @@ type displaced struct {
 }
 
 // readDisplaced classifies the current state of path. A directory is never
-// displaced content, writing over one fails regardless.
+// displaced content, writing over one fails regardless. A special file reads
+// as unreadable rather than being opened.
 func readDisplaced(path string) displaced {
+	if refuseSpecial(path) != nil {
+		return displaced{state: dispUnreadable}
+	}
 	b, err := os.ReadFile(path)
 	if err == nil {
 		return displaced{state: dispReadable, data: b}

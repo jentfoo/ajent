@@ -780,6 +780,19 @@ session cwd, and symlinks in the longest existing prefix are folded so every
 tool agrees on one canonical path (which is also the tracker key). There is no
 containment check by default. Extensions layer their own limits via guards.
 
+### Special files (`fileutil.go`)
+
+No tool opens a path that stats as a named pipe, device or socket. The open
+can block forever (an unopened FIFO waits for a writer) and such a file
+carries no diffable content anyway. One shared predicate and refusal serve
+every open site, including the git repo-open metadata reads a hostile work
+tree controls. Each surface keeps its existing behavior for an unreadable
+file: read refuses, measure annotates without reading, git work-tree diffs
+render the side as deleted, and the tracker treats it as changed rather than
+deduping against it. The same rule guards AGENTS.md loading in `pkg/agent`
+(its own mask, since agent cannot import tools). Directory listings need no
+guard, since a fifo fails the directory open immediately.
+
 ### Read tracking (`track.go`)
 
 The tracker records, per observed path, enough to detect that the file is

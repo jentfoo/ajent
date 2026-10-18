@@ -45,6 +45,9 @@ type ProjectInstruction struct {
 // dir, ancestor walking is not supported.
 const agentsFileName = "AGENTS.md"
 
+// specialMode marks a pipe, device or socket: opening one can block forever.
+const specialMode = os.ModeNamedPipe | os.ModeDevice | os.ModeSocket
+
 // LoadProjectInstructions reads <dir>/AGENTS.md from each of dirs, in order,
 // returning a provenance-marked instruction per existing file (global first,
 // then project). Empty dirs and absent files are skipped, nil means none were found.
@@ -56,6 +59,10 @@ func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 			continue
 		}
 		path := filepath.Join(dir, agentsFileName)
+		// an unopened fifo at AGENTS.md would block the launch or reload forever
+		if fi, serr := os.Stat(path); serr == nil && fi.Mode()&specialMode != 0 {
+			return nil, fmt.Errorf("%s is not a regular file", path)
+		}
 		data, err := os.ReadFile(path)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
