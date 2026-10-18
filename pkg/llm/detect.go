@@ -3,10 +3,12 @@ package llm
 import "strings"
 
 // isOpenRouterEndpoint reports whether an endpoint is openrouter, keyed on the
-// provider name or base URL. Shared by capability detection and the compat
-// profile so both agree on what the endpoint is, whatever key names it.
+// provider name or base URL case-insensitively. Shared by capability detection
+// and the compat profile so both agree on what the endpoint is, whatever key
+// names it.
 func isOpenRouterEndpoint(provider, baseURL string) bool {
-	return provider == openRouterAffinityFormat || strings.Contains(baseURL, "openrouter.ai")
+	return strings.EqualFold(provider, openRouterAffinityFormat) ||
+		strings.Contains(strings.ToLower(baseURL), "openrouter.ai")
 }
 
 // detectCompat derives the quirks it auto-detects for a chat-completions
@@ -19,6 +21,10 @@ func isOpenRouterEndpoint(provider, baseURL string) bool {
 func detectCompat(provider, baseURL, modelID string) Compat {
 	var c Compat
 
+	// normalized once so no family check can drift on configured casing
+	provider = strings.ToLower(provider)
+	baseURL = strings.ToLower(baseURL)
+
 	isZai := provider == "zai" || provider == "zai-coding-cn" ||
 		strings.Contains(baseURL, "api.z.ai") || strings.Contains(baseURL, "open.bigmodel.cn")
 	isTogether := provider == "together" ||
@@ -30,28 +36,27 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	isCFGateway := provider == "cloudflare-ai-gateway" || strings.Contains(baseURL, "gateway.ai.cloudflare.com")
 	isNvidia := provider == "nvidia" || strings.Contains(baseURL, "integrate.api.nvidia.com")
 	isAntLing := provider == "ant-ling" || strings.Contains(baseURL, "api.ant-ling.com")
-	isDeepSeek := provider == "deepseek" || strings.Contains(strings.ToLower(baseURL), "deepseek.com")
+	isDeepSeek := provider == "deepseek" || strings.Contains(baseURL, "deepseek.com")
 	isOpenCode := provider == "opencode" || strings.Contains(baseURL, "opencode.ai")
 	isOpenAI := provider == "openai" || strings.Contains(baseURL, "api.openai.com")
+	isCerebras := provider == "cerebras" || strings.Contains(baseURL, "cerebras.ai")
+	isGrok := provider == "xai" || strings.Contains(baseURL, "api.x.ai")
+	isChutes := strings.Contains(baseURL, "chutes.ai")
 
 	matched := isZai || isTogether || isMoonshot || isOpenRouter || isCFWorkersAI ||
 		isCFGateway || isNvidia || isAntLing || isDeepSeek || isOpenAI ||
-		provider == "cerebras" || strings.Contains(baseURL, "cerebras.ai") ||
-		provider == "xai" || strings.Contains(baseURL, "api.x.ai") ||
-		strings.Contains(baseURL, "chutes.ai") || isOpenCode
+		isCerebras || isGrok || isChutes || isOpenCode
 	if !matched {
 		return c
 	}
 
-	isNonStandard := isNvidia || provider == "cerebras" || strings.Contains(baseURL, "cerebras.ai") ||
-		provider == "xai" || strings.Contains(baseURL, "api.x.ai") || isTogether ||
-		strings.Contains(baseURL, "chutes.ai") || isDeepSeek || isZai || isMoonshot ||
-		isOpenCode || isCFWorkersAI || isCFGateway || isAntLing
+	isNonStandard := isNvidia || isCerebras || isGrok || isTogether || isChutes ||
+		isDeepSeek || isZai || isMoonshot || isOpenCode || isCFWorkersAI ||
+		isCFGateway || isAntLing
 
-	useMaxTokens := strings.Contains(baseURL, "chutes.ai") || isDeepSeek || isMoonshot ||
+	useMaxTokens := isChutes || isDeepSeek || isMoonshot ||
 		isCFGateway || isTogether || isNvidia || isAntLing || isZai
 
-	isGrok := provider == "xai" || strings.Contains(baseURL, "api.x.ai")
 	openRouterDevRoleModel := isOpenRouter &&
 		(strings.HasPrefix(modelID, "anthropic/") || strings.HasPrefix(modelID, "openai/"))
 	// cache-control format keys on the literal provider name, not the base URL

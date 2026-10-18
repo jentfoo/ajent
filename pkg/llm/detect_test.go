@@ -1,11 +1,21 @@
 package llm
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsOpenRouterEndpoint(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isOpenRouterEndpoint("openrouter", ""))
+	assert.True(t, isOpenRouterEndpoint("OpenRouter", ""))
+	assert.True(t, isOpenRouterEndpoint("custom", "https://OpenRouter.AI/api/v1"))
+	assert.False(t, isOpenRouterEndpoint("custom", "https://example.com/v1"))
+}
 
 func TestDetectCompat(t *testing.T) {
 	t.Parallel()
@@ -83,6 +93,24 @@ func TestDetectCompat(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("mixed_case_matches_lowercase_spelling", func(t *testing.T) {
+		for _, tc := range []struct{ name, provider, baseURL string }{
+			{"deepseek_url", "custom", "https://Api.DeepSeek.Com/v1"},
+			{"together_url", "custom", "https://API.Together.XYZ/v1"},
+			{"openrouter_url", "custom", "https://OpenRouter.AI/api/v1"},
+			{"chutes_url", "custom", "https://Chutes.Ai/v1"},
+			{"grok_name", "XAI", ""},
+			{"deepseek_name", "DeepSeek", ""},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := detectCompat(tc.provider, tc.baseURL, "")
+				lower := detectCompat(strings.ToLower(tc.provider), strings.ToLower(tc.baseURL), "")
+				assert.Equal(t, lower, got)
+				assert.NotEqual(t, Compat{}, got)
+			})
+		}
+	})
 
 	t.Run("unmatched_provider_is_sparse", func(t *testing.T) {
 		var zero Compat
