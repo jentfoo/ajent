@@ -2,6 +2,7 @@ package tools
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -111,6 +112,53 @@ func TestLs(t *testing.T) {
 		out := textOf(res)
 		assert.Contains(t, out, "2/5 lines shown") // the whole match set is counted
 		assert.Contains(t, out, "narrow the path or raise limit")
+	})
+
+	// a metacharacter directory lists literally instead of glob-matching a sibling
+	t.Run("literal_metachar_dir_wins", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "weird[1]/inner.txt", "x")
+		mkfile(dir, "weird1/other.txt", "y")
+
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"weird[1]"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"inner.txt"}, strings.Split(textOf(res), "\n"))
+	})
+
+	// without a literal directory the metacharacter path still expands as a glob
+	t.Run("metachar_path_globs_without_literal", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "weird1/other.txt", "y")
+
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"weird[1]"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"weird1/"}, strings.Split(textOf(res), "\n"))
+	})
+
+	// only directories prefer literal: an existing metacharacter file keeps glob expansion
+	t.Run("literal_file_keeps_glob", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "weird[1].txt", "x")
+		mkfile(dir, "weird1.txt", "y")
+
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"weird[1].txt"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"weird1.txt"}, strings.Split(textOf(res), "\n"))
+	})
+
+	// a metacharacter directory observes the tracker like any literal listing
+	t.Run("literal_metachar_dir_observed", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "weird[1]/inner.txt", "x")
+
+		tracker := NewTracker()
+		_, err := (&lsTool{policy: policy, tracker: tracker}).Execute(t.Context(),
+			callWith([]byte(`{"path":"weird[1]"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.True(t, tracker.UnchangedDir(filepath.Join(dir, "weird[1]")))
 	})
 
 	t.Run("missing_dir_is_error", func(t *testing.T) {

@@ -20,6 +20,9 @@ type lsParams struct {
 // lsTool lists one directory's entries, sorted alphabetically with a '/' suffix
 // on directories. Registered off by default: it exists for the sub-agent, which
 // has no shell.
+//
+// A path naming an existing directory is listed literally even when it
+// contains wildcards.
 type lsTool struct {
 	policy    PathPolicy
 	tracker   *Tracker
@@ -35,7 +38,9 @@ func (t *lsTool) Label(agent.ToolCall) string {
 }
 
 func (t *lsTool) Description() string {
-	return "List directory contents, or files matching a wildcard pattern. Returns entries sorted alphabetically, with '/' suffix for directories."
+	return "List directory contents, or files matching a wildcard pattern. A path naming an existing " +
+		"directory is listed literally even when it contains wildcards. Returns entries sorted " +
+		"alphabetically, with '/' suffix for directories."
 }
 func (t *lsTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: SchemaOf[lsParams]()} }
 func (t *lsTool) Mode() agent.ExecutionMode {
@@ -46,8 +51,9 @@ func (t *lsTool) Close() {}
 // selfBounding: ls bounds and spills its own results.
 func (*lsTool) selfBounding() {}
 
-// Execute lists the directory bounded by the limit. The complete listing spills
-// to disk when the bound cuts it, so the model can page the file.
+// Execute lists one directory's entries, or when the path names no directory
+// and carries wildcards, the files the pattern matches. The complete listing
+// spills to disk when the bound cuts it, so the model can page the file.
 func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p lsParams
 	if err := decode(call.Input, &p); err != nil {
@@ -58,14 +64,25 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 		return agent.ErrorToolResult(err.Error()), nil
 	}
 
+	// literal directories win over glob expansion so real names like weird[1]
+	// cannot silently list a sibling's contents
+	if fi, statErr := os.Stat(full); statErr == nil && fi.IsDir() {
+		return t.listDir(full, p.Limit), nil
+	}
 	// a wildcard pattern is not a real directory: list the files it matches
 	if HasGlob(full) {
 		return t.listMatches(full, p.Limit), nil
 	}
+	return t.listDir(full, p.Limit), nil
+}
 
-	entries, err := os.ReadDir(full) // ReadDir returns entries sorted by name
+// listDir lists one directory's entries, sorted alphabetically with '/'
+// suffix on directories. The listing is observed so unchanged @ repeats can
+// dedupe.
+func (t *lsTool) listDir(full string, limit int) agent.ToolResult {
+	entries, err := os.ReadDir(full)
 	if err != nil {
-		return agent.ErrorToolResult("ls: " + err.Error()), nil
+		return agent.ErrorToolResult("ls: " + err.Error())
 	}
 	t.tracker.ObserveDir(full, entries)
 
@@ -77,8 +94,8 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 		}
 		b.WriteString(name + "\n")
 	}
-	text, _ := truncateOutput(t.sessionID, ToolLs, b.String(), lsLimit(p.Limit), lsPaging(p.Limit))
-	return agent.ToolResult{Content: llmBlock(text), Display: text}, nil
+	text, _ := truncateOutput(t.sessionID, ToolLs, b.String(), lsLimit(limit), lsPaging(limit))
+	return agent.ToolResult{Content: llmBlock(text), Display: text}
 }
 
 // listMatches lists the files a wildcard pattern matches, sorted with relative
