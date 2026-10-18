@@ -85,4 +85,22 @@ func TestGitShow(t *testing.T) {
 		assert.Contains(t, out, "commit "+g.b) // the header is the answer's anchor
 		assert.Contains(t, out, "(no changes)")
 	})
+
+	t.Run("header_full_never_claims_no_changes", func(t *testing.T) {
+		g := newGitRepo(t)
+
+		testLimitsGate.Lock()
+		t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
+		orig := GitResultLimit()
+		t.Cleanup(func() { ApplyLimits(Limits{Git: orig}) })
+		ApplyLimits(Limits{Git: Limit{Lines: 3}}) // the header alone fills the line bound
+
+		// commit a adds two paths, both counted as skipped once full
+		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+g.a+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "commit "+g.a) // the kept header prefix survives
+		assert.Contains(t, out, "2 more changed paths not shown")
+		assert.Contains(t, out, "truncated:")
+		assert.NotContains(t, out, "(no changes)")
+	})
 }

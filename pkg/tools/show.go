@@ -76,7 +76,7 @@ func (t *gitShowTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 	if err := gitCommitDiffText(ctx, c, normalizeGitPathspec(p.File), d); err != nil {
 		return agent.ErrorToolResult(ToolGitShow + ": " + err.Error()), nil
 	}
-	if d.shown == 0 && len(d.notes) == 0 { // the patch section must name its emptiness
+	if d.EmptyPatch() { // the patch section must name its emptiness
 		d.Note("(no changes)")
 	}
 	text := d.Text("use git_log to find a smaller commit")

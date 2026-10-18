@@ -339,6 +339,13 @@ func (d *gitDiffOut) Note(s string) { d.notes = append(d.notes, s) }
 // paths that can no longer appear in the output.
 func (d *gitDiffOut) Full() bool { return d.w.Truncated() }
 
+// EmptyPatch reports a genuinely empty patch section: no block rendered, none
+// dropped to the bound, and no note naming hidden content. A full writer with
+// skipped paths means changes existed, only the budget did not.
+func (d *gitDiffOut) EmptyPatch() bool {
+	return d.shown == 0 && d.skipped == 0 && len(d.notes) == 0
+}
+
 // Block appends one changed path as a git-shaped block. Callers check Full
 // before materializing sides; skipped counting stays with them.
 func (d *gitDiffOut) Block(from, to *gitSide) {
