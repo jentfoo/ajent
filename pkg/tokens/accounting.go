@@ -20,7 +20,7 @@ type Accounting struct {
 	cal   *Calibrator // shared with child ledgers of this session
 
 	promptExact int     // last reported prompt size, Input + CacheRead + CacheWrite
-	outputExact int     // last reported output tokens
+	outputExact int     // last reported output tokens, until a newer prompt report covers them
 	pending     float64 // raw estimate of messages appended since the last report
 	live        float64 // raw estimate of the response currently streaming
 	composing   float64 // raw estimate of text being typed but not yet sent
@@ -154,15 +154,17 @@ func (a *Accounting) Response(key string, u llm.Usage, predicted int, keepThink 
 	a.cal.Feed(key, predicted, prompt)
 }
 
-// Partial records a mid-stream usage snapshot, snapping promptExact and clearing
-// pending (now covered by it) without touching live.
+// Partial records a mid-stream usage snapshot. An input-bearing one covers the
+// whole request prompt, so it supersedes every appended term: outputExact and
+// pending drop while live keeps growing, the response itself never rides input.
 func (a *Accounting) Partial(u llm.Usage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	if p := u.Input + u.CacheRead + u.CacheWrite; p > 0 {
 		a.promptExact = p
-		a.pending = 0 // now covered by the reported prompt
+		a.outputExact = 0 // already inside the reported prompt
+		a.pending = 0
 	}
 }
 

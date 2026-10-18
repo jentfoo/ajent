@@ -479,3 +479,56 @@ func TestAccountingOutputOnlyAcrossTurns(t *testing.T) {
 	// response in outputExact instead lost every earlier one as the next overwrote it.
 	assert.Equal(t, 450, a.Context().Used)
 }
+
+func TestAccountingPartialSupersedesPriorOutput(t *testing.T) {
+	t.Parallel()
+
+	m := llm.Model{ID: "m1", Provider: "p", ContextWindow: 32000}
+
+	t.Run("input_snapshot_drops_prior_output", func(t *testing.T) {
+		a := New(m)
+		a.Response(m.Key(), llm.Usage{Input: 10000, Output: 4000}, 10000, true)
+		a.Add(200) // the next user prompt, estimated until the provider reports
+
+		// anthropic's message_start reports the whole messages array mid-stream, a
+		// prompt that already contains the prior response: leaving outputExact
+		// standing counted that response twice for the whole streaming window
+		a.Partial(llm.Usage{Input: 14200})
+		cs := a.Context()
+		assert.Equal(t, 14200, cs.Used)
+		assert.False(t, cs.Estimated)
+	})
+
+	t.Run("live_keeps_growing_on_snapshot", func(t *testing.T) {
+		a := New(m)
+		a.Response(m.Key(), llm.Usage{Input: 10000, Output: 4000}, 10000, true)
+
+		// the streaming response itself never rides the reported prompt, so live
+		// still adds on top of the snapshot
+		a.Partial(llm.Usage{Input: 10000})
+		a.Stream(150)
+		cs := a.Context()
+		assert.Equal(t, 10150, cs.Used)
+		assert.True(t, cs.Estimated)
+	})
+
+	t.Run("response_restores_output_after_snapshot", func(t *testing.T) {
+		a := New(m)
+		a.Response(m.Key(), llm.Usage{Input: 10000, Output: 4000}, 10000, true)
+		a.Partial(llm.Usage{Input: 14200})
+
+		// the final report lands both exact terms again, including this response
+		a.Response(m.Key(), llm.Usage{Input: 14200, Output: 900}, 14200, true)
+		assert.Equal(t, 15100, a.Context().Used)
+	})
+
+	t.Run("output_only_snapshot_keeps_terms", func(t *testing.T) {
+		a := New(m)
+		a.Response(m.Key(), llm.Usage{Input: 10000, Output: 4000}, 10000, true)
+		a.Add(300)
+
+		// a snapshot without input says nothing about the prompt: every term stays
+		a.Partial(llm.Usage{Output: 120})
+		assert.Equal(t, 14300, a.Context().Used)
+	})
+}
