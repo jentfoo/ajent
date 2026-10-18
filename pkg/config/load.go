@@ -206,10 +206,12 @@ func collectLeaves(v *val, prefix string, out *[]string) {
 // SeedSession folds resumed setting overrides into the session layer. Keys
 // apply in sorted order so shared object subtrees keep a stable shape across runs.
 // A JSON null marks a recorded reset: the key leaves the session layer instead
-// of overriding with null, which no lower layer could mean.
-func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
+// of overriding with null, which no lower layer could mean. Returns one warning
+// per override that cannot be applied, and the rest still seed.
+func (s *Set) SeedSession(overrides map[string]json.RawMessage) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var warns []string
 	data := s.session.Data
 	keys := bulk.MapKeysSlice(overrides)
 	slices.Sort(keys)
@@ -218,14 +220,22 @@ func (s *Set) SeedSession(overrides map[string]json.RawMessage) {
 		if len(v) == 0 {
 			continue
 		}
-		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
-			data, _ = DeleteKey(data, k)
+		var next []byte
+		var err error
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) { // a recorded reset removes the key
+			next, err = DeleteKey(data, k)
+		} else {
+			next, err = SetKey(data, k, v)
+		}
+		if err != nil {
+			warns = append(warns, fmt.Sprintf("session override %q not applied: %v", k, err))
 			continue
 		}
-		data, _ = SetKey(data, k, v)
+		data = next
 	}
 	s.session = Layer{Name: "session", Data: data}
 	s.valid = false
+	return warns
 }
 
 // Save writes key into the user or project layer file and re-resolves. Warnings

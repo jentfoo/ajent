@@ -462,7 +462,7 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	// session recorded it) so a restart always starts from the configured default.
 	overrides := session.SettingOverrides(session.Branch(entries, head))
 	delete(overrides, "permissions.mode")
-	set.SeedSession(overrides)
+	rwarns = append(rwarns, set.SeedSession(overrides)...)
 	applyImagesBlock(set) // a session saved with images blocked resumes blocked
 	resumed := set.Settings()
 	reg.SetCompactDefault(resumed.Compaction.Threshold) // models declaring none pick up the session default

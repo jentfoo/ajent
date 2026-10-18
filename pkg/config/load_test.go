@@ -221,6 +221,25 @@ func TestSeedSession(t *testing.T) {
 		assert.False(t, ok)
 		assert.Equal(t, "high", s.Settings().Reasoning.Level)
 	})
+
+	t.Run("corrupt_override_warns_and_skips", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", t.TempDir())
+		s, _, err := Load(Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		require.NoError(t, s.SetSession("model", "keep"))
+
+		warns := s.SeedSession(map[string]json.RawMessage{
+			"agent.maxSteps":  json.RawMessage(`null`), // a recorded reset still applies
+			"model":           json.RawMessage(`{"oops"`),
+			"reasoning.level": json.RawMessage(`"high"`),
+		})
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], `"model"`)
+
+		st := s.Settings()
+		assert.Equal(t, "keep", st.Model)           // the bad key is skipped, not wiped
+		assert.Equal(t, "high", st.Reasoning.Level) // siblings still seed
+	})
 }
 
 func TestSave(t *testing.T) {
