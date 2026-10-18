@@ -12,7 +12,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/plan"
 	"github.com/jentfoo/ajent/pkg/session"
-	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -221,19 +220,10 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 	if err := r.switchState(ui, ag, reg, head, "plan: "); err != nil {
 		return err
 	}
+	if err := r.restoreForkModel(ui, ag, reg, m, "plan: "); err != nil {
+		return err
+	}
 	r.rec.ModelChange(m, "plan")
-	var ledger *tokens.Accounting
-	ag.WithState(func(st *agent.State) {
-		st.Model = m
-		st.Tokens.SetModel(m)
-		st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
-		ledger = st.Tokens
-	})
-	// this deliberately overwrites what switchState seeded, so the base is measured
-	// again here against the fork's model, BaseEstimate takes the lock WithState held
-	ledger.SetBase(r.baseEstimate(ag))
-	pushSwitchedContext(ui, ledger)
-	syncModelUI(ui, reg, m)
 	if moved {
 		ui.Divider() // phase boundaries read as breaks in scrollback
 	}

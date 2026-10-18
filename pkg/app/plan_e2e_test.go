@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
@@ -67,6 +68,43 @@ type planHarness struct {
 	impl     *llm.ScriptedProvider
 	editor   []string
 	notices  []string
+}
+
+// TestForkToRefusedMidTurn covers a workflow fork racing a turn: the refusal
+// returns before the head moves or the model change is recorded, where the old
+// code panicked on a nil ledger after moving the head.
+func TestForkToRefusedMidTurn(t *testing.T) {
+	t.Parallel()
+
+	ui, out := plainUI(t)
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-plan.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "goal")})
+	require.NoError(t, err)
+	before := readEntriesRewind(t, p)
+
+	m, err := reg.Resolve("p/a")
+	require.NoError(t, err)
+	ag, _, release := holdTurn(t)
+
+	err = r.forkTo(ui, ag, reg, before[1].ID, m)
+	release()
+
+	require.ErrorIs(t, err, errTurnRunning)
+	assert.Equal(t, before[len(before)-1].ID, w.Head()) // the head never moved
+	assert.Len(t, readEntriesRewind(t, p), len(before)) // no model change recorded
+	require.Eventually(t, func() bool {
+		return strings.Contains(out(), "plan: a turn is running")
+	}, 2*time.Second, 5*time.Millisecond)
 }
 
 // newPlanHarness wires the workflow over a real session and agent. Only the

@@ -230,7 +230,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	// rewind onto the first user message and restore the fork model: it must stay b
 	save := r.liveModel(a)
 	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, "rewind: "))
-	r.restoreForkModel(nil, a, reg, save)
+	require.NoError(t, r.restoreForkModel(nil, a, reg, save, "rewind: "))
 
 	var got llm.Model
 	a.WithState(func(st *agent.State) { got = st.Model })
@@ -1061,6 +1061,115 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	assert.Equal(t, 100000, cs.Window) // framed by the live model, not left at zero
 	assert.Equal(t, tokens.CompactAt(model), cs.Compact)
 	assert.NotZero(t, cs.Used)
+}
+
+// holdTurn starts a blocked turn on a fresh agent, holding it mid-stream so
+// WithState refuses until the returned release ends it.
+func holdTurn(t *testing.T) (*agent.Agent, *agent.State, func()) {
+	t.Helper()
+
+	bp := &blockingProvider{
+		turn:     []llm.Event{{Type: llm.EventTextDelta, Text: "held"}},
+		onCreate: make(chan *blockingStream, 1),
+	}
+	model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+	st := &agent.State{Model: model, Tokens: tokens.New(model)}
+	ag := agent.New(st, agent.Options{
+		Sinks:    []agent.Sink{agent.NopSink{}},
+		Provider: func(llm.Model) (llm.Provider, error) { return bp, nil },
+		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel) // the held turn always ends, even on a failed assertion
+	errCh := make(chan error, 1)
+	go func() { errCh <- ag.Prompt(ctx, agent.Input{Text: "held"}) }()
+	select {
+	case <-bp.onCreate:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the held turn never started")
+	}
+	require.Eventually(t, func() bool { return ag.Running() }, 5*time.Second, 5*time.Millisecond)
+	return ag, st, func() {
+		cancel()
+		require.NoError(t, <-errCh)
+	}
+}
+
+// TestSwitchStateRefusedMidTurn covers a switch racing a turn: the refusal must
+// leave the writer head, switch callbacks and live state all untouched, where
+// the old code panicked on a nil ledger after moving the head.
+func TestSwitchStateRefusedMidTurn(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	ui, out := plainUI(t)
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+	require.NoError(t, err)
+
+	var switched bool
+	var resumed bool
+	r := &sessRec{
+		w: w, rec: session.NewRecorder(w),
+		onSwitch:   func([]llm.Message) { switched = true },
+		resumeAuto: func() { resumed = true },
+	}
+
+	entries := readEntriesRewind(t, p)
+	ag, st, release := holdTurn(t)
+
+	err = r.switchState(ui, ag, reg, entries[len(entries)-1].ID, "rewind: ")
+
+	require.ErrorIs(t, err, errTurnRunning)
+	assert.Equal(t, entries[len(entries)-1].ID, w.Head()) // the head never moved
+	assert.False(t, switched)                             // callbacks never fired
+	assert.False(t, resumed)
+	assert.False(t, slices.ContainsFunc(st.Messages, func(m llm.Message) bool {
+		return textOf(m) == "hello" // the branch context never landed
+	}))
+	release()
+	require.Eventually(t, func() bool {
+		return strings.Contains(out(), "rewind: a turn is running")
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
+// TestRestoreForkModelRefusedMidTurn covers the post-switch model restore racing
+// a turn: the refusal reports rather than panicking, leaving the model alone.
+func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}, {ID: "b"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	ui, out := plainUI(t)
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+
+	m, err := reg.Resolve("p/b")
+	require.NoError(t, err)
+	ag, st, release := holdTurn(t)
+
+	err = r.restoreForkModel(ui, ag, reg, m, "rewind: ")
+	release()
+
+	require.ErrorIs(t, err, errTurnRunning)
+	assert.Equal(t, "m", st.Model.ID) // the live model is untouched
+	require.Eventually(t, func() bool {
+		return strings.Contains(out(), "rewind: a turn is running")
+	}, 2*time.Second, 5*time.Millisecond)
 }
 
 // syncBuffer guards one strings.Builder for the plainUI drain goroutine.

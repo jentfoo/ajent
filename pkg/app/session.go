@@ -535,6 +535,13 @@ func (r *sessRec) stateFor(resolve func(string) (llm.Model, error), entries []se
 	return session.State(session.Branch(entries, head), resolve)
 }
 
+// errTurnRunning reports a refused state swap: a turn claimed the loop between
+// the caller's idle check and the swap attempt.
+var errTurnRunning = errors.New("a turn is running")
+
+// switchState points the writer and live agent state at head's branch, an empty
+// head starting a new root, firing the switch callbacks once both moved. It
+// reports errTurnRunning when a turn claims the loop first, with nothing moved.
 func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head, prefix string) error {
 	var rebuilt agent.State
 	if head != "" {
@@ -550,20 +557,14 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 			ui.Notify(prefix+wmsg, tui.LevelWarn)
 		}
 	}
-	r.w.SetHead(head)
-	if r.onSwitch != nil {
-		r.onSwitch(rebuilt.Messages)
-	}
-	if r.resumeAuto != nil {
-		r.resumeAuto()
-	}
-
-	live := r.liveModel(ag) // captured before the swap, for a branch that names no model
 
 	// mutate the live state in place so every holder (the console, this handler)
-	// sees the restored context.
+	// sees the restored context. The swap runs before the head move and callbacks:
+	// a refused swap must leave all of them in step with the untouched state.
+	var live llm.Model
 	var ledger *tokens.Accounting
-	ag.WithState(func(st *agent.State) {
+	if !ag.WithState(func(st *agent.State) {
+		live = st.Model // read before the overwrite below, for a branch that names no model
 		st.Messages = rebuilt.Messages
 		if rebuilt.Model.ID != "" {
 			st.Model = rebuilt.Model
@@ -574,7 +575,17 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 			st.Tokens = tokens.New(st.Model) // a new root starts an empty ledger
 		}
 		ledger = st.Tokens
-	})
+	}) {
+		ui.Notify(prefix+errTurnRunning.Error(), tui.LevelWarn)
+		return errTurnRunning
+	}
+	r.w.SetHead(head)
+	if r.onSwitch != nil {
+		r.onSwitch(rebuilt.Messages)
+	}
+	if r.resumeAuto != nil {
+		r.resumeAuto()
+	}
 	// both of these need the agent lock WithState holds, so they run after it, not
 	// inside the closure.
 	if rebuilt.Model.ID == "" && live.ID != "" {
@@ -632,22 +643,29 @@ func replaySink(ui *tui.UI) agent.Sink {
 	return s
 }
 
-func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model) {
+// restoreForkModel re-applies m as the live model over the switched context,
+// reseeding the ledger against it. It reports errTurnRunning when a turn claims
+// the loop first, leaving the model as the switch left it.
+func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model, prefix string) error {
 	if m.ID == "" || ag == nil {
-		return
+		return nil
 	}
 	var ledger *tokens.Accounting
-	ag.WithState(func(st *agent.State) {
+	if !ag.WithState(func(st *agent.State) {
 		st.Model = m
 		st.Tokens.SetModel(m)
 		st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
 		ledger = st.Tokens
-	})
+	}) {
+		ui.Notify(prefix+errTurnRunning.Error(), tui.LevelWarn)
+		return errTurnRunning
+	}
 	// this deliberately overwrites what switchState seeded, so the base is measured
 	// again here against the fork's model, BaseEstimate takes the lock WithState held
 	ledger.SetBase(r.baseEstimate(ag))
 	pushSwitchedContext(ui, ledger)
 	syncModelUI(ui, reg, m)
+	return nil
 }
 
 func resumeHead(live string, entries []session.Entry) string {
@@ -741,7 +759,11 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	if r.discardStaged != nil {
 		r.discardStaged() // staged against the branch just left, not this one's to carry
 	}
-	r.restoreForkModel(ui, ag, reg, saveModel)
+	// a turn claiming the loop here runs against the switched state, so the redraw
+	// below would wipe its live output: leave the screen to it
+	if err := r.restoreForkModel(ui, ag, reg, saveModel, "rewind: "); err != nil {
+		return
+	}
 
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.

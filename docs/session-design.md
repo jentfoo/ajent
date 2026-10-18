@@ -370,6 +370,11 @@ UI, replays the restored context, and pre-fills the editor with the full
 original prompt, ready to edit or re-send. The cursor now points at the fork's
 tip, and both it and every earlier branch remain in the file.
 
+Every branch switch, rewind and the plan workflow's forks alike, goes through
+one guarded state swap (`WithState`). The swap is refused while a turn owns the
+loop, and a refusal is detected before the writer head moves or any switch
+callback fires, so a refused switch leaves the run on the branch it already had.
+
 For a **large session** (at least `rewindDeferThreshold` tree rows), navigating
 the picker does not repaint committed history: alt mode keeps the retained lines
 on screen while only the live block moves. The restored context still replays
