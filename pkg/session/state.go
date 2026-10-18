@@ -18,7 +18,12 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	var warns []string
 	st.Tokens = tokens.New(llm.Model{})
 
-	cd, _, _ := NewestCompaction(branch)
+	cd, _, _, cerr := NewestCompaction(branch)
+	if cerr != nil {
+		// only the newest compaction applies, so an unreadable one drops the whole
+		// chain rather than letting a half-decoded plan shape the rebuild
+		warns = append(warns, "invalid compaction entry: "+cerr.Error())
+	}
 	msgs, mwarns := ContextMessages(branch, cd, resolve)
 	warns = append(warns, mwarns...)
 	st.Messages = msgs
@@ -96,15 +101,19 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 
 // NewestCompaction decodes the last compaction entry on the branch, returning its
 // data and branch index. found is false when the branch carries none, where the
-// zero value applies no cut and no reductions.
-func NewestCompaction(branch []Entry) (cd CompactionData, idx int, found bool) {
+// zero value applies no cut and no reductions. A decode failure also yields the
+// zero value: a half-decoded plan must never shape a rebuild.
+func NewestCompaction(branch []Entry) (cd CompactionData, idx int, found bool, err error) {
 	for i := len(branch) - 1; i >= 0; i-- {
-		if branch[i].Type == TypeCompaction {
-			_ = branch[i].Decode(&cd)
-			return cd, i, true
+		if branch[i].Type != TypeCompaction {
+			continue
 		}
+		if derr := branch[i].Decode(&cd); derr != nil {
+			return CompactionData{}, i, true, derr
+		}
+		return cd, i, true, nil
 	}
-	return CompactionData{}, -1, false
+	return CompactionData{}, -1, false, nil
 }
 
 // rebuildUsage folds one message's recorded usage into the ledger under key. A

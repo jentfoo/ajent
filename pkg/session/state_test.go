@@ -78,6 +78,94 @@ func TestStateCompactionRebuild(t *testing.T) {
 	})
 }
 
+func TestNewestCompaction(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns_newest", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "c1", Type: TypeCompaction, Data: compactData(`{"summary":"old"}`)},
+			{ID: "c2", Type: TypeCompaction, Data: compactData(`{"summary":"new"}`)},
+		}
+		cd, idx, found, err := NewestCompaction(branch)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "new", cd.Summary)
+		assert.Equal(t, 1, idx)
+	})
+
+	t.Run("none_found", func(t *testing.T) {
+		branch := []Entry{msgWithID("m1", llm.Text(llm.RoleUser, "hi"))}
+		cd, idx, found, err := NewestCompaction(branch)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Zero(t, cd)
+		assert.Equal(t, -1, idx)
+	})
+
+	// json populates fields before failing, so a corrupt payload must not leak a
+	// half-decoded cut
+	t.Run("corrupt_yields_zero_data", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "c1", Type: TypeCompaction, Data: compactData(`{"summary":"ok"}`)},
+			{ID: "c2", Type: TypeCompaction, Data: compactData(`{"summary":123}`)},
+		}
+		cd, idx, found, err := NewestCompaction(branch)
+		require.Error(t, err)
+		require.True(t, found)
+		assert.Zero(t, cd)
+		assert.Equal(t, 1, idx)
+	})
+
+	t.Run("empty_payload_decodes_to_zero", func(t *testing.T) {
+		branch := []Entry{{ID: "c1", Type: TypeCompaction}}
+		cd, _, found, err := NewestCompaction(branch)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Zero(t, cd)
+	})
+}
+
+// corruptCompaction yields a compaction entry whose payload decodes fields before
+// failing, like a torn write or hand edit.
+func corruptCompaction() Entry {
+	return Entry{ID: "comp", Type: TypeCompaction, Data: compactData(`{"summary":"half","before":"x"}`)}
+}
+
+func TestStateCorruptCompactionWarns(t *testing.T) {
+	t.Parallel()
+
+	// the rebuild must not apply the surviving half of a corrupt plan: without the
+	// warning this silently sent every message the cut removed
+	t.Run("zero_value_plus_warning", func(t *testing.T) {
+		branch := []Entry{
+			msgWithID("m1", llm.Text(llm.RoleUser, "first")),
+			msgWithID("m2", llm.Text(llm.RoleAssistant, "second")),
+			corruptCompaction(),
+			msgWithID("m3", llm.Text(llm.RoleUser, "kept start")),
+		}
+		st, warns := State(branch, resolveModel)
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], "invalid compaction entry")
+		require.Len(t, st.Messages, 3) // zero plan: every recorded message
+		assert.Equal(t, "first", textOf(st.Messages[0]))
+	})
+
+	// only the newest compaction applies, so a corrupt newest one drops the whole
+	// chain rather than falling back to an older entry
+	t.Run("corrupt_newest_shadows_older", func(t *testing.T) {
+		branch := []Entry{
+			msgWithID("m1", llm.Text(llm.RoleUser, "first")),
+			{ID: "c1", Type: TypeCompaction, Data: compactData(`{"summary":"ok","firstKeptEntryId":"m1"}`)},
+			msgWithID("m2", llm.Text(llm.RoleUser, "second")),
+			corruptCompaction(),
+		}
+		st, warns := State(branch, resolveModel)
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], "invalid compaction entry")
+		require.Len(t, st.Messages, 2) // no summary, both prompts whole
+	})
+}
+
 func TestStateUnresolvableModelWarns(t *testing.T) {
 	t.Parallel()
 

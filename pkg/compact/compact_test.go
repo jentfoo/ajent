@@ -279,6 +279,31 @@ func TestCompactRecompaction(t *testing.T) {
 		assert.Nil(t, res)
 	})
 
+	// a payload that decodes half-way must not leave its surviving cut bound on
+	// the pass: the recompute measures the unreduced branch, as every stage already does
+	t.Run("corrupt_prior_warns_and_recomputes", func(t *testing.T) {
+		branch := toolBranch(t, 8, 400)
+		// "before" as a string populates summary and cut, then fails on the int
+		branch = append(branch, session.Entry{ID: "comp", Type: session.TypeCompaction,
+			Data: []byte(`{"summary":"a checkpoint","firstKeptEntryId":"a7","before":"x"}`)})
+		for i := 1; i <= 6; i++ {
+			s := strconv.Itoa(i)
+			branch = append(branch,
+				callMsg("na"+s, "nc"+s, "bash", ""),
+				resultMsg("nr"+s, "nc"+s, "new output "+strings.Repeat("y ", 400), false))
+		}
+
+		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.Len(t, res.Warnings, 1)
+		assert.Contains(t, res.Warnings[0], "invalid prior compaction entry")
+
+		// the zero plan measures the raw branch, never the half-decoded cut
+		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0, nil)
+		assert.Equal(t, raw, res.Before)
+	})
+
 	t.Run("declines_when_nothing_new_happened", func(t *testing.T) {
 		branch := toolBranch(t, 8, 400)
 		branch = append(branch, compactEntry("comp", "a checkpoint", "a7"))

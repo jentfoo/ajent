@@ -135,7 +135,8 @@ func TestFixtureRecompaction(t *testing.T) {
 	model := fixtureCompactModel()
 	branch := loadFixtureBranch(t, "compacted.jsonl")
 
-	prior, _, found := session.NewestCompaction(branch)
+	prior, _, found, perr := session.NewestCompaction(branch)
+	require.NoError(t, perr)
 	require.True(t, found)
 	require.NotEmpty(t, prior.FirstKeptEntryID)
 	priorCut := session.CutIndex(branch, prior)

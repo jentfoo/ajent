@@ -56,8 +56,9 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	minSteps, verbatimTokens := resolveVerbatim(model, opts)
 
 	// the baseline is the effective current context, not the raw branch: a prior
-	// compaction already folded part of it away.
-	prior, priorIdx, has := session.NewestCompaction(branch)
+	// compaction already folded part of it away. An undecodable prior is the zero
+	// plan, so this pass recomputes cumulatively from the unreduced branch.
+	prior, priorIdx, has, perr := session.NewestCompaction(branch)
 	if has {
 		prior = normalisePrior(branch, prior, priorIdx)
 	}
@@ -95,6 +96,10 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		// the recorded plan is inert by construction, so it carries only what the
 		// notice needs, claiming stub work here would describe context that never changed
 		Reduce: session.Reduce{Stats: session.Stats{Summarized: nsum}},
+	}
+	if perr != nil {
+		// Before names the unreduced branch, larger than the last run left it
+		res.Warnings = append(res.Warnings, "invalid prior compaction entry: "+perr.Error())
 	}
 	// a defective checkpoint still records; the warning only makes the defect visible
 	if miss := missingSections(summary); len(miss) > 0 {
