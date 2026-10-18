@@ -98,9 +98,9 @@ func repairTornTail(path string, f *os.File) error {
 	if tail[len(tail)-1] == '\n' {
 		return nil // terminated tail, nothing torn
 	}
-	cut := size - int64(len(tail)) // bytes to keep, or 0 for a whole-file tear
+	var cut int64 // bytes to keep, 0 for a whole-file tear
 	if i := bytes.LastIndexByte(tail, '\n'); i >= 0 {
-		cut += int64(i) + 1
+		cut = size - int64(len(tail)) + int64(i) + 1
 	} else if size > int64(len(tail)) {
 		// torn line longer than the window: rare, worth the full backward scan
 		cut, err = lastNewline(rf, size)
@@ -125,8 +125,9 @@ func quarantine(rf *os.File, dst string, cut, size int64) error {
 	return err
 }
 
-// lastNewline scans rf backward chunk by chunk for the final newline. Only
-// reached when a torn line exceeds the fast window; 0 means no newline at all.
+// lastNewline returns the offset one past the final newline in the first size
+// bytes of rf, scanning backward chunk by chunk, or 0 when the file has none.
+// Only reached when a torn line exceeds the fast window.
 func lastNewline(rf *os.File, size int64) (int64, error) {
 	var buf [tornScanWindow]byte
 	for end := size; end > 0; {
@@ -136,7 +137,7 @@ func lastNewline(rf *os.File, size int64) (int64, error) {
 			return 0, err
 		}
 		if i := bytes.LastIndexByte(buf[:n], '\n'); i >= 0 {
-			return start + int64(i), nil
+			return start + int64(i) + 1, nil
 		}
 		end = start
 	}

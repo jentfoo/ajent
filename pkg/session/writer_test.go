@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -389,6 +390,73 @@ func TestWriterOpenRepairsTornTail(t *testing.T) {
 		torn, terr := os.ReadFile(tornPath(p))
 		require.NoError(t, terr)
 		assert.Equal(t, string(line[:len(line)/2]), string(torn)) // bytes preserved
+	})
+
+	// a torn tail longer than the scan window falls back to the full backward scan
+	t.Run("open_repairs_torn_tail_beyond_window", func(t *testing.T) {
+		for _, n := range []int{tornScanWindow + 1, tornScanWindow + 77, 2*tornScanWindow + 13} {
+			t.Run(fmt.Sprintf("junk_%d", n), func(t *testing.T) {
+				p := filepath.Join(t.TempDir(), "s.jsonl")
+				w, err := Create(p, SessionData{Version: sessionVersion})
+				require.NoError(t, err)
+				e1, aerr := w.Append(TypeMessage, MessageData{Message: llmText("one")})
+				require.NoError(t, aerr)
+				require.NoError(t, w.Sync())
+				require.NoError(t, w.Close())
+
+				before, rerr := os.ReadFile(p) // the durable prefix, both lines terminated
+				require.NoError(t, rerr)
+
+				// simulate a crashed partial write past the window, newline never lands
+				f, oerr := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+				require.NoError(t, oerr)
+				junk := bytes.Repeat([]byte("x"), n)
+				_, werr := f.Write(junk)
+				require.NoError(t, werr)
+				require.NoError(t, f.Close())
+
+				w2, oerr := Open(p)
+				require.NoError(t, oerr)
+				t.Cleanup(func() { _ = w2.Close() })
+
+				after, rerr := os.ReadFile(p)
+				require.NoError(t, rerr)
+				assert.Equal(t, string(before), string(after)) // prefix intact, its final newline too
+
+				torn, terr := os.ReadFile(tornPath(p))
+				require.NoError(t, terr)
+				assert.Equal(t, junk, torn) // only the torn bytes fenced aside
+
+				assert.Equal(t, e1.ID, w2.Head()) // the last complete entry survives
+				e2, aerr := w2.Append(TypeMessage, MessageData{Message: llmText("two")})
+				require.NoError(t, aerr)
+				assert.Equal(t, e1.ID, e2.ParentID) // chain intact, no glued link
+
+				entries, warns, rerr := Read(p)
+				require.NoError(t, rerr)
+				assert.Empty(t, warns)
+				assert.Equal(t, []string{e2.ID}, ids(entries)[2:])
+			})
+		}
+	})
+
+	// an unterminated file longer than the window is one whole torn write
+	t.Run("open_quarantines_whole_file_tear", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		junk := bytes.Repeat([]byte("x"), tornScanWindow+5)
+		require.NoError(t, os.WriteFile(p, junk, 0o600))
+
+		w2, oerr := Open(p)
+		require.NoError(t, oerr)
+		t.Cleanup(func() { _ = w2.Close() })
+
+		raw, rerr := os.ReadFile(p)
+		require.NoError(t, rerr)
+		assert.Empty(t, raw)
+
+		torn, terr := os.ReadFile(tornPath(p))
+		require.NoError(t, terr)
+		assert.Equal(t, junk, torn)
 	})
 
 	// a healthy file is left byte-identical and no sidecar appears
