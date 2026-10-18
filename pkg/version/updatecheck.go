@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -24,6 +25,12 @@ const (
 	remoteVersionTTL = 12 * time.Hour
 	// noticeInterval is the minimum gap between update notices for one install.
 	noticeInterval = 2 * time.Hour
+
+	// tagsPerPage requests GitHub's maximum page size so most repos need one request.
+	tagsPerPage = 100
+	// maxTagPages bounds pagination; past it the check may miss an update, which is
+	// its accepted failure direction.
+	maxTagPages = 3
 
 	fetchTimeout = 5 * time.Second
 )
@@ -144,38 +151,63 @@ type ghTag struct {
 
 // fetchLatestVersion returns the highest clean vX.Y.Z tag from GitHub.
 func fetchLatestVersion(ctx context.Context) (string, error) {
+	// one budget spans every page so total fetch cost stays bounded
 	cctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
+	client := httputil.New(httputil.Options{})
+	u, err := url.Parse(githubTagsURL)
+	if err != nil {
+		return "", fmt.Errorf("tags url: %w", err)
+	}
+	q := u.Query()
+	q.Set("per_page", strconv.Itoa(tagsPerPage))
 
-	resp, err := httputil.Do(cctx, httputil.New(httputil.Options{}), httputil.Request{
+	var max semver
+	var found bool
+	for page := 1; page <= maxTagPages; page++ {
+		q.Set("page", strconv.Itoa(page))
+		u.RawQuery = q.Encode()
+		tags, err := fetchTagsPage(cctx, client, u.String())
+		if err != nil {
+			return "", err
+		}
+		for _, t := range tags {
+			v, vok := parseVersion(t.Name)
+			if !vok {
+				continue
+			}
+			if !found || max.less(v) {
+				max, found = v, true
+			}
+		}
+		if len(tags) < tagsPerPage {
+			break // short page: no further pages exist
+		}
+	}
+	if !found {
+		return "", errors.New("no clean vX.Y.Z tags returned")
+	}
+	return max.String(), nil
+}
+
+// fetchTagsPage decodes one page of repository tags.
+func fetchTagsPage(ctx context.Context, client *http.Client, pageURL string) ([]ghTag, error) {
+	resp, err := httputil.Do(ctx, client, httputil.Request{
 		Method:    http.MethodGet,
-		URL:       githubTagsURL,
+		URL:       pageURL,
 		Name:      "update-check",
 		UserAgent: UserAgent(),
 	})
 	if err != nil {
-		return "", fmt.Errorf("github get: %w", err)
+		return nil, fmt.Errorf("github get: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	var tags []ghTag
 	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
-		return "", fmt.Errorf("decode: %w", err)
+		return nil, fmt.Errorf("decode: %w", err)
 	}
-	max, ok := semver{}, false
-	for _, t := range tags {
-		v, vok := parseVersion(t.Name)
-		if !vok {
-			continue
-		}
-		if !ok || max.less(v) {
-			max, ok = v, true
-		}
-	}
-	if !ok {
-		return "", errors.New("no clean vX.Y.Z tags returned")
-	}
-	return max.String(), nil
+	return tags, nil
 }
 
 // cleanTag matches a strict release tag with no pre-release suffix.

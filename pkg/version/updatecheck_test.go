@@ -2,6 +2,7 @@ package version
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -217,5 +218,79 @@ func TestFetchLatestVersion(t *testing.T) {
 
 		_, err := fetchLatestVersion(t.Context())
 		require.Error(t, err)
+	})
+
+	t.Run("follows_paginated_pages", func(t *testing.T) {
+		page1 := make([]ghTag, 0, tagsPerPage)
+		for i := range tagsPerPage {
+			page1 = append(page1, ghTag{Name: fmt.Sprintf("v1.0.%d", i)})
+		}
+		var pages []string // per_page/page from each request
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			q := r.URL.Query()
+			pages = append(pages, q.Get("per_page")+"/"+q.Get("page"))
+			if q.Get("page") == "1" {
+				b, _ := json.Marshal(page1)
+				_, _ = w.Write(b)
+				return
+			}
+			_, _ = io.WriteString(w, `[{"name":"v9.9.9"},{"name":"nightly"}]`)
+		}))
+		t.Cleanup(srv.Close)
+		swapURL(t, srv.URL)
+
+		got, err := fetchLatestVersion(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "v9.9.9", got) // only reachable past page 1
+		assert.Equal(t, []string{"100/1", "100/2"}, pages)
+	})
+
+	t.Run("stops_at_page_cap", func(t *testing.T) {
+		var reqs int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			reqs++
+			tags := make([]ghTag, 0, tagsPerPage+1)
+			for i := range tagsPerPage {
+				tags = append(tags, ghTag{Name: fmt.Sprintf("v1.0.%d", i)})
+			}
+			top := "v2.0.0" // the highest tag within the cap
+			if reqs > maxTagPages {
+				top = "v9.9.9"
+			}
+			tags = append(tags, ghTag{Name: top})
+			b, _ := json.Marshal(tags)
+			_, _ = w.Write(b)
+		}))
+		t.Cleanup(srv.Close)
+		swapURL(t, srv.URL)
+
+		got, err := fetchLatestVersion(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "v2.0.0", got)
+		assert.Equal(t, maxTagPages, reqs)
+	})
+
+	t.Run("empty_page_terminates", func(t *testing.T) {
+		page1 := make([]ghTag, tagsPerPage)
+		for i := range page1 {
+			page1[i] = ghTag{Name: fmt.Sprintf("v3.%d.0", i)}
+		}
+		var reqs int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			reqs++
+			if reqs == 1 {
+				b, _ := json.Marshal(page1)
+				_, _ = w.Write(b)
+				return
+			}
+			_, _ = io.WriteString(w, `[]`)
+		}))
+		t.Cleanup(srv.Close)
+		swapURL(t, srv.URL)
+
+		got, err := fetchLatestVersion(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("v3.%d.0", tagsPerPage-1), got)
+		assert.Equal(t, 2, reqs) // an exact-multiple last page costs one empty fetch
 	})
 }
