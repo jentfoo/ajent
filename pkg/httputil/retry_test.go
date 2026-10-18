@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -95,6 +96,11 @@ func TestParseRetryAfter(t *testing.T) {
 		{"delta_seconds", "5", 5 * time.Second},
 		{"zero_seconds", "0", 0},
 		{"negative_ignored", "-3", 0},
+		{"overflow_saturates", "10000000000", retryAfterForever},
+		{"beyond_int64_range", "99999999999999999999", retryAfterForever},
+		{"largest_representable_delta", strconv.FormatInt(maxDeltaSeconds, 10),
+			time.Duration(maxDeltaSeconds) * time.Second},
+		{"negative_beyond_int64", "-99999999999999999999", 0},
 		{"http_date_future", now.Add(90 * time.Second).Format(http.TimeFormat), 90 * time.Second},
 		{"http_date_past", now.Add(-time.Minute).Format(http.TimeFormat), 0},
 		{"garbage", "soon", 0},

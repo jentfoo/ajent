@@ -147,6 +147,20 @@ func TestDo(t *testing.T) {
 		assert.Empty(t, *slept)
 	})
 
+	t.Run("overflowing_retry_after_fails_immediately", func(t *testing.T) {
+		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "10000000000") // wraps a duration if multiplied raw
+			w.WriteHeader(http.StatusTooManyRequests)
+		})
+
+		r, hc, slept, _ := testRequest(t, srv.URL)
+		_, err := Do(t.Context(), hc, r)
+
+		require.Error(t, err)
+		assert.Equal(t, int64(1), hits.Load())
+		assert.Empty(t, *slept)
+	})
+
 	t.Run("error_func_replaces_the_error", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)

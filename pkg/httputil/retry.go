@@ -2,6 +2,7 @@ package httputil
 
 import (
 	"errors"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -109,15 +110,29 @@ func ShouldRetryTransport(err error) bool {
 	return errors.As(err, &ne) || errors.Is(err, net.ErrClosed)
 }
 
+// maxDeltaSeconds is the largest seconds count that still scales into a duration.
+const maxDeltaSeconds = math.MaxInt64 / int64(time.Second)
+
+// retryAfterForever saturates any larger wait: positive so presence checks stay
+// truthful, past every cap BackoffDelay honours.
+const retryAfterForever = time.Duration(math.MaxInt64)
+
 // parseRetryAfter reads a Retry-After header in either the delta seconds or the
-// HTTP date form, returning zero when absent or unparseable.
+// HTTP date form, returning zero when absent or unparseable. A wait too large
+// to represent saturates to retryAfterForever rather than wrapping negative.
 func parseRetryAfter(h string, now time.Time) time.Duration {
 	if h == "" {
 		return 0
 	}
-	if secs, err := strconv.Atoi(h); err == nil {
-		if secs < 0 {
+	// explicit width parses huge deltas identically on every platform, where Atoi
+	// would reject them. An out-of-range literal arrives clamped to the int64
+	// bounds and folds into the saturate branch below.
+	if secs, err := strconv.ParseInt(h, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+		if secs <= 0 {
 			return 0
+		}
+		if secs > maxDeltaSeconds {
+			return retryAfterForever
 		}
 		return time.Duration(secs) * time.Second
 	}
